@@ -44,52 +44,63 @@ import sun.reflect.annotation.AnnotationType;
 import sun.nio.ch.Interruptible;
 
 /**
- * Metal JavaLangAccess: only getEnumConstantsShared is real (routes to the working Class.getEnumConstants);
- * every other method is an unreached stub (RTA compiles only what the running code calls). Seeded into
- * SharedSecrets.javaLangAccess by the loader so EnumMap.getKeyUniverse works on metal (System.<clinit>,
- * which normally registers the JLA, is skipped). Generated from the JavaLangAccess interface.
+ * Metal JavaLangAccess, seeded into {@code SharedSecrets.javaLangAccess} by the loader (stock
+ * {@code System.<clinit>}, which registers the real one, does not run here).
+ *
+ * <p>Every member is one of three kinds, and rule 3 decides which. IMPLEMENTED exactly from public API where
+ * stock's behaviour can be reproduced; a NO-OP only where doing nothing is the correct semantics on this VM
+ * (each says why); otherwise it THROWS an {@code InternalError} naming itself. This class used to answer
+ * null/0/false for ~60 members, and two of those plausible answers were measured as silent wrong answers VM-wide
+ * ({@code join} made every {@code StringJoiner} answer null; {@code inflateBytesToChars} filled nothing). An
+ * {@code Error} rather than a RuntimeException, for the reason {@code CaseFolding} records: a broad
+ * {@code catch (Exception)} must not turn a missing capability into a silent wrong answer.
  */
 public final class MetalJavaLangAccess implements JavaLangAccess
 {
+    private static InternalError unsupported(String member)
+    {
+        return new InternalError("joe-ng: JavaLangAccess." + member + " is not implemented on this VM");
+    }
+
     @Override public List<Method> getDeclaredPublicMethods(Class<?> klass, String name, Class<?>... parameterTypes)
     {
-        return null;
+        throw unsupported("getDeclaredPublicMethods");
     }
     @Override public Method findMethod(Class<?> klass, boolean publicOnly, String name, Class<?>... parameterTypes)
     {
-        return null;
+        throw unsupported("findMethod");
     }
     @Override public ConstantPool getConstantPool(Class<?> klass)
     {
-        return null;
+        throw unsupported("getConstantPool");
     }
     @Override public boolean casAnnotationType(Class<?> klass, AnnotationType oldType, AnnotationType newType)
     {
-        return false;
+        throw unsupported("casAnnotationType");
     }
     @Override public AnnotationType getAnnotationType(Class<?> klass)
     {
-        return null;
+        throw unsupported("getAnnotationType");
     }
     @Override public Map<Class<? extends Annotation>, Annotation> getDeclaredAnnotationMap(Class<?> klass)
     {
-        return null;
+        throw unsupported("getDeclaredAnnotationMap");
     }
     @Override public byte[] getRawClassAnnotations(Class<?> klass)
     {
-        return null;
+        throw unsupported("getRawClassAnnotations");
     }
     @Override public byte[] getRawClassTypeAnnotations(Class<?> klass)
     {
-        return null;
+        throw unsupported("getRawClassTypeAnnotations");
     }
     @Override public byte[] getRawExecutableTypeAnnotations(Executable executable)
     {
-        return null;
+        throw unsupported("getRawExecutableTypeAnnotations");
     }
     @Override public int getClassFileAccessFlags(Class<?> klass)
     {
-        return 0;
+        throw unsupported("getClassFileAccessFlags");
     }
     @Override public <E extends Enum<E>> E[] getEnumConstantsShared(Class<E> klass)
     {
@@ -97,131 +108,174 @@ public final class MetalJavaLangAccess implements JavaLangAccess
     }
     @Override public int classFileVersion(Class<?> clazz)
     {
-        return 0;
+        throw unsupported("classFileVersion");
     }
     @Override public void blockedOn(Interruptible b)
     {
+        throw unsupported("blockedOn");
     }
     @Override public void registerShutdownHook(int slot, boolean registerShutdownInProgress, Runnable hook)
     {
+        // Correct as a no-op: a bare-metal VM never runs the JVM exit sequence, so a hook could never fire.
     }
     @Override public void invokeFinalize(Object o) throws Throwable
     {
+        throw unsupported("invokeFinalize");
     }
     @Override public ConcurrentHashMap<?, ?> createOrGetClassLoaderValueMap(ClassLoader cl)
     {
-        return null;
+        throw unsupported("createOrGetClassLoaderValueMap");
     }
     @Override public Class<?> defineClass(ClassLoader cl, String name, byte[] b, ProtectionDomain pd, String source)
     {
-        return null;
+        throw unsupported("defineClass");
     }
     @Override public Class<?> defineClass(ClassLoader cl, Class<?> lookup, String name, byte[] b, ProtectionDomain pd, boolean initialize, int flags, Object classData)
     {
-        return null;
+        throw unsupported("defineClass");
     }
     @Override public Class<?> findBootstrapClassOrNull(String name)
     {
-        return null;
+        throw unsupported("findBootstrapClassOrNull");
     }
     @Override public Package definePackage(ClassLoader cl, String name, Module module)
     {
-        return null;
+        throw unsupported("definePackage");
     }
     @Override public Module defineModule(ClassLoader loader, ModuleDescriptor descriptor, URI uri)
     {
-        return null;
+        throw unsupported("defineModule");
     }
     @Override public Module defineUnnamedModule(ClassLoader loader)
     {
-        return null;
+        throw unsupported("defineUnnamedModule");
     }
     @Override public void addReads(Module m1, Module m2)
     {
+        // Correct as a no-op: joe-ng has ONE unnamed module, which reads, exports and opens everything already.
     }
     @Override public void addReadsAllUnnamed(Module m)
     {
+        // Correct as a no-op: one unnamed module, which already reads everything.
     }
     @Override public void addExports(Module m1, String pkg)
     {
+        // Correct as a no-op: one unnamed module, which already exports every package.
     }
     @Override public void addExports(Module m1, String pkg, Module m2)
     {
+        // Correct as a no-op: one unnamed module, which already exports every package.
     }
     @Override public void addExportsToAllUnnamed(Module m, String pkg)
     {
+        // Correct as a no-op: one unnamed module, which already exports every package.
     }
     @Override public void addOpens(Module m1, String pkg, Module m2)
     {
+        // Correct as a no-op: one unnamed module, which already opens every package.
     }
     @Override public void addOpensToAllUnnamed(Module m, String pkg)
     {
+        // Correct as a no-op: one unnamed module, which already opens every package.
     }
     @Override public void addUses(Module m, Class<?> service)
     {
+        // Correct as a no-op: an unnamed module may use any service; uses is not checked here.
     }
     @Override public boolean isReflectivelyExported(Module module, String pn, Module other)
     {
-        return false;
+        // One unnamed module, which exports and opens every package: true is the exact answer. Was false.
+        return true;
     }
     @Override public boolean isReflectivelyOpened(Module module, String pn, Module other)
     {
-        return false;
+        // One unnamed module, which exports and opens every package: true is the exact answer. Was false.
+        return true;
     }
     @Override public void addEnableNativeAccess(Module m)
     {
+        throw unsupported("addEnableNativeAccess");
     }
     @Override public boolean addEnableNativeAccess(ModuleLayer layer, String name)
     {
-        return false;
+        throw unsupported("addEnableNativeAccess");
     }
     @Override public void addEnableNativeAccessToAllUnnamed()
     {
+        throw unsupported("addEnableNativeAccessToAllUnnamed");
     }
     @Override public void ensureNativeAccess(Module m, Class<?> owner, String methodName, Class<?> currentClass, boolean jni)
     {
+        throw unsupported("ensureNativeAccess");
     }
     @Override public void addEnableFinalMutationToAllUnnamed()
     {
+        throw unsupported("addEnableFinalMutationToAllUnnamed");
     }
     @Override public boolean tryEnableFinalMutation(Module m)
     {
-        return false;
+        throw unsupported("tryEnableFinalMutation");
     }
     @Override public boolean isFinalMutationEnabled(Module m)
     {
-        return false;
+        throw unsupported("isFinalMutationEnabled");
     }
     @Override public boolean isStaticallyExported(Module module, String pn, Module other)
     {
-        return false;
+        // One unnamed module, which exports and opens every package: true is the exact answer. Was false.
+        return true;
     }
     @Override public boolean isStaticallyOpened(Module module, String pn, Module other)
     {
-        return false;
+        // One unnamed module, which exports and opens every package: true is the exact answer. Was false.
+        return true;
     }
     @Override public ServicesCatalog getServicesCatalog(ModuleLayer layer)
     {
-        return null;
+        throw unsupported("getServicesCatalog");
     }
     @Override public void bindToLoader(ModuleLayer layer, ClassLoader loader)
     {
+        throw unsupported("bindToLoader");
     }
     @Override public Stream<ModuleLayer> layers(ModuleLayer layer)
     {
-        return null;
+        throw unsupported("layers");
     }
     @Override public Stream<ModuleLayer> layers(ClassLoader loader)
     {
-        return null;
+        throw unsupported("layers");
     }
     @Override public int countPositives(byte[] ba, int off, int len)
     {
-        return 0;
+        // Stock StringCoding.countPositives: the number of leading NON-NEGATIVE bytes. Was 0.
+        int i = 0;
+        while (i < len)
+        {
+            if (ba[off + i] < 0)
+            {
+                return i;
+            }
+            i += 1;
+        }
+        return len;
     }
     @Override public int countNonZeroAscii(String s)
     {
-        return 0;
+        // Stock StringCoding.countNonZeroAscii: leading chars in U+0001..U+007F. The LATIN1 and UTF16 branches
+        // stock takes agree on that definition, so charAt serves both. Was 0.
+        int n = s.length();
+        int i = 0;
+        while (i < n)
+        {
+            char c = s.charAt(i);
+            if (c == 0 || c > 0x7F)
+            {
+                return i;
+            }
+            i += 1;
+        }
+        return n;
     }
     /**
      * Wrap LATIN1 bytes as a String -- IMPLEMENTED, not stubbed, because a null here is a SILENT WRONG
@@ -239,22 +293,27 @@ public final class MetalJavaLangAccess implements JavaLangAccess
     }
     @Override public String uncheckedNewStringOrThrow(byte[] bytes, Charset cs) throws CharacterCodingException
     {
-        return null;
+        throw unsupported("uncheckedNewStringOrThrow");
     }
     @Override public byte[] uncheckedGetBytesOrThrow(String s, Charset cs) throws CharacterCodingException
     {
-        return null;
+        throw unsupported("uncheckedGetBytesOrThrow");
     }
     @Override public char uncheckedGetUTF16Char(byte[] bytes, int index)
     {
-        return 0;
+        // StringUTF16.getChar. LITTLE-endian: StringUTF16.LO_BYTE_SHIFT is seeded to 8 on this VM, the same
+        // order Loader.internString writes UTF16 literals in. Was 0.
+        return (char) ((bytes[index << 1] & 0xFF) | ((bytes[(index << 1) + 1] & 0xFF) << 8));
     }
     @Override public void uncheckedPutCharUTF16(byte[] bytes, int index, int ch)
     {
+        // StringUTF16.putChar, little-endian as above. Was an empty body.
+        bytes[index << 1] = (byte) ch;
+        bytes[(index << 1) + 1] = (byte) (ch >> 8);
     }
     @Override public byte[] getBytesUTF8OrThrow(String s) throws CharacterCodingException
     {
-        return null;
+        throw unsupported("getBytesUTF8OrThrow");
     }
     /** Each LATIN1 byte widened to a char -- stock's {@code StringLatin1.inflate}. Was an empty body,
      *  which left {@code dst} untouched while the caller went on as if it had been filled. */
@@ -269,41 +328,72 @@ public final class MetalJavaLangAccess implements JavaLangAccess
     }
     @Override public int decodeASCII(byte[] src, int srcOff, char[] dst, int dstOff, int len)
     {
-        return 0;
+        // Stock String.decodeASCII: copy the leading non-negative bytes, widened, and answer how many. Was 0.
+        int count = countPositives(src, srcOff, len);
+        inflateBytesToChars(src, srcOff, dst, dstOff, count);
+        return count;
     }
     @Override public InputStream initialSystemIn()
     {
-        return null;
+        throw unsupported("initialSystemIn");
     }
     @Override public PrintStream initialSystemErr()
     {
-        return null;
+        throw unsupported("initialSystemErr");
     }
     @Override public int uncheckedEncodeASCII(char[] src, int srcOff, byte[] dst, int dstOff, int len)
     {
-        return 0;
+        // Stock StringCoding.implEncodeAsciiArray: narrow chars below U+0080, stopping at the first that is
+        // not, and answer how many. Was 0.
+        int i = 0;
+        while (i < len)
+        {
+            char c = src[srcOff + i];
+            if (c >= 0x80)
+            {
+                return i;
+            }
+            dst[dstOff + i] = (byte) c;
+            i += 1;
+        }
+        return len;
     }
     @Override public void setCause(Throwable t, Throwable cause)
     {
+        throw unsupported("setCause");
     }
     @Override public ProtectionDomain protectionDomain(Class<?> c)
     {
-        return null;
+        throw unsupported("protectionDomain");
     }
     @Override public MethodHandle stringConcatHelper(String name, MethodType methodType)
     {
-        return null;
+        throw unsupported("stringConcatHelper");
     }
     @Override public Object uncheckedStringConcat1(String[] constants)
     {
-        return null;
+        throw unsupported("uncheckedStringConcat1");
     }
     @Override public byte stringInitCoder()
     {
+        // Stock: COMPACT_STRINGS ? LATIN1 : UTF16. Compact strings are on here (a String is LATIN1 whenever
+        // every char fits a byte), so LATIN1 -- the previous 0 was already the right answer.
         return 0;
     }
     @Override public byte stringCoder(String str)
     {
+        // String.coder() is package-private; with compact strings a String is LATIN1 (0) exactly when every
+        // char fits a byte, UTF16 (1) otherwise. Was 0 for every string.
+        int n = str.length();
+        int i = 0;
+        while (i < n)
+        {
+            if (str.charAt(i) > 0xFF)
+            {
+                return 1;
+            }
+            i += 1;
+        }
         return 0;
     }
     /**
@@ -335,92 +425,102 @@ public final class MetalJavaLangAccess implements JavaLangAccess
     }
     @Override public Object classData(Class<?> c)
     {
-        return null;
+        throw unsupported("classData");
     }
     @Override public NativeLibraries nativeLibrariesFor(ClassLoader loader)
     {
-        return null;
+        throw unsupported("nativeLibrariesFor");
     }
     @Override public Thread[] getAllThreads()
     {
-        return null;
+        throw unsupported("getAllThreads");
     }
     @Override public ThreadContainer threadContainer(Thread thread)
     {
-        return null;
+        throw unsupported("threadContainer");
     }
     @Override public void start(Thread thread, ThreadContainer container)
     {
+        throw unsupported("start");
     }
     @Override public StackableScope headStackableScope(Thread thread)
     {
-        return null;
+        throw unsupported("headStackableScope");
     }
     @Override public void setHeadStackableScope(StackableScope scope)
     {
+        throw unsupported("setHeadStackableScope");
     }
     @Override public Thread currentCarrierThread()
     {
-        return null;
+        throw unsupported("currentCarrierThread");
     }
     @Override public <T> T getCarrierThreadLocal(CarrierThreadLocal<T> local)
     {
-        return null;
+        throw unsupported("getCarrierThreadLocal");
     }
     @Override public <T> void setCarrierThreadLocal(CarrierThreadLocal<T> local, T value)
     {
+        throw unsupported("setCarrierThreadLocal");
     }
     @Override public void removeCarrierThreadLocal(CarrierThreadLocal<?> local)
     {
+        throw unsupported("removeCarrierThreadLocal");
     }
     @Override public Object[] scopedValueCache()
     {
-        return null;
+        throw unsupported("scopedValueCache");
     }
     @Override public void setScopedValueCache(Object[] cache)
     {
+        throw unsupported("setScopedValueCache");
     }
     @Override public Object scopedValueBindings()
     {
-        return null;
+        throw unsupported("scopedValueBindings");
     }
     @Override public Continuation getContinuation(Thread thread)
     {
-        return null;
+        throw unsupported("getContinuation");
     }
     @Override public void setContinuation(Thread thread, Continuation continuation)
     {
+        throw unsupported("setContinuation");
     }
     @Override public ContinuationScope virtualThreadContinuationScope()
     {
-        return null;
+        throw unsupported("virtualThreadContinuationScope");
     }
     @Override public void parkVirtualThread()
     {
+        throw unsupported("parkVirtualThread");
     }
     @Override public void parkVirtualThread(long nanos)
     {
+        throw unsupported("parkVirtualThread");
     }
     @Override public void unparkVirtualThread(Thread thread)
     {
+        throw unsupported("unparkVirtualThread");
     }
     @Override public Executor virtualThreadDefaultScheduler()
     {
-        return null;
+        throw unsupported("virtualThreadDefaultScheduler");
     }
     @Override public StackWalker newStackWalkerInstance(Set<StackWalker.Option> options, ContinuationScope contScope, Continuation continuation)
     {
-        return null;
+        throw unsupported("newStackWalkerInstance");
     }
     @Override public String getLoaderNameID(ClassLoader loader)
     {
-        return null;
+        throw unsupported("getLoaderNameID");
     }
     @Override public void copyToSegmentRaw(String string, MemorySegment segment, long offset)
     {
+        throw unsupported("copyToSegmentRaw");
     }
     @Override public boolean bytesCompatible(String string, Charset charset)
     {
-        return false;
+        throw unsupported("bytesCompatible");
     }
 }

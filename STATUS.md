@@ -4,6 +4,37 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **`MetalJavaLangAccess` FOLLOWS RULE 3 NOW -- AND THE CONTROL FOUND A THIRD SILENT WRONG ANSWER IN IT: A DOUBLE
+  APPENDED TO A UTF16 `StringBuilder` WROTE NULs (2026-10-05, QEMU-GATED -- NOT YET PI-VALIDATED).** The class
+  answered null/0/false for ~60 of its 91 members. Each member is now one of three kinds:
+
+  | kind | count | members |
+  |---|---|---|
+  | **IMPLEMENTED exactly** from public API | 13 | `countPositives`, `countNonZeroAscii`, `decodeASCII`, `uncheckedEncodeASCII`, `uncheckedGet/PutCharUTF16` (little-endian, matching the seeded `LO_BYTE_SHIFT`), `stringCoder`, `stringInitCoder`, the four `is{Reflectively,Statically}{Exported,Opened}` (TRUE: one unnamed module that opens everything -- the stub said false), plus the earlier `join`/`concat`/`inflateBytesToChars`/`uncheckedNewStringWithLatin1Bytes`/`getEnumConstantsShared` |
+  | **NO-OP, justified** | 8 | `registerShutdownHook` (a bare-metal VM never runs the exit sequence), the module-graph `add*` mutators (already true of the one unnamed module) |
+  | **THROWS `InternalError` naming itself** | 65 | everything whose stock behaviour needs a subsystem this VM lacks |
+
+  | gate | result |
+  |---|---|
+  | **`JlaProbe`, 12 lines against the HOST ORACLE** | **BYTE-IDENTICAL** |
+  | **negative control (the previous class)** | **3 arms wrong: `"€" + 1.5` -> `€` + TEN NULs, length 11 for 4** |
+  | demo suite, COMPLETE run | 40 programs, 20 markers zero, **no `not implemented` reached**, `gc: collections=47` at churn / 56 finale (unchanged from the `Locale` card) |
+  | host | A64 105, compiler 40, `overlay-check 0 new` |
+
+  - **THE CONTROL IS SPECIFIC:** the `writeUTF`/`readUTF` arms (NUL, LATIN1, euro, mixed) pass in BOTH states,
+    because a 0 from `countPositives`/`countNonZeroAscii` only forces the slow path -- a conservative answer, not a
+    wrong one. The three `ToDecimal` arms move: `uncheckedPutCharUTF16` was an EMPTY BODY, so stock
+    `DoubleToDecimal`/`FloatToDecimal` writing digits into a UTF16 buffer wrote nothing and the builder kept NULs
+    -- at the wrong length too, since the formatter reads its own digits back through `uncheckedGetUTF16Char`.
+    Any `"€" + d` or `sb.append(d)` after a non-LATIN1 char was silently corrupted.
+  - **THE SUITE REACHES NONE OF THE 65 THROWS** (`not implemented` 0), which is the measurement that says turning
+    them into throws costs nothing today -- and the day a program reaches one it names the member instead of
+    carrying a null somewhere else.
+  - **THE FIRST REWRITE SCRIPT DELETED 20 MEMBERS** -- its block pattern needed a newline before the closing
+    brace, so each empty-bodied method swallowed the next one. Caught by counting `@Override` (91 -> 71) before
+    building; javac would have refused it too (the interface members are abstract), so it was never at risk of
+    shipping -- recorded because a scripted rewrite of method bodies wants a member count checked either way.
+
 - **THE `java/util/Locale` OVERLAY IS DELETED AND STOCK RUNS -- AND IT FOUND FOUR PRE-EXISTING VM BUGS, ONE OF
   THEM JLS-LEVEL: `String.intern()` WAS IDENTITY AND THERE WAS NO VM-WIDE STRING POOL (2026-10-03, QEMU-GATED --
   NOT YET PI-VALIDATED).** Stock `Locale` has ZERO natives; it runs on the core of `sun/util/locale`, which is
