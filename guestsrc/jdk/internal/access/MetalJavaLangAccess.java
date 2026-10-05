@@ -256,8 +256,16 @@ public final class MetalJavaLangAccess implements JavaLangAccess
     {
         return null;
     }
+    /** Each LATIN1 byte widened to a char -- stock's {@code StringLatin1.inflate}. Was an empty body,
+     *  which left {@code dst} untouched while the caller went on as if it had been filled. */
     @Override public void inflateBytesToChars(byte[] src, int srcOff, char[] dst, int dstOff, int len)
     {
+        int i = 0;
+        while (i < len)
+        {
+            dst[dstOff + i] = (char) (src[srcOff + i] & 0xFF);
+            i += 1;
+        }
     }
     @Override public int decodeASCII(byte[] src, int srcOff, char[] dst, int dstOff, int len)
     {
@@ -298,13 +306,32 @@ public final class MetalJavaLangAccess implements JavaLangAccess
     {
         return 0;
     }
+    /**
+     * Stock's {@code String.join(prefix, suffix, delimiter, elements, size)} -- package-private to
+     * {@code java.lang}, so built here from public calls. This stub answered NULL, so every
+     * {@code StringJoiner.toString()} with elements (and every collector built on it) returned null across
+     * the VM -- found by stock {@code Locale.toLanguageTag()} rendering a Unicode extension as {@code u-null}.
+     */
     @Override public String join(String prefix, String suffix, String delimiter, String[] elements, int size)
     {
-        return null;
+        StringBuilder sb = new StringBuilder(prefix);
+        int i = 0;
+        while (i < size)
+        {
+            if (i > 0)
+            {
+                sb.append(delimiter);
+            }
+            sb.append(elements[i]);
+            i += 1;
+        }
+        sb.append(suffix);
+        return sb.toString();
     }
+    /** Stock's {@code StringConcatHelper.concat}: {@code prefix + String.valueOf(value) + suffix}. Was null. */
     @Override public String concat(String prefix, Object value, String suffix)
     {
-        return null;
+        return prefix.concat(String.valueOf(value)).concat(suffix);
     }
     @Override public Object classData(Class<?> c)
     {

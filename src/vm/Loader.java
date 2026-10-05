@@ -1890,11 +1890,26 @@ public final class Loader
      *  can compile further methods, which can note more classes. */
     private static void drainPendingInit()
     {
-        while (lzInitN > 0)
+        // SNAPSHOT AND CLEAR FIRST, as drainPendingPulls does. Each ensureClinit runs GUEST code, which
+        // compiles further methods -- and a nested compile's own drain used to pop THIS drain's remaining
+        // entries off the shared list, initializing them from inside an unrelated initializer. Measured:
+        // stock Locale's initDefault noted StaticProperty and BaseLocale; StaticProperty.<clinit> lazily
+        // compiled a callee, whose drain initialized BaseLocale -- whose <clinit> reads
+        // StaticProperty.javaLocaleUseOldISOCodes() while StaticProperty was still half-built: an NPE in
+        // BaseLocale.<clinit>. The order within this drain is unchanged (newest first).
+        int n = lzInitN;
+        int[] regs = new int[n];
+        int i = 0;
+        while (i < n)
         {
-            lzInitN -= 1;
-            int reg = lzInitReg[lzInitN];
-            ensureClinit(reg);
+            regs[i] = lzInitReg[i];
+            i += 1;
+        }
+        lzInitN = 0;
+        while (n > 0)
+        {
+            n -= 1;
+            ensureClinit(regs[n]);
         }
         lzInitWant = 0;                                 // the list is empty: this compile's want is settled.
                                                         //   Reset HERE rather than at note time because an
@@ -3491,6 +3506,8 @@ public final class Loader
         }
         litAnchor = null;                               // per-batch GC anchor for interned literals: the rewind
         litAnchorN = 0;                                 //   reclaimed both the literals and the anchor array
+        strPool = null;                                 // ... and the string pool those anchors keep alive
+        strPoolN = 0;
         VM.byteArrayTibCache = 0L;                      // the batch's [B TIB was just reclaimed with its heap
         VM.stringTypeCache = 0L;                        // ... and so was the Type it is paired with: a STALE one
                                                         //   could be matched by a later Type at the same address
@@ -5762,6 +5779,17 @@ public final class Loader
      */
     private static boolean isDenylisted(long base, int off)
     {
+        // NARROWED OUT of the sun/util/ denial: the CORE of sun/util/locale -- BaseLocale, LocaleUtils,
+        // LanguageTag, InternalLocaleBuilder, LocaleExtensions, LocaleMatcher -- which stock java/util/Locale
+        // is built on. Pure string logic with no natives, so Locale runs STOCK (its overlay is deleted). The
+        // PROVIDER subtree stays denied: LocaleProviderAdapter / LocaleResources / LocaleServiceProviderPool
+        // read locale DATA through ResourceBundle and the service machinery, and are reached only by the
+        // display-name and localized-format paths. (Keep in sync with writer.ReachScan.isDenied.)
+        if (utf8HasPrefix(base, off, Magic.bytes("sun/util/locale/"))
+                && !utf8HasPrefix(base, off, Magic.bytes("sun/util/locale/provider/")))
+        {
+            return false;
+        }
         // Narrow ALLOW for the VarHandle-as-atomic-field-accessor shim (overlays, not the real invoke runtime):
         // java.net.Socket uses VarHandle for its `state`/`in`/`out` fields. Allowed BEFORE the java/lang/invoke
         // prefix deny below. Everything else in java/lang/invoke stays denied.
@@ -5816,6 +5844,14 @@ public final class Loader
                 // ResourceBundle -> the module/service machinery. Without this line the call site is
                 // trap-wired at PATCH TIME and the overlay is never consulted.
                 || utf8HasPrefix(base, off, Magic.bytes("java/text/DecimalFormatSymbols"))
+                // ParsePosition: two ints and accessors, no dependencies. Stock Locale.forLanguageTag parses
+                // with `new ParsePosition(0)`, so while it was denied every language tag halted the VM
+                // (UNRESOLVED NEW). It is a data holder, not the locale-data machinery the denial exists for.
+                || utf8HasPrefix(base, off, Magic.bytes("java/text/ParsePosition"))
+                // sun/text/Normalizer is OVERLAID (from the JDK 26 source): getCombiningClass is exact below
+                // U+0300 and throws above it. Stock String's Turkish case mapping reaches it through
+                // ConditionalSpecialCasing. The rest of sun/text/ (the ICU-backed normalizer) stays denied.
+                || utf8HasPrefix(base, off, Magic.bytes("sun/text/Normalizer"))
                 // NARROWED OUT of the java/lang/reflect/ denial: `Type` is an empty MARKER INTERFACE with one
                 // default method and no natives, so the stock class loads as-is -- no overlay needed, which is
                 // the right shape (guestsrc is for classes that need natives). It is denied only by the broad
@@ -11693,6 +11729,15 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("setErr0")))           { return VM.setErr0Addr; }   // (PrintStream)V
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("setIn0")))            { return VM.setIn0Addr; }    // (InputStream)V
         }
+        // java.lang.ref: see VMNatives.refGet0. PhantomReference declares its OWN refersTo0/clear0 natives,
+        // and this table is keyed by the DECLARING class, so both classes are listed.
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/ref/Reference"))
+                || utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/ref/PhantomReference")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("get0")))      { return VM.refGet0Addr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("refersTo0"))) { return VM.refRefersTo0Addr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("clear0")))    { return VM.refClear0Addr; }
+        }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/Unsafe")))
         {
             // One full barrier for all three: see VMNatives.unsafeFence. Reached from Hashtable/Properties
@@ -11717,10 +11762,10 @@ public final class Loader
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/String")))
         {
-            // There is no intern table on metal: every String is its own canonical instance, so intern() is
-            // identity. Callers use it to shrink allocation (java.util.jar.Attributes$Name) or to compare by
-            // ==; the latter would be wrong here, and no reached java.base code does it.
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("intern")))             { return VM.identityAddr; }
+            // The VM-wide string pool (see poolIntern). This was IDENTITY, on the premise that "no reached
+            // java.base code" compares interned strings with ==. Stock StringLatin1/StringUTF16 do exactly that
+            // -- `lang == "tr"` against Locale's interned language -- so Turkish case mapping was silently wrong.
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("intern")))             { return VM.stringInternAddr; }
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Throwable")))
         {
@@ -23428,7 +23473,16 @@ public final class Loader
             Magic.store64(obj + 0L, tib);               // TIB
             Magic.store64(obj + 16L, bytes);            // value field (offset 16)
             Magic.store64(obj + 24L, lastLiteralCoder); // coder (offset 24): 0 LATIN1, 1 UTF16
-            result = anchorLiteral(obj);
+            long canon = poolLookup(obj);               // the same literal in ANOTHER class is the SAME object
+            if (canon != 0L)
+            {
+                result = canon;
+            }
+            else
+            {
+                result = anchorLiteral(obj);
+                poolInsert(obj);
+            }
         }
         if (litObjByCp != null && stringCp < litObjByCp.length)
         {
@@ -23449,6 +23503,137 @@ public final class Loader
     // (so all ldc sites of the same literal in a class share one object). Reallocated each parseConstPool, so it
     // always matches the blob currently compiling; entries are anchored (litAnchor) like any interned literal.
     private static long[] litObjByCp;
+
+    // THE VM-WIDE STRING POOL (JLS 3.10.5, String.intern). Open addressing over String object addresses, 0 =
+    // empty, keyed on CONTENT (coder + value bytes). Every literal goes through it, so `ldc "x"` in two classes
+    // yields ONE object, and String.intern() answers that same object. Before it, literals were interned per
+    // CLASS only and intern() was identity -- so `new String("tr").intern() == "tr"` was false, and stock
+    // StringLatin1's `lang == "tr"` (Turkish case mapping) never matched a Locale's interned language.
+    //
+    // LIFETIME: cleared in resetLoader beside litAnchor and the parse cache, the two other places a literal is
+    // remembered -- an entry outliving them could hand out an object from a reclaimed batch. Entries are kept
+    // alive by litAnchor, not by this array (a long[] is not traced). STATED LIMITS: writer-BAKED literals are
+    // not in the pool (only guest code compares against them here, measured for the case-mapping paths), and
+    // an intern()ed string is held for the rest of the launch where stock's table is weak.
+    private static long[] strPool;
+    private static int strPoolN;
+
+    /** FNV-1a over a String's coder and value bytes. */
+    private static int poolHash(long str)
+    {
+        long val = Magic.load64(str + 16L);
+        int len = (int) Magic.load64(val + 16L);
+        int h = 0x811C9DC5 ^ (int) Magic.load64(str + 24L);
+        int i = 0;
+        while (i < len)
+        {
+            h = (h ^ (Magic.load8(val + 24L + i) & 0xFF)) * 0x01000193;
+            i += 1;
+        }
+        return h & 0x7FFFFFFF;
+    }
+
+    /** Whether two Strings have the same coder and the same value bytes. */
+    private static boolean poolSame(long a, long b)
+    {
+        if (Magic.load64(a + 24L) != Magic.load64(b + 24L))
+        {
+            return false;
+        }
+        long va = Magic.load64(a + 16L);
+        long vb = Magic.load64(b + 16L);
+        int len = (int) Magic.load64(va + 16L);
+        if (len != (int) Magic.load64(vb + 16L))
+        {
+            return false;
+        }
+        int i = 0;
+        while (i < len)
+        {
+            if (Magic.load8(va + 24L + i) != Magic.load8(vb + 24L + i))
+            {
+                return false;
+            }
+            i += 1;
+        }
+        return true;
+    }
+
+    /** The pooled String with {@code str}'s content, or 0. */
+    private static long poolLookup(long str)
+    {
+        if (strPool == null)
+        {
+            return 0L;
+        }
+        int mask = strPool.length - 1;
+        int i = poolHash(str) & mask;
+        while (strPool[i] != 0L)
+        {
+            if (poolSame(strPool[i], str))
+            {
+                return strPool[i];
+            }
+            i = (i + 1) & mask;
+        }
+        return 0L;
+    }
+
+    /** Add {@code str}, known absent, growing the table at half full. */
+    private static void poolInsert(long str)
+    {
+        if (strPool == null || (strPoolN + 1) * 2 > strPool.length)
+        {
+            long[] old = strPool;
+            strPool = new long[old == null ? 1024 : old.length * 2];
+            int k = 0;
+            while (k < strPool.length)
+            {
+                strPool[k] = 0L;                        // allocArray does not zero elements on this VM
+                k += 1;
+            }
+            strPoolN = 0;
+            if (old != null)
+            {
+                int j = 0;
+                while (j < old.length)
+                {
+                    if (old[j] != 0L)
+                    {
+                        poolPut(old[j]);
+                    }
+                    j += 1;
+                }
+            }
+        }
+        poolPut(str);
+    }
+
+    private static void poolPut(long str)
+    {
+        int mask = strPool.length - 1;
+        int i = poolHash(str) & mask;
+        while (strPool[i] != 0L)
+        {
+            i = (i + 1) & mask;
+        }
+        strPool[i] = str;
+        strPoolN += 1;
+    }
+
+    /** {@code String.intern()}: the canonical String with this content, adding {@code str} if there is none.
+     *  Called under the loader lock -- literal interning runs inside compiles, which hold it. */
+    static long poolIntern(long str)
+    {
+        long canon = poolLookup(str);
+        if (canon != 0L)
+        {
+            return canon;
+        }
+        anchorLiteral(str);
+        poolInsert(str);
+        return str;
+    }
 
     /** Record {@code obj} (a literal the JIT bakes into code) as a GC root; returns it for chaining. */
     private static long anchorLiteral(long obj)

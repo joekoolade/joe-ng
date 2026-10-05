@@ -525,7 +525,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         for (int _s16 = 0; _s16 < statics.size(); _s16++)
         {
             String key = statics.at(_s16);
-            if (!clinitDeferred(ownerOf(key)) || !bakedStaticsDone.add(key))
+            if (!snapshotStatics(ownerOf(key)) || !bakedStaticsDone.add(key))
             {
                 continue;
             }
@@ -1475,6 +1475,10 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.unsafeFieldOffset(JJ)J", "vm/VM.unsafeFieldOffsetAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.noopNative(J)V", "vm/VM.noopNativeAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.unsafeFence(J)V", "vm/VM.unsafeFenceAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.refGet0(J)J", "vm/VM.refGet0Addr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.stringIntern(J)J", "vm/VM.stringInternAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.refRefersTo0(JJ)J", "vm/VM.refRefersTo0Addr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.refClear0(J)V", "vm/VM.refClear0Addr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.arrayKindOf(J)J", "vm/VM.arrayKindAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.setOut0(J)V",     "vm/VM.setOut0Addr");   // System.setOut
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.setErr0(J)V",     "vm/VM.setErr0Addr");   // System.setErr
@@ -1576,7 +1580,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         for (int si = 0; si < statics.size(); si++)
         {
             String key = statics.at(si);
-            if (clinitDeferred(ownerOf(key)))
+            if (snapshotStatics(ownerOf(key)))
             {
                 Long bits = StaticSnapshot.primitiveBits(key);
                 if (bits != null)
@@ -1588,7 +1592,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         for (int vi = 0; vi < vtSigClasses.size(); vi++)
         {
             String cls = vtSigClasses.get(vi);
-            if (!clinitDeferred(cls))
+            if (!snapshotStatics(cls))
             {
                 continue;
             }
@@ -1827,7 +1831,12 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 || cls.equals("java/lang/Integer$IntegerCache")
                 || cls.equals("java/lang/Long")
                 || cls.equals("java/lang/Long$LongCache")
-                || cls.equals("java/lang/String");
+                || cls.equals("java/lang/String")
+                // StaticProperty reads System properties, which do not exist in the BAKED world at
+                // VM.initClasses time -- scheduled there it NPEs at boot (measured, once stock Locale's baked
+                // bodies made it reachable). It is also on noSnapshot: the seed JVM's values describe the build
+                // host. So its initializer runs on METAL, against the VM's seeded properties.
+                || cls.equals("jdk/internal/util/StaticProperty");
     }
 
     /** Owner class of a method key ("o/C.m(desc)") or field key ("o/C.f"). */
@@ -2434,6 +2443,39 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     private boolean clinitDeferred(String cls)
     {
         return bakeNoClinit(cls) || stubbedKeys.contains(cls + ".<clinit>()V");
+    }
+
+    /**
+     * Whether {@code cls}'s statics are filled from the SEED JVM. A deferred initializer's statics are, EXCEPT
+     * for the classes {@link #noSnapshot} names: those keep zeroed cells, and the real {@code <clinit>} fills
+     * them on metal at the first active use (rule 2 -- every initializer runs).
+     */
+    private boolean snapshotStatics(String cls)
+    {
+        return clinitDeferred(cls) && !noSnapshot(cls);
+    }
+
+    /**
+     * Classes whose seed-JVM state must NOT be baked, because it describes the BUILD HOST rather than the VM.
+     *
+     * <p>{@code java/util/Locale} and the core of {@code sun/util/locale}: the host writer cannot compile
+     * {@code Locale.<clinit>} (an {@code ldc} class literal for {@code serialPersistentFields}), and a snapshot
+     * would bake (1) the BUILD MACHINE's default locale, where the VM's own seeded properties say {@code en} --
+     * making the image differ by who built it -- and (2) {@code LOCALE_CACHE}, a live {@code ReferencedKeyMap}
+     * over the host's {@code ConcurrentHashMap}, whose layout is not this VM's overlaid one. Measured: the
+     * deep-bake walked into {@code BaseLocale} and {@code LazyConstantImpl} and stopped on module access.
+     *
+     * <p>Leaving the cells zero is sound because baked {@code Locale} bodies are reached only through GUEST
+     * call sites, and every guest {@code getstatic}/{@code invokestatic}/{@code new} carries the JVMS 5.5
+     * active-use guard: {@code Locale.<clinit>} has run on metal before a baked body reads its statics.
+     *
+     * <p>{@code jdk/internal/util/StaticProperty} for the same reason: its values are the host's
+     * {@code user.*}/{@code java.home}/... properties, where the VM's are seeded by the loader.
+     */
+    private static boolean noSnapshot(String cls)
+    {
+        return cls.equals("java/util/Locale") || cls.startsWith("sun/util/locale/")
+                || cls.equals("jdk/internal/util/StaticProperty");
     }
 
     private Resolved lookup(String key)

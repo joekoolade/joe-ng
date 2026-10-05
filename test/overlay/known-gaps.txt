@@ -80,12 +80,6 @@ supertype#java/text/BreakIterator#java/lang/Cloneable
 supertype#java/time/Duration#java/io/Serializable
 supertype#java/time/Duration#java/lang/Comparable
 supertype#java/time/Duration#java/time/temporal/TemporalAmount
-supertype#java/util/Locale#java/io/Serializable
-supertype#java/util/Locale#java/lang/Cloneable
-supertype#java/util/Locale$Category#java/io/Serializable
-supertype#java/util/Locale$Category#java/lang/Comparable
-supertype#java/util/Locale$Category#java/lang/Enum
-supertype#java/util/Locale$Category#java/lang/constant/Constable
 supertype#java/util/Random#java/io/Serializable
 supertype#java/util/Random#java/util/random/RandomGenerator
 supertype#java/util/concurrent/ConcurrentHashMap$KeySetView#java/util/concurrent/ConcurrentHashMap$CollectionView
