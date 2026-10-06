@@ -11748,6 +11748,7 @@ public final class Loader
             // Every ordered mode shares ONE full barrier: there is no one-way form to emit here, and
             // stronger than required is always correct where weaker could only be wrong invisibly.
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fence0")))             { return VM.unsafeFenceAddr; }  // ()V
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("parkNanos0")))         { return VM.parkNanosAddr; }    // (J)V timed park
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("staticFieldAddr0")))  { return VM.unsafeStaticAddrAddr; } // (Class,byte[])J
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("storeFence")))         { return VM.unsafeFenceAddr; }
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("loadFence")))          { return VM.unsafeFenceAddr; }
@@ -11979,6 +11980,7 @@ public final class Loader
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Thread")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("currentThread0")))    { return VM.currentThreadAddr; } // ()Thread
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("yield0")))            { return VM.threadYieldAddr; }   // ()V
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Runtime")))
         {

@@ -161,6 +161,19 @@ final class VMNatives
         return r;
     }
 
+    /** {@code Thread.yield0()}: offer the core to another runnable task, exactly the scheduler's yield. Takes one
+     *  ignored argument like {@link #noopNative}, so a static native (nothing in x0) lands here correctly. */
+    static void threadYield(long ignored)
+    {
+        VMScheduler.taskYield();
+    }
+
+    /** {@code Unsafe.parkNanos0(long)}: a timed park -- see {@code VMScheduler.parkNanos}. */
+    static void parkNanos(long nanos)
+    {
+        VMScheduler.parkNanos(nanos);
+    }
+
     static long refGet0(long ref)
     {
         if (ref == 0L)
