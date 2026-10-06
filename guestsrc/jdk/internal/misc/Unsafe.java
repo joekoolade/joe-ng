@@ -2893,14 +2893,47 @@ public final class Unsafe
         throw new InternalError("jdk.internal.misc.Unsafe.shouldBeInitialized: not implemented");
     }
 
+    /**
+     * Stock's contract: block until an {@link #unpark}, an interrupt, or the time runs out. {@code time} is a
+     * relative timeout in NANOSECONDS, or with {@code isAbsolute} a deadline in epoch MILLISECONDS; a relative
+     * 0 means no timeout, and a non-positive relative time (or a past deadline) returns at once.
+     *
+     * <p>This used to ignore {@code time} and park until unparked -- so {@code parkNanos(1 s)} could block for
+     * ever -- and to delegate to the {@code LockSupport} overlay, which is deleted: stock {@code LockSupport}
+     * has no natives and runs on this method, so the timing belongs HERE.
+     */
     public void park(boolean isAbsolute, long time)
     {
-        java.util.concurrent.locks.LockSupport.park();
+        if (isAbsolute)
+        {
+            long ms = time - System.currentTimeMillis();
+            if (ms <= 0L)
+            {
+                return;
+            }
+            parkNanos0(ms > 9223372036854L ? 9223372036854775807L : ms * 1000000L);
+            return;
+        }
+        if (time == 0L)
+        {
+            Magic.park();
+            return;
+        }
+        if (time > 0L)
+        {
+            parkNanos0(time);
+        }
     }
+
+    /** A timed park, provided by the VM (see {@code VMScheduler.parkNanos}). */
+    private static native void parkNanos0(long nanos);
 
     public void unpark(Object thread)
     {
-        java.util.concurrent.locks.LockSupport.unpark((Thread) thread);
+        if (thread != null)
+        {
+            Magic.unpark(thread);
+        }
     }
 
     /**

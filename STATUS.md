@@ -4,6 +4,39 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **THE `java/util/concurrent/locks/LockSupport` OVERLAY IS DELETED AND STOCK RUNS -- A TIMED PARK USED TO BLOCK
+  UNTIL UNPARKED, POSSIBLY FOR EVER, AND A PARK IGNORED INTERRUPTS (2026-10-06, QEMU-GATED -- NOT YET
+  PI-VALIDATED).** Picked from `overlaycheck-deep` (513 gaps): the overlay declared only `park()`/`unpark()`, so
+  `park(Object)`, `parkNanos`, `parkUntil`, `getBlocker`, `setCurrentBlocker` and `getThreadId` CEASED TO EXIST --
+  and stock `CompletableFuture$Signaller`, AQS `ConditionObject` and `ForkJoinPool` call them. Stock
+  `LockSupport` has NO natives; it runs on `Unsafe.park`/`unpark`, which is where the work belongs.
+
+  | gate | result |
+  |---|---|
+  | **`ParkProbe`, 11 lines against the HOST ORACLE** | **BYTE-IDENTICAL** |
+  | **negative control** (stock LockSupport, the OLD `Unsafe.park` + `VMScheduler.park`) | **HANGS at the first arm: `parkNanos(50ms)` never returns** |
+  | demo suite, COMPLETE run | 40 programs, 17 markers zero, `finish HML`, inversion `HML 64ms`, `gc: collections=47`/`56` -- unchanged |
+  | deep-scan gaps | 513 -> **504** (`LockSupport` x6, `Thread.yield`/`onSpinWait`/`join(JI)`) |
+  | host | A64 105, compiler 40, `overlay-check 0 new` |
+
+  - **`Unsafe.park(isAbsolute, time)` IGNORED `time`** and parked until unparked. It now has stock's contract:
+    relative NANOS, absolute epoch MILLIS, relative 0 = no timeout, non-positive / past = return at once. The timed
+    path is a new native `Unsafe.parkNanos0` -> `VMScheduler.parkNanos`, which reuses the `taskWake` deadline the
+    scheduler's wake scan already honours for any BLOCKED task (the `Object.wait(ms)` mechanism).
+  - **`VMScheduler.park` IGNORED INTERRUPTS:** `interrupt()` flips a parked task READY and the loop blocked it again
+    for want of a permit, so `lockInterruptibly`/`Condition.await` never saw one. It returns now with the status
+    still set, as stock.
+  - **THREE MORE DROPPED `Thread` MEMBERS, found as the probe walked into them:** `join(long)`/`join(long,int)`
+    (javac refused the probe), `onSpinWait()` (AQS's acquire loop -- a `DENYLIST TRAP` at the timed-await arm;
+    stock's body is EMPTY, so empty is exact) and `yield()` (stock's native `yield0` -> the scheduler's yield).
+  - **`Thread.parkBlocker` added at @64**, LAST, so the offsets the VM hardcodes (@16..@56) do not move;
+    `allocThreadObj` sizes a Thread from its field count. Stock reaches it through
+    `Unsafe.objectFieldOffset(Thread.class, "parkBlocker")`, unchanged.
+  - **WHAT THE CONTROL DOES NOT SHOW, stated:** it halts at arm 1, so the interrupt, `CountDownLatch` and
+    `CompletableFuture` arms never ran under it. The interrupt fix is measured only in the positive direction.
+  - **NOT PI-VALIDATED, gate named in advance:** the timed park under four cores and the real timer -- a
+    deadline-woken BLOCKED task is the path the emulator delivers least faithfully.
+
 - **`MetalJavaLangAccess` FOLLOWS RULE 3 NOW -- AND THE CONTROL FOUND A THIRD SILENT WRONG ANSWER IN IT: A DOUBLE
   APPENDED TO A UTF16 `StringBuilder` WROTE NULs (2026-10-05, QEMU-GATED -- NOT YET PI-VALIDATED).** The class
   answered null/0/false for ~60 of its 91 members. Each member is now one of three kinds:

@@ -985,12 +985,18 @@ public final class VMScheduler
         return (taskDone[tid] != 0) ? 1 : 0;               // final check at the deadline
     }
 
-    /** {@code LockSupport.park()}: block the current task until a permit is available (an {@link #unpark}). */
+    /**
+     * {@code Unsafe.park(false, 0)}: block the current task until a permit is available (an {@link #unpark}) OR
+     * the task is interrupted. The interrupt half is stock's contract and was missing: {@link #interrupt} flips a
+     * parked task READY, and this loop used to block it again for want of a permit -- so
+     * {@code lockInterruptibly}, {@code Condition.await} and every interruptible AQS wait never saw the
+     * interrupt. A set interrupt status makes park return at once and is NOT cleared, as on stock.
+     */
     static void park()
     {
         long daif = schedLock();
         int me = curTask();
-        while (taskPermit[me] == 0)
+        while (taskPermit[me] == 0 && taskInterrupted[me] == 0)
         {
             taskWaitOn[me] = -3;                           // a park waiter
             taskState[me] = TASK_BLOCKED;
@@ -999,6 +1005,46 @@ public final class VMScheduler
             daif = schedLock();
         }
         taskPermit[me] = 0;                                // consume the permit
+        schedUnlock(daif);
+    }
+
+    /**
+     * {@code Unsafe.park(false, nanos)}: {@link #park} that ALSO returns once {@code nanos} have elapsed.
+     * Non-positive returns at once, as stock does. The deadline rides {@code taskWake}, which the scheduler's
+     * wake scan already honours for any BLOCKED task (the {@code Object.wait(ms)} mechanism). A timeout too
+     * large for the counter is a park without one.
+     */
+    static void parkNanos(long nanos)
+    {
+        if (nanos <= 0L)
+        {
+            return;
+        }
+        long freq = Magic.readCNTFRQ_EL0();
+        long secs = nanos / 1000000000L;
+        long deadline = 9223372036854775807L;
+        if (secs <= 9223372036854775807L / freq / 2L)
+        {
+            long ticks = secs * freq + (nanos % 1000000000L) * freq / 1000000000L;
+            deadline = Magic.readCNTPCT_EL0() + ticks;
+            if (deadline < 0L)
+            {
+                deadline = 9223372036854775807L;
+            }
+        }
+        long daif = schedLock();
+        int me = curTask();
+        while (taskPermit[me] == 0 && taskInterrupted[me] == 0 && Magic.readCNTPCT_EL0() < deadline)
+        {
+            taskWaitOn[me] = -3;                           // a park waiter: unpark/interrupt wake it
+            taskWake[me] = deadline;                       // ... and so does the deadline
+            taskState[me] = TASK_BLOCKED;
+            schedUnlock(daif);
+            taskYield();
+            daif = schedLock();
+        }
+        taskWake[me] = 0L;                                 // a later untimed BLOCKED wait must not be deadline-woken
+        taskPermit[me] = 0;                                // consume the permit if that is what woke us
         schedUnlock(daif);
     }
 

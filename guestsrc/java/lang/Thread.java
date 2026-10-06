@@ -31,6 +31,10 @@ public class Thread implements Runnable
     Object[] tlVals;            // @40 — parallel values
     int tlN;                    // @48 — number of entries
     private int priority;       // @56 — the Java 1..10 value setPriority was given; 0 = never set
+    // @64 — stock LockSupport's blocker (getBlocker/setCurrentBlocker), reached through
+    // Unsafe.objectFieldOffset(Thread.class, "parkBlocker") exactly as on stock. Appended LAST so the offsets the
+    // VM hardcodes above it do not move; allocThreadObj sizes a Thread from its field count.
+    volatile Object parkBlocker;
 
     /** The lowest priority a thread may have. */
     public static final int MIN_PRIORITY = 1;
@@ -350,10 +354,73 @@ public class Thread implements Runnable
         new Exception("Stack trace").printStackTrace();
     }
 
+    /**
+     * Stock's {@code yield()}: a hint that the caller is willing to give up the core. Was MISSING (the overlay
+     * dropped it), so FutureTask, PriorityBlockingQueue and ForkJoinPool trapped on it. {@code yield0} is
+     * stock's own native, provided by the VM as the scheduler's yield.
+     */
+    public static void yield()
+    {
+        yield0();
+    }
+
+    private static native void yield0();
+
+    /**
+     * Stock's {@code onSpinWait()} -- whose Java body is EMPTY on stock too (a JIT intrinsic hint), so empty is
+     * exact here. Was missing: AQS's acquire loop calls it, so every contended {@code CountDownLatch} or lock
+     * acquire trapped.
+     */
+    public static void onSpinWait()
+    {
+    }
+
     /** Block the calling task until THIS thread's run() has returned. */
     public final void join() throws InterruptedException
     {
         Magic.tjoin(this);
+    }
+
+    /**
+     * Stock's {@code join(long)}: wait at most {@code millis} ms for this thread to terminate; 0 waits for ever.
+     * Was MISSING -- a member a name-winning overlay omits ceases to exist, so {@code t.join(ms)} resolved
+     * nowhere. Stock's timed join on a thread that was never started returns at once ({@code isAlive()} is
+     * false), so the VM's "not started" answer is not an error here, unlike {@link #join(java.time.Duration)}.
+     */
+    public final void join(long millis) throws InterruptedException
+    {
+        if (millis < 0L)
+        {
+            throw new IllegalArgumentException("timeout value is negative");
+        }
+        if (millis == 0L)
+        {
+            join();
+            return;
+        }
+        int r = Magic.joinms(this, millis);
+        if (r == 2)
+        {
+            throw new InterruptedException();
+        }
+    }
+
+    /** Stock's {@code join(long, int)}: validated exactly as stock, then a positive nanos rounds UP to a ms. */
+    public final void join(long millis, int nanos) throws InterruptedException
+    {
+        if (millis < 0L)
+        {
+            throw new IllegalArgumentException("timeout value is negative");
+        }
+        if (nanos < 0 || nanos > 999999)
+        {
+            throw new IllegalArgumentException("nanosecond timeout value out of range");
+        }
+        if (nanos > 0 && millis < Long.MAX_VALUE)
+        {
+            millis += 1L;
+        }
+        join(millis);
     }
 
     /**
