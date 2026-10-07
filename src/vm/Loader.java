@@ -3508,6 +3508,7 @@ public final class Loader
         litAnchorN = 0;                                 //   reclaimed both the literals and the anchor array
         strPool = null;                                 // ... and the string pool those anchors keep alive
         strPoolN = 0;
+        clearSiteMemos();                               // a (site, Type) answer holds within a launch only
         VM.byteArrayTibCache = 0L;                      // the batch's [B TIB was just reclaimed with its heap
         VM.stringTypeCache = 0L;                        // ... and so was the Type it is paired with: a STALE one
                                                         //   could be matched by a later Type at the same address
@@ -12854,6 +12855,47 @@ public final class Loader
     private static long virtualTrampLo, virtualTrampHi;   // the range over which its frame is live
     private static long vsMemoType, vsMemoBuf;           // one-entry memo: the same site is usually monomorphic
     private static int vsMemoIdx = -1;
+    // PER-SITE, WRITE-ONCE memo: the first receiver Type a site resolved for, and the body it resolved to.
+    // The one-entry memo above is shared by EVERY site, so a loop alternating two late sites -- a VarHandle
+    // `get` and `compareAndSet`, which is every CAS loop over an AtomicReference/Atomic*Array -- thrashed it
+    // and paid a full lookup UNDER THE LOADER LOCK on every call. Four cores doing that serialised on the
+    // lock: measured, a 4-thread x 20,000-iteration CAS loop did not finish in 180 s on QEMU, where the
+    // Unsafe-backed AtomicInteger loop beside it finished at once.
+    //
+    // Read WITHOUT the lock (virtualResolve), which is the point. Sound because (1) an entry is written ONCE
+    // per launch -- body first, a barrier, then the Type -- so a reader that sees the Type sees the body; and
+    // (2) within a launch a (site, receiver Type) pair cannot change its answer: registered classes keep their
+    // Types and registered bodies stay reachable. Cleared in resetLoader, where both of those stop holding.
+    private static long[] vsSiteType;
+    private static long[] vsSiteBuf;
+
+    /** Empty the per-site memo (allocation, and every resetLoader). Type is cleared first: a reader keys on it. */
+    static void clearSiteMemos()
+    {
+        if (vsSiteType == null)
+        {
+            return;
+        }
+        int z = 0;
+        while (z < MAXVSITE)
+        {
+            vsSiteType[z] = 0L;
+            vsSiteBuf[z] = 0L;
+            z += 1;
+        }
+        vsMemoIdx = -1;
+    }
+
+    /** Publish a site's first resolution, once: body, then a barrier, then the Type a lock-free reader keys on. */
+    private static void publishSiteMemo(int idx, long type, long buf)
+    {
+        if (vsSiteType != null && vsSiteType[idx] == 0L)
+        {
+            vsSiteBuf[idx] = buf;
+            Magic.dsb();
+            vsSiteType[idx] = type;
+        }
+    }
 
     /** Record an unresolved virtual site; returns its index (what the emitted code puts in x17). */
     static int virtualSiteIndex(int methodCp)
@@ -12864,6 +12906,9 @@ public final class Loader
             vsDesc = new long[MAXVSITE];
             vsCls = new long[MAXVSITE];
             vsBucket = new int[VSHASH];                  // allocArray does NOT zero: fill it explicitly
+            vsSiteType = new long[MAXVSITE];
+            vsSiteBuf = new long[MAXVSITE];
+            clearSiteMemos();
             int z = 0;
             while (z < VSHASH)
             {
@@ -13069,6 +13114,11 @@ public final class Loader
         // AND IT WIDENS A DEBT RATHER THAN CREATING ONE, stated because it should not be discovered later:
         // this path can run a <clinit> (its own doc below says so), so the lock is now held across guest
         // code here too -- exactly as it already is for lazyCompile's drain and loadAll's batch.
+        long hit = siteMemoHit(recv, idx);              // FAST PATH, NO LOCK -- see vsSiteType
+        if (hit != 0L)
+        {
+            return hit;
+        }
         VM.loaderLock(VM.LOCK_VIRT_RESOLVE);
         long r;
         try
@@ -13080,6 +13130,36 @@ public final class Loader
             VM.loaderUnlock();   // see the note in lazyCompile: a throw here used to strand the lock
         }
         return r;
+    }
+
+    /**
+     * The site's write-once memo, read without the loader lock (see {@code vsSiteType}); 0 = miss. A helper
+     * rather than inline so {@link #virtualResolve}, which carries a try/finally, stays SHALLOW. The receiver
+     * checks are the ones virtualResolveLocked makes, so a garbage receiver still reaches its reporting path.
+     */
+    private static long siteMemoHit(long recv, int idx)
+    {
+        if (vsSiteType == null || idx < 0 || idx >= vsCount)
+        {
+            return 0L;
+        }
+        if (recv < Heap.BASE || recv >= Heap.managedTop() || (recv & 7L) != 0L)
+        {
+            return 0L;
+        }
+        long memoType = vsSiteType[idx];
+        if (memoType == 0L)
+        {
+            return 0L;
+        }
+        Magic.dsb();                                    // the Type was read before the body
+        long memoBuf = vsSiteBuf[idx];
+        long tib = Magic.load64(recv + ObjectModel.TIB_OFFSET);
+        if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB || Magic.load64(tib) != memoType)
+        {
+            return 0L;
+        }
+        return memoBuf;
     }
 
     private static long virtualResolveLocked(long recv, int idx)
@@ -13151,6 +13231,7 @@ public final class Loader
                     vsMemoIdx = idx;
                     vsMemoType = type;
                     vsMemoBuf = ib;
+                    publishSiteMemo(idx, type, ib);
                     return ib;
                 }
                 Uart.write(Magic.bytes("\n  DISPATCH ON UNREGISTERED TYPE (receiver's class not in the registry): "));
@@ -13257,6 +13338,7 @@ public final class Loader
         vsMemoIdx = idx;
         vsMemoType = type;
         vsMemoBuf = buf;
+        publishSiteMemo(idx, type, buf);
         return buf;
     }
 

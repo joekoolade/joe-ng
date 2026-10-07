@@ -2473,11 +2473,16 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
      *
      * <p>{@code jdk/internal/util/StaticProperty} for the same reason: its values are the host's
      * {@code user.*}/{@code java.home}/... properties, where the VM's are seeded by the loader.
+     *
+     * <p>{@code java/util/concurrent/atomic/Atomic*} (stock since the overlays were deleted): {@code VALUE} is
+     * {@code Unsafe.objectFieldOffset(AtomicLong.class, "value")} -- the HOST JVM's field offset (12 under
+     * compressed oops) where this VM's is 16. Baked, every CAS would hit the wrong word of every atomic.
      */
     private static boolean noSnapshot(String cls)
     {
         return cls.equals("java/util/Locale") || cls.startsWith("sun/util/locale/")
-                || cls.equals("jdk/internal/util/StaticProperty");
+                || cls.equals("jdk/internal/util/StaticProperty")
+                || cls.startsWith("java/util/concurrent/atomic/Atomic");
     }
 
     private Resolved lookup(String key)

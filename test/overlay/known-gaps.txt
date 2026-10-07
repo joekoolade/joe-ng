@@ -85,11 +85,6 @@ supertype#java/util/Random#java/util/random/RandomGenerator
 supertype#java/util/concurrent/ConcurrentHashMap$KeySetView#java/util/concurrent/ConcurrentHashMap$CollectionView
 supertype#java/util/concurrent/ConcurrentSkipListMap#java/util/concurrent/ConcurrentNavigableMap
 supertype#java/util/concurrent/Semaphore#java/io/Serializable
-supertype#java/util/concurrent/atomic/AtomicBoolean#java/io/Serializable
-supertype#java/util/concurrent/atomic/AtomicIntegerArray#java/io/Serializable
-supertype#java/util/concurrent/atomic/AtomicLongArray#java/io/Serializable
-supertype#java/util/concurrent/atomic/AtomicReference#java/io/Serializable
-supertype#java/util/concurrent/atomic/AtomicReferenceArray#java/io/Serializable
 supertype#java/util/jar/JarFile#java/util/zip/ZipConstants
 supertype#java/util/zip/ZipFile#java/util/zip/ZipConstants
 supertype#sun/nio/cs/ISO_8859_1#java/lang/Comparable
