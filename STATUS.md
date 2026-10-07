@@ -4,6 +4,48 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **SEVEN `java.util.concurrent.atomic` OVERLAYS ARE DELETED -- THEY WERE NOT ATOMIC: "plain field access on
+  joe-ng's single core", ON A VM THAT HAS SCHEDULED ON FOUR CORES SINCE THE SMP ARC (2026-10-07, QEMU-GATED -- NOT
+  YET PI-VALIDATED).** `AtomicInteger`, `AtomicLong`, `AtomicBoolean`, `AtomicReference` and the three
+  `Atomic*Array`s were hand-written minima whose `compareAndSet` was a check-then-act and whose
+  `incrementAndGet` was `++value`. Stock has no natives in any of them; it runs on `Unsafe` (Integer/Long) and on
+  VarHandles (the rest). The three field updaters keep their overlays (they carry natives). Picked from
+  `overlaycheck-deep` via the `AtomicLong.decrementAndGet` gap.
+
+  | `AtomicRaceProbe`: 4 threads x 20,000, want 80,000 | overlays (the control) | stock |
+  |---|---|---|
+  | `AtomicInteger.incrementAndGet` | **79,818** | 80,000 |
+  | `AtomicLong.incrementAndGet` / `getAndAdd(3)` | **79,753 / 239,292** | 80,000 / 240,000 |
+  | `AtomicReference` CAS loop | **79,564** | 80,000 |
+  | `AtomicIntegerArray` / `AtomicLongArray` CAS loop | **79,671 / 79,691** | 80,000 / 80,000 |
+  | `AtomicReferenceArray` CAS loop | **75,535** | 80,000 |
+  | `AtomicBoolean` as a spinlock around a plain counter | **79,890** | 80,000 (intermittent -- below) |
+  | whole probe vs host oracle | -- | **BYTE-IDENTICAL** |
+  | demo suite | -- | 40 programs, 18 markers zero, `HML`/`HML 71ms`, `gc: collections=47`/`56` unchanged |
+  | host | -- | A64 105, compiler 40, `overlay-check 0 new` (5 stale `Serializable` baseline lines removed) |
+
+  - **STOCK ATOMICS EXPOSED A VM SCALING BUG: A LATE-RESOLVED VIRTUAL SITE PAID A FULL LOOKUP UNDER THE LOADER LOCK
+    ON EVERY CALL.** Every VarHandle access is such a site, and the only memo was ONE global entry, which a CAS
+    loop alternating `get`/`compareAndSet` thrashes. Bisected by type (four throwaway subsets): the Unsafe-backed
+    Integer/Long loop was exact at once, while every VarHandle-backed loop did not finish in 180 s on four
+    cores. **Fix: a per-site, WRITE-ONCE memo read WITHOUT the lock** (`Loader.siteMemoHit`): body, barrier,
+    then Type, so a reader that sees the Type sees the body; a (site, receiver Type) answer cannot change within
+    a launch, and the memo is cleared in `resetLoader`. After it, all three subsets are exact.
+  - **WRITER: `java/util/concurrent/atomic/Atomic*` is on `noSnapshot`.** Stock's `VALUE` is
+    `Unsafe.objectFieldOffset(AtomicLong.class, "value")`, and a seed-JVM snapshot would bake the HOST's offset
+    (compressed oops) where this VM's is 16 -- every CAS on the wrong word. The only baked code that instantiates
+    an atomic is JFR's `ThrowableTracer`, which this VM's `Throwable` never calls.
+  - **OPEN, AND IT IS THE NEXT INCREMENT: THE JIT EMITS NO BARRIER FOR A VOLATILE FIELD ACCESS** -- there is no
+    `volatile` handling anywhere in `compiler/`. The spinlock arm read **79,998 once** with stock atomics, then
+    80,000 on three later runs: the acquire is a CAS (`LDAXR`), but stock `AtomicBoolean.set(false)` is a plain
+    volatile store, and on AArch64 the guarded `counter++` can become visible after it. Releasing with
+    `compareAndSet(true, false)` (an `STLXR`) read 80,000. One failing sample against three passing ones is not a
+    rate, so this is stated as the reading the code supports, not a measurement -- and it is VM-wide: AQS
+    `state`, `ConcurrentHashMap`, `CompletableFuture` all rely on volatile ordering.
+  - **TWO HARNESS EVENTS, stated:** the session scratchpad and `/tmp` were cleared between runs, so three
+    "still hanging" reruns had silently booted NOTHING (the helper script was gone) -- caught because the logs
+    did not exist. The helper and `suite-run.sh` were recreated and every figure above is from a run after that.
+
 - **THE `java/util/concurrent/locks/LockSupport` OVERLAY IS DELETED AND STOCK RUNS -- A TIMED PARK USED TO BLOCK
   UNTIL UNPARKED, POSSIBLY FOR EVER, AND A PARK IGNORED INTERRUPTS (2026-10-06, QEMU-GATED -- NOT YET
   PI-VALIDATED).** Picked from `overlaycheck-deep` (513 gaps): the overlay declared only `park()`/`unpark()`, so
