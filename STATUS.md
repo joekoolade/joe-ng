@@ -4,6 +4,35 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **THE `ReentrantLock` OVERLAY IS DELETED -- IT WAS A NO-OP LOCK ON A FOUR-CORE SCHEDULER; STOCK JDK 26
+  `ReentrantLock` (AQS) RUNS (2026-10-08, QEMU-GATED -- NOT YET PI-VALIDATED).** The overlay made `lock()`/`unlock()`
+  empty, `tryLock()` always true, `isHeldByCurrentThread()` always true and `newCondition()` NULL, on the
+  justification "the socket path on metal is single-threaded". That stopped being true when the SMP arc put guest
+  threads on all four A72s; what the overlay avoided (AQS's `VarHandle`s, `LockSupport`) has since been made to work
+  stock by #328-#330.
+
+  | `LockProbe` arm | overlay | stock | host |
+  |---|---|---|---|
+  | counter guarded by the lock, 4 threads x 20,000 | **78,934** | **80,000** | 80,000 |
+  | `tryLock` while held by another thread | **`true`** | `false` | `false` |
+  | `Condition` await/signal | **NPE** (`newCondition()` null) | 42 | 42 |
+  | `ArrayBlockingQueue` / `LinkedBlockingQueue` / timed `poll` | not reached | correct | correct |
+
+  - The stock run is **byte-identical to the host JVM**. Same probe source against both, so the overlay is the
+    negative control.
+  - **Suite: 40 programs, 18 markers zero, `HML`/`HML 72ms`, `smp 4 of 4`, `gc: collections=47` at churn --
+    unchanged; `lisp evals=600 result=610 stable=1`.** Host: `compiler 40`, `overlay-check 0 new`; deep scan
+    503 -> 502 new gaps.
+  - **A FALSE ALARM, RECORDED SO IT IS NOT CHASED AGAIN:** two suite runs and two alone-runs of `LispDemo` stopped
+    printing in the long run with QEMU at ~370% CPU, which looked like a livelock. The CONTROL (same alone-run with
+    the overlay restored) stalled at the SAME point, and the host's load average was **32** (macOS
+    `mediaanalysisd` + on-device inference): an image build took 30 minutes instead of one. On a quiet host the
+    identical tree finished the whole suite in under 8 minutes. **When QEMU "hangs", read `uptime` before reading
+    the VM.**
+  - **NOT EXERCISED HERE:** `NioSocketImpl`, the overlay's original caller, now takes a real lock on the socket
+    path. That is WiFi-only, so the Pi is its only harness. Gate: `NetDemo` HTTP 200 and the litmus/lock probes on
+    silicon.
+
 - **VOLATILE FIELD ACCESSES ARE FENCED -- THE JIT EMITTED NO BARRIER FOR `volatile` AT ALL, AND A STORE-BUFFERING
   LITMUS TEST SHOWS THE FORBIDDEN OUTCOME IN 65% OF ROUNDS WITHOUT IT (2026-10-08, QEMU-GATED -- NOT YET
   PI-VALIDATED).** There was no `volatile` handling anywhere in `compiler/`: a volatile field compiled to a plain
