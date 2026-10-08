@@ -453,7 +453,10 @@ public final class MetalJavaLangAccess implements JavaLangAccess
     }
     @Override public Thread currentCarrierThread()
     {
-        throw unsupported("currentCarrierThread");
+        // The carrier of a PLATFORM thread is the thread itself (Thread.currentCarrierThread's javadoc), and
+        // joe-ng has no virtual threads, so this is exact. Reached by ThreadLocalRandom.getProbe, i.e. by
+        // ConcurrentHashMap's contended counter.
+        return Thread.currentThread();
     }
     @Override public <T> T getCarrierThreadLocal(CarrierThreadLocal<T> local)
     {

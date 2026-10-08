@@ -457,6 +457,8 @@ public final class Loader
                 clinitPd[clinitN] = findPdByName(gbase, gThisNameOff);   // which blob (for dependency-ordered running)
             clinitBase[clinitN] = gbase;                // batch-independent identity (see the declarations)
             clinitNameOff[clinitN] = gThisNameOff;
+            clinitOwner[clinitN] = 0;                   // explicit: allocArray does not zero on this VM
+            clinitDone[clinitN] = 0;
             if (utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/io/FileDescriptor")))
             {
                 clinitFdFirst = clinitN;   // run FIRST in runClinits: it registers the JavaIOFileDescriptorAccess
@@ -1058,6 +1060,13 @@ public final class Loader
     // So `clinitRan` now means RUNNING-OR-RUN and is set immediately before the call, and `clinitBusy` marks
     // the dep/compile phase separately -- purely to stop that phase re-entering itself.
     private static int[] clinitBusy;
+    // JVMS 5.5 STEP 2: "If C is being initialized by SOME OTHER THREAD, block until it completes." The record
+    // carries WHO claimed it (task id + 1, so 0 is none) and whether its body has FINISHED -- normally or by a
+    // throw. Without them a second task found `clinitRan` already set, took it as done, and read the statics
+    // the first task had not assigned yet: stock ConcurrentHashMap's contended counter NPE'd in
+    // ThreadLocalRandom.getProbe on exactly that, four threads entering TLR.<clinit> at once.
+    private static int[] clinitOwner;
+    private static int[] clinitDone;
     // PRECISE per-<clinit> init dependencies: the classes the initializer BODY actively touches
     // (getstatic/putstatic/invokestatic owner, new/anewarray class, ldc Class literal), name Utf8 offsets in the
     // owning blob's gbase. Used by clinitDepBlocked INSTEAD of the whole-constant-pool dp table, whose field-type /
@@ -1602,7 +1611,51 @@ public final class Loader
         // the order the specification requires. State is checked first, so an already-initialized ancestor
         // costs nothing and a cycle cannot recurse for ever.
         initPrereq(reg);                                // the one edge no bytecode scan can see (see below)
+        if (awaitOtherInitializer(reg))
+        {
+            return;                                     // another task ran it to completion while we waited
+        }
         runPendingClinit(reg);
+    }
+
+    /**
+     * JVMS 5.5 step 2: if {@code reg}'s initializer is CLAIMED by another task and has not finished, yield until
+     * it has. Returns true when it waited (the caller then proceeds against the finished statics, or -- if the
+     * body threw -- against what it left, which is what the claiming task saw too).
+     *
+     * <p>A task HOLDING THE LOADER LOCK does not wait: the initializing task may need that lock to compile a
+     * method its body calls, and waiting would deadlock the two. That case keeps the old behaviour (proceed);
+     * it is the hazard {@code warnClinitUnderLock} already names.
+     */
+    private static boolean awaitOtherInitializer(int reg)
+    {
+        int me = VM.curTask() + 1;
+        int i = 0;
+        while (i < clinitN)
+        {
+            if (clinitBase[i] == clTab[reg].base && clinitOwner[i] != 0 && clinitOwner[i] != me
+                    && clinitDone[i] == 0)
+            {
+                return awaitInitializer(i, reg);
+            }
+            i += 1;
+        }
+        return false;
+    }
+
+    /** Yield until initializer record {@code i} (claimed by another task) has finished; false -- without
+     *  waiting -- if this task holds the loader lock (see {@link #awaitOtherInitializer}). */
+    private static boolean awaitInitializer(int i, int reg)
+    {
+        if (VM.loaderOwner == VM.curTask())
+        {
+            return false;
+        }
+        while (clinitDone[i] == 0)
+        {
+            VMScheduler.taskYield();
+        }
+        return true;
     }
 
     /**
@@ -1617,7 +1670,24 @@ public final class Loader
         {
             if (clinitRan[i] == 0 && clinitCode[i] != 0L && clinitBase[i] == clTab[reg].base)
             {
-                if (clinitBusy[i] != 0)
+                int me = VM.curTask() + 1;
+                long daif = VMScheduler.schedLock();     // test-and-claim is ONE step: two tasks must not both
+                int busy = clinitBusy[i];                //   read busy==0 and both run the body
+                int owner = clinitOwner[i];
+                if (busy == 0)
+                {
+                    clinitBusy[i] = 1;
+                    clinitOwner[i] = me;
+                }
+                VMScheduler.schedUnlock(daif);
+                if (busy != 0 && owner != me)
+                {
+                    // JVMS 5.5 STEP 2, not step 3: ANOTHER task is initializing this class. Wait for it, and
+                    // then proceed exactly as if it had already been done when we arrived.
+                    awaitInitializer(i, reg);
+                    return 0;
+                }
+                if (busy != 0)
                 {
                     // RE-ENTERED WHILE THIS CLASS IS ALREADY BEING INITIALIZED BY US -- JVMS 5.5 step 3:
                     // "this must be a recursive request for initialization ... complete normally". So we
@@ -1644,7 +1714,8 @@ public final class Loader
                     // runs once at the live site below.
                     return 0;
                 }
-                clinitBusy[i] = 1;                       // the dep/compile phase, NOT yet "being initialized"
+                // CLAIMED above (busy=1, owner=us): the dep/compile phase, NOT yet "being initialized", but already
+                // OURS -- another task arriving now waits (step 2) instead of taking step 3's recursive return.
                 // COMPILE FIRST. Measured: the dependency pre-pass was NOT what pulled the
                 // mutually-referencing partner in -- the COMPILE was, which is JVMS 5.4's "linking may never
                 // run an initializer" being violated by this VM's own codegen. That is why the phase is
@@ -1718,8 +1789,15 @@ public final class Loader
                 clinitCellWatch(reg, Magic.bytes("before"));
                 warnClinitUnderLock(i);                 // THE LIVE SITE: lazyCompile holds the lock across this
                 clinitRan[i] = 1;                        // CLAIM here: step 6 and step 9 with nothing between
-                long unused = Magic.call0(entry);
-                clTab[reg].state = RVMClass.ST_INITIALIZED;
+                try
+                {
+                    long unused = Magic.call0(entry);
+                    clTab[reg].state = RVMClass.ST_INITIALIZED;
+                }
+                finally
+                {
+                    clinitDone[i] = 1;                   // release the step-2 waiters, normally or by a throw
+                }
                 // NOW -- and not before -- initialize the classes this initializer's COMPILE noted. They are
                 // an over-approximation of its active uses (the compile pulls whatever the constant pool
                 // names, nest-host and inner-class references included) and running them ahead of this body
@@ -2508,6 +2586,7 @@ public final class Loader
         // That is the hazard already recorded for demand-loading inside buildLambdaTib, reached from a
         // different direction.
         seedSystemProps();                                  // System.props -> a real Properties (setProperty)
+        seedSavedProps();                                   // jdk.internal.misc.VM.savedProps -> its own snapshot
         seedSystemStreams();                                // System.out/err -> stock PrintStream over the UART
         long argv = buildArgv(argsLine);                    // after loadAll: guestString needs String's TIB
         long buf = globalMethodBuf(className, Magic.bytes("main"), Magic.bytes("([Ljava/lang/String;)V"));
@@ -2648,6 +2727,7 @@ public final class Loader
         // That is the hazard already recorded for demand-loading inside buildLambdaTib, reached from a
         // different direction.
         seedSystemProps();                                  // System.props -> a real Properties (setProperty)
+        seedSavedProps();                                   // jdk.internal.misc.VM.savedProps -> its own snapshot
         seedSystemStreams();                                // System.out/err -> stock PrintStream over the UART
         // Build the String[] argv AFTER loadAll: guestString needs the loaded String class's TIB, so the argv
         // MUST be built here, not before resetLoader() (that was the "args[i] throws" bug).
@@ -3572,6 +3652,8 @@ public final class Loader
         clinitNameOff = new int[MAXBLOB];
         clinitRan = new int[MAXBLOB];
         clinitBusy = new int[MAXBLOB];
+        clinitOwner = new int[MAXBLOB];
+        clinitDone = new int[MAXBLOB];
         lzInitReg = new int[MAXPENDINIT];
         lzInitN = 0;
         dblToStrBuf = 0L;                               // per LAUNCH: a memo that outlived the code buffers
@@ -9719,6 +9801,52 @@ public final class Loader
         Magic.store64(slot, obj);
         seedStandardProps(obj, pi);
         seedLineSeparator();
+    }
+
+    /**
+     * Fill {@code jdk.internal.misc.VM.savedProps}, the snapshot stock {@code System.initPhase1} hands to
+     * {@code VM.saveProperties}. joe-ng never runs initPhase1, so the field stayed null and
+     * {@code VM.getSavedProperty} THREW "Not yet initialized" -- inside {@code ThreadLocalRandom.<clinit>}, which
+     * reads {@code java.util.secureRandomSeed}. That left every TLR static null, and stock
+     * {@code ConcurrentHashMap} NPE'd in {@code addCount} the first time two threads contended.
+     *
+     * <p>A SEPARATE {@code Properties} with the same standard entries, NOT the {@code System.props} object: stock
+     * keeps the two apart, so a {@code System.setProperty} in {@code main} is invisible to
+     * {@code getSavedProperty}. Sharing one object would let a program's runtime property change what java.base
+     * read as its launch configuration -- a silent difference, which is the kind this project removes.
+     *
+     * <p>Runs at LAUNCH beside {@link #seedSystemProps} because it compiles the same {@code Properties} methods,
+     * which the per-batch seed site must not do. A missing {@code savedProps} cell is REPORTED: it means VM was
+     * not registered at launch and a later {@code getSavedProperty} would throw.
+     */
+    static void seedSavedProps()
+    {
+        long slot = staticSlotOf(Magic.bytes("jdk/internal/misc/VM"), Magic.bytes("savedProps"));
+        if (slot == 0L)
+        {
+            reportPropsGap(Magic.bytes("jdk/internal/misc/VM.savedProps has no static cell (getSavedProperty throws)"));
+            return;
+        }
+        if (Magic.load64(slot) != 0L)
+        {
+            return;
+        }
+        int pi = classIndexByName(Magic.bytes("java/util/Properties"));
+        if (pi < 0)
+        {
+            reportPropsGap(Magic.bytes("VM.savedProps: java/util/Properties is not registered"));
+            return;
+        }
+        long obj = allocInstance(clTab[pi].type);
+        int ctor = constructorResolve(clTab[pi].type, 0);
+        if (obj == 0L || ctor < 0 || rgTab[ctor].buf == 0L)
+        {
+            reportPropsGap(Magic.bytes("VM.savedProps: java/util/Properties could not be constructed"));
+            return;
+        }
+        Magic.call2(rgTab[ctor].buf, obj, 0L);
+        seedStandardProps(obj, pi);
+        Magic.store64(slot, obj);
     }
 
     /**

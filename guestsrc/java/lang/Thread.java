@@ -35,6 +35,22 @@ public class Thread implements Runnable
     // Unsafe.objectFieldOffset(Thread.class, "parkBlocker") exactly as on stock. Appended LAST so the offsets the
     // VM hardcodes above it do not move; allocThreadObj sizes a Thread from its field count.
     volatile Object parkBlocker;
+    // @72/@80/@88 -- stock ThreadLocalRandom's per-thread state, reached through
+    // Unsafe.objectFieldOffset(Thread.class, "threadLocalRandomSeed") etc. exactly as on stock (ConcurrentHashMap's
+    // contended counter path uses the probe). Appended after parkBlocker for the same reason.
+    /** The current seed for a ThreadLocalRandom */
+    long threadLocalRandomSeed;
+    /** Probe hash value; nonzero if threadLocalRandomSeed initialized */
+    int threadLocalRandomProbe;
+    /** Secondary seed isolated from public ThreadLocalRandom sequence */
+    int threadLocalRandomSecondarySeed;
+    // @96/@104 -- stock's thread-local map fields, declared ONLY so ThreadLocalRandom.<clinit>'s
+    // objectFieldOffset(Thread.class, "threadLocals"/"inheritableThreadLocals") resolves; they stay null. joe-ng's
+    // thread-locals live in tlKeys/tlVals (the ThreadLocal overlay), so TLR.eraseThreadLocals -- the only writer
+    // -- would NOT clear them. Its callers are InnocuousThread and the ForkJoin pool's innocuous worker, neither
+    // reachable on metal (no common pool). A stock ThreadLocal would make these the real map and close that.
+    Object threadLocals;
+    Object inheritableThreadLocals;
 
     /** The lowest priority a thread may have. */
     public static final int MIN_PRIORITY = 1;
