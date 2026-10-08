@@ -37,9 +37,11 @@ public final class ClassFile
     public record MemberRef(String owner, String name, String descriptor) {}
 
     /** An instance/static field declaration. */
-    public record FieldInfo(String name, String descriptor, boolean isStatic) {}
+    /** A field: name, descriptor, static-ness, and {@code isVolatile} -- which the compiler fences. */
+    public record FieldInfo(String name, String descriptor, boolean isStatic, boolean isVolatile) {}
 
     private static final int ACC_STATIC = 0x0008;
+    private static final int ACC_VOLATILE = 0x0040;
     private static final int ACC_SYNCHRONIZED = 0x0020;
 
     /** A try/catch entry: bytecode range [startPc,endPc), handler, and catch-type cp index (0 = any). */
@@ -180,6 +182,19 @@ public final class ClassFile
             }
         }
         return n;
+    }
+
+    /** Whether this class DECLARES a field {@code name} of the given static-ness: 1 volatile, 0 not, -1 absent. */
+    public int declaredFieldVolatile(String name, boolean isStatic)
+    {
+        for (FieldInfo f : fields)
+        {
+            if (f.isStatic() == isStatic && f.name().equals(name))
+            {
+                return f.isVolatile() ? 1 : 0;
+            }
+        }
+        return -1;
     }
 
     /** Index of instance field {@code name} in declaration order (its slot in the object). */
@@ -738,7 +753,7 @@ public final class ClassFile
             String name = utf8(ClassReader.u2(b, p + 2));
             String desc = utf8(ClassReader.u2(b, p + 4));
             p = ClassReader.skipAttributes(b, p + 6);
-            fs[i] = new FieldInfo(name, desc, (access & ACC_STATIC) != 0);
+            fs[i] = new FieldInfo(name, desc, (access & ACC_STATIC) != 0, (access & ACC_VOLATILE) != 0);
         }
         return fs;
     }

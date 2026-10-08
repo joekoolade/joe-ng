@@ -361,6 +361,12 @@ public final class A64Enc
     {
         return 0xD503_3F9F;
     }
+    /** {@code DMB ISH} — data memory barrier, inner shareable: the ordering point for a Java volatile access
+     *  between cores (CRm 0b1011 = ISH). */
+    public static int dmbIsh()
+    {
+        return 0xD503_3BBF;
+    }
     /** {@code ISB} — instruction synchronization barrier. */
     public static int isb()
     {

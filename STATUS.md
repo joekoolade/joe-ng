@@ -4,6 +4,43 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **VOLATILE FIELD ACCESSES ARE FENCED -- THE JIT EMITTED NO BARRIER FOR `volatile` AT ALL, AND A STORE-BUFFERING
+  LITMUS TEST SHOWS THE FORBIDDEN OUTCOME IN 65% OF ROUNDS WITHOUT IT (2026-10-08, QEMU-GATED -- NOT YET
+  PI-VALIDATED).** There was no `volatile` handling anywhere in `compiler/`: a volatile field compiled to a plain
+  `ldr`/`str`. On four weakly-ordered A72s that breaks the Java memory model for every stock class that relies on
+  it -- AQS `state`, `ConcurrentHashMap`, `CompletableFuture`, `AtomicBoolean.set` releasing a lock -- and it is
+  what the previous card named as open.
+
+  | gate | before | after |
+  |---|---|---|
+  | **`VolatileLitmusProbe`: `x=1; r1=y` vs `y=1; r2=x`, 20,000 rounds, forbidden `r1==0 && r2==0`** | **12,952** | **0** |
+  | `AtomicRaceProbe`, `AtomicBoolean` spinlock arm | 79,998 once in 4 runs | **80,000 in 4 of 4** |
+  | host oracle (both probes) | -- | identical; HotSpot's count is 0 |
+  | demo suite | -- | 40 programs, 18 markers zero, `HML`/`HML 65ms`, **`gc: collections=47` at churn -- unchanged** |
+  | host | -- | **A64 105 -> 107** (`DMB ISH` encoded and cross-checked), **compiler 40** (fixpoint holds), `overlay-check 0 new` |
+
+  - **THE MAPPING IS THE JSR-133 COOKBOOK'S FOR ARMv8:** a volatile LOAD is `ldr; dmb ish`; a volatile STORE is
+    `dmb ish; str; dmb ish` -- the trailing barrier is the store-load fence the litmus test exercises, the leading
+    one the release that orders a lock's guarded writes before its unlock. `A64Enc.dmbIsh()` is `0xD5033BBF`.
+  - **BOTH WORLDS ANSWER THE QUESTION, so the self-hosting fixpoint holds:** `Symbols.isVolatileField(cp,
+    isStatic)` (default false) is implemented by `WriterSymbols` (from `ClassFile.FieldInfo`, which now keeps
+    `isVolatile`) and `MetalSymbols` (`Loader.fieldIsVolatile`). Both resolve the same way -- the owner, then up the
+    superclass chain, since javac may name a field through a subclass. The metal query is COMPILE-SAFE (tables
+    only, no constant-pool re-parse); static access flags are now recorded at parse time (`gsfAccess`, into
+    `RVMField.access`, which statics never filled), and the static lookup reuses `sgCellOf`'s hash index
+    (`sgIndexOf`) rather than adding a scan.
+  - **NINE BARRIERS ARE BAKED, ALL ON THE RIGHT FIELDS** -- mapped by address through the symmap: every one is in
+    `java/util/Locale`'s getters for its `volatile` statics (`defaultDisplayLocale`/`defaultFormatLocale`, the
+    double-checked lazy initialisers). Most volatile code is guest-compiled, which is why the metal probes are the
+    gate.
+  - **THE CONTROL IS SINGLE-VARIABLE:** the same tree with only `Baseline.java` reverted, same probe, same harness.
+  - **STATED LIMITS:** the self-build writer (`MetalWriterSymbols`, retired) takes the default and would not fence --
+    unreachable while self-build is retired. And the lisp finale read 58 against 56, which this file records as not
+    citable from QEMU; the churn gate is the one that is, and it did not move.
+  - **NOT PI-VALIDATED, and the Pi is the harness that matters here:** real A72s reorder at their own rate, which
+    the emulator (on an Apple-silicon host) only approximates. Gate named in advance: the litmus count 0 on silicon,
+    and the suite's concurrency demos unchanged.
+
 - **SEVEN `java.util.concurrent.atomic` OVERLAYS ARE DELETED -- THEY WERE NOT ATOMIC: "plain field access on
   joe-ng's single core", ON A VM THAT HAS SCHEDULED ON FOUR CORES SINCE THE SMP ARC (2026-10-07, QEMU-GATED -- NOT
   YET PI-VALIDATED).** `AtomicInteger`, `AtomicLong`, `AtomicBoolean`, `AtomicReference` and the three

@@ -379,6 +379,17 @@ public interface Symbols
     /** Byte offset of the instance field at Fieldref index {@code fieldCp} within its object. */
     int fieldOffset(int fieldCp);
 
+    /**
+     * Whether Fieldref {@code fieldCp} names a {@code volatile} field. The compiler then FENCES the access
+     * (JSR-133 on ARMv8: a volatile load is {@code ldr; dmb ish}, a store {@code dmb ish; str; dmb ish}). Both
+     * worlds must agree, or the self-hosting fixpoint breaks; the default answers false for a symbol source
+     * with no field metadata.
+     */
+    default boolean isVolatileField(int fieldCp, boolean isStatic)
+    {
+        return false;
+    }
+
     /** Scalar allocation size (bytes) of an instance of the class at {@code classCp} (for {@code new}). */
     /**
      * Scalar instance size of the class at {@code classCp}, or a NEGATIVE value when the class cannot be
