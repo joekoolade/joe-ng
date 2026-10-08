@@ -80,6 +80,7 @@ public final class Loader
     private static int gdescLen;
     private static long gStatics;   // this class's statics block
     private static int[] gsfName;   // Utf8 offset of each static field's name (index = slot)
+    private static int[] gsfAccess; // access_flags of each static field (index = slot): ACC_VOLATILE for the JIT
     private static int gsfCount;
     private static int[] gifName;   // Utf8 offset of each instance field's name (index = slot)
     private static int[] gifAccess; // access_flags of each own instance field (index = slot; 0 for inherited)
@@ -7579,6 +7580,7 @@ public final class Loader
         }
         p += 2;
         gsfName = new int[fcount + 1];
+        gsfAccess = new int[fcount + 1];
         gifName = new int[fcount + islot + 1];
         gifAccess = new int[fcount + islot + 1];
         gifDescOff = new int[fcount + islot + 1];
@@ -7593,6 +7595,7 @@ public final class Loader
             if ((access & 0x0008) != 0)
             {
                 gsfName[slot] = gcp[nameIdx];    // ACC_STATIC
+                gsfAccess[slot] = access;        // the JIT's volatile barriers read ACC_VOLATILE from here
                 slot += 1;
             }
             else
@@ -11659,16 +11662,25 @@ public final class Loader
      */
     private static long sgCellOf(long refBase, int classOff, int nameOff)
     {
+        int best = sgIndexOf(refBase, classOff, refBase, nameOff);
+        return best < 0 ? 0L : sgTab[best].addr;
+    }
+
+    /** The static-registry entry for class {@code clsBase+clsOff} and field {@code nameBase+nameOff} (the two
+     *  names may live in different blobs), or -1. The index of {@link #sgCellOf}, shared with
+     *  {@link #fieldIsVolatile}. */
+    private static int sgIndexOf(long clsBase, int clsOff, long nameBase, int nameOff)
+    {
         buildSgIndex();
         // The SAME predicate the scan used -- the index only narrows what it is applied to, so a hit is the
         // same entry the scan would have found and a miss still answers 0.
         int best = -1;
-        int k = sgBucket[utf8Hash2(refBase, classOff, refBase, nameOff) & (SGTAB - 1)];
+        int k = sgBucket[utf8Hash2(clsBase, clsOff, nameBase, nameOff) & (SGTAB - 1)];
         while (k >= 0)
         {
             psSteps += 1;
-            if (utf8EqAt(refBase, classOff, sgTab[k].base, sgTab[k].classOff)
-                    && utf8EqAt(refBase, nameOff, sgTab[k].base, sgTab[k].nameOff))
+            if (utf8EqAt(clsBase, clsOff, sgTab[k].base, sgTab[k].classOff)
+                    && utf8EqAt(nameBase, nameOff, sgTab[k].base, sgTab[k].nameOff))
             {
                 if (best < 0 || k < best)
                 {
@@ -11677,7 +11689,7 @@ public final class Loader
             }
             k = sgNext[k];
         }
-        return best < 0 ? 0L : sgTab[best].addr;
+        return best;
     }
 
     /** Static-slot address for a field ref given as blob base + Utf8 offsets, or 0. */
@@ -12294,6 +12306,7 @@ public final class Loader
             sgTab[sgCount].classOff = gThisNameOff;
             sgTab[sgCount].nameOff = gsfName[st];
             sgTab[sgCount].addr = gStatics + st * 8L;
+            sgTab[sgCount].access = gsfAccess[st];
             sgCount += 1;
             st += 1;
         }
@@ -20171,6 +20184,75 @@ public final class Loader
             fieldOffsetLog(refClassNameOff(idx), nameOff, -1, 9);  // 9 = same-class MISS, fell through
         }
         return globalFieldOffset(idx);                     // another class, or an inherited field
+    }
+
+    /**
+     * Whether Fieldref {@code idx} names a {@code volatile} field -- the JIT then fences the access (see
+     * {@code Baseline.getfield}). Resolved the way {@link #fieldOffsetOf} and the static lookup resolve the
+     * field itself: this class's own fields, then the registries class-qualified, then the superclass chain.
+     * Compile-safe: it walks tables and never re-parses a constant pool. An unresolvable field answers false;
+     * the access it guards is then unresolved anyway, and takes that path's own retry or report.
+     */
+    static boolean fieldIsVolatile(int idx, boolean isStatic)
+    {
+        int classOff = refClassNameOff(idx);
+        int nameOff = mrefNameOff(idx);
+        if (utf8Eq(classOff, gThisNameOff))
+        {
+            int s = 0;
+            int n = isStatic ? gsfCount : gifCount;
+            while (s < n)
+            {
+                int nm = isStatic ? gsfName[s] : gifName[s];
+                if (nm == nameOff)
+                {
+                    return ((isStatic ? gsfAccess[s] : gifAccess[s]) & 0x0040) != 0;   // ACC_VOLATILE
+                }
+                s += 1;
+            }
+        }
+        long clsBase = gbase;
+        int clsOff = classOff;
+        int hops = 0;
+        while (hops < 64)
+        {
+            int a = registeredFieldAccess(clsBase, clsOff, nameOff, isStatic);
+            if (a >= 0)
+            {
+                return (a & 0x0040) != 0;
+            }
+            int pd = findPdByName(clsBase, clsOff);
+            if (pd < 0 || pdSuperOff[pd] == 0)
+            {
+                return false;
+            }
+            clsBase = pdBase[pd];
+            clsOff = pdSuperOff[pd];
+            hops += 1;
+        }
+        return false;
+    }
+
+    /** access_flags of the registered field {@code nameOff} (in gbase) DECLARED by the class named at
+     *  {@code clsBase+clsOff}, or -1. */
+    private static int registeredFieldAccess(long clsBase, int clsOff, int nameOff, boolean isStatic)
+    {
+        if (isStatic)
+        {
+            int k = sgIndexOf(clsBase, clsOff, gbase, nameOff);   // the static registry's hash index
+            return k < 0 ? -1 : sgTab[k].access;
+        }
+        int i = 0;                                      // instance fields: the same scan globalFieldOffset
+        while (i < fldCount)                            //   makes at this site, no index of its own
+        {
+            if (utf8EqAt(clsBase, clsOff, fldTab[i].base, fldTab[i].classOff)
+                    && utf8EqAt(gbase, nameOff, fldTab[i].base, fldTab[i].nameOff))
+            {
+                return fldTab[i].access;
+            }
+            i += 1;
+        }
+        return -1;
     }
 
     /** Resolve Methodref {@code idx} to its (same-class) method's bytecode; set {@code gcodeLen}. */

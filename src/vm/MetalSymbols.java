@@ -268,6 +268,10 @@ final class MetalSymbols implements Symbols
     {
         return Loader.fieldOffsetOf(fieldCp);
     }
+    public boolean isVolatileField(int fieldCp, boolean isStatic)
+    {
+        return Loader.fieldIsVolatile(fieldCp, isStatic);
+    }
     public boolean defaultDispatch(int methodCp)
     {
         return Loader.defaultDispatch(methodCp);

@@ -86,6 +86,8 @@ public final class A64Test
         // ---- barriers ------------------------------------------------------
         T.eqWord("DSB SY", 0xD5033F9F, A64.dsb());
         T.eqWord("DMB SY", 0xD5033FBF, A64.dmb());
+        T.eqWord("DMB ISH", 0xD5033BBF, asm.A64Enc.dmbIsh());
+        T.eqWord("DMB ISH via A64", A64.dmb(0b1011), asm.A64Enc.dmbIsh());
         T.eqWord("ISB",    0xD5033FDF, A64.isb());
 
         // ---- cache maintenance ---------------------------------------------

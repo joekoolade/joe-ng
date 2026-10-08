@@ -278,6 +278,26 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         ClassFile owner = resolve(ref.owner());
         return ObjectModel.fieldOffset(chainBase(ref.owner()) + owner.instanceFieldIndex(ref.name()));
     }
+    /** Owner first, then up the superclass chain -- javac may name the field through a subclass. */
+    public boolean isVolatileField(int fieldCp, boolean isStatic)
+    {
+        ClassFile.MemberRef ref = cf.memberRef(fieldCp);
+        String c = ref.owner();
+        int hops = 0;
+        while (c != null && hops < 64 && canResolve(c))
+        {
+            ClassFile k = resolve(c);
+            int v = k.declaredFieldVolatile(ref.name(), isStatic);
+            if (v >= 0)
+            {
+                return v == 1;
+            }
+            c = k.superClassName();
+            hops += 1;
+        }
+        return false;
+    }
+
     /** The writer resolves against a closed world where every virtual target is known, so an inherited
      *  interface default never reaches the vtable fallback that makes this necessary on metal. */
     public boolean defaultDispatch(int methodCp)

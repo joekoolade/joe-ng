@@ -1522,13 +1522,26 @@ public final class Baseline
         int r = pushReg();
         symbols.staticField(cb, r, cpIndex);
         cb.emit(A64Enc.ldrx(r, r, 0));
+        if (symbols.isVolatileField(cpIndex, true))
+        {
+            cb.emit(A64Enc.dmbIsh());                    // volatile LOAD: later accesses stay after it
+        }
     }
     private void putstatic(CodeBuffer cb, int cpIndex)
     {
         initGuardAt(cb, cpIndex, false);               // BEFORE the pop: spillLive only covers the stack
         int v = popReg();
         symbols.staticField(cb, 16, cpIndex);
+        boolean vol = symbols.isVolatileField(cpIndex, true);
+        if (vol)
+        {
+            cb.emit(A64Enc.dmbIsh());                    // volatile STORE: earlier accesses complete first
+        }
         cb.emit(A64Enc.strx(v, 16, 0));
+        if (vol)
+        {
+            cb.emit(A64Enc.dmbIsh());                    // ... and a later volatile load cannot pass it
+        }
     }
 
     /** Load the synthetic $exception static slot into {@code destReg}. */
@@ -1590,6 +1603,13 @@ public final class Baseline
         nullCheck(cb, obj, pos);                                 // this.f on null -> NPE
         int r = pushReg();
         cb.emit(A64Enc.ldrx(r, obj, off));
+        if (symbols.isVolatileField(cpIndex, false))
+        {
+            // JSR-133 on ARMv8 (the JMM cookbook mapping): a volatile load is followed by a barrier, so no
+            // later access is satisfied before it. Without it the four cores reorder freely: a lock released
+            // by a volatile store (stock AtomicBoolean.set) could publish before the writes it guards.
+            cb.emit(A64Enc.dmbIsh());
+        }
     }
 
     private void putfield(CodeBuffer cb, int cpIndex, int pos)
@@ -1614,7 +1634,16 @@ public final class Baseline
         int val = popReg();
         int obj = popReg();
         nullCheck(cb, obj, pos);                                 // this.f = v on null -> NPE
+        boolean vol = symbols.isVolatileField(cpIndex, false);
+        if (vol)
+        {
+            cb.emit(A64Enc.dmbIsh());                            // volatile STORE: release -- earlier accesses first
+        }
         cb.emit(A64Enc.strx(val, obj, off));
+        if (vol)
+        {
+            cb.emit(A64Enc.dmbIsh());                            // ... and store-load: a later volatile load waits
+        }
     }
 
     // ----- allocation: new -> Heap.alloc(size), store TIB, push ref ---------
