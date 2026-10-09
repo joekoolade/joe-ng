@@ -441,7 +441,26 @@ public final class MetalJavaLangAccess implements JavaLangAccess
     }
     @Override public void start(Thread thread, ThreadContainer container)
     {
-        throw unsupported("start");
+        // Stock Thread.start(ThreadContainer): register with the container, start, and unregister if the start
+        // failed. Reached by every ThreadPoolExecutor worker (its SharedThreadContainer).
+        //
+        // STATED LIMIT: stock ALSO calls container.remove(thread) when the thread exits (Thread.exit). That is not
+        // done here. For SharedThreadContainer -- the Executors path -- onExit of a PLATFORM thread is a no-op, so
+        // this is exact there; a counting container (ThreadFlock, preview StructuredTaskScope) would miss the exit.
+        container.add(thread);
+        boolean started = false;
+        try
+        {
+            thread.start();
+            started = true;
+        }
+        finally
+        {
+            if (!started)
+            {
+                container.remove(thread);
+            }
+        }
     }
     @Override public StackableScope headStackableScope(Thread thread)
     {

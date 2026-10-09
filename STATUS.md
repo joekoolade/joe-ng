@@ -4,6 +4,37 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **THREAD POOLS WORK, AND UNCAUGHT-EXCEPTION HANDLERS FIRE -- `Executors.newFixedThreadPool` COULD NOT CREATE A
+  SINGLE WORKER (2026-10-09, QEMU-GATED -- NOT YET PI-VALIDATED).** The `Thread` overlay is VM-coupled (fixed field
+  offsets), so this ADDS the stock members it lacked rather than replacing it. Each was named by the previous run's
+  failure:
+
+  | step | failure | fix |
+  |---|---|---|
+  | 1 | `LINK FAILED: Thread.<init>(ThreadGroup, Runnable, String, long)` in `Executors$DefaultThreadFactory` | stock `Thread(String)` and the 4-arg constructor |
+  | 2 | `VIRTUALRESOLVE FAILED Thread.getState()` in `ThreadPoolExecutor.addWorker` | stock `Thread.State`; `getState` |
+  | 3 | `JavaLangAccess.start is not implemented` (a #327 throwing stub) | stock `Thread.start(ThreadContainer)`: `container.add`, start, `remove` on failure |
+
+  - **AND THE HANDLERS HAD TO FIRE, not merely exist.** The overlay had no `Thread.UncaughtExceptionHandler` at all;
+    adding a settable one would have been a SILENT WRONG ANSWER, because the VM's unwinder reports an escaping
+    throwable itself and nothing called the handler. A new package-private `java.lang.MetalThreadEntry` interface is
+    what the run-trampoline (`Loader.resolveRun`) now prefers over `Runnable.run`. `Thread.metalThreadEntry` (final)
+    runs `run()` -- a subclass override included -- and hands an escaping throwable to
+    `getUncaughtExceptionHandler()` (the thread's, else its group's), ignoring an exception the handler throws, as
+    stock documents. `ThreadGroup` implements `UncaughtExceptionHandler` with stock's default-handler-else-print
+    chain. A `Thread` without the entry still runs via `Runnable` and is REPORTED (`RUNTRAMP: no metalThreadEntry`).
+  - **`ExecutorProbe` is byte-identical to the host:** 20 futures, `invokeAll` (8,000 increments), a failing task's
+    `ExecutionException` cause, worker names `pool-N-thread-M`, `awaitTermination`, and handlers firing for a
+    throwing `Runnable`, a throwing `run()` OVERRIDE, and the default handler; a terminated thread's handler is null.
+  - **Suite: 40 programs, markers zero (`RUNTRAMP` zero -- every guest thread entered through the new path),
+    `HML`/`HML 67ms`, `smp 4 of 4`, churn gc 47 unchanged, `lisp stable=1`.** `LockProbe`, `ParkProbe`,
+    `ChmRaceProbe`, `TlrProbe` host-identical. Host: `compiler 40`, `overlay-check 0 new` (known gaps 21 -> 20,
+    dropped supertypes 60 -> 59 -- `ThreadGroup` now implements the handler interface); deep scan 469 -> 464.
+  - **STATED LIMITS:** a live thread's `getState` is always RUNNABLE (the scheduler knows parked/sleeping/blocked but
+    nothing hands it to guest code); `JavaLangAccess.start` does not call `container.remove` at THREAD EXIT -- a no-op
+    for the `SharedThreadContainer` `Executors` uses, wrong only for a counting container (`ThreadFlock`); and the
+    MAIN thread's uncaught exception is still reported by the VM, not dispatched to a handler.
+
 - **THE SIX `java.util.function` OVERLAYS ARE DELETED -- `stream.max(comparator)` HIT A MISSING
   `BinaryOperator.maxBy`; STOCK JDK 26 `Function`/`BiFunction`/`BinaryOperator`/`Consumer`/`BiConsumer`/`Predicate`
   RUN (2026-10-09, QEMU-GATED -- NOT YET PI-VALIDATED).** Minimal hand-written shells with no natives -- exactly

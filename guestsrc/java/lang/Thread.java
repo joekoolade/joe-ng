@@ -23,7 +23,7 @@ import magic.Magic;
  * Compiled as a {@code java.base} patch so it carries the real {@code java/lang/Thread} name. No String
  * concat, no lambdas, no {@code synchronized} — so the baseline compiler can compile it.
  */
-public class Thread implements Runnable
+public class Thread implements Runnable, MetalThreadEntry
 {
     private Runnable target;    // @16 — what run() delegates to
     private String name;        // @24
@@ -51,6 +51,13 @@ public class Thread implements Runnable
     // reachable on metal (no common pool). A stock ThreadLocal would make these the real map and close that.
     Object threadLocals;
     Object inheritableThreadLocals;
+    // @112/@120 -- stock's per-thread handler (null unless set) and whether start() ran, which is what lets
+    // getUncaughtExceptionHandler answer null after termination exactly as stock does. Appended for the same reason.
+    private volatile UncaughtExceptionHandler uncaughtExceptionHandler;
+    private volatile boolean everStarted;
+
+    // null unless explicitly set (stock)
+    private static volatile UncaughtExceptionHandler defaultUncaughtExceptionHandler;
 
     /** The lowest priority a thread may have. */
     public static final int MIN_PRIORITY = 1;
@@ -104,6 +111,109 @@ public class Thread implements Runnable
     public Thread(ThreadGroup group, Runnable r, String threadName)
     {
         this(group, r, threadName, 0L, true);
+    }
+
+    /** Stock: a named thread with no task (a subclass supplies {@code run()}). */
+    public Thread(String threadName)
+    {
+        this(null, null, threadName, 0L, true);
+    }
+
+    /** Stock's 4-arg form -- what {@code Executors$DefaultThreadFactory} builds every pool worker with. */
+    public Thread(ThreadGroup group, Runnable r, String threadName, long stackSize)
+    {
+        this(group, r, threadName, stackSize, true);
+    }
+
+    /** Stock's thread states, verbatim. */
+    public enum State
+    {
+        NEW,
+        RUNNABLE,
+        BLOCKED,
+        WAITING,
+        TIMED_WAITING,
+        TERMINATED;
+    }
+
+    /**
+     * NEW before {@code start()}, TERMINATED once a started thread is no longer alive, else RUNNABLE.
+     *
+     * <p>STATED LIMIT: a live thread always reads RUNNABLE. The scheduler does know whether a task is parked,
+     * sleeping or blocked on a monitor, but nothing hands that to guest code yet, so BLOCKED/WAITING/TIMED_WAITING
+     * are never answered. Stock documents the value as a monitoring snapshot, not a synchronisation tool, and the
+     * caller that needed it -- {@code ThreadPoolExecutor.addWorker} -- only asks whether a worker is still NEW.
+     */
+    public State getState()
+    {
+        if (!everStarted)
+        {
+            return State.NEW;
+        }
+        return isAlive() ? State.RUNNABLE : State.TERMINATED;
+    }
+
+    /** Stock's handler interface, verbatim. */
+    @FunctionalInterface
+    public interface UncaughtExceptionHandler
+    {
+        void uncaughtException(Thread t, Throwable e);
+    }
+
+    public static void setDefaultUncaughtExceptionHandler(UncaughtExceptionHandler ueh)
+    {
+        defaultUncaughtExceptionHandler = ueh;
+    }
+
+    public static UncaughtExceptionHandler getDefaultUncaughtExceptionHandler()
+    {
+        return defaultUncaughtExceptionHandler;
+    }
+
+    /** Stock: null once the thread has terminated, else its own handler or, failing that, its group. */
+    public UncaughtExceptionHandler getUncaughtExceptionHandler()
+    {
+        if (everStarted && !isAlive())
+        {
+            return null;
+        }
+        UncaughtExceptionHandler ueh = uncaughtExceptionHandler;
+        return (ueh != null) ? ueh : getThreadGroup();
+    }
+
+    public void setUncaughtExceptionHandler(UncaughtExceptionHandler ueh)
+    {
+        uncaughtExceptionHandler = ueh;
+    }
+
+    /** Stock: the VM hands a throwable that escaped {@code run()} to the thread's handler. */
+    void dispatchUncaughtException(Throwable e)
+    {
+        getUncaughtExceptionHandler().uncaughtException(this, e);
+    }
+
+    /**
+     * The VM's ENTRY into a started thread (see {@link MetalThreadEntry}): run the thread, and give a throwable
+     * that escapes {@code run()} to the handler, as stock's VM does. Final, so a subclass's {@code run()} override
+     * is what runs inside it. An exception the HANDLER throws is ignored, which is stock's documented behaviour
+     * ("Any exception thrown by this method will be ignored by the Java Virtual Machine").
+     */
+    public final void metalThreadEntry()
+    {
+        try
+        {
+            run();
+        }
+        catch (Throwable e)
+        {
+            try
+            {
+                dispatchUncaughtException(e);
+            }
+            catch (Throwable ignored)
+            {
+            }
+        }
     }
 
     /**
@@ -218,6 +328,7 @@ public class Thread implements Runnable
     /** Start a fresh task running {@code this.run()} (preempted by the timer like any joe-ng task). */
     public void start()
     {
+        everStarted = true;
         Magic.spawn(this);
         if (priority != 0)
         {
