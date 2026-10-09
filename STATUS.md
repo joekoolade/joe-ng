@@ -4,6 +4,53 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **THE `ConcurrentHashMap` OVERLAY IS DELETED -- A `HashMap` WITH NO CONCURRENCY CONTROL ON FOUR CORES; STOCK JDK
+  26 CHM RUNS, AND IT EXPOSED A REAL `<clinit>` RACE: A SECOND THREAD READ A CLASS'S STATICS WHILE ANOTHER WAS STILL
+  INITIALIZING IT (2026-10-08, QEMU-GATED -- NOT YET PI-VALIDATED).** The overlay's header said "joe-ng runs on a
+  single unparked core, so a plain hash map ... is behaviourally sufficient".
+
+  | `ChmRaceProbe` arm (4 threads) | overlay | stock | host |
+  |---|---|---|---|
+  | disjoint puts, 20,000 keys | **429 missing** | 0 missing | 0 |
+  | `merge` counters, 16 hot keys | **16 of 16 wrong** | 0 wrong | 0 |
+  | `putIfAbsent`, 5,000 keys | **14,258 winners, size 14,088** (more entries than keys) | 5,000 / 5,000 | 5,000 |
+  | `computeIfAbsent` function calls | **TRAP in `HashMap.resize`** | 5,000 | 5,000 |
+  | iterate during writes | not reached | ok | ok |
+
+  Stock is **byte-identical to the host**. **Suite: 40 programs, 18 markers zero, `HML`/`HML 66ms`, `smp 4 of 4`,
+  `gc: collections=47` at churn -- unchanged; `lisp stable=1`.** `LockProbe`, `AtomicRaceProbe`,
+  `VolatileLitmusProbe`, `ParkProbe` and the new `TlrProbe` all re-run host-identical on this tree. Host:
+  `compiler 40`, `overlay-check 0 new` (dropped supertypes 65 -> 64); deep scan 502 -> 494.
+
+  **WHAT STOCK CHM NEEDED -- each step found by the previous one's throw:**
+  - **`ThreadLocalRandom.<clinit>` threw "Not yet initialized"** from `VM.getSavedProperty`: `jdk.internal.misc.VM`
+    has its initializer skipped and joe-ng never runs `System.initPhase1`, so `savedProps` was null.
+    `seedSavedProps` (beside `seedSystemProps`, at launch) fills it with its OWN `Properties` of the standard
+    entries -- not the `System.props` object, because stock keeps a runtime `setProperty` invisible to it.
+  - **`Unsafe.objectFieldOffset` answered -1 for a field that does not exist** -- a SILENT WRONG ANSWER: the caller's
+    next `getInt(o, -1)` reads the object header. It THROWS `InternalError(name)` now, as stock does, and the very
+    next run named the missing fields: `Thread` gained stock's `threadLocalRandomSeed`/`Probe`/`SecondarySeed`
+    (appended after `parkBlocker`) and `threadLocals`/`inheritableThreadLocals`, the last two only so TLR's offsets
+    resolve. **STATED LIMIT:** joe-ng's thread-locals live in `tlKeys`/`tlVals`, so `TLR.eraseThreadLocals` would
+    not clear them; its only callers (`InnocuousThread`, the ForkJoin innocuous worker) are unreachable on metal.
+  - **`JavaLangAccess.currentCarrierThread` was one of #327's throwing stubs** and is implemented: with no virtual
+    threads the carrier IS the current thread.
+  - **THE VM BUG: JVMS 5.5 step 2 was not implemented.** A class being initialized by ANOTHER thread must make the
+    arriving thread WAIT; joe-ng had only step 3 (a recursive request by the SAME thread returns). Two windows:
+    `clinitRan` is set just before the body runs, so a late arrival found no pending record and returned; and an
+    arrival during the dependency/compile phase found `clinitBusy` and took step 3's return without asking WHOSE.
+    Either way it then read null statics -- the CHM failure was an NPE in `ThreadLocalRandom.getProbe` with four
+    threads entering `TLR.<clinit>` at once. Each record now carries its OWNER task and a DONE flag (set in a
+    `finally`, so a throwing initializer cannot strand its waiters); the busy test-and-claim is atomic under
+    `schedLock`; a non-owner yields until done. **A task holding the loader lock does not wait** -- the owner may
+    need that lock to compile, so waiting could deadlock; that case keeps the old behaviour, which is the hazard
+    `warnClinitUnderLock` already names. The instrument that confirmed the waits fire was removed.
+  - **FOUND, NOT FIXED -- THE NEXT INCREMENT:** a METHOD REFERENCE whose primitive parameters receive boxed SAM
+    arguments is NOT UNBOXED. `merge(k, 1, Integer::sum)` returned **91,635,776** for a count of 100 -- the referent
+    summed two heap addresses. Lambda thunks box a primitive RESULT (`lambdaNeedsBoxing`) but never unbox an
+    ARGUMENT, and nothing reports it. Pre-existing (the `HashMap`-based overlay showed it too); the probe uses
+    `(x, y) -> x + y` until it is fixed.
+
 - **THE `ReentrantLock` OVERLAY IS DELETED -- IT WAS A NO-OP LOCK ON A FOUR-CORE SCHEDULER; STOCK JDK 26
   `ReentrantLock` (AQS) RUNS (2026-10-08, QEMU-GATED -- NOT YET PI-VALIDATED).** The overlay made `lock()`/`unlock()`
   empty, `tryLock()` always true, `isHeldByCurrentThread()` always true and `newCondition()` NULL, on the

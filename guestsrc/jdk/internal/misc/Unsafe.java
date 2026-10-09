@@ -128,7 +128,15 @@ public final class Unsafe
 
     public long objectFieldOffset(Class<?> c, String name)
     {
-        return fieldOffsetOfClass0(c, name.getBytes());
+        long off = fieldOffsetOfClass0(c, name.getBytes());
+        if (off < 0L)
+        {
+            // Stock throws here (objectFieldOffset1 -> InternalError). Answering -1 was a SILENT wrong answer: the
+            // caller's next getInt/putInt(o, -1) touched the object HEADER. ThreadLocalRandom did exactly that on
+            // a Thread with no threadLocalRandomProbe field.
+            throw new InternalError(name);
+        }
+        return off;
     }
 
     private static native long fieldOffsetOfClass0(Class<?> c, byte[] name);
