@@ -7354,7 +7354,19 @@ public final class Loader
             Uart.putc(0x0A);
             return VM.denylistTrapAddr;
         }
-        long buf = runFromItable(recv);
+        // A Thread enters through MetalThreadEntry.metalThreadEntry -- run() plus uncaught-handler dispatch -- and
+        // only falls back to Runnable.run when that entry is absent, which is REPORTED: the thread still runs, but
+        // a handler set on it would silently never fire.
+        long buf = ifaceMethodFromItable(recv, metalThreadEntryTypeAddr(), 0);
+        if (buf == 0L || !plausibleCode(buf))
+        {
+            if (metalThreadEntryTypeAddr() != 0L && !reportedNoThreadEntry)
+            {
+                reportedNoThreadEntry = true;
+                Uart.write(Magic.bytes("\n  RUNTRAMP: no metalThreadEntry -- uncaught-exception handlers will not fire\n"));
+            }
+            buf = runFromItable(recv);
+        }
         if (buf == 0L || !plausibleCode(buf))
         {
             Uart.write(Magic.bytes("\n  RUNTRAMP: no run()V for "));
@@ -7371,11 +7383,33 @@ public final class Loader
         return buf;
     }
 
+    private static boolean reportedNoThreadEntry;
+
+    /** java/lang/MetalThreadEntry's Type (0 if not loaded). Its one method is slot 0 of its itable run. */
+    private static long metalThreadEntryTypeAddr()
+    {
+        int i = 0;
+        while (i < clCount)
+        {
+            if (utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/MetalThreadEntry")))
+            {
+                return clTab[i].type;
+            }
+            i += 1;
+        }
+        return 0L;
+    }
+
     /** {@code run()V} via the receiver's itable entry for java/lang/Runnable, or 0. Bounded, unlike the
      *  hand-emitted scan it replaces: it stops at the 0 terminator instead of walking past it. */
     private static long runFromItable(long recv)
     {
-        long want = runnableTypeAddr();                 // looked up FRESH: not an immediate baked in once
+        return ifaceMethodFromItable(recv, runnableTypeAddr(), runnableRunSlot());
+    }
+
+    /** Slot {@code slot} of the receiver's itable run for interface {@code want}, or 0 (also 0 for want == 0). */
+    private static long ifaceMethodFromItable(long recv, long want, int slot)
+    {
         if (want == 0L)
         {
             return 0L;
@@ -7411,7 +7445,7 @@ public final class Loader
                 {
                     return 0L;
                 }
-                return Magic.load64(it + runnableRunSlot() * 8L);
+                return Magic.load64(it + slot * 8L);
             }
             n += 1;
         }

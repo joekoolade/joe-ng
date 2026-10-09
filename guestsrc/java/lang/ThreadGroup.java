@@ -18,7 +18,7 @@ import magic.Magic;
  * every live thread. It exists so Thread's 5-arg constructor and {@link Thread#getThreadGroup()} have a type
  * to name, and so {@code activeCount()}/{@code enumerate(Thread[])} can report the live threads the VM tracks.
  */
-public class ThreadGroup
+public class ThreadGroup implements Thread.UncaughtExceptionHandler
 {
     /** The one group every thread belongs to (there is no hierarchy). */
     static final ThreadGroup SYSTEM = new ThreadGroup();
@@ -39,6 +39,31 @@ public class ThreadGroup
     public ThreadGroup(String name)
     {
         this.name = name;
+    }
+
+    /** Stock's parent-and-name form (ForkJoin's innocuous workers, {@code InnocuousThread}); flattened the same way. */
+    public ThreadGroup(ThreadGroup parent, String name)
+    {
+        this.name = name;
+    }
+
+    /**
+     * Stock's default handling of a throwable that escaped a thread with no handler of its own: the group's parent
+     * (none here: the one group is flat), else the default handler, else "Exception in thread" and the stack trace on
+     * {@code System.err} -- stock's text, so a program's error output reads the same.
+     */
+    public void uncaughtException(Thread t, Throwable e)
+    {
+        Thread.UncaughtExceptionHandler ueh = Thread.getDefaultUncaughtExceptionHandler();
+        if (ueh != null)
+        {
+            ueh.uncaughtException(t, e);
+        }
+        else
+        {
+            System.err.print("Exception in thread \"" + t.getName() + "\" ");
+            e.printStackTrace(System.err);
+        }
     }
 
     public final String getName()
