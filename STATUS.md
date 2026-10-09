@@ -4,6 +4,28 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **THE `ConcurrentSkipListMap` OVERLAY IS DELETED -- A `TreeMap` WITH NO CONCURRENCY CONTROL ON FOUR CORES;
+  STOCK JDK 26 CSLM RUNS, FIRST TRY (2026-10-09, QEMU-GATED -- NOT YET PI-VALIDATED).** The same premise as the CHM
+  overlay ("Single core, so no concurrency control is needed"), and the same outcome under contention.
+
+  | `CslmRaceProbe` arm (4 threads) | overlay | stock / host |
+  |---|---|---|
+  | disjoint puts, 12,000 keys | **NPE in `TreeMap.rotateLeft` on two threads** (the red-black tree corrupted) | all present, sorted, 0/11999 |
+  | `merge(k, 1, Integer::sum)`, 16 hot keys | not reached | 0 wrong |
+  | `putIfAbsent`, 3,000 keys | not reached | 3,000 winners |
+  | remove race (keep every third) | not reached | 4,000 left, sorted |
+  | iterate during writes | not reached | ok |
+  | `ConcurrentSkipListSet(reverseOrder)`, ceiling/floor, head/tail, descending, `pollFirstEntry` | **cannot compile** (the overlay had no comparator constructor or navigable surface -- the 15 deep gaps) | exact |
+
+  - **Byte-identical to the host.** No VM change was needed: everything stock CSLM uses (`VarHandle` CAS,
+    `LockSupport`, `ThreadLocalRandom`) was made to work by #328-#333. `CslmRaceProbe` is new.
+  - **Suite: 40 programs, 18 markers zero, `HML`/`HML 67ms`, `smp 4 of 4`, `gc: collections=47` at churn --
+    unchanged; `lisp stable=1`.**
+  - **Host:** `compiler 40`, `overlay-check 0 new` (dropped supertypes 64 -> 63); deep scan 494 -> 479.
+  - **What is left in `guestsrc/java/util/concurrent`:** the three field updaters (`FieldUpdaterCheck`) and
+    `Semaphore`, a thin handle over the scheduler's own semaphores that the dining philosophers use -- 0 deep gaps,
+    and the next one to measure against stock rather than assume.
+
 - **METHOD-REFERENCE ARGUMENTS ARE UNBOXED -- A REFERENT TAKING PRIMITIVES RECEIVED THE BOXED REFERENCES' ADDRESSES
   (2026-10-08, QEMU-GATED -- NOT YET PI-VALIDATED).** Found by `ChmRaceProbe` (previous card): `merge(k, 1,
   Integer::sum)` counted **91,635,776** for 100. joe-ng synthesises lambda classes itself, and its thunks boxed a
