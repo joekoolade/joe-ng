@@ -25,16 +25,16 @@ import java.util.concurrent.atomic.AtomicInteger;
  *
  * <ul>
  * <li>Disjoint puts: each thread inserts its own {@link #N} keys into one map. Every key must be present.</li>
- * <li>{@code merge(k, 1, (x, y) -> x + y)}, first from one thread (so a wrong count there is {@code merge} itself, not
+ * <li>{@code merge(k, 1, Integer::sum)}, first from one thread (so a wrong count there is {@code merge} itself, not
  *     contention), then on {@link #HOT} shared keys: every count must equal {@code THREADS*ROUNDS}.</li>
  * <li>{@code putIfAbsent} race: exactly one winner per key.</li>
  * <li>{@code computeIfAbsent}: the mapping function runs exactly once per key.</li>
  * <li>Iteration while another thread writes: no {@code ConcurrentModificationException}.</li>
  * </ul>
  *
- * <p>The remapping function is a LAMBDA, not {@code Integer::sum}, on purpose: a method reference whose
- * primitive parameters receive boxed SAM arguments is not unboxed on this VM (the referent sums two heap
- * addresses), which is a lambda-thunk bug, not a map bug -- the {@code HashMap}-based overlay showed it too.
+ * <p>The remapping function is {@code Integer::sum}, a method reference whose primitive parameters receive boxed
+ * SAM arguments. Until the thunks unboxed them it summed two heap ADDRESSES (100 merges counted 91,635,776) --
+ * which is how that bug was found; {@code MethodRefUnboxProbe} is its own regression.
  */
 public class ChmRaceProbe
 {
@@ -71,7 +71,7 @@ public class ChmRaceProbe
         int m = 0;
         while (m < 100)
         {
-            one.merge(7, 1, (x, y) -> x + y);
+            one.merge(7, 1, Integer::sum);
             m += 1;
         }
         System.out.println("merge, one thread: count = " + one.get(7) + " (want 100)");
@@ -85,7 +85,7 @@ public class ChmRaceProbe
                 int h = 0;
                 while (h < HOT)
                 {
-                    counts.merge(h, 1, (x, y) -> x + y);
+                    counts.merge(h, 1, Integer::sum);
                     h += 1;
                 }
                 r += 1;

@@ -26,9 +26,16 @@ import magic.Magic;
  * first virtual call on the result threw NPE from inside JUnit -- a fault that looked like a
  * StringTokenizer bug and was nowhere near one.
  *
- * <p>Float and double are deliberately absent: their return value arrives in d0, not x0, so a thunk cannot
- * move it without FP support. {@link Loader} reports such a reference by name rather than emitting a
- * conversion that would quietly read the wrong register.
+ * <p>FLOAT AND DOUBLE ARE ABSENT, AND NOT FOR THE REASON THIS USED TO GIVE. It said their result "arrives in
+ * d0, not x0"; joe-ng keeps a float/double as raw bits in an X register and returns it with the same
+ * {@code mov x0} as an int ({@code freturn}/{@code dreturn} are bit-preserving), so x0 does hold the bits. The
+ * real obstacle is THIS CLASS: it is image code, and naming {@code Double}/{@code Float} here pulls them into
+ * the boot set, where {@code Double.<clinit>} ({@code TYPE = Class.getPrimitiveClass("double")}) faults in
+ * {@code bakeResolve} before the VM is up -- MEASURED, it was tried. Boxing them needs the guest-compiled
+ * {@code valueOf} resolved at run time instead. Until then {@link Loader} REPORTS such a reference by name.
+ *
+ * <p>The ARGUMENT direction ({@link #unboxNull}) needs no helper for a non-null value: every wrapper's only
+ * instance field is {@code value}, in slot 0, so the thunk unboxes with one load.
  */
 final class VMBox
 {
@@ -68,5 +75,23 @@ final class VMBox
             return Magic.addrOf(Long.valueOf(v));
         }
         return 0L;                          // unreachable: the loader emits no call for any other kind
+    }
+
+    /**
+     * A method reference's thunk is unboxing a NULL argument for a primitive parameter: throw what
+     * {@code LambdaMetafactory}'s adapter throws. The thunk TAIL-branches here with its own frame (if any)
+     * already dropped, so the exception appears to come from the SAM call site -- the frame the unwinder knows.
+     * Without the check the load reads whatever sits at address 16, which is mapped RAM on this board: a silent
+     * wrong value, not a fault.
+     *
+     * <p>{@code marker} 0 is {@code VM.forceCompile}'s touch and returns; the thunk passes 1.
+     */
+    static long unboxNull(long marker)
+    {
+        if (marker == 0L)
+        {
+            return 0L;
+        }
+        throw new NullPointerException();
     }
 }
