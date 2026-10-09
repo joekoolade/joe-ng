@@ -4,6 +4,30 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **THE `java.util.Random` OVERLAY IS DELETED -- ITS `next()` WAS NOT ATOMIC, AND IT DROPPED THE EIGHT RANGED
+  METHODS `ThreadLocalRandom` INHERITS; STOCK JDK 26 `Random` RUNS (2026-10-09, QEMU-GATED -- NOT YET
+  PI-VALIDATED).** The overlay's premise was "atomics/CAS are absent on metal", untrue since #329. Since #332 stock
+  CHM pulls in `ThreadLocalRandom`, whose `nextInt(origin, bound)`, `nextLong(bound)`, `nextDouble(origin, bound)`
+  etc. are `Random`'s -- so those deep gaps had become live paths.
+
+  | `RandomProbe` arm | overlay | stock / host |
+  |---|---|---|
+  | seeded `nextInt`/`nextInt(100)`/`nextLong` | exact (the LCG was right) | exact |
+  | `nextGaussian`, all ranged methods, `ints(n, lo, hi)` | **the probe cannot compile** against the overlay | exact |
+  | ONE `Random(7)` shared by 4 threads: same multiset as one thread drawing 8,000 | **false, 3 of 3 runs** | **true, 3 of 3** |
+  | `ThreadLocalRandom` ranged calls in bounds | not reachable | true |
+
+  - **The shared-instance arm is the point.** Stock `next()` advances the seed with a CAS, so under contention each
+    seed step is consumed exactly once and the four threads' values, sorted, equal a single thread's 8,000. The
+    overlay handed the same step to two threads.
+  - **`java/util/Random` joins the writer's `noSnapshot`:** its `seedOffset` is `Unsafe.objectFieldOffset` on the
+    HOST, and `seedUniquifier` is a host `AtomicLong` -- the same trap as the atomics in #329.
+  - **The guest `SecureRandom` overlay extends `Random`** (its load-bearing `super(0)`); `SecureRandomDemo`'s
+    sha1prng lines are byte-identical to the previous `main` run.
+  - **Suite: 40 programs, 18 markers zero, `HML`/`HML 67ms`, churn gc 47 unchanged, `lisp stable=1`.** Host:
+    `compiler 40`, `overlay-check 0 new` (dropped supertypes 63 -> 60); deep scan 479 -> 471. `RandomProbe` is new
+    and byte-identical to the host.
+
 - **THE `ConcurrentSkipListMap` OVERLAY IS DELETED -- A `TreeMap` WITH NO CONCURRENCY CONTROL ON FOUR CORES;
   STOCK JDK 26 CSLM RUNS, FIRST TRY (2026-10-09, QEMU-GATED -- NOT YET PI-VALIDATED).** The same premise as the CHM
   overlay ("Single core, so no concurrency control is needed"), and the same outcome under contention.

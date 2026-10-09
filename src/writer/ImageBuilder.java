@@ -2478,12 +2478,17 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
      * <p>{@code java/util/concurrent/atomic/Atomic*} (stock since the overlays were deleted): {@code VALUE} is
      * {@code Unsafe.objectFieldOffset(AtomicLong.class, "value")} -- the HOST JVM's field offset (12 under
      * compressed oops) where this VM's is 16. Baked, every CAS would hit the wrong word of every atomic.
+     *
+     * <p>{@code java/util/Random} (stock since its overlay was deleted), for the same reason: {@code seedOffset}
+     * is {@code Unsafe.objectFieldOffset(Random.class, "seed")} on the HOST, and {@code seedUniquifier} is a
+     * host {@code AtomicLong} whose own value cell would carry the host's state.
      */
     private static boolean noSnapshot(String cls)
     {
         return cls.equals("java/util/Locale") || cls.startsWith("sun/util/locale/")
                 || cls.equals("jdk/internal/util/StaticProperty")
-                || cls.startsWith("java/util/concurrent/atomic/Atomic");
+                || cls.startsWith("java/util/concurrent/atomic/Atomic")
+                || cls.equals("java/util/Random");
     }
 
     private Resolved lookup(String key)
