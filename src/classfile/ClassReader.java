@@ -189,6 +189,52 @@ public final class ClassReader
         return count;
     }
 
+    /** Kind char of parameter {@code i} of the method descriptor at {@code descOff}: 'L' for a class, '[' for
+     *  an array, else the primitive's char; 0 if there is no such parameter. */
+    public static char descParamKind(byte[] b, int descOff, int i)
+    {
+        int p = descOff + 2 + 1;                    // past u2 length and '('
+        int n = 0;
+        while (u1(b, p) != ')')
+        {
+            int c = u1(b, p);
+            int kind = c;
+            if (c == '[')
+            {
+                while (u1(b, p) == '[')
+                {
+                    p += 1;
+                }
+                if (u1(b, p) == 'L')
+                {
+                    while (u1(b, p) != ';')
+                    {
+                        p += 1;
+                    }
+                }
+                p += 1;
+            }
+            else if (c == 'L')
+            {
+                while (u1(b, p) != ';')
+                {
+                    p += 1;
+                }
+                p += 1;
+            }
+            else
+            {
+                p += 1;
+            }
+            if (n == i)
+            {
+                return (char) kind;
+            }
+            n += 1;
+        }
+        return 0;
+    }
+
     /** Return-type kind char ('V','I','J',...) of the descriptor at {@code descOff}. */
     public static char descReturnKind(byte[] b, int descOff)
     {

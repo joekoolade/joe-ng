@@ -21278,13 +21278,91 @@ public final class Loader
     private static final int BOX_FRAME = 16;
 
     /**
-     * Primitive kinds a thunk can box. Float and double are absent on purpose: their result arrives in d0,
-     * not x0, so there is nothing for an integer-register thunk to hand the boxer. Such a reference is
+     * Primitive kinds a thunk can box. Float and double are absent because the boxer is image code and cannot
+     * name {@code Double}/{@code Float} without pulling their boot-hostile initializers into the image (see
+     * {@code VMBox}) -- NOT because the value is elsewhere: it is in x0 as raw bits. Such a reference is
      * REPORTED rather than mis-adapted -- see {@link #reportUnboxableRef}.
      */
     private static boolean boxableKind(int k)
     {
         return k == 'Z' || k == 'B' || k == 'C' || k == 'S' || k == 'I' || k == 'J';
+    }
+
+    /**
+     * UNBOX the arguments a method reference's referent takes as PRIMITIVES while its erased SAM passes them
+     * as REFERENCES -- the conversion {@code LambdaMetafactory} inserts on a stock JVM. The thunks boxed a
+     * primitive result and never did this, so {@code Integer::sum} summed two {@code Integer} ADDRESSES
+     * ({@code ConcurrentHashMap.merge} counted 91,635,776 for 100) and {@code Float::sum} branched wild.
+     *
+     * <p>Referent parameter {@code p} for {@code p >= pStart} is SAM argument {@code sStart + (p - pStart)},
+     * and sits in register {@code regBase + p} once the arm has placed the arguments. Parameters below
+     * {@code pStart} are CAPTURES, which are already of the referent's type.
+     *
+     * <p>ONE LOAD unboxes any of the eight: every wrapper's only instance field is {@code value}, slot 0, and a
+     * field slot is 8 bytes holding the value as the compiler keeps it (sign-extended integral, raw float or
+     * double bits), so {@code ldr xR, [xR, #16]} leaves exactly what a primitive argument would carry. A
+     * widening the referent wants ({@code Integer} into a {@code long} parameter) is already in that slot.
+     *
+     * <p>A NULL must throw {@code NullPointerException}, and address 16 is mapped RAM here, so the load
+     * would silently read garbage. The null path drops this thunk's frame if it has one ({@code framed}) and
+     * TAIL-branches to {@code VMBox.unboxNull}: LR still names the SAM call site, so the exception unwinds from
+     * there, a frame the walker knows.
+     */
+    private static int emitUnboxArgs(long thunk, int w, int idx, int pStart, int sStart, int regBase,
+            boolean framed)
+    {
+        int implDesc = mrefDescOff(lambdaImplMref(idx));
+        int samDesc = lambdaSamDescOff(idx);
+        int n = ClassReader.descParamCount(gbytes, implDesc);
+        int p = pStart;
+        while (p < n)
+        {
+            int ik = ClassReader.descParamKind(gbytes, implDesc, p);
+            int sk = ClassReader.descParamKind(gbytes, samDesc, sStart + (p - pStart));
+            if (sk == 'L' && ik != 'L' && ik != '[' && ik != 0)
+            {
+                int r = regBase + p;
+                if (r > 7 || VM.unboxNullAddr == 0L)
+                {
+                    reportUnboxArg(idx, p, r);
+                }
+                else
+                {
+                    int nullLen = framed ? 3 : 2;                                 // [add sp], movz, b
+                    w = emitAt(thunk, w, A64Enc.cbnz(r, 1 + nullLen));           // non-null -> the load
+                    if (framed)
+                    {
+                        w = emitAt(thunk, w, A64Enc.addImm(STUB_SP, STUB_SP, BOX_FRAME));
+                    }
+                    w = emitAt(thunk, w, A64Enc.movz(0, 1, 0));                  // unboxNull's "really throw"
+                    long at = thunk + w * 4L;
+                    w = emitAt(thunk, w, A64Enc.b((int) ((VM.unboxNullAddr - at) / 4L)));
+                    w = emitAt(thunk, w, A64Enc.ldrx(r, r, 16));                 // xR = wrapper.value
+                }
+            }
+            p += 1;
+        }
+        return w;
+    }
+
+    /** A primitive parameter the thunk cannot unbox: past x7 (a stacked argument) or no helper to throw with. */
+    private static void reportUnboxArg(int idx, int p, int r)
+    {
+        int mref = lambdaImplMref(idx);
+        Uart.write(Magic.bytes("  METHOD REF ARG NOT UNBOXED "));
+        printNameAt(gbase, refClassNameOff(mref));
+        Uart.putc(0x2E);
+        printNameAt(gbase, mrefNameOff(mref));
+        Uart.write(Magic.bytes(" param="));
+        VM.printDec(p);
+        if (r > 7)
+        {
+            Uart.write(Magic.bytes(" (stacked argument)\n"));
+        }
+        else
+        {
+            Uart.write(Magic.bytes(" (vm/VMBox.unboxNull not stashed)\n"));
+        }
     }
 
     /** True if the erased SAM at {@code idx} returns a reference while its referent returns a primitive, so
@@ -21317,7 +21395,7 @@ public final class Loader
         printNameAt(gbase, mrefNameOff(mref));
         Uart.write(Magic.bytes(" returns "));
         Uart.putc(retKind);
-        Uart.write(Magic.bytes(" into a generic SAM (float/double not adapted)\n"));
+        Uart.write(Magic.bytes(" into a generic SAM (float/double results are not boxed yet)\n"));
     }
 
     /** Emit one instruction word at word index {@code w}; returns the next index. */
@@ -21501,7 +21579,8 @@ public final class Loader
         // with more than ~13 SAM arguments would have written PAST the allocation into whatever code the
         // arena handed out next -- silent, and the worst failure mode this VM has. Nothing reached had that
         // arity, so it never fired; sizing from `ia` removes the cliff rather than moving it.
-        long thunk = Heap.allocCode(160 + ia * 16);
+        // ... and up to five more per SAM argument for an unbox (cbnz, [add sp], movz, b, ldr): see emitUnboxArgs.
+        long thunk = Heap.allocCode(160 + ia * 36);
         int w = 0;
         if (boxRet)
         {
@@ -21521,6 +21600,7 @@ public final class Loader
                     w += 1;
                     j += 1;
                 }
+                w = emitUnboxArgs(thunk, w, idx, 0, 1, 1, boxRet);    // param p = samArg[p+1], in x(1+p)
             }
             else
             {
@@ -21553,6 +21633,7 @@ public final class Loader
                     w += 1;
                     c -= 1;
                 }
+                w = emitUnboxArgs(thunk, w, idx, nc - 1, 0, 1, boxRet);   // params past the captured ones
             }
             int slot = globalVtableSlot(lambdaImplMref(idx));                 // vtable slot of the referenced method
             if (slot < 0)
@@ -21636,6 +21717,7 @@ public final class Loader
                 reportLambdaCtorNoTib(cr);              // registered but phase B has not built its TIB yet
             }
             long initBuf = lambdaImplBuf(idx);                               // its <init> buffer (cross-class ok)
+            w = emitUnboxArgs(thunk, w, idx, 0, 0, 1, false);   // Foo(int) from a Function<Integer,Foo>: BEFORE the frame
             int frame = ((2 + ia + 1) & ~1) * 8;                            // LR + obj + ia args, 16-byte aligned
             Magic.store32(thunk + w * 4L, A64Enc.subImm(31, 31, frame));                 w += 1;  // sub sp, #frame
             Magic.store32(thunk + w * 4L, A64Enc.strx(STUB_LR, STUB_SP, STUB_LR_OFF));                       w += 1;  // str x30,[sp] (LR)
@@ -21763,6 +21845,7 @@ public final class Loader
             w += 1;
             c -= 1;
         }
+        w = emitUnboxArgs(thunk, w, idx, nc, 0, 0, boxRet);                 // static referent: param p in x(p)
         long bAt = thunk + w * 4L;
         if (implBuf != 0L)
         {

@@ -4,6 +4,47 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **METHOD-REFERENCE ARGUMENTS ARE UNBOXED -- A REFERENT TAKING PRIMITIVES RECEIVED THE BOXED REFERENCES' ADDRESSES
+  (2026-10-08, QEMU-GATED -- NOT YET PI-VALIDATED).** Found by `ChmRaceProbe` (previous card): `merge(k, 1,
+  Integer::sum)` counted **91,635,776** for 100. joe-ng synthesises lambda classes itself, and its thunks boxed a
+  primitive RESULT (`lambdaNeedsBoxing`) but never unboxed an ARGUMENT -- the conversion `LambdaMetafactory` inserts
+  on a stock JVM. Nothing reported it.
+
+  | `MethodRefUnboxProbe` arm | before | after / host |
+  |---|---|---|
+  | `Integer::sum(3, 4)` / `Long::sum` | **3100152** / **95821784** | 7 / 5000000007 |
+  | `Integer::toHexString(255)` / `Math::abs(-9)` | **59f9400** / **1549776** | ff / 9 |
+  | `Character::isDigit('7')` / `Short::compare` / `Byte::compare` | **false** / **48** / **-96** | true / 2 / -4 |
+  | `Long::valueOf` from an `Integer` (unbox + widen) | **1551000** | 42 |
+  | `Float::sum` | **BOOT RE-ENTERED** (float bits used as an address) | (arm retargeted, see below) |
+  | F/D arguments, unbound/bound instance, constructor ref, two NULL arguments | never reached | all exact; nulls throw NPE |
+
+  The `before` column is the control on the parent commit with the probe's first version. Two arms (`Comparator`,
+  `Boolean::logicalXor`) printed the right answer there BY LUCK -- the sign of two compared addresses, and two
+  non-null words read as `true`. **After: all 19 lines byte-identical to the host.** Suite: 40 programs, markers
+  zero (plus `UNBOXABLE`/`NOT UNBOXED` zero), `HML`/`HML 67ms`, churn gc **47 unchanged**; `ChmRaceProbe` -- back on
+  `Integer::sum` -- `LockProbe`, `AtomicRaceProbe` and `TlrProbe` host-identical. Host: `compiler 40`,
+  `class-reader 171`, `overlay-check 0 new`.
+
+  - **ONE LOAD UNBOXES ALL EIGHT KINDS.** Every wrapper's only instance field is `value`, in slot 0, and a field slot
+    is 8 bytes holding the value as the compiler keeps it -- sign-extended integral, raw float or double bits -- so
+    `ldr xR, [xR, #16]` leaves exactly what a primitive argument carries, widening included. `emitUnboxArgs` maps
+    each referent parameter to its SAM argument and register in all four thunk arms (static/lambda body, unbound
+    instance, bound instance with leading captures, constructor reference), using a new
+    `ClassReader.descParamKind`.
+  - **A NULL MUST THROW, and address 16 is mapped RAM on this board** -- the bare load would answer garbage silently.
+    The null path drops the thunk's boxing frame if it has one and TAIL-branches to a new stashed helper,
+    `VMBox.unboxNull` (`VM.unboxNullAddr`), so LR still names the SAM call site and the NPE unwinds from a frame the
+    walker knows. An argument past x7, or a missing helper, is REPORTED (`METHOD REF ARG NOT UNBOXED`).
+  - **FLOAT/DOUBLE RESULTS ARE STILL NOT BOXED -- THE NEXT OPEN CASE, AND ITS RECORDED REASON WAS WRONG.** The code
+    said a float/double result "arrives in d0, not x0". It does not: the compiler keeps them as raw bits in X
+    registers and `freturn`/`dreturn` are a plain `mov x0`. Adding F/D to `VMBox.box` was TRIED AND MEASURED: naming
+    `Double`/`Float` in image code pulls them into the boot set, and `Double.<clinit>` (`TYPE =
+    getPrimitiveClass("double")`) faults in `bakeResolve` before the VM is up. So boxing them needs the
+    guest-compiled `valueOf` resolved at run time. Reverted; still reported at link time (`UNBOXABLE METHOD REF`);
+    the probe's F/D arms return int/boolean (`Float::compare`, `Double::isFinite`, `Double::compare`) so they test
+    argument unboxing only, and the comments now give the real reason.
+
 - **THE `ConcurrentHashMap` OVERLAY IS DELETED -- A `HashMap` WITH NO CONCURRENCY CONTROL ON FOUR CORES; STOCK JDK
   26 CHM RUNS, AND IT EXPOSED A REAL `<clinit>` RACE: A SECOND THREAD READ A CLASS'S STATICS WHILE ANOTHER WAS STILL
   INITIALIZING IT (2026-10-08, QEMU-GATED -- NOT YET PI-VALIDATED).** The overlay's header said "joe-ng runs on a

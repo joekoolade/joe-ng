@@ -1839,6 +1839,7 @@ public final class VM
         if (taskExitAddr == 0L) { VMScheduler.taskExit(); }
         if (runResolveAddr == 0L) { long u = Loader.resolveRun(0L); }   // the run-trampoline's dispatch
         if (boxPrimAddr == 0L) { long u = VMBox.box(0L, 0); }          // boxes a method ref's primitive result
+        if (unboxNullAddr == 0L) { long u = VMBox.unboxNull(0L); }     // a method ref's null primitive argument -> NPE
         if (scStartAddr == 0L) { long u = VMConcat.scStart(); }        // string-concat helpers (JIT'd concat only)
         if (ensureInitAddr == 0L) { ensureInitByName(0L); }   // 0 is the no-op arg (Loader.ensureInitFor)
         if (scCharAddr == 0L) { VMConcat.scChar(0L, 0); }
@@ -3294,6 +3295,7 @@ public final class VM
     // invokedynamic string-concat helpers (JIT'd concat lowering BLs these).
     static long scStartAddr;           // VM.scStart()J
     static long boxPrimAddr;           // VMBox.box(JI)J — a method ref's primitive result, boxed for a generic SAM
+    static long unboxNullAddr;         // VMBox.unboxNull(J)J — throws the NPE for a null argument a thunk must unbox
     static long scCharAddr;            // VM.scChar(JI)V
     static long scIntAddr;             // VM.scInt(JI)V
     static long scEndAddr;             // VM.scEnd(J)J
