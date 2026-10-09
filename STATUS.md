@@ -4,6 +4,23 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **THE SIX `java.util.function` OVERLAYS ARE DELETED -- `stream.max(comparator)` HIT A MISSING
+  `BinaryOperator.maxBy`; STOCK JDK 26 `Function`/`BiFunction`/`BinaryOperator`/`Consumer`/`BiConsumer`/`Predicate`
+  RUN (2026-10-09, QEMU-GATED -- NOT YET PI-VALIDATED).** Minimal hand-written shells with no natives -- exactly
+  what rule 3 retires. They lacked `BinaryOperator.minBy`/`maxBy` (called by stock `ReferencePipeline.max`/`min`
+  and `Collectors.maxBy`/`minBy`), `Consumer.andThen` and `BiConsumer.andThen`.
+
+  - **CONTROL:** the full probe cannot COMPILE against the overlays. Reduced to the arms that do, a plain
+    `words.stream().max(byLen)` died with `LINK FAILED: BinaryOperator.maxBy ... no body` and a `DENYLIST TRAP` in
+    `ReferencePipeline.max` -- the recorded overlay-drops-a-stock-member trap, blaming a denylist it is not on.
+  - **STOCK: `FunctionProbe` is byte-identical to the host** -- every default and static of the six (andThen/
+    compose/identity, minBy/maxBy incl. the tie rule, the Consumer/BiConsumer call ORDER, Predicate
+    and/or/negate/not/isEqual incl. short-circuiting), plus `stream.max`/`min` and
+    `Collectors.maxBy`/`minBy`/`reducing`. No VM change was needed.
+  - **Suite: 40 programs, 18 markers zero, `HML`/`HML 67ms`, churn gc 47 unchanged, `lisp stable=1`** -- these
+    interfaces sit under every lambda and stream in it. Host: `compiler 40`, `overlay-check 0 new`; deep scan 471 ->
+    469.
+
 - **THE `java.util.Random` OVERLAY IS DELETED -- ITS `next()` WAS NOT ATOMIC, AND IT DROPPED THE EIGHT RANGED
   METHODS `ThreadLocalRandom` INHERITS; STOCK JDK 26 `Random` RUNS (2026-10-09, QEMU-GATED -- NOT YET
   PI-VALIDATED).** The overlay's premise was "atomics/CAS are absent on metal", untrue since #329. Since #332 stock
