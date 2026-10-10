@@ -107,8 +107,17 @@ public final class ReachScan
         // class its numeric conversions reach is DecimalFormatSymbols, for four ASCII symbols. That one IS
         // overlaid, because its whole job is reading locale data through LocaleProviderAdapter ->
         // ResourceBundle. (Keep in sync with Loader.isDenylisted.)
+        //
+        // And stock java/text/DecimalFormat with the pure-logic classes it is built from -- see the matching
+        // block in Loader.isDenylisted for the reasoning and the list.
         if (c.startsWith("java/text/DecimalFormatSymbols") || c.startsWith("java/text/ParsePosition")
-                || c.startsWith("sun/text/Normalizer"))
+                || c.startsWith("sun/text/Normalizer")
+                || c.startsWith("java/text/DecimalFormat") || c.startsWith("java/text/NumberFormat")
+                || c.startsWith("java/text/Format") || c.startsWith("java/text/FieldPosition")
+                || c.startsWith("java/text/DigitList") || c.startsWith("java/text/DontCareFieldPosition")
+                || c.startsWith("java/text/ParseException") || c.startsWith("java/text/AttributedCharacterIterator")
+                || c.startsWith("java/text/CharacterIteratorFieldDelegate")
+                || c.startsWith("java/text/StringBufFactory") || c.startsWith("java/text/AttributedString"))
         {
             return false;
         }

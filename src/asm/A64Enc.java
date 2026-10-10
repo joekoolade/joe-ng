@@ -63,6 +63,11 @@ public final class A64Enc
     {
         return 0xD280_0000 | (hw << 21) | ((imm16 & 0xFFFF) << 5) | rd;
     }
+    /** {@code MOVN Xd, #imm16, LSL #(hw*16)} — the NOT of the immediate ({@code movn xd, #0} is -1). */
+    public static int movn(int rd, int imm16, int hw)
+    {
+        return 0x9280_0000 | (hw << 21) | ((imm16 & 0xFFFF) << 5) | rd;
+    }
     /** {@code MOVK Xd, #imm16, LSL #(hw*16)} — insert, keeping the other lanes. */
     public static int movk(int rd, int imm16, int hw)
     {

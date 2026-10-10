@@ -57,6 +57,8 @@ public final class A64Test
         T.eqWord("MOVZ x1,#1,LSL#16", 0xD2A00021, A64.movz(1, 1, 1));
         T.eqWord("MOVK x0,#1,LSL#48", 0xF2E00020, A64.movk(0, 1, 3));
         T.eqWord("MOVN x0,#0",        0x92800000, A64.movn(0, 0, 0));
+        T.eqWord("MOVN x16,#0 (Enc)", 0x92800010, asm.A64Enc.movn(16, 0, 0));
+        T.eqWord("MOVN x3,#5,LSL16 (Enc = A64)", A64.movn(3, 5, 1), asm.A64Enc.movn(3, 5, 1));
 
         // ---- loadImm64 composition -----------------------------------------
         // 0x80000 = 0x0008_0000 -> MOVZ x0,#0x8,LSL#16 (single word).

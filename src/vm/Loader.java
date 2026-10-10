@@ -5932,6 +5932,28 @@ public final class Loader
                 // with `new ParsePosition(0)`, so while it was denied every language tag halted the VM
                 // (UNRESOLVED NEW). It is a data holder, not the locale-data machinery the denial exists for.
                 || utf8HasPrefix(base, off, Magic.bytes("java/text/ParsePosition"))
+                // Stock java/text/DecimalFormat and the PURE-LOGIC classes it is built from: its supertypes
+                // NumberFormat and Format, FieldPosition, DigitList, DontCareFieldPosition, ParseException,
+                // AttributedCharacterIterator (Format.Field extends its Attribute) and
+                // CharacterIteratorFieldDelegate. While denied, `new DecimalFormat(pattern)` was a CTOR SKIPPED
+                // with every field 0 -- a silent wrong answer. None of these reads locale data: the symbols come
+                // from the overlaid DecimalFormatSymbols. NumberFormat's locale FACTORIES (getInstance(Locale),
+                // getNumberInstance, ...) still go through java/text/spi and the provider adapter, which stay
+                // denied, so they trap loudly rather than answer.
+                || utf8HasPrefix(base, off, Magic.bytes("java/text/DecimalFormat"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/text/NumberFormat"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/text/Format"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/text/FieldPosition"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/text/DigitList"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/text/DontCareFieldPosition"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/text/ParseException"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/text/AttributedCharacterIterator"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/text/CharacterIteratorFieldDelegate"))
+                // ... and the last two of that closure (read off the classes' constant pools rather than found
+                // one boot at a time): StringBufFactory (Format's buffer abstraction) and AttributedString
+                // (formatToCharacterIterator). java/text/spi stays denied, deliberately.
+                || utf8HasPrefix(base, off, Magic.bytes("java/text/StringBufFactory"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/text/AttributedString"))
                 // sun/text/Normalizer is OVERLAID (from the JDK 26 source): getCombiningClass is exact below
                 // U+0300 and throws above it. Stock String's Turkish case mapping reaches it through
                 // ConditionalSpecialCasing. The rest of sun/text/ (the ICU-backed normalizer) stays denied.
@@ -21144,6 +21166,108 @@ public final class Loader
         int mhIdx = u2(e);
         int mrefIdx = u2(gbase + gcp[mhIdx] + 1);
         return utf8IsStr(refClassNameOff(mrefIdx), Magic.bytes("java/lang/runtime/ObjectMethods"));
+    }
+
+    /**
+     * True if the invokedynamic at {@code idx} bootstraps via {@code java/lang/runtime/SwitchBootstraps.typeSwitch}
+     * -- a pattern-matching {@code switch}. Its static arguments are the case labels; the JIT lowers it inline
+     * ({@code Baseline.lowerTypeSwitch}), so no MethodHandle runtime is involved.
+     */
+    static boolean isTypeSwitchIndy(int idx)
+    {
+        if (gBsmOff == 0L)
+        {
+            return false;
+        }
+        long e = bsmEntryOff(indyBsmIndex(idx));
+        int mhIdx = u2(e);
+        int mrefIdx = u2(gbase + gcp[mhIdx] + 1);
+        return utf8IsStr(refClassNameOff(mrefIdx), Magic.bytes("java/lang/runtime/SwitchBootstraps"))
+                && utf8IsStr(mrefNameOff(mrefIdx), Magic.bytes("typeSwitch"));
+    }
+
+    /** Number of case labels of the typeSwitch indy at {@code idx}. */
+    static int typeSwitchLabelCount(int idx)
+    {
+        return bsmArgCount(idx);
+    }
+
+    /** Constant-pool index of label {@code k} if it is a CONSTANT_Class; -2 for a primitive-class dynamic
+     *  constant ({@link #primitiveLabelKind}); else -1. */
+    static int typeSwitchLabelClass(int idx, int k)
+    {
+        int c = bsmArg(idx, k);
+        if (gcpTag[c] == 7)
+        {
+            return c;
+        }
+        return primitiveLabelKind(c) != 0 ? -2 : -1;
+    }
+
+    /** Kind of the typeSwitch selector: the first parameter of the indy's descriptor ({@code (II)I} -> 'I'). */
+    static int typeSwitchSelectorKind(int idx)
+    {
+        return ClassReader.descParamKind(gbytes, mrefDescOff(idx), 0);
+    }
+
+    /** Primitive descriptor char of label {@code k} if it is a primitive-class constant, else 0. */
+    static int typeSwitchPrimitiveLabel(int idx, int k)
+    {
+        return primitiveLabelKind(bsmArg(idx, k));
+    }
+
+    /**
+     * The descriptor char of a {@code CONSTANT_Dynamic} that is {@code ConstantBootstraps.primitiveClass} -- javac's
+     * spelling of {@code int.class} as a typeSwitch LABEL, for a record component pattern like
+     * {@code Rect(int w, int h)} -- or 0 for any other constant. The dynamic constant's NAME is the descriptor
+     * ("I"); its bootstrap must be primitiveClass, checked rather than assumed.
+     */
+    private static int primitiveLabelKind(int c)
+    {
+        if (gcpTag[c] != 17 || gBsmOff == 0L)
+        {
+            return 0;
+        }
+        long body = gbase + gcp[c];
+        int bsm = u2(body);                             // bootstrap_method_attr_index
+        int nat = u2(body + 2);                         // name_and_type_index
+        long e = bsmEntryOff(bsm);
+        int mrefIdx = u2(gbase + gcp[u2(e)] + 1);
+        if (!utf8IsStr(refClassNameOff(mrefIdx), Magic.bytes("java/lang/invoke/ConstantBootstraps"))
+                || !utf8IsStr(mrefNameOff(mrefIdx), Magic.bytes("primitiveClass")))
+        {
+            return 0;
+        }
+        int nameOff = gcp[u2(gbase + gcp[nat])];        // NameAndType.name -> Utf8 offset
+        if (u2(gbase + nameOff) != 1)
+        {
+            return 0;
+        }
+        int ch = u1(gbase + nameOff + 2);
+        return (ch == 'Z' || ch == 'B' || ch == 'C' || ch == 'S' || ch == 'I' || ch == 'J' || ch == 'F' || ch == 'D')
+                ? ch : 0;
+    }
+
+    /**
+     * Type of the WRAPPER for primitive-class label {@code k}: a selector matches {@code int.class} iff it is an
+     * {@code Integer}. EXACT for every label javac emits without --enable-preview: a primitive label appears only
+     * where the selector's static type IS that primitive (a record component), so the value arrives boxed as
+     * exactly its own wrapper. Primitive patterns against an arbitrary Object -- where a Byte would also match
+     * {@code int} by exact widening -- are a PREVIEW feature, and would need SwitchBootstraps' conversion table.
+     */
+    static long typeSwitchWrapperType(int idx, int k)
+    {
+        int ch = primitiveLabelKind(bsmArg(idx, k));
+        byte[] name = ch == 'Z' ? Magic.bytes("java/lang/Boolean")
+                : ch == 'B' ? Magic.bytes("java/lang/Byte")
+                : ch == 'C' ? Magic.bytes("java/lang/Character")
+                : ch == 'S' ? Magic.bytes("java/lang/Short")
+                : ch == 'I' ? Magic.bytes("java/lang/Integer")
+                : ch == 'J' ? Magic.bytes("java/lang/Long")
+                : ch == 'F' ? Magic.bytes("java/lang/Float")
+                : Magic.bytes("java/lang/Double");
+        int ci = classIndexByName(name);
+        return ci < 0 ? 0L : clTab[ci].type;
     }
 
     /** JIT buffer of the lambda body (bootstrap_arguments[1] MethodHandle -> its Methodref, same class). */

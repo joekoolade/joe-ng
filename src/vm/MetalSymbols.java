@@ -399,6 +399,38 @@ final class MetalSymbols implements Symbols
 
     /** Compile-time trace of every lambda site: capture count, SAM argc, allocated size, impl kind. */
     private static final boolean LAMBDA_WATCH = false;
+    public boolean isTypeSwitchIndy(int idx)
+    {
+        return Loader.isTypeSwitchIndy(idx);
+    }
+    public int typeSwitchLabelCount(int idx)
+    {
+        return Loader.typeSwitchLabelCount(idx);
+    }
+    public int typeSwitchLabelClass(int idx, int k)
+    {
+        return Loader.typeSwitchLabelClass(idx, k);
+    }
+    public int typeSwitchSelectorKind(int idx)
+    {
+        return Loader.typeSwitchSelectorKind(idx);
+    }
+    public int typeSwitchPrimitiveLabel(int idx, int k)
+    {
+        return Loader.typeSwitchPrimitiveLabel(idx, k);
+    }
+    public void typeSwitchLabelType(CodeBuffer cb, int reg, int idx, int k)
+    {
+        int c = Loader.typeSwitchLabelClass(idx, k);
+        if (c >= 0)
+        {
+            type(cb, reg, c);
+        }
+        else
+        {
+            emitAddr(cb, reg, Loader.typeSwitchWrapperType(idx, k));
+        }
+    }
     public boolean isRecordIndy(int idx)
     {
         return Loader.isRecordIndy(idx);

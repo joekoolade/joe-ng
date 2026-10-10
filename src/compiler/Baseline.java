@@ -2163,10 +2163,151 @@ public final class Baseline
         {
             lowerRecordTrap(cpIndex, cb);
         }
+        else if (symbols.isTypeSwitchIndy(cpIndex))
+        {
+            lowerTypeSwitch(cpIndex, cb);
+        }
         else
         {
             symbols.fail(Symbols.FAIL_OPCODE, 0xBA, 0);          // unsupported bootstrap
         }
+    }
+
+    /**
+     * A pattern-matching {@code switch}: {@code SwitchBootstraps.typeSwitch(Object target, int restart)}, lowered
+     * INLINE from the case labels the bootstrap carries as static arguments -- no MethodHandle runtime. The call
+     * site's two operands are the selector and the restart index (javac re-invokes with {@code restart = i+1} when
+     * case {@code i}'s {@code when} guard fails); the result is the index of the FIRST label {@code >= restart}
+     * that matches, {@code -1} for a null selector, or the label count when none matches -- the bootstrap's
+     * specified answer.
+     *
+     * <pre>
+     *   x16 = -1; cbz target, done
+     *   for each label i:  cmp restart, #i; b.gt next   ;  copy target; instanceof label i; cbz next
+     *                      x16 = i; b done
+     *   next: ...
+     *   x16 = n
+     *   done: pop restart, pop target, push x16
+     * </pre>
+     *
+     * <p>Each test is the {@code instanceof} lowering against the label's Type -- the CONSTANT_Class's, or for a
+     * primitive-class label ({@code Rect(int w, int h)}) its wrapper's -- so an unloaded label class simply does
+     * not match (no instance of it can exist). x16 holds the
+     * answer across the branches: it is written only after the last helper call on every path.
+     *
+     * <p>LIMITS, each a NAMED compile failure rather than a wrong lowering: a String/Integer/EnumDesc label
+     * ({@code 0xBA}, 3) and a method whose operand stack spills to memory ({@code 0xBA}, 4), where the register
+     * window's residency bookkeeping cannot follow branches inside one lowering.
+     */
+    private void lowerTypeSwitch(int cpIndex, CodeBuffer cb)
+    {
+        if (deepStack)
+        {
+            symbols.fail(Symbols.FAIL_OPCODE, 0xBA, 4);
+            return;
+        }
+        int n = symbols.typeSwitchLabelCount(cpIndex);
+        if (n > 4095)
+        {
+            symbols.fail(Symbols.FAIL_OPCODE, 0xBA, 5);    // cmp #imm12 / movz #imm16 range
+            return;
+        }
+        int k = 0;
+        while (k < n)
+        {
+            if (symbols.typeSwitchLabelClass(cpIndex, k) == -1)
+            {
+                symbols.fail(Symbols.FAIL_OPCODE, 0xBA, 3);
+                return;
+            }
+            k += 1;
+        }
+        int selKind = symbols.typeSwitchSelectorKind(cpIndex);
+        if (selKind != 'L' && selKind != '[')
+        {
+            lowerPrimitiveTypeSwitch(cpIndex, cb, n, selKind);
+            return;
+        }
+        int tgt = opSlot(sp - 2);
+        cb.emit(A64Enc.movn(16, 0, 0));                            // x16 = -1: the null selector's answer
+        int nullAt = cb.emit(A64Enc.cbz(tgt, 0));
+        int[] matched = new int[n];
+        int i = 0;
+        while (i < n)
+        {
+            int rst = opSlot(sp - 1);
+            cb.emit(A64Enc.cmpImm(rst, i));
+            int before = cb.emit(A64Enc.bcond(A64Enc.GT, 0));      // restart > i: this label is not a candidate
+            int copy = pushReg();
+            cb.emit(A64Enc.movReg(copy, opSlot(sp - 3)));         // the selector, above restart
+            int lt = pushReg();                                    // as typeCheck: the label's Type above it
+            symbols.typeSwitchLabelType(cb, lt, cpIndex, i);
+            emitCall(cb, 2, true, false, SYM_HELPER, Symbols.INSTANCE_OF);
+            int r = popReg();
+            int miss = cb.emit(A64Enc.cbz(r, 0));
+            cb.emit(A64Enc.movz(16, i, 0));
+            matched[i] = cb.emit(A64Enc.b(0));
+            int next = cb.wordCount();
+            cb.set(before, A64Enc.bcond(A64Enc.GT, next - before));
+            cb.set(miss, A64Enc.cbz(r, next - miss));
+            i += 1;
+        }
+        cb.emit(A64Enc.movz(16, n, 0));                            // no label matched
+        int done = cb.wordCount();
+        cb.set(nullAt, A64Enc.cbz(tgt, done - nullAt));
+        i = 0;
+        while (i < n)
+        {
+            cb.set(matched[i], A64Enc.b(done - matched[i]));
+            i += 1;
+        }
+        popReg();                                                  // restart
+        popReg();                                                  // selector
+        cb.emit(A64Enc.movReg(pushReg(), 16));
+    }
+
+    /**
+     * typeSwitch on a PRIMITIVE selector -- javac's lowering of a record component pattern such as
+     * {@code Rect(int w, int h)}, whose site is {@code (II)I}: the component value arrives unboxed and every label
+     * is the matching primitive class. Such a label matches UNCONDITIONALLY (the conversion is the identity), so
+     * the answer is the first label at or after {@code restart}, or {@code n}; a primitive has no null case.
+     * Any other label on a primitive selector needs SwitchBootstraps' exact-conversion table (preview primitive
+     * patterns) and is a named failure ({@code 0xBA}, 6).
+     */
+    private void lowerPrimitiveTypeSwitch(int cpIndex, CodeBuffer cb, int n, int selKind)
+    {
+        int k = 0;
+        while (k < n)
+        {
+            if (symbols.typeSwitchPrimitiveLabel(cpIndex, k) != selKind)
+            {
+                symbols.fail(Symbols.FAIL_OPCODE, 0xBA, 6);
+                return;
+            }
+            k += 1;
+        }
+        int[] matched = new int[n];
+        int i = 0;
+        while (i < n)
+        {
+            cb.emit(A64Enc.cmpImm(opSlot(sp - 1), i));
+            int before = cb.emit(A64Enc.bcond(A64Enc.GT, 0));      // restart > i: not a candidate
+            cb.emit(A64Enc.movz(16, i, 0));
+            matched[i] = cb.emit(A64Enc.b(0));
+            cb.set(before, A64Enc.bcond(A64Enc.GT, cb.wordCount() - before));
+            i += 1;
+        }
+        cb.emit(A64Enc.movz(16, n, 0));
+        int done = cb.wordCount();
+        i = 0;
+        while (i < n)
+        {
+            cb.set(matched[i], A64Enc.b(done - matched[i]));
+            i += 1;
+        }
+        popReg();                                                  // restart
+        popReg();                                                  // selector
+        cb.emit(A64Enc.movReg(pushReg(), 16));
     }
 
     /**
@@ -3767,6 +3908,10 @@ public final class Baseline
             else if (op == 0xBA && symbols.isConcatIndy(((code[pc + 1] & 0xFF) << 8) | (code[pc + 2] & 0xFF)))
             {
                 trans = d + 1;                                        // string-concat builder over the args
+            }
+            else if (op == 0xBA && symbols.isTypeSwitchIndy(((code[pc + 1] & 0xFF) << 8) | (code[pc + 2] & 0xFF)))
+            {
+                trans = d + 2;                                        // typeSwitch: selector copy + label Type
             }
             else if (op == 0xBF && symbols.captureTraces())
             {
