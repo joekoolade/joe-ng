@@ -118,7 +118,7 @@ defines the minimum the assembler must encode.
 
 Lives in **`STATUS.md`** -- the per-increment record (what each change fixed, how it was measured, QEMU and
 Pi results), newest first. Read the top of it before starting work: it carries the measured figures new work
-is compared against (closure counters, `gc: collections=46` at the churn demo, marker lists) and the
+is compared against (closure counters, `gc: collections=48` at the churn demo -- 46 until #326, 47 until the NumberFormat factories; each move measured against a same-conditions control, marker lists) and the
 recorded traps.
 
 ## Real-hardware flashing
