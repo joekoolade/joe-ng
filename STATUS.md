@@ -4,6 +4,53 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **PATTERN-MATCHING `switch` COMPILES (`SwitchBootstraps.typeSwitch` lowered inline), AND STOCK `DecimalFormat`
+  RUNS -- IT WAS DENIED, SO `new DecimalFormat(pattern)` WAS A `CTOR SKIPPED` WITH EVERY FIELD 0 (2026-10-10,
+  QEMU-GATED -- NOT YET PI-VALIDATED).** Picked as the `DecimalFormatSymbols` gap (30 deep gaps, its callers stock
+  `DecimalFormat`/`CompactNumberFormat`); the control showed the real wall was two layers further down.
+
+  **1. `DecimalFormatSymbols` is rebuilt FROM THE JDK 26 SOURCE (rule 3).** Every stock member; only the locale-data
+  reads are replaced -- `loadNumberData` answers the ROOT locale's CLDR elements (measured against the host:
+  `. , ; % 0 # - E \u2030 \u221e NaN`, not the legacy FormatData's U+FFFD NaN), `getInstance` constructs directly,
+  `getAvailableLocales` is `{ROOT}`, and `initializeCurrency` is stock's own ROOT branch (`XXX`, `\u00a4`) with
+  `Currency.getInstance` DEFERRED to `getCurrency()`: `java.util.Currency` loads a data file through
+  `Class.getResourceAsStream`, which this VM lacks, and only code that really wants the `Currency` object should
+  reach it (it fails there loudly). STATED LIMIT, unchanged: every locale gets ROOT symbols.
+
+  **2. `DecimalFormat` and the pure-logic `java.text` classes it is built from are narrowed out of the `java/text/`
+  denial** (both lists): `DecimalFormat`, `NumberFormat`, `Format`, `FieldPosition`, `DigitList`,
+  `DontCareFieldPosition`, `ParseException`, `AttributedCharacterIterator`, `CharacterIteratorFieldDelegate`,
+  `StringBufFactory`, `AttributedString` -- the closure read off their CONSTANT POOLS rather than found one boot at a
+  time. `java/text/spi` and the provider adapter stay denied, so `NumberFormat`'s locale FACTORIES trap loudly.
+
+  **3. THE COMPILER: `SwitchBootstraps.typeSwitch`.** `DecimalFormat` then died `JIT unsupported ... a=0xBA` -- four
+  pattern switches. `Baseline.lowerTypeSwitch` lowers it INLINE from the case labels (the bootstrap's static
+  arguments), no MethodHandle runtime: `x16 = -1; cbz selector, done`; per label `i`: `cmp restart, #i; b.gt next`,
+  then the existing `instanceof` lowering against the label's Type; `x16 = n` on no match. Only the metal JIT
+  answers (image code has no indy), so the fixpoint is untouched; `computeDepths` counts the +2 transient.
+  - **A PRIMITIVE SELECTOR, found by the probe:** javac 26 lowers a record component pattern `Rect(int w, int h)` to
+    a typeSwitch whose site is `(II)I` -- the component UNBOXED -- with label `int.class` (a `CONSTANT_Dynamic` via
+    `ConstantBootstraps.primitiveClass`). Treating it as a reference would have read `w == 0` as NULL. Such a site
+    is lowered separately: no null case, a same-kind primitive label matches unconditionally.
+  - **NAMED FAILURES, not wrong lowerings:** String/Integer/EnumDesc labels (`0xBA`/3), a spilled-stack method
+    (`0xBA`/4: the register window's bookkeeping cannot follow branches inside one lowering), >4095 labels
+    (`0xBA`/5), and a non-identity label on a primitive selector (`0xBA`/6, preview primitive patterns). New
+    `A64Enc.movn`, checked bit-for-bit against `A64.movn` (A64 107 -> 109).
+
+  - **`PatternSwitchProbe` (new) byte-identical to the host:** label order, `case null`, guards and the RESTART
+    path, a guard on the last label, `int[]`, a never-instantiated label class, sealed + record deconstruction
+    with primitive components, nested record patterns, default.
+  - **`DecimalFormatProbe` (new) byte-identical:** the ROOT symbols, grouping/BigDecimal, scientific, percent, per
+    mille, a negative subpattern, NaN/infinity, `parse`, custom separators/`equals`/`clone`, and
+    `String.format(Locale.US, "%,.2f")`.
+  - **Suite: 40 programs, markers zero (`CTOR SKIPPED` and `RUNTRAMP` zero too), `HML`/`HML 68ms`, churn gc 47
+    unchanged, `lisp stable=1`;** `FunctionProbe`, `ExecutorProbe`, `LockProbe` host-identical. Host: `compiler 40`,
+    `A64 109`, `overlay-check 0 new`; deep scan 464 -> 434.
+  - **THE NEXT GAP, measured:** `%,d`/`%,.2f` under the DEFAULT locale. No `user.language`/`user.country` is seeded,
+    so the default is `en` (no country) -- not `Locale.US` -- and Formatter's grouping branch calls
+    `NumberFormat.getNumberInstance`, whose provider factory is denied. Pre-existing (NumberFormat itself was
+    denied before); the fix is `NumberFormat`'s factories from the ROOT patterns, the same move as this DFS one.
+
 - **THREAD POOLS WORK, AND UNCAUGHT-EXCEPTION HANDLERS FIRE -- `Executors.newFixedThreadPool` COULD NOT CREATE A
   SINGLE WORKER (2026-10-09, QEMU-GATED -- NOT YET PI-VALIDATED).** The `Thread` overlay is VM-coupled (fixed field
   offsets), so this ADDS the stock members it lacked rather than replacing it. Each was named by the previous run's

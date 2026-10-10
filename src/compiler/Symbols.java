@@ -502,6 +502,50 @@ public interface Symbols
     /** Load into {@code reg} the synthetic lambda class's TIB address (building the class on the metal). */
     void lambdaTib(CodeBuffer cb, int reg, int idx);
 
+    // ----- invokedynamic (pattern-matching switch: SwitchBootstraps.typeSwitch) -----
+
+    /** Whether the {@code invokedynamic} at {@code idx} bootstraps via {@code SwitchBootstraps.typeSwitch}. Only
+     *  the metal JIT answers true: image code has no invokedynamic. */
+    default boolean isTypeSwitchIndy(int idx)
+    {
+        return false;
+    }
+
+    /** Number of case labels ({@code bootstrap_arguments}) of the typeSwitch indy at {@code idx}. */
+    default int typeSwitchLabelCount(int idx)
+    {
+        return 0;
+    }
+
+    /** Constant-pool index of label {@code k} if it is a CLASS label; -2 for a PRIMITIVE-class label (a
+     *  {@code ConstantBootstraps.primitiveClass} dynamic constant, which javac emits for a record component
+     *  pattern such as {@code Rect(int w, int h)}); -1 for anything else (String/Integer/EnumDesc labels are not
+     *  lowered yet, and the compiler fails the method by name rather than lowering them wrongly). */
+    default int typeSwitchLabelClass(int idx, int k)
+    {
+        return -1;
+    }
+
+    /** Descriptor kind of the typeSwitch SELECTOR (its call site's first parameter): 'L'/'[' for a reference, or a
+     *  primitive's char -- javac passes a record's primitive COMPONENT unboxed, e.g. {@code (II)I}. */
+    default int typeSwitchSelectorKind(int idx)
+    {
+        return 'L';
+    }
+
+    /** The primitive descriptor char of a primitive-class label {@code k}, else 0. */
+    default int typeSwitchPrimitiveLabel(int idx, int k)
+    {
+        return 0;
+    }
+
+    /** Load into {@code reg} the Type a selector must be an instance of to match label {@code k}: the label class,
+     *  or for a primitive-class label its WRAPPER (see the metal implementation for why that is exact). */
+    default void typeSwitchLabelType(CodeBuffer cb, int reg, int idx, int k)
+    {
+        type(cb, reg, typeSwitchLabelClass(idx, k));
+    }
+
     // ----- invokedynamic (record ObjectMethods) -----
 
     /** Whether the {@code invokedynamic} at {@code idx} bootstraps via {@code ObjectMethods.bootstrap} (record). */
