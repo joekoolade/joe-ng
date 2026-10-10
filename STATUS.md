@@ -4,6 +4,36 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **`NumberFormat`'S FACTORIES WORK -- `String.format("%,d")` UNDER THE DEFAULT LOCALE NO LONGER TRAPS; THE CHURN
+  GATE MOVES 47 -> 48, MEASURED AND ACCEPTED (2026-10-10, QEMU-GATED -- NOT YET PI-VALIDATED).** The next gap named
+  by #338. joe-ng seeds no `user.language`/`user.country`, so the default locale is `en` -- not `Locale.US` -- and
+  `Formatter`'s grouping flag calls `NumberFormat.getNumberInstance`, whose stock factory asks the denied locale
+  provider. **Control (main): the very first `String.format("%,d", 1234567)` died with a DENYLIST TRAP in
+  `LocaleProviderAdapter.getAdapter`.**
+
+  - **`NumberFormat` is overlaid FROM THE JDK 26 SOURCE (rule 3):** every stock member; only the factory's provider
+    lookup is replaced, by what the JRE provider (`NumberFormatProviderImpl`) does, fed the ROOT locale's CLDR
+    patterns -- measured against the host: number `#,##0.###`, integer (number + max fraction 0, decimal separator
+    off, parse-integer-only), percent `#,##0%`, currency `\u00a4\u00a0#,##0.00`, accounting `\u00a4 #,##0.00`.
+    `getAvailableLocales` is `{ROOT}`. Consistent with the #338 `DecimalFormatSymbols` (ROOT symbols everywhere).
+  - **`NumberFormatProbe` (new) byte-identical to the host** -- and the host prints the SAME under `en` (the board's
+    default) as under `en_US`, so the oracle is valid: `%,d` / `%,.2f` under the default locale, number/integer/
+    percent format and parse, HALF_EVEN integer rounding, `getInstance == getNumberInstance`.
+  - **THE GC GATE, MEASURED AGAINST A SAME-CONDITIONS CONTROL:** main's tree, same build, same harness, booted
+    straight after: **churn `gc: collections` 47 (main) vs 48 (this)**, finale 56 vs 57; both 40 programs, markers
+    zero, `lisp stable=1`. Attribution: **every batch carries +169 classes (688 -> 857)**. The factory now does
+    `new DecimalFormat(...)` where stock's went to a denied (pruned) provider, so `DecimalFormat`'s closure --
+    the `java.math` classes its `format(Object)` pattern switch names, `Currency` -- enters every program that
+    reaches `Formatter`. Same shape as #326 (46 -> 47 for +273/batch). **Accepted by the user; the standing churn
+    figure is 48 from here.** Not trimmed: those classes are reachable from any `DecimalFormat`, and no instrumented
+    boot was spent listing them.
+  - **STATED LIMITS:** every locale gets the ROOT patterns; a CURRENCY instance needs `java.util.Currency`'s data
+    file (via `Class.getResourceAsStream`, absent) and fails there loudly; COMPACT formats throw by name.
+  - **NEXT GAP, measured by this probe's first draft:** `Scanner` also reaches these factories, but first needs
+    `java.nio.CharBuffer.allocate` -- still denied, the Charset/CharBuffer subsystem (the `CodingErrorAction.REPLACE`
+    and `CharBuffer.wrap` notes in every boot log).
+  - Host: `compiler 40`, `overlay-check 0 new`; deep scan unchanged at 434 (NumberFormat was not overlaid before).
+
 - **PATTERN-MATCHING `switch` COMPILES (`SwitchBootstraps.typeSwitch` lowered inline), AND STOCK `DecimalFormat`
   RUNS -- IT WAS DENIED, SO `new DecimalFormat(pattern)` WAS A `CTOR SKIPPED` WITH EVERY FIELD 0 (2026-10-10,
   QEMU-GATED -- NOT YET PI-VALIDATED).** Picked as the `DecimalFormatSymbols` gap (30 deep gaps, its callers stock
