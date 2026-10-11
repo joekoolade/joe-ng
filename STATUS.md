@@ -4,6 +4,27 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **AN IMAGE CLASS IS INITIALIZED ONCE PER VM, NOT ONCE PER LOADER WORLD (2026-10-11, QEMU-GATED -- NOT YET
+  PI-VALIDATED).** The other half of the OpenJDK rule the previous card cited: a class whose statics block is the
+  IMAGE's (adopted by the loader, so every world shares one home) is the analogue of a boot-loader class, and
+  JVMS 5.5 initializes it at most once. Its completed `<clinit>` is recorded by statics-block address in a set
+  `resetLoader` does not clear; a later world marks it `ST_INITIALIZED` and retires its pending initializer
+  entries instead of re-running it, on both the lazy (`ensureClinit`) and the batch (`runClinits`) path.
+  - **MEASURED BEFORE IT WAS NARROWED:** the first build noted 14 classes and ADOPTED 2 -- `String` and
+    `StringUTF16`, initialized inside `loadParseInt`'s hand-built world (String loaded there as a raw blob) and
+    then carried into the runtime world un-re-run. The suite passed, but String's statics would have held
+    objects built in a world whose code is discarded -- the stale-object hazard of the previous card, reversed.
+    **Only initializations after `runtimeUp` count now**: the hand-built worlds are scaffolding, not part of the
+    VM whose lifetime "once" refers to. Re-measured: 14 noted, all after the runtime came up, **0 adopted**.
+  - **So nothing in today's suite exercises the adoption path**: since the previous card no reset follows
+    `bringUpRuntime`. This is the rule enforced for any future reset path, not a fix for a current failure.
+  - **Suite: 40 programs, markers zero, `HML`/`HML 68ms`, `smp 4 of 4`, `lisp stable=1`, churn gc 49 (unchanged
+    from the previous card).** Host: `compiler 40`, `overlay-check 0 new`. The `DIAG-BOOTINIT` prints that
+    produced the counts above were removed after the measurement (UART writes only).
+  - **NOT DONE (the third part):** a reset still discards the code of classes whose objects stay reachable from
+    image statics. OpenJDK unloads by reachability; joe-ng's lazy-stub tables do not. Moot while no reset
+    follows the runtime bring-up.
+
 - **BAKED CODE GETS A JVMS 5.5 INIT GUARD AT ITS `java/util/Locale` SITES; THE SUITE'S HAND-BUILT LOADER WORLDS
   RUN BEFORE THE RUNTIME COMES UP (2026-10-11, QEMU-GATED -- NOT YET PI-VALIDATED).** Fixes the `ByteViewProbe`
   regression the nio-buffers card found. **Bisected to #326** (first bad `b20ff99`, last good `b5feaf9`/#325),

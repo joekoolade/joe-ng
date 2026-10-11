@@ -1067,6 +1067,16 @@ public final class Loader
     // ThreadLocalRandom.getProbe on exactly that, four threads entering TLR.<clinit> at once.
     private static int[] clinitOwner;
     private static int[] clinitDone;
+
+    /**
+     * The IMAGE statics blocks whose {@code <clinit>} has completed, for the life of the VM -- deliberately NOT
+     * reset by {@link #resetLoader}. A baked class adopts the writer's statics block, so every loader world shares
+     * ONE home for its statics, which makes it the analogue of an OpenJDK boot-loader class: initialized at most
+     * once per VM (JVMS 5.5), never once per world. Re-running it in a later world re-ran Locale's initializer
+     * over statics still holding objects whose code the reset had discarded ({@code stub outlived its table}).
+     */
+    private static long[] bootInited;
+    private static int bootInitedN;
     // PRECISE per-<clinit> init dependencies: the classes the initializer BODY actively touches
     // (getstatic/putstatic/invokestatic owner, new/anewarray class, ldc Class literal), name Utf8 offsets in the
     // owning blob's gbase. Used by clinitDepBlocked INSTEAD of the whole-constant-pool dp table, whose field-type /
@@ -1216,6 +1226,13 @@ public final class Loader
                     remaining -= 1;
                     progress = 1;
                 }
+                else if (!done[i] && bootInitedEntry(i))
+                {
+                    clinitRan[i] = 1;                    // ran once per VM, in an earlier loader world
+                    done[i] = true;
+                    remaining -= 1;
+                    progress = 1;
+                }
                 else if (!done[i] && !clinitDepBlocked(i, done))
                 {
                     if (logClinit != 0)                  // #43: name each <clinit> as it runs (spot a hanging one)
@@ -1229,6 +1246,7 @@ public final class Loader
                     warnClinitUnderLock(i);
                     long unused = Magic.call0(entry);
                     clinitRan[i] = 1;
+                    noteBootInited(classRegAt(clinitBase[i], clinitNameOff[i]));
                     done[i] = true;
                     remaining -= 1;
                     progress = 1;
@@ -1249,6 +1267,7 @@ public final class Loader
                     warnClinitUnderLock(j);
                     long unused = Magic.call0(cyEntry);
                     clinitRan[j] = 1;
+                    noteBootInited(classRegAt(clinitBase[j], clinitNameOff[j]));
                     done[j] = true;
                     remaining -= 1;
                 }
@@ -1282,6 +1301,13 @@ public final class Loader
      * demand), and never calls {@code ConditionalSpecialCasing} at all (so its initializer — which builds a
      * HashMap of Entry objects — never runs).
      */
+    /** {@link #adoptBootInit} for batch initializer entry {@code i}, by its class. */
+    private static boolean bootInitedEntry(int i)
+    {
+        int reg = classRegAt(clinitBase[i], clinitNameOff[i]);
+        return reg >= 0 && adoptBootInit(reg);
+    }
+
     private static boolean lazyClinitGated(long base, int off)
     {
         return !clinitEagerKept(base, off);
@@ -1559,6 +1585,89 @@ public final class Loader
         Uart.putc(0x0A);
     }
 
+    /** True when {@code statics} is a writer-emitted block in the image (an adopted class's ONE home). */
+    private static boolean isImageStatics(long statics)
+    {
+        return statics != 0L && statics >= VM.staticsStart && statics < VM.staticsEnd;
+    }
+
+    /** Whether the class at {@code reg} shares an image statics block whose initializer already ran. */
+    private static boolean bootInitedReg(int reg)
+    {
+        long st = clTab[reg].statics;
+        if (!isImageStatics(st))
+        {
+            return false;
+        }
+        int i = 0;
+        while (i < bootInitedN)
+        {
+            if (bootInited[i] == st)
+            {
+                return true;
+            }
+            i += 1;
+        }
+        return false;
+    }
+
+    /**
+     * Record that the class at {@code reg}'s initializer completed -- if its statics are the image's, and only once
+     * the RUNTIME world is up. The suite's hand-built worlds (loadParseInt and friends) run first and reset the
+     * loader to a few raw blobs; MEASURED, they initialize {@code String} and {@code StringUTF16}, and carrying that
+     * into the runtime world would leave String's statics holding objects built in a world the next reset
+     * discards. Those worlds are scaffolding, not part of the VM whose lifetime "once" refers to.
+     */
+    private static void noteBootInited(int reg)
+    {
+        if (!runtimeUp || reg < 0 || !isImageStatics(clTab[reg].statics) || bootInitedReg(reg))
+        {
+            return;                                     // only the RUNTIME world's initializations count: see below
+        }
+        if (bootInited == null)
+        {
+            bootInited = new long[64];
+        }
+        if (bootInitedN == bootInited.length)
+        {
+            long[] grown = new long[bootInitedN * 2];
+            int k = 0;
+            while (k < bootInitedN)
+            {
+                grown[k] = bootInited[k];
+                k += 1;
+            }
+            bootInited = grown;
+        }
+        bootInited[bootInitedN] = clTab[reg].statics;
+        bootInitedN += 1;
+    }
+
+    /**
+     * A class registered in THIS world whose image statics were initialized in an earlier one: mark it
+     * initialized without running anything, and retire its pending initializer entries so neither the batch sweep
+     * nor a step-2 waiter treats them as outstanding. Returns whether it applied.
+     */
+    private static boolean adoptBootInit(int reg)
+    {
+        if (!bootInitedReg(reg))
+        {
+            return false;
+        }
+        clTab[reg].state = RVMClass.ST_INITIALIZED;
+        int i = 0;
+        while (i < clinitN)
+        {
+            if (clinitBase[i] == clTab[reg].base)
+            {
+                clinitRan[i] = 1;
+                clinitDone[i] = 1;
+            }
+            i += 1;
+        }
+        return true;
+    }
+
     private static void ensureClinit(int reg)
     {
         if (reg < 0 || clTab == null || clTab[reg] == null)
@@ -1592,6 +1701,10 @@ public final class Loader
         if (clTab[reg].state >= RVMClass.ST_INITIALIZED)
         {
             return;
+        }
+        if (adoptBootInit(reg))
+        {
+            return;                                     // initialized once per VM, in an earlier loader world
         }
         if (!lazyClinitGated(clTab[reg].base, clTab[reg].nameOff))
         {
@@ -1797,6 +1910,7 @@ public final class Loader
                 {
                     long unused = Magic.call0(entry);
                     clTab[reg].state = RVMClass.ST_INITIALIZED;
+                    noteBootInited(reg);
                 }
                 finally
                 {
