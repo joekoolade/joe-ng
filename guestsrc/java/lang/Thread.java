@@ -55,6 +55,9 @@ public class Thread implements Runnable, MetalThreadEntry
     // getUncaughtExceptionHandler answer null after termination exactly as stock does. Appended for the same reason.
     private volatile UncaughtExceptionHandler uncaughtExceptionHandler;
     private volatile boolean everStarted;
+    // @128 -- stock's context loader, a REAL field: InnocuousThread.<clinit> takes its offset and its constructor
+    // writes it through Unsafe. The accessors used to answer null and DISCARD a set, so set(x) then get() was null.
+    private volatile ClassLoader contextClassLoader;
 
     // null unless explicitly set (stock)
     private static volatile UncaughtExceptionHandler defaultUncaughtExceptionHandler;
@@ -91,6 +94,7 @@ public class Thread implements Runnable, MetalThreadEntry
     {
         target = r;
         name = threadName;
+        contextClassLoader = currentThread().contextClassLoader;   // stock: inherited from the creating thread
         if (inheritThreadLocals)
         {
             Thread parent = currentThread();
@@ -248,14 +252,15 @@ public class Thread implements Runnable, MetalThreadEntry
         return false;
     }
 
-    /** Null: joe-ng loads every class through one VM loader, which is the bootstrap loader's own answer. */
+    /** Null unless set: joe-ng loads every class through one VM loader, the bootstrap loader's own answer. */
     public ClassLoader getContextClassLoader()
     {
-        return null;
+        return contextClassLoader;
     }
 
     public void setContextClassLoader(ClassLoader cl)
     {
+        contextClassLoader = cl;
     }
 
     /** Every thread belongs to the one flat group (no hierarchy on joe-ng). */

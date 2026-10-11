@@ -621,12 +621,10 @@ public final class Unsafe
      */
     public void putInt(Object o, long offset, int x)
     {
-        if (isArrayRef(o))
-        {
-            putBits(o, offset, x, 4);          // a 4-byte element; store64 would span two of them
-            return;
-        }
-        Magic.store64(at(o, offset), x);
+        // putBits decides the width: a FIELD's whole 8-byte slot, but exactly 4 bytes for an array element OR A RAW
+        // ADDRESS. This used to test isArrayRef only, so putInt(null, address) -- every DirectByteBuffer.putInt --
+        // wrote 8 bytes and silently overwrote the next 4. (NioBufferProbe reads the neighbours back.)
+        putBits(o, offset, x, 4);
     }
 
     public int getIntAcquire(Object o, long offset)
@@ -2784,19 +2782,21 @@ public final class Unsafe
     // denies and shims itself -- and every referrer of the ones below is a subsystem joe-ng deliberately
     // lacks (java/nio direct buffers, jdk/internal/foreign, sun/nio/ch channels).
 
+    // Off-heap memory: the payload of a guest byte[], held until freed -- see MetalOffHeap. This is what stock
+    // DirectByteBuffer (allocateDirect) and sun.nio.ch.Util's temporary socket buffers allocate through.
     public long allocateMemory(long bytes)
     {
-        throw new InternalError("jdk.internal.misc.Unsafe.allocateMemory: no off-heap memory on bare metal");
+        return MetalOffHeap.allocate(bytes);
     }
 
     public long reallocateMemory(long address, long bytes)
     {
-        throw new InternalError("jdk.internal.misc.Unsafe.reallocateMemory: no off-heap memory on bare metal");
+        return MetalOffHeap.reallocate(address, bytes);
     }
 
     public void freeMemory(long address)
     {
-        throw new InternalError("jdk.internal.misc.Unsafe.freeMemory: no off-heap memory on bare metal");
+        MetalOffHeap.free(address);
     }
 
     public void copySwapMemory(Object srcBase, long srcOffset, Object destBase, long destOffset,
@@ -2827,7 +2827,9 @@ public final class Unsafe
      *  off-heap allocations -- which throw -- so answering would be answering for nobody. */
     public int pageSize()
     {
-        throw new InternalError("jdk.internal.misc.Unsafe.pageSize: no pager on bare metal");
+        // The MMU's translation granule: TCR_EL1 is programmed 0x2_0080_3520 (VMScheduler), TG0 = 0b00 -> 4 KiB.
+        // Asked by java.nio.Bits for every direct buffer (page alignment is off by default, so it only sizes).
+        return 4096;
     }
 
     public Object getUncompressedObject(long address)

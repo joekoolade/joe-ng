@@ -4,6 +4,39 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **STOCK `java.nio` BUFFERS RUN -- HEAP AND DIRECT; THE `ByteBuffer`/`ByteOrder`/`DirectBuffer`/`Util` OVERLAYS ARE
+  DELETED, AND `Unsafe` GAINS OFF-HEAP MEMORY (2026-10-11, QEMU-GATED -- NOT YET PI-VALIDATED; the socket path is
+  Pi-only).** First increment of the charset arc, the design the user chose: the decoders work on byte buffers, and
+  joe-ng's `ByteBuffer` was a 408-line socket-path overlay (24 deep gaps, not even a `java.nio.Buffer`). Every wall
+  was named by the previous run:
+
+  | step | failure | fix |
+  |---|---|---|
+  | 1 | (design) stock `allocateDirect` / `sun.nio.ch.Util` need `Unsafe.allocateMemory`, which THREW | `MetalOffHeap`: a block is the payload of a guest `byte[]` held in a table until `freeMemory` -- sound because the collector never moves objects; `reallocateMemory` keeps the prefix |
+  | 2 | (found reading `Unsafe`) `putInt(null, address)` wrote **8 bytes**: it took `store64` for any non-array base | `putInt` goes through `putBits` like every other narrow put -- a FIELD's whole slot, 4 bytes for an element or a raw address. Silent, and every stock `DirectByteBuffer.putInt` would have clobbered its neighbour |
+  | 3 | `jdk.internal.misc.VM.<clinit>` was SKIPPED, so `directMemory` was 0 and `Bits.reserveMemory` would refuse every direct buffer | the initializer runs; its native `initialize()` only `RegisterNatives` (libjava `VM.c`) and is wired EMPTY |
+  | 4 | `Unsafe.pageSize` threw | answers **4096**, read off the MMU: `TCR_EL1 = 0x2_0080_3520`, TG0 = 0 -> 4 KiB granule |
+  | 5 | `InnocuousThread.<clinit>` (stock `BufferCleaner`'s cleaning thread): `InternalError: contextClassLoader` | `Thread.contextClassLoader` and `ThreadGroup.parent` are REAL fields now. The old accessors answered null and DISCARDED a set -- a silent wrong answer of their own |
+
+  - **`NioBufferProbe` (new, adversarial) byte-identical to the host**, heap AND direct: multi-byte put/get absolute
+    and relative with the NEIGHBOURING bytes read back (the 8-byte `putInt` would fail exactly there), byte order,
+    flip/duplicate/slice/compact, read-only, `asIntBuffer`/`asLongBuffer`/`asCharBuffer` views, heap->direct
+    bulk copy, `equals`/`compareTo`/`mismatch`, `wrap` with offset.
+  - **Suite: 40 programs, markers zero, `HML`/`HML 67ms`, `smp 4 of 4`, churn gc 48 unchanged, `lisp stable=1`, the
+    `MessageDigest` arm's sha256 correct (it reads through a `ByteBuffer`).** `ScannerProbe`, `ChmRaceProbe`
+    host-identical; `DigestProbe`/`MacProbe` pass their own gate (`failures=0 divergences-unmet=0` -- they print
+    joe-ng's designed SHA-3/provider differences, so a raw host diff is not their gate). Host: `compiler 40`,
+    `A64 109`, `overlay-check 0 new` (known dropped supertypes 59 -> 53); deep scan 434 -> 394.
+  - **A REGRESSION ON MAIN, FOUND BY THIS GATE AND NOT CAUSED BY IT:** `ByteViewProbe`'s out-of-bounds arm throws
+    NPE instead of `ArrayIndexOutOfBoundsException`, then `BAD RECEIVER at dispatch: recv=0x25 site=set([BII)V`
+    and a trap. The SAME on `main` (`4c98b90`, measured with this change stashed), so it entered somewhere in
+    #333-#341 after the archived Pi-validated byteview image. Next: bisect it.
+  - **STATED LIMITS:** direct buffers allocated by user code are freed only by `BufferCleaner`, which needs phantom
+    references enqueued by the collector -- `sun.nio.ch.Util`'s temporary buffers are freed explicitly, so the socket
+    path does not depend on it. The NetDemo socket path now runs stock `Util` over direct buffers and is Pi-only.
+  - **NEXT (the arc):** stock `CharsetDecoder`/`CharsetEncoder` and the `UTF_8`/`ISO_8859_1`/`US_ASCII` charsets, so
+    `ReaderProbe` (text files through `BufferedReader`) passes. It traps today at `UTF_8.newDecoder`.
+
 - **METHOD REFERENCES RETURNING `float`/`double` ARE BOXED -- `reduce(0.0, Double::sum)`, `map(Math::sqrt)`,
   `Float::sum` (2026-10-11, PI-VALIDATED -- and with it #326 through #340).**
 

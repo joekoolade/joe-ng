@@ -2230,10 +2230,11 @@ public final class Loader
                 // pinIfSupported/unpinIfSupported no-ops that never touch the denied Continuation class.
                 // (Reached via collection iterators / Thread.isVirtual checks in several java.util closures.)
                 || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("jdk/internal/vm/ContinuationSupport"))
-                // jdk/internal/misc/VM.<clinit> = initialize() (a native setting savedProps/direct-memory/page
-                // state). Metal has no such native; the reachable collection/reference paths don't read VM's
-                // statics, so skip it (defaults are inert). Pulled transitively by reference/buffer machinery.
-                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("jdk/internal/misc/VM"))
+                // jdk/internal/misc/VM.<clinit> is NO LONGER SKIPPED: it assigns `lock` and the 64 MB default
+                // `directMemory` and calls the native initialize(), which only RegisterNatives for JNI
+                // (share/native/libjava/VM.c) and is wired empty. Skipped, directMemory stayed 0 and stock
+                // DirectByteBuffer's Bits.reserveMemory refused every direct buffer. It does not touch savedProps,
+                // which seedSavedProps fills at launch.
                 // Arrays$LegacyMergeSort.<clinit> reads the java.util.Arrays.useLegacyMergeSort property via
                 // AccessController/GetBooleanAction (denied). Skipping leaves userRequested=false -- correct,
                 // so Arrays.sort takes the modern TimSort path (reached by any object Arrays.sort/Collections.sort).
@@ -12144,6 +12145,13 @@ public final class Loader
         // No JNI here, so the empty stub is exactly right. closeScope0 itself -- closing a SHARED foreign arena -- is
         // deliberately NOT wired: it does real work, so it must fail loudly if reached. Reached by
         // java.nio.Buffer.<clinit>, i.e. by every stock CharBuffer (Scanner's input buffer).
+        // jdk/internal/misc/VM.initialize: RegisterNatives for JNI and nothing else (share/native/libjava/VM.c), so
+        // empty is exactly right. The natives it would register (getNanoTimeAdjustment, ...) are wired or fail on
+        // their own.
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/VM")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("initialize")))        { return VM.noopNativeAddr; }  // ()V
+        }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/ScopedMemoryAccess")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("registerNatives")))   { return VM.noopNativeAddr; }  // ()V
