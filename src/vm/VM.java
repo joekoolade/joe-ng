@@ -4086,6 +4086,52 @@ public final class VM
         Uart.putc(Loader.loadMath());                      // 'M' from java.base java.lang.Math.max(0x4D,0x21)
         Uart.putc(0x0A);
 
+        // The HAND-BUILT loader worlds (each of these resets the loader to a few raw blobs) all run here, BEFORE
+        // the first launchMain brings the runtime world up. A reset after that would leave image-adopted statics
+        // holding objects whose code the reset discarded, and re-run their <clinit> in the new world -- OpenJDK
+        // never resets the boot loader, and a baked-Locale init guard made the suite crash at exactly that.
+
+        // Experiment: compile + run methods from a REAL, unmodified java.base class (java/lang/Integer).
+        // First two pure methods (should just work), then a full-class load to see where the reach ends.
+        Uart.write(Magic.bytes("real java.base (unmodified java/lang/Integer):\n"));
+        Uart.write(Magic.bytes("  bitCount(0x0F0F0F0F)="));
+        printDec(Loader.intBitCount(0x0F0F0F0F));                 // expect 16
+        Uart.write(Magic.bytes("  reverse(0x00000001)="));
+        printHex(Loader.intReverse(1) & 0xFFFFFFFFL);            // expect 0x80000000
+        Uart.putc(0x0A);
+        Uart.write(Magic.bytes("  dependency+native surface of java/lang/Integer:\n"));
+        Loader.loadIntegerFull();                                // static scan: classes Integer calls into
+
+        // Real-java.base probe: compile + run a battery of UNMODIFIED OpenJDK numeric methods (Integer/Long/
+        // Math), each in isolation (transitively pulling same-class callees), checked against JDK-known
+        // results. Pure/leaf methods that touch no static state -- the frontier of "real java.base on metal".
+        Uart.write(Magic.bytes("real java.base numeric probe (unmodified Integer/Long/Math):\n"));
+        long ib = integerBytes;
+        int il = (int) integerLen;
+        probeShow(Magic.bytes("Integer.bitCount(0xF0F0F0F0)"),        Loader.probeStatic(ib, il, Magic.bytes("bitCount"),              Magic.bytes("(I)I"),  0xF0F0F0F0L, 0L), 16);
+        probeShow(Magic.bytes("Integer.numberOfLeadingZeros(1)"),     Loader.probeStatic(ib, il, Magic.bytes("numberOfLeadingZeros"),  Magic.bytes("(I)I"),  1L, 0L), 31);
+        probeShow(Magic.bytes("Integer.numberOfTrailingZeros(0x10000)"), Loader.probeStatic(ib, il, Magic.bytes("numberOfTrailingZeros"), Magic.bytes("(I)I"), 0x10000L, 0L), 16);
+        probeShow(Magic.bytes("Integer.reverseBytes(0x12345678)"),    Loader.probeStatic(ib, il, Magic.bytes("reverseBytes"),          Magic.bytes("(I)I"),  0x12345678L, 0L), 0x78563412);
+        probeShow(Magic.bytes("Integer.reverse(1)"),                  Loader.probeStatic(ib, il, Magic.bytes("reverse"),               Magic.bytes("(I)I"),  1L, 0L), 0x80000000);
+        probeShow(Magic.bytes("Integer.highestOneBit(100)"),          Loader.probeStatic(ib, il, Magic.bytes("highestOneBit"),         Magic.bytes("(I)I"),  100L, 0L), 64);
+        probeShow(Magic.bytes("Integer.signum(-5)"),                  Loader.probeStatic(ib, il, Magic.bytes("signum"),                Magic.bytes("(I)I"),  -5L, 0L), -1);
+        probeShow(Magic.bytes("Integer.rotateLeft(1,4)"),             Loader.probeStatic(ib, il, Magic.bytes("rotateLeft"),            Magic.bytes("(II)I"), 1L, 4L), 16);
+        probeShow(Magic.bytes("Integer.compare(3,7)"),                Loader.probeStatic(ib, il, Magic.bytes("compare"),               Magic.bytes("(II)I"), 3L, 7L), -1);
+        probeShow(Magic.bytes("Long.bitCount(0xFF)"),                 Loader.probeStatic(longBytes, (int) longLen, Magic.bytes("bitCount"), Magic.bytes("(J)I"), 0xFFL, 0L), 8);
+        probeShow(Magic.bytes("Math.abs(-42)"),                       Loader.probeStatic(mathBytes, (int) mathLen, Magic.bytes("abs"),      Magic.bytes("(I)I"), -42L, 0L), 42);
+
+        // Close the dep/native wall: run the UNMODIFIED JDK Integer.parseInt(String,int) end-to-end, against
+        // a mini dep surface (Character.digit + NumberFormatException hierarchy) -- real String parsing on metal.
+        Uart.write(Magic.bytes("real Integer.parseInt (unmodified JDK + mini deps):\n"));
+        Loader.loadParseInt();
+        parseShow(Magic.bytes("0"), 0);
+        parseShow(Magic.bytes("42"), 42);
+        parseShow(Magic.bytes("-7"), -7);
+        parseShow(Magic.bytes("12345"), 12345);
+        parseShow(Magic.bytes("1000000"), 1000000);
+        parseShow(Magic.bytes("2147483647"), 2147483647);
+        parseShow(Magic.bytes("-2147483648"), -2147483648);
+
         // M4 capstone: demand-load and RUN a whole program. demo/DiningPhilosophers is embedded only as
         // raw bytes; loadAndRun parses it, pulls java/lang/Thread, java/lang/Runnable,
         // java/util/concurrent/Semaphore and demo/Philosopher from the embedded mini java.base (classDir)
@@ -4128,17 +4174,6 @@ public final class VM
         // (captured fields + an itable thunk into the lambda body), so r.run() dispatches into the body.
         Uart.write(Magic.bytes("invokedynamic lambdas (demand-loaded):\n"));
         Loader.launchMain(Magic.bytes("demo/LambdaDemo"), Magic.bytes(""));
-
-        // Experiment: compile + run methods from a REAL, unmodified java.base class (java/lang/Integer).
-        // First two pure methods (should just work), then a full-class load to see where the reach ends.
-        Uart.write(Magic.bytes("real java.base (unmodified java/lang/Integer):\n"));
-        Uart.write(Magic.bytes("  bitCount(0x0F0F0F0F)="));
-        printDec(Loader.intBitCount(0x0F0F0F0F));                 // expect 16
-        Uart.write(Magic.bytes("  reverse(0x00000001)="));
-        printHex(Loader.intReverse(1) & 0xFFFFFFFFL);            // expect 0x80000000
-        Uart.putc(0x0A);
-        Uart.write(Magic.bytes("  dependency+native surface of java/lang/Integer:\n"));
-        Loader.loadIntegerFull();                                // static scan: classes Integer calls into
 
         // Float/double support: a demand-loaded class doing float+double arithmetic, conversions, compare.
         Uart.write(Magic.bytes("float/double (demand-loaded):\n"));
@@ -4186,36 +4221,6 @@ public final class VM
         // this and then carry on, so WARNING and above are written rather than dropped.
         Uart.write(Magic.bytes("java.util.logging (provided; java.logging is not in the image):\n"));
         Loader.launchMain(Magic.bytes("demo/LoggingDemo"), Magic.bytes(""));
-
-        // Real-java.base probe: compile + run a battery of UNMODIFIED OpenJDK numeric methods (Integer/Long/
-        // Math), each in isolation (transitively pulling same-class callees), checked against JDK-known
-        // results. Pure/leaf methods that touch no static state -- the frontier of "real java.base on metal".
-        Uart.write(Magic.bytes("real java.base numeric probe (unmodified Integer/Long/Math):\n"));
-        long ib = integerBytes;
-        int il = (int) integerLen;
-        probeShow(Magic.bytes("Integer.bitCount(0xF0F0F0F0)"),        Loader.probeStatic(ib, il, Magic.bytes("bitCount"),              Magic.bytes("(I)I"),  0xF0F0F0F0L, 0L), 16);
-        probeShow(Magic.bytes("Integer.numberOfLeadingZeros(1)"),     Loader.probeStatic(ib, il, Magic.bytes("numberOfLeadingZeros"),  Magic.bytes("(I)I"),  1L, 0L), 31);
-        probeShow(Magic.bytes("Integer.numberOfTrailingZeros(0x10000)"), Loader.probeStatic(ib, il, Magic.bytes("numberOfTrailingZeros"), Magic.bytes("(I)I"), 0x10000L, 0L), 16);
-        probeShow(Magic.bytes("Integer.reverseBytes(0x12345678)"),    Loader.probeStatic(ib, il, Magic.bytes("reverseBytes"),          Magic.bytes("(I)I"),  0x12345678L, 0L), 0x78563412);
-        probeShow(Magic.bytes("Integer.reverse(1)"),                  Loader.probeStatic(ib, il, Magic.bytes("reverse"),               Magic.bytes("(I)I"),  1L, 0L), 0x80000000);
-        probeShow(Magic.bytes("Integer.highestOneBit(100)"),          Loader.probeStatic(ib, il, Magic.bytes("highestOneBit"),         Magic.bytes("(I)I"),  100L, 0L), 64);
-        probeShow(Magic.bytes("Integer.signum(-5)"),                  Loader.probeStatic(ib, il, Magic.bytes("signum"),                Magic.bytes("(I)I"),  -5L, 0L), -1);
-        probeShow(Magic.bytes("Integer.rotateLeft(1,4)"),             Loader.probeStatic(ib, il, Magic.bytes("rotateLeft"),            Magic.bytes("(II)I"), 1L, 4L), 16);
-        probeShow(Magic.bytes("Integer.compare(3,7)"),                Loader.probeStatic(ib, il, Magic.bytes("compare"),               Magic.bytes("(II)I"), 3L, 7L), -1);
-        probeShow(Magic.bytes("Long.bitCount(0xFF)"),                 Loader.probeStatic(longBytes, (int) longLen, Magic.bytes("bitCount"), Magic.bytes("(J)I"), 0xFFL, 0L), 8);
-        probeShow(Magic.bytes("Math.abs(-42)"),                       Loader.probeStatic(mathBytes, (int) mathLen, Magic.bytes("abs"),      Magic.bytes("(I)I"), -42L, 0L), 42);
-
-        // Close the dep/native wall: run the UNMODIFIED JDK Integer.parseInt(String,int) end-to-end, against
-        // a mini dep surface (Character.digit + NumberFormatException hierarchy) -- real String parsing on metal.
-        Uart.write(Magic.bytes("real Integer.parseInt (unmodified JDK + mini deps):\n"));
-        Loader.loadParseInt();
-        parseShow(Magic.bytes("0"), 0);
-        parseShow(Magic.bytes("42"), 42);
-        parseShow(Magic.bytes("-7"), -7);
-        parseShow(Magic.bytes("12345"), 12345);
-        parseShow(Magic.bytes("1000000"), 1000000);
-        parseShow(Magic.bytes("2147483647"), 2147483647);
-        parseShow(Magic.bytes("-2147483648"), -2147483648);
 
         // Reachable loadAll: load the real Integer through the NORMAL closure path (not isolated compile) and
         // run parseInt -- loadAll now compiles only the methods the entry reaches, so real Integer's

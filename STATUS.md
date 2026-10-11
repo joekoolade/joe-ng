@@ -4,6 +4,36 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **BAKED CODE GETS A JVMS 5.5 INIT GUARD AT ITS `java/util/Locale` SITES; THE SUITE'S HAND-BUILT LOADER WORLDS
+  RUN BEFORE THE RUNTIME COMES UP (2026-10-11, QEMU-GATED -- NOT YET PI-VALIDATED).** Fixes the `ByteViewProbe`
+  regression the nio-buffers card found. **Bisected to #326** (first bad `b20ff99`, last good `b5feaf9`/#325),
+  where Locale went stock, and reduced to the first `String.format` of a program: `Locale.initDefault` NPE'd on
+  `defaultLocale == null`.
+
+  | step | failure | fix |
+  |---|---|---|
+  | 1 | Locale is on the writer's `noSnapshot` list (statics baked ZERO, `<clinit>` left to the metal at first active use), but **baked code calls baked code with no init guard**: `Preconditions` -> `String.format` -> `Formatter` -> `Locale.getDefault` is baked end to end, so a program whose FIRST locale use is such a call reads a null `defaultLocale` | (first attempt) run the no-snapshot `<clinit>`s eagerly at launch -- **REJECTED, see 2-3** |
+  | 2 | eager init: the suite died at ParseAllDemo, then (with a world flag) at program 27 -- `NPE: The delimiter must not be null` out of `StringJoiner.<init>` under `Locale.<clinit>` | instrumented: the FIRST program initialized Locale fine (state 3 -> 4); program 27 ran `Locale.<clinit>` a SECOND time, after `loadParseInt` had RESET the loader. A control with eager init off passed (gc 48) |
+  | 3 | (the OpenJDK-shaped fix) `WriterSymbols` emits the guard the metal JIT already emits -- x0 = a baked `{u2 len}{name}` byte[] + 24, `bl VM.ensureInitByName` -- at baked sites that touch `java/util/Locale` from another class; `ensureInitFor` returns before the loader tables exist | the suite then died at program 27 again: `LAZY INDEX OUT OF RANGE (stub outlived its table)` and a branch to 0 from `HashMap.hash`. Same cause: Locale initialized before the reset, re-initialized after it, over adopted statics still holding objects whose code the reset discarded |
+  | 4 | `loadIntegerFull` and `loadParseInt` (with their probe batteries) reset the loader AFTER the first `launchMain` -- a situation with no OpenJDK analogue (the boot loader is never reset) | **moved ahead of the first `launchMain`**: nothing resets the loader once the runtime world is up (checked: only `launchMain`/`armHeapReclaim`/`printCodeArena` follow) |
+
+  - **`ByteViewProbe` and `OobMessageProbe` (new) byte-identical to the host.** `OobMessageProbe` reaches
+    `Preconditions` messages through `String.format`, `Objects.checkIndex`/`checkFromToIndex`, and VarHandle
+    view get/set out of bounds.
+  - **Suite: 40 programs, markers zero (now incl. `TAIL TARGET`, `LAZY INDEX`), `HML`/`HML 67ms`, `smp 4 of 4`,
+    `lisp stable=1`, PASS 32 / FAIL 0 as the control, `Str."HeLLo".toUpperCase() = HELLO`.** Host: `compiler 40`
+    (the fixpoint is untouched -- VM classes never touch Locale), `overlay-check 0 new`.
+  - **CHURN GC 48 -> 49, ATTRIBUTED TO THE REORDER:** a reorder-only arm (guard off) also reads 49; the guard adds
+    nothing. Probably the hand-built worlds' allocation now precedes `armHeapReclaim` instead of following it, but
+    that was not measured.
+  - **STATED LIMITS:** the guard covers `java/util/Locale` only -- the one measured hole. The rest of `noSnapshot`
+    (`sun/util/locale/*`, `StaticProperty`, `Atomic*`, `Random`) has the same shape unguarded; `Atomic*` is left
+    out deliberately, as baked VM code may touch it before the loader exists. The JIT's IMPLICIT array bounds
+    check throws `ArrayIndexOutOfBoundsException` with a null message (stock: `Index 5 out of bounds for length
+    2`); `OobMessageProbe` prints that arm's class only.
+  - **NEXT:** the other half of the OpenJDK rule -- a class whose statics are the IMAGE's is initialized once per
+    VM, not once per loader world -- then the charset coders.
+
 - **STOCK `java.nio` BUFFERS RUN -- HEAP AND DIRECT; THE `ByteBuffer`/`ByteOrder`/`DirectBuffer`/`Util` OVERLAYS ARE
   DELETED, AND `Unsafe` GAINS OFF-HEAP MEMORY (2026-10-11, QEMU-GATED -- NOT YET PI-VALIDATED; the socket path is
   Pi-only).** First increment of the charset arc, the design the user chose: the decoders work on byte buffers, and

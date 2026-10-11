@@ -1415,6 +1415,10 @@ public final class Loader
         {
             return;                                     // VM.forceCompile's touch, and an unresolvable name
         }
+        if (!runtimeUp)
+        {
+            return;                                     // a BAKED guard (WriterSymbols) reached before the loader
+        }                                               //   tables exist: no class is registered yet to initialize
         int reg = regBySigU(clsU);
         if (INIT_GUARD_LOG)
         {
