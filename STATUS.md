@@ -4,6 +4,42 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **METHOD REFERENCES RETURNING `float`/`double` ARE BOXED -- `reduce(0.0, Double::sum)`, `map(Math::sqrt)`,
+  `Float::sum` (2026-10-11, PI-VALIDATED -- and with it #326 through #340).**
+
+  **PI 4, 2026-10-11, the no-manifest SUITE image of `bac66b4` (34,646,696 bytes, sha256 `69d9200a49cf9320...`,
+  archived as `sdcard/kernel8-floatbox-suite-candidate.img`):** every demo ran to the end -- churn
+  `gc: collections=48` and finale 57, the SAME as QEMU; `lisp evals=600 result=610 stable=1`; `finish HML` twice
+  (inversion `HIGH blocked 63ms`); `smp sched: 4 of 4`, steps/core 61/60/60/59; the hardware RNG live and unseeded
+  `SecureRandom` self-seeding from it; WiFi joined and `HTTP/1.1 200 OK`, 891 bytes; no fault, trap or exception
+  line. Batch 2 carries 870 classes, as on QEMU -- which is how the boot was told apart from the OLDER image the
+  same paste began with (batch 2 +357), the "a pasted log can predate the flash" trap. This one boot is the
+  hardware witness for every QEMU-gated card from #326 to here. The case #333 had to leave open. Lambda thunks
+  boxed the six integral kinds and REFUSED F/D at link time (`UNBOXABLE METHOD REF ... float/double results are not
+  boxed yet`); at run time the raw bits came back posing as a reference. **Control (main's Loader/VMBox): every F/D
+  reference in the probe refused -- `Float.sum`, `Math.sqrt`, `Math.max`, `Double.sum`, `Random.nextDouble`.**
+
+  - **THE BOXER IS THE GUEST `valueOf`, RESOLVED BY NAME.** `VMBox.box` hands `F`/`D` to the new
+    `Loader.boxFloating`, which calls the guest-compiled `Float.valueOf(F)`/`Double.valueOf(D)` -- the move
+    `doubleToStringBuf` already makes for `Double.toString`: looked up by name (`bufBySigU`, then
+    `compileSigOnDemand`), its class initialized first (a raw buffer call is not an active use), memoised per LAUNCH
+    and cleared in `resetLoader` beside `dblToStrBuf`. Naming `Double` in image code is what #333 MEASURED to fault
+    (`Double.<clinit>` in the boot set). The raw bits in x0 are exactly what a guest float/double ARGUMENT carries.
+    A `valueOf` that cannot be had is REPORTED by name (`FLOAT/DOUBLE RESULT NOT BOXED`) and answers null, never
+    raw bits as a pointer. `boxableKind` now admits all eight kinds; the stale comments are corrected.
+  - **`MethodRefBoxFloatProbe` (new) byte-identical to the host:** static (`Float::sum`, `Math::sqrt`, `Math::max`,
+    `Double::sum`), bound instance (`random::nextDouble`, seeded), unbound instance (`Float::floatValue`), the
+    stream idioms, and bit patterns that must survive exactly -- `-0.0`, NaN, infinity, `Float.MAX_VALUE`, and
+    `0.1 + 0.2` = `3fd3333333333334`.
+  - **Suite: 40 programs, markers zero (`UNBOXABLE`, `NOT BOXED`, `NOT UNBOXED` zero), `HML`/`HML 67ms`, churn gc
+    48 unchanged, `lisp stable=1`.** `MethodRefUnboxProbe`, `FunctionProbe`, `ChmRaceProbe` host-identical. Host:
+    `compiler 40`, `overlay-check 0 new`.
+  - **HARNESS NOTES, so they are not chased:** the gate runs were stretched across a night by the laptop SLEEPING
+    (`pmset`: repeated maintenance wakes; `caffeinate -i` cannot hold a closed lid), and under a load average of
+    13-25 from macOS background jobs (`installd`, Spotlight) one regression probe's 200-second window closed at
+    batch 3 before it printed. Re-run with a 450-second window: host-identical. A probe with NO output is a timing
+    fact about the harness until its log shows otherwise.
+
 - **`java.util.Scanner` WORKS, AND A VM BUG UNDER IT IS FIXED: A STATIC READ THROUGH A CLASS THAT DOES NOT DECLARE
   IT (`Sub.X` for `Base.X`, `Impl.C` for an interface's `C`) WAS A SILENT NULL (2026-10-10, QEMU-GATED -- NOT YET
   PI-VALIDATED).** The next gap named by #339: `Scanner` buffers its input in a heap `java.nio.CharBuffer`, which was

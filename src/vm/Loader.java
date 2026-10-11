@@ -1863,6 +1863,9 @@ public final class Loader
     // perfectly, measured before this was written: byte-identical to a host JVM on 1.5, 0.1, 0.0, -0.0,
     // 1e20, 1e-9 and NaN. Same shape as seedStandardProps reaching Properties.setProperty.
     private static long dblToStrBuf;
+    private static long dblValueOfBuf;                  // Double.valueOf(D) for VMBox -- per LAUNCH, like dblToStrBuf
+    private static long fltValueOfBuf;                  // Float.valueOf(F)
+    private static boolean reportedNoFloatBox;
     private static long fltToStrBuf;
 
     private static final int MAXPENDINIT = 64;
@@ -3657,6 +3660,8 @@ public final class Loader
         lzInitReg = new int[MAXPENDINIT];
         lzInitN = 0;
         dblToStrBuf = 0L;                               // per LAUNCH: a memo that outlived the code buffers
+        dblValueOfBuf = 0L;                             //   (the boxing twins, for the same reason)
+        fltValueOfBuf = 0L;
         fltToStrBuf = 0L;                               //   it names would call into swept memory
         lzInitDropped = 0;                              // per LAUNCH, beside the table they describe --
         lzInitWant = 0;                                 //   reportPendInitDrops prints at the end of one
@@ -9972,6 +9977,68 @@ public final class Loader
             dblToStrBuf = fmtBuf(Magic.bytes("java/lang/Double"), Magic.bytes("(D)Ljava/lang/String;"));
         }
         return dblToStrBuf;
+    }
+
+    /**
+     * Box a method reference's FLOAT or DOUBLE result: x0 holds its raw bits (the baseline compiler returns a
+     * float/double as bits in an X register, like any value), and the boxing thunk hands them here through
+     * {@code VMBox.box}. Calls the guest {@code Float.valueOf(F)}/{@code Double.valueOf(D)}, resolved BY NAME --
+     * the same move as {@link #doubleToStringBuf}, for the same reason: {@code VMBox} is image code, and naming
+     * {@code Double} there pulled it into the boot set, where {@code Double.<clinit>} faulted (measured in #333).
+     * The bits are exactly what a guest float/double ARGUMENT carries, so they pass straight through.
+     *
+     * <p>If the method cannot be had, the result is NOT handed back as raw bits posing as a reference: it is
+     * reported once by name and answered null, which fails at its first use rather than as a wild pointer.
+     */
+    static long boxFloating(long bits, int kind)
+    {
+        long buf;
+        if (kind == 'F')
+        {
+            if (fltValueOfBuf == 0L)
+            {
+                fltValueOfBuf = boxValueOfBuf(Magic.bytes("java/lang/Float"), Magic.bytes("(F)Ljava/lang/Float;"));
+            }
+            buf = fltValueOfBuf;
+        }
+        else
+        {
+            if (dblValueOfBuf == 0L)
+            {
+                dblValueOfBuf = boxValueOfBuf(Magic.bytes("java/lang/Double"), Magic.bytes("(D)Ljava/lang/Double;"));
+            }
+            buf = dblValueOfBuf;
+        }
+        if (buf == 0L)
+        {
+            if (!reportedNoFloatBox)
+            {
+                reportedNoFloatBox = true;
+                Uart.write(Magic.bytes("\n  FLOAT/DOUBLE RESULT NOT BOXED: Float/Double.valueOf could not be resolved\n"));
+            }
+            return 0L;
+        }
+        return Magic.call2(buf, bits, 0L);              // one argument; the second register is ignored
+    }
+
+    /** {@code cls.valueOf(desc)} resolved to callable code (compiled on demand), its class initialized first --
+     *  calling a raw buffer is not an active use (see {@link #fmtBuf}). */
+    private static long boxValueOfBuf(byte[] cls, byte[] desc)
+    {
+        long buf = bufBySigU(utf8Blob(cls), utf8Blob(Magic.bytes("valueOf")), utf8Blob(desc));
+        if (buf == 0L)
+        {
+            buf = compileSigOnDemand(utf8Blob(cls), utf8Blob(Magic.bytes("valueOf")), utf8Blob(desc));
+        }
+        if (buf != 0L)
+        {
+            int reg = classRegByNameBytes(cls);
+            if (reg >= 0)
+            {
+                ensureClinit(reg);
+            }
+        }
+        return buf;
     }
 
     /** The float twin of {@link #doubleToStringBuf} -- a DIFFERENT string, never the widened double's. */
@@ -21541,14 +21608,13 @@ public final class Loader
     private static final int BOX_FRAME = 16;
 
     /**
-     * Primitive kinds a thunk can box. Float and double are absent because the boxer is image code and cannot
-     * name {@code Double}/{@code Float} without pulling their boot-hostile initializers into the image (see
-     * {@code VMBox}) -- NOT because the value is elsewhere: it is in x0 as raw bits. Such a reference is
-     * REPORTED rather than mis-adapted -- see {@link #reportUnboxableRef}.
+     * Primitive kinds a thunk can box: all eight. Float and double are boxed through the GUEST
+     * {@code Float/Double.valueOf}, resolved by name at run time ({@link #boxFloating}): the boxer is image code
+     * and naming those classes there pulled their boot-hostile initializers into the image.
      */
     private static boolean boxableKind(int k)
     {
-        return k == 'Z' || k == 'B' || k == 'C' || k == 'S' || k == 'I' || k == 'J';
+        return k == 'Z' || k == 'B' || k == 'C' || k == 'S' || k == 'I' || k == 'J' || k == 'F' || k == 'D';
     }
 
     /**
@@ -21658,7 +21724,7 @@ public final class Loader
         printNameAt(gbase, mrefNameOff(mref));
         Uart.write(Magic.bytes(" returns "));
         Uart.putc(retKind);
-        Uart.write(Magic.bytes(" into a generic SAM (float/double results are not boxed yet)\n"));
+        Uart.write(Magic.bytes(" into a generic SAM (vm/VMBox.box not stashed)\n"));
     }
 
     /** Emit one instruction word at word index {@code w}; returns the next index. */
