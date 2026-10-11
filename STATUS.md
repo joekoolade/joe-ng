@@ -5,7 +5,16 @@ Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constrain
 Newest entries are at the top.
 
 - **METHOD REFERENCES RETURNING `float`/`double` ARE BOXED -- `reduce(0.0, Double::sum)`, `map(Math::sqrt)`,
-  `Float::sum` (2026-10-11, QEMU-GATED -- NOT YET PI-VALIDATED).** The case #333 had to leave open. Lambda thunks
+  `Float::sum` (2026-10-11, PI-VALIDATED -- and with it #326 through #340).**
+
+  **PI 4, 2026-10-11, the no-manifest SUITE image of `bac66b4` (34,646,696 bytes, sha256 `69d9200a49cf9320...`,
+  archived as `sdcard/kernel8-floatbox-suite-candidate.img`):** every demo ran to the end -- churn
+  `gc: collections=48` and finale 57, the SAME as QEMU; `lisp evals=600 result=610 stable=1`; `finish HML` twice
+  (inversion `HIGH blocked 63ms`); `smp sched: 4 of 4`, steps/core 61/60/60/59; the hardware RNG live and unseeded
+  `SecureRandom` self-seeding from it; WiFi joined and `HTTP/1.1 200 OK`, 891 bytes; no fault, trap or exception
+  line. Batch 2 carries 870 classes, as on QEMU -- which is how the boot was told apart from the OLDER image the
+  same paste began with (batch 2 +357), the "a pasted log can predate the flash" trap. This one boot is the
+  hardware witness for every QEMU-gated card from #326 to here. The case #333 had to leave open. Lambda thunks
   boxed the six integral kinds and REFUSED F/D at link time (`UNBOXABLE METHOD REF ... float/double results are not
   boxed yet`); at run time the raw bits came back posing as a reference. **Control (main's Loader/VMBox): every F/D
   reference in the probe refused -- `Float.sum`, `Math.sqrt`, `Math.max`, `Double.sum`, `Random.nextDouble`.**
