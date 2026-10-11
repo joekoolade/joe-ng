@@ -6189,8 +6189,9 @@ public final class Loader
                 // latter as stock does, and stock code CATCHES both (PrintStream.toCharset). While they were
                 // denied, such a catch clause could not name its class -- see the CATCH_BY_NAME note in
                 // emitMethod for what an unresolvable catch class used to do.
-                // java/nio/ByteBuffer is LOADABLE (overlay -> socket temp buffers); CharBuffer stays denied.
-                || utf8HasPrefix(base, off, Magic.bytes("java/nio/CharBuffer"))
+                // java/nio/ByteBuffer is LOADABLE (overlay -> socket temp buffers). java/nio/CharBuffer is loadable
+                // too now, and STOCK: java.util.Scanner buffers its input in a heap CharBuffer (CharBuffer.allocate)
+                // and reads through Readable.read(CharBuffer), so denying it trapped Scanner's first token.
                 || utf8HasPrefix(base, off, Magic.bytes("sun/nio/cs/Array"));
     }
 
@@ -8013,6 +8014,10 @@ public final class Loader
         // and it carried its own copy of the same linear scan. One index serves both -- the same "one call
         // site's fix, two timers" shape the phase-B publish had.
         long hit = sgCellOf(gbase, classOff, nameOff);
+        if (hit == 0L)
+        {
+            hit = inheritedStaticCell(gbase, classOff, gbase, nameOff, 0);   // declared by a supertype (JVMS 5.4.3.2)
+        }
         if (hit != 0L)
         {
             if (STATIC_ADDR_LOG)
@@ -11883,9 +11888,100 @@ public final class Loader
         long addr = sgCellOf(refBase, classOff, nameOff);
         if (addr == 0L)
         {
+            addr = inheritedStaticCell(refBase, classOff, refBase, nameOff, 0);
+        }
+        if (addr == 0L)
+        {
             psMiss += 1;
         }
         return addr;
+    }
+
+    /**
+     * JVMS 5.4.3.2 FIELD RESOLUTION for a static the named class does not declare itself: search its direct
+     * SUPERINTERFACES (recursively), then its SUPERCLASS (recursively, the same way), and answer the first
+     * declaring class's cell -- or 0.
+     *
+     * <p>Static lookup was CLASS-QUALIFIED ONLY, and javac names an inherited static through the class the source
+     * wrote: stock {@code CharBuffer.<clinit>} reads {@code getstatic CharBuffer.UNSAFE}, a static DECLARED by
+     * {@code java.nio.Buffer}. The miss was not reported on the batch path (it is left for the reloc pass, which
+     * looked up the same name and missed again), so the read was a SILENT NULL -- an NPE in CharBuffer.<clinit>
+     * with no unresolved-static line anywhere. Instance fields got this walk long ago ({@code globalFieldOffset});
+     * statics never did.
+     *
+     * <p>{@code depth} bounds a malformed or cyclic hierarchy. A declaring class not registered yet answers 0, and
+     * the caller's existing unresolved paths (pull-and-retry, reloc) apply.
+     */
+    private static long inheritedStaticCell(long clsBase, int clsOff, long nameBase, int nameOff, int depth)
+    {
+        int k = inheritedStaticIndex(clsBase, clsOff, nameBase, nameOff, depth);
+        return k < 0 ? 0L : sgTab[k].addr;
+    }
+
+    /** The static-registry entry {@link #inheritedStaticCell} resolves to, or -1: the DECLARING class's cell, so
+     *  {@code sgTab[k].base + sgTab[k].classOff} also names the class JVMS 5.5 says to initialize. */
+    private static int inheritedStaticIndex(long clsBase, int clsOff, long nameBase, int nameOff, int depth)
+    {
+        if (depth > 32)
+        {
+            return -1;
+        }
+        if (depth > 0)
+        {
+            int k = sgIndexOf(clsBase, clsOff, nameBase, nameOff);
+            if (k >= 0)
+            {
+                return k;
+            }
+        }
+        int pd = findPdByName(clsBase, clsOff);
+        if (pd < 0)
+        {
+            return -1;
+        }
+        int i = 0;
+        while (i < pdIfN[pd])
+        {
+            int a = inheritedStaticIndex(pdBase[pd], pdIfOff[pd * MAX_DIRECT_IF + i], nameBase, nameOff, depth + 1);
+            if (a >= 0)
+            {
+                return a;
+            }
+            i += 1;
+        }
+        if (pdSuperOff[pd] == 0)
+        {
+            return -1;
+        }
+        return inheritedStaticIndex(pdBase[pd], pdSuperOff[pd], nameBase, nameOff, depth + 1);
+    }
+
+    /**
+     * The class an active use of {@code refCp} must INITIALIZE (JVMS 5.5). For a {@code getstatic}/{@code putstatic}
+     * that is the class that DECLARES the resolved field -- not the class the reference names. They differ for an
+     * inherited static: {@code getstatic Impl.NAMES}, where interface {@code Holder} declares NAMES. Initializing
+     * Impl initializes its superCLASSES but never its superinterfaces, so Holder.<clinit> never ran and the
+     * (correctly resolved) cell read null. Any other reference -- and a field not resolvable yet -- keeps the
+     * named class.
+     *
+     * <p>STATED LIMIT: an inherited static METHOD ({@code invokestatic Sub.m()}, declared by Base) still guards
+     * the named class, which initializes Sub as well as Base -- an over-initialization, not a missed one.
+     */
+    static long initTargetNameAddr(int refCp)
+    {
+        long named = refClassNameAddr(refCp);
+        if (named == 0L || gcpTag[refCp] != 9)          // 9 = CONSTANT_Fieldref
+        {
+            return named;
+        }
+        int classOff = refClassNameOff(refCp);
+        int nameOff = mrefNameOff(refCp);
+        if (sgIndexOf(gbase, classOff, gbase, nameOff) >= 0)
+        {
+            return named;                               // declared by the named class itself
+        }
+        int k = inheritedStaticIndex(gbase, classOff, gbase, nameOff, 0);
+        return k < 0 ? named : sgTab[k].base + (long) sgTab[k].classOff;
     }
 
     /**
@@ -11975,6 +12071,15 @@ public final class Loader
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/io/UnixFileSystem")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("initIDs")))           { return VM.noopNativeAddr; }  // ()V
+        }
+        // jdk/internal/misc/ScopedMemoryAccess.registerNatives does ONE thing: RegisterNatives binds closeScope0
+        // for JNI (hotspot share/prims/scopedMemoryAccess.cpp, JVM_RegisterJDKInternalMiscScopedMemoryAccessMethods).
+        // No JNI here, so the empty stub is exactly right. closeScope0 itself -- closing a SHARED foreign arena -- is
+        // deliberately NOT wired: it does real work, so it must fail loudly if reached. Reached by
+        // java.nio.Buffer.<clinit>, i.e. by every stock CharBuffer (Scanner's input buffer).
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/ScopedMemoryAccess")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("registerNatives")))   { return VM.noopNativeAddr; }  // ()V
         }
         // java/io/ObjectStreamClass.initNative caches a JNI global ref to NoSuchMethodError's class, read only
         // by other natives in the same C file (share/native/libjava/ObjectStreamClass.c). No JNI here, so
