@@ -26,13 +26,12 @@ import magic.Magic;
  * first virtual call on the result threw NPE from inside JUnit -- a fault that looked like a
  * StringTokenizer bug and was nowhere near one.
  *
- * <p>FLOAT AND DOUBLE ARE ABSENT, AND NOT FOR THE REASON THIS USED TO GIVE. It said their result "arrives in
- * d0, not x0"; joe-ng keeps a float/double as raw bits in an X register and returns it with the same
- * {@code mov x0} as an int ({@code freturn}/{@code dreturn} are bit-preserving), so x0 does hold the bits. The
- * real obstacle is THIS CLASS: it is image code, and naming {@code Double}/{@code Float} here pulls them into
- * the boot set, where {@code Double.<clinit>} ({@code TYPE = Class.getPrimitiveClass("double")}) faults in
- * {@code bakeResolve} before the VM is up -- MEASURED, it was tried. Boxing them needs the guest-compiled
- * {@code valueOf} resolved at run time instead. Until then {@link Loader} REPORTS such a reference by name.
+ * <p>FLOAT AND DOUBLE GO THROUGH {@link Loader#boxFloating}, not through a {@code Double.valueOf} written here.
+ * joe-ng keeps a float/double as raw bits in an X register ({@code freturn}/{@code dreturn} are a plain
+ * {@code mov x0}), so the bits are in hand; the obstacle is THIS CLASS: it is image code, and naming
+ * {@code Double}/{@code Float} here pulls them into the boot set, where {@code Double.<clinit>}
+ * ({@code TYPE = Class.getPrimitiveClass("double")}) faults in {@code bakeResolve} before the VM is up --
+ * MEASURED in #333. The loader resolves the GUEST {@code valueOf} by name at run time instead.
  *
  * <p>The ARGUMENT direction ({@link #unboxNull}) needs no helper for a non-null value: every wrapper's only
  * instance field is {@code value}, in slot 0, so the thunk unboxes with one load.
@@ -73,6 +72,10 @@ final class VMBox
         if (kind == 'J')
         {
             return Magic.addrOf(Long.valueOf(v));
+        }
+        if (kind == 'F' || kind == 'D')
+        {
+            return Loader.boxFloating(v, kind);   // the guest valueOf, by NAME -- see the class note
         }
         return 0L;                          // unreachable: the loader emits no call for any other kind
     }
