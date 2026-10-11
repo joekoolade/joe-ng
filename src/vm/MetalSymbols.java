@@ -201,7 +201,7 @@ final class MetalSymbols implements Symbols
      */
     public void initGuard(CodeBuffer cb, int refCp)
     {
-        emitInitGuard(cb, Loader.refClassNameAddr(refCp));
+        emitInitGuard(cb, Loader.initTargetNameAddr(refCp));   // a field's DECLARING class (JVMS 5.5)
     }
 
     /** {@link #initGuard} for {@code new}, whose operand is a CONSTANT_Class rather than a {@code *ref}. */
@@ -212,7 +212,7 @@ final class MetalSymbols implements Symbols
 
     public boolean needsInitGuard(int refCp)
     {
-        return Loader.initGuardNeeded(Loader.refClassNameAddr(refCp));
+        return Loader.initGuardNeeded(Loader.initTargetNameAddr(refCp));   // the SAME class initGuard emits
     }
 
     public boolean needsInitGuardClass(int classCp)

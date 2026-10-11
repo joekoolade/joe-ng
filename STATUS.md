@@ -4,6 +4,45 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **`java.util.Scanner` WORKS, AND A VM BUG UNDER IT IS FIXED: A STATIC READ THROUGH A CLASS THAT DOES NOT DECLARE
+  IT (`Sub.X` for `Base.X`, `Impl.C` for an interface's `C`) WAS A SILENT NULL (2026-10-10, QEMU-GATED -- NOT YET
+  PI-VALIDATED).** The next gap named by #339: `Scanner` buffers its input in a heap `java.nio.CharBuffer`, which was
+  denied, so its first token trapped (`CharBuffer.allocate`). Three walls, each named by the previous run:
+
+  | step | failure | fix |
+  |---|---|---|
+  | 1 | DENYLIST TRAP `CharBuffer.allocate` | `java/nio/CharBuffer` out of both deny lists; it runs STOCK |
+  | 2 | `LINK FAILED ScopedMemoryAccess.registerNatives` (reached by `java.nio.Buffer.<clinit>`) | wired as an EMPTY native -- decided by the C source: hotspot `prims/scopedMemoryAccess.cpp` only `RegisterNatives` `closeScope0` for JNI; `closeScope0` itself is left unwired, so it fails loudly |
+  | 3 | NPE in `CharBuffer.<clinit>` | **THE VM BUG**, below |
+
+  - **JVMS 5.4.3.2 FIELD RESOLUTION WAS CLASS-QUALIFIED ONLY.** javac names an inherited static through the class
+    the source wrote: `CharBuffer.<clinit>` does `getstatic CharBuffer.UNSAFE`, which `java.nio.Buffer` DECLARES.
+    `globalStaticAddr` (compile time) and `globalStaticByRef` (patch time) looked up only the named class; the batch
+    path left the miss to the reloc pass, which missed again, so the read was a silent null. The new
+    `inheritedStaticIndex` searches direct SUPERINTERFACES recursively, then the SUPERCLASS, as the JVMS orders it.
+    Instance fields have had this walk for a long time (`globalFieldOffset`); statics never had it.
+  - **AND THE RIGHT CLASS IS NOW INITIALIZED (JVMS 5.5).** The adversarial probe found a second half: an interface's
+    static read through an implementing class resolved correctly but read NULL, because the init guard initialized
+    the NAMED class (`Impl`), and initializing a class initializes its superclasses, never its superinterfaces.
+    `Loader.initTargetNameAddr` makes a Fieldref's guard target the DECLARING class, in both `initGuard` and
+    `needsInitGuard` so the two cannot disagree. STATED LIMIT: an inherited static METHOD still guards the named
+    class -- an over-initialization (Sub as well as Base), not a missed one.
+  - **THE DIAGNOSTIC MISNAMED IT:** on main the probe's reads were reported as `UNRESOLVED STATIC ... class IS
+    REGISTERED but has no static cell (registration gap)`. There was no registration gap; the field was inherited.
+    A cited cause that was never checked -- the recorded failure mode for diagnostics.
+
+  - **`InheritedStaticProbe` (new, adversarial):** one and two levels up, an interface static via an implementor, a
+    write through the subclass read through the declarer, and a SHADOWING subclass whose own cell must win. Control
+    (main's VM): every subclass-qualified read NULL, NPE on the first arm. Now byte-identical to the host.
+  - **`ScannerProbe` (new) byte-identical to the host** (which prints the same under `en` as `en_US`): tokens
+    across types, lines, a custom delimiter, `hasNextInt`/`hasNextDouble`, `findInLine`, a `Reader` source past one
+    buffer, both exceptions, and `CharBuffer` itself.
+  - **Suite: 40 programs, markers zero (`registration gap` zero too), `HML`/`HML 67ms`, churn gc 48 -- unchanged
+    against the standing figure; batch 2 carries 870 classes (857 before, +13: CharBuffer/Buffer and helpers).**
+    `NumberFormatProbe`, `ExecutorProbe`, `ChmRaceProbe` host-identical. Host: `compiler 40`, `overlay-check 0 new`,
+    deep 434. (The regression run's last probe was stretched over four hours by the laptop SLEEPING -- `pmset` shows
+    a lid wake at 22:45 -- not by the VM; its output is host-identical.)
+
 - **`NumberFormat`'S FACTORIES WORK -- `String.format("%,d")` UNDER THE DEFAULT LOCALE NO LONGER TRAPS; THE CHURN
   GATE MOVES 47 -> 48, MEASURED AND ACCEPTED (2026-10-10, QEMU-GATED -- NOT YET PI-VALIDATED).** The next gap named
   by #338. joe-ng seeds no `user.language`/`user.country`, so the default locale is `en` -- not `Locale.US` -- and

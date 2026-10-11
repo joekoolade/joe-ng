@@ -84,7 +84,9 @@ public final class ReachScan
         "java/nio/charset/CharsetDecoder", "java/nio/charset/CharsetEncoder",
         "java/nio/charset/Coder", "java/nio/charset/Coding",
         
-        "java/nio/CharBuffer", "sun/nio/cs/Array",   // ByteBuffer now loadable (overlay -> socket buffers)
+        // java/nio/CharBuffer is NOT here any more: Scanner buffers its input in a heap CharBuffer, and denying it
+        // trapped the first token. It runs stock -- see Loader.isDenylisted. (Keep in sync with that list.)
+        "sun/nio/cs/Array",
     };
 
     static boolean deny = false;                       // set by the "DENY" arg
