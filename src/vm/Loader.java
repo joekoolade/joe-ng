@@ -2334,8 +2334,14 @@ public final class Loader
                 // left the access null, so getJavaIOFileDescriptorAccess() took the ensureClassInitialized ->
                 // MethodHandles.lookup branch (denied) and trapped. Its 3 natives (initIDs/getHandle/getAppend)
                 // are stubbed in nativeBuf, and runClinits() runs it before NioSocketImpl's (dependency order).
+                // sun/nio/ch/NativeThread is NO LONGER SKIPPED: its initializer is IOUtil.load() (an empty
+                // method) and init(), whose C source only installs a do-nothing INTERRUPT_SIGNAL handler --
+                // there are no signals here, and current0 answers 0 ("cannot signal"), so signal0 is unreached.
+                // sun/nio/ch/Net STAYS SKIPPED, for a measured reason: its first static block builds the IPv6
+                // any-local and loopback addresses with InetAddress.getByAddress(new byte[16]), and the
+                // hand-written InetAddress overlay answers an Inet4Address 0.0.0.0 for any non-4-byte array --
+                // running it would plant that wrong value in two statics. It needs the overlay from source first.
                 || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("sun/nio/ch/Net"))
-                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("sun/nio/ch/NativeThread"))
                 // Inet4/6Address.<clinit> is just `init()` -- a native that caches JNI field IDs. We never
                 // instantiate them (the InetAddress overlay returns a plain InetAddress), so their <clinit>s
                 // are inert; skip them (they'd trap on the unwired native otherwise).
