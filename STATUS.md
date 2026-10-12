@@ -4,6 +4,23 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **`NativeThread.<clinit>` RUNS; `Net.<clinit>` STAYS SKIPPED FOR A MEASURED REASON (2026-10-12, PI-VALIDATED).**
+  Next of the socket entries on `Loader`'s `<clinit>` skip list, after `IOUtil` (below).
+  - **`sun/nio/ch/NativeThread` is off the list.** Its initializer is `IOUtil.load()` (an empty method) and the
+    native `init()`, already provided empty. `unix/native/libnio/ch/NativeThread.c` shows `init` only installs a
+    do-nothing `INTERRUPT_SIGNAL` handler; there are no signals here and `current0` answers 0 ("cannot signal"), so
+    empty is the correct semantics, decided from the C source.
+  - **`sun/nio/ch/Net` stays on it, and the comment there now says why:** its first static block builds
+    `ANY_LOCAL_INET6ADDRESS` and `INET6_LOOPBACK_ADDRESS` with `InetAddress.getByAddress(new byte[16])`, and the
+    hand-written `java/net/InetAddress` overlay answers an `Inet4Address` 0.0.0.0 for ANY non-4-byte array. Running
+    the initializer would plant that wrong value in two statics silently. The prerequisite is the `InetAddress`
+    overlay taken from the JDK 26 source (rule 3), with `Inet4Address`/`Inet6Address`.
+  - Suite: 40 programs, markers zero, churn `gc: collections=50` (= #345 and main). No suite program opens a
+    socket, so this is a no-regression gate only.
+  - **Pi:** NetDemo `HTTP/1.1 200 OK ... http done bytes=891`, `[main returned normally]`; the batch lines read
+    `clinits=256/256/257` against `255/255/256` for #345 -- the extra initializer is `NativeThread`'s. No new
+    TRAP-WIRED line.
+
 - **`IOUtil.<clinit>` RUNS -- THE TEMPORARY DIRECT-BUFFER CACHE CACHES (2026-10-12, PI-VALIDATED).** Closes the
   measured gap in the carrier thread-locals card below. `sun/nio/ch/Util` sizes its per-thread temporary
   direct-buffer cache from `IOUtil.IOV_MAX`; `IOUtil` was on `Loader`'s `<clinit>` skip list, so `IOV_MAX` was 0 and
