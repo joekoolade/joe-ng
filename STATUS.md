@@ -16,14 +16,15 @@ Newest entries are at the top.
   - **Fix:** `Ip.recvIp` hands an ethertype-0x0806 frame to `answerArp`, which replies to a request whose target IP
     is ours, from our MAC to the requester's.
   - **Pi:** the counter-carrying image printed `arpAskedForUs=1 arpAnswered=1` and `HTTP/1.1 200 OK ... http done
-    bytes=891` (the last good #341 figure). The committed code is that image minus the counters; the counter-free
-    build itself was not booted. Why it surfaced now is INFERRED, not measured: the stock socket path makes the GET
+    bytes=891` (the last good #341 figure). The committed code is that image minus the counters, and the
+    counter-free build was booted too: main `8064c98` (#343) printed `HTTP/1.1 200 OK ... http done bytes=891` and
+    `[main returned normally]`. Why it surfaced now is INFERRED, not measured: the stock socket path makes the GET
     later than the old overlays did, long enough for the router's re-verification to fall inside the exchange.
   - Also measured on this run: the carrier thread-local card below is now exercised on hardware -- the GET's bytes
     went through `Util.getTemporaryDirectBuffer` and the 891 response bytes came back through it.
 
-- **CARRIER THREAD-LOCALS -- THE PI's NetDemo DIED ON ITS FIRST SOCKET WRITE (2026-10-12, QEMU-GATED -- NOT YET
-  PI-VALIDATED).** The Pi run of main `bd27f5d` (#342) connected, then threw `InternalError: joe-ng:
+- **CARRIER THREAD-LOCALS -- THE PI's NetDemo DIED ON ITS FIRST SOCKET WRITE (2026-10-12, PI-VALIDATED
+  on main `8064c98`, #343).** The Pi run of main `bd27f5d` (#342) connected, then threw `InternalError: joe-ng:
   JavaLangAccess.getCarrierThreadLocal is not implemented on this VM` from `CarrierThreadLocal.get <-
   sun/nio/ch/Util.getTemporaryDirectBuffer <- NioSocketImpl.tryWrite`. Stock `Util`'s per-thread temporary
   direct-buffer cache is a `TerminatingThreadLocal`, whose get/set/remove route through `JavaLangAccess`; the stub
