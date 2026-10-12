@@ -4,6 +4,24 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **STOCK `java.util.zip.ZipCoder`; `Deflater.shouldFinish` RESTORED (2026-10-11, QEMU-GATED -- NOT YET
+  PI-VALIDATED).** The `ZipCoder` overlay decoded every entry name as UTF-8 through `String`, because stock reaches
+  `CharsetDecoder` and three `JavaLangAccess` members that THREW `unsupported`. With the coders stock, those three
+  are implemented from public API in `MetalJavaLangAccess` -- `uncheckedNewStringOrThrow` /
+  `uncheckedGetBytesOrThrow` (a decoder/encoder with malformed AND unmappable input `REPORT`ed, which is what stock
+  `String.newStringOrThrow`/`getBytesOrThrow` do) and `getBytesUTF8OrThrow` -- and the overlay is DELETED.
+  - **`ZipNamesProbe` (new) host-identical:** ASCII, Latin-1, euro, CJK and supplementary-plane entry names plus
+    entry and archive comments, written through `ZipOutputStream` and read back through `ZipInputStream`.
+    **The first runs DIFFERED on archive size only (692 vs 652)** -- not a coder fault: joe-ng's `Deflater` emits
+    STORED deflate blocks by design (no zlib), so any DEFLATED archive differs from the host's. A fixed entry time
+    was tried first and changed nothing; the probe now writes STORED entries, whose bytes are identical (562).
+  - **`ZipJUnitAll`: `ran 29, failures 0`** -- after restoring **`Deflater.shouldFinish()`**, a dropped member the
+    deep scan had listed: stock `ZipOutputStream.closeEntry` asks it on its IOException path, and the run hit
+    `VIRTUALRESOLVE FAILED java/util/zip/Deflater.shouldFinish()Z`. Stock semantics: set by `finish()`, cleared by
+    `reset()`. (Not a regression of this change -- the overlay was untouched -- but not measured on main either.)
+    The probe harness's first attempt omitted `classpath=/lib/junit.jar` and failed to link; it takes `CP=` now.
+  - **Suite: 40 programs, markers zero, churn gc 49.** Host: `A64 109`, `compiler 40`, `overlay-check 0 new`.
+
 - **THE JIT's IMPLICIT BOUNDS CHECK THROWS WITH STOCK's MESSAGE -- `Index 5 out of bounds for length 2` (2026-10-11,
   QEMU-GATED -- NOT YET PI-VALIDATED).** `getMessage()` on the AIOOBE a JIT'd `xaload`/`xastore` throws answered
   NULL; every stock JVM names the index and the length (`Preconditions.outOfBoundsCheckIndex`). A new helper id
