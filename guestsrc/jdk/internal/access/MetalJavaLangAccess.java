@@ -33,6 +33,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.stream.Stream;
 import jdk.internal.loader.NativeLibraries;
+import java.lang.MetalCarrierLocals;
 import jdk.internal.misc.CarrierThreadLocal;
 import jdk.internal.module.ServicesCatalog;
 import jdk.internal.reflect.ConstantPool;
@@ -497,15 +498,15 @@ public final class MetalJavaLangAccess implements JavaLangAccess
     }
     @Override public <T> T getCarrierThreadLocal(CarrierThreadLocal<T> local)
     {
-        throw unsupported("getCarrierThreadLocal");
+        return MetalCarrierLocals.get(local);
     }
     @Override public <T> void setCarrierThreadLocal(CarrierThreadLocal<T> local, T value)
     {
-        throw unsupported("setCarrierThreadLocal");
+        MetalCarrierLocals.set(local, value);
     }
     @Override public void removeCarrierThreadLocal(CarrierThreadLocal<?> local)
     {
-        throw unsupported("removeCarrierThreadLocal");
+        MetalCarrierLocals.remove(local);
     }
     @Override public Object[] scopedValueCache()
     {

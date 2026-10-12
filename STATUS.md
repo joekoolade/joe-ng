@@ -4,6 +4,56 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **THE STACK NEVER ANSWERED ARP -- THE ROUTER DROPPED NetDemo's REPLY (2026-10-12, PI-VALIDATED).** With carrier
+  thread-locals fixed, the Pi connected and sent a byte-correct GET, then read 0 bytes after the 8 s timeout, twice.
+  Temporary counters in `net.Tcp`/`net.Ip` MEASURED the gap: the SYN|ACK did arrive (the connect timestamp is set
+  only on one), the GET went out 0x37F ms later, and during the 8 s read the driver delivered **3 frames, none
+  IPv4**. If the GET had been lost the server would still have retransmitted its SYN|ACK inside 8 s, so IPv4 for
+  us was being dropped upstream. `net.Ip` had no ARP responder: bring-up ARPs the gateway, but nothing ever
+  answered a who-has for our own IP, and a router re-verifying a stale neighbour entry with unanswered unicast
+  probes declares the host unreachable. (A capture from a Mac on the same WiFi showed only the Pi's broadcasts --
+  without monitor mode a station cannot see another station's unicast, so it could not show the TCP exchange.)
+  - **Fix:** `Ip.recvIp` hands an ethertype-0x0806 frame to `answerArp`, which replies to a request whose target IP
+    is ours, from our MAC to the requester's.
+  - **Pi:** the counter-carrying image printed `arpAskedForUs=1 arpAnswered=1` and `HTTP/1.1 200 OK ... http done
+    bytes=891` (the last good #341 figure). The committed code is that image minus the counters; the counter-free
+    build itself was not booted. Why it surfaced now is INFERRED, not measured: the stock socket path makes the GET
+    later than the old overlays did, long enough for the router's re-verification to fall inside the exchange.
+  - Also measured on this run: the carrier thread-local card below is now exercised on hardware -- the GET's bytes
+    went through `Util.getTemporaryDirectBuffer` and the 891 response bytes came back through it.
+
+- **CARRIER THREAD-LOCALS -- THE PI's NetDemo DIED ON ITS FIRST SOCKET WRITE (2026-10-12, QEMU-GATED -- NOT YET
+  PI-VALIDATED).** The Pi run of main `bd27f5d` (#342) connected, then threw `InternalError: joe-ng:
+  JavaLangAccess.getCarrierThreadLocal is not implemented on this VM` from `CarrierThreadLocal.get <-
+  sun/nio/ch/Util.getTemporaryDirectBuffer <- NioSocketImpl.tryWrite`. Stock `Util`'s per-thread temporary
+  direct-buffer cache is a `TerminatingThreadLocal`, whose get/set/remove route through `JavaLangAccess`; the stub
+  threw, as rule 3 intends, at the first socket write. **QEMU cannot run NetDemo (no WiFi), so no QEMU gate reached
+  this path** -- a gap in the gates, not only in the VM.
+  - **Fix:** the `ThreadLocal` overlay gains stock's package-private `get/set/removeCarrierThreadLocal`, run
+    against `Thread.currentThread()` (no virtual threads, so every thread is its own carrier), and stock's
+    `setInitialValue` registration of a `TerminatingThreadLocal`. A public bridge `java.lang.MetalCarrierLocals`
+    reaches them from `MetalJavaLangAccess` (stock's JLA is an anonymous class inside `System`; ours cannot see
+    package-private `java.lang`). The overlay `Thread` now runs stock `exit()`'s
+    `TerminatingThreadLocal.threadTerminated()` when the thread used one -- how stock frees a dying thread's cached
+    buffers -- and lets an exception there escape to the uncaught report rather than clearing it.
+  - **Found on the way: `Thread.tlPut` never grew its 16-entry table** -- a 17th thread-local on one thread was an
+    AIOOBE. It doubles now.
+  - **`CarrierLocalProbe` (new) host-identical:** the temporary-buffer get/release pair, a plain
+    `CarrierThreadLocal`, a `TerminatingThreadLocal`'s exit callback on a spawned thread (and NO callback after
+    `remove`), a thread that only touches `Util`'s cache, and 40 thread-locals on one thread. `jdktests` now compiles
+    with `--add-exports` for `jdk.internal.misc` and `sun.nio.ch` so a probe can name them; the host control needs
+    the same flags. `ExecutorProbe`, `TlrProbe`, `NioBufferProbe` unchanged against the host.
+  - **MEASURED GAP, NOT FIXED: the buffer cache never caches.** The first probe run DIFFERED on one line -- a
+    released temporary buffer is not handed back (`sameAsCached=false`, host `true`). The cache holds
+    `IOUtil.IOV_MAX` buffers, and `IOUtil.<clinit>` is on `Loader`'s skip list (its `BootLoader.loadLibrary` lives
+    in the denied `jdk/internal/loader/`), so `IOV_MAX` is 0 and every socket write allocates and frees a fresh
+    direct buffer. Correct (`MetalOffHeap.free` returns the block to the GC), only slower; a skipped initializer is
+    exactly what rule 2 retires, so running it is the follow-up. The probe no longer prints the identity.
+  - Host: `make test` OK (`overlay-check 0 new`, 45 known dropped supertypes). **Suite: 40 programs, markers
+    zero, churn `gc: collections=50`** -- against **49 for a same-conditions control of main `bd27f5d`** booted from
+    a worktree on the same harness, so this change moved it by one. Cause NOT isolated (candidates: the larger
+    `ThreadLocal`/`Thread` bodies, and the exit check every spawned thread now runs).
+
 - **STOCK `java.util.zip.ZipCoder`; `Deflater.shouldFinish` RESTORED (2026-10-11, QEMU-GATED -- NOT YET
   PI-VALIDATED).** The `ZipCoder` overlay decoded every entry name as UTF-8 through `String`, because stock reaches
   `CharsetDecoder` and three `JavaLangAccess` members that THREW `unsupported`. With the coders stock, those three

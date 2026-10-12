@@ -62,7 +62,13 @@ public final class Ip
         }
         long eth = rx + (Magic.load8(rx + 7) & 0xFF);   // SDPCM data offset
         eth = eth + 4 + (Magic.load8(eth + 3) & 0xFF) * 4;   // skip the 4-byte BDC header
-        if (((Magic.load8(eth + 12) & 0xFF) << 8 | (Magic.load8(eth + 13) & 0xFF)) != 0x0800)
+        int et = (Magic.load8(eth + 12) & 0xFF) << 8 | (Magic.load8(eth + 13) & 0xFF);
+        if (et == 0x0806)
+        {
+            answerArp(eth);
+            return 0L;
+        }
+        if (et != 0x0800)
         {
             return 0L;                                   // not IPv4
         }
@@ -70,6 +76,55 @@ public final class Ip
         lastIhl = (Magic.load8(ip) & 0x0F) * 4;
         lastIpTotal = ((Magic.load8(ip + 2) & 0xFF) << 8) | (Magic.load8(ip + 3) & 0xFF);
         return ip;
+    }
+
+    /**
+     * Answer an ARP request for our IP. A neighbour (the gateway) that learned our MAC re-verifies it with
+     * unicast who-has probes once the entry goes stale; a host that never replies is declared unreachable
+     * and every later IPv4 frame for it is dropped at the router.
+     */
+    private static void answerArp(long eth)
+    {
+        long arp = eth + 14;
+        if ((((Magic.load8(arp + 6) & 0xFF) << 8) | (Magic.load8(arp + 7) & 0xFF)) != 1)
+        {
+            return;                                      // not a request
+        }
+        if (!eq(arp + 24, ourIp))
+        {
+            return;                                      // not asking for us
+        }
+        long buf = Heap.allocData(64);
+        int i = 0;
+        while (i < 6)
+        {
+            Magic.store8(buf + i, Magic.load8(arp + 8 + i));              // to the requester's MAC
+            Magic.store8(buf + 6 + i, Magic.load8(ourMac + i));
+            i = i + 1;
+        }
+        be16(buf + 12, 0x0806);
+        long r = buf + 14;
+        be16(r + 0, 1);                                  // hardware type = Ethernet
+        be16(r + 2, 0x0800);                             // protocol type = IPv4
+        Magic.store8(r + 4, 6);
+        Magic.store8(r + 5, 4);
+        be16(r + 6, 2);                                  // opcode = reply
+        i = 0;
+        while (i < 6)
+        {
+            Magic.store8(r + 8 + i, Magic.load8(ourMac + i));             // sender = us
+            Magic.store8(r + 18 + i, Magic.load8(arp + 8 + i));           // target = the requester
+            i = i + 1;
+        }
+        copy4(ourIp, r + 14);
+        copy4(arp + 14, r + 24);
+        i = 42;
+        while (i < 60)
+        {
+            Magic.store8(buf + i, 0);                    // pad to the 60-byte Ethernet minimum
+            i = i + 1;
+        }
+        send(buf, 60);
     }
 
     /** One's-complement IPv4 header checksum over {@code len} bytes at {@code addr}. */

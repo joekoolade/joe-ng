@@ -11,6 +11,8 @@
  */
 package java.lang;
 
+import jdk.internal.misc.TerminatingThreadLocal;
+
 /**
  * A JDK-free {@code java.lang.ThreadLocal}: per-thread storage kept in a small map on the current Thread
  * (see {@code Thread.tl*}). {@link #get()} lazily initialises the entry via {@link #initialValue()}.
@@ -36,18 +38,9 @@ public class ThreadLocal<T>
         return false;
     }
 
-    @SuppressWarnings("unchecked")
     public T get()
     {
-        Thread t = Thread.currentThread();
-        int i = t.tlIndex(this);
-        if (i >= 0)
-        {
-            return (T) t.tlValueAt(i);
-        }
-        T v = initialValue();
-        t.tlPut(this, v);
-        return v;
+        return get(Thread.currentThread());
     }
 
     public void set(T value)
@@ -58,6 +51,50 @@ public class ThreadLocal<T>
     public void remove()
     {
         Thread.currentThread().tlRemove(this);
+    }
+
+    /*
+     * The CARRIER variants, reached from CarrierThreadLocal through JavaLangAccess (MetalCarrierLocals). Stock
+     * runs them against Thread.currentCarrierThread(); this VM has no virtual threads, so every thread is its own
+     * carrier and the carrier is Thread.currentThread(). They exist because CarrierThreadLocal OVERRIDES
+     * get/set/remove to route here -- calling local.get() instead would recurse.
+     */
+    T getCarrierThreadLocal()
+    {
+        return get(Thread.currentThread());
+    }
+
+    void setCarrierThreadLocal(T value)
+    {
+        Thread.currentThread().tlPut(this, value);
+    }
+
+    void removeCarrierThreadLocal()
+    {
+        Thread.currentThread().tlRemove(this);
+    }
+
+    @SuppressWarnings("unchecked")
+    private T get(Thread t)
+    {
+        int i = t.tlIndex(this);
+        if (i >= 0)
+        {
+            return (T) t.tlValueAt(i);
+        }
+        return setInitialValue(t);
+    }
+
+    /** Stock's setInitialValue: a TerminatingThreadLocal that gets its value this way is registered, as set() would. */
+    private T setInitialValue(Thread t)
+    {
+        T v = initialValue();
+        t.tlPut(this, v);
+        if (this instanceof TerminatingThreadLocal<?> ttl)
+        {
+            TerminatingThreadLocal.register(ttl);
+        }
+        return v;
     }
 
     /**
