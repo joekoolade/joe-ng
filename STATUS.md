@@ -4,6 +4,16 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **STOCK `sun.nio.cs.StreamEncoder` -- CONSOLE OUTPUT GOES THROUGH A REAL `CharsetEncoder` (2026-10-11, QEMU-GATED --
+  NOT YET PI-VALIDATED).** The overlay existed because the charsets were identity tokens with no encoder; with the
+  previous card that reason is gone, and it is deleted. Stock is BUFFERED (8 KiB) where the overlay was not -- the
+  overlay's stated worry was output stuck in a buffer at a halt, but stock `PrintStream` calls
+  `charOut.flushBuffer()` after every write, so console text still reaches the UART per call.
+  - **Host-identical:** `Utf16PrintProbe`, `PrintWriterProbe`, `ReaderProbe`, `FormatProbe`, `ConcatUtf16Probe`.
+  - **Suite: 40 programs, markers zero, `HML`/`HML 81ms`, `smp 4 of 4`, `lisp stable=1`, churn gc 49 (unchanged).**
+    Host: `compiler 40`, `overlay-check 0 new`.
+  - **NOT RUN:** the JUnit console launcher and the Pi's NetDemo -- both print through this path.
+
 - **STOCK CHARSETS AND CODERS RUN -- `Reader`/`Writer` BRIDGES DECODE AND ENCODE FOR REAL; AND STRING
   CONCATENATION IS CORRECT OUTSIDE LATIN-1 (2026-10-11, QEMU-GATED -- NOT YET PI-VALIDATED).** Second increment of
   the charset arc. The `Charset`/`StandardCharsets`/`UTF_8`/`ISO_8859_1`/`US_ASCII` overlays (identity tokens with
