@@ -62,4 +62,15 @@ for f in $BOOT_FILES; do
 done
 
 # Eject by VOLUME, not by a device number: the disk number is assigned at insertion and can name another disk.
-diskutil eject "$CARD"
+# The first attempt can fail with "at least one volume could not be unmounted" while macOS is still indexing
+# the files just written (nothing held them open when it was checked); a retry a few seconds later succeeds.
+sync
+n=0
+until diskutil eject "$CARD"; do
+    n=$((n + 1))
+    if [ $n -ge 5 ]; then
+        echo "  eject FAILED after $n tries -- the card is verified; eject it by hand" >&2
+        exit 1
+    fi
+    sleep 3
+done
