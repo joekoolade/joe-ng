@@ -24,7 +24,7 @@ public class AtomicReferenceFieldUpdater<T, V>
 
     protected AtomicReferenceFieldUpdater(String fieldName)
     {
-        this.fname = fieldName.getBytes();
+        this.fname = jdk.internal.misc.MetalNames.utf8(fieldName);
     }
 
     public static <U, W> AtomicReferenceFieldUpdater<U, W> newUpdater(Class tclass, Class vclass, String fieldName)

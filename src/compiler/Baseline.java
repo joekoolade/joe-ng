@@ -2399,6 +2399,18 @@ public final class Baseline
         while (i < len)
         {
             int c = classBytes[p + i] & 0xFF;
+            // The recipe is a class-file Utf8, i.e. MODIFIED UTF-8: a literal outside ASCII is two or three bytes
+            // for ONE char. Appending those bytes one by one turned "café " into "cafÃ© ". Decode a unit first.
+            if ((c & 0xE0) == 0xC0 && i + 1 < len)
+            {
+                c = ((c & 0x1F) << 6) | (classBytes[p + i + 1] & 0x3F);
+                i = i + 1;
+            }
+            else if ((c & 0xF0) == 0xE0 && i + 2 < len)
+            {
+                c = ((c & 0x0F) << 12) | ((classBytes[p + i + 1] & 0x3F) << 6) | (classBytes[p + i + 2] & 0x3F);
+                i = i + 2;
+            }
             if (c == 0x01)                                       //  -> the next dynamic arg
             {
                 appendArg(cb, sbIdx, argBase + argIdx, cpIndex, argIdx);
@@ -2418,7 +2430,7 @@ public final class Baseline
         sp = argBase;                                            // drop the builder + the nargs args (keep the rest)
         spillLive(cb);                                           // the operand stack is x9.. (caller-saved): preserve any
         symbols.callHelper(cb, Symbols.SC_END);                  // live operand BELOW the args (e.g. a receiver pushed
-        symbols.newStringFromBytes(cb);                          // before `a + b`) across these two BLs. x0 = mini String.
+        symbols.concatResult(cb);                                // before `a + b`) across the BL. x0 = the String.
         reloadLive(cb);
         cb.emit(A64Enc.movReg(pushReg(), 0));                    // push the result String (at slot argBase)
     }
@@ -2610,6 +2622,21 @@ public final class Baseline
     /** Allocate the exception (via {@code newHelper}) and throw it as if {@code athrow} occurred at {@code pos}. */
     private void throwImplicit(CodeBuffer cb, int pos, int newHelper)
     {
+        throwImplicit(cb, pos, newHelper, -1, -1);
+    }
+
+    /**
+     * {@link #throwImplicit}, first moving {@code arg0Reg}/{@code arg1Reg} (when not -1) into x0/x1 as the helper's
+     * arguments -- at the top of the throw block, before anything there can clobber them (the helper call itself
+     * takes no operand-stack arguments, so with sp at 0 nothing is emitted ahead of its BL).
+     */
+    private void throwImplicit(CodeBuffer cb, int pos, int newHelper, int arg0Reg, int arg1Reg)
+    {
+        if (arg0Reg >= 0)
+        {
+            cb.emit(A64Enc.movReg(0, arg0Reg));
+            cb.emit(A64Enc.movReg(1, arg1Reg));
+        }
         int savedSp = sp;                                       // the throw block is off the fall-through path
         // The throw block is skipped at runtime (a never-taken branch guards it), so it must NOT perturb the
         // compiler's operand-stack model for the fall-through code that follows. sp is saved below; for deep
@@ -2765,7 +2792,7 @@ public final class Baseline
         cb.emit(A64Enc.ldrx(16, arrReg, ObjectModel.ARRAY_LENGTH_OFFSET));   // x16 = length (scratch, no call before use)
         cb.emit(A64Enc.cmpReg(indexReg, 16));
         int over = cb.emit(A64Enc.bcond(A64Enc.LO, 0));         // unsigned index < length -> ok (negative -> huge -> throws)
-        throwImplicit(cb, pos, Symbols.NEW_AIOOBE);
+        throwImplicit(cb, pos, Symbols.NEW_AIOOBE_IDX, indexReg, 16);   // stock's message names both
         cb.set(over, A64Enc.bcond(A64Enc.LO, cb.wordCount() - over));
     }
 

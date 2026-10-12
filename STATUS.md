@@ -4,6 +4,157 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **STOCK `java.util.zip.ZipCoder`; `Deflater.shouldFinish` RESTORED (2026-10-11, QEMU-GATED -- NOT YET
+  PI-VALIDATED).** The `ZipCoder` overlay decoded every entry name as UTF-8 through `String`, because stock reaches
+  `CharsetDecoder` and three `JavaLangAccess` members that THREW `unsupported`. With the coders stock, those three
+  are implemented from public API in `MetalJavaLangAccess` -- `uncheckedNewStringOrThrow` /
+  `uncheckedGetBytesOrThrow` (a decoder/encoder with malformed AND unmappable input `REPORT`ed, which is what stock
+  `String.newStringOrThrow`/`getBytesOrThrow` do) and `getBytesUTF8OrThrow` -- and the overlay is DELETED.
+  - **`ZipNamesProbe` (new) host-identical:** ASCII, Latin-1, euro, CJK and supplementary-plane entry names plus
+    entry and archive comments, written through `ZipOutputStream` and read back through `ZipInputStream`.
+    **The first runs DIFFERED on archive size only (692 vs 652)** -- not a coder fault: joe-ng's `Deflater` emits
+    STORED deflate blocks by design (no zlib), so any DEFLATED archive differs from the host's. A fixed entry time
+    was tried first and changed nothing; the probe now writes STORED entries, whose bytes are identical (562).
+  - **`ZipJUnitAll`: `ran 29, failures 0`** -- after restoring **`Deflater.shouldFinish()`**, a dropped member the
+    deep scan had listed: stock `ZipOutputStream.closeEntry` asks it on its IOException path, and the run hit
+    `VIRTUALRESOLVE FAILED java/util/zip/Deflater.shouldFinish()Z`. Stock semantics: set by `finish()`, cleared by
+    `reset()`. (Not a regression of this change -- the overlay was untouched -- but not measured on main either.)
+    The probe harness's first attempt omitted `classpath=/lib/junit.jar` and failed to link; it takes `CP=` now.
+  - **Suite: 40 programs, markers zero, churn gc 49.** Host: `A64 109`, `compiler 40`, `overlay-check 0 new`.
+
+- **THE JIT's IMPLICIT BOUNDS CHECK THROWS WITH STOCK's MESSAGE -- `Index 5 out of bounds for length 2` (2026-10-11,
+  QEMU-GATED -- NOT YET PI-VALIDATED).** `getMessage()` on the AIOOBE a JIT'd `xaload`/`xastore` throws answered
+  NULL; every stock JVM names the index and the length (`Preconditions.outOfBoundsCheckIndex`). A new helper id
+  `NEW_AIOOBE_IDX` (62, `VM.newAioobeIndex(JJ)J`) takes x0 = index, x1 = length: `boundsCheck` moves them in at the
+  top of the throw block (the length is already in x16 from the compare; the in-bounds path is unchanged), and
+  `Loader.newAioobeIndex` builds the message from bytes and stores it at `Throwable.detailMessage` directly, since
+  `newExc` allocates without running a constructor. The two other `NEW_AIOOBE` sites have no index/length and keep
+  the message-less helper.
+  - **`OobMessageProbe` host-identical with the arm restored** (it printed the class only): `int[2][5]` store,
+    `long[3][-1]` load, `char[0][0]` load. `ByteViewProbe` host-identical.
+  - **Suite: 40 programs, markers zero, ExcDemo `array aioobe caught=1`, `HML`/`HML 76ms`, `smp 4 of 4`,
+    `lisp stable=1`, churn gc 49.** Host: `A64 109`, `compiler 40`, `overlay-check 0 new`.
+
+- **STOCK `sun.nio.cs.StreamEncoder` -- CONSOLE OUTPUT GOES THROUGH A REAL `CharsetEncoder` (2026-10-11, QEMU-GATED --
+  NOT YET PI-VALIDATED).** The overlay existed because the charsets were identity tokens with no encoder; with the
+  previous card that reason is gone, and it is deleted. Stock is BUFFERED (8 KiB) where the overlay was not -- the
+  overlay's stated worry was output stuck in a buffer at a halt, but stock `PrintStream` calls
+  `charOut.flushBuffer()` after every write, so console text still reaches the UART per call.
+  - **Host-identical:** `Utf16PrintProbe`, `PrintWriterProbe`, `ReaderProbe`, `FormatProbe`, `ConcatUtf16Probe`.
+  - **Suite: 40 programs, markers zero, `HML`/`HML 81ms`, `smp 4 of 4`, `lisp stable=1`, churn gc 49 (unchanged).**
+    Host: `compiler 40`, `overlay-check 0 new`.
+  - **NOT RUN:** the JUnit console launcher and the Pi's NetDemo -- both print through this path.
+
+- **STOCK CHARSETS AND CODERS RUN -- `Reader`/`Writer` BRIDGES DECODE AND ENCODE FOR REAL; AND STRING
+  CONCATENATION IS CORRECT OUTSIDE LATIN-1 (2026-10-11, QEMU-GATED -- NOT YET PI-VALIDATED).** Second increment of
+  the charset arc. The `Charset`/`StandardCharsets`/`UTF_8`/`ISO_8859_1`/`US_ASCII` overlays (identity tokens with
+  no coder behind them) are DELETED and `CharsetDecoder`/`CharsetEncoder`/`Coder*`/`Coding*`/`sun/nio/cs/Array*`
+  are UN-DENIED. Every wall was named by the previous run:
+
+  | step | failure | fix |
+  |---|---|---|
+  | 1 | `NPE` in `Charset.defaultCharset` under `LazyConstantImpl.<clinit>`: stock `Charset.<clinit>` builds `LazyConstant`s, whose class asks `Unsafe.objectFieldOffset`, and the overlay encoded the field NAME through `getBytes()` -- the default charset that was still initializing | new `jdk/internal/misc/MetalNames.utf8`: a name as MODIFIED UTF-8, charset-free. Every overlay that hands a name to a native uses it (`Unsafe`, the three `Atomic*FieldUpdater`s, `Class`, `ClassLoader`, `reflect.Field`/`Method`); stock `Unsafe` passes the String to a native and has no such dependency |
+  | 2 | `Charset.forName("UTF-16BE")`: `DENYLIST TRAP`, `TRAPWIRE index=-1` in generated `StandardCharsets.canonicalize` at `aliasMap().get` | `sun/util/PreHashedMap` (the alias/class maps' base, pure Java) narrowed out of the `sun/util/` denial in both lists |
+  | 3 | `new String(bytes, UTF_16BE)` printed as `\0 H \0 i ␠ ¬` -- read first as a wrong decode; `CharsetIdentityProbe` (all six charsets host-identical) and `Utf16PrintProbe` (`getBytes`, a stock `PrintStream`, `System.out.charset` all host-identical) cleared the charset path | **THE JIT's STRING CONCAT WAS LATIN-1 ONLY, since it was written**: `VMConcat` was a BYTE builder -- a UTF-16 String argument's storage was copied verbatim, a `char` lost its high byte, a non-ASCII recipe literal was appended as its modified-UTF-8 bytes (`"café "` -> `cafÃ© `), and the result was wrapped with `coder` never set. Now a builder of UTF-16 units: `scStr` honours the argument's coder, `lowerConcat` decodes the recipe, and `scEnd` returns the finished String, LATIN1 or UTF16 by its largest unit (stock `StringConcatHelper`'s choice). The wrap hook is `concatResult` -- empty on metal, still a refusal in both writers |
+
+  - **Host-identical: `ReaderProbe`** (BufferedReader over InputStreamReader / FileReader on the RAMFS, OutputStreamWriter
+    UTF-8, UTF-16BE/LE both ways, PrintWriter), **`CharsetIdentityProbe`** (new: identity, `forName`, decoder class,
+    String and coder round trips for six charsets), **`Utf16PrintProbe`** (new), **`ConcatUtf16Probe`** (new,
+    adversarial: 16 run-time concat sites -- UTF-16 arg, wide/narrow char vars, non-ASCII and UTF-16 literals, both
+    mix orders, a surrogate pair, null, boxed, a 40-unit grown chain, equals/hashCode). Regression probes
+    host-identical: `ScannerProbe`, `NioBufferProbe`, `PrintWriterProbe`, `FormatProbe`, `JlaProbe`,
+    `RecordUtf16Probe`.
+  - **Suite: 40 programs, markers zero, `HML`/`HML 79ms`, `smp 4 of 4`, `lisp stable=1`, churn gc 49 (unchanged),
+    ConcatDemo's MIN/MAX arms as wanted.** Host: `compiler 40`, `overlay-check 0 new` (known dropped supertypes
+    53 -> 45).
+  - **STATED LIMITS:** the `StreamEncoder` overlay stays (UNBUFFERED, encodes through `String.getBytes(cs)`); stock
+    `StreamEncoder` over a real `CharsetEncoder` is the next step. `ZipCoder` stays overlaid (UTF-8 only).
+    Extended charsets (`ExtendedProviderHolder`, ServiceLoader providers) are not exercised.
+
+- **AN IMAGE CLASS IS INITIALIZED ONCE PER VM, NOT ONCE PER LOADER WORLD (2026-10-11, QEMU-GATED -- NOT YET
+  PI-VALIDATED).** The other half of the OpenJDK rule the previous card cited: a class whose statics block is the
+  IMAGE's (adopted by the loader, so every world shares one home) is the analogue of a boot-loader class, and
+  JVMS 5.5 initializes it at most once. Its completed `<clinit>` is recorded by statics-block address in a set
+  `resetLoader` does not clear; a later world marks it `ST_INITIALIZED` and retires its pending initializer
+  entries instead of re-running it, on both the lazy (`ensureClinit`) and the batch (`runClinits`) path.
+  - **MEASURED BEFORE IT WAS NARROWED:** the first build noted 14 classes and ADOPTED 2 -- `String` and
+    `StringUTF16`, initialized inside `loadParseInt`'s hand-built world (String loaded there as a raw blob) and
+    then carried into the runtime world un-re-run. The suite passed, but String's statics would have held
+    objects built in a world whose code is discarded -- the stale-object hazard of the previous card, reversed.
+    **Only initializations after `runtimeUp` count now**: the hand-built worlds are scaffolding, not part of the
+    VM whose lifetime "once" refers to. Re-measured: 14 noted, all after the runtime came up, **0 adopted**.
+  - **So nothing in today's suite exercises the adoption path**: since the previous card no reset follows
+    `bringUpRuntime`. This is the rule enforced for any future reset path, not a fix for a current failure.
+  - **Suite: 40 programs, markers zero, `HML`/`HML 68ms`, `smp 4 of 4`, `lisp stable=1`, churn gc 49 (unchanged
+    from the previous card).** Host: `compiler 40`, `overlay-check 0 new`. The `DIAG-BOOTINIT` prints that
+    produced the counts above were removed after the measurement (UART writes only).
+  - **NOT DONE (the third part):** a reset still discards the code of classes whose objects stay reachable from
+    image statics. OpenJDK unloads by reachability; joe-ng's lazy-stub tables do not. Moot while no reset
+    follows the runtime bring-up.
+
+- **BAKED CODE GETS A JVMS 5.5 INIT GUARD AT ITS `java/util/Locale` SITES; THE SUITE'S HAND-BUILT LOADER WORLDS
+  RUN BEFORE THE RUNTIME COMES UP (2026-10-11, QEMU-GATED -- NOT YET PI-VALIDATED).** Fixes the `ByteViewProbe`
+  regression the nio-buffers card found. **Bisected to #326** (first bad `b20ff99`, last good `b5feaf9`/#325),
+  where Locale went stock, and reduced to the first `String.format` of a program: `Locale.initDefault` NPE'd on
+  `defaultLocale == null`.
+
+  | step | failure | fix |
+  |---|---|---|
+  | 1 | Locale is on the writer's `noSnapshot` list (statics baked ZERO, `<clinit>` left to the metal at first active use), but **baked code calls baked code with no init guard**: `Preconditions` -> `String.format` -> `Formatter` -> `Locale.getDefault` is baked end to end, so a program whose FIRST locale use is such a call reads a null `defaultLocale` | (first attempt) run the no-snapshot `<clinit>`s eagerly at launch -- **REJECTED, see 2-3** |
+  | 2 | eager init: the suite died at ParseAllDemo, then (with a world flag) at program 27 -- `NPE: The delimiter must not be null` out of `StringJoiner.<init>` under `Locale.<clinit>` | instrumented: the FIRST program initialized Locale fine (state 3 -> 4); program 27 ran `Locale.<clinit>` a SECOND time, after `loadParseInt` had RESET the loader. A control with eager init off passed (gc 48) |
+  | 3 | (the OpenJDK-shaped fix) `WriterSymbols` emits the guard the metal JIT already emits -- x0 = a baked `{u2 len}{name}` byte[] + 24, `bl VM.ensureInitByName` -- at baked sites that touch `java/util/Locale` from another class; `ensureInitFor` returns before the loader tables exist | the suite then died at program 27 again: `LAZY INDEX OUT OF RANGE (stub outlived its table)` and a branch to 0 from `HashMap.hash`. Same cause: Locale initialized before the reset, re-initialized after it, over adopted statics still holding objects whose code the reset discarded |
+  | 4 | `loadIntegerFull` and `loadParseInt` (with their probe batteries) reset the loader AFTER the first `launchMain` -- a situation with no OpenJDK analogue (the boot loader is never reset) | **moved ahead of the first `launchMain`**: nothing resets the loader once the runtime world is up (checked: only `launchMain`/`armHeapReclaim`/`printCodeArena` follow) |
+
+  - **`ByteViewProbe` and `OobMessageProbe` (new) byte-identical to the host.** `OobMessageProbe` reaches
+    `Preconditions` messages through `String.format`, `Objects.checkIndex`/`checkFromToIndex`, and VarHandle
+    view get/set out of bounds.
+  - **Suite: 40 programs, markers zero (now incl. `TAIL TARGET`, `LAZY INDEX`), `HML`/`HML 67ms`, `smp 4 of 4`,
+    `lisp stable=1`, PASS 32 / FAIL 0 as the control, `Str."HeLLo".toUpperCase() = HELLO`.** Host: `compiler 40`
+    (the fixpoint is untouched -- VM classes never touch Locale), `overlay-check 0 new`.
+  - **CHURN GC 48 -> 49, ATTRIBUTED TO THE REORDER:** a reorder-only arm (guard off) also reads 49; the guard adds
+    nothing. Probably the hand-built worlds' allocation now precedes `armHeapReclaim` instead of following it, but
+    that was not measured.
+  - **STATED LIMITS:** the guard covers `java/util/Locale` only -- the one measured hole. The rest of `noSnapshot`
+    (`sun/util/locale/*`, `StaticProperty`, `Atomic*`, `Random`) has the same shape unguarded; `Atomic*` is left
+    out deliberately, as baked VM code may touch it before the loader exists. The JIT's IMPLICIT array bounds
+    check throws `ArrayIndexOutOfBoundsException` with a null message (stock: `Index 5 out of bounds for length
+    2`); `OobMessageProbe` prints that arm's class only.
+  - **NEXT:** the other half of the OpenJDK rule -- a class whose statics are the IMAGE's is initialized once per
+    VM, not once per loader world -- then the charset coders.
+
+- **STOCK `java.nio` BUFFERS RUN -- HEAP AND DIRECT; THE `ByteBuffer`/`ByteOrder`/`DirectBuffer`/`Util` OVERLAYS ARE
+  DELETED, AND `Unsafe` GAINS OFF-HEAP MEMORY (2026-10-11, QEMU-GATED -- NOT YET PI-VALIDATED; the socket path is
+  Pi-only).** First increment of the charset arc, the design the user chose: the decoders work on byte buffers, and
+  joe-ng's `ByteBuffer` was a 408-line socket-path overlay (24 deep gaps, not even a `java.nio.Buffer`). Every wall
+  was named by the previous run:
+
+  | step | failure | fix |
+  |---|---|---|
+  | 1 | (design) stock `allocateDirect` / `sun.nio.ch.Util` need `Unsafe.allocateMemory`, which THREW | `MetalOffHeap`: a block is the payload of a guest `byte[]` held in a table until `freeMemory` -- sound because the collector never moves objects; `reallocateMemory` keeps the prefix |
+  | 2 | (found reading `Unsafe`) `putInt(null, address)` wrote **8 bytes**: it took `store64` for any non-array base | `putInt` goes through `putBits` like every other narrow put -- a FIELD's whole slot, 4 bytes for an element or a raw address. Silent, and every stock `DirectByteBuffer.putInt` would have clobbered its neighbour |
+  | 3 | `jdk.internal.misc.VM.<clinit>` was SKIPPED, so `directMemory` was 0 and `Bits.reserveMemory` would refuse every direct buffer | the initializer runs; its native `initialize()` only `RegisterNatives` (libjava `VM.c`) and is wired EMPTY |
+  | 4 | `Unsafe.pageSize` threw | answers **4096**, read off the MMU: `TCR_EL1 = 0x2_0080_3520`, TG0 = 0 -> 4 KiB granule |
+  | 5 | `InnocuousThread.<clinit>` (stock `BufferCleaner`'s cleaning thread): `InternalError: contextClassLoader` | `Thread.contextClassLoader` and `ThreadGroup.parent` are REAL fields now. The old accessors answered null and DISCARDED a set -- a silent wrong answer of their own |
+
+  - **`NioBufferProbe` (new, adversarial) byte-identical to the host**, heap AND direct: multi-byte put/get absolute
+    and relative with the NEIGHBOURING bytes read back (the 8-byte `putInt` would fail exactly there), byte order,
+    flip/duplicate/slice/compact, read-only, `asIntBuffer`/`asLongBuffer`/`asCharBuffer` views, heap->direct
+    bulk copy, `equals`/`compareTo`/`mismatch`, `wrap` with offset.
+  - **Suite: 40 programs, markers zero, `HML`/`HML 67ms`, `smp 4 of 4`, churn gc 48 unchanged, `lisp stable=1`, the
+    `MessageDigest` arm's sha256 correct (it reads through a `ByteBuffer`).** `ScannerProbe`, `ChmRaceProbe`
+    host-identical; `DigestProbe`/`MacProbe` pass their own gate (`failures=0 divergences-unmet=0` -- they print
+    joe-ng's designed SHA-3/provider differences, so a raw host diff is not their gate). Host: `compiler 40`,
+    `A64 109`, `overlay-check 0 new` (known dropped supertypes 59 -> 53); deep scan 434 -> 394.
+  - **A REGRESSION ON MAIN, FOUND BY THIS GATE AND NOT CAUSED BY IT:** `ByteViewProbe`'s out-of-bounds arm throws
+    NPE instead of `ArrayIndexOutOfBoundsException`, then `BAD RECEIVER at dispatch: recv=0x25 site=set([BII)V`
+    and a trap. The SAME on `main` (`4c98b90`, measured with this change stashed), so it entered somewhere in
+    #333-#341 after the archived Pi-validated byteview image. Next: bisect it.
+  - **STATED LIMITS:** direct buffers allocated by user code are freed only by `BufferCleaner`, which needs phantom
+    references enqueued by the collector -- `sun.nio.ch.Util`'s temporary buffers are freed explicitly, so the socket
+    path does not depend on it. The NetDemo socket path now runs stock `Util` over direct buffers and is Pi-only.
+  - **NEXT (the arc):** stock `CharsetDecoder`/`CharsetEncoder` and the `UTF_8`/`ISO_8859_1`/`US_ASCII` charsets, so
+    `ReaderProbe` (text files through `BufferedReader`) passes. It traps today at `UTF_8.newDecoder`.
+
 - **METHOD REFERENCES RETURNING `float`/`double` ARE BOXED -- `reduce(0.0, Double::sum)`, `map(Math::sqrt)`,
   `Float::sum` (2026-10-11, PI-VALIDATED -- and with it #326 through #340).**
 

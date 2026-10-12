@@ -1067,6 +1067,16 @@ public final class Loader
     // ThreadLocalRandom.getProbe on exactly that, four threads entering TLR.<clinit> at once.
     private static int[] clinitOwner;
     private static int[] clinitDone;
+
+    /**
+     * The IMAGE statics blocks whose {@code <clinit>} has completed, for the life of the VM -- deliberately NOT
+     * reset by {@link #resetLoader}. A baked class adopts the writer's statics block, so every loader world shares
+     * ONE home for its statics, which makes it the analogue of an OpenJDK boot-loader class: initialized at most
+     * once per VM (JVMS 5.5), never once per world. Re-running it in a later world re-ran Locale's initializer
+     * over statics still holding objects whose code the reset had discarded ({@code stub outlived its table}).
+     */
+    private static long[] bootInited;
+    private static int bootInitedN;
     // PRECISE per-<clinit> init dependencies: the classes the initializer BODY actively touches
     // (getstatic/putstatic/invokestatic owner, new/anewarray class, ldc Class literal), name Utf8 offsets in the
     // owning blob's gbase. Used by clinitDepBlocked INSTEAD of the whole-constant-pool dp table, whose field-type /
@@ -1216,6 +1226,13 @@ public final class Loader
                     remaining -= 1;
                     progress = 1;
                 }
+                else if (!done[i] && bootInitedEntry(i))
+                {
+                    clinitRan[i] = 1;                    // ran once per VM, in an earlier loader world
+                    done[i] = true;
+                    remaining -= 1;
+                    progress = 1;
+                }
                 else if (!done[i] && !clinitDepBlocked(i, done))
                 {
                     if (logClinit != 0)                  // #43: name each <clinit> as it runs (spot a hanging one)
@@ -1229,6 +1246,7 @@ public final class Loader
                     warnClinitUnderLock(i);
                     long unused = Magic.call0(entry);
                     clinitRan[i] = 1;
+                    noteBootInited(classRegAt(clinitBase[i], clinitNameOff[i]));
                     done[i] = true;
                     remaining -= 1;
                     progress = 1;
@@ -1249,6 +1267,7 @@ public final class Loader
                     warnClinitUnderLock(j);
                     long unused = Magic.call0(cyEntry);
                     clinitRan[j] = 1;
+                    noteBootInited(classRegAt(clinitBase[j], clinitNameOff[j]));
                     done[j] = true;
                     remaining -= 1;
                 }
@@ -1282,6 +1301,13 @@ public final class Loader
      * demand), and never calls {@code ConditionalSpecialCasing} at all (so its initializer — which builds a
      * HashMap of Entry objects — never runs).
      */
+    /** {@link #adoptBootInit} for batch initializer entry {@code i}, by its class. */
+    private static boolean bootInitedEntry(int i)
+    {
+        int reg = classRegAt(clinitBase[i], clinitNameOff[i]);
+        return reg >= 0 && adoptBootInit(reg);
+    }
+
     private static boolean lazyClinitGated(long base, int off)
     {
         return !clinitEagerKept(base, off);
@@ -1415,6 +1441,10 @@ public final class Loader
         {
             return;                                     // VM.forceCompile's touch, and an unresolvable name
         }
+        if (!runtimeUp)
+        {
+            return;                                     // a BAKED guard (WriterSymbols) reached before the loader
+        }                                               //   tables exist: no class is registered yet to initialize
         int reg = regBySigU(clsU);
         if (INIT_GUARD_LOG)
         {
@@ -1555,6 +1585,89 @@ public final class Loader
         Uart.putc(0x0A);
     }
 
+    /** True when {@code statics} is a writer-emitted block in the image (an adopted class's ONE home). */
+    private static boolean isImageStatics(long statics)
+    {
+        return statics != 0L && statics >= VM.staticsStart && statics < VM.staticsEnd;
+    }
+
+    /** Whether the class at {@code reg} shares an image statics block whose initializer already ran. */
+    private static boolean bootInitedReg(int reg)
+    {
+        long st = clTab[reg].statics;
+        if (!isImageStatics(st))
+        {
+            return false;
+        }
+        int i = 0;
+        while (i < bootInitedN)
+        {
+            if (bootInited[i] == st)
+            {
+                return true;
+            }
+            i += 1;
+        }
+        return false;
+    }
+
+    /**
+     * Record that the class at {@code reg}'s initializer completed -- if its statics are the image's, and only once
+     * the RUNTIME world is up. The suite's hand-built worlds (loadParseInt and friends) run first and reset the
+     * loader to a few raw blobs; MEASURED, they initialize {@code String} and {@code StringUTF16}, and carrying that
+     * into the runtime world would leave String's statics holding objects built in a world the next reset
+     * discards. Those worlds are scaffolding, not part of the VM whose lifetime "once" refers to.
+     */
+    private static void noteBootInited(int reg)
+    {
+        if (!runtimeUp || reg < 0 || !isImageStatics(clTab[reg].statics) || bootInitedReg(reg))
+        {
+            return;                                     // only the RUNTIME world's initializations count: see below
+        }
+        if (bootInited == null)
+        {
+            bootInited = new long[64];
+        }
+        if (bootInitedN == bootInited.length)
+        {
+            long[] grown = new long[bootInitedN * 2];
+            int k = 0;
+            while (k < bootInitedN)
+            {
+                grown[k] = bootInited[k];
+                k += 1;
+            }
+            bootInited = grown;
+        }
+        bootInited[bootInitedN] = clTab[reg].statics;
+        bootInitedN += 1;
+    }
+
+    /**
+     * A class registered in THIS world whose image statics were initialized in an earlier one: mark it
+     * initialized without running anything, and retire its pending initializer entries so neither the batch sweep
+     * nor a step-2 waiter treats them as outstanding. Returns whether it applied.
+     */
+    private static boolean adoptBootInit(int reg)
+    {
+        if (!bootInitedReg(reg))
+        {
+            return false;
+        }
+        clTab[reg].state = RVMClass.ST_INITIALIZED;
+        int i = 0;
+        while (i < clinitN)
+        {
+            if (clinitBase[i] == clTab[reg].base)
+            {
+                clinitRan[i] = 1;
+                clinitDone[i] = 1;
+            }
+            i += 1;
+        }
+        return true;
+    }
+
     private static void ensureClinit(int reg)
     {
         if (reg < 0 || clTab == null || clTab[reg] == null)
@@ -1588,6 +1701,10 @@ public final class Loader
         if (clTab[reg].state >= RVMClass.ST_INITIALIZED)
         {
             return;
+        }
+        if (adoptBootInit(reg))
+        {
+            return;                                     // initialized once per VM, in an earlier loader world
         }
         if (!lazyClinitGated(clTab[reg].base, clTab[reg].nameOff))
         {
@@ -1793,6 +1910,7 @@ public final class Loader
                 {
                     long unused = Magic.call0(entry);
                     clTab[reg].state = RVMClass.ST_INITIALIZED;
+                    noteBootInited(reg);
                 }
                 finally
                 {
@@ -2230,10 +2348,11 @@ public final class Loader
                 // pinIfSupported/unpinIfSupported no-ops that never touch the denied Continuation class.
                 // (Reached via collection iterators / Thread.isVirtual checks in several java.util closures.)
                 || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("jdk/internal/vm/ContinuationSupport"))
-                // jdk/internal/misc/VM.<clinit> = initialize() (a native setting savedProps/direct-memory/page
-                // state). Metal has no such native; the reachable collection/reference paths don't read VM's
-                // statics, so skip it (defaults are inert). Pulled transitively by reference/buffer machinery.
-                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("jdk/internal/misc/VM"))
+                // jdk/internal/misc/VM.<clinit> is NO LONGER SKIPPED: it assigns `lock` and the 64 MB default
+                // `directMemory` and calls the native initialize(), which only RegisterNatives for JNI
+                // (share/native/libjava/VM.c) and is wired empty. Skipped, directMemory stayed 0 and stock
+                // DirectByteBuffer's Bits.reserveMemory refused every direct buffer. It does not touch savedProps,
+                // which seedSavedProps fills at launch.
                 // Arrays$LegacyMergeSort.<clinit> reads the java.util.Arrays.useLegacyMergeSort property via
                 // AccessController/GetBooleanAction (denied). Skipping leaves userRequested=false -- correct,
                 // so Arrays.sort takes the modern TimSort path (reached by any object Arrays.sort/Collections.sort).
@@ -4995,7 +5114,7 @@ public final class Loader
             k += 1;
         }
         // Instances the VM creates WITHOUT a bytecode `new`, so RTA can't see the site: string literals + concat
-        // materialize a String (intern / newStringFromBytes); the JIT's null/bounds/div/cast checks throw these
+        // materialize a String (intern / the concat's scEnd); the JIT's null/bounds/div/cast checks throw these
         // exceptions via VM.newHelper. Flag them instantiated whenever loaded so their virtual methods resolve.
         grew = flagInstByName(Magic.bytes("java/lang/String")) || grew;
         grew = flagInstByName(Magic.bytes("java/lang/NullPointerException")) || grew;
@@ -5879,6 +5998,14 @@ public final class Loader
         {
             return false;
         }
+        // NARROWED OUT too: sun/util/PreHashedMap, the base of the generated sun/nio/cs/StandardCharsets alias and
+        // class maps. Pure collection code, no natives; while denied, Charset.forName("UTF-16BE") trapped in
+        // StandardCharsets.canonicalize at aliasMap().get. (Keep in sync with writer.ReachScan.isDenied.)
+        if (utf8IsAtBase(base, off, Magic.bytes("sun/util/PreHashedMap"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/util/PreHashedMap$")))
+        {
+            return false;
+        }
         // Narrow ALLOW for the VarHandle-as-atomic-field-accessor shim (overlays, not the real invoke runtime):
         // java.net.Socket uses VarHandle for its `state`/`in`/`out` fields. Allowed BEFORE the java/lang/invoke
         // prefix deny below. Everything else in java/lang/invoke stays denied.
@@ -6181,23 +6308,17 @@ public final class Loader
                 // is trap-wired at PATCH TIME, so no link stub runs and the overlay is never consulted.
                 // The stock class cannot simply be un-denied -- it builds its tables with multianewarray,
                 // which this JIT records metadata for but has no lowering for.
-                // The charset ENCODER/DECODER fallback: stock String's byte[]-ctor/getBytes take the pure-Java
-                // UTF-8 fast path (identity vs the overlay sun/nio/cs singletons); the decode/encodeWithEncoder
-                // branches that would pull CharsetDecoder/nio buffers are statically present but never taken.
-                // (java/nio/charset/Charset itself is NOT denied -- the overlay must load.)
-                || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/CharsetDecoder"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/CharsetEncoder"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/Coder"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/Coding"))
+                // The charset coders (CharsetDecoder/CharsetEncoder/CoderResult/CodingErrorAction) and
+                // sun/nio/cs/Array* are NOT denied any more: the charsets run STOCK with real coders, so
+                // InputStreamReader/OutputStreamWriter decode and encode. (Keep in sync with ReachScan.DENY.)
                 // IllegalCharsetNameException / UnsupportedCharsetException are NOT denied: they are plain
-                // IllegalArgumentException subclasses with no dependencies, the Charset overlay throws the
-                // latter as stock does, and stock code CATCHES both (PrintStream.toCharset). While they were
+                // IllegalArgumentException subclasses with no dependencies, stock Charset throws the latter,
+                // and stock code CATCHES both (PrintStream.toCharset). While they were
                 // denied, such a catch clause could not name its class -- see the CATCH_BY_NAME note in
                 // emitMethod for what an unresolvable catch class used to do.
-                // java/nio/ByteBuffer is LOADABLE (overlay -> socket temp buffers). java/nio/CharBuffer is loadable
-                // too now, and STOCK: java.util.Scanner buffers its input in a heap CharBuffer (CharBuffer.allocate)
+                // java/nio/ByteBuffer runs STOCK (heap and direct). java/nio/CharBuffer is loadable and STOCK too: java.util.Scanner buffers its input in a heap CharBuffer (CharBuffer.allocate)
                 // and reads through Readable.read(CharBuffer), so denying it trapped Scanner's first token.
-                || utf8HasPrefix(base, off, Magic.bytes("sun/nio/cs/Array"));
+                ;
     }
 
     /** True if some registered blob's own name equals the class name at {@code off} in {@code base}. */
@@ -9302,7 +9423,7 @@ public final class Loader
                 }
                 else if (gcpTag[c] == 8 || gcpTag[c] == 18)   // CONSTANT_String / CONSTANT_InvokeDynamic:
                 {
-                    pdNeedsString[i] = true;            // materializes a String via newStringFromBytes (baked TIB)
+                    pdNeedsString[i] = true;            // materializes a String via the concat's scEnd (baked TIB)
                     if (gcpTag[c] == 18)
                     {
                         addIndyIfaceDep(i, c);          // ... and names its functional interface in a descriptor
@@ -9518,7 +9639,7 @@ public final class Loader
     private static boolean ready(int i)
     {
         // A blob that materializes a String (string literal / concat) bakes String's TIB+size at compile time
-        // (newStringFromBytes) but carries no CONSTANT_Class dep on it — so hold it until java/lang/String's
+        // (the concat's scEnd) but carries no CONSTANT_Class dep on it — so hold it until java/lang/String's
         // Type is registered, else it compiles against TIB=0 and yields a malformed String.
         if (pdNeedsString[i] && stringPdIndex >= 0 && stringPdIndex != i && pdDone[stringPdIndex] == 0)
         {
@@ -12144,6 +12265,13 @@ public final class Loader
         // No JNI here, so the empty stub is exactly right. closeScope0 itself -- closing a SHARED foreign arena -- is
         // deliberately NOT wired: it does real work, so it must fail loudly if reached. Reached by
         // java.nio.Buffer.<clinit>, i.e. by every stock CharBuffer (Scanner's input buffer).
+        // jdk/internal/misc/VM.initialize: RegisterNatives for JNI and nothing else (share/native/libjava/VM.c), so
+        // empty is exactly right. The natives it would register (getNanoTimeAdjustment, ...) are wired or fail on
+        // their own.
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/VM")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("initialize")))        { return VM.noopNativeAddr; }  // ()V
+        }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/ScopedMemoryAccess")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("registerNatives")))   { return VM.noopNativeAddr; }  // ()V
@@ -20816,6 +20944,83 @@ public final class Loader
         return newExc(Magic.bytes("java/lang/ArrayIndexOutOfBoundsException"));
     }
 
+    /**
+     * The JIT bounds check's exception: an AIOOBE whose {@code detailMessage} is stock's
+     * {@code "Index i out of bounds for length n"} ({@code Preconditions.outOfBoundsCheckIndex}). The implicit
+     * throw used to carry NO message, so {@code getMessage()} answered null where every stock JVM names the index
+     * and the length -- OobMessageProbe printed that arm's class only. Set directly at {@code Throwable}'s field,
+     * as {@link #newExc} allocates without running a constructor.
+     */
+    static long newAioobeIndex(long index, long length)
+    {
+        long exc = newAioobe();
+        int th = classIndexByName(Magic.bytes("java/lang/Throwable"));
+        if (exc == 0L || th < 0)
+        {
+            return exc;
+        }
+        long off = instanceFieldOffset(th, Magic.bytes("detailMessage"));
+        if (off < 0L)
+        {
+            return exc;
+        }
+        byte[] msg = new byte[64];
+        int n = putAsciiAt(msg, 0, Magic.bytes("Index "));
+        n = putDecAt(msg, n, (int) index);
+        n = putAsciiAt(msg, n, Magic.bytes(" out of bounds for length "));
+        n = putDecAt(msg, n, (int) length);
+        byte[] text = new byte[n];
+        int k = 0;
+        while (k < n)
+        {
+            text[k] = msg[k];
+            k += 1;
+        }
+        Magic.store64(exc + off, guestString(text));
+        return exc;
+    }
+
+    /** Copy {@code s} into {@code out} at {@code p}; returns the new position. */
+    private static int putAsciiAt(byte[] out, int p, byte[] s)
+    {
+        int i = 0;
+        while (i < s.length)
+        {
+            out[p] = s[i];
+            p += 1;
+            i += 1;
+        }
+        return p;
+    }
+
+    /** Write {@code v} in decimal into {@code out} at {@code p}; returns the new position. Long math: -MIN fits. */
+    private static int putDecAt(byte[] out, int p, int v)
+    {
+        long m = v;
+        if (m < 0L)
+        {
+            out[p] = 0x2D;
+            p += 1;
+            m = -m;
+        }
+        byte[] tmp = new byte[12];
+        int n = 0;
+        do
+        {
+            tmp[n] = (byte) (0x30 + (int) (m % 10L));
+            n += 1;
+            m = m / 10L;
+        }
+        while (m > 0L);
+        while (n > 0)
+        {
+            n -= 1;
+            out[p] = tmp[n];
+            p += 1;
+        }
+        return p;
+    }
+
     /** Allocate a mini {@code java/lang/ArithmeticException} — the JIT's divide-by-zero helper. */
     static long newArith()
     {
@@ -21132,7 +21337,7 @@ public final class Loader
         Uart.putc(0x0A);
     }
 
-    /** TIB of the loaded mini {@code java/lang/String} (for the concat's {@code newStringFromBytes}), or 0. */
+    /** TIB of the loaded mini {@code java/lang/String} (for the concat's {@code VMConcat.scEnd}), or 0. */
     static long stringTib()
     {
         int i = stringClassIndex();

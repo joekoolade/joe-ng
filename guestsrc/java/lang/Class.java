@@ -64,7 +64,7 @@ public final class Class<T> implements java.lang.reflect.Type
      */
     public static Class<?> forName(String name, boolean initialize, ClassLoader loader) throws ClassNotFoundException
     {
-        Class<?> c = (name == null) ? null : forName0(name.getBytes());
+        Class<?> c = (name == null) ? null : forName0(jdk.internal.misc.MetalNames.utf8(name));
         if (c == null)
         {
             throw new ClassNotFoundException(name);
@@ -1057,7 +1057,7 @@ public final class Class<T> implements java.lang.reflect.Type
 
     public java.lang.reflect.Field getDeclaredField(String name) throws NoSuchFieldException
     {
-        byte[] nb = name.getBytes();
+        byte[] nb = jdk.internal.misc.MetalNames.utf8(name);
         int mods = fieldMods0(this, nb);
         if (mods < 0)
         {
@@ -1200,13 +1200,13 @@ public final class Class<T> implements java.lang.reflect.Type
     /** Access flags of the named own instance field, or -1 if absent (reflection helper for the field updaters). */
     public int fieldModifiers(String name)
     {
-        return fieldMods0(this, name.getBytes());
+        return fieldMods0(this, jdk.internal.misc.MetalNames.utf8(name));
     }
 
     /** First char of the named own instance field's JVM type descriptor ('I','J','Z','L','['), or -1. */
     public int fieldTypeChar(String name)
     {
-        return fieldTypeChar0(this, name.getBytes());
+        return fieldTypeChar0(this, jdk.internal.misc.MetalNames.utf8(name));
     }
 
     /** VM native -> {@code VM.fieldMods}: this class's own instance field {@code name}'s access flags, or -1. */

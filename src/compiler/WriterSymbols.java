@@ -69,6 +69,9 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         HELPER_KEY[Symbols.SC_BOOL]          = "vm/VMConcat.scBool(JI)V";
         HELPER_KEY[Symbols.SC_DOUBLE]        = "vm/VMConcat.scDouble(JJ)V";
         HELPER_KEY[Symbols.SC_FLOAT]         = "vm/VMConcat.scFloat(JI)V";
+        // REACHED: the guard baked at a site that touches a class whose statics the image does not snapshot
+        // (see needsInitGuard).
+        HELPER_KEY[Symbols.ENSURE_INIT]      = "vm/VM.ensureInitByName(J)V";
     }
 
     /** The image method a helper id resolves to -- or a loud failure, never a silently wrong neighbour. */
@@ -264,6 +267,60 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         }
         relocs.strRefs().add(new StrRef(cb.reserveAddr(reg), reg, text));
     }
+    /**
+     * JVMS 5.5 at a BAKED active use of a class whose statics the image leaves ZERO for the metal
+     * {@code <clinit>} to fill ({@code ImageBuilder.noSnapshot}). Every other baked class carries its seed-JVM
+     * snapshot and is initialized before any code runs, which is why the writer emits no guards at all -- but a
+     * no-snapshot class is initialized only at its first active use, and baked code calling baked code has no
+     * site where that can happen. {@code String.format} reached from a baked {@code Preconditions} message reads
+     * {@code Locale.getDefault} that way, and found {@code defaultLocale} null (ByteViewProbe, since #326).
+     *
+     * <p>Only {@code java/util/Locale} for now: it is the one MEASURED hole, and the other no-snapshot classes
+     * include {@code Atomic*}, which baked VM code may touch before the loader tables exist. A site inside the
+     * class itself needs no guard (its own code runs only once it is being initialized).
+     */
+    public boolean needsInitGuard(int refCp)
+    {
+        return guardedClass(cf.memberRef(refCp).owner());
+    }
+
+    public boolean needsInitGuardClass(int classCp)
+    {
+        return guardedClass(cf.classAt(classCp));
+    }
+
+    public void initGuard(CodeBuffer cb, int refCp)
+    {
+        emitInitGuard(cb, cf.memberRef(refCp).owner());
+    }
+
+    public void initGuardClass(CodeBuffer cb, int classCp)
+    {
+        emitInitGuard(cb, cf.classAt(classCp));
+    }
+
+    private boolean guardedClass(String cls)
+    {
+        return cls.equals("java/util/Locale") && !cls.equals(cf.thisClassName());
+    }
+
+    /**
+     * x0 = an absolute {@code {u2 len}{bytes}} class name -- the form {@code VM.ensureInitByName} takes -- then
+     * the helper. The name is baked as a raw byte[] whose payload starts with the length, so x0 is the array plus
+     * its element offset.
+     */
+    private void emitInitGuard(CodeBuffer cb, String cls)
+    {
+        byte[] name = cls.getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        byte[] lenName = new byte[name.length + 2];
+        lenName[0] = (byte) (name.length >> 8);
+        lenName[1] = (byte) name.length;
+        System.arraycopy(name, 0, lenName, 2, name.length);
+        relocs.strRefs().add(new StrRef(cb.reserveAddr(0), 0, lenName));
+        cb.emit(A64.addImm(0, 0, ObjectModel.ARRAY_BASE_OFFSET));
+        callHelper(cb, Symbols.ENSURE_INIT);
+    }
+
     public void exceptionSlot(CodeBuffer cb, int reg)
     {
         relocs.staticRefs().add(new StaticRef(cb.reserveAddr(reg), reg, EXCEPTION_KEY));
@@ -445,7 +502,7 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
     // invokedynamic never occurs in the image's own (JDK-free) classes, so the writer never lowers it.
     public boolean isConcatIndy(int idx) { return false; }
     public int concatRecipeOff(int idx) { return -1; }
-    public void newStringFromBytes(CodeBuffer cb) { throw new IllegalStateException("no invokedynamic in image code"); }
+    public void concatResult(CodeBuffer cb) { throw new IllegalStateException("no invokedynamic in image code"); }
     public boolean isLambdaIndy(int idx) { return false; }
     public int lambdaSize(int idx) { return 0; }
     public int lambdaSamArgc(int idx) { return 0; }

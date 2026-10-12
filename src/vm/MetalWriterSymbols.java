@@ -370,7 +370,7 @@ final class MetalWriterSymbols implements Symbols
     // invokedynamic never occurs in the image's own classes, so the metal writer never lowers it either.
     public boolean isConcatIndy(int idx) { return false; }
     public int concatRecipeOff(int idx) { return -1; }
-    public void newStringFromBytes(CodeBuffer cb) { failed = true; }
+    public void concatResult(CodeBuffer cb) { failed = true; }
     public boolean isLambdaIndy(int idx) { return false; }
     public int lambdaSize(int idx) { return 0; }
     public int lambdaSamArgc(int idx) { return 0; }

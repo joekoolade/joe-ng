@@ -42,6 +42,7 @@ public class Deflater implements AutoCloseable
     private final Deflate engine = new Deflate();
     private boolean nowrap;
     private boolean ended;
+    private boolean finish;                         // stock's 'finish' flag: set by finish(), cleared by reset()
 
     public Deflater()
     {
@@ -64,6 +65,7 @@ public class Deflater implements AutoCloseable
     {
         engine.reset(nowrap);
         ended = false;
+        finish = false;
     }
 
     /** Release the compressor. There is no native resource here, so this only latches the closed state. */
@@ -122,6 +124,17 @@ public class Deflater implements AutoCloseable
     public void finish()
     {
         engine.finish();
+        finish = true;
+    }
+
+    /**
+     * Stock's package-private flag read: whether {@link #finish} has been called since the last reset. Stock
+     * {@code ZipOutputStream.closeEntry} asks it on its IOException path; the overlay dropped it, so that path was
+     * {@code VIRTUALRESOLVE FAILED} (ZipJUnitAll found it).
+     */
+    boolean shouldFinish()
+    {
+        return finish;
     }
 
     /** True once the whole compressed stream has been handed to the caller. */

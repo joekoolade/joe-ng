@@ -52,7 +52,7 @@ public final class Method extends Executable
      *  an overlay-only entry point, not part of the stock {@code Method} API. */
     public static Method resolve(Class<?> c, String name) throws NoSuchMethodException
     {
-        int idx = methodResolve0(c, name.getBytes());
+        int idx = methodResolve0(c, jdk.internal.misc.MetalNames.utf8(name));
         if (idx < 0)
         {
             throw new NoSuchMethodException(name);
@@ -71,7 +71,7 @@ public final class Method extends Executable
      */
     public static Method resolve(Class<?> c, String name, String desc) throws NoSuchMethodException
     {
-        int idx = methodResolveDesc0(c, name.getBytes(), desc == null ? null : desc.getBytes());
+        int idx = methodResolveDesc0(c, jdk.internal.misc.MetalNames.utf8(name), desc == null ? null : jdk.internal.misc.MetalNames.utf8(desc));
         if (idx < 0)
         {
             throw new NoSuchMethodException(name);

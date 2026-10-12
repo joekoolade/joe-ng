@@ -450,18 +450,12 @@ final class MetalSymbols implements Symbols
         emitBl(cb, VM.denylistTrapAddr);   // unsupported record ObjectMethods method — halt loudly if ever called
     }
 
-    /** Wrap the byte[] in x0 as a java/lang/String: alloc, set TIB, store into the sole `value` field. */
-    public void newStringFromBytes(CodeBuffer cb)
+    /**
+     * Nothing to emit: {@code VMConcat.scEnd} returns the finished String in x0. This used to wrap a byte[] here,
+     * setting the TIB and {@code value} but never {@code coder}, so every concat result was LATIN1 whatever it held.
+     */
+    public void concatResult(CodeBuffer cb)
     {
-        cb.emit(A64Enc.subImm(31, 31, 16));                 // sub sp, #16 (preserve byte[] across the alloc)
-        cb.emit(A64Enc.strx(0, 31, 0));                     // str x0, [sp]
-        cb.emitAll(A64Enc.loadImm64(0, Loader.stringSize())); // x0 = String instance size
-        emitBl(cb, VM.heapAlloc);                            // x0 = new object (header/size set, payload zeroed)
-        cb.emit(A64Enc.ldrx(1, 31, 0));                     // x1 = byte[]
-        cb.emit(A64Enc.addImm(31, 31, 16));                 // add sp, #16
-        emitAddr(cb, 2, Loader.stringTib());                // x2 = String TIB
-        cb.emit(A64Enc.strx(2, 0, 0));                      // obj.tib   = String TIB (TIB_OFFSET = 0)
-        cb.emit(A64Enc.strx(1, 0, 16));                     // obj.value = byte[]      (field 0 -> offset 16)
     }
 
     /** A compile failure on metal is unrecoverable and message-free: halt. */
@@ -686,6 +680,10 @@ final class MetalSymbols implements Symbols
         if (helper == Symbols.NEW_AIOOBE)
         {
             return VM.newAioobeAddr;
+        }
+        if (helper == Symbols.NEW_AIOOBE_IDX)
+        {
+            return VM.newAioobeIndexAddr;
         }
         if (helper == Symbols.CAPTURE_TRACE)
         {

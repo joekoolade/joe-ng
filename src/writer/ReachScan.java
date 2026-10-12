@@ -80,13 +80,10 @@ public final class ReachScan
         // jdk/internal/lang/CaseFolding is NOT here any more: it was denied as "only CASE_INSENSITIVE regex
         // needs them", and JUnit's TimeoutDurationParser compiles exactly such a pattern. It is overlaid in
         // guestsrc instead -- see Loader.isDenylisted. (Keep in sync with that list.)
-        // charset encoder/decoder fallback (never taken: the overlay singletons pin the UTF-8 fast path).
-        "java/nio/charset/CharsetDecoder", "java/nio/charset/CharsetEncoder",
-        "java/nio/charset/Coder", "java/nio/charset/Coding",
-        
-        // java/nio/CharBuffer is NOT here any more: Scanner buffers its input in a heap CharBuffer, and denying it
-        // trapped the first token. It runs stock -- see Loader.isDenylisted. (Keep in sync with that list.)
-        "sun/nio/cs/Array",
+        // java/nio/charset/CharsetDecoder/CharsetEncoder/Coder*/Coding* and sun/nio/cs/Array* are NOT here any
+        // more: the charsets and their coders run STOCK, so Reader/Writer bridges decode and encode for real.
+        // java/nio/CharBuffer is NOT here either: Scanner buffers its input in a heap CharBuffer, and denying it
+        // trapped the first token. (Keep in sync with Loader.isDenylisted.)
     };
 
     static boolean deny = false;                       // set by the "DENY" arg
@@ -97,6 +94,11 @@ public final class ReachScan
         // The core of sun/util/locale is narrowed out of the sun/util/ deny (stock Locale runs on it); its
         // provider/ subtree stays denied. See Loader.isDenylisted.
         if (c.startsWith("sun/util/locale/") && !c.startsWith("sun/util/locale/provider/"))
+        {
+            return false;
+        }
+        // sun/util/PreHashedMap (StandardCharsets' alias/class maps) is narrowed out too -- see Loader.isDenylisted.
+        if (c.equals("sun/util/PreHashedMap") || c.startsWith("sun/util/PreHashedMap$"))
         {
             return false;
         }

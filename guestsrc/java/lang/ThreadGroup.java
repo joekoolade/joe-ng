@@ -24,10 +24,14 @@ public class ThreadGroup implements Thread.UncaughtExceptionHandler
     static final ThreadGroup SYSTEM = new ThreadGroup();
 
     private String name;
+    // Stock's parent link, a REAL field: InnocuousThread.<clinit> walks it through Unsafe to find the top group.
+    // Null for the one root group; a group made with a parent remembers it (scheduling is still flat).
+    private final ThreadGroup parent;
 
     ThreadGroup()
     {
         this.name = "main";
+        this.parent = null;
     }
 
     /**
@@ -39,12 +43,14 @@ public class ThreadGroup implements Thread.UncaughtExceptionHandler
     public ThreadGroup(String name)
     {
         this.name = name;
+        this.parent = Thread.currentThread().getThreadGroup();   // stock: the creating thread's group
     }
 
     /** Stock's parent-and-name form (ForkJoin's innocuous workers, {@code InnocuousThread}); flattened the same way. */
     public ThreadGroup(ThreadGroup parent, String name)
     {
         this.name = name;
+        this.parent = parent;
     }
 
     /**
@@ -83,7 +89,7 @@ public class ThreadGroup implements Thread.UncaughtExceptionHandler
 
     public final ThreadGroup getParent()
     {
-        return null;                                    // flat: the one group has no parent
+        return parent;                                  // null for the root group
     }
 
     /** Number of live threads (every thread is in this one group). */

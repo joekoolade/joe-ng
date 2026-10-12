@@ -291,13 +291,30 @@ public final class MetalJavaLangAccess implements JavaLangAccess
     {
         return new String(bytes, java.nio.charset.StandardCharsets.ISO_8859_1);
     }
+    /**
+     * Stock {@code String.newStringOrThrow}: decode with malformed AND unmappable input REPORTED, so bad bytes throw
+     * {@code CharacterCodingException} instead of becoming U+FFFD. Built on the public coder API, which runs stock
+     * now that the charsets do; it threw {@code unsupported} while they were identity tokens. Stock
+     * {@code ZipCoder} decodes entry names through it.
+     */
     @Override public String uncheckedNewStringOrThrow(byte[] bytes, Charset cs) throws CharacterCodingException
     {
-        throw unsupported("uncheckedNewStringOrThrow");
+        return cs.newDecoder()
+                .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                .decode(java.nio.ByteBuffer.wrap(bytes))
+                .toString();
     }
+    /** Stock {@code String.getBytesOrThrow}: encode with malformed and unmappable input REPORTED (see above). */
     @Override public byte[] uncheckedGetBytesOrThrow(String s, Charset cs) throws CharacterCodingException
     {
-        throw unsupported("uncheckedGetBytesOrThrow");
+        java.nio.ByteBuffer bb = cs.newEncoder()
+                .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                .encode(java.nio.CharBuffer.wrap(s));
+        byte[] out = new byte[bb.remaining()];
+        bb.get(out);
+        return out;
     }
     @Override public char uncheckedGetUTF16Char(byte[] bytes, int index)
     {
@@ -311,9 +328,10 @@ public final class MetalJavaLangAccess implements JavaLangAccess
         bytes[index << 1] = (byte) ch;
         bytes[(index << 1) + 1] = (byte) (ch >> 8);
     }
+    /** Stock {@code String.getBytesUTF8OrThrow}: an unpaired surrogate throws rather than becoming {@code '?'}. */
     @Override public byte[] getBytesUTF8OrThrow(String s) throws CharacterCodingException
     {
-        throw unsupported("getBytesUTF8OrThrow");
+        return uncheckedGetBytesOrThrow(s, java.nio.charset.StandardCharsets.UTF_8);
     }
     /** Each LATIN1 byte widened to a char -- stock's {@code StringLatin1.inflate}. Was an empty body,
      *  which left {@code dst} untouched while the caller went on as if it had been filled. */

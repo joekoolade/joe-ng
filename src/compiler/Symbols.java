@@ -123,6 +123,8 @@ public interface Symbols
     // declaration: the ids are one namespace but NOT one contiguous block, so appending after the last line
     // picks a used number (NEW_NASE took VIRTUAL_RESOLVE's 48 exactly that way).
     int ENSURE_INIT = 61;       // vm/VM.ensureInitByName(J)V — initialize the class named by an absolute Utf8
+    // The bounds check's own AIOOBE, carrying stock's message: x0 = the index, x1 = the length.
+    int NEW_AIOOBE_IDX = 62;    // vm/VM.newAioobeIndex(JJ)J — "Index i out of bounds for length n"
 
     /**
      * The largest value a code address's top byte (bits 31..24) can take, for the dispatch-target guard.
@@ -478,10 +480,12 @@ public interface Symbols
     int concatRecipeOff(int idx);
 
     /**
-     * Wrap the {@code byte[]} in x0 as a {@code java/lang/String} object, leaving it in x0 (the metal JIT
-     * knows String's TIB/layout; the writer never reaches this — image code has no invokedynamic).
+     * The concat's {@code SC_END} helper has left the finished {@code java/lang/String} in x0 (it chooses the coder,
+     * so nothing is emitted on metal). Kept as a hook because it is where a compiler that cannot lower a concat
+     * refuses: the writer never reaches this -- image code has no invokedynamic -- and the metal writer marks the
+     * compile failed.
      */
-    void newStringFromBytes(CodeBuffer cb);
+    void concatResult(CodeBuffer cb);
 
     // ----- invokedynamic (lambda, M-B slice 1c) -----
 

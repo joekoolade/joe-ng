@@ -20,7 +20,7 @@ public class AtomicLongFieldUpdater<T>
 
     protected AtomicLongFieldUpdater(String fieldName)
     {
-        this.fname = fieldName.getBytes();
+        this.fname = jdk.internal.misc.MetalNames.utf8(fieldName);
     }
 
     public static <U> AtomicLongFieldUpdater<U> newUpdater(Class tclass, String fieldName)
