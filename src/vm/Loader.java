@@ -2322,16 +2322,19 @@ public final class Loader
                 // the lazy fill chose, not of the problem.
                 || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Byte"))
                 || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Short"))
-                // M3 sockets: these <clinit>s call natives (initIDs/poll consts/SharedSecrets/iovMax). Skipping
-                // is sound for the blocking connect/read/write/close path -- none of the skipped statics are
-                // read there (IPv4-only, no poll consts, no IOV_MAX).
+                // M3 sockets: these <clinit>s call natives (initIDs/poll consts/SharedSecrets). Skipping is
+                // sound for the blocking connect/read/write/close path -- none of the skipped statics are read
+                // there (IPv4-only, no poll consts).
+                // sun/nio/ch/IOUtil is NO LONGER SKIPPED: its statics ARE read on that path -- sun/nio/ch/Util
+                // sizes the per-thread temporary direct-buffer cache from IOUtil.IOV_MAX, so skipped it was 0
+                // and every socket write allocated a fresh direct buffer. Its loadLibrary calls, initIDs,
+                // iovMax and writevMax are all provided in nativeBufAt.
                 // NOTE: java/io/FileDescriptor is NOT skipped -- its <clinit> registers the
                 // JavaIOFileDescriptorAccess that NioSocketImpl.<clinit> reads via SharedSecrets; skipping it
                 // left the access null, so getJavaIOFileDescriptorAccess() took the ensureClassInitialized ->
                 // MethodHandles.lookup branch (denied) and trapped. Its 3 natives (initIDs/getHandle/getAppend)
                 // are stubbed in nativeBuf, and runClinits() runs it before NioSocketImpl's (dependency order).
                 || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("sun/nio/ch/Net"))
-                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("sun/nio/ch/IOUtil"))
                 || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("sun/nio/ch/NativeThread"))
                 // Inet4/6Address.<clinit> is just `init()` -- a native that caches JNI field IDs. We never
                 // instantiate them (the InetAddress overlay returns a plain InetAddress), so their <clinit>s
@@ -12388,6 +12391,17 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fdVal")))             { return VM.fdValAddr; }
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("setfdVal")))          { return VM.setFdValAddr; }
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("initIDs")))           { return VM.sockNoopAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("iovMax")))            { return VM.iovMaxAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("writevMax")))         { return VM.writevMaxAddr; }
+        }
+        // BootLoader.loadLibrary(String) is not a native, but its class stays DENIED (jdk/internal/loader), so it is
+        // PROVIDED here like one. What it does on a stock JVM is dlopen a library so that library's JNI natives can
+        // bind; on this VM every native is bound by THIS table, so there is no library and nothing to load --
+        // empty is the correct semantics, decided the same way as initIDs. Its callers are the <clinit>s of
+        // IOUtil, Net, NetworkInterface, InetAddress, ZipUtils and DefaultProxySelector.
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/loader/BootLoader")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("loadLibrary")))       { return VM.sockNoopAddr; }
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("sun/nio/ch/NativeThread")))
         {

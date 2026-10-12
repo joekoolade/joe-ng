@@ -1528,6 +1528,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.shutdownBeforeHalt()V", "vm/VM.shutdownBeforeHaltAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.shutdownHalt0(J)V",  "vm/VM.shutdownHalt0Addr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockZero()J",        "vm/VM.sockZeroAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.iovMax()J",          "vm/VM.iovMaxAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.writevMax()J",       "vm/VM.writevMaxAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classNameOf(J)J",    "vm/VM.classNameAddr");  // M4: Class.getName0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.forName(J)J",        "vm/VM.forNameAddr");    // reflection M1: Class.forName0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.assignable(JJ)J",    "vm/VM.assignableAddr"); // Class.isAssignableFrom

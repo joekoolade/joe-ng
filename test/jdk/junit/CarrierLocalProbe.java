@@ -40,10 +40,9 @@ public class CarrierLocalProbe
                 + b1.limit() + " pos=" + b1.position());
         Util.releaseTemporaryDirectBuffer(b1);
         ByteBuffer b2 = Util.getTemporaryDirectBuffer(50);
-        // Not b1 == b2: stock reuses the released buffer, but the cache holds IOUtil.IOV_MAX buffers and this VM
-        // skips IOUtil.<clinit> (it needs jdk/internal/loader's loadLibrary), so IOV_MAX is 0 and every temporary
-        // buffer is fresh. Measured, recorded in STATUS.md; correct, only slower.
-        System.out.println("temp2 direct=" + b2.isDirect() + " limit=" + b2.limit());
+        // The cache holds IOUtil.IOV_MAX buffers, so this is also the check that IOUtil.<clinit> ran: with it
+        // skipped, IOV_MAX was 0 and every temporary buffer was fresh (false here, true on the host).
+        System.out.println("temp2 direct=" + b2.isDirect() + " limit=" + b2.limit() + " sameAsCached=" + (b1 == b2));
         Util.releaseTemporaryDirectBuffer(b2);
 
         nativeView();
