@@ -2399,6 +2399,18 @@ public final class Baseline
         while (i < len)
         {
             int c = classBytes[p + i] & 0xFF;
+            // The recipe is a class-file Utf8, i.e. MODIFIED UTF-8: a literal outside ASCII is two or three bytes
+            // for ONE char. Appending those bytes one by one turned "café " into "cafÃ© ". Decode a unit first.
+            if ((c & 0xE0) == 0xC0 && i + 1 < len)
+            {
+                c = ((c & 0x1F) << 6) | (classBytes[p + i + 1] & 0x3F);
+                i = i + 1;
+            }
+            else if ((c & 0xF0) == 0xE0 && i + 2 < len)
+            {
+                c = ((c & 0x0F) << 12) | ((classBytes[p + i + 1] & 0x3F) << 6) | (classBytes[p + i + 2] & 0x3F);
+                i = i + 2;
+            }
             if (c == 0x01)                                       //  -> the next dynamic arg
             {
                 appendArg(cb, sbIdx, argBase + argIdx, cpIndex, argIdx);
@@ -2418,7 +2430,7 @@ public final class Baseline
         sp = argBase;                                            // drop the builder + the nargs args (keep the rest)
         spillLive(cb);                                           // the operand stack is x9.. (caller-saved): preserve any
         symbols.callHelper(cb, Symbols.SC_END);                  // live operand BELOW the args (e.g. a receiver pushed
-        symbols.newStringFromBytes(cb);                          // before `a + b`) across these two BLs. x0 = mini String.
+        symbols.concatResult(cb);                                // before `a + b`) across the BL. x0 = the String.
         reloadLive(cb);
         cb.emit(A64Enc.movReg(pushReg(), 0));                    // push the result String (at slot argBase)
     }

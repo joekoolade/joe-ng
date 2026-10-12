@@ -5114,7 +5114,7 @@ public final class Loader
             k += 1;
         }
         // Instances the VM creates WITHOUT a bytecode `new`, so RTA can't see the site: string literals + concat
-        // materialize a String (intern / newStringFromBytes); the JIT's null/bounds/div/cast checks throw these
+        // materialize a String (intern / the concat's scEnd); the JIT's null/bounds/div/cast checks throw these
         // exceptions via VM.newHelper. Flag them instantiated whenever loaded so their virtual methods resolve.
         grew = flagInstByName(Magic.bytes("java/lang/String")) || grew;
         grew = flagInstByName(Magic.bytes("java/lang/NullPointerException")) || grew;
@@ -5998,6 +5998,14 @@ public final class Loader
         {
             return false;
         }
+        // NARROWED OUT too: sun/util/PreHashedMap, the base of the generated sun/nio/cs/StandardCharsets alias and
+        // class maps. Pure collection code, no natives; while denied, Charset.forName("UTF-16BE") trapped in
+        // StandardCharsets.canonicalize at aliasMap().get. (Keep in sync with writer.ReachScan.isDenied.)
+        if (utf8IsAtBase(base, off, Magic.bytes("sun/util/PreHashedMap"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/util/PreHashedMap$")))
+        {
+            return false;
+        }
         // Narrow ALLOW for the VarHandle-as-atomic-field-accessor shim (overlays, not the real invoke runtime):
         // java.net.Socket uses VarHandle for its `state`/`in`/`out` fields. Allowed BEFORE the java/lang/invoke
         // prefix deny below. Everything else in java/lang/invoke stays denied.
@@ -6300,23 +6308,17 @@ public final class Loader
                 // is trap-wired at PATCH TIME, so no link stub runs and the overlay is never consulted.
                 // The stock class cannot simply be un-denied -- it builds its tables with multianewarray,
                 // which this JIT records metadata for but has no lowering for.
-                // The charset ENCODER/DECODER fallback: stock String's byte[]-ctor/getBytes take the pure-Java
-                // UTF-8 fast path (identity vs the overlay sun/nio/cs singletons); the decode/encodeWithEncoder
-                // branches that would pull CharsetDecoder/nio buffers are statically present but never taken.
-                // (java/nio/charset/Charset itself is NOT denied -- the overlay must load.)
-                || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/CharsetDecoder"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/CharsetEncoder"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/Coder"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/Coding"))
+                // The charset coders (CharsetDecoder/CharsetEncoder/CoderResult/CodingErrorAction) and
+                // sun/nio/cs/Array* are NOT denied any more: the charsets run STOCK with real coders, so
+                // InputStreamReader/OutputStreamWriter decode and encode. (Keep in sync with ReachScan.DENY.)
                 // IllegalCharsetNameException / UnsupportedCharsetException are NOT denied: they are plain
-                // IllegalArgumentException subclasses with no dependencies, the Charset overlay throws the
-                // latter as stock does, and stock code CATCHES both (PrintStream.toCharset). While they were
+                // IllegalArgumentException subclasses with no dependencies, stock Charset throws the latter,
+                // and stock code CATCHES both (PrintStream.toCharset). While they were
                 // denied, such a catch clause could not name its class -- see the CATCH_BY_NAME note in
                 // emitMethod for what an unresolvable catch class used to do.
-                // java/nio/ByteBuffer is LOADABLE (overlay -> socket temp buffers). java/nio/CharBuffer is loadable
-                // too now, and STOCK: java.util.Scanner buffers its input in a heap CharBuffer (CharBuffer.allocate)
+                // java/nio/ByteBuffer runs STOCK (heap and direct). java/nio/CharBuffer is loadable and STOCK too: java.util.Scanner buffers its input in a heap CharBuffer (CharBuffer.allocate)
                 // and reads through Readable.read(CharBuffer), so denying it trapped Scanner's first token.
-                || utf8HasPrefix(base, off, Magic.bytes("sun/nio/cs/Array"));
+                ;
     }
 
     /** True if some registered blob's own name equals the class name at {@code off} in {@code base}. */
@@ -9421,7 +9423,7 @@ public final class Loader
                 }
                 else if (gcpTag[c] == 8 || gcpTag[c] == 18)   // CONSTANT_String / CONSTANT_InvokeDynamic:
                 {
-                    pdNeedsString[i] = true;            // materializes a String via newStringFromBytes (baked TIB)
+                    pdNeedsString[i] = true;            // materializes a String via the concat's scEnd (baked TIB)
                     if (gcpTag[c] == 18)
                     {
                         addIndyIfaceDep(i, c);          // ... and names its functional interface in a descriptor
@@ -9637,7 +9639,7 @@ public final class Loader
     private static boolean ready(int i)
     {
         // A blob that materializes a String (string literal / concat) bakes String's TIB+size at compile time
-        // (newStringFromBytes) but carries no CONSTANT_Class dep on it — so hold it until java/lang/String's
+        // (the concat's scEnd) but carries no CONSTANT_Class dep on it — so hold it until java/lang/String's
         // Type is registered, else it compiles against TIB=0 and yields a malformed String.
         if (pdNeedsString[i] && stringPdIndex >= 0 && stringPdIndex != i && pdDone[stringPdIndex] == 0)
         {
@@ -21258,7 +21260,7 @@ public final class Loader
         Uart.putc(0x0A);
     }
 
-    /** TIB of the loaded mini {@code java/lang/String} (for the concat's {@code newStringFromBytes}), or 0. */
+    /** TIB of the loaded mini {@code java/lang/String} (for the concat's {@code VMConcat.scEnd}), or 0. */
     static long stringTib()
     {
         int i = stringClassIndex();

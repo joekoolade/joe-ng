@@ -33,7 +33,7 @@ public final class Field extends AccessibleObject
     {
         this.clazz = clazz;
         this.name = name;
-        this.nameBytes = name.getBytes();
+        this.nameBytes = jdk.internal.misc.MetalNames.utf8(name);
         this.modifiers = modifiers;
         this.typeChar = typeChar;
     }

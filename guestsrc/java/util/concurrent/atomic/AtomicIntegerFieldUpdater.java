@@ -26,7 +26,7 @@ public class AtomicIntegerFieldUpdater<T>
 
     protected AtomicIntegerFieldUpdater(String fieldName)
     {
-        this.fname = fieldName.getBytes();
+        this.fname = jdk.internal.misc.MetalNames.utf8(fieldName);
     }
 
     public static <U> AtomicIntegerFieldUpdater<U> newUpdater(Class tclass, String fieldName)

@@ -112,7 +112,7 @@ public class ClassLoader
      */
     public java.util.Enumeration<java.net.URL> getResources(String name) throws java.io.IOException
     {
-        if (name != null && resourceExists0(name.getBytes()) != 0L)
+        if (name != null && resourceExists0(jdk.internal.misc.MetalNames.utf8(name)) != 0L)
         {
             // No concatenation: in a java.base overlay that lowers to invokedynamic and drags the
             // string-concat machinery into a closure that must stay cold.
@@ -128,7 +128,7 @@ public class ClassLoader
      */
     public java.net.URL getResource(String name)
     {
-        if (name != null && resourceExists0(name.getBytes()) != 0L)
+        if (name != null && resourceExists0(jdk.internal.misc.MetalNames.utf8(name)) != 0L)
         {
             System.err.print("joe-ng: classpath resource present but not served (no URL support): ");
             System.err.println(name);
@@ -152,7 +152,7 @@ public class ClassLoader
         {
             return null;
         }
-        byte[] b = resourceBytes0(name.getBytes());
+        byte[] b = resourceBytes0(jdk.internal.misc.MetalNames.utf8(name));
         return b == null ? null : new java.io.ByteArrayInputStream(b);
     }
 

@@ -128,7 +128,7 @@ public final class Unsafe
 
     public long objectFieldOffset(Class<?> c, String name)
     {
-        long off = fieldOffsetOfClass0(c, name.getBytes());
+        long off = fieldOffsetOfClass0(c, MetalNames.utf8(name));
         if (off < 0L)
         {
             // Stock throws here (objectFieldOffset1 -> InternalError). Answering -1 was a SILENT wrong answer: the
@@ -755,7 +755,7 @@ public final class Unsafe
      */
     public long staticFieldOffset(java.lang.reflect.Field f)
     {
-        return staticFieldAddr0(f.getDeclaringClass(), f.getName().getBytes());
+        return staticFieldAddr0(f.getDeclaringClass(), MetalNames.utf8(f.getName()));
     }
 
     public Object staticFieldBase(java.lang.reflect.Field f)

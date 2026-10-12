@@ -478,10 +478,12 @@ public interface Symbols
     int concatRecipeOff(int idx);
 
     /**
-     * Wrap the {@code byte[]} in x0 as a {@code java/lang/String} object, leaving it in x0 (the metal JIT
-     * knows String's TIB/layout; the writer never reaches this — image code has no invokedynamic).
+     * The concat's {@code SC_END} helper has left the finished {@code java/lang/String} in x0 (it chooses the coder,
+     * so nothing is emitted on metal). Kept as a hook because it is where a compiler that cannot lower a concat
+     * refuses: the writer never reaches this -- image code has no invokedynamic -- and the metal writer marks the
+     * compile failed.
      */
-    void newStringFromBytes(CodeBuffer cb);
+    void concatResult(CodeBuffer cb);
 
     // ----- invokedynamic (lambda, M-B slice 1c) -----
 

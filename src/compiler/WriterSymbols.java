@@ -502,7 +502,7 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
     // invokedynamic never occurs in the image's own (JDK-free) classes, so the writer never lowers it.
     public boolean isConcatIndy(int idx) { return false; }
     public int concatRecipeOff(int idx) { return -1; }
-    public void newStringFromBytes(CodeBuffer cb) { throw new IllegalStateException("no invokedynamic in image code"); }
+    public void concatResult(CodeBuffer cb) { throw new IllegalStateException("no invokedynamic in image code"); }
     public boolean isLambdaIndy(int idx) { return false; }
     public int lambdaSize(int idx) { return 0; }
     public int lambdaSamArgc(int idx) { return 0; }

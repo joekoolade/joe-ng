@@ -4,6 +4,32 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **STOCK CHARSETS AND CODERS RUN -- `Reader`/`Writer` BRIDGES DECODE AND ENCODE FOR REAL; AND STRING
+  CONCATENATION IS CORRECT OUTSIDE LATIN-1 (2026-10-11, QEMU-GATED -- NOT YET PI-VALIDATED).** Second increment of
+  the charset arc. The `Charset`/`StandardCharsets`/`UTF_8`/`ISO_8859_1`/`US_ASCII` overlays (identity tokens with
+  no coder behind them) are DELETED and `CharsetDecoder`/`CharsetEncoder`/`Coder*`/`Coding*`/`sun/nio/cs/Array*`
+  are UN-DENIED. Every wall was named by the previous run:
+
+  | step | failure | fix |
+  |---|---|---|
+  | 1 | `NPE` in `Charset.defaultCharset` under `LazyConstantImpl.<clinit>`: stock `Charset.<clinit>` builds `LazyConstant`s, whose class asks `Unsafe.objectFieldOffset`, and the overlay encoded the field NAME through `getBytes()` -- the default charset that was still initializing | new `jdk/internal/misc/MetalNames.utf8`: a name as MODIFIED UTF-8, charset-free. Every overlay that hands a name to a native uses it (`Unsafe`, the three `Atomic*FieldUpdater`s, `Class`, `ClassLoader`, `reflect.Field`/`Method`); stock `Unsafe` passes the String to a native and has no such dependency |
+  | 2 | `Charset.forName("UTF-16BE")`: `DENYLIST TRAP`, `TRAPWIRE index=-1` in generated `StandardCharsets.canonicalize` at `aliasMap().get` | `sun/util/PreHashedMap` (the alias/class maps' base, pure Java) narrowed out of the `sun/util/` denial in both lists |
+  | 3 | `new String(bytes, UTF_16BE)` printed as `\0 H \0 i ␠ ¬` -- read first as a wrong decode; `CharsetIdentityProbe` (all six charsets host-identical) and `Utf16PrintProbe` (`getBytes`, a stock `PrintStream`, `System.out.charset` all host-identical) cleared the charset path | **THE JIT's STRING CONCAT WAS LATIN-1 ONLY, since it was written**: `VMConcat` was a BYTE builder -- a UTF-16 String argument's storage was copied verbatim, a `char` lost its high byte, a non-ASCII recipe literal was appended as its modified-UTF-8 bytes (`"café "` -> `cafÃ© `), and the result was wrapped with `coder` never set. Now a builder of UTF-16 units: `scStr` honours the argument's coder, `lowerConcat` decodes the recipe, and `scEnd` returns the finished String, LATIN1 or UTF16 by its largest unit (stock `StringConcatHelper`'s choice). The wrap hook is `concatResult` -- empty on metal, still a refusal in both writers |
+
+  - **Host-identical: `ReaderProbe`** (BufferedReader over InputStreamReader / FileReader on the RAMFS, OutputStreamWriter
+    UTF-8, UTF-16BE/LE both ways, PrintWriter), **`CharsetIdentityProbe`** (new: identity, `forName`, decoder class,
+    String and coder round trips for six charsets), **`Utf16PrintProbe`** (new), **`ConcatUtf16Probe`** (new,
+    adversarial: 16 run-time concat sites -- UTF-16 arg, wide/narrow char vars, non-ASCII and UTF-16 literals, both
+    mix orders, a surrogate pair, null, boxed, a 40-unit grown chain, equals/hashCode). Regression probes
+    host-identical: `ScannerProbe`, `NioBufferProbe`, `PrintWriterProbe`, `FormatProbe`, `JlaProbe`,
+    `RecordUtf16Probe`.
+  - **Suite: 40 programs, markers zero, `HML`/`HML 79ms`, `smp 4 of 4`, `lisp stable=1`, churn gc 49 (unchanged),
+    ConcatDemo's MIN/MAX arms as wanted.** Host: `compiler 40`, `overlay-check 0 new` (known dropped supertypes
+    53 -> 45).
+  - **STATED LIMITS:** the `StreamEncoder` overlay stays (UNBUFFERED, encodes through `String.getBytes(cs)`); stock
+    `StreamEncoder` over a real `CharsetEncoder` is the next step. `ZipCoder` stays overlaid (UTF-8 only).
+    Extended charsets (`ExtendedProviderHolder`, ServiceLoader providers) are not exercised.
+
 - **AN IMAGE CLASS IS INITIALIZED ONCE PER VM, NOT ONCE PER LOADER WORLD (2026-10-11, QEMU-GATED -- NOT YET
   PI-VALIDATED).** The other half of the OpenJDK rule the previous card cited: a class whose statics block is the
   IMAGE's (adopted by the loader, so every world shares one home) is the analogue of a boot-loader class, and

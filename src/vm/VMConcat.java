@@ -26,22 +26,33 @@ import static vm.VM.*;   // strBytes (the string-ref -> byte[] accessor stays in
  */
 final class VMConcat
 {
-    /** Begin a concat: a fresh builder over a 64-byte byte[]. */
+    /**
+     * Begin a concat: a fresh builder of UTF-16 CODE UNITS -- {@code +16} a byte[] holding them two bytes each, low
+     * byte first; {@code +24} the unit count; {@code +32} the largest unit appended.
+     *
+     * <p>UNITS, NOT BYTES, AND THAT IS THE FIX. The builder used to be a byte buffer: a String argument's
+     * {@code value} array was copied verbatim whatever its coder, a {@code char} was truncated to its low byte, and
+     * the result was always wrapped LATIN1. So {@code "back=" + s} for a UTF-16 {@code s} holding {@code "Hi\u20ac"}
+     * printed its raw storage, {@code 00 48 00 69 AC 20} read as six Latin-1 characters -- a silent wrong answer in a
+     * core language feature, found by ReaderProbe once stock charsets made a UTF-16 decode reachable. The largest
+     * unit decides the result's coder in {@link #scEnd}, the choice stock {@code StringConcatHelper} makes.
+     */
     static long scStart()
     {
         long buf = Heap.allocArray(64, 1);
-        long sb = Heap.alloc(32);
+        long sb = Heap.alloc(40);
         Magic.store64(sb + 16L, buf);
         Magic.store64(sb + 24L, 0L);
+        Magic.store64(sb + 32L, 0L);
         return sb;
     }
 
-    /** Grow a builder's backing byte[] to twice {@code cap}, copying {@code count} bytes; returns the new buf. */
+    /** Grow a builder's backing byte[] to twice {@code cap} bytes, copying {@code count} units; returns the new buf. */
     static long scGrow(long sb, long buf, long count, long cap)
     {
         long nbuf = Heap.allocArray((int) (cap * 2L), 1);
         long i = 0L;
-        while (i < count)
+        while (i < count * 2L)
         {
             Magic.store8(nbuf + 24L + i, (byte) Magic.load8(buf + 24L + i));
             i = i + 1L;
@@ -156,18 +167,24 @@ final class VMConcat
 
     private static boolean noFmtSaid;
 
-    /** Append one byte {@code c} to the builder. */
+    /** Append one UTF-16 code unit {@code c} (a {@code char} argument, or a recipe/literal unit) to the builder. */
     static void scChar(long sb, int c)
     {
+        int unit = c & 0xFFFF;
         long buf = Magic.load64(sb + 16L);
         long count = Magic.load64(sb + 24L);
         long cap = Magic.load64(buf + 16L);                // byte[] length (ARRAY_LENGTH_OFFSET)
-        if (count >= cap)
+        if (count * 2L + 2L > cap)
         {
             buf = scGrow(sb, buf, count, cap);
         }
-        Magic.store8(buf + 24L + count, (byte) c);         // ARRAY_BASE_OFFSET = 24
+        Magic.store8(buf + 24L + count * 2L, (byte) unit);         // ARRAY_BASE_OFFSET = 24; LO byte first
+        Magic.store8(buf + 24L + count * 2L + 1L, (byte) (unit >> 8));
         Magic.store64(sb + 24L, count + 1L);
+        if (unit > Magic.load64(sb + 32L))
+        {
+            Magic.store64(sb + 32L, unit);
+        }
     }
 
     /**
@@ -207,23 +224,34 @@ final class VMConcat
         }
     }
 
-    /** Finish a concat: a fresh byte[] trimmed to the builder's length (typed with VM.byteArrayTibCache). */
+    /**
+     * Finish a concat into a {@code java/lang/String}: LATIN1 when every unit fits a byte, UTF16 (low byte first, as
+     * {@code StringUTF16.LO_BYTE_SHIFT} is seeded for AArch64) otherwise -- with the {@code coder} field SET, which the
+     * old byte[]-and-wrap epilogue never did. The value array is typed with {@code VM.byteArrayTibCache}.
+     */
     static long scEnd(long sb)
     {
         long buf = Magic.load64(sb + 16L);
         long count = Magic.load64(sb + 24L);
-        long out = Heap.allocArray((int) count, 1);
+        int coder = Magic.load64(sb + 32L) < 256L ? 0 : 1;
+        long nbytes = coder == 0 ? count : count * 2L;
+        long out = Heap.allocArray((int) nbytes, 1);
         if (byteArrayTibCache != 0L)
         {
             Magic.store64(out, byteArrayTibCache);
         }
         long i = 0L;
-        while (i < count)
+        while (i < nbytes)
         {
-            Magic.store8(out + 24L + i, (byte) Magic.load8(buf + 24L + i));
+            long from = coder == 0 ? i * 2L : i;           // LATIN1 keeps each unit's low byte
+            Magic.store8(out + 24L + i, (byte) Magic.load8(buf + 24L + from));
             i = i + 1L;
         }
-        return out;
+        long str = Heap.alloc(Loader.stringSize());
+        Magic.store64(str, Loader.stringTib());            // TIB_OFFSET = 0
+        Magic.store64(str + 16L, out);                     // value
+        Magic.store64(str + 24L, coder);                   // coder: 0 = LATIN1, 1 = UTF16
+        return str;
     }
 
     /**
@@ -287,11 +315,21 @@ final class VMConcat
             return;
         }
         long len = Magic.load64(arr + 16L);
+        int coder = arr == str ? 0 : (int) Magic.load64(str + 24L);   // a raw byte[] carrier has no coder: LATIN1
         long i = 0L;
-        while (i < len)
+        if (coder == 0)
         {
-            scChar(sb, Magic.load8(arr + 24L + i));
-            i = i + 1L;
+            while (i < len)
+            {
+                scChar(sb, Magic.load8(arr + 24L + i));
+                i = i + 1L;
+            }
+            return;
+        }
+        while (i + 1L < len)
+        {
+            scChar(sb, Magic.load8(arr + 24L + i) | (Magic.load8(arr + 24L + i + 1L) << 8));   // LO byte first
+            i = i + 2L;
         }
     }
 
