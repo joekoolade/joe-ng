@@ -15,6 +15,8 @@ import java.util.Collections;
 import java.util.List;
 import jdk.internal.misc.CarrierThreadLocal;
 import jdk.internal.misc.TerminatingThreadLocal;
+import jdk.internal.misc.Unsafe;
+import sun.nio.ch.DirectBuffer;
 import sun.nio.ch.Util;
 
 /**
@@ -43,6 +45,8 @@ public class CarrierLocalProbe
         // buffer is fresh. Measured, recorded in STATUS.md; correct, only slower.
         System.out.println("temp2 direct=" + b2.isDirect() + " limit=" + b2.limit());
         Util.releaseTemporaryDirectBuffer(b2);
+
+        nativeView();
 
         CarrierThreadLocal<String> ctl = new CarrierThreadLocal<>();
         System.out.println("carrier initial=" + ctl.get());
@@ -117,5 +121,41 @@ public class CarrierLocalProbe
         }
         System.out.println("many locals=" + many.size() + " sum=" + sum + " afterSet=" + sum2);
         System.out.println("CarrierLocalProbe done");
+    }
+
+    /**
+     * What the socket natives SEE: stock {@code NioSocketImpl.tryWrite} puts the caller's bytes into a temporary
+     * direct buffer and hands {@code SocketDispatcher.write0} its raw ADDRESS; {@code tryRead} lets {@code read0}
+     * fill the address and then copies out with {@code get}. So each half is checked through the address with
+     * {@code Unsafe} -- a {@code put} the native cannot see sends garbage, and a {@code get} that ignores what the
+     * native stored returns nothing. (The Pi's NetDemo sent its GET and read 0 bytes.)
+     */
+    static void nativeView()
+    {
+        Unsafe u = Unsafe.getUnsafe();
+        byte[] req = "GET / HTTP/1.0\r\n".getBytes();
+        ByteBuffer w = Util.getTemporaryDirectBuffer(req.length);
+        w.put(req, 0, req.length);
+        long wa = ((DirectBuffer) w).address();
+        StringBuilder seen = new StringBuilder();
+        for (int i = 0; i < req.length; i += 1)
+        {
+            seen.append((char) u.getByte(wa + i));
+        }
+        System.out.println("write half: native sees " + seen.toString().trim() + " match="
+                + seen.toString().equals(new String(req)) + " pos=" + w.position());
+        Util.releaseTemporaryDirectBuffer(w);
+
+        ByteBuffer r = Util.getTemporaryDirectBuffer(64);
+        long ra = ((DirectBuffer) r).address();
+        byte[] resp = "HTTP/1.1 200 OK".getBytes();
+        for (int i = 0; i < resp.length; i += 1)
+        {
+            u.putByte(ra + i, resp[i]);
+        }
+        byte[] into = new byte[64];
+        r.get(into, 3, resp.length);
+        System.out.println("read half: copied out " + new String(into, 3, resp.length) + " pos=" + r.position());
+        Util.releaseTemporaryDirectBuffer(r);
     }
 }
