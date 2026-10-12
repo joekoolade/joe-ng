@@ -4,6 +4,24 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **THE STACK NEVER ANSWERED ARP -- THE ROUTER DROPPED NetDemo's REPLY (2026-10-12, PI-VALIDATED).** With carrier
+  thread-locals fixed, the Pi connected and sent a byte-correct GET, then read 0 bytes after the 8 s timeout, twice.
+  Temporary counters in `net.Tcp`/`net.Ip` MEASURED the gap: the SYN|ACK did arrive (the connect timestamp is set
+  only on one), the GET went out 0x37F ms later, and during the 8 s read the driver delivered **3 frames, none
+  IPv4**. If the GET had been lost the server would still have retransmitted its SYN|ACK inside 8 s, so IPv4 for
+  us was being dropped upstream. `net.Ip` had no ARP responder: bring-up ARPs the gateway, but nothing ever
+  answered a who-has for our own IP, and a router re-verifying a stale neighbour entry with unanswered unicast
+  probes declares the host unreachable. (A capture from a Mac on the same WiFi showed only the Pi's broadcasts --
+  without monitor mode a station cannot see another station's unicast, so it could not show the TCP exchange.)
+  - **Fix:** `Ip.recvIp` hands an ethertype-0x0806 frame to `answerArp`, which replies to a request whose target IP
+    is ours, from our MAC to the requester's.
+  - **Pi:** the counter-carrying image printed `arpAskedForUs=1 arpAnswered=1` and `HTTP/1.1 200 OK ... http done
+    bytes=891` (the last good #341 figure). The committed code is that image minus the counters; the counter-free
+    build itself was not booted. Why it surfaced now is INFERRED, not measured: the stock socket path makes the GET
+    later than the old overlays did, long enough for the router's re-verification to fall inside the exchange.
+  - Also measured on this run: the carrier thread-local card below is now exercised on hardware -- the GET's bytes
+    went through `Util.getTemporaryDirectBuffer` and the 891 response bytes came back through it.
+
 - **CARRIER THREAD-LOCALS -- THE PI's NetDemo DIED ON ITS FIRST SOCKET WRITE (2026-10-12, QEMU-GATED -- NOT YET
   PI-VALIDATED).** The Pi run of main `bd27f5d` (#342) connected, then threw `InternalError: joe-ng:
   JavaLangAccess.getCarrierThreadLocal is not implemented on this VM` from `CarrierThreadLocal.get <-
