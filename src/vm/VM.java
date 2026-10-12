@@ -1363,6 +1363,12 @@ public final class VM
         return Loader.newAioobe();
     }
 
+    /** The JIT's bounds check: an AIOOBE carrying stock's {@code "Index i out of bounds for length n"}. */
+    static long newAioobeIndex(long index, long length)
+    {
+        return Loader.newAioobeIndex(index, length);
+    }
+
     /** Allocate a mini {@code java/lang/ArithmeticException} — the JIT calls this on an integer / or % by zero
      *  (AArch64 SDIV/UDIV don't trap, so the compiler emits an explicit divisor-zero check). */
     static long newArith()
@@ -1878,6 +1884,7 @@ public final class VM
         if (watchRecvAddr == 0L) { watchRecv(0L, 0L); }
         if (watchX21Addr == 0L) { watchX21(0L, 0L); }                     // ... and its argument-side twin
         if (newAioobeAddr == 0L) { long u = newAioobe(); }
+        if (newAioobeIndexAddr == 0L) { long u = newAioobeIndex(0L, 0L); }
         if (newAseAddr == 0L) { long u = newAse(); }                  // ArrayStoreException (aastore mismatch)
         if (arrayStoreOkAddr == 0L) { int u = arrayStoreOk(0L, 0L); } // aastore covariant check
         if (newCceAddr == 0L) { long u = newCce(); }                  // ClassCastException (failed checkcast)
@@ -3340,6 +3347,7 @@ public final class VM
     // Implicit-exception constructors the JIT calls on a failed null/bounds check (writer-stashed).
     static long newNpeAddr;            // VM.newNpe()J    — a java/lang/NullPointerException
     static long newAioobeAddr;         // VM.newAioobe()J — a java/lang/ArrayIndexOutOfBoundsException
+    static long newAioobeIndexAddr;    // VM.newAioobeIndex(JJ)J — ... with stock's index/length message
     static long newArithAddr;          // VM.newArith()J  — a java/lang/ArithmeticException (divide by zero)
     static long newAseAddr;            // VM.newAse()J    — a java/lang/ArrayStoreException (aastore mismatch)
     static long newNaseAddr;           // VM.newNase()J   — a java/lang/NegativeArraySizeException (newarray < 0)

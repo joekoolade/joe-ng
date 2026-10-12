@@ -1495,6 +1495,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.arraycopy(JIJII)V", "vm/VM.arraycopyAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.newNpe()J",         "vm/VM.newNpeAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.newAioobe()J",      "vm/VM.newAioobeAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.newAioobeIndex(JJ)J", "vm/VM.newAioobeIndexAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.newArith()J",       "vm/VM.newArithAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.newAse()J",          "vm/VM.newAseAddr");     // ArrayStoreException
         stashHelper(image, staticWord, wordOffset, "vm/VM.newNase()J",         "vm/VM.newNaseAddr");    // NegativeArraySizeException

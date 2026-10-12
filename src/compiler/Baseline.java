@@ -2622,6 +2622,21 @@ public final class Baseline
     /** Allocate the exception (via {@code newHelper}) and throw it as if {@code athrow} occurred at {@code pos}. */
     private void throwImplicit(CodeBuffer cb, int pos, int newHelper)
     {
+        throwImplicit(cb, pos, newHelper, -1, -1);
+    }
+
+    /**
+     * {@link #throwImplicit}, first moving {@code arg0Reg}/{@code arg1Reg} (when not -1) into x0/x1 as the helper's
+     * arguments -- at the top of the throw block, before anything there can clobber them (the helper call itself
+     * takes no operand-stack arguments, so with sp at 0 nothing is emitted ahead of its BL).
+     */
+    private void throwImplicit(CodeBuffer cb, int pos, int newHelper, int arg0Reg, int arg1Reg)
+    {
+        if (arg0Reg >= 0)
+        {
+            cb.emit(A64Enc.movReg(0, arg0Reg));
+            cb.emit(A64Enc.movReg(1, arg1Reg));
+        }
         int savedSp = sp;                                       // the throw block is off the fall-through path
         // The throw block is skipped at runtime (a never-taken branch guards it), so it must NOT perturb the
         // compiler's operand-stack model for the fall-through code that follows. sp is saved below; for deep
@@ -2777,7 +2792,7 @@ public final class Baseline
         cb.emit(A64Enc.ldrx(16, arrReg, ObjectModel.ARRAY_LENGTH_OFFSET));   // x16 = length (scratch, no call before use)
         cb.emit(A64Enc.cmpReg(indexReg, 16));
         int over = cb.emit(A64Enc.bcond(A64Enc.LO, 0));         // unsigned index < length -> ok (negative -> huge -> throws)
-        throwImplicit(cb, pos, Symbols.NEW_AIOOBE);
+        throwImplicit(cb, pos, Symbols.NEW_AIOOBE_IDX, indexReg, 16);   // stock's message names both
         cb.set(over, A64Enc.bcond(A64Enc.LO, cb.wordCount() - over));
     }
 

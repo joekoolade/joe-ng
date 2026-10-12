@@ -20944,6 +20944,83 @@ public final class Loader
         return newExc(Magic.bytes("java/lang/ArrayIndexOutOfBoundsException"));
     }
 
+    /**
+     * The JIT bounds check's exception: an AIOOBE whose {@code detailMessage} is stock's
+     * {@code "Index i out of bounds for length n"} ({@code Preconditions.outOfBoundsCheckIndex}). The implicit
+     * throw used to carry NO message, so {@code getMessage()} answered null where every stock JVM names the index
+     * and the length -- OobMessageProbe printed that arm's class only. Set directly at {@code Throwable}'s field,
+     * as {@link #newExc} allocates without running a constructor.
+     */
+    static long newAioobeIndex(long index, long length)
+    {
+        long exc = newAioobe();
+        int th = classIndexByName(Magic.bytes("java/lang/Throwable"));
+        if (exc == 0L || th < 0)
+        {
+            return exc;
+        }
+        long off = instanceFieldOffset(th, Magic.bytes("detailMessage"));
+        if (off < 0L)
+        {
+            return exc;
+        }
+        byte[] msg = new byte[64];
+        int n = putAsciiAt(msg, 0, Magic.bytes("Index "));
+        n = putDecAt(msg, n, (int) index);
+        n = putAsciiAt(msg, n, Magic.bytes(" out of bounds for length "));
+        n = putDecAt(msg, n, (int) length);
+        byte[] text = new byte[n];
+        int k = 0;
+        while (k < n)
+        {
+            text[k] = msg[k];
+            k += 1;
+        }
+        Magic.store64(exc + off, guestString(text));
+        return exc;
+    }
+
+    /** Copy {@code s} into {@code out} at {@code p}; returns the new position. */
+    private static int putAsciiAt(byte[] out, int p, byte[] s)
+    {
+        int i = 0;
+        while (i < s.length)
+        {
+            out[p] = s[i];
+            p += 1;
+            i += 1;
+        }
+        return p;
+    }
+
+    /** Write {@code v} in decimal into {@code out} at {@code p}; returns the new position. Long math: -MIN fits. */
+    private static int putDecAt(byte[] out, int p, int v)
+    {
+        long m = v;
+        if (m < 0L)
+        {
+            out[p] = 0x2D;
+            p += 1;
+            m = -m;
+        }
+        byte[] tmp = new byte[12];
+        int n = 0;
+        do
+        {
+            tmp[n] = (byte) (0x30 + (int) (m % 10L));
+            n += 1;
+            m = m / 10L;
+        }
+        while (m > 0L);
+        while (n > 0)
+        {
+            n -= 1;
+            out[p] = tmp[n];
+            p += 1;
+        }
+        return p;
+    }
+
     /** Allocate a mini {@code java/lang/ArithmeticException} — the JIT's divide-by-zero helper. */
     static long newArith()
     {

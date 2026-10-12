@@ -681,6 +681,10 @@ final class MetalSymbols implements Symbols
         {
             return VM.newAioobeAddr;
         }
+        if (helper == Symbols.NEW_AIOOBE_IDX)
+        {
+            return VM.newAioobeIndexAddr;
+        }
         if (helper == Symbols.CAPTURE_TRACE)
         {
             return VM.captureTraceAddr;

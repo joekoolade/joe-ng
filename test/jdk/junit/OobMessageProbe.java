@@ -35,18 +35,22 @@ public class OobMessageProbe
         System.out.println("format -> " + String.format("Index %s out of bounds for length %s", 5, 3));
         arm("Objects.checkIndex(5, 3)", () -> Objects.checkIndex(5, 3));
         arm("Objects.checkFromToIndex(2, 9, 4)", () -> Objects.checkFromToIndex(2, 9, 4));
-        try
+        // The JIT's IMPLICIT bounds check (iastore/laload/caload), whose exception carries stock's message.
+        arm("int[2][5] store", () ->
         {
             int[] a = new int[2];
             a[5] = 1;
-            System.out.println("int[2][5] -> no exception");
-        }
-        catch (ArrayIndexOutOfBoundsException e)
+        });
+        arm("long[3][-1] load", () ->
         {
-            // CLASS ONLY: the JIT's implicit bounds-check throw builds the exception WITHOUT stock's detail
-            // message ("Index 5 out of bounds for length 2") -- a recorded gap, not part of this probe's gate.
-            System.out.println("int[2][5] -> " + e.getClass().getName());
-        }
+            long[] a = new long[3];
+            sink = (int) a[-1];
+        });
+        arm("char[0][0] load", () ->
+        {
+            char[] a = new char[0];
+            sink = a[0];
+        });
         VarHandle ii = MethodHandles.byteArrayViewVarHandle(int[].class, ByteOrder.BIG_ENDIAN);
         arm("view get(byte[4], 1)", () -> sink = (int) ii.get(new byte[4], 1));
         arm("view set(byte[4], 1)", () -> ii.set(new byte[4], 1, 0));

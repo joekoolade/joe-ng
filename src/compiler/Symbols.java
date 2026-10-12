@@ -123,6 +123,8 @@ public interface Symbols
     // declaration: the ids are one namespace but NOT one contiguous block, so appending after the last line
     // picks a used number (NEW_NASE took VIRTUAL_RESOLVE's 48 exactly that way).
     int ENSURE_INIT = 61;       // vm/VM.ensureInitByName(J)V — initialize the class named by an absolute Utf8
+    // The bounds check's own AIOOBE, carrying stock's message: x0 = the index, x1 = the length.
+    int NEW_AIOOBE_IDX = 62;    // vm/VM.newAioobeIndex(JJ)J — "Index i out of bounds for length n"
 
     /**
      * The largest value a code address's top byte (bits 31..24) can take, for the dispatch-target guard.

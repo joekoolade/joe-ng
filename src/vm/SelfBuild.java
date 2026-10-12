@@ -2452,6 +2452,7 @@ final class SelfBuild
         if (bytesEqual(nm, Magic.bytes("arraycopyAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("arraycopy"), Magic.bytes("(JIJII)V")); }
         if (bytesEqual(nm, Magic.bytes("newNpeAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("newNpe"), Magic.bytes("()J")); }
         if (bytesEqual(nm, Magic.bytes("newAioobeAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("newAioobe"), Magic.bytes("()J")); }
+        if (bytesEqual(nm, Magic.bytes("newAioobeIndexAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("newAioobeIndex"), Magic.bytes("(JJ)J")); }
         if (bytesEqual(nm, Magic.bytes("newArithAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("newArith"), Magic.bytes("()J")); }
         if (bytesEqual(nm, Magic.bytes("newAseAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("newAse"), Magic.bytes("()J")); }
         if (bytesEqual(nm, Magic.bytes("arrayStoreOkAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("arrayStoreOk"), Magic.bytes("(JJ)I")); }

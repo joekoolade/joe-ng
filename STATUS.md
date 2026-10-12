@@ -4,6 +4,19 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **THE JIT's IMPLICIT BOUNDS CHECK THROWS WITH STOCK's MESSAGE -- `Index 5 out of bounds for length 2` (2026-10-11,
+  QEMU-GATED -- NOT YET PI-VALIDATED).** `getMessage()` on the AIOOBE a JIT'd `xaload`/`xastore` throws answered
+  NULL; every stock JVM names the index and the length (`Preconditions.outOfBoundsCheckIndex`). A new helper id
+  `NEW_AIOOBE_IDX` (62, `VM.newAioobeIndex(JJ)J`) takes x0 = index, x1 = length: `boundsCheck` moves them in at the
+  top of the throw block (the length is already in x16 from the compare; the in-bounds path is unchanged), and
+  `Loader.newAioobeIndex` builds the message from bytes and stores it at `Throwable.detailMessage` directly, since
+  `newExc` allocates without running a constructor. The two other `NEW_AIOOBE` sites have no index/length and keep
+  the message-less helper.
+  - **`OobMessageProbe` host-identical with the arm restored** (it printed the class only): `int[2][5]` store,
+    `long[3][-1]` load, `char[0][0]` load. `ByteViewProbe` host-identical.
+  - **Suite: 40 programs, markers zero, ExcDemo `array aioobe caught=1`, `HML`/`HML 76ms`, `smp 4 of 4`,
+    `lisp stable=1`, churn gc 49.** Host: `A64 109`, `compiler 40`, `overlay-check 0 new`.
+
 - **STOCK `sun.nio.cs.StreamEncoder` -- CONSOLE OUTPUT GOES THROUGH A REAL `CharsetEncoder` (2026-10-11, QEMU-GATED --
   NOT YET PI-VALIDATED).** The overlay existed because the charsets were identity tokens with no encoder; with the
   previous card that reason is gone, and it is deleted. Stock is BUFFERED (8 KiB) where the overlay was not -- the
