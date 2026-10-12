@@ -5,7 +5,7 @@
 # external seed joe-ng does not build (PLAN.md §0), not part of the VM.
 #
 # Usage: scripts/sdcard.sh          (build image + assemble sdcard/)
-# Then:  cp sdcard/* /Volumes/BOOT/  (macOS)  or  /media/$USER/bootfs/ (Linux)
+# It then copies the boot files to /Volumes/bootfs (macOS), verifies them and ejects the card.
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -34,16 +34,26 @@ ls -l "$OUT"
 echo
 echo "Copy these to the FAT32 boot partition of an SD card, insert into the Pi 4,"
 echo "connect a USB-TTL serial adapter (see scripts/flash.md), and power on."
-cp sdcard/* /Volumes/bootfs
-ls -tl /Volumes/bootfs | head -n 10
+
+# Copy ONLY what the Pi boots from. sdcard/ also collects saved images (kernel8-<tag>.img) from earlier runs;
+# a `cp sdcard/*` copied all of them, filled the 512 MB boot partition, and stopped before the verify below.
+CARD=/Volumes/bootfs
+BOOT_FILES="kernel8.img config.txt start4.elf fixup4.dat"
+for b in "$ROOT"/armstub/*.bin; do
+    BOOT_FILES="$BOOT_FILES $(basename "$b")"
+done
+for f in $BOOT_FILES; do
+    cp "$OUT/$f" "$CARD/$f"
+done
+ls -tl "$CARD" | head -n 10
 
 # VERIFY BEFORE EJECTING. A matching byte COUNT is not a matching FILE, and once the card is ejected the
 # reader drops it off the bus entirely -- so there is no second chance to check: a remount afterwards fails
 # with "Failed to find disk". A boot from a half-written card looks exactly like a boot from a good one that
 # regressed, and this project has already lost a boot to reading output that predated the flash.
 echo "== verifying card contents =="
-for f in kernel8.img config.txt; do
-    if cmp -s "sdcard/$f" "/Volumes/bootfs/$f"; then
+for f in $BOOT_FILES; do
+    if cmp -s "$OUT/$f" "$CARD/$f"; then
         echo "  OK   $f"
     else
         echo "  FAIL $f DIFFERS -- do NOT boot this card" >&2
@@ -51,4 +61,5 @@ for f in kernel8.img config.txt; do
     fi
 done
 
-diskutil eject /dev/disk4s1
+# Eject by VOLUME, not by a device number: the disk number is assigned at insertion and can name another disk.
+diskutil eject "$CARD"
