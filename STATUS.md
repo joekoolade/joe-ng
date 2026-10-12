@@ -4,6 +4,38 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **CARRIER THREAD-LOCALS -- THE PI's NetDemo DIED ON ITS FIRST SOCKET WRITE (2026-10-12, QEMU-GATED -- NOT YET
+  PI-VALIDATED).** The Pi run of main `bd27f5d` (#342) connected, then threw `InternalError: joe-ng:
+  JavaLangAccess.getCarrierThreadLocal is not implemented on this VM` from `CarrierThreadLocal.get <-
+  sun/nio/ch/Util.getTemporaryDirectBuffer <- NioSocketImpl.tryWrite`. Stock `Util`'s per-thread temporary
+  direct-buffer cache is a `TerminatingThreadLocal`, whose get/set/remove route through `JavaLangAccess`; the stub
+  threw, as rule 3 intends, at the first socket write. **QEMU cannot run NetDemo (no WiFi), so no QEMU gate reached
+  this path** -- a gap in the gates, not only in the VM.
+  - **Fix:** the `ThreadLocal` overlay gains stock's package-private `get/set/removeCarrierThreadLocal`, run
+    against `Thread.currentThread()` (no virtual threads, so every thread is its own carrier), and stock's
+    `setInitialValue` registration of a `TerminatingThreadLocal`. A public bridge `java.lang.MetalCarrierLocals`
+    reaches them from `MetalJavaLangAccess` (stock's JLA is an anonymous class inside `System`; ours cannot see
+    package-private `java.lang`). The overlay `Thread` now runs stock `exit()`'s
+    `TerminatingThreadLocal.threadTerminated()` when the thread used one -- how stock frees a dying thread's cached
+    buffers -- and lets an exception there escape to the uncaught report rather than clearing it.
+  - **Found on the way: `Thread.tlPut` never grew its 16-entry table** -- a 17th thread-local on one thread was an
+    AIOOBE. It doubles now.
+  - **`CarrierLocalProbe` (new) host-identical:** the temporary-buffer get/release pair, a plain
+    `CarrierThreadLocal`, a `TerminatingThreadLocal`'s exit callback on a spawned thread (and NO callback after
+    `remove`), a thread that only touches `Util`'s cache, and 40 thread-locals on one thread. `jdktests` now compiles
+    with `--add-exports` for `jdk.internal.misc` and `sun.nio.ch` so a probe can name them; the host control needs
+    the same flags. `ExecutorProbe`, `TlrProbe`, `NioBufferProbe` unchanged against the host.
+  - **MEASURED GAP, NOT FIXED: the buffer cache never caches.** The first probe run DIFFERED on one line -- a
+    released temporary buffer is not handed back (`sameAsCached=false`, host `true`). The cache holds
+    `IOUtil.IOV_MAX` buffers, and `IOUtil.<clinit>` is on `Loader`'s skip list (its `BootLoader.loadLibrary` lives
+    in the denied `jdk/internal/loader/`), so `IOV_MAX` is 0 and every socket write allocates and frees a fresh
+    direct buffer. Correct (`MetalOffHeap.free` returns the block to the GC), only slower; a skipped initializer is
+    exactly what rule 2 retires, so running it is the follow-up. The probe no longer prints the identity.
+  - Host: `make test` OK (`overlay-check 0 new`, 45 known dropped supertypes). **Suite: 40 programs, markers
+    zero, churn `gc: collections=50`** -- against **49 for a same-conditions control of main `bd27f5d`** booted from
+    a worktree on the same harness, so this change moved it by one. Cause NOT isolated (candidates: the larger
+    `ThreadLocal`/`Thread` bodies, and the exit check every spawned thread now runs).
+
 - **STOCK `java.util.zip.ZipCoder`; `Deflater.shouldFinish` RESTORED (2026-10-11, QEMU-GATED -- NOT YET
   PI-VALIDATED).** The `ZipCoder` overlay decoded every entry name as UTF-8 through `String`, because stock reaches
   `CharsetDecoder` and three `JavaLangAccess` members that THREW `unsupported`. With the coders stock, those three

@@ -218,6 +218,27 @@ public class Thread implements Runnable, MetalThreadEntry
             {
             }
         }
+        exitTerminatingThreadLocals();
+    }
+
+    /**
+     * Stock {@code Thread.exit}'s {@code TerminatingThreadLocal.threadTerminated()} call, which is how stock
+     * {@code sun.nio.ch.Util} frees a dying thread's cached temporary direct buffers. Stock keeps those locals in
+     * their own map and tests it for null; this overlay keeps one table, so the same test is whether the REGISTRY
+     * local -- set by the first {@code TerminatingThreadLocal.register} on this thread -- has an entry. Stock's VM
+     * clears an exception thrown here; this lets it escape to the VM's uncaught report instead, so a stubbed
+     * capability reached at thread exit names itself rather than vanishing.
+     */
+    private void exitTerminatingThreadLocals()
+    {
+        if (tlN == 0)
+        {
+            return;
+        }
+        if (tlIndex(jdk.internal.misc.TerminatingThreadLocal.REGISTRY) >= 0)
+        {
+            jdk.internal.misc.TerminatingThreadLocal.threadTerminated();
+        }
     }
 
     /**
@@ -302,6 +323,15 @@ public class Thread implements Runnable, MetalThreadEntry
         {
             tlKeys = new Object[16];
             tlVals = new Object[16];
+        }
+        else if (tlN == tlKeys.length)
+        {
+            Object[] k = new Object[tlN * 2];
+            Object[] v = new Object[tlN * 2];
+            System.arraycopy(tlKeys, 0, k, 0, tlN);
+            System.arraycopy(tlVals, 0, v, 0, tlN);
+            tlKeys = k;
+            tlVals = v;
         }
         tlKeys[tlN] = key;
         tlVals[tlN] = val;
