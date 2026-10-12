@@ -1941,6 +1941,8 @@ public final class VM
         if (shutdownBeforeHaltAddr == 0L) { VMNatives.shutdownBeforeHalt(); }   // Shutdown.beforeHalt (System.exit)
         if (shutdownHalt0Addr == 0L) { VMNatives.shutdownHalt0(-1L); }          // Shutdown.halt0
         if (sockZeroAddr == 0L) { long u = VMNatives.sockZero(); }
+        if (iovMaxAddr == 0L) { long u = VMNatives.iovMax(); }                  // IOUtil.iovMax
+        if (writevMaxAddr == 0L) { long u = VMNatives.writevMax(); }            // IOUtil.writevMax
         if (classNameAddr == 0L) { long u = VMNatives.classNameOf(0L); }        // Class.getName0() native (M4)
         if (forNameAddr == 0L) { long u = VMNatives.forName(0L); }              // Class.forName0() native (reflection M1)
         if (assignableAddr == 0L) { long u = VMNatives.assignable(0L, 0L); }    // Class.assignable0 (interfaces too)
@@ -3380,6 +3382,8 @@ public final class VM
     static long shutdownBeforeHaltAddr;// VMNatives.shutdownBeforeHalt()V — java.lang.Shutdown.beforeHalt (no-op)
     static long shutdownHalt0Addr;     // VMNatives.shutdownHalt0(J)V — java.lang.Shutdown.halt0 (System.exit)
     static long sockZeroAddr;
+    static long iovMaxAddr;            // VMNatives.iovMax()J -- IOUtil.iovMax
+    static long writevMaxAddr;         // VMNatives.writevMax()J -- IOUtil.writevMax
     static long classNameAddr;         // VM.classNameOf(J)J — Class.getName0(Class) native (M4)
     static long forNameAddr;           // VM.forName(J)J — Class.forName0(byte[]) native (reflection arc M1)
     static long assignableAddr;        // VMNatives.assignable(JJ)J — Class.assignable0(J,J)

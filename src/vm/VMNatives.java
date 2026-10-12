@@ -1241,6 +1241,23 @@ final class VMNatives
         return 0L;
     }
 
+    /**
+     * {@code IOUtil.iovMax()}: unix/native/libnio/ch/IOUtil.c answers {@code sysconf(_SC_IOV_MAX)}, which is
+     * 1024 on Linux (the platform whose stock classes the image bakes). Nothing here has a writev limit of its
+     * own, so the Linux figure is the honest one. Stock reads it in two places: {@code IOUtil.IOV_MAX} caps a
+     * gather/scatter, and {@code sun.nio.ch.Util} sizes the per-thread temporary direct-buffer cache from it.
+     */
+    static long iovMax()
+    {
+        return 1024L;
+    }
+
+    /** {@code IOUtil.writevMax()}: IOUtil.c answers {@code Integer.MAX_VALUE} on Linux and macOS. */
+    static long writevMax()
+    {
+        return 0x7FFFFFFFL;
+    }
+
     static void printStackTrace(long self)
     {
         if (self <= 0x1000L)

@@ -4,6 +4,26 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **`IOUtil.<clinit>` RUNS -- THE TEMPORARY DIRECT-BUFFER CACHE CACHES (2026-10-12, PI-VALIDATED).** Closes the
+  measured gap in the carrier thread-locals card below. `sun/nio/ch/Util` sizes its per-thread temporary
+  direct-buffer cache from `IOUtil.IOV_MAX`; `IOUtil` was on `Loader`'s `<clinit>` skip list, so `IOV_MAX` was 0 and
+  every socket read and write allocated a fresh direct buffer. The skip list's own comment said "no IOV_MAX" is read
+  on the blocking socket path -- `Util` reads it there.
+  - **Fix:** `IOUtil` is off the skip list. Its natives are provided in `nativeBufAt`: `iovMax` answers 1024 and
+    `writevMax` `Integer.MAX_VALUE`, the Linux answers of `unix/native/libnio/ch/IOUtil.c` (`sysconf(_SC_IOV_MAX)`;
+    `writevMax` is `INT_MAX` on Linux and macOS). `jdk/internal/loader/BootLoader.loadLibrary` is PROVIDED as a
+    no-op while its package stays denied: it exists to dlopen a library so its JNI natives can bind, and every
+    native here is bound by that same table -- empty decided from what the call is for, as with `initIDs`. The
+    other `<clinit>`s that call it (`Net`, `NetworkInterface`, `InetAddress`, `ZipUtils`, `DefaultProxySelector`)
+    are still skipped, denied or overlaid; this unblocks the call for them, it does not run them.
+  - **`CarrierLocalProbe`'s `sameAsCached` line is back** and host-identical on QEMU (`true`; it was the one line
+    that differed).
+  - Host: `make test` OK (`overlay-check 0 new`). **Suite: 40 programs, markers zero, churn `gc: collections=50`**
+    -- equal to a same-conditions control of main `bca3237` booted from a worktree in parallel (also 50).
+  - **Pi:** NetDemo `HTTP/1.1 200 OK ... http done bytes=891`, `[main returned normally]`, no new TRAP-WIRED or
+    NULL CLASS LITERAL line; the batch lines read `clinits=255`/`256` against `254`/`255` on main -- the one extra
+    initializer is `IOUtil`'s.
+
 - **THE STACK NEVER ANSWERED ARP -- THE ROUTER DROPPED NetDemo's REPLY (2026-10-12, PI-VALIDATED).** With carrier
   thread-locals fixed, the Pi connected and sent a byte-correct GET, then read 0 bytes after the 8 s timeout, twice.
   Temporary counters in `net.Tcp`/`net.Ip` MEASURED the gap: the SYN|ACK did arrive (the connect timestamp is set
@@ -44,7 +64,7 @@ Newest entries are at the top.
     `remove`), a thread that only touches `Util`'s cache, and 40 thread-locals on one thread. `jdktests` now compiles
     with `--add-exports` for `jdk.internal.misc` and `sun.nio.ch` so a probe can name them; the host control needs
     the same flags. `ExecutorProbe`, `TlrProbe`, `NioBufferProbe` unchanged against the host.
-  - **MEASURED GAP, NOT FIXED: the buffer cache never caches.** The first probe run DIFFERED on one line -- a
+  - **MEASURED GAP -- FIXED by the `IOUtil.<clinit>` card above: the buffer cache never caches.** The first probe run DIFFERED on one line -- a
     released temporary buffer is not handed back (`sameAsCached=false`, host `true`). The cache holds
     `IOUtil.IOV_MAX` buffers, and `IOUtil.<clinit>` is on `Loader`'s skip list (its `BootLoader.loadLibrary` lives
     in the denied `jdk/internal/loader/`), so `IOV_MAX` is 0 and every socket write allocates and frees a fresh
