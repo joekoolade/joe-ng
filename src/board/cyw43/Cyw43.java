@@ -1695,7 +1695,13 @@ public final class Cyw43
             }
             long eth = rx + (Magic.load8(rx + 7) & 0xFF);
             eth = eth + 4 + (Magic.load8(eth + 3) & 0xFF) * 4;
-            if (((Magic.load8(eth + 12) & 0xFF) << 8 | (Magic.load8(eth + 13) & 0xFF)) != 0x0800)
+            int et = (Magic.load8(eth + 12) & 0xFF) << 8 | (Magic.load8(eth + 13) & 0xFF);
+            if (et == 0x0806)
+            {
+                net.Ip.answerArp(eth);                   // a stale gateway re-verifies us mid-query
+                continue;
+            }
+            if (et != 0x0800)
             {
                 continue;
             }
