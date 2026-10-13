@@ -1532,6 +1532,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.iovMax()J",          "vm/VM.iovMaxAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.writevMax()J",       "vm/VM.writevMaxAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.pollIn()J",          "vm/VM.pollInAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.nanoTimeAdjustment(J)J", "vm/VM.nanoTimeAdjAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.pollOut()J",         "vm/VM.pollOutAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.pollErr()J",         "vm/VM.pollErrAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.pollHup()J",         "vm/VM.pollHupAddr");

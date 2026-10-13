@@ -125,6 +125,9 @@ public interface Symbols
     int ENSURE_INIT = 61;       // vm/VM.ensureInitByName(J)V — initialize the class named by an absolute Utf8
     // The bounds check's own AIOOBE, carrying stock's message: x0 = the index, x1 = the length.
     int NEW_AIOOBE_IDX = 62;    // vm/VM.newAioobeIndex(JJ)J — "Index i out of bounds for length n"
+    // Reflection.getCallerClass(): the class of a code address -- the CALL SITE in the caller of the method
+    // that asked (its saved LR - 4). See Baseline.lowerGetCallerClass.
+    int CALLER_CLASS = 63;      // vm/VMNatives.classAtPc(J)J — the Class mirror of the method containing a pc
 
     /**
      * The largest value a code address's top byte (bits 31..24) can take, for the dispatch-target guard.
@@ -239,6 +242,12 @@ public interface Symbols
 
     /** True if the method ref at {@code methodCp} is {@code getClass()Ljava/lang/Class;} — intrinsified to GET_CLASS. */
     boolean isGetClass(int methodCp);
+
+    /**
+     * True if the invokestatic is {@code jdk.internal.reflect.Reflection.getCallerClass()} -- intrinsified to
+     * the class of the asking method's own caller, which is in the asking method's frame (its saved LR).
+     */
+    default boolean isGetCallerClass(int methodCp) { return false; }
 
     /** True if the invokevirtual is {@code Class.desiredAssertionStatus()Z} (intrinsify to false). */
     default boolean isDesiredAssertionStatus(int methodCp) { return false; }

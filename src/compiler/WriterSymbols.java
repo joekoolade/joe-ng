@@ -74,6 +74,7 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         HELPER_KEY[Symbols.ENSURE_INIT]      = "vm/VM.ensureInitByName(J)V";
         // REACHED: every baked getClass() call site (see isGetClass).
         HELPER_KEY[Symbols.GET_CLASS]        = "vm/VM.getClassOf(J)J";
+        HELPER_KEY[Symbols.CALLER_CLASS]     = "vm/VMNatives.classAtPc(J)J";
     }
 
     /** The image method a helper id resolves to -- or a loud failure, never a silently wrong neighbour. */
@@ -254,6 +255,14 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
     {
         ClassFile.MemberRef r = cf.memberRef(methodCp);
         return r.name().equals("getClass") && r.descriptor().equals("()Ljava/lang/Class;");
+    }
+
+    /** {@code Reflection.getCallerClass()}: intrinsified here too, so a BAKED caller-sensitive method agrees. */
+    public boolean isGetCallerClass(int methodCp)
+    {
+        ClassFile.MemberRef r = cf.memberRef(methodCp);
+        return r.owner().equals("jdk/internal/reflect/Reflection") && r.name().equals("getCallerClass")
+                && r.descriptor().equals("()Ljava/lang/Class;");
     }
     public void staticField(CodeBuffer cb, int reg, int fieldCp)
     {

@@ -1945,6 +1945,7 @@ public final class VM
         if (iovMaxAddr == 0L) { long u = VMNatives.iovMax(); }                  // IOUtil.iovMax
         if (writevMaxAddr == 0L) { long u = VMNatives.writevMax(); }            // IOUtil.writevMax
         if (pollInAddr == 0L) { long u = VMNatives.pollIn(); }                  // Net.pollinValue
+        if (nanoTimeAdjAddr == 0L) { long u = VMNatives.nanoTimeAdjustment(0L); }  // VM.getNanoTimeAdjustment
         if (pollOutAddr == 0L) { long u = VMNatives.pollOut(); }                // Net.polloutValue/pollconnValue
         if (pollErrAddr == 0L) { long u = VMNatives.pollErr(); }                // Net.pollerrValue
         if (pollHupAddr == 0L) { long u = VMNatives.pollHup(); }                // Net.pollhupValue
@@ -3393,6 +3394,7 @@ public final class VM
     static long iovMaxAddr;            // VMNatives.iovMax()J -- IOUtil.iovMax
     static long writevMaxAddr;         // VMNatives.writevMax()J -- IOUtil.writevMax
     static long pollInAddr;            // VMNatives.pollIn()J -- Net.pollinValue
+    static long nanoTimeAdjAddr;       // VMNatives.nanoTimeAdjustment(J)J -- jdk.internal.misc.VM.getNanoTimeAdjustment
     static long pollOutAddr;           // VMNatives.pollOut()J -- Net.polloutValue / pollconnValue
     static long pollErrAddr;           // VMNatives.pollErr()J -- Net.pollerrValue
     static long pollHupAddr;           // VMNatives.pollHup()J -- Net.pollhupValue

@@ -49,14 +49,13 @@ public final class ReachScan
         "sun/net/www/", "sun/net/ext/",
         // heavy socket subtrees never taken on the blocking client path (would pull streams/ForkJoin/regex).
         "sun/nio/ch/Poller", "sun/nio/ch/ExtendedSocketOption", "java/net/NetworkInterface",
-        // Exceptions = NioSocketImpl's error-message formatter (String.format->Formatter->regex + a
-        // security-property read->Properties/stream), reached only at throw sites; IPAddressUtil =
-        // link-local scoped-address cache (ConcurrentHashMap), reached only under isLinkLocalAddress()==false.
-        "jdk/internal/util/Exceptions", "sun/net/util/IPAddressUtil",
+        // jdk/internal/util/Exceptions and sun/net/util/IPAddressUtil are NOT here any more: stock InetAddress
+        // calls both on its ordinary paths (see Loader.isDenylisted).
         // jar signature verification: JarVerifier pulls the whole sun.security provider closure for a path
         // an unsigned jar never takes (see Loader.isDenylisted).
         "sun/security/", "java/util/jar/JarVerifier",
-        "jdk/internal/logger/", "java/lang/reflect/", "jdk/internal/reflect/",
+        // jdk/internal/logger is NOT here any more: System.getLogger runs stock (see Loader.isDenylisted).
+        "java/lang/reflect/", "jdk/internal/reflect/",
         "jdk/internal/module/", "java/lang/module/", "java/text/spi/",
         // cold ICU/normalizer/break-iterator, pulled by Pattern but never run for a literal match. (NOT
         // java/util/concurrent -- the philosophers demand-load java/util/concurrent/Semaphore.)
@@ -94,6 +93,18 @@ public final class ReachScan
         // The core of sun/util/locale is narrowed out of the sun/util/ deny (stock Locale runs on it); its
         // provider/ subtree stays denied. See Loader.isDenylisted.
         if (c.startsWith("sun/util/locale/") && !c.startsWith("sun/util/locale/provider/"))
+        {
+            return false;
+        }
+        // sun/util/logging/PlatformLogger is narrowed out too: stock jdk/internal/logger is built on it.
+        if (c.startsWith("sun/util/logging/"))
+        {
+            return false;
+        }
+        // java/security/Security (stock InetAddress's cache TTLs) and the two sun/security/util classes its
+        // property load uses are narrowed out -- see Loader.isDenylisted.
+        if (c.startsWith("java/security/Security") || c.equals("sun/security/util/Debug")
+                || c.equals("sun/security/util/SecurityProperties"))
         {
             return false;
         }

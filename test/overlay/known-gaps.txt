@@ -49,7 +49,6 @@ supertype#java/lang/NoSuchFieldException#java/io/Serializable
 supertype#java/lang/NoSuchMethodException#java/io/Serializable
 supertype#java/lang/NullPointerException#java/io/Serializable
 supertype#java/lang/ReflectiveOperationException#java/io/Serializable
-supertype#java/lang/StackTraceElement#java/io/Serializable
 supertype#java/lang/ThreadGroup#java/lang/Thread$UncaughtExceptionHandler
 supertype#java/lang/Throwable#java/io/Serializable
 supertype#java/lang/reflect/AccessibleObject#java/lang/reflect/AnnotatedElement

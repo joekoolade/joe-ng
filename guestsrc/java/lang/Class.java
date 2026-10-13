@@ -859,6 +859,12 @@ public final class Class<T> implements java.lang.reflect.Type
         return null;
     }
 
+    /** Stock's unchecked accessor, which java.base calls in place of {@link #getClassLoader}; the same answer. */
+    ClassLoader getClassLoader0()
+    {
+        return null;
+    }
+
     public boolean isAnnotation()
     {
         return (getModifiers() & 0x2000) != 0;          // ACC_ANNOTATION

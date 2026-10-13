@@ -87,6 +87,28 @@ final class VMNatives
         return VM.cdsDumpSeed;
     }
 
+    /**
+     * {@code jdk/internal/misc/VM.getNanoTimeAdjustment(long offsetSecs)}: the wall clock as nanoseconds past
+     * {@code offsetSecs}, for {@code Instant.now()} / {@code Clock.systemUTC()}. HotSpot's
+     * {@code JVM_GetNanoTimeAdjustment} (prims/jvm.cpp) answers {@code (seconds - offset) * 1e9 + nanos}, and
+     * the sentinel -1 when {@code |seconds - offset| >= 2^32} so the caller recomputes its offset. The clock is
+     * the same one {@link #currentTimeMillis} answers -- time since boot, there being no wall clock -- so the
+     * two agree as they do on a JVM.
+     */
+    static long nanoTimeAdjustment(long offsetSecs)
+    {
+        long ticks = Magic.readCNTPCT_EL0();
+        long freq = Magic.readCNTFRQ_EL0();
+        long seconds = ticks / freq;
+        long nanos = ticks % freq * 1000000000L / freq;
+        long diff = seconds - offsetSecs;
+        if (diff >= 0x100000000L || diff <= -0x100000000L)
+        {
+            return -1L;
+        }
+        return diff * 1000000000L + nanos;
+    }
+
     /** {@code java/lang/System.currentTimeMillis()} — ms since boot (no wall clock on bare metal). */
     static long currentTimeMillis()
     {
