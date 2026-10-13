@@ -1820,8 +1820,30 @@ public final class Baseline
             lowerIntrinsic(symbols.intrinsicId(cpIndex), cb);
             return;
         }
+        if (symbols.isGetCallerClass(cpIndex))
+        {
+            lowerGetCallerClass(cb);
+            return;
+        }
         initGuardAt(cb, cpIndex, false);         // a REAL static call: JVMS 5.5 active use
         lowerCall(cpIndex, cb, false);
+    }
+
+    /**
+     * {@code Reflection.getCallerClass()}: the class of the method that called THIS one. Stock's is a
+     * VM intrinsic too (it walks frames, skipping reflection ones). Here the answer is already in this
+     * method's frame: the prologue stores x30 at {@code [sp]} and SP does not move for the rest of the body
+     * (outgoing overflow arguments live inside the frame for exactly that reason, see above), so
+     * {@code [sp] - 4} is the call site in the caller, and CALLER_CLASS maps that pc to its method's class --
+     * the same exact-containment lookup the field-updater overlays use. A reflective call through
+     * Method.invoke answers the invoker, not the reflective caller; stock skips those frames, this does not.
+     */
+    private void lowerGetCallerClass(CodeBuffer cb)
+    {
+        int r = pushReg();
+        cb.emit(A64Enc.ldrx(r, 31, 0));                     // this frame's saved LR: the return into our caller
+        cb.emit(A64Enc.subImm(r, r, 4));                    // the call site itself
+        emitCall(cb, 1, true, false, SYM_HELPER, Symbols.CALLER_CLASS);   // (pc) -> Class mirror, or null
     }
 
     /**

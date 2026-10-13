@@ -58,6 +58,12 @@ public class Thread implements Runnable, MetalThreadEntry
     // @128 -- stock's context loader, a REAL field: InnocuousThread.<clinit> takes its offset and its constructor
     // writes it through Unsafe. The accessors used to answer null and DISCARD a set, so set(x) then get() was null.
     private volatile ClassLoader contextClassLoader;
+    // @136/@144 -- stock's ScopedValue support, appended for the same reason: the bindings ScopedValue.Carrier sets
+    // and restores around each where(...).run/call, and the per-thread lookup cache ScopedValue keeps.
+    private Object scopedValueBindings;
+    private Object[] scopedValueCache;
+    // @152 -- stock's head of this thread's stack of StackableScopes (ScopedValueContainer, structured scopes).
+    private volatile jdk.internal.vm.StackableScope headStackableScopes;
 
     // null unless explicitly set (stock)
     private static volatile UncaughtExceptionHandler defaultUncaughtExceptionHandler;
@@ -414,6 +420,57 @@ public class Thread implements Runnable, MetalThreadEntry
 
     /** VM native ({@code Loader.nativeBuf} -> {@code VM.currentThreadObj}): the current task's Thread. */
     private static native Thread currentThread0();
+
+    // ----- ScopedValue support -----
+    //
+    // Stock keeps the bindings in a Thread field, as here, and makes three of these natives because HotSpot
+    // stores the CACHE in the carrier thread and can find bindings by walking frames. This VM has platform
+    // threads only, so the carrier IS the thread and the cache is a field. Bindings reach the "unknown" state
+    // (null) only when HotSpot drops them on a continuation yield or an unwind it did not restore; here
+    // ScopedValue.Carrier always restores them in a finally and nothing else writes them, so a null means a
+    // thread that never bound anything -- and the stack has nothing to find. ScopedValue then answers the
+    // empty snapshot, exactly as for a new thread.
+
+    static Object scopedValueBindings()
+    {
+        return currentThread().scopedValueBindings;
+    }
+
+    static void setScopedValueBindings(Object bindings)
+    {
+        currentThread().scopedValueBindings = bindings;
+    }
+
+    /** Stock walks the stack for a {@code runWith} frame; see above for why there is none to find here. */
+    static Object findScopedValueBindings()
+    {
+        return null;
+    }
+
+    static Object[] scopedValueCache()
+    {
+        return currentThread().scopedValueCache;
+    }
+
+    static void setScopedValueCache(Object[] cache)
+    {
+        currentThread().scopedValueCache = cache;
+    }
+
+    jdk.internal.vm.StackableScope headStackableScopes()
+    {
+        return headStackableScopes;
+    }
+
+    static void setHeadStackableScope(jdk.internal.vm.StackableScope scope)
+    {
+        currentThread().headStackableScopes = scope;
+    }
+
+    /** Stock keeps {@code o} live in the frame for findScopedValueBindings' walk; with no walk, nothing to do. */
+    static void ensureMaterializedForStackWalk(Object o)
+    {
+    }
 
     /**
      * joe-ng has no virtual threads -- every task is a platform thread. Must exist as a real method so an

@@ -153,6 +153,10 @@ final class MetalSymbols implements Symbols
     {
         return Loader.isGetClass(methodCp);
     }
+    public boolean isGetCallerClass(int methodCp)
+    {
+        return Loader.isGetCallerClass(methodCp);
+    }
     public boolean isArrayClone(int methodCp)
     {
         return Loader.isArrayClone(methodCp);
@@ -656,6 +660,10 @@ final class MetalSymbols implements Symbols
         if (helper == Symbols.GET_CLASS)
         {
             return VM.getClassAddr;
+        }
+        if (helper == Symbols.CALLER_CLASS)
+        {
+            return VM.classAtPcAddr;
         }
         if (helper == Symbols.WATCH_RET)
         {

@@ -34,6 +34,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.stream.Stream;
 import jdk.internal.loader.NativeLibraries;
 import java.lang.MetalCarrierLocals;
+import java.lang.MetalStackableScopes;
 import jdk.internal.misc.CarrierThreadLocal;
 import jdk.internal.module.ServicesCatalog;
 import jdk.internal.reflect.ConstantPool;
@@ -483,11 +484,11 @@ public final class MetalJavaLangAccess implements JavaLangAccess
     }
     @Override public StackableScope headStackableScope(Thread thread)
     {
-        throw unsupported("headStackableScope");
+        return MetalStackableScopes.head(thread);
     }
     @Override public void setHeadStackableScope(StackableScope scope)
     {
-        throw unsupported("setHeadStackableScope");
+        MetalStackableScopes.setHead(scope);
     }
     @Override public Thread currentCarrierThread()
     {

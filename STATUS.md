@@ -4,6 +4,68 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **`System.getLogger` RUNS STOCK, THE VM IS BOOTED, `StackWalker` EXISTS (2026-10-13).** First increment of the
+  System.Logger arc, which gaps (1) and (3) of the `InetAddress` card below both wait on. `getLogger` and
+  `isLoggable` are host-identical; `log()` stops, loudly, at the next wall (below).
+  - **`Reflection.getCallerClass()` is a compiler intrinsic** (Baseline `lowerGetCallerClass`, both the metal
+    JIT and the host writer). The prologue stores x30 at `[sp]` and SP is fixed for the body, so the asking
+    method's own frame holds its caller's call site: `ldr [sp]`, `- 4`, then the new `CALLER_CLASS` helper (63)
+    maps the pc to its class through `VMNatives.classAtPc` -- the exact-containment lookup the field-updater
+    overlays already use. Every `@CallerSensitive` JDK method gets it, not only `getLogger`. Unlike stock, a
+    reflective `Method.invoke` caller is not skipped.
+  - **`jdk.internal.misc.VM.initLevel` is raised to `SYSTEM_BOOTED` before `main`** (`Loader.seedBooted`, both
+    launch paths, last of the seeds). Nothing raised it, so `isBooted()` was false for ever. Two measured
+    consequences: `System.getLogger` handed out a `BootstrapLogger`, which QUEUES records until boot (the probe
+    read `OFF loggable=true` and printed nothing), and `jdk.internal.util.Exceptions.setup` never ran. Level 4
+    does nothing else in stock (`System.initPhase3` sets it after the system loader and TCCL).
+  - **`VM.getNanoTimeAdjustment`** is provided as HotSpot's `JVM_GetNanoTimeAdjustment` computes it (the -1
+    sentinel past +/-2^32 s), on the same since-boot clock `currentTimeMillis` answers.
+  - **Narrowed:** `jdk/internal/logger/` and `sun/util/logging/` (PlatformLogger; pure Java, its
+    java.util.logging bridge is never taken without java.logging).
+  - **`StackWalker` is the JDK 26 source with `walk`/`forEach`/`getCallerClass` built on the VM's own walker**
+    (`Magic.stacktr`, the same one behind `Thread.getStackTrace`). Stock's `StackStreamFactory` is HotSpot's
+    frame-buffer protocol and stays unused. Frames are captured eagerly at the call, as stock guarantees.
+    Hidden by default: the VM's launch frames below `main` (`vm.*`) and reflection frames, as stock hides them.
+    `getByteCodeIndex` THROWS: frames map a pc to a line, not a bci.
+  - **`StackTraceElement` is the JDK 26 class** in place of a four-field hand-written shell, whose `toString`
+    answered the method name alone and which had no `isNativeMethod`, `equals` or `hashCode`. `frameToElement`
+    now finds its four fields BY NAME, writes BINARY class names (`java.lang.String`, not `java/lang/String`),
+    and splits an image frame's combined `owner/Class.method` symbol into class and method (it put the whole
+    symbol in the method name under a `<vm>` class). Dotted names change what every `getStackTrace()` consumer
+    reads -- JUnit's `pruneStackTrace` prefix test (`org.junit.start.`) could never match a slashed name.
+    The `Class` overlay gains stock's `getClassLoader0`, which the stock class calls.
+  - **Booting exposed `ScopedValue`, which is now supported.** Stock `Charset.lookupViaProviders` returns early
+    `if (!VM.isBooted())`; booted, an unknown charset name goes on into `ScopedValue.where(IN_LOOKUP, true)`, and
+    the regression run caught it: `PrintWriterProbe` halted at `Thread.scopedValueCache` (a LINK FAILED) where it
+    had printed `UnsupportedEncodingException`. The `Thread` overlay gains stock's `scopedValueBindings` field and
+    accessors, and the three HotSpot natives as their single-carrier equivalents: the cache is a per-thread field
+    (the carrier IS the thread, there being no virtual threads), `ensureMaterializedForStackWalk` is empty, and
+    `findScopedValueBindings` answers null -- bindings are only ever "unknown" in HotSpot after an unrestored
+    unwind or a yield, and `ScopedValue.Carrier` restores them in a finally. Plus stock's `headStackableScopes`
+    field, reached from `MetalJavaLangAccess.headStackableScope`/`setHeadStackableScope` (which THREW) through a
+    new `java/lang/MetalStackableScopes` bridge, as `MetalCarrierLocals` bridges carrier thread-locals. Not done:
+    stock's thread exit pops a leftover scope stack (`StackableScope.popAll`), and a started thread inherits
+    nothing from a structured container -- neither reachable without StructuredTaskScope.
+  - **`ReachScan` re-synced** with `Loader.isDenylisted`: it still denied `Exceptions` and `IPAddressUtil` (#347)
+    and `jdk/internal/logger`, and lacked the Security narrowings.
+  - **Probes:** `StackWalkerProbe` (new): frames from a known depth with class, method, line and file;
+    `forEach` and `walk` agree; `getCallerClass`; `getDeclaringClass`; the RETAIN_CLASS_REFERENCE and
+    DROP_METHOD_INFO refusals; a lambda body's frame; stock `StackTraceElement.toString`. **Host-identical at the
+    first boot.** `ScopedValueProbe` (new): run/call, nested rebinding restored, two values at once, the binding
+    restored after a throw, orElse/orElseThrow, unbound `get`, a new thread not seeing the caller's binding.
+    **Host-identical at the first boot.** `SystemLoggerProbe` (new): the logger's name and all eight `isLoggable` answers, against a host
+    run with `--limit-modules java.base` (java.logging present changes the OFF answer).
+  - **The wall, recorded:** `SimpleConsoleLogger` formats a record with `java.text.MessageFormat` and stamps it
+    with `ZonedDateTime.now()` through `Formatter`'s `%t` conversions -- java.time's zone rules and their tzdb
+    data. All denied today; the call traps loudly (`DENYLIST TRAP ... MessageFormat.format`). Next arc.
+  - Host: `make overlaycheck` OK (`0 new`; dropped supertypes 43 -> 42, `StackTraceElement` is `Serializable`
+    again). **Suite: 40 programs, markers zero, churn `gc: collections=50`** (= #349 and main).
+    **Every host-controlled probe (31) re-run on QEMU: all host-identical**, after the `PrintWriterProbe` fix
+    above; `DigestProbe` and `MacProbe` print their designed divergences (`failures=0 divergences-unmet=0`).
+  - **Pi** (the image before the ScopedValue fix): NetDemo `HTTP/1.1 200 OK ... http done bytes=891`, `[main
+    returned normally]`, no new TRAP-WIRED line, `clinits=312/312/313/314` against `305/305/306/307` -- the
+    logger and stack-walk classes' initializers.
+
 - **`Throwable.toString` IS STOCK'S -- THE HOST WRITER INTRINSIFIES `getClass()` (2026-10-13, PI-VALIDATED).** Closes gap (2)
   of the `InetAddress` card below. Every exception's `toString` answered `Object.toString` (`name@hash`), and so
   did every message built from one: the cause constructor sets `detailMessage = cause.toString()`, so a wrapping

@@ -2714,6 +2714,7 @@ public final class Loader
         seedSystemProps();                                  // System.props -> a real Properties (setProperty)
         seedSavedProps();                                   // jdk.internal.misc.VM.savedProps -> its own snapshot
         seedSystemStreams();                                // System.out/err -> stock PrintStream over the UART
+        seedBooted();                                       // jdk.internal.misc.VM.initLevel -> SYSTEM_BOOTED, last
         long argv = buildArgv(argsLine);                    // after loadAll: guestString needs String's TIB
         long buf = globalMethodBuf(className, Magic.bytes("main"), Magic.bytes("([Ljava/lang/String;)V"));
         if (buf == 0L)
@@ -2854,6 +2855,7 @@ public final class Loader
         seedSystemProps();                                  // System.props -> a real Properties (setProperty)
         seedSavedProps();                                   // jdk.internal.misc.VM.savedProps -> its own snapshot
         seedSystemStreams();                                // System.out/err -> stock PrintStream over the UART
+        seedBooted();                                       // jdk.internal.misc.VM.initLevel -> SYSTEM_BOOTED, last
         // Build the String[] argv AFTER loadAll: guestString needs the loaded String class's TIB, so the argv
         // MUST be built here, not before resetLoader() (that was the "args[i] throws" bug).
         long argv = buildArgv(argsLine);
@@ -3091,14 +3093,16 @@ public final class Loader
         long line = 0L;
         if (bestReg >= 0)
         {
-            clsStr = guestStringUtf8(rgTab[bestReg].base, rgTab[bestReg].classOff);
+            clsStr = guestBinaryName(rgTab[bestReg].base + rgTab[bestReg].classOff + 2L,
+                    u2(rgTab[bestReg].base + rgTab[bestReg].classOff));
             methStr = guestStringUtf8(rgTab[bestReg].base, rgTab[bestReg].nameOff);
             fileStr = guestStringUtf8(rgTab[bestReg].src, 0);
             line = lineAtOffset(rgTab[bestReg].line, (int) ((pc - bestBuf) >> 2));
         }
         else if (bestClin >= 0)
         {
-            clsStr = guestStringUtf8(clinitBase[bestClin], clinitNameOff[bestClin]);
+            clsStr = guestBinaryName(clinitBase[bestClin] + clinitNameOff[bestClin] + 2L,
+                    u2(clinitBase[bestClin] + clinitNameOff[bestClin]));
             methStr = guestString(Magic.bytes("<clinit>"));
         }
         else
@@ -3112,7 +3116,24 @@ public final class Loader
                 long start = Magic.load64(e);
                 if (pc >= start && pc < Magic.load64(e + 8L))
                 {
-                    methStr = guestStringUtf8(Magic.load64(e + 16L), 0);   // "owner/Class.method" (combined)
+                    // The symbol is "owner/Class.method", combined: split it at the LAST '.' (a method name
+                    // has none) so the class is a class and the method a method, as on a JVM.
+                    long sym = Magic.load64(e + 16L);
+                    int symLen = u2(sym);
+                    int dot = symLen - 1;
+                    while (dot > 0 && u1(sym + 2L + dot) != 0x2E)
+                    {
+                        dot -= 1;
+                    }
+                    if (dot > 0)
+                    {
+                        clsStr = guestBinaryName(sym + 2L, dot);
+                        methStr = guestBytes(sym + 2L + dot + 1L, symLen - dot - 1);
+                    }
+                    else
+                    {
+                        methStr = guestStringUtf8(sym, 0);
+                    }
                     fileStr = guestStringUtf8(Magic.load64(e + 24L), 0);
                     line = lineAtOffset(Magic.load64(e + 32L), (int) ((pc - start) >> 2));
                     k = n;
@@ -3144,13 +3165,71 @@ public final class Loader
         {
             methStr = guestString(Magic.bytes("<unknown>"));
         }
-        long ste = Heap.alloc(48);                          // header(16) + 4 field slots
+        // The four fields are found BY NAME: StackTraceElement is the JDK 26 class, whose layout puts the
+        // class-loader, module and Class-object fields first. Its other fields stay null/0 -- format 0 is
+        // stock's "show all", and toString prints no loader or module for a null name.
+        if (steTib != steFieldsTib)
+        {
+            int si = classIndexByName(Magic.bytes("java/lang/StackTraceElement"));
+            steSize = 16L + clTab[si].fieldCount * 8L;
+            steClassOff = instanceFieldOffset(si, Magic.bytes("declaringClass"));
+            steMethodOff = instanceFieldOffset(si, Magic.bytes("methodName"));
+            steFileOff = instanceFieldOffset(si, Magic.bytes("fileName"));
+            steLineOff = instanceFieldOffset(si, Magic.bytes("lineNumber"));
+            steFieldsTib = steTib;
+        }
+        long ste = Heap.alloc((int) steSize);
         Magic.store64(ste + 0L, steTib);
-        Magic.store64(ste + 16L, clsStr);
-        Magic.store64(ste + 24L, methStr);
-        Magic.store64(ste + 32L, fileStr);
-        Magic.store64(ste + 40L, line);
+        Magic.store64(ste + steClassOff, clsStr);
+        Magic.store64(ste + steMethodOff, methStr);
+        Magic.store64(ste + steFileOff, fileStr);
+        Magic.store64(ste + steLineOff, line);
         return ste;
+    }
+
+    // frameToElement's StackTraceElement layout, resolved once per TIB.
+    private static long steFieldsTib;
+    private static long steSize;
+    private static long steClassOff;
+    private static long steMethodOff;
+    private static long steFileOff;
+    private static long steLineOff;
+
+    /** A guest String of the {@code len} bytes at {@code src}. */
+    static long guestBytes(long src, int len)
+    {
+        return guestBytesMapped(src, len, false);
+    }
+
+    /** A guest String of the internal class name at {@code src} as a BINARY name: '/' written as '.'. */
+    static long guestBinaryName(long src, int len)
+    {
+        return guestBytesMapped(src, len, true);
+    }
+
+    private static long guestBytesMapped(long src, int len, boolean dots)
+    {
+        long arr = Heap.allocArray(len, 1);
+        long bt = byteArrayTib();
+        if (bt != 0L)
+        {
+            Magic.store64(arr + ObjectModel.TIB_OFFSET, bt);
+        }
+        int i = 0;
+        while (i < len)
+        {
+            int b = u1(src + i);
+            if (dots && b == 0x2F)
+            {
+                b = 0x2E;
+            }
+            Magic.store8(arr + 24L + i, (byte) b);
+            i += 1;
+        }
+        long obj = Heap.alloc(stringSize());
+        Magic.store64(obj + 0L, stringTib());
+        Magic.store64(obj + 16L, arr);
+        return obj;
     }
 
     /**
@@ -6001,6 +6080,15 @@ public final class Loader
         {
             return false;
         }
+        // NARROWED OUT too: sun/util/logging/PlatformLogger. Stock jdk/internal/logger (System.getLogger) is
+        // built on it: SimpleConsoleLogger.<clinit> maps its default level through PlatformLogger.toPlatformLevel,
+        // and the console logger's configuration is a PlatformLogger.ConfigurableBridge. Pure Java with no
+        // natives; java.logging is absent here, so its bridge to java.util.logging is never taken.
+        // (Keep in sync with writer.ReachScan.isDenied.)
+        if (utf8HasPrefix(base, off, Magic.bytes("sun/util/logging/")))
+        {
+            return false;
+        }
         // NARROWED OUT too: sun/util/PreHashedMap, the base of the generated sun/nio/cs/StandardCharsets alias and
         // class maps. Pure collection code, no natives; while denied, Charset.forName("UTF-16BE") trapped in
         // StandardCharsets.canonicalize at aliasMap().get. (Keep in sync with writer.ReachScan.isDenied.)
@@ -6266,7 +6354,6 @@ public final class Loader
                 // a verifying one traps loudly instead of exploding the closure.
                 || utf8HasPrefix(base, off, Magic.bytes("sun/security/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/util/jar/JarVerifier"))
-                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/logger/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/"))
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/reflect/"))
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/module/"))
@@ -10024,6 +10111,27 @@ public final class Loader
      * which the per-batch seed site must not do. A missing {@code savedProps} cell is REPORTED: it means VM was
      * not registered at launch and a later {@code getSavedProperty} would throw.
      */
+    /**
+     * Raise {@code jdk.internal.misc.VM.initLevel} to {@code SYSTEM_BOOTED} (4) before {@code main}, where stock
+     * {@code System.initPhase3} leaves it. This VM runs no initPhase, so the level stayed 0 and
+     * {@code VM.isBooted()} answered false for ever: {@code System.getLogger} handed out a BootstrapLogger that
+     * queues every record until a boot that never came, and {@code jdk.internal.util.Exceptions.setup} refused to
+     * run, so exception texts omitted the host. Level 4 does nothing else in stock (initPhase3 sets it after the
+     * system class loader and the TCCL, both of which are already in place here), so the flag is the whole of it.
+     * Set by storing the cell, as the other launch seeds do: nothing can be waiting on the level's lock yet.
+     * Last of the seeds, because every one before it is part of what "booted" means.
+     */
+    static void seedBooted()
+    {
+        long slot = staticSlotOf(Magic.bytes("jdk/internal/misc/VM"), Magic.bytes("initLevel"));
+        if (slot == 0L)
+        {
+            reportPropsGap(Magic.bytes("jdk/internal/misc/VM.initLevel has no static cell (isBooted stays false)"));
+            return;
+        }
+        Magic.store64(slot, 4L);
+    }
+
     static void seedSavedProps()
     {
         long slot = staticSlotOf(Magic.bytes("jdk/internal/misc/VM"), Magic.bytes("savedProps"));
@@ -12265,6 +12373,7 @@ public final class Loader
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/VM")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("initialize")))        { return VM.noopNativeAddr; }  // ()V
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getNanoTimeAdjustment"))) { return VM.nanoTimeAdjAddr; } // (J)J
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/ScopedMemoryAccess")))
         {
@@ -23949,6 +24058,14 @@ public final class Loader
         }
         reportArmed(n, idx);
         return true;
+    }
+
+    /** True if the *ref at {@code idx} is {@code jdk/internal/reflect/Reflection.getCallerClass()} (intrinsified). */
+    static boolean isGetCallerClass(int idx)
+    {
+        return utf8IsAtBase(gbase, mrefNameOff(idx), Magic.bytes("getCallerClass"))
+                && utf8IsAtBase(gbase, mrefDescOff(idx), Magic.bytes("()Ljava/lang/Class;"))
+                && utf8IsAtBase(gbase, refClassNameOff(idx), Magic.bytes("jdk/internal/reflect/Reflection"));
     }
 
     /** True if the *ref at {@code idx} is a {@code getClass()Ljava/lang/Class;} call (intrinsified to a helper). */
