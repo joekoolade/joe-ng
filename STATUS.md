@@ -4,6 +4,28 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **`Net.<clinit>` RUNS (2026-10-13, PI-VALIDATED).** The last socket entry on `Loader`'s `<clinit>` skip list, unblocked by
+  stock `InetAddress` (#347): its first static block builds the IPv6 any-local and loopback addresses with
+  `InetAddress.getByAddress(new byte[16])`, which the old overlay answered with an `Inet4Address` 0.0.0.0.
+  - **Its natives now answer what `unix/native/libnio/ch/Net.c` answers on Linux.** Skipped, nothing read them;
+    running, they become statics, and the table had them all at 0. Now: the `<poll.h>` bits `POLLIN` 0x1,
+    `POLLOUT` 0x4, `POLLERR` 0x8, `POLLHUP` 0x10, `POLLNVAL` 0x20 (`pollconnValue` is `POLLOUT` there), and
+    `isExclusiveBindAvailable` -1 -- with 0 the initializer would have gone on to read `sun.net.useExclusiveBind`.
+    `isIPv6Available0` and `isReusePortAvailable0` stay false (an IPv4-only stack with no SO_REUSEPORT), `initIDs`
+    stays empty (it caches JNI class and method IDs only), and `shouldShutdownWriteBeforeClose0` is provided
+    false, as on Linux, for the lazy constant that reads it.
+  - **`Loader.seedNetExtendedOptions` is deleted.** It planted an `ExtendedSocketOptions` instance in
+    `Net.EXTENDED_OPTIONS` because the initializer that sets it never ran; it runs now.
+  - **`NetStaticsProbe`** (new) prints the poll bits, `useExclusiveBind`, the four any-local/loopback addresses
+    with their length and predicates, `FAST_LOOPBACK` and whether `EXTENDED_OPTIONS` is set: **host-identical on
+    QEMU at the first boot**. Values that differ by platform (IPv6, SO_REUSEPORT) are not printed.
+  - Host: `make overlaycheck` OK (`0 new`). **Suite: 40 programs, markers zero, churn `gc: collections=50`** (=
+    #347 and main).
+  - **Pi:** NetDemo `HTTP/1.1 200 OK ... http done bytes=892`, `[main returned normally]` -- the close path now
+    reads the `EXTENDED_OPTIONS` the initializer set, not a seeded one. No new TRAP-WIRED line; the batch lines
+    read `clinits=305/305/306/307` against `304/304/305/306` for #347 -- the extra initializer is `Net`'s. With
+    it, no socket class is left on the `<clinit>` skip list.
+
 - **STOCK `java.net.InetAddress`; `java.security.Security` PROPERTIES FROM SOURCE; THE DNS LOOP ANSWERS ARP
   (2026-10-13, PI-VALIDATED).** The hand-written `InetAddress`/`Inet4Address` overlays are gone: `InetAddress` is
   the JDK 26 class byte-for-byte, `Inet4Address`/`Inet6Address` run stock, and the one platform piece is a

@@ -2337,11 +2337,10 @@ public final class Loader
                 // sun/nio/ch/NativeThread is NO LONGER SKIPPED: its initializer is IOUtil.load() (an empty
                 // method) and init(), whose C source only installs a do-nothing INTERRUPT_SIGNAL handler --
                 // there are no signals here, and current0 answers 0 ("cannot signal"), so signal0 is unreached.
-                // sun/nio/ch/Net STAYS SKIPPED, for a measured reason: its first static block builds the IPv6
-                // any-local and loopback addresses with InetAddress.getByAddress(new byte[16]), and the
-                // hand-written InetAddress overlay answers an Inet4Address 0.0.0.0 for any non-4-byte array --
-                // running it would plant that wrong value in two statics. It needs the overlay from source first.
-                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("sun/nio/ch/Net"))
+                // sun/nio/ch/Net is NO LONGER SKIPPED: its first static block builds the IPv6 any-local and
+                // loopback addresses with InetAddress.getByAddress(new byte[16]), which the old hand-written
+                // InetAddress overlay answered with an Inet4Address 0.0.0.0. InetAddress is stock now, and the
+                // natives the initializer calls are provided with Net.c's Linux answers (nativeBufAt).
                 // java/net/Inet4Address and Inet6Address are NO LONGER SKIPPED: InetAddress is stock now and
                 // instantiates both, and their init() natives are provided empty (JNI ID caches).
                 // Proxy.<clinit> builds a jdk/internal/loader/ClassLoaderValue proxy cache and a ClassValue
@@ -2706,7 +2705,6 @@ public final class Loader
         // System.out then read null in the third program (the demo suite's PipDemo). launch got this right by
         // accident, re-seeding after every program; doing it deliberately costs a few registry lookups.
         seedSystemIn();                                     // System.in -> an empty stream (never null)
-        seedNetExtendedOptions();                           // Net.EXTENDED_OPTIONS (close() SO_LINGER path)
         buildRunTramp();                                    // enable Thread.start() (needs Runnable loaded)
         // seedSystemProps runs LAST of the seeds, because it is the only one that COMPILES a method:
         // resolving Properties.setProperty rebuilds the loader's compile cursor (gcp/gbase/gStatics) for
@@ -2845,7 +2843,6 @@ public final class Loader
         pullSupportClasses();
         loadAll();                                          // reachability-gated JIT of the whole closure
         seedSystemIn();                                     // System.in -> an empty stream (never null)
-        seedNetExtendedOptions();                           // Net.EXTENDED_OPTIONS (close() SO_LINGER path)
         buildRunTramp();                                    // enable Thread.start(): the shared Runnable.run()
                                                             //   trampoline (needs Runnable loaded by loadAll;
                                                             //   harmless if the program spawns no threads)
@@ -10524,14 +10521,6 @@ public final class Loader
     }
 
     /**
-     * Seed {@code sun.nio.ch.Net.EXTENDED_OPTIONS} with an {@link sun.net.ext.ExtendedSocketOptions} overlay
-     * instance. Net.<clinit> (which normally sets it) is native-heavy and reads system properties (props are
-     * null on metal -> NPE), so it stays blocked; but {@code Socket.close() -> Net.getSocketOption} derefs
-     * EXTENDED_OPTIONS on the SO_LINGER path. The overlay's {@code isOptionSupported} is always false (no
-     * jdk.net options on metal), so getSocketOption falls through to the ordinary getIntOption0 path. Same
-     * direct-static-seed trick as {@link #seedSystemStreams}. No-op if either class is absent.
-     */
-    /**
      * Seed a {@code MetalJavaLangAccess} instance into {@code SharedSecrets.javaLangAccess} so
      * {@code EnumMap.getKeyUniverse} (-&gt; {@code getJavaLangAccess().getEnumConstantsShared()}) works. On stock
      * the JLA is registered by {@code System.<clinit>}, which the metal skips, leaving the field null. Runs inside
@@ -10649,22 +10638,6 @@ public final class Loader
             Magic.store64(inst + 0L, clTab[mi].tib);                 // TIB (itable dir for getEnumConstantsShared dispatch)
             Magic.store64(slot, inst);
             sdJla = true;
-        }
-    }
-
-    static void seedNetExtendedOptions()
-    {
-        int ei = classIndexByName(Magic.bytes("sun/net/ext/ExtendedSocketOptions"));
-        if (ei < 0)
-        {
-            return;
-        }
-        long slot = staticSlotOf(Magic.bytes("sun/nio/ch/Net"), Magic.bytes("EXTENDED_OPTIONS"));
-        if (slot != 0L && Magic.load64(slot) == 0L)
-        {
-            long inst = Heap.alloc(16 + clTab[ei].fieldCount * 8);   // field-free overlay -> just the TIB header
-            Magic.store64(inst + 0L, clTab[ei].tib);                 // TIB (vtable for isOptionSupported dispatch)
-            Magic.store64(slot, inst);
         }
     }
 
@@ -12396,17 +12369,21 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("localPort")))         { return VM.sockZeroAddr; }     // -> 0
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getIntOption0")))     { return VM.sockZeroAddr; }     // -> 0 (SO_LINGER)
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("localInetAddress")))  { return VM.sockZeroAddr; }     // -> null wildcard
-            // Net.<clinit> capability probes: no poll, IPv4-only, no reuse-port on metal -> all 0/false.
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("pollinValue")))       { return VM.sockZeroAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("polloutValue")))      { return VM.sockZeroAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("pollerrValue")))      { return VM.sockZeroAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("pollhupValue")))      { return VM.sockZeroAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("pollnvalValue")))     { return VM.sockZeroAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("pollconnValue")))     { return VM.sockZeroAddr; }
+            // Net.<clinit> natives, answered as unix/native/libnio/ch/Net.c answers them on Linux: the <poll.h>
+            // event bits (pollconnValue is POLLOUT there), isExclusiveBindAvailable -1, and the two capability
+            // probes false -- this stack is IPv4-only and has no SO_REUSEPORT. initIDs only caches JNI class and
+            // method IDs (InetSocketAddress, InetAddress), so empty is right.
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("pollinValue")))       { return VM.pollInAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("polloutValue")))      { return VM.pollOutAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("pollerrValue")))      { return VM.pollErrAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("pollhupValue")))      { return VM.pollHupAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("pollnvalValue")))     { return VM.pollNvalAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("pollconnValue")))     { return VM.pollOutAddr; }
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isIPv6Available0")))  { return VM.sockZeroAddr; }
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isReusePortAvailable0"))) { return VM.sockZeroAddr; }
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("initIDs")))           { return VM.sockNoopAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isExclusiveBindAvailable"))) { return VM.sockZeroAddr; }  // -> 0
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isExclusiveBindAvailable"))) { return VM.exclusiveBindNoneAddr; }  // -> -1
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("shouldShutdownWriteBeforeClose0"))) { return VM.sockZeroAddr; } // -> false
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("sun/nio/ch/SocketDispatcher")))
         {

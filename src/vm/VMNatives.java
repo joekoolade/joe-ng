@@ -1292,6 +1292,50 @@ final class VMNatives
         return 0x7FFFFFFFL;
     }
 
+    // sun.nio.ch.Net's poll-event constants. unix/native/libnio/ch/Net.c answers the <poll.h> values, so these
+    // are Linux's (the platform the image bakes); pollconnValue answers POLLOUT there, so it shares pollOut.
+    // Nothing here polls yet, but NioSocketImpl passes Net.POLLIN/POLLOUT to park on a timed read or connect,
+    // and a 0 would name no event at all.
+
+    /** {@code Net.pollinValue()}: POLLIN = 0x1. */
+    static long pollIn()
+    {
+        return 0x1L;
+    }
+
+    /** {@code Net.polloutValue()} and {@code pollconnValue()}: POLLOUT = 0x4. */
+    static long pollOut()
+    {
+        return 0x4L;
+    }
+
+    /** {@code Net.pollerrValue()}: POLLERR = 0x8. */
+    static long pollErr()
+    {
+        return 0x8L;
+    }
+
+    /** {@code Net.pollhupValue()}: POLLHUP = 0x10. */
+    static long pollHup()
+    {
+        return 0x10L;
+    }
+
+    /** {@code Net.pollnvalValue()}: POLLNVAL = 0x20. */
+    static long pollNval()
+    {
+        return 0x20L;
+    }
+
+    /**
+     * {@code Net.isExclusiveBindAvailable()}: Net.c answers -1 on Linux and macOS ("not applicable"; 1 is
+     * Windows). -1 makes Net.&lt;clinit&gt; set EXCLUSIVE_BIND false without reading sun.net.useExclusiveBind.
+     */
+    static long exclusiveBindNone()
+    {
+        return -1L;
+    }
+
     static void printStackTrace(long self)
     {
         if (self <= 0x1000L)

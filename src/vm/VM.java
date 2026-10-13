@@ -1944,6 +1944,12 @@ public final class VM
         if (nativeTrueAddr == 0L) { long u = VMNatives.nativeTrue(); }
         if (iovMaxAddr == 0L) { long u = VMNatives.iovMax(); }                  // IOUtil.iovMax
         if (writevMaxAddr == 0L) { long u = VMNatives.writevMax(); }            // IOUtil.writevMax
+        if (pollInAddr == 0L) { long u = VMNatives.pollIn(); }                  // Net.pollinValue
+        if (pollOutAddr == 0L) { long u = VMNatives.pollOut(); }                // Net.polloutValue/pollconnValue
+        if (pollErrAddr == 0L) { long u = VMNatives.pollErr(); }                // Net.pollerrValue
+        if (pollHupAddr == 0L) { long u = VMNatives.pollHup(); }                // Net.pollhupValue
+        if (pollNvalAddr == 0L) { long u = VMNatives.pollNval(); }              // Net.pollnvalValue
+        if (exclusiveBindNoneAddr == 0L) { long u = VMNatives.exclusiveBindNone(); } // Net.isExclusiveBindAvailable
         if (classNameAddr == 0L) { long u = VMNatives.classNameOf(0L); }        // Class.getName0() native (M4)
         if (forNameAddr == 0L) { long u = VMNatives.forName(0L); }              // Class.forName0() native (reflection M1)
         if (assignableAddr == 0L) { long u = VMNatives.assignable(0L, 0L); }    // Class.assignable0 (interfaces too)
@@ -3386,6 +3392,12 @@ public final class VM
     static long nativeTrueAddr;        // VMNatives.nativeTrue()J -- InetAddress.isIPv4Available
     static long iovMaxAddr;            // VMNatives.iovMax()J -- IOUtil.iovMax
     static long writevMaxAddr;         // VMNatives.writevMax()J -- IOUtil.writevMax
+    static long pollInAddr;            // VMNatives.pollIn()J -- Net.pollinValue
+    static long pollOutAddr;           // VMNatives.pollOut()J -- Net.polloutValue / pollconnValue
+    static long pollErrAddr;           // VMNatives.pollErr()J -- Net.pollerrValue
+    static long pollHupAddr;           // VMNatives.pollHup()J -- Net.pollhupValue
+    static long pollNvalAddr;          // VMNatives.pollNval()J -- Net.pollnvalValue
+    static long exclusiveBindNoneAddr; // VMNatives.exclusiveBindNone()J -- Net.isExclusiveBindAvailable
     static long classNameAddr;         // VM.classNameOf(J)J — Class.getName0(Class) native (M4)
     static long forNameAddr;           // VM.forName(J)J — Class.forName0(byte[]) native (reflection arc M1)
     static long assignableAddr;        // VMNatives.assignable(JJ)J — Class.assignable0(J,J)
