@@ -26,3 +26,6 @@ ramfs/lib/junit.jar
 
 # Editor workspace file (references ../jdk, a local path) -- local-only.
 joe-ng.code-workspace
+
+# Generated from the JDK tree's java.security template by `make` (see JAVA_SECURITY in the Makefile).
+ramfs/conf/

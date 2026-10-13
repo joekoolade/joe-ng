@@ -2342,11 +2342,8 @@ public final class Loader
                 // hand-written InetAddress overlay answers an Inet4Address 0.0.0.0 for any non-4-byte array --
                 // running it would plant that wrong value in two statics. It needs the overlay from source first.
                 || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("sun/nio/ch/Net"))
-                // Inet4/6Address.<clinit> is just `init()` -- a native that caches JNI field IDs. We never
-                // instantiate them (the InetAddress overlay returns a plain InetAddress), so their <clinit>s
-                // are inert; skip them (they'd trap on the unwired native otherwise).
-                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/net/Inet4Address"))
-                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/net/Inet6Address"))
+                // java/net/Inet4Address and Inet6Address are NO LONGER SKIPPED: InetAddress is stock now and
+                // instantiates both, and their init() natives are provided empty (JNI ID caches).
                 // Proxy.<clinit> builds a jdk/internal/loader/ClassLoaderValue proxy cache and a ClassValue
                 // of MethodHandles -- both denied, and both only for MAKING proxies, which metal never does.
                 // The one method reached (isProxyClass) reads no static of Proxy, just the class literal, so
@@ -6192,7 +6189,22 @@ public final class Loader
                 // constants plus one AllPermission. PropertyPermission.getMask compares its actions string
                 // against these by IDENTITY -- and FALLS THROUGH to a char-by-char parse when they miss, so
                 // the answer is correct either way and only the fast path depends on interning.
-                || utf8HasPrefix(base, off, Magic.bytes("sun/security/util/SecurityConstants")))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/security/util/SecurityConstants"))
+                // NARROWED OUT: java.security.Security, the security-PROPERTIES store (OVERLAID from the JDK 26
+                // source; only the master-file read differs). Stock InetAddress's resolver cache reads
+                // networkaddress.cache.* through Security.getProperty, and the shipped file sets the negative
+                // TTL to 10 -- so a denied or empty Security would be a silent wrong answer. The PREFIX also
+                // admits its nested types (SecPropLoader, the anonymous Properties). Its provider methods reach
+                // sun/security/jca, which STAYS denied: properties need no providers.
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/Security"))
+                // sun.security.util.Debug: Security.<clinit> assigns sdebug = Debug.getInstance("properties"),
+                // which is null unless java.security.debug is set. Its initializer only reads two system
+                // properties; plain Java, no natives.
+                || utf8IsAtBase(base, off, Magic.bytes("sun/security/util/Debug"))
+                // sun.security.util.SecurityProperties: stock jdk.internal.util.Exceptions asks it which
+                // categories jdk.includeInExceptions names (the shipped file says hostInfoExclSocket), so every
+                // UnknownHostException message goes through it. Plain Java over System and Security properties.
+                || utf8IsAtBase(base, off, Magic.bytes("sun/security/util/SecurityProperties")))
         {
             return false;
         }
@@ -6245,11 +6257,11 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("sun/nio/ch/Poller"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/nio/ch/ExtendedSocketOption"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/net/NetworkInterface"))
-                // Exceptions = the error-message formatter (String.format->Formatter->regex + a security
-                // property read->Properties/stream), reached only at NioSocketImpl throw sites; IPAddressUtil
-                // = link-local scoped-address cache (ConcurrentHashMap), reached only under isLinkLocalAddress().
-                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/util/Exceptions"))
-                || utf8HasPrefix(base, off, Magic.bytes("sun/net/util/IPAddressUtil"))
+                // jdk/internal/util/Exceptions and sun/net/util/IPAddressUtil are NO LONGER DENIED. They were
+                // kept out because their closures (Formatter -> regex, a security-property read, a
+                // ConcurrentHashMap) OOM'd the demand-load of the day; all of those load now, Security is
+                // narrowed in above, and stock InetAddress calls both on its ordinary paths (literal parsing,
+                // IPv4-mapped conversion, the UnknownHostException message).
                 // Jar signature verification: joe-ng reads archives, it does not authenticate them. Left
                 // loadable, JarInputStream's default verifying constructor drags in JarVerifier -> the whole
                 // sun.security provider closure (SunEC, BigDecimal, regex, streams) -- hundreds of classes for
@@ -12356,7 +12368,22 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getHandle")))         { return VM.sockZeroAddr; }    // (I)J -> 0
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getAppend")))         { return VM.sockZeroAddr; }    // (I)Z -> false
         }
+        // java.net: STOCK InetAddress/Inet4Address/Inet6Address. The three init()s only cache JNI class/field IDs
+        // (share/native/libnet/Inet{,4,6}Address.c), so empty is the correct semantics. Address families: IPv4
+        // only -- the WiFi stack has no IPv6 -- so isIPv6Supported answers false, which makes InetAddress pick
+        // Inet4AddressImpl, as a JDK built without IPv6 does.
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/net/InetAddress")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("init")))              { return VM.sockNoopAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isIPv4Available")))   { return VM.nativeTrueAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isIPv6Supported")))   { return VM.sockZeroAddr; }   // -> false
+        }
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/net/Inet4Address"))
+                || utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/net/Inet6Address")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("init")))              { return VM.sockNoopAddr; }
+        }
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/net/Inet4AddressImpl")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("resolve0")))          { return VM.dnsResolveAddr; }  // (byte[])I -> WiFi DNS
         }

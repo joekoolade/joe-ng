@@ -964,8 +964,8 @@ final class VMNatives
 
     /**
      * Resolve a guest {@code byte[]} hostname to an IPv4 address, returned as a big-endian int (a.b.c.d ->
-     * (a&lt;&lt;24)|(b&lt;&lt;16)|(c&lt;&lt;8)|d), 0 on failure. Backs the overlay {@code java.net.InetAddress.resolve0}
-     * with the WiFi DNS resolver; the socket layer reads this int straight out of the InetAddress.
+     * (a&lt;&lt;24)|(b&lt;&lt;16)|(c&lt;&lt;8)|d), 0 on failure. Backs {@code java.net.Inet4AddressImpl.resolve0} (the
+     * overlay's lookupAllHostAddr) with the WiFi DNS resolver.
      */
     static int dnsResolve(long hostArrRef)
     {
@@ -1159,8 +1159,35 @@ final class VMNatives
     /** Net.connect0(preferIPv6, FileDescriptor fd, InetAddress remote, int port) -> 1 on success, 0 else. */
     static int sockConnect0(long preferIPv6, long fdRef, long inetRef, long port)
     {
-        int ipBe = (int) Magic.load64(inetRef + 16L);   // InetAddress.addr (first field, big-endian IPv4)
+        // Stock InetAddress keeps its address in holder.address -- the field the C (NET_InetAddressToSockaddr)
+        // reads. Located BY NAME through the same super-walking lookup the guest's VarHandles use, so a layout
+        // change cannot silently move it; a miss refuses the connect rather than dialling a wrong address.
+        long holderOff = fieldOffsetNamed(inetRef, Magic.bytes("holder"));
+        if (holderOff < 0L)
+        {
+            return 0;
+        }
+        long holder = Magic.load64(inetRef + holderOff);
+        long addrOff = fieldOffsetNamed(holder, Magic.bytes("address"));
+        if (addrOff < 0L)
+        {
+            return 0;
+        }
+        int ipBe = (int) Magic.load64(holder + addrOff); // InetAddressHolder.address: big-endian IPv4
         return net.Tcp.connect(fdIndex(fdRef), ipBe, (int) port);
+    }
+
+    /** Byte offset of the instance field {@code name} in {@code obj}'s class or a superclass, or -1. */
+    private static long fieldOffsetNamed(long obj, byte[] name)
+    {
+        long raw = Heap.allocData(name.length);
+        int i = 0;
+        while (i < name.length)
+        {
+            Magic.store8(raw + i, name[i]);
+            i += 1;
+        }
+        return Loader.vhFieldOffset(raw, name.length, Magic.load64(obj));
     }
 
     /** SocketDispatcher.read0(fd, address, len) -> bytes read into {@code address}, or -1 at EOF. */
@@ -1239,6 +1266,13 @@ final class VMNatives
     static long sockZero()
     {
         return 0L;
+    }
+
+    /** Shared {@code true} for a boolean native whose correct answer here is always yes
+     *  ({@code InetAddress.isIPv4Available}). */
+    static long nativeTrue()
+    {
+        return 1L;
     }
 
     /**

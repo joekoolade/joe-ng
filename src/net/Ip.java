@@ -81,9 +81,10 @@ public final class Ip
     /**
      * Answer an ARP request for our IP. A neighbour (the gateway) that learned our MAC re-verifies it with
      * unicast who-has probes once the entry goes stale; a host that never replies is declared unreachable
-     * and every later IPv4 frame for it is dropped at the router.
+     * and every later IPv4 frame for it is dropped at the router. Public because every receive loop must call
+     * it, not only this one: the driver's DNS resolver has its own loop.
      */
-    private static void answerArp(long eth)
+    public static void answerArp(long eth)
     {
         long arp = eth + 14;
         if ((((Magic.load8(arp + 6) & 0xFF) << 8) | (Magic.load8(arp + 7) & 0xFF)) != 1)

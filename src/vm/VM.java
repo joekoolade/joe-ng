@@ -1941,6 +1941,7 @@ public final class VM
         if (shutdownBeforeHaltAddr == 0L) { VMNatives.shutdownBeforeHalt(); }   // Shutdown.beforeHalt (System.exit)
         if (shutdownHalt0Addr == 0L) { VMNatives.shutdownHalt0(-1L); }          // Shutdown.halt0
         if (sockZeroAddr == 0L) { long u = VMNatives.sockZero(); }
+        if (nativeTrueAddr == 0L) { long u = VMNatives.nativeTrue(); }
         if (iovMaxAddr == 0L) { long u = VMNatives.iovMax(); }                  // IOUtil.iovMax
         if (writevMaxAddr == 0L) { long u = VMNatives.writevMax(); }            // IOUtil.writevMax
         if (classNameAddr == 0L) { long u = VMNatives.classNameOf(0L); }        // Class.getName0() native (M4)
@@ -3382,6 +3383,7 @@ public final class VM
     static long shutdownBeforeHaltAddr;// VMNatives.shutdownBeforeHalt()V — java.lang.Shutdown.beforeHalt (no-op)
     static long shutdownHalt0Addr;     // VMNatives.shutdownHalt0(J)V — java.lang.Shutdown.halt0 (System.exit)
     static long sockZeroAddr;
+    static long nativeTrueAddr;        // VMNatives.nativeTrue()J -- InetAddress.isIPv4Available
     static long iovMaxAddr;            // VMNatives.iovMax()J -- IOUtil.iovMax
     static long writevMaxAddr;         // VMNatives.writevMax()J -- IOUtil.writevMax
     static long classNameAddr;         // VM.classNameOf(J)J — Class.getName0(Class) native (M4)

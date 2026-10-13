@@ -187,6 +187,24 @@ public final class ServiceLoader<S> implements Iterable<S>
         return out.stream();
     }
 
+    /**
+     * Stock's {@code findFirst}, verbatim: the first provider the iterator yields, or empty. Dropped from this
+     * overlay until stock {@code java.net.InetAddress} asked for it ({@code loadResolver} looks up an
+     * {@code InetAddressResolverProvider} this way and falls back to the built-in resolver when there is none).
+     */
+    public Optional<S> findFirst()
+    {
+        Iterator<S> iterator = iterator();
+        if (iterator.hasNext())
+        {
+            return Optional.of(iterator.next());
+        }
+        else
+        {
+            return Optional.empty();
+        }
+    }
+
     /** The provider instances, constructed as the iteration reaches them; unloadable providers are skipped. */
     @Override
     public Iterator<S> iterator()
