@@ -4,7 +4,7 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
-- **`System.getLogger` RUNS STOCK, THE VM IS BOOTED, `StackWalker` EXISTS (2026-10-13).** First increment of the
+- **`System.getLogger` RUNS STOCK, THE VM IS BOOTED, `StackWalker` EXISTS (2026-10-13, PI-VALIDATED).** First increment of the
   System.Logger arc, which gaps (1) and (3) of the `InetAddress` card below both wait on. `getLogger` and
   `isLoggable` are host-identical; `log()` stops, loudly, at the next wall (below).
   - **`Reflection.getCallerClass()` is a compiler intrinsic** (Baseline `lowerGetCallerClass`, both the metal
@@ -62,7 +62,7 @@ Newest entries are at the top.
     again). **Suite: 40 programs, markers zero, churn `gc: collections=50`** (= #349 and main).
     **Every host-controlled probe (31) re-run on QEMU: all host-identical**, after the `PrintWriterProbe` fix
     above; `DigestProbe` and `MacProbe` print their designed divergences (`failures=0 divergences-unmet=0`).
-  - **Pi** (the image before the ScopedValue fix): NetDemo `HTTP/1.1 200 OK ... http done bytes=891`, `[main
+  - **Pi** (`537a000`, the final image): NetDemo `HTTP/1.1 200 OK ... http done bytes=891`, `[main
     returned normally]`, no new TRAP-WIRED line, `clinits=312/312/313/314` against `305/305/306/307` -- the
     logger and stack-walk classes' initializers.
 
