@@ -72,6 +72,8 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         // REACHED: the guard baked at a site that touches a class whose statics the image does not snapshot
         // (see needsInitGuard).
         HELPER_KEY[Symbols.ENSURE_INIT]      = "vm/VM.ensureInitByName(J)V";
+        // REACHED: every baked getClass() call site (see isGetClass).
+        HELPER_KEY[Symbols.GET_CLASS]        = "vm/VM.getClassOf(J)J";
     }
 
     /** The image method a helper id resolves to -- or a loud failure, never a silently wrong neighbour. */
@@ -241,9 +243,17 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         return false;   // host writer: never watches a call site
     }
 
+    /**
+     * {@code getClass()} is intrinsified HERE TOO, exactly as the metal JIT does it (Loader.isGetClass: the name
+     * and descriptor, owner-agnostic, since getClass is final in Object). The VM's own code never calls it, but
+     * baked java.base code can, and without the intrinsic a baked call dispatched to Object.getClass()'s body,
+     * which is {@code return null}: a silent null where the same source, JIT-compiled on metal, answers the
+     * mirror. It is what kept Throwable.toString out of the overlay.
+     */
     public boolean isGetClass(int methodCp)
     {
-        return false;   // host writer: no getClass intrinsic (VM's own code doesn't call it)
+        ClassFile.MemberRef r = cf.memberRef(methodCp);
+        return r.name().equals("getClass") && r.descriptor().equals("()Ljava/lang/Class;");
     }
     public void staticField(CodeBuffer cb, int reg, int fieldCp)
     {

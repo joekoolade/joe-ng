@@ -58,12 +58,11 @@ public class InetAddrProbe
             System.out.println("5 bytes: " + e.getClass().getSimpleName() + " " + e.getMessage());
         }
 
-        // Malformed LITERALS: rejected without any lookup, through jdk.internal.util.Exceptions. Two things are
-        // NOT printed, each a measured gap recorded in STATUS.md rather than a difference this probe should carry:
-        // the UnknownHostException TEXT (it includes the host only once VM.isBooted(), which this VM never
-        // reaches -- nothing raises jdk.internal.misc.VM.initLevel; the cause's message is built the same way),
-        // and the cause's toString (the Throwable overlay does not declare toString, so it answers
-        // Object.toString). Which literals are rejected, and with what cause CLASS, is printed.
+        // Malformed LITERALS: rejected without any lookup, through jdk.internal.util.Exceptions. The
+        // UnknownHostException TEXT is NOT printed, a measured gap recorded in STATUS.md rather than a difference
+        // this probe should carry: it includes the host only once VM.isBooted(), which this VM never reaches --
+        // nothing raises jdk.internal.misc.VM.initLevel -- and the cause's message is built the same way. Which
+        // literals are rejected, and with what cause CLASS, is printed.
         String[] bad = { "[::1", "1:2:3", "0x7f.1", "[1.2.3.4]" };
         for (int i = 0; i < bad.length; i += 1)
         {
