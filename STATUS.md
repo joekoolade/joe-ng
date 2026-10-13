@@ -4,6 +4,31 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **`Throwable.toString` IS STOCK'S -- THE HOST WRITER INTRINSIFIES `getClass()` (2026-10-13, PI-VALIDATED).** Closes gap (2)
+  of the `InetAddress` card below. Every exception's `toString` answered `Object.toString` (`name@hash`), and so
+  did every message built from one: the cause constructor sets `detailMessage = cause.toString()`, so a wrapping
+  exception's MESSAGE was wrong too.
+  - **Why the overlay left it undeclared:** `java/lang/Throwable` is baked, so its overlay body runs the HOST
+    WRITER's compiled copy, and `WriterSymbols.isGetClass` answered false -- the writer compiled `getClass()` as
+    an ordinary virtual call into `Object.getClass()`, whose body is `return null`. The metal JIT intrinsifies
+    the same call to `GET_CLASS` (`VM.getClassOf`). A declared `toString` would have NPE'd inside the report it
+    exists to produce.
+  - **Fix:** `WriterSymbols.isGetClass` matches name and descriptor (owner-agnostic, as `Loader.isGetClass`
+    does; getClass is final in Object), and `HELPER_KEY[GET_CLASS]` names `vm/VM.getClassOf(J)J`. The overlay
+    declares stock's three-line `toString`. Any other baked `getClass()` call now answers the mirror instead of
+    null.
+  - **`ThrowableToStringProbe`** (new): direct, concatenation, `String.valueOf`, a null message, a subclass
+    overriding `getLocalizedMessage`, a message-less subclass, the cause constructor's message, a nested
+    cause, an implicit ClassCastException and ArrayIndexOutOfBoundsException, and a plain object's `getClass()`.
+    **Host-identical on QEMU at the first boot.** Negative control (the two source changes stashed, same probe):
+    10 of the 12 numbered lines differ, each a `name@hash`.
+  - Host: `make overlaycheck` OK (`0 new`). **Suite: 40 programs, markers zero, churn `gc: collections=50`** (=
+    #348 and main).
+  - **Pi:** NetDemo `HTTP/1.1 200 OK ... http done bytes=892`, `[main returned normally]`, no new TRAP-WIRED line,
+    `clinits=305/305/306/307` (= #348). NetDemo throws nothing on success, so this is the gate that every baked
+    `getClass()` site now going through the intrinsic left the boot and network path intact; `toString` itself is
+    the probe's.
+
 - **`Net.<clinit>` RUNS (2026-10-13, PI-VALIDATED).** The last socket entry on `Loader`'s `<clinit>` skip list, unblocked by
   stock `InetAddress` (#347): its first static block builds the IPv6 any-local and loopback addresses with
   `InetAddress.getByAddress(new byte[16])`, which the old overlay answered with an `Inet4Address` 0.0.0.0.
