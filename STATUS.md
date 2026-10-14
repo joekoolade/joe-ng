@@ -4,7 +4,7 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
-- **STOCK `java.util.concurrent.Semaphore` -- THE OVERLAY OVER SIXTEEN SCHEDULER SEMAPHORES IS DELETED (2026-10-14).**
+- **STOCK `java.util.concurrent.Semaphore` -- THE OVERLAY OVER SIXTEEN SCHEDULER SEMAPHORES IS DELETED (2026-10-14, PI-VALIDATED).**
   The overlay was three methods (`<init>(int)`, `acquire`, `release`) over the VM's own counting semaphores: each
   instance took one of `VM.NUM_SEM = 16` fixed slots (5 reserved), so a program creating a dozen ran out, and it
   dropped `tryAcquire`, `availablePermits` (both known gaps), every multi-permit/timed/fair form, `Serializable`,
@@ -17,7 +17,8 @@ Newest entries are at the top.
   - `make overlaycheck`: known gaps 15 -> 13, dropped supertypes 24 -> 23. **Suite: 40 programs, markers zero,
     `gc: collections=50`**; the philosophers' events are identical to the previous suite (each P0..P4 thinks and
     hungers 3 times, then done); their batch carries 2 more classes (AQS).
-- **THIRTEEN java.lang EXCEPTION OVERLAYS DELETED -- STOCK RUNS; `Throwable` IS `Serializable` (2026-10-14).**
+  - **Pi:** validated with the exception increment below (same image, `0cb98c8`).
+- **THIRTEEN java.lang EXCEPTION OVERLAYS DELETED -- STOCK RUNS; `Throwable` IS `Serializable` (2026-10-14, PI-VALIDATED).**
   The overlay backlog's largest source. `ArithmeticException`, `ArrayIndexOutOfBoundsException`,
   `ClassNotFoundException`, `IllegalAccessException`, `IllegalArgumentException`, `IllegalThreadStateException`,
   `IndexOutOfBoundsException`, `InstantiationException`, `NoSuchFieldException`, `NoSuchMethodException`,
@@ -53,7 +54,11 @@ Newest entries are at the top.
     the thirteen with a `<clinit>`, by `javap`), running clean. **All 36 host-controlled probes re-run on QEMU:
     34 host-identical, DigestProbe/MacProbe their designed divergences.** **MetalJUnit, the eight-class jtreg
     baseline (incl. `JoinWithDuration`, which throws `IllegalThreadStateException`): `ran 44, failures 0`.**
-  - **Pi:** pending.
+  - **Pi (`0cb98c8`, both increments):** NetDemo `HTTP/1.1 200 OK ... http done bytes=888` (`Age: 8`, three digits
+    shorter than the 891-byte runs'), `[main returned normally]`, no new TRAP-WIRED line. `clinits=373/373/374/375`
+    against `372/372/373/374`: the +1 is `ClassNotFoundException`'s initializer, as on QEMU. Batch 1 `+1406blob`
+    unchanged; `n:imap` 752 -> 841 (stated, not attributed: consistent with every `Throwable` now carrying
+    `Serializable`'s itable entry).
 - **`Security.setProperty` RUNS STOCK; `ensureInitialized` REALLY INITIALIZES; STATIC VARHANDLES (2026-10-14, PI-VALIDATED).**
   Closes gap (3) of the `InetAddress` card: the last of its four. Stock `setProperty` reaches
   `jdk.internal.event.EventHelper` on every call, and three walls stood between them, each found by the probe in turn.
