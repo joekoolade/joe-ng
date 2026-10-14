@@ -46,13 +46,13 @@ public class Philosopher implements Runnable
             Magic.report(id, 1);                 // hungry
             if (id % 2 == 0)
             {
-                left.acquire();                  // even: left fork first
-                right.acquire();
+                left.acquireUninterruptibly();   // even: left fork first
+                right.acquireUninterruptibly();
             }
             else
             {
-                right.acquire();                 // odd: right fork first (breaks the cycle)
-                left.acquire();
+                right.acquireUninterruptibly();  // odd: right fork first (breaks the cycle)
+                left.acquireUninterruptibly();
             }
             Magic.report(id, 2);                 // eating
             Magic.sleepMs(30L);

@@ -4,6 +4,61 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **STOCK `java.util.concurrent.Semaphore` -- THE OVERLAY OVER SIXTEEN SCHEDULER SEMAPHORES IS DELETED (2026-10-14, PI-VALIDATED).**
+  The overlay was three methods (`<init>(int)`, `acquire`, `release`) over the VM's own counting semaphores: each
+  instance took one of `VM.NUM_SEM = 16` fixed slots (5 reserved), so a program creating a dozen ran out, and it
+  dropped `tryAcquire`, `availablePermits` (both known gaps), every multi-permit/timed/fair form, `Serializable`,
+  and `acquire`'s `throws InterruptedException`. Stock is AQS over `LockSupport.park`, which already runs on the
+  metal (LockProbe, ExecutorProbe). The dining-philosophers demo, its only user, calls `acquireUninterruptibly()`
+  -- the overlay's semantics exactly, without the checked exception.
+  - **Probe:** `SemaphoreProbe` (new): the dropped members, `acquire(2)`/`release(3)`, `drainPermits`, a timed
+    `tryAcquire` that times out, a fair semaphore, FORTY alive at once (each acquired once: 40), and four threads x
+    200 on one permit (`total=800 maxInside=1`). **Host-identical at the first boot.**
+  - `make overlaycheck`: known gaps 15 -> 13, dropped supertypes 24 -> 23. **Suite: 40 programs, markers zero,
+    `gc: collections=50`**; the philosophers' events are identical to the previous suite (each P0..P4 thinks and
+    hungers 3 times, then done); their batch carries 2 more classes (AQS).
+  - **Pi:** validated with the exception increment below (same image, `0cb98c8`).
+- **THIRTEEN java.lang EXCEPTION OVERLAYS DELETED -- STOCK RUNS; `Throwable` IS `Serializable` (2026-10-14, PI-VALIDATED).**
+  The overlay backlog's largest source. `ArithmeticException`, `ArrayIndexOutOfBoundsException`,
+  `ClassNotFoundException`, `IllegalAccessException`, `IllegalArgumentException`, `IllegalThreadStateException`,
+  `IndexOutOfBoundsException`, `InstantiationException`, `NoSuchFieldException`, `NoSuchMethodException`,
+  `NullPointerException`, `ReflectiveOperationException` and `reflect/InvocationTargetException` were hand-written
+  `super(...)` shells -- no natives, no VM-visible state -- the shape `Exception`/`RuntimeException`/`Error` were
+  deleted for (2026-09-23). What they cost, measured:
+  - **`IllegalThreadStateException` extended `RuntimeException`** where stock extends `IllegalArgumentException`,
+    so a `catch (IllegalArgumentException e)` let it through.
+  - **Dropped members:** `IllegalArgumentException(String, Throwable)` (a known gap), and every shell's
+    `(Throwable)`/`(String, Throwable)` and `IndexOutOfBounds`/`ArrayIndexOutOfBounds`' `(int)`/`(long)`
+    constructors with their stock messages.
+  - **Not one exception in the VM was `Serializable`** -- not from these shells but from `Throwable`'s overlay,
+    which dropped stock's `implements Serializable`, so every exception inherited the omission (0 of 13 against
+    the host's 13). Restored: a marker, so the VM-visible field layout the overlay exists for is untouched.
+  - **`NullPointerException.getExtendedNPEMessage` -> null**, HotSpot's own answer with
+    `-XX:-ShowCodeDetailsInExceptionMessages`: the "helpful" text is computed from the faulting BCI, and this VM maps
+    a pc to a line. Reached only after `fillInStackTrace()`; the VM's implicit NPEs are allocated without a
+    constructor and stay at state 0, so `getMessage()` is null without calling it -- as the shell answered.
+  - **`java/lang/reflect/InvocationTargetException` is narrowed out of the `java/lang/reflect/` denial.** As an
+    overlay it got through; deleted, the stock class met the prefix and `new InvocationTargetException` was an
+    `UNRESOLVED NEW` -- caught by the probe on its first boot.
+  - **Probe:** `StockExceptionProbe` (new): all 13 `Serializable`; ITSE caught as IAE; the cause-chain
+    constructors; the IOOBE/AIOOBE int and long messages; `ReflectiveOperationException` as the common catch;
+    ITE's target and cause; NPE's message bare, given, and after `fillInStackTrace`; and the VM's OWN implicit
+    AIOOBE, ArithmeticException and NPE caught by their stock supertypes. Host-identical against
+    `-XX:-ShowCodeDetailsInExceptionMessages --limit-modules java.base`.
+  - `make overlaycheck`: overlaid classes 106 -> 93; known gaps 16 -> 15; dropped supertypes 39 -> 24 (the
+    baseline regenerated: it also carried 23 lines fixed by earlier work and never pruned, `Thread.getState` among
+    them).
+  - **Suite: 40 programs, markers zero (incl. `EXCEPTION CLASS NOT LOADED` 0), churn `gc: collections=50`**, batch
+    blob counts identical; **`clinits` +1 from batch 2 on (324 -> 325)**, which is stock `ClassNotFoundException`'s
+    own initializer (`serialPersistentFields = { new ObjectStreamField("ex", Throwable.class) }` -- the only one of
+    the thirteen with a `<clinit>`, by `javap`), running clean. **All 36 host-controlled probes re-run on QEMU:
+    34 host-identical, DigestProbe/MacProbe their designed divergences.** **MetalJUnit, the eight-class jtreg
+    baseline (incl. `JoinWithDuration`, which throws `IllegalThreadStateException`): `ran 44, failures 0`.**
+  - **Pi (`0cb98c8`, both increments):** NetDemo `HTTP/1.1 200 OK ... http done bytes=888` (`Age: 8`, three digits
+    shorter than the 891-byte runs'), `[main returned normally]`, no new TRAP-WIRED line. `clinits=373/373/374/375`
+    against `372/372/373/374`: the +1 is `ClassNotFoundException`'s initializer, as on QEMU. Batch 1 `+1406blob`
+    unchanged; `n:imap` 752 -> 841 (stated, not attributed: consistent with every `Throwable` now carrying
+    `Serializable`'s itable entry).
 - **`Security.setProperty` RUNS STOCK; `ensureInitialized` REALLY INITIALIZES; STATIC VARHANDLES (2026-10-14, PI-VALIDATED).**
   Closes gap (3) of the `InetAddress` card: the last of its four. Stock `setProperty` reaches
   `jdk.internal.event.EventHelper` on every call, and three walls stood between them, each found by the probe in turn.

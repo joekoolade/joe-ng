@@ -6194,6 +6194,10 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Constructor"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Array"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/AccessibleObject"))
+                // InvocationTargetException runs STOCK: a plain exception, no natives. It was a hand-written overlay
+                // shell and got through as one; deleted, the stock class met this prefix denial and `new
+                // InvocationTargetException` became an UNRESOLVED NEW (StockExceptionProbe).
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/InvocationTargetException"))
                 // Executable is the shared supertype of Method and Constructor, and Parameter is what its
                 // getParameters() answers. Both are OVERLAID (see guestsrc) rather than allowed through to
                 // stock, whose versions are built on the denied sun/reflect/generics + sun/reflect/annotation
@@ -12372,6 +12376,15 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("setOut0")))           { return VM.setOut0Addr; }   // (PrintStream)V
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("setErr0")))           { return VM.setErr0Addr; }   // (PrintStream)V
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("setIn0")))            { return VM.setIn0Addr; }    // (InputStream)V
+        }
+        // NullPointerException.getExtendedNPEMessage() -> NULL: HotSpot's own answer with
+        // -XX:-ShowCodeDetailsInExceptionMessages, and for every NPE not raised at an NPE-ing bytecode. The
+        // "helpful" text is computed from the bytecode at the faulting BCI, and this VM maps a pc to a line, not
+        // to a bci. Reached only after fillInStackTrace() (state 1); the VM's own implicit NPEs are allocated
+        // without a constructor and stay at state 0, so getMessage() answers null without calling it.
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/NullPointerException")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getExtendedNPEMessage"))) { return VM.sockZeroAddr; } // ()String -> null
         }
         // TimeZone.getSystemTimeZoneID(javaHome) -> NULL, the answer TimeZone_md.c's findJavaTZ_md gives with no
         // TZ variable and no /etc/timezone or /etc/localtime -- none of which exists here. setDefaultZone then

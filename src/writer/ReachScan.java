@@ -148,6 +148,7 @@ public final class ReachScan
                 || c.startsWith("java/lang/reflect/Constructor")
                 || c.startsWith("java/lang/reflect/Array")
                 || c.startsWith("java/lang/reflect/AccessibleObject")
+                || c.startsWith("java/lang/reflect/InvocationTargetException")  // stock exception, no natives
                 || c.startsWith("java/lang/ClassLoader")                 // M3: JDK-free overlay (defineClass/loadClass)
                 || c.startsWith("sun/net/ext/ExtendedSocketOptions")    // overlaid no-op; rest of sun/net/ext denied
                 // The java.security PERMISSION + MARKER layer: plain data structures and string matching,
