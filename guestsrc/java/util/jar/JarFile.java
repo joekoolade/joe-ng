@@ -16,6 +16,7 @@ import java.io.InputStream;
 import java.util.Enumeration;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
+import jdk.internal.access.SharedSecrets;
 
 /**
  * A JDK-free {@code java.util.jar.JarFile} overlay (wins by name). It is a thin layer over the
@@ -31,6 +32,23 @@ import java.util.zip.ZipFile;
 public class JarFile extends ZipFile
 {
     public static final String MANIFEST_NAME = "META-INF/MANIFEST.MF";
+
+    /**
+     * Stock's: bound while a jar VERIFIER initializes ({@code JarFile.initializeVerifier}). This overlay never
+     * verifies, so nothing binds it and {@link #isInitializing} answers false -- read from the value, as stock
+     * reads it, not hardcoded.
+     */
+    private static final ScopedValue<Boolean> IN_VERIFIER_INIT = ScopedValue.newInstance();
+
+    static
+    {
+        // Stock's first initializer line. jdk.internal.event.EventHelper reads it at class initialization
+        // (SharedSecrets.javaUtilJarAccess()) and calls isInitializing() on every Security.setProperty; left
+        // unset it was null, and the first setProperty NPE'd. The impl's other JarFile callees
+        // (hasClassPathAttribute, ensureInitialization, entryFor) serve the signed-jar and class-path paths this
+        // overlay does not carry, and stay undeclared so they fail loudly if reached.
+        SharedSecrets.setJavaUtilJarAccess(new JavaUtilJarAccessImpl());
+    }
 
     private Manifest manifest;
     private boolean manifestRead;
@@ -76,6 +94,12 @@ public class JarFile extends ZipFile
     public Enumeration<JarEntry> entries()
     {
         return new JarEntries(super.entries());
+    }
+
+    /** Stock's: true while a jar verifier is being initialized on this thread (see {@link #IN_VERIFIER_INIT}). */
+    static boolean isInitializing()
+    {
+        return IN_VERIFIER_INIT.isBound();
     }
 
     /** Always false: versioned ({@code META-INF/versions/}) entry selection is not implemented. */
