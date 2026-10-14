@@ -22,8 +22,12 @@ package java.lang;
  * -> {@code Throwable(String)}. Without them the {@code super} call is unresolved (target 0) and hits the
  * unresolved-call trap. Field-free, so the message is dropped — the metal catches by type, not text; add a
  * {@code detailMessage} field + {@code getMessage()} on demand if a reached path needs the text.
+ *
+ * <p>{@code implements Serializable}, as stock does: a MARKER, so the VM-visible field layout above is untouched.
+ * It was dropped, and every exception in the VM inherited the omission -- {@code e instanceof Serializable}
+ * answered false for all of them (StockExceptionProbe: 0 of 13 against the host's 13).
  */
-public class Throwable
+public class Throwable implements java.io.Serializable
 {
     // Stock Throwable/Error/Exception constructors read this JFR flag: `if (Throwable.jfrTracing)
     // ThrowableTracer.traceError(...)`. jdk/internal/event/ThrowableTracer is never compiled on metal (JFR is
