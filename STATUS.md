@@ -4,6 +4,62 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **`java.time` RUNS, THE DEFAULT ZONE IS GMT, `System.Logger.log()` PRINTS (2026-10-13, PI-VALIDATED).** Second increment of
+  the System.Logger arc: the wall the card below recorded is gone, and `log()` is host-identical, header and all.
+  - **java.time is no longer denied** (`java/time/chrono|temporal|zone`, `Zone*`, `Instant`, `DateTimeException`,
+    and `TimeUnit$1`, the ChronoUnit switch map). It was denied because `Formatter` NAMES ten of its classes for
+    `%t` and the dependency pass of the day pulled +357 classes into every batch. MEASURED now: **+162 classes,
+    once**, in a program's first batch (suite batch 2: 1017 -> 1179 blobs, cumulative thereafter), suite wall time
+    945 -> 1050 s, churn `gc: collections=50` unchanged.
+  - **The hand-written `java/time/Duration` overlay is deleted** -- 93 lines with ONE `long nanos` field where
+    stock has `seconds` + `nanos`; stock runs. Its three known-gap lines and three dropped supertypes go with it.
+  - **The default zone is GMT, as stock decides it.** `TimeZone.getSystemTimeZoneID` -> null, which is what
+    `TimeZone_md.c`'s `findJavaTZ_md` returns with no `TZ`, `/etc/timezone` or `/etc/localtime`; `setDefaultZone`
+    then takes stock's own `"GMT"`. `getSystemGMTOffsetID` is deliberately unmapped (reached only if that fails).
+    `sun/util/calendar/` is narrowed out (ZoneInfo, ZoneInfoFile, the calendar systems; pure Java), and the zone
+    rules ship as **`/lib/tzdb.dat`**, copied by the Makefile from the SEED JDK -- the java.base the writer bakes,
+    so the same format and TZDB release (generated, gitignored, like `java.security`). `ZoneInfoFile` reads it with
+    `new FileInputStream(File)`, which the RAMFS overlay lacked (a known gap): added, with stock's null and
+    invalid-path checks.
+  - **`DateFormatSymbols` is overlaid from the JDK 26 source**, only its locale-data reads replaced: it reads the
+    REAL generated CLDR bundles java.base ships (`sun/text/resources/cldr/FormatData_en` over the root
+    `FormatData`, plain `ListResourceBundle`s, linked by a small parent-setting subclass) instead of the provider
+    adapter -- same keys, same two-element AM/PM trim. The en-over-root chain was checked against the host's
+    `DateFormatSymbols` key by key first. Stated limits: only root and English data exist in java.base, the "rg"
+    override is not applied, `getZoneStrings` still traps. Cost seen: the two bundles' `getContents` compile to
+    1.0 MB and 1.6 MB (`HUGE body`) -- one-shot bodies the collector reclaims.
+  - **`MessageFormat` runs stock** (narrowed out of `java/text/`): `{0}` with a Number goes through the
+    `NumberFormat` overlay's factory; the Date/list/choice element paths stay denied and trap.
+  - **VM BUG FIXED -- `Class.isAssignableFrom` was FALSE for an interface against ITSELF** whenever its interface
+    ID was odd. `VM.typeAssignable`'s O(1) interface path reads the receiver's `TYPE_IMPLEMENTS` word as a
+    doesImplement bitmap with bit 0 as its "computed" marker; on an interface Type that word is the interface's
+    own ID, and `ObjectModel` justified the overlap with "a receiver's Type is never an interface" -- true of
+    `instanceof`/`checkcast`, false of `isAssignableFrom` and of the array-element recursion. The fast path now
+    requires a non-interface receiver, and `type == target` is answered first. Found because `SimpleConsoleLogger`
+    filters its machinery with `System.Logger.class.isAssignableFrom(frame.getDeclaringClass())` and named
+    `java.lang.System$Logger log` as the caller. **Control on the unfixed VM: 9 of 21 baked interfaces not
+    self-assignable** (`Runnable`, `Iterable`, `Map`, `Set`, `RandomAccess`, `Cloneable`, `Closeable`,
+    `Supplier`, `System$Logger`); fixed: 0.
+  - **Probes:** `JavaTimeProbe` (new): ISO date arithmetic, leap years, adjusters, offsets, instants, `Duration`,
+    `DateTimeFormatter` (ISO and numeric pattern), `parse`, `%t` over a temporal, the default zone, `now()`.
+    `DefaultFrameProbe` (new): a frame inside an interface default method, its declaring class against the class
+    literal, `forName` against the literal, 21 baked interfaces against themselves, interface-extends-interface,
+    interface arrays. `SystemLoggerProbe` gains three `log()` calls through a captured `System.err` -- the
+    message lines verbatim, the header's shape and caller (the clock differs; the metal's reads 1970). All three
+    host-identical against `--limit-modules java.base -Duser.timezone=GMT`.
+  - Host: `make overlaycheck` OK (`0 new`; known gaps 20 -> 16, dropped supertypes 42 -> 39). **Suite: 40
+    programs, markers zero, churn `gc: collections=50`.** **Every host-controlled probe (34) re-run on QEMU:
+    host-identical**; `DigestProbe`/`MacProbe` print their designed divergences (`failures=0
+    divergences-unmet=0`).
+  - **RECORDED, NOT CAUSED HERE: `ChmRaceProbe` hangs intermittently** -- silent right after its third load
+    batch, inside the first four-thread phase (concurrent puts while bodies compile lazily). This branch: 3 hangs
+    in 5 runs. **Control on `main` (`f77295b`): 1 in 5, at the identical point.** Pre-existing; the two rates are
+    too few runs apart to say whether the larger closure widens the window. Next to chase.
+  - **Pi (`a37d8ad`):** the first boot ran NetDemo to `[main returned normally]` with no trap and no new
+    TRAP-WIRED line, but read `http done bytes=0` -- a known intermittent outcome of NetDemo's GET on this board,
+    not this branch. **The second boot: `HTTP/1.1 200 OK ... http done bytes=891`, `[main returned normally]`.**
+    Both boots: batch 1 `+1406blob` (was 1250: +156, the java.time closure), `clinits=372/372/373/374` (was
+    312/312/313/314), `gc: collections=6`.
 - **`System.getLogger` RUNS STOCK, THE VM IS BOOTED, `StackWalker` EXISTS (2026-10-13, PI-VALIDATED).** First increment of the
   System.Logger arc, which gaps (1) and (3) of the `InetAddress` card below both wait on. `getLogger` and
   `isLoggable` are host-identical; `log()` stops, loudly, at the next wall (below).

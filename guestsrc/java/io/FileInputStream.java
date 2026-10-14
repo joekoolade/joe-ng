@@ -41,6 +41,29 @@ public class FileInputStream extends InputStream
         }
     }
 
+    /**
+     * Stock's {@code File} constructor, with stock's argument checks: a null file is an NPE and an invalid path
+     * (one holding a NUL) is {@code FileNotFoundException("Invalid file path")}. The open is the RAMFS one.
+     * Reached by {@code sun.util.calendar.ZoneInfoFile}, which reads {@code /lib/tzdb.dat} this way.
+     */
+    public FileInputStream(File file) throws FileNotFoundException
+    {
+        String name = (file != null ? file.getPath() : null);
+        if (name == null)
+        {
+            throw new NullPointerException();
+        }
+        if (file.isInvalid())
+        {
+            throw new FileNotFoundException("Invalid file path");
+        }
+        entry = open0(name);
+        if (entry == 0L)
+        {
+            throw new FileNotFoundException(name);
+        }
+    }
+
     /** VM native ({@code Loader.nativeBuf} -> {@code VM.fileOpen}): path -> file-table entry addr, or 0. */
     private static native long open0(String name);
 
