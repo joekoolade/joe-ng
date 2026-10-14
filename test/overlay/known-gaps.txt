@@ -17,8 +17,6 @@ java/lang/ClassLoader#getDefinedPackage(Ljava/lang/String;)Ljava/lang/Package;
 java/lang/ClassLoader#getParent()Ljava/lang/ClassLoader;
 java/lang/reflect/Field#getDouble(Ljava/lang/Object;)D
 java/lang/reflect/Field#getFloat(Ljava/lang/Object;)F
-java/util/concurrent/Semaphore#availablePermits()I
-java/util/concurrent/Semaphore#tryAcquire()Z
 java/util/jar/JarFile#<init>(Ljava/io/File;)V
 #
 # Supertypes an overlay drops. A dropped SUPERCLASS or INTERFACE is as silent as a
@@ -44,6 +42,5 @@ supertype#java/lang/reflect/Method#java/lang/reflect/GenericDeclaration
 supertype#java/lang/reflect/Method#java/lang/reflect/Member
 supertype#java/net/SocksSocketImpl#java/net/SocksConsts
 supertype#java/text/BreakIterator#java/lang/Cloneable
-supertype#java/util/concurrent/Semaphore#java/io/Serializable
 supertype#java/util/jar/JarFile#java/util/zip/ZipConstants
 supertype#java/util/zip/ZipFile#java/util/zip/ZipConstants

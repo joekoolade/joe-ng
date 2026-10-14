@@ -4,6 +4,19 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **STOCK `java.util.concurrent.Semaphore` -- THE OVERLAY OVER SIXTEEN SCHEDULER SEMAPHORES IS DELETED (2026-10-14).**
+  The overlay was three methods (`<init>(int)`, `acquire`, `release`) over the VM's own counting semaphores: each
+  instance took one of `VM.NUM_SEM = 16` fixed slots (5 reserved), so a program creating a dozen ran out, and it
+  dropped `tryAcquire`, `availablePermits` (both known gaps), every multi-permit/timed/fair form, `Serializable`,
+  and `acquire`'s `throws InterruptedException`. Stock is AQS over `LockSupport.park`, which already runs on the
+  metal (LockProbe, ExecutorProbe). The dining-philosophers demo, its only user, calls `acquireUninterruptibly()`
+  -- the overlay's semantics exactly, without the checked exception.
+  - **Probe:** `SemaphoreProbe` (new): the dropped members, `acquire(2)`/`release(3)`, `drainPermits`, a timed
+    `tryAcquire` that times out, a fair semaphore, FORTY alive at once (each acquired once: 40), and four threads x
+    200 on one permit (`total=800 maxInside=1`). **Host-identical at the first boot.**
+  - `make overlaycheck`: known gaps 15 -> 13, dropped supertypes 24 -> 23. **Suite: 40 programs, markers zero,
+    `gc: collections=50`**; the philosophers' events are identical to the previous suite (each P0..P4 thinks and
+    hungers 3 times, then done); their batch carries 2 more classes (AQS).
 - **THIRTEEN java.lang EXCEPTION OVERLAYS DELETED -- STOCK RUNS; `Throwable` IS `Serializable` (2026-10-14).**
   The overlay backlog's largest source. `ArithmeticException`, `ArrayIndexOutOfBoundsException`,
   `ClassNotFoundException`, `IllegalAccessException`, `IllegalArgumentException`, `IllegalThreadStateException`,
