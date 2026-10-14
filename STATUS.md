@@ -4,7 +4,7 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
-- **`Security.setProperty` RUNS STOCK; `ensureInitialized` REALLY INITIALIZES; STATIC VARHANDLES (2026-10-14).**
+- **`Security.setProperty` RUNS STOCK; `ensureInitialized` REALLY INITIALIZES; STATIC VARHANDLES (2026-10-14, PI-VALIDATED).**
   Closes gap (3) of the `InetAddress` card: the last of its four. Stock `setProperty` reaches
   `jdk.internal.event.EventHelper` on every call, and three walls stood between them, each found by the probe in turn.
   - **`MethodHandles.Lookup.findStaticVarHandle`** (a dropped overlay member: `VIRTUALRESOLVE FAILED`, `TRAPWIRE
@@ -37,7 +37,9 @@ Newest entries are at the top.
     host-controlled probe (35) re-run on QEMU: host-identical**; DigestProbe/MacProbe print their designed
     divergences (`failures=0 divergences-unmet=0`). `ParkProbe`'s and `TlrProbe`'s host controls had been deleted
     from `/tmp` (the oldest there); regenerated, they equal the previous run's metal output byte for byte.
-  - **Pi:** pending.
+  - **Pi (`f77d676`):** NetDemo `HTTP/1.1 200 OK ... http done bytes=892` (the `Age:` header is one digit longer
+    than the 891-byte runs'), `[main returned normally]`, no new TRAP-WIRED line, `clinits=372/372/373/374` and
+    batch 1 `+1406blob` -- unchanged: NetDemo's boot did not depend on the no-op initializers.
 - **THE `ChmRaceProbe` HANG WAS A CROSS-TASK CLASS-INIT DEADLOCK, CAUSED BY THE PENDING-INIT DRAIN (2026-10-14, PI-VALIDATED).**
   Recorded on the card below as pre-existing (main hung 1 run in 5 at the identical point); fixed here.
   - **Found with a new instrument, the HANG DUMP** (`/etc/init` key `hangdump=<secs>`, off when absent). Past the
