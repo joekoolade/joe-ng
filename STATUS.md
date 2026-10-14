@@ -4,7 +4,7 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
-- **THE `ChmRaceProbe` HANG WAS A CROSS-TASK CLASS-INIT DEADLOCK, CAUSED BY THE PENDING-INIT DRAIN (2026-10-14).**
+- **THE `ChmRaceProbe` HANG WAS A CROSS-TASK CLASS-INIT DEADLOCK, CAUSED BY THE PENDING-INIT DRAIN (2026-10-14, PI-VALIDATED).**
   Recorded on the card below as pre-existing (main hung 1 run in 5 at the identical point); fixed here.
   - **Found with a new instrument, the HANG DUMP** (`/etc/init` key `hangdump=<secs>`, off when absent). Past the
     deadline each core's next task switch reports the task leaving it, and the first core also prints the task
@@ -37,7 +37,9 @@ Newest entries are at the top.
     1050 s last card: QEMU timing -- neither change is on a normal boot's path). **Every host-controlled probe
     (34) re-run on QEMU: host-identical**, ChmRaceProbe included; DigestProbe/MacProbe print their designed
     divergences (`failures=0 divergences-unmet=0`).
-  - **Pi:** pending.
+  - **Pi (`41530b2`):** NetDemo `HTTP/1.1 200 OK ... http done bytes=891`, `[main returned normally]`, no new
+    TRAP-WIRED line, `clinits=372/372/373/374` and batch 1 `+1406blob` -- both unchanged from the previous card,
+    as expected: neither change is on a single-threaded boot's path.
 - **`java.time` RUNS, THE DEFAULT ZONE IS GMT, `System.Logger.log()` PRINTS (2026-10-13, PI-VALIDATED).** Second increment of
   the System.Logger arc: the wall the card below recorded is gone, and `log()` is host-identical, header and all.
   - **java.time is no longer denied** (`java/time/chrono|temporal|zone`, `Zone*`, `Instant`, `DateTimeException`,
