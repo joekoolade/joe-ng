@@ -5,7 +5,7 @@ Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constrain
 Newest entries are at the top.
 
 - **REFLECTIVE AND UPDATER FIELD WRITES WERE WRONG ON MAIN: STALE HIGH HALVES, A NON-ATOMIC CAS, FLOATS AS POINTERS
-  (2026-10-14).** Found while closing the `Field.getFloat`/`getDouble` gaps -- each a SILENT wrong answer.
+  (2026-10-14, PI-VALIDATED).** Found while closing the `Field.getFloat`/`getDouble` gaps -- each a SILENT wrong answer.
   - **`Field.setInt`/`setShort`/`setByte`/`setChar`/`setBoolean` and the `set(...)` arms wrote 32 bits** into an
     8-byte field slot whose compiled `getfield` reads all 64. Over a negative value the old `0xFFFFFFFF` high half
     stayed: MEASURED on the unfixed VM, `setInt(p, 5)` over `-1` gave a value passing `i == 5` (a 32-bit compare)
@@ -32,7 +32,8 @@ Newest entries are at the top.
     `clinits=325`** (unchanged). **All 41 host-controlled probes re-run on QEMU: 39 host-identical** (incl.
     `AtomicUpdaters` and `Lazy`), DigestProbe/MacProbe their designed divergences. **MetalJUnit baseline: `ran 44,
     failures 0`.**
-  - **Pi:** pending.
+  - **Pi (`4ed964b`):** NetDemo `HTTP/1.1 200 OK ... http done bytes=888`, `[main returned normally]`, no new
+    TRAP-WIRED line, `clinits=373/373/374/375` and batch 1 `+1406blob` -- unchanged, as expected.
 - **STOCK `java.util.concurrent.Semaphore` -- THE OVERLAY OVER SIXTEEN SCHEDULER SEMAPHORES IS DELETED (2026-10-14, PI-VALIDATED).**
   The overlay was three methods (`<init>(int)`, `acquire`, `release`) over the VM's own counting semaphores: each
   instance took one of `VM.NUM_SEM = 16` fixed slots (5 reserved), so a program creating a dozen ran out, and it
