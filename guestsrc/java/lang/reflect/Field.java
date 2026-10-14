@@ -115,6 +115,8 @@ public final class Field extends AccessibleObject
         if (typeChar == 'B') { return Byte.valueOf((byte) Magic.load32(a)); }
         if (typeChar == 'C') { return Character.valueOf((char) Magic.load32(a)); }
         if (typeChar == 'S') { return Short.valueOf((short) Magic.load32(a)); }
+        if (typeChar == 'F') { return Float.valueOf(Float.intBitsToFloat(Magic.load32(a))); }
+        if (typeChar == 'D') { return Double.valueOf(Double.longBitsToDouble(Magic.load64(a))); }
         return Magic.fromAddr(Magic.load64(a));                              // 'L' / '[' reference
     }
 
@@ -122,13 +124,33 @@ public final class Field extends AccessibleObject
     {
         checkAccess(clazz, modifiers, Magic.readLR());
         long a = addr(obj);
-        if (typeChar == 'I') { Magic.store32(a, ((Integer) value).intValue()); return; }
+        if (typeChar == 'I') { slot(a, ((Integer) value).intValue()); return; }
         if (typeChar == 'J') { Magic.store64(a, ((Long) value).longValue()); return; }
-        if (typeChar == 'Z') { Magic.store32(a, ((Boolean) value).booleanValue() ? 1 : 0); return; }
-        if (typeChar == 'B') { Magic.store32(a, ((Byte) value).byteValue()); return; }
-        if (typeChar == 'C') { Magic.store32(a, ((Character) value).charValue()); return; }
-        if (typeChar == 'S') { Magic.store32(a, ((Short) value).shortValue()); return; }
+        if (typeChar == 'Z') { slot(a, ((Boolean) value).booleanValue() ? 1 : 0); return; }
+        if (typeChar == 'B') { slot(a, ((Byte) value).byteValue()); return; }
+        if (typeChar == 'C') { slot(a, ((Character) value).charValue()); return; }
+        if (typeChar == 'S') { slot(a, ((Short) value).shortValue()); return; }
+        if (typeChar == 'F') { floatSlot(a, ((Float) value).floatValue()); return; }
+        if (typeChar == 'D') { Magic.store64(a, Double.doubleToRawLongBits(((Double) value).doubleValue())); return; }
         Magic.store64(a, value == null ? 0L : Magic.addrOf(value));         // 'L' / '[' reference
+    }
+
+    /**
+     * A narrow value into its field's WHOLE 8-byte slot, extended the way compiled {@code putfield} leaves it --
+     * sign-extended for int/short/byte, zero-extended for char/boolean (the caller's Java widening does the
+     * extending). Compiled {@code getfield} reads all 64 bits, so a 32-bit store over a negative value left its
+     * {@code 0xFFFFFFFF} high half behind: MEASURED, {@code setInt(p, 5)} over {@code -1} read back as a value that
+     * passed {@code i == 5} (a 32-bit compare) and gave {@code i / 5 = -858993458} (FieldPrimProbe).
+     */
+    private static void slot(long a, long extended)
+    {
+        Magic.store64(a, extended);
+    }
+
+    /** A float's raw bits, zero-extended into the slot -- what a compiled {@code putfield} of an {@code F} leaves. */
+    private static void floatSlot(long a, float v)
+    {
+        Magic.store64(a, Float.floatToRawIntBits(v) & 0xFFFFFFFFL);
     }
 
     public int getInt(Object obj) throws IllegalAccessException
@@ -138,7 +160,7 @@ public final class Field extends AccessibleObject
 
     public void setInt(Object obj, int v) throws IllegalAccessException
     {
-        Magic.store32(addr(obj), v);
+        slot(addr(obj), v);
     }
 
     public long getLong(Object obj) throws IllegalAccessException
@@ -161,9 +183,8 @@ public final class Field extends AccessibleObject
      * object layout, so the value is read as a word and narrowed by the cast -- the cast is what applies the
      * sign extension for byte/short and the zero extension for char, which is exactly the stock contract.
      *
-     * <p>{@code float}/{@code double} are deliberately absent: their values arrive in the FP registers, which
-     * joe-ng's reflective marshalling does not carry, so a plausible-looking {@code getFloat} would return a
-     * wrong number rather than fail. Left in the overlay backlog instead -- see {@code make overlaycheck}.
+     * <p>The writes are {@link #slot}'s whole-slot stores (see there for what the 32-bit ones cost).
+     * {@code float}/{@code double} are further down.
      */
     public byte getByte(Object obj) throws IllegalAccessException
     {
@@ -172,7 +193,7 @@ public final class Field extends AccessibleObject
 
     public void setByte(Object obj, byte v) throws IllegalAccessException
     {
-        Magic.store32(addr(obj), v);
+        slot(addr(obj), v);
     }
 
     public short getShort(Object obj) throws IllegalAccessException
@@ -182,7 +203,7 @@ public final class Field extends AccessibleObject
 
     public void setShort(Object obj, short v) throws IllegalAccessException
     {
-        Magic.store32(addr(obj), v);
+        slot(addr(obj), v);
     }
 
     public char getChar(Object obj) throws IllegalAccessException
@@ -192,7 +213,58 @@ public final class Field extends AccessibleObject
 
     public void setChar(Object obj, char v) throws IllegalAccessException
     {
-        Magic.store32(addr(obj), v);
+        slot(addr(obj), v);
+    }
+
+    /**
+     * {@code float}/{@code double}, which the overlay used to leave out on the premise that "their values arrive
+     * in the FP registers, which joe-ng's reflective marshalling does not carry". THAT PREMISE WAS WRONG: this
+     * compiler keeps a float or double as its RAW BITS in a general-purpose register and moves it to an FP
+     * register only for the arithmetic ({@code Float.intBitsToFloat} is an identity native), so they marshal like
+     * an int and a long. And leaving them out was not the loud failure it was meant to be: {@code get}/{@code set}
+     * on an {@code F}/{@code D} field fell through to the REFERENCE arm, handing back the bits as an object
+     * pointer and storing a box's address into the field.
+     *
+     * <p>Stock's widening rules: {@code getFloat} reads float and the integral types; {@code getDouble} also
+     * reads float; {@code setFloat} also writes a double field; {@code setDouble} only a double field. Anything
+     * else is stock's IllegalArgumentException.
+     */
+    public float getFloat(Object obj) throws IllegalAccessException
+    {
+        long a = addr(obj);
+        if (typeChar == 'F') { return Float.intBitsToFloat(Magic.load32(a)); }
+        if (typeChar == 'J') { return (float) Magic.load64(a); }
+        if (typeChar == 'I' || typeChar == 'S' || typeChar == 'B') { return (float) Magic.load32(a); }
+        if (typeChar == 'C') { return (float) (char) Magic.load32(a); }
+        throw new IllegalArgumentException(name);
+    }
+
+    public double getDouble(Object obj) throws IllegalAccessException
+    {
+        long a = addr(obj);
+        if (typeChar == 'D') { return Double.longBitsToDouble(Magic.load64(a)); }
+        if (typeChar == 'F') { return (double) Float.intBitsToFloat(Magic.load32(a)); }
+        if (typeChar == 'J') { return (double) Magic.load64(a); }
+        if (typeChar == 'I' || typeChar == 'S' || typeChar == 'B') { return (double) Magic.load32(a); }
+        if (typeChar == 'C') { return (double) (char) Magic.load32(a); }
+        throw new IllegalArgumentException(name);
+    }
+
+    public void setFloat(Object obj, float v) throws IllegalAccessException
+    {
+        long a = addr(obj);
+        if (typeChar == 'F') { floatSlot(a, v); return; }
+        if (typeChar == 'D') { Magic.store64(a, Double.doubleToRawLongBits((double) v)); return; }
+        throw new IllegalArgumentException(name);
+    }
+
+    public void setDouble(Object obj, double v) throws IllegalAccessException
+    {
+        if (typeChar != 'D')
+        {
+            throw new IllegalArgumentException(name);
+        }
+        Magic.store64(addr(obj), Double.doubleToRawLongBits(v));
     }
 
     /**
@@ -371,6 +443,6 @@ public final class Field extends AccessibleObject
 
     public void setBoolean(Object obj, boolean v) throws IllegalAccessException
     {
-        Magic.store32(addr(obj), v ? 1 : 0);
+        slot(addr(obj), v ? 1 : 0);
     }
 }
