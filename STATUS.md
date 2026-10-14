@@ -57,8 +57,9 @@ Newest entries are at the top.
     too few runs apart to say whether the larger closure widens the window. Next to chase.
   - **Pi (`a37d8ad`):** the first boot ran NetDemo to `[main returned normally]` with no trap and no new
     TRAP-WIRED line, but read `http done bytes=0` -- a known intermittent outcome of NetDemo's GET on this board,
-    not this branch; **the second boot fetched the page** (reported by the user). First boot's figures: batch 1
-    `+1406blob` (was 1250: +156, the java.time closure), `clinits=372/372/373/374` (was 312/312/313/314).
+    not this branch. **The second boot: `HTTP/1.1 200 OK ... http done bytes=891`, `[main returned normally]`.**
+    Both boots: batch 1 `+1406blob` (was 1250: +156, the java.time closure), `clinits=372/372/373/374` (was
+    312/312/313/314), `gc: collections=6`.
 - **`System.getLogger` RUNS STOCK, THE VM IS BOOTED, `StackWalker` EXISTS (2026-10-13, PI-VALIDATED).** First increment of the
   System.Logger arc, which gaps (1) and (3) of the `InetAddress` card below both wait on. `getLogger` and
   `isLoggable` are host-identical; `log()` stops, loudly, at the next wall (below).
