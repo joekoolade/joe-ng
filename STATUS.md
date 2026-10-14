@@ -4,6 +4,36 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **REFLECTIVE AND UPDATER FIELD WRITES WERE WRONG ON MAIN: STALE HIGH HALVES, A NON-ATOMIC CAS, FLOATS AS POINTERS
+  (2026-10-14, PI-VALIDATED).** Found while closing the `Field.getFloat`/`getDouble` gaps -- each a SILENT wrong answer.
+  - **`Field.setInt`/`setShort`/`setByte`/`setChar`/`setBoolean` and the `set(...)` arms wrote 32 bits** into an
+    8-byte field slot whose compiled `getfield` reads all 64. Over a negative value the old `0xFFFFFFFF` high half
+    stayed: MEASURED on the unfixed VM, `setInt(p, 5)` over `-1` gave a value passing `i == 5` (a 32-bit compare)
+    with **`i / 5 = -858993458`**, and `setShort(6)` gave `s / 3 = -1431655763`. Every narrow write now stores the
+    whole slot, extended as `putfield` leaves it.
+  - **`get`/`set` on a `float`/`double` field fell through to the REFERENCE arm** -- the bits handed back as an
+    object pointer, a box's address stored into the field. The overlay had left floats out on the premise that
+    "their values arrive in the FP registers, which joe-ng's reflective marshalling does not carry"; this compiler
+    keeps a float/double as RAW BITS in a general-purpose register (`Float.intBitsToFloat` is an identity native).
+    `getFloat`/`getDouble`/`setFloat`/`setDouble` added with stock's widening rules, and `F`/`D` arms in
+    `get`/`set`. Closes two known gaps.
+  - **`Atomic{Integer,Long,Reference}FieldUpdater.compareAndSet` was `load; compare; store`**, on the overlays'
+    note "Single core, so the access is a plain load/store" -- a premise that expired with SMP scheduling (#180).
+    **Control on the unfixed VM, four threads x 3000 CAS-loop increments: int 11679 / 11800, long 11840 / 11914,
+    reference 11117 / 11239, of 12000** (two runs). Now one `cas64` on the slot, as `Unsafe.compareAndSetInt`
+    does for a field: 12000 each. The int updater's `set` had the 32-bit store too, and now writes the whole slot.
+    (`Unsafe.putBits` was already right: a field takes the whole slot.)
+  - **Probes:** `FieldPrimProbe` (new): each narrow field negative, overwritten reflectively, read through compiled
+    arithmetic; float/double through `get`/`set` and the typed forms, a negative zero, the widenings.
+    `UpdaterRaceProbe` (new): the contention above, and `set` over a compiled-code negative. Both host-identical.
+    The stock jtreg `AtomicUpdaters` and `Lazy`, compiled in the tree since the updaters arc but run by nothing,
+    get host controls and join the regression set.
+  - `make overlaycheck`: known gaps 13 -> 11. **Suite: 40 programs, markers zero, `gc: collections=50`,
+    `clinits=325`** (unchanged). **All 41 host-controlled probes re-run on QEMU: 39 host-identical** (incl.
+    `AtomicUpdaters` and `Lazy`), DigestProbe/MacProbe their designed divergences. **MetalJUnit baseline: `ran 44,
+    failures 0`.**
+  - **Pi (`4ed964b`):** NetDemo `HTTP/1.1 200 OK ... http done bytes=888`, `[main returned normally]`, no new
+    TRAP-WIRED line, `clinits=373/373/374/375` and batch 1 `+1406blob` -- unchanged, as expected.
 - **STOCK `java.util.concurrent.Semaphore` -- THE OVERLAY OVER SIXTEEN SCHEDULER SEMAPHORES IS DELETED (2026-10-14, PI-VALIDATED).**
   The overlay was three methods (`<init>(int)`, `acquire`, `release`) over the VM's own counting semaphores: each
   instance took one of `VM.NUM_SEM = 16` fixed slots (5 reserved), so a program creating a dozen ran out, and it

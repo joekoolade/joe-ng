@@ -47,15 +47,16 @@ public class AtomicReferenceFieldUpdater<T, V>
         set(obj, newValue);
     }
 
+    /**
+     * ONE {@code cas64} on the field's 8-byte slot. It was {@code load; compare; store} under the overlay's note
+     * "Single core, so the access is a plain load/store" -- a premise that expired with SMP scheduling (#180):
+     * two cores could both read {@code expect} and both "succeed", a lost update in exactly the code that exists
+     * to prevent one.
+     */
     public boolean compareAndSet(T obj, V expect, V update)
     {
-        long a = Magic.addrOf(obj) + fieldOffset0(fname, obj);
         long e = (expect == null) ? 0L : Magic.addrOf(expect);
-        if (Magic.load64(a) == e)
-        {
-            Magic.store64(a, (update == null) ? 0L : Magic.addrOf(update));
-            return true;
-        }
-        return false;
+        long u = (update == null) ? 0L : Magic.addrOf(update);
+        return Magic.cas64(Magic.addrOf(obj) + fieldOffset0(fname, obj), e, u);
     }
 }
