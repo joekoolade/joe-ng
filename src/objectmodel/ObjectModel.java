@@ -82,7 +82,8 @@ public final class ObjectModel
      *  this chain's ancestor at depth d (display[depth] = self). O(1) subclass test: T is assignable
      *  from S iff S.depth >= T.depth and S.display[T.depth] == T. 0 = no display (walk fallback). */
     public static final int TYPE_DISPLAY_OFFSET = 5 * WORD; // 40
-    /** Type field, dual-purpose by kind (a receiver's Type is never an interface, so no conflict):
+    /** Type field, dual-purpose by kind (an OBJECT's Type is never an interface -- but Class.isAssignableFrom
+     *  passes interface Types as the receiver, so VM.typeAssignable checks the kind before reading a bitmap):
      *  - class/array Type: doesImplement BITMAP, two 64-bit words (this word + the next). Bit 0 =
      *    "bitmap computed" marker; bit i (i = 1..127) = implements the interface with ID i. O(1)
      *    interface test: S implements I iff S.bitmap[I.id] (definitive only for NUMBERED targets;

@@ -6089,6 +6089,14 @@ public final class Loader
         {
             return false;
         }
+        // NARROWED OUT too: sun/util/calendar/ -- ZoneInfo, ZoneInfoFile (the tzdb.dat reader) and the calendar
+        // systems. TimeZone.getDefault resolves its ID through ZoneInfoFile, and ZoneId.systemDefault through
+        // TimeZone, so java.time's default zone needs them. Pure Java with no natives; the rules come from
+        // /lib/tzdb.dat (see TZDB in the Makefile). (Keep in sync with writer.ReachScan.isDenied.)
+        if (utf8HasPrefix(base, off, Magic.bytes("sun/util/calendar/")))
+        {
+            return false;
+        }
         // NARROWED OUT too: sun/util/PreHashedMap, the base of the generated sun/nio/cs/StandardCharsets alias and
         // class maps. Pure collection code, no natives; while denied, Charset.forName("UTF-16BE") trapped in
         // StandardCharsets.canonicalize at aliasMap().get. (Keep in sync with writer.ReachScan.isDenied.)
@@ -6177,6 +6185,16 @@ public final class Loader
                 // (formatToCharacterIterator). java/text/spi stays denied, deliberately.
                 || utf8HasPrefix(base, off, Magic.bytes("java/text/StringBufFactory"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/text/AttributedString"))
+                // DateFormatSymbols is OVERLAID (from the JDK 26 source): only its locale-data reads are replaced,
+                // and they read the REAL generated CLDR bundles java.base ships -- sun/text/resources/cldr/
+                // FormatData (root) and FormatData_en, plain ListResourceBundles with no natives -- instead of
+                // going through the provider adapter. Formatter's %tb/%tA/%tp reach it (System.Logger's header).
+                || utf8HasPrefix(base, off, Magic.bytes("java/text/DateFormatSymbols"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/text/resources/cldr/FormatData"))
+                // Stock MessageFormat (System.Logger's {0} parameters): pure pattern logic. A Number argument formats
+                // through NumberFormat.getInstance(locale), which the NumberFormat overlay serves; the Date and list
+                // element paths (DateFormat, SimpleDateFormat, ListFormat, ChoiceFormat) stay denied and trap.
+                || utf8HasPrefix(base, off, Magic.bytes("java/text/MessageFormat"))
                 // sun/text/Normalizer is OVERLAID (from the JDK 26 source): getCombiningClass is exact below
                 // U+0300 and throws above it. Stock String's Turkish case mapping reaches it through
                 // ConditionalSpecialCasing. The rest of sun/text/ (the ICU-backed normalizer) stays denied.
@@ -6363,16 +6381,9 @@ public final class Loader
                 // (NOT java/util/concurrent -- the philosophers demand-load java/util/concurrent/Semaphore.)
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/icu/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/text/"))
-                // THE DATE/TIME HALF OF stock java/util/Formatter, which is pulled by NAME and never RUN.
-                // The loader's dependency pass takes every CONSTANT_Class a blob NAMES, not just what RTA
-                // reaches. Formatter$FormatSpecifier NAMES ten java/time classes (the six prefixes below) for
-                // its %t conversions while method-level RTA reaches NONE of them -- ReachScan reports the same
-                // 110 classes and the same one trap site with these denied as without.
-                // MEASURED: leaving them loadable put +357 classes into
-                // EVERY demand-load batch of every program (batch 2 of the demo suite went 159 -> 516 blobs)
-                // for code that needs a Calendar/Date/TemporalAccessor argument nothing here passes. That is
-                // exactly what this list is for: a cold subtree a big class names, trapped loudly if reached.
-                // java/time/Duration is deliberately NOT here -- it is used, and no %t path names it.
+                // java/time is NOT DENIED any more (the date/time arc). It was kept out because Formatter NAMES
+                // ten of its classes for %t and the dependency pass of the day pulled +357 classes into every
+                // batch; System.Logger's log() formats through ZonedDateTime.now(), and rule 1 says implement.
                 // THE NAME-ONLY HALF OF stock java/lang/Character, which is the java/time situation one
                 // class along. The loader pulls every CONSTANT_Class a blob NAMES, and under rule 2 a pulled
                 // class's <clinit> RUNS -- so naming these costs running them:
@@ -6385,21 +6396,8 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/CharacterName"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/Character$UnicodeBlock"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/Character$UnicodeScript"))
-                // THE SWITCH-MAP HOLDER OF stock java/util/concurrent/TimeUnit, and it is the SAME mechanism
-                // as the three Character entries above one class along. TimeUnit NAMES TimeUnit$1, whose
-                // sole field is `$SwitchMap$java$time$temporal$ChronoUnit` (MEASURED by reflection on the
-                // seed JDK, not read off a comment) -- so its <clinit> is `new int[ChronoUnit.values().length]`
-                // plus one ordinal store per constant, and under rule 2 pulling it RUNS that, calling straight
-                // into java/time/temporal/, denied on the very next line. Its only readers are
-                // TimeUnit.of(ChronoUnit) and toChronoUnit(), which nothing in this closure calls; denied so
-                // it is trap-wired and unreached, and DENYLIST TRAP reading 0 is what says so.
-                || utf8HasPrefix(base, off, Magic.bytes("java/util/concurrent/TimeUnit$1"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/time/chrono/"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/time/temporal/"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/time/zone/"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/time/Zone"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/time/Instant"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/time/DateTimeException"))
+                // java/util/concurrent/TimeUnit$1 (the ChronoUnit switch map) is NOT denied either: its
+                // <clinit> calls ChronoUnit.values(), which loads now that java/time/temporal/ does.
                 || utf8HasPrefix(base, off, Magic.bytes("sun/text/"))
                 // grapheme-boundary tables (\b{g}): a 15x15 [[Z built via multianewarray in its <clinit>; a
                 // literal split never matches graphemes, so this whole subtree is cold.
@@ -12311,6 +12309,14 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("setOut0")))           { return VM.setOut0Addr; }   // (PrintStream)V
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("setErr0")))           { return VM.setErr0Addr; }   // (PrintStream)V
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("setIn0")))            { return VM.setIn0Addr; }    // (InputStream)V
+        }
+        // TimeZone.getSystemTimeZoneID(javaHome) -> NULL, the answer TimeZone_md.c's findJavaTZ_md gives with no
+        // TZ variable and no /etc/timezone or /etc/localtime -- none of which exists here. setDefaultZone then
+        // falls back to "GMT", stock's own default. getSystemGMTOffsetID is NOT mapped: it is reached only when
+        // that ID fails to resolve, and it should throw if it ever is.
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/util/TimeZone")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getSystemTimeZoneID"))) { return VM.sockZeroAddr; } // (String)String -> null
         }
         // java.lang.ref: see VMNatives.refGet0. PhantomReference declares its OWN refersTo0/clear0 natives,
         // and this table is keyed by the DECLARING class, so both classes are listed.

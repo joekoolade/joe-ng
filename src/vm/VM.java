@@ -2819,7 +2819,20 @@ public final class VM
             // O(1) interface fast path: a NUMBERED interface target (depth -1, ID 1..127) against a
             // receiver with a COMPUTED doesImplement bitmap is one bit test. Unnumbered interfaces
             // and marker-less receivers fall through to the itable-dir walk below.
-            if (tDisp == 0L && Magic.load64(targetType + ObjectModel.TYPE_DEPTH_OFFSET) == -1L)
+            //
+            // THE RECEIVER MUST NOT ITSELF BE AN INTERFACE. The word read as its bitmap is dual-purpose
+            // (ObjectModel.TYPE_IMPLEMENTS_OFFSET): on an interface Type it holds that interface's own ID,
+            // and an ODD ID passes the bit-0 "computed" test and is then read as a bitmap. ObjectModel says
+            // "a receiver's Type is never an interface" -- true of instanceof and checkcast, false here:
+            // Class.isAssignableFrom and the array-element recursion above both pass interface Types. MEASURED:
+            // System.Logger.class.isAssignableFrom(System.Logger.class) answered FALSE, so SimpleConsoleLogger
+            // named the System$Logger.log default method as its caller (DefaultFrameProbe).
+            if (type == targetType)
+            {
+                return true;
+            }
+            if (tDisp == 0L && Magic.load64(targetType + ObjectModel.TYPE_DEPTH_OFFSET) == -1L
+                    && Magic.load64(type + ObjectModel.TYPE_DEPTH_OFFSET) != -1L)
             {
                 long id = Magic.load64(targetType + ObjectModel.TYPE_IMPLEMENTS_OFFSET);
                 long b0 = Magic.load64(type + ObjectModel.TYPE_IMPLEMENTS_OFFSET);

@@ -60,20 +60,12 @@ public final class ReachScan
         // cold ICU/normalizer/break-iterator, pulled by Pattern but never run for a literal match. (NOT
         // java/util/concurrent -- the philosophers demand-load java/util/concurrent/Semaphore.)
         "jdk/internal/icu/", "java/text/", "sun/text/",
-        // The date/time half of stock java/util/Formatter: Formatter$FormatSpecifier NAMES these for its
-        // %t conversions and method-level RTA reaches none of them, but the loader's dependency pass pulls
-        // every class a blob NAMES -- measured at +357 classes in every batch (suite batch 2: 159 -> 516
-        // blobs) for a path needing a Calendar/Date/TemporalAccessor argument nothing here passes.
-        // java/time/Duration is NOT denied: it is used, and no %t path names it.
+        // java/time and TimeUnit$1 are NOT denied (the date/time arc). (Keep in sync with Loader.isDenylisted.)
         // The name-only half of stock java/lang/Character: UnicodeBlock's <clinit> builds 347 blocks,
         // UnicodeScript the same for scripts, and CharacterName reads a "uniName.dat" resource this VM has
         // no copy of. Reached only from UnicodeBlock.of / UnicodeScript.of / Character.getName -- nothing on
         // the classification, case or digit paths. (Keep in sync with Loader.isDenylisted.)
         "java/lang/CharacterName", "java/lang/Character$UnicodeBlock", "java/lang/Character$UnicodeScript",
-        // stock TimeUnit's switch-map holder: its <clinit> calls ChronoUnit.values(). (Loader.isDenylisted.)
-        "java/util/concurrent/TimeUnit$1",
-        "java/time/chrono/", "java/time/temporal/", "java/time/zone/",
-        "java/time/Zone", "java/time/Instant", "java/time/DateTimeException",
         // grapheme-boundary tables (\b{g}): a 15x15 [[Z built via multianewarray; cold for a literal match.
         "jdk/internal/util/regex/Grapheme",
         // jdk/internal/lang/CaseFolding is NOT here any more: it was denied as "only CASE_INSENSITIVE regex
@@ -108,6 +100,11 @@ public final class ReachScan
         {
             return false;
         }
+        // sun/util/calendar/ (ZoneInfo, ZoneInfoFile, the calendar systems) is narrowed out -- see Loader.isDenylisted.
+        if (c.startsWith("sun/util/calendar/"))
+        {
+            return false;
+        }
         // sun/util/PreHashedMap (StandardCharsets' alias/class maps) is narrowed out too -- see Loader.isDenylisted.
         if (c.equals("sun/util/PreHashedMap") || c.startsWith("sun/util/PreHashedMap$"))
         {
@@ -124,9 +121,12 @@ public final class ReachScan
         // ResourceBundle. (Keep in sync with Loader.isDenylisted.)
         //
         // And stock java/text/DecimalFormat with the pure-logic classes it is built from -- see the matching
-        // block in Loader.isDenylisted for the reasoning and the list.
+        // block in Loader.isDenylisted for the reasoning and the list. DateFormatSymbols (overlaid), the CLDR
+        // FormatData bundles it reads, and stock MessageFormat are narrowed out the same way.
         if (c.startsWith("java/text/DecimalFormatSymbols") || c.startsWith("java/text/ParsePosition")
                 || c.startsWith("sun/text/Normalizer")
+                || c.startsWith("java/text/DateFormatSymbols") || c.startsWith("sun/text/resources/cldr/FormatData")
+                || c.startsWith("java/text/MessageFormat")
                 || c.startsWith("java/text/DecimalFormat") || c.startsWith("java/text/NumberFormat")
                 || c.startsWith("java/text/Format") || c.startsWith("java/text/FieldPosition")
                 || c.startsWith("java/text/DigitList") || c.startsWith("java/text/DontCareFieldPosition")

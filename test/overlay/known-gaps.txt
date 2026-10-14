@@ -5,7 +5,6 @@
 # unfixed, not that it is safe -- most are cold paths in the JUnit jar, but the ones that
 # bit us (Boolean.getBoolean, ConcurrentHashMap.<init>(IFI)V) looked exactly this cold
 # until the day they ran. The check exists to stop NEW ones appearing silently.
-java/io/FileInputStream#<init>(Ljava/io/File;)V
 java/lang/Class#getConstructor([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;
 java/lang/Class#getConstructors()[Ljava/lang/reflect/Constructor;
 java/lang/Class#getGenericSuperclass()Ljava/lang/reflect/Type;
@@ -20,9 +19,6 @@ java/lang/IllegalArgumentException#<init>(Ljava/lang/String;Ljava/lang/Throwable
 java/lang/Thread#getState()Ljava/lang/Thread$State;
 java/lang/reflect/Field#getDouble(Ljava/lang/Object;)D
 java/lang/reflect/Field#getFloat(Ljava/lang/Object;)F
-java/time/Duration#between(Ljava/time/temporal/Temporal;Ljava/time/temporal/Temporal;)Ljava/time/Duration;
-java/time/Duration#of(JLjava/time/temporal/TemporalUnit;)Ljava/time/Duration;
-java/time/Duration#parse(Ljava/lang/CharSequence;)Ljava/time/Duration;
 java/util/concurrent/Semaphore#availablePermits()I
 java/util/concurrent/Semaphore#tryAcquire()Z
 java/util/jar/JarFile#<init>(Ljava/io/File;)V
@@ -76,9 +72,6 @@ supertype#java/nio/ByteOrder#java/lang/constant/Constable
 supertype#java/nio/charset/Charset#java/lang/Comparable
 supertype#java/security/SecureRandom#java/util/random/RandomGenerator
 supertype#java/text/BreakIterator#java/lang/Cloneable
-supertype#java/time/Duration#java/io/Serializable
-supertype#java/time/Duration#java/lang/Comparable
-supertype#java/time/Duration#java/time/temporal/TemporalAmount
 supertype#java/util/Random#java/io/Serializable
 supertype#java/util/Random#java/util/random/RandomGenerator
 supertype#java/util/concurrent/ConcurrentHashMap$KeySetView#java/util/concurrent/ConcurrentHashMap$CollectionView
