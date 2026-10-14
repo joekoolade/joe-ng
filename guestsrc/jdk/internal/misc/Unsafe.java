@@ -2877,26 +2877,27 @@ public final class Unsafe
     private static native Object allocInstance0(Class<?> c);
 
     /**
-     * A NO-OP, and that is CORRECT here rather than a stub -- the same argument, and the same wording,
-     * {@code MethodHandles.Lookup.ensureInitialized} already carries: joe-ng initializes a class on its
-     * first ACTIVE USE (JVMS 5.5), so forcing an initializer a moment earlier changes nothing observable.
+     * Initialize {@code c} now (JVMS 5.5), through {@code VMNatives.ensureMirrorInit} -- the same path an init
+     * guard takes, so a class already initialized, or being initialized by this thread, returns at once.
      *
-     * <p>IT USED TO THROW, on the stated premise that it is "referenced only by java/lang/invoke, which is
-     * denied". THAT PREMISE EXPIRED when stock {@code VarHandle} stopped being overlaid: its {@code <clinit>}
-     * ends in {@code UNSAFE.ensureClassInitialized(VarHandleGuards.class)}, so the throw became the second
-     * of the two reasons that initializer died. A comment recording WHY a stub throws is what let this be
-     * noticed rather than re-derived.
-     *
-     * <p>The argument is IGNORED, and nothing is lost by that: pre-initializing {@code VarHandleGuards} buys
-     * nothing here, because the guards are reached only from MethodHandle invocation, which this VM does not
-     * do. (An earlier cut of this comment asserted that class was DENIED and its literal therefore null.
-     * WRONG, and unchecked: the denial's allow-list carries the prefix {@code java/lang/invoke/VarHandle},
-     * which prefix-MATCHES {@code VarHandleGuards} -- and the probe boot's {@code NULL CLASS LITERAL} count
-     * of 0 says the literal resolves. A comment is a claim like any other.)
+     * <p>IT WAS A NO-OP, justified as "joe-ng initializes a class on its first ACTIVE USE, so forcing an
+     * initializer a moment earlier changes nothing observable". That holds only when the caller's next step is
+     * an active use of {@code c} itself. It is false for the pattern stock uses this for:
+     * {@code SharedSecrets.javaUtilJarAccess()} initializes JarFile and then reads SharedSecrets' OWN static,
+     * which JarFile's initializer sets -- nothing of JarFile's is touched, so nothing triggers it, and the access
+     * object is null. MEASURED: {@code Security.setProperty} NPE'd in {@code EventHelper.isLoggingSecurity} on
+     * exactly that null. Every {@code SharedSecrets} getter has the same shape.
      */
     public void ensureClassInitialized(Class<?> c)
     {
+        if (c == null)
+        {
+            throw new NullPointerException();
+        }
+        ensureClassInitialized0(c);
     }
+
+    private static native void ensureClassInitialized0(Class<?> c);
 
     public boolean shouldBeInitialized(Class<?> c)
     {

@@ -12412,6 +12412,7 @@ public final class Loader
             // The same native Constructor.allocInstance0 runs on -- zeroed fields, the class's TIB, and
             // ensureClinit first. nativeBuf keys on the DECLARING class, so it needs registering under both.
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("allocInstance0")))      { return VM.allocInstanceAddr; } // (Class)Object
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("ensureClassInitialized0"))) { return VM.ensureMirrorInitAddr; } // (Class)V
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/String")))
         {
@@ -22613,6 +22614,21 @@ public final class Loader
         }
         Heap.publishCode(thunk, thunk + w * 4L);
         return finishLambdaClass(thunk, ifaceType, idx, nc);
+    }
+
+    /** Initialize the loaded class whose Type node is {@code type} (VMNatives.ensureMirrorInit); a Type the
+     *  registry does not know -- an array, a primitive -- has no initializer and is left alone. */
+    static void ensureInitOfType(long type)
+    {
+        if (type == 0L || !runtimeUp)
+        {
+            return;
+        }
+        int reg = regOfType(type);
+        if (reg >= 0)
+        {
+            ensureClinit(reg);
+        }
     }
 
     /** Registry index of the loaded class/interface whose Type node is {@code type}, or -1. */

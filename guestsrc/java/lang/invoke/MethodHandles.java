@@ -52,17 +52,26 @@ public final class MethodHandles
         }
 
         /**
-         * A no-op returning {@code c}, and that is CORRECT here rather than a stub: joe-ng runs a class's
-         * {@code <clinit>} on first ACTIVE USE, and every caller of this follows it immediately with a
-         * {@code getstatic} on that same class -- which is an active use and triggers the initializer through
-         * {@code noteInitNeeded}. Forcing it a moment earlier would change nothing observable.
+         * Stock's: initialize {@code c} and return it -- primitives and arrays refused as stock refuses them.
+         * Through {@code Unsafe.ensureClassInitialized}, which REALLY initializes now (see there).
          *
-         * <p>Declared because stock {@code SharedSecrets} calls it before reading EVERY access shim, so
-         * without it the first `getJavaXxxAccess()` traps -- and it catches only IllegalAccessException, which
-         * a denylist trap is not.
+         * <p>IT WAS A NO-OP, on the premise that "every caller follows it immediately with a {@code getstatic} on
+         * that same class". Stock {@code SharedSecrets} is the counterexample, and it is every caller: it
+         * initializes the class that REGISTERS an access object, then reads its own static -- so the
+         * registering initializer never ran and the access object was null ({@code JarFile} ->
+         * {@code javaUtilJarAccess}, reached by every {@code Security.setProperty}).
          */
-        public Class<?> ensureInitialized(Class<?> c)
+        public Class<?> ensureInitialized(Class<?> c) throws IllegalAccessException
         {
+            if (c.isPrimitive())
+            {
+                throw new IllegalArgumentException(c + " is a primitive class");
+            }
+            if (c.isArray())
+            {
+                throw new IllegalArgumentException(c + " is an array class");
+            }
+            Unsafe.getUnsafe().ensureClassInitialized(c);
             return c;
         }
 
@@ -89,6 +98,55 @@ public final class MethodHandles
                 throws NoSuchFieldException, IllegalAccessException
         {
             return forInstanceField(recv, name, type);
+        }
+
+        /**
+         * Bind a VarHandle to a STATIC field: stock's {@code findStaticVarHandle}, built the way stock's
+         * {@code VarHandles.makeFieldHandle} does for a static -- the {@code staticFieldBase}/
+         * {@code staticFieldOffset} pair from {@code Unsafe}, handed to the template-generated
+         * {@code FieldStaticReadWrite}. Reached by {@code jdk.internal.event.EventHelper.<clinit>}, which every
+         * stock {@code Security.setProperty} initializes.
+         *
+         * <p>STATED LIMIT, and it THROWS rather than answering: joe-ng's pair is {null base, absolute address of
+         * an 8-byte static slot}, and through a null base only the 8-byte accessors (reference, long, double)
+         * write the WHOLE slot. A null base is also how raw memory arrives (every {@code DirectByteBuffer}), so
+         * {@code putInt}/{@code putShort}/... write their natural width there -- correct for raw memory, and a
+         * stale high half for a static slot. Those types are refused here until the statics region can be told
+         * from raw memory.
+         */
+        public VarHandle findStaticVarHandle(Class<?> decl, String name, Class<?> type)
+                throws NoSuchFieldException, IllegalAccessException
+        {
+            java.lang.reflect.Field f = decl.getDeclaredField(name);
+            if (!java.lang.reflect.Modifier.isStatic(f.getModifiers()))
+            {
+                throw new IllegalAccessException("expected a static field: " + name);
+            }
+            if (f.getType() != type)
+            {
+                throw new NoSuchFieldException(name);
+            }
+            Unsafe u = Unsafe.getUnsafe();
+            Object base = u.staticFieldBase(f);
+            long off = u.staticFieldOffset(f);
+            boolean ro = java.lang.reflect.Modifier.isFinal(f.getModifiers());   // stock: a final static is read-only
+            if (type == long.class)
+            {
+                return ro ? new VarHandleLongs.FieldStaticReadOnly(decl, base, off)
+                          : new VarHandleLongs.FieldStaticReadWrite(decl, base, off);
+            }
+            if (type == double.class)
+            {
+                return ro ? new VarHandleDoubles.FieldStaticReadOnly(decl, base, off)
+                          : new VarHandleDoubles.FieldStaticReadWrite(decl, base, off);
+            }
+            if (!type.isPrimitive())
+            {
+                return ro ? new VarHandleReferences.FieldStaticReadOnly(decl, base, off, type)
+                          : new VarHandleReferences.FieldStaticReadWrite(decl, base, off, type);
+            }
+            throw new UnsupportedOperationException("joe-ng: a static VarHandle of type " + type.getName()
+                    + " would write a narrow width into an 8-byte static slot (see findStaticVarHandle)");
         }
     }
 

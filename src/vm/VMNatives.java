@@ -924,6 +924,22 @@ final class VMNatives
     }
 
     /**
+     * {@code Unsafe.ensureClassInitialized0(Class)}: run the {@code <clinit>} of the class the mirror stands for
+     * (JVMS 5.5), on the same path an init guard takes. Stock code calls this to force an initializer whose SIDE
+     * EFFECTS land elsewhere -- {@code SharedSecrets.javaUtilJarAccess()} initializes JarFile and then reads its
+     * OWN static, which JarFile's initializer set -- so a no-op is a silent null there. Returns 0 (void native).
+     */
+    static long ensureMirrorInit(long mirrorRef)
+    {
+        if (mirrorRef <= 0x1000L)
+        {
+            return 0L;                                     // boot force-compile passes 0
+        }
+        Loader.ensureInitOfType(Magic.load64(mirrorRef + 16L));
+        return 0L;
+    }
+
+    /**
      * M4: {@code Class.superclass0(Class)} native — the mirror's Type's {@code superType} ({@code @8}) ->
      * its (cached) mirror, or 0 for {@code java/lang/Object}/unloaded.
      */

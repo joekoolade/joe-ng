@@ -4,6 +4,40 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **`Security.setProperty` RUNS STOCK; `ensureInitialized` REALLY INITIALIZES; STATIC VARHANDLES (2026-10-14).**
+  Closes gap (3) of the `InetAddress` card: the last of its four. Stock `setProperty` reaches
+  `jdk.internal.event.EventHelper` on every call, and three walls stood between them, each found by the probe in turn.
+  - **`MethodHandles.Lookup.findStaticVarHandle`** (a dropped overlay member: `VIRTUALRESOLVE FAILED`, `TRAPWIRE
+    index=-1`). Added as stock's `VarHandles.makeFieldHandle` builds a static handle: the `Field`, the
+    `staticFieldBase`/`staticFieldOffset` pair, the template-generated `FieldStatic{ReadOnly,ReadWrite}` (read-only
+    for a `final` static, as stock). **Reference, `long` and `double` only; narrower types THROW.** The pair is
+    {null base, absolute address of an 8-byte static slot}, and a null base is also how raw memory arrives, so
+    `putInt`/`putShort`/... write their natural width there -- right for a `DirectByteBuffer`, a stale high half
+    for a static slot. (The Unsafe overlay's own note that "putInt/putLong keep whole-slot semantics for a null
+    base" was written before `putInt` learned raw addresses, and is stale.)
+  - **`JarFile`'s initializer never registered `JavaUtilJarAccess`** -- the overlay is a hand-written shell with no
+    initializer, so `EventHelper`'s `JUJA` was null and the first set NPE'd. It gains stock's
+    `SharedSecrets.setJavaUtilJarAccess(new JavaUtilJarAccessImpl())` and stock's `IN_VERIFIER_INIT`
+    `ScopedValue` with `isInitializing()` -- read from the value, which nothing binds because this overlay never
+    verifies. The impl's other callees (`hasClassPathAttribute`, `ensureInitialization`, `entryFor`) serve signed
+    and class-path jars and stay undeclared, failing loudly if reached. Replacing the shell with stock is a zip/jar
+    arc of its own (stock JarFile stands on stock ZipFile's internals, also overlaid).
+  - **...and registering it was not enough: `Lookup.ensureInitialized` and `Unsafe.ensureClassInitialized` were
+    NO-OPS.** Both rested on "every caller follows it immediately with a `getstatic` on that same class". Stock
+    `SharedSecrets` is the counterexample, and it is EVERY caller: it initializes the class that REGISTERS an
+    access object, then reads its OWN static -- nothing of `JarFile` is touched, so nothing triggered it. Both now
+    initialize through a new native, `VMNatives.ensureMirrorInit` (mirror -> Type -> registry -> `ensureClinit`,
+    the init-guard path); `ensureInitialized` gains stock's primitive/array refusals and its declared
+    `IllegalAccessException`. Every `SharedSecrets` getter had this latent null.
+  - **Probe:** `SecuritySetProbe` (new): a new key read back, reset, an existing key overwritten, the reserved
+    `include` key and null key/value refused. Host-identical (`--limit-modules java.base`).
+  - Host: `make overlaycheck` OK (`0 new`). **Suite: 40 programs, markers zero, churn `gc: collections=50`**;
+    batch blob counts and `clinits=324` IDENTICAL to the last card's suite, so the real `ensureInitialized` adds no
+    initializer to any demo (wall 1275 s against 1185 s: QEMU timing, the work being equal). **Every
+    host-controlled probe (35) re-run on QEMU: host-identical**; DigestProbe/MacProbe print their designed
+    divergences (`failures=0 divergences-unmet=0`). `ParkProbe`'s and `TlrProbe`'s host controls had been deleted
+    from `/tmp` (the oldest there); regenerated, they equal the previous run's metal output byte for byte.
+  - **Pi:** pending.
 - **THE `ChmRaceProbe` HANG WAS A CROSS-TASK CLASS-INIT DEADLOCK, CAUSED BY THE PENDING-INIT DRAIN (2026-10-14, PI-VALIDATED).**
   Recorded on the card below as pre-existing (main hung 1 run in 5 at the identical point); fixed here.
   - **Found with a new instrument, the HANG DUMP** (`/etc/init` key `hangdump=<secs>`, off when absent). Past the
