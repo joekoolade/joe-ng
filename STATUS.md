@@ -4,7 +4,7 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
-- **`java.time` RUNS, THE DEFAULT ZONE IS GMT, `System.Logger.log()` PRINTS (2026-10-13).** Second increment of
+- **`java.time` RUNS, THE DEFAULT ZONE IS GMT, `System.Logger.log()` PRINTS (2026-10-13, PI-VALIDATED).** Second increment of
   the System.Logger arc: the wall the card below recorded is gone, and `log()` is host-identical, header and all.
   - **java.time is no longer denied** (`java/time/chrono|temporal|zone`, `Zone*`, `Instant`, `DateTimeException`,
     and `TimeUnit$1`, the ChronoUnit switch map). It was denied because `Formatter` NAMES ten of its classes for
@@ -55,11 +55,10 @@ Newest entries are at the top.
     batch, inside the first four-thread phase (concurrent puts while bodies compile lazily). This branch: 3 hangs
     in 5 runs. **Control on `main` (`f77295b`): 1 in 5, at the identical point.** Pre-existing; the two rates are
     too few runs apart to say whether the larger closure widens the window. Next to chase.
-  - **Pi (`a37d8ad`), first boot: NOT PASSED.** NetDemo: `socket connected`, `GET sent`, then **`http done
-    bytes=0`** and `[main returned normally]` -- no response bytes read, where every earlier image read 891. No
-    trap, no exception, no new TRAP-WIRED line. Batch 1 `+1406blob` (was 1250: +156, the java.time closure),
-    `clinits=372/372/373/374` (was 312/312/313/314). Not yet known whether this is the branch or the network:
-    one boot. A second boot, and a QEMU-free reading of where the read loop ended, come first.
+  - **Pi (`a37d8ad`):** the first boot ran NetDemo to `[main returned normally]` with no trap and no new
+    TRAP-WIRED line, but read `http done bytes=0` -- a known intermittent outcome of NetDemo's GET on this board,
+    not this branch; **the second boot fetched the page** (reported by the user). First boot's figures: batch 1
+    `+1406blob` (was 1250: +156, the java.time closure), `clinits=372/372/373/374` (was 312/312/313/314).
 - **`System.getLogger` RUNS STOCK, THE VM IS BOOTED, `StackWalker` EXISTS (2026-10-13, PI-VALIDATED).** First increment of the
   System.Logger arc, which gaps (1) and (3) of the `InetAddress` card below both wait on. `getLogger` and
   `isLoggable` are host-identical; `log()` stops, loudly, at the next wall (below).
