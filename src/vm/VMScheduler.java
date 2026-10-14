@@ -749,6 +749,13 @@ public final class VMScheduler
     static long pickNext(long curSp)
     {
         int core = (int) (Magic.readMPIDR() & 3L);
+        // The hang dump hangs off EVERY switch, not only the timer: on QEMU the tick never reaches schedule()
+        // (MEASURED, ticks=0 at main's return), so a launched program switches only when a task yields or
+        // blocks -- and a hung program still has a yielder (main polls in Thread.join).
+        if (hangDumpAt != 0L && Magic.readCNTPCT_EL0() > hangDumpAt)
+        {
+            hangDump(curSp);                               // VM.HANG_LOCK: what every task is doing, once per core
+        }
         if (gcStop != 0 && core != 0)
         {
             return gcPark(core, curSp);                    // core 0 is collecting: nobody else touches the heap
@@ -857,6 +864,117 @@ public final class VMScheduler
         }
         if (id != 0x3FF) { Gic.end(id); }                 // other/real INTID: EOI, don't switch
         return curSp;
+    }
+
+    /**
+     * The hang dump's per-core report (see {@link VM#HANG_LOCK}). Runs from {@code pickNext} -- a timer tick or a
+     * yield/block -- with the switching task's saved frame: x0..x30 at 0..240, ELR (its pc) at 248, its SP at {@code frame + SCHED_FRAME}. The
+     * first core to arrive also prints the task table, and the saved stack of every task that is not running.
+     * Reads the table WITHOUT {@code SCHED_LOCK} -- a diagnostic must not take the lock a hang may be holding --
+     * so a value can be one switch stale; each line states only what it read.
+     */
+    static void hangDump(long curSp)
+    {
+        int core = (int) (Magic.readMPIDR() & 3L);
+        Magic.spinLock(HANG_LOCK);
+        int seen = hangDumpCores;
+        if ((seen & (1 << core)) != 0)
+        {
+            Magic.spinUnlock(HANG_LOCK);
+            return;
+        }
+        hangDumpCores = seen | (1 << core);
+        if (seen == 0)
+        {
+            Uart.write(Magic.bytes("\nHANG DUMP: tasks="));
+            printDec(taskCount);
+            Uart.write(Magic.bytes(" (state 0=empty 1=ready 2=sleeping 3=blocked 4=running) loaderOwner="));
+            printDec(loaderOwner);
+            Uart.write(Magic.bytes("\n"));
+            Loader.hangDumpInits();                        // the claimed-initializer table
+            int t = 0;
+            while (t < taskCount)
+            {
+                if (taskState[t] != TASK_EMPTY && taskIdle[t] == 0)
+                {
+                    hangDumpTask(t);
+                }
+                t += 1;
+            }
+        }
+        Uart.write(Magic.bytes("HANG DUMP core "));
+        printDec(core);
+        Uart.write(Magic.bytes(" interrupted task "));
+        printDec(coreTask[core]);
+        Uart.write(Magic.bytes(taskIdle[coreTask[core]] != 0 ? " (idle)" : ""));
+        hangDumpStack(curSp);
+        Magic.spinUnlock(HANG_LOCK);
+    }
+
+    /** One task-table row, and the task's saved stack when it is not running (a running task's frame is stale). */
+    private static void hangDumpTask(int t)
+    {
+        Uart.write(Magic.bytes("  task "));
+        printDec(t);
+        Uart.write(Magic.bytes(" state="));
+        printDec(taskState[t]);
+        Uart.write(Magic.bytes(" prio="));
+        printDec(taskPrio[t]);
+        Uart.write(Magic.bytes(" done="));
+        printDec(taskDone[t]);
+        Uart.write(Magic.bytes(" waitOn="));
+        printDec(taskWaitOn[t]);
+        Uart.write(Magic.bytes(" waitObj="));
+        printHex(taskWaitObj[t]);
+        Uart.write(Magic.bytes(" monWait="));
+        printHex(taskMonWait[t]);
+        Uart.write(Magic.bytes(" permit="));
+        printDec(taskPermit[t]);
+        if (taskState[t] != TASK_RUNNING && taskSp[t] != 0L)
+        {
+            hangDumpStack(taskSp[t]);
+        }
+        else
+        {
+            Uart.write(Magic.bytes("\n"));
+        }
+    }
+
+    /**
+     * Up to twelve frames of the task whose saved context is {@code frame}: its pc (ELR, +248), then the unwinder's
+     * walk from its SP ({@code frame + SCHED_FRAME}), where [sp] holds the caller's return address. A FRAMELESS pc
+     * -- a leaf such as taskYield, which is where every yielding task is saved -- keeps its return address in
+     * x30 (+240), which the saved frame has, so the walk continues from there once.
+     */
+    private static void hangDumpStack(long frame)
+    {
+        long cpc = Magic.load64(frame + 248L);
+        long csp = frame + SCHED_FRAME;
+        long lr = Magic.load64(frame + 240L);
+        int depth = 0;
+        while (depth < 12 && cpc > 0x1000L)
+        {
+            Uart.write(Magic.bytes("\n      at "));
+            Loader.printFrameAt(cpc);
+            long fs = frameSizeAt(cpc);
+            if (fs == 0L)
+            {
+                if (lr == 0L)
+                {
+                    Uart.write(Magic.bytes("  <frameless>"));
+                    break;
+                }
+                cpc = lr - 4L;                             // a leaf: its caller is in x30, and csp is unchanged
+                lr = 0L;
+                depth += 1;
+                continue;
+            }
+            cpc = Magic.load64(csp) - 4L;
+            csp += fs;
+            lr = 0L;                                       // x30 is only the FIRST frame's: stale past it
+            depth += 1;
+        }
+        Uart.write(Magic.bytes("\n"));
     }
 
     /** SVC (yield) path: no timer to service, just pick the next task. Called by the SVC handler stub. */

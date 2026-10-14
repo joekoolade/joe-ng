@@ -1735,6 +1735,27 @@ public final class Loader
         runPendingClinit(reg);
     }
 
+    /** True if {@code reg}'s initializer is claimed by ANOTHER task and has not finished (see drainPendingInit). */
+    private static boolean initClaimedByOther(int reg)
+    {
+        if (reg < 0 || clTab == null || clTab[reg] == null)
+        {
+            return false;
+        }
+        int me = VM.curTask() + 1;
+        int i = 0;
+        while (i < clinitN)
+        {
+            if (clinitBase[i] == clTab[reg].base && clinitOwner[i] != 0 && clinitOwner[i] != me
+                    && clinitDone[i] == 0)
+            {
+                return true;
+            }
+            i += 1;
+        }
+        return false;
+    }
+
     /**
      * JVMS 5.5 step 2: if {@code reg}'s initializer is CLAIMED by another task and has not finished, yield until
      * it has. Returns true when it waited (the caller then proceeds against the finished statics, or -- if the
@@ -1758,6 +1779,31 @@ public final class Loader
             i += 1;
         }
         return false;
+    }
+
+    /**
+     * For {@link VMScheduler#hangDump}: every initializer record that is CLAIMED and not finished -- the class,
+     * the claiming task, and whether its body has started ({@code ran=1}) or it is still in the dependency phase
+     * ({@code ran=0}). This is the table a cross-task initialization wait cycle is read from. Read without any
+     * lock, as the rest of the dump is.
+     */
+    static void hangDumpInits()
+    {
+        int i = 0;
+        while (i < clinitN)
+        {
+            if (clinitBusy[i] != 0 && clinitDone[i] == 0)
+            {
+                Uart.write(Magic.bytes("  init claimed: "));
+                printUtf8Capped(clinitBase[i] != 0L ? clinitBase[i] + clinitNameOff[i] : 0L);
+                Uart.write(Magic.bytes(" owner task="));
+                VM.printDec(clinitOwner[i] - 1);
+                Uart.write(Magic.bytes(" ran="));
+                VM.printDec(clinitRan[i]);
+                Uart.putc(0x0A);
+            }
+            i += 1;
+        }
     }
 
     /** Yield until initializer record {@code i} (claimed by another task) has finished; false -- without
@@ -2109,6 +2155,23 @@ public final class Loader
         while (n > 0)
         {
             n -= 1;
+            // A CLASS ANOTHER TASK IS INITIALIZING IS LEFT TO THAT TASK, not waited for. This list is an
+            // OVER-APPROXIMATION -- every class the compile's constant pool touched, initialized before the
+            // body has executed one instruction -- and waiting on it adds a wait-for edge a real JVM never has,
+            // because a JVM initializes a class only when a use EXECUTES. Held while this task has a claim of its
+            // own in flight, that edge closes a cross-task cycle. MEASURED (ChmRaceProbe, ~1 boot in 5, silent):
+            // task A claimed java/util/Random and, inside its dependency phase, drained ThreadLocalRandom; task B
+            // had claimed ThreadLocalRandom and was initializing its superclass Random first (JVMS 5.5 step 7).
+            // Random's initializer never touches ThreadLocalRandom -- the edge was this drain's.
+            //
+            // SKIPPING IS SOUND because every such site is GUARDED: a class still being initialized was not
+            // initialized when the body compiled (initialization is monotone), so getstatic/putstatic/new/
+            // invokestatic on it got an init guard (MetalSymbols.needsInitGuard*), and the guard waits -- at the
+            // use, on the owner -- exactly when a JVM would.
+            if (initClaimedByOther(regs[n]))
+            {
+                continue;
+            }
             ensureClinit(regs[n]);
         }
         lzInitWant = 0;                                 // the list is empty: this compile's want is settled.

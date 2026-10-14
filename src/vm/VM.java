@@ -573,6 +573,20 @@ public final class VM
      *  {@link #LOCK_ADDR} so the SMP job-queue demo and the scheduler don't false-share. */
     static final long SCHED_LOCK = 0x0302_0040L;
 
+    /**
+     * THE HANG DUMP -- what every task is doing once a launched program has run for {@code hangdump=<secs>}
+     * (an {@code /etc/init} key; absent = off). Built for a hang that prints NOTHING: ChmRaceProbe goes silent
+     * inside its first four-thread phase about one boot in five, and no watchdog fires, because neither the
+     * loader lock nor a collection is involved. Past the deadline each core's next task switch (a timer tick, a
+     * yield or a block -- VMScheduler.pickNext) reports the task leaving it (pc and frames), and the first core to
+     * report also prints the whole task table with every non-running task's SAVED stack. Once per core. A core
+     * that never reports never switched in the window: whatever it runs neither yields nor blocks, and on QEMU,
+     * where the timer tick does not reach the scheduler, nothing preempts it -- itself an answer. {@link #HANG_LOCK} keeps one core's report contiguous.
+     */
+    static final long HANG_LOCK = 0x0302_0080L;
+    static long hangDumpAt;                 // CNTPCT deadline after which the dump fires (0 = off)
+    static int  hangDumpCores;              // bit c = core c has reported (written under HANG_LOCK)
+
     // The LOADER lock. The on-metal JIT keeps its whole compile context in statics (methods are capped at
     // ten register locals, so the loader threads its state through fields), and the code arena is one bump
     // pointer -- so two cores compiling at once would interleave into each other's context and hand out the
@@ -2138,6 +2152,7 @@ public final class VM
         int alen = manifestValue(conf, flen, Magic.bytes("args"), al, 250);
         byte[] argsLine = heapBytes(al, alen);              // raw space-separated args; argv built after loadAll
         openClasspath(conf, flen);                          // classpath=<jar>: classes the image lacks come from it
+        armHangDump(conf, flen);                            // hangdump=<secs>: report every task after that long
         Uart.write(Magic.bytes("launch "));
         Uart.write(mainClass);
         Uart.putc(0x0A);
@@ -2177,6 +2192,36 @@ public final class VM
             Uart.write(Magic.bytes(" UNREADABLE"));
         }
         Uart.putc(0x0A);
+    }
+
+    /** {@code hangdump=<secs>} (decimal) arms {@link #hangDumpAt}; absent or 0 leaves it off. */
+    private static void armHangDump(long conf, int flen)
+    {
+        long v = Heap.allocData(16);
+        int n = manifestValue(conf, flen, Magic.bytes("hangdump"), v, 8);
+        long secs = 0L;
+        int i = 0;
+        while (i < n)
+        {
+            int c = Magic.load8(v + i) & 0xFF;
+            if (c < 0x30 || c > 0x39)
+            {
+                break;
+            }
+            secs = secs * 10L + (c - 0x30);
+            i += 1;
+        }
+        if (secs == 0L)
+        {
+            return;
+        }
+        Magic.store32(HANG_LOCK, 0);                       // raw scratch RAM: free before any core can take it
+        hangDumpCores = 0;
+        Magic.dsb();
+        hangDumpAt = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * secs;
+        Uart.write(Magic.bytes("hangdump armed: "));
+        printDec((int) secs);
+        Uart.write(Magic.bytes("s\n"));
     }
 
     /** True if the /etc/init manifest requests networking ({@code net=1}) -- the OS then brings the WiFi

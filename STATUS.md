@@ -4,6 +4,42 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **THE `ChmRaceProbe` HANG WAS A CROSS-TASK CLASS-INIT DEADLOCK, CAUSED BY THE PENDING-INIT DRAIN (2026-10-14, PI-VALIDATED).**
+  Recorded on the card below as pre-existing (main hung 1 run in 5 at the identical point); fixed here.
+  - **Found with a new instrument, the HANG DUMP** (`/etc/init` key `hangdump=<secs>`, off when absent). Past the
+    deadline each core's next task switch reports the task leaving it, and the first core also prints the task
+    table, every non-running task's SAVED stack (walking through a frameless leaf via the saved x30), and every
+    CLAIMED, unfinished `<clinit>` record with its owner and phase. `VM.HANG_LOCK` keeps one core's report whole.
+  - **The instrument first could NOT fire, and was proved before its silence was read.** It hung off the timer
+    tick, and a `hangdump=3` run of a HEALTHY probe printed nothing: **on QEMU the timer tick never reaches
+    `VMScheduler.schedule` -- `ticks=0` at main's return** -- so a launched program is cooperatively scheduled
+    there (switches only on yield/block). It hangs off `pickNext` now, which every switch passes through.
+  - **The dump, on the hung boot:** `init claimed: java/util/Random owner task=4 ran=0` and `init claimed:
+    java/util/concurrent/ThreadLocalRandom owner task=6 ran=0`. Task 6, inside ThreadLocalRandom's claim,
+    waited for its superclass Random (JVMS 5.5 step 7, correct). Task 4, inside Random's claim, had run a
+    dependency's body and then `drainPendingInit` -> ThreadLocalRandom -> wait. Random's initializer never
+    touches ThreadLocalRandom: **the edge was the drain's**, which initializes every class a body's COMPILE
+    touched -- an over-approximation, before the body executes an instruction -- where a JVM initializes on an
+    EXECUTED use. The third worker and main (in `join`) waited behind them. Silent: neither the loader lock nor
+    a collection is involved, so no watchdog could see it.
+  - **Fix: the drain skips a class another task has claimed and not finished** (`Loader.initClaimedByOther`)
+    instead of waiting on it. Sound because every such site is GUARDED: a class still initializing was not
+    initialized when the body compiled (initialization is monotone), so `getstatic`/`putstatic`/`new`/
+    `invokestatic` on it carry an init guard (`MetalSymbols.needsInitGuard*`), which waits at the USE -- when a
+    JVM would.
+  - **Measured: before, 7 hangs in 21 runs** (java-time 3/5, main's control 1/5, and the hang-dump loops 1/7,
+    1/3, 1/1); **after, 0 in 15**, hang dump armed in every run and never firing. At the old rate (1 in 3) 15
+    clean runs is a ~0.3% fluke.
+  - **Recorded, not changed:** QEMU gives a launched program no preemption (above). The Pi's tick is the
+    hardware timer and is unaffected; but a QEMU pass of a program that spins without yielding is evidence of
+    less than it looks.
+  - Host: builds clean. **Suite: 40 programs, markers zero, churn `gc: collections=50`** (wall 1185 s against
+    1050 s last card: QEMU timing -- neither change is on a normal boot's path). **Every host-controlled probe
+    (34) re-run on QEMU: host-identical**, ChmRaceProbe included; DigestProbe/MacProbe print their designed
+    divergences (`failures=0 divergences-unmet=0`).
+  - **Pi (`41530b2`):** NetDemo `HTTP/1.1 200 OK ... http done bytes=891`, `[main returned normally]`, no new
+    TRAP-WIRED line, `clinits=372/372/373/374` and batch 1 `+1406blob` -- both unchanged from the previous card,
+    as expected: neither change is on a single-threaded boot's path.
 - **`java.time` RUNS, THE DEFAULT ZONE IS GMT, `System.Logger.log()` PRINTS (2026-10-13, PI-VALIDATED).** Second increment of
   the System.Logger arc: the wall the card below recorded is gone, and `log()` is host-identical, header and all.
   - **java.time is no longer denied** (`java/time/chrono|temporal|zone`, `Zone*`, `Instant`, `DateTimeException`,
