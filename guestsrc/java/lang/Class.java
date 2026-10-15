@@ -563,9 +563,9 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.T
      *
      * <p>The half NOT added here is the half that needs machinery joe-ng does not have:
      * {@code getAnnotation}/{@code getAnnotations} need a live annotation instance (a Proxy runtime),
-     * {@code getProtectionDomain} needs {@code java/security} (denylisted), {@code getResource*} needs URL and
-     * resource enumeration, and the generic-signature methods need a signature parser. Those stay in the
-     * backlog rather than being answered wrongly.
+     * {@code getProtectionDomain} needs {@code java/security} (denylisted) and the generic-signature methods
+     * need a signature parser. Those stay in the backlog rather than being answered wrongly. ({@code getResource*}
+     * was in this list; it is declared below {@link #getClassLoader} now.)
      */
     @SuppressWarnings("unchecked")
     public <U> Class<? extends U> asSubclass(Class<U> clazz)
@@ -875,6 +875,52 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.T
     ClassLoader getClassLoader0()
     {
         return null;
+    }
+
+    /**
+     * Stock's unnamed-module arm: resolve {@code name} against this class's package, then ask the loader -- which,
+     * {@link #getClassLoader} being null, is the system loader, exactly as stock does for a bootstrap class.
+     * The bytes come out of the classpath jar ({@link ClassLoader#getResourceAsStream}); every class here is in
+     * the unnamed module, so stock's named-module encapsulation check has nothing to apply to.
+     */
+    public java.io.InputStream getResourceAsStream(String name)
+    {
+        name = resolveName(name);
+        return ClassLoader.getSystemResourceAsStream(name);
+    }
+
+    /**
+     * Stock's unnamed-module arm, as {@link #getResourceAsStream}. It answers what {@link ClassLoader#getResource}
+     * answers: null, and a console report when the jar DOES hold the resource, because this VM cannot build a
+     * {@link java.net.URL} for it -- the stream form is the one that serves bytes.
+     */
+    public java.net.URL getResource(String name)
+    {
+        name = resolveName(name);
+        return ClassLoader.getSystemResource(name);
+    }
+
+    /** Stock's: a name without a leading '/' is relative to this class's package; a leading '/' is dropped. */
+    private String resolveName(String name)
+    {
+        if (!name.startsWith("/"))
+        {
+            String baseName = getPackageName();
+            if (!baseName.isEmpty())
+            {
+                int len = baseName.length() + 1 + name.length();
+                StringBuilder sb = new StringBuilder(len);
+                name = sb.append(baseName.replace('.', '/'))
+                    .append('/')
+                    .append(name)
+                    .toString();
+            }
+        }
+        else
+        {
+            name = name.substring(1);
+        }
+        return name;
     }
 
     public boolean isAnnotation()
