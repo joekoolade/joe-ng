@@ -4,6 +4,28 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **REFLECTIVE INVOKE: EXCEPTIONS WRAPPED, ARGUMENTS CONVERTED AS STOCK (2026-10-15).** What `Method.invoke`
+  and `Constructor.newInstance` do around the call, measured against the unfixed VM with the same probe.
+  - **An exception the target threw escaped UNWRAPPED.** Stock wraps whatever the target throws, checked,
+    unchecked or an `Error`, in `InvocationTargetException`. Code that catches that (or unwraps it) saw the raw
+    exception instead. `MetalJUnit` already unwraps, since it was written against stock.
+  - **Arguments were CAST to the exact wrapper**, so:
+    - every widening threw `ClassCastException`: `Integer` for a `long`, `Character` for an `int`, `Float` for a
+      `double` -- 11 of 11 arms;
+    - a null for a primitive threw `NullPointerException`;
+    - **a wrong REFERENCE type was never checked**: an `Integer` passed to a `String` parameter ran the method
+      with it (`string <- Integer -> string 7`). That is a type-safety hole, not just a wrong exception.
+    Now `Executable.convertArg` does stock's checks: a reference must be an instance of the parameter type;
+    a primitive is unboxed and widened per JLS 5.1.2 (`char` only to `int` and up, nothing to `char` but a
+    `Character`); anything else is `IllegalArgumentException("argument type mismatch")`. The two per-class
+    `marshal` copies are gone.
+  - **Probe:** `InvokeSemanticsProbe` (new) covers:
+    - four throwing shapes, including a throw five frames deep, and a throwing constructor;
+    - 12 widenings;
+    - 8 mismatches, among them a narrowing, `Boolean` for `int`, null for `int` and `Integer` for `String`;
+    - constructor widening and mismatch.
+    Host-identical. Negative control on the unfixed VM: 25 of its 33 lines differ.
+  - **Regression (suite, all probes, JUnit):** pending. **Pi:** pending.
 - **REFLECTIVE CALLS WITH MORE THAN 8 ARGUMENTS (2026-10-15).** `Method.invoke` and `Constructor.newInstance`
   handled at most 8 arguments, counting the receiver, while the JIT passes 16 in registers and more through a
   pointer.
