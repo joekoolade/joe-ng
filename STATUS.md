@@ -25,7 +25,7 @@ Newest entries are at the top.
     - 8 mismatches, among them a narrowing, `Boolean` for `int`, null for `int` and `Integer` for `String`;
     - constructor widening and mismatch.
     Host-identical. Negative control on the unfixed VM: 25 of its 33 lines differ.
-  - **Regression (suite, all probes, JUnit):** pending. **Pi:** pending.
+  - **Regression (suite, all probes, JUnit):** QEMU clean on 5240ab6 -- suite markers all zero, `gc: collections=51`, clinits 346; 48 of 50 probes host-identical (InvokeSemanticsProbe among them), DigestProbe/MacProbe their designed divergences only; `ran 44, failures 0`. **Pi:** pending.
 - **REFLECTIVE CALLS WITH MORE THAN 8 ARGUMENTS (2026-10-15).** `Method.invoke` and `Constructor.newInstance`
   handled at most 8 arguments, counting the receiver, while the JIT passes 16 in registers and more through a
   pointer.
@@ -52,7 +52,7 @@ Newest entries are at the top.
     (17 with the receiver), a 16-parameter instance method, `getDeclaredMethods` over seven 8+-parameter
     members, and the count check. Every reflective answer is printed beside the direct call's. Host-identical.
     `VirtualInvokeProbe` is unchanged.
-  - **Regression (suite, all probes, JUnit):** pending. **Pi:** PASS (2026-10-15, 6f68a71) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=891), `[main returned normally]`, `gc: collections=7`.
+  - **Regression (suite, all probes, JUnit):** QEMU clean on the tree merged as cce4bcc -- suite markers all zero, `gc: collections=51`, clinits 346; 47 of 49 probes host-identical, DigestProbe/MacProbe their designed divergences only (`failures=0 divergences-unmet=0`); `ran 44, failures 0`. Recorded after the merge, which went ahead with this line pending. **Pi:** PASS (2026-10-15, 6f68a71) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=891), `[main returned normally]`, `gc: collections=7`.
 - **`Method` FOR ABSTRACT AND NATIVE METHODS; `Method.invoke` DISPATCHES VIRTUALLY; FP ARGUMENTS AND RETURNS
   (2026-10-15).** Both gaps recorded by the card below, plus a third found by the probe.
   - **An abstract or native method had NO `Method`.** A method-registry slot follows a compiled body, so a
