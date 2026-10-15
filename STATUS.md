@@ -4,6 +4,51 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **`Method` FOR ABSTRACT AND NATIVE METHODS; `Method.invoke` DISPATCHES VIRTUALLY; FP ARGUMENTS AND RETURNS
+  (2026-10-15).** Both gaps recorded by the card below, plus a third found by the probe.
+  - **An abstract or native method had NO `Method`.** A method-registry slot follows a compiled body, so a
+    method without a `Code` attribute never got one. `getMethod` of an abstract interface method
+    threw `NoSuchMethodException` (measured: the first `MemberToStringProbe` boot, on `Shape.area`). `getDeclaredMethods` skips any
+    member whose resolve throws, so it OMITTED every abstract method -- read from the code, not measured on
+    the old VM: an interface would list only its defaults, an annotation type none of its elements.
+    - Such a method now gets a REFLECTION-ONLY entry (`Loader.bodylessIndex`), addressed as `BODYLESS + k`.
+      Every reflection native reads entries through `reflEntry`.
+    - **It is kept out of the method registry on purpose.** The call linker's lookups (`globalBuf`,
+      `globalBufByRef`'s tiers, `globalMethodBuf`) return the first match's `buf` without testing it, so a
+      body-less entry would answer 0 where the search used to fall through to its later tiers.
+  - **`Method.invoke` called the DECLARING class's body for every receiver.** Invoking `Base.greet` on a
+    `Square` that overrides it ran `Base.greet`. It now dispatches as `invokevirtual`/`invokeinterface` do,
+    in this order:
+    1. the receiver's class chain, for a body with EXACTLY this name and descriptor (a new native,
+       `Method.exact0`). The old resolver's name-only fallback could pick an overload;
+    2. reaching the declaring class: this method's own body;
+    3. otherwise, the receiver's itable directory (`Method.itableTarget0` over `resolveViaItableDir`). That
+       covers interface methods, a default a SUB-INTERFACE overrides, and receivers the VM synthesised
+       (lambdas, annotation instances), which have no class file to walk.
+
+    Private methods are never dispatched. A null receiver throws `NullPointerException` and a wrong one
+    `IllegalArgumentException`, as stock does; before, both were passed in unchecked. With no body anywhere,
+    invoke throws `AbstractMethodError`.
+  - **A `double`/`float` result came back as a garbage OBJECT REFERENCE.** `Method.invoke` boxed by return
+    character and had no `F`/`D` arm, and the argument marshallers (`Method` and `Constructor`) had none
+    either. The JIT keeps FP values as raw bits in general registers (`dreturn` is a plain `mov x0`), so both
+    directions are now raw-bit conversions.
+  - **Not modelled:** package-private methods are not distinguished across packages when finding an
+    override. Arguments are not WIDENED the way stock's are (an `Integer` for a `long` parameter).
+  - **Probe:** `VirtualInvokeProbe` (new) covers:
+    - abstract members: `getMethod`, `getDeclaredMethods` of an interface, an abstract class and an
+      annotation type, with their `toString`;
+    - an override, an abstract method's implementation, an overload that is NOT an override, and a private
+      method that is never overridden;
+    - three default shapes: overridden by a class, by a sub-interface, and by nobody;
+    - a lambda, an anonymous class, a `Supplier`;
+    - `Comparator.compare` on a lambda and on `CASE_INSENSITIVE_ORDER`;
+    - `Object.toString`/`hashCode` on baked receivers;
+    - annotation elements read reflectively;
+    - FP arguments and returns;
+    - both receiver errors.
+    Host-identical. The two new probes of the card below and the generics probes are unchanged.
+  - **Regression (suite, all probes, JUnit):** QEMU clean -- suite markers all zero, `gc: collections=51`, clinits 346; 45 of 49 probes host-identical on the first pass. DigestProbe/MacProbe show only their designed divergences (`failures=0 divergences-unmet=0`). LockProbe printed only `GC: core N stuck parked >10s` under host load (avg ~10) and reran host-identical. CauseToStringProbe is NOT A PROBE: it has no source in the tree, only a stale `out/CauseToStringProbe.class` in the main checkout, so a clean build answers `class not found` -- it should leave the regression set. `ran 44, failures 0`. **Pi:** PASS (2026-10-15, dc7bfd9) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=891), `[main returned normally]`, `gc: collections=7`. (A first flash built from a clean worktree booted with `no /etc/wifi.conf` -- the file is gitignored -- and died in DNS; that was the build, not the VM, and is not this result.)
 - **CLASS NESTING FROM THE CLASSFILE; `getEnclosingMethod`/`getEnclosingConstructor`; MEMBER `toString` WITH
   `throws`; STOCK `Modifier` (2026-10-15).** Known gaps and dropped supertypes unchanged (1 and 3).
   - **Nesting was read from the BINARY NAME.** `isMemberClass`/`isLocalClass`/`isAnonymousClass`,
@@ -57,7 +102,7 @@ Newest entries are at the top.
         `String` constructor.
     Both are host-identical. `GenericsProbe`, `MemberGenericsProbe`, `ReflectLookupProbe` and
     `SupertypeProbe` are unchanged.
-  - **Regression (suite, all probes, JUnit):** pending. **Pi:** PASS (2026-10-15, 846be40) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=888), `[main returned normally]`, `gc: collections=7`.
+  - **Regression (suite, all probes, JUnit):** QEMU clean on main 6e76981 (the merged tree; the run started before the merge and was not touched by it) -- suite markers all zero, `gc: collections=51`, clinits 346; all 48 probes host-identical except the designed DigestProbe/MacProbe divergences (`failures=0 divergences-unmet=0`); `ran 44, failures 0`. Recorded after the merge, which went ahead with this line pending. **Pi:** PASS (2026-10-15, 846be40) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=888), `[main returned normally]`, `gc: collections=7`.
 - **MEMBER-LEVEL GENERIC REFLECTION; MEMBER `equals`/`hashCode`; ARRAY PARAMETER AND RETURN TYPES (2026-10-14).**
   Builds on the class-level card below. Dropped supertypes 6 -> 3: only `Class`'s
   `Constable`/`TypeDescriptor` family is left.
