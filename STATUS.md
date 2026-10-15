@@ -25,7 +25,7 @@ Newest entries are at the top.
     - 8 mismatches, among them a narrowing, `Boolean` for `int`, null for `int` and `Integer` for `String`;
     - constructor widening and mismatch.
     Host-identical. Negative control on the unfixed VM: 25 of its 33 lines differ.
-  - **Regression (suite, all probes, JUnit):** QEMU clean on 5240ab6 -- suite markers all zero, `gc: collections=51`, clinits 346; 48 of 50 probes host-identical (InvokeSemanticsProbe among them), DigestProbe/MacProbe their designed divergences only; `ran 44, failures 0`. **Pi:** pending.
+  - **Regression (suite, all probes, JUnit):** QEMU clean on 5240ab6 -- suite markers all zero, `gc: collections=51`, clinits 346; 48 of 50 probes host-identical (InvokeSemanticsProbe among them), DigestProbe/MacProbe their designed divergences only; `ran 44, failures 0`. **Pi:** PASS (2026-10-15, 618ea50) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=891), `[main returned normally]`, `gc: collections=7`.
 - **REFLECTIVE CALLS WITH MORE THAN 8 ARGUMENTS (2026-10-15).** `Method.invoke` and `Constructor.newInstance`
   handled at most 8 arguments, counting the receiver, while the JIT passes 16 in registers and more through a
   pointer.
