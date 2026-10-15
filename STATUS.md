@@ -57,7 +57,7 @@ Newest entries are at the top.
         `String` constructor.
     Both are host-identical. `GenericsProbe`, `MemberGenericsProbe`, `ReflectLookupProbe` and
     `SupertypeProbe` are unchanged.
-  - **Regression (suite, all probes, JUnit):** pending. **Pi:** pending.
+  - **Regression (suite, all probes, JUnit):** pending. **Pi:** PASS (2026-10-15, 846be40) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=888), `[main returned normally]`, `gc: collections=7`.
 - **MEMBER-LEVEL GENERIC REFLECTION; MEMBER `equals`/`hashCode`; ARRAY PARAMETER AND RETURN TYPES (2026-10-14).**
   Builds on the class-level card below. Dropped supertypes 6 -> 3: only `Class`'s
   `Constable`/`TypeDescriptor` family is left.
