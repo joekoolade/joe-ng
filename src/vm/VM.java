@@ -1979,9 +1979,11 @@ public final class VM
         if (classAnnoAllAddr == 0L) { long u = VMNatives.classAnnoAll(0L); }    // Class.annoAll0
         if (classIfacesAddr == 0L) { long u = VMNatives.classIfaces(0L); }      // Class.interfaces0
         if (classSignatureAddr == 0L) { long u = VMNatives.classSignature(0L); }    // Class.genericSignature0
-        if (classEnclosingKindAddr == 0L) { long u = VMNatives.classEnclosingKind(0L); } // Class.enclosingMethodKind0
+        if (classEnclosingPartAddr == 0L) { long u = VMNatives.classEnclosingPart(0L, 0L); } // Class.enclosingPart0
+        if (classInnerPartAddr == 0L) { long u = VMNatives.classInnerPart(0L, 0L); }   // Class.innerPart0
         if (classSealedAddr == 0L) { long u = VMNatives.classSealed(0L); }          // Class.sealed0
         if (methodSignatureAddr == 0L) { long u = VMNatives.methodSignature(-1L); } // Executable.signature0
+        if (methodExceptionNameAddr == 0L) { long u = VMNatives.methodExceptionName(-1L, 0L); } // Executable.exceptionName0
         if (fieldSignatureAddr == 0L) { long u = VMNatives.fieldSignature(0L, 0L); } // Field.signature0
         if (defineClassAddr == 0L) { long u = VMNatives.defineClass(0L, 0L, 0L, 0L); } // ClassLoader.defineClass0 (M3)
         if (classModifiersAddr == 0L) { long u = VMNatives.classModifiers(0L); } // Class.getModifiers() native (reflection M1)
@@ -3479,9 +3481,11 @@ public final class VM
     static long classAnnoAllAddr;      // VMNatives.classAnnoAll(J)J — Class.annoAll0(Class)
     static long classIfacesAddr;       // VMNatives.classIfaces(J)J — Class.interfaces0(Class)
     static long classSignatureAddr;    // VMNatives.classSignature(J)J — Class.genericSignature0(Class)
-    static long classEnclosingKindAddr; // VMNatives.classEnclosingKind(J)J — Class.enclosingMethodKind0(Class)
+    static long classEnclosingPartAddr; // VMNatives.classEnclosingPart(JJ)J — Class.enclosingPart0(Class, long)
+    static long classInnerPartAddr;    // VMNatives.classInnerPart(JJ)J — Class.innerPart0(Class, long)
     static long classSealedAddr;       // VMNatives.classSealed(J)J — Class.sealed0(Class)
     static long methodSignatureAddr;   // VMNatives.methodSignature(J)J — Executable.signature0(int)
+    static long methodExceptionNameAddr; // VMNatives.methodExceptionName(JJ)J — Executable.exceptionName0(int, long)
     static long fieldSignatureAddr;    // VMNatives.fieldSignature(JJ)J — Field.signature0(Class,byte[])
     static long defineClassAddr;       // VM.defineClass(JJJJ)J — ClassLoader.defineClass0 native (reflection M3)
     static long classModifiersAddr;    // VM.classModifiers(J)I — Class.getModifiers() native (reflection M1)

@@ -4,6 +4,60 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **CLASS NESTING FROM THE CLASSFILE; `getEnclosingMethod`/`getEnclosingConstructor`; MEMBER `toString` WITH
+  `throws`; STOCK `Modifier` (2026-10-15).** Known gaps and dropped supertypes unchanged (1 and 3).
+  - **Nesting was read from the BINARY NAME.** `isMemberClass`/`isLocalClass`/`isAnonymousClass`,
+    `getEnclosingClass`, `getSimpleName` and `getCanonicalName` all cut `getName()` at its last '$'. A top-level
+    class whose own name contains '$' (`Odd$Name`) read as a member of `Odd`. `getSimpleName` of an array
+    answered `[I` (stock: `int[]`) and of an anonymous class `1` (stock: `""`). `getCanonicalName` named local
+    and anonymous classes (stock: null) and spelled arrays as `[I`. All of these are plausible wrong answers.
+  - **Now stock's bodies end to end**, over two new natives:
+    - `Class.enclosingPart0` reads the `EnclosingMethod` attribute: the class, method name and descriptor.
+      Stock's `getEnclosingMethod0()` array is built from it in Java.
+    - `Class.innerPart0` reads the class's OWN `InnerClasses` entry: the outer class and the simple name.
+      These are HotSpot's `getDeclaringClass0` and `getSimpleBinaryName0`.
+    The old `enclosingMethodKind0` native is gone.
+  - **`getEnclosingMethod`/`getEnclosingConstructor` THREW** for a class inside a method or constructor
+    ("building that Method is not done yet"). They now find the member: the candidate whose descriptor equals
+    the attribute's. Stock compares parsed classes, which is the same test. A generic local class's type
+    variable bounded by its METHOD's type variable now resolves through `MethodScope`
+    (`Holder<U extends T>`, `T` declared by `generic()`).
+  - **Divergence, recorded:** the enclosing and declaring class resolve through `Class.forName`, which on this
+    VM always INITIALIZES the class; stock does not. That was already true of the old `getEnclosingClass`.
+  - **`Method.toString` and `toGenericString` were one erasure-only printer, and `Constructor` had NO
+    `toString`** (it printed `java.lang.reflect.Constructor@d03e366`). Neither knew `throws`: there was no
+    `getExceptionTypes` at all. Now stock's `sharedToString`/`sharedToGenericString`, over:
+    - a third native, `Executable.exceptionName0`, which reads the `Exceptions` attribute;
+    - `getGenericExceptionTypes` from the `Signature` (a thrown type variable stays `X`);
+    - type parameters, varargs `T...`, and `default` placed after the access word.
+  - **The `Modifier` overlay is DELETED.** It was a 75-line hand-written stand-in for stock's 530 lines (pure
+    Java, no natives), and lacked `methodModifiers`, `constructorModifiers`, `ACCESS_MODIFIERS` and
+    `VARARGS`. Stock runs now.
+  - **Found, NOT fixed (next increment):**
+    - An ABSTRACT or NATIVE method gets no method-registry slot (registration follows a `Code` attribute), so
+      no `Method` exists for it. `Interface.class.getMethod("abstractOne")` throws `NoSuchMethodException`, and
+      `getDeclaredMethods` silently OMITS such methods. `MemberToStringProbe` first tripped on it, and has no
+      abstract member until that lands.
+    - `Method.invoke` calls the DECLARING class's body directly (`Magic.callN(buf, ...)`), so invoking a
+      superclass `Method` on a receiver that overrides it runs the superclass body. Stock dispatches
+      virtually.
+  - **Probes:**
+    - `NestingProbe` (new) covers every kind of class:
+      - top-level, `$`-named top-level, static member, inner, and member of a member;
+      - local and anonymous classes in a method, in both constructors, and in static and instance
+        initializers;
+      - a local class inside a lambda body (javac names `main`), and in two overloads;
+      - a generic local class;
+      - arrays of local, member and anonymous classes, `int`, `int[]`, `Map.Entry` and `String`.
+    - `MemberToStringProbe` (new) covers:
+      - `throws` lists, and a thrown type variable;
+      - varargs, a default method, and modifier order;
+      - a generic constructor that throws;
+      - baked `Object.wait`, `String.getBytes`, `List.of`, `Collections.max`, `Comparator.reversed`, and a
+        `String` constructor.
+    Both are host-identical. `GenericsProbe`, `MemberGenericsProbe`, `ReflectLookupProbe` and
+    `SupertypeProbe` are unchanged.
+  - **Regression (suite, all probes, JUnit):** pending. **Pi:** PASS (2026-10-15, 846be40) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=888), `[main returned normally]`, `gc: collections=7`.
 - **MEMBER-LEVEL GENERIC REFLECTION; MEMBER `equals`/`hashCode`; ARRAY PARAMETER AND RETURN TYPES (2026-10-14).**
   Builds on the class-level card below. Dropped supertypes 6 -> 3: only `Class`'s
   `Constable`/`TypeDescriptor` family is left.

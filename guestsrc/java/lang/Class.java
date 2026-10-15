@@ -496,21 +496,62 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
         return dot < 0 ? "" : n.substring(0, dot);
     }
 
-    /** The simple (unqualified) class name: the binary name after the last '.' or '$', whichever is later. */
+    /**
+     * Stock's {@code getSimpleName0}, uncached (a mirror carries no reflection data): an array's is its
+     * component's plus {@code []}, a nested class's is the simple name its {@code InnerClasses} entry records
+     * ({@code ""} for an anonymous class), and a top-level class's is its binary name past the package.
+     */
     public String getSimpleName()
     {
-        String n = getName();
-        int dot = n.lastIndexOf('.');
-        int dollar = n.lastIndexOf('$');
-        int cut = dot > dollar ? dot : dollar;
-        return cut < 0 ? n : n.substring(cut + 1);
+        if (isArray())
+        {
+            return getComponentType().getSimpleName().concat("[]");
+        }
+        String simpleName = getSimpleBinaryName();
+        if (simpleName == null)
+        {
+            simpleName = getName();
+            simpleName = simpleName.substring(simpleName.lastIndexOf('.') + 1);
+        }
+        return simpleName;
     }
 
-    /** The canonical name (dotted binary name with nested '$' turned into '.'). Local/anonymous classes (no
-     *  canonical name in the JLS) are not distinguished yet — see arc M1. */
+    /**
+     * Stock's {@code getCanonicalName0}, uncached: null for a local or anonymous class, an array of one, or a
+     * member of one. Stock also answers null for a HIDDEN class; this VM defines none through
+     * {@code Lookup.defineHiddenClass}, so that arm is absent rather than guessed.
+     */
     public String getCanonicalName()
     {
-        return getName().replace('$', '.');
+        if (isArray())
+        {
+            String canonicalName = getComponentType().getCanonicalName();
+            if (canonicalName != null)
+            {
+                return canonicalName.concat("[]");
+            }
+            return null;
+        }
+        if (isLocalOrAnonymousClass())
+        {
+            return null;
+        }
+        Class<?> enclosingClass = getEnclosingClass();
+        if (enclosingClass == null)
+        {
+            return getName();
+        }
+        String enclosingName = enclosingClass.getCanonicalName();
+        if (enclosingName == null)
+        {
+            return null;
+        }
+        String simpleName = getSimpleName();
+        return new StringBuilder(enclosingName.length() + simpleName.length() + 1)
+                .append(enclosingName)
+                .append('.')
+                .append(simpleName)
+                .toString();
     }
 
     /** True if {@code obj} is non-null and assignable to this type (the {@code instanceof} walk). */
@@ -1024,34 +1065,191 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
     private static native String genericSignature0(Class<?> c);
 
     /**
-     * Null for a class with no {@code EnclosingMethod} attribute (every top-level and member class), one
-     * enclosed by an initializer, or one enclosed by a constructor -- each stock's answer. A local or anonymous
-     * class declared INSIDE a method THROWS: finding that Method is not built yet, and a null would claim the
-     * class is not in one. Generic scope resolution asks this first ({@code ClassScope}), so a member class
-     * still reaches its outer class's type variables through {@link #getEnclosingClass}.
+     * Stock's: the method a local or anonymous class is declared in, or null (no {@code EnclosingMethod}
+     * attribute, an initializer, or a constructor). Stock parses the descriptor into classes with
+     * {@code BytecodeDescriptor} and compares parameter and return types; this compares each candidate's
+     * DESCRIPTOR with the attribute's instead, which is the same test without loading every named type.
      */
     public java.lang.reflect.Method getEnclosingMethod()
     {
-        if (enclosingMethodKind0(this) == 2L)
+        EnclosingMethodInfo enclosingInfo = getEnclosingMethodInfo();
+        if (enclosingInfo == null)
         {
-            throw new UnsupportedOperationException("Class.getEnclosingMethod: enclosing method of " + getName());
+            return null;
         }
-        return null;
+        if (!enclosingInfo.isMethod())
+        {
+            return null;
+        }
+        String descriptor = enclosingInfo.getDescriptor();
+        for (java.lang.reflect.Method m : enclosingInfo.getEnclosingClass().getDeclaredMethods())
+        {
+            if (m.getName().equals(enclosingInfo.getName())
+                    && descriptorOf(m.getParameterTypes(), m.getReturnType()).equals(descriptor))
+            {
+                return m;
+            }
+        }
+        throw new InternalError("Enclosing method not found");
     }
 
     /** As {@link #getEnclosingMethod}, for a class declared inside a constructor. */
     public java.lang.reflect.Constructor<?> getEnclosingConstructor()
     {
-        if (enclosingMethodKind0(this) == 3L)
+        EnclosingMethodInfo enclosingInfo = getEnclosingMethodInfo();
+        if (enclosingInfo == null)
         {
-            throw new UnsupportedOperationException("Class.getEnclosingConstructor: enclosing constructor of "
-                    + getName());
+            return null;
         }
-        return null;
+        if (!enclosingInfo.isConstructor())
+        {
+            return null;
+        }
+        String descriptor = enclosingInfo.getDescriptor();
+        for (java.lang.reflect.Constructor<?> c : enclosingInfo.getEnclosingClass().getDeclaredConstructors())
+        {
+            if (descriptorOf(c.getParameterTypes(), void.class).equals(descriptor))
+            {
+                return c;
+            }
+        }
+        throw new InternalError("Enclosing constructor not found");
     }
 
-    /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.classEnclosingKind}): 0 none, 1 no method, 2 a method, 3 a constructor. */
-    private static native long enclosingMethodKind0(Class<?> c);
+    /** The method descriptor {@code (params)ret} a classfile would record for these types. */
+    private static String descriptorOf(Class<?>[] params, Class<?> ret)
+    {
+        StringBuilder sb = new StringBuilder("(");
+        for (Class<?> p : params)
+        {
+            sb.append(p.descriptorString());
+        }
+        return sb.append(')').append(ret.descriptorString()).toString();
+    }
+
+    /**
+     * Stock's {@code getEnclosingMethod0}, built in Java from the {@code EnclosingMethod} attribute: null when
+     * the class has none, else {enclosing class, method name or null, descriptor or null}. The enclosing
+     * class is resolved by name through {@link #forName}, which on this VM also INITIALIZES it -- stock does
+     * not. A local or anonymous class runs inside its enclosing class's code, so that class is normally
+     * initialized already.
+     */
+    private Object[] getEnclosingMethod0()
+    {
+        String cn = enclosingPart0(this, 0L);
+        if (cn == null)
+        {
+            return null;
+        }
+        return new Object[] { classNamed(cn), enclosingPart0(this, 1L), enclosingPart0(this, 2L) };
+    }
+
+    private EnclosingMethodInfo getEnclosingMethodInfo()
+    {
+        Object[] enclosingInfo = getEnclosingMethod0();
+        if (enclosingInfo == null)
+        {
+            return null;
+        }
+        return new EnclosingMethodInfo(enclosingInfo);
+    }
+
+    /** Stock's. */
+    private static final class EnclosingMethodInfo
+    {
+        private final Class<?> enclosingClass;
+        private final String name;
+        private final String descriptor;
+
+        static void validate(Object[] enclosingInfo)
+        {
+            if (enclosingInfo.length != 3)
+            {
+                throw new InternalError("Malformed enclosing method information");
+            }
+            try
+            {
+                Class<?> enclosingClass = (Class<?>) enclosingInfo[0];
+                assert (enclosingClass != null);
+                String name = (String) enclosingInfo[1];
+                String descriptor = (String) enclosingInfo[2];
+                assert ((name != null && descriptor != null) || name == descriptor);
+            }
+            catch (ClassCastException cce)
+            {
+                throw new InternalError("Invalid type in enclosing method information", cce);
+            }
+        }
+
+        EnclosingMethodInfo(Object[] enclosingInfo)
+        {
+            validate(enclosingInfo);
+            this.enclosingClass = (Class<?>) enclosingInfo[0];
+            this.name = (String) enclosingInfo[1];
+            this.descriptor = (String) enclosingInfo[2];
+        }
+
+        boolean isPartial()
+        {
+            return enclosingClass == null || name == null || descriptor == null;
+        }
+
+        boolean isConstructor()
+        {
+            return !isPartial() && "<init>".equals(name);
+        }
+
+        boolean isMethod()
+        {
+            return !isPartial() && !isConstructor() && !"<clinit>".equals(name);
+        }
+
+        Class<?> getEnclosingClass()
+        {
+            return enclosingClass;
+        }
+
+        String getName()
+        {
+            return name;
+        }
+
+        String getDescriptor()
+        {
+            if (descriptor.isEmpty() || descriptor.charAt(0) != '(')
+            {
+                throw new java.lang.reflect.GenericSignatureFormatError("Bad method signature: " + descriptor);
+            }
+            return descriptor;
+        }
+    }
+
+    /** An internal name from a classfile ({@code a/b/C}) -> its mirror; a dangling one is a linkage error. */
+    private static Class<?> classNamed(String internalName)
+    {
+        try
+        {
+            return forName(internalName.replace('/', '.'), false, null);
+        }
+        catch (ClassNotFoundException e)
+        {
+            NoClassDefFoundError err = new NoClassDefFoundError(internalName);
+            err.initCause(e);
+            throw err;
+        }
+    }
+
+    /**
+     * VM native ({@code Loader.nativeBuf} -> {@code VMNatives.classEnclosingPart}): part 0 the EnclosingMethod
+     * attribute's class (internal name; null when the attribute is absent), 1 the method name, 2 its descriptor.
+     */
+    private static native String enclosingPart0(Class<?> c, long part);
+
+    /**
+     * VM native ({@code Loader.nativeBuf} -> {@code VMNatives.classInnerPart}): from this class's own
+     * InnerClasses entry, part 0 the outer class (internal name) and part 1 the simple name; null when absent.
+     */
+    private static native String innerPart0(Class<?> c, long part);
 
     /** {@code com.x.Foo} -> the bytes of {@code Lcom/x/Foo;} -- the form the classfile stores. */
     private static byte[] annoDescriptorOf(Class<?> anno)
@@ -1168,77 +1366,108 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
         return (getModifiers() & 0x2000) != 0;          // ACC_ANNOTATION
     }
 
-    /**
-     * NESTING is read from the binary name, which is what the JVM guarantees for a nested class: javac emits
-     * {@code Outer$Inner}, and only a nested class carries a '$'. An anonymous class's simple name is all
-     * digits ({@code Outer$1}); a local class's begins with digits then letters ({@code Outer$1Named}); a
-     * member class's begins with a letter. This is the same rule {@link #getSimpleName} already relies on.
-     */
+    /** Stock's: a member class is not local or anonymous, and names an outer class in InnerClasses. */
     public boolean isMemberClass()
     {
-        String sn = nestedSimpleName();
-        return sn != null && !sn.isEmpty() && !isDigit(sn.charAt(0));
+        return !isLocalOrAnonymousClass() && getDeclaringClass0() != null;
     }
 
+    /** Stock's: local or anonymous, with no simple name recorded. */
     public boolean isAnonymousClass()
     {
-        String sn = nestedSimpleName();
-        if (sn == null || sn.isEmpty())
-        {
-            return false;
-        }
-        for (int i = 0; i < sn.length(); i++)
-        {
-            if (!isDigit(sn.charAt(i)))
-            {
-                return false;
-            }
-        }
-        return true;
+        return !isArray() && isLocalOrAnonymousClass() && getSimpleBinaryName0() == null;
     }
 
+    /** Stock's. */
     public boolean isLocalClass()
     {
-        String sn = nestedSimpleName();
-        return sn != null && !sn.isEmpty() && isDigit(sn.charAt(0)) && !isAnonymousClass();
-    }
-
-    /** The enclosing class of a nested class, or null. */
-    public Class<?> getEnclosingClass()
-    {
-        String n = getName();
-        int i = n.lastIndexOf('$');
-        if (i < 0)
-        {
-            return null;
-        }
-        try
-        {
-            return Class.forName(n.substring(0, i));
-        }
-        catch (ClassNotFoundException e)
-        {
-            return null;
-        }
+        return isLocalOrAnonymousClass() && (isArray() || getSimpleBinaryName0() != null);
     }
 
     /**
-     * The class this one is a MEMBER of, or null: null for a top-level class, and -- unlike
-     * {@link #getEnclosingClass} -- null for a local or anonymous class, which is declared in a block rather
-     * than as a member. Which case applies is MEASURED from the {@code EnclosingMethod} attribute (only local
-     * and anonymous classes carry one); the member's outer class is then {@link #getEnclosingClass}'s, which
-     * reads the binary name -- so a top-level class whose own name contains '$' would read as nested.
-     *
-     * <p>Stock generic reflection depends on this: {@code ParameterizedTypeImpl} takes a member type's OWNER
-     * from it ({@code GenericsProbe$Box<Integer>} is owned by {@code GenericsProbe}).
+     * Stock's: from the {@code EnclosingMethod} attribute for a local or anonymous class, else from the
+     * class's {@code InnerClasses} entry. This used to strip the binary name at its last '$' and look that up,
+     * so a top-level class whose own name contains '$' read as nested in another.
+     */
+    public Class<?> getEnclosingClass()
+    {
+        EnclosingMethodInfo enclosingInfo = getEnclosingMethodInfo();
+        Class<?> enclosingCandidate;
+        if (enclosingInfo == null)
+        {
+            enclosingCandidate = getDeclaringClass0();
+        }
+        else
+        {
+            Class<?> enclosingClass = enclosingInfo.getEnclosingClass();
+            if (enclosingClass == this || enclosingClass == null)
+            {
+                throw new InternalError("Malformed enclosing method information");
+            }
+            enclosingCandidate = enclosingClass;
+        }
+        return enclosingCandidate;
+    }
+
+    /**
+     * Stock's: the class this one is a MEMBER of, or null. Stock generic reflection depends on it:
+     * {@code ParameterizedTypeImpl} takes a member type's OWNER from it.
      */
     public Class<?> getDeclaringClass()
     {
-        if (enclosingMethodKind0(this) != 0L)
+        return getDeclaringClass0();
+    }
+
+    /** HotSpot's {@code getDeclaringClass0}: the outer class named by this class's own InnerClasses entry. */
+    private Class<?> getDeclaringClass0()
+    {
+        String outer = innerPart0(this, 0L);
+        return outer == null ? null : classNamed(outer);
+    }
+
+    /** HotSpot's {@code getSimpleBinaryName0}: the simple name in this class's own InnerClasses entry. */
+    private String getSimpleBinaryName0()
+    {
+        return innerPart0(this, 1L);
+    }
+
+    /** Stock's. */
+    private String getSimpleBinaryName()
+    {
+        if (isTopLevelClass())
         {
             return null;
         }
-        return getEnclosingClass();
+        String name = getSimpleBinaryName0();
+        if (name == null)
+        {
+            return "";
+        }
+        return name;
+    }
+
+    /** Stock's. */
+    private boolean isTopLevelClass()
+    {
+        return !isLocalOrAnonymousClass() && getDeclaringClass0() == null;
+    }
+
+    /** Stock's: JVMS 4.7.7 -- a class has an EnclosingMethod attribute iff it is local or anonymous. */
+    private boolean isLocalOrAnonymousClass()
+    {
+        return hasEnclosingMethodInfo();
+    }
+
+    /** Stock's. */
+    private boolean hasEnclosingMethodInfo()
+    {
+        Object[] enclosingInfo = getEnclosingMethod0();
+        if (enclosingInfo != null)
+        {
+            EnclosingMethodInfo.validate(enclosingInfo);
+            return true;
+        }
+        return false;
     }
 
     /** Stock's: the array class whose component type is this one; {@code void} has none. */
@@ -1252,19 +1481,6 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
         {
             throw new UnsupportedOperationException(iae);
         }
-    }
-
-    /** The part after the last '$', or null when this class is not nested. */
-    private String nestedSimpleName()
-    {
-        String n = getName();
-        int i = n.lastIndexOf('$');
-        return i < 0 ? null : n.substring(i + 1);
-    }
-
-    private static boolean isDigit(char c)
-    {
-        return c >= '0' && c <= '9';
     }
 
     /** The superclass's mirror (cached per Type, so {@code getSuperclass() == Super.class}), or null. */

@@ -233,47 +233,39 @@ public final class Method extends Executable
     private static native Object returnType0(int rgIndex);
 
     /**
-     * {@code "public java.lang.String com.x.Foo.bar(int)"} -- the {@link Field#toGenericString} twin, and
-     * built the same way: modifiers in JLS order, then return type, declaring class, name, parameter list.
+     * Stock's: {@code "public java.lang.String com.x.Foo.bar(int) throws java.io.IOException"}, erased.
      *
-     * <p>picocli calls it while building an {@code ArgSpec} for an annotated SETTER, so a missing one stops
-     * option construction rather than merely degrading a message -- the same role it plays for fields.
+     * <p>picocli calls {@link #toGenericString} while building an {@code ArgSpec} for an annotated SETTER, so a
+     * missing one stops option construction rather than merely degrading a message.
      */
-    public String toGenericString()
-    {
-        StringBuilder b = new StringBuilder();
-        int m = access;
-        if ((m & 0x0001) != 0) { b.append("public "); }
-        if ((m & 0x0002) != 0) { b.append("private "); }
-        if ((m & 0x0004) != 0) { b.append("protected "); }
-        if ((m & 0x0008) != 0) { b.append("static "); }
-        if ((m & 0x0010) != 0) { b.append("final "); }
-        if ((m & 0x0020) != 0) { b.append("synchronized "); }
-        if ((m & 0x0400) != 0) { b.append("abstract "); }
-        Class<?> r = getReturnType();
-        b.append(r == null ? "void" : r.getTypeName());
-        b.append(' ');
-        b.append(clazz == null ? "?" : clazz.getName());
-        b.append('.');
-        b.append(name);
-        b.append('(');
-        Class<?>[] p = getParameterTypes();
-        for (int i = 0; i < p.length; i++)
-        {
-            if (i > 0)
-            {
-                b.append(',');
-            }
-            b.append(p[i] == null ? "?" : p[i].getTypeName());
-        }
-        b.append(')');
-        return b.toString();
-    }
-
     @Override
     public String toString()
     {
-        return toGenericString();
+        return sharedToString(Modifier.methodModifiers(), isDefault(), getParameterTypes(), getExceptionTypes());
+    }
+
+    @Override
+    void specificToStringHeader(StringBuilder sb)
+    {
+        sb.append(getReturnType().getTypeName()).append(' ');
+        sb.append(getDeclaringClass().getTypeName()).append('.');
+        sb.append(getName());
+    }
+
+    /** Stock's: as {@link #toString}, with the generic types, type parameters and varargs. */
+    @Override
+    public String toGenericString()
+    {
+        return sharedToGenericString(Modifier.methodModifiers(), isDefault());
+    }
+
+    @Override
+    void specificToGenericStringHeader(StringBuilder sb)
+    {
+        Type genRetType = getGenericReturnType();
+        sb.append(genRetType.getTypeName()).append(' ');
+        sb.append(getDeclaringClass().getTypeName()).append('.');
+        sb.append(getName());
     }
 
     public int getParameterCount()

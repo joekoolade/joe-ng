@@ -693,13 +693,27 @@ final class VMNatives
         }
     }
 
-    /** {@code Class.enclosingMethodKind0(Class)} native: 0 none, 1 no method, 2 a method, 3 a constructor -- see Loader. */
-    static long classEnclosingKind(long mirror)
+    /** {@code Class.enclosingPart0(Class, long)} native: one part of the EnclosingMethod attribute as a String, or 0 -- see Loader. */
+    static long classEnclosingPart(long mirror, long part)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.classEnclosingKind(mirror);
+            return Loader.classEnclosingPart(mirror, part);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
+    }
+
+    /** {@code Class.innerPart0(Class, long)} native: one part of the class's own InnerClasses entry as a String, or 0 -- see Loader. */
+    static long classInnerPart(long mirror, long part)
+    {
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            return Loader.classInnerPart(mirror, part);
         }
         finally
         {
@@ -714,6 +728,20 @@ final class VMNatives
         try
         {
             return Loader.methodSignature((int) rgIndex);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
+    }
+
+    /** {@code Executable.exceptionName0(int, long)} native: the i-th declared exception's internal name, or 0. */
+    static long methodExceptionName(long rgIndex, long i)
+    {
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            return Loader.methodExceptionName((int) rgIndex, i);
         }
         finally
         {

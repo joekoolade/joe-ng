@@ -142,7 +142,8 @@ public final class ReachScan
                 || c.startsWith("java/lang/invoke/MethodHandleStatics")
                 || c.startsWith("java/lang/invoke/MethodHandles")
                 || c.startsWith("jdk/internal/invoke/MhUtil")
-                || c.startsWith("java/lang/reflect/Modifier")           // reflection arc: JDK-free overlays that run
+                || c.startsWith("java/lang/reflect/Modifier")           // STOCK (overlay deleted); the rest are
+                                                                        // reflection-arc overlays that run
                 || c.startsWith("java/lang/reflect/Field")              //   on metal; rest of java/lang/reflect denied
                 || c.startsWith("java/lang/reflect/Method")
                 || c.startsWith("java/lang/reflect/Constructor")
