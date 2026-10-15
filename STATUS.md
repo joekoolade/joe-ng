@@ -4,6 +4,80 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **MEMBER-LEVEL GENERIC REFLECTION; MEMBER `equals`/`hashCode`; ARRAY PARAMETER AND RETURN TYPES (2026-10-14).**
+  Builds on the class-level card below. Dropped supertypes 6 -> 3: only `Class`'s
+  `Constable`/`TypeDescriptor` family is left.
+  - **`Field.getGenericType`, `Method.getGenericReturnType`, `getGenericParameterTypes` and
+    `Method`/`Constructor.getTypeParameters` answered ERASURES** (documented as "the element type is unknown,
+    not wrong"). They now run stock `FieldRepository`/`MethodRepository`/`ConstructorRepository`, each in its
+    member's own scope, over a new `Signature` native per member: `Executable.signature0` by registry slot
+    (name AND descriptor, so overloads keep their own) and `Field.signature0` by name.
+    `Executable implements GenericDeclaration`.
+  - **`Method`, `Constructor` and `Field` had no `equals`/`hashCode`**, so two lookups of one member compared by
+    IDENTITY. Stock's added; names compare with `equals`, since stock's `==` relies on interned member names.
+    Stock `TypeVariableImpl.equals` compares declarations with `equals`, so before this a method's type
+    variable was unequal to itself across lookups.
+  - **`ReflectionFactory.copyMethod`/`copyConstructor`** added. Stock `TypeVariableImpl.getGenericDeclaration`
+    hands out a copy, made here by an EXACT re-lookup: the same member, with its own `accessible` flag.
+  - **ARRAY PARAMETER AND RETURN TYPES RESOLVED TO NULL** in `getParameterTypes`/`getReturnType` ("not
+    modelled", in the VM and in two overlay javadocs). A null `Class` is a wrong answer, and re-looking a
+    method up by its own parameter types failed for any array parameter. The copy above hit exactly that.
+    `Loader.arrayOf`/`primArrayMirror` now wrap the element's mirror once per `[` through the array TIBs.
+    The result is the same node `getClass()` answers: `getParameterTypes()[0] == String[].class` holds, as do
+    `long[]`, `Object[][]` and `int[][]`.
+  - **Probe:** `MemberGenericsProbe` (new) covers fields:
+    - `List<String>`, `T`, `Map<String, ? super Integer>`, `T[]`, `int`.
+    It covers methods:
+    - a method type variable and one bounded by the class's;
+    - a self-bounded static method;
+    - two overloads differing only by parameter type;
+    - array parameters and return.
+    It also covers a constructor with its own type variable; `equals`/`hashCode` for all three member kinds,
+    with type-variable equality across lookups; and baked `HashMap.put`, `Collections.emptyList`/`max` and
+    `Arrays.asList`. Members are looked up by name and types, never enumerated. Host-identical.
+  - **Regression (suite, all probes, JUnit):** QEMU clean -- suite markers all zero, `gc: collections=51` (50 on #358; not attributed), clinits 339; all 46 probes host-identical except the designed DigestProbe/MacProbe divergences (`failures=0 divergences-unmet=0`); `ran 44, failures 0`. Under host load (avg ~12) FormatProbe hung once after its first line and CauseToStringProbe printed `GC: core N stuck parked >10s`. FormatProbe reran host-identical in 30 s; CauseToStringProbe was not rerun -- its program output matched and only those watchdog lines differed. Both recorded as load-dependent intermittents, not dismissed. **Pi:** PASS (2026-10-15, 885d930) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=892), `[main returned normally]`, `gc: collections=7`.
+- **CLASS-LEVEL GENERIC REFLECTION FROM THE `Signature` ATTRIBUTE; `toGenericString`, `isSealed`; NESTED-CLASS
+  MODIFIERS (2026-10-14).** Known gaps 3 -> 1 (`getProtectionDomain`, which needs `java/security`); dropped
+  supertypes 7 -> 6.
+  - **`getGenericInterfaces` answered the ERASURE, always**, on the recorded premise that the VM reads no
+    generic signatures. That was a plausible wrong answer, not a gap. Stock `HashMap.comparableClassFor` (every
+    treeified bin) asks `t instanceof ParameterizedType` of it. That test always failed, so a tree of
+    `Integer` keys was ordered by HashMap's identity-hash fallback instead of `compareTo`. Lookups still
+    worked, so nothing observable broke.
+  - **Now stock's code end to end:** `getGenericSuperclass`, `getGenericInterfaces`, `getTypeParameters`,
+    `toGenericString` and `Class implements GenericDeclaration`, over stock `sun/reflect/generics` (pure Java,
+    never denied). A new native `Class.genericSignature0` returns the class's `Signature` attribute. The
+    generic-type interfaces `ParameterizedType`, `WildcardType`, `GenericArrayType` and `GenericDeclaration`,
+    and the parser's two errors, are narrowed out of the `java/lang/reflect/` denial. A type variable's
+    annotation readers still reach the denied `sun/reflect/annotation` and trap there.
+  - **No per-mirror cache.** A mirror is VM-allocated, so each call parses afresh: type variables come back
+    EQUAL across calls (`TypeVariableImpl.equals` is by declaration and name), not identical.
+  - **The stock generics code calls `Class` members the overlay lacked.** The shallow overlay check cannot see
+    these, because their only callers are stock `java.base`; found by grepping the package's calls:
+    - `getDeclaringClass`: `ParameterizedTypeImpl` takes a member type's OWNER from it. Null for a local or
+      anonymous class (measured: it carries an `EnclosingMethod` attribute), else the enclosing class.
+    - `arrayType`: stock's body.
+    - `getEnclosingMethod`/`getEnclosingConstructor`: generic scope resolution asks these before the
+      enclosing class. They answer from a new `EnclosingMethod` native. Null for none, an initializer, or the
+      OTHER kind of member. They THROW for a class really inside a method/constructor, because building that
+      `Method` is not done yet, and a null there would say the class is in none.
+  - **`isSealed`** (stock: `getPermittedSubclasses() != null`) answers from the presence of the
+    `PermittedSubclasses` attribute, through a third native. `toGenericString` is stock's, with its sealing
+    words.
+  - **`Class.getModifiers()` on a NESTED class lacked `static`/`private`/`protected`.** Those flags exist only in
+    the class's own `InnerClasses` entry, and the load-time capture kept raw `access_flags` (its comment said
+    "InnerClasses override is TODO"). They are now read at reflection time, under the loader lock the native
+    now takes. Found by the probe's `toGenericString` lines: every member class lacked `static`.
+  - **Probe:** `GenericsProbe` (new) checks the probe's own classes:
+    - a self-referential bound (`T extends Comparable<T>`);
+    - a parameterized superclass and interfaces;
+    - a wildcard and a generic array;
+    - a non-static inner class whose superclass names its OUTER `T` (resolved through the enclosing scope);
+    - a raw class and an interface.
+    It asks the same of baked `Integer`/`String`/`HashMap`/`ArrayList`, then `toGenericString`/`isSealed` over
+    generic, sealed, final and non-sealed subclasses, an enum, a record with an intersection bound, an
+    annotation, arrays and a primitive. Host-identical.
+  - **Regression (suite, all probes, JUnit):** QEMU clean -- suite markers all zero, `gc: collections=51` (50 on #358; not attributed), clinits 339; all 46 probes host-identical except the designed DigestProbe/MacProbe divergences (`failures=0 divergences-unmet=0`); `ran 44, failures 0`. Under host load (avg ~12) FormatProbe hung once after its first line and CauseToStringProbe printed `GC: core N stuck parked >10s`. FormatProbe reran host-identical in 30 s; CauseToStringProbe was not rerun -- its program output matched and only those watchdog lines differed. Both recorded as load-dependent intermittents, not dismissed. **Pi:** PASS (2026-10-15, 885d930) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=892), `[main returned normally]`, `gc: collections=7`.
 - **`Class.getResourceAsStream`/`getResource`, `ClassLoader.getParent`/`getDefinedPackage` (2026-10-14, PI-VALIDATED).**
   Known gaps 7 -> 3. What is left needs machinery this VM lacks: `getGenericSuperclass` and `toGenericString`
   need a generic-signature reader, and `getProtectionDomain` needs `java/security`.

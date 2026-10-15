@@ -1548,6 +1548,11 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classAnnoAll(J)J", "vm/VM.classAnnoAllAddr"); // Class.annoAll0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classDeclClasses(J)J", "vm/VM.classDeclClassesAddr"); // Class.declaredClasses0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classIfaces(J)J", "vm/VM.classIfacesAddr"); // Class.interfaces0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classSignature(J)J", "vm/VM.classSignatureAddr"); // Class.genericSignature0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classEnclosingKind(J)J", "vm/VM.classEnclosingKindAddr"); // Class.enclosingMethodKind0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classSealed(J)J", "vm/VM.classSealedAddr"); // Class.sealed0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodSignature(J)J", "vm/VM.methodSignatureAddr"); // Executable.signature0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.fieldSignature(JJ)J", "vm/VM.fieldSignatureAddr"); // Field.signature0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.defineClass(JJJJ)J", "vm/VM.defineClassAddr"); // reflection M3: ClassLoader.defineClass0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classModifiers(J)J", "vm/VM.classModifiersAddr"); // reflection M1: Class.getModifiers
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodResolve(JJ)I", "vm/VM.methodResolveAddr");  // reflection M2: Method.methodResolve0

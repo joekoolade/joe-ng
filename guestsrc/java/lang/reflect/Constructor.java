@@ -110,6 +110,45 @@ public final class Constructor<T> extends Executable
         return paramCount;
     }
 
+    /** Stock's: the type variables this constructor declares, in order; empty when it declares none. */
+    @SuppressWarnings("unchecked")
+    public TypeVariable<Constructor<T>>[] getTypeParameters()
+    {
+        String sig = genericSignature();
+        if (sig != null)
+        {
+            return (TypeVariable<Constructor<T>>[]) genericInfo(sig).getTypeParameters();
+        }
+        return (TypeVariable<Constructor<T>>[]) new TypeVariable<?>[0];
+    }
+
+    /** Stock's factory and scope: this constructor's own type variables first, then its class's. */
+    sun.reflect.generics.repository.ConstructorRepository genericInfo(String signature)
+    {
+        return sun.reflect.generics.repository.ConstructorRepository.make(signature,
+                sun.reflect.generics.factory.CoreReflectionFactory.make(this,
+                        sun.reflect.generics.scope.ConstructorScope.make(this)));
+    }
+
+    /** Stock's: same declaring class and parameter types (see {@link Method#equals} for why it is needed). */
+    public boolean equals(Object obj)
+    {
+        if (obj instanceof Constructor<?> other)
+        {
+            if (getDeclaringClass() == other.getDeclaringClass())
+            {
+                return java.util.Arrays.equals(getParameterTypes(), other.getParameterTypes());
+            }
+        }
+        return false;
+    }
+
+    /** Stock's. */
+    public int hashCode()
+    {
+        return getDeclaringClass().getName().hashCode();
+    }
+
     /** Allocate a fresh instance of the declaring class and run this {@code <init>} with {@code args}. */
     public T newInstance(Object... args) throws IllegalAccessException, InvocationTargetException,
                                                 InstantiationException

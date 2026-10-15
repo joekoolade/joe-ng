@@ -5,16 +5,10 @@
 # unfixed, not that it is safe -- most are cold paths in the JUnit jar, but the ones that
 # bit us (Boolean.getBoolean, ConcurrentHashMap.<init>(IFI)V) looked exactly this cold
 # until the day they ran. The check exists to stop NEW ones appearing silently.
-java/lang/Class#getGenericSuperclass()Ljava/lang/reflect/Type;
 java/lang/Class#getProtectionDomain()Ljava/security/ProtectionDomain;
-java/lang/Class#toGenericString()Ljava/lang/String;
 #
 # Supertypes an overlay drops. A dropped SUPERCLASS or INTERFACE is as silent as a
 # dropped member and strictly worse: nothing that WRAPS the class can bind to it.
 supertype#java/lang/Class#java/lang/constant/Constable
 supertype#java/lang/Class#java/lang/invoke/TypeDescriptor
 supertype#java/lang/Class#java/lang/invoke/TypeDescriptor$OfField
-supertype#java/lang/Class#java/lang/reflect/GenericDeclaration
-supertype#java/lang/reflect/Constructor#java/lang/reflect/GenericDeclaration
-supertype#java/lang/reflect/Executable#java/lang/reflect/GenericDeclaration
-supertype#java/lang/reflect/Method#java/lang/reflect/GenericDeclaration

@@ -147,9 +147,8 @@ public final class Method extends Executable
      * The parameter types, resolved from this method's DESCRIPTOR by the VM.
      *
      * <p>The stored {@code paramChars} keeps only each parameter's first descriptor character, so it cannot
-     * name a reference type -- the descriptor can. An ARRAY parameter comes back null (see
-     * {@code Loader.methodParamTypes}): visibly wrong at the caller, where {@code Object.class} would be
-     * quietly wrong.
+     * name a reference type -- the descriptor can. An ARRAY parameter resolves to its array class
+     * ({@code Loader.arrayOf}).
      */
     public Class<?>[] getParameterTypes()
     {
@@ -161,27 +160,67 @@ public final class Method extends Executable
     private static native Object paramTypes0(int rgIndex);
 
     /**
-     * The ERASED parameter types, as {@link #getGenericType} is the erasure for a field.
-     *
-     * <p>A fresh {@code Type[]} is built and copied rather than returning the {@code Class[]} directly: Java
-     * array covariance would allow it, but that leans on the VM's array-Type assignability for a cast the
-     * caller makes, and allocating the right array outright costs one loop and no assumptions.
+     * Stock's: the return type as this method's {@code Signature} declares it, or the erased
+     * {@link #getReturnType} when it has none. {@code getGenericParameterTypes} is {@link Executable}'s.
      */
-    public java.lang.reflect.Type[] getGenericParameterTypes()
-    {
-        Class<?>[] p = getParameterTypes();
-        java.lang.reflect.Type[] t = new java.lang.reflect.Type[p.length];
-        for (int i = 0; i < p.length; i++)
-        {
-            t[i] = p[i];
-        }
-        return t;
-    }
-
-    /** The erased return type; {@code getReturnType}'s generic twin, same reasoning. */
     public java.lang.reflect.Type getGenericReturnType()
     {
-        return getReturnType();
+        String sig = genericSignature();
+        if (sig == null)
+        {
+            return getReturnType();
+        }
+        return genericInfo(sig).getReturnType();
+    }
+
+    /** Stock's: the type variables this method declares, in order; empty when it declares none. */
+    @SuppressWarnings("unchecked")
+    public TypeVariable<Method>[] getTypeParameters()
+    {
+        String sig = genericSignature();
+        if (sig != null)
+        {
+            return (TypeVariable<Method>[]) genericInfo(sig).getTypeParameters();
+        }
+        return (TypeVariable<Method>[]) new TypeVariable<?>[0];
+    }
+
+    /** Stock's factory and scope: this method's own type variables first, then its class's. */
+    sun.reflect.generics.repository.MethodRepository genericInfo(String signature)
+    {
+        return sun.reflect.generics.repository.MethodRepository.make(signature,
+                sun.reflect.generics.factory.CoreReflectionFactory.make(this,
+                        sun.reflect.generics.scope.MethodScope.make(this)));
+    }
+
+    /**
+     * Stock's: same declaring class, name, return type and parameter types. It was undeclared, so two
+     * {@code Method} objects for one method compared by IDENTITY -- and stock {@code TypeVariableImpl.equals}
+     * compares the declaring {@code Method} with {@code equals}, so a method's type variable was unequal to
+     * itself across two lookups. Names compare with {@code equals}: stock's {@code ==} relies on the VM
+     * interning member names, which this one does not.
+     */
+    public boolean equals(Object obj)
+    {
+        if (obj instanceof Method other)
+        {
+            if ((getDeclaringClass() == other.getDeclaringClass())
+                && (getName().equals(other.getName())))
+            {
+                if (!getReturnType().equals(other.getReturnType()))
+                {
+                    return false;
+                }
+                return java.util.Arrays.equals(getParameterTypes(), other.getParameterTypes());
+            }
+        }
+        return false;
+    }
+
+    /** Stock's. */
+    public int hashCode()
+    {
+        return getDeclaringClass().getName().hashCode() ^ getName().hashCode();
     }
 
     /** The declared return type, resolved from the descriptor by the VM (see {@link #getParameterTypes}). */

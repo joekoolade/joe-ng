@@ -23,8 +23,8 @@ import magic.Magic;
  * ({@code getName}/{@code getComponentType}/{@code isInstance}/...) are added on demand as the code that runs
  * on metal reaches them. The VM allocates the object directly (bypassing this ctor).
  */
-public final class Class<T> implements java.io.Serializable, java.lang.reflect.Type,
-                                       java.lang.reflect.AnnotatedElement
+public final class Class<T> implements java.io.Serializable, java.lang.reflect.GenericDeclaration,
+                                       java.lang.reflect.Type, java.lang.reflect.AnnotatedElement
 {
     private long typeAddr;      // the VM Type node this Class mirrors (set by the VM at materialisation)
 
@@ -776,42 +776,282 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.T
     private static native Class<?>[] interfaces0(Class c);
 
     /**
-     * The interfaces this class directly declares, as the ERASURES -- the same decision already recorded for
-     * {@code Field.getGenericType} and {@code Method.getGenericParameterTypes}: stock answers a
-     * {@code ParameterizedType} only where a {@code Signature} attribute is present, and this VM reads no
-     * generic signatures, so a {@code Class} (which IS a {@code Type}) is what each element holds.
+     * Stock's: the {@code ParameterizedType}s this class's {@code Signature} attribute declares for its direct
+     * superinterfaces, or -- for a class with no signature -- the erased {@link #getInterfaces}.
      *
-     * <p>NOT A REFLECTION NICETY -- STOCK {@code java.util.HashMap} CALLS THIS WHENEVER A BIN TREEIFIES.
-     * {@code comparableClassFor(Object)} is reached from all three of the tree paths and its body is
-     * {@code if ((c = x.getClass()) == String.class) return c; if ((ts = c.getGenericInterfaces()) != null)
-     * ...}. Dropped from this overlay the member CEASED TO EXIST, so a treeified bin halted the VM:
-     * {@code VIRTUALRESOLVE FAILED java/lang/Class.getGenericInterfaces()} and a {@code DENYLIST TRAP}
-     * blaming a list this class is not on. Nothing had noticed because the {@code == String.class} line
-     * short-circuits before the call and a non-Comparable key never gets past the {@code instanceof} above
-     * it -- the condition is a Comparable, non-String key in a bin of eight at a table capacity of at least
-     * 64, which {@code HashMap<Integer,...>} is.
-     *
-     * <p>THE ERASURE IS A CORRECT ANSWER FOR THAT CALLER, not a degradation: it asks
-     * {@code t instanceof ParameterizedType} first, which is false here, so it returns null and HashMap
-     * orders the tree by its OWN documented fallback ({@code tieBreakOrder}, on identity hash) instead of by
-     * {@code compareTo}. {@code TreeNode.find} with a null {@code kc} searches both subtrees, so every lookup
-     * still succeeds; what differs is the tree's ORDER, which no caller can observe.
-     *
-     * <p>A fresh {@code Type[]} is built rather than returning the {@code Class[]} through array covariance,
-     * for the reason {@code getGenericParameterTypes} records: that would lean on the VM's array-Type
-     * assignability for a cast the CALLER makes, and the loop costs no assumptions.
+     * <p>THIS USED TO ANSWER THE ERASURES ALWAYS, because the VM read no generic signatures. Stock
+     * {@code java.util.HashMap} calls it whenever a bin treeifies ({@code comparableClassFor}): with the
+     * erasure its {@code t instanceof ParameterizedType} test always failed, so a tree of {@code Integer} keys
+     * was ordered by HashMap's identity-hash fallback rather than by {@code compareTo}. Every lookup still
+     * succeeded, so nothing observable broke -- which is how a silent wrong answer survives. Stock's answer
+     * now, and stock's ordering with it.
      */
     public java.lang.reflect.Type[] getGenericInterfaces()
     {
-        Class<?>[] a = interfaces0(this);
-        int n = a == null ? 0 : a.length;
-        java.lang.reflect.Type[] out = new java.lang.reflect.Type[n];
-        for (int i = 0; i < n; i++)
+        sun.reflect.generics.repository.ClassRepository info = getGenericInfo();
+        if (info == null)
         {
-            out[i] = a[i];
+            Class<?>[] a = getInterfaces();
+            java.lang.reflect.Type[] out = new java.lang.reflect.Type[a.length];
+            for (int i = 0; i < a.length; i++)
+            {
+                out[i] = a[i];
+            }
+            return out;
         }
-        return out;
+        return info.getSuperInterfaces();
     }
+
+    /**
+     * Stock's: the superclass as this class's {@code Signature} declares it -- a {@code ParameterizedType} for
+     * {@code extends ArrayList<String>} -- or the erased {@link #getSuperclass} when there is no signature;
+     * null for an interface, a primitive and {@code Object}.
+     */
+    public java.lang.reflect.Type getGenericSuperclass()
+    {
+        sun.reflect.generics.repository.ClassRepository info = getGenericInfo();
+        if (info == null)
+        {
+            return getSuperclass();
+        }
+        // Historical irregularity: Generic signature marks interfaces with superclass = Object but this API
+        // returns null for interfaces
+        if (isInterface())
+        {
+            return null;
+        }
+        return info.getSuperclass();
+    }
+
+    /**
+     * Stock's: modifiers, sealing, kind, name and the type parameters with their bounds -- e.g.
+     * {@code public class java.util.HashMap<K,V>}, {@code public abstract interface java.lang.Comparable<T>}.
+     */
+    public String toGenericString()
+    {
+        if (isPrimitive())
+        {
+            return toString();
+        }
+        else
+        {
+            StringBuilder sb = new StringBuilder();
+            Class<?> component = this;
+            int arrayDepth = 0;
+
+            if (isArray())
+            {
+                do
+                {
+                    arrayDepth++;
+                    component = component.getComponentType();
+                }
+                while (component.isArray());
+                sb.append(component.getName());
+            }
+            else
+            {
+                // Class modifiers are a superset of interface modifiers
+                int modifiers = getModifiers() & java.lang.reflect.Modifier.classModifiers();
+                if (modifiers != 0)
+                {
+                    sb.append(java.lang.reflect.Modifier.toString(modifiers));
+                    sb.append(' ');
+                }
+
+                // A class cannot be strictfp and sealed/non-sealed so it is sufficient to check for
+                // sealed-ness after all modifiers are printed.
+                addSealingInfo(modifiers, sb);
+
+                if (isAnnotation())
+                {
+                    sb.append('@');
+                }
+                if (isInterface())
+                {
+                    // Note: all annotation interfaces are interfaces
+                    sb.append("interface");
+                }
+                else
+                {
+                    if (isEnum())
+                    {
+                        sb.append("enum");
+                    }
+                    else if (isRecord())
+                    {
+                        sb.append("record");
+                    }
+                    else
+                    {
+                        sb.append("class");
+                    }
+                }
+                sb.append(' ');
+                sb.append(getName());
+            }
+
+            java.lang.reflect.TypeVariable<?>[] typeparms = component.getTypeParameters();
+            if (typeparms.length > 0)
+            {
+                sb.append(java.util.Arrays.stream(typeparms)
+                          .map(Class::typeVarBounds)
+                          .collect(java.util.stream.Collectors.joining(",", "<", ">")));
+            }
+
+            if (arrayDepth > 0)
+            {
+                sb.append("[]".repeat(arrayDepth));
+            }
+
+            return sb.toString();
+        }
+    }
+
+    static String typeVarBounds(java.lang.reflect.TypeVariable<?> typeVar)
+    {
+        java.lang.reflect.Type[] bounds = typeVar.getBounds();
+        if (bounds.length == 1 && bounds[0].equals(Object.class))
+        {
+            return typeVar.getName();
+        }
+        else
+        {
+            return typeVar.getName() + " extends "
+                + java.util.Arrays.stream(bounds)
+                .map(java.lang.reflect.Type::getTypeName)
+                .collect(java.util.stream.Collectors.joining(" & "));
+        }
+    }
+
+    private void addSealingInfo(int modifiers, StringBuilder sb)
+    {
+        // A class can be final XOR sealed XOR non-sealed.
+        if (java.lang.reflect.Modifier.isFinal(modifiers))
+        {
+            return; // no-op
+        }
+        else
+        {
+            if (isSealed())
+            {
+                sb.append("sealed ");
+                return;
+            }
+            else
+            {
+                // Check for sealed ancestor, which implies this class is non-sealed.
+                if (hasSealedAncestor(this))
+                {
+                    sb.append("non-sealed ");
+                }
+            }
+        }
+    }
+
+    private boolean hasSealedAncestor(Class<?> clazz)
+    {
+        // From JLS 8.1.1.2: a direct subclass of a sealed class must declare itself final, sealed or
+        // non-sealed, so checking the direct superclass and superinterfaces is enough.
+        var superclass = clazz.getSuperclass();
+        if (superclass != null && superclass.isSealed())
+        {
+            return true;
+        }
+        for (var superinterface : clazz.getInterfaces())
+        {
+            if (superinterface.isSealed())
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Stock's definition -- {@code getPermittedSubclasses() != null} for a non-array, non-primitive class --
+     * answered from the attribute that makes it non-null: {@code PermittedSubclasses} present. The permitted
+     * classes themselves ({@code getPermittedSubclasses}) are not built here.
+     */
+    public boolean isSealed()
+    {
+        if (isArray() || isPrimitive())
+        {
+            return false;
+        }
+        return sealed0(this) != 0L;
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.classSealed}): 1 if PermittedSubclasses is present. */
+    private static native long sealed0(Class<?> c);
+
+    /** Stock's: the type variables this class declares, in order; empty for a class with no signature. */
+    @SuppressWarnings("unchecked")
+    public java.lang.reflect.TypeVariable<Class<T>>[] getTypeParameters()
+    {
+        sun.reflect.generics.repository.ClassRepository info = getGenericInfo();
+        if (info != null)
+        {
+            return (java.lang.reflect.TypeVariable<Class<T>>[]) info.getTypeParameters();
+        }
+        return (java.lang.reflect.TypeVariable<Class<T>>[]) new java.lang.reflect.TypeVariable<?>[0];
+    }
+
+    /**
+     * Stock's generic-info accessor, WITHOUT stock's per-mirror cache: a mirror is VM-allocated, and a new
+     * instance field would have to be laid out by the VM as well. Each call parses the signature afresh, so
+     * two calls answer EQUAL type variables rather than identical ones -- {@code TypeVariableImpl.equals} is
+     * by declaration and name, which is the contract stock documents.
+     */
+    private sun.reflect.generics.repository.ClassRepository getGenericInfo()
+    {
+        String signature = genericSignature0(this);
+        if (signature == null)
+        {
+            return null;
+        }
+        return sun.reflect.generics.repository.ClassRepository.make(signature, getFactory());
+    }
+
+    /** Stock's: a factory resolving names through this class's scope (its own, then its enclosing ones). */
+    private sun.reflect.generics.factory.GenericsFactory getFactory()
+    {
+        return sun.reflect.generics.factory.CoreReflectionFactory.make(this,
+                sun.reflect.generics.scope.ClassScope.make(this));
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.classSignature}): the Signature attribute, or null. */
+    private static native String genericSignature0(Class<?> c);
+
+    /**
+     * Null for a class with no {@code EnclosingMethod} attribute (every top-level and member class), one
+     * enclosed by an initializer, or one enclosed by a constructor -- each stock's answer. A local or anonymous
+     * class declared INSIDE a method THROWS: finding that Method is not built yet, and a null would claim the
+     * class is not in one. Generic scope resolution asks this first ({@code ClassScope}), so a member class
+     * still reaches its outer class's type variables through {@link #getEnclosingClass}.
+     */
+    public java.lang.reflect.Method getEnclosingMethod()
+    {
+        if (enclosingMethodKind0(this) == 2L)
+        {
+            throw new UnsupportedOperationException("Class.getEnclosingMethod: enclosing method of " + getName());
+        }
+        return null;
+    }
+
+    /** As {@link #getEnclosingMethod}, for a class declared inside a constructor. */
+    public java.lang.reflect.Constructor<?> getEnclosingConstructor()
+    {
+        if (enclosingMethodKind0(this) == 3L)
+        {
+            throw new UnsupportedOperationException("Class.getEnclosingConstructor: enclosing constructor of "
+                    + getName());
+        }
+        return null;
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.classEnclosingKind}): 0 none, 1 no method, 2 a method, 3 a constructor. */
+    private static native long enclosingMethodKind0(Class<?> c);
 
     /** {@code com.x.Foo} -> the bytes of {@code Lcom/x/Foo;} -- the form the classfile stores. */
     private static byte[] annoDescriptorOf(Class<?> anno)
@@ -979,6 +1219,38 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.T
         catch (ClassNotFoundException e)
         {
             return null;
+        }
+    }
+
+    /**
+     * The class this one is a MEMBER of, or null: null for a top-level class, and -- unlike
+     * {@link #getEnclosingClass} -- null for a local or anonymous class, which is declared in a block rather
+     * than as a member. Which case applies is MEASURED from the {@code EnclosingMethod} attribute (only local
+     * and anonymous classes carry one); the member's outer class is then {@link #getEnclosingClass}'s, which
+     * reads the binary name -- so a top-level class whose own name contains '$' would read as nested.
+     *
+     * <p>Stock generic reflection depends on this: {@code ParameterizedTypeImpl} takes a member type's OWNER
+     * from it ({@code GenericsProbe$Box<Integer>} is owned by {@code GenericsProbe}).
+     */
+    public Class<?> getDeclaringClass()
+    {
+        if (enclosingMethodKind0(this) != 0L)
+        {
+            return null;
+        }
+        return getEnclosingClass();
+    }
+
+    /** Stock's: the array class whose component type is this one; {@code void} has none. */
+    public Class<?> arrayType()
+    {
+        try
+        {
+            return java.lang.reflect.Array.newInstance(this, 0).getClass();
+        }
+        catch (IllegalArgumentException iae)
+        {
+            throw new UnsupportedOperationException(iae);
         }
     }
 
