@@ -32,8 +32,41 @@ public class ClassLoader
 {
     private static final ClassLoader SYSTEM = new ClassLoader();
 
+    /** The delegation parent, as stock keeps it; null means the bootstrap loader. */
+    private final ClassLoader parent;
+
+    /**
+     * Stock's default: the parent is the system class loader. For {@link #SYSTEM} itself that read happens while
+     * {@code SYSTEM} is still being assigned, so its parent is null -- the bootstrap loader, which is what the
+     * single VM loader underneath it is. (Stock's application loader has the PLATFORM loader as its parent; this
+     * VM has no platform loader to name.)
+     */
     protected ClassLoader()
     {
+        this(getSystemClassLoader());
+    }
+
+    /** Stock's: a loader delegating to {@code parent}, null for the bootstrap loader. */
+    protected ClassLoader(ClassLoader parent)
+    {
+        this.parent = parent;
+    }
+
+    /** Stock's accessor for the delegation parent. */
+    public final ClassLoader getParent()
+    {
+        return parent;
+    }
+
+    /**
+     * Null: this VM creates no {@link Package} objects, for the reason given on {@link Class#getPackage}, so no
+     * package is ever DEFINED by a loader -- and stock answers null for a package the loader has not defined.
+     * The two methods agree by construction.
+     */
+    public final Package getDefinedPackage(String name)
+    {
+        java.util.Objects.requireNonNull(name, "name cannot be null");
+        return null;
     }
 
     /** The single application class loader (no real delegation hierarchy here). */
@@ -154,6 +187,12 @@ public class ClassLoader
         }
         byte[] b = resourceBytes0(jdk.internal.misc.MetalNames.utf8(name));
         return b == null ? null : new java.io.ByteArrayInputStream(b);
+    }
+
+    /** Stock's: {@link #getResource} on the system class loader. */
+    public static java.net.URL getSystemResource(String name)
+    {
+        return getSystemClassLoader().getResource(name);
     }
 
     /** As {@link #getResourceAsStream}, against the single application loader. */

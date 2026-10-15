@@ -4,6 +4,30 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **`Class.getResourceAsStream`/`getResource`, `ClassLoader.getParent`/`getDefinedPackage` (2026-10-14, PI-VALIDATED).**
+  Known gaps 7 -> 3. What is left needs machinery this VM lacks: `getGenericSuperclass` and `toGenericString`
+  need a generic-signature reader, and `getProtectionDomain` needs `java/security`.
+  - **`Class.getResourceAsStream`/`getResource`** follow stock's unnamed-module arm: `resolveName` (relative to
+    the class's PACKAGE unless the name starts with '/'), then the loader. `getClassLoader()` is null here, so
+    that loader is the system loader, as stock does for a bootstrap class. The stream form serves the jar's
+    bytes. `getResource` answers what `ClassLoader.getResource` already does: null, with a console report when
+    the jar holds the entry, because no URL can be built. `ClassLoader.getSystemResource` added for it.
+  - **`ClassLoader.getParent`** with stock's constructors: `ClassLoader()` delegates to the system loader,
+    `ClassLoader(parent)` keeps the one given. The system loader's own parent is null (bootstrap); stock's is
+    the platform loader, which this VM has none of.
+  - **`ClassLoader.getDefinedPackage`** answers null, agreeing with `Class.getPackage`: this VM defines no
+    `Package` objects, and stock answers null for a package the loader has not defined. It has stock's null
+    check.
+  - **Probe:** `ClassResourceProbe` (new), against the JUnit jar. It reads:
+    - a class file relative to its own class, and the same entry by absolute name;
+    - a services file by absolute name;
+    - the same services name read RELATIVE, from a packaged class (a miss) and from the default package (a
+      hit).
+    Each read prints length, magic and hash. It also covers absent `getResource`s, the three constructor
+    parents, and `getDefinedPackage` including its NPE. Host-identical on the first run.
+  - **Regression (suite, 44 probes, JUnit):** running.
+  - **Pi (`c035724`):** NetDemo `HTTP/1.1 200 OK ... http done bytes=888`, `[main returned normally]`, no new
+    TRAP-WIRED line, `clinits=373/373/374/375` and batch 1 `+1409blob` -- unchanged from the previous merge.
 - **DROPPED SUPERTYPES RESTORED: `Member`, `AnnotatedElement`, `Serializable`, `Cloneable`, the zip/socks constants
   interfaces; CONSTRUCTOR ANNOTATIONS READABLE (2026-10-14, PI-VALIDATED).** `make overlaycheck`'s dropped-supertype backlog
   23 -> 7. What is left is the generic-signature family (`GenericDeclaration`, `TypeDescriptor`, `Constable`),
