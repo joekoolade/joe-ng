@@ -4,7 +4,7 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
-- **EXACT REFLECTIVE LOOKUP: OVERLOADS, PUBLIC LOOKUPS, INTERFACE DEFAULTS; `Class.toString` (2026-10-14).**
+- **EXACT REFLECTIVE LOOKUP: OVERLOADS, PUBLIC LOOKUPS, INTERFACE DEFAULTS; `Class.toString` (2026-10-14, PI-VALIDATED).**
   Closing `getMethod`/`getConstructor`/`getConstructors` (known gaps) found the lookups they would build on
   answering WRONG for overloads.
   - **`getDeclaredMethod` ignored its parameter types** and answered the first method of that name, so with
@@ -33,7 +33,8 @@ Newest entries are at the top.
     DigestProbe/MacProbe their designed divergences (`failures=0 divergences-unmet=0`). **MetalJUnit baseline:
     `ran 44, failures 0`** -- the check that matters most here, since its parameterized tests resolve methods
     reflectively and `getDeclaredMethod` is now exact.
-  - **Pi:** pending.
+  - **Pi (`895e920`):** NetDemo `HTTP/1.1 200 OK ... http done bytes=888`, `[main returned normally]`, no new
+    TRAP-WIRED line, `clinits=373/373/374/375` and batch 1 `+1406blob` -- unchanged, as expected.
 - **REFLECTIVE AND UPDATER FIELD WRITES WERE WRONG ON MAIN: STALE HIGH HALVES, A NON-ATOMIC CAS, FLOATS AS POINTERS
   (2026-10-14, PI-VALIDATED).** Found while closing the `Field.getFloat`/`getDouble` gaps -- each a SILENT wrong answer.
   - **`Field.setInt`/`setShort`/`setByte`/`setChar`/`setBoolean` and the `set(...)` arms wrote 32 bits** into an
