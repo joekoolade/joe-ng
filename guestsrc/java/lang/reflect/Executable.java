@@ -12,6 +12,7 @@
 package java.lang.reflect;
 
 import java.lang.annotation.Annotation;
+import magic.Magic;
 import java.util.Arrays;
 import java.util.StringJoiner;
 import java.util.stream.Collectors;
@@ -122,6 +123,55 @@ public abstract class Executable extends AccessibleObject implements Member, Gen
 
     /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.methodSignature}): registry index -> Signature. */
     private static native String signature0(int rgIndex);
+
+    /**
+     * A {@link magic.Magic#callN} argument buffer for {@code total} arguments (the receiver counts), laid out as
+     * the JIT passes them: arguments 0..15 in x0..x15, or -- past 16 -- 0..14 in x0..x14 and x15 POINTING at the
+     * rest, which follow in the same array. {@link #putArg} places each one. The buffer was a fixed
+     * {@code long[8]}, so a ninth argument was written past its end.
+     */
+    static long[] argBuffer(int total)
+    {
+        if (total <= 16)
+        {
+            return new long[16];
+        }
+        long[] slots = new long[total + 1];
+        slots[15] = Magic.addrOf(slots) + 24L + 16L * 8L;   // &slots[16]: the collector does not move objects
+        return slots;
+    }
+
+    /** Store argument {@code k} of {@code total} into an {@link #argBuffer}. */
+    static void putArg(long[] slots, int total, int k, long value)
+    {
+        slots[(total > 16 && k >= 15) ? k + 1 : k] = value;
+    }
+
+    /** Stock's argument-count check for {@code invoke}/{@code newInstance}. */
+    static void checkArgCount(Object[] args, int expected)
+    {
+        int n = args == null ? 0 : args.length;
+        if (n != expected)
+        {
+            throw new IllegalArgumentException("wrong number of arguments: " + n + " expected: " + expected);
+        }
+    }
+
+    /**
+     * A scratch array for {@code methodInfo0}, which writes one type character per parameter with NO bound.
+     * Every caller passed a {@code byte[8]}, so a ninth parameter wrote past the array into the heap. JVMS 4.3.3
+     * caps a descriptor at 255 parameter slots; trim the result with {@link #paramChars}.
+     */
+    static byte[] paramCharScratch()
+    {
+        return new byte[255];
+    }
+
+    /** The first {@code n} characters of a {@link #paramCharScratch}, kept per member. */
+    static byte[] paramChars(byte[] scratch, int n)
+    {
+        return Arrays.copyOf(scratch, n);
+    }
 
     /** Stock's. */
     void printModifiersIfNonzero(StringBuilder sb, int mask, boolean isDefault)

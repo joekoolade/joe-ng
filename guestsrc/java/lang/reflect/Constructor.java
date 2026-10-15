@@ -52,10 +52,10 @@ public final class Constructor<T> extends Executable
         {
             throw new NoSuchMethodException("<init>");
         }
-        byte[] pchars = new byte[8];
+        byte[] pchars = paramCharScratch();
         long[] out = new long[3];                          // {buffer, access, returnChar} — returnChar is 'V'
         int n = methodInfo0(idx, pchars, out);
-        return new Constructor<T>(c, (int) out[1], out[0], n, pchars, idx);
+        return new Constructor<T>(c, (int) out[1], out[0], n, paramChars(pchars, n), idx);
     }
 
     /**
@@ -70,10 +70,10 @@ public final class Constructor<T> extends Executable
         {
             throw new NoSuchMethodException("<init>" + desc);
         }
-        byte[] pchars = new byte[8];
+        byte[] pchars = paramCharScratch();
         long[] out = new long[3];                          // {buffer, access, returnChar} — returnChar is 'V'
         int n = methodInfo0(idx, pchars, out);
-        return new Constructor<T>(c, (int) out[1], out[0], n, pchars, idx);
+        return new Constructor<T>(c, (int) out[1], out[0], n, paramChars(pchars, n), idx);
     }
 
     private static native int ctorResolve0(Class c, int paramCount);
@@ -179,21 +179,22 @@ public final class Constructor<T> extends Executable
                                                 InstantiationException
     {
         checkAccess(clazz, access, Magic.readLR());
+        checkArgCount(args, paramCount);
         Object obj = allocInstance0(clazz);
         if (obj == null)
         {
             throw new InstantiationException();
         }
-        long[] slots = new long[8];
-        long base = Magic.addrOf(slots) + 24L;             // array elements (header 16 + length 8)
-        Magic.store64(base, Magic.addrOf(obj));            // receiver in slot 0 (<init> is an instance method)
+        int total = 1 + paramCount;
+        long[] slots = argBuffer(total);
+        putArg(slots, total, 0, Magic.addrOf(obj));        // receiver in slot 0 (<init> is an instance method)
         int k = 0;
         while (k < paramCount)
         {
-            Magic.store64(base + (1 + k) * 8L, marshal(paramChars[k], args[k]));
+            putArg(slots, total, 1 + k, marshal(paramChars[k], args[k]));
             k += 1;
         }
-        Magic.callN(buf, base);                            // <init> returns void
+        Magic.callN(buf, Magic.addrOf(slots) + 24L);      // <init> returns void
         return (T) obj;
     }
 

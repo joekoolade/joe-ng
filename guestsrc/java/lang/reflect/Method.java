@@ -57,10 +57,10 @@ public final class Method extends Executable
         {
             throw new NoSuchMethodException(name);
         }
-        byte[] pchars = new byte[8];
+        byte[] pchars = paramCharScratch();
         long[] out = new long[3];                          // {buffer, access, returnChar}
         int n = methodInfo0(idx, pchars, out);
-        return new Method(c, name, (int) out[1], out[0], n, pchars, (int) out[2], idx);
+        return new Method(c, name, (int) out[1], out[0], n, paramChars(pchars, n), (int) out[2], idx);
     }
 
     /**
@@ -76,10 +76,10 @@ public final class Method extends Executable
         {
             throw new NoSuchMethodException(name);
         }
-        byte[] pchars = new byte[8];
+        byte[] pchars = paramCharScratch();
         long[] out = new long[3];                          // {buffer, access, returnChar}
         int n = methodInfo0(idx, pchars, out);
-        return new Method(c, name, (int) out[1], out[0], n, pchars, (int) out[2], idx);
+        return new Method(c, name, (int) out[1], out[0], n, paramChars(pchars, n), (int) out[2], idx);
     }
 
     /** VM native: registry index of the method with this name AND descriptor, or -1. */
@@ -299,21 +299,21 @@ public final class Method extends Executable
         {
             throw new AbstractMethodError(clazz.getName() + "." + name);
         }
-        long[] slots = new long[8];
-        long base = Magic.addrOf(slots) + 24L;             // array elements (header 16 + length 8)
-        int s = 0;
+        checkArgCount(args, paramCount);
+        int s = isStatic ? 0 : 1;
+        int total = s + paramCount;
+        long[] slots = argBuffer(total);
         if (!isStatic)
         {
-            Magic.store64(base, recv == null ? 0L : Magic.addrOf(recv));
-            s = 1;
+            putArg(slots, total, 0, Magic.addrOf(recv));
         }
         int k = 0;
         while (k < paramCount)
         {
-            Magic.store64(base + (s + k) * 8L, marshal(paramChars[k], args[k]));
+            putArg(slots, total, s + k, marshal(paramChars[k], args[k]));
             k += 1;
         }
-        long ret = Magic.callN(target, base);
+        long ret = Magic.callN(target, Magic.addrOf(slots) + 24L);   // array elements (header 16 + length 8)
         return box(returnChar, ret);
     }
 

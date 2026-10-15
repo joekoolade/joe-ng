@@ -4,6 +4,33 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **REFLECTIVE CALLS WITH MORE THAN 8 ARGUMENTS (2026-10-15).** `Method.invoke` and `Constructor.newInstance`
+  handled at most 8 arguments, counting the receiver, while the JIT passes 16 in registers and more through a
+  pointer.
+  - **Three limits, one shape.** In each case 8 was the size of a register file nobody had re-checked:
+    - **`Magic.callN` loaded x0..x7 only.** The JIT's convention (`Baseline`'s `ARG_PTR_REG`) is arguments 0..15
+      in x0..x15, or -- past 16 -- 0..14 in x0..x14 with x15 POINTING at the rest. The lowering now loads all 16.
+      x9..x15 are also the operand-stack registers that held `callN`'s own operands, so those move to x16/x17
+      and the live operands SPILL BEFORE the loads. The old code spilled after, which was safe only while the
+      loads stopped at x7.
+    - **The argument buffer was a `long[8]`**, written through `Magic.store64`, which has no bound. It is now
+      `Executable.argBuffer`/`putArg`, laid out per that convention: past 16, slot 15 holds `&slots[16]` (the
+      collector does not move objects).
+    - **Resolving a member wrote past a `byte[8]` INTO THE HEAP.** `Loader.methodInfo` writes one type character
+      per parameter with no bound, and all four resolve paths passed 8 bytes. So `getDeclaredMethods` on any
+      class with a 9+-parameter method silently overwrote whatever followed the array. Now a 255-byte scratch
+      (JVMS 4.3.3's cap), trimmed per member.
+  - **Measured on the unfixed VM (negative control, same probe):** the 9-parameter call threw
+    `ArrayIndexOutOfBoundsException: Index 8 out of bounds for length 8` in `Method.invoke`. The bounds-checked
+    read of `paramChars[8]` caught what the unchecked heap write in resolve had silently corrupted.
+  - **Stock's argument-count check** is added: `wrong number of arguments: 3 expected: 9`. Before, a short
+    array was an `ArrayIndexOutOfBoundsException` and a long one was silently truncated.
+  - **Probe:** `WideCallProbe` (new) covers arities 8, 9, 15, 16, 17 and 20, mixing int/long/double/float/String
+    so each argument keeps its type across the boundary. It also covers a 10- and a 16-parameter constructor
+    (17 with the receiver), a 16-parameter instance method, `getDeclaredMethods` over seven 8+-parameter
+    members, and the count check. Every reflective answer is printed beside the direct call's. Host-identical.
+    `VirtualInvokeProbe` is unchanged.
+  - **Regression (suite, all probes, JUnit):** pending. **Pi:** pending.
 - **`Method` FOR ABSTRACT AND NATIVE METHODS; `Method.invoke` DISPATCHES VIRTUALLY; FP ARGUMENTS AND RETURNS
   (2026-10-15).** Both gaps recorded by the card below, plus a third found by the probe.
   - **An abstract or native method had NO `Method`.** A method-registry slot follows a compiled body, so a

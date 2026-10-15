@@ -32,7 +32,7 @@ public final class Intrinsics
     public static final int GC = 3;
     public static final int CALL0 = 4;
     public static final int CALL2 = 5;
-    public static final int CALL_N = 77;             // magic.callN(buf, argsPtr): x0..x7 <- [argsPtr..+56], blr buf, x0 result
+    public static final int CALL_N = 77;             // magic.callN(buf, argsPtr): x0..x15 <- [argsPtr..+120], blr buf, x0 result
     public static final int ERET = 6;
     public static final int DROP_TO_EL1 = 7;
     public static final int WRITE_HCR_EL2 = 8;
