@@ -30,7 +30,7 @@ Newest entries are at the top.
     (17 with the receiver), a 16-parameter instance method, `getDeclaredMethods` over seven 8+-parameter
     members, and the count check. Every reflective answer is printed beside the direct call's. Host-identical.
     `VirtualInvokeProbe` is unchanged.
-  - **Regression (suite, all probes, JUnit):** pending. **Pi:** pending.
+  - **Regression (suite, all probes, JUnit):** pending. **Pi:** PASS (2026-10-15, 6f68a71) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=891), `[main returned normally]`, `gc: collections=7`.
 - **`Method` FOR ABSTRACT AND NATIVE METHODS; `Method.invoke` DISPATCHES VIRTUALLY; FP ARGUMENTS AND RETURNS
   (2026-10-15).** Both gaps recorded by the card below, plus a third found by the probe.
   - **An abstract or native method had NO `Method`.** A method-registry slot follows a compiled body, so a
