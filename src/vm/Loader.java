@@ -12522,6 +12522,7 @@ public final class Loader
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Constructor")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("ctorResolve0")))     { return VM.constructorResolveAddr; }  // (Class,I)I
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("ctorResolveDesc0"))) { return VM.ctorResolveDescAddr; }   // (Class,byte[])I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("methodInfo0")))      { return VM.methodInfoAddr; }          // (I,byte[],long[])I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("allocInstance0")))   { return VM.allocInstanceAddr; }       // (Class)Object
         }
@@ -14740,7 +14741,12 @@ public final class Loader
         {
             ci += 1;
         }
-        if (ci >= clCount || clTab[ci].isIface)
+        // AN INTERFACE IS NOT REFUSED any more. It was, for having no TIB to reuse -- but this path compiles with
+        // compileReuseTib, which never touches one (the reason compileSigOnDemand already compiles interface
+        // STATICS). The refusal left every not-yet-called DEFAULT method unresolvable by reflection:
+        // getDeclaredMethods on an interface answered EMPTY and getMethods/getMethod never saw its defaults
+        // (ReflectLookupProbe: a one-method interface declared 0).
+        if (ci >= clCount)
         {
             return -1;
         }
@@ -14864,6 +14870,48 @@ public final class Loader
     }
 
     /** Method-registry index of the class's {@code <init>} with {@code paramCount} parameters, or -1. */
+    /**
+     * The DESCRIPTOR a constructor resolve must match exactly (a raw {@code byte[]} address), or 0 for the arity
+     * match. Arity alone cannot tell {@code (String)} from {@code (int)}: the first one found answered for both, so
+     * {@code getDeclaredConstructors} listed one constructor twice and {@code getDeclaredConstructor(int.class)}
+     * could hand back the String one. Set only by {@link #constructorResolveDesc}, under the loader lock, and
+     * consulted at the two match points (the registry scan and the on-demand method walk).
+     */
+    private static long ctorWantDesc;
+
+    /** Does the {@code <init>} whose descriptor is at {@code base + descOff} match the current request? */
+    private static boolean ctorMatches(long base, int descOff, int paramCount)
+    {
+        if (ctorWantDesc != 0L)
+        {
+            return rawEqUtf8(ctorWantDesc + 24L, (int) Magic.load64(ctorWantDesc + 16L), base, descOff);
+        }
+        return descParamCountRaw(base + descOff) == paramCount;
+    }
+
+    /** {@link #constructorResolve} matched by DESCRIPTOR (see {@link #ctorWantDesc}); -1 if none. */
+    static int constructorResolveDesc(long type, long descArr)
+    {
+        if (descArr <= 0x1000L)
+        {
+            return -1;
+        }
+        VM.loaderLock(VM.LOCK_DEFERRED_CT);
+        long outer = ctorWantDesc;
+        int r;
+        try
+        {
+            ctorWantDesc = descArr;
+            r = constructorResolveLocked(type, -1);
+        }
+        finally
+        {
+            ctorWantDesc = outer;
+            VM.loaderUnlock();
+        }
+        return r;
+    }
+
     private static int ctorResolveRegistry(int ci, int paramCount)
     {
         int i = 0;
@@ -14871,7 +14919,7 @@ public final class Loader
         {
             if (utf8EqAt(clTab[ci].base, clTab[ci].nameOff, rgTab[i].base, rgTab[i].classOff)
                     && utf8IsAtBase(rgTab[i].base, rgTab[i].nameOff, Magic.bytes("<init>"))
-                    && descParamCountRaw(rgTab[i].base + rgTab[i].descOff) == paramCount)
+                    && ctorMatches(rgTab[i].base, rgTab[i].descOff, paramCount))
             {
                 return i;
             }
@@ -14959,7 +15007,7 @@ public final class Loader
         {
             int attrs = u2(p + 6);
             int dOff = gcp[u2(p + 4)];
-            if (utf8IsAtBase(blob, gcp[u2(p + 2)], Magic.bytes("<init>")) && descParamCountRaw(blob + dOff) == paramCount)
+            if (utf8IsAtBase(blob, gcp[u2(p + 2)], Magic.bytes("<init>")) && ctorMatches(blob, dOff, paramCount))
             {
                 long c = findCode(blob, p + 8, attrs);
                 if (c != 0L)

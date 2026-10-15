@@ -58,7 +58,26 @@ public final class Constructor<T> extends Executable
         return new Constructor<T>(c, (int) out[1], out[0], n, pchars, idx);
     }
 
+    /**
+     * Resolve the {@code <init>} of {@code c} with exactly this DESCRIPTOR. Arity alone cannot tell overloads of
+     * the same length apart -- {@code (String)} and {@code (int)} -- so {@link #resolve(Class,int)} answers the
+     * first for both. Overlay-only entry point, like that one.
+     */
+    public static <T> Constructor<T> resolve(Class<T> c, String desc) throws NoSuchMethodException
+    {
+        int idx = ctorResolveDesc0(c, jdk.internal.misc.MetalNames.utf8(desc));
+        if (idx < 0)
+        {
+            throw new NoSuchMethodException("<init>" + desc);
+        }
+        byte[] pchars = new byte[8];
+        long[] out = new long[3];                          // {buffer, access, returnChar} — returnChar is 'V'
+        int n = methodInfo0(idx, pchars, out);
+        return new Constructor<T>(c, (int) out[1], out[0], n, pchars, idx);
+    }
+
     private static native int ctorResolve0(Class c, int paramCount);
+    private static native int ctorResolveDesc0(Class c, byte[] desc);
     private static native int methodInfo0(int rgIndex, byte[] paramChars, long[] out);
     private static native Object allocInstance0(Class c);
 

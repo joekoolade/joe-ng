@@ -63,6 +63,13 @@ public class JarFile extends ZipFile
         super(name);
     }
 
+    /** Stock's {@code File} constructor, over the same RAMFS-backed {@link ZipFile} as the name forms (a null file
+     *  is stock's NPE, from {@code getPath}). */
+    public JarFile(java.io.File file) throws IOException
+    {
+        super(file.getPath());
+    }
+
     /** The parsed {@code META-INF/MANIFEST.MF}, or null when the jar has none. Parsed once, then cached. */
     public Manifest getManifest() throws IOException
     {

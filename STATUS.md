@@ -4,6 +4,36 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **EXACT REFLECTIVE LOOKUP: OVERLOADS, PUBLIC LOOKUPS, INTERFACE DEFAULTS; `Class.toString` (2026-10-14).**
+  Closing `getMethod`/`getConstructor`/`getConstructors` (known gaps) found the lookups they would build on
+  answering WRONG for overloads.
+  - **`getDeclaredMethod` ignored its parameter types** and answered the first method of that name, so with
+    overloads `getDeclaredMethod("m", int.class)` could hand back `m(String)`. It now matches the parameter part of
+    the enumerated descriptor exactly, as stock does.
+  - **Constructors resolved by ARITY**, VM-side included (`Loader.constructorResolveLocked`), so `(String)` and
+    `(int)` were one constructor: `getDeclaredConstructors` listed it twice and `getDeclaredConstructor(int.class)`
+    could build with the String body. A descriptor-exact resolve is added (`Loader.ctorWantDesc` at the two match
+    points, a new `VMNatives.ctorResolveDesc`); `getDeclaredConstructor(types)` and `getDeclaredConstructors` use
+    it, and the now-dead `arityOf` is removed.
+  - **New:** `getMethod` (public; this class, its superclasses, then interfaces -- `getMethods`' order),
+    `getConstructor`, `getConstructors`; `JarFile(File)`. Known gaps 11 -> 7.
+  - **An interface's DEFAULT methods were invisible to reflection:** `getDeclaredMethods` on an interface answered
+    EMPTY, and `getMethods`/`getMethod` never saw a default. Cause: `compileMethodOnDemand` refused interfaces "for
+    having no TIB to reuse" -- but it compiles with `compileReuseTib`, which never touches one (the reason
+    `compileSigOnDemand` already compiles interface statics). The refusal is gone.
+  - **`Class.toString()` was undeclared**, so every mirror printed `java.lang.Class@<hash>` -- e.g.
+    `Arrays.toString(getParameterTypes())`. Stock's form added.
+  - **Probe:** `ReflectLookupProbe` (new): three constructors (one private) and four `m` overloads, each looked up
+    by type AND INVOKED, so a wrong overload shows in its value; public counts; an inherited method; an interface
+    default; an array parameter; wrong types refused; `JarFile(File)` over the RAMFS jar. Host-identical after
+    the three fixes the probe itself drove (toString, then the interface default, located by two added probe
+    lines and a temporary VM instrument that proved the registry lookup was NOT the miss).
+  - **Suite: 40 programs, markers zero, `gc: collections=50`, `clinits=325`** (unchanged). **All 42
+    host-controlled probes re-run on QEMU: 40 host-identical** (incl. the new `ReflectLookupProbe`),
+    DigestProbe/MacProbe their designed divergences (`failures=0 divergences-unmet=0`). **MetalJUnit baseline:
+    `ran 44, failures 0`** -- the check that matters most here, since its parameterized tests resolve methods
+    reflectively and `getDeclaredMethod` is now exact.
+  - **Pi:** pending.
 - **REFLECTIVE AND UPDATER FIELD WRITES WERE WRONG ON MAIN: STALE HIGH HALVES, A NON-ATOMIC CAS, FLOATS AS POINTERS
   (2026-10-14, PI-VALIDATED).** Found while closing the `Field.getFloat`/`getDouble` gaps -- each a SILENT wrong answer.
   - **`Field.setInt`/`setShort`/`setByte`/`setChar`/`setBoolean` and the `set(...)` arms wrote 32 bits** into an
