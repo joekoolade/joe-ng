@@ -6283,6 +6283,18 @@ public final class Loader
                 // stays denied and trap-wired on that path alone.
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Member"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/AnnotatedElement"))
+                // The generic-type half of java/lang/reflect, NARROWED OUT so stock Class.getGenericSuperclass/
+                // getGenericInterfaces/getTypeParameters run: the interfaces their answers are typed by
+                // (ParameterizedType, WildcardType, GenericArrayType, GenericDeclaration -- TypeVariable is
+                // already matched by the "Type" prefix above) and the two errors the stock parser throws. The
+                // implementation is sun/reflect/generics, pure Java and not denied. A type variable's ANNOTATION
+                // readers reach the denied sun/reflect/annotation and trap on that path alone.
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/ParameterizedType"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/WildcardType"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/GenericArrayType"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/GenericDeclaration"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/GenericSignatureFormatError"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/MalformedParameterizedTypeException"))
                 // NARROWED OUT of the java/lang/reflect/ denial, and NOT overlaid: guestsrc is for classes
                 // that need NATIVES, and this one needs none. picocli's ObjectScope asks
                 // `Proxy.isProxyClass(obj.getClass())`, whose whole body is
@@ -9864,8 +9876,9 @@ public final class Loader
         parseConstPool(bytes, len);
         gClassModifiers = u2(gp) & ~0x0020;             // class access_flags (gp is here, post-cp), ACC_SUPER stripped;
                                                         //   cached for Class.getModifiers() with NO extra parse (an
-                                                        //   extra runtime/load re-parse corrupted the heap). Nested
-                                                        //   classes report raw flags — InnerClasses override is TODO.
+                                                        //   extra runtime/load re-parse corrupted the heap). A nested
+                                                        //   class's InnerClasses flags are read at REFLECTION time
+                                                        //   instead (innerClassFlags, under the loader lock).
         parseFields();                                  // hierarchy-aware field layout (allocates gStatics)
         findBootstrapMethods();                         // locate BootstrapMethods (for invokedynamic), if any
         if (gIsInterface)
@@ -12639,6 +12652,9 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoAll0")))          { return VM.classAnnoAllAddr; }   // (Class)[Annotation
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredClasses0")))  { return VM.classDeclClassesAddr; } // (Class)[Class
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("interfaces0")))       { return VM.classIfacesAddr; }   // (Class)[Class
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("genericSignature0"))) { return VM.classSignatureAddr; } // (Class)String
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("enclosingMethodKind0"))) { return VM.classEnclosingKindAddr; } // (Class)J
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("sealed0")))           { return VM.classSealedAddr; }   // (Class)J
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("forName0")))          { return VM.forNameAddr; }       // (byte[])Class
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("classModifiers0")))   { return VM.classModifiersAddr; } // (Class)I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isInstance0")))       { return VM.instanceOfAddr; }    // (Object,J)Z == VM.instanceOf(JJ)I
@@ -14586,11 +14602,59 @@ public final class Loader
         {
             if (clTab[i].type == type)
             {
-                return clTab[i].modifiers;                     // cached at load time (see computeModifiersAtLoad)
+                int inner = innerClassFlags(i);
+                if (inner >= 0)
+                {
+                    return inner & ~0x0020 & 0x7FFF;           // as HotSpot: no ACC_SUPER, written flags only
+                }
+                return clTab[i].modifiers;                     // top-level: access_flags, cached at load time
             }
             i += 1;
         }
         return 0;
+    }
+
+    /**
+     * The {@code inner_class_access_flags} of this class's OWN entry in its {@code InnerClasses} attribute
+     * (JVMS 4.7.6), or -1 when it has none -- a top-level class. A nested class's {@code access_flags} cannot
+     * say {@code static}, {@code private} or {@code protected}; only this entry can, so without it every member
+     * class read as package-or-public and non-static ({@code toGenericString} printed {@code class X$Y} where
+     * stock prints {@code static class X$Y}; GenericsProbe). Read at reflection time, under the loader lock
+     * the native takes, from the blob -- the load-time capture keeps the raw flags for the reason noted there.
+     * Matched by constant-pool index: javac's {@code inner_class_info_index} for a class's own entry IS its
+     * {@code this_class}, as {@link #innerAccessOf} also relies on.
+     */
+    private static int innerClassFlags(int reg)
+    {
+        long base = clTab[reg].base;
+        long ap = classAttrsPos(base);
+        if (ap == 0L)
+        {
+            return -1;
+        }
+        long lp = innerClassesPos(base, ap + 2L, u2(ap));
+        if (lp == 0L)
+        {
+            return -1;
+        }
+        int thisIdx = u2(base + gAfterCp + 2);          // this_class, per the ClassReader.afterCp layout
+        if (thisIdx == 0)
+        {
+            return -1;
+        }
+        int n = u2(lp);
+        long p = lp + 2L;
+        int e = 0;
+        while (e < n)
+        {
+            if (u2(p) == thisIdx)                       // inner_class_info_index == this_class
+            {
+                return u2(p + 6);                       // inner_class_access_flags
+            }
+            p += 8;                                     // inner, outer, simple name, access flags
+            e += 1;
+        }
+        return -1;
     }
 
     /**
@@ -18689,6 +18753,122 @@ public final class Loader
             return 0L;
         }
         return annoFromAttrs(rgTab[rgIndex].base, p + 8, u2(p + 6), descArr, descLen);
+    }
+
+    /**
+     * {@code Class.genericSignature0}: the class's {@code Signature} attribute (JVMS 4.7.9) as a String, or 0
+     * when it has none -- which is what stock's {@code getGenericSignature0} answers, and what makes
+     * {@code getGenericSuperclass} fall back to the erasure for a NON-generic class, exactly as stock does.
+     *
+     * <p>The bytes are copied as Latin-1 by {@link #utf8ToString}; a signature is a modified-UTF-8 string,
+     * so a non-ASCII identifier in one would read wrongly. ALLOCATION-FREE for a bad argument, because
+     * {@code VM.forceCompile} probes this native with zero.
+     */
+    static long classSignature(long mirror)
+    {
+        if (mirror <= 0x1000L)
+        {
+            return 0L;
+        }
+        int reg = regOfType(Magic.load64(mirror + 16L));
+        if (reg < 0)
+        {
+            return 0L;
+        }
+        long base = clTab[reg].base;
+        long ap = classAttrsPos(base);
+        if (ap == 0L)
+        {
+            return 0L;
+        }
+        long p = classAttrNamed(base, ap + 2L, u2(ap), Magic.bytes("Signature"));
+        if (p == 0L)
+        {
+            return 0L;
+        }
+        return utf8ToString(base, gcp[u2(p)]);
+    }
+
+    /**
+     * {@code Class.enclosingMethodKind0}: 0 when the class has no {@code EnclosingMethod} attribute (JVMS
+     * 4.7.7) -- every top-level and MEMBER class; 1 when it has one naming no method (a local or anonymous
+     * class in an initializer); 2 when it names a method; 3 when it names a constructor ({@code <init>}).
+     * Measured from the attribute, not inferred from the binary name.
+     */
+    static long classEnclosingKind(long mirror)
+    {
+        if (mirror <= 0x1000L)
+        {
+            return 0L;
+        }
+        int reg = regOfType(Magic.load64(mirror + 16L));
+        if (reg < 0)
+        {
+            return 0L;
+        }
+        long base = clTab[reg].base;
+        long ap = classAttrsPos(base);
+        if (ap == 0L)
+        {
+            return 0L;
+        }
+        long p = classAttrNamed(base, ap + 2L, u2(ap), Magic.bytes("EnclosingMethod"));
+        if (p == 0L)
+        {
+            return 0L;
+        }
+        int nat = u2(p + 2L);                           // u2 class_index, u2 method_index
+        if (nat == 0)
+        {
+            return 1L;
+        }
+        int nameOff = gcp[u2(base + gcp[nat])];         // CONSTANT_NameAndType -> its name Utf8 offset
+        return utf8IsAtBase(base, nameOff, Magic.bytes("<init>")) ? 3L : 2L;
+    }
+
+    /**
+     * {@code Class.sealed0}: 1 when the class carries a {@code PermittedSubclasses} attribute (JVMS 4.7.31),
+     * else 0. That is exactly when stock's {@code getPermittedSubclasses()} is non-null, which is stock's whole
+     * definition of {@code isSealed()} for a non-array, non-primitive class.
+     */
+    static long classSealed(long mirror)
+    {
+        if (mirror <= 0x1000L)
+        {
+            return 0L;
+        }
+        int reg = regOfType(Magic.load64(mirror + 16L));
+        if (reg < 0)
+        {
+            return 0L;
+        }
+        long base = clTab[reg].base;
+        long ap = classAttrsPos(base);
+        if (ap == 0L)
+        {
+            return 0L;
+        }
+        return classAttrNamed(base, ap + 2L, u2(ap), Magic.bytes("PermittedSubclasses")) != 0L ? 1L : 0L;
+    }
+
+    /** Position of the body of the attribute named {@code name} in an attribute list, or 0 if absent. */
+    private static long classAttrNamed(long base, long p, int attrs, byte[] name)
+    {
+        int a = 0;
+        while (a < attrs)
+        {
+            int anIdx = u2(p);
+            p += 2;
+            int alen = u4(p);
+            p += 4;
+            if (utf8IsAtBase(base, gcp[anIdx], name))
+            {
+                return p;
+            }
+            p += alen;
+            a += 1;
+        }
+        return 0L;
     }
 
     /** The class-level {@code attributes_count} position: past every method, which is where they begin. */

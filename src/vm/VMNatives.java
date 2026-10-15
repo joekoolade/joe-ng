@@ -679,6 +679,48 @@ final class VMNatives
         }
     }
 
+    /** {@code Class.genericSignature0(Class)} native: the class's Signature attribute as a String, or 0. */
+    static long classSignature(long mirror)
+    {
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            return Loader.classSignature(mirror);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
+    }
+
+    /** {@code Class.enclosingMethodKind0(Class)} native: 0 none, 1 no method, 2 a method, 3 a constructor -- see Loader. */
+    static long classEnclosingKind(long mirror)
+    {
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            return Loader.classEnclosingKind(mirror);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
+    }
+
+    /** {@code Class.sealed0(Class)} native: 1 when the class has a PermittedSubclasses attribute, else 0. */
+    static long classSealed(long mirror)
+    {
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            return Loader.classSealed(mirror);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
+    }
+
     /** {@code Class.declaredClasses0(Class)} native: the MEMBER classes it declares, as a Class[]. */
     static long classDeclClasses(long mirror)
     {
@@ -869,7 +911,15 @@ final class VMNatives
         {
             return 0L;                                     // boot force-compile passes 0
         }
-        return (long) Loader.classModifiersOf(Magic.load64(mirror + 16L));
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes: a nested class's InnerClasses entry
+        try                                  // is read from its blob -- see the class doc
+        {
+            return (long) Loader.classModifiersOf(Magic.load64(mirror + 16L));
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
     }
 
     /** Reflection: {@code Method.methodResolve0(Class,byte[])} -> method-registry index of the named method, or -1. */
