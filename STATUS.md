@@ -4,6 +4,48 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **CLASS-LEVEL GENERIC REFLECTION FROM THE `Signature` ATTRIBUTE; `toGenericString`, `isSealed`; NESTED-CLASS
+  MODIFIERS (2026-10-14).** Known gaps 3 -> 1 (`getProtectionDomain`, which needs `java/security`); dropped
+  supertypes 7 -> 6.
+  - **`getGenericInterfaces` answered the ERASURE, always**, on the recorded premise that the VM reads no
+    generic signatures. That was a plausible wrong answer, not a gap. Stock `HashMap.comparableClassFor` (every
+    treeified bin) asks `t instanceof ParameterizedType` of it. That test always failed, so a tree of
+    `Integer` keys was ordered by HashMap's identity-hash fallback instead of `compareTo`. Lookups still
+    worked, so nothing observable broke.
+  - **Now stock's code end to end:** `getGenericSuperclass`, `getGenericInterfaces`, `getTypeParameters`,
+    `toGenericString` and `Class implements GenericDeclaration`, over stock `sun/reflect/generics` (pure Java,
+    never denied). A new native `Class.genericSignature0` returns the class's `Signature` attribute. The
+    generic-type interfaces `ParameterizedType`, `WildcardType`, `GenericArrayType` and `GenericDeclaration`,
+    and the parser's two errors, are narrowed out of the `java/lang/reflect/` denial. A type variable's
+    annotation readers still reach the denied `sun/reflect/annotation` and trap there.
+  - **No per-mirror cache.** A mirror is VM-allocated, so each call parses afresh: type variables come back
+    EQUAL across calls (`TypeVariableImpl.equals` is by declaration and name), not identical.
+  - **The stock generics code calls `Class` members the overlay lacked.** The shallow overlay check cannot see
+    these, because their only callers are stock `java.base`; found by grepping the package's calls:
+    - `getDeclaringClass`: `ParameterizedTypeImpl` takes a member type's OWNER from it. Null for a local or
+      anonymous class (measured: it carries an `EnclosingMethod` attribute), else the enclosing class.
+    - `arrayType`: stock's body.
+    - `getEnclosingMethod`/`getEnclosingConstructor`: generic scope resolution asks these before the
+      enclosing class. They answer from a new `EnclosingMethod` native. Null for none, an initializer, or the
+      OTHER kind of member. They THROW for a class really inside a method/constructor, because building that
+      `Method` is not done yet, and a null there would say the class is in none.
+  - **`isSealed`** (stock: `getPermittedSubclasses() != null`) answers from the presence of the
+    `PermittedSubclasses` attribute, through a third native. `toGenericString` is stock's, with its sealing
+    words.
+  - **`Class.getModifiers()` on a NESTED class lacked `static`/`private`/`protected`.** Those flags exist only in
+    the class's own `InnerClasses` entry, and the load-time capture kept raw `access_flags` (its comment said
+    "InnerClasses override is TODO"). They are now read at reflection time, under the loader lock the native
+    now takes. Found by the probe's `toGenericString` lines: every member class lacked `static`.
+  - **Probe:** `GenericsProbe` (new) checks the probe's own classes:
+    - a self-referential bound (`T extends Comparable<T>`);
+    - a parameterized superclass and interfaces;
+    - a wildcard and a generic array;
+    - a non-static inner class whose superclass names its OUTER `T` (resolved through the enclosing scope);
+    - a raw class and an interface.
+    It asks the same of baked `Integer`/`String`/`HashMap`/`ArrayList`, then `toGenericString`/`isSealed` over
+    generic, sealed, final and non-sealed subclasses, an enum, a record with an intersection bound, an
+    annotation, arrays and a primitive. Host-identical.
+  - **Regression (suite, all probes, JUnit):** pending. **Pi:** pending.
 - **`Class.getResourceAsStream`/`getResource`, `ClassLoader.getParent`/`getDefinedPackage` (2026-10-14, PI-VALIDATED).**
   Known gaps 7 -> 3. What is left needs machinery this VM lacks: `getGenericSuperclass` and `toGenericString`
   need a generic-signature reader, and `getProtectionDomain` needs `java/security`.
