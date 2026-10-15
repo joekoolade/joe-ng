@@ -4,7 +4,7 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
-- **`Class.getResourceAsStream`/`getResource`, `ClassLoader.getParent`/`getDefinedPackage` (2026-10-14).**
+- **`Class.getResourceAsStream`/`getResource`, `ClassLoader.getParent`/`getDefinedPackage` (2026-10-14, PI-VALIDATED).**
   Known gaps 7 -> 3. What is left needs machinery this VM lacks: `getGenericSuperclass` and `toGenericString`
   need a generic-signature reader, and `getProtectionDomain` needs `java/security`.
   - **`Class.getResourceAsStream`/`getResource`** follow stock's unnamed-module arm: `resolveName` (relative to
@@ -25,7 +25,9 @@ Newest entries are at the top.
       hit).
     Each read prints length, magic and hash. It also covers absent `getResource`s, the three constructor
     parents, and `getDefinedPackage` including its NPE. Host-identical on the first run.
-  - **Regression (suite, 44 probes, JUnit):** running. **Pi:** pending.
+  - **Regression (suite, 44 probes, JUnit):** running.
+  - **Pi (`c035724`):** NetDemo `HTTP/1.1 200 OK ... http done bytes=888`, `[main returned normally]`, no new
+    TRAP-WIRED line, `clinits=373/373/374/375` and batch 1 `+1409blob` -- unchanged from the previous merge.
 - **DROPPED SUPERTYPES RESTORED: `Member`, `AnnotatedElement`, `Serializable`, `Cloneable`, the zip/socks constants
   interfaces; CONSTRUCTOR ANNOTATIONS READABLE (2026-10-14, PI-VALIDATED).** `make overlaycheck`'s dropped-supertype backlog
   23 -> 7. What is left is the generic-signature family (`GenericDeclaration`, `TypeDescriptor`, `Constable`),
