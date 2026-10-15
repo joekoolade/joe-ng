@@ -12,6 +12,3 @@ java/lang/Class#getProtectionDomain()Ljava/security/ProtectionDomain;
 supertype#java/lang/Class#java/lang/constant/Constable
 supertype#java/lang/Class#java/lang/invoke/TypeDescriptor
 supertype#java/lang/Class#java/lang/invoke/TypeDescriptor$OfField
-supertype#java/lang/reflect/Constructor#java/lang/reflect/GenericDeclaration
-supertype#java/lang/reflect/Executable#java/lang/reflect/GenericDeclaration
-supertype#java/lang/reflect/Method#java/lang/reflect/GenericDeclaration

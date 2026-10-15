@@ -57,4 +57,36 @@ public final class ReflectionFactory
     {
         return null;
     }
+
+    /**
+     * A fresh {@code Method} object for the same method -- what stock's copy is: same member, its own
+     * {@code accessible} flag. Stock {@code TypeVariableImpl.getGenericDeclaration} hands one out so a caller
+     * cannot flip the original's access. Made by an EXACT re-lookup (name and parameter types), since this
+     * overlay cannot reach Method's package-private constructor; a bridge method sharing those parameter
+     * types would be ambiguous, but a bridge declares no type variables, so it never reaches here.
+     */
+    public java.lang.reflect.Method copyMethod(java.lang.reflect.Method arg)
+    {
+        try
+        {
+            return arg.getDeclaringClass().getDeclaredMethod(arg.getName(), arg.getParameterTypes());
+        }
+        catch (NoSuchMethodException e)
+        {
+            throw new InternalError(e);
+        }
+    }
+
+    /** As {@link #copyMethod}, for a constructor. */
+    public <T> Constructor<T> copyConstructor(Constructor<T> arg)
+    {
+        try
+        {
+            return arg.getDeclaringClass().getDeclaredConstructor(arg.getParameterTypes());
+        }
+        catch (NoSuchMethodException e)
+        {
+            throw new InternalError(e);
+        }
+    }
 }

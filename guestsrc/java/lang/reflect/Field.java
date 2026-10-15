@@ -379,18 +379,43 @@ public final class Field extends AccessibleObject implements Member
     private static native Object fieldType0(Class<?> c, byte[] fieldName);
 
     /**
-     * The declared type, EXACT for a non-generic field and the ERASURE for a generic one.
-     *
-     * <p>Stock returns a {@code ParameterizedType} when the field carries a {@code Signature} attribute, which
-     * needs a generic-signature parser joe-ng does not have. Returning the raw {@link Class} is what stock
-     * itself returns for every NON-generic field, and a caller that inspects the result asks
-     * {@code instanceof ParameterizedType} first -- which is false here, so it takes its raw-type path rather
-     * than misreading a wrong answer. For {@code List<String>} that means the element type is unknown, not
-     * wrong.
+     * Stock's: the type as this field's {@code Signature} declares it -- {@code List<String>}, a type variable,
+     * a generic array -- or the erased {@link #getType} when it has none, which is stock's answer for a
+     * non-generic field. It answered the ERASURE always while no signature was read: for {@code List<String>}
+     * a caller asking {@code instanceof ParameterizedType} took its raw path and lost the element type.
      */
     public java.lang.reflect.Type getGenericType()
     {
-        return getType();
+        String sig = signature0(clazz, nameBytes);
+        if (sig == null)
+        {
+            return getType();
+        }
+        Class<?> c = getDeclaringClass();
+        return sun.reflect.generics.repository.FieldRepository.make(sig,
+                sun.reflect.generics.factory.CoreReflectionFactory.make(c,
+                        sun.reflect.generics.scope.ClassScope.make(c))).getGenericType();
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.fieldSignature}): mirror + name -> Signature. */
+    private static native String signature0(Class<?> c, byte[] fieldName);
+
+    /** Stock's: same declaring class, name and type (see {@link Method#equals} for why it is needed). */
+    public boolean equals(Object obj)
+    {
+        if (obj instanceof Field other)
+        {
+            return (getDeclaringClass() == other.getDeclaringClass())
+                && (getName().equals(other.getName()))
+                && (getType() == other.getType());
+        }
+        return false;
+    }
+
+    /** Stock's. */
+    public int hashCode()
+    {
+        return getDeclaringClass().getName().hashCode() ^ getName().hashCode();
     }
 
     /**

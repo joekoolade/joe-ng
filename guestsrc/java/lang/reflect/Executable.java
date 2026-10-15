@@ -35,7 +35,7 @@ import java.lang.annotation.Annotation;
  * {@link Constructor} already answer them from their own registry state; this class only gives callers a type
  * to dispatch through.
  */
-public abstract class Executable extends AccessibleObject implements Member
+public abstract class Executable extends AccessibleObject implements Member, GenericDeclaration
 {
     Executable()
     {
@@ -62,8 +62,7 @@ public abstract class Executable extends AccessibleObject implements Member
      * <p>Not answerable from the {@code paramChars} both subclasses cache -- those keep only the first
      * character of each parameter, so every reference type looks alike. {@link Method} overrides this with the
      * identical body against its own native; the copy here is what makes a {@link Constructor} answer, which
-     * it never could before. An ARRAY parameter resolves to null rather than to {@code Object.class}: visibly
-     * wrong at the caller, where a plausible answer would be quietly wrong.
+     * it never could before. An ARRAY parameter resolves to its array class ({@code String[].class}).
      */
     public Class<?>[] getParameterTypes()
     {
@@ -77,6 +76,49 @@ public abstract class Executable extends AccessibleObject implements Member
 
     /** VM native ({@code Loader.nativeBuf} -> {@code VM.methodParamTypes}): registry index -> Class[]. */
     private static native Object paramTypes0(int rgIndex);
+
+    /** Stock's: the type variables this method or constructor declares; empty when it declares none. */
+    public abstract TypeVariable<?>[] getTypeParameters();
+
+    /**
+     * Stock's: the parameter types as this member's {@code Signature} attribute declares them --
+     * {@code List<String>} rather than {@code List} -- or the erased {@link #getParameterTypes} when it has no
+     * signature, which is stock's own answer for a non-generic member.
+     */
+    public Type[] getGenericParameterTypes()
+    {
+        String sig = genericSignature();
+        if (sig == null)
+        {
+            Class<?>[] p = getParameterTypes();
+            Type[] t = new Type[p.length];
+            for (int i = 0; i < p.length; i++)
+            {
+                t[i] = p[i];
+            }
+            return t;
+        }
+        return genericInfo(sig).getParameterTypes();
+    }
+
+    /**
+     * This member's {@code Signature} attribute, or null. Read afresh on each call: a stock {@code Executable}
+     * caches its repository in a field, and this one keeps no state beyond what its subclasses already hold.
+     */
+    String genericSignature()
+    {
+        return signature0(registryIndex());
+    }
+
+    /**
+     * The generic repository over {@code signature}, built in this member's own SCOPE so that a type variable
+     * resolves to the method's or constructor's own before its class's -- stock's split: {@link Method} answers
+     * a {@code MethodRepository}, {@link Constructor} a {@code ConstructorRepository}.
+     */
+    abstract sun.reflect.generics.repository.ConstructorRepository genericInfo(String signature);
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.methodSignature}): registry index -> Signature. */
+    private static native String signature0(int rgIndex);
 
     /**
      * {@code "public com.x.Foo(int)"} -- modifiers, declaring class, name, parameter types.

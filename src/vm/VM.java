@@ -1981,6 +1981,8 @@ public final class VM
         if (classSignatureAddr == 0L) { long u = VMNatives.classSignature(0L); }    // Class.genericSignature0
         if (classEnclosingKindAddr == 0L) { long u = VMNatives.classEnclosingKind(0L); } // Class.enclosingMethodKind0
         if (classSealedAddr == 0L) { long u = VMNatives.classSealed(0L); }          // Class.sealed0
+        if (methodSignatureAddr == 0L) { long u = VMNatives.methodSignature(-1L); } // Executable.signature0
+        if (fieldSignatureAddr == 0L) { long u = VMNatives.fieldSignature(0L, 0L); } // Field.signature0
         if (defineClassAddr == 0L) { long u = VMNatives.defineClass(0L, 0L, 0L, 0L); } // ClassLoader.defineClass0 (M3)
         if (classModifiersAddr == 0L) { long u = VMNatives.classModifiers(0L); } // Class.getModifiers() native (reflection M1)
         if (methodResolveAddr == 0L) { int u = VMNatives.methodResolve(0L, 0L); } // Method.methodResolve0 native (reflection M2)
@@ -3479,6 +3481,8 @@ public final class VM
     static long classSignatureAddr;    // VMNatives.classSignature(J)J — Class.genericSignature0(Class)
     static long classEnclosingKindAddr; // VMNatives.classEnclosingKind(J)J — Class.enclosingMethodKind0(Class)
     static long classSealedAddr;       // VMNatives.classSealed(J)J — Class.sealed0(Class)
+    static long methodSignatureAddr;   // VMNatives.methodSignature(J)J — Executable.signature0(int)
+    static long fieldSignatureAddr;    // VMNatives.fieldSignature(JJ)J — Field.signature0(Class,byte[])
     static long defineClassAddr;       // VM.defineClass(JJJJ)J — ClassLoader.defineClass0 native (reflection M3)
     static long classModifiersAddr;    // VM.classModifiers(J)I — Class.getModifiers() native (reflection M1)
     static long methodResolveAddr;     // VM.methodResolve(JJ)I — Method.methodResolve0 (reflection M2)

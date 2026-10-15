@@ -12519,6 +12519,7 @@ public final class Loader
         // loader field registry as the VarHandle/atomic-updater shims).
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Field")))
         {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("signature0")))        { return VM.fieldSignatureAddr; } // (Class,byte[])String
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldOffset0")))     { return VM.vhFieldOffsetAddr; }    // (byte[],Object)J
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldAnnoGet0")))    { return VM.fieldAnnoGetAddr; }     // (Class,byte[],byte[])
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldAnnoAll0")))    { return VM.fieldAnnoAllAddr; }     // (Class,byte[])[Annotation
@@ -12696,6 +12697,7 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoPresent0")))      { return VM.annoPresentAddr; }   // (I,byte[])I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoGet0")))          { return VM.annoGetAddr; }       // (I,byte[]) -> instance
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoAll0")))          { return VM.methodAnnoAllAddr; } // (I)[Annotation
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("signature0")))        { return VM.methodSignatureAddr; } // (I)String
         }
         // The BCM2711 hardware RNG, behind java.security.SecureRandom's self-seeding. Keyed by DECLARING
         // CLASS like every native here -- registering one under the wrong class is the LINK FAILED this
@@ -18790,6 +18792,70 @@ public final class Loader
     }
 
     /**
+     * {@code Executable.signature0}: the {@code Signature} attribute of the method or constructor registered at
+     * {@code rgIndex}, as a String, or 0 when it has none (a non-generic member, whose generic types ARE its
+     * erasures -- stock's answer too). The {@code method_info} is found by name AND descriptor
+     * ({@link #methodInfoPos}), so overloads keep their own signatures.
+     */
+    static long methodSignature(int rgIndex)
+    {
+        long p = methodInfoPos(rgIndex);
+        if (p == 0L)
+        {
+            return 0L;
+        }
+        long base = rgTab[rgIndex].base;
+        long q = classAttrNamed(base, p + 8L, u2(p + 6L), Magic.bytes("Signature"));
+        if (q == 0L)
+        {
+            return 0L;
+        }
+        return utf8ToString(base, gcp[u2(q)]);
+    }
+
+    /**
+     * {@code Field.signature0}: the {@code Signature} attribute of field {@code nameArr} (a raw {@code byte[]})
+     * of the class whose mirror is given, or 0. The field walk is {@link #fieldAnnotation}'s.
+     */
+    static long fieldSignature(long mirror, long nameArr)
+    {
+        if (mirror <= 0x1000L || nameArr <= 0x1000L)
+        {
+            return 0L;
+        }
+        int ci = classRegByType(Magic.load64(mirror + 16L));
+        if (ci < 0)
+        {
+            return 0L;
+        }
+        long base = clTab[ci].base;
+        parseConstPool(base, blobLenOf(base));
+        long p = gp + 6L;                               // past access_flags, this_class, super_class
+        p += 2L + u2(p) * 2L;                           // past the interfaces list
+        int fcount = u2(p);
+        p += 2;
+        int nlen = (int) Magic.load64(nameArr + 16L);   // byte[] length @16
+        long nbase = nameArr + 24L;
+        int f = 0;
+        while (f < fcount)
+        {
+            int attrs = u2(p + 6);
+            if (rawEqUtf8(nbase, nlen, base, gcp[u2(p + 2)]))
+            {
+                long q = classAttrNamed(base, p + 8L, attrs, Magic.bytes("Signature"));
+                if (q == 0L)
+                {
+                    return 0L;
+                }
+                return utf8ToString(base, gcp[u2(q)]);
+            }
+            p = skipAttributes(p + 8, attrs);
+            f += 1;
+        }
+        return 0L;
+    }
+
+    /**
      * {@code Class.enclosingMethodKind0}: 0 when the class has no {@code EnclosingMethod} attribute (JVMS
      * 4.7.7) -- every top-level and MEMBER class; 1 when it has one naming no method (a local or anonymous
      * class in an initializer); 2 when it names a method; 3 when it names a constructor ({@code <init>}).
@@ -19122,12 +19188,12 @@ public final class Loader
                 {
                     i += 1;
                 }
-                mirror = start == nameStart - 1 ? mirrorOfInternalName(d + nameStart, i - nameStart) : 0L;
+                mirror = arrayOf(mirrorOfInternalName(d + nameStart, i - nameStart), nameStart - 1 - start);
                 i += 1;                                 // past ';'
             }
             else
             {
-                mirror = start == i ? primitiveMirror(u1(d + i)) : 0L;   // a bare primitive, not an array
+                mirror = start == i ? primitiveMirror(u1(d + i)) : primArrayMirror(u1(d + i), i - start);
                 i += 1;
             }
             Magic.store64(arr + 24L + k * 8L, mirror);
@@ -19154,7 +19220,7 @@ public final class Loader
         }
         i += 1;
         int start = i;
-        while (i < len && u1(d + i) == 0x5B)            // array prefixes: not modelled, see methodParamTypes
+        while (i < len && u1(d + i) == 0x5B)            // array prefixes: resolved by arrayOf/primArrayMirror
         {
             i += 1;
         }
@@ -19165,9 +19231,64 @@ public final class Loader
             {
                 i += 1;
             }
-            return start == nameStart - 1 ? mirrorOfInternalName(d + nameStart, i - nameStart) : 0L;
+            return arrayOf(mirrorOfInternalName(d + nameStart, i - nameStart), nameStart - 1 - start);
         }
-        return start == i ? primitiveMirror(u1(d + i)) : 0L;   // includes 'V' for void
+        return start == i ? primitiveMirror(u1(d + i)) : primArrayMirror(u1(d + i), i - start);   // 'V' too
+    }
+
+    /**
+     * The mirror of {@code dims}-dimensional array of the class whose mirror is {@code elemMirror}, or
+     * {@code elemMirror} itself for 0 dimensions. Each level is the element Type's reference-array TIB, whose
+     * word 0 is the array Type -- the same node {@code getClass()} on such an array answers, so
+     * {@code getParameterTypes()[i] == String[].class} holds.
+     *
+     * <p>ARRAY PARAMETER AND RETURN TYPES USED TO RESOLVE TO NULL ("not modelled"). A null element in a
+     * {@code Class[]} is a wrong answer a caller cannot tell from a missing class: re-looking a method up by its
+     * own {@code getParameterTypes()} failed for any array parameter (MemberGenericsProbe, through stock
+     * {@code TypeVariableImpl.getGenericDeclaration}).
+     */
+    private static long arrayOf(long elemMirror, int dims)
+    {
+        if (elemMirror == 0L)
+        {
+            return 0L;
+        }
+        long type = Magic.load64(elemMirror + 16L);
+        int k = 0;
+        while (k < dims)
+        {
+            long tib = refArrayTib(type);
+            if (tib == 0L)
+            {
+                return 0L;
+            }
+            type = Magic.load64(tib);
+            k += 1;
+        }
+        return classMirror(type);
+    }
+
+    /** As {@link #arrayOf}, for an array of the primitive with descriptor char {@code c}: {@code [I}, {@code [[J}. */
+    private static long primArrayMirror(int c, int dims)
+    {
+        long tib = primArrayTib(atypeForDescChar(c));
+        if (tib == 0L)
+        {
+            return 0L;
+        }
+        long type = Magic.load64(tib);
+        int k = 1;
+        while (k < dims)
+        {
+            tib = refArrayTib(type);
+            if (tib == 0L)
+            {
+                return 0L;
+            }
+            type = Magic.load64(tib);
+            k += 1;
+        }
+        return classMirror(type);
     }
 
     /** Parameter count of the descriptor bytes at {@code d} (arrays fold into their element). */

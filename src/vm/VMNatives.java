@@ -707,6 +707,34 @@ final class VMNatives
         }
     }
 
+    /** {@code Executable.signature0(int)} native: the member's Signature attribute as a String, or 0. */
+    static long methodSignature(long rgIndex)
+    {
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            return Loader.methodSignature((int) rgIndex);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
+    }
+
+    /** {@code Field.signature0(Class, byte[])} native: the field's Signature attribute as a String, or 0. */
+    static long fieldSignature(long mirror, long nameArr)
+    {
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            return Loader.fieldSignature(mirror, nameArr);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
+    }
+
     /** {@code Class.sealed0(Class)} native: 1 when the class has a PermittedSubclasses attribute, else 0. */
     static long classSealed(long mirror)
     {

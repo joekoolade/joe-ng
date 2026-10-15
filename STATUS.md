@@ -4,6 +4,38 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **MEMBER-LEVEL GENERIC REFLECTION; MEMBER `equals`/`hashCode`; ARRAY PARAMETER AND RETURN TYPES (2026-10-14).**
+  Builds on the class-level card below. Dropped supertypes 6 -> 3: only `Class`'s
+  `Constable`/`TypeDescriptor` family is left.
+  - **`Field.getGenericType`, `Method.getGenericReturnType`, `getGenericParameterTypes` and
+    `Method`/`Constructor.getTypeParameters` answered ERASURES** (documented as "the element type is unknown,
+    not wrong"). They now run stock `FieldRepository`/`MethodRepository`/`ConstructorRepository`, each in its
+    member's own scope, over a new `Signature` native per member: `Executable.signature0` by registry slot
+    (name AND descriptor, so overloads keep their own) and `Field.signature0` by name.
+    `Executable implements GenericDeclaration`.
+  - **`Method`, `Constructor` and `Field` had no `equals`/`hashCode`**, so two lookups of one member compared by
+    IDENTITY. Stock's added; names compare with `equals`, since stock's `==` relies on interned member names.
+    Stock `TypeVariableImpl.equals` compares declarations with `equals`, so before this a method's type
+    variable was unequal to itself across lookups.
+  - **`ReflectionFactory.copyMethod`/`copyConstructor`** added. Stock `TypeVariableImpl.getGenericDeclaration`
+    hands out a copy, made here by an EXACT re-lookup: the same member, with its own `accessible` flag.
+  - **ARRAY PARAMETER AND RETURN TYPES RESOLVED TO NULL** in `getParameterTypes`/`getReturnType` ("not
+    modelled", in the VM and in two overlay javadocs). A null `Class` is a wrong answer, and re-looking a
+    method up by its own parameter types failed for any array parameter. The copy above hit exactly that.
+    `Loader.arrayOf`/`primArrayMirror` now wrap the element's mirror once per `[` through the array TIBs.
+    The result is the same node `getClass()` answers: `getParameterTypes()[0] == String[].class` holds, as do
+    `long[]`, `Object[][]` and `int[][]`.
+  - **Probe:** `MemberGenericsProbe` (new) covers fields:
+    - `List<String>`, `T`, `Map<String, ? super Integer>`, `T[]`, `int`.
+    It covers methods:
+    - a method type variable and one bounded by the class's;
+    - a self-bounded static method;
+    - two overloads differing only by parameter type;
+    - array parameters and return.
+    It also covers a constructor with its own type variable; `equals`/`hashCode` for all three member kinds,
+    with type-variable equality across lookups; and baked `HashMap.put`, `Collections.emptyList`/`max` and
+    `Arrays.asList`. Members are looked up by name and types, never enumerated. Host-identical.
+  - **Regression (suite, all probes, JUnit):** pending. **Pi:** pending.
 - **CLASS-LEVEL GENERIC REFLECTION FROM THE `Signature` ATTRIBUTE; `toGenericString`, `isSealed`; NESTED-CLASS
   MODIFIERS (2026-10-14).** Known gaps 3 -> 1 (`getProtectionDomain`, which needs `java/security`); dropped
   supertypes 7 -> 6.
