@@ -160,11 +160,12 @@ public final class Magic
     }
 
     /**
-     * Call JIT'd code at {@code addr} with up to 8 register arguments loaded from {@code argsPtr}: x0 &lt;-
-     * [argsPtr+0], x1 &lt;- [argsPtr+8], ... x7 &lt;- [argsPtr+56]; return x0. The callee reads only the args
+     * Call JIT'd code at {@code addr} with the 16 argument registers loaded from {@code argsPtr}: x0 &lt;-
+     * [argsPtr+0], x1 &lt;- [argsPtr+8], ... x15 &lt;- [argsPtr+120]; return x0. The callee reads only the args
      * its arity uses (extra loaded registers are ignored). The general N-arg call behind reflective
-     * {@code Method.invoke}/{@code Constructor.newInstance}; the caller lays out the 8-long buffer per the
-     * target's descriptor (receiver + marshalled args, zero-padded).
+     * {@code Method.invoke}/{@code Constructor.newInstance}; the caller lays out the buffer per the target's
+     * descriptor (receiver + marshalled args, zero-padded), and past 16 arguments puts the POINTER to the rest
+     * in slot 15, the compiler's convention for a long argument list.
      */
     public static long callN(long addr, long argsPtr)
     {

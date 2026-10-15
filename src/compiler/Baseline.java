@@ -3421,17 +3421,24 @@ public final class Baseline
             cb.emit(A64Enc.movReg(pushReg(), 0));
         }
         else if (id == Intrinsics.CALL_N)
-        // (addr, argsPtr): x0..x7 <- [argsPtr..+56], blr addr, result x0. argsPtr/addr live in operand-stack
-        // registers (x9..x15), so loading the argument registers x0..x7 cannot clobber them.
+        // (addr, argsPtr): x0..x15 <- [argsPtr..+120], blr addr, result x0 -- ALL the JIT's argument registers.
+        // This loaded x0..x7 only, so a reflective call with a 9th argument (receiver included) handed the
+        // callee whatever x8..x15 held. Past 16 the caller lays out x15 as the POINTER to the rest, exactly as a
+        // compiled call does (see ARG_PTR_REG), so this needs no arity.
+        //
+        // x9..x15 are ALSO the operand-stack registers that hold addr and argsPtr, so both move to the IP
+        // scratch pair first, and the live operands spill BEFORE the loads overwrite them (this spilled after,
+        // which was safe only while the loads stopped at x7).
         {
             int argsPtr = popReg();
             int addr = popReg();
-            cb.emit(A64Enc.movReg(16, addr));               // stash target in x16 before x0..x7 are loaded
-            for (int r = 0; r < 8; r++)
+            cb.emit(A64Enc.movReg(16, addr));               // x16 = target
+            cb.emit(A64Enc.movReg(17, argsPtr));            // x17 = the argument buffer
+            spillLive(cb);                                  // before x9..x15 are overwritten below
+            for (int r = 0; r < MAX_ARG_REGS; r++)
             {
-                cb.emit(A64Enc.ldrx(r, argsPtr, r * 8));    // xr <- [argsPtr + r*8]
+                cb.emit(A64Enc.ldrx(r, 17, r * 8));         // xr <- [argsPtr + r*8]
             }
-            spillLive(cb);                                  // after the loads: they read argsPtr, an x9.. reg
             cb.emit(A64Enc.blr(16));
             reloadLive(cb);
             cb.emit(A64Enc.movReg(pushReg(), 0));           // result x0
