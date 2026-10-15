@@ -35,7 +35,7 @@ import zip.ZipDir;
  *
  * <p>Read-only: no writing, no {@code File}/{@code Charset} constructors, no signature verification.
  */
-public class ZipFile implements Closeable
+public class ZipFile implements ZipConstants, Closeable
 {
     // The zip header layout constants. In the JDK these are inherited from the package-private interface
     // java.util.zip.ZipConstants, which makes them readable as ZipFile.LOCHDR etc. from any package -- a

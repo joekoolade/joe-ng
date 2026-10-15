@@ -204,7 +204,7 @@ public class MetalJUnit {
     }
 
     /** Invoke every method carrying {@code anno}; false if one threw (the test is then already reported). */
-    private static boolean invokeTagged(Method[] all, Object instance, Class<?> anno, Method test) {
+    private static boolean invokeTagged(Method[] all, Object instance, Class<? extends java.lang.annotation.Annotation> anno, Method test) {
         int i = 0;
         while (i < all.length) {
             if (all[i].isAnnotationPresent(anno)) {

@@ -1918,8 +1918,8 @@ public final class VM
         if (isArrayClassAddr == 0L) { long u = VMNatives.isArrayClass(0L); }          // Class.isArray0
         if (isPrimClassAddr == 0L) { long u = VMNatives.isPrimClass(0L); }            // Class.isPrimitive0
         if (primClassAddr == 0L) { long u = VMNatives.primClassOf(0L); }              // Class.primitiveClass0
-        if (annoPresentAddr == 0L) { long u = VMNatives.annoPresent(0L, 0L); }        // Method.annoPresent0
-        if (annoGetAddr == 0L) { long u = VMNatives.annoGet(0L, 0L); }              // Method.annoGet0
+        if (annoPresentAddr == 0L) { long u = VMNatives.annoPresent(0L, 0L); }        // Executable.annoPresent0
+        if (annoGetAddr == 0L) { long u = VMNatives.annoGet(0L, 0L); }              // Executable.annoGet0
         if (classAnnoGetAddr == 0L) { long u = VMNatives.classAnnoGet(0L, 0L); }     // Class.annoGet0
         if (fieldAnnoGetAddr == 0L) { long u = VMNatives.fieldAnnoGet(0L, 0L, 0L); } // Field.annoGet0
         if (fieldTypeAddr == 0L) { long u = VMNatives.fieldType(0L, 0L); }          // Field.type0
@@ -1971,7 +1971,7 @@ public final class VM
         if (hwEntropyAddr == 0L) { long u = VMNatives.hwEntropy(0L, 0L); } // SecureRandom.hwEntropy0
         if (resourceExistsAddr == 0L) { long u = VMNatives.resourceExists(0L); } // ClassLoader.resourceExists0
         if (resourceBytesAddr == 0L) { long u = VMNatives.resourceBytes(0L); }  // ClassLoader.resourceBytes0
-        if (methodAnnoAllAddr == 0L) { long u = VMNatives.methodAnnoAll(-1L); } // Method.annoAll0
+        if (methodAnnoAllAddr == 0L) { long u = VMNatives.methodAnnoAll(-1L); } // Executable.annoAll0
         if (recordHashAddr == 0L) { long u = recordHash(0L); }                   // record hashCode
         if (recordEqualsAddr == 0L) { long u = recordEquals(0L, 0L); }           // record equals
         if (recordToStringAddr == 0L) { long u = recordToString(0L); }           // record toString
@@ -3466,7 +3466,7 @@ public final class VM
     static long hwEntropyAddr;         // VMNatives.hwEntropy(JJ)J — SecureRandom.hwEntropy0(byte[],int)
     static long resourceExistsAddr;    // VMNatives.resourceExists(J)J — ClassLoader.resourceExists0(byte[])
     static long resourceBytesAddr;     // VMNatives.resourceBytes(J)J — ClassLoader.resourceBytes0(byte[])
-    static long methodAnnoAllAddr;     // VMNatives.methodAnnoAll(J)J — Method.annoAll0(int)
+    static long methodAnnoAllAddr;     // VMNatives.methodAnnoAll(J)J — Executable.annoAll0(int)
     static long recordHashAddr;        // VM.recordHash(J)J — a record's synthesised hashCode
     static long recordEqualsAddr;      // VM.recordEquals(JJ)J — a record's synthesised equals
     static long recordToStringAddr;    // VM.recordToString(J)J — a record's synthesised toString
@@ -3495,8 +3495,8 @@ public final class VM
     static long isArrayClassAddr;      // VM.isArrayClass(J)J — Class.isArray0 (array Type tag test)
     static long isPrimClassAddr;       // VM.isPrimClass(J)J — Class.isPrimitive0 (primitive Type tag test)
     static long primClassAddr;         // VM.primClassOf(J)J — Class.primitiveClass0 (desc char -> mirror)
-    static long annoPresentAddr;       // VM.annoPresent(JJ)J — Method.annoPresent0 (RuntimeVisibleAnnotations)
-    static long annoGetAddr;           // VMNatives.annoGet(JJ)J — Method.annoGet0 (annotation INSTANCE)
+    static long annoPresentAddr;       // VM.annoPresent(JJ)J — Executable.annoPresent0 (RuntimeVisibleAnnotations)
+    static long annoGetAddr;           // VMNatives.annoGet(JJ)J — Executable.annoGet0 (annotation INSTANCE)
     static long classAnnoGetAddr;      // VMNatives.classAnnoGet(JJ)J — Class.annoGet0
     static long fieldAnnoGetAddr;      // VMNatives.fieldAnnoGet(JJJ)J — Field.annoGet0
     static long fieldTypeAddr;         // VMNatives.fieldType(JJ)J — Field.type0

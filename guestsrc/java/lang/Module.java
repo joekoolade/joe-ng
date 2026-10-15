@@ -26,7 +26,7 @@ package java.lang;
  * {@link #isNamed()} first is making an unsound assumption and gets an NPE at its own site, which is a better
  * outcome than a fabricated descriptor.
  */
-public final class Module
+public final class Module implements java.lang.reflect.AnnotatedElement
 {
     /** Every class belongs to this one instance -- there is no second module to distinguish it from. */
     static final Module UNNAMED = new Module();
@@ -62,6 +62,30 @@ public final class Module
     public ModuleLayer getLayer()
     {
         return null;
+    }
+
+    /**
+     * Null. Stock specifies exactly this "when invoked on an unnamed module", and every module here is one --
+     * the stated answer for this VM, not a stand-in for an annotation reader it lacks.
+     */
+    @Override
+    public <T extends java.lang.annotation.Annotation> T getAnnotation(Class<T> annotationClass)
+    {
+        return null;
+    }
+
+    /** Empty, as stock specifies for an unnamed module; a fresh array because the caller may modify it. */
+    @Override
+    public java.lang.annotation.Annotation[] getAnnotations()
+    {
+        return new java.lang.annotation.Annotation[0];
+    }
+
+    /** Empty, as stock specifies for an unnamed module; a fresh array because the caller may modify it. */
+    @Override
+    public java.lang.annotation.Annotation[] getDeclaredAnnotations()
+    {
+        return new java.lang.annotation.Annotation[0];
     }
 
     @Override
