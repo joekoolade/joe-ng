@@ -34,7 +34,10 @@ Newest entries are at the top.
     host-controlled probes re-run on QEMU: 41 host-identical** (incl. the new `SupertypeProbe`), DigestProbe/
     MacProbe their designed divergences (`failures=0 divergences-unmet=0`). **MetalJUnit baseline: `ran 44,
     failures 0`** -- it reads `@BeforeEach`/`@AfterEach` through the retyped `isAnnotationPresent`.
-  - **Pi:** pending.
+  - **Pi (`eb9669f`):** NetDemo `HTTP/1.1 200 OK ... http done bytes=888`, `[main returned normally]`, no new
+    TRAP-WIRED line, `clinits=373/373/374/375` (unchanged). Batch 1 `+1406blob` -> `+1409blob`: three more
+    class blobs, which fits the two un-denied interfaces plus `SocksConsts` on NetDemo's socket path (the
+    three classes were not identified).
 - **EXACT REFLECTIVE LOOKUP: OVERLOADS, PUBLIC LOOKUPS, INTERFACE DEFAULTS; `Class.toString` (2026-10-14, PI-VALIDATED).**
   Closing `getMethod`/`getConstructor`/`getConstructors` (known gaps) found the lookups they would build on
   answering WRONG for overloads.
