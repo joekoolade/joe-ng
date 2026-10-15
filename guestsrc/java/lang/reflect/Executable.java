@@ -12,6 +12,9 @@
 package java.lang.reflect;
 
 import java.lang.annotation.Annotation;
+import java.util.Arrays;
+import java.util.StringJoiner;
+import java.util.stream.Collectors;
 
 /**
  * {@code java.lang.reflect.Executable} for joe-ng: the shared supertype of {@link Method} and
@@ -120,52 +123,185 @@ public abstract class Executable extends AccessibleObject implements Member, Gen
     /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.methodSignature}): registry index -> Signature. */
     private static native String signature0(int rgIndex);
 
-    /**
-     * {@code "public com.x.Foo(int)"} -- modifiers, declaring class, name, parameter types.
-     *
-     * <p>The GENERIC part of the name is aspirational here, exactly as on {@link Method#toGenericString}: with
-     * no {@code Signature} attribute read, every type prints as its ERASURE. {@link Method} overrides this to
-     * put its return type in front; a constructor has none, which is the whole difference.
-     */
-    public String toGenericString()
+    /** Stock's. */
+    void printModifiersIfNonzero(StringBuilder sb, int mask, boolean isDefault)
     {
-        int m = getModifiers();
-        StringBuilder b = new StringBuilder();
-        if ((m & 0x0001) != 0)
+        int mod = getModifiers() & mask;
+
+        if (mod != 0 && !isDefault)
         {
-            b.append("public ");
+            sb.append(Modifier.toString(mod)).append(' ');
         }
-        if ((m & 0x0002) != 0)
+        else
         {
-            b.append("private ");
-        }
-        if ((m & 0x0004) != 0)
-        {
-            b.append("protected ");
-        }
-        if ((m & 0x0008) != 0)
-        {
-            b.append("static ");
-        }
-        if ((m & 0x0010) != 0)
-        {
-            b.append("final ");
-        }
-        b.append(getName());
-        b.append("(");
-        Class<?>[] ps = getParameterTypes();
-        int i = 0;
-        while (i < ps.length)
-        {
-            if (i > 0)
+            int access_mod = mod & Modifier.ACCESS_MODIFIERS;
+            if (access_mod != 0)
             {
-                b.append(",");
+                sb.append(Modifier.toString(access_mod)).append(' ');
             }
-            b.append(ps[i] == null ? "?" : ps[i].getName());
-            i += 1;
+            if (isDefault)
+            {
+                sb.append("default ");
+            }
+            mod = (mod & ~Modifier.ACCESS_MODIFIERS);
+            if (mod != 0)
+            {
+                sb.append(Modifier.toString(mod)).append(' ');
+            }
         }
-        b.append(")");
-        return b.toString();
+    }
+
+    /** Stock's: modifiers, the subclass's header, erased parameter types, then any {@code throws} clause. */
+    String sharedToString(int modifierMask, boolean isDefault, Class<?>[] parameterTypes, Class<?>[] exceptionTypes)
+    {
+        try
+        {
+            StringBuilder sb = new StringBuilder();
+
+            printModifiersIfNonzero(sb, modifierMask, isDefault);
+            specificToStringHeader(sb);
+            sb.append(Arrays.stream(parameterTypes)
+                      .map(Type::getTypeName)
+                      .collect(Collectors.joining(",", "(", ")")));
+            if (exceptionTypes.length > 0)
+            {
+                sb.append(Arrays.stream(exceptionTypes)
+                          .map(Type::getTypeName)
+                          .collect(Collectors.joining(",", " throws ", "")));
+            }
+            return sb.toString();
+        }
+        catch (Exception e)
+        {
+            return "<" + e + ">";
+        }
+    }
+
+    abstract void specificToStringHeader(StringBuilder sb);
+
+    /** Stock's. */
+    static String typeVarBounds(TypeVariable<?> typeVar)
+    {
+        Type[] bounds = typeVar.getBounds();
+        if (bounds.length == 1 && bounds[0].equals(Object.class))
+        {
+            return typeVar.getName();
+        }
+        else
+        {
+            return typeVar.getName() + " extends "
+                    + Arrays.stream(bounds)
+                    .map(Type::getTypeName)
+                    .collect(Collectors.joining(" & "));
+        }
+    }
+
+    /** Stock's: as {@link #sharedToString}, over the GENERIC types, with type parameters and varargs. */
+    String sharedToGenericString(int modifierMask, boolean isDefault)
+    {
+        try
+        {
+            StringBuilder sb = new StringBuilder();
+
+            printModifiersIfNonzero(sb, modifierMask, isDefault);
+
+            TypeVariable<?>[] typeparms = getTypeParameters();
+            if (typeparms.length > 0)
+            {
+                sb.append(Arrays.stream(typeparms)
+                          .map(Executable::typeVarBounds)
+                          .collect(Collectors.joining(",", "<", "> ")));
+            }
+
+            specificToGenericStringHeader(sb);
+
+            sb.append('(');
+            StringJoiner sj = new StringJoiner(",");
+            Type[] params = getGenericParameterTypes();
+            for (int j = 0; j < params.length; j++)
+            {
+                String param = params[j].getTypeName();
+                if (isVarArgs() && (j == params.length - 1))  // replace T[] with T...
+                {
+                    param = param.replaceFirst("\\[\\]$", "...");
+                }
+                sj.add(param);
+            }
+            sb.append(sj.toString());
+            sb.append(')');
+
+            Type[] exceptionTypes = getGenericExceptionTypes();
+            if (exceptionTypes.length > 0)
+            {
+                sb.append(Arrays.stream(exceptionTypes)
+                          .map(Type::getTypeName)
+                          .collect(Collectors.joining(",", " throws ", "")));
+            }
+            return sb.toString();
+        }
+        catch (Exception e)
+        {
+            return "<" + e + ">";
+        }
+    }
+
+    abstract void specificToGenericStringHeader(StringBuilder sb);
+
+    public abstract String toGenericString();
+
+    /** Stock's. */
+    public boolean isVarArgs()
+    {
+        return (getModifiers() & Modifier.VARARGS) != 0;
+    }
+
+    /**
+     * The classes this member declares it {@code throws}, from its {@code Exceptions} attribute, in declared
+     * order; empty when it declares none. A FRESH ARRAY EACH CALL, as stock's copy is. Each name resolves
+     * through {@link Class#forName}, which on this VM also initializes the class.
+     */
+    public Class<?>[] getExceptionTypes()
+    {
+        int rg = registryIndex();
+        int n = 0;
+        while (exceptionName0(rg, n) != null)
+        {
+            n += 1;
+        }
+        Class<?>[] out = new Class<?>[n];
+        for (int i = 0; i < n; i++)
+        {
+            String name = exceptionName0(rg, i).replace('/', '.');
+            try
+            {
+                out[i] = Class.forName(name, false, null);
+            }
+            catch (ClassNotFoundException e)
+            {
+                NoClassDefFoundError err = new NoClassDefFoundError(name);
+                err.initCause(e);
+                throw err;
+            }
+        }
+        return out;
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.methodExceptionName}): the i-th throws name, or null. */
+    private static native String exceptionName0(int rgIndex, long i);
+
+    /**
+     * Stock's: the {@code throws} clause as the {@code Signature} attribute declares it -- a thrown type
+     * variable stays {@code X} -- or the erased {@link #getExceptionTypes} when the signature names none.
+     */
+    public Type[] getGenericExceptionTypes()
+    {
+        Type[] result;
+        String sig = genericSignature();
+        if (sig != null && ((result = genericInfo(sig).getExceptionTypes()).length > 0))
+        {
+            return result;
+        }
+        return getExceptionTypes();
     }
 
     /**

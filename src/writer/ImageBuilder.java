@@ -1549,9 +1549,11 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classDeclClasses(J)J", "vm/VM.classDeclClassesAddr"); // Class.declaredClasses0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classIfaces(J)J", "vm/VM.classIfacesAddr"); // Class.interfaces0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classSignature(J)J", "vm/VM.classSignatureAddr"); // Class.genericSignature0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classEnclosingKind(J)J", "vm/VM.classEnclosingKindAddr"); // Class.enclosingMethodKind0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classEnclosingPart(JJ)J", "vm/VM.classEnclosingPartAddr"); // Class.enclosingPart0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classInnerPart(JJ)J", "vm/VM.classInnerPartAddr"); // Class.innerPart0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classSealed(J)J", "vm/VM.classSealedAddr"); // Class.sealed0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodSignature(J)J", "vm/VM.methodSignatureAddr"); // Executable.signature0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodExceptionName(JJ)J", "vm/VM.methodExceptionNameAddr"); // Executable.exceptionName0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.fieldSignature(JJ)J", "vm/VM.fieldSignatureAddr"); // Field.signature0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.defineClass(JJJJ)J", "vm/VM.defineClassAddr"); // reflection M3: ClassLoader.defineClass0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classModifiers(J)J", "vm/VM.classModifiersAddr"); // reflection M1: Class.getModifiers

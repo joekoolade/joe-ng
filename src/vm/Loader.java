@@ -12654,7 +12654,8 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredClasses0")))  { return VM.classDeclClassesAddr; } // (Class)[Class
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("interfaces0")))       { return VM.classIfacesAddr; }   // (Class)[Class
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("genericSignature0"))) { return VM.classSignatureAddr; } // (Class)String
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("enclosingMethodKind0"))) { return VM.classEnclosingKindAddr; } // (Class)J
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("enclosingPart0")))    { return VM.classEnclosingPartAddr; } // (Class,J)String
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("innerPart0")))        { return VM.classInnerPartAddr; }     // (Class,J)String
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("sealed0")))           { return VM.classSealedAddr; }   // (Class)J
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("forName0")))          { return VM.forNameAddr; }       // (byte[])Class
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("classModifiers0")))   { return VM.classModifiersAddr; } // (Class)I
@@ -12698,6 +12699,7 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoGet0")))          { return VM.annoGetAddr; }       // (I,byte[]) -> instance
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoAll0")))          { return VM.methodAnnoAllAddr; } // (I)[Annotation
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("signature0")))        { return VM.methodSignatureAddr; } // (I)String
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("exceptionName0")))    { return VM.methodExceptionNameAddr; } // (I,J)String
         }
         // The BCM2711 hardware RNG, behind java.security.SecureRandom's self-seeding. Keyed by DECLARING
         // CLASS like every native here -- registering one under the wrong class is the LINK FAILED this
@@ -14628,21 +14630,35 @@ public final class Loader
      */
     private static int innerClassFlags(int reg)
     {
-        long base = clTab[reg].base;
+        long e = ownInnerClassEntry(clTab[reg].base);
+        if (e == 0L)
+        {
+            return -1;
+        }
+        return u2(e + 6);                               // inner_class_access_flags
+    }
+
+    /**
+     * Position of the class's OWN entry in its {@code InnerClasses} attribute (JVMS 4.7.6) -- the one whose
+     * {@code inner_class_info_index} is {@code this_class} -- or 0 when it has none (a top-level class). The
+     * entry is four u2s: inner class, outer class, simple name, access flags.
+     */
+    private static long ownInnerClassEntry(long base)
+    {
         long ap = classAttrsPos(base);
         if (ap == 0L)
         {
-            return -1;
+            return 0L;
         }
         long lp = innerClassesPos(base, ap + 2L, u2(ap));
         if (lp == 0L)
         {
-            return -1;
+            return 0L;
         }
         int thisIdx = u2(base + gAfterCp + 2);          // this_class, per the ClassReader.afterCp layout
         if (thisIdx == 0)
         {
-            return -1;
+            return 0L;
         }
         int n = u2(lp);
         long p = lp + 2L;
@@ -14651,12 +14667,12 @@ public final class Loader
         {
             if (u2(p) == thisIdx)                       // inner_class_info_index == this_class
             {
-                return u2(p + 6);                       // inner_class_access_flags
+                return p;
             }
-            p += 8;                                     // inner, outer, simple name, access flags
+            p += 8;
             e += 1;
         }
-        return -1;
+        return 0L;
     }
 
     /**
@@ -18814,6 +18830,33 @@ public final class Loader
     }
 
     /**
+     * {@code Executable.exceptionName0}: the internal name of the {@code i}th class in the {@code Exceptions}
+     * attribute (JVMS 4.7.5) of the method or constructor registered at {@code rgIndex}, or 0 past the end --
+     * and 0 for every {@code i} when there is no such attribute, i.e. the member declares no {@code throws}.
+     * One name per call keeps this allocation-free for a bad argument ({@code VM.forceCompile} probes with -1).
+     */
+    static long methodExceptionName(int rgIndex, long i)
+    {
+        long p = methodInfoPos(rgIndex);
+        if (p == 0L)
+        {
+            return 0L;
+        }
+        long base = rgTab[rgIndex].base;
+        long q = classAttrNamed(base, p + 8L, u2(p + 6L), Magic.bytes("Exceptions"));
+        if (q == 0L)
+        {
+            return 0L;
+        }
+        if (i < 0L || i >= u2(q))                       // u2 number_of_exceptions, then u2 class indices
+        {
+            return 0L;
+        }
+        int ci = u2(q + 2L + 2L * i);
+        return utf8ToString(base, gcp[u2(base + gcp[ci])]);  // CONSTANT_Class -> its name Utf8
+    }
+
+    /**
      * {@code Field.signature0}: the {@code Signature} attribute of field {@code nameArr} (a raw {@code byte[]})
      * of the class whose mirror is given, or 0. The field walk is {@link #fieldAnnotation}'s.
      */
@@ -18856,12 +18899,14 @@ public final class Loader
     }
 
     /**
-     * {@code Class.enclosingMethodKind0}: 0 when the class has no {@code EnclosingMethod} attribute (JVMS
-     * 4.7.7) -- every top-level and MEMBER class; 1 when it has one naming no method (a local or anonymous
-     * class in an initializer); 2 when it names a method; 3 when it names a constructor ({@code <init>}).
-     * Measured from the attribute, not inferred from the binary name.
+     * {@code Class.enclosingPart0}: one part of the class's {@code EnclosingMethod} attribute (JVMS 4.7.7) as a
+     * String, or 0. Part 0 is the enclosing CLASS's internal name; 0 means the attribute is absent, which JVMS
+     * makes the definition of "neither local nor anonymous". Part 1 is the enclosing method's name and part 2
+     * its descriptor; both are 0 when {@code method_index} is 0, i.e. the class sits in an initializer. These
+     * are the three elements of stock's {@code getEnclosingMethod0()} array, with the class left as a name for
+     * the guest to resolve. ALLOCATION-FREE for a bad argument, because {@code VM.forceCompile} probes with 0.
      */
-    static long classEnclosingKind(long mirror)
+    static long classEnclosingPart(long mirror, long part)
     {
         if (mirror <= 0x1000L)
         {
@@ -18883,13 +18928,53 @@ public final class Loader
         {
             return 0L;
         }
+        if (part == 0L)
+        {
+            return utf8ToString(base, gcp[u2(base + gcp[u2(p)])]);  // CONSTANT_Class -> its name Utf8
+        }
         int nat = u2(p + 2L);                           // u2 class_index, u2 method_index
         if (nat == 0)
         {
-            return 1L;
+            return 0L;
         }
-        int nameOff = gcp[u2(base + gcp[nat])];         // CONSTANT_NameAndType -> its name Utf8 offset
-        return utf8IsAtBase(base, nameOff, Magic.bytes("<init>")) ? 3L : 2L;
+        long natPos = base + gcp[nat];                  // CONSTANT_NameAndType: u2 name, u2 descriptor
+        return utf8ToString(base, gcp[u2(natPos + (part == 1L ? 0L : 2L))]);
+    }
+
+    /**
+     * {@code Class.innerPart0}: one part of the class's own {@code InnerClasses} entry as a String, or 0. Part 0
+     * is the OUTER class's internal name -- 0 for a top-level, local or anonymous class, since only a member
+     * class names an outer one; this is HotSpot's {@code getDeclaringClass0}. Part 1 is the SIMPLE name -- 0
+     * for a top-level or anonymous class; HotSpot's {@code getSimpleBinaryName0}. Read from the classfile, never
+     * from the binary name, so a top-level class whose name contains '$' stays top-level.
+     */
+    static long classInnerPart(long mirror, long part)
+    {
+        if (mirror <= 0x1000L)
+        {
+            return 0L;
+        }
+        int reg = regOfType(Magic.load64(mirror + 16L));
+        if (reg < 0)
+        {
+            return 0L;
+        }
+        long base = clTab[reg].base;
+        long e = ownInnerClassEntry(base);
+        if (e == 0L)
+        {
+            return 0L;
+        }
+        int idx = u2(e + (part == 0L ? 2L : 4L));     // outer_class_info_index or inner_name_index
+        if (idx == 0)
+        {
+            return 0L;
+        }
+        if (part == 0L)
+        {
+            return utf8ToString(base, gcp[u2(base + gcp[idx])]);    // CONSTANT_Class -> its name Utf8
+        }
+        return utf8ToString(base, gcp[idx]);
     }
 
     /**

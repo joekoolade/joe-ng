@@ -149,6 +149,31 @@ public final class Constructor<T> extends Executable
         return getDeclaringClass().getName().hashCode();
     }
 
+    /** Stock's: {@code "public com.x.Foo(int) throws java.io.IOException"}, erased. */
+    public String toString()
+    {
+        return sharedToString(Modifier.constructorModifiers(), false, getParameterTypes(), getExceptionTypes());
+    }
+
+    @Override
+    void specificToStringHeader(StringBuilder sb)
+    {
+        sb.append(getDeclaringClass().getTypeName());
+    }
+
+    /** Stock's: as {@link #toString}, with the generic types, type parameters and varargs. */
+    @Override
+    public String toGenericString()
+    {
+        return sharedToGenericString(Modifier.constructorModifiers(), false);
+    }
+
+    @Override
+    void specificToGenericStringHeader(StringBuilder sb)
+    {
+        specificToStringHeader(sb);
+    }
+
     /** Allocate a fresh instance of the declaring class and run this {@code <init>} with {@code args}. */
     public T newInstance(Object... args) throws IllegalAccessException, InvocationTargetException,
                                                 InstantiationException
