@@ -188,28 +188,22 @@ public final class Constructor<T> extends Executable
         int total = 1 + paramCount;
         long[] slots = argBuffer(total);
         putArg(slots, total, 0, Magic.addrOf(obj));        // receiver in slot 0 (<init> is an instance method)
+        Class<?>[] pt = getParameterTypes();
         int k = 0;
         while (k < paramCount)
         {
-            putArg(slots, total, 1 + k, marshal(paramChars[k], args[k]));
+            putArg(slots, total, 1 + k, convertArg(pt[k], args[k]));
             k += 1;
         }
-        Magic.callN(buf, Magic.addrOf(slots) + 24L);      // <init> returns void
+        try
+        {
+            Magic.callN(buf, Magic.addrOf(slots) + 24L);  // <init> returns void
+        }
+        catch (Throwable t)
+        {
+            throw new InvocationTargetException(t);         // stock: whatever the constructor throws arrives wrapped
+        }
         return (T) obj;
-    }
-
-    /** Unbox/reinterpret one argument to its raw 64-bit register value per its declared type char. */
-    private static long marshal(int tc, Object a)
-    {
-        if (tc == 'I') { return ((Integer) a).intValue(); }
-        if (tc == 'J') { return ((Long) a).longValue(); }
-        if (tc == 'Z') { return ((Boolean) a).booleanValue() ? 1L : 0L; }
-        if (tc == 'B') { return ((Byte) a).byteValue(); }
-        if (tc == 'C') { return ((Character) a).charValue(); }
-        if (tc == 'S') { return ((Short) a).shortValue(); }
-        if (tc == 'F') { return Float.floatToRawIntBits(((Float) a).floatValue()); }       // the JIT keeps FP
-        if (tc == 'D') { return Double.doubleToRawLongBits(((Double) a).doubleValue()); }  //   values as GPR bits
-        return a == null ? 0L : Magic.addrOf(a);           // 'L' / '[' reference
     }
 
     /** ACC_SYNTHETIC / ACC_VARARGS -- see {@link Method#isSynthetic()}; both are bits of this member's own

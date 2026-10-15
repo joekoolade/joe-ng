@@ -4,6 +4,28 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **REFLECTIVE INVOKE: EXCEPTIONS WRAPPED, ARGUMENTS CONVERTED AS STOCK (2026-10-15).** What `Method.invoke`
+  and `Constructor.newInstance` do around the call, measured against the unfixed VM with the same probe.
+  - **An exception the target threw escaped UNWRAPPED.** Stock wraps whatever the target throws, checked,
+    unchecked or an `Error`, in `InvocationTargetException`. Code that catches that (or unwraps it) saw the raw
+    exception instead. `MetalJUnit` already unwraps, since it was written against stock.
+  - **Arguments were CAST to the exact wrapper**, so:
+    - every widening threw `ClassCastException`: `Integer` for a `long`, `Character` for an `int`, `Float` for a
+      `double` -- 11 of 11 arms;
+    - a null for a primitive threw `NullPointerException`;
+    - **a wrong REFERENCE type was never checked**: an `Integer` passed to a `String` parameter ran the method
+      with it (`string <- Integer -> string 7`). That is a type-safety hole, not just a wrong exception.
+    Now `Executable.convertArg` does stock's checks: a reference must be an instance of the parameter type;
+    a primitive is unboxed and widened per JLS 5.1.2 (`char` only to `int` and up, nothing to `char` but a
+    `Character`); anything else is `IllegalArgumentException("argument type mismatch")`. The two per-class
+    `marshal` copies are gone.
+  - **Probe:** `InvokeSemanticsProbe` (new) covers:
+    - four throwing shapes, including a throw five frames deep, and a throwing constructor;
+    - 12 widenings;
+    - 8 mismatches, among them a narrowing, `Boolean` for `int`, null for `int` and `Integer` for `String`;
+    - constructor widening and mismatch.
+    Host-identical. Negative control on the unfixed VM: 25 of its 33 lines differ.
+  - **Regression (suite, all probes, JUnit):** QEMU clean on 5240ab6 -- suite markers all zero, `gc: collections=51`, clinits 346; 48 of 50 probes host-identical (InvokeSemanticsProbe among them), DigestProbe/MacProbe their designed divergences only; `ran 44, failures 0`. **Pi:** PASS (2026-10-15, 618ea50) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=891), `[main returned normally]`, `gc: collections=7`.
 - **REFLECTIVE CALLS WITH MORE THAN 8 ARGUMENTS (2026-10-15).** `Method.invoke` and `Constructor.newInstance`
   handled at most 8 arguments, counting the receiver, while the JIT passes 16 in registers and more through a
   pointer.
@@ -30,7 +52,7 @@ Newest entries are at the top.
     (17 with the receiver), a 16-parameter instance method, `getDeclaredMethods` over seven 8+-parameter
     members, and the count check. Every reflective answer is printed beside the direct call's. Host-identical.
     `VirtualInvokeProbe` is unchanged.
-  - **Regression (suite, all probes, JUnit):** pending. **Pi:** PASS (2026-10-15, 6f68a71) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=891), `[main returned normally]`, `gc: collections=7`.
+  - **Regression (suite, all probes, JUnit):** QEMU clean on the tree merged as cce4bcc -- suite markers all zero, `gc: collections=51`, clinits 346; 47 of 49 probes host-identical, DigestProbe/MacProbe their designed divergences only (`failures=0 divergences-unmet=0`); `ran 44, failures 0`. Recorded after the merge, which went ahead with this line pending. **Pi:** PASS (2026-10-15, 6f68a71) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=891), `[main returned normally]`, `gc: collections=7`.
 - **`Method` FOR ABSTRACT AND NATIVE METHODS; `Method.invoke` DISPATCHES VIRTUALLY; FP ARGUMENTS AND RETURNS
   (2026-10-15).** Both gaps recorded by the card below, plus a third found by the probe.
   - **An abstract or native method had NO `Method`.** A method-registry slot follows a compiled body, so a

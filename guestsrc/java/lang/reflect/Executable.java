@@ -147,6 +147,121 @@ public abstract class Executable extends AccessibleObject implements Member, Gen
         slots[(total > 16 && k >= 15) ? k + 1 : k] = value;
     }
 
+    /**
+     * Argument {@code a} for a parameter of type {@code t}, as the raw 64-bit register value the JIT expects,
+     * converted as stock converts it: a reference must be an instance of {@code t} (or null); a primitive is
+     * UNBOXED and then WIDENED (JLS 5.1.2) -- {@code Integer} to {@code long}, {@code Character} to {@code int},
+     * {@code Float} to {@code double} -- and anything else, a narrowing or a null, is
+     * {@code IllegalArgumentException}. This used to CAST to the exact wrapper, so a widening threw
+     * {@code ClassCastException} and a wrong reference type passed through unchecked. FP values travel as their
+     * raw bits, which is how the JIT holds them.
+     */
+    static long convertArg(Class<?> t, Object a)
+    {
+        if (!t.isPrimitive())
+        {
+            if (a != null && !t.isInstance(a))
+            {
+                throw new IllegalArgumentException("argument type mismatch");
+            }
+            return a == null ? 0L : Magic.addrOf(a);
+        }
+        if (t == boolean.class)
+        {
+            if (a instanceof Boolean b)
+            {
+                return b ? 1L : 0L;
+            }
+            throw new IllegalArgumentException("argument type mismatch");
+        }
+        int tr = primRank(t);
+        int sr;
+        if (a instanceof Byte)
+        {
+            sr = 1;
+        }
+        else if (a instanceof Short)
+        {
+            sr = 2;
+        }
+        else if (a instanceof Character)
+        {
+            sr = 3;                                     // char widens only to int and up
+        }
+        else if (a instanceof Integer)
+        {
+            sr = 3;
+        }
+        else if (a instanceof Long)
+        {
+            sr = 4;
+        }
+        else if (a instanceof Float)
+        {
+            sr = 5;
+        }
+        else if (a instanceof Double)
+        {
+            sr = 6;
+        }
+        else
+        {
+            throw new IllegalArgumentException("argument type mismatch");
+        }
+        boolean ok = t == char.class ? a instanceof Character : sr <= tr;
+        if (!ok)
+        {
+            throw new IllegalArgumentException("argument type mismatch");
+        }
+        if (t == float.class)
+        {
+            float f = sr >= 5 ? ((Number) a).floatValue() : (float) integralValue(a);
+            return Float.floatToRawIntBits(f);
+        }
+        if (t == double.class)
+        {
+            double d = sr >= 5 ? ((Number) a).doubleValue() : (double) integralValue(a);
+            return Double.doubleToRawLongBits(d);
+        }
+        return integralValue(a);
+    }
+
+    /** byte 1, short 2, char/int 3, long 4, float 5, double 6 -- the widening order of JLS 5.1.2. */
+    private static int primRank(Class<?> t)
+    {
+        if (t == byte.class)
+        {
+            return 1;
+        }
+        if (t == short.class)
+        {
+            return 2;
+        }
+        if (t == char.class || t == int.class)
+        {
+            return 3;
+        }
+        if (t == long.class)
+        {
+            return 4;
+        }
+        if (t == float.class)
+        {
+            return 5;
+        }
+        return 6;
+    }
+
+    /** The value of an integral box (Character included), sign-extended. */
+    private static long integralValue(Object a)
+    {
+        if (a instanceof Character ch)
+        {
+            return ch.charValue();
+        }
+        return ((Number) a).longValue();
+    }
+
     /** Stock's argument-count check for {@code invoke}/{@code newInstance}. */
     static void checkArgCount(Object[] args, int expected)
     {

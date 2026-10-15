@@ -17,11 +17,10 @@ import magic.Magic;
  * {@code java.lang.reflect.Method} for joe-ng: reflective invocation of a loaded method. A Method carries its
  * declaring {@link Class}, name, method-registry index, access flags, compiled-buffer address, and its
  * descriptor's parameter type-chars + return type-char (resolved once at construction via {@link #methodInfo0}).
- * {@link #invoke} marshals the {@code Object[]} args into an 8-slot register buffer (receiver in slot 0 for an
- * instance method, then one slot per parameter — primitives unboxed, references reinterpreted to their address),
- * calls the target via {@link Magic#callN}, and boxes the return per the return type. Access enforcement
- * ({@code setAccessible} + member-access rules) lands in reflection arc M2; virtual override dispatch is direct
- * (the resolved method's buffer) for now.
+ * {@link #invoke} finds the receiver's body ({@code dispatchTarget}: virtual dispatch), converts the
+ * {@code Object[]} args as stock does (unbox, widen, else {@code IllegalArgumentException}) into a register
+ * buffer laid out as the JIT passes arguments, calls the target via {@link Magic#callN}, wraps anything it throws
+ * in {@code InvocationTargetException}, and boxes the return per the return type.
  */
 public final class Method extends Executable
 {
@@ -307,13 +306,22 @@ public final class Method extends Executable
         {
             putArg(slots, total, 0, Magic.addrOf(recv));
         }
+        Class<?>[] pt = getParameterTypes();
         int k = 0;
         while (k < paramCount)
         {
-            putArg(slots, total, s + k, marshal(paramChars[k], args[k]));
+            putArg(slots, total, s + k, convertArg(pt[k], args[k]));
             k += 1;
         }
-        long ret = Magic.callN(target, Magic.addrOf(slots) + 24L);   // array elements (header 16 + length 8)
+        long ret;
+        try
+        {
+            ret = Magic.callN(target, Magic.addrOf(slots) + 24L);   // array elements (header 16 + length 8)
+        }
+        catch (Throwable t)
+        {
+            throw new InvocationTargetException(t);         // stock: whatever the TARGET throws arrives wrapped
+        }
         return box(returnChar, ret);
     }
 
@@ -382,20 +390,6 @@ public final class Method extends Executable
 
     /** VM native: the body the receiver's itable directory answers for the method at {@code rgIndex}, or 0. */
     private static native long itableTarget0(Object recv, int rgIndex);
-
-    /** Unbox/reinterpret one argument to its raw 64-bit register value per its declared type char. */
-    private static long marshal(int tc, Object a)
-    {
-        if (tc == 'I') { return ((Integer) a).intValue(); }
-        if (tc == 'J') { return ((Long) a).longValue(); }
-        if (tc == 'Z') { return ((Boolean) a).booleanValue() ? 1L : 0L; }
-        if (tc == 'B') { return ((Byte) a).byteValue(); }
-        if (tc == 'C') { return ((Character) a).charValue(); }
-        if (tc == 'S') { return ((Short) a).shortValue(); }
-        if (tc == 'F') { return Float.floatToRawIntBits(((Float) a).floatValue()); }       // the JIT keeps FP
-        if (tc == 'D') { return Double.doubleToRawLongBits(((Double) a).doubleValue()); }  //   values as GPR bits
-        return a == null ? 0L : Magic.addrOf(a);           // 'L' / '[' reference
-    }
 
     /** Box the raw 64-bit return value per the return type char (null for 'V'). */
     private static Object box(int tc, long ret)
