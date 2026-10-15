@@ -107,6 +107,10 @@ public final class Loader
     // name / descriptor Utf8 bytes live (all in that class's blob) plus its buffer.
     private static final int MAXREG = 24576;
     private static RVMMethod[] rgTab;   // global method registry (reified: one RVMMethod per compiled method)
+    private static RVMMethod[] bdTab;   // BODYLESS methods (abstract/native, no Code): reflection-only, never linked
+    private static int bdCount;
+    /** A reflection index at or above this names {@code bdTab[idx - BODYLESS]} instead of a registry slot. */
+    private static final int BODYLESS = 1 << 24;
     private static int rgCount;
 
     // Static-field registry: per loaded class, each static field's {class, name, slot address} so a
@@ -3862,6 +3866,8 @@ public final class Loader
                                                         //   could be matched by a later Type at the same address
         rgTab = new RVMMethod[MAXREG];
         rgCount = 0;
+        bdTab = null;                                   // reflection-only entries name this launch's blobs too
+        bdCount = 0;
         rgIndexed = 0;                                   // the index is keyed by registry INDEX, so it must
         rgBucket = null;                                 //   be rebuilt whenever the registry is cleared
         sgTab = new RVMField[MAXREG];
@@ -12539,6 +12545,8 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("methodResolve0")))   { return VM.methodResolveAddr; }    // (Class,byte[])I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("methodResolveDesc0"))) { return VM.methodResolveDescAddr; } // (Class,byte[],byte[])I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("methodInfo0")))      { return VM.methodInfoAddr; }       // (I,byte[],long[])I
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("exact0")))           { return VM.methodResolveExactAddr; } // (Class,byte[],byte[])I
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("itableTarget0")))    { return VM.methodItableTargetAddr; } // (Object,I)J
         }
         // Reflective Constructor.newInstance: resolve <init> by arity, read its descriptor (shared methodInfo0),
         // and allocate the instance.
@@ -14723,7 +14731,172 @@ public final class Loader
         {
             return idx;
         }
+        VM.loaderLock(VM.LOCK_REFLECT);                 // bodylessIndex re-points the shared parse globals
+        try
+        {
+            idx = bodylessIndex(type, nameArr, descArr); // abstract or native: a Method with no body to call
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
+        if (idx >= 0)
+        {
+            return idx;
+        }
         return methodResolve(type, nameArr);            // descriptor matched nothing: no worse than name-only
+    }
+
+    /**
+     * {@code Method.exact0}: the registry index of the method the class whose Type is {@code type} DECLARES
+     * with exactly this name and descriptor and a body to run, compiling it on demand, or -1 -- never the
+     * name-only fallback {@link #methodResolveDesc} ends in, and never a bodyless entry. This is the per-class
+     * step of reflective VIRTUAL dispatch, where a same-named method with another descriptor is not an
+     * override and must not be called. Not an active use of the class: the receiver's class is initialized.
+     */
+    static int methodResolveExact(long type, long nameArr, long descArr)
+    {
+        if (type == 0L || nameArr <= 0x1000L || descArr <= 0x1000L)
+        {
+            return -1;
+        }
+        int idx = methodResolveRegistryDesc(type, nameArr, descArr);
+        if (idx >= 0)
+        {
+            return idx;
+        }
+        return compileMethodOnDemand(type, nameArr, descArr);
+    }
+
+    /**
+     * {@code Method.itableTarget0}: the body the RECEIVER's itable directory answers for the method at reflection
+     * index {@code rgIndex}, or 0 -- {@link #resolveViaItableDir}, the tier the JIT's late interface dispatch
+     * uses. It is the only route to a receiver the VM SYNTHESISED (a lambda, an annotation instance), which has
+     * a Type and an itable but no class file for a class-chain walk to read, and it answers a default method
+     * with the implementation THIS receiver runs.
+     */
+    static long reflectItableTarget(long recv, int rgIndex)
+    {
+        RVMMethod e = reflEntry(rgIndex);
+        if (e == null || recv <= 0x1000L)
+        {
+            return 0L;
+        }
+        long tib = Magic.load64(recv);
+        if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
+        {
+            return 0L;
+        }
+        long type = Magic.load64(tib);
+        if (type <= 0x1000L)
+        {
+            return 0L;
+        }
+        return resolveViaItableDir(type, e.base + e.nameOff, e.base + e.descOff);
+    }
+
+    /** The entry a reflection index names: a registry slot, or {@code BODYLESS + k} for a bodyless method. */
+    private static RVMMethod reflEntry(int idx)
+    {
+        if (idx >= BODYLESS)
+        {
+            int k = idx - BODYLESS;
+            return k < bdCount ? bdTab[k] : null;
+        }
+        if (idx < 0 || idx >= rgCount)
+        {
+            return null;
+        }
+        return rgTab[idx];
+    }
+
+    /**
+     * A reflection index for the ABSTRACT or NATIVE method the class whose Type is {@code type} declares with
+     * this name and descriptor, or -1 when it declares none without a {@code Code} attribute. Registration
+     * follows a compiled body, so such a method has no registry slot and, until this, no {@code Method}:
+     * {@code getMethod} threw for it and {@code getDeclaredMethods} silently left it out.
+     *
+     * <p>THE ENTRY IS KEPT OUT OF THE REGISTRY ON PURPOSE. The call linker's lookups ({@code globalBuf},
+     * {@code globalBufByRef}'s tiers) return the first matching entry's {@code buf} without testing it, so an
+     * entry with no body would answer 0 where the search used to fall through to its later tiers. Only the
+     * reflection natives read this table, through {@link #reflEntry}. One entry per method: a repeat lookup
+     * answers the same index.
+     */
+    private static int bodylessIndex(long type, long nameArr, long descArr)
+    {
+        if (descArr <= 0x1000L)
+        {
+            return -1;
+        }
+        int ci = 0;
+        while (ci < clCount && clTab[ci].type != type)
+        {
+            ci += 1;
+        }
+        if (ci >= clCount)
+        {
+            return -1;
+        }
+        long blob = clTab[ci].base;
+        parseForMethods(blob, blobLenOf(blob));
+        long p = gMethodsStart;
+        int mcount = u2(p);
+        p += 2;
+        int nlen = (int) Magic.load64(nameArr + 16L);
+        long nbase = nameArr + 24L;
+        int dlen = (int) Magic.load64(descArr + 16L);
+        long dbase = descArr + 24L;
+        int m = 0;
+        while (m < mcount)
+        {
+            int attrs = u2(p + 6);
+            if (rawEqUtf8(nbase, nlen, blob, gcp[u2(p + 2)]) && rawEqUtf8(dbase, dlen, blob, gcp[u2(p + 4)]))
+            {
+                if (findCode(blob, p + 8, attrs) != 0L)
+                {
+                    return -1;                          // it HAS a body: not this table's business
+                }
+                int nameOff = gcp[u2(p + 2)];
+                int descOff = gcp[u2(p + 4)];
+                int k = 0;
+                while (k < bdCount)
+                {
+                    if (bdTab[k].base == blob && bdTab[k].nameOff == nameOff && bdTab[k].descOff == descOff)
+                    {
+                        return BODYLESS + k;
+                    }
+                    k += 1;
+                }
+                if (bdTab == null)
+                {
+                    bdTab = new RVMMethod[256];
+                }
+                if (bdCount >= bdTab.length)
+                {
+                    RVMMethod[] grown = new RVMMethod[bdTab.length * 2];
+                    int j = 0;
+                    while (j < bdCount)
+                    {
+                        grown[j] = bdTab[j];
+                        j += 1;
+                    }
+                    bdTab = grown;
+                }
+                RVMMethod e = new RVMMethod();
+                e.base = blob;
+                e.classOff = clTab[ci].nameOff;
+                e.nameOff = nameOff;
+                e.descOff = descOff;
+                e.buf = 0L;                             // nothing to call: Method.invoke dispatches or throws
+                e.access = u2(p);
+                bdTab[bdCount] = e;
+                bdCount += 1;
+                return BODYLESS + bdCount - 1;
+            }
+            p = skipAttributes(p + 8, attrs);
+            m += 1;
+        }
+        return -1;
     }
 
     /** {@link #methodResolveRegistry} with the descriptor compared too. */
@@ -15191,7 +15364,11 @@ public final class Loader
      */
     static int methodInfo(int rgIndex, long paramCharsArr, long outArr)
     {
-        long descAddr = rgTab[rgIndex].base + rgTab[rgIndex].descOff;   // "(...)ret" Utf8 (u2 length, then bytes)
+        if (reflEntry(rgIndex) == null)
+        {
+            return 0;
+        }
+        long descAddr = reflEntry(rgIndex).base + reflEntry(rgIndex).descOff;   // "(...)ret" Utf8 (u2 length, then bytes)
         long p = descAddr + 2 + 1;                              // past u2 length and '('
         long pc = paramCharsArr + 24L;                          // byte[] elements
         int n = 0;
@@ -15218,8 +15395,8 @@ public final class Loader
             }
             n += 1;
         }
-        Magic.store64(outArr + 24L + 0L, rgTab[rgIndex].buf);      // out[0] = compiled buffer
-        Magic.store64(outArr + 24L + 8L, (long) rgTab[rgIndex].access);   // out[1] = access flags
+        Magic.store64(outArr + 24L + 0L, reflEntry(rgIndex).buf);      // out[0] = compiled buffer
+        Magic.store64(outArr + 24L + 8L, (long) reflEntry(rgIndex).access);   // out[1] = access flags
         Magic.store64(outArr + 24L + 16L, (long) u1(p + 1));   // out[2] = return-type char (after ')')
         return n;
     }
@@ -18720,13 +18897,13 @@ public final class Loader
      */
     private static long methodInfoPos(int rgIndex)
     {
-        if (rgIndex < 0 || rgIndex >= rgCount || rgTab[rgIndex] == null)
+        if (reflEntry(rgIndex) == null)
         {
             return 0L;
         }
-        long base = rgTab[rgIndex].base;
-        int nameOff = rgTab[rgIndex].nameOff;
-        int descOff = rgTab[rgIndex].descOff;
+        long base = reflEntry(rgIndex).base;
+        int nameOff = reflEntry(rgIndex).nameOff;
+        int descOff = reflEntry(rgIndex).descOff;
         parseForMethods(base, blobLenOf(base));
         long p = gMethodsStart;
         int mcount = u2(p);
@@ -18755,7 +18932,7 @@ public final class Loader
         {
             return false;
         }
-        return annoInAttrs(rgTab[rgIndex].base, p + 8, u2(p + 6), descArr, descLen);
+        return annoInAttrs(reflEntry(rgIndex).base, p + 8, u2(p + 6), descArr, descLen);
     }
 
     /**
@@ -18770,7 +18947,7 @@ public final class Loader
         {
             return 0L;
         }
-        return annoFromAttrs(rgTab[rgIndex].base, p + 8, u2(p + 6), descArr, descLen);
+        return annoFromAttrs(reflEntry(rgIndex).base, p + 8, u2(p + 6), descArr, descLen);
     }
 
     /**
@@ -18820,7 +18997,7 @@ public final class Loader
         {
             return 0L;
         }
-        long base = rgTab[rgIndex].base;
+        long base = reflEntry(rgIndex).base;
         long q = classAttrNamed(base, p + 8L, u2(p + 6L), Magic.bytes("Signature"));
         if (q == 0L)
         {
@@ -18842,7 +19019,7 @@ public final class Loader
         {
             return 0L;
         }
-        long base = rgTab[rgIndex].base;
+        long base = reflEntry(rgIndex).base;
         long q = classAttrNamed(base, p + 8L, u2(p + 6L), Magic.bytes("Exceptions"));
         if (q == 0L)
         {
@@ -19241,12 +19418,12 @@ public final class Loader
      */
     static long methodParamTypes(int rgIndex)
     {
-        if (rgIndex < 0 || rgIndex >= rgCount || rgTab[rgIndex] == null)
+        if (reflEntry(rgIndex) == null)
         {
             return 0L;
         }
-        long base = rgTab[rgIndex].base;
-        int off = rgTab[rgIndex].descOff;
+        long base = reflEntry(rgIndex).base;
+        int off = reflEntry(rgIndex).descOff;
         int len = u2(base + off);
         long d = base + off + 2;                        // the descriptor bytes: "(...)ret"
         int n = countDescParams(d, len);
@@ -19290,12 +19467,12 @@ public final class Loader
     /** {@code Method.returnType0}: the declared return type's mirror, resolved from the descriptor. */
     static long methodReturnType(int rgIndex)
     {
-        if (rgIndex < 0 || rgIndex >= rgCount || rgTab[rgIndex] == null)
+        if (reflEntry(rgIndex) == null)
         {
             return 0L;
         }
-        long base = rgTab[rgIndex].base;
-        int off = rgTab[rgIndex].descOff;
+        long base = reflEntry(rgIndex).base;
+        int off = reflEntry(rgIndex).descOff;
         int len = u2(base + off);
         long d = base + off + 2;
         int i = 1;
@@ -19611,7 +19788,7 @@ public final class Loader
      */
     static long methodAnnotationsAll(int rgIndex)
     {
-        if (rgIndex < 0 || rgIndex >= rgCount || rgTab[rgIndex] == null)
+        if (reflEntry(rgIndex) == null)
         {
             return 0L;                                  // no such registration; the guest answers an empty
         }                                               // array. ALLOCATION-FREE, because VM.forceCompile
@@ -19620,7 +19797,7 @@ public final class Loader
         {
             return emptyAnnoArray();                    // registered but not declared here: none to read
         }
-        long base = rgTab[rgIndex].base;
+        long base = reflEntry(rgIndex).base;
         long lp = annoListPos(base, mp + 8L, u2(mp + 6));
         if (lp == 0L)
         {

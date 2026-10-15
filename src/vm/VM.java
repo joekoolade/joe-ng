@@ -1989,6 +1989,8 @@ public final class VM
         if (classModifiersAddr == 0L) { long u = VMNatives.classModifiers(0L); } // Class.getModifiers() native (reflection M1)
         if (methodResolveAddr == 0L) { int u = VMNatives.methodResolve(0L, 0L); } // Method.methodResolve0 native (reflection M2)
         if (methodResolveDescAddr == 0L) { int u = VMNatives.methodResolveDesc(0L, 0L, 0L); } // Method.methodResolveDesc0
+        if (methodResolveExactAddr == 0L) { int u = VMNatives.methodResolveExact(0L, 0L, 0L); } // Method.exact0
+        if (methodItableTargetAddr == 0L) { long u = VMNatives.methodItableTarget(0L, 0L); } // Method.itableTarget0
         if (methodInfoAddr == 0L) { int u = VMNatives.methodInfo(0L, 0L, 0L); }   // Method.methodInfo0 native (reflection M2)
         if (constructorResolveAddr == 0L) { int u = VMNatives.constructorResolve(0L, 0L); } // Constructor.ctorResolve0 (M2)
         if (ctorResolveDescAddr == 0L) { int u = VMNatives.ctorResolveDesc(0L, 0L); } // Constructor.ctorResolveDesc0
@@ -3491,6 +3493,8 @@ public final class VM
     static long classModifiersAddr;    // VM.classModifiers(J)I — Class.getModifiers() native (reflection M1)
     static long methodResolveAddr;     // VM.methodResolve(JJ)I — Method.methodResolve0 (reflection M2)
     static long methodResolveDescAddr; // VM.methodResolveDesc(JJJ)I — Method.methodResolveDesc0 (overload-exact)
+    static long methodResolveExactAddr; // VMNatives.methodResolveExact(JJJ)I — Method.exact0 (virtual dispatch step)
+    static long methodItableTargetAddr; // VMNatives.methodItableTarget(JJ)J — Method.itableTarget0 (synthesised receivers)
     static long methodInfoAddr;        // VM.methodInfo(JJJ)I — Method.methodInfo0 (reflection M2)
     static long constructorResolveAddr;// VM.constructorResolve(JJ)I — Constructor.ctorResolve0 (reflection M2)
     static long ctorResolveDescAddr;   // VMNatives.ctorResolveDesc(JJ)I — Constructor.ctorResolveDesc0

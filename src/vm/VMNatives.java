@@ -999,6 +999,35 @@ final class VMNatives
         return Loader.methodResolveDesc(Magic.load64(mirrorRef + 16L), nameArrRef, descArrRef);
     }
 
+    /** Reflection: {@code Method.exact0(Class,byte[],byte[])} -> registry index of the method that class itself
+     *  declares with exactly that name and descriptor and a body, or -1 -- the per-class step of virtual dispatch. */
+    static int methodResolveExact(long mirrorRef, long nameArrRef, long descArrRef)
+    {
+        if (mirrorRef <= 0x1000L || nameArrRef <= 0x1000L)
+        {
+            return -1;                                     // boot force-compile passes 0
+        }
+        return Loader.methodResolveExact(Magic.load64(mirrorRef + 16L), nameArrRef, descArrRef);
+    }
+
+    /** Reflection: {@code Method.itableTarget0(Object,int)} -> the receiver's itable answer for that method, or 0. */
+    static long methodItableTarget(long recv, long rgIndex)
+    {
+        if (recv <= 0x1000L)
+        {
+            return 0L;                                     // boot force-compile passes 0
+        }
+        VM.loaderLock(VM.LOCK_REFLECT);      // resolveViaItableDir walks the registries and may compile a default
+        try
+        {
+            return Loader.reflectItableTarget(recv, (int) rgIndex);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
+    }
+
     /** Reflection: {@code Method.methodInfo0(int,byte[],long[])} -> fills param chars + {buf,access,retChar}; count. */
     static int methodInfo(long rgIndex, long paramCharsRef, long outRef)
     {

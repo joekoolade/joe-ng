@@ -278,9 +278,29 @@ public final class Method extends Executable
     public Object invoke(Object recv, Object... args) throws IllegalAccessException, InvocationTargetException
     {
         checkAccess(clazz, access, Magic.readLR());
+        boolean isStatic = (access & 0x0008) != 0;
+        long target = buf;
+        if (!isStatic)
+        {
+            if (recv == null)
+            {
+                throw new NullPointerException();
+            }
+            if (!clazz.isInstance(recv))
+            {
+                throw new IllegalArgumentException("object is not an instance of declaring class");
+            }
+            if ((access & 0x0002) == 0)                     // a PRIVATE method is never overridden
+            {
+                target = dispatchTarget(recv);
+            }
+        }
+        if (target == 0L)
+        {
+            throw new AbstractMethodError(clazz.getName() + "." + name);
+        }
         long[] slots = new long[8];
         long base = Magic.addrOf(slots) + 24L;             // array elements (header 16 + length 8)
-        boolean isStatic = (access & 0x0008) != 0;
         int s = 0;
         if (!isStatic)
         {
@@ -293,9 +313,75 @@ public final class Method extends Executable
             Magic.store64(base + (s + k) * 8L, marshal(paramChars[k], args[k]));
             k += 1;
         }
-        long ret = Magic.callN(buf, base);
+        long ret = Magic.callN(target, base);
         return box(returnChar, ret);
     }
+
+    /**
+     * The body {@code recv}'s class runs for this method: VIRTUAL dispatch, as {@code invokevirtual} and
+     * {@code invokeinterface} do. This used to call THIS method's own body for every receiver, so invoking a
+     * superclass's {@code Method} on an object that overrides it ran the superclass body.
+     *
+     * <p>The receiver's class chain is walked for a body with exactly this name and descriptor (another
+     * descriptor is an overload, not an override). Reaching the declaring class means no override, and this
+     * body runs. Otherwise the receiver's itable answers: an interface method, a default a subinterface
+     * overrides, and every receiver the VM SYNTHESISED (a lambda or annotation instance, which has no class
+     * file for the chain walk to read). Package-private overriding across packages is not modelled.
+     */
+    private long dispatchTarget(Object recv)
+    {
+        Class<?> rc = recv.getClass();
+        if (rc == clazz && buf != 0L)
+        {
+            return buf;
+        }
+        byte[] n = jdk.internal.misc.MetalNames.utf8(name);
+        byte[] d = jdk.internal.misc.MetalNames.utf8(descriptor());
+        Class<?> k = rc;
+        while (k != null)
+        {
+            if (k == clazz)
+            {
+                if (buf != 0L)
+                {
+                    return buf;
+                }
+                break;
+            }
+            int idx = exact0(k, n, d);
+            if (idx >= 0)
+            {
+                long[] out = new long[3];
+                methodInfo0(idx, new byte[paramCount], out);
+                return out[0];
+            }
+            k = k.getSuperclass();
+        }
+        long t = itableTarget0(recv, rgIndex);
+        if (t != 0L)
+        {
+            return t;
+        }
+        return buf;
+    }
+
+    /** This method's descriptor, {@code (params)ret}, as its class file spells it. */
+    private String descriptor()
+    {
+        StringBuilder sb = new StringBuilder("(");
+        for (Class<?> p : getParameterTypes())
+        {
+            sb.append(p.descriptorString());
+        }
+        return sb.append(')').append(getReturnType().descriptorString()).toString();
+    }
+
+    /** VM native: the registry index of the method class {@code c} itself declares with this exact name and
+     *  descriptor and a body (compiled on demand), or -1. Never a name-only match, never a bodyless entry. */
+    private static native int exact0(Class<?> c, byte[] name, byte[] desc);
+
+    /** VM native: the body the receiver's itable directory answers for the method at {@code rgIndex}, or 0. */
+    private static native long itableTarget0(Object recv, int rgIndex);
 
     /** Unbox/reinterpret one argument to its raw 64-bit register value per its declared type char. */
     private static long marshal(int tc, Object a)
@@ -306,6 +392,8 @@ public final class Method extends Executable
         if (tc == 'B') { return ((Byte) a).byteValue(); }
         if (tc == 'C') { return ((Character) a).charValue(); }
         if (tc == 'S') { return ((Short) a).shortValue(); }
+        if (tc == 'F') { return Float.floatToRawIntBits(((Float) a).floatValue()); }       // the JIT keeps FP
+        if (tc == 'D') { return Double.doubleToRawLongBits(((Double) a).doubleValue()); }  //   values as GPR bits
         return a == null ? 0L : Magic.addrOf(a);           // 'L' / '[' reference
     }
 
@@ -319,6 +407,8 @@ public final class Method extends Executable
         if (tc == 'B') { return Byte.valueOf((byte) ret); }
         if (tc == 'C') { return Character.valueOf((char) ret); }
         if (tc == 'S') { return Short.valueOf((short) ret); }
+        if (tc == 'F') { return Float.valueOf(Float.intBitsToFloat((int) ret)); }   // freturn/dreturn move the
+        if (tc == 'D') { return Double.valueOf(Double.longBitsToDouble(ret)); }     //   raw bits into x0
         return Magic.fromAddr(ret);                        // 'L' / '[' reference
     }
 }

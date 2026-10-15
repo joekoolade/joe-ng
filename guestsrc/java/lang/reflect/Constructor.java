@@ -206,6 +206,8 @@ public final class Constructor<T> extends Executable
         if (tc == 'B') { return ((Byte) a).byteValue(); }
         if (tc == 'C') { return ((Character) a).charValue(); }
         if (tc == 'S') { return ((Short) a).shortValue(); }
+        if (tc == 'F') { return Float.floatToRawIntBits(((Float) a).floatValue()); }       // the JIT keeps FP
+        if (tc == 'D') { return Double.doubleToRawLongBits(((Double) a).doubleValue()); }  //   values as GPR bits
         return a == null ? 0L : Magic.addrOf(a);           // 'L' / '[' reference
     }
 
