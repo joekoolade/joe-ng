@@ -5,7 +5,7 @@ Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constrain
 Newest entries are at the top.
 
 - **DROPPED SUPERTYPES RESTORED: `Member`, `AnnotatedElement`, `Serializable`, `Cloneable`, the zip/socks constants
-  interfaces; CONSTRUCTOR ANNOTATIONS READABLE (2026-10-14).** `make overlaycheck`'s dropped-supertype backlog
+  interfaces; CONSTRUCTOR ANNOTATIONS READABLE (2026-10-14, PI-VALIDATED).** `make overlaycheck`'s dropped-supertype backlog
   23 -> 7. What is left is the generic-signature family (`GenericDeclaration`, `TypeDescriptor`, `Constable`),
   which needs a generics reader this VM does not have.
   - **Restored:** `Executable` and `Field` implement `Member`; `AccessibleObject`, `Class` and `Module`
