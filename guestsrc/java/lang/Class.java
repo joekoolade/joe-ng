@@ -110,6 +110,17 @@ public final class Class<T> implements java.lang.reflect.Type
         return Module.UNNAMED;
     }
 
+
+    /**
+     * Stock's: {@code "interface " + name}, a primitive's bare name, otherwise {@code "class " + name}. It was
+     * undeclared, so every mirror printed as {@code java.lang.Class@<hash>} -- {@code Arrays.toString} of a
+     * {@code getParameterTypes()} array among them (ReflectLookupProbe).
+     */
+    public String toString()
+    {
+        String kind = isInterface() ? "interface " : (isPrimitive() ? "" : "class ");
+        return kind.concat(getName());
+    }
     public String getName()
     {
         return getName0(this);
@@ -1094,14 +1105,142 @@ public final class Class<T> implements java.lang.reflect.Type
     }
 
     /**
-     * The declared method named {@code name} (first match — overload resolution by parameter types is not yet
-     * implemented), or throws {@code NoSuchMethodException}. Returns a {@code Method} that can be reflectively
-     * {@code invoke}d. The {@code parameterTypes} are accepted for signature compatibility but not yet matched.
+     * The declared method named {@code name} whose parameters are EXACTLY {@code parameterTypes}, as stock
+     * matches it, or {@code NoSuchMethodException}.
+     *
+     * <p>IT USED TO IGNORE {@code parameterTypes} and answer the first method of that name, so with overloads
+     * {@code getDeclaredMethod("m", int.class)} could hand back {@code m(String)}. The declared methods are
+     * enumerated with their full descriptors, so the match is on the parameter part of the descriptor.
      */
     public java.lang.reflect.Method getDeclaredMethod(String name, Class<?>... parameterTypes)
             throws NoSuchMethodException
     {
-        return java.lang.reflect.Method.resolve(this, name);
+        java.lang.reflect.Method m = declaredMethodMatching(this, name, paramDesc(parameterTypes), false);
+        if (m == null)
+        {
+            throw new NoSuchMethodException(getName() + "." + name + paramDesc(parameterTypes));
+        }
+        return m;
+    }
+
+    /**
+     * Stock's {@code getMethod}: the PUBLIC method named {@code name} with exactly {@code parameterTypes}, from
+     * this class, its superclasses, then its interfaces -- the order {@link #getMethods} collects in, so a
+     * subclass's override wins.
+     */
+    public java.lang.reflect.Method getMethod(String name, Class<?>... parameterTypes)
+            throws NoSuchMethodException
+    {
+        String want = paramDesc(parameterTypes);
+        Class<?> c = this;
+        while (c != null)
+        {
+            java.lang.reflect.Method m = declaredMethodMatching(c, name, want, true);
+            if (m != null)
+            {
+                return m;
+            }
+            c = c.getSuperclass();
+        }
+        java.lang.reflect.Method m = interfaceMethodMatching(this, name, want);
+        if (m != null)
+        {
+            return m;
+        }
+        throw new NoSuchMethodException(getName() + "." + name + want);
+    }
+
+    /** {@code c}'s own method named {@code name} whose descriptor begins with {@code paramDesc}, or null. */
+    private static java.lang.reflect.Method declaredMethodMatching(Class<?> c, String name, String paramDesc,
+            boolean publicOnly)
+    {
+        int n = (int) declaredMethodCount0(c);
+        int i = 0;
+        while (i < n)
+        {
+            String nm = declaredMethodAt0(c, i);
+            String ds = declaredMethodDescAt0(c, i);
+            if (nm != null && ds != null && nm.equals(name) && ds.startsWith(paramDesc))
+            {
+                try
+                {
+                    java.lang.reflect.Method m = java.lang.reflect.Method.resolve(c, nm, ds);
+                    if (!publicOnly || java.lang.reflect.Modifier.isPublic(m.getModifiers()))
+                    {
+                        return m;
+                    }
+                }
+                catch (NoSuchMethodException e)
+                {
+                    // declared but unresolvable here (a native with no helper): not a match
+                }
+            }
+            i += 1;
+        }
+        return null;
+    }
+
+    /** {@link #getMethod}'s interface half: the superinterfaces of {@code c} and of its superclasses. */
+    private static java.lang.reflect.Method interfaceMethodMatching(Class<?> c, String name, String paramDesc)
+    {
+        Class<?> k = c;
+        while (k != null)
+        {
+            Class<?>[] ifs = k.getInterfaces();
+            int i = 0;
+            while (i < ifs.length)
+            {
+                java.lang.reflect.Method m = declaredMethodMatching(ifs[i], name, paramDesc, true);
+                if (m == null)
+                {
+                    m = interfaceMethodMatching(ifs[i], name, paramDesc);
+                }
+                if (m != null)
+                {
+                    return m;
+                }
+                i += 1;
+            }
+            k = k.getSuperclass();
+        }
+        return null;
+    }
+
+    /** The parameter part of a method descriptor, {@code (Ljava/lang/String;I)}, for these types. */
+    private static String paramDesc(Class<?>[] types)
+    {
+        StringBuilder sb = new StringBuilder("(");
+        int n = types == null ? 0 : types.length;
+        int i = 0;
+        while (i < n)
+        {
+            sb.append(typeDesc(types[i]));
+            i += 1;
+        }
+        return sb.append(')').toString();
+    }
+
+    /** The field descriptor of one type: {@code I}, {@code [J}, {@code Ljava/lang/String;}. */
+    private static String typeDesc(Class<?> t)
+    {
+        if (t.isPrimitive())
+        {
+            String n = t.getName();
+            if (n.equals("int"))     { return "I"; }
+            if (n.equals("long"))    { return "J"; }
+            if (n.equals("boolean")) { return "Z"; }
+            if (n.equals("byte"))    { return "B"; }
+            if (n.equals("char"))    { return "C"; }
+            if (n.equals("short"))   { return "S"; }
+            if (n.equals("float"))   { return "F"; }
+            if (n.equals("double"))  { return "D"; }
+            return "V";
+        }
+        if (t.isArray())
+        {
+            return t.getName().replace('.', '/');      // "[Ljava.lang.String;" -> "[Ljava/lang/String;"
+        }
+        return "L" + t.getName().replace('.', '/') + ";";
     }
 
     /**
@@ -1112,7 +1251,49 @@ public final class Class<T> implements java.lang.reflect.Type
     public java.lang.reflect.Constructor<T> getDeclaredConstructor(Class<?>... parameterTypes)
             throws NoSuchMethodException
     {
-        return java.lang.reflect.Constructor.resolve(this, parameterTypes == null ? 0 : parameterTypes.length);
+        // EXACT, by descriptor: arity alone answered (String) for getDeclaredConstructor(int.class) when the
+        // class declared both. See Loader.ctorWantDesc.
+        return java.lang.reflect.Constructor.resolve(this, paramDesc(parameterTypes) + "V");
+    }
+
+    /** Stock's {@code getConstructor}: the PUBLIC constructor taking exactly {@code parameterTypes}. */
+    public java.lang.reflect.Constructor<T> getConstructor(Class<?>... parameterTypes) throws NoSuchMethodException
+    {
+        java.lang.reflect.Constructor<T> c = getDeclaredConstructor(parameterTypes);
+        if (!java.lang.reflect.Modifier.isPublic(c.getModifiers()))
+        {
+            throw new NoSuchMethodException(getName() + ".<init>" + paramDesc(parameterTypes));
+        }
+        return c;
+    }
+
+    /** Stock's {@code getConstructors}: the PUBLIC ones of {@link #getDeclaredConstructors}. */
+    public java.lang.reflect.Constructor<?>[] getConstructors()
+    {
+        java.lang.reflect.Constructor<?>[] all = getDeclaredConstructors();
+        int k = 0;
+        int i = 0;
+        while (i < all.length)
+        {
+            if (java.lang.reflect.Modifier.isPublic(all[i].getModifiers()))
+            {
+                k += 1;
+            }
+            i += 1;
+        }
+        java.lang.reflect.Constructor<?>[] out = new java.lang.reflect.Constructor<?>[k];
+        k = 0;
+        i = 0;
+        while (i < all.length)
+        {
+            if (java.lang.reflect.Modifier.isPublic(all[i].getModifiers()))
+            {
+                out[k] = all[i];
+                k += 1;
+            }
+            i += 1;
+        }
+        return out;
     }
 
     /**
@@ -1142,7 +1323,7 @@ public final class Class<T> implements java.lang.reflect.Type
         {
             try
             {
-                out[k] = java.lang.reflect.Constructor.resolve(this, arityOf(declaredCtorDescAt0(this, i)));
+                out[k] = java.lang.reflect.Constructor.resolve(this, declaredCtorDescAt0(this, i));   // exact: by descriptor
                 k += 1;
             }
             catch (NoSuchMethodException e)
@@ -1159,42 +1340,6 @@ public final class Class<T> implements java.lang.reflect.Type
             j += 1;
         }
         return trimmed;
-    }
-
-    /**
-     * Parameter COUNT of a method descriptor -- {@code (Ljava/lang/String;I)V} -> 2.
-     *
-     * <p>Counts parameters, not characters: an object type runs to its {@code ;} and an array's {@code [}s
-     * belong to the type that follows them, so a naive scan would report {@code ([[I)V} as three.
-     */
-    private static int arityOf(String desc)
-    {
-        if (desc == null)
-        {
-            return 0;
-        }
-        int n = 0;
-        int i = desc.indexOf('(') + 1;
-        int end = desc.indexOf(')');
-        while (i < end && i > 0)
-        {
-            char c = desc.charAt(i);
-            while (c == '[')                            // array dimensions belong to the type after them
-            {
-                i += 1;
-                c = desc.charAt(i);
-            }
-            if (c == 'L')
-            {
-                i = desc.indexOf(';', i) + 1;           // an object type runs to its ';'
-            }
-            else
-            {
-                i += 1;                                 // a primitive is one character
-            }
-            n += 1;
-        }
-        return n;
     }
 
     /** VM native: how many CONSTRUCTORS this class declares (declaredMethodCount0 excludes them). */

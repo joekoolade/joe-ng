@@ -903,6 +903,17 @@ final class VMNatives
         return Loader.methodInfo((int) rgIndex, paramCharsRef, outRef);
     }
 
+    /** Reflection: {@code Constructor.ctorResolveDesc0(Class,byte[])} -> registry index of the {@code <init>} with
+     *  exactly that descriptor, or -1. */
+    static int ctorResolveDesc(long mirrorRef, long descArrRef)
+    {
+        if (mirrorRef <= 0x1000L)
+        {
+            return -1;                                     // boot force-compile passes 0
+        }
+        return Loader.constructorResolveDesc(Magic.load64(mirrorRef + 16L), descArrRef);
+    }
+
     /** Reflection: {@code Constructor.ctorResolve0(Class,int)} -> registry index of the <init> with that arity, or -1. */
     static int constructorResolve(long mirrorRef, long paramCount)
     {

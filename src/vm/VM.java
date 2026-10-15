@@ -1984,6 +1984,7 @@ public final class VM
         if (methodResolveDescAddr == 0L) { int u = VMNatives.methodResolveDesc(0L, 0L, 0L); } // Method.methodResolveDesc0
         if (methodInfoAddr == 0L) { int u = VMNatives.methodInfo(0L, 0L, 0L); }   // Method.methodInfo0 native (reflection M2)
         if (constructorResolveAddr == 0L) { int u = VMNatives.constructorResolve(0L, 0L); } // Constructor.ctorResolve0 (M2)
+        if (ctorResolveDescAddr == 0L) { int u = VMNatives.ctorResolveDesc(0L, 0L); } // Constructor.ctorResolveDesc0
         if (allocInstanceAddr == 0L) { long u = VMNatives.allocInstance(0L); }    // Constructor.allocInstance0 native (M2)
         if (ensureMirrorInitAddr == 0L) { long u = VMNatives.ensureMirrorInit(0L); } // Unsafe.ensureClassInitialized0
         if (superclassAddr == 0L) { long u = VMNatives.superclassOf(0L); }      // Class.superclass0() native (M4)
@@ -3478,6 +3479,7 @@ public final class VM
     static long methodResolveDescAddr; // VM.methodResolveDesc(JJJ)I — Method.methodResolveDesc0 (overload-exact)
     static long methodInfoAddr;        // VM.methodInfo(JJJ)I — Method.methodInfo0 (reflection M2)
     static long constructorResolveAddr;// VM.constructorResolve(JJ)I — Constructor.ctorResolve0 (reflection M2)
+    static long ctorResolveDescAddr;   // VMNatives.ctorResolveDesc(JJ)I — Constructor.ctorResolveDesc0
     static long allocInstanceAddr;     // VM.allocInstance(J)J — Constructor.allocInstance0 (reflection M2)
     static long ensureMirrorInitAddr;  // VMNatives.ensureMirrorInit(J)J — Unsafe.ensureClassInitialized0
     static long superclassAddr;        // VM.superclassOf(J)J — Class.superclass0(Class) native (M4)
