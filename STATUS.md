@@ -4,6 +4,37 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **DROPPED SUPERTYPES RESTORED: `Member`, `AnnotatedElement`, `Serializable`, `Cloneable`, the zip/socks constants
+  interfaces; CONSTRUCTOR ANNOTATIONS READABLE (2026-10-14).** `make overlaycheck`'s dropped-supertype backlog
+  23 -> 7. What is left is the generic-signature family (`GenericDeclaration`, `TypeDescriptor`, `Constable`),
+  which needs a generics reader this VM does not have.
+  - **Restored:** `Executable` and `Field` implement `Member`; `AccessibleObject`, `Class` and `Module`
+    implement `AnnotatedElement`; `Class` is `Serializable`; `BreakIterator` is `Cloneable` with stock's
+    `clone()`; `ZipFile` implements `ZipConstants` (and so `JarFile`); `SocksSocketImpl` implements `SocksConsts`.
+  - **A constructor's annotations were unreadable.** `isAnnotationPresent`/`getAnnotation`/
+    `getDeclaredAnnotation(s)`/`getAnnotations` lived on `Method` alone; a `Constructor` fell through to the base
+    class (`false`/`null`). They move up to `Executable`, keyed on `registryIndex()`; the registry holds `<init>`
+    like any method, so the same natives answer (now registered under `Executable`). `AccessibleObject` takes
+    stock's base bodies (`AssertionError` -- every subclass overrides). `Module` answers `null`/empty, which stock
+    specifies for an unnamed module, the only kind here.
+  - **`implements` WAS NOT ENOUGH for the two `java/lang/reflect` interfaces.** Calls through them bound (late
+    dispatch on the receiver), but `instanceof Member` answered false and `getInterfaces()` left them out:
+    the stock interfaces sat under the `java/lang/reflect/` DENY prefix, so the interface closure skipped
+    them -- silently, while `Serializable`/`Cloneable`/`ZipConstants` on the same probe answered right. Both
+    narrowed out (Loader and ReachScan), as `Type` already was; `AnnotatedElement`'s `ByType` defaults still
+    reach the denied annotation machinery and trap there.
+  - `isAnnotationPresent` now has stock's parameter type `Class<? extends Annotation>` on `Class`/`Field`/
+    `Executable`. The old `Class<?>` was a same-erasure clash with the interface; `MetalJUnit.invokeTagged`
+    was written against it and now takes the stock type.
+  - **Probe:** `SupertypeProbe` (new). It reaches every restored interface THROUGH the interface type:
+    `Member` over a field, method and constructor; `AnnotatedElement` over a class, field, method, both
+    constructors and the module; `instanceof` and `getInterfaces()` for each class; a cloned
+    `BreakIterator` iterating independently. Host-identical.
+  - **Suite: 40 programs, markers zero, `gc: collections=50`, `clinits=325`** (unchanged). **All 43
+    host-controlled probes re-run on QEMU: 41 host-identical** (incl. the new `SupertypeProbe`), DigestProbe/
+    MacProbe their designed divergences (`failures=0 divergences-unmet=0`). **MetalJUnit baseline: `ran 44,
+    failures 0`** -- it reads `@BeforeEach`/`@AfterEach` through the retyped `isAnnotationPresent`.
+  - **Pi:** pending.
 - **EXACT REFLECTIVE LOOKUP: OVERLOADS, PUBLIC LOOKUPS, INTERFACE DEFAULTS; `Class.toString` (2026-10-14, PI-VALIDATED).**
   Closing `getMethod`/`getConstructor`/`getConstructors` (known gaps) found the lookups they would build on
   answering WRONG for overloads.

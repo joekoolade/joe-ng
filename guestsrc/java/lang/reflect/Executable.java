@@ -35,7 +35,7 @@ import java.lang.annotation.Annotation;
  * {@link Constructor} already answer them from their own registry state; this class only gives callers a type
  * to dispatch through.
  */
-public abstract class Executable extends AccessibleObject
+public abstract class Executable extends AccessibleObject implements Member
 {
     Executable()
     {
@@ -171,4 +171,123 @@ public abstract class Executable extends AccessibleObject
         }
         return out;
     }
+
+    /**
+     * True if this method or constructor carries the given annotation. Marker level: presence only, no element
+     * values.
+     *
+     * <p>This and the four annotation readers below live HERE, not on {@link Method}, because the registry
+     * holds a constructor's {@code <init>} like any other method: keyed on {@link #registryIndex}, they answer
+     * for a {@link Constructor} too, which stock does and which this VM never did -- a constructor's
+     * annotations fell through to the base class.
+     *
+     * <p>Only annotations declared {@code @Retention(RUNTIME)} are visible -- javac writes anything else into
+     * RuntimeINVISIBLEAnnotations, i.e. an annotation without RUNTIME retention is not merely unreadable here,
+     * it is absent from the classfile.
+     */
+    public boolean isAnnotationPresent(Class<? extends java.lang.annotation.Annotation> anno)
+    {
+        if (anno == null)
+        {
+            return false;
+        }
+        return annoPresent0(registryIndex(), descriptorOf(anno)) != 0;
+    }
+
+    /** "org.junit.jupiter.api.Test" -> the field descriptor "Lorg/junit/jupiter/api/Test;" the classfile holds. */
+    private static byte[] descriptorOf(Class<?> anno)
+    {
+        String n = anno.getName();
+        byte[] out = new byte[n.length() + 2];
+        out[0] = (byte) 'L';
+        int i = 0;
+        while (i < n.length())
+        {
+            char c = n.charAt(i);
+            out[i + 1] = (byte) (c == '.' ? '/' : c);
+            i += 1;
+        }
+        out[n.length() + 1] = (byte) ';';
+        return out;
+    }
+
+    /**
+     * The annotation INSTANCE, or null when absent. The object the VM returns implements the annotation
+     * interface: its Type carries an itable for that interface whose slots are two-instruction thunks reading
+     * the element values out of the instance (see {@code Loader.annoTibFor}). So {@code getAnnotation(X.class)
+     * .value()} is an ordinary interface dispatch, not a special case.
+     *
+     * <p>Element values that need a class RESOLVED -- a {@code Class} element, an enum constant, a nested
+     * annotation -- read null in this increment, because resolving one mid-walk would re-parse a blob and
+     * clobber the classfile cursor the walk is using.
+     */
+    @SuppressWarnings("unchecked")
+    public <T extends java.lang.annotation.Annotation> T getAnnotation(Class<T> anno)
+    {
+        if (anno == null)
+        {
+            return null;
+        }
+        return (T) annoGet0(registryIndex(), descriptorOf(anno));
+    }
+
+    /**
+     * The annotation DECLARED DIRECTLY on this method or constructor, or null.
+     *
+     * <p>IDENTICAL to {@link #getAnnotation}, and for a method that is EXACT rather than an approximation --
+     * unlike the {@code Class} pair, where the two differ by {@code @Inherited}. JLS 9.6.4.3 gives
+     * {@code @Inherited} effect on class declarations ALONE, and an overriding method does not inherit the
+     * annotations of the method it overrides, so for a method "declared" and "present" are the same set.
+     * Stock agrees by construction: {@code Executable.getAnnotation} reads {@code declaredAnnotations()}.
+     *
+     * <p>THE BOUND IS LOAD-BEARING, for the third time in this family. {@code <T extends Annotation>} erases
+     * the return to {@code Ljava/lang/annotation/Annotation;} -- the descriptor JUnit's
+     * {@code AnnotationUtils.findAnnotation} references. Declared as a plain {@code <T>} it would erase to
+     * {@code Ljava/lang/Object;}: a DIFFERENT METHOD that resolves nowhere and traps.
+     */
+    @SuppressWarnings("unchecked")
+    public <T extends java.lang.annotation.Annotation> T getDeclaredAnnotation(Class<T> anno)
+    {
+        if (anno == null)
+        {
+            return null;
+        }
+        return (T) annoGet0(registryIndex(), descriptorOf(anno));
+    }
+
+    /**
+     * Every annotation DECLARED on this method or constructor. Never null; empty when there are none.
+     *
+     * <p>{@code findAnnotation} walks this to find META-ANNOTATIONS -- an annotation carried by another
+     * annotation -- so an empty answer would not fail, it would silently report "not annotated". That is the
+     * shape this VM keeps getting bitten by, which is why it enumerates rather than answering empty.
+     *
+     * <p>A fresh array each call, because stock specifies the caller may modify the returned one. An
+     * annotation whose interface is not loaded is omitted and named on the console: there is no itable to
+     * give such an instance, and a null element reads as "present but broken".
+     */
+    public java.lang.annotation.Annotation[] getDeclaredAnnotations()
+    {
+        java.lang.annotation.Annotation[] a = annoAll0(registryIndex());
+        return a == null ? new java.lang.annotation.Annotation[0] : a;
+    }
+
+    /**
+     * As {@link #getDeclaredAnnotations}. For a method or constructor the two coincide EXACTLY, for the reason given on
+     * {@link #getDeclaredAnnotation}: {@code @Inherited} does not reach method declarations, so there is no
+     * indirectly-present annotation for this to add. No divergence from stock here.
+     */
+    public java.lang.annotation.Annotation[] getAnnotations()
+    {
+        return getDeclaredAnnotations();
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.methodAnnoAll}): registry index -> Annotation[]. */
+    private static native java.lang.annotation.Annotation[] annoAll0(int rgIndex);
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.annoGet}): registry index + descriptor -> instance. */
+    private static native Object annoGet0(int rgIndex, byte[] descriptor);
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.annoPresent}): registry index + descriptor -> 0/1. */
+    private static native int annoPresent0(int rgIndex, byte[] descriptor);
 }

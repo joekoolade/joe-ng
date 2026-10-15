@@ -29,7 +29,7 @@ package java.text;
  * returns the position AFTER the next break opportunity (so a segment carries its own trailing whitespace),
  * the final boundary is the text length, and the call after that returns {@link #DONE}.
  */
-public class BreakIterator
+public class BreakIterator implements Cloneable
 {
     public static final int DONE = -1;
 
@@ -38,6 +38,23 @@ public class BreakIterator
 
     protected BreakIterator()
     {
+    }
+
+    /**
+     * Stock's body. A shallow copy is a full one for this iterator: its state is the (immutable) text and an
+     * int position, so the copy iterates independently of the original.
+     */
+    @Override
+    public Object clone()
+    {
+        try
+        {
+            return super.clone();
+        }
+        catch (CloneNotSupportedException e)
+        {
+            throw new InternalError(e);
+        }
     }
 
     public static BreakIterator getLineInstance()

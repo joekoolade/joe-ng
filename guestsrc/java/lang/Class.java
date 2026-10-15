@@ -23,7 +23,8 @@ import magic.Magic;
  * ({@code getName}/{@code getComponentType}/{@code isInstance}/...) are added on demand as the code that runs
  * on metal reaches them. The VM allocates the object directly (bypassing this ctor).
  */
-public final class Class<T> implements java.lang.reflect.Type
+public final class Class<T> implements java.io.Serializable, java.lang.reflect.Type,
+                                       java.lang.reflect.AnnotatedElement
 {
     private long typeAddr;      // the VM Type node this Class mirrors (set by the VM at materialisation)
 
@@ -634,7 +635,7 @@ public final class Class<T> implements java.lang.reflect.Type
     }
 
     /** Takes a wildcard, as stock does, so it cannot call the BOUNDED {@code getAnnotation} directly. */
-    public boolean isAnnotationPresent(Class<?> anno)
+    public boolean isAnnotationPresent(Class<? extends java.lang.annotation.Annotation> anno)
     {
         return anno != null && annoGet0(this, annoDescriptorOf(anno)) != null;
     }

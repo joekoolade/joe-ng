@@ -23,7 +23,7 @@ package java.net;
  * {@code getInputStream}/{@code getOutputStream}/{@code close}/... all go straight to the stock
  * {@code NioSocketImpl} delegate, with no proxy logic and no proxy-selector closure.
  */
-class SocksSocketImpl extends DelegatingSocketImpl
+class SocksSocketImpl extends DelegatingSocketImpl implements SocksConsts
 {
     SocksSocketImpl(SocketImpl delegate)
     {

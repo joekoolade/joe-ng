@@ -518,7 +518,7 @@ final class VMNatives
     }
 
     /**
-     * {@code Method.annoPresent0(int, byte[])} native: 1 if the method registered at {@code rgIndex} carries
+     * {@code Executable.annoPresent0(int, byte[])} native: 1 if the method registered at {@code rgIndex} carries
      * the annotation whose descriptor the byte[] holds. Marker level -- presence only, no element values.
      */
     static long annoPresent(long rgIndex, long descArr)
@@ -540,7 +540,7 @@ final class VMNatives
     }
 
     /**
-     * {@code Method.annoGet0(int, byte[])} native: the ANNOTATION INSTANCE for that descriptor on the method
+     * {@code Executable.annoGet0(int, byte[])} native: the ANNOTATION INSTANCE for that descriptor on the method
      * registered at {@code rgIndex}, or 0. The instance-level twin of {@link #annoPresent}, which only ever
      * answered presence.
      */
@@ -665,7 +665,7 @@ final class VMNatives
         return Loader.classInterfaces(mirror);
     }
 
-    /** {@code Method.annoAll0(int)} native: every annotation DECLARED on that method, as an Annotation[]. */
+    /** {@code Executable.annoAll0(int)} native: every annotation DECLARED on that method, as an Annotation[]. */
     static long methodAnnoAll(long rgIndex)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc

@@ -11,13 +11,15 @@
  */
 package java.lang.reflect;
 
+import java.lang.annotation.Annotation;
+
 /**
  * Base of {@code Field}/{@code Method}/{@code Constructor} — the {@code accessible} override flag that
  * {@code setAccessible(true)} sets to bypass member-access enforcement, plus the enforcement itself
  * ({@link #checkAccess}). Java's protection on joe-ng is language-level (verification + these checks), not
  * hardware rings, so reflective get/set/invoke MUST honour member access or the boundary is void.
  */
-public class AccessibleObject
+public class AccessibleObject implements AnnotatedElement
 {
     static final int ACC_PUBLIC    = 0x0001;
     static final int ACC_PRIVATE   = 0x0002;
@@ -36,33 +38,39 @@ public class AccessibleObject
     }
 
     /**
-     * False here, OVERRIDDEN by {@link Method} (which answers it from the classfile via the VM). Declared on
-     * the base because a call through an {@code AccessibleObject}-typed reference resolves against THIS class,
-     * and a name-winning overlay that does not declare it drops the member entirely -- the call then resolves
-     * nowhere and traps, even though Method has a perfectly good implementation.
-     *
-     * <p>{@code getAnnotation} is deliberately NOT declared alongside it: it must return a live annotation
-     * INSTANCE, which needs a Proxy runtime joe-ng does not have. Returning null would claim "no such
-     * annotation" and directly contradict an {@code isAnnotationPresent} that answers true -- a wrong answer
-     * where a known gap is better.
-     */
-    public boolean isAnnotationPresent(Class<?> anno)
-    {
-        return false;
-    }
-
-    /**
-     * Null on the base, OVERRIDDEN by {@link Method}. Safe to declare now that annotation INSTANCES exist: it
-     * was held back while nothing could build one, because a null here would have claimed "no such annotation"
-     * against an {@code isAnnotationPresent} that answered true. With Method overriding both, the pair agrees.
+     * The {@code AnnotatedElement} readers, with stock's base bodies. Every concrete subclass -- {@link Field}
+     * and, through {@link Executable}, {@link Method} and {@link Constructor} -- overrides each one from its
+     * own registry state, so the {@code AssertionError} bodies are stock's "unreachable" marker, not a gap.
      *
      * <p>{@code <T extends Annotation>} is not decoration -- the BOUND is what erases the return to
      * {@code Ljava/lang/annotation/Annotation;}, the descriptor stock callers reference. An unbounded
      * {@code <T>} erases to {@code Ljava/lang/Object;} and is a DIFFERENT METHOD that resolves nowhere.
      */
-    public <T extends java.lang.annotation.Annotation> T getAnnotation(Class<T> anno)
+    public <T extends Annotation> T getAnnotation(Class<T> annotationClass)
     {
-        return null;
+        throw new AssertionError("All subclasses should override this method");
+    }
+
+    public boolean isAnnotationPresent(Class<? extends Annotation> annotationClass)
+    {
+        return AnnotatedElement.super.isAnnotationPresent(annotationClass);
+    }
+
+    public Annotation[] getAnnotations()
+    {
+        return getDeclaredAnnotations();
+    }
+
+    public <T extends Annotation> T getDeclaredAnnotation(Class<T> annotationClass)
+    {
+        // Only annotations on classes are inherited, for all other objects getDeclaredAnnotation is the same
+        // as getAnnotation.
+        return getAnnotation(annotationClass);
+    }
+
+    public Annotation[] getDeclaredAnnotations()
+    {
+        throw new AssertionError("All subclasses should override this method");
     }
 
     /** VM native ({@code Loader.nativeBuf} -> {@code VM.classAtPc}): Class of the method containing frame PC {@code pc}. */

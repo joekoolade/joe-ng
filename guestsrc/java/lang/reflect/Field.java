@@ -21,7 +21,7 @@ import magic.Magic;
  * {@code VM.vhFieldOffset}, the same loader field registry the VarHandle/atomic-updater overlays use).
  * Access enforcement ({@code setAccessible} + the member-access rules) lands in reflection arc M2.
  */
-public final class Field extends AccessibleObject
+public final class Field extends AccessibleObject implements Member
 {
     private final Class<?> clazz;
     private final String name;
@@ -342,7 +342,7 @@ public final class Field extends AccessibleObject
     private static native java.lang.annotation.Annotation[] fieldAnnoAll0(Class<?> c, byte[] fieldName);
 
     @Override
-    public boolean isAnnotationPresent(Class<?> anno)
+    public boolean isAnnotationPresent(Class<? extends java.lang.annotation.Annotation> anno)
     {
         return anno != null && fieldAnnoGet0(clazz, nameBytes, descriptorOf(anno)) != null;
     }

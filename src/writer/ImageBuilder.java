@@ -1544,7 +1544,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.resourceExists(J)J", "vm/VM.resourceExistsAddr"); // ClassLoader.resourceExists0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.hwEntropy(JJ)J", "vm/VM.hwEntropyAddr"); // SecureRandom.hwEntropy0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.resourceBytes(J)J", "vm/VM.resourceBytesAddr"); // ClassLoader.resourceBytes0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodAnnoAll(J)J", "vm/VM.methodAnnoAllAddr"); // Method.annoAll0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodAnnoAll(J)J", "vm/VM.methodAnnoAllAddr"); // Executable.annoAll0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classAnnoAll(J)J", "vm/VM.classAnnoAllAddr"); // Class.annoAll0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classDeclClasses(J)J", "vm/VM.classDeclClassesAddr"); // Class.declaredClasses0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classIfaces(J)J", "vm/VM.classIfacesAddr"); // Class.interfaces0
@@ -1565,7 +1565,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.isArrayClass(J)J", "vm/VM.isArrayClassAddr");        // Class.isArray0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.isPrimClass(J)J", "vm/VM.isPrimClassAddr");          // Class.isPrimitive0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.primClassOf(J)J", "vm/VM.primClassAddr");            // Class.primitiveClass0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.annoPresent(JJ)J", "vm/VM.annoPresentAddr");         // Method.annoPresent0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.annoPresent(JJ)J", "vm/VM.annoPresentAddr");         // Executable.annoPresent0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredMethodAt(JJ)J", "vm/VM.declMethodAddr");     // Class.declaredMethodAt0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredMethodDescAt(JJ)J", "vm/VM.declMethodDescAddr"); // Class.declaredMethodDescAt0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredMethodCount(J)J", "vm/VM.declMethodCountAddr"); // Class.declaredMethodCount0

@@ -6274,6 +6274,15 @@ public final class Loader
                 // Needed because `Field.getGenericType()` and `Class` itself are declared in terms of it: a
                 // return type that cannot load makes the method unresolvable however simple its body.
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Type"))
+                // NARROWED OUT for the same reason: `Member` (four abstract methods and two int constants) and
+                // `AnnotatedElement` (three abstract readers plus defaults) are the INTERFACES that Field,
+                // Executable, AccessibleObject, Class and Module implement. While denied, the overlays could name
+                // them in `implements` and calls through them still bound late, but the interface closure skipped
+                // them: `instanceof Member` answered false and `getInterfaces()` left them out (SupertypeProbe).
+                // AnnotatedElement's ByType defaults reach the denied sun/reflect/annotation machinery, which
+                // stays denied and trap-wired on that path alone.
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Member"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/AnnotatedElement"))
                 // NARROWED OUT of the java/lang/reflect/ denial, and NOT overlaid: guestsrc is for classes
                 // that need NATIVES, and this one needs none. picocli's ObjectScope asks
                 // `Proxy.isProxyClass(obj.getClass())`, whose whole body is
@@ -12656,9 +12665,6 @@ public final class Loader
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Method")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoPresent0")))      { return VM.annoPresentAddr; }   // (I,byte[])I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoGet0")))          { return VM.annoGetAddr; }       // (I,byte[]) -> instance
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoAll0")))          { return VM.methodAnnoAllAddr; } // (I)[Annotation
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("paramTypes0")))       { return VM.paramTypesAddr; }    // (I)Class[]
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("returnType0")))       { return VM.returnTypeAddr; }    // (I)Class
         }
@@ -12666,9 +12672,14 @@ public final class Loader
         // like any other method -- so the same native is registered under both declaring classes. A native is
         // keyed by DECLARING CLASS here, and registering it under only one of them is the LINK FAILED already
         // paid for once (ClassLoader.resourceExists0 under java/lang/Class).
+        // The annotation readers moved up from Method for the same reason: a constructor's annotations are keyed
+        // by its registry slot exactly as a method's are.
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Executable")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("paramTypes0")))       { return VM.paramTypesAddr; }    // (I)Class[]
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoPresent0")))      { return VM.annoPresentAddr; }   // (I,byte[])I
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoGet0")))          { return VM.annoGetAddr; }       // (I,byte[]) -> instance
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoAll0")))          { return VM.methodAnnoAllAddr; } // (I)[Annotation
         }
         // The BCM2711 hardware RNG, behind java.security.SecureRandom's self-seeding. Keyed by DECLARING
         // CLASS like every native here -- registering one under the wrong class is the LINK FAILED this
@@ -19197,7 +19208,7 @@ public final class Loader
     }
 
     /**
-     * {@code Method.annoAll0}: every annotation DECLARED on the method registered at {@code rgIndex}, as an
+     * {@code Executable.annoAll0}: every annotation DECLARED on the method registered at {@code rgIndex}, as an
      * {@code Annotation[]}. Never 0; a method with none answers a zero-length array.
      *
      * <p>The method-level twin of {@link #classAnnotationsAll}, and it keeps that method's TWO PASSES OVER
