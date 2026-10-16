@@ -721,6 +721,20 @@ final class VMNatives
         }
     }
 
+    /** {@code Class.classFileWord0(Class, long)} native: the classfile version or raw access_flags -- see Loader. */
+    static long classFileWord(long mirror, long k)
+    {
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            return Loader.classFileWord(mirror, k);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
+    }
+
     /** {@code Class.innerPart0(Class, long)} native: one part of the class's own InnerClasses entry as a String, or 0 -- see Loader. */
     static long classInnerPart(long mirror, long part)
     {

@@ -1551,6 +1551,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classSignature(J)J", "vm/VM.classSignatureAddr"); // Class.genericSignature0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classEnclosingPart(JJ)J", "vm/VM.classEnclosingPartAddr"); // Class.enclosingPart0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classNestPart(JJ)J", "vm/VM.classNestPartAddr"); // Class.nestPart0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classFileWord(JJ)J", "vm/VM.classFileWordAddr"); // Class.classFileWord0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classInnerPart(JJ)J", "vm/VM.classInnerPartAddr"); // Class.innerPart0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classSealed(J)J", "vm/VM.classSealedAddr"); // Class.sealed0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodSignature(J)J", "vm/VM.methodSignatureAddr"); // Executable.signature0

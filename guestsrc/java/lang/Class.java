@@ -137,6 +137,20 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
      */
     public int getModifiers()
     {
+        // Stock (HotSpot's modifier_flags): a primitive or void is PUBLIC|FINAL|ABSTRACT, and an array is FINAL|
+        // ABSTRACT plus its component's access bit -- public, private or protected, nothing else. Both read 0
+        // from the VM, which has no classfile for either: an int[] was not even public.
+        if (isPrimitive())
+        {
+            return java.lang.reflect.Modifier.PUBLIC | java.lang.reflect.Modifier.FINAL
+                    | java.lang.reflect.Modifier.ABSTRACT;
+        }
+        if (isArray())
+        {
+            int access = getComponentType().getModifiers() & (java.lang.reflect.Modifier.PUBLIC
+                    | java.lang.reflect.Modifier.PRIVATE | java.lang.reflect.Modifier.PROTECTED);
+            return access | java.lang.reflect.Modifier.FINAL | java.lang.reflect.Modifier.ABSTRACT;
+        }
         return (int) classModifiers0(this);
     }
 
@@ -1243,6 +1257,36 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
             throw err;
         }
     }
+
+    /**
+     * Stock's: the class's access flags as {@link java.lang.reflect.AccessFlag}s. A top-level class answers
+     * from its classfile's own {@code access_flags}, so {@code SUPER} shows; a member, local or anonymous class,
+     * or an array, from {@link #getModifiers}, which reads {@code InnerClasses} -- the two disagree for a
+     * private or static nested class.
+     */
+    public java.util.Set<java.lang.reflect.AccessFlag> accessFlags()
+    {
+        var location = (isMemberClass() || isLocalClass() || isAnonymousClass() || isArray())
+                ? java.lang.reflect.AccessFlag.Location.INNER_CLASS
+                : java.lang.reflect.AccessFlag.Location.CLASS;
+        return jdk.internal.reflect.ReflectionFactory.getReflectionFactory().parseAccessFlags(
+                (location == java.lang.reflect.AccessFlag.Location.CLASS) ? getClassFileAccessFlags()
+                        : getModifiers(), location, this);
+    }
+
+    /** Stock's: the classfile's own access_flags, ACC_SUPER included; a primitive's are PUBLIC|ABSTRACT|FINAL. */
+    int getClassFileAccessFlags()
+    {
+        if (isPrimitive())
+        {
+            return java.lang.reflect.Modifier.PUBLIC | java.lang.reflect.Modifier.ABSTRACT
+                    | java.lang.reflect.Modifier.FINAL;
+        }
+        return (int) classFileWord0(this, 1L);
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.classFileWord}): the version (0) or flags (1). */
+    private static native long classFileWord0(Class<?> c, long k);
 
     /**
      * Stock's: the host of this class's nest -- the class named by its {@code NestHost} attribute, or this class

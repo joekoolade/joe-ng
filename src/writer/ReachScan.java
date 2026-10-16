@@ -159,6 +159,8 @@ public final class ReachScan
                 || c.startsWith("java/lang/reflect/GenericDeclaration")
                 || c.startsWith("java/lang/reflect/GenericSignatureFormatError")
                 || c.startsWith("java/lang/reflect/MalformedParameterizedTypeException")
+                || c.startsWith("java/lang/reflect/AccessFlag")         // accessFlags(): pure Java enums
+                || c.startsWith("java/lang/reflect/ClassFileFormatVersion")
                 || c.startsWith("java/lang/ClassLoader")                 // M3: JDK-free overlay (defineClass/loadClass)
                 || c.startsWith("sun/net/ext/ExtendedSocketOptions")    // overlaid no-op; rest of sun/net/ext denied
                 // The java.security PERMISSION + MARKER layer: plain data structures and string matching,

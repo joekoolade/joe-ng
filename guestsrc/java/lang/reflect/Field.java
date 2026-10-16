@@ -53,6 +53,12 @@ public final class Field extends AccessibleObject implements Member
         return clazz;
     }
 
+    /** Stock's: this field's modifiers as {@link AccessFlag}s. */
+    public java.util.Set<AccessFlag> accessFlags()
+    {
+        return reflectionFactory.parseAccessFlags(getModifiers(), AccessFlag.Location.FIELD, getDeclaringClass());
+    }
+
     /** First char of the field's JVM type descriptor: 'I' int, 'J' long, 'Z' boolean, 'L'/'[' reference. */
     public int getTypeChar()
     {

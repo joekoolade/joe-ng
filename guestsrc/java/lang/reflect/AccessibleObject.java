@@ -27,6 +27,10 @@ public class AccessibleObject implements AnnotatedElement
 
     boolean override;
 
+    /** Stock's shared instance, which {@code accessFlags()} on every member parses through. */
+    static final jdk.internal.reflect.ReflectionFactory reflectionFactory =
+            jdk.internal.reflect.ReflectionFactory.getReflectionFactory();
+
     public void setAccessible(boolean flag)
     {
         this.override = flag;

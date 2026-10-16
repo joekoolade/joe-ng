@@ -40,9 +40,8 @@ import sun.reflect.annotation.AnnotationSupport;
  *
  * @since 1.8
  *
- * <p>joe-ng overlay, taken from the JDK 26 source (rule 3). Every member is stock except {@code accessFlags} and
- * {@code getAnnotatedType}, which throw naming what they need: {@code java.lang.reflect.AccessFlag} and the
- * type-annotation parser, neither carried yet. The names, modifiers and annotations come from the VM's
+ * <p>joe-ng overlay, taken from the JDK 26 source (rule 3). Every member is stock except
+ * {@code getAnnotatedType}, which throws naming what it needs: the type-annotation parser, not carried yet. The names, modifiers and annotations come from the VM's
  * readers for {@code MethodParameters} and {@code RuntimeVisibleParameterAnnotations} (see
  * {@code Executable.getParameters} and {@code getParameterAnnotations}).
  */
@@ -178,10 +177,8 @@ public final class Parameter implements AnnotatedElement {
      * @since 20
      */
     public Set<AccessFlag> accessFlags() {
-        // joe-ng: stock parses through ReflectionFactory.parseAccessFlags into java.lang.reflect.AccessFlag,
-        // which this VM does not carry yet (Field and Executable lack accessFlags for the same reason). A throw
-        // names the gap; an empty set would answer "no flags" for a MANDATED or SYNTHETIC parameter.
-        throw new UnsupportedOperationException("joe-ng: Parameter.accessFlags needs java.lang.reflect.AccessFlag");
+        return AccessibleObject.reflectionFactory.parseAccessFlags(getModifiers(),
+                AccessFlag.Location.METHOD_PARAMETER, getDeclaringExecutable().getDeclaringClass());
     }
 
     /**

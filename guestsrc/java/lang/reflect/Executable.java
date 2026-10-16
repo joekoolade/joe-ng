@@ -53,6 +53,12 @@ public abstract class Executable extends AccessibleObject implements Member, Gen
 
     public abstract int getParameterCount();
 
+    /** Stock's: this method's or constructor's modifiers as {@link AccessFlag}s. */
+    public java.util.Set<AccessFlag> accessFlags()
+    {
+        return reflectionFactory.parseAccessFlags(getModifiers(), AccessFlag.Location.METHOD, getDeclaringClass());
+    }
+
     /**
      * This executable's slot in the VM's METHOD REGISTRY, which is the key every descriptor- and
      * annotation-reading native takes. Package-private and abstract because the two subclasses each already
