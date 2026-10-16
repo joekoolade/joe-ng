@@ -6301,6 +6301,10 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/GenericDeclaration"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/GenericSignatureFormatError"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/MalformedParameterizedTypeException"))
+                // NARROWED OUT for accessFlags(): the AccessFlag enum and its Location, and the
+                // ClassFileFormatVersion enum ReflectionFactory.parseAccessFlags keys them by. Pure Java, no natives.
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/AccessFlag"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/ClassFileFormatVersion"))
                 // NARROWED OUT of the java/lang/reflect/ denial, and NOT overlaid: guestsrc is for classes
                 // that need NATIVES, and this one needs none. picocli's ObjectScope asks
                 // `Proxy.isProxyClass(obj.getClass())`, whose whole body is
@@ -12652,6 +12656,12 @@ public final class Loader
             // status-word size), so reuse arrayClone. Cloneable collections super.clone() then fix their links.
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("clone0")))            { return VM.arrayCloneAddr; }    // (Object)Object
         }
+        // JavaLangAccess.classFileVersion/getClassFileAccessFlags: the same classfile-header reader Class uses,
+        // registered under the overlay that declares its own copy (a native binds by DECLARING class).
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/access/MetalJavaLangAccess")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("classFileWord0")))     { return VM.classFileWordAddr; } // (Class,J)J
+        }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Array")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("newArray0")))         { return VM.newReflectArrayAddr; } // (Class,I)Object
@@ -12666,6 +12676,7 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("genericSignature0"))) { return VM.classSignatureAddr; } // (Class)String
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("enclosingPart0")))    { return VM.classEnclosingPartAddr; } // (Class,J)String
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("nestPart0")))    { return VM.classNestPartAddr; } // (Class,J)String
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("classFileWord0")))    { return VM.classFileWordAddr; } // (Class,J)String
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("innerPart0")))        { return VM.classInnerPartAddr; }     // (Class,J)String
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("sealed0")))           { return VM.classSealedAddr; }   // (Class)J
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("forName0")))          { return VM.forNameAddr; }       // (byte[])Class
@@ -19220,6 +19231,33 @@ public final class Loader
         }
         long natPos = base + gcp[nat];                  // CONSTANT_NameAndType: u2 name, u2 descriptor
         return utf8ToString(base, gcp[u2(natPos + (part == 1L ? 0L : 2L))]);
+    }
+
+    /**
+     * {@code Class.classFileWord0} / {@code MetalJavaLangAccess.classFileWord0}: one word of the class's own
+     * classfile header. {@code k == 0} answers the version as stock's {@code getClassFileVersion0} packs it,
+     * {@code (minor << 16) | major}; {@code k == 1} answers the raw {@code access_flags}, {@code ACC_SUPER}
+     * included -- the cached modifiers strip it, and for a nested class the flags are not {@code InnerClasses}'.
+     * 0 for a mirror with no classfile (a primitive or array type: the guest answers those itself).
+     */
+    static long classFileWord(long mirror, long k)
+    {
+        if (mirror <= 0x1000L)
+        {
+            return 0L;
+        }
+        int reg = regOfType(Magic.load64(mirror + 16L));
+        if (reg < 0)
+        {
+            return 0L;
+        }
+        long base = clTab[reg].base;
+        if (k == 0L)
+        {
+            return ((long) u2(base + 4L) << 16) | u2(base + 6L);   // u4 magic, u2 minor, u2 major
+        }
+        parseConstPool(base, blobLenOf(base));          // leaves gp at access_flags, as loadStructure reads it
+        return u2(gp);
     }
 
     /**

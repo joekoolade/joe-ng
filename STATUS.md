@@ -4,6 +4,36 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **`accessFlags()` ON CLASSES, FIELDS, METHODS, CONSTRUCTORS AND PARAMETERS; ARRAYS AND PRIMITIVES HAVE STOCK
+  MODIFIERS (2026-10-15).**
+  - **`accessFlags()` was missing from `Class`, `Field` and `Executable`, and `Parameter`'s threw.** The probe
+    does not compile against main: 17 `accessFlags()` call sites unresolved.
+  - **Now they are stock's:** each parses through `ReflectionFactory.parseAccessFlags`, which reads the mask
+    against the class's `ClassFileFormatVersion`.
+    - `AccessFlag` and `ClassFileFormatVersion` are narrowed out of the `java/lang/reflect` denial, in both
+      `Loader.isDenylisted` and `ReachScan`. Both are pure-Java enums.
+    - A new native, `classFileWord0`, answers a class's classfile version and its RAW `access_flags`, `SUPER`
+      included. It is mapped under both `Class` and `MetalJavaLangAccess`, whose `classFileVersion` and
+      `getClassFileAccessFlags` used to throw.
+    - A top-level class answers from those raw flags, a nested one from `InnerClasses`, as stock does.
+  - **Measured on this branch before the fix: `int[].class.accessFlags()` read `[]`.** `Class.getModifiers()`
+    answered 0 for every array and every primitive -- an `int[]` was not even public. Stock (HotSpot's
+    `modifier_flags`) gives:
+    - a primitive or `void`: `PUBLIC|FINAL|ABSTRACT`;
+    - an array: `FINAL|ABSTRACT` plus its component's access bit.
+    `getModifiers` gives those now.
+  - **Stated gap, not fixed:** `Object.class.getDeclaredMethod("hashCode").getModifiers()` is `PUBLIC` where
+    stock says `PUBLIC|NATIVE`. The `Object` overlay implements `hashCode` (and the other stock natives it
+    carries) in Java. The probe uses `System.arraycopy`, a stock native, for its NATIVE arm instead.
+  - **Probe:** `AccessFlagsProbe` (new, 74 lines) is host-identical. It covers:
+    - classes of every kind, including private/protected/static nested, local, anonymous, enum, annotation,
+      record, arrays and a primitive;
+    - fields, including an enum's `$VALUES` and a `this$0`;
+    - methods, including a bridge, varargs, a native and a default method;
+    - constructors, and mandated and synthetic parameters;
+    - every `AccessFlag`'s mask, source flag and locations, the locations sorted because `Set.of` iteration
+      order varies between host runs.
+  - **Regression (suite, all probes, JUnit):** pending. **Pi:** PASS (2026-10-15, f2456c9) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=889), `[main returned normally]`, `gc: collections=7`.
 - **REFLECTIVE ACCESS FOLLOWS STOCK'S `verifyMemberAccess`: NESTMATES, CLASS ACCESS, PROTECTED TARGETS; NESTS
   ARE READ (2026-10-15).** `AccessibleObject.checkAccess` knew public/private/protected/package by the member's
   own flags alone. A negative control on main (a copy without the nest-API arms, which main's `Class` lacks)

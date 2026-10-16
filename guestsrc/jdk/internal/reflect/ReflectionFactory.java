@@ -40,6 +40,44 @@ public final class ReflectionFactory
     }
 
     /**
+     * Stock's: {@code mask} as the {@link java.lang.reflect.AccessFlag}s valid at {@code location}, read against
+     * {@code classFile}'s format version where it has a release one, so a bit means what it meant then.
+     */
+    public final java.util.Set<java.lang.reflect.AccessFlag> parseAccessFlags(int mask,
+            java.lang.reflect.AccessFlag.Location location, Class<?> classFile)
+    {
+        var cffv = classFileFormatVersion(classFile);
+        return cffv == null ? java.lang.reflect.AccessFlag.maskToAccessFlags(mask, location)
+                : java.lang.reflect.AccessFlag.maskToAccessFlags(mask, location, cffv);
+    }
+
+    /**
+     * Stock's, less its {@code assert VM.isSupportedClassFileVersion}: an assert would give this class an
+     * initializer for {@code $assertionsDisabled}, and a VM-loaded class is a supported version by construction.
+     * {@code ClassFile.JAVA_12_VERSION} and {@code JAVA_1_VERSION} are compile-time constants, inlined by javac.
+     */
+    private java.lang.reflect.ClassFileFormatVersion classFileFormatVersion(Class<?> cl)
+    {
+        int raw = jdk.internal.access.SharedSecrets.getJavaLangAccess().classFileVersion(cl);
+        int major = raw & 0xFFFF;
+        int minor = raw >>> Character.SIZE;
+        if (major >= java.lang.classfile.ClassFile.JAVA_12_VERSION)
+        {
+            if (minor == 0)
+            {
+                return java.lang.reflect.ClassFileFormatVersion.fromMajor(raw);
+            }
+            return null;
+        }
+        else if (major == java.lang.classfile.ClassFile.JAVA_1_VERSION)
+        {
+            return minor < 3 ? java.lang.reflect.ClassFileFormatVersion.RELEASE_0
+                    : java.lang.reflect.ClassFileFormatVersion.RELEASE_1;
+        }
+        return java.lang.reflect.ClassFileFormatVersion.fromMajor(major);
+    }
+
+    /**
      * The no-arg constructor of the first non-serializable superclass, used to build an instance during
      * DESERIALIZATION without running the serializable class's own constructor.
      *

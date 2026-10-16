@@ -100,18 +100,40 @@ public final class MetalJavaLangAccess implements JavaLangAccess
     {
         throw unsupported("getRawExecutableTypeAnnotations");
     }
+    /** Stock's: the class's own classfile access_flags, ACC_SUPER included; a primitive's are fixed. */
     @Override public int getClassFileAccessFlags(Class<?> klass)
     {
-        throw unsupported("getClassFileAccessFlags");
+        if (klass.isPrimitive())
+        {
+            return java.lang.reflect.Modifier.PUBLIC | java.lang.reflect.Modifier.ABSTRACT
+                    | java.lang.reflect.Modifier.FINAL;
+        }
+        return (int) classFileWord0(klass, 1L);
     }
     @Override public <E extends Enum<E>> E[] getEnumConstantsShared(Class<E> klass)
     {
         return (E[]) (Object) klass.getEnumConstants();   // metal Class.getEnumConstants (values() reflection)
     }
+    /**
+     * Stock's {@code Class.getClassFileVersion}: {@code (minor << 16) | major} of the class's classfile -- for an
+     * array, its element type's -- and the running release's major for a primitive, as HotSpot answers.
+     */
     @Override public int classFileVersion(Class<?> clazz)
     {
-        throw unsupported("classFileVersion");
+        Class<?> c = clazz;
+        while (c.isArray())
+        {
+            c = c.getComponentType();
+        }
+        if (c.isPrimitive())
+        {
+            return java.lang.reflect.ClassFileFormatVersion.latest().major();
+        }
+        return (int) classFileWord0(c, 0L);
     }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.classFileWord}): the version (0) or flags (1). */
+    private static native long classFileWord0(Class<?> c, long k);
     @Override public void blockedOn(Interruptible b)
     {
         throw unsupported("blockedOn");

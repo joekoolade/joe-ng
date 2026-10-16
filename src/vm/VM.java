@@ -1981,6 +1981,7 @@ public final class VM
         if (classSignatureAddr == 0L) { long u = VMNatives.classSignature(0L); }    // Class.genericSignature0
         if (classEnclosingPartAddr == 0L) { long u = VMNatives.classEnclosingPart(0L, 0L); } // Class.enclosingPart0
         if (classNestPartAddr == 0L) { long u = VMNatives.classNestPart(0L, 0L); } // Class.nestPart0
+        if (classFileWordAddr == 0L) { long u = VMNatives.classFileWord(0L, 0L); } // Class.classFileWord0
         if (classInnerPartAddr == 0L) { long u = VMNatives.classInnerPart(0L, 0L); }   // Class.innerPart0
         if (classSealedAddr == 0L) { long u = VMNatives.classSealed(0L); }          // Class.sealed0
         if (methodSignatureAddr == 0L) { long u = VMNatives.methodSignature(-1L); } // Executable.signature0
@@ -3489,6 +3490,7 @@ public final class VM
     static long classSignatureAddr;    // VMNatives.classSignature(J)J — Class.genericSignature0(Class)
     static long classEnclosingPartAddr; // VMNatives.classEnclosingPart(JJ)J — Class.enclosingPart0(Class, long)
     static long classNestPartAddr;     // VMNatives.classNestPart(JJ)J — Class.nestPart0(Class, long)
+    static long classFileWordAddr;     // VMNatives.classFileWord(JJ)J — Class/MetalJavaLangAccess.classFileWord0
     static long classInnerPartAddr;    // VMNatives.classInnerPart(JJ)J — Class.innerPart0(Class, long)
     static long classSealedAddr;       // VMNatives.classSealed(J)J — Class.sealed0(Class)
     static long methodSignatureAddr;   // VMNatives.methodSignature(J)J — Executable.signature0(int)
