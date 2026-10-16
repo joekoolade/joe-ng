@@ -76,17 +76,36 @@ public final class MetalJavaLangAccess implements JavaLangAccess
     {
         throw unsupported("getConstantPool");
     }
+    /**
+     * Stock keeps each annotation type's {@link AnnotationType} in a field on its {@code Class}; a mirror here is
+     * VM-allocated with a fixed layout, so the cache lives in this map instead. Classes never unload on this VM,
+     * so holding them is not a leak. {@code AnnotationSupport}/{@code AnnotationType.getInstance} -- which
+     * {@code getAnnotationsByType} runs through -- read and publish it with these two.
+     */
+    private static final java.util.concurrent.ConcurrentHashMap<Class<?>, AnnotationType> ANNOTATION_TYPES =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
     @Override public boolean casAnnotationType(Class<?> klass, AnnotationType oldType, AnnotationType newType)
     {
-        throw unsupported("casAnnotationType");
+        if (oldType == null)
+        {
+            return ANNOTATION_TYPES.putIfAbsent(klass, newType) == null;
+        }
+        return ANNOTATION_TYPES.replace(klass, oldType, newType);
     }
     @Override public AnnotationType getAnnotationType(Class<?> klass)
     {
-        throw unsupported("getAnnotationType");
+        return ANNOTATION_TYPES.get(klass);
     }
+    /** Stock's: the class's DECLARED annotations keyed by type, in declaration order. */
     @Override public Map<Class<? extends Annotation>, Annotation> getDeclaredAnnotationMap(Class<?> klass)
     {
-        throw unsupported("getDeclaredAnnotationMap");
+        Map<Class<? extends Annotation>, Annotation> m = new java.util.LinkedHashMap<>();
+        for (Annotation a : klass.getDeclaredAnnotations())
+        {
+            m.put(a.annotationType(), a);
+        }
+        return m;
     }
     @Override public byte[] getRawClassAnnotations(Class<?> klass)
     {

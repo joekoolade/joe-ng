@@ -666,17 +666,48 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
         {
             return null;
         }
-        return (T) annoGet0(this, annoDescriptorOf(anno));
+        return (T) annotationOrInherited(anno);
+    }
+
+    /**
+     * Stock's rule for a CLASS: the annotation declared here, or -- when its type is {@code @Inherited} -- the
+     * one declared by the nearest SUPERCLASS that has it (JLS 9.6.4.3; interfaces never inherit). This VM's
+     * reader sees one class's own annotations, so the walk is here; it used to be missing, and
+     * {@code getAnnotation} of an {@code @Inherited} type on a subclass answered null (RepeatableProbe).
+     */
+    private Object annotationOrInherited(Class<?> anno)
+    {
+        byte[] desc = annoDescriptorOf(anno);
+        Object a = annoGet0(this, desc);
+        if (a != null || !isInheritedAnnotation(anno))
+        {
+            return a;
+        }
+        Class<?> c = getSuperclass();
+        while (c != null)
+        {
+            a = annoGet0(c, desc);
+            if (a != null)
+            {
+                return a;
+            }
+            c = c.getSuperclass();
+        }
+        return null;
+    }
+
+    /** Whether annotation type {@code anno} is meta-annotated {@code @Inherited}. */
+    private static boolean isInheritedAnnotation(Class<?> anno)
+    {
+        return annoGet0(anno, annoDescriptorOf(java.lang.annotation.Inherited.class)) != null;
     }
 
     /**
      * The annotation DECLARED DIRECTLY on this class, or null.
      *
-     * <p>In stock this differs from {@link #getAnnotation} by {@code @Inherited} alone: getAnnotation also
-     * finds an {@code @Inherited} annotation on a SUPERCLASS. The native here reads THIS class's own
-     * {@code RuntimeVisibleAnnotations} and nothing else, so the two coincide -- which makes THIS method
-     * exact and {@code getAnnotation} the one that diverges. Stated rather than hidden: an {@code @Inherited}
-     * annotation on a superclass is found by neither, and nothing reached so far asks for one.
+     * <p>This differs from {@link #getAnnotation} by {@code @Inherited} alone, as in stock: getAnnotation also
+     * finds an {@code @Inherited} annotation on a SUPERCLASS, and this reads only THIS class's own
+     * {@code RuntimeVisibleAnnotations}.
      *
      * <p>THE BOUND IS LOAD-BEARING, for the reason spelled out on {@link #getAnnotation}: it erases the
      * return to {@code Ljava/lang/annotation/Annotation;}, which is the descriptor stock callers reference.
@@ -697,7 +728,7 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
     /** Takes a wildcard, as stock does, so it cannot call the BOUNDED {@code getAnnotation} directly. */
     public boolean isAnnotationPresent(Class<? extends java.lang.annotation.Annotation> anno)
     {
-        return anno != null && annoGet0(this, annoDescriptorOf(anno)) != null;
+        return anno != null && annotationOrInherited(anno) != null;
     }
 
     /**
@@ -718,14 +749,32 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
     }
 
     /**
-     * As {@link #getDeclaredAnnotations}. In stock these differ by {@code @Inherited} alone -- getAnnotations
-     * also reports an {@code @Inherited} annotation carried by a SUPERCLASS -- and this VM does not implement
-     * that, so the two coincide. Stated rather than hidden, and the same divergence {@code getAnnotation}
-     * already carries.
+     * Stock's: the declared annotations plus every {@code @Inherited} one the superclass chain carries that this
+     * class does not redeclare -- in stock's order, the superclass's first (by its own {@code getAnnotations}),
+     * then this class's, a redeclared type keeping its inherited position with this class's instance.
      */
     public java.lang.annotation.Annotation[] getAnnotations()
     {
-        return getDeclaredAnnotations();
+        Class<?> sup = getSuperclass();
+        java.lang.annotation.Annotation[] declared = getDeclaredAnnotations();
+        if (sup == null)
+        {
+            return declared;
+        }
+        java.util.Map<Class<? extends java.lang.annotation.Annotation>, java.lang.annotation.Annotation> m =
+                new java.util.LinkedHashMap<>();
+        for (java.lang.annotation.Annotation a : sup.getAnnotations())
+        {
+            if (isInheritedAnnotation(a.annotationType()))
+            {
+                m.put(a.annotationType(), a);
+            }
+        }
+        for (java.lang.annotation.Annotation a : declared)
+        {
+            m.put(a.annotationType(), a);
+        }
+        return m.values().toArray(new java.lang.annotation.Annotation[0]);
     }
 
     /** VM native ({@code Loader.nativeBuf} -> {@code VM.classAnnoGet}): mirror + descriptor -> instance. */

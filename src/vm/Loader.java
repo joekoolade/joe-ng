@@ -20923,14 +20923,30 @@ public final class Loader
         }
         int n = clTab[ifaceReg].ifmCount;
         long it = Heap.allocData(n > 0 ? n * 8 : 8);
+        long ownBase = clTab[ifaceReg].base;
         int s = 0;
         while (s < n)
         {
-            long thunk = Heap.allocCode(8);
-            Heap.pinCodeAt(thunk);                      // only the itable names it; no `bl` displacement does
-            Magic.store32(thunk + 0L, A64Enc.ldrx(0, 0, 16 + s * 8));
-            Magic.store32(thunk + 4L, A64Enc.ret());
-            Heap.publishCode(thunk, thunk + 8L);        // another core may run it: maintenance is BY ADDRESS
+            // ONLY THE INTERFACE'S OWN ELEMENTS READ A VALUE SLOT. Its method list also carries what it inherits
+            // from java/lang/annotation/Annotation, and every slot used to get a value-reading thunk -- so
+            // annotationType() in THIS entry read an empty value slot. A direct call names Annotation and lands in
+            // that entry's thunk below, which is why it worked; a method reference resolves BY NAME and finds
+            // this entry first, so `Annotation::annotationType` on an annotation read null (AnnoRefProbe) and
+            // AnnotatedElement's default getDeclaredAnnotationsByType keyed its map by null (RepeatableProbe).
+            // annotationType() gets the mirror thunk here too; an inherited equals/hashCode/toString stays 0,
+            // which the dispatch guard turns into a resolution, not a branch.
+            long thunk = 0L;
+            boolean own = ifBase[clTab[ifaceReg].ifmStart + s] == ownBase;
+            boolean isAnnoType = utf8IsAtBase(ifBase[clTab[ifaceReg].ifmStart + s],
+                    ifNameOff[clTab[ifaceReg].ifmStart + s], Magic.bytes("annotationType"));
+            if (own || isAnnoType)
+            {
+                thunk = Heap.allocCode(8);
+                Heap.pinCodeAt(thunk);                  // only the itable names it; no `bl` displacement does
+                Magic.store32(thunk + 0L, A64Enc.ldrx(0, 0, 16 + (own ? s : n) * 8));
+                Magic.store32(thunk + 4L, A64Enc.ret());
+                Heap.publishCode(thunk, thunk + 8L);    // another core may run it: maintenance is BY ADDRESS
+            }
             Magic.store64(it + s * 8L, thunk);
             s += 1;
         }
@@ -23883,6 +23899,51 @@ public final class Loader
     // @0 instead — untyped, never checkcast, distinguished by magnitude (<= MAX_RAW_ARRAY_TIB).
 
     /** java/lang/Object's Type (array super), or 0 if Object isn't loaded yet. */
+    /** Cached Types of the two interfaces every array implements; 0 until each is found (Types never move). */
+    private static long cloneableTypeCache;
+    private static long serializableTypeCache;
+
+    /**
+     * Is {@code type} {@code java/lang/Cloneable} or {@code java/io/Serializable} -- the two interfaces every array
+     * type implements (JLS 4.10.3)? Allocation- and lock-free, because {@code VM.typeAssignable} asks it from
+     * checkcast and instanceof: a hit on the cached Types first, and the registry scan only while one is unfound.
+     */
+    static boolean isArrayInterface(long type)
+    {
+        if (type == 0L)
+        {
+            return false;
+        }
+        if (type == cloneableTypeCache || type == serializableTypeCache)
+        {
+            return true;
+        }
+        if (cloneableTypeCache != 0L && serializableTypeCache != 0L)
+        {
+            return false;
+        }
+        int i = 0;
+        while (i < clCount)
+        {
+            if (clTab[i] != null && clTab[i].type == type)
+            {
+                if (utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/Cloneable")))
+                {
+                    cloneableTypeCache = type;
+                    return true;
+                }
+                if (utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/io/Serializable")))
+                {
+                    serializableTypeCache = type;
+                    return true;
+                }
+                return false;
+            }
+            i += 1;
+        }
+        return false;
+    }
+
     static long objectTypeAddr()
     {
         int i = 0;

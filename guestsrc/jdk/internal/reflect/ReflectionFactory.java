@@ -40,6 +40,25 @@ public final class ReflectionFactory
     }
 
     /**
+     * Stock's contract: a COPY of {@code arg} whose accessibility the caller may change without touching the
+     * original -- {@code AnnotationSupport.getValueArray} copies a non-public container's {@code value()} this
+     * way and calls {@code setAccessible(true)} on the copy. Stock copies through {@code LangReflectAccess}; here
+     * {@code getDeclaredMethod} already answers a NEW {@code Method} object for every call, so re-resolving the
+     * same member is that copy.
+     */
+    public java.lang.reflect.Method leafCopyMethod(java.lang.reflect.Method arg)
+    {
+        try
+        {
+            return arg.getDeclaringClass().getDeclaredMethod(arg.getName(), arg.getParameterTypes());
+        }
+        catch (NoSuchMethodException e)
+        {
+            throw new InternalError("leafCopyMethod: " + arg, e);
+        }
+    }
+
+    /**
      * Stock's: {@code mask} as the {@link java.lang.reflect.AccessFlag}s valid at {@code location}, read against
      * {@code classFile}'s format version where it has a release one, so a bit means what it meant then.
      */

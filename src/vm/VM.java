@@ -2852,6 +2852,15 @@ public final class VM
                 {
                     return true;
                 }
+                // ...or the element is an INTERFACE extending the target's element: Tag[] is an Annotation[]
+                // when @interface Tag extends Annotation. The walk above cannot see interface-extends-interface
+                // (an interface Type is a chain dead end), so Sub[] -> Base[] failed checkcast -- MEASURED:
+                // AnnotationSupport's cast of a repeated annotation's Tag[] to Annotation[] threw
+                // ClassCastException, and getAnnotationsByType with it (RepeatableProbe, ArrayCovarianceProbe).
+                if (Loader.ifaceExtends(elemType, elemTarget) != 0)
+                {
+                    return true;
+                }
                 // Every reference element widens to Object, so S[] is always an Object[]. The walk above
                 // cannot show that when S is an INTERFACE: an interface Type is a chain dead end (depth -1,
                 // no display, no superclass link), so it never reaches Object. Map.Entry[] -> Object[] is
@@ -2860,6 +2869,15 @@ public final class VM
                 return elemTarget == Loader.objectTypeAddr();
             }
             // a primitive element on either side is invariant: only the exact-match below can succeed
+        }
+        // EVERY ARRAY IS A Cloneable AND A Serializable (JLS 4.10.3). An array Type's chain is Object and its
+        // itable directory is empty, so neither the fast paths nor the walk below reached either: String[]
+        // instanceof Cloneable answered false, and through the element recursion int[][] was no Cloneable[]
+        // (ArrayCovarianceProbe). Ahead of the fast paths, because an array Type's implements-bitmap answers
+        // the interface-ID test without either bit.
+        if (isArrayType(type) && Loader.isArrayInterface(targetType))
+        {
+            return true;
         }
         // O(1) display fast path: class/array targets carry a depth + display, so the whole chain
         // question is one bounds check + one compare (S is a T iff S.display[T.depth] == T).
