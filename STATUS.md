@@ -4,6 +4,40 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **A CLASS IS INITIALIZED AT AN EXECUTED USE, NOT WHEN A COMPILE NAMES IT (JVMS 5.5); `describeConstable` (2026-10-16).**
+  Closes the defect the previous two cards left open.
+  - **Two eager mechanisms approximated JVMS 5.5 from COMPILE-TIME references**, and both pick the wrong member
+    of a mutually-referencing pair:
+    - `initClinitDeps` ran every class an initializer's compile named BEFORE its body. `ConstantDescs` was
+      claimed, and its dependency phase ran `PrimitiveClassDescImpl`'s initializer first. That initializer
+      reads `ConstantDescs.BSM_PRIMITIVE_CLASS` back -- null -- so `int[].class.describeConstable()` died in a
+      `requireNonNull`.
+    - `drainPendingInit` initialized everything a compile noted, executed or not. With the pre-walk alone
+      removed, compiling `Early2`'s initializer drained `Late2`, whose constructor read `Early2.EARLY2` from a
+      class already claimed: `ClinitOrderProbe` order 2 printed `ctor saw = null`.
+    The instrument that showed it was the existing `INIT_GUARD_LOG`: in that run the guard for `Early2` in
+    `Late2` was emitted and fired, but found `Early2` already claimed (`CL-miss ... ran=1`). With the drain
+    disabled as well, the same probe passes.
+  - **Now `GUARDS_ONLY`:** once the runtime is up, both are no-ops, and the compiled init guard is the only
+    trigger -- the guard every getstatic/putstatic/new/invokestatic on a not-yet-initialized class already
+    carries.
+    - Before bring-up they stay. The boot self-test's legacy `loadParseInt` path runs before `bringUpRuntime`,
+      where `ensureInitFor` skips guards by design, and it relies on them. Measured: with the switch
+      unconditional, the suite died at boot with `Character.digit` reading a null `CharacterDataLatin1.instance`.
+    - `Class.describeConstable` is restored as stock's.
+  - **Nothing it touches regressed** -- the suite ran the SAME 348 initializers with every counter equal to main
+    (40 programs, `gc: collections=51`). Before the full run, the probes guarding the cases the eager paths were
+    added for passed on it:
+    - `GvrProbe` -- picocli's `GroupValidationResult`/`Type` pair;
+    - `CharsetIdentityProbe` -- `StandardCharsets.UTF_8`;
+    - `ClinitOrderProbe`, `NestedClinitProbe`, `StockExceptionProbe`, `JlaProbe` and `LocaleProbe`.
+  - **Probe:** `ConstantDescOrderProbe` (new, 8 lines) is host-identical. It covers `describeConstable` on a
+    primitive array as the first touch of `java.lang.constant`, descriptors of every shape, and
+    `BSM_PRIMITIVE_CLASS` non-null. `LocaleProbe` joins the regression set with its documented host flags
+    (`-Duser.language=en`, the rest empty).
+  - **Regression (suite, all probes, JUnit):** suite clean -- markers all zero, `gc: collections=51`, clinits
+    348, 40 programs returned normally; 64 of 66 probes host-identical, DigestProbe/MacProbe their designed
+    divergences only; `ran 44, failures 0`. **Pi:** pending.
 - **RECORDS AND SEALED CLASSES REFLECT: `getRecordComponents`, `getPermittedSubclasses`; SMALL `Class` MEMBERS
   (2026-10-16).**
   - **Six public `Class` members were missing** -- the probe does not compile against main (16 call sites):
