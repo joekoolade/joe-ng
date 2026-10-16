@@ -4,6 +4,33 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **ANNOTATION INSTANCES KEEP THE `Annotation` CONTRACT: `equals`, `hashCode`, `toString` (2026-10-16).**
+  - **Measured on main** with a new `AnnoContractProbe` -- a VM-built annotation was an identity object:
+    - two reads of the same annotation were not `equals`, and neither were equal annotations on two classes,
+      nor two whose float element is NaN;
+    - `hashCode` was the identity hash;
+    - `toString` printed `$$Lambda/0x...@...`;
+    - a `HashSet` of 7 reads (3 distinct annotations) kept all 7.
+  - **Now:** a new `jdk.internal.misc.MetalAnnotations` holds stock's `AnnotationInvocationHandler` semantics:
+    - elements compared by value -- arrays by content, floats by bits;
+    - the specified hash formula;
+    - stock's source-form `toString`.
+    `annoTibFor` points each annotation TIB's `equals`/`hashCode`/`toString` -- the `Object` vtable slots and
+    the `Annotation` itable entry -- at its three static methods, whose `(receiver, arg)` register layout is the
+    instance method's.
+    - `refillSynthTibVtables` re-applies the patch, because it copies `Object`'s slots back.
+    - The helper class is loaded lazily, at the first annotation TIB, so a program that reads no annotation
+      pays nothing.
+    - `buildAnnoObject` re-points the parse cursor after `annoTibFor`, because compiling the helpers re-parses.
+  - **One stated difference:** with more than one element, `toString` lists them in declaration order. Stock's
+    order comes from its parser's member map.
+  - **Probe:** `AnnoContractProbe` (new, 15 lines) is host-identical. It covers:
+    - equality across reads, classes and a NaN element, and inequality by value, type, null and a non-annotation;
+    - the hash: equal for equal annotations, and equal to the formula recomputed in the probe. A `Class` or enum
+      element hashes by IDENTITY on any JVM, so for those the formula is compared, not the number;
+    - `toString` for a marker and a single-`value` annotation;
+    - a `HashSet` collapsing to 3.
+  - **Regression (suite, all probes, JUnit):** suite clean on 60defc2 -- markers all zero, `gc: collections=51`, clinits 348; probes still running when this line was written (28 of the first 30 host-identical, the other two DigestProbe/MacProbe as designed); JUnit pending. **Pi:** PASS (2026-10-16, 60defc2) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=892), `[main returned normally]`, `gc: collections=7`. NetDemo reads no annotation, so its counters equal the previous image's; the image is known from the completed flash.
 - **AN ANNOTATION WHOSE TYPE NOTHING ELSE NAMES IS READ (2026-10-16).** The gap the previous card recorded as
   found-not-fixed.
   - **Problem:** the annotation readers resolved each annotation's type by looking it up in the class registry,
@@ -20,7 +47,7 @@ Newest entries are at the top.
   - **Probe:** `AnnoLoadProbe` (new, 8 lines) is host-identical. It covers annotations on a class, field,
     method and parameter whose types nothing names, and a nested annotation and an array of them, also of
     unnamed types.
-  - **Regression (suite, all probes, JUnit):** probes and JUnit clean on b6fe81f -- 57 of 59 probes host-identical, DigestProbe/MacProbe their designed divergences only; `ran 44, failures 0`. The suite was still running when this line was written. **Pi:** PASS (2026-10-16, b6fe81f) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=891), `[main returned normally]`, `gc: collections=7`. NetDemo never reads an annotation, so its batch counters equal 06a6875's; the image is known from the flash, which completed and ejected.
+  - **Regression (suite, all probes, JUnit):** probes and JUnit clean on b6fe81f -- 57 of 59 probes host-identical, DigestProbe/MacProbe their designed divergences only; `ran 44, failures 0`; and the suite, recorded after the merge: markers all zero, `gc: collections=51`, clinits 348. **Pi:** PASS (2026-10-16, b6fe81f) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=891), `[main returned normally]`, `gc: collections=7`. NetDemo never reads an annotation, so its batch counters equal 06a6875's; the image is known from the flash, which completed and ejected.
 - **REPEATED ANNOTATIONS (`getAnnotationsByType`) WORK; ARRAY COVARIANCE THROUGH INTERFACES; `@Inherited` CLASS
   ANNOTATIONS (2026-10-16).** `getAnnotationsByType` runs stock `AnnotationSupport`, which was never denied. On
   main it died at its first step. Five defects stood between it and the right answer, each found by the one
