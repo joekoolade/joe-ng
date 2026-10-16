@@ -4,6 +4,39 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **`java.lang.reflect.Array` RUNS STOCK, ITS NATIVES WRITTEN IN JAVA (2026-10-15).** The overlay was a
+  hand-written minimum, which rule 3 retires, and it was wrong for every array but a reference `Object[]`.
+  - **15 stock members were missing:** `getBoolean`/`getByte`/`getChar`/`getShort`/`getFloat`/`getDouble` and all
+    eight `setX`. The new probe does not even COMPILE against the old overlay (35 `cannot find symbol`).
+  - **What did exist read and wrote every element as 8 bytes, unchecked.** A negative-control probe limited to
+    those members differs from the host on 10 of 11 arms:
+    - `getInt(int[],1)` answered element 2, and `getInt(byte[],1)` answered `1516832`;
+    - `getInt(long[])` answered instead of refusing a narrowing;
+    - `getLength("x")` answered `84315928`;
+    - `set(String[],2,Integer)` STORED the Integer;
+    - `set(int[],1,Short)` wrote an 8-byte pointer at byte offset 8 of the 12-byte element area of an `int[3]`:
+      element 2 became `1628448`, and 4 bytes went past the last element. Here they landed in alignment padding;
+      by the layout, not by measurement, the same call at index 2 or 3 of an `int[4]` writes into the next block;
+    - `newInstance(void.class,1)` made an `[Lvoid;`, and the multi-dimensional form threw
+      `UnsupportedOperationException`.
+    With the `get` arms left in, the first one (`get(byte[],1)`) returned a wild reference and the boot died
+    inside `Class.isArray` on it.
+  - **Now:** `guestsrc/java/lang/reflect/Array.java` is the JDK 26 source with its 21 natives given Java bodies.
+    - Each accessor dispatches on the array's real type with `instanceof` and indexes it as bytecode, so width,
+      bounds and widening are the compiler's own.
+    - `set` checks a reference against the component type and unboxes a primitive into the matching `setX`.
+    - Creation applies stock's checks (null, `void`, negative, 255 dimensions) before the `newArray0` VM native;
+      the multi-dimensional form builds one level at a time.
+    - The failures are stock's: `NullPointerException`, `IllegalArgumentException` for a non-array or a
+      narrowing, `ArrayIndexOutOfBoundsException`.
+  - **Probe:** `ReflectArrayProbe` (new, 157 lines) covers:
+    - `get` over all ten element kinds, in and out of bounds;
+    - every typed getter and setter, each with a widening that must work and a narrowing that must refuse;
+    - `set` with unboxing, a null and a wrong reference type;
+    - `newInstance` over every component type, `void`, null and a negative length;
+    - the multi-dimensional forms, including an array component type, a zero dimension and a cast to `int[][]`.
+    Host-identical on the first run.
+  - **Regression (suite, all probes, JUnit):** QEMU clean on 45b27c8 -- suite markers all zero, `gc: collections=51`, clinits 346; 49 of 51 probes host-identical (ReflectArrayProbe among them), DigestProbe/MacProbe their designed divergences only; `ran 44, failures 0`. **Pi:** PASS (2026-10-15, 25e1662) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=888), `[main returned normally]`, `gc: collections=7`.
 - **REFLECTIVE INVOKE: EXCEPTIONS WRAPPED, ARGUMENTS CONVERTED AS STOCK (2026-10-15).** What `Method.invoke`
   and `Constructor.newInstance` do around the call, measured against the unfixed VM with the same probe.
   - **An exception the target threw escaped UNWRAPPED.** Stock wraps whatever the target throws, checked,
