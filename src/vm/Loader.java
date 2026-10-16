@@ -19962,7 +19962,7 @@ public final class Loader
         int k = 0;
         while (k < found)
         {
-            int ifaceReg = regOfAnnoDescAbs(descAbs[k]);
+            int ifaceReg = loadAnnoTypeByDescAbs(descAbs[k]);
             if (ifaceReg >= 0)
             {
                 // RE-POINT THE CURSOR at the annotated class first. buildAnnoObject matches element names through
@@ -20759,6 +20759,35 @@ public final class Loader
         return 0L;
     }
 
+    /**
+     * As {@link #regOfAnnoDescAbs}, LOADING the annotation type when nothing has yet -- an annotation whose
+     * type no class literal, cast or call names was left out of every reader, silently: a class carrying
+     * {@code @OnClass} answered {@code getDeclaredAnnotations() == []} (AnnoLoadProbe). The same demand-load
+     * {@code annoClassValue} does for a {@code Class} element. Callers re-point the parse cursor after it.
+     */
+    private static int loadAnnoTypeByDescAbs(long utf8Addr)
+    {
+        int reg = regOfAnnoDescAbs(utf8Addr);
+        if (reg >= 0)
+        {
+            return reg;
+        }
+        int len = u2(utf8Addr);
+        if (len < 3 || u1(utf8Addr + 2) != 0x4C)        // not "L...;"
+        {
+            return -1;
+        }
+        byte[] name = new byte[len - 2];
+        int i = 0;
+        while (i < len - 2)
+        {
+            name[i] = (byte) u1(utf8Addr + 2 + 1 + i);
+            i += 1;
+        }
+        loadClassIncremental(name);
+        return classIndexByName(name);
+    }
+
     /** As {@link #regOfAnnoDesc}, for a descriptor at an ABSOLUTE length-prefixed Utf8 address. */
     private static int regOfAnnoDescAbs(long utf8Addr)
     {
@@ -21314,11 +21343,13 @@ public final class Loader
      */
     private static long annoNestedValue(long base, long at)
     {
-        int nreg = regOfAnnoDescAbs(base + gcp[u2(at)]);
+        int nreg = loadAnnoTypeByDescAbs(base + gcp[u2(at)]);
         if (nreg < 0)
         {
+            parseForMethods(base, blobLenOf(base));
             return 0L;
         }
+        parseForMethods(base, blobLenOf(base));         // a load re-parses: the build reads names through gcp
         int sSlot = annoPendSlot;
         int sElem = annoPendElem;
         long sTib = annoArrayTib;

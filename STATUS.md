@@ -4,6 +4,23 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **AN ANNOTATION WHOSE TYPE NOTHING ELSE NAMES IS READ (2026-10-16).** The gap the previous card recorded as
+  found-not-fixed.
+  - **Problem:** the annotation readers resolved each annotation's type by looking it up in the class registry,
+    and SKIPPED one that was not there. An annotation type that no class literal, cast or call names is never
+    loaded before reflection asks, so the readers left it out, silently.
+  - **Measured on main** with a new `AnnoLoadProbe`: a class's `getDeclaredAnnotations()`/`getAnnotations()`,
+    a field's, a method's and a parameter's all answered `[]` where the host reports each annotation.
+  - **Now:** `loadAnnoTypeByDescAbs` loads a missing type by name, the demand-load `annoClassValue` already
+    does for a `Class` element.
+    - It is used by the shared build pass (`annotationsAt`) and by nested annotations (`annoNestedValue`).
+    - The nested path re-points the parse cursor after the load, since a load re-parses and the build reads
+      element names through the cursor.
+    - `getAnnotation(X.class)` never had the gap: its argument already loaded `X`.
+  - **Probe:** `AnnoLoadProbe` (new, 8 lines) is host-identical. It covers annotations on a class, field,
+    method and parameter whose types nothing names, and a nested annotation and an array of them, also of
+    unnamed types.
+  - **Regression (suite, all probes, JUnit):** pending. **Pi:** pending.
 - **REPEATED ANNOTATIONS (`getAnnotationsByType`) WORK; ARRAY COVARIANCE THROUGH INTERFACES; `@Inherited` CLASS
   ANNOTATIONS (2026-10-16).** `getAnnotationsByType` runs stock `AnnotationSupport`, which was never denied. On
   main it died at its first step. Five defects stood between it and the right answer, each found by the one
