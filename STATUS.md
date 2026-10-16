@@ -32,13 +32,27 @@ Newest entries are at the top.
     body first, and stock `ConstantDescs` sets `BSM_PRIMITIVE_CLASS` before it ever touches
     `PrimitiveClassDescImpl`; run early, `DynamicConstantDesc`'s `requireNonNull` reads it null. An
     initialization-ORDER defect in the VM, for its own increment.
+    - **Followed up the next day, and LEFT OPEN.**
+      - **Instrumented, the order is:** `ConstantDescs` CLAIMED, then -- inside its dependency phase, before
+        its own body -- `ClassOrInterfaceDescImpl`, `DirectMethodHandleDesc$Kind` and
+        `PrimitiveClassDescImpl` all ran their initializers.
+      - **Experiment, with both `initClinitDeps` calls disabled:**
+        - it did NOT fix it: the same NPE then came from the post-body `drainPendingInit` of another
+          initializer, which initializes every class its COMPILE noted, executed or not;
+        - and it BROKE `ClinitOrderProbe`'s order-2 arm (`ctor saw = null`), so the guards alone do not yet
+          cover a constructor's read during initialization.
+      - **Conclusion:** both eager mechanisms approximate JVMS 5.5 from compile-time references. A fix means
+        moving every active use onto an executed guard -- an arc of its own, not this increment. Reverted;
+        `describeConstable` stays absent.
+      - **Kept from it:** `GvrProbe`, `ClinitOrderProbe` and `NestedClinitProbe` now have host controls in the
+        regression set, and all pass on the real tree.
   - **Probe:** `RecordSealedProbe` (new, 22 lines) is host-identical. It covers:
     - components of a plain, a generic and an empty record, a record implementing a sealed interface, and a
       non-record: name, type, generic type, accessor (invoked), an annotation on a component, `toString`;
     - `isRecord` of a record, class, enum and `Record`;
     - a sealed interface and class, non-sealed and final subclasses, `String` and `int[]`;
     - the four small members.
-  - **Regression (suite, all probes, JUnit):** suite clean on f528a90 -- markers all zero, `gc: collections=51`, clinits 348; probes and JUnit still running when this line was written. **Pi:** PASS (2026-10-16, f528a90) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=891), `[main returned normally]`, `gc: collections=7`; the first batch loads 1471 classes where the previous image loaded 1470, so this boot is the new image.
+  - **Regression (suite, all probes, JUnit):** QEMU clean on f528a90 -- suite markers all zero, `gc: collections=51`, clinits 348; 59 of 61 probes host-identical, DigestProbe/MacProbe their designed divergences only; `ran 44, failures 0` -- the probes and JUnit finished after the merge. **Pi:** PASS (2026-10-16, f528a90) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=891), `[main returned normally]`, `gc: collections=7`; the first batch loads 1471 classes where the previous image loaded 1470, so this boot is the new image.
 - **ANNOTATION INSTANCES KEEP THE `Annotation` CONTRACT: `equals`, `hashCode`, `toString` (2026-10-16).**
   - **Measured on main** with a new `AnnoContractProbe` -- a VM-built annotation was an identity object:
     - two reads of the same annotation were not `equals`, and neither were equal annotations on two classes,
