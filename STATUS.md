@@ -4,6 +4,41 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **RECORDS AND SEALED CLASSES REFLECT: `getRecordComponents`, `getPermittedSubclasses`; SMALL `Class` MEMBERS
+  (2026-10-16).**
+  - **Six public `Class` members were missing** -- the probe does not compile against main (16 call sites):
+    `getRecordComponents`, `getPermittedSubclasses`, `componentType`, `forPrimitiveName`, `isHidden` and
+    `getSigners`. `java.lang.reflect.RecordComponent` was denied.
+  - **Now:**
+    - **Records:** three new natives read the class's `Record` attribute (JVMS 4.7.30): the component count, each
+      component's name/descriptor/`Signature`, and its annotations (through the shared annotation walk).
+      `RecordComponent` is overlaid from the JDK 26 source, narrowed out of the `java/lang/reflect` denial in
+      both `Loader.isDenylisted` and `ReachScan`:
+      - its overlay-only `componentsOf` stands in for the JVM's `getRecordComponents0`, the accessor being the
+        record's same-named no-argument method;
+      - annotations come from the VM's reader;
+      - `getAnnotatedType` throws, naming the type-annotation parser it needs.
+      `isRecord` now also requires the `Record` attribute, as stock does; it used to answer from the superclass's
+      name alone.
+    - **Sealed classes:** a fourth native names the `PermittedSubclasses` entries. `getPermittedSubclasses` keeps
+      stock's filter to DIRECT subtypes, and answers null for an unsealed class, an array or a primitive.
+    - **`componentType`, `forPrimitiveName`:** stock's bodies.
+    - **`isHidden` false and `getSigners` null are DECIDED, not defaulted.** A hidden class comes only from
+      `Lookup.defineHiddenClass`, which this VM does not provide, and signers only from a loader verifying a
+      signed jar, which it never does.
+  - **Found, NOT fixed: `describeConstable` was written and taken out again.** `int[].class.describeConstable()`
+    died with an NPE in `PrimitiveClassDescImpl.<clinit>`. The trace shows `initClinitDeps` running that
+    initializer as a DEPENDENCY, ahead of the initializer that needed it. JVMS order runs that initializer's
+    body first, and stock `ConstantDescs` sets `BSM_PRIMITIVE_CLASS` before it ever touches
+    `PrimitiveClassDescImpl`; run early, `DynamicConstantDesc`'s `requireNonNull` reads it null. An
+    initialization-ORDER defect in the VM, for its own increment.
+  - **Probe:** `RecordSealedProbe` (new, 22 lines) is host-identical. It covers:
+    - components of a plain, a generic and an empty record, a record implementing a sealed interface, and a
+      non-record: name, type, generic type, accessor (invoked), an annotation on a component, `toString`;
+    - `isRecord` of a record, class, enum and `Record`;
+    - a sealed interface and class, non-sealed and final subclasses, `String` and `int[]`;
+    - the four small members.
+  - **Regression (suite, all probes, JUnit):** pending. **Pi:** pending.
 - **ANNOTATION INSTANCES KEEP THE `Annotation` CONTRACT: `equals`, `hashCode`, `toString` (2026-10-16).**
   - **Measured on main** with a new `AnnoContractProbe` -- a VM-built annotation was an identity object:
     - two reads of the same annotation were not `equals`, and neither were equal annotations on two classes,

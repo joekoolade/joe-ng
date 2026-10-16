@@ -861,6 +861,62 @@ final class VMNatives
         }
     }
 
+    /** {@code RecordComponent.recordInfo0} native: the Record attribute's component count, or -1. */
+    static long classRecordInfo(long mirror, long k)
+    {
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            return Loader.classRecordInfo(mirror, k);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
+    }
+
+    /** {@code RecordComponent.recordPart0} native: a record component's name, descriptor or signature. */
+    static long classRecordPart(long mirror, long k)
+    {
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            return Loader.classRecordPart(mirror, k);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
+    }
+
+    /** {@code RecordComponent.recordAnnos0} native: a record component's annotations. */
+    static long classRecordAnnos(long mirror, long k)
+    {
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            return Loader.classRecordAnnos(mirror, k);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
+    }
+
+    /** {@code Class.permitted0} native: the k-th PermittedSubclasses name, or 0. */
+    static long classPermitted(long mirror, long k)
+    {
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            return Loader.classPermitted(mirror, k);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
+    }
+
     /** {@code Class.declaredClasses0(Class)} native: the MEMBER classes it declares, as a Class[]. */
     static long classDeclClasses(long mirror)
     {
