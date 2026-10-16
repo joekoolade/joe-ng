@@ -4,6 +4,23 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **AN ANNOTATION WHOSE TYPE NOTHING ELSE NAMES IS READ (2026-10-16).** The gap the previous card recorded as
+  found-not-fixed.
+  - **Problem:** the annotation readers resolved each annotation's type by looking it up in the class registry,
+    and SKIPPED one that was not there. An annotation type that no class literal, cast or call names is never
+    loaded before reflection asks, so the readers left it out, silently.
+  - **Measured on main** with a new `AnnoLoadProbe`: a class's `getDeclaredAnnotations()`/`getAnnotations()`,
+    a field's, a method's and a parameter's all answered `[]` where the host reports each annotation.
+  - **Now:** `loadAnnoTypeByDescAbs` loads a missing type by name, the demand-load `annoClassValue` already
+    does for a `Class` element.
+    - It is used by the shared build pass (`annotationsAt`) and by nested annotations (`annoNestedValue`).
+    - The nested path re-points the parse cursor after the load, since a load re-parses and the build reads
+      element names through the cursor.
+    - `getAnnotation(X.class)` never had the gap: its argument already loaded `X`.
+  - **Probe:** `AnnoLoadProbe` (new, 8 lines) is host-identical. It covers annotations on a class, field,
+    method and parameter whose types nothing names, and a nested annotation and an array of them, also of
+    unnamed types.
+  - **Regression (suite, all probes, JUnit):** probes and JUnit clean on b6fe81f -- 57 of 59 probes host-identical, DigestProbe/MacProbe their designed divergences only; `ran 44, failures 0`. The suite was still running when this line was written. **Pi:** PASS (2026-10-16, b6fe81f) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=891), `[main returned normally]`, `gc: collections=7`. NetDemo never reads an annotation, so its batch counters equal 06a6875's; the image is known from the flash, which completed and ejected.
 - **REPEATED ANNOTATIONS (`getAnnotationsByType`) WORK; ARRAY COVARIANCE THROUGH INTERFACES; `@Inherited` CLASS
   ANNOTATIONS (2026-10-16).** `getAnnotationsByType` runs stock `AnnotationSupport`, which was never denied. On
   main it died at its first step. Five defects stood between it and the right answer, each found by the one
@@ -49,7 +66,7 @@ Newest entries are at the top.
       `getAnnotations` on a subclass.
     - `ArrayCovarianceProbe` (29 lines): every element relation through compiled `instanceof`/`checkcast` and
       `isInstance`/`isAssignableFrom`/`cast`, including the refusals.
-  - **Regression (suite, all probes, JUnit):** pending. **Pi:** PASS (2026-10-16, 06a6875) -- WiFi join, DHCP (one retry), NetDemo HTTP 200 from example.com (bytes=891), `[main returned normally]`, `gc: collections=7`.
+  - **Regression (suite, all probes, JUnit):** QEMU clean -- the suite on 0530d17 (the merged tree): markers all zero, `gc: collections=51`, clinits 348; the probes and JUnit on b6fe81f, the next change, which contains this one: 57 of 59 probes host-identical, DigestProbe/MacProbe their designed divergences only; `ran 44, failures 0`. Recorded after the merge, which went ahead with this line pending. **Pi:** PASS (2026-10-16, 06a6875) -- WiFi join, DHCP (one retry), NetDemo HTTP 200 from example.com (bytes=891), `[main returned normally]`, `gc: collections=7`.
 - **ANNOTATION VALUES: FLOATS, PRIMITIVE ARRAYS, ARRAY CLASS LITERALS AND NESTED ANNOTATIONS ARE READ;
   `Method.getDefaultValue` (2026-10-16).**
   - **Four kinds of annotation element value read wrong, WRITTEN or defaulted** -- the decoder
