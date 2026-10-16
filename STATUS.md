@@ -45,7 +45,7 @@ Newest entries are at the top.
     - the same kinds WRITTEN on a use.
     Before the decoder fix, on this branch, the defaults read: `d` and `f` 0.0, `empty` as `Object[]`,
     `int[].class` in a `Class[]` null, and `ints` crashed the printer.
-  - **Regression (suite, all probes, JUnit):** QEMU clean on the combined tree 1c40fe8 (main b7ad6e4 plus the annotation-defaults change, so it contains this one) -- suite markers all zero, `gc: collections=51`, clinits 347; 54 of 56 probes host-identical, DigestProbe/MacProbe their designed divergences only; `ran 44, failures 0`. **Pi:** pending.
+  - **Regression (suite, all probes, JUnit):** QEMU clean on the combined tree 1c40fe8 (main b7ad6e4 plus the annotation-defaults change, so it contains this one) -- suite markers all zero, `gc: collections=51`, clinits 347; 54 of 56 probes host-identical, DigestProbe/MacProbe their designed divergences only; `ran 44, failures 0`. **Pi:** PASS (2026-10-16, 976a04a) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=892), `[main returned normally]`, `gc: collections=7`.
 - **`accessFlags()` ON CLASSES, FIELDS, METHODS, CONSTRUCTORS AND PARAMETERS; ARRAYS AND PRIMITIVES HAVE STOCK
   MODIFIERS (2026-10-15).**
   - **`accessFlags()` was missing from `Class`, `Field` and `Executable`, and `Parameter`'s threw.** The probe
