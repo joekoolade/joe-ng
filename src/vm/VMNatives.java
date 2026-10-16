@@ -819,6 +819,20 @@ final class VMNatives
         }
     }
 
+    /** {@code Method.annoDefaults0(Class)} native: an instance of the annotation type with every element defaulted. */
+    static long annoDefaultInstance(long mirror)
+    {
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            return Loader.annoDefaultInstance(mirror);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
+    }
+
     /** {@code Field.signature0(Class, byte[])} native: the field's Signature attribute as a String, or 0. */
     static long fieldSignature(long mirror, long nameArr)
     {

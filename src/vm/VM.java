@@ -1989,6 +1989,7 @@ public final class VM
         if (methodParamMetaAddr == 0L) { long u = VMNatives.methodParamMeta(-1L, 0L); } // Executable.paramMeta0
         if (methodParamNameAddr == 0L) { long u = VMNatives.methodParamName(-1L, 0L); } // Executable.paramName0
         if (methodParamAnnoRowAddr == 0L) { long u = VMNatives.methodParamAnnoRow(-1L, 0L); } // Executable.paramAnnoRow0
+        if (annoDefaultInstanceAddr == 0L) { long u = VMNatives.annoDefaultInstance(0L); } // Method.annoDefaults0
         if (fieldSignatureAddr == 0L) { long u = VMNatives.fieldSignature(0L, 0L); } // Field.signature0
         if (defineClassAddr == 0L) { long u = VMNatives.defineClass(0L, 0L, 0L, 0L); } // ClassLoader.defineClass0 (M3)
         if (classModifiersAddr == 0L) { long u = VMNatives.classModifiers(0L); } // Class.getModifiers() native (reflection M1)
@@ -3498,6 +3499,7 @@ public final class VM
     static long methodParamMetaAddr;   // VMNatives.methodParamMeta(JJ)J — Executable.paramMeta0(int, long)
     static long methodParamNameAddr;   // VMNatives.methodParamName(JJ)J — Executable.paramName0(int, long)
     static long methodParamAnnoRowAddr; // VMNatives.methodParamAnnoRow(JJ)J — Executable.paramAnnoRow0(int, long)
+    static long annoDefaultInstanceAddr; // VMNatives.annoDefaultInstance(J)J — Method.annoDefaults0(Class)
     static long fieldSignatureAddr;    // VMNatives.fieldSignature(JJ)J — Field.signature0(Class,byte[])
     static long defineClassAddr;       // VM.defineClass(JJJJ)J — ClassLoader.defineClass0 native (reflection M3)
     static long classModifiersAddr;    // VM.classModifiers(J)I — Class.getModifiers() native (reflection M1)

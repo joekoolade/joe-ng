@@ -12548,6 +12548,7 @@ public final class Loader
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Method")))
         {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoDefaults0")))    { return VM.annoDefaultInstanceAddr; } // (Class)Object
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("methodResolve0")))   { return VM.methodResolveAddr; }    // (Class,byte[])I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("methodResolveDesc0"))) { return VM.methodResolveDescAddr; } // (Class,byte[],byte[])I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("methodInfo0")))      { return VM.methodInfoAddr; }       // (I,byte[],long[])I
@@ -19068,6 +19069,12 @@ public final class Loader
             return -1L;
         }
         long base = reflEntry(rgIndex).base;
+        if (k == -3L)
+        {
+            // Not a parameter fact, but the same kind of question about the same method_info: does this
+            // annotation element have an AnnotationDefault (JVMS 4.7.22)? 1 or 0. Method.getDefaultValue asks.
+            return classAttrNamed(base, p + 8L, u2(p + 6L), Magic.bytes("AnnotationDefault")) == 0L ? 0L : 1L;
+        }
         if (k == -2L)
         {
             long q = classAttrNamed(base, p + 8L, u2(p + 6L), Magic.bytes("RuntimeVisibleParameterAnnotations"));
@@ -19088,6 +19095,28 @@ public final class Loader
             return -1L;
         }
         return u2(q + 1L + 4L * k + 2L);
+    }
+
+    /**
+     * {@code Method.annoDefaults0}: an instance of annotation type {@code mirror} with NO element written, so
+     * that every element carries its {@code AnnotationDefault} -- built by {@link #buildAnnoObject} like any
+     * annotation, from an empty element-value-pair list. An element with no default reads null/0, which is why
+     * {@code Method.getDefaultValue} asks {@link #methodParamMeta} for the attribute first. 0 when the type is
+     * not a loaded class.
+     */
+    static long annoDefaultInstance(long mirror)
+    {
+        if (mirror <= 0x1000L)
+        {
+            return 0L;
+        }
+        int reg = regOfType(Magic.load64(mirror + 16L));
+        if (reg < 0)
+        {
+            return 0L;
+        }
+        long zero = Heap.allocArray(2, 1);              // u2 num_element_value_pairs = 0, zeroed by the allocator
+        return buildAnnoObject(clTab[reg].base, zero + ObjectModel.ARRAY_BASE_OFFSET, reg);
     }
 
     /**
@@ -21011,6 +21040,7 @@ public final class Loader
         Magic.store64(obj + ObjectModel.TIB_OFFSET, tib);
         Magic.store64(obj + 16L + n * 8L, classMirror(clTab[ifaceReg].type));
         int start = clTab[ifaceReg].ifmStart;
+        int pendMark = annoPendN;                       // a NESTED build drains only what it adds past here
         int pairs = u2(pairsPos);
         // PHASE 1 -- every element the annotation USE writes, decoded against the annotated class's blob.
         boolean[] filled = new boolean[n];
@@ -21026,9 +21056,11 @@ public final class Loader
                 {
                     annoPendSlot = s;                   // a 'c'/'e' value notes ITS slot, not a global one
                     annoArrayTib = annoArrayTibFor(ifBase[start + s], ifDescOff[start + s]);
+                    annoArrayPrim = annoArrayPrimFor(ifBase[start + s], ifDescOff[start + s]);
                     Magic.store64(obj + 16L + s * 8L, annoElementValue(base, p + 2L));
                     annoPendSlot = -1;
                     annoArrayTib = 0L;
+                    annoArrayPrim = 0;
                     filled[s] = true;
                     break;
                 }
@@ -21052,7 +21084,7 @@ public final class Loader
         //
         // The pending entries hold ABSOLUTE Utf8 addresses, which survive a re-parse because blobs do not move
         // -- only the parse STATE does. That is the same property applyAnnoDefaults relies on.
-        drainAnnoPending(obj);
+        drainAnnoPending(obj, pendMark);
         return obj;
     }
 
@@ -21071,6 +21103,7 @@ public final class Loader
         // into ifBase[], and the parse below is what makes those offsets resolvable against a different blob.
         long[] want = new long[n];
         long[] defArrayTib = new long[n];
+        int[] defArrayPrim = new int[n];
         int s = 0;
         while (s < n)
         {
@@ -21078,6 +21111,7 @@ public final class Loader
             // Computed HERE, before the re-parse: annoArrayTibFor reads the element method's descriptor
             // through gcp/clTab, and the parse below moves that cursor to a different blob.
             defArrayTib[s] = filled[s] ? 0L : annoArrayTibFor(ifBase[start + s], ifDescOff[start + s]);
+            defArrayPrim[s] = filled[s] ? 0 : annoArrayPrimFor(ifBase[start + s], ifDescOff[start + s]);
             s += 1;
         }
         parseForMethods(ibase, blobLenOf(ibase));
@@ -21114,9 +21148,11 @@ public final class Loader
                     {
                         annoPendSlot = slot;
                         annoArrayTib = defArrayTib[slot];   // computed BEFORE this parse: see applyAnnoDefaults
+                        annoArrayPrim = defArrayPrim[slot];
                         Magic.store64(obj + 16L + slot * 8L, annoElementValue(ibase, q));
                         annoPendSlot = -1;
                         annoArrayTib = 0L;
+                        annoArrayPrim = 0;
                         break;
                     }
                     q += alen;
@@ -21141,9 +21177,21 @@ public final class Loader
         {
             return (long) u4(base + gcp[idx]);          // B C I S Z -- all CONSTANT_Integer
         }
-        if (tag == 0x4A)                                // 'J' -- CONSTANT_Long, two u4 halves
-        {
+        if (tag == 0x4A || tag == 0x44)                 // 'J' / 'D' -- CONSTANT_Long/Double, two u4 halves; a
+        {                                               //   double's raw bits, as the slot keeps them
             return ((long) u4(base + gcp[idx]) << 32) | ((long) u4(base + gcp[idx] + 4) & 0xFFFFFFFFL);
+        }
+        if (tag == 0x46)                                // 'F' -- CONSTANT_Float: its raw bits, zero-extended,
+        {                                               //   as a compiled putfield leaves a float. Unhandled, a
+            return (long) u4(base + gcp[idx]) & 0xFFFFFFFFL;   // float or double element read 0.0
+        }
+        if (tag == 0x40)                                // '@' -- a nested annotation
+        {
+            return annoNestedValue(base, p + 1L);
+        }
+        if (tag == 0x5B && annoArrayPrim != 0)          // '[' of a PRIMITIVE element type
+        {
+            return annoPrimArray(base, p);
         }
         if (tag == 0x5B)                                // '[' -- array of element_values
         {
@@ -21188,7 +21236,88 @@ public final class Loader
             noteAnnoPending(1, base + gcp[idx], base + gcp[u2(p + 3)]);
             return 0L;
         }
-        return 0L;                                      // '@' nested annotation -- still open
+        return 0L;
+    }
+
+    /**
+     * A {@code '['} element of a PRIMITIVE component -- {@code int[] ints() default {1, 2, 3}} -- as a real
+     * primitive array: that component's element width and the interned primitive-array TIB {@code new int[]}
+     * uses. It used to be built as 8-byte reference slots, so an {@code int[]} was malformed (the reader
+     * crashed in {@code Arrays.toString}) and an empty one came back typed {@code Object[]}.
+     */
+    private static long annoPrimArray(long base, long p)
+    {
+        int count = u2(p + 1);
+        int atype = atypeForDescChar(annoArrayPrim);
+        int esz = arrayElemSizeOfAtype(atype);
+        long arr = Heap.allocArray(count, esz);
+        Magic.store64(arr + ObjectModel.TIB_OFFSET, primArrayTib(atype));
+        long q = p + 3L;
+        int i = 0;
+        while (i < count)
+        {
+            long v = annoElementValue(base, q);         // B C I S Z F: the value or raw bits; J D: 64 bits
+            long at = arr + ObjectModel.ARRAY_BASE_OFFSET + (long) i * esz;
+            if (esz == 1)
+            {
+                Magic.store8(at, (int) v);
+            }
+            else if (esz == 2)
+            {
+                Magic.store8(at, (int) v);
+                Magic.store8(at + 1L, (int) (v >>> 8));
+            }
+            else if (esz == 4)
+            {
+                Magic.store32(at, (int) v);
+            }
+            else
+            {
+                Magic.store64(at, v);
+            }
+            q = skipElementValue(q);
+            i += 1;
+        }
+        return arr;
+    }
+
+    /**
+     * A {@code '@'} element: the nested annotation, built by {@link #buildAnnoObject} like any other -- it was
+     * left null, so every {@code @Repeatable} container read {@code value() == null}. {@code at} is the nested
+     * {@code annotation} structure ({@code u2 type_index}, then its element-value pairs).
+     *
+     * <p>A build is not re-entrant on its own, and this one runs INSIDE an outer build's walk:
+     * <ul>
+     *   <li>the decoder's per-element globals (slot, array index, array TIB and component) are saved and
+     *       restored around it;</li>
+     *   <li>its pending Class/enum values drain against IT -- {@link #drainAnnoPending} drains from the mark
+     *       {@code buildAnnoObject} takes, not the outer build's entries;</li>
+     *   <li>and the parse cursor is re-pointed at {@code base} after it, because applying its defaults
+     *       re-parsed its own type's blob and the outer walk reads element names through that cursor.</li>
+     * </ul>
+     */
+    private static long annoNestedValue(long base, long at)
+    {
+        int nreg = regOfAnnoDescAbs(base + gcp[u2(at)]);
+        if (nreg < 0)
+        {
+            return 0L;
+        }
+        int sSlot = annoPendSlot;
+        int sElem = annoPendElem;
+        long sTib = annoArrayTib;
+        int sPrim = annoArrayPrim;
+        annoPendSlot = -1;
+        annoPendElem = -1;
+        annoArrayTib = 0L;
+        annoArrayPrim = 0;
+        long obj = buildAnnoObject(base, at + 2L, nreg);
+        annoPendSlot = sSlot;
+        annoPendElem = sElem;
+        annoArrayTib = sTib;
+        annoArrayPrim = sPrim;
+        parseForMethods(base, blobLenOf(base));
+        return obj;
     }
 
     // Pending Class/enum element resolutions for the annotation currently being built. Kept as a flat list
@@ -21205,6 +21334,7 @@ public final class Loader
     private static int annoPendSlot = -1;               // the slot being decoded, or -1 outside an element
     private static int annoPendElem = -1;               // array element index being decoded, or -1
     private static long annoArrayTib;                   // the array TIB for that slot's declared element type
+    private static int annoArrayPrim;                   // that slot's PRIMITIVE array component char, or 0
 
     /**
      * The array TIB an element of declared type {@code ()[Lfoo;} needs, or 0 if it is not an array of a
@@ -21212,6 +21342,23 @@ public final class Loader
      * element's real type is written down -- an {@code element_value} says what a value IS, never what the
      * declaration expects.
      */
+    /** The primitive component char of an element method's {@code ()[X} return type, or 0 for anything else. */
+    private static int annoArrayPrimFor(long base, int descOff)
+    {
+        int len = u2(base + descOff);
+        int i = 0;
+        while (i < len && u1(base + descOff + 2 + i) != 0x29)   // ')'
+        {
+            i += 1;
+        }
+        if (i + 2 >= len || u1(base + descOff + 2 + i + 1) != 0x5B)  // '['
+        {
+            return 0;
+        }
+        int c = u1(base + descOff + 2 + i + 2);
+        return c == 0x4C || c == 0x5B ? 0 : c;          // 'L' / '[': a reference component
+    }
+
     private static long annoArrayTibFor(long base, int descOff)
     {
         int len = u2(base + descOff);
@@ -21262,21 +21409,40 @@ public final class Loader
      * <p>A Class element whose class cannot be loaded, and an enum constant whose class has no such static,
      * stay NULL rather than becoming something plausible -- the same choice the rest of this runtime makes.
      */
-    private static void drainAnnoPending(long obj)
+    private static void drainAnnoPending(long obj, int mark)
     {
-        int n = annoPendN;
-        annoPendN = 0;                                  // clear first: a <clinit> below can build an annotation
+        int n = annoPendN - mark;
+        if (n <= 0)
+        {
+            return;
+        }
+        // COPY this build's entries out, then release them: a <clinit> or another build below can note new
+        // entries, which land at `mark` and would overwrite the ones being resolved.
+        int[] kind = new int[n];
+        long[] ea = new long[n];
+        long[] eb = new long[n];
+        int[] eat = new int[n];
+        int[] eidx = new int[n];
+        int c = 0;
+        while (c < n)
+        {
+            kind[c] = annoPendKind[mark + c];
+            ea[c] = annoPendA[mark + c];
+            eb[c] = annoPendB[mark + c];
+            eat[c] = annoPendAt[mark + c];
+            eidx[c] = annoPendIdx[mark + c];
+            c += 1;
+        }
+        annoPendN = mark;
         int i = 0;
         while (i < n)
         {
-            long v = annoPendKind[i] == 0
-                    ? annoClassValue(annoPendA[i])
-                    : annoEnumValue(annoPendA[i], annoPendB[i]);
+            long v = kind[i] == 0 ? annoClassValue(ea[i]) : annoEnumValue(ea[i], eb[i]);
             if (v != 0L)
             {
-                if (annoPendIdx[i] < 0)
+                if (eidx[i] < 0)
                 {
-                    Magic.store64(obj + 16L + annoPendAt[i] * 8L, v);
+                    Magic.store64(obj + 16L + eat[i] * 8L, v);
                 }
                 else
                 {
@@ -21284,16 +21450,16 @@ public final class Loader
                     // after the walks, and resolving a Class here can demand-load and collect. The array is
                     // reachable from the object's value slot, so going via the slot keeps it alive; a stashed
                     // address would not.
-                    long arr = Magic.load64(obj + 16L + annoPendAt[i] * 8L);
+                    long arr = Magic.load64(obj + 16L + eat[i] * 8L);
                     // BOUNDS-CHECK BEFORE STORING. A raw store at a COMPUTED offset: if the slot does not hold
                     // the array this entry was recorded against, or the index is stale, it writes into the
                     // middle of whatever object is there. Not the cause of the corruption this change was once
                     // blamed for -- that was the code arena overlapping the image -- but unchecked computed
                     // stores were three separate defects in one day, so this one does not ship unchecked.
                     // A miss means the pending record is wrong, so it is skipped, not clamped.
-                    if (arr != 0L && annoPendIdx[i] < (int) Magic.load64(arr + 16L))
+                    if (arr != 0L && eidx[i] < (int) Magic.load64(arr + 16L))
                     {
-                        Magic.store64(arr + 24L + annoPendIdx[i] * 8L, v);
+                        Magic.store64(arr + 24L + eidx[i] * 8L, v);
                     }
                 }
             }
@@ -21309,15 +21475,24 @@ public final class Loader
         {
             return primitiveMirror(u1(descU + 2));      // I J Z C B S F D V
         }
-        if (len < 3 || u1(descU + 2) != 0x4C)           // not "L...;" -- an array class literal, not modelled
+        int dims = 0;                                   // an ARRAY class literal -- int[].class, String[][].class
+        while (dims < len && u1(descU + 2 + dims) == 0x5B)  // -- read null before; '[' counts the dimensions
+        {
+            dims += 1;
+        }
+        if (dims > 0 && dims == len - 1)
+        {
+            return primArrayMirror(u1(descU + 2 + dims), dims);
+        }
+        if (len - dims < 3 || u1(descU + 2 + dims) != 0x4C)
         {
             return 0L;
         }
-        byte[] name = new byte[len - 2];
+        byte[] name = new byte[len - dims - 2];
         int i = 0;
-        while (i < len - 2)
+        while (i < name.length)
         {
-            name[i] = (byte) u1(descU + 2 + 1 + i);
+            name[i] = (byte) u1(descU + 2 + dims + 1 + i);
             i += 1;
         }
         int ci = classIndexByName(name);
@@ -21326,7 +21501,12 @@ public final class Loader
             loadClassIncremental(name);                 // safe here: no walk is in progress
             ci = classIndexByName(name);
         }
-        return ci < 0 ? 0L : classMirror(clTab[ci].type);
+        if (ci < 0)
+        {
+            return 0L;
+        }
+        long m = classMirror(clTab[ci].type);
+        return dims == 0 ? m : arrayOf(m, dims);
     }
 
     /** An {@code 'e'} element: enum type descriptor + constant name -> the constant object, or 0. */

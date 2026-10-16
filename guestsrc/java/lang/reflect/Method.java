@@ -274,7 +274,39 @@ public final class Method extends Executable
         throw new java.lang.annotation.AnnotationFormatError("Parameter annotations don't match number of parameters");
     }
 
-    public int getParameterCount()
+    /**
+     * Stock's: the default of this annotation element, or null when it has none -- or when this is not an
+     * annotation element at all. Read by building an instance of the annotation type with NO element written
+     * ({@code annoDefaults0}, the VM's own annotation builder, which fills every element from its
+     * {@code AnnotationDefault}) and calling this element on it. A fresh instance per call, so an array default
+     * is never shared between callers, as stock's is not. The call skips {@link #invoke}'s access check: the
+     * annotation type may be non-public, and the caller of that check would be this class.
+     */
+    public Object getDefaultValue()
+    {
+        if (!clazz.isAnnotation() || paramCount != 0 || paramMeta0(rgIndex, -3L) != 1L)
+        {
+            return null;
+        }
+        Object inst = annoDefaults0(clazz);
+        if (inst == null)
+        {
+            return null;
+        }
+        try
+        {
+            return invoke0(inst, new Object[0]);
+        }
+        catch (InvocationTargetException e)
+        {
+            throw new java.lang.annotation.AnnotationFormatError("Invalid default: " + this, e.getCause());
+        }
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.annoDefaultInstance}): see {@link #getDefaultValue}. */
+    private static native Object annoDefaults0(Class<?> annotationType);
+
+        public int getParameterCount()
     {
         return paramCount;
     }
@@ -285,6 +317,12 @@ public final class Method extends Executable
     {
         checkAccess(clazz, access, Magic.readLR(),
                 Modifier.isStatic(access) || recv == null ? null : recv.getClass());
+        return invoke0(recv, args);
+    }
+
+    /** {@link #invoke} after its access check: the receiver and argument checks, the dispatch and the call. */
+    private Object invoke0(Object recv, Object[] args) throws InvocationTargetException
+    {
         boolean isStatic = (access & 0x0008) != 0;
         long target = buf;
         if (!isStatic)
