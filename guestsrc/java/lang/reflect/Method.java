@@ -283,7 +283,8 @@ public final class Method extends Executable
      *  boxed arguments. Returns the boxed result (null for a {@code void} method). */
     public Object invoke(Object recv, Object... args) throws IllegalAccessException, InvocationTargetException
     {
-        checkAccess(clazz, access, Magic.readLR());
+        checkAccess(clazz, access, Magic.readLR(),
+                Modifier.isStatic(access) || recv == null ? null : recv.getClass());
         boolean isStatic = (access & 0x0008) != 0;
         long target = buf;
         if (!isStatic)

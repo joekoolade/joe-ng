@@ -4,6 +4,37 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **REFLECTIVE ACCESS FOLLOWS STOCK'S `verifyMemberAccess`: NESTMATES, CLASS ACCESS, PROTECTED TARGETS; NESTS
+  ARE READ (2026-10-15).** `AccessibleObject.checkAccess` knew public/private/protected/package by the member's
+  own flags alone. A negative control on main (a copy without the nest-API arms, which main's `Class` lacks)
+  differs from the host on 12 of its 21 lines:
+  - **Nestmates were refused (7 lines).** Since JEP 181 an outer class may reach a nested class's private
+    members reflectively, and the reverse; here every one -- a field read and write, a method, a constructor,
+    a doubly nested field and the outer class's private static -- threw `IllegalAccessException`.
+  - **The declaring CLASS was never checked (2 lines).** A public method of a non-public class in another
+    package was callable: `hasNext` on `ArrayList`'s private iterator class answered `true`, where stock refuses.
+  - **The protected-instance target rule was missing (3 lines).** A subclass of `ArrayList` read the protected
+    `modCount` of, and called `removeRange` on, another `ArrayList` that is not its subclass -- stock allows
+    these on the caller's own class only.
+  - **Now** `verify` is stock's `Reflection.verifyMemberAccess` without the module step (every class is in the
+    unnamed module):
+    - the declaring class must be public or in the caller's package -- public as the classfile's own
+      `access_flags` say, which for a nested class is public-or-protected in `InnerClasses`;
+    - a private member is reachable from a nestmate;
+    - a protected instance member, reached from another package, only on an object of the caller's class or a
+      subclass.
+    `checkAccess` takes the target class: the receiver's class for a field or method, the declaring class for a
+    constructor, as stock passes. Its fast path (no caller lookup) is now a public member of a public class.
+  - **`Class.getNestHost`/`isNestmateOf`/`getNestMembers`** were missing. They are stock's, over a new native
+    `nestPart0` that reads the `NestHost` and `NestMembers` attributes. One stated difference: HotSpot falls
+    back to the class itself when the named host does not list it back; a javac nest always does, so that
+    check is not made.
+  - **Probe:** `AccessRulesProbe` (new, 37 lines) is host-identical. It covers:
+    - the nestmate cases in both directions;
+    - the nest API for member, local, anonymous, top-level, `String`, primitive and array classes;
+    - the private iterator class;
+    - the protected target on self and on another list.
+  - **Regression (suite, all probes, JUnit):** pending. **Pi:** pending.
 - **REFLECTIVE FIELD ACCESS CHECKS ACCESS, THE RECEIVER, THE TYPE AND `final` AS STOCK DOES (2026-10-15).** The
   Field overlay read and wrote a slot whatever was asked of it. A negative control on main (the probe without
   the three new `AccessibleObject` members) differs from the host on 42 of its 74 lines:

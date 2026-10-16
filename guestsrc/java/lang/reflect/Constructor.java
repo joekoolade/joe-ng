@@ -211,7 +211,7 @@ public final class Constructor<T> extends Executable
     public T newInstance(Object... args) throws IllegalAccessException, InvocationTargetException,
                                                 InstantiationException
     {
-        checkAccess(clazz, access, Magic.readLR());
+        checkAccess(clazz, access, Magic.readLR(), clazz);   // stock's target for a constructor
         checkArgCount(args, paramCount);
         Object obj = allocInstance0(clazz);
         if (obj == null)

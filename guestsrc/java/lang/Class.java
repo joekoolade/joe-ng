@@ -1240,6 +1240,68 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
     }
 
     /**
+     * Stock's: the host of this class's nest -- the class named by its {@code NestHost} attribute, or this class
+     * when it has none. javac names the top-level class, so every member, local and anonymous class of a
+     * top-level class shares its host. A primitive or array class is its own host. (HotSpot also falls back to
+     * this class when the named host does not list it back; a javac nest always does.)
+     */
+    public Class<?> getNestHost()
+    {
+        if (isPrimitive() || isArray())
+        {
+            return this;
+        }
+        String host = nestPart0(this, -1L);
+        return host == null ? this : classNamed(host);
+    }
+
+    /** Stock's: whether {@code c} and this class share a nest host. */
+    public boolean isNestmateOf(Class<?> c)
+    {
+        java.util.Objects.requireNonNull(c);
+        if (this == c)
+        {
+            return true;
+        }
+        if (isPrimitive() || isArray() || c.isPrimitive() || c.isArray())
+        {
+            return false;
+        }
+        return getNestHost() == c.getNestHost();
+    }
+
+    /**
+     * Stock's: the host first, then every class its {@code NestMembers} attribute lists. Asked of a member, it
+     * answers for that member's HOST, as stock does.
+     */
+    public Class<?>[] getNestMembers()
+    {
+        if (isPrimitive() || isArray())
+        {
+            return new Class<?>[] { this };
+        }
+        Class<?> host = getNestHost();
+        int n = 0;
+        while (nestPart0(host, n) != null)
+        {
+            n += 1;
+        }
+        Class<?>[] members = new Class<?>[n + 1];
+        members[0] = host;
+        for (int i = 0; i < n; i++)
+        {
+            members[i + 1] = classNamed(nestPart0(host, i));
+        }
+        return members;
+    }
+
+    /**
+     * VM native ({@code Loader.nativeBuf} -> {@code VMNatives.classNestPart}): {@code k == -1} the NestHost
+     * attribute's class (internal name; null when absent), {@code k >= 0} the k-th NestMembers entry, or null.
+     */
+    private static native String nestPart0(Class<?> c, long k);
+
+    /**
      * VM native ({@code Loader.nativeBuf} -> {@code VMNatives.classEnclosingPart}): part 0 the EnclosingMethod
      * attribute's class (internal name; null when the attribute is absent), 1 the method name, 2 its descriptor.
      */
