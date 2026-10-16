@@ -20923,6 +20923,141 @@ public final class Loader
     private static long[] annoTibVal;
     private static int annoTibN;
 
+    /** Compiled bodies of {@code MetalAnnotations.annoEquals/annoHashCode/annoToString}; 0 until compiled. */
+    private static long annoEqBuf;
+    private static long annoHashBuf;
+    private static long annoStrBuf;
+
+    /**
+     * Compile the annotation-contract helpers once, loading their class on first use -- lazily, so a program
+     * that reads no annotation pays nothing. Each stays 0 if it will not compile, and its slot then keeps
+     * {@code Object}'s identity behaviour, which is the old answer rather than a wild branch.
+     */
+    private static void annoContractBufs()
+    {
+        if (annoEqBuf != 0L && annoHashBuf != 0L && annoStrBuf != 0L)
+        {
+            return;
+        }
+        if (classIndexByName(Magic.bytes("jdk/internal/misc/MetalAnnotations")) < 0)
+        {
+            loadClassIncremental(Magic.bytes("jdk/internal/misc/MetalAnnotations"));
+            if (classIndexByName(Magic.bytes("jdk/internal/misc/MetalAnnotations")) < 0)
+            {
+                return;
+            }
+        }
+        long cls = utf8Blob(Magic.bytes("jdk/internal/misc/MetalAnnotations"));
+        if (annoEqBuf == 0L)
+        {
+            annoEqBuf = helperBuf(cls, Magic.bytes("annoEquals"), Magic.bytes("(Ljava/lang/Object;Ljava/lang/Object;)Z"));
+        }
+        if (annoHashBuf == 0L)
+        {
+            annoHashBuf = helperBuf(cls, Magic.bytes("annoHashCode"), Magic.bytes("(Ljava/lang/Object;)I"));
+        }
+        if (annoStrBuf == 0L)
+        {
+            annoStrBuf = helperBuf(cls, Magic.bytes("annoToString"), Magic.bytes("(Ljava/lang/Object;)Ljava/lang/String;"));
+        }
+    }
+
+    private static long helperBuf(long cls, byte[] name, byte[] desc)
+    {
+        long n = utf8Blob(name);
+        long d = utf8Blob(desc);
+        long buf = bufBySigU(cls, n, d);
+        return buf != 0L ? buf : compileSigOnDemand(cls, n, d);
+    }
+
+    /** Whether {@code tib} is one of the shared annotation TIBs. */
+    private static boolean isAnnoTib(long tib)
+    {
+        int i = 0;
+        while (i < annoTibN)
+        {
+            if (annoTibVal[i] == tib)
+            {
+                return true;
+            }
+            i += 1;
+        }
+        return false;
+    }
+
+    /**
+     * Point an annotation TIB's {@code equals}/{@code hashCode}/{@code toString} -- the {@code Object} vtable
+     * slots, and when {@code dir} is given the {@code java/lang/annotation/Annotation} itable entry -- at
+     * {@code MetalAnnotations}' static helpers, whose (receiver, arg) register layout is the instance method's.
+     * Before this an annotation was compared, hashed and printed as an identity object: two reads of the same
+     * annotation were not equal, a {@code HashSet} kept every copy, and {@code toString} printed a {@code $$Lambda}
+     * name (AnnoContractProbe). Slots beyond {@code cap} are not written.
+     */
+    private static void patchAnnoContract(long tib, int cap, long dir)
+    {
+        annoContractBufs();
+        int oi = objectClassIndex();
+        if (oi < 0)
+        {
+            return;
+        }
+        int st = clTab[oi].vtStart;
+        int nv = clTab[oi].vtCount;
+        int k = 0;
+        while (k < nv && k < cap)
+        {
+            long buf = annoContractBufFor(vtNameBase[st + k], vtNameOff[st + k], vtDescOff[st + k]);
+            if (buf != 0L)
+            {
+                Magic.store64(tib + 8L + (long) k * 8L, buf);
+            }
+            k += 1;
+        }
+        if (dir == 0L)
+        {
+            return;
+        }
+        long e = dir;
+        while (Magic.load64(e) != 0L)
+        {
+            int r = classRegByType(Magic.load64(e));
+            long it = Magic.load64(e + 8L);
+            if (r >= 0 && it != 0L && utf8IsAtBase(clTab[r].base, clTab[r].nameOff, Magic.bytes("java/lang/annotation/Annotation")))
+            {
+                int z = 0;
+                while (z < clTab[r].ifmCount)
+                {
+                    int m = clTab[r].ifmStart + z;
+                    long buf = annoContractBufFor(ifBase[m], ifNameOff[m], ifDescOff[m]);
+                    if (buf != 0L)
+                    {
+                        Magic.store64(it + z * 8L, buf);
+                    }
+                    z += 1;
+                }
+            }
+            e += 16L;
+        }
+    }
+
+    /** The contract helper for a method named and typed as {@code equals}/{@code hashCode}/{@code toString}, or 0. */
+    private static long annoContractBufFor(long base, int nameOff, int descOff)
+    {
+        if (utf8IsAtBase(base, nameOff, Magic.bytes("equals")) && utf8IsAtBase(base, descOff, Magic.bytes("(Ljava/lang/Object;)Z")))
+        {
+            return annoEqBuf;
+        }
+        if (utf8IsAtBase(base, nameOff, Magic.bytes("hashCode")) && utf8IsAtBase(base, descOff, Magic.bytes("()I")))
+        {
+            return annoHashBuf;
+        }
+        if (utf8IsAtBase(base, nameOff, Magic.bytes("toString")) && utf8IsAtBase(base, descOff, Magic.bytes("()Ljava/lang/String;")))
+        {
+            return annoStrBuf;
+        }
+        return 0L;
+    }
+
     /** The shared TIB for annotation interface {@code ifaceReg}, built once and GC-rooted like a lambda's. */
     private static long annoTibFor(int ifaceReg)
     {
@@ -21042,6 +21177,7 @@ public final class Loader
         long tib = Heap.allocData(8 + onv2 * 8);
         Magic.store64(tib + 0L, type);
         fillObjectVtable(tib);
+        patchAnnoContract(tib, onv2, dir);
         annoTibKey[annoTibN] = ifaceType;
         annoTibVal[annoTibN] = tib;
         annoTibN += 1;
@@ -21077,6 +21213,8 @@ public final class Loader
         {
             return 0L;
         }
+        parseForMethods(base, blobLenOf(base));         // a first TIB compiles the contract helpers, which
+                                                        //   re-parses; phase 1 reads names through gcp
         int n = clTab[ifaceReg].ifmCount;
         // ONE EXTRA TRAILING WORD holds this annotation's own Class mirror, which is what
         // Annotation.annotationType() answers. Keeping it IN THE INSTANCE is what lets that method reuse the
@@ -24076,6 +24214,10 @@ public final class Loader
                 if (fillObjectVtableUpTo(lambdaTibRoots[i], lambdaTibVtCap[i]))
                 {
                     lambdaTibFilled[i] = true;           // complete: nothing more can ever be written here
+                }
+                if (isAnnoTib(lambdaTibRoots[i]))       // the refill copies Object's slots back over the
+                {                                       //   annotation contract: put it back
+                    patchAnnoContract(lambdaTibRoots[i], lambdaTibVtCap[i], 0L);
                 }
             }
             i += 1;
