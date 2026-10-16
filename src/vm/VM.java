@@ -1984,6 +1984,10 @@ public final class VM
         if (classFileWordAddr == 0L) { long u = VMNatives.classFileWord(0L, 0L); } // Class.classFileWord0
         if (classInnerPartAddr == 0L) { long u = VMNatives.classInnerPart(0L, 0L); }   // Class.innerPart0
         if (classSealedAddr == 0L) { long u = VMNatives.classSealed(0L); }          // Class.sealed0
+        if (classRecordInfoAddr == 0L) { long u = VMNatives.classRecordInfo(0L, 0L); } // RecordComponent.recordInfo0
+        if (classRecordPartAddr == 0L) { long u = VMNatives.classRecordPart(0L, 0L); } // RecordComponent.recordPart0
+        if (classRecordAnnosAddr == 0L) { long u = VMNatives.classRecordAnnos(0L, 0L); } // RecordComponent.recordAnnos0
+        if (classPermittedAddr == 0L) { long u = VMNatives.classPermitted(0L, 0L); } // Class.permitted0
         if (methodSignatureAddr == 0L) { long u = VMNatives.methodSignature(-1L); } // Executable.signature0
         if (methodExceptionNameAddr == 0L) { long u = VMNatives.methodExceptionName(-1L, 0L); } // Executable.exceptionName0
         if (methodParamMetaAddr == 0L) { long u = VMNatives.methodParamMeta(-1L, 0L); } // Executable.paramMeta0
@@ -3512,6 +3516,10 @@ public final class VM
     static long classFileWordAddr;     // VMNatives.classFileWord(JJ)J — Class/MetalJavaLangAccess.classFileWord0
     static long classInnerPartAddr;    // VMNatives.classInnerPart(JJ)J — Class.innerPart0(Class, long)
     static long classSealedAddr;       // VMNatives.classSealed(J)J — Class.sealed0(Class)
+    static long classRecordInfoAddr;   // VMNatives.classRecordInfo(JJ)J — RecordComponent.recordInfo0(Class, long)
+    static long classRecordPartAddr;   // VMNatives.classRecordPart(JJ)J — RecordComponent.recordPart0(Class, long)
+    static long classRecordAnnosAddr;  // VMNatives.classRecordAnnos(JJ)J — RecordComponent.recordAnnos0(Class, long)
+    static long classPermittedAddr;    // VMNatives.classPermitted(JJ)J — Class.permitted0(Class, long)
     static long methodSignatureAddr;   // VMNatives.methodSignature(J)J — Executable.signature0(int)
     static long methodExceptionNameAddr; // VMNatives.methodExceptionName(JJ)J — Executable.exceptionName0(int, long)
     static long methodParamMetaAddr;   // VMNatives.methodParamMeta(JJ)J — Executable.paramMeta0(int, long)

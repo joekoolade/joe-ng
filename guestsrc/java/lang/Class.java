@@ -429,10 +429,119 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
         return "L" + getName().replace('.', '/') + ";";
     }
 
+    /**
+     * Stock's rule: a direct subclass of {@code java.lang.Record} that carries a {@code Record} attribute. It used
+     * to answer from the superclass's NAME alone.
+     */
     public boolean isRecord()
     {
         Class<?> sup = getSuperclass();
-        return sup != null && "java.lang.Record".equals(sup.getName());
+        return sup != null && "java.lang.Record".equals(sup.getName()) && getRecordComponents() != null;
+    }
+
+    /**
+     * Stock's: this record's components in declaration order, or null for a class that is not a record. Read from
+     * the {@code Record} attribute by {@link java.lang.reflect.RecordComponent#componentsOf}, the stand-in for the
+     * JVM's {@code getRecordComponents0}; a fresh array each call, as stock's is.
+     */
+    public java.lang.reflect.RecordComponent[] getRecordComponents()
+    {
+        Class<?> sup = getSuperclass();
+        if (sup == null || !"java.lang.Record".equals(sup.getName()))
+        {
+            return null;
+        }
+        return java.lang.reflect.RecordComponent.componentsOf(this);
+    }
+
+    /**
+     * Stock's: the classes named by the {@code PermittedSubclasses} attribute, or null when there is none (an
+     * array, a primitive, or a class that is not sealed). Stock leaves out any listed class that is not a DIRECT
+     * subtype of this one; so does this.
+     */
+    public Class<?>[] getPermittedSubclasses()
+    {
+        if (isArray() || isPrimitive() || !isSealed())
+        {
+            return null;
+        }
+        int n = 0;
+        while (permitted0(this, n) != null)
+        {
+            n += 1;
+        }
+        Class<?>[] out = new Class<?>[n];
+        int k = 0;
+        for (int i = 0; i < n; i++)
+        {
+            Class<?> c = classNamed(permitted0(this, i));
+            if (isDirectSubType(c))
+            {
+                out[k] = c;
+                k += 1;
+            }
+        }
+        return k == n ? out : java.util.Arrays.copyOf(out, k);
+    }
+
+    /** Stock's: whether {@code c} extends this class or, for an interface, implements it directly. */
+    private boolean isDirectSubType(Class<?> c)
+    {
+        if (isInterface())
+        {
+            for (Class<?> i : c.getInterfaces())
+            {
+                if (i == this)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+        return c.getSuperclass() == this;
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.classPermitted}): the k-th permitted name, or null. */
+    private static native String permitted0(Class<?> c, long k);
+
+    /** Stock's: the component type of an array class, else null. */
+    public Class<?> componentType()
+    {
+        return isArray() ? getComponentType() : null;
+    }
+
+    /** Stock's: the primitive class (or void) named {@code primitiveName}, or null for any other name. */
+    public static Class<?> forPrimitiveName(String primitiveName)
+    {
+        return switch (primitiveName)
+        {
+            case "int" -> int.class;
+            case "long" -> long.class;
+            case "short" -> short.class;
+            case "char" -> char.class;
+            case "byte" -> byte.class;
+            case "float" -> float.class;
+            case "double" -> double.class;
+            case "boolean" -> boolean.class;
+            case "void" -> void.class;
+            default -> null;
+        };
+    }
+
+    /**
+     * Stock's native, decided rather than defaulted: false. A hidden class comes only from
+     * {@code Lookup.defineHiddenClass}, which this VM does not provide; its lambdas and annotation instances are
+     * VM-synthesised objects, not hidden classes, and they have no {@code Class} of their own to ask.
+     */
+    public boolean isHidden()
+    {
+        return false;
+    }
+
+    /** Stock's native: null. Signers are set by a class loader verifying a signed jar, which this VM never does. */
+    public Object[] getSigners()
+    {
+        return null;
     }
 
     /**

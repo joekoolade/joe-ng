@@ -6305,6 +6305,8 @@ public final class Loader
                 // ClassFileFormatVersion enum ReflectionFactory.parseAccessFlags keys them by. Pure Java, no natives.
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/AccessFlag"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/ClassFileFormatVersion"))
+                // RecordComponent: OVERLAID (see guestsrc) -- Class.getRecordComponents answers in its terms.
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/RecordComponent"))
                 // NARROWED OUT of the java/lang/reflect/ denial, and NOT overlaid: guestsrc is for classes
                 // that need NATIVES, and this one needs none. picocli's ObjectScope asks
                 // `Proxy.isProxyClass(obj.getClass())`, whose whole body is
@@ -12659,6 +12661,12 @@ public final class Loader
         }
         // JavaLangAccess.classFileVersion/getClassFileAccessFlags: the same classfile-header reader Class uses,
         // registered under the overlay that declares its own copy (a native binds by DECLARING class).
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/RecordComponent")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("recordInfo0")))        { return VM.classRecordInfoAddr; }  // (Class,J)J
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("recordPart0")))        { return VM.classRecordPartAddr; }  // (Class,J)String
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("recordAnnos0")))       { return VM.classRecordAnnosAddr; } // (Class,J)[Annotation
+        }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/access/MetalJavaLangAccess")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("classFileWord0")))     { return VM.classFileWordAddr; } // (Class,J)J
@@ -12680,6 +12688,7 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("classFileWord0")))    { return VM.classFileWordAddr; } // (Class,J)String
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("innerPart0")))        { return VM.classInnerPartAddr; }     // (Class,J)String
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("sealed0")))           { return VM.classSealedAddr; }   // (Class)J
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("permitted0")))           { return VM.classPermittedAddr; }   // (Class,J)String
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("forName0")))          { return VM.forNameAddr; }       // (byte[])Class
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("classModifiers0")))   { return VM.classModifiersAddr; } // (Class)I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isInstance0")))       { return VM.instanceOfAddr; }    // (Object,J)Z == VM.instanceOf(JJ)I
@@ -19361,6 +19370,123 @@ public final class Loader
             return utf8ToString(base, gcp[u2(base + gcp[idx])]);    // CONSTANT_Class -> its name Utf8
         }
         return utf8ToString(base, gcp[idx]);
+    }
+
+    /**
+     * The class's attribute named {@code name} -- position of its body, or 0 when absent or the mirror has no
+     * classfile. The base of the blob is left in {@link #gAttrBase} for the caller's reads.
+     */
+    private static long classAttrOf(long mirror, byte[] name)
+    {
+        if (mirror <= 0x1000L)
+        {
+            return 0L;
+        }
+        int reg = regOfType(Magic.load64(mirror + 16L));
+        if (reg < 0)
+        {
+            return 0L;
+        }
+        long base = clTab[reg].base;
+        long ap = classAttrsPos(base);
+        if (ap == 0L)
+        {
+            return 0L;
+        }
+        gAttrBase = base;
+        return classAttrNamed(base, ap + 2L, u2(ap), name);
+    }
+
+    private static long gAttrBase;                      // the blob classAttrOf last answered for
+
+    /** Position of record component {@code idx} in the Record attribute at {@code rec}, or 0 past the end. */
+    private static long recordComponentPos(long rec, long idx)
+    {
+        int n = u2(rec);                                // u2 components_count, then the components
+        if (idx < 0L || idx >= n)
+        {
+            return 0L;
+        }
+        long p = rec + 2L;
+        long i = 0L;
+        while (i < idx)
+        {
+            p = skipAttributes(p + 6L, u2(p + 4L));     // u2 name, u2 descriptor, u2 attributes_count, attrs
+            i += 1L;
+        }
+        return p;
+    }
+
+    /**
+     * {@code RecordComponent.recordInfo0}: the number of components in the class's {@code Record} attribute
+     * (JVMS 4.7.30), or -1 when it has none -- which is what makes it a record, beyond extending Record.
+     */
+    static long classRecordInfo(long mirror, long k)
+    {
+        long rec = classAttrOf(mirror, Magic.bytes("Record"));
+        return rec == 0L ? -1L : u2(rec);
+    }
+
+    /**
+     * {@code RecordComponent.recordPart0}: for component {@code code >> 2}, part {@code code & 3} -- 0 its name, 1
+     * its field descriptor, 2 its {@code Signature} attribute -- as a String, or 0 (no such component, or no
+     * Signature).
+     */
+    static long classRecordPart(long mirror, long code)
+    {
+        long rec = classAttrOf(mirror, Magic.bytes("Record"));
+        if (rec == 0L)
+        {
+            return 0L;
+        }
+        long base = gAttrBase;
+        long p = recordComponentPos(rec, code >> 2);
+        if (p == 0L)
+        {
+            return 0L;
+        }
+        int part = (int) (code & 3L);
+        if (part == 0)
+        {
+            return utf8ToString(base, gcp[u2(p)]);
+        }
+        if (part == 1)
+        {
+            return utf8ToString(base, gcp[u2(p + 2L)]);
+        }
+        long q = classAttrNamed(base, p + 6L, u2(p + 4L), Magic.bytes("Signature"));
+        return q == 0L ? 0L : utf8ToString(base, gcp[u2(q)]);
+    }
+
+    /** {@code RecordComponent.recordAnnos0}: the annotations written on component {@code idx}, as an Annotation[]. */
+    static long classRecordAnnos(long mirror, long idx)
+    {
+        long rec = classAttrOf(mirror, Magic.bytes("Record"));
+        if (rec == 0L)
+        {
+            return 0L;
+        }
+        long base = gAttrBase;
+        long p = recordComponentPos(rec, idx);
+        if (p == 0L)
+        {
+            return 0L;
+        }
+        long lp = annoListPos(base, p + 6L, u2(p + 4L));
+        return lp == 0L ? emptyAnnoArray() : annotationsAt(base, lp);
+    }
+
+    /** {@code Class.permitted0}: the {@code k}th name in the class's {@code PermittedSubclasses}, or 0. */
+    static long classPermitted(long mirror, long k)
+    {
+        long ps = classAttrOf(mirror, Magic.bytes("PermittedSubclasses"));
+        if (ps == 0L || k < 0L || k >= u2(ps))         // u2 number_of_classes, then u2 class indices
+        {
+            return 0L;
+        }
+        long base = gAttrBase;
+        int ci = u2(ps + 2L + 2L * k);
+        return utf8ToString(base, gcp[u2(base + gcp[ci])]);   // CONSTANT_Class -> its name Utf8
     }
 
     /**

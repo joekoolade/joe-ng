@@ -1554,6 +1554,10 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classFileWord(JJ)J", "vm/VM.classFileWordAddr"); // Class.classFileWord0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classInnerPart(JJ)J", "vm/VM.classInnerPartAddr"); // Class.innerPart0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classSealed(J)J", "vm/VM.classSealedAddr"); // Class.sealed0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classRecordInfo(JJ)J", "vm/VM.classRecordInfoAddr"); // RecordComponent.recordInfo0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classRecordPart(JJ)J", "vm/VM.classRecordPartAddr"); // RecordComponent.recordPart0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classRecordAnnos(JJ)J", "vm/VM.classRecordAnnosAddr"); // RecordComponent.recordAnnos0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classPermitted(JJ)J", "vm/VM.classPermittedAddr"); // Class.permitted0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodSignature(J)J", "vm/VM.methodSignatureAddr"); // Executable.signature0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodExceptionName(JJ)J", "vm/VM.methodExceptionNameAddr"); // Executable.exceptionName0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodParamMeta(JJ)J", "vm/VM.methodParamMetaAddr"); // Executable.paramMeta0
