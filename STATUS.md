@@ -196,7 +196,7 @@ Newest entries are at the top.
     Host-identical. Negative control on main, a cut-down copy (main's `Parameter` lacks the methods the full
     probe calls): 30 of its 55 lines differ -- every annotation row empty, every `toString` bare, and all
     three stacked lists wrong.
-  - **Regression (suite, all probes, JUnit):** pending. **Pi:** PASS (2026-10-15, 1a273e2) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=888), `[main returned normally]`, `gc: collections=7`.
+  - **Regression (suite, all probes, JUnit):** QEMU clean on 1a273e2 -- suite markers all zero, `gc: collections=51`, clinits 346; 50 of 53 probes host-identical, DigestProbe/MacProbe their designed divergences, FieldSemanticsProbe absent from that tree (its host control was written by the next branch mid-run); `ran 44, failures 0`. Recorded after the merge, which went ahead with this line pending. **Pi:** PASS (2026-10-15, 1a273e2) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=888), `[main returned normally]`, `gc: collections=7`.
 - **`java.lang.reflect.Array` RUNS STOCK, ITS NATIVES WRITTEN IN JAVA (2026-10-15).** The overlay was a
   hand-written minimum, which rule 3 retires, and it was wrong for every array but a reference `Object[]`.
   - **15 stock members were missing:** `getBoolean`/`getByte`/`getChar`/`getShort`/`getFloat`/`getDouble` and all
