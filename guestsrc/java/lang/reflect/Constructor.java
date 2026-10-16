@@ -19,9 +19,8 @@ import magic.Magic;
  * compiled-buffer address, and its descriptor's parameter type-chars (resolved once at construction via the
  * shared {@link #methodInfo0}). {@link #newInstance} allocates a fresh zeroed instance (header + TIB via
  * {@link #allocInstance0}), marshals the {@code Object[]} args into a register buffer (the new object in slot 0
- * as the {@code <init>} receiver, then one slot per parameter — primitives unboxed, references reinterpreted to
- * their address), runs {@code <init>} via {@link Magic#callN}, and returns the object. Overload resolution is by
- * arity only for now (no parameter-type matching). Access enforcement mirrors {@link Method}.
+ * as the {@code <init>} receiver, then one slot per parameter), runs {@code <init>} via {@link Magic#callN}, and
+ * returns the object. Access enforcement mirrors {@link Method}.
  */
 public final class Constructor<T> extends Executable
 {
@@ -172,6 +171,40 @@ public final class Constructor<T> extends Executable
     void specificToGenericStringHeader(StringBuilder sb)
     {
         specificToStringHeader(sb);
+    }
+
+    /**
+     * Stock's: an enum constructor's name and ordinal, and a non-static member class constructor's outer
+     * instance, have no annotation row, so the rows are padded at the front; a local or anonymous class cannot
+     * be counted reliably and is left as read.
+     */
+    @Override
+    boolean handleParameterNumberMismatch(int resultLength, Class<?>[] parameterTypes)
+    {
+        int numParameters = parameterTypes.length;
+        Class<?> declaringClass = getDeclaringClass();
+        if (declaringClass.isEnum())
+        {
+            return resultLength + 2 == numParameters && parameterTypes[0] == String.class
+                    && parameterTypes[1] == int.class;
+        }
+        else if (declaringClass.isAnonymousClass() || declaringClass.isLocalClass())
+        {
+            return false;
+        }
+        else
+        {
+            if (declaringClass.isMemberClass() && ((declaringClass.getModifiers() & Modifier.STATIC) == 0)
+                    && resultLength + 1 == numParameters)
+            {
+                return true;
+            }
+            else
+            {
+                throw new java.lang.annotation.AnnotationFormatError(
+                        "Parameter annotations don't match number of parameters");
+            }
+        }
     }
 
     /** Allocate a fresh instance of the declaring class and run this {@code <init>} with {@code args}. */

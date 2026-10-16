@@ -267,6 +267,13 @@ public final class Method extends Executable
         sb.append(getName());
     }
 
+    /** Stock's: a method has no implicit parameters, so a row count that differs from the descriptor's is bad. */
+    @Override
+    boolean handleParameterNumberMismatch(int resultLength, Class<?>[] parameterTypes)
+    {
+        throw new java.lang.annotation.AnnotationFormatError("Parameter annotations don't match number of parameters");
+    }
+
     public int getParameterCount()
     {
         return paramCount;

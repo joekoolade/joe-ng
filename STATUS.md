@@ -4,6 +4,47 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **PARAMETER ANNOTATIONS AND `MethodParameters` ARE READ; `Parameter` RUNS STOCK; STACKED ANNOTATIONS KEEP THEIR
+  VALUES (2026-10-15).**
+  - **`getParameterAnnotations()` answered an empty row for every parameter**, a limit stated in its own
+    javadoc: the VM never read `RuntimeVisibleParameterAnnotations`. JUnit reads it for `@ExtendWith` on a
+    parameter.
+    - Three new natives read it (JVMS 4.7.18), along with `MethodParameters` (4.7.24): `paramMeta0`,
+      `paramName0` and `paramAnnoRow0`, each `(int, long)`.
+    - `Executable.getParameters`/`getParameterAnnotations` now carry stock's logic, including stock's
+      realignment. javac writes no annotation row for an inner class constructor's outer instance, or for an
+      enum constructor's name and ordinal, so `handleParameterNumberMismatch` pads the leading rows, per
+      subclass as stock does.
+  - **`Parameter` was a hand-written minimum**:
+    - its `toString` was `arg0`, not stock's `int arg0`, `java.util.List<java.lang.String> arg4` or
+      `int... arg1`;
+    - it had no `equals`/`hashCode`;
+    - it ignored `MethodParameters`, so an inner class constructor's `final mandated` outer instance and an enum
+      constructor's `synthetic` name and ordinal read as plain parameters;
+    - it had no `isImplicit`/`isSynthetic`/`isVarArgs`.
+    It is now the JDK 26 source. Two members throw, naming what they need: `accessFlags` needs
+    `java.lang.reflect.AccessFlag` (also missing from Field and Executable), and `getAnnotatedType` needs the
+    type-annotation parser.
+  - **A BUG ALREADY ON MAIN, FOUND BY THE PROBE: in a list of annotations, every one after the first lost its
+    written values.**
+    - `buildAnnoObject` matches element names through the parse cursor `gcp`. Building the previous
+      annotation re-parses its annotation type's blob to apply defaults, which moves that cursor.
+    - So the next annotation matched nothing and read its defaults: `@Mark @Num(3) @Tag("third")` on a method
+      read `@Mark @Num(7) @Tag(null)`. An element with no default read null.
+    - The same happened on a field and a class: three separate copies of the walk, all with the bug.
+    - Fixed by re-pointing the cursor at the annotated class before each build, in ONE walk
+      (`annotationsAt`) that the class, field, method and parameter readers now share.
+    - A single annotation, the case every probe so far used, was unaffected.
+  - **Probe:** `ParamAnnoProbe` (new, 91 lines) covers:
+    - annotations on the first, middle and last parameter, two on one parameter, and a CLASS-retention one
+      that must stay invisible;
+    - varargs and generic parameters, a method-level-only annotation, and inner and enum constructors;
+    - each parameter's `toString`, flags and equality across two `getParameters` calls;
+    - three annotations stacked on a method, a field and a class, in different orders.
+    Host-identical. Negative control on main, a cut-down copy (main's `Parameter` lacks the methods the full
+    probe calls): 30 of its 55 lines differ -- every annotation row empty, every `toString` bare, and all
+    three stacked lists wrong.
+  - **Regression (suite, all probes, JUnit):** pending. **Pi:** pending.
 - **`java.lang.reflect.Array` RUNS STOCK, ITS NATIVES WRITTEN IN JAVA (2026-10-15).** The overlay was a
   hand-written minimum, which rule 3 retires, and it was wrong for every array but a reference `Object[]`.
   - **15 stock members were missing:** `getBoolean`/`getByte`/`getChar`/`getShort`/`getFloat`/`getDouble` and all

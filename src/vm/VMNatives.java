@@ -749,6 +749,48 @@ final class VMNatives
         }
     }
 
+    /** {@code Executable.paramMeta0(int, long)} native: a MethodParameters/parameter-annotation count, or an entry's flags. */
+    static long methodParamMeta(long rgIndex, long k)
+    {
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            return Loader.methodParamMeta((int) rgIndex, k);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
+    }
+
+    /** {@code Executable.paramName0(int, long)} native: a MethodParameters entry's name, or 0. */
+    static long methodParamName(long rgIndex, long k)
+    {
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            return Loader.methodParamName((int) rgIndex, k);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
+    }
+
+    /** {@code Executable.paramAnnoRow0(int, long)} native: one row of RuntimeVisibleParameterAnnotations, or 0. */
+    static long methodParamAnnoRow(long rgIndex, long k)
+    {
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            return Loader.methodParamAnnoRow((int) rgIndex, k);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
+    }
+
     /** {@code Field.signature0(Class, byte[])} native: the field's Signature attribute as a String, or 0. */
     static long fieldSignature(long mirror, long nameArr)
     {
