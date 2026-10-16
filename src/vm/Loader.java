@@ -12708,6 +12708,9 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoAll0")))          { return VM.methodAnnoAllAddr; } // (I)[Annotation
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("signature0")))        { return VM.methodSignatureAddr; } // (I)String
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("exceptionName0")))    { return VM.methodExceptionNameAddr; } // (I,J)String
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("paramMeta0")))    { return VM.methodParamMetaAddr; } // (I,J)J
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("paramName0")))    { return VM.methodParamNameAddr; } // (I,J)String
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("paramAnnoRow0")))    { return VM.methodParamAnnoRowAddr; } // (I,J)[Annotation
         }
         // The BCM2711 hardware RNG, behind java.security.SecureRandom's self-seeding. Keyed by DECLARING
         // CLASS like every native here -- registering one under the wrong class is the LINK FAILED this
@@ -19034,6 +19037,104 @@ public final class Loader
     }
 
     /**
+     * {@code Executable.paramMeta0}: the integer half of a method's parameter attributes. {@code k == -1}
+     * answers the {@code parameters_count} of its {@code MethodParameters} attribute (JVMS 4.7.24), {@code -2}
+     * the {@code num_parameters} of its {@code RuntimeVisibleParameterAnnotations} (JVMS 4.7.18) -- each -1 when
+     * the attribute is absent -- and {@code k >= 0} the {@code access_flags} of {@code MethodParameters} entry
+     * {@code k}. The two counts can differ from the descriptor's and from each other: javac writes no
+     * annotation row for a constructor's implicit outer instance or an enum's name and ordinal, and a
+     * {@code MethodParameters} entry for each. -1 for anything out of range; allocation-free, since
+     * {@code VM.forceCompile} probes with rgIndex -1.
+     */
+    static long methodParamMeta(int rgIndex, long k)
+    {
+        long p = methodInfoPos(rgIndex);
+        if (p == 0L)
+        {
+            return -1L;
+        }
+        long base = reflEntry(rgIndex).base;
+        if (k == -2L)
+        {
+            long q = classAttrNamed(base, p + 8L, u2(p + 6L), Magic.bytes("RuntimeVisibleParameterAnnotations"));
+            return q == 0L ? -1L : u1(q);
+        }
+        long q = classAttrNamed(base, p + 8L, u2(p + 6L), Magic.bytes("MethodParameters"));
+        if (q == 0L)
+        {
+            return -1L;
+        }
+        int n = u1(q);                                   // u1 parameters_count, then {u2 name, u2 flags} each
+        if (k == -1L)
+        {
+            return n;
+        }
+        if (k < 0L || k >= n)
+        {
+            return -1L;
+        }
+        return u2(q + 1L + 4L * k + 2L);
+    }
+
+    /**
+     * {@code Executable.paramName0}: the name in {@code MethodParameters} entry {@code k} as a String, or 0 when
+     * the entry has none ({@code name_index} 0 -- javac writes that for an implicit or synthetic parameter of a
+     * class not compiled with {@code -parameters}), the attribute is absent, or {@code k} is out of range.
+     */
+    static long methodParamName(int rgIndex, long k)
+    {
+        long p = methodInfoPos(rgIndex);
+        if (p == 0L)
+        {
+            return 0L;
+        }
+        long base = reflEntry(rgIndex).base;
+        long q = classAttrNamed(base, p + 8L, u2(p + 6L), Magic.bytes("MethodParameters"));
+        if (q == 0L || k < 0L || k >= u1(q))
+        {
+            return 0L;
+        }
+        int nameIdx = u2(q + 1L + 4L * k);
+        return nameIdx == 0 ? 0L : utf8ToString(base, gcp[nameIdx]);
+    }
+
+    /**
+     * {@code Executable.paramAnnoRow0}: row {@code k} of the method's {@code RuntimeVisibleParameterAnnotations}
+     * as a fresh {@code Annotation[]}, or 0 when the attribute is absent or {@code k} is out of range. Rows
+     * are numbered as the ATTRIBUTE numbers them, which is not always the descriptor's numbering (see
+     * {@link #methodParamMeta}); {@code Executable.getParameterAnnotations} does stock's realignment.
+     */
+    static long methodParamAnnoRow(int rgIndex, long k)
+    {
+        long p = methodInfoPos(rgIndex);
+        if (p == 0L)
+        {
+            return 0L;
+        }
+        long base = reflEntry(rgIndex).base;
+        long q = classAttrNamed(base, p + 8L, u2(p + 6L), Magic.bytes("RuntimeVisibleParameterAnnotations"));
+        if (q == 0L || k < 0L || k >= u1(q))
+        {
+            return 0L;
+        }
+        long lp = q + 1L;                                // u1 num_parameters, then one annotation list per row
+        long r = 0L;
+        while (r < k)
+        {
+            int n = u2(lp);
+            lp += 2L;
+            int i = 0;
+            while (i < n)
+            {
+                lp = skipElementPairs(lp + 2L);          // u2 type_index, then the element-value pairs
+                i += 1;
+            }
+            r += 1L;
+        }
+        return annotationsAt(base, lp);
+    }
+
+    /**
      * {@code Field.signature0}: the {@code Signature} attribute of field {@code nameArr} (a raw {@code byte[]})
      * of the class whose mirror is given, or 0. The field walk is {@link #fieldAnnotation}'s.
      */
@@ -19280,48 +19381,7 @@ public final class Loader
         {
             return emptyAnnoArray();                    // no such field, or none declared on it
         }
-        long[] descAbs = new long[MAXDECLANNO];
-        long[] pairsAbs = new long[MAXDECLANNO];
-        int n = u2(lp);
-        long q = lp + 2L;
-        int found = 0;
-        int i = 0;
-        while (i < n && found < MAXDECLANNO)             // PASS 1: addresses only, nothing resolved or built
-        {
-            int typeIdx = u2(q);
-            q += 2;
-            descAbs[found] = base + gcp[typeIdx];
-            pairsAbs[found] = q;
-            found += 1;
-            q = skipElementPairs(q);
-            i += 1;
-        }
-        long[] objs = new long[found];                   // PASS 2: resolve + build
-        int built = 0;
-        int k = 0;
-        while (k < found)
-        {
-            int ifaceReg = regOfAnnoDescAbs(descAbs[k]);
-            if (ifaceReg >= 0)
-            {
-                long obj = buildAnnoObject(base, pairsAbs[k], ifaceReg);
-                if (obj != 0L)
-                {
-                    objs[built] = obj;
-                    built += 1;
-                }
-            }
-            k += 1;
-        }
-        long arr = Heap.allocArray(built, 8);
-        Magic.store64(arr + ObjectModel.TIB_OFFSET, refArrayTib(annotationTypeAddr()));
-        int j = 0;
-        while (j < built)
-        {
-            Magic.store64(arr + ObjectModel.ARRAY_BASE_OFFSET + j * 8L, objs[j]);
-            j += 1;
-        }
-        return arr;
+        return annotationsAt(base, lp);
     }
 
     static long fieldAnnotation(long mirror, long nameArr, long descArr, int descLen)
@@ -19726,48 +19786,7 @@ public final class Loader
         {
             return emptyAnnoArray();                    // no RuntimeVisibleAnnotations: none declared
         }
-        long[] descAbs = new long[MAXDECLANNO];
-        long[] pairsAbs = new long[MAXDECLANNO];
-        int n = u2(lp);
-        long p = lp + 2L;
-        int found = 0;
-        int i = 0;
-        while (i < n && found < MAXDECLANNO)             // PASS 1: addresses only, nothing resolved or built
-        {
-            int typeIdx = u2(p);
-            p += 2;
-            descAbs[found] = base + gcp[typeIdx];
-            pairsAbs[found] = p;
-            found += 1;
-            p = skipElementPairs(p);
-            i += 1;
-        }
-        long[] objs = new long[found];                   // PASS 2: resolve + build
-        int built = 0;
-        int k = 0;
-        while (k < found)
-        {
-            int ifaceReg = regOfAnnoDescAbs(descAbs[k]);
-            if (ifaceReg >= 0)
-            {
-                long obj = buildAnnoObject(base, pairsAbs[k], ifaceReg);
-                if (obj != 0L)
-                {
-                    objs[built] = obj;
-                    built += 1;
-                }
-            }
-            k += 1;
-        }
-        long arr = Heap.allocArray(built, 8);
-        Magic.store64(arr + ObjectModel.TIB_OFFSET, refArrayTib(annotationTypeAddr()));
-        int j = 0;
-        while (j < built)
-        {
-            Magic.store64(arr + ObjectModel.ARRAY_BASE_OFFSET + j * 8L, objs[j]);
-            j += 1;
-        }
-        return arr;
+        return annotationsAt(base, lp);
     }
 
     /**
@@ -19803,6 +19822,17 @@ public final class Loader
         {
             return emptyAnnoArray();                    // no RuntimeVisibleAnnotations: none declared
         }
+        return annotationsAt(base, lp);
+    }
+
+    /**
+     * The two passes shared by the class, field, method and parameter readers: every annotation in the list at {@code lp}
+     * ({@code u2 num_annotations} first, then the entries, as both {@code RuntimeVisibleAnnotations} and each
+     * row of {@code RuntimeVisibleParameterAnnotations} lay it out), built into a fresh {@code Annotation[]}.
+     * See {@link #methodAnnotationsAll} for why pass 1 records blob addresses only.
+     */
+    private static long annotationsAt(long base, long lp)
+    {
         long[] descAbs = new long[MAXDECLANNO];
         long[] pairsAbs = new long[MAXDECLANNO];
         int n = u2(lp);
@@ -19827,6 +19857,11 @@ public final class Loader
             int ifaceReg = regOfAnnoDescAbs(descAbs[k]);
             if (ifaceReg >= 0)
             {
+                // RE-POINT THE CURSOR at the annotated class first. buildAnnoObject matches element names through
+                // gcp, and building the PREVIOUS annotation re-parsed its annotation type's blob to read the
+                // defaults (as resolving one may), so without this every annotation after the first in a list
+                // matched no written element and answered its defaults: `@Mark @Num(3)` read `@Num(7)`.
+                parseForMethods(base, blobLenOf(base));
                 long obj = buildAnnoObject(base, pairsAbs[k], ifaceReg);
                 if (obj != 0L)
                 {

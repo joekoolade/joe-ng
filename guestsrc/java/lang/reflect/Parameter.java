@@ -1,145 +1,396 @@
 /*
- * Copyright (c) 2026 Joseph Kulig.
+ * Copyright (c) 2013, 2025, Oracle and/or its affiliates. All rights reserved.
+ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License 2.0 which is available at
- * https://www.eclipse.org/legal/epl-2.0/
+ * This code is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 only, as
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
- * SPDX-License-Identifier: EPL-2.0
+ * This code is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+ * version 2 for more details (a copy is included in the LICENSE file that
+ * accompanied this code).
  *
- * Created: 2026-09-14
+ * You should have received a copy of the GNU General Public License version
+ * 2 along with this work; if not, write to the Free Software Foundation,
+ * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ *
+ * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
+ * or visit www.oracle.com if you need additional information or have any
+ * questions.
  */
 package java.lang.reflect;
 
-import java.lang.annotation.Annotation;
+import java.lang.annotation.*;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Set;
+import java.util.Objects;
+import sun.reflect.annotation.AnnotationSupport;
 
 /**
- * {@code java.lang.reflect.Parameter} for joe-ng: one parameter of a {@link Method} or {@link Constructor},
- * identified by its declaring executable and its index.
+ * Information about method parameters.
  *
- * <p>It carries NO state of its own beyond those two, which is what makes it cheap to mint per call: every
- * question is answered by asking the executable. Stock caches an array on the Executable; there is nothing
- * here worth caching.
+ * A {@code Parameter} provides information about method parameters,
+ * including its name and modifiers.  It also provides an alternate
+ * means of obtaining attributes for the parameter.
  *
- * <p>IT IMPLEMENTS {@link AnnotatedElement}, and that is load-bearing rather than decorative. JUnit's
- * {@code AnnotationUtils.getEffectiveAnnotatedParameter} hands a Parameter to
- * {@code findRepeatableAnnotations(AnnotatedElement, Class)}, so the three element methods are reached by
- * INTERFACE dispatch and must match the interface's descriptors exactly -- the same bound that has bitten
- * this overlay three times (see Method.getDeclaredAnnotation).
+ * @since 1.8
+ *
+ * <p>joe-ng overlay, taken from the JDK 26 source (rule 3). Every member is stock except {@code accessFlags} and
+ * {@code getAnnotatedType}, which throw naming what they need: {@code java.lang.reflect.AccessFlag} and the
+ * type-annotation parser, neither carried yet. The names, modifiers and annotations come from the VM's
+ * readers for {@code MethodParameters} and {@code RuntimeVisibleParameterAnnotations} (see
+ * {@code Executable.getParameters} and {@code getParameterAnnotations}).
  */
-public class Parameter implements AnnotatedElement
-{
+public final class Parameter implements AnnotatedElement {
+
+    private final String name;
+    private final int modifiers;
     private final Executable executable;
     private final int index;
 
-    Parameter(Executable executable, int index)
-    {
+    /**
+     * Package-private constructor for {@code Parameter}.
+     *
+     * If method parameter data is present in the classfile, then the
+     * JVM creates {@code Parameter} objects directly.  If it is
+     * absent, however, then {@code Executable} uses this constructor
+     * to synthesize them.
+     *
+     * @param name The name of the parameter, or {@code null} if absent
+     * @param modifiers The modifier flags for the parameter.
+     * @param executable The executable which defines this parameter.
+     * @param index The index of the parameter.
+     */
+    Parameter(String name,
+              int modifiers,
+              Executable executable,
+              int index) {
+        this.name = name;
+        this.modifiers = modifiers;
         this.executable = executable;
         this.index = index;
     }
 
-    public Executable getDeclaringExecutable()
-    {
+    /**
+     * Compares based on the executable and the index.
+     *
+     * @param obj The object to compare.
+     * @return Whether or not this is equal to the argument.
+     */
+    @Override
+    public boolean equals(Object obj) {
+        return (obj instanceof Parameter other)
+                && other.executable.equals(executable)
+                && other.index == index;
+    }
+
+    /**
+     * Returns a hash code based on the executable's hash code and the
+     * index.
+     *
+     * @return A hash code based on the executable's hash code.
+     */
+    @Override
+    public int hashCode() {
+        return executable.hashCode() ^ index;
+    }
+
+    /**
+     * Returns true if the parameter has a name according to the class
+     * file; returns false otherwise. Whether a parameter has a name
+     * is determined by the {@literal MethodParameters} attribute of
+     * the method which declares the parameter.
+     *
+     * @return true if and only if the parameter has a name according
+     * to the class file.
+     */
+    public boolean isNamePresent() {
+        return name != null;
+    }
+
+    /**
+     * Returns a string describing this parameter.  The format is the
+     * modifiers for the parameter, if any, in canonical order as
+     * recommended by <cite>The Java Language
+     * Specification</cite>, followed by the fully-qualified type of
+     * the parameter (excluding the last [] if the parameter is
+     * variable arity), followed by "..." if the parameter is variable
+     * arity, followed by a space, followed by the name of the
+     * parameter.
+     *
+     * @return A string representation of the parameter and associated
+     * information.
+     */
+    @Override
+    public String toString() {
+        final StringBuilder sb = new StringBuilder();
+        final Type type = getParameterizedType();
+        final String typename = type.getTypeName();
+
+        sb.append(Modifier.toString(getModifiers()));
+
+        if(0 != modifiers)
+            sb.append(' ');
+
+        if(isVarArgs())
+            sb.append(typename.replaceFirst("\\[\\]$", "..."));
+        else
+            sb.append(typename);
+
+        sb.append(' ');
+        sb.append(getName());
+
+        return sb.toString();
+    }
+
+    /**
+     * {@return the {@code Executable} declaring this parameter}
+     */
+    public Executable getDeclaringExecutable() {
         return executable;
     }
 
     /**
-     * {@code argN}, which is what STOCK answers for a parameter whose class carries no
-     * {@code MethodParameters} attribute -- i.e. anything not compiled with {@code -parameters}, which is
-     * every class this VM loads. So this is exact rather than approximate, and {@link #isNamePresent} says so.
-     */
-    public String getName()
-    {
-        return "arg" + index;
-    }
-
-    public boolean isNamePresent()
-    {
-        return false;
-    }
-
-    public int getModifiers()
-    {
-        return 0;
-    }
-
-    /**
-     * The parameter's declared type, indexed out of the executable's own descriptor.
+     * {@return the Java language {@linkplain Modifier modifiers} for
+     * the parameter represented by this object}
      *
-     * <p>THE MOST-CALLED MEMBER OF THIS CLASS, by a distance: eleven JUnit classes reference it
-     * ({@code ParameterResolutionUtils}, {@code TempDirectory}, {@code RepetitionExtension} ...), because a
-     * parameter resolver's whole job is to decide whether it can supply THIS type. Null only if the index is
-     * out of range or the type did not resolve, which the caller sees rather than a plausible substitute.
+     * @jls 8.4.1 Formal Parameters
+     * @see <a
+     * href="{@docRoot}/java.base/java/lang/reflect/package-summary.html#LanguageJvmModel">Java
+     * programming language and JVM modeling in core reflection</a>
      */
-    public Class<?> getType()
-    {
-        Class<?>[] ps = executable.getParameterTypes();
-        if (index < 0 || index >= ps.length)
-        {
-            return null;
-        }
-        return ps[index];
+    public int getModifiers() {
+        return modifiers;
     }
 
     /**
-     * The ERASURE, i.e. exactly {@link #getType}, and a caller is not misled by it: stock returns a
-     * {@code ParameterizedType} only when a {@code Signature} attribute is present, and every caller asks
-     * {@code instanceof ParameterizedType} first -- false here, so it takes its raw-type path. The same
-     * decision already recorded for {@code Method.getGenericParameterTypes}.
+     * {@return an unmodifiable set of the {@linkplain AccessFlag
+     * access flags} for the parameter represented by this object,
+     * possibly empty}
+     *
+     * @see #getModifiers()
+     * @jvms 4.7.24 The MethodParameters Attribute
+     * @since 20
      */
-    public java.lang.reflect.Type getParameterizedType()
-    {
-        return getType();
-    }
-
-    /** Empty, for the reason stated on {@link Executable#getParameterAnnotations} -- a row of that array. */
-    public Annotation[] getDeclaredAnnotations()
-    {
-        Annotation[][] all = executable.getParameterAnnotations();
-        if (index < 0 || index >= all.length)
-        {
-            return new Annotation[0];
-        }
-        return all[index];
+    public Set<AccessFlag> accessFlags() {
+        // joe-ng: stock parses through ReflectionFactory.parseAccessFlags into java.lang.reflect.AccessFlag,
+        // which this VM does not carry yet (Field and Executable lack accessFlags for the same reason). A throw
+        // names the gap; an empty set would answer "no flags" for a MANDATED or SYNTHETIC parameter.
+        throw new UnsupportedOperationException("joe-ng: Parameter.accessFlags needs java.lang.reflect.AccessFlag");
     }
 
     /**
-     * The same as {@link #getDeclaredAnnotations}, and EXACTLY so rather than approximately: {@code @Inherited}
-     * has effect on CLASS declarations alone (JLS 9.6.4.3), so a parameter has no inherited annotations to
-     * differ by. Stock agrees by construction -- its {@code getAnnotations} delegates to the declared path.
+     * Returns the name of the parameter.  If the parameter's name is
+     * {@linkplain #isNamePresent() present}, then this method returns
+     * the name provided by the class file. Otherwise, this method
+     * synthesizes a name of the form argN, where N is the index of
+     * the parameter in the descriptor of the method which declares
+     * the parameter.
+     *
+     * @return The name of the parameter, either provided by the class
+     *         file or synthesized if the class file does not provide
+     *         a name.
      */
-    public Annotation[] getAnnotations()
-    {
-        return getDeclaredAnnotations();
+    public String getName() {
+        // Note: empty strings as parameter names are now outlawed.
+        // The .isEmpty() is for compatibility with current JVM
+        // behavior.  It may be removed at some point.
+        if(name == null || name.isEmpty())
+            return "arg" + index;
+        else
+            return name;
     }
 
-    public <T extends Annotation> T getAnnotation(Class<T> annotationClass)
-    {
-        Annotation[] a = getDeclaredAnnotations();
-        int i = 0;
-        while (i < a.length)
-        {
-            if (a[i].annotationType() == annotationClass)
-            {
-                return (T) a[i];
-            }
-            i += 1;
+    // Package-private accessor to the real name field.
+    String getRealName() {
+        return name;
+    }
+
+    /**
+     * Returns a {@code Type} object that identifies the parameterized
+     * type for the parameter represented by this {@code Parameter}
+     * object.
+     *
+     * @return a {@code Type} object identifying the parameterized
+     * type of the parameter represented by this object
+     */
+    public Type getParameterizedType() {
+        Type tmp = parameterTypeCache;
+        if (null == tmp) {
+            tmp = executable.getAllGenericParameterTypes()[index];
+            parameterTypeCache = tmp;
         }
-        return null;
+
+        return tmp;
     }
 
-    public <T extends Annotation> T getDeclaredAnnotation(Class<T> annotationClass)
-    {
+    private transient volatile Type parameterTypeCache;
+
+    /**
+     * Returns a {@code Class} object that identifies the
+     * declared type for the parameter represented by this
+     * {@code Parameter} object.
+     *
+     * @return a {@code Class} object identifying the declared
+     * type of the parameter represented by this object
+     */
+    public Class<?> getType() {
+        Class<?> tmp = parameterClassCache;
+        if (null == tmp) {
+            tmp = executable.getSharedParameterTypes()[index];
+            parameterClassCache = tmp;
+        }
+        return tmp;
+    }
+
+    /**
+     * Returns an AnnotatedType object that represents the use of a type to
+     * specify the type of the formal parameter represented by this Parameter.
+     *
+     * @return an {@code AnnotatedType} object representing the use of a type
+     *         to specify the type of the formal parameter represented by this
+     *         Parameter
+     */
+    public AnnotatedType getAnnotatedType() {
+        // joe-ng: stock reads the type annotations through Executable.getAnnotatedParameterTypes, which needs the
+        // type-annotation parser in sun.reflect.annotation -- not carried here. A throw names the gap.
+        throw new UnsupportedOperationException("joe-ng: Parameter.getAnnotatedType needs type annotations");
+    }
+
+    private transient volatile Class<?> parameterClassCache;
+
+    /**
+     * Returns {@code true} if this parameter is implicitly declared
+     * in source code; returns {@code false} otherwise.
+     *
+     * @return true if and only if this parameter is implicitly
+     * declared as defined by <cite>The Java Language
+     * Specification</cite>.
+     */
+    public boolean isImplicit() {
+        return Modifier.isMandated(getModifiers());
+    }
+
+    /**
+     * Returns {@code true} if this parameter is neither implicitly
+     * nor explicitly declared in source code; returns {@code false}
+     * otherwise.
+     *
+     * @return true if and only if this parameter is a synthetic
+     * construct as defined by
+     * <cite>The Java Language Specification</cite>.
+     * @jls 13.1 The Form of a Binary
+     * @see <a
+     * href="{@docRoot}/java.base/java/lang/reflect/package-summary.html#LanguageJvmModel">Java
+     * programming language and JVM modeling in core reflection</a>
+     */
+    public boolean isSynthetic() {
+        return Modifier.isSynthetic(getModifiers());
+    }
+
+    /**
+     * Returns {@code true} if this parameter represents a variable
+     * argument list; returns {@code false} otherwise.
+     *
+     * @return {@code true} if an only if this parameter represents a
+     * variable argument list.
+     */
+    public boolean isVarArgs() {
+        return executable.isVarArgs() &&
+            index == executable.getParameterCount() - 1;
+    }
+
+
+    /**
+     * {@inheritDoc}
+     * <p>Note that any annotation returned by this method is a
+     * declaration annotation.
+     * @throws NullPointerException {@inheritDoc}
+     */
+    @Override
+    public <T extends Annotation> T getAnnotation(Class<T> annotationClass) {
+        Objects.requireNonNull(annotationClass);
+        return annotationClass.cast(declaredAnnotations().get(annotationClass));
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>Note that any annotations returned by this method are
+     * declaration annotations.
+     *
+     * @throws NullPointerException {@inheritDoc}
+     */
+    @Override
+    public <T extends Annotation> T[] getAnnotationsByType(Class<T> annotationClass) {
+        Objects.requireNonNull(annotationClass);
+
+        return AnnotationSupport.getDirectlyAndIndirectlyPresent(declaredAnnotations(), annotationClass);
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>Note that any annotations returned by this method are
+     * declaration annotations.
+     */
+    @Override
+    public Annotation[] getDeclaredAnnotations() {
+        return executable.getParameterAnnotations()[index];
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>Note that any annotation returned by this method is a
+     * declaration annotation.
+     *
+     * @throws NullPointerException {@inheritDoc}
+     */
+    @Override
+    public <T extends Annotation> T getDeclaredAnnotation(Class<T> annotationClass) {
+        // Only annotations on classes are inherited, for all other
+        // objects getDeclaredAnnotation is the same as
+        // getAnnotation.
         return getAnnotation(annotationClass);
     }
 
-    public boolean isAnnotationPresent(Class<? extends Annotation> annotationClass)
-    {
-        return getAnnotation(annotationClass) != null;
+    /**
+     * {@inheritDoc}
+     * <p>Note that any annotations returned by this method are
+     * declaration annotations.
+     *
+     * @throws NullPointerException {@inheritDoc}
+     */
+    @Override
+    public <T extends Annotation> T[] getDeclaredAnnotationsByType(Class<T> annotationClass) {
+        // Only annotations on classes are inherited, for all other
+        // objects getDeclaredAnnotations is the same as
+        // getAnnotations.
+        return getAnnotationsByType(annotationClass);
     }
 
-    public String toString()
-    {
-        return getName();
+    /**
+     * {@inheritDoc}
+     * <p>Note that any annotations returned by this method are
+     * declaration annotations.
+     */
+    @Override
+    public Annotation[] getAnnotations() {
+        return getDeclaredAnnotations();
     }
+
+    private transient Map<Class<? extends Annotation>, Annotation> declaredAnnotations;
+
+    private synchronized Map<Class<? extends Annotation>, Annotation> declaredAnnotations() {
+        if(null == declaredAnnotations) {
+            declaredAnnotations = new HashMap<>();
+            for (Annotation a : getDeclaredAnnotations())
+                declaredAnnotations.put(a.annotationType(), a);
+        }
+        return declaredAnnotations;
+   }
+
 }

@@ -470,50 +470,215 @@ public abstract class Executable extends AccessibleObject implements Member, Gen
     }
 
     /**
-     * The parameters as {@link Parameter} objects, built on demand from the count.
-     *
-     * <p>A FRESH ARRAY EACH CALL, as stock: the returned array is the caller's to mutate, and JUnit streams
-     * over it. Stock caches and clones; there is nothing here worth caching, since a Parameter carries only
-     * its executable and index.
+     * Stock's: the parameters, from the {@code MethodParameters} attribute when the class has one -- javac writes
+     * it for every class compiled with {@code -parameters}, and for an inner class's or enum's constructor even
+     * without, flagging the implicit outer instance {@code MANDATED} and the enum's name and ordinal
+     * {@code SYNTHETIC} -- and synthesized as {@code argN} with no modifiers when it has none. A fresh array each
+     * call; the parameters themselves are cached, as stock caches them.
      */
     public Parameter[] getParameters()
     {
-        int n = getParameterCount();
-        Parameter[] out = new Parameter[n];
-        int i = 0;
-        while (i < n)
+        return parameterData().parameters.clone();
+    }
+
+    private Parameter[] synthesizeAllParams()
+    {
+        final int realparams = getParameterCount();
+        final Parameter[] out = new Parameter[realparams];
+        for (int i = 0; i < realparams; i++)
         {
-            out[i] = new Parameter(this, i);
-            i += 1;
+            out[i] = new Parameter(null, 0, this, i);
         }
         return out;
     }
 
-    /**
-     * Per-parameter annotations: one row per parameter, each row EMPTY.
-     *
-     * <p>STATED LIMIT, NOT A SILENT ONE. The rows come back empty because this VM does not yet read a method's
-     * {@code RuntimeVisibleParameterAnnotations} attribute -- the class- and method-level walks exist
-     * ({@code classAnnotationsAll}, {@code methodAnnotationsAll}) and the parameter-level one is their
-     * sibling, but it is not written. So a parameter that really carries an annotation reports none.
-     *
-     * <p>What that costs, precisely: JUnit reads this to find {@code @ExtendWith} on a parameter, so such an
-     * extension is not registered. A method whose parameters carry no annotations -- every one reached so far
-     * -- gets the correct answer. Returning an empty ROW per parameter rather than a null array is what the
-     * callers require: {@code getEffectiveAnnotatedParameter} indexes the result unguarded.
-     */
-    public Annotation[][] getParameterAnnotations()
+    private void verifyParameters(final Parameter[] parameters)
     {
-        int n = getParameterCount();
-        Annotation[][] out = new Annotation[n][];
-        int i = 0;
-        while (i < n)
+        final int mask = Modifier.FINAL | Modifier.SYNTHETIC | Modifier.MANDATED;
+
+        if (getParameterCount() != parameters.length)
         {
-            out[i] = new Annotation[0];
-            i += 1;
+            throw new MalformedParametersException("Wrong number of parameters in MethodParameters attribute");
+        }
+
+        for (Parameter parameter : parameters)
+        {
+            final String name = parameter.getRealName();
+            final int mods = parameter.getModifiers();
+
+            if (name != null)
+            {
+                if (name.isEmpty() || name.indexOf('.') != -1 || name.indexOf(';') != -1 || name.indexOf('[') != -1
+                        || name.indexOf('/') != -1)
+                {
+                    throw new MalformedParametersException("Invalid parameter name \"" + name + "\"");
+                }
+            }
+
+            if (mods != (mods & mask))
+            {
+                throw new MalformedParametersException("Invalid parameter modifiers");
+            }
+        }
+    }
+
+    boolean hasRealParameterData()
+    {
+        return parameterData().isReal;
+    }
+
+    private ParameterData parameterData()
+    {
+        ParameterData parameterData = this.parameterData;
+        if (parameterData != null)
+        {
+            return parameterData;
+        }
+        Parameter[] tmp = getParameters0();
+        if (tmp == null)
+        {
+            tmp = synthesizeAllParams();
+            parameterData = new ParameterData(tmp, false);
+        }
+        else
+        {
+            verifyParameters(tmp);
+            parameterData = new ParameterData(tmp, true);
+        }
+        return this.parameterData = parameterData;
+    }
+
+    private transient ParameterData parameterData;
+
+    record ParameterData(Parameter[] parameters, boolean isReal)
+    {
+    }
+
+    /**
+     * Stock's native, in Java over the VM's attribute readers: one {@link Parameter} per {@code MethodParameters}
+     * entry, with its name (null where the entry has none) and flags, or null when there is no such attribute.
+     */
+    private Parameter[] getParameters0()
+    {
+        int rg = registryIndex();
+        int n = (int) paramMeta0(rg, -1L);
+        if (n < 0)
+        {
+            return null;
+        }
+        Parameter[] out = new Parameter[n];
+        for (int i = 0; i < n; i++)
+        {
+            out[i] = new Parameter(paramName0(rg, i), (int) paramMeta0(rg, i), this, i);
         }
         return out;
     }
+
+    /** Stock's: the parameter types, shared rather than copied -- here {@link #getParameterTypes}, fresh. */
+    Class<?>[] getSharedParameterTypes()
+    {
+        return getParameterTypes();
+    }
+
+    /** Stock's: whether this member has a {@code Signature} attribute. */
+    boolean hasGenericInformation()
+    {
+        return genericSignature() != null;
+    }
+
+    /**
+     * Stock's: one generic type per parameter INCLUDING implicit and synthetic ones, which a {@code Signature}
+     * leaves out -- so it lines the two up by the {@code MethodParameters} flags when it has them, and falls
+     * back to the erased types when the counts disagree and it cannot tell which parameters are missing.
+     */
+    Type[] getAllGenericParameterTypes()
+    {
+        final boolean genericInfo = hasGenericInformation();
+        if (!genericInfo)
+        {
+            return getParameterTypes();
+        }
+        final boolean realParamData = hasRealParameterData();
+        final Type[] genericParamTypes = getGenericParameterTypes();
+        final Type[] nonGenericParamTypes = getSharedParameterTypes();
+        if (realParamData)
+        {
+            if (getDeclaringClass().isRecord() && this instanceof Constructor)
+            {
+                if (genericParamTypes.length == nonGenericParamTypes.length)
+                {
+                    return genericParamTypes;
+                }
+                return nonGenericParamTypes.clone();
+            }
+            final Type[] out = new Type[nonGenericParamTypes.length];
+            final Parameter[] params = getParameters();
+            int fromidx = 0;
+            for (int i = 0; i < out.length; i++)
+            {
+                final Parameter param = params[i];
+                if (param.isSynthetic() || param.isImplicit())
+                {
+                    out[i] = nonGenericParamTypes[i];
+                }
+                else
+                {
+                    out[i] = genericParamTypes[fromidx];
+                    fromidx++;
+                }
+            }
+            return out;
+        }
+        return genericParamTypes.length == nonGenericParamTypes.length ? genericParamTypes : getParameterTypes();
+    }
+
+    /**
+     * Stock's {@code sharedGetParameterAnnotations}: one row per parameter from the
+     * {@code RuntimeVisibleParameterAnnotations} attribute, all rows empty when there is none. The attribute
+     * can have FEWER rows than the descriptor has parameters -- javac writes none for an inner class
+     * constructor's outer instance or an enum constructor's name and ordinal -- and
+     * {@link #handleParameterNumberMismatch} decides, per subclass as stock does, whether to pad the leading
+     * rows or refuse.
+     */
+    public Annotation[][] getParameterAnnotations()
+    {
+        Class<?>[] parameterTypes = getParameterTypes();
+        int numParameters = parameterTypes.length;
+        int rg = registryIndex();
+        int rows = (int) paramMeta0(rg, -2L);
+        if (rows < 0)
+        {
+            return new Annotation[numParameters][0];
+        }
+        Annotation[][] result = new Annotation[rows][];
+        for (int i = 0; i < rows; i++)
+        {
+            Annotation[] row = paramAnnoRow0(rg, i);
+            result[i] = row == null ? new Annotation[0] : row;
+        }
+        if (result.length != numParameters && handleParameterNumberMismatch(result.length, parameterTypes))
+        {
+            Annotation[][] tmp = new Annotation[numParameters][];
+            System.arraycopy(result, 0, tmp, numParameters - result.length, result.length);
+            for (int i = 0; i < numParameters - result.length; i++)
+            {
+                tmp[i] = new Annotation[0];
+            }
+            result = tmp;
+        }
+        return result;
+    }
+
+    abstract boolean handleParameterNumberMismatch(int resultLength, Class<?>[] parameterTypes);
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.methodParamMeta}): see {@code Loader.methodParamMeta}. */
+    private static native long paramMeta0(int rgIndex, long k);
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.methodParamName}): an entry's name, or null. */
+    private static native String paramName0(int rgIndex, long k);
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.methodParamAnnoRow}): one attribute row, or null. */
+    private static native Annotation[] paramAnnoRow0(int rgIndex, long k);
 
     /**
      * True if this method or constructor carries the given annotation. Marker level: presence only, no element
