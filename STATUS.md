@@ -4,6 +4,38 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **REFLECTIVE FIELD ACCESS CHECKS ACCESS, THE RECEIVER, THE TYPE AND `final` AS STOCK DOES (2026-10-15).** The
+  Field overlay read and wrote a slot whatever was asked of it. A negative control on main (the probe without
+  the three new `AccessibleObject` members) differs from the host on 42 of its 74 lines:
+  - **Access was checked only by `get` and `set`.** `getInt`/`getLong`/`setInt` read and wrote a private field of
+    another class without `setAccessible`.
+  - **`final` was not enforced at all.** `set` on a final instance field wrote without `setAccessible`, and
+    `set` on a `static final String` rewrote the constant -- `get` then answered `changed` for `orig`.
+  - **The receiver was not checked:**
+    - an object of an UNRELATED class with a same-named field was read and written (`num` 50 -> 99);
+    - for a SUBCLASS declaring its own same-named field, the SUBCLASS's field was read and written instead of the
+      declared one. The offset was looked up by name from the receiver's class (`vhFieldOffset`); it is now
+      keyed on the declaring class (`unsafeFieldOffset`, the lookup `Unsafe` uses).
+  - **The type was not checked:**
+    - `set` cast its value, so every widening threw `ClassCastException`, and `String <- Integer` STORED the
+      Integer: the probe's last line, `str still a String`, read `false`;
+    - the typed accessors ignored the field's type: `getInt(long)` answered the low half, `getInt(Integer)` a
+      pointer's bits (`1602216`), and `setLong` on a `double` stored raw bits (`4.4E-323`);
+    - `setInt` on a REFERENCE field wrote an int into a slot the collector reads as a pointer.
+  - **Now**, every public accessor checks, in order:
+    - access against its own caller;
+    - the receiver: an instance of the declaring class, else `NullPointerException`/`IllegalArgumentException`;
+    - for a write, stock's final rule: writable only after `setAccessible(true)`, on an instance field, of a
+      non-record class;
+    - the type, by JLS 5.1.2 widening in both directions, refusing with `IllegalArgumentException`.
+    `AccessibleObject` gains stock's `canAccess`, `trySetAccessible` and the static
+    `setAccessible(AccessibleObject[], boolean)`. `trySetAccessible` always succeeds: every class is in the
+    unnamed module, which stock's own rule lets through.
+  - **Not covered yet:** nestmate private access, class-level accessibility and the protected-instance target
+    rule of stock's `verifyMemberAccess`. The probe's target is a separate top-level class, so it does not
+    reach them.
+  - **Probe:** `FieldSemanticsProbe` (new, 82 lines) is host-identical.
+  - **Regression (suite, all probes, JUnit):** pending. **Pi:** PASS (2026-10-15, 737984d) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=889), `[main returned normally]`, `gc: collections=7`.
 - **PARAMETER ANNOTATIONS AND `MethodParameters` ARE READ; `Parameter` RUNS STOCK; STACKED ANNOTATIONS KEEP THEIR
   VALUES (2026-10-15).**
   - **`getParameterAnnotations()` answered an empty row for every parameter**, a limit stated in its own

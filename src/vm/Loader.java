@@ -12521,12 +12521,12 @@ public final class Loader
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("callerClass0")))     { return VM.classAtPcAddr; }        // (J)Class
         }
-        // Reflective Field.get/set: resolve the field's byte offset from the target object's class (same
-        // loader field registry as the VarHandle/atomic-updater shims).
+        // Reflective Field.get/set: resolve the field's byte offset from its DECLARING class, the lookup
+        // Unsafe.objectFieldOffset uses. Keyed on the receiver's class instead, a subclass's same-named field won.
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Field")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("signature0")))        { return VM.fieldSignatureAddr; } // (Class,byte[])String
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldOffset0")))     { return VM.vhFieldOffsetAddr; }    // (byte[],Object)J
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldOffsetOfClass0"))) { return VM.unsafeFieldOffsetAddr; } // (Class,byte[])J
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldAnnoGet0")))    { return VM.fieldAnnoGetAddr; }     // (Class,byte[],byte[])
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldAnnoAll0")))    { return VM.fieldAnnoAllAddr; }     // (Class,byte[])[Annotation
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldType0")))       { return VM.fieldTypeAddr; }        // (Class,byte[])Class

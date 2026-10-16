@@ -17,9 +17,9 @@ import magic.Magic;
  * {@code java.lang.reflect.Field} for joe-ng: carries the declaring {@link Class}, field name, access flags,
  * and the field's type as the first char of its JVM descriptor ('I','J','Z','B','C','S','F','D','L','['), and
  * supports reflective {@link #get}/{@link #set} (plus typed {@code getInt}/{@code setInt}/...). The field's
- * byte offset within a target object is resolved at call time from the object's class ({@link #fieldOffset0} ->
- * {@code VM.vhFieldOffset}, the same loader field registry the VarHandle/atomic-updater overlays use).
- * Access enforcement ({@code setAccessible} + the member-access rules) lands in reflection arc M2.
+ * byte offset is resolved at call time from the DECLARING class ({@link #fieldOffsetOfClass0}, the lookup
+ * {@code Unsafe.objectFieldOffset} uses).
+ * Every accessor enforces member access, the receiver, the field's type and stock's final-field rule.
  */
 public final class Field extends AccessibleObject implements Member
 {
@@ -59,23 +59,34 @@ public final class Field extends AccessibleObject implements Member
         return typeChar;
     }
 
-    /** Byte offset of {@code nameBytes} within {@code obj}'s class -> {@code VM.vhFieldOffset} (loader field registry). */
-    private static native long fieldOffset0(byte[] fname, Object obj);
+    /**
+     * VM native ({@code Loader.nativeBuf} -> {@code VMNatives.unsafeFieldOffset}, the one {@code Unsafe} uses): the
+     * byte offset of instance field {@code fname} declared by {@code c}, or -1. Keyed on the DECLARING class, not
+     * on the receiver. The receiver-keyed lookup walked up from the object's own class, so a subclass declaring
+     * a field of the same name had ITS field read and written instead (FieldSemanticsProbe).
+     */
+    private static native long fieldOffsetOfClass0(Class<?> c, byte[] fname);
 
-    /** Absolute address of this field's slot in {@code obj}. */
     /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.staticCell}): the ADDRESS of a STATIC field's
      *  cell, or 0. Statics are not in the loader's field registry -- that maps a field to an OFFSET within an
      *  object -- so they resolve through the statics table instead. */
     private static native long staticCell0(Class<?> c, byte[] fname);
 
+    /**
+     * The address of this field's slot for {@code obj}, after stock's receiver checks. A static ignores
+     * {@code obj}, as stock does. An instance field needs a receiver that IS an instance of the declaring
+     * class: null is {@code NullPointerException}, anything else {@code IllegalArgumentException}.
+     *
+     * <p>The instance check is not a formality. The offset used to be found by NAME in the receiver's class, so
+     * an object of an unrelated class with a same-named field had that field read and written.
+     *
+     * <p>Messages are the bare field name, with no concatenation: concatenation lowers to invokedynamic and would
+     * pull the string-concat machinery into java.base's bake closure from a path that must stay cold.
+     */
     private long addr(Object obj)
     {
         if (Modifier.isStatic(modifiers))
         {
-            // A STATIC has no receiver: its value lives in a cell, not at an offset inside an object, so the
-            // `obj` argument is ignored exactly as stock ignores it. Before this, statics were not even
-            // enumerated -- the registry answered -1 and getDeclaredFields dropped them -- so `Field.get(null)`
-            // could not read one at all.
             long cell = staticCell0(clazz, nameBytes);
             if (cell == 0L)
             {
@@ -87,52 +98,226 @@ public final class Field extends AccessibleObject implements Member
         {
             throw new NullPointerException(name);
         }
-        long off = fieldOffset0(nameBytes, obj);
+        if (!clazz.isInstance(obj))
+        {
+            throw new IllegalArgumentException(name);
+        }
+        long off = fieldOffsetOfClass0(clazz, nameBytes);
         if (off < 0L)
         {
-            // A MISS MUST NOT BE ADDED TO THE OBJECT. fieldOffset0 answers -1 when it cannot place the field,
-            // and obj-1 is inside the header: a get reads a straddled word that looks like a plausible
-            // reference, and a set WRITES there, corrupting the heap far from the call that did it.
-            //
-            // IllegalArgumentException is what stock throws when the object is not an instance of the class
-            // declaring the field, which is exactly the condition a miss represents. The message is the bare
-            // field name -- no concatenation, because that lowers to invokedynamic and would pull the string
-            // concat machinery into java.base's bake closure from a path that must stay cold.
+            // A MISS MUST NOT BE ADDED TO THE OBJECT: obj-1 is inside the header, and a set would write there.
             throw new IllegalArgumentException(name);
         }
         return Magic.addrOf(obj) + off;
     }
 
-    // ---- reflective get/set: the field's value, boxed (get) / unboxed (set) per the declared type ----
+    /**
+     * As {@link #addr}, for a WRITE, with stock's rule for a {@code final} field: writable only when
+     * {@code setAccessible(true)} was called, the field is an instance field, and the class is not a record.
+     * (Stock also refuses a hidden class; this VM makes none.) A static final is never writable -- a
+     * {@code static final} String constant could otherwise be rewritten without even a {@code setAccessible}.
+     */
+    private long writableAddr(Object obj) throws IllegalAccessException
+    {
+        long a = addr(obj);
+        if (Modifier.isFinal(modifiers) && (!override || Modifier.isStatic(modifiers) || clazz.isRecord()))
+        {
+            throw new IllegalAccessException(name);
+        }
+        return a;
+    }
+
+    /**
+     * JLS 5.1.2: may a value of primitive type {@code from} be stored as, or read as, {@code to}? Identity or a
+     * widening; {@code boolean} converts to nothing else and {@code char} only upwards from {@code int}. Both are
+     * descriptor chars; a reference type ('L', '[') converts to no primitive at all.
+     */
+    private static boolean widens(int from, int to)
+    {
+        if (from == to)
+        {
+            return from != 'L' && from != '[';
+        }
+        if (from == 'B')
+        {
+            return to == 'S' || to == 'I' || to == 'J' || to == 'F' || to == 'D';
+        }
+        if (from == 'S' || from == 'C')
+        {
+            return to == 'I' || to == 'J' || to == 'F' || to == 'D';
+        }
+        if (from == 'I')
+        {
+            return to == 'J' || to == 'F' || to == 'D';
+        }
+        if (from == 'J')
+        {
+            return to == 'F' || to == 'D';
+        }
+        if (from == 'F')
+        {
+            return to == 'D';
+        }
+        return false;
+    }
+
+    /**
+     * An integral or boolean field's value, in its own range. The slot holds it extended to 64 bits (see
+     * {@link #slot}); the narrowing cast is what restores sign or zero extension for the field's type.
+     */
+    private long integral(long a)
+    {
+        long bits = Magic.load64(a);
+        if (typeChar == 'B')
+        {
+            return (byte) bits;
+        }
+        if (typeChar == 'S')
+        {
+            return (short) bits;
+        }
+        if (typeChar == 'C')
+        {
+            return (char) bits;
+        }
+        if (typeChar == 'I')
+        {
+            return (int) bits;
+        }
+        if (typeChar == 'Z')
+        {
+            return ((int) bits) != 0 ? 1L : 0L;
+        }
+        return bits;
+    }
+
+    /** Refuse a typed read as {@code as} unless this field's type widens to it. */
+    private void readableAs(int as)
+    {
+        if (!widens(typeChar, as))
+        {
+            throw new IllegalArgumentException(name);
+        }
+    }
+
+    /** Store {@code v}, a value of integral type {@code from}, after checking it widens to this field's type. */
+    private void putIntegral(long a, int from, long v)
+    {
+        if (!widens(from, typeChar))
+        {
+            throw new IllegalArgumentException(name);
+        }
+        if (typeChar == 'F')
+        {
+            floatSlot(a, (float) v);
+            return;
+        }
+        if (typeChar == 'D')
+        {
+            Magic.store64(a, Double.doubleToRawLongBits((double) v));
+            return;
+        }
+        slot(a, v);
+    }
+
+    // ---- reflective get/set. Every public accessor checks access against ITS caller first (Magic.readLR is
+    // ---- the caller's return address only in the accessor itself), then the receiver, then the type.
 
     public Object get(Object obj) throws IllegalAccessException
     {
         checkAccess(clazz, modifiers, Magic.readLR());
         long a = addr(obj);
-        if (typeChar == 'I') { return Integer.valueOf(Magic.load32(a)); }
-        if (typeChar == 'J') { return Long.valueOf(Magic.load64(a)); }
-        if (typeChar == 'Z') { return Boolean.valueOf(Magic.load32(a) != 0); }
-        if (typeChar == 'B') { return Byte.valueOf((byte) Magic.load32(a)); }
-        if (typeChar == 'C') { return Character.valueOf((char) Magic.load32(a)); }
-        if (typeChar == 'S') { return Short.valueOf((short) Magic.load32(a)); }
-        if (typeChar == 'F') { return Float.valueOf(Float.intBitsToFloat(Magic.load32(a))); }
-        if (typeChar == 'D') { return Double.valueOf(Double.longBitsToDouble(Magic.load64(a))); }
-        return Magic.fromAddr(Magic.load64(a));                              // 'L' / '[' reference
+        if (typeChar == 'I')
+        {
+            return Integer.valueOf((int) integral(a));
+        }
+        if (typeChar == 'J')
+        {
+            return Long.valueOf(integral(a));
+        }
+        if (typeChar == 'Z')
+        {
+            return Boolean.valueOf(integral(a) != 0L);
+        }
+        if (typeChar == 'B')
+        {
+            return Byte.valueOf((byte) integral(a));
+        }
+        if (typeChar == 'C')
+        {
+            return Character.valueOf((char) integral(a));
+        }
+        if (typeChar == 'S')
+        {
+            return Short.valueOf((short) integral(a));
+        }
+        if (typeChar == 'F')
+        {
+            return Float.valueOf(Float.intBitsToFloat(Magic.load32(a)));
+        }
+        if (typeChar == 'D')
+        {
+            return Double.valueOf(Double.longBitsToDouble(Magic.load64(a)));
+        }
+        return Magic.fromAddr(Magic.load64(a));
     }
 
+    /**
+     * Stock's {@code set}: a reference field takes null or an instance of its type -- an {@code Integer} into a
+     * {@code String} field used to be stored, leaving a non-String where compiled code trusts the type -- and a
+     * primitive field takes a box whose primitive widens to it. Anything else, null for a primitive included,
+     * is {@code IllegalArgumentException}, never the {@code ClassCastException} of a cast.
+     */
     public void set(Object obj, Object value) throws IllegalAccessException
     {
         checkAccess(clazz, modifiers, Magic.readLR());
-        long a = addr(obj);
-        if (typeChar == 'I') { slot(a, ((Integer) value).intValue()); return; }
-        if (typeChar == 'J') { Magic.store64(a, ((Long) value).longValue()); return; }
-        if (typeChar == 'Z') { slot(a, ((Boolean) value).booleanValue() ? 1 : 0); return; }
-        if (typeChar == 'B') { slot(a, ((Byte) value).byteValue()); return; }
-        if (typeChar == 'C') { slot(a, ((Character) value).charValue()); return; }
-        if (typeChar == 'S') { slot(a, ((Short) value).shortValue()); return; }
-        if (typeChar == 'F') { floatSlot(a, ((Float) value).floatValue()); return; }
-        if (typeChar == 'D') { Magic.store64(a, Double.doubleToRawLongBits(((Double) value).doubleValue())); return; }
-        Magic.store64(a, value == null ? 0L : Magic.addrOf(value));         // 'L' / '[' reference
+        long a = writableAddr(obj);
+        if (typeChar == 'L' || typeChar == '[')
+        {
+            Class<?> ft = getType();
+            if (value != null && ft != null && !ft.isInstance(value))
+            {
+                throw new IllegalArgumentException(name);
+            }
+            Magic.store64(a, value == null ? 0L : Magic.addrOf(value));
+            return;
+        }
+        if (value instanceof Integer v)
+        {
+            putIntegral(a, 'I', v.intValue());
+        }
+        else if (value instanceof Long v)
+        {
+            putIntegral(a, 'J', v.longValue());
+        }
+        else if (value instanceof Short v)
+        {
+            putIntegral(a, 'S', v.shortValue());
+        }
+        else if (value instanceof Byte v)
+        {
+            putIntegral(a, 'B', v.byteValue());
+        }
+        else if (value instanceof Character v)
+        {
+            putIntegral(a, 'C', v.charValue());
+        }
+        else if (value instanceof Boolean v)
+        {
+            putIntegral(a, 'Z', v.booleanValue() ? 1L : 0L);
+        }
+        else if (value instanceof Float v)
+        {
+            putFloat(a, v.floatValue());
+        }
+        else if (value instanceof Double v)
+        {
+            putDouble(a, v.doubleValue());
+        }
+        else
+        {
+            throw new IllegalArgumentException(name);
+        }
     }
 
     /**
@@ -153,118 +338,161 @@ public final class Field extends AccessibleObject implements Member
         Magic.store64(a, Float.floatToRawIntBits(v) & 0xFFFFFFFFL);
     }
 
-    public int getInt(Object obj) throws IllegalAccessException
+    /** A float into a float or double field; anything else refuses. */
+    private void putFloat(long a, float v)
     {
-        return Magic.load32(addr(obj));
-    }
-
-    public void setInt(Object obj, int v) throws IllegalAccessException
-    {
-        slot(addr(obj), v);
-    }
-
-    public long getLong(Object obj) throws IllegalAccessException
-    {
-        return Magic.load64(addr(obj));
-    }
-
-    public void setLong(Object obj, long v) throws IllegalAccessException
-    {
-        Magic.store64(addr(obj), v);
-    }
-
-    public boolean getBoolean(Object obj) throws IllegalAccessException
-    {
-        return Magic.load32(addr(obj)) != 0;
-    }
-
-    /**
-     * The NARROW primitive reads/writes. A byte/short/char field occupies a full 8-byte slot in joe-ng's
-     * object layout, so the value is read as a word and narrowed by the cast -- the cast is what applies the
-     * sign extension for byte/short and the zero extension for char, which is exactly the stock contract.
-     *
-     * <p>The writes are {@link #slot}'s whole-slot stores (see there for what the 32-bit ones cost).
-     * {@code float}/{@code double} are further down.
-     */
-    public byte getByte(Object obj) throws IllegalAccessException
-    {
-        return (byte) Magic.load32(addr(obj));
-    }
-
-    public void setByte(Object obj, byte v) throws IllegalAccessException
-    {
-        slot(addr(obj), v);
-    }
-
-    public short getShort(Object obj) throws IllegalAccessException
-    {
-        return (short) Magic.load32(addr(obj));
-    }
-
-    public void setShort(Object obj, short v) throws IllegalAccessException
-    {
-        slot(addr(obj), v);
-    }
-
-    public char getChar(Object obj) throws IllegalAccessException
-    {
-        return (char) Magic.load32(addr(obj));
-    }
-
-    public void setChar(Object obj, char v) throws IllegalAccessException
-    {
-        slot(addr(obj), v);
-    }
-
-    /**
-     * {@code float}/{@code double}, which the overlay used to leave out on the premise that "their values arrive
-     * in the FP registers, which joe-ng's reflective marshalling does not carry". THAT PREMISE WAS WRONG: this
-     * compiler keeps a float or double as its RAW BITS in a general-purpose register and moves it to an FP
-     * register only for the arithmetic ({@code Float.intBitsToFloat} is an identity native), so they marshal like
-     * an int and a long. And leaving them out was not the loud failure it was meant to be: {@code get}/{@code set}
-     * on an {@code F}/{@code D} field fell through to the REFERENCE arm, handing back the bits as an object
-     * pointer and storing a box's address into the field.
-     *
-     * <p>Stock's widening rules: {@code getFloat} reads float and the integral types; {@code getDouble} also
-     * reads float; {@code setFloat} also writes a double field; {@code setDouble} only a double field. Anything
-     * else is stock's IllegalArgumentException.
-     */
-    public float getFloat(Object obj) throws IllegalAccessException
-    {
-        long a = addr(obj);
-        if (typeChar == 'F') { return Float.intBitsToFloat(Magic.load32(a)); }
-        if (typeChar == 'J') { return (float) Magic.load64(a); }
-        if (typeChar == 'I' || typeChar == 'S' || typeChar == 'B') { return (float) Magic.load32(a); }
-        if (typeChar == 'C') { return (float) (char) Magic.load32(a); }
+        if (typeChar == 'F')
+        {
+            floatSlot(a, v);
+            return;
+        }
+        if (typeChar == 'D')
+        {
+            Magic.store64(a, Double.doubleToRawLongBits((double) v));
+            return;
+        }
         throw new IllegalArgumentException(name);
     }
 
-    public double getDouble(Object obj) throws IllegalAccessException
-    {
-        long a = addr(obj);
-        if (typeChar == 'D') { return Double.longBitsToDouble(Magic.load64(a)); }
-        if (typeChar == 'F') { return (double) Float.intBitsToFloat(Magic.load32(a)); }
-        if (typeChar == 'J') { return (double) Magic.load64(a); }
-        if (typeChar == 'I' || typeChar == 'S' || typeChar == 'B') { return (double) Magic.load32(a); }
-        if (typeChar == 'C') { return (double) (char) Magic.load32(a); }
-        throw new IllegalArgumentException(name);
-    }
-
-    public void setFloat(Object obj, float v) throws IllegalAccessException
-    {
-        long a = addr(obj);
-        if (typeChar == 'F') { floatSlot(a, v); return; }
-        if (typeChar == 'D') { Magic.store64(a, Double.doubleToRawLongBits((double) v)); return; }
-        throw new IllegalArgumentException(name);
-    }
-
-    public void setDouble(Object obj, double v) throws IllegalAccessException
+    /** A double into a double field only. */
+    private void putDouble(long a, double v)
     {
         if (typeChar != 'D')
         {
             throw new IllegalArgumentException(name);
         }
-        Magic.store64(addr(obj), Double.doubleToRawLongBits(v));
+        Magic.store64(a, Double.doubleToRawLongBits(v));
+    }
+
+    /**
+     * The typed accessors, with stock's widening: a getter reads any field whose type widens to its own
+     * ({@code getLong} on an {@code int}), a setter writes any field its own type widens to ({@code setInt} on a
+     * {@code long}). Each used to read or write the slot whatever the field's type -- {@code getInt} on a
+     * {@code long} answered its low half, and {@code setInt} on a REFERENCE field wrote an int where the
+     * collector expects a pointer.
+     */
+    public boolean getBoolean(Object obj) throws IllegalAccessException
+    {
+        checkAccess(clazz, modifiers, Magic.readLR());
+        long a = addr(obj);
+        readableAs('Z');
+        return integral(a) != 0L;
+    }
+
+    public byte getByte(Object obj) throws IllegalAccessException
+    {
+        checkAccess(clazz, modifiers, Magic.readLR());
+        long a = addr(obj);
+        readableAs('B');
+        return (byte) integral(a);
+    }
+
+    public char getChar(Object obj) throws IllegalAccessException
+    {
+        checkAccess(clazz, modifiers, Magic.readLR());
+        long a = addr(obj);
+        readableAs('C');
+        return (char) integral(a);
+    }
+
+    public short getShort(Object obj) throws IllegalAccessException
+    {
+        checkAccess(clazz, modifiers, Magic.readLR());
+        long a = addr(obj);
+        readableAs('S');
+        return (short) integral(a);
+    }
+
+    public int getInt(Object obj) throws IllegalAccessException
+    {
+        checkAccess(clazz, modifiers, Magic.readLR());
+        long a = addr(obj);
+        readableAs('I');
+        return (int) integral(a);
+    }
+
+    public long getLong(Object obj) throws IllegalAccessException
+    {
+        checkAccess(clazz, modifiers, Magic.readLR());
+        long a = addr(obj);
+        readableAs('J');
+        return integral(a);
+    }
+
+    public float getFloat(Object obj) throws IllegalAccessException
+    {
+        checkAccess(clazz, modifiers, Magic.readLR());
+        long a = addr(obj);
+        readableAs('F');
+        if (typeChar == 'F')
+        {
+            return Float.intBitsToFloat(Magic.load32(a));
+        }
+        return (float) integral(a);
+    }
+
+    public double getDouble(Object obj) throws IllegalAccessException
+    {
+        checkAccess(clazz, modifiers, Magic.readLR());
+        long a = addr(obj);
+        readableAs('D');
+        if (typeChar == 'D')
+        {
+            return Double.longBitsToDouble(Magic.load64(a));
+        }
+        if (typeChar == 'F')
+        {
+            return (double) Float.intBitsToFloat(Magic.load32(a));
+        }
+        return (double) integral(a);
+    }
+
+    public void setBoolean(Object obj, boolean v) throws IllegalAccessException
+    {
+        checkAccess(clazz, modifiers, Magic.readLR());
+        putIntegral(writableAddr(obj), 'Z', v ? 1L : 0L);
+    }
+
+    public void setByte(Object obj, byte v) throws IllegalAccessException
+    {
+        checkAccess(clazz, modifiers, Magic.readLR());
+        putIntegral(writableAddr(obj), 'B', v);
+    }
+
+    public void setChar(Object obj, char v) throws IllegalAccessException
+    {
+        checkAccess(clazz, modifiers, Magic.readLR());
+        putIntegral(writableAddr(obj), 'C', v);
+    }
+
+    public void setShort(Object obj, short v) throws IllegalAccessException
+    {
+        checkAccess(clazz, modifiers, Magic.readLR());
+        putIntegral(writableAddr(obj), 'S', v);
+    }
+
+    public void setInt(Object obj, int v) throws IllegalAccessException
+    {
+        checkAccess(clazz, modifiers, Magic.readLR());
+        putIntegral(writableAddr(obj), 'I', v);
+    }
+
+    public void setLong(Object obj, long v) throws IllegalAccessException
+    {
+        checkAccess(clazz, modifiers, Magic.readLR());
+        putIntegral(writableAddr(obj), 'J', v);
+    }
+
+    public void setFloat(Object obj, float v) throws IllegalAccessException
+    {
+        checkAccess(clazz, modifiers, Magic.readLR());
+        putFloat(writableAddr(obj), v);
+    }
+
+    public void setDouble(Object obj, double v) throws IllegalAccessException
+    {
+        checkAccess(clazz, modifiers, Magic.readLR());
+        putDouble(writableAddr(obj), v);
     }
 
     /**
@@ -464,10 +692,5 @@ public final class Field extends AccessibleObject implements Member
     public boolean isEnumConstant()
     {
         return (modifiers & 0x4000) != 0;               // ACC_ENUM
-    }
-
-    public void setBoolean(Object obj, boolean v) throws IllegalAccessException
-    {
-        slot(addr(obj), v ? 1 : 0);
     }
 }
