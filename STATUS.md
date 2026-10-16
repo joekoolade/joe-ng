@@ -4,6 +4,48 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **ANNOTATION VALUES: FLOATS, PRIMITIVE ARRAYS, ARRAY CLASS LITERALS AND NESTED ANNOTATIONS ARE READ;
+  `Method.getDefaultValue` (2026-10-16).**
+  - **Four kinds of annotation element value read wrong, WRITTEN or defaulted** -- the decoder
+    (`annoElementValue`) is shared. Measured on main, written on a use of an annotation, each listed as read
+    against the host:
+    - **float and double: `d=0.0 f=0.0` for 3.5 and 2.5.** The `F` and `D` tags were not decoded at all.
+    - **primitive arrays: `ints=[4, 0]` for `{4, 5}`.** Built as 8-byte reference slots and read as 4-byte
+      ints; an empty one came back as an `Object[]`, and a defaulted `int[]` crashed `Arrays.deepToString`.
+    - **array class literals: `classes=[null, null]` for `{long[].class, String[][].class}`.**
+      `annoClassValue` resolved only `L...;` descriptors.
+    - **nested annotations: `nested=null`, `nesteds=[null]`.** The `@` tag was marked "still open". This is
+      the value of every `@Repeatable` container, so a repeated annotation read its container's `value()` as
+      null.
+  - **Now:**
+    - floats and doubles are decoded as raw bits;
+    - a primitive array is a real one, with the component's width and the interned primitive-array TIB,
+      sized from a new `annoArrayPrim` taken from the element's descriptor;
+    - an array class literal resolves through `primArrayMirror`/`arrayOf`;
+    - a nested annotation is built by `buildAnnoObject` like any other. A build is not re-entrant, so
+      `annoNestedValue`:
+      - saves and restores the decoder's per-element globals;
+      - re-points the parse cursor at the outer blob afterwards, because applying the inner defaults re-parsed
+        another blob;
+      - drains only its OWN pending Class/enum values. `drainAnnoPending` now drains from a mark
+        `buildAnnoObject` takes, and copies its entries out before resolving them, so a load that builds an
+        annotation cannot overwrite them.
+  - **`Method.getDefaultValue` was missing.** It is stock's contract, over the VM's own builder:
+    - an instance of the annotation type with NO element written (`annoDefaults0`) carries every default;
+    - the element is called on it, so each call gets a fresh array;
+    - it answers null without an `AnnotationDefault` attribute -- asked through `paramMeta0(rg, -3)` -- and
+      for a method that is not an annotation element.
+    `Method.invoke`'s body after its access check is now a private `invoke0`, which this calls, because the
+    annotation type may be non-public.
+  - **Probe:** `AnnoDefaultProbe` (new, 26 lines) is host-identical. It covers:
+    - a default of every element kind -- each primitive, String, Class, enum, nested annotation, and arrays
+      of each, including `{}`;
+    - an element with no default, an interface method and a `String` method;
+    - a mutated returned copy;
+    - the same kinds WRITTEN on a use.
+    Before the decoder fix, on this branch, the defaults read: `d` and `f` 0.0, `empty` as `Object[]`,
+    `int[].class` in a `Class[]` null, and `ints` crashed the printer.
+  - **Regression (suite, all probes, JUnit):** QEMU clean on the combined tree 1c40fe8 (main b7ad6e4 plus the annotation-defaults change, so it contains this one) -- suite markers all zero, `gc: collections=51`, clinits 347; 54 of 56 probes host-identical, DigestProbe/MacProbe their designed divergences only; `ran 44, failures 0`. **Pi:** PASS (2026-10-16, 976a04a) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=892), `[main returned normally]`, `gc: collections=7`.
 - **`accessFlags()` ON CLASSES, FIELDS, METHODS, CONSTRUCTORS AND PARAMETERS; ARRAYS AND PRIMITIVES HAVE STOCK
   MODIFIERS (2026-10-15).**
   - **`accessFlags()` was missing from `Class`, `Field` and `Executable`, and `Parameter`'s threw.** The probe
@@ -33,7 +75,7 @@ Newest entries are at the top.
     - constructors, and mandated and synthetic parameters;
     - every `AccessFlag`'s mask, source flag and locations, the locations sorted because `Set.of` iteration
       order varies between host runs.
-  - **Regression (suite, all probes, JUnit):** pending. **Pi:** PASS (2026-10-15, f2456c9) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=889), `[main returned normally]`, `gc: collections=7`.
+  - **Regression (suite, all probes, JUnit):** QEMU clean on the combined tree 1c40fe8 (main b7ad6e4 plus the annotation-defaults change, so it contains this one) -- suite markers all zero, `gc: collections=51`, clinits 347; 54 of 56 probes host-identical, DigestProbe/MacProbe their designed divergences only; `ran 44, failures 0`. Recorded after the merge, which went ahead with this line pending. **Pi:** PASS (2026-10-15, f2456c9) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=889), `[main returned normally]`, `gc: collections=7`.
 - **REFLECTIVE ACCESS FOLLOWS STOCK'S `verifyMemberAccess`: NESTMATES, CLASS ACCESS, PROTECTED TARGETS; NESTS
   ARE READ (2026-10-15).** `AccessibleObject.checkAccess` knew public/private/protected/package by the member's
   own flags alone. A negative control on main (a copy without the nest-API arms, which main's `Class` lacks)
@@ -79,7 +121,7 @@ Newest entries are at the top.
     - the private iterator class;
     - the protected target on self and on another list;
     - the VM's own enum and `newInstance` calls, plus a private constructor that must stay refused.
-  - **Regression (suite, all probes, JUnit):** pending. **Pi:** FAILED on 19e9d0c as above; PASS on the fixed tree (2026-10-15, d26e756) -- WiFi join, DHCP,
+  - **Regression (suite, all probes, JUnit):** QEMU clean on the combined tree 1c40fe8 (main b7ad6e4 plus the annotation-defaults change, so it contains this one) -- suite markers all zero, `gc: collections=51`, clinits 347; 54 of 56 probes host-identical, DigestProbe/MacProbe their designed divergences only; `ran 44, failures 0`. Recorded after the merge, which went ahead with this line pending. **Pi:** FAILED on 19e9d0c as above; PASS on the fixed tree (2026-10-15, d26e756) -- WiFi join, DHCP,
     NetDemo HTTP 200 from example.com (bytes=888), no `ENUM CONSTANTS UNREADABLE`, `[main returned normally]`,
     `gc: collections=7`.
 - **REFLECTIVE FIELD ACCESS CHECKS ACCESS, THE RECEIVER, THE TYPE AND `final` AS STOCK DOES (2026-10-15).** The
@@ -113,7 +155,7 @@ Newest entries are at the top.
     rule of stock's `verifyMemberAccess`. The probe's target is a separate top-level class, so it does not
     reach them.
   - **Probe:** `FieldSemanticsProbe` (new, 82 lines) is host-identical.
-  - **Regression (suite, all probes, JUnit):** pending. **Pi:** PASS (2026-10-15, 737984d) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=889), `[main returned normally]`, `gc: collections=7`.
+  - **Regression (suite, all probes, JUnit):** QEMU clean on the combined tree 1c40fe8 (main b7ad6e4 plus the annotation-defaults change, so it contains this one) -- suite markers all zero, `gc: collections=51`, clinits 347; 54 of 56 probes host-identical, DigestProbe/MacProbe their designed divergences only; `ran 44, failures 0`. Recorded after the merge, which went ahead with this line pending. **Pi:** PASS (2026-10-15, 737984d) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=889), `[main returned normally]`, `gc: collections=7`.
 - **PARAMETER ANNOTATIONS AND `MethodParameters` ARE READ; `Parameter` RUNS STOCK; STACKED ANNOTATIONS KEEP THEIR
   VALUES (2026-10-15).**
   - **`getParameterAnnotations()` answered an empty row for every parameter**, a limit stated in its own
@@ -154,7 +196,7 @@ Newest entries are at the top.
     Host-identical. Negative control on main, a cut-down copy (main's `Parameter` lacks the methods the full
     probe calls): 30 of its 55 lines differ -- every annotation row empty, every `toString` bare, and all
     three stacked lists wrong.
-  - **Regression (suite, all probes, JUnit):** pending. **Pi:** PASS (2026-10-15, 1a273e2) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=888), `[main returned normally]`, `gc: collections=7`.
+  - **Regression (suite, all probes, JUnit):** QEMU clean on 1a273e2 -- suite markers all zero, `gc: collections=51`, clinits 346; 50 of 53 probes host-identical, DigestProbe/MacProbe their designed divergences, FieldSemanticsProbe absent from that tree (its host control was written by the next branch mid-run); `ran 44, failures 0`. Recorded after the merge, which went ahead with this line pending. **Pi:** PASS (2026-10-15, 1a273e2) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=888), `[main returned normally]`, `gc: collections=7`.
 - **`java.lang.reflect.Array` RUNS STOCK, ITS NATIVES WRITTEN IN JAVA (2026-10-15).** The overlay was a
   hand-written minimum, which rule 3 retires, and it was wrong for every array but a reference `Object[]`.
   - **15 stock members were missing:** `getBoolean`/`getByte`/`getChar`/`getShort`/`getFloat`/`getDouble` and all

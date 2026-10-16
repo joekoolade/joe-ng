@@ -678,7 +678,7 @@ public abstract class Executable extends AccessibleObject implements Member, Gen
     abstract boolean handleParameterNumberMismatch(int resultLength, Class<?>[] parameterTypes);
 
     /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.methodParamMeta}): see {@code Loader.methodParamMeta}. */
-    private static native long paramMeta0(int rgIndex, long k);
+    static native long paramMeta0(int rgIndex, long k);
 
     /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.methodParamName}): an entry's name, or null. */
     private static native String paramName0(int rgIndex, long k);
