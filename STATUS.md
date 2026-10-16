@@ -65,7 +65,7 @@ Newest entries are at the top.
       element hashes by IDENTITY on any JVM, so for those the formula is compared, not the number;
     - `toString` for a marker and a single-`value` annotation;
     - a `HashSet` collapsing to 3.
-  - **Regression (suite, all probes, JUnit):** suite clean on 60defc2 -- markers all zero, `gc: collections=51`, clinits 348; probes still running when this line was written (28 of the first 30 host-identical, the other two DigestProbe/MacProbe as designed); JUnit pending. **Pi:** PASS (2026-10-16, 60defc2) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=892), `[main returned normally]`, `gc: collections=7`. NetDemo reads no annotation, so its counters equal the previous image's; the image is known from the completed flash.
+  - **Regression (suite, all probes, JUnit):** suite clean on 60defc2 -- markers all zero, `gc: collections=51`, clinits 348; 58 of 60 probes host-identical, DigestProbe/MacProbe their designed divergences only; `ran 44, failures 0` -- the probes and JUnit finished after the merge. **Pi:** PASS (2026-10-16, 60defc2) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=892), `[main returned normally]`, `gc: collections=7`. NetDemo reads no annotation, so its counters equal the previous image's; the image is known from the completed flash.
 - **AN ANNOTATION WHOSE TYPE NOTHING ELSE NAMES IS READ (2026-10-16).** The gap the previous card recorded as
   found-not-fixed.
   - **Problem:** the annotation readers resolved each annotation's type by looking it up in the class registry,
