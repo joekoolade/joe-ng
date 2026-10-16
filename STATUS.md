@@ -37,7 +37,11 @@ Newest entries are at the top.
     (`-Duser.language=en`, the rest empty).
   - **Regression (suite, all probes, JUnit):** suite clean -- markers all zero, `gc: collections=51`, clinits
     348, 40 programs returned normally; 64 of 66 probes host-identical, DigestProbe/MacProbe their designed
-    divergences only; `ran 44, failures 0`. **Pi:** pending.
+    divergences only; `ran 44, failures 0`. **Pi:** PASS (2026-10-16, d769ad9) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=888), `[main returned normally]`. Per-batch `clinits=` counts equal the previous boot's (396/396/397/398). Two figures MOVED, recorded as observed rather than explained:
+    - `gc: collections=6` where the previous boots read 7;
+    - fewer initializers ran under the loader lock -- batch `clinitLk=1` and `12` against `7` and `46` -- and a
+      different set of them is named. That is the expected shape when a class initializes at its use instead
+      of inside a compile, but it is not measured as the cause.
 - **RECORDS AND SEALED CLASSES REFLECT: `getRecordComponents`, `getPermittedSubclasses`; SMALL `Class` MEMBERS
   (2026-10-16).**
   - **Six public `Class` members were missing** -- the probe does not compile against main (16 call sites):
