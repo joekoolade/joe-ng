@@ -49,8 +49,9 @@ Newest entries are at the top.
     - the private iterator class;
     - the protected target on self and on another list;
     - the VM's own enum and `newInstance` calls, plus a private constructor that must stay refused.
-  - **Regression (suite, all probes, JUnit):** pending. **Pi:** FAILED on 19e9d0c as above; the fixed tree is
-    pending.
+  - **Regression (suite, all probes, JUnit):** pending. **Pi:** FAILED on 19e9d0c as above; PASS on the fixed tree (2026-10-15, d26e756) -- WiFi join, DHCP,
+    NetDemo HTTP 200 from example.com (bytes=888), no `ENUM CONSTANTS UNREADABLE`, `[main returned normally]`,
+    `gc: collections=7`.
 - **REFLECTIVE FIELD ACCESS CHECKS ACCESS, THE RECEIVER, THE TYPE AND `final` AS STOCK DOES (2026-10-15).** The
   Field overlay read and wrote a slot whatever was asked of it. A negative control on main (the probe without
   the three new `AccessibleObject` members) differs from the host on 42 of its 74 lines:
