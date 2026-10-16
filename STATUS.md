@@ -36,7 +36,7 @@ Newest entries are at the top.
     - `newInstance` over every component type, `void`, null and a negative length;
     - the multi-dimensional forms, including an array component type, a zero dimension and a cast to `int[][]`.
     Host-identical on the first run.
-  - **Regression (suite, all probes, JUnit):** QEMU clean on 45b27c8 -- suite markers all zero, `gc: collections=51`, clinits 346; 49 of 51 probes host-identical (ReflectArrayProbe among them), DigestProbe/MacProbe their designed divergences only; `ran 44, failures 0`. **Pi:** pending.
+  - **Regression (suite, all probes, JUnit):** QEMU clean on 45b27c8 -- suite markers all zero, `gc: collections=51`, clinits 346; 49 of 51 probes host-identical (ReflectArrayProbe among them), DigestProbe/MacProbe their designed divergences only; `ran 44, failures 0`. **Pi:** PASS (2026-10-15, 25e1662) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=888), `[main returned normally]`, `gc: collections=7`.
 - **REFLECTIVE INVOKE: EXCEPTIONS WRAPPED, ARGUMENTS CONVERTED AS STOCK (2026-10-15).** What `Method.invoke`
   and `Constructor.newInstance` do around the call, measured against the unfixed VM with the same probe.
   - **An exception the target threw escaped UNWRAPPED.** Stock wraps whatever the target throws, checked,
