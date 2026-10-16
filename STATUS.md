@@ -38,7 +38,7 @@ Newest entries are at the top.
     - `isRecord` of a record, class, enum and `Record`;
     - a sealed interface and class, non-sealed and final subclasses, `String` and `int[]`;
     - the four small members.
-  - **Regression (suite, all probes, JUnit):** pending. **Pi:** pending.
+  - **Regression (suite, all probes, JUnit):** suite clean on f528a90 -- markers all zero, `gc: collections=51`, clinits 348; probes and JUnit still running when this line was written. **Pi:** PASS (2026-10-16, f528a90) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=891), `[main returned normally]`, `gc: collections=7`; the first batch loads 1471 classes where the previous image loaded 1470, so this boot is the new image.
 - **ANNOTATION INSTANCES KEEP THE `Annotation` CONTRACT: `equals`, `hashCode`, `toString` (2026-10-16).**
   - **Measured on main** with a new `AnnoContractProbe` -- a VM-built annotation was an identity object:
     - two reads of the same annotation were not `equals`, and neither were equal annotations on two classes,
