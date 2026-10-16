@@ -861,6 +861,26 @@ final class VMNatives
         }
     }
 
+    /** {@code Proxy.proxyType0} native: build a proxy class for an interface closure -- see Loader.proxyType. */
+    static long proxyType(long ifaces, long methods, long names, long descs, long objMethods)
+    {
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes and compiles the dispatch helper
+        try
+        {
+            return Loader.proxyType(ifaces, methods, names, descs, objMethods);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
+    }
+
+    /** {@code Proxy.proxyAlloc0} native: a zeroed instance of a proxy class. */
+    static long proxyAlloc(long mirror)
+    {
+        return Loader.proxyAlloc(mirror);
+    }
+
     /** {@code RecordComponent.recordInfo0} native: the Record attribute's component count, or -1. */
     static long classRecordInfo(long mirror, long k)
     {
