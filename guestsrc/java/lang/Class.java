@@ -544,6 +544,12 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
         return null;
     }
 
+    /** Stock's: a nominal descriptor for this class -- empty only for a hidden one, and this VM makes none. */
+    public java.util.Optional<java.lang.constant.ClassDesc> describeConstable()
+    {
+        return java.util.Optional.of(jdk.internal.constant.ConstantUtils.classDesc(this));
+    }
+
     /**
      * The enum constants of this enum type (in declaration order), or {@code null} if this is not an enum.
      * Implemented via the enum's compiler-synthesised {@code values()} (reached through M2 reflection) — the

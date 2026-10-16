@@ -1421,6 +1421,28 @@ public final class Loader
     /** TEMPORARY (init-guard diagnosis): report every guard EMITTED and every guard that FIRES. */
     static final boolean INIT_GUARD_LOG = false;
 
+    /**
+     * JVMS 5.5, AND NOTHING ELSE, ONCE THE RUNTIME IS UP: a class is initialized at an EXECUTED active use -- the
+     * compiled init guard -- and never because a compile NAMED it. The dependency pre-walk
+     * ({@link #initClinitDeps}) and the compile drain ({@link #drainPendingInit}) both approximated 5.5 from
+     * compile-time references, and an approximation picks the WRONG member of a mutually-referencing pair:
+     * <ul>
+     *   <li>{@code ConstantDescs} was claimed, and its dependency phase ran {@code PrimitiveClassDescImpl}'s
+     *       initializer before ConstantDescs' own body, which reads {@code BSM_PRIMITIVE_CLASS} back -- still
+     *       null -- so {@code int[].class.describeConstable()} died in a {@code requireNonNull}
+     *       (ConstantDescOrderProbe);</li>
+     *   <li>with the pre-walk alone removed, compiling {@code Early2}'s initializer drained {@code Late2}, whose
+     *       constructor then read {@code Early2.EARLY2} from a class already claimed: {@code ctor saw = null}
+     *       (ClinitOrderProbe order 2).</li>
+     * </ul>
+     * Both are gone with the guard as the only trigger, and nothing regressed: the suite ran the same 348
+     * initializers it ran before. BEFORE the runtime is up the eager paths stay: the boot self-test's legacy
+     * {@code loadParseInt} path runs before {@link #bringUpRuntime}, where {@code ensureInitFor} skips guards by
+     * design, and it relies on them -- disabled there, {@code Character.digit} read a null
+     * {@code CharacterDataLatin1.instance}.
+     */
+    static final boolean GUARDS_ONLY = true;
+
     /** Print an absolute {u2 len}{bytes} class name with a tag. Temporary, paired with INIT_GUARD_LOG. */
     static void logInitGuard(byte[] tag, long clsU)
     {
@@ -1541,6 +1563,10 @@ public final class Loader
 
     private static void initClinitDeps(int i, int self)
     {
+        if (GUARDS_ONLY && runtimeUp)
+        {
+            return;                                     // executed guards alone (JVMS 5.5) -- see GUARDS_ONLY
+        }
         int e = clDepStart[i] + clDepN[i];
         int d = clDepStart[i];
         while (d < e)
@@ -2140,6 +2166,12 @@ public final class Loader
      *  can compile further methods, which can note more classes. */
     private static void drainPendingInit()
     {
+        if (GUARDS_ONLY && runtimeUp)
+        {
+            lzInitN = 0;                                // noted, never acted on: the guard is the only trigger,
+            lzInitWant = 0;                             //   as an executed active use is in a JVM (GUARDS_ONLY)
+            return;
+        }
         // SNAPSHOT AND CLEAR FIRST, as drainPendingPulls does. Each ensureClinit runs GUEST code, which
         // compiles further methods -- and a nested compile's own drain used to pop THIS drain's remaining
         // entries off the shared list, initializing them from inside an unrelated initializer. Measured:
