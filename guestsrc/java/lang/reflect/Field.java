@@ -111,6 +111,12 @@ public final class Field extends AccessibleObject implements Member
         return Magic.addrOf(obj) + off;
     }
 
+    /** The class the access rules check a protected member against: the receiver's, or null for a static. */
+    private Class<?> targetOf(Object obj)
+    {
+        return Modifier.isStatic(modifiers) || obj == null ? null : obj.getClass();
+    }
+
     /**
      * As {@link #addr}, for a WRITE, with stock's rule for a {@code final} field: writable only when
      * {@code setAccessible(true)} was called, the field is an instance field, and the class is not a record.
@@ -225,7 +231,7 @@ public final class Field extends AccessibleObject implements Member
 
     public Object get(Object obj) throws IllegalAccessException
     {
-        checkAccess(clazz, modifiers, Magic.readLR());
+        checkAccess(clazz, modifiers, Magic.readLR(), targetOf(obj));
         long a = addr(obj);
         if (typeChar == 'I')
         {
@@ -270,7 +276,7 @@ public final class Field extends AccessibleObject implements Member
      */
     public void set(Object obj, Object value) throws IllegalAccessException
     {
-        checkAccess(clazz, modifiers, Magic.readLR());
+        checkAccess(clazz, modifiers, Magic.readLR(), targetOf(obj));
         long a = writableAddr(obj);
         if (typeChar == 'L' || typeChar == '[')
         {
@@ -373,7 +379,7 @@ public final class Field extends AccessibleObject implements Member
      */
     public boolean getBoolean(Object obj) throws IllegalAccessException
     {
-        checkAccess(clazz, modifiers, Magic.readLR());
+        checkAccess(clazz, modifiers, Magic.readLR(), targetOf(obj));
         long a = addr(obj);
         readableAs('Z');
         return integral(a) != 0L;
@@ -381,7 +387,7 @@ public final class Field extends AccessibleObject implements Member
 
     public byte getByte(Object obj) throws IllegalAccessException
     {
-        checkAccess(clazz, modifiers, Magic.readLR());
+        checkAccess(clazz, modifiers, Magic.readLR(), targetOf(obj));
         long a = addr(obj);
         readableAs('B');
         return (byte) integral(a);
@@ -389,7 +395,7 @@ public final class Field extends AccessibleObject implements Member
 
     public char getChar(Object obj) throws IllegalAccessException
     {
-        checkAccess(clazz, modifiers, Magic.readLR());
+        checkAccess(clazz, modifiers, Magic.readLR(), targetOf(obj));
         long a = addr(obj);
         readableAs('C');
         return (char) integral(a);
@@ -397,7 +403,7 @@ public final class Field extends AccessibleObject implements Member
 
     public short getShort(Object obj) throws IllegalAccessException
     {
-        checkAccess(clazz, modifiers, Magic.readLR());
+        checkAccess(clazz, modifiers, Magic.readLR(), targetOf(obj));
         long a = addr(obj);
         readableAs('S');
         return (short) integral(a);
@@ -405,7 +411,7 @@ public final class Field extends AccessibleObject implements Member
 
     public int getInt(Object obj) throws IllegalAccessException
     {
-        checkAccess(clazz, modifiers, Magic.readLR());
+        checkAccess(clazz, modifiers, Magic.readLR(), targetOf(obj));
         long a = addr(obj);
         readableAs('I');
         return (int) integral(a);
@@ -413,7 +419,7 @@ public final class Field extends AccessibleObject implements Member
 
     public long getLong(Object obj) throws IllegalAccessException
     {
-        checkAccess(clazz, modifiers, Magic.readLR());
+        checkAccess(clazz, modifiers, Magic.readLR(), targetOf(obj));
         long a = addr(obj);
         readableAs('J');
         return integral(a);
@@ -421,7 +427,7 @@ public final class Field extends AccessibleObject implements Member
 
     public float getFloat(Object obj) throws IllegalAccessException
     {
-        checkAccess(clazz, modifiers, Magic.readLR());
+        checkAccess(clazz, modifiers, Magic.readLR(), targetOf(obj));
         long a = addr(obj);
         readableAs('F');
         if (typeChar == 'F')
@@ -433,7 +439,7 @@ public final class Field extends AccessibleObject implements Member
 
     public double getDouble(Object obj) throws IllegalAccessException
     {
-        checkAccess(clazz, modifiers, Magic.readLR());
+        checkAccess(clazz, modifiers, Magic.readLR(), targetOf(obj));
         long a = addr(obj);
         readableAs('D');
         if (typeChar == 'D')
@@ -449,49 +455,49 @@ public final class Field extends AccessibleObject implements Member
 
     public void setBoolean(Object obj, boolean v) throws IllegalAccessException
     {
-        checkAccess(clazz, modifiers, Magic.readLR());
+        checkAccess(clazz, modifiers, Magic.readLR(), targetOf(obj));
         putIntegral(writableAddr(obj), 'Z', v ? 1L : 0L);
     }
 
     public void setByte(Object obj, byte v) throws IllegalAccessException
     {
-        checkAccess(clazz, modifiers, Magic.readLR());
+        checkAccess(clazz, modifiers, Magic.readLR(), targetOf(obj));
         putIntegral(writableAddr(obj), 'B', v);
     }
 
     public void setChar(Object obj, char v) throws IllegalAccessException
     {
-        checkAccess(clazz, modifiers, Magic.readLR());
+        checkAccess(clazz, modifiers, Magic.readLR(), targetOf(obj));
         putIntegral(writableAddr(obj), 'C', v);
     }
 
     public void setShort(Object obj, short v) throws IllegalAccessException
     {
-        checkAccess(clazz, modifiers, Magic.readLR());
+        checkAccess(clazz, modifiers, Magic.readLR(), targetOf(obj));
         putIntegral(writableAddr(obj), 'S', v);
     }
 
     public void setInt(Object obj, int v) throws IllegalAccessException
     {
-        checkAccess(clazz, modifiers, Magic.readLR());
+        checkAccess(clazz, modifiers, Magic.readLR(), targetOf(obj));
         putIntegral(writableAddr(obj), 'I', v);
     }
 
     public void setLong(Object obj, long v) throws IllegalAccessException
     {
-        checkAccess(clazz, modifiers, Magic.readLR());
+        checkAccess(clazz, modifiers, Magic.readLR(), targetOf(obj));
         putIntegral(writableAddr(obj), 'J', v);
     }
 
     public void setFloat(Object obj, float v) throws IllegalAccessException
     {
-        checkAccess(clazz, modifiers, Magic.readLR());
+        checkAccess(clazz, modifiers, Magic.readLR(), targetOf(obj));
         putFloat(writableAddr(obj), v);
     }
 
     public void setDouble(Object obj, double v) throws IllegalAccessException
     {
-        checkAccess(clazz, modifiers, Magic.readLR());
+        checkAccess(clazz, modifiers, Magic.readLR(), targetOf(obj));
         putDouble(writableAddr(obj), v);
     }
 

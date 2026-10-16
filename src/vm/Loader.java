@@ -12513,6 +12513,8 @@ public final class Loader
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/util/concurrent/atomic/FieldUpdaterCheck"))
                 || utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/AccessibleObject"))
+                // Class.newInstance checks access against ITS caller, as stock's ensureMemberAccess does.
+                || utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Class"))
                 // MhUtil's no-receiver findVarHandle: stock resolves the field against lookup.lookupClass(),
                 // and joe-ng's Lookup carries none, so the DECLARING class comes from the caller's frame.
                 // Keyed by DECLARING CLASS like every entry here -- registering a native under one of two
@@ -12663,6 +12665,7 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("interfaces0")))       { return VM.classIfacesAddr; }   // (Class)[Class
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("genericSignature0"))) { return VM.classSignatureAddr; } // (Class)String
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("enclosingPart0")))    { return VM.classEnclosingPartAddr; } // (Class,J)String
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("nestPart0")))    { return VM.classNestPartAddr; } // (Class,J)String
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("innerPart0")))        { return VM.classInnerPartAddr; }     // (Class,J)String
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("sealed0")))           { return VM.classSealedAddr; }   // (Class)J
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("forName0")))          { return VM.forNameAddr; }       // (byte[])Class
@@ -19217,6 +19220,44 @@ public final class Loader
         }
         long natPos = base + gcp[nat];                  // CONSTANT_NameAndType: u2 name, u2 descriptor
         return utf8ToString(base, gcp[u2(natPos + (part == 1L ? 0L : 2L))]);
+    }
+
+    /**
+     * {@code Class.nestPart0}: the class's nest, as written by its {@code NestHost} and {@code NestMembers}
+     * attributes (JVMS 4.7.28, 4.7.29). {@code k == -1} answers the HOST's internal name, or 0 when this class
+     * has no {@code NestHost} -- it is then its own host; {@code k >= 0} answers the {@code k}th
+     * {@code NestMembers} entry's internal name, or 0 past the end or when there is no such attribute. Names
+     * only: the guest resolves them, so nothing here demand-loads under the cursor.
+     */
+    static long classNestPart(long mirror, long k)
+    {
+        if (mirror <= 0x1000L)
+        {
+            return 0L;
+        }
+        int reg = regOfType(Magic.load64(mirror + 16L));
+        if (reg < 0)
+        {
+            return 0L;
+        }
+        long base = clTab[reg].base;
+        long ap = classAttrsPos(base);
+        if (ap == 0L)
+        {
+            return 0L;
+        }
+        if (k < 0L)
+        {
+            long p = classAttrNamed(base, ap + 2L, u2(ap), Magic.bytes("NestHost"));
+            return p == 0L ? 0L : utf8ToString(base, gcp[u2(base + gcp[u2(p)])]);  // CONSTANT_Class -> name
+        }
+        long p = classAttrNamed(base, ap + 2L, u2(ap), Magic.bytes("NestMembers"));
+        if (p == 0L || k >= u2(p))                      // u2 number_of_classes, then u2 class indices
+        {
+            return 0L;
+        }
+        int ci = u2(p + 2L + 2L * k);
+        return utf8ToString(base, gcp[u2(base + gcp[ci])]);
     }
 
     /**

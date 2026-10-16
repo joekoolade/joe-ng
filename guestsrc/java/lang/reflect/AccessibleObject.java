@@ -78,43 +78,104 @@ public class AccessibleObject implements AnnotatedElement
 
     /**
      * Enforce Java member access for a member with modifiers {@code mods} declared by {@code declaringClass},
-     * from the caller whose frame return-address is {@code callerPc} -- unless {@code setAccessible(true)} was
-     * called. Throws {@code IllegalAccessException} when {@link #verify} refuses.
+     * from the caller whose frame return-address is {@code callerPc}, on an object of class {@code targetClass}
+     * (null for a static member) -- unless {@code setAccessible(true)} was called. Throws
+     * {@code IllegalAccessException} when {@link #verify} refuses.
+     *
+     * <p>The fast path is a public member of a public class, which needs no caller: everything else asks who is
+     * calling.
      */
-    protected final void checkAccess(Class<?> declaringClass, int mods, long callerPc) throws IllegalAccessException
+    protected final void checkAccess(Class<?> declaringClass, int mods, long callerPc, Class<?> targetClass)
+            throws IllegalAccessException
     {
-        if (override || (mods & ACC_PUBLIC) != 0)
+        if (override || ((mods & ACC_PUBLIC) != 0 && classIsPublic(declaringClass)))
         {
             return;
         }
         Class<?> caller = (Class<?>) callerClass0(callerPc);
-        if (!verify(caller, declaringClass, mods))
+        if (!verify(caller, declaringClass, targetClass, mods))
         {
             throw denied(caller, declaringClass, (mods & ACC_PRIVATE) != 0 ? "private"
-                    : (mods & ACC_PROTECTED) != 0 ? "protected" : "package-private");
+                    : (mods & ACC_PROTECTED) != 0 ? "protected" : (mods & ACC_PUBLIC) != 0 ? "public"
+                    : "package-private");
         }
     }
 
     /**
-     * The member-access rules, without the override: public -> always; same declaring class -> always; private
-     * -> only the declaring class; protected -> same package or a subclass of the declaring class;
-     * package-private -> same package.
+     * Whether a class is PUBLIC for access purposes. Stock reads the classfile's own {@code access_flags}, where
+     * javac writes {@code ACC_PUBLIC} for a public OR protected nested class and nothing for a private or
+     * package-private one; {@code getModifiers} answers from {@code InnerClasses}, so public-or-protected there is
+     * the same predicate.
      */
-    private static boolean verify(Class<?> caller, Class<?> declaringClass, int mods)
+    private static boolean classIsPublic(Class<?> c)
     {
-        if ((mods & ACC_PUBLIC) != 0 || caller == declaringClass)
+        return (c.getModifiers() & (ACC_PUBLIC | ACC_PROTECTED)) != 0;
+    }
+
+    /**
+     * {@link #verify} for {@code java.lang.Class.newInstance}, which must check against ITS caller as stock's
+     * {@code Reflection.ensureMemberAccess} does. Overlay-only, like {@code Constructor.resolve}; it answers a
+     * question about the classes it is given and grants nothing.
+     */
+    public static boolean verifyMemberAccess(Class<?> caller, Class<?> memberClass, Class<?> targetClass, int mods)
+    {
+        if ((mods & ACC_PUBLIC) != 0 && classIsPublic(memberClass))
         {
             return true;
         }
-        if (caller == null || (mods & ACC_PRIVATE) != 0)
+        return verify(caller, memberClass, targetClass, mods);
+    }
+
+    /**
+     * Stock's {@code Reflection.verifyMemberAccess}, without the module step (every class here is in the unnamed
+     * module, which stock's module check passes):
+     * <ul>
+     *   <li>the declaring class itself must be accessible -- public, or in the caller's package;</li>
+     *   <li>a public member is then accessible;</li>
+     *   <li>a private member only to a NESTMATE of its declaring class (the declaring class itself included);</li>
+     *   <li>a protected member to a subclass, or within the package;</li>
+     *   <li>a package-private member within the package;</li>
+     *   <li>and a protected INSTANCE member reached from a subclass in another package only on an object of the
+     *       caller's own class or a subclass of it ({@code targetClass}).</li>
+     * </ul>
+     */
+    private static boolean verify(Class<?> caller, Class<?> declaringClass, Class<?> targetClass, int mods)
+    {
+        if (caller == declaringClass)
+        {
+            return true;
+        }
+        if (caller == null)
         {
             return false;
         }
-        if ((mods & ACC_PROTECTED) != 0 && declaringClass.isAssignableFrom(caller))
+        boolean samePkg = samePackage(caller, declaringClass);
+        if (!classIsPublic(declaringClass) && !samePkg)
+        {
+            return false;
+        }
+        if ((mods & ACC_PUBLIC) != 0)
         {
             return true;
         }
-        return samePackage(caller, declaringClass);
+        if ((mods & ACC_PRIVATE) != 0)
+        {
+            return caller.isNestmateOf(declaringClass);
+        }
+        boolean ok = samePkg;
+        if (!ok && (mods & ACC_PROTECTED) != 0 && declaringClass.isAssignableFrom(caller))
+        {
+            ok = true;
+        }
+        if (!ok)
+        {
+            return false;
+        }
+        if (targetClass != null && (mods & ACC_PROTECTED) != 0 && targetClass != caller && !samePkg)
+        {
+            return caller.isAssignableFrom(targetClass);
+        }
+        return true;
     }
 
     /**
@@ -151,7 +212,16 @@ public class AccessibleObject implements AnnotatedElement
         {
             return true;
         }
-        return verify((Class<?>) callerClass0(callerPc), declaringClass, modifiers);
+        Class<?> targetClass;
+        if (this instanceof Constructor)
+        {
+            targetClass = declaringClass;
+        }
+        else
+        {
+            targetClass = Modifier.isStatic(modifiers) ? null : obj.getClass();
+        }
+        return verify((Class<?>) callerClass0(callerPc), declaringClass, targetClass, modifiers);
     }
 
     /**

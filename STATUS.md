@@ -4,6 +4,54 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **REFLECTIVE ACCESS FOLLOWS STOCK'S `verifyMemberAccess`: NESTMATES, CLASS ACCESS, PROTECTED TARGETS; NESTS
+  ARE READ (2026-10-15).** `AccessibleObject.checkAccess` knew public/private/protected/package by the member's
+  own flags alone. A negative control on main (a copy without the nest-API arms, which main's `Class` lacks)
+  differs from the host on 12 of its 21 lines:
+  - **Nestmates were refused (7 lines).** Since JEP 181 an outer class may reach a nested class's private
+    members reflectively, and the reverse; here every one -- a field read and write, a method, a constructor,
+    a doubly nested field and the outer class's private static -- threw `IllegalAccessException`.
+  - **The declaring CLASS was never checked (2 lines).** A public method of a non-public class in another
+    package was callable: `hasNext` on `ArrayList`'s private iterator class answered `true`, where stock refuses.
+  - **The protected-instance target rule was missing (3 lines).** A subclass of `ArrayList` read the protected
+    `modCount` of, and called `removeRange` on, another `ArrayList` that is not its subclass -- stock allows
+    these on the caller's own class only.
+  - **Now** `verify` is stock's `Reflection.verifyMemberAccess` without the module step (every class is in the
+    unnamed module):
+    - the declaring class must be public or in the caller's package -- public as the classfile's own
+      `access_flags` say, which for a nested class is public-or-protected in `InnerClasses`;
+    - a private member is reachable from a nestmate;
+    - a protected instance member, reached from another package, only on an object of the caller's class or a
+      subclass.
+    `checkAccess` takes the target class: the receiver's class for a field or method, the declaring class for a
+    constructor, as stock passes. Its fast path (no caller lookup) is now a public member of a public class.
+  - **`Class.getNestHost`/`isNestmateOf`/`getNestMembers`** were missing. They are stock's, over a new native
+    `nestPart0` that reads the `NestHost` and `NestMembers` attributes. One stated difference: HotSpot falls
+    back to the class itself when the named host does not list it back; a javac nest always does, so that
+    check is not made.
+  - **THE FIRST PI BOOT FAILED, AND IT WAS THIS CHANGE (19e9d0c).** NetDemo died with `UnknownHostException`
+    after `ENUM CONSTANTS UNREADABLE: java.util.stream.StreamOpFlag$Type ... values() threw
+    IllegalAccessException`. Two of the VM's OWN reflective calls had relied on the missing class check:
+    - **`Class.getEnumConstants`** invokes `values()` from `java.lang.Class`. A non-public enum in another
+      package is not accessible from there, so every such enum read as constant-less and `Enum.valueOf` on it
+      failed. Stock's `getEnumConstantsShared` calls `setAccessible(true)` first; this does too now.
+    - **`Class.newInstance`** delegated to `Constructor.newInstance`, so the access check saw `java.lang.Class`
+      as the caller, and a package-private class could not be instantiated from its own package. It now has
+      stock's shape:
+      - it checks against ITS caller, through a new `callerClass0` mapping on `Class` and an overlay-only
+        `AccessibleObject.verifyMemberAccess` that answers and grants nothing;
+      - it then runs the constructor with checks off.
+    The probe gained four arms for these, and fails them on 19e9d0c (`NullPointerException`,
+    `IllegalArgumentException`, `IllegalAccessException` where the host answers `4`, `REFERENCE`, `made`).
+  - **Probe:** `AccessRulesProbe` (new, 41 lines) is host-identical. It covers:
+    - the nestmate cases in both directions;
+    - the nest API for member, local, anonymous, top-level, `String`, primitive and array classes;
+    - the private iterator class;
+    - the protected target on self and on another list;
+    - the VM's own enum and `newInstance` calls, plus a private constructor that must stay refused.
+  - **Regression (suite, all probes, JUnit):** pending. **Pi:** FAILED on 19e9d0c as above; PASS on the fixed tree (2026-10-15, d26e756) -- WiFi join, DHCP,
+    NetDemo HTTP 200 from example.com (bytes=888), no `ENUM CONSTANTS UNREADABLE`, `[main returned normally]`,
+    `gc: collections=7`.
 - **REFLECTIVE FIELD ACCESS CHECKS ACCESS, THE RECEIVER, THE TYPE AND `final` AS STOCK DOES (2026-10-15).** The
   Field overlay read and wrote a slot whatever was asked of it. A negative control on main (the probe without
   the three new `AccessibleObject` members) differs from the host on 42 of its 74 lines:

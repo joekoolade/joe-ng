@@ -467,7 +467,12 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
         }
         try
         {
+            // setAccessible as stock's getEnumConstantsShared does: the CALLER of invoke is java.lang.Class, and
+            // a non-public enum in another package (java.util.stream.StreamOpFlag$Type, StreamShape) is not
+            // accessible from it. Without it every such enum read as constant-less once the class-access rule
+            // of verifyMemberAccess was enforced, and the network stack's Enum.valueOf failed on the Pi.
             java.lang.reflect.Method values = getDeclaredMethod("values");
+            values.setAccessible(true);
             return (Object[]) values.invoke(null);
         }
         catch (Exception e)
@@ -1240,6 +1245,68 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
     }
 
     /**
+     * Stock's: the host of this class's nest -- the class named by its {@code NestHost} attribute, or this class
+     * when it has none. javac names the top-level class, so every member, local and anonymous class of a
+     * top-level class shares its host. A primitive or array class is its own host. (HotSpot also falls back to
+     * this class when the named host does not list it back; a javac nest always does.)
+     */
+    public Class<?> getNestHost()
+    {
+        if (isPrimitive() || isArray())
+        {
+            return this;
+        }
+        String host = nestPart0(this, -1L);
+        return host == null ? this : classNamed(host);
+    }
+
+    /** Stock's: whether {@code c} and this class share a nest host. */
+    public boolean isNestmateOf(Class<?> c)
+    {
+        java.util.Objects.requireNonNull(c);
+        if (this == c)
+        {
+            return true;
+        }
+        if (isPrimitive() || isArray() || c.isPrimitive() || c.isArray())
+        {
+            return false;
+        }
+        return getNestHost() == c.getNestHost();
+    }
+
+    /**
+     * Stock's: the host first, then every class its {@code NestMembers} attribute lists. Asked of a member, it
+     * answers for that member's HOST, as stock does.
+     */
+    public Class<?>[] getNestMembers()
+    {
+        if (isPrimitive() || isArray())
+        {
+            return new Class<?>[] { this };
+        }
+        Class<?> host = getNestHost();
+        int n = 0;
+        while (nestPart0(host, n) != null)
+        {
+            n += 1;
+        }
+        Class<?>[] members = new Class<?>[n + 1];
+        members[0] = host;
+        for (int i = 0; i < n; i++)
+        {
+            members[i + 1] = classNamed(nestPart0(host, i));
+        }
+        return members;
+    }
+
+    /**
+     * VM native ({@code Loader.nativeBuf} -> {@code VMNatives.classNestPart}): {@code k == -1} the NestHost
+     * attribute's class (internal name; null when absent), {@code k >= 0} the k-th NestMembers entry, or null.
+     */
+    private static native String nestPart0(Class<?> c, long k);
+
+    /**
      * VM native ({@code Loader.nativeBuf} -> {@code VMNatives.classEnclosingPart}): part 0 the EnclosingMethod
      * attribute's class (internal name; null when the attribute is absent), 1 the method name, 2 its descriptor.
      */
@@ -1278,19 +1345,39 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
     @SuppressWarnings("unchecked")
     public T newInstance() throws InstantiationException, IllegalAccessException
     {
+        long callerPc = Magic.readLR();
+        java.lang.reflect.Constructor<T> ctor;
         try
         {
-            return (T) getDeclaredConstructor().newInstance();
+            ctor = getDeclaredConstructor();
         }
         catch (NoSuchMethodException e)
         {
             throw new InstantiationException(getName() + " has no no-arg constructor");
+        }
+        // Stock's shape: the access check is against the CALLER of newInstance -- Reflection.ensureMemberAccess
+        // with the caller's class -- and the constructor itself then runs with its checks off. Delegating to
+        // Constructor.newInstance instead made java.lang.Class the caller, so a package-private class could
+        // not be instantiated even from its own package.
+        Class<?> caller = (Class<?>) callerClass0(callerPc);
+        if (!java.lang.reflect.AccessibleObject.verifyMemberAccess(caller, this, this, ctor.getModifiers()))
+        {
+            throw new IllegalAccessException("class " + (caller == null ? "<unknown>" : caller.getName())
+                    + " cannot access a member of class " + getName());
+        }
+        ctor.setAccessible(true);
+        try
+        {
+            return ctor.newInstance();
         }
         catch (java.lang.reflect.InvocationTargetException e)
         {
             throw new InstantiationException(getName() + " constructor threw");
         }
     }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.classAtPc}): the Class of the method containing {@code pc}. */
+    private static native Object callerClass0(long pc);
 
     /** For a non-array, non-primitive class this is {@link #getName()}; arrays report the source-style form. */
     public String getTypeName()
