@@ -35,7 +35,7 @@ Newest entries are at the top.
     rule of stock's `verifyMemberAccess`. The probe's target is a separate top-level class, so it does not
     reach them.
   - **Probe:** `FieldSemanticsProbe` (new, 82 lines) is host-identical.
-  - **Regression (suite, all probes, JUnit):** pending. **Pi:** pending.
+  - **Regression (suite, all probes, JUnit):** pending. **Pi:** PASS (2026-10-15, 737984d) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=889), `[main returned normally]`, `gc: collections=7`.
 - **PARAMETER ANNOTATIONS AND `MethodParameters` ARE READ; `Parameter` RUNS STOCK; STACKED ANNOTATIONS KEEP THEIR
   VALUES (2026-10-15).**
   - **`getParameterAnnotations()` answered an empty row for every parameter**, a limit stated in its own
