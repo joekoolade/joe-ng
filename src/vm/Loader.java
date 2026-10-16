@@ -12513,6 +12513,8 @@ public final class Loader
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/util/concurrent/atomic/FieldUpdaterCheck"))
                 || utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/AccessibleObject"))
+                // Class.newInstance checks access against ITS caller, as stock's ensureMemberAccess does.
+                || utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Class"))
                 // MhUtil's no-receiver findVarHandle: stock resolves the field against lookup.lookupClass(),
                 // and joe-ng's Lookup carries none, so the DECLARING class comes from the caller's frame.
                 // Keyed by DECLARING CLASS like every entry here -- registering a native under one of two

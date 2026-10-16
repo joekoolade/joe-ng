@@ -467,7 +467,12 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
         }
         try
         {
+            // setAccessible as stock's getEnumConstantsShared does: the CALLER of invoke is java.lang.Class, and
+            // a non-public enum in another package (java.util.stream.StreamOpFlag$Type, StreamShape) is not
+            // accessible from it. Without it every such enum read as constant-less once the class-access rule
+            // of verifyMemberAccess was enforced, and the network stack's Enum.valueOf failed on the Pi.
             java.lang.reflect.Method values = getDeclaredMethod("values");
+            values.setAccessible(true);
             return (Object[]) values.invoke(null);
         }
         catch (Exception e)
@@ -1340,19 +1345,39 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
     @SuppressWarnings("unchecked")
     public T newInstance() throws InstantiationException, IllegalAccessException
     {
+        long callerPc = Magic.readLR();
+        java.lang.reflect.Constructor<T> ctor;
         try
         {
-            return (T) getDeclaredConstructor().newInstance();
+            ctor = getDeclaredConstructor();
         }
         catch (NoSuchMethodException e)
         {
             throw new InstantiationException(getName() + " has no no-arg constructor");
+        }
+        // Stock's shape: the access check is against the CALLER of newInstance -- Reflection.ensureMemberAccess
+        // with the caller's class -- and the constructor itself then runs with its checks off. Delegating to
+        // Constructor.newInstance instead made java.lang.Class the caller, so a package-private class could
+        // not be instantiated even from its own package.
+        Class<?> caller = (Class<?>) callerClass0(callerPc);
+        if (!java.lang.reflect.AccessibleObject.verifyMemberAccess(caller, this, this, ctor.getModifiers()))
+        {
+            throw new IllegalAccessException("class " + (caller == null ? "<unknown>" : caller.getName())
+                    + " cannot access a member of class " + getName());
+        }
+        ctor.setAccessible(true);
+        try
+        {
+            return ctor.newInstance();
         }
         catch (java.lang.reflect.InvocationTargetException e)
         {
             throw new InstantiationException(getName() + " constructor threw");
         }
     }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.classAtPc}): the Class of the method containing {@code pc}. */
+    private static native Object callerClass0(long pc);
 
     /** For a non-array, non-primitive class this is {@link #getName()}; arrays report the source-style form. */
     public String getTypeName()

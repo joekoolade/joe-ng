@@ -113,6 +113,20 @@ public class AccessibleObject implements AnnotatedElement
     }
 
     /**
+     * {@link #verify} for {@code java.lang.Class.newInstance}, which must check against ITS caller as stock's
+     * {@code Reflection.ensureMemberAccess} does. Overlay-only, like {@code Constructor.resolve}; it answers a
+     * question about the classes it is given and grants nothing.
+     */
+    public static boolean verifyMemberAccess(Class<?> caller, Class<?> memberClass, Class<?> targetClass, int mods)
+    {
+        if ((mods & ACC_PUBLIC) != 0 && classIsPublic(memberClass))
+        {
+            return true;
+        }
+        return verify(caller, memberClass, targetClass, mods);
+    }
+
+    /**
      * Stock's {@code Reflection.verifyMemberAccess}, without the module step (every class here is in the unnamed
      * module, which stock's module check passes):
      * <ul>

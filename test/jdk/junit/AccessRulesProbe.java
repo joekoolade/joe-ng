@@ -30,6 +30,9 @@ import java.util.List;
  *   <li>PROTECTED INSTANCE TARGET: a subclass of {@code ArrayList} may reach the protected {@code modCount} and
  *       {@code removeRange} on ITSELF, but not on another {@code ArrayList} that is not its subclass.</li>
  * </ul>
+ * Last, the VM's OWN reflective calls must not be refused by these rules: reading a package-private enum's
+ * constants from another package, and {@code Class.newInstance} of a package-private class from code in its own
+ * package -- where the access rules must see the CALLER of {@code newInstance}, not {@code java.lang.Class}.
  * Each refusal prints the exception's class only. Prints values only; the host diff is the gate.
  */
 public class AccessRulesProbe
@@ -166,8 +169,31 @@ public class AccessRulesProbe
         arm("canAccess hasNext", () -> hasNext.canAccess(it));
         arm("Iterator.hasNext via interface", () -> Iterator.class.getMethod("hasNext").invoke(it));
 
+        System.out.println("-- the VM's own reflective calls keep working --");
+        Class<?> shape = Class.forName("java.util.stream.StreamShape");
+        arm("non-public enum constants from another package", () -> shape.getEnumConstants().length);
+        arm("Enum.valueOf on it", () -> Enum.valueOf((Class) shape, "REFERENCE").toString());
+        arm("Class.newInstance of a package-private class here", () -> PkgHelper.class.newInstance().tag);
+        arm("Class.newInstance of a private constructor here", () -> PrivCtor.class.newInstance());
+
         System.out.println("-- protected instance target --");
         new MyList().probe();
         System.out.println("AccessRulesProbe done");
+    }
+}
+
+class PkgHelper
+{
+    final String tag = "made";
+
+    public PkgHelper()
+    {
+    }
+}
+
+class PrivCtor
+{
+    private PrivCtor()
+    {
     }
 }
