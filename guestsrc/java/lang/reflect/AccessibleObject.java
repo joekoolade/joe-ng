@@ -78,10 +78,8 @@ public class AccessibleObject implements AnnotatedElement
 
     /**
      * Enforce Java member access for a member with modifiers {@code mods} declared by {@code declaringClass},
-     * from the caller whose frame return-address is {@code callerPc} — unless {@code setAccessible(true)} was
-     * called. Rules: public → always; same declaring class → always; private → only the declaring class;
-     * protected → same package or a subclass of the declaring class; package-private → same package. Throws
-     * {@code IllegalAccessException} otherwise.
+     * from the caller whose frame return-address is {@code callerPc} -- unless {@code setAccessible(true)} was
+     * called. Throws {@code IllegalAccessException} when {@link #verify} refuses.
      */
     protected final void checkAccess(Class<?> declaringClass, int mods, long callerPc) throws IllegalAccessException
     {
@@ -89,30 +87,91 @@ public class AccessibleObject implements AnnotatedElement
         {
             return;
         }
-        Object c = callerClass0(callerPc);
-        Class<?> caller = (Class<?>) c;
-        if (caller == declaringClass)
+        Class<?> caller = (Class<?>) callerClass0(callerPc);
+        if (!verify(caller, declaringClass, mods))
         {
-            return;                                        // same class sees all of its own members
+            throw denied(caller, declaringClass, (mods & ACC_PRIVATE) != 0 ? "private"
+                    : (mods & ACC_PROTECTED) != 0 ? "protected" : "package-private");
         }
-        if ((mods & ACC_PRIVATE) != 0)
+    }
+
+    /**
+     * The member-access rules, without the override: public -> always; same declaring class -> always; private
+     * -> only the declaring class; protected -> same package or a subclass of the declaring class;
+     * package-private -> same package.
+     */
+    private static boolean verify(Class<?> caller, Class<?> declaringClass, int mods)
+    {
+        if ((mods & ACC_PUBLIC) != 0 || caller == declaringClass)
         {
-            throw denied(caller, declaringClass, "private");
+            return true;
         }
-        if ((mods & ACC_PROTECTED) != 0)
+        if (caller == null || (mods & ACC_PRIVATE) != 0)
         {
-            if (caller != null && (samePackage(caller, declaringClass) || declaringClass.isAssignableFrom(caller)))
+            return false;
+        }
+        if ((mods & ACC_PROTECTED) != 0 && declaringClass.isAssignableFrom(caller))
+        {
+            return true;
+        }
+        return samePackage(caller, declaringClass);
+    }
+
+    /**
+     * Stock's: can the CALLER access this member on {@code obj}? An instance field or method needs an instance
+     * of its declaring class and a static member or constructor needs null, else
+     * {@code IllegalArgumentException}; then true if {@code setAccessible(true)} was called, otherwise the
+     * access rules decide.
+     */
+    public final boolean canAccess(Object obj)
+    {
+        long callerPc = magic.Magic.readLR();
+        if (!(this instanceof Member m))
+        {
+            return override;
+        }
+        Class<?> declaringClass = m.getDeclaringClass();
+        int modifiers = m.getModifiers();
+        if (!Modifier.isStatic(modifiers) && (this instanceof Method || this instanceof Field))
+        {
+            if (obj == null)
             {
-                return;
+                throw new IllegalArgumentException("null object for " + this);
             }
-            throw denied(caller, declaringClass, "protected");
+            if (!declaringClass.isAssignableFrom(obj.getClass()))
+            {
+                throw new IllegalArgumentException("object is not an instance of " + declaringClass.getName());
+            }
         }
-        // package-private (no access bit): same package only
-        if (caller != null && samePackage(caller, declaringClass))
+        else if (obj != null)
         {
-            return;
+            throw new IllegalArgumentException("non-null object for " + this);
         }
-        throw denied(caller, declaringClass, "package-private");
+        if (override)
+        {
+            return true;
+        }
+        return verify((Class<?>) callerClass0(callerPc), declaringClass, modifiers);
+    }
+
+    /**
+     * Stock's: {@code setAccessible(true)} that answers false instead of throwing. It always succeeds here:
+     * stock refuses only where a NAMED module has not opened the package, and every class on this VM is in the
+     * unnamed module ({@code Class.getModule}), which stock's own rule lets through.
+     */
+    public final boolean trySetAccessible()
+    {
+        override = true;
+        return true;
+    }
+
+    /** Stock's: {@link #setAccessible(boolean)} on each element, in order. */
+    public static void setAccessible(AccessibleObject[] array, boolean flag)
+    {
+        for (AccessibleObject ao : array)
+        {
+            ao.setAccessible(flag);
+        }
     }
 
     /** True if {@code a} and {@code b} are declared in the same package (by binary-name package prefix). */
