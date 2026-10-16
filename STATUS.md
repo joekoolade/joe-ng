@@ -4,6 +4,52 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **REPEATED ANNOTATIONS (`getAnnotationsByType`) WORK; ARRAY COVARIANCE THROUGH INTERFACES; `@Inherited` CLASS
+  ANNOTATIONS (2026-10-16).** `getAnnotationsByType` runs stock `AnnotationSupport`, which was never denied. On
+  main it died at its first step. Five defects stood between it and the right answer, each found by the one
+  before it. In the order the probe met them:
+  1. **ARRAY COVARIANCE MISSED TWO RULES (VM.typeAssignable)** -- `Tag[]` cast to `Annotation[]` threw
+     `ClassCastException`, which is where main stopped. Measured with a new `ArrayCovarianceProbe`, four of
+     whose compiled arms (and four reflective ones) differed on main:
+     - **an interface element does not widen to a super-interface's array:** `Sub[] instanceof Base[]` false.
+       The element recursion cannot see interface-extends-interface, because an interface Type is a chain dead
+       end. It now also asks `Loader.ifaceExtends`, as `typesAssignable` already did for `isAssignableFrom`.
+     - **no array was a `Cloneable` or a `Serializable`** (JLS 4.10.3): `String[] instanceof Cloneable`
+       false, and through the recursion `int[][]` no `Cloneable[]`. Now an array Type is assignable to both,
+       found through a cached `Loader.isArrayInterface`. It is checked AHEAD of the interface-ID fast path,
+       because an array Type's implements-bitmap answered that test without either bit.
+  2. **`JavaLangAccess.getAnnotationType`/`casAnnotationType`/`getDeclaredAnnotationMap` threw** -- now a
+     concurrent map stands in for the `AnnotationType` field a VM-allocated mirror cannot carry, and the
+     declared-annotation map is stock's.
+  3. **`AnnotationType`'s constructor parses raw annotation bytes against a native `ConstantPool`** -- it is
+     overlaid from the JDK 26 source. Only the `@Retention`/`@Inherited` read differs: it goes through the VM's
+     own annotation reader.
+  4. **A METHOD REFERENCE TO `annotationType()` ON AN ANNOTATION ANSWERED NULL** -- a direct call worked, and
+     `AnnotatedElement`'s default `getDeclaredAnnotationsByType` (a stream keyed by `Annotation::annotationType`)
+     built a map keyed by null and found nothing.
+     - Reduced first, then instrumented, because two plausible fixes -- interface method references through late
+       dispatch, and a slots-first itable search -- each changed nothing, and were reverted.
+     - The instrument showed the cause in `annoTibFor`. An annotation interface's method list includes what it
+       inherits from `Annotation`, and EVERY slot of its own itable got a value-reading thunk. So
+       `annotationType` in that entry read an empty value slot; the real thunk sits in the `Annotation` entry,
+       which a direct call names and a by-name resolution reaches second.
+     - Now only the interface's own elements read value slots, `annotationType` reads the mirror in both
+       entries, and an inherited `equals`/`hashCode`/`toString` slot stays 0 for the dispatch guard.
+  5. **`ReflectionFactory.leafCopyMethod` was missing** (a non-public container's `value()` is invoked through
+     a copy). It is a re-resolved `Method`, which `getDeclaredMethod` already makes fresh.
+  - **And `@Inherited` on a class was not implemented** -- a gap the `Class` overlay's own javadoc stated.
+    `getAnnotation`/`isAnnotationPresent` now walk the superclass chain for an `@Inherited` type, and
+    `getAnnotations` merges the inherited ones in stock's order.
+  - **Found, NOT fixed:** an annotation whose TYPE was never loaded is left out of `getDeclaredAnnotations`. The
+    reader skips a type it has no registry entry for and does not load it, so a `@M` never named elsewhere is
+    absent where the host reports it. Measured in the reduction probe, which then loaded `M.class` first.
+  - **Probes:** both new, both host-identical:
+    - `RepeatableProbe` (16 lines): repeated annotations on a class, method, field and parameter; a single use;
+      none; an `@Inherited` repeatable through a subclass; a non-repeatable; the stream-built map; and
+      `getAnnotations` on a subclass.
+    - `ArrayCovarianceProbe` (29 lines): every element relation through compiled `instanceof`/`checkcast` and
+      `isInstance`/`isAssignableFrom`/`cast`, including the refusals.
+  - **Regression (suite, all probes, JUnit):** pending. **Pi:** pending.
 - **ANNOTATION VALUES: FLOATS, PRIMITIVE ARRAYS, ARRAY CLASS LITERALS AND NESTED ANNOTATIONS ARE READ;
   `Method.getDefaultValue` (2026-10-16).**
   - **Four kinds of annotation element value read wrong, WRITTEN or defaulted** -- the decoder
