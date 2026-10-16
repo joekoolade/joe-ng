@@ -49,7 +49,7 @@ Newest entries are at the top.
       `getAnnotations` on a subclass.
     - `ArrayCovarianceProbe` (29 lines): every element relation through compiled `instanceof`/`checkcast` and
       `isInstance`/`isAssignableFrom`/`cast`, including the refusals.
-  - **Regression (suite, all probes, JUnit):** pending. **Pi:** pending.
+  - **Regression (suite, all probes, JUnit):** pending. **Pi:** PASS (2026-10-16, 06a6875) -- WiFi join, DHCP (one retry), NetDemo HTTP 200 from example.com (bytes=891), `[main returned normally]`, `gc: collections=7`.
 - **ANNOTATION VALUES: FLOATS, PRIMITIVE ARRAYS, ARRAY CLASS LITERALS AND NESTED ANNOTATIONS ARE READ;
   `Method.getDefaultValue` (2026-10-16).**
   - **Four kinds of annotation element value read wrong, WRITTEN or defaulted** -- the decoder
