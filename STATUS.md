@@ -33,7 +33,7 @@ Newest entries are at the top.
     - constructors, and mandated and synthetic parameters;
     - every `AccessFlag`'s mask, source flag and locations, the locations sorted because `Set.of` iteration
       order varies between host runs.
-  - **Regression (suite, all probes, JUnit):** pending. **Pi:** pending.
+  - **Regression (suite, all probes, JUnit):** pending. **Pi:** PASS (2026-10-15, f2456c9) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=889), `[main returned normally]`, `gc: collections=7`.
 - **REFLECTIVE ACCESS FOLLOWS STOCK'S `verifyMemberAccess`: NESTMATES, CLASS ACCESS, PROTECTED TARGETS; NESTS
   ARE READ (2026-10-15).** `AccessibleObject.checkAccess` knew public/private/protected/package by the member's
   own flags alone. A negative control on main (a copy without the nest-API arms, which main's `Class` lacks)
