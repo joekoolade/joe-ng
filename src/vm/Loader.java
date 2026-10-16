@@ -2442,11 +2442,9 @@ public final class Loader
                 // natives the initializer calls are provided with Net.c's Linux answers (nativeBufAt).
                 // java/net/Inet4Address and Inet6Address are NO LONGER SKIPPED: InetAddress is stock now and
                 // instantiates both, and their init() natives are provided empty (JNI ID caches).
-                // Proxy.<clinit> builds a jdk/internal/loader/ClassLoaderValue proxy cache and a ClassValue
-                // of MethodHandles -- both denied, and both only for MAKING proxies, which metal never does.
-                // The one method reached (isProxyClass) reads no static of Proxy, just the class literal, so
-                // skipping the initializer leaves nothing it needs unset.
-                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/reflect/Proxy"))
+                // java/lang/reflect/Proxy is NO LONGER SKIPPED: it is overlaid (guestsrc), and the overlay's
+                // initializer builds the proxy-class cache newProxyInstance needs. Stock's built a ClassLoaderValue
+                // cache and a ClassValue of MethodHandles, both denied.
                 // ContinuationSupport.<clinit> sets SUPPORTED = isSupported0() (a native). Metal has no
                 // continuations, so skipping it leaves SUPPORTED=false -- which is correct, and makes
                 // pinIfSupported/unpinIfSupported no-ops that never touch the denied Continuation class.
@@ -6339,6 +6337,9 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/ClassFileFormatVersion"))
                 // RecordComponent: OVERLAID (see guestsrc) -- Class.getRecordComponents answers in its terms.
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/RecordComponent"))
+                // Dynamic proxies: the handler interface and the wrapper for an undeclared checked exception.
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/InvocationHandler"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/UndeclaredThrowableException"))
                 // NARROWED OUT of the java/lang/reflect/ denial, and NOT overlaid: guestsrc is for classes
                 // that need NATIVES, and this one needs none. picocli's ObjectScope asks
                 // `Proxy.isProxyClass(obj.getClass())`, whose whole body is
@@ -12693,6 +12694,11 @@ public final class Loader
         }
         // JavaLangAccess.classFileVersion/getClassFileAccessFlags: the same classfile-header reader Class uses,
         // registered under the overlay that declares its own copy (a native binds by DECLARING class).
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Proxy")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("proxyType0")))         { return VM.proxyTypeAddr; }   // ([Class,[Object,[Object,[Object,[Object)Class
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("proxyAlloc0")))        { return VM.proxyAllocAddr; }  // (Class)Object
+        }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/RecordComponent")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("recordInfo0")))        { return VM.classRecordInfoAddr; }  // (Class,J)J
@@ -21081,6 +21087,253 @@ public final class Loader
     private static long[] annoTibVal;
     private static int annoTibN;
 
+    // ===== java.lang.reflect.Proxy instances =========================================================
+    // A proxy is synthesised like a lambda or an annotation instance: a Type the registry does not know, whose
+    // itable directory names the proxied interfaces. Its SUPERCLASS is java/lang/reflect/Proxy, so the object
+    // carries Proxy's `h` field and `instanceof Proxy` holds. Every interface method -- and equals/hashCode/
+    // toString, through the Object vtable slots -- is one THUNK that spills the argument registers and calls
+    // jdk/internal/misc/MetalProxies.dispatch(proxy, Method, argsAddr); dispatch boxes the arguments, asks the
+    // InvocationHandler, and returns the unboxed raw result in x0.
+    private static final int MAXPROXY = 256;
+    private static final int PROXY_FRAME = 144;         // x30 at [sp], x1..x15 at [sp+16..sp+128], 16-aligned
+    private static long[] proxyTypes;
+    private static long[] proxyTibs;
+    private static long[] proxyObjThunks;               // 3 per proxy: hashCode, equals, toString
+    private static int proxyN;
+    private static long proxyHelperBuf;
+
+    /** MetalProxies.dispatch, compiled once; its class is loaded on first use. 0 if it will not compile. */
+    private static long proxyHelper()
+    {
+        if (proxyHelperBuf != 0L)
+        {
+            return proxyHelperBuf;
+        }
+        if (classIndexByName(Magic.bytes("jdk/internal/misc/MetalProxies")) < 0)
+        {
+            loadClassIncremental(Magic.bytes("jdk/internal/misc/MetalProxies"));
+            if (classIndexByName(Magic.bytes("jdk/internal/misc/MetalProxies")) < 0)
+            {
+                return 0L;
+            }
+        }
+        proxyHelperBuf = helperBuf(utf8Blob(Magic.bytes("jdk/internal/misc/MetalProxies")), Magic.bytes("dispatch"),
+                Magic.bytes("(Ljava/lang/Object;Ljava/lang/Object;J)J"));
+        return proxyHelperBuf;
+    }
+
+    /** Load a 48-bit absolute address into {@code rd}. */
+    private static int emitMov48(long t, int w, int rd, long v)
+    {
+        w = emitAt(t, w, A64Enc.movz(rd, (int) (v & 0xFFFF), 0));
+        w = emitAt(t, w, A64Enc.movk(rd, (int) ((v >> 16) & 0xFFFF), 1));
+        w = emitAt(t, w, A64Enc.movk(rd, (int) ((v >> 32) & 0xFFFF), 2));
+        return w;
+    }
+
+    /**
+     * One proxy method's thunk. The receiver (the proxy) is already in x0. x1..x15 -- every register an argument
+     * can arrive in, including x15's pointer to the rest past sixteen -- go to the frame, and dispatch gets the
+     * frame's address in x2 and the Method in x1. The frame is registered with the unwinder, so a throw from the
+     * handler unwinds through it to the caller like any other.
+     */
+    private static long proxyThunk(long method, long helper)
+    {
+        long t = Heap.allocCode(32 * 4);
+        Heap.pinCodeAt(t);                              // only an itable or vtable names it
+        int w = 0;
+        w = emitAt(t, w, A64Enc.subImm(STUB_SP, STUB_SP, PROXY_FRAME));
+        w = emitAt(t, w, A64Enc.strx(STUB_LR, STUB_SP, STUB_LR_OFF));
+        int r = 1;
+        while (r <= 15)
+        {
+            w = emitAt(t, w, A64Enc.strx(r, STUB_SP, 8 + r * 8));
+            r += 1;
+        }
+        w = emitMov48(t, w, 1, method);
+        w = emitAt(t, w, A64Enc.addImm(2, STUB_SP, 16));
+        w = emitMov48(t, w, 16, helper);
+        w = emitAt(t, w, A64Enc.blr(16));
+        w = emitAt(t, w, A64Enc.ldrx(STUB_LR, STUB_SP, STUB_LR_OFF));
+        long thi = t + w * 4L;
+        w = emitAt(t, w, A64Enc.addImm(STUB_SP, STUB_SP, PROXY_FRAME));
+        w = emitAt(t, w, A64Enc.ret());
+        Heap.publishCode(t, t + w * 4L);
+        VM.addJitFrame(t + 4L, thi, PROXY_FRAME, 0L);  // live from just after the `sub sp`
+        return t;
+    }
+
+    /** Put proxy {@code i}'s equals/hashCode/toString thunks into its TIB's Object vtable slots. */
+    private static void patchProxyObject(int i)
+    {
+        int oi = objectClassIndex();
+        if (oi < 0)
+        {
+            return;
+        }
+        int st = clTab[oi].vtStart;
+        int nv = clTab[oi].vtCount;
+        int k = 0;
+        while (k < nv)
+        {
+            long b = vtNameBase[st + k];
+            int no = vtNameOff[st + k];
+            int dof = vtDescOff[st + k];
+            long thunk = 0L;
+            if (utf8IsAtBase(b, no, Magic.bytes("hashCode")) && utf8IsAtBase(b, dof, Magic.bytes("()I")))
+            {
+                thunk = proxyObjThunks[i * 3];
+            }
+            else if (utf8IsAtBase(b, no, Magic.bytes("equals")) && utf8IsAtBase(b, dof, Magic.bytes("(Ljava/lang/Object;)Z")))
+            {
+                thunk = proxyObjThunks[i * 3 + 1];
+            }
+            else if (utf8IsAtBase(b, no, Magic.bytes("toString")) && utf8IsAtBase(b, dof, Magic.bytes("()Ljava/lang/String;")))
+            {
+                thunk = proxyObjThunks[i * 3 + 2];
+            }
+            if (thunk != 0L)
+            {
+                Magic.store64(proxyTibs[i] + 8L + (long) k * 8L, thunk);
+            }
+            k += 1;
+        }
+    }
+
+    /** The proxy index of TIB {@code tib}, or -1. */
+    private static int proxyIndexOfTib(long tib)
+    {
+        int i = 0;
+        while (i < proxyN)
+        {
+            if (proxyTibs[i] == tib)
+            {
+                return i;
+            }
+            i += 1;
+        }
+        return -1;
+    }
+
+    /**
+     * {@code Proxy.proxyType0}: build a proxy class for the interface CLOSURE {@code ifacesArr} (Class[]).
+     * {@code methodsArr}/{@code namesArr}/{@code descsArr} are parallel: every non-static method of the closure,
+     * its name and its descriptor as raw byte[]s; a slot is given the FIRST method matching its name and
+     * descriptor, in the order the guest listed them. {@code objArr} holds Object's hashCode, equals, toString.
+     * Returns the new class's mirror, or 0.
+     */
+    static long proxyType(long ifacesArr, long methodsArr, long namesArr, long descsArr, long objArr)
+    {
+        if (ifacesArr <= 0x1000L || methodsArr <= 0x1000L || namesArr <= 0x1000L || descsArr <= 0x1000L
+                || objArr <= 0x1000L)
+        {
+            return 0L;
+        }
+        int pr = classIndexByName(Magic.bytes("java/lang/reflect/Proxy"));
+        long helper = proxyHelper();
+        if (pr < 0 || helper == 0L)
+        {
+            return 0L;
+        }
+        if (proxyTypes == null)
+        {
+            proxyTypes = new long[MAXPROXY];
+            proxyTibs = new long[MAXPROXY];
+            proxyObjThunks = new long[MAXPROXY * 3];
+        }
+        if (proxyN >= MAXPROXY)
+        {
+            Uart.write(Magic.bytes("\n  PROXY TABLE FULL: no more proxy classes (MAXPROXY)\n"));
+            return 0L;
+        }
+        int ni = (int) Magic.load64(ifacesArr + 16L);
+        int nm = (int) Magic.load64(methodsArr + 16L);
+        long dir = Heap.allocData((ni + 1) * 16);
+        int e = 0;
+        while (e < ni)
+        {
+            long mirror = Magic.load64(ifacesArr + 24L + e * 8L);
+            long ity = mirror == 0L ? 0L : Magic.load64(mirror + 16L);
+            int ir = classRegByType(ity);
+            int cn = ir >= 0 ? clTab[ir].ifmCount : 0;
+            long cit = Heap.allocData(cn > 0 ? cn * 8 : 8);
+            int z = 0;
+            while (z < cn)
+            {
+                int m = clTab[ir].ifmStart + z;
+                long thunk = 0L;
+                int j = 0;
+                while (j < nm && thunk == 0L)
+                {
+                    long nb = Magic.load64(namesArr + 24L + j * 8L);
+                    long db = Magic.load64(descsArr + 24L + j * 8L);
+                    if (rawEqUtf8(nb + 24L, (int) Magic.load64(nb + 16L), ifBase[m], ifNameOff[m])
+                            && rawEqUtf8(db + 24L, (int) Magic.load64(db + 16L), ifBase[m], ifDescOff[m]))
+                    {
+                        thunk = proxyThunk(Magic.load64(methodsArr + 24L + j * 8L), helper);
+                    }
+                    j += 1;
+                }
+                Magic.store64(cit + z * 8L, thunk);
+                z += 1;
+            }
+            Magic.store64(dir + e * 16L, ity);
+            Magic.store64(dir + e * 16L + 8L, cit);
+            e += 1;
+        }
+        Magic.store64(dir + ni * 16L, 0L);              // sentinel: interfaceType 0 ends the directory
+        Magic.store64(dir + ni * 16L + 8L, 0L);
+        long type = Heap.allocData(ObjectModel.TYPE_SIZE);
+        Magic.store64(type + 0L, (long) (16 + clTab[pr].fieldCount * 8));   // Proxy's instance: header + h
+        Magic.store64(type + ObjectModel.TYPE_SUPER_OFFSET, clTab[pr].type);
+        Magic.store64(type + ObjectModel.TYPE_ITABLE_DIR_OFFSET, dir);
+        int onv = objectVtableCount();
+        long tib = Heap.allocData(8 + onv * 8);
+        Magic.store64(tib + 0L, type);
+        fillObjectVtable(tib);
+        int i = proxyN;
+        proxyTypes[i] = type;
+        proxyTibs[i] = tib;
+        int k = 0;
+        while (k < 3)
+        {
+            proxyObjThunks[i * 3 + k] = proxyThunk(Magic.load64(objArr + 24L + k * 8L), helper);
+            k += 1;
+        }
+        proxyN += 1;
+        patchProxyObject(i);
+        if (lambdaTibRoots != null && lambdaTibRootN < MAXLAMBDATIB)
+        {
+            lambdaTibRoots[lambdaTibRootN] = tib;       // the same GC root a lambda's TIB has: nothing scanned
+            lambdaTibVtCap[lambdaTibRootN] = onv;       //   would otherwise reach it
+            lambdaTibFilled[lambdaTibRootN] = false;
+            lambdaTibRootN += 1;
+        }
+        return classMirror(type);
+    }
+
+    /** {@code Proxy.proxyAlloc0}: a zeroed instance of proxy class {@code mirror}, or 0 if it is not one. */
+    static long proxyAlloc(long mirror)
+    {
+        if (mirror <= 0x1000L || proxyTypes == null)
+        {
+            return 0L;
+        }
+        long type = Magic.load64(mirror + 16L);
+        int i = 0;
+        while (i < proxyN)
+        {
+            if (proxyTypes[i] == type)
+            {
+                long obj = Heap.alloc((int) Magic.load64(type));
+                Magic.store64(obj + ObjectModel.TIB_OFFSET, proxyTibs[i]);
+                return obj;
+            }
+            i += 1;
+        }
+        return 0L;
+    }
+
     /** Compiled bodies of {@code MetalAnnotations.annoEquals/annoHashCode/annoToString}; 0 until compiled. */
     private static long annoEqBuf;
     private static long annoHashBuf;
@@ -24376,6 +24629,11 @@ public final class Loader
                 if (isAnnoTib(lambdaTibRoots[i]))       // the refill copies Object's slots back over the
                 {                                       //   annotation contract: put it back
                     patchAnnoContract(lambdaTibRoots[i], lambdaTibVtCap[i], 0L);
+                }
+                int px = proxyIndexOfTib(lambdaTibRoots[i]);
+                if (px >= 0)                            // ... and over a proxy's equals/hashCode/toString
+                {
+                    patchProxyObject(px);
                 }
             }
             i += 1;

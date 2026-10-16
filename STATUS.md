@@ -4,6 +4,45 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **DYNAMIC PROXIES (`java.lang.reflect.Proxy`), AND AN `invokeinterface` WITH NINE OR MORE ARGUMENTS LOST ITS 9TH (2026-10-16).**
+  - **`Proxy` is overlaid; the proxy CLASS is synthesised by the VM, not generated.** Stock writes bytecode with
+    `ProxyGenerator` (over `java.lang.classfile`) and defines it. Here `Loader.proxyType` builds the class the way
+    a lambda or annotation instance is built: a Type whose super is `Proxy` (so the instance carries `h` and
+    `instanceof Proxy` holds), an itable over the interface CLOSURE, and one thunk per method -- plus
+    `equals`/`hashCode`/`toString` in the Object vtable slots, re-patched after `refillSynthTibVtables` the way
+    the annotation contract is. A thunk spills `x1..x15` (every argument register, x15 being the VM's pointer past
+    sixteen), registers its frame with the unwinder, and calls `MetalProxies.dispatch(proxy, Method, argsAddr)`.
+  - **`dispatch` is stock's generated body in Java:** box by parameter type, `h.invoke`, then stock's rules -- a
+    `RuntimeException`/`Error`/declared checked exception propagates, any other checked exception is wrapped in
+    `UndeclaredThrowableException`; `null` for a primitive result is an NPE, a wrong-typed result a CCE.
+  - **Stock's public contract is kept:** interface checks (not an interface, repeated), a class cache keyed by the
+    interface list (`getProxyClass` twice answers one class), `isProxyClass`, `getInvocationHandler`, and
+    `Class.getInterfaces` answers a proxy class from the overlay's registry (a synthesised class has no classfile).
+    `InvocationHandler` and `UndeclaredThrowableException` leave the denylist; `Proxy.<clinit>` is no longer
+    skipped. **Stated differences:** the `loader` argument is not consulted (one namespace), and
+    `InvocationHandler.invokeDefault` THROWS -- it is built on method handles.
+  - **A Method's address lives in thunk CODE, which is not a GC root**; the overlay keeps every such Method in a
+    static list (the collector does not move objects).
+  - **THE 9TH-ARGUMENT BUG, real on main.** `itableDispatch` scanned the itable directory with **x9** as scratch,
+    after the arguments were loaded -- and x9 is the 9th argument register. Every `invokeinterface` with nine or
+    more arguments received the directory entry's interface Type as its 9th. **It was not a proxy bug:**
+    ProxyEdgeProbe's controls `nine via class` and `nine via lambda` (ordinary receivers) printed the same garbage
+    (`664508364` for `285`), and `seventeen` showed exactly argument 9 wrong. The scan uses **x18** now, which
+    nothing else on a call path writes (only RESUME, which does not return). That pre-fix run is the negative
+    control; WideCallProbe stays identical.
+  - **Probes:** `ProxyProbe` (30 lines: arguments of every kind, a default method routed to the handler, the
+    Object methods, `isProxyClass`/`getInvocationHandler`/`getInterfaces`, a declared checked exception, a lambda
+    handler) and `ProxyEdgeProbe` (19 lines: 9 and 17 arguments, float/char/byte/short, the undeclared/NPE/CCE
+    rules, a proxy `Comparator` driving `Collections.sort`, the class cache, proxies as `HashMap` keys), both
+    host-identical. Negative control on main: `LAMBDA IFACE UNRESOLVED java/lang/reflect/InvocationHandler --
+    DENYLISTED`, then `DENYLIST TRAP` in `Proxy.getProxyConstructor`.
+  - **Regression (suite, all probes, JUnit):** QEMU clean on 13bfa27 -- suite markers all zero, `gc:
+    collections=51`, clinits 349 (348 before, observed, not attributed); 66 of 68 probes host-identical,
+    DigestProbe/MacProbe their designed divergences only; `ran 44, failures 0`. **Pi:** PASS (2026-10-16,
+    13bfa27) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=888), `[main returned normally]`, `gc:
+    collections=6`; per-batch `clinits=` 397/397/398/399, each one above the previous boot's 396/396/397/398
+    (observed, not explained); batch 1 loads 1472 classes.
+
 - **A CLASS IS INITIALIZED AT AN EXECUTED USE, NOT WHEN A COMPILE NAMES IT (JVMS 5.5); `describeConstable` (2026-10-16).**
   Closes the defect the previous two cards left open.
   - **Two eager mechanisms approximated JVMS 5.5 from COMPILE-TIME references**, and both pick the wrong member

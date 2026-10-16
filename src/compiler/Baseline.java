@@ -2025,7 +2025,7 @@ public final class Baseline
      * Interface dispatch: move args to x0.., then inline-search the receiver's
      * itable directory (Type→dir of {interfaceType, itable}) for the target
      * interface's Type, index the itable by the method's slot, and {@code blr}.
-     * Uses x16 (target/code), x17 (walker), x9 (temp) — args in x0..x7 untouched.
+     * Uses x16 (target/code), x17 (walker), x18 (temp) — args in x0..x15 untouched.
      */
     /**
      * DEBUG (off unless Loader.RECV_WATCH_ON): describe the RECEIVER this dispatch is about to use.
@@ -2110,15 +2110,19 @@ public final class Baseline
         cb.emit(A64Enc.ldrx(17, 17, ObjectModel.tibSlotOffset(ObjectModel.TIB_TYPE_SLOT))); // x17 = Type
         cb.emit(A64Enc.ldrx(17, 17, ObjectModel.TYPE_ITABLE_DIR_OFFSET));              // x17 = itable dir
         int search = cb.wordCount();
-        cb.emit(A64Enc.ldrx(9, 17, ObjectModel.ITABLE_ENTRY_IFACE_OFFSET));            // x9 = entry.interfaceType
+        // x18, NOT an argument register: x0..x15 all carry arguments here (x9 is the 9th), and this scan runs
+        // after they are loaded. The scratch was x9, so every invokeinterface with nine or more arguments
+        // passed the directory entry's interface Type as its 9th -- an ordinary class, a lambda and a proxy
+        // alike (ProxyEdgeProbe's `nine via class`). x18 is written nowhere else on a call path.
+        cb.emit(A64Enc.ldrx(18, 17, ObjectModel.ITABLE_ENTRY_IFACE_OFFSET));           // x18 = entry.interfaceType
         // Directory-sentinel guard (metal JIT only; the image writer's trusted code is check-free like nullCheck):
         // if the scan reaches the 0-terminator without a match, the receiver's itable dir lacks the target
         // interface. It must not dereference the sentinel's itable (blr 0) or walk PAST it into arbitrary heap
         // and blr a layout-dependent garbage word (the wild branch that reset/hung nondeterministically); it
         // takes the late-resolve path below instead, which is what makes an interface call work in a body
         // compiled after its batch.
-        int miss = symbols.implicitChecks() ? cb.emit(A64Enc.cbz(9, 0)) : -1;
-        cb.emit(A64Enc.cmpReg(9, 16));
+        int miss = symbols.implicitChecks() ? cb.emit(A64Enc.cbz(18, 0)) : -1;
+        cb.emit(A64Enc.cmpReg(18, 16));
         int beq = cb.emit(A64Enc.bcond(A64Enc.EQ, 0));                                    // found?
         cb.emit(A64Enc.addImm(17, 17, ObjectModel.ITABLE_ENTRY_SIZE));                 // next entry
         cb.emit(A64Enc.b(search - cb.wordCount()));                                    // loop
@@ -2137,7 +2141,7 @@ public final class Baseline
             // name+descriptor, which is precisely what VIRTUAL_RESOLVE answers. x17 held the directory cursor
             // and x16 the interface Type; both are dead here, so they can carry the site index and the
             // trampoline address into the shared `blr` below. x0 (the receiver) is untouched by the search.
-            cb.set(miss, A64Enc.cbz(9, cb.wordCount() - miss));
+            cb.set(miss, A64Enc.cbz(18, cb.wordCount() - miss));
             symbols.virtualSite(cb, cpIndex);                                          // x17 = site index
             symbols.helperInto(cb, 16, Symbols.VIRTUAL_RESOLVE);                       // x16 = the trampoline
             back = cb.emit(A64Enc.b(0));           // skip the itable load AND its guard: x16 is already a call

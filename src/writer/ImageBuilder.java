@@ -1554,6 +1554,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classFileWord(JJ)J", "vm/VM.classFileWordAddr"); // Class.classFileWord0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classInnerPart(JJ)J", "vm/VM.classInnerPartAddr"); // Class.innerPart0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classSealed(J)J", "vm/VM.classSealedAddr"); // Class.sealed0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.proxyType(JJJJJ)J", "vm/VM.proxyTypeAddr"); // Proxy.proxyType0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.proxyAlloc(J)J", "vm/VM.proxyAllocAddr"); // Proxy.proxyAlloc0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classRecordInfo(JJ)J", "vm/VM.classRecordInfoAddr"); // RecordComponent.recordInfo0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classRecordPart(JJ)J", "vm/VM.classRecordPartAddr"); // RecordComponent.recordPart0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classRecordAnnos(JJ)J", "vm/VM.classRecordAnnosAddr"); // RecordComponent.recordAnnos0

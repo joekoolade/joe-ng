@@ -992,6 +992,17 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
      */
     public Class<?>[] getInterfaces()
     {
+        // A PROXY class is synthesised, so it has no classfile to read its interfaces from; Proxy keeps them.
+        // Asked only of a subclass of Proxy, so an ordinary class never reaches the registry.
+        if (!isInterface() && !isArray() && !isPrimitive() && this != java.lang.reflect.Proxy.class
+                && java.lang.reflect.Proxy.class.isAssignableFrom(this))
+        {
+            Class<?>[] p = java.lang.reflect.Proxy.proxyInterfaces(this);
+            if (p != null)
+            {
+                return p;
+            }
+        }
         Class<?>[] a = interfaces0(this);
         return a == null ? new Class<?>[0] : a;
     }

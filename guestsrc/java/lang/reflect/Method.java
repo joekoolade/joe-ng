@@ -420,7 +420,7 @@ public final class Method extends Executable
     }
 
     /** This method's descriptor, {@code (params)ret}, as its class file spells it. */
-    private String descriptor()
+    String descriptor()
     {
         StringBuilder sb = new StringBuilder("(");
         for (Class<?> p : getParameterTypes())

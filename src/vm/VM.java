@@ -1984,6 +1984,8 @@ public final class VM
         if (classFileWordAddr == 0L) { long u = VMNatives.classFileWord(0L, 0L); } // Class.classFileWord0
         if (classInnerPartAddr == 0L) { long u = VMNatives.classInnerPart(0L, 0L); }   // Class.innerPart0
         if (classSealedAddr == 0L) { long u = VMNatives.classSealed(0L); }          // Class.sealed0
+        if (proxyTypeAddr == 0L) { long u = VMNatives.proxyType(0L, 0L, 0L, 0L, 0L); } // Proxy.proxyType0
+        if (proxyAllocAddr == 0L) { long u = VMNatives.proxyAlloc(0L); }            // Proxy.proxyAlloc0
         if (classRecordInfoAddr == 0L) { long u = VMNatives.classRecordInfo(0L, 0L); } // RecordComponent.recordInfo0
         if (classRecordPartAddr == 0L) { long u = VMNatives.classRecordPart(0L, 0L); } // RecordComponent.recordPart0
         if (classRecordAnnosAddr == 0L) { long u = VMNatives.classRecordAnnos(0L, 0L); } // RecordComponent.recordAnnos0
@@ -3516,6 +3518,8 @@ public final class VM
     static long classFileWordAddr;     // VMNatives.classFileWord(JJ)J — Class/MetalJavaLangAccess.classFileWord0
     static long classInnerPartAddr;    // VMNatives.classInnerPart(JJ)J — Class.innerPart0(Class, long)
     static long classSealedAddr;       // VMNatives.classSealed(J)J — Class.sealed0(Class)
+    static long proxyTypeAddr;         // VMNatives.proxyType(JJJJJ)J — Proxy.proxyType0
+    static long proxyAllocAddr;        // VMNatives.proxyAlloc(J)J — Proxy.proxyAlloc0(Class)
     static long classRecordInfoAddr;   // VMNatives.classRecordInfo(JJ)J — RecordComponent.recordInfo0(Class, long)
     static long classRecordPartAddr;   // VMNatives.classRecordPart(JJ)J — RecordComponent.recordPart0(Class, long)
     static long classRecordAnnosAddr;  // VMNatives.classRecordAnnos(JJ)J — RecordComponent.recordAnnos0(Class, long)
