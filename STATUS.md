@@ -4,6 +4,33 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **JVMS 5.5: A SECOND TASK WAITS FOR THE SUPERCLASS'S INITIALIZER; ChmRaceProbe's intermittent NPE (2026-10-16).**
+  - **The bug, real on main:** `ensureClinit` set `superInited` BEFORE recursing into the superclass, as a cycle
+    guard. A second task arriving while the first was still inside the superclass's `<clinit>` read the flag as
+    true, skipped the superclass, and ran the SUBCLASS's initializer against the superclass's unset statics.
+  - **Measured where it struck:** ChmRaceProbe, once in five on ea3f7a1 -- three threads NPE'd in
+    `ThreadLocalRandom.<clinit>` -> `new ThreadLocalRandom` -> `Random.<init>` -> `Random.seedUniquifier`
+    (`Random`'s static, null), then in `ThreadLocalRandom.getProbe` (the consequence: its initializer had thrown).
+  - **THE FIRST READING WAS WRONG, and a probe refuted it:** the previous card blamed `lazyCompileLocked`'s
+    under-the-lock barrier exempting a lock holder from waiting. A probe of exactly that shape (a slow `<clinit>`
+    started by a `getstatic`, three first-call compiles of the class's methods meanwhile) printed `4 of 4` on
+    UNCHANGED main. Re-reading the trace's frames -- `ThreadLocalRandom.<clinit>` failing INSIDE `Random` -- is what
+    named the superclass step. The lock-holder exemption stays as it was, still a stated hazard.
+  - **Reduced:** `ClinitRaceProbe`'s second shape -- a slow `Base.<clinit>`, a `Derived extends Base` whose
+    `<clinit>` constructs a `Derived` (so `Base()` reads `Base`'s static), thread A's use started first and threads
+    B, C after the gate -- is DETERMINISTIC on main: `subclass users that saw an initialized superclass: 0 of 3`,
+    host `3 of 3`. Even thread A failed, because B had already run `Derived.<clinit>` and it threw.
+  - **The fix:** the flag is set once the superclass is initialized, or has no initializer in flight
+    (`initInFlight`: claimed by any task and not done); until then the walk goes through `ensureClinit(sup)`, which
+    waits for another task's initializer (step 2) or returns for this task's own (step 3). A superclass chain is
+    acyclic, so the re-entry this allows is bounded by its depth. `ClinitRaceProbe` is host-identical after it.
+  - **Regression -- PARTIAL when this card was written, stated as such:** on f8cf09f, 56 of 71 probes had finished,
+    54 host-identical and DigestProbe/MacProbe their designed divergences only; ChmRaceProbe identical in its one
+    finished run. Still to run: 15 probes, three more ChmRaceProbe and two more ClinitRaceProbe repeats, the suite and
+    JUnit. **Pi:** PASS (2026-10-16, f8cf09f) -- WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=892),
+    `[main returned normally]`, `gc: collections=6`; per-batch `clinits=` 397/397/398/399 and batch 1's 1473
+    classes, equal to the previous boot's.
+
 - **`java.io.File` RUNS OVER THE RAMFS: `UnixFileSystem`'s NATIVES IMPLEMENTED (2026-10-16).** First step of the
   java.io / java.nio.file arc (standing rule 1 names java/nio/file).
   - **Before:** stock `File` sits on `UnixFileSystem`, and only its `initIDs` was wired, so the first
