@@ -155,7 +155,7 @@ public final class MetalJavaLangAccess implements JavaLangAccess
     private static native long classFileWord0(Class<?> c, long k);
     @Override public void blockedOn(Interruptible b)
     {
-        throw unsupported("blockedOn");
+        Thread.blockedOn(b);                           // stock: Thread.currentThread().blockedOn(b)
     }
     @Override public void registerShutdownHook(int slot, boolean registerShutdownInProgress, Runnable hook)
     {
