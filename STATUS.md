@@ -4,6 +4,51 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **SMP: TWO CORES COULD RUN ON ONE TASK'S STACK -- a task was claimable before the core leaving it was off its stack
+  (2026-10-17).** The cause behind ChmRaceProbe's recorded wild branches.
+  - **The bug, real on main:** `pickNext` set `coreTask[core]` to the next task and released `SCHED_LOCK` while
+    this core was still running on the OLD task's stack -- `schedUnlock`'s call pushed a frame below the old task's
+    saved SP, and the pick/yield epilogues read their frames back from there, before the switch stub's `mov sp, x0`.
+    `claimable()` refused a task only while some core's `coreTask` named it, so the old task was claimable the
+    moment `coreTask` moved on. A second core could resume it and grow its NEW frames over those same bytes. The
+    leaving core then returned through a clobbered x30; or the resumed task reloaded a spilled local the leaving
+    core's push had overwritten. On hardware the window is a few instructions; under QEMU a vCPU is a host thread the
+    host OS can deschedule mid-window, which is why the rate rose with host load.
+  - **How it was found:** a 40-run ChmRaceProbe hunt after #379 kept, for the first time, a failing run's log (the
+    regression scripts now copy a differing run's files to `/tmp/fail-<probe>-<time>-<pid>.*`; a repeat of the
+    same probe used to OVERWRITE them, which lost one post-#379 failure unidentified). It was a WILD BRANCH into a
+    data arena (pc `0x101C56C8`, just above `Heap.LARGE_LIMIT`) in computeIfAbsent's mapping lambda -- not #379's
+    NPE. Reduced to `FirstCallRaceStress` (four threads making FIRST calls into 480 methods, contending for the
+    loader lock) it failed three ways: a wild branch to pc `0x1` with `x30=0` from "no registered method", a branch
+    into a data arena, and a `NullPointerException` INSIDE `Baseline.compileBody` on a local (`cb`) that is never
+    null. Zeroed registers, not a shared static, is what pointed at the switch rather than at a fifth unlocked
+    compile path (the #244 family, the first suspect).
+  - **The fix:** `pickNext` records `coreLeaving[core] = task+1` when it switches a core off a task
+    (`markLeaving`); `claimable()` refuses such a task; the switch stub clears the word only AFTER `mov sp, x0`,
+    behind a `DMB ISH`, so every access this core made to the old stack completes before another core can take it.
+    Four words in the code arena (fixed address, never collected), allocated with the first stub.
+  - **Measured, FirstCallRaceStress classified by its answer:** unfixed 6 failures in 70 (3 in 40 in a same-session
+    control, same probe, same 4-QEMU load); fixed **0 in 40** (39 uncontaminated -- one run overlapped another loop
+    in the same checkout and is excluded). Stated as evidence, not proof: at a 10% rate 39 clean runs would happen
+    about 1.6% of the time.
+  - **Probes:** `FirstCallRaceProbe` (120 methods, the quiet diffed regression form; it reproduced the race about once
+    in 40) and `FirstCallRaceStress` (480 methods, NOT in the regression set: every first-call compile of a class
+    that size holds the loader lock for seconds, so the watchdog prints slow-hold lines and a diff can never pass).
+  - **Regression:** QEMU on c54659e -- suite markers all zero, `gc: collections=51`, clinits 349; of 72 probes 67
+    host-identical, DigestProbe/MacProbe their designed divergences only, FirstCallRaceProbe correct but carrying
+    watchdog lines (the 480-method class; split into the two probes in 28b9421, after which it was host-identical
+    twice), and SemaphoreProbe correct but carrying three `GC: core stuck parked >10s` lines (recorded before under
+    host load; host-identical in two solo reruns); `ran 44, failures 0`. **Pi:** PASS (2026-10-17, 28b9421) -- `SMP: 4
+    of 4 cores up`, `smp sched: 4 of 4 cores on the run queue`, WiFi join, DHCP, NetDemo HTTP 200 from example.com
+    (bytes=891), `[main returned normally]`, `gc: collections=6`; per-batch `clinits=` 397/397/398/399.
+  - **#379's record, completed and corrected:** its probes, suite and JUnit finished after its merge -- 69 of 71 probes
+    host-identical, DigestProbe/MacProbe designed divergences only, suite markers all zero, `ran 44, failures 0`.
+    But ChmRaceProbe was NOT fully fixed by #379: after it, 2 failures in 51 runs -- one this wild branch, one lost
+    to the overwritten log. #379's superclass-initializer fix stands on its own deterministic probe (ClinitRaceProbe
+    `0 of 3` -> `3 of 3`); ChmRaceProbe's remaining failures were this switch race.
+  - **Also:** CarrierLocalProbe's host control had been purged from `/tmp` and was regenerated with the flags its
+    javadoc names (`--add-exports java.base/jdk.internal.misc=ALL-UNNAMED --add-exports java.base/sun.nio.ch=ALL-UNNAMED`).
+
 - **JVMS 5.5: A SECOND TASK WAITS FOR THE SUPERCLASS'S INITIALIZER; ChmRaceProbe's intermittent NPE (2026-10-16).**
   - **The bug, real on main:** `ensureClinit` set `superInited` BEFORE recursing into the superclass, as a cycle
     guard. A second task arriving while the first was still inside the superclass's `<clinit>` read the flag as
