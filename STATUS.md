@@ -4,6 +4,44 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **`java.io.File` RUNS OVER THE RAMFS: `UnixFileSystem`'s NATIVES IMPLEMENTED (2026-10-16).** First step of the
+  java.io / java.nio.file arc (standing rule 1 names java/nio/file).
+  - **Before:** stock `File` sits on `UnixFileSystem`, and only its `initIDs` was wired, so the first
+    `File.exists()` died -- `VIRTUALRESOLVE FAILED java/io/UnixFileSystem.getBooleanAttributes0` then `DENYLIST
+    TRAP` at `UnixFileSystem.hasBooleanAttributes` (the unwired-native-reads-as-a-denylist-trap signature).
+  - **The class is overlaid from the JDK 26 `unix/` source**, every native a Java body over the baked read-only file
+    table, each decision read from `unix/native/libjava/UnixFileSystem_md.c`: a table entry is REGULAR, `/` and
+    every proper path prefix a DIRECTORY (the table has no directory entries); `length` is the byte count (0 for a
+    directory or an absent path, as the C's failed stat); `list` the names, null for a non-directory; access is
+    READ if it exists, WRITE never (`EROFS`), EXECUTE for a directory only (the table has no modes); canonical paths
+    resolve `.`/`..` lexically (no symlinks); every mutator returns what the C returns when the syscall fails
+    `EROFS`, and `createNewFile` throws stock's `IOException("Read-only file system")`.
+  - **Two answers are DECISIONS, stated:** `lastModified` is 0 -- the API's "unknown" -- because the image carries
+    no timestamps; `getNameMax` is Linux's 255, since the table sets no limit.
+  - **One guest class does the table walking** (`jdk.internal.misc.MetalRamfs`: find, isDirectory, list, size)
+    over ONE new native that only says where the table is (`MetalRamfs.table0`), so java.nio.file can sit on the
+    same answers.
+  - **Probe:** `FileProbe` (29 lines), host-identical. **The host control needs a REALLY read-only filesystem:** on
+    a `chmod a-w` copy the owner can still chmod and utime, so `setWritable`/`setLastModified` answered `true`;
+    taken instead on a read-only `hdiutil` UDRO image of `ramfs/` mounted at a path with no symlink in it (the
+    recipe is in the probe's javadoc).
+  - **Regression:** QEMU on ea3f7a1 -- suite markers all zero, `gc: collections=51`, clinits 349; 67 of 70 probes
+    host-identical, DigestProbe/MacProbe their designed divergences only; `ran 44, failures 0`. **ChmRaceProbe
+    FAILED ONCE IN FIVE** (four reruns identical): three threads NPE'd in `ThreadLocalRandom.getProbe` and
+    `Random.seedUniquifier` -- statics `ThreadLocalRandom.<clinit>` sets. Nothing on that path changed here. The
+    reading, an inference not yet measured: `lazyCompileLocked` runs the JVMS 5.5 first-call barrier UNDER the
+    loader lock, and `awaitInitializer` exempts a lock holder from waiting for another task's initializer, so a
+    second thread's first call into a class whose `<clinit>` is mid-run proceeds against unset statics. That is the
+    next increment.
+  - **Pi:** PASS (2026-10-16, ea3f7a1) on the SECOND boot -- WiFi join, DHCP, NetDemo HTTP 200 from example.com
+    (bytes=891), `[main returned normally]`, `gc: collections=6`; per-batch `clinits=` 397/397/398/399; batch 1 loads
+    1473 classes (1472 before, observed). The FIRST boot of the same, byte-verified card timed out at the WiFi join
+    (`event 1/0/6/3` after `pmk ready`, `wifi: join timeout`) and NetDemo then threw `UnknownHostException` -- before
+    any Java program ran, so not attributed to the image.
+  - **The previous card's regression, completed:** on fcfe32b (invokeDefault) the remaining probes, the suite and
+    JUnit finished after its merge -- 67 of 69 probes host-identical, DigestProbe/MacProbe designed divergences
+    only; suite markers all zero, `gc: collections=51`, clinits 349; `ran 44, failures 0`.
+
 - **`InvocationHandler.invokeDefault` RUNS A PROXY'S DEFAULT METHOD (2026-10-16).** The previous card's one stated
   proxy gap.
   - **Stock goes through a method handle; the call it makes is an `invokespecial` of the default body**, which needs
