@@ -4,6 +4,32 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **`java.nio.file` ATTRIBUTES OVER THE RAMFS -- owner, group, file store, refused setters (2026-10-17).** Fourth
+  step of the file arc.
+  - **`UnixNativeDispatcher`'s remaining attribute natives**, semantics from `UnixNativeDispatcher.c`:
+    `getpwuid`/`getgrgid` name id 0 "root" (every file is owned 0/0; gid 0's name is a DECISION -- macOS calls it
+    wheel) and are ENOENT for any other id, the C's "not found"; `getpwnam0`/`getgrnam0` answer 0 for "root" and -1
+    otherwise. `statvfs0` fills `UnixFileStoreAttributes` by offset: a 4 KiB fragment (a DECISION -- the table has no
+    block size), the stored bytes rounded up, nothing free or available. `futimens0`/`fchmod0`/`fchown0` are EBADF
+    for an fd that is not open and EROFS otherwise; `fchmodat0` resolves AT_FDCWD as `fstatat0` does (it first took
+    AT_FDCWD for an fd, which the probe caught as `setLastModifiedTime -> UnsupportedOperationException`).
+  - **`sun.nio.fs.BsdNativeDispatcher` is overlaid from the JDK 26 `macosx/` source** -- the variant
+    `BsdFileStore.findMountEntry` reaches. `initIDs` only caches JNI field IDs, so empty is exactly right; one mount,
+    "ramfs" on "/", type ramfs, options "ro", device 1 (`stat0`'s st_dev), through `getfsstat`/`fsstatEntry`/
+    `endfsstat`; `getmntonname0` "/"; `clonefile0` EEXIST/EROFS; `setattrlist0`/`fsetattrlist0` EROFS.
+  - **Probe:** `NioAttrProbe` (11 lines: POSIX permissions, owner, group, getOwner, the `posix:*` map, last-modified,
+    the file store's space and read-only flag, and setPosixFilePermissions/setLastModifiedTime/setOwner refused),
+    host-identical against the read-only disk-image control. **Negative control** on main: owner/group/getOwner are
+    `UnsupportedOperationException` and `Files.getFileStore` is a DENYLIST TRAP on `BsdNativeDispatcher.initIDs`.
+  - **Regression (6909738):** 73 of 75 probes host-identical, DigestProbe/MacProbe their designed divergences only;
+    suite markers all zero, `gc: collections=51`, clinits 351; JUnit `ran 44, failures 0`.
+  - **Pi:** PASS (2026-10-17, 6909738) -- 4 of 4 cores, WiFi join, DHCP, NetDemo HTTP 200 from example.com
+    (bytes=891), `[main returned normally]`, `gc: collections=7`; batch 1 loads 1576 classes and per-batch `clinits=`
+    are 434/434/435/436, both unchanged from #382's boot.
+  - **#382's record, completed:** its remaining probes, the suite and JUnit finished after its merge -- 72 of 74
+    probes host-identical, DigestProbe/MacProbe designed divergences only; suite markers all zero, clinits 351;
+    `ran 44, failures 0`.
+
 - **`java.nio.file` READS THE RAMFS -- FileChannel's natives, `FileDescriptor.close`, and Thread's missing
   `nioBlocker` (2026-10-17).** Third step of the file arc.
   - **Every layer of the read path had an unwired native**, met in order by `NioReadProbe` on the metal:
