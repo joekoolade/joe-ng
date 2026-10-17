@@ -20,8 +20,10 @@ import java.util.Map;
 /**
  * The attribute side of {@code java.nio.file}: POSIX attributes (owner, group, permissions), the attribute-map form
  * ({@code Files.readAttributes(p, "posix:*")}), the owner, the file store (type and space), and the setters --
- * permissions, last-modified time, owner -- every one refused on a read-only filesystem. Owner, group, times and the
- * store's figures differ by machine, so only their KIND is printed (a non-null name, a non-negative number).
+ * permissions, last-modified time, owner -- each read back, and one on a missing file. Owner, group, times and the
+ * store's figures differ by machine, so only their KIND is printed (a non-null name, a non-negative number). The
+ * argument is the tree's root: empty on the metal, on a host a fresh writable copy of {@code ramfs/} (see
+ * FileProbe).
  */
 public class NioAttrProbe
 {
@@ -76,10 +78,26 @@ public class NioAttrProbe
             FileStore fs = Files.getFileStore(sample);
             return (fs.getTotalSpace() >= 0) + " " + (fs.getUsableSpace() >= 0) + " readOnly=" + fs.isReadOnly();
         });
-        arm("setPosixFilePermissions", () -> Files.setPosixFilePermissions(sample,
+        arm("setPosixFilePermissions", () ->
+        {
+            Files.setPosixFilePermissions(sample, PosixFilePermissions.fromString("r--r-x---"));
+            String now = PosixFilePermissions.toString(Files.getPosixFilePermissions(sample));
+            Files.setPosixFilePermissions(sample, PosixFilePermissions.fromString("rw-r--r--"));
+            return now;
+        });
+        arm("setLastModifiedTime", () ->
+        {
+            Files.setLastModifiedTime(sample, FileTime.fromMillis(1000L));
+            return Files.getLastModifiedTime(sample).toMillis();
+        });
+        arm("setOwner", () ->
+        {
+            Files.setOwner(sample, Files.getOwner(sample));
+            return "kept " + Files.getOwner(sample).getName().equals(
+                    Files.readAttributes(sample, PosixFileAttributes.class).owner().getName());
+        });
+        arm("setPosixFilePermissions missing", () -> Files.setPosixFilePermissions(p("/data/missing.txt"),
                 PosixFilePermissions.fromString("rw-r--r--")));
-        arm("setLastModifiedTime", () -> Files.setLastModifiedTime(sample, FileTime.fromMillis(1000L)));
-        arm("setOwner", () -> Files.setOwner(sample, Files.getOwner(sample)));
         System.out.println("NioAttrProbe done");
     }
 }

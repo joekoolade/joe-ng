@@ -78,23 +78,34 @@ class UnixNativeDispatcher {
     }
     private static int open0(long pathAddress, int flags, int mode) throws UnixException
     {
-        String p = path(pathAddress);
-        boolean writes = (flags & (UnixConstants.O_WRONLY | UnixConstants.O_RDWR | UnixConstants.O_TRUNC
-                | UnixConstants.O_APPEND)) != 0;
-        if (!exists(p))
+        int acc = flags & (UnixConstants.O_WRONLY | UnixConstants.O_RDWR);
+        int how = 0;
+        if (acc == UnixConstants.O_RDONLY || acc == UnixConstants.O_RDWR)
         {
-            throw new UnixException((flags & UnixConstants.O_CREAT) != 0 ? UnixConstants.EROFS
-                    : UnixConstants.ENOENT);
+            how |= jdk.internal.misc.MetalRamfs.O_READ;
         }
-        if ((flags & UnixConstants.O_CREAT) != 0 && (flags & UnixConstants.O_EXCL) != 0)
+        if (acc == UnixConstants.O_WRONLY || acc == UnixConstants.O_RDWR)
         {
-            throw new UnixException(UnixConstants.EEXIST);
+            how |= jdk.internal.misc.MetalRamfs.O_WRITE;
         }
-        if (writes)
+        if ((flags & UnixConstants.O_CREAT) != 0)
         {
-            throw new UnixException(UnixConstants.EROFS);
+            how |= jdk.internal.misc.MetalRamfs.O_CREAT;
         }
-        return jdk.internal.misc.MetalRamfs.open(p);   // O_RDONLY: a file or a directory, positioned at 0
+        if ((flags & UnixConstants.O_EXCL) != 0)
+        {
+            how |= jdk.internal.misc.MetalRamfs.O_EXCL;
+        }
+        if ((flags & UnixConstants.O_TRUNC) != 0)
+        {
+            how |= jdk.internal.misc.MetalRamfs.O_TRUNC;
+        }
+        if ((flags & UnixConstants.O_APPEND) != 0)
+        {
+            how |= jdk.internal.misc.MetalRamfs.O_APPEND;
+        }
+        // O_NOFOLLOW, O_SYNC and O_DSYNC change nothing here: there are no links, and nothing is cached.
+        return check(jdk.internal.misc.MetalRamfs.open(path(pathAddress), how, mode));
     }
 
     /**
@@ -171,12 +182,7 @@ class UnixNativeDispatcher {
     }
     private static void link0(long existingAddress, long newAddress) throws UnixException
     {
-        String p = path(newAddress);
-        if (exists(p))
-        {
-            throw new UnixException(UnixConstants.EEXIST);
-        }
-        throw new UnixException(UnixConstants.EROFS);
+        check(jdk.internal.misc.MetalRamfs.link(path(existingAddress), path(newAddress)));
     }
 
     /**
@@ -189,12 +195,7 @@ class UnixNativeDispatcher {
     }
     private static void unlink0(long pathAddress) throws UnixException
     {
-        String p = path(pathAddress);
-        if (!exists(p))
-        {
-            throw new UnixException(UnixConstants.ENOENT);
-        }
-        throw new UnixException(UnixConstants.EROFS);
+        check(jdk.internal.misc.MetalRamfs.unlink(path(pathAddress)));
     }
 
     /**
@@ -220,12 +221,11 @@ class UnixNativeDispatcher {
     }
     private static void mknod0(long pathAddress, int mode, long dev) throws UnixException
     {
-        String p = path(pathAddress);
-        if (exists(p))
+        if (jdk.internal.misc.MetalRamfs.exists(path(pathAddress)))
         {
             throw new UnixException(UnixConstants.EEXIST);
         }
-        throw new UnixException(UnixConstants.EROFS);
+        throw new UnixException(UnixConstants.ENOTSUP);  // the tree holds files and directories only
     }
 
     /**
@@ -239,12 +239,7 @@ class UnixNativeDispatcher {
     }
     private static void rename0(long fromAddress, long toAddress) throws UnixException
     {
-        String p = path(fromAddress);
-        if (!exists(p))
-        {
-            throw new UnixException(UnixConstants.ENOENT);
-        }
-        throw new UnixException(UnixConstants.EROFS);
+        check(jdk.internal.misc.MetalRamfs.rename(path(fromAddress), path(toAddress)));
     }
 
     /**
@@ -271,12 +266,7 @@ class UnixNativeDispatcher {
     }
     private static void mkdir0(long pathAddress, int mode) throws UnixException
     {
-        String p = path(pathAddress);
-        if (exists(p))
-        {
-            throw new UnixException(UnixConstants.EEXIST);
-        }
-        throw new UnixException(UnixConstants.EROFS);
+        check(jdk.internal.misc.MetalRamfs.mkdir(path(pathAddress), mode));
     }
 
     /**
@@ -289,12 +279,7 @@ class UnixNativeDispatcher {
     }
     private static void rmdir0(long pathAddress) throws UnixException
     {
-        String p = path(pathAddress);
-        if (!exists(p))
-        {
-            throw new UnixException(UnixConstants.ENOENT);
-        }
-        throw new UnixException(UnixConstants.EROFS);
+        check(jdk.internal.misc.MetalRamfs.rmdir(path(pathAddress)));
     }
 
     /**
@@ -310,7 +295,11 @@ class UnixNativeDispatcher {
     private static byte[] readlink0(long pathAddress) throws UnixException
     {
         String p = path(pathAddress);
-        throw new UnixException(exists(p) ? UnixConstants.EINVAL : UnixConstants.ENOENT);  // nothing is a link
+        if (!jdk.internal.misc.MetalRamfs.exists(p))
+        {
+            throw new UnixException(errno(jdk.internal.misc.MetalRamfs.lookupError(p)));
+        }
+        throw new UnixException(UnixConstants.EINVAL);   // nothing is a link
     }
 
     /**
@@ -326,9 +315,9 @@ class UnixNativeDispatcher {
     private static byte[] realpath0(long pathAddress) throws UnixException
     {
         String p = path(pathAddress);
-        if (!exists(p))
+        if (!jdk.internal.misc.MetalRamfs.exists(p))
         {
-            throw new UnixException(UnixConstants.ENOENT);
+            throw new UnixException(errno(jdk.internal.misc.MetalRamfs.lookupError(p)));
         }
         return p.getBytes(java.nio.charset.StandardCharsets.UTF_8);
     }
@@ -344,12 +333,12 @@ class UnixNativeDispatcher {
     }
     private static void symlink0(long name1, long name2) throws UnixException
     {
-        String p = path(name2);
-        if (exists(p))
+        if (jdk.internal.misc.MetalRamfs.exists(path(name2)))
         {
             throw new UnixException(UnixConstants.EEXIST);
         }
-        throw new UnixException(UnixConstants.EROFS);
+        throw new UnsupportedOperationException("joe-ng: UnixNativeDispatcher.symlink0 is not implemented "
+                + "(the tree has no symbolic links)");
     }
 
     /**
@@ -365,13 +354,7 @@ class UnixNativeDispatcher {
     }
     private static int stat0(long pathAddress, UnixFileAttributes attrs)
     {
-        String p = path(pathAddress);
-        if (!exists(p))
-        {
-            return UnixConstants.ENOENT;
-        }
-        fill(attrs, p);
-        return 0;
+        return statInto(path(pathAddress), attrs);
     }
 
     // Variant of stat() returning errno instead of throwing UnixException
@@ -391,12 +374,11 @@ class UnixNativeDispatcher {
     }
     private static void lstat0(long pathAddress, UnixFileAttributes attrs) throws UnixException
     {
-        String p = path(pathAddress);
-        if (!exists(p))
+        int errno = statInto(path(pathAddress), attrs);  // no links, so lstat is stat
+        if (errno != 0)
         {
-            throw new UnixException(UnixConstants.ENOENT);
+            throw new UnixException(errno);
         }
-        fill(attrs, p);                                // no links, so lstat is stat
     }
 
     /**
@@ -407,12 +389,12 @@ class UnixNativeDispatcher {
     }
     private static void fstat0(int fd, UnixFileAttributes attrs) throws UnixException
     {
-        String p = jdk.internal.misc.MetalRamfs.fdPath(fd);
-        if (p == null)
+        long[] st = jdk.internal.misc.MetalRamfs.fstat(fd);
+        if (st == null)
         {
             throw new UnixException(EBADF);
         }
-        fill(attrs, p);
+        fill(attrs, st);
     }
 
     /**
@@ -435,13 +417,7 @@ class UnixNativeDispatcher {
             throw new UnsupportedOperationException("joe-ng: UnixNativeDispatcher.fstatat0 relative to a directory fd "
                     + "is not implemented (init() reports no openat)");
         }
-        String p = path(pathAddress);                // no links, so AT_SYMLINK_NOFOLLOW changes nothing
-        if (!exists(p))
-        {
-            return UnixConstants.ENOENT;
-        }
-        fill(attrs, p);
-        return 0;
+        return statInto(path(pathAddress), attrs);     // no links, so AT_SYMLINK_NOFOLLOW changes nothing
     }
 
     // Variant of fstatat() returning errno instead of throwing UnixException
@@ -461,12 +437,7 @@ class UnixNativeDispatcher {
     }
     private static void chown0(long pathAddress, int uid, int gid) throws UnixException
     {
-        String p = path(pathAddress);
-        if (!exists(p))
-        {
-            throw new UnixException(UnixConstants.ENOENT);
-        }
-        throw new UnixException(UnixConstants.EROFS);
+        check(jdk.internal.misc.MetalRamfs.chown(path(pathAddress), uid, gid));
     }
 
     /**
@@ -479,12 +450,7 @@ class UnixNativeDispatcher {
     }
     private static void lchown0(long pathAddress, int uid, int gid) throws UnixException
     {
-        String p = path(pathAddress);
-        if (!exists(p))
-        {
-            throw new UnixException(UnixConstants.ENOENT);
-        }
-        throw new UnixException(UnixConstants.EROFS);
+        check(jdk.internal.misc.MetalRamfs.chown(path(pathAddress), uid, gid));  // no links: lchown is chown
     }
 
     /**
@@ -495,11 +461,7 @@ class UnixNativeDispatcher {
     }
     static void fchown0(int fd, int uid, int gid) throws UnixException
     {
-        if (jdk.internal.misc.MetalRamfs.fdPath(fd) == null)
-        {
-            throw new UnixException(EBADF);
-        }
-        throw new UnixException(UnixConstants.EROFS);     // an open fd on a read-only filesystem
+        check(jdk.internal.misc.MetalRamfs.fchown(fd, uid, gid));
     }
 
     /**
@@ -512,12 +474,7 @@ class UnixNativeDispatcher {
     }
     private static void chmod0(long pathAddress, int mode) throws UnixException
     {
-        String p = path(pathAddress);
-        if (!exists(p))
-        {
-            throw new UnixException(UnixConstants.ENOENT);
-        }
-        throw new UnixException(UnixConstants.EROFS);
+        check(jdk.internal.misc.MetalRamfs.chmod(path(pathAddress), mode));
     }
 
     /**
@@ -528,11 +485,7 @@ class UnixNativeDispatcher {
     }
     private static void fchmod0(int fd, int mode) throws UnixException
     {
-        if (jdk.internal.misc.MetalRamfs.fdPath(fd) == null)
-        {
-            throw new UnixException(EBADF);
-        }
-        throw new UnixException(UnixConstants.EROFS);     // an open fd on a read-only filesystem
+        check(jdk.internal.misc.MetalRamfs.fchmod(fd, mode));
     }
 
     /**
@@ -551,12 +504,7 @@ class UnixNativeDispatcher {
             throw new UnsupportedOperationException("joe-ng: UnixNativeDispatcher.fchmodat0 relative to a directory fd "
                     + "is not implemented (init() reports no openat)");
         }
-        String p = path(pathAddress);
-        if (!exists(p))
-        {
-            throw new UnixException(UnixConstants.ENOENT);
-        }
-        throw new UnixException(UnixConstants.EROFS);
+        check(jdk.internal.misc.MetalRamfs.chmod(path(pathAddress), mode));  // no links: NOFOLLOW changes nothing
     }
 
 
@@ -568,11 +516,7 @@ class UnixNativeDispatcher {
     }
     private static void futimens0(int fd, long times0, long times1) throws UnixException
     {
-        if (jdk.internal.misc.MetalRamfs.fdPath(fd) == null)
-        {
-            throw new UnixException(EBADF);
-        }
-        throw new UnixException(UnixConstants.EROFS);     // an open fd on a read-only filesystem
+        check(jdk.internal.misc.MetalRamfs.fsetTimes(fd, times0, times1));  // access, modification: nanoseconds
     }
 
     /**
@@ -588,12 +532,12 @@ class UnixNativeDispatcher {
     }
     private static void utimensat0(int fd, long pathAddress, long times0, long times1, int flags) throws UnixException
     {
-        String p = path(pathAddress);
-        if (!exists(p))
+        if (fd != UnixConstants.AT_FDCWD)
         {
-            throw new UnixException(UnixConstants.ENOENT);
+            throw new UnsupportedOperationException("joe-ng: UnixNativeDispatcher.utimensat0 relative to a directory fd "
+                    + "is not implemented (init() reports no openat)");
         }
-        throw new UnixException(UnixConstants.EROFS);
+        check(jdk.internal.misc.MetalRamfs.setTimes(path(pathAddress), times0, times1));
     }
 
     /**
@@ -610,7 +554,8 @@ class UnixNativeDispatcher {
         long h = jdk.internal.misc.MetalRamfs.opendir(p);
         if (h == 0L)
         {
-            throw new UnixException(exists(p) ? UnixConstants.ENOTDIR : UnixConstants.ENOENT);
+            throw new UnixException(jdk.internal.misc.MetalRamfs.exists(p) ? UnixConstants.ENOTDIR
+                    : errno(jdk.internal.misc.MetalRamfs.lookupError(p)));
         }
         return h;
     }
@@ -656,15 +601,7 @@ class UnixNativeDispatcher {
     }
     private static int read0(int fildes, long buf, int nbyte) throws UnixException
     {
-        if (jdk.internal.misc.MetalRamfs.fdPath(fildes) == null)
-        {
-            throw new UnixException(EBADF);
-        }
-        if (jdk.internal.misc.MetalRamfs.fdIsDirectory(fildes))
-        {
-            throw new UnixException(UnixConstants.EISDIR);
-        }
-        return jdk.internal.misc.MetalRamfs.read(fildes, buf, nbyte);
+        return check(jdk.internal.misc.MetalRamfs.read(fildes, buf, nbyte));
     }
 
     /**
@@ -675,7 +612,7 @@ class UnixNativeDispatcher {
     }
     private static int write0(int fildes, long buf, int nbyte) throws UnixException
     {
-        throw new UnixException(EBADF);                // every fd here is open read-only
+        return check(jdk.internal.misc.MetalRamfs.write(fildes, buf, nbyte));
     }
 
     /**
@@ -689,15 +626,15 @@ class UnixNativeDispatcher {
     private static int access0(long pathAddress, int amode)
     {
         String p = path(pathAddress);
-        if (!exists(p))
+        long[] st = jdk.internal.misc.MetalRamfs.stat(p);
+        if (st == null)
         {
-            return UnixConstants.ENOENT;
+            return errno(jdk.internal.misc.MetalRamfs.lookupError(p));
         }
-        if ((amode & UnixConstants.W_OK) != 0)
-        {
-            return UnixConstants.EROFS;
-        }
-        if ((amode & UnixConstants.X_OK) != 0 && !jdk.internal.misc.MetalRamfs.isDirectory(p))
+        // The VM's one user is root (uid 0), so read and write are always granted; execute needs a directory or
+        // an execute bit somewhere in the mode, as access(2) answers for root.
+        if ((amode & UnixConstants.X_OK) != 0 && st[jdk.internal.misc.MetalRamfs.ST_DIR] == 0L
+                && (st[jdk.internal.misc.MetalRamfs.ST_MODE] & 0111) == 0L)
         {
             return UnixConstants.EACCES;
         }
@@ -775,17 +712,20 @@ class UnixNativeDispatcher {
     private static void statvfs0(long pathAddress, UnixFileStoreAttributes attrs) throws UnixException
     {
         String p = path(pathAddress);
-        if (!exists(p))
+        if (!jdk.internal.misc.MetalRamfs.exists(p))
         {
-            throw new UnixException(UnixConstants.ENOENT);
+            throw new UnixException(errno(jdk.internal.misc.MetalRamfs.lookupError(p)));
         }
-        long frsize = 4096L;                           // a DECISION: the table has no block size; a 4 KiB fragment
-        long blocks = (jdk.internal.misc.MetalRamfs.totalBytes() + frsize - 1L) / frsize;
+        // DECISIONS: the tree has no block size, so a 4 KiB fragment; and it lives in the heap, which gives it no
+        // capacity of its own to report -- the size is what is stored, and nothing is counted free rather than
+        // inventing a figure.
+        long frsize = 4096L;
+        long blocks = (jdk.internal.misc.MetalRamfs.usedBytes() + frsize - 1L) / frsize;
         jdk.internal.misc.Unsafe u = jdk.internal.misc.Unsafe.getUnsafe();
         Class<?> c = UnixFileStoreAttributes.class;
         u.putLong(attrs, u.objectFieldOffset(c, "f_frsize"), frsize);
         u.putLong(attrs, u.objectFieldOffset(c, "f_blocks"), blocks);
-        u.putLong(attrs, u.objectFieldOffset(c, "f_bfree"), 0L);   // read-only: nothing is free or available
+        u.putLong(attrs, u.objectFieldOffset(c, "f_bfree"), 0L);
         u.putLong(attrs, u.objectFieldOffset(c, "f_bavail"), 0L);
     }
 
@@ -830,6 +770,22 @@ class UnixNativeDispatcher {
         else if (errnum == EBADF)
         {
             m = "Bad file descriptor";
+        }
+        else if (errnum == EPERM)
+        {
+            m = "Operation not permitted";
+        }
+        else if (errnum == EBUSY)
+        {
+            m = "Resource busy";
+        }
+        else if (errnum == EFBIG)
+        {
+            m = "File too large";
+        }
+        else if (errnum == UnixConstants.ENOTSUP)
+        {
+            m = "Operation not supported";
         }
         else
         {
@@ -936,12 +892,55 @@ class UnixNativeDispatcher {
     {
         return 0;                                      // no openat/fstatat/fdopendir, xattrs or birthtime
     }
-    // ---- joe-ng: the natives above are Java over the read-only RAMFS (jdk.internal.misc.MetalRamfs), their
-    // semantics read from unix/native/libnio/fs/UnixNativeDispatcher.c. A mutator fails with the errno a
-    // read-only filesystem gives -- ENOENT for an absent path, EEXIST for a create over an existing one, EROFS
-    // otherwise -- and a native that is not implemented THROWS naming itself. Errno values are the baked
-    // UnixConstants (the macOS table); EBADF is 9 on every Unix and is not in it.
+    // ---- joe-ng: the natives above are Java over the VM's in-memory tree (jdk.internal.misc.MetalRamfs), their
+    // semantics read from unix/native/libnio/fs/UnixNativeDispatcher.c. A failing call's code becomes the errno
+    // the C would see; a native that is not implemented THROWS naming itself. Errno values are the baked
+    // UnixConstants (the macOS table); the few it does not carry (EPERM, EBADF, EBUSY, EFBIG) have the same
+    // number on every Unix.
+    private static final int EPERM = 1;
     private static final int EBADF = 9;
+    private static final int EBUSY = 16;
+    private static final int EFBIG = 27;
+
+    /** The errno for MetalRamfs code {@code code} (negative). */
+    private static int errno(int code)
+    {
+        switch (code)
+        {
+            case -jdk.internal.misc.MetalRamfs.NOENT:
+                return UnixConstants.ENOENT;
+            case -jdk.internal.misc.MetalRamfs.EXIST:
+                return UnixConstants.EEXIST;
+            case -jdk.internal.misc.MetalRamfs.NOTDIR:
+                return UnixConstants.ENOTDIR;
+            case -jdk.internal.misc.MetalRamfs.ISDIR:
+                return UnixConstants.EISDIR;
+            case -jdk.internal.misc.MetalRamfs.NOTEMPTY:
+                return UnixConstants.ENOTEMPTY;
+            case -jdk.internal.misc.MetalRamfs.INVAL:
+                return UnixConstants.EINVAL;
+            case -jdk.internal.misc.MetalRamfs.BADF:
+                return EBADF;
+            case -jdk.internal.misc.MetalRamfs.PERM:
+                return EPERM;
+            case -jdk.internal.misc.MetalRamfs.BUSY:
+                return EBUSY;
+            case -jdk.internal.misc.MetalRamfs.FBIG:
+                return EFBIG;
+            default:
+                throw new InternalError("joe-ng: MetalRamfs code " + code);
+        }
+    }
+
+    /** {@code r} if it is not negative, else the UnixException its code maps to. */
+    private static int check(int r) throws UnixException
+    {
+        if (r < 0)
+        {
+            throw new UnixException(errno(r));
+        }
+        return r;
+    }
 
     /** The NUL-terminated path at {@code addr}, made absolute against the working directory and normalized. */
     private static String path(long addr)
@@ -955,32 +954,48 @@ class UnixNativeDispatcher {
         return jdk.internal.misc.MetalRamfs.normalize(p);
     }
 
-    private static boolean exists(String p)
+    /** stat() of {@code p} into {@code attrs}: 0, or the errno when it does not resolve. */
+    private static int statInto(String p, UnixFileAttributes attrs)
     {
-        return jdk.internal.misc.MetalRamfs.find(p) != 0L || jdk.internal.misc.MetalRamfs.isDirectory(p);
+        long[] st = jdk.internal.misc.MetalRamfs.stat(p);
+        if (st == null)
+        {
+            return errno(jdk.internal.misc.MetalRamfs.lookupError(p));
+        }
+        fill(attrs, st);
+        return 0;
     }
 
     /**
-     * stat() into {@code attrs}: a file S_IFREG|0444 with its length, a directory S_IFDIR|0555; one device, the
-     * table's inode, owner 0/0, every time 0 (the image carries none), birthtime unavailable. The fields are
-     * private to UnixFileAttributes, so they are set by offset -- what the C's SetIntField/SetLongField do.
+     * A MetalRamfs stat array into {@code attrs}: kind and mode, the tree's inode on its one device (1), link
+     * count, owner, size and the three times split into seconds and nanoseconds; birthtime unavailable. The fields
+     * are private to UnixFileAttributes, so they are set by offset -- what the C's SetIntField/SetLongField do.
      */
-    private static void fill(UnixFileAttributes attrs, String p)
+    private static void fill(UnixFileAttributes attrs, long[] st)
     {
-        boolean dir = jdk.internal.misc.MetalRamfs.find(p) == 0L;
-        long e = jdk.internal.misc.MetalRamfs.find(p);
+        boolean dir = st[jdk.internal.misc.MetalRamfs.ST_DIR] != 0L;
+        int perm = (int) st[jdk.internal.misc.MetalRamfs.ST_MODE];
         jdk.internal.misc.Unsafe u = jdk.internal.misc.Unsafe.getUnsafe();
         Class<?> c = UnixFileAttributes.class;
-        u.putInt(attrs, u.objectFieldOffset(c, "st_mode"),
-                dir ? (UnixConstants.S_IFDIR | 0555) : (UnixConstants.S_IFREG | 0444));
-        u.putLong(attrs, u.objectFieldOffset(c, "st_ino"), jdk.internal.misc.MetalRamfs.inode(p));
+        u.putInt(attrs, u.objectFieldOffset(c, "st_mode"), (dir ? UnixConstants.S_IFDIR : UnixConstants.S_IFREG) | perm);
+        u.putLong(attrs, u.objectFieldOffset(c, "st_ino"), st[jdk.internal.misc.MetalRamfs.ST_INO]);
         u.putLong(attrs, u.objectFieldOffset(c, "st_dev"), 1L);
         u.putLong(attrs, u.objectFieldOffset(c, "st_rdev"), 0L);
-        u.putInt(attrs, u.objectFieldOffset(c, "st_nlink"), dir ? 2 : 1);
-        u.putInt(attrs, u.objectFieldOffset(c, "st_uid"), 0);
-        u.putInt(attrs, u.objectFieldOffset(c, "st_gid"), 0);
-        u.putLong(attrs, u.objectFieldOffset(c, "st_size"), dir ? 0L : jdk.internal.misc.MetalRamfs.size(e));
+        u.putInt(attrs, u.objectFieldOffset(c, "st_nlink"), (int) st[jdk.internal.misc.MetalRamfs.ST_NLINK]);
+        u.putInt(attrs, u.objectFieldOffset(c, "st_uid"), (int) st[jdk.internal.misc.MetalRamfs.ST_UID]);
+        u.putInt(attrs, u.objectFieldOffset(c, "st_gid"), (int) st[jdk.internal.misc.MetalRamfs.ST_GID]);
+        u.putLong(attrs, u.objectFieldOffset(c, "st_size"), st[jdk.internal.misc.MetalRamfs.ST_SIZE]);
+        putTime(u, attrs, "st_atime", st[jdk.internal.misc.MetalRamfs.ST_ATIME]);
+        putTime(u, attrs, "st_mtime", st[jdk.internal.misc.MetalRamfs.ST_MTIME]);
+        putTime(u, attrs, "st_ctime", st[jdk.internal.misc.MetalRamfs.ST_CTIME]);
         u.putBoolean(attrs, u.objectFieldOffset(c, "birthtime_available"), false);
+    }
+
+    private static void putTime(jdk.internal.misc.Unsafe u, UnixFileAttributes attrs, String field, long nanos)
+    {
+        Class<?> c = UnixFileAttributes.class;
+        u.putLong(attrs, u.objectFieldOffset(c, field + "_sec"), Math.floorDiv(nanos, 1_000_000_000L));
+        u.putLong(attrs, u.objectFieldOffset(c, field + "_nsec"), Math.floorMod(nanos, 1_000_000_000L));
     }
 
     static {

@@ -23,10 +23,10 @@ import java.util.stream.Stream;
 /**
  * READING a file through {@code java.nio.file}: bytes, a string, lines (a list and a stream), an InputStream, a
  * BufferedReader, a SeekableByteChannel (position, size, a positional re-read) and a FileChannel (a heap and a direct
- * buffer, read past the end), a read of a missing file, a channel opened for writing (refused), and a read by an
+ * buffer, read past the end), a read of a missing file, a channel opened for writing (which must not truncate), and a read by an
  * already-interrupted thread, which must close the channel with ClosedByInterruptException (the interruptible-channel
  * protocol: Thread.blockedOn / interrupt). The argument
- * is the tree's root: empty on the metal (the baked RAMFS), on a host a READ-ONLY mount of {@code ramfs/} (see
+ * is the tree's root: empty on the metal (the image's tree), on a host a fresh writable copy of {@code ramfs/} (see
  * FileProbe). Of file contents only the first line of /data/sample.txt and a few of its bytes are printed.
  */
 public class NioReadProbe
@@ -130,7 +130,7 @@ public class NioReadProbe
         {
             try (FileChannel ch = FileChannel.open(sample, StandardOpenOption.WRITE))
             {
-                return "opened";
+                return "opened size=" + ch.size();
             }
         });
         arm("read while interrupted", () ->

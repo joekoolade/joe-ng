@@ -177,15 +177,13 @@ class UnixFileDispatcherImpl extends FileDispatcher {
 
     static int read0(FileDescriptor fd, long address, int len) throws IOException
     {
-        int f = open(fd);
-        int n = jdk.internal.misc.MetalRamfs.read(f, address, len);
+        int n = check(jdk.internal.misc.MetalRamfs.read(open(fd), address, len));
         return n == 0 && len > 0 ? IOStatus.EOF : n;
     }
 
     static int pread0(FileDescriptor fd, long address, int len, long position) throws IOException
     {
-        int f = open(fd);
-        int n = jdk.internal.misc.MetalRamfs.pread(f, address, len, position);
+        int n = check(jdk.internal.misc.MetalRamfs.pread(open(fd), address, len, position));
         return n == 0 && len > 0 ? IOStatus.EOF : n;
     }
 
@@ -198,7 +196,7 @@ class UnixFileDispatcherImpl extends FileDispatcher {
         {
             long base = u.getLong(address + 16L * i);
             int want = (int) u.getLong(address + 16L * i + 8L);
-            int n = jdk.internal.misc.MetalRamfs.read(f, base, want);
+            int n = check(jdk.internal.misc.MetalRamfs.read(f, base, want));
             total += n;
             if (n < want)
             {
@@ -210,26 +208,32 @@ class UnixFileDispatcherImpl extends FileDispatcher {
 
     static int write0(FileDescriptor fd, long address, int len) throws IOException
     {
-        open(fd);
-        throw new IOException("Bad file descriptor");     // every fd here is open read-only
+        return check(jdk.internal.misc.MetalRamfs.write(open(fd), address, len));
     }
 
     static int pwrite0(FileDescriptor fd, long address, int len, long position) throws IOException
     {
-        open(fd);
-        throw new IOException("Bad file descriptor");
+        return check(jdk.internal.misc.MetalRamfs.pwrite(open(fd), address, len, position));
     }
 
     static long writev0(FileDescriptor fd, long address, int len) throws IOException
     {
-        open(fd);
-        throw new IOException("Bad file descriptor");
+        int f = open(fd);
+        jdk.internal.misc.Unsafe u = jdk.internal.misc.Unsafe.getUnsafe();
+        long total = 0L;
+        for (int i = 0; i < len; i++)
+        {
+            long base = u.getLong(address + 16L * i);
+            int want = (int) u.getLong(address + 16L * i + 8L);
+            total += check(jdk.internal.misc.MetalRamfs.write(f, base, want));  // a write here is never short
+        }
+        return total;
     }
 
     static int force0(FileDescriptor fd, boolean metaData) throws IOException
     {
         open(fd);
-        return 0;                                      // fsync of a read-only fd succeeds; there is nothing to flush
+        return 0;                                      // fsync: the tree is memory, there is nothing to flush
     }
 
     static long seek0(FileDescriptor fd, long offset) throws IOException
@@ -245,8 +249,7 @@ class UnixFileDispatcherImpl extends FileDispatcher {
 
     static int truncate0(FileDescriptor fd, long size) throws IOException
     {
-        open(fd);
-        throw new IOException("Invalid argument");        // ftruncate on an fd not open for writing
+        return check(jdk.internal.misc.MetalRamfs.truncate(open(fd), size));
     }
 
     static long size0(FileDescriptor fd) throws IOException
@@ -305,19 +308,51 @@ class UnixFileDispatcherImpl extends FileDispatcher {
         throw new UnsupportedOperationException("joe-ng: UnixFileDispatcherImpl.setDirect0 is not implemented");
     }
 
-    // ---- joe-ng: the natives above are Java over the read-only RAMFS's descriptor table
+    // ---- joe-ng: the natives above are Java over the VM's in-memory tree's descriptor table
     // (jdk.internal.misc.MetalRamfs), their semantics from unix/native/libnio/ch/UnixFileDispatcherImpl.c: a read at
-    // the end is IOStatus.EOF, a write to a read-only fd is EBADF, seek0 with a negative offset reports the
-    // position. Locking, mapping and O_DIRECT are not implemented and THROW naming themselves.
+    // the end is IOStatus.EOF, seek0 with a negative offset reports the position, and a failure is stock's
+    // IOException carrying the errno's text (the C's JNU_ThrowIOExceptionWithLastError). Locking, mapping and
+    // O_DIRECT are not implemented and THROW naming themselves.
 
     /** The int fd of {@code fd}, as the C's fdval(); EBADF as stock's IOException when it is not open here. */
     private static int open(FileDescriptor fd) throws IOException
     {
         int f = IOUtil.fdVal(fd);
-        if (jdk.internal.misc.MetalRamfs.fdPath(f) == null)
+        if (!jdk.internal.misc.MetalRamfs.isOpen(f))
         {
             throw new IOException("Bad file descriptor");
         }
         return f;
+    }
+
+    /** {@code r} if it is not negative, else the IOException for its MetalRamfs code. */
+    private static int check(int r) throws IOException
+    {
+        if (r >= 0)
+        {
+            return r;
+        }
+        String m;
+        if (r == -jdk.internal.misc.MetalRamfs.BADF)
+        {
+            m = "Bad file descriptor";
+        }
+        else if (r == -jdk.internal.misc.MetalRamfs.ISDIR)
+        {
+            m = "Is a directory";
+        }
+        else if (r == -jdk.internal.misc.MetalRamfs.INVAL)
+        {
+            m = "Invalid argument";
+        }
+        else if (r == -jdk.internal.misc.MetalRamfs.FBIG)
+        {
+            m = "File too large";
+        }
+        else
+        {
+            throw new InternalError("joe-ng: MetalRamfs code " + r);
+        }
+        throw new IOException(m);
     }
 }
