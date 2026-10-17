@@ -495,7 +495,11 @@ class UnixNativeDispatcher {
     }
     static void fchown0(int fd, int uid, int gid) throws UnixException
     {
-        throw new UnsupportedOperationException("joe-ng: UnixNativeDispatcher.fchown0 is not implemented");
+        if (jdk.internal.misc.MetalRamfs.fdPath(fd) == null)
+        {
+            throw new UnixException(EBADF);
+        }
+        throw new UnixException(UnixConstants.EROFS);     // an open fd on a read-only filesystem
     }
 
     /**
@@ -524,7 +528,11 @@ class UnixNativeDispatcher {
     }
     private static void fchmod0(int fd, int mode) throws UnixException
     {
-        throw new UnsupportedOperationException("joe-ng: UnixNativeDispatcher.fchmod0 is not implemented");
+        if (jdk.internal.misc.MetalRamfs.fdPath(fd) == null)
+        {
+            throw new UnixException(EBADF);
+        }
+        throw new UnixException(UnixConstants.EROFS);     // an open fd on a read-only filesystem
     }
 
     /**
@@ -538,8 +546,19 @@ class UnixNativeDispatcher {
     }
     private static void fchmodat0(int fd, long pathAddress, int mode, int flag) throws UnixException
     {
-        throw new UnsupportedOperationException("joe-ng: UnixNativeDispatcher.fchmodat0 is not implemented");
+        if (fd != UnixConstants.AT_FDCWD)
+        {
+            throw new UnsupportedOperationException("joe-ng: UnixNativeDispatcher.fchmodat0 relative to a directory fd "
+                    + "is not implemented (init() reports no openat)");
+        }
+        String p = path(pathAddress);
+        if (!exists(p))
+        {
+            throw new UnixException(UnixConstants.ENOENT);
+        }
+        throw new UnixException(UnixConstants.EROFS);
     }
+
 
     /**
      * futimens(int fildes, const struct timespec times[2])
@@ -549,7 +568,11 @@ class UnixNativeDispatcher {
     }
     private static void futimens0(int fd, long times0, long times1) throws UnixException
     {
-        throw new UnsupportedOperationException("joe-ng: UnixNativeDispatcher.futimens0 is not implemented");
+        if (jdk.internal.misc.MetalRamfs.fdPath(fd) == null)
+        {
+            throw new UnixException(EBADF);
+        }
+        throw new UnixException(UnixConstants.EROFS);     // an open fd on a read-only filesystem
     }
 
     /**
@@ -688,7 +711,11 @@ class UnixNativeDispatcher {
      */
     static byte[] getpwuid(int uid) throws UnixException
     {
-        throw new UnsupportedOperationException("joe-ng: UnixNativeDispatcher.getpwuid is not implemented");
+        if (uid != 0)
+        {
+            throw new UnixException(UnixConstants.ENOENT);  // the C's "not found"
+        }
+        return "root".getBytes(java.nio.charset.StandardCharsets.UTF_8);  // every file here is owned 0/0
     }
 
     /**
@@ -698,7 +725,11 @@ class UnixNativeDispatcher {
      */
     static byte[] getgrgid(int gid) throws UnixException
     {
-        throw new UnsupportedOperationException("joe-ng: UnixNativeDispatcher.getgrgid is not implemented");
+        if (gid != 0)
+        {
+            throw new UnixException(UnixConstants.ENOENT);
+        }
+        return "root".getBytes(java.nio.charset.StandardCharsets.UTF_8);  // gid 0's name: a DECISION (macOS says wheel)
     }
 
     /**
@@ -713,7 +744,7 @@ class UnixNativeDispatcher {
     }
     private static int getpwnam0(long nameAddress) throws UnixException
     {
-        throw new UnsupportedOperationException("joe-ng: UnixNativeDispatcher.getpwnam0 is not implemented");
+        return "root".equals(jdk.internal.misc.MetalRamfs.cstring(nameAddress)) ? 0 : -1;  // -1 = not found, as the C
     }
 
     /**
@@ -728,7 +759,7 @@ class UnixNativeDispatcher {
     }
     private static int getgrnam0(long nameAddress) throws UnixException
     {
-        throw new UnsupportedOperationException("joe-ng: UnixNativeDispatcher.getgrnam0 is not implemented");
+        return "root".equals(jdk.internal.misc.MetalRamfs.cstring(nameAddress)) ? 0 : -1;
     }
 
     /**
@@ -743,7 +774,19 @@ class UnixNativeDispatcher {
     }
     private static void statvfs0(long pathAddress, UnixFileStoreAttributes attrs) throws UnixException
     {
-        throw new UnsupportedOperationException("joe-ng: UnixNativeDispatcher.statvfs0 is not implemented");
+        String p = path(pathAddress);
+        if (!exists(p))
+        {
+            throw new UnixException(UnixConstants.ENOENT);
+        }
+        long frsize = 4096L;                           // a DECISION: the table has no block size; a 4 KiB fragment
+        long blocks = (jdk.internal.misc.MetalRamfs.totalBytes() + frsize - 1L) / frsize;
+        jdk.internal.misc.Unsafe u = jdk.internal.misc.Unsafe.getUnsafe();
+        Class<?> c = UnixFileStoreAttributes.class;
+        u.putLong(attrs, u.objectFieldOffset(c, "f_frsize"), frsize);
+        u.putLong(attrs, u.objectFieldOffset(c, "f_blocks"), blocks);
+        u.putLong(attrs, u.objectFieldOffset(c, "f_bfree"), 0L);   // read-only: nothing is free or available
+        u.putLong(attrs, u.objectFieldOffset(c, "f_bavail"), 0L);
     }
 
     /**
