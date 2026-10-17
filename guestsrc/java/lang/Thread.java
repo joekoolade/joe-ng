@@ -547,7 +547,50 @@ public class Thread implements Runnable, MetalThreadEntry
     /** Set this thread's interrupt flag (and wake it if it is sleeping/blocked). */
     public void interrupt()
     {
-        Magic.intr(this);
+        Magic.intr(this);                              // setting the status must come before reading nioBlocker
+        // Stock's: a thread blocked in an interruptible I/O operation (an AbstractInterruptibleChannel between
+        // begin() and end()) registered its channel as nioBlocker; interrupting it closes that channel. Without
+        // this an interrupt never reached a blocked channel -- a silent wrong answer, not a missing feature.
+        if (this != Thread.currentThread())
+        {
+            sun.nio.ch.Interruptible blocker;
+            synchronized (INTERRUPT_LOCK)
+            {
+                blocker = nioBlocker;
+                if (blocker != null)
+                {
+                    blocker.interrupt(this);
+                }
+            }
+            if (blocker != null)
+            {
+                blocker.postInterrupt();
+            }
+        }
+    }
+
+    /**
+     * Stock's interruptLock, made STATIC: the VM allocates the boot task's Thread without running a constructor
+     * ({@code Loader.allocThreadObj}), so an instance lock field would be null there. Only blockedOn and interrupt
+     * take it, and both hold it for a field read or write.
+     */
+    private static final Object INTERRUPT_LOCK = new Object();
+
+    /** The interruptible channel this thread is blocked in, or null (stock's field). */
+    private sun.nio.ch.Interruptible nioBlocker;
+
+    /**
+     * Stock's blockedOn, PUBLIC here only because this VM's JavaLangAccess ({@code MetalJavaLangAccess}) lives
+     * outside java.lang and so cannot reach a package-private member; stock reaches it from System's anonymous
+     * JavaLangAccess. Sets the CURRENT thread's blocker, as stock's caller does.
+     */
+    public static void blockedOn(sun.nio.ch.Interruptible b)
+    {
+        Thread me = Thread.currentThread();
+        synchronized (INTERRUPT_LOCK)
+        {
+            me.nioBlocker = b;
+        }
     }
 
     /** This thread's interrupt flag (does not clear it). */

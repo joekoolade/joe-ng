@@ -240,6 +240,116 @@ public final class MetalRamfs
         return DIRS.remove(h) != null;
     }
 
+    // ---- file descriptors: what open() hands out, and what read/pread/lseek/fstat/close take ---------------
+
+    /** fds start here, clear of 0/1/2 and of any descriptor the VM's own consoles use. */
+    private static final int FIRST_FD = 100;
+    private static final java.util.Map<Integer, long[]> FDS = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.Map<Integer, String> FD_PATHS = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.concurrent.atomic.AtomicInteger NEXT_FD =
+            new java.util.concurrent.atomic.AtomicInteger(FIRST_FD);
+
+    /** open(O_RDONLY): a new fd over {@code path} -- a file's entry, or 0 for a directory -- positioned at 0. */
+    public static int open(String path)
+    {
+        int fd = NEXT_FD.getAndIncrement();
+        FDS.put(fd, new long[] { find(path), 0L });
+        FD_PATHS.put(fd, path);
+        return fd;
+    }
+
+    /** close: false if {@code fd} is not open. */
+    public static boolean close(int fd)
+    {
+        FD_PATHS.remove(fd);
+        return FDS.remove(fd) != null;
+    }
+
+    /** The path {@code fd} was opened on, or null if it is not open. */
+    public static String fdPath(int fd)
+    {
+        return FD_PATHS.get(fd);
+    }
+
+    /** True if {@code fd} is open on a directory (reading it is EISDIR). */
+    public static boolean fdIsDirectory(int fd)
+    {
+        long[] f = FDS.get(fd);
+        return f != null && f[0] == 0L;
+    }
+
+    /** The byte length of {@code fd}'s file, -1 if not open, 0 for a directory. */
+    public static long fdSize(int fd)
+    {
+        long[] f = FDS.get(fd);
+        if (f == null)
+        {
+            return -1L;
+        }
+        return f[0] == 0L ? 0L : size(f[0]);
+    }
+
+    /** {@code fd}'s position, -1 if not open. */
+    public static long position(int fd)
+    {
+        long[] f = FDS.get(fd);
+        return f == null ? -1L : f[1];
+    }
+
+    /** lseek(SEEK_SET): set {@code fd}'s position; false if not open. A position past the end is allowed. */
+    public static boolean seek(int fd, long pos)
+    {
+        long[] f = FDS.get(fd);
+        if (f == null)
+        {
+            return false;
+        }
+        f[1] = pos;
+        return true;
+    }
+
+    /**
+     * pread: up to {@code len} bytes of {@code fd}'s file from {@code pos} into native memory at {@code addr}; the
+     * count, 0 at or past the end, -1 if {@code fd} is not open. The position is not moved.
+     */
+    public static int pread(int fd, long addr, int len, long pos)
+    {
+        long[] f = FDS.get(fd);
+        if (f == null)
+        {
+            return -1;
+        }
+        long sz = f[0] == 0L ? 0L : size(f[0]);
+        if (pos >= sz || len <= 0)
+        {
+            return 0;
+        }
+        int n = (int) Math.min((long) len, sz - pos);
+        long src = Magic.load64(f[0] + 16L) + pos;
+        Unsafe u = Unsafe.getUnsafe();
+        for (int k = 0; k < n; k++)
+        {
+            u.putByte(addr + k, (byte) Magic.load8(src + k));
+        }
+        return n;
+    }
+
+    /** read: {@link #pread} at {@code fd}'s position, which then advances by the count. */
+    public static int read(int fd, long addr, int len)
+    {
+        long[] f = FDS.get(fd);
+        if (f == null)
+        {
+            return -1;
+        }
+        int n = pread(fd, addr, len, f[1]);
+        if (n > 0)
+        {
+            f[1] += n;
+        }
+        return n;
+    }
+
     private static boolean bytesAt(long addr, byte[] b, int n)
     {
         for (int k = 0; k < n; k++)

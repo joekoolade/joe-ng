@@ -94,8 +94,7 @@ class UnixNativeDispatcher {
         {
             throw new UnixException(UnixConstants.EROFS);
         }
-        throw new UnsupportedOperationException("joe-ng: UnixNativeDispatcher.open0 for reading is not implemented "
-                + "yet (FileChannel over the RAMFS is the next increment): " + p);
+        return jdk.internal.misc.MetalRamfs.open(p);   // O_RDONLY: a file or a directory, positioned at 0
     }
 
     /**
@@ -121,7 +120,10 @@ class UnixNativeDispatcher {
     }
     private static void close0(int fd) throws UnixException
     {
-        throw new UnsupportedOperationException("joe-ng: UnixNativeDispatcher.close0 is not implemented");
+        if (!jdk.internal.misc.MetalRamfs.close(fd))
+        {
+            throw new UnixException(EBADF);
+        }
     }
 
     /**
@@ -405,7 +407,12 @@ class UnixNativeDispatcher {
     }
     private static void fstat0(int fd, UnixFileAttributes attrs) throws UnixException
     {
-        throw new UnsupportedOperationException("joe-ng: UnixNativeDispatcher.fstat0 is not implemented");
+        String p = jdk.internal.misc.MetalRamfs.fdPath(fd);
+        if (p == null)
+        {
+            throw new UnixException(EBADF);
+        }
+        fill(attrs, p);
     }
 
     /**
@@ -626,7 +633,15 @@ class UnixNativeDispatcher {
     }
     private static int read0(int fildes, long buf, int nbyte) throws UnixException
     {
-        throw new UnsupportedOperationException("joe-ng: UnixNativeDispatcher.read0 is not implemented");
+        if (jdk.internal.misc.MetalRamfs.fdPath(fildes) == null)
+        {
+            throw new UnixException(EBADF);
+        }
+        if (jdk.internal.misc.MetalRamfs.fdIsDirectory(fildes))
+        {
+            throw new UnixException(UnixConstants.EISDIR);
+        }
+        return jdk.internal.misc.MetalRamfs.read(fildes, buf, nbyte);
     }
 
     /**
@@ -637,7 +652,7 @@ class UnixNativeDispatcher {
     }
     private static int write0(int fildes, long buf, int nbyte) throws UnixException
     {
-        throw new UnsupportedOperationException("joe-ng: UnixNativeDispatcher.write0 is not implemented");
+        throw new UnixException(EBADF);                // every fd here is open read-only
     }
 
     /**
