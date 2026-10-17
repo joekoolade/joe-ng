@@ -1750,6 +1750,19 @@ public final class VM
         // compile: a GC mid-compile freed it). Allocate in the never-reclaimed, never-GC'd JIT code arena so the
         // vectors stay valid for the whole run. (Core-0 only: both callers -- pcSetup, installSchedVectors -- are
         // primary-only, so the non-atomic allocCode bump is race-free.)
+        if (coreLeavingAddr == 0L)
+        {
+            // Four words, one per core: task+1 that core is switching OFF, 0 when none (VMScheduler.pickNext /
+            // claimable). In the code arena for the stub's reason: never GC'd, never rewound, fixed address.
+            long lraw = Heap.allocCode(64);
+            coreLeavingAddr = (lraw + (long) ObjectModel.HEADER_SIZE + 0xFL) & ~0xFL;
+            int q = 0;
+            while (q < 4)
+            {
+                Magic.store64(coreLeavingAddr + q * 8L, 0L);
+                q += 1;
+            }
+        }
         long raw = Heap.allocCode(0x400);
         long stub = (raw + (long) ObjectModel.HEADER_SIZE + 0xFL) & ~0xFL;   // 16-byte-aligned code start
         int w = 0;
@@ -1782,6 +1795,23 @@ public final class VM
         Magic.store32(blAddr, A64Enc.bl((int) ((pickAddr - blAddr) / 4L)));      // x0 = pick(x0)
         w += 1;
         Magic.store32(stub + w * 4L, A64Enc.movToSp(0));             w += 1;    // mov sp, x0 (next task)
+        // OFF THE OLD STACK NOW -- only now may another core claim the task this core just left. pickNext
+        // released SCHED_LOCK while this core was still ON that task's stack: schedUnlock's call pushed a frame
+        // below its saved SP, and the pick/yield epilogues read their frames back from there. A second core
+        // that resumed the task in that window grew the task's NEW frames over those same bytes: this core
+        // then returned through a clobbered x30 (a wild branch to pc 0x1 with x30=0, "no registered method"),
+        // or the resumed task reloaded a spilled local that this core's push had overwritten (a NULL local
+        // in Baseline.compileBody). So pickNext marks the task LEAVING (coreLeaving[core] = task+1), claimable
+        // refuses it, and the mark is cleared HERE -- after a barrier, so every load and store this core made
+        // to the old stack is complete before another core can see the task free. x9/x10 are restored below.
+        Magic.store32(stub + w * 4L, A64Enc.mrs(9, A64Enc.MPIDR_EL1)); w += 1;
+        Magic.store32(stub + w * 4L, A64Enc.andLowBits(9, 9, 2));     w += 1;    // x9 = core id (Aff0, 0..3)
+        Magic.store32(stub + w * 4L, A64Enc.movz(10, (int) (coreLeavingAddr & 0xFFFF), 0));         w += 1;
+        Magic.store32(stub + w * 4L, A64Enc.movk(10, (int) ((coreLeavingAddr >> 16) & 0xFFFF), 1)); w += 1;
+        Magic.store32(stub + w * 4L, A64Enc.movk(10, (int) ((coreLeavingAddr >> 32) & 0xFFFF), 2)); w += 1;
+        Magic.store32(stub + w * 4L, A64Enc.addRegLsl(10, 10, 9, 3)); w += 1;    // x10 = &coreLeaving[core]
+        Magic.store32(stub + w * 4L, A64Enc.dmbIsh());                w += 1;
+        Magic.store32(stub + w * 4L, A64Enc.strx(31, 10, 0));         w += 1;    // coreLeaving[core] = 0 (xzr)
         Magic.store32(stub + w * 4L, A64Enc.ldrx(9, 31, 248));       w += 1;
         Magic.store32(stub + w * 4L, A64Enc.msr(A64Enc.ELR_EL1, 9)); w += 1;    // restore ELR_EL1
         Magic.store32(stub + w * 4L, A64Enc.ldrx(9, 31, 256));       w += 1;
@@ -3579,6 +3609,7 @@ public final class VM
     static long irqHandlerAddr;        // VM.irqHandler()V — the IRQ-vector handler's address (writer-stashed)
     static long scheduleAddr;          // VM.schedule(J)J — the timer-path switcher (writer-stashed)
     static long yieldPickAddr;         // VM.yieldPick(J)J — the SVC/yield-path switcher (writer-stashed)
+    static long coreLeavingAddr;       // 4 words: task+1 each core is switching OFF (pickNext sets, the stub clears)
     static long taskAAddr;             // VM.taskA()V — demo task entry (writer-stashed)
     static long taskBAddr;             // VM.taskB()V — demo task entry (writer-stashed)
     static long taskCAddr;             // VM.taskC()V — demo task entry (writer-stashed)

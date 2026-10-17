@@ -700,9 +700,28 @@ public final class VMScheduler
             {
                 return false;                              // another core has not switched off it yet
             }
+            if (c != core && coreLeavingAddr != 0L && Magic.load64(coreLeavingAddr + c * 8L) == (long) (t + 1))
+            {
+                return false;                              // ... or has, but is still ON its stack (see markLeaving)
+            }
             c += 1;
         }
         return true;
+    }
+
+    /**
+     * Record that {@code core} is switching from task {@code from} to {@code to}: until the switch stub has moved
+     * SP off {@code from}'s stack and cleared the mark, {@link #claimable} refuses {@code from}. Without it a task
+     * became claimable the moment {@code coreTask} moved on -- while this core was still pushing and popping
+     * frames below the task's saved SP -- so two cores could run on one stack for a few instructions (see the
+     * clear in {@code VM.buildSwitchStub}). Called under SCHED_LOCK.
+     */
+    private static void markLeaving(int core, int from, int to)
+    {
+        if (coreLeavingAddr != 0L && from != to)
+        {
+            Magic.store64(coreLeavingAddr + core * 8L, (long) (from + 1));
+        }
     }
 
     /**
@@ -810,6 +829,7 @@ public final class VMScheduler
             if (best >= 0)
             {
                 taskState[best] = TASK_RUNNING;            // claimed by THIS core until it yields back
+                markLeaving(core, cur, best);
                 coreTask[core] = best;
                 schedUnlock(daif);
                 return taskSp[best];
@@ -824,6 +844,7 @@ public final class VMScheduler
         {
             taskState[fall] = TASK_RUNNING;
         }
+        markLeaving(core, cur, fall);
         coreTask[core] = fall;
         schedUnlock(daif);
         return taskSp[fall];                               // (fall == cur => taskSp[cur] == curSp: resume it)
