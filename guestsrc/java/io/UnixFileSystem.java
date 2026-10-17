@@ -164,11 +164,18 @@ final class UnixFileSystem extends FileSystem {
         return canonicalize0(getPathForSysCalls(path));
     }
 
-    // joe-ng: every native below is implemented over the read-only file table (jdk.internal.misc.MetalRamfs),
-    // its semantics read from unix/native/libjava/UnixFileSystem_md.c. Where the C makes a syscall that fails on
-    // a read-only filesystem (EROFS), the answer here is what the C returns for that failure.
+    // joe-ng: every native below is implemented over the VM's in-memory tree (jdk.internal.misc.MetalRamfs), its
+    // semantics read from unix/native/libjava/UnixFileSystem_md.c: each answers what the C returns for the
+    // syscall's result.
 
-    /** JDK_Canonicalize, without symlinks to resolve (the table has none): "." and ".." resolved lexically. */
+    /** A path as the kernel would resolve it: against the working directory, "." and ".." lexically. */
+    private String abs(String path)
+    {
+        String p = path.startsWith("/") ? path : resolve(userDir, path);
+        return jdk.internal.misc.MetalRamfs.normalize(p);
+    }
+
+    /** JDK_Canonicalize, without symlinks to resolve (the tree has none): "." and ".." resolved lexically. */
     private String canonicalize0(String path) throws IOException
     {
         String[] parts = path.split("/");
@@ -194,19 +201,15 @@ final class UnixFileSystem extends FileSystem {
 
     /* -- Attribute accessors -- */
 
-    /** stat(): a table entry is a regular file; "/" and every implicit directory a directory. */
+    /** stat(): BA_EXISTS with BA_DIRECTORY or BA_REGULAR, the only two kinds the tree holds; 0 when absent. */
     private int getBooleanAttributes0(File f)
     {
-        String p = f.getPath();
-        if (jdk.internal.misc.MetalRamfs.find(p) != 0L)
+        long[] st = jdk.internal.misc.MetalRamfs.stat(abs(f.getPath()));
+        if (st == null)
         {
-            return BA_EXISTS | BA_REGULAR;
+            return 0;
         }
-        if (jdk.internal.misc.MetalRamfs.isDirectory(p))
-        {
-            return BA_EXISTS | BA_DIRECTORY;
-        }
-        return 0;
+        return BA_EXISTS | (st[jdk.internal.misc.MetalRamfs.ST_DIR] != 0L ? BA_DIRECTORY : BA_REGULAR);
     }
 
     @Override
@@ -233,35 +236,36 @@ final class UnixFileSystem extends FileSystem {
         return checkAccess0(getFileForSysCalls(f), access);
     }
     /**
-     * access(): READ whenever it exists; WRITE never (EROFS); EXECUTE -- search -- for a directory only: the
-     * table carries no modes, and a file in it is data, not a program.
+     * access() as root, the VM's one user: READ and WRITE whenever it exists; EXECUTE for a directory, or a file with
+     * an execute bit anywhere in its mode.
      */
     private boolean checkAccess0(File f, int access)
     {
-        int ba = getBooleanAttributes0(f);
-        if ((ba & BA_EXISTS) == 0)
+        long[] st = jdk.internal.misc.MetalRamfs.stat(abs(f.getPath()));
+        if (st == null)
         {
             return false;
         }
-        if (access == ACCESS_READ)
-        {
-            return true;
-        }
         if (access == ACCESS_EXECUTE)
         {
-            return (ba & BA_DIRECTORY) != 0;
+            return st[jdk.internal.misc.MetalRamfs.ST_DIR] != 0L || (st[jdk.internal.misc.MetalRamfs.ST_MODE] & 0111) != 0L;
         }
-        return false;
+        return true;                                   // the VM's one user is root: read and write are granted
     }
 
     @Override
     public long getLastModifiedTime(File f) {
         return getLastModifiedTime0(getFileForSysCalls(f));
     }
-    /** 0 -- the API's own "unknown": the image carries no timestamps, so there is no time to report. */
+    /** stat().st_mtime in milliseconds; 0 when absent, as in C. A file from the image carries time 0. */
     private long getLastModifiedTime0(File f)
     {
-        return 0L;
+        long[] st = jdk.internal.misc.MetalRamfs.stat(abs(f.getPath()));
+        if (st == null)
+        {
+            return 0L;
+        }
+        return Math.floorDiv(st[jdk.internal.misc.MetalRamfs.ST_MTIME], 1_000_000L);  // sec * 1000 + nsec / 10^6
     }
 
     @Override
@@ -271,18 +275,39 @@ final class UnixFileSystem extends FileSystem {
     /** stat().st_size of a file; 0 for a directory, which occupies nothing here; 0 when absent, as in C. */
     private long getLength0(File f)
     {
-        long e = jdk.internal.misc.MetalRamfs.find(f.getPath());
-        return e == 0L ? 0L : jdk.internal.misc.MetalRamfs.size(e);
+        long[] st = jdk.internal.misc.MetalRamfs.stat(abs(f.getPath()));
+        return st == null ? 0L : st[jdk.internal.misc.MetalRamfs.ST_SIZE];
     }
 
     @Override
     public boolean setPermission(File f, int access, boolean enable, boolean owneronly) {
         return setPermission0(getFileForSysCalls(f), access, enable, owneronly);
     }
-    /** chmod() fails with EROFS: false, as the C returns. */
+    /** The mode with the owner's (or everyone's) bit for {@code access} set or cleared, through chmod(). */
     private boolean setPermission0(File f, int access, boolean enable, boolean owneronly)
     {
-        return false;
+        int amode;
+        if (access == ACCESS_READ)
+        {
+            amode = owneronly ? 0400 : 0444;
+        }
+        else if (access == ACCESS_WRITE)
+        {
+            amode = owneronly ? 0200 : 0222;
+        }
+        else
+        {
+            amode = owneronly ? 0100 : 0111;
+        }
+        String p = abs(f.getPath());
+        long[] st = jdk.internal.misc.MetalRamfs.stat(p);
+        if (st == null)
+        {
+            return false;
+        }
+        int mode = (int) st[jdk.internal.misc.MetalRamfs.ST_MODE];
+        mode = enable ? (mode | amode) : (mode & ~amode);
+        return jdk.internal.misc.MetalRamfs.chmod(p, mode) == 0;
     }
 
     /* -- File operations -- */
@@ -292,27 +317,45 @@ final class UnixFileSystem extends FileSystem {
         return createFileExclusively0(path);
     }
     /**
-     * open(O_CREAT|O_EXCL): "/" always exists (false), an existing file is EEXIST (false), and any other path is
-     * EROFS, which the C turns into an IOException with the errno text.
+     * open(O_RDWR|O_CREAT|O_EXCL, 0666) and close: "/" always exists (false), an existing path is EEXIST (false), and
+     * any other failure is an IOException with the errno text, as the C throws.
      */
     private boolean createFileExclusively0(String path) throws IOException
     {
-        if (path.equals("/") || jdk.internal.misc.MetalRamfs.find(path) != 0L
-                || jdk.internal.misc.MetalRamfs.isDirectory(path))
-                {
+        String p = abs(path);
+        if (p.equals("/"))
+        {
+            return false;                              // the root directory always exists
+        }
+        int fd = jdk.internal.misc.MetalRamfs.open(p, jdk.internal.misc.MetalRamfs.O_READ
+                | jdk.internal.misc.MetalRamfs.O_WRITE | jdk.internal.misc.MetalRamfs.O_CREAT
+                | jdk.internal.misc.MetalRamfs.O_EXCL, 0666);
+        if (fd == -jdk.internal.misc.MetalRamfs.EXIST)
+        {
             return false;
         }
-        throw new IOException("Read-only file system");
+        if (fd < 0)
+        {
+            throw new IOException(fd == -jdk.internal.misc.MetalRamfs.NOTDIR ? "Not a directory"
+                    : "No such file or directory");
+        }
+        jdk.internal.misc.MetalRamfs.close(fd);
+        return true;
     }
 
     @Override
     public boolean delete(File f) {
         return delete0(getFileForSysCalls(f));
     }
-    /** remove() fails (EROFS, or ENOENT): false. */
+    /** remove(): rmdir for a directory, unlink otherwise; false when it fails. */
     private boolean delete0(File f)
     {
-        return false;
+        String p = abs(f.getPath());
+        if (jdk.internal.misc.MetalRamfs.isDirectory(p))
+        {
+            return jdk.internal.misc.MetalRamfs.rmdir(p) == 0;
+        }
+        return jdk.internal.misc.MetalRamfs.unlink(p) == 0;
     }
 
     @Override
@@ -322,47 +365,61 @@ final class UnixFileSystem extends FileSystem {
     /** opendir()/readdir() without "." and "..": the names in the directory, or null if it is not one. */
     private String[] list0(File f)
     {
-        return jdk.internal.misc.MetalRamfs.list(f.getPath());
+        return jdk.internal.misc.MetalRamfs.list(abs(f.getPath()));
     }
 
     @Override
     public boolean createDirectory(File f) {
         return createDirectory0(getFileForSysCalls(f));
     }
-    /** mkdir() fails (EROFS, or EEXIST): false. */
+    /** mkdir(path, 0777); false when it fails. */
     private boolean createDirectory0(File f)
     {
-        return false;
+        return jdk.internal.misc.MetalRamfs.mkdir(abs(f.getPath()), 0777) == 0;
     }
 
     @Override
     public boolean rename(File f1, File f2) {
         return rename0(getFileForSysCalls(f1), getFileForSysCalls(f2));
     }
-    /** rename() fails with EROFS: false. */
+    /** rename(); false when it fails. */
     private boolean rename0(File f1, File f2)
     {
-        return false;
+        return jdk.internal.misc.MetalRamfs.rename(abs(f1.getPath()), abs(f2.getPath())) == 0;
     }
 
     @Override
     public boolean setLastModifiedTime(File f, long time) {
         return setLastModifiedTime0(getFileForSysCalls(f), time);
     }
-    /** utimes() fails with EROFS: false. */
+    /** utimes(): the modification time from {@code time} (milliseconds), the access time as it was. */
     private boolean setLastModifiedTime0(File f, long time)
     {
-        return false;
+        String p = abs(f.getPath());
+        long[] st = jdk.internal.misc.MetalRamfs.stat(p);
+        if (st == null)
+        {
+            return false;
+        }
+        // utimes(): the access time kept to the microsecond, the modification time set from milliseconds
+        long atime = Math.floorDiv(st[jdk.internal.misc.MetalRamfs.ST_ATIME], 1000L) * 1000L;
+        return jdk.internal.misc.MetalRamfs.setTimes(p, atime, time * 1_000_000L) == 0;
     }
 
     @Override
     public boolean setReadOnly(File f) {
         return setReadOnly0(getFileForSysCalls(f));
     }
-    /** chmod() fails with EROFS: false, though the file is in fact read-only already. */
+    /** chmod() clearing every write bit. */
     private boolean setReadOnly0(File f)
     {
-        return false;
+        String p = abs(f.getPath());
+        long[] st = jdk.internal.misc.MetalRamfs.stat(p);
+        if (st == null)
+        {
+            return false;
+        }
+        return jdk.internal.misc.MetalRamfs.chmod(p, (int) st[jdk.internal.misc.MetalRamfs.ST_MODE] & ~0222) == 0;
     }
 
     /* -- Filesystem interface -- */
@@ -378,19 +435,22 @@ final class UnixFileSystem extends FileSystem {
     public long getSpace(File f, int t) {
         return getSpace0(getFileForSysCalls(f), t);
     }
-    /** statvfs(): TOTAL is the bytes the table holds; nothing is FREE or USABLE on a read-only filesystem. */
+    /** statvfs(): TOTAL is f_frsize * f_blocks, FREE and USABLE f_bfree and f_bavail -- see statvfs0's decisions. */
     private long getSpace0(File f, int t)
     {
-        if ((getBooleanAttributes0(f) & BA_EXISTS) == 0)
+        if (jdk.internal.misc.MetalRamfs.stat(abs(f.getPath())) == null)
         {
             return 0L;
         }
-        return t == SPACE_TOTAL ? jdk.internal.misc.MetalRamfs.totalBytes() : 0L;
+        // statvfs() as UnixNativeDispatcher.statvfs0 answers it: the bytes stored in 4 KiB blocks, none free
+        long frsize = 4096L;
+        long blocks = (jdk.internal.misc.MetalRamfs.usedBytes() + frsize - 1L) / frsize;
+        return t == SPACE_TOTAL ? frsize * blocks : 0L;
     }
 
     /* -- Basic infrastructure -- */
 
-    /** pathconf(_PC_NAME_MAX): the table sets no limit, so Linux's NAME_MAX -- the platform java.base here is. */
+    /** pathconf(_PC_NAME_MAX): the tree sets no limit, so Linux's NAME_MAX -- the platform java.base here is. */
     private long getNameMax0(String path)
     {
         return 255L;

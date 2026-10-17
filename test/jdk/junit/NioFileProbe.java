@@ -24,12 +24,12 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
- * {@code java.nio.file} over a read-only tree: Path operations, existence and kind, size, basic attributes,
- * directory listing and walking (sorted, so readdir order does not matter), real paths, and every mutating call
- * refused. READING a file's contents (through FileChannel) is NioReadProbe's. The argument is the tree's root: empty on the metal (the
- * baked RAMFS), and on a host a READ-ONLY mount of {@code ramfs/} (see FileProbe for the recipe), so the refusals
- * agree. Paths are printed relative to the root, exceptions by class only; of file contents only the first line of
- * /data/sample.txt is printed.
+ * {@code java.nio.file} over the VM's writable tree: Path operations, existence and kind, size, basic attributes,
+ * directory listing and walking (sorted, so readdir order does not matter), real paths, and a create/delete round
+ * trip on scratch paths. READING a file's contents (through FileChannel) is NioReadProbe's, the write path
+ * NioWriteProbe's. The argument is the tree's root: empty on the metal, and on a host a fresh writable copy of
+ * {@code ramfs/} (see FileProbe for the recipe). Paths are printed relative to the root, exceptions by class only;
+ * of file contents only the first line of /data/sample.txt is printed.
  */
 public class NioFileProbe
 {
@@ -135,11 +135,18 @@ public class NioFileProbe
         });
         arm("toRealPath", () -> rel(p("/data/../etc/motd").toRealPath()));
         arm("isSameFile", () -> Files.isSameFile(sample, p("/data/./sample.txt")));
-        arm("write", () -> Files.writeString(p("/data/new.txt"), "x"));
-        arm("createDirectory", () -> Files.createDirectory(p("/data/newdir")));
+        arm("write", () -> rel(Files.writeString(p("/data/new.txt"), "x")) + " size " + Files.size(p("/data/new.txt")));
+        arm("createDirectory", () -> rel(Files.createDirectory(p("/data/newdir"))));
+        arm("createDirectory again", () -> Files.createDirectory(p("/data/newdir")));
         arm("delete", () ->
         {
-            Files.delete(sample);
+            Files.delete(p("/data/new.txt"));
+            Files.delete(p("/data/newdir"));
+            return Files.exists(p("/data/new.txt")) + " " + Files.exists(p("/data/newdir"));
+        });
+        arm("delete again", () ->
+        {
+            Files.delete(p("/data/new.txt"));
             return "deleted";
         });
         arm("still there", () -> Files.exists(sample));

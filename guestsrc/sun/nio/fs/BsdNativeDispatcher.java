@@ -60,7 +60,7 @@ class BsdNativeDispatcher extends UnixNativeDispatcher {
         u.putReference(entry, u.objectFieldOffset(c, "name"), bytes("ramfs"));
         u.putReference(entry, u.objectFieldOffset(c, "dir"), bytes("/"));
         u.putReference(entry, u.objectFieldOffset(c, "fstype"), bytes("ramfs"));
-        u.putReference(entry, u.objectFieldOffset(c, "opts"), bytes("ro"));   // the C writes "ro" for ISREADONLY
+        u.putReference(entry, u.objectFieldOffset(c, "opts"), bytes(""));     // writable: the C writes "" (not ISREADONLY)
         u.putLong(entry, u.objectFieldOffset(c, "dev"), 1L);   // the st_dev stat0 reports
         return 0;
     }
@@ -84,9 +84,8 @@ class BsdNativeDispatcher extends UnixNativeDispatcher {
     }
     static byte[] getmntonname0(long pathAddress) throws UnixException
     {
-        String p = jdk.internal.misc.MetalRamfs.cstring(pathAddress);
-        String n = jdk.internal.misc.MetalRamfs.normalize(p.startsWith("/") ? p : "/" + p);
-        if (jdk.internal.misc.MetalRamfs.find(n) == 0L && !jdk.internal.misc.MetalRamfs.isDirectory(n))
+        String n = path(pathAddress);
+        if (!jdk.internal.misc.MetalRamfs.exists(n))
         {
             throw new UnixException(UnixConstants.ENOENT);
         }
@@ -106,9 +105,22 @@ class BsdNativeDispatcher extends UnixNativeDispatcher {
     }
     private static int clonefile0(long srcAddress, long dstAddress, int flags) throws UnixException
     {
-        String dst = jdk.internal.misc.MetalRamfs.normalize(jdk.internal.misc.MetalRamfs.cstring(dstAddress));
-        boolean exists = jdk.internal.misc.MetalRamfs.find(dst) != 0L || jdk.internal.misc.MetalRamfs.isDirectory(dst);
-        throw new UnixException(exists ? UnixConstants.EEXIST : UnixConstants.EROFS);
+        // clonefile(2): a copy of a file or a whole directory, sharing nothing afterwards; there are no links, so
+        // CLONE_NOFOLLOW changes nothing, and every file is owned 0/0, so CLONE_NOOWNERCOPY changes nothing either.
+        int r = jdk.internal.misc.MetalRamfs.clone(path(srcAddress), path(dstAddress));
+        if (r == -jdk.internal.misc.MetalRamfs.EXIST)
+        {
+            throw new UnixException(UnixConstants.EEXIST);
+        }
+        if (r == -jdk.internal.misc.MetalRamfs.NOTDIR)
+        {
+            throw new UnixException(UnixConstants.ENOTDIR);
+        }
+        if (r < 0)
+        {
+            throw new UnixException(UnixConstants.ENOENT);
+        }
+        return 0;
     }
 
     /**
@@ -126,7 +138,14 @@ class BsdNativeDispatcher extends UnixNativeDispatcher {
     }
     private static void setattrlist0(long pathAddress, int commonattr, long modTime, long accTime, long createTime, long options) throws UnixException
     {
-        throw new UnixException(UnixConstants.EROFS);
+        String p = path(pathAddress);
+        long[] st = jdk.internal.misc.MetalRamfs.stat(p);
+        if (st == null)
+        {
+            throw new UnixException(UnixConstants.ENOENT);
+        }
+        long[] t = times(commonattr, modTime, accTime, st);
+        jdk.internal.misc.MetalRamfs.setTimes(p, t[0], t[1]);
     }
 
     /**
@@ -141,7 +160,13 @@ class BsdNativeDispatcher extends UnixNativeDispatcher {
     }
     private static void fsetattrlist0(int fd, int commonattr, long modTime, long accTime, long createTime, long options) throws UnixException
     {
-        throw new UnixException(UnixConstants.EROFS);
+        long[] st = jdk.internal.misc.MetalRamfs.fstat(fd);
+        if (st == null)
+        {
+            throw new UnixException(EBADF);
+        }
+        long[] t = times(commonattr, modTime, accTime, st);
+        jdk.internal.misc.MetalRamfs.fsetTimes(fd, t[0], t[1]);
     }
 
     // initialize field IDs
@@ -151,11 +176,42 @@ class BsdNativeDispatcher extends UnixNativeDispatcher {
                                                        //   (BsdNativeDispatcher.c): empty is exactly right
     }
 
-    // ---- joe-ng: the natives above are Java over the read-only RAMFS, semantics from
-    // macosx/native/libnio/fs/BsdNativeDispatcher.c. There is ONE mount -- "ramfs" on "/", type ramfs, read-only,
+    // ---- joe-ng: the natives above are Java over the VM's in-memory tree (jdk.internal.misc.MetalRamfs), semantics
+    // from macosx/native/libnio/fs/BsdNativeDispatcher.c. There is ONE mount -- "ramfs" on "/", type ramfs, writable,
     // device 1 (the st_dev stat0 reports) -- and UnixMountEntry's private fields are set by offset, as the C's
     // SetObjectField does. The per-thread position makes the getfsstat/fsstatEntry/endfsstat loop restartable.
     private static final ThreadLocal<int[]> FSSTAT_POS = ThreadLocal.withInitial(() -> new int[1]);
+    private static final int EBADF = 9;
+
+    /** The NUL-terminated path at {@code addr}, absolute against the working directory and normalized. */
+    private static String path(long addr)
+    {
+        String p = jdk.internal.misc.MetalRamfs.cstring(addr);
+        if (!p.startsWith("/"))
+        {
+            String d = System.getProperty("user.dir");
+            p = (d == null || d.isEmpty() ? "/" : d) + "/" + p;
+        }
+        return jdk.internal.misc.MetalRamfs.normalize(p);
+    }
+
+    /**
+     * The {access, modification} times setattrlist leaves: each ATTR_CMN_ bit replaces its time (nanoseconds, as
+     * initattrlist divides them). ATTR_CMN_CRTIME -- the only reason stock calls setattrlist -- THROWS: the tree
+     * keeps no creation time (init() reports no birthtime), and dropping the request silently would be a wrong
+     * answer.
+     */
+    private static long[] times(int commonattr, long modTime, long accTime, long[] st)
+    {
+        if ((commonattr & UnixConstants.ATTR_CMN_CRTIME) != 0)
+        {
+            throw new UnsupportedOperationException("joe-ng: BsdNativeDispatcher.setattrlist0 ATTR_CMN_CRTIME is not "
+                    + "implemented (the tree keeps no creation time)");
+        }
+        long a = (commonattr & UnixConstants.ATTR_CMN_ACCTIME) != 0 ? accTime : st[jdk.internal.misc.MetalRamfs.ST_ATIME];
+        long m = (commonattr & UnixConstants.ATTR_CMN_MODTIME) != 0 ? modTime : st[jdk.internal.misc.MetalRamfs.ST_MTIME];
+        return new long[] { a, m };
+    }
 
     private static byte[] bytes(String s)
     {

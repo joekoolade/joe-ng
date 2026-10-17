@@ -15,22 +15,21 @@ import java.io.IOException;
 import java.util.Arrays;
 
 /**
- * {@code java.io.File} over a read-only tree: existence, file versus directory, length, listing (sorted, so a
- * filesystem's readdir order does not matter), canonical paths through "." and "..", access checks, and every
- * mutating call refused. The argument is the tree's root: empty on the metal (the baked RAMFS), and on a host a
- * READ-ONLY copy of {@code ramfs/} so the refusals agree. Paths are printed relative to the root; no file's
- * contents are printed except the first line of /data/sample.txt.
+ * {@code java.io.File} over the VM's writable tree: existence, file versus directory, length, listing (sorted, so
+ * a filesystem's readdir order does not matter), canonical paths through "." and "..", access checks, and the
+ * mutators -- mkdir/mkdirs, createNewFile, renameTo, setLastModified, setExecutable, setReadOnly, delete -- on
+ * scratch paths, so the baked files are left as they were. The argument is the tree's root: empty on the metal
+ * (the image's tree), and on a host a FRESH WRITABLE copy of {@code ramfs/} with an empty {@code tmp/}, as the VM
+ * has. Paths are printed relative to the root; no file's contents are printed except the first line of
+ * /data/sample.txt. Nothing prints a write-permission answer after a chmod: the VM's user is root, a host's is not.
  *
- * <p>The host control needs a filesystem that is really read-only (EROFS): with files that are merely
- * {@code chmod a-w}, the owner can still chmod and utime them, so {@code setWritable}/{@code setLastModified}
- * answer true. On macOS:
+ * <p>The host control, on macOS:
  * <pre>
- *   mkdir -p T/tree &amp;&amp; cp -R ramfs/etc ramfs/data ramfs/lib ramfs/conf ramfs/plugins T/tree/
- *   hdiutil create -srcfolder T/tree -format UDRO -ov T/fp.dmg
- *   hdiutil attach -readonly -mountpoint /private/tmp/fpmnt T/fp.dmg
- *   java -cp out FileProbe /private/tmp/fpmnt; hdiutil detach /private/tmp/fpmnt
+ *   rm -rf /private/tmp/fpw &amp;&amp; mkdir -p /private/tmp/fpw/tmp
+ *   cp -R ramfs/etc ramfs/data ramfs/lib ramfs/conf ramfs/plugins /private/tmp/fpw/
+ *   java -cp out FileProbe /private/tmp/fpw
  * </pre>
- * (the mount point must not pass through a symlink such as {@code /tmp}, or the canonical paths differ).
+ * (the root must not pass through a symlink such as {@code /tmp}, or the canonical paths differ).
  */
 public class FileProbe
 {
@@ -92,21 +91,33 @@ public class FileProbe
         System.out.println("absolute " + rel(f("/data/sample.txt").getAbsolutePath()));
         System.out.println("parent " + rel(f("/data/sample.txt").getParent()) + " name " + f("/data/sample.txt").getName());
 
-        System.out.println("mkdir " + f("/data/newdir").mkdir());
-        System.out.println("delete " + f("/data/sample.txt").delete());
-        System.out.println("renameTo " + f("/data/sample.txt").renameTo(f("/data/renamed.txt")));
-        System.out.println("setLastModified " + f("/data/sample.txt").setLastModified(1000L));
-        System.out.println("setWritable " + f("/data/sample.txt").setWritable(true));
+        File dir = f("/data/newdir");
+        System.out.println("mkdir " + dir.mkdir() + " again " + dir.mkdir() + " isDirectory " + dir.isDirectory());
+        File a = f("/data/newdir/a.txt");
+        System.out.println("createNewFile " + a.createNewFile() + " again " + a.createNewFile() + " length "
+                + a.length() + " isFile " + a.isFile());
         try
         {
-            System.out.println("createNewFile " + f("/data/new.txt").createNewFile());
+            System.out.println("createNewFile in a missing directory " + f("/nodir/x.txt").createNewFile());
         }
         catch (IOException e)
         {
-            System.out.println("createNewFile -> IOException");
+            System.out.println("createNewFile in a missing directory -> IOException");
         }
+        File b = f("/data/newdir/b.txt");
+        System.out.println("renameTo " + a.renameTo(b) + " old " + a.exists() + " new " + b.exists());
+        System.out.println("setLastModified " + b.setLastModified(1000L) + " lastModified " + b.lastModified());
+        System.out.println("setExecutable " + b.setExecutable(true) + " canExecute " + b.canExecute());
+        System.out.println("setReadOnly " + b.setReadOnly());
+        String[] inDir = dir.list();
+        System.out.println("list newdir " + Arrays.toString(inDir));
+        System.out.println("delete non-empty dir " + dir.delete());
+        System.out.println("delete file " + b.delete() + " delete dir " + dir.delete() + " gone " + !dir.exists());
+        System.out.println("delete missing " + f("/data/missing.txt").delete());
+        System.out.println("setLastModified missing " + f("/data/missing.txt").setLastModified(1000L));
+        System.out.println("mkdirs " + f("/data/x/y/z").mkdirs() + " " + f("/data/x/y").isDirectory());
         System.out.println("createNewFile existing " + f("/data/sample.txt").createNewFile());
-        System.out.println("still there " + f("/data/sample.txt").exists() + " absent " + !f("/data/new.txt").exists());
+        System.out.println("still there " + f("/data/sample.txt").exists());
 
         long len = f("/data/sample.txt").length();
         try (FileInputStream in = new FileInputStream(f("/data/sample.txt")))
