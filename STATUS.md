@@ -4,6 +4,46 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **`java.nio.file` READS THE RAMFS -- FileChannel's natives, `FileDescriptor.close`, and Thread's missing
+  `nioBlocker` (2026-10-17).** Third step of the file arc.
+  - **Every layer of the read path had an unwired native**, met in order by `NioReadProbe` on the metal:
+    `UnixNativeDispatcher.open0` (reading threw), then `sun/nio/ch/UnixFileDispatcherImpl.size0`, then
+    `java/io/FileDescriptor.close0` (never needed before: sockets close through their own dispatcher), then
+    `MetalJavaLangAccess.blockedOn`.
+  - **`MetalRamfs` gains a descriptor table** (fds from 100, clear of 0/1/2: entry, position, path) -- open, read,
+    pread, seek, size, close. `UnixNativeDispatcher`'s `open0` (O_RDONLY), `close0`, `fstat0`, `read0` use it;
+    `write0` is EBADF, every fd being read-only.
+  - **`sun.nio.ch.UnixFileDispatcherImpl` is overlaid from the JDK 26 `unix/` source**, semantics from
+    `UnixFileDispatcherImpl.c`: `read0`/`pread0`/`readv0` (IOStatus.EOF at the end), `seek0` (a negative offset
+    reports the position), `size0`, `available0`, `isOther0` false, `force0` succeeds; writes are "Bad file
+    descriptor", `truncate0` "Invalid argument"; locking, mapping and O_DIRECT THROW naming themselves.
+  - **`java.io.FileDescriptor` is overlaid from the JDK 26 source** for `close0` -- `io_util_md.c`'s
+    `fileDescriptorClose`: fd set to -1 FIRST; 0/1/2 (the UART console) are left as they are where the C points them
+    at /dev/null, since nothing here can reuse their numbers -- and `sync0` (nothing to flush). Its three wired
+    natives stay native.
+  - **A SILENT WRONG ANSWER the channel path exposed:** this VM's hand-written `Thread` overlay had no `nioBlocker`,
+    so an interrupt NEVER reached a thread blocked in an interruptible channel. Stock's protocol now works:
+    `blockedOn` sets the current thread's blocker; `interrupt()` of another thread calls the blocker's
+    `interrupt` then `postInterrupt`, as stock does. The lock is STATIC because the VM allocates the boot task's
+    Thread without running a constructor. `blockedOn` is public only because `MetalJavaLangAccess` lives outside
+    java.lang. **Measured only on the deterministic half:** a read by an already-interrupted thread closes the
+    channel with `ClosedByInterruptException` (`open=false`); the cross-thread interrupt of a BLOCKED reader cannot
+    be timed here, since RAMFS reads never block, so that branch is written to stock and unprobed.
+  - **Probe:** `NioReadProbe` (14 lines: readAllBytes/readString/readAllLines/lines/newInputStream/
+    newBufferedReader, a missing file, a SeekableByteChannel's position/size/positional read, a FileChannel into a
+    direct buffer to EOF and a positional read past the end, a write channel refused, the interrupted read),
+    host-identical against the read-only disk-image control. **Negative control** on main (2910b5d): 10 of its reads
+    are `UnsupportedOperationException`.
+  - **Regression -- PARTIAL when this card was written, stated as such:** on 4bd12d7, 45 of 74 probes had finished,
+    43 host-identical and DigestProbe/MacProbe their designed divergences only; the other 29, the suite and JUnit
+    were still to run. **Pi:** PASS (2026-10-17, 4bd12d7) -- 4 of 4 cores, WiFi join, DHCP, NetDemo HTTP 200 from
+    example.com (bytes=890), `[main returned normally]`, `gc: collections=7`; batch 1 loads 1576 classes (unchanged)
+    and per-batch `clinits=` are 434/434/435/436, one above the previous boot's 433/433/434/435 (observed, not
+    attributed).
+  - **#381's record, completed:** its remaining probes, the suite and JUnit finished after its merge -- 71 of 73 probes
+    host-identical, DigestProbe/MacProbe designed divergences only; suite markers all zero, `gc: collections=51`,
+    clinits 350 (349 before, observed); `ran 44, failures 0`.
+
 - **`java.nio.file` RUNS STOCK OVER THE RAMFS -- paths, attributes, listing, real paths, refusals; READING is next
   (2026-10-17).** Second step of the file arc; the user chose stock-provider-plus-natives over a hand-written provider.
   - **`java/nio/file/` and `sun/nio/fs/` leave the denylist** (Loader + ReachScan), so `Path`/`Files` run STOCK
