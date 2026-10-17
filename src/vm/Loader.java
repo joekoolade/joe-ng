@@ -12538,6 +12538,10 @@ public final class Loader
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("initNative")))        { return VM.noopNativeAddr; }  // ()V
         }
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalRamfs")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("table0")))            { return VM.ramfsTableAddr; } // (J)J
+        }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/io/FileInputStream")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("open0")))             { return VM.fileOpenAddr; }   // (String)J -> RAMFS entry
