@@ -1719,13 +1719,28 @@ public final class Loader
         //
         // Guarded by its own flag rather than by `state`, and done ONCE: the walk must run even for a class
         // the loader considers initialized, but re-walking on every call would cost O(depth) per dispatch.
+        //
+        // THE FLAG IS SET WHEN THE SUPERCLASS IS DONE, NOT WHEN THE WALK STARTS. It used to be set before the
+        // recursion, as a cycle guard -- and then a SECOND task arriving while the first was still inside the
+        // superclass's initializer read `superInited` as true, skipped the superclass, and ran this class's
+        // initializer against the superclass's unset statics. MEASURED: ChmRaceProbe, once in five, three
+        // threads NPE'd in ThreadLocalRandom.<clinit> -> new ThreadLocalRandom -> Random.<init> ->
+        // Random.seedUniquifier (Random's static, null) and then in ThreadLocalRandom.getProbe; reduced to
+        // ClinitRaceProbe's Base/Derived shape it is deterministic, `0 of 3` against the host's `3 of 3`.
+        // ensureClinit(sup) is what makes the second task WAIT (JVMS 5.5 step 2) or, for the task already
+        // initializing it, return (step 3); a superclass chain is acyclic, so the re-entry this allows is
+        // bounded by its depth. The flag is set once the superclass is initialized, or has no initializer in
+        // flight at all (a class this barrier never runs) -- never while one is mid-run.
         if (!clTab[reg].superInited)
         {
-            clTab[reg].superInited = true;              // set BEFORE recursing: a cycle must not re-enter
             int sup = superRegOf(reg);
             if (sup >= 0 && sup != reg)
             {
                 ensureClinit(sup);
+            }
+            if (sup < 0 || sup == reg || clTab[sup].state >= RVMClass.ST_INITIALIZED || !initInFlight(sup))
+            {
+                clTab[reg].superInited = true;
             }
         }
         if (clTab[reg].state >= RVMClass.ST_INITIALIZED)
@@ -1763,6 +1778,21 @@ public final class Loader
             return;                                     // another task ran it to completion while we waited
         }
         runPendingClinit(reg);
+    }
+
+    /** True if {@code reg}'s initializer is claimed -- by any task, this one included -- and has not finished. */
+    private static boolean initInFlight(int reg)
+    {
+        int i = 0;
+        while (i < clinitN)
+        {
+            if (clinitBase[i] == clTab[reg].base && clinitBusy[i] != 0 && clinitDone[i] == 0)
+            {
+                return true;
+            }
+            i += 1;
+        }
+        return false;
     }
 
     /** True if {@code reg}'s initializer is claimed by ANOTHER task and has not finished (see drainPendingInit). */
