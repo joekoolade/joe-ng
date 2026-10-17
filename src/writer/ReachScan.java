@@ -40,7 +40,8 @@ public final class ReachScan
      *  the loader's denylist (Loader.isDenylisted). */
     static final String[] DENY = {
         "java/lang/invoke/", "java/lang/foreign/", "jdk/internal/foreign/",
-        "sun/nio/fs/", "java/nio/file/", "jdk/internal/loader/",
+        // sun/nio/fs/ and java/nio/file/ run stock over the RAMFS (see Loader.isDenylisted).
+        "jdk/internal/loader/",
         "java/security/", "java/util/ServiceLoader", "java/util/spi/", "sun/util/",
         // java/net is loadable (M3 sockets). SocksSocketImpl IS on the taken path (Socket.createImpl always
         // wraps the platform impl in it) -- overlaid as a pure delegator, so NOT denied. The HTTP-CONNECT

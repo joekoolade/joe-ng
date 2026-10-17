@@ -128,6 +128,118 @@ public final class MetalRamfs
         return sum;
     }
 
+    // ---- the unix-dispatcher view (sun.nio.fs.UnixNativeDispatcher) ------------------------------------------
+
+    /** The NUL-terminated UTF-8 string at native address {@code addr} (a NativeBuffer the dispatcher filled). */
+    public static String cstring(long addr)
+    {
+        Unsafe u = Unsafe.getUnsafe();
+        int n = 0;
+        while (u.getByte(addr + n) != 0)
+        {
+            n += 1;
+        }
+        byte[] b = new byte[n];
+        for (int k = 0; k < n; k++)
+        {
+            b[k] = u.getByte(addr + k);
+        }
+        return new String(b, StandardCharsets.UTF_8);
+    }
+
+    /** "." and ".." resolved lexically, duplicate and trailing slashes dropped; the table has no links. */
+    public static String normalize(String path)
+    {
+        List<String> out = new ArrayList<>();
+        for (String c : path.split("/"))
+        {
+            if (c.isEmpty() || c.equals("."))
+            {
+                continue;
+            }
+            if (c.equals(".."))
+            {
+                if (!out.isEmpty())
+                {
+                    out.remove(out.size() - 1);
+                }
+                continue;
+            }
+            out.add(c);
+        }
+        return "/" + String.join("/", out);
+    }
+
+    /**
+     * A stable inode number, unique per entry, as isSameFile's file key needs: a file is its table index + 1; a
+     * directory is the index of the first file beneath it, scaled, plus its depth -- distinct because two
+     * directories over the same first file are different prefixes of it, so differ in depth. 0 if absent.
+     */
+    public static long inode(String path)
+    {
+        long dir = table0(0L);
+        int n = (int) table0(1L);
+        long e = find(path);
+        if (e != 0L)
+        {
+            return (e - dir) / ENTRY + 1L;
+        }
+        if (!isDirectory(path))
+        {
+            return 0L;
+        }
+        byte[] prefix = (path.equals("/") ? "/" : path + "/").getBytes(StandardCharsets.UTF_8);
+        int depth = path.equals("/") ? 0 : path.split("/").length - 1;
+        for (int i = 0; i < n; i++)
+        {
+            long f = dir + (long) i * ENTRY;
+            if (Magic.load64(f + 8L) > prefix.length && bytesAt(Magic.load64(f), prefix, prefix.length))
+            {
+                return 1_000_000_000L + (long) i * 256L + depth;
+            }
+        }
+        return 0L;
+    }
+
+    private static final java.util.Map<Long, String[]> DIRS = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.Map<Long, int[]> DIR_POS = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.concurrent.atomic.AtomicLong NEXT_DIR = new java.util.concurrent.atomic.AtomicLong(1);
+
+    /** opendir: a handle over the directory's names, or 0 if it is not one. */
+    public static long opendir(String path)
+    {
+        String[] names = list(path);
+        if (names == null)
+        {
+            return 0L;
+        }
+        long h = NEXT_DIR.getAndIncrement();
+        DIRS.put(h, names);
+        DIR_POS.put(h, new int[1]);
+        return h;
+    }
+
+    /** readdir: the next name as bytes, or null at the end (the C returns NULL then). */
+    public static byte[] readdir(long h)
+    {
+        String[] names = DIRS.get(h);
+        int[] pos = DIR_POS.get(h);
+        if (names == null || pos[0] >= names.length)
+        {
+            return null;
+        }
+        String name = names[pos[0]];
+        pos[0] += 1;
+        return name.getBytes(StandardCharsets.UTF_8);
+    }
+
+    /** closedir: false if {@code h} is not open. */
+    public static boolean closedir(long h)
+    {
+        DIR_POS.remove(h);
+        return DIRS.remove(h) != null;
+    }
+
     private static boolean bytesAt(long addr, byte[] b, int n)
     {
         for (int k = 0; k < n; k++)
