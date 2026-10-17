@@ -1,0 +1,152 @@
+/*
+ * Copyright (c) 2026 Joseph Kulig.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0/
+ *
+ * SPDX-License-Identifier: EPL-2.0
+ *
+ * Created: 2026-10-16
+ */
+package jdk.internal.misc;
+
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import magic.Magic;
+
+/**
+ * The filesystem this VM has: the read-only file table the image writer bakes from the repo's {@code ramfs/} tree
+ * ({@code BuildRuntimeImage.embedRamfs}). Each entry is a regular file keyed by its absolute path, sorted by path;
+ * there are no directory entries, so a DIRECTORY is implicit -- {@code /} and every proper prefix of a file's path
+ * that ends at a {@code /}. There are no links, modes or timestamps, and nothing can be written.
+ *
+ * <p>The questions a filesystem answers -- does it exist, is it a directory, how long, what is in it -- are
+ * answered here in Java over that table, so every file API (java.io's {@code UnixFileSystem}, later java.nio.file)
+ * asks the same place. Paths are compared as their UTF-8 bytes, which is how the writer stored them.
+ */
+public final class MetalRamfs
+{
+    private MetalRamfs()
+    {
+    }
+
+    /** VM native ({@code VMNatives.ramfsTable}): {@code k == 0} the table's address, {@code k == 1} its count. */
+    private static native long table0(long k);
+
+    private static final int ENTRY = 32;
+
+    /** The entry for regular file {@code path} (absolute, normalized), or 0. */
+    public static long find(String path)
+    {
+        byte[] p = path.getBytes(StandardCharsets.UTF_8);
+        long dir = table0(0L);
+        int n = (int) table0(1L);
+        for (int i = 0; i < n; i++)
+        {
+            long e = dir + (long) i * ENTRY;
+            if (Magic.load64(e + 8L) == p.length && bytesAt(Magic.load64(e), p, p.length))
+            {
+                return e;
+            }
+        }
+        return 0L;
+    }
+
+    /** True for {@code /} and for every directory a file's path passes through. */
+    public static boolean isDirectory(String path)
+    {
+        if (path.equals("/"))
+        {
+            return true;
+        }
+        byte[] prefix = (path + "/").getBytes(StandardCharsets.UTF_8);
+        long dir = table0(0L);
+        int n = (int) table0(1L);
+        for (int i = 0; i < n; i++)
+        {
+            long e = dir + (long) i * ENTRY;
+            if (Magic.load64(e + 8L) > prefix.length && bytesAt(Magic.load64(e), prefix, prefix.length))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The byte length of file entry {@code e}. */
+    public static long size(long e)
+    {
+        return Magic.load64(e + 24L);
+    }
+
+    /** The names directly inside directory {@code path}, in path order, each once; null if it is not one. */
+    public static String[] list(String path)
+    {
+        if (!isDirectory(path))
+        {
+            return null;
+        }
+        String prefix = path.equals("/") ? "/" : path + "/";
+        byte[] pb = prefix.getBytes(StandardCharsets.UTF_8);
+        List<String> out = new ArrayList<>();
+        long dir = table0(0L);
+        int n = (int) table0(1L);
+        for (int i = 0; i < n; i++)
+        {
+            long e = dir + (long) i * ENTRY;
+            int len = (int) Magic.load64(e + 8L);
+            long name = Magic.load64(e);
+            if (len > pb.length && bytesAt(name, pb, pb.length))
+            {
+                int end = pb.length;
+                while (end < len && (Magic.load8(name + end) & 0xFF) != '/')
+                {
+                    end += 1;
+                }
+                String child = utf8(name + pb.length, end - pb.length);
+                if (out.isEmpty() || !out.get(out.size() - 1).equals(child))
+                {
+                    out.add(child);                      // sorted table: a directory's files are adjacent
+                }
+            }
+        }
+        return out.toArray(new String[0]);
+    }
+
+    /** Every byte the table stores. */
+    public static long totalBytes()
+    {
+        long dir = table0(0L);
+        int n = (int) table0(1L);
+        long sum = 0L;
+        for (int i = 0; i < n; i++)
+        {
+            sum += Magic.load64(dir + (long) i * ENTRY + 24L);
+        }
+        return sum;
+    }
+
+    private static boolean bytesAt(long addr, byte[] b, int n)
+    {
+        for (int k = 0; k < n; k++)
+        {
+            if ((Magic.load8(addr + k) & 0xFF) != (b[k] & 0xFF))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static String utf8(long addr, int n)
+    {
+        byte[] b = new byte[n];
+        for (int k = 0; k < n; k++)
+        {
+            b[k] = (byte) Magic.load8(addr + k);
+        }
+        return new String(b, StandardCharsets.UTF_8);
+    }
+}

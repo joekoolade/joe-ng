@@ -1276,6 +1276,16 @@ final class VMNatives
         return t;
     }
 
+    /**
+     * {@code MetalRamfs.table0(k)}: the read-only file table the writer baked -- {@code k == 0} its address
+     * ({@code fileDir}, 32-byte entries {nameAddr, nameLen, bytesAddr, bytesLen}, sorted by path), {@code k == 1}
+     * its entry count. The guest walks the table itself; this only says where it is.
+     */
+    static long ramfsTable(long k)
+    {
+        return k == 0L ? fileDir : fileCount;
+    }
+
     static long fileOpen(long nameRef)
     {
         if (nameRef <= 0x1000L || fileDir == 0L)
