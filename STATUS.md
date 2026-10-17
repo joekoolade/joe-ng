@@ -4,6 +4,42 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **`java.nio.file` RUNS STOCK OVER THE RAMFS -- paths, attributes, listing, real paths, refusals; READING is next
+  (2026-10-17).** Second step of the file arc; the user chose stock-provider-plus-natives over a hand-written provider.
+  - **`java/nio/file/` and `sun/nio/fs/` leave the denylist** (Loader + ReachScan), so `Path`/`Files` run STOCK
+    through `MacOSXFileSystemProvider` -- the variant the macOS seed (Homebrew OpenJDK 26.0.1) bakes, confirmed in its
+    `jimage`, not linux's.
+  - **`sun.nio.fs.UnixNativeDispatcher` is overlaid from the JDK 26 `unix/` source; all 49 natives are Java bodies**
+    over `jdk.internal.misc.MetalRamfs`, semantics from `unix/native/libnio/fs/UnixNativeDispatcher.c`: `init` 0 (no
+    openat/fstatat/fdopendir, xattrs, birthtime); `stat0`/`lstat0`/`fstatat0` give `S_IFREG|0444` + length or
+    `S_IFDIR|0555`, a stable per-entry inode (isSameFile's file key: a file's table index; a directory's first file's
+    index scaled plus its depth), owner 0/0 and every time 0; `access0`, `realpath0` (lexical; nothing is a link,
+    `readlink0` EINVAL), `opendir0`/`readdir0`/`closedir`, `getcwd` (user.dir), `strerror`. Every mutator fails as a
+    read-only filesystem does: ENOENT for an absent path, EEXIST for a create over an existing one, EROFS otherwise.
+    Natives not implemented THROW naming themselves; `open0` for READING throws for now.
+  - **Two corrections made while bringing it up:** stock JDK 26 calls `fstatat0(AT_FDCWD, ...)` UNCONDITIONALLY,
+    whatever `init` reports, so AT_FDCWD is implemented (a real directory fd still throws); and my first cut
+    normalized relative paths as if rooted at `/` -- every native now resolves against the working directory, as the
+    kernel does. Paths arrive as NUL-terminated native buffers; `UnixFileAttributes`' PRIVATE fields are set by
+    `Unsafe.objectFieldOffset` + `put*`, which is what the C's SetIntField does. Errno values are the baked
+    (macOS) `UnixConstants`; EBADF (9 everywhere) is not in it and is a named literal.
+  - **Probe:** `NioFileProbe` (29 lines: Path operations, exists/notExists/isDirectory/isRegularFile/isReadable/
+    isWritable/size, basic attributes, `list`/`newDirectoryStream`/`walk`, `toRealPath`, `isSameFile`, and
+    write/createDirectory/delete refused), host-identical against the read-only disk-image control `FileProbe`
+    introduced. **Negative control** on the previous tree: its first `Path.of` is `DENYLIST TRAP ... denied callee:
+    java/nio/file/Path.of`.
+  - **THE CLOSURE OF EVERY PROGRAM CHANGED, measured on the Pi's NetDemo:** sites that were trap-wired now load real
+    classes -- batch 1 loads **1576** classes (1473 before, +103), per-batch `clinits=` **433/433/434/435** (397/397/398/399),
+    `gc: collections=7` (6); the boot's `TRAP-WIRED ... java/nio/file/Path.of`, `Files.exists`, `isDirectory`,
+    `newInputStream`, `isRegularFile`, `isSameFile` and the `LinkOption`/`OpenOption` array-element lines are GONE
+    (only `PropertyExpander.expand` stays trap-wired). Observed, and the direction expected; not further attributed.
+  - **Regression -- PARTIAL when this card was written, stated as such:** on 2910b5d, 15 of 73 probes had finished, 14
+    host-identical and DigestProbe its designed divergence only; the other 58, the suite and JUnit were still to run.
+    **Pi:** PASS (2026-10-17, 2910b5d) -- 4 of 4 cores on the run queue, WiFi join, DHCP, NetDemo HTTP 200 from
+    example.com (bytes=891), `[main returned normally]`.
+  - **Next:** reading -- `open0` for O_RDONLY plus the `sun/nio/ch` FileDispatcher natives FileChannel reads through
+    (`NioReadProbe`: readAllBytes, readString, lines, newInputStream, newBufferedReader).
+
 - **SMP: TWO CORES COULD RUN ON ONE TASK'S STACK -- a task was claimable before the core leaving it was off its stack
   (2026-10-17).** The cause behind ChmRaceProbe's recorded wild branches.
   - **The bug, real on main:** `pickNext` set `coreTask[core]` to the next task and released `SCHED_LOCK` while
