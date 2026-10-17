@@ -4,6 +4,32 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **`InvocationHandler.invokeDefault` RUNS A PROXY'S DEFAULT METHOD (2026-10-16).** The previous card's one stated
+  proxy gap.
+  - **Stock goes through a method handle; the call it makes is an `invokespecial` of the default body**, which needs
+    none. `Proxy.invokeDefault` applies stock's checks in stock's order -- a proxy instance, a default method, the
+    caller's access (`Reflection.getCallerClass` is intrinsified, so stock `InvocationHandler.invokeDefault` hands
+    a real caller over; as in stock, `setAccessible` does not bypass it), and `findProxyInterfaceOrElseThrow`
+    ported verbatim (a default another proxy interface overrides, or one the proxy class does not inherit, is an
+    IAE) -- then calls `Method.invokeSpecial`.
+  - **`Method.invokeSpecial` is `Method.invoke`'s marshalling WITHOUT the virtual dispatch**: the declaring class's
+    own body, so the default runs instead of re-entering the proxy's handler (which would recurse), and what it
+    throws arrives unwrapped, as from stock's handle. `invoke0` and it now share one `call(recv, args, virtual)`.
+  - **A wrong-typed reference argument** is stock's `IllegalArgumentException("Cannot cast X to Y")` -- the
+    message of the `Class.cast` inside stock's `asType`, which `convertArg`'s own IAE did not match; the overlay
+    checks reference arguments first.
+  - **Probe:** `InvokeDefaultProbe` (15 lines: a default body calling back into the proxy, primitive arguments and
+    returns, a declared checked exception from the body, a default inherited from a superinterface, one overridden
+    by another interface, non-default / non-proxy / wrong-type refusals with stock's messages, a null args array),
+    host-identical. **Negative control on main 1c1d15a:** 14 of its 15 lines print
+    `UnsupportedOperationException: joe-ng: InvocationHandler.invokeDefault needs method handles`.
+  - **Regression -- PARTIAL when this card was written, stated as such:** on fcfe32b, 43 of 69 probes had finished,
+    41 host-identical and DigestProbe/MacProbe their designed divergences only (`failures=0 divergences-unmet=0`);
+    the remaining 26 probes, the demo suite and JUnit were still to run. **Pi:** PASS (2026-10-16, fcfe32b) --
+    WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=889), `[main returned normally]`, `gc:
+    collections=6`; per-batch `clinits=` 397/397/398/399 and batch 1's 1472 classes, both equal to the previous
+    boot's (NetDemo calls no default method through a proxy, so equal is the expected reading).
+
 - **DYNAMIC PROXIES (`java.lang.reflect.Proxy`), AND AN `invokeinterface` WITH NINE OR MORE ARGUMENTS LOST ITS 9TH (2026-10-16).**
   - **`Proxy` is overlaid; the proxy CLASS is synthesised by the VM, not generated.** Stock writes bytecode with
     `ProxyGenerator` (over `java.lang.classfile`) and defines it. Here `Loader.proxyType` builds the class the way

@@ -31,9 +31,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * a default method is routed to the handler like any other, and the instance is an instance of each interface
  * and of {@code Proxy}.
  *
- * <p>Differences, stated: the {@code loader} argument is not consulted -- this VM has one class namespace -- and
- * {@link InvocationHandler#invokeDefault} throws, because it is built on method handles. Proxy classes are cached
- * by their interface list, as stock caches them.
+ * <p>Difference, stated: the {@code loader} argument is not consulted -- this VM has one class namespace. Proxy
+ * classes are cached by their interface list, as stock caches them, and {@link InvocationHandler#invokeDefault}
+ * runs the default body directly where stock goes through a method handle.
  */
 public class Proxy implements java.io.Serializable
 {
@@ -105,12 +105,119 @@ public class Proxy implements java.io.Serializable
     }
 
     /**
-     * Stock's entry for {@link InvocationHandler#invokeDefault}. Stock invokes the default method through a method
-     * handle; this VM does not carry method handles, so a call names that gap rather than answering.
+     * Stock's entry for {@link InvocationHandler#invokeDefault}, with stock's checks: a proxy instance, a default
+     * method, the caller's access to it, and a method the proxy class really inherits from one of its proxy
+     * interfaces (not one another proxy interface overrides). Stock then calls the default body through a method
+     * handle; here {@link Method#invokeSpecial} calls it directly -- the same {@code invokespecial}, with the
+     * same unwrapped exception. An argument of the wrong type is an {@code IllegalArgumentException}, as stock's
+     * CCE/NPE from the handle's {@code asType} become one.
      */
     static Object invokeDefault(Object proxy, Method method, Object[] args, Class<?> caller) throws Throwable
     {
-        throw new UnsupportedOperationException("joe-ng: InvocationHandler.invokeDefault needs method handles");
+        if (!Proxy.isProxyClass(proxy.getClass()))
+        {
+            throw new IllegalArgumentException("'proxy' is not a proxy instance");
+        }
+        if (!method.isDefault())
+        {
+            throw new IllegalArgumentException("\"" + method + "\" is not a default method");
+        }
+        Class<?> proxyClass = proxy.getClass();
+        if (caller != null)
+        {
+            Class<?> intf = method.getDeclaringClass();
+            if (!AccessibleObject.verifyMemberAccess(caller, intf, proxyClass, method.getModifiers()))
+            {
+                throw new IllegalAccessException(caller.getName() + " cannot access a member of " + intf
+                        + " with modifiers \"" + Modifier.toString(method.getModifiers()) + "\"");
+            }
+        }
+        findProxyInterfaceOrElseThrow(proxyClass, method);
+        Object[] params = args != null ? args : new Object[0];
+        Class<?>[] pt = method.getParameterTypes();
+        int n = Math.min(pt.length, params.length);
+        for (int i = 0; i < n; i++)
+        {
+            Object a = params[i];
+            if (!pt[i].isPrimitive() && a != null && !pt[i].isInstance(a))
+            {
+                // stock's asType casts each reference argument (Class.cast), and its CCE becomes this IAE
+                throw new IllegalArgumentException("Cannot cast " + a.getClass().getName() + " to "
+                        + pt[i].getName());
+            }
+        }
+        try
+        {
+            return method.invokeSpecial(proxy, params);
+        }
+        catch (ClassCastException | NullPointerException e)
+        {
+            throw new IllegalArgumentException(e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Stock's: the first proxy interface that declares {@code method} directly or inherits it, breadth-first; an
+     * IllegalArgumentException when none does or when another interface overrides it.
+     */
+    private static Class<?> findProxyInterfaceOrElseThrow(Class<?> proxyClass, Method method)
+    {
+        Class<?> declaringClass = method.getDeclaringClass();
+        if (!declaringClass.isInterface())
+        {
+            throw new IllegalArgumentException("\"" + method + "\" is not a method declared in the proxy class");
+        }
+        List<Class<?>> proxyInterfaces = Arrays.asList(proxyClass.getInterfaces());
+        if (proxyInterfaces.contains(declaringClass))
+        {
+            return declaringClass;
+        }
+        java.util.Deque<Class<?>> deque = new java.util.ArrayDeque<>();
+        java.util.Set<Class<?>> visited = new java.util.HashSet<>();
+        boolean indirectMethodRef = false;
+        for (Class<?> proxyIntf : proxyInterfaces)
+        {
+            visited.add(proxyIntf);
+            deque.add(proxyIntf);
+            Class<?> c;
+            while ((c = deque.poll()) != null)
+            {
+                if (c == declaringClass)
+                {
+                    try
+                    {
+                        Method m = proxyIntf.getMethod(method.getName(), method.getParameterTypes());
+                        if (m.getDeclaringClass() == declaringClass)
+                        {
+                            return proxyIntf;
+                        }
+                        indirectMethodRef = true;
+                    }
+                    catch (NoSuchMethodException e)
+                    {
+                    }
+                    continue;
+                }
+                visited.add(c);
+                for (Class<?> superIntf : c.getInterfaces())
+                {
+                    if (!visited.contains(superIntf) && !deque.contains(superIntf))
+                    {
+                        if (superIntf == declaringClass)
+                        {
+                            deque.addFirst(superIntf);
+                        }
+                        else
+                        {
+                            deque.add(superIntf);
+                        }
+                    }
+                }
+            }
+        }
+        throw new IllegalArgumentException("\"" + method + (indirectMethodRef
+                ? "\" is overridden directly or indirectly by the proxy interfaces"
+                : "\" is not a method declared in the proxy class"));
     }
 
     /**

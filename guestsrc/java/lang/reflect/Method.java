@@ -323,6 +323,28 @@ public final class Method extends Executable
     /** {@link #invoke} after its access check: the receiver and argument checks, the dispatch and the call. */
     private Object invoke0(Object recv, Object[] args) throws InvocationTargetException
     {
+        return call(recv, args, true);
+    }
+
+    /**
+     * For {@code Proxy.invokeDefault}: run THIS method's own body on {@code recv} -- an {@code invokespecial},
+     * never dispatched, so a proxy's default method runs the interface's body rather than re-entering the
+     * proxy's handler. What the body throws arrives as itself, as stock's method handle delivers it.
+     */
+    Object invokeSpecial(Object recv, Object[] args) throws Throwable
+    {
+        try
+        {
+            return call(recv, args, false);
+        }
+        catch (InvocationTargetException e)
+        {
+            throw e.getCause();
+        }
+    }
+
+    private Object call(Object recv, Object[] args, boolean virtual) throws InvocationTargetException
+    {
         boolean isStatic = (access & 0x0008) != 0;
         long target = buf;
         if (!isStatic)
@@ -335,7 +357,7 @@ public final class Method extends Executable
             {
                 throw new IllegalArgumentException("object is not an instance of declaring class");
             }
-            if ((access & 0x0002) == 0)                     // a PRIVATE method is never overridden
+            if (virtual && (access & 0x0002) == 0)          // a PRIVATE method is never overridden
             {
                 target = dispatchTarget(recv);
             }
