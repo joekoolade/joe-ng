@@ -1966,7 +1966,6 @@ public final class VM
         if (stackTraceAddr == 0L) { long u = VMNatives.throwableTrace(0L); }          // Throwable.stackTrace0
         if (virtualResolveAddr == 0L) { long u = VMNatives.virtualResolve(0L, 0L); }  // late virtual dispatch
         if (printStackTraceAddr == 0L) { VMNatives.printStackTrace(0L); }       // Throwable.printStackTrace0() native
-        if (fileOpenAddr == 0L) { long u = VMNatives.fileOpen(0L); }            // FileInputStream.open0() native (M3 RAMFS)
         if (ramfsTableAddr == 0L) { long u = VMNatives.ramfsTable(0L); }        // MetalRamfs.table0
         if (dnsResolveAddr == 0L) { int u = VMNatives.dnsResolve(0L); }         // java.net.InetAddress.resolve0() native (M3)
         if (vhFieldOffsetAddr == 0L) { long u = VMNatives.vhFieldOffset(0L, 0L); }      // VarHandle.fieldOffset0 native (M3)
@@ -2090,12 +2089,6 @@ public final class VM
 
 
 
-    /**
-     * M3 RAMFS: resolve a guest {@code java/lang/String} path to its embedded file-table entry
-     * ({nameAddr, nameLen, bytesAddr, bytesLen}), or 0 if absent. The native behind the guest
-     * {@code java/io/FileInputStream.open0(String)} overlay (wired in {@code Loader.nativeBuf});
-     * the overlay then reads the content directly via {@code Magic.load8/load64} on the entry.
-     */
     /** Find a RAMFS file by a raw path {@code byte[]} (for VM/driver code with no guest String); returns the
      *  directory entry addr {nameAddr, nameLen@8, bytesAddr@16, bytesLen@24}, or 0. */
     public static long fileFind(byte[] path)
@@ -3501,7 +3494,6 @@ public final class VM
     static long newUnresolvedAddr;     // VM.newUnresolved(J)J — an executed `new` the loader resolves late
     static long ctorRefInit0;          // VM.ctorRefInit(J)V — a constructor reference initializes its target (JVMS 5.5)
     static long printStackTraceAddr;   // VM.printStackTrace(J)V — Throwable.printStackTrace0() native (self in x0)
-    static long fileOpenAddr;          // VM.fileOpen(J)J — FileInputStream.open0(String) native (M3 RAMFS)
     static long ramfsTableAddr;        // VMNatives.ramfsTable(J)J — MetalRamfs.table0(long)
     static long dnsResolveAddr;        // VM.dnsResolve(J)I — java.net.InetAddress.resolve0(byte[]) native (M3)
     static long vhFieldOffsetAddr;     // VM.vhFieldOffset(JJ)J — java.lang.invoke.VarHandle.fieldOffset0 (M3)
@@ -4483,8 +4475,8 @@ public final class VM
         Uart.write(Magic.bytes("String indexOf/substring (demand-loaded):\n"));
         Loader.launchMain(Magic.bytes("demo/StrOpsDemo"), Magic.bytes(""));
 
-        // M3: java.io -- the guest FileInputStream overlay reading the embedded read-only RAMFS.
-        Uart.write(Magic.bytes("java.io FileInputStream (embedded RAMFS):\n"));
+        // M3: java.io -- the stock FileInputStream, its natives Java over the VM's tree (MetalRamfs).
+        Uart.write(Magic.bytes("java.io FileInputStream (the VM's tree):\n"));
         Loader.launchMain(Magic.bytes("demo/FileDemo"), Magic.bytes(""));
 
         // M4: Thread identity (currentThread/getName) + Class reflection (getName/isInstance/...).

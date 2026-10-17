@@ -1,162 +1,622 @@
 /*
- * Copyright (c) 2026 Joseph Kulig.
+ * Copyright (c) 1994, 2025, Oracle and/or its affiliates. All rights reserved.
+ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License 2.0 which is available at
- * https://www.eclipse.org/legal/epl-2.0/
+ * This code is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 only, as
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
- * SPDX-License-Identifier: EPL-2.0
+ * This code is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+ * version 2 for more details (a copy is included in the LICENSE file that
+ * accompanied this code).
  *
- * Created: 2026-08-02
+ * You should have received a copy of the GNU General Public License version
+ * 2 along with this work; if not, write to the Free Software Foundation,
+ * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ *
+ * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
+ * or visit www.oracle.com if you need additional information or have any
+ * questions.
  */
+
 package java.io;
 
-import magic.Magic;
+import java.nio.channels.FileChannel;
+import java.util.Arrays;
+import jdk.internal.util.ArraysSupport;
+import jdk.internal.event.FileReadEvent;
+import jdk.internal.vm.annotation.Stable;
+import sun.nio.ch.FileChannelImpl;
 
 /**
- * A JDK-free {@code java/io/FileInputStream} overlay (wins by name) reading from the image's embedded
- * read-only RAMFS (M3). The stock class is a wall of natives — {@code open0}/{@code read0}/{@code readBytes}/
- * {@code length0}/{@code position0}/{@code skip0}/{@code available0}/{@code initIDs} — over an OS file
- * descriptor that doesn't exist on metal. Here a single native remains: {@code open0(String)} ->
- * {@code VM.fileOpen} (wired in {@code Loader.nativeBuf}) resolves the path against the writer-baked file
- * table and returns the directory entry address {nameAddr, nameLen, bytesAddr@+16, bytesLen@+24}; every
- * read then walks the content bytes directly via {@code Magic.load8/load64} — pure Java, no descriptor.
+ * A {@code FileInputStream} obtains input bytes
+ * from a file in a file system. What files
+ * are  available depends on the host environment.
  *
- * <p>Read-only and always "regular": no {@code write}, no {@code File}/{@code FileDescriptor} objects. It
- * DOES extend the stock {@code java.io.InputStream}, so it can be handed to anything that takes one — which
- * is what lets {@code new ZipInputStream(new FileInputStream("/lib/app.jar"))} work with the stock zip
- * classes. (The stock super is small and its unreached methods never compile, so the closure cost is nil.)
+ * <p>{@code FileInputStream} is meant for reading streams of raw bytes
+ * such as image data. For reading streams of characters, consider using
+ * {@code FileReader}.
+ *
+ * @apiNote
+ * The {@link #close} method should be called to release resources used by this
+ * stream, either directly, or with the {@code try}-with-resources statement.
+ *
+ * @implSpec
+ * Subclasses are responsible for the cleanup of resources acquired by the subclass.
+ * Subclasses requiring that resource cleanup take place after a stream becomes
+ * unreachable should use {@link java.lang.ref.Cleaner} or some other mechanism.
+ *
+ * @author  Arthur van Hoff
+ * @see     java.io.File
+ * @see     java.io.FileDescriptor
+ * @see     java.io.FileOutputStream
+ * @see     java.nio.file.Files#newInputStream
+ * @since   1.0
  */
 public class FileInputStream extends InputStream
 {
-    private long entry;                                  // RAMFS dir entry, 0 = closed/absent
-    private int pos;                                     // read cursor into the content bytes
+    private static final int DEFAULT_BUFFER_SIZE = 8192;
 
-    public FileInputStream(String name) throws FileNotFoundException
-    {
-        entry = open0(name);
-        if (entry == 0L)
-        {
-            throw new FileNotFoundException(name);
-        }
+    /**
+     * Flag set by jdk.internal.event.JFRTracing to indicate if
+     * file reads should be traced by JFR.
+     */
+    private static boolean jfrTracing;
+
+    /* File Descriptor - handle to the open file */
+    private final FileDescriptor fd;
+
+    /**
+     * The path of the referenced file
+     * (null if the stream is created with a file descriptor)
+     */
+    private final String path;
+
+    private volatile FileChannel channel;
+
+    private final Object closeLock = new Object();
+
+    private volatile boolean closed;
+
+    // This field indicates whether the file is a regular file as some
+    // operations need the current position which requires seeking
+    private @Stable Boolean isRegularFile;
+
+    /**
+     * Creates a {@code FileInputStream} to read from an existing file
+     * named by the path name {@code name}.
+     * {@linkplain java.nio.file##links Symbolic links}
+     * are automatically redirected to the <i>target</i> of the link.
+     * A new {@code FileDescriptor}
+     * object is created to represent this file
+     * connection.
+     * <p>
+     * If the named file does not exist, is a directory rather than a regular
+     * file, or for some other reason cannot be opened for reading then a
+     * {@code FileNotFoundException} is thrown.
+     *
+     * @param      name   the system-dependent file name.
+     * @throws     FileNotFoundException  if the file does not exist,
+     *             is a directory rather than a regular file,
+     *             or for some other reason cannot be opened for
+     *             reading.
+     */
+    public FileInputStream(String name) throws FileNotFoundException {
+        this(name != null ? new File(name) : null);
     }
 
     /**
-     * Stock's {@code File} constructor, with stock's argument checks: a null file is an NPE and an invalid path
-     * (one holding a NUL) is {@code FileNotFoundException("Invalid file path")}. The open is the RAMFS one.
-     * Reached by {@code sun.util.calendar.ZoneInfoFile}, which reads {@code /lib/tzdb.dat} this way.
+     * Creates a {@code FileInputStream} to read from an existing file
+     * represented by the {@code File} object {@code file}.
+     * {@linkplain java.nio.file##links Symbolic links}
+     * are automatically redirected to the <i>target</i> of the link.
+     * A new {@code FileDescriptor} object
+     * is created to represent this file connection.
+     * <p>
+     * If the named file does not exist, is a directory rather than a regular
+     * file, or for some other reason cannot be opened for reading then a
+     * {@code FileNotFoundException} is thrown.
+     *
+     * @param      file   the file to be opened for reading.
+     * @throws     FileNotFoundException  if the file does not exist,
+     *             is a directory rather than a regular file,
+     *             or for some other reason cannot be opened for
+     *             reading.
+     * @see        java.io.File#getPath()
      */
-    public FileInputStream(File file) throws FileNotFoundException
-    {
-        String name = (file != null ? file.getPath() : null);
-        if (name == null)
-        {
-            throw new NullPointerException();
-        }
-        if (file.isInvalid())
-        {
+    @SuppressWarnings("this-escape")
+    public FileInputStream(File file) throws FileNotFoundException {
+        if (file.isInvalid()) {
             throw new FileNotFoundException("Invalid file path");
         }
-        entry = open0(name);
-        if (entry == 0L)
-        {
-            throw new FileNotFoundException(name);
+        path = file.getPath();
+        fd = new FileDescriptor();
+        fd.attach(this);
+        open(path);
+        FileCleanable.register(fd);       // open set the fd, register the cleanup
+    }
+
+    /**
+     * Creates a {@code FileInputStream} by using the file descriptor
+     * {@code fdObj}, which represents an existing connection to an
+     * actual file in the file system.
+     * <p>
+     * If {@code fdObj} is null then a {@code NullPointerException}
+     * is thrown.
+     * <p>
+     * This constructor does not throw an exception if {@code fdObj}
+     * is {@link java.io.FileDescriptor#valid() invalid}.
+     * However, if the methods are invoked on the resulting stream to attempt
+     * I/O on the stream, an {@code IOException} is thrown.
+     *
+     * @param      fdObj   the file descriptor to be opened for reading.
+     */
+    @SuppressWarnings("this-escape")
+    public FileInputStream(FileDescriptor fdObj) {
+        if (fdObj == null) {
+            throw new NullPointerException();
+        }
+        fd = fdObj;
+        path = null;
+
+        /*
+         * FileDescriptor is being shared by streams.
+         * Register this stream with FileDescriptor tracker.
+         */
+        fd.attach(this);
+    }
+
+    /**
+     * Opens the specified file for reading.
+     * @param name the name of the file
+     */
+    private void open0(String name) throws FileNotFoundException
+    {
+        MetalFileIo.open(fd, name, jdk.internal.misc.MetalRamfs.O_READ);   // fileOpen(env, this, path, fis_fd, O_RDONLY)
+    }
+
+    // wrap native call to allow instrumentation
+    /**
+     * Opens the specified file for reading.
+     * @param name the name of the file
+     */
+    private void open(String name) throws FileNotFoundException {
+        open0(name);
+    }
+
+    /**
+     * Reads a byte of data from this input stream. This method blocks
+     * if no input is yet available.
+     *
+     * @return     the next byte of data, or {@code -1} if the end of the
+     *             file is reached.
+     * @throws     IOException {@inheritDoc}
+     */
+    @Override
+    public int read() throws IOException {
+        if (jfrTracing && FileReadEvent.enabled()) {
+            return traceRead0();
+        }
+        return read0();
+    }
+
+    private int read0() throws IOException
+    {
+        return MetalFileIo.readSingle(fd);
+    }
+
+    private int traceRead0() throws IOException {
+        int result = 0;
+        long bytesRead = 0;
+        long start = FileReadEvent.timestamp();
+        try {
+            result = read0();
+            if (result < 0) {
+                bytesRead = -1;
+            } else {
+                bytesRead = 1;
+            }
+        } finally {
+            FileReadEvent.offer(start, path, bytesRead);
+        }
+        return result;
+    }
+
+    /**
+     * Reads a subarray as a sequence of bytes.
+     * @param     b the data to be written
+     * @param     off the start offset in the data
+     * @param     len the number of bytes that are written
+     * @throws    IOException If an I/O error has occurred.
+     */
+    private int readBytes(byte[] b, int off, int len) throws IOException
+    {
+        return MetalFileIo.readBytes(fd, b, off, len);
+    }
+
+    private int traceReadBytes(byte b[], int off, int len) throws IOException {
+        int bytesRead = 0;
+        long start = FileReadEvent.timestamp();
+        try {
+            bytesRead = readBytes(b, off, len);
+        } finally {
+            FileReadEvent.offer(start, path, bytesRead);
+        }
+        return bytesRead;
+    }
+
+    /**
+     * Reads up to {@code b.length} bytes of data from this input
+     * stream into an array of bytes. This method blocks until some input
+     * is available.
+     *
+     * @param      b   {@inheritDoc}
+     * @return     the total number of bytes read into the buffer, or
+     *             {@code -1} if there is no more data because the end of
+     *             the file has been reached.
+     * @throws     IOException  if an I/O error occurs.
+     */
+    @Override
+    public int read(byte[] b) throws IOException {
+        if (jfrTracing && FileReadEvent.enabled()) {
+            return traceReadBytes(b, 0, b.length);
+        }
+        return readBytes(b, 0, b.length);
+    }
+
+    /**
+     * Reads up to {@code len} bytes of data from this input stream
+     * into an array of bytes. If {@code len} is not zero, the method
+     * blocks until some input is available; otherwise, no
+     * bytes are read and {@code 0} is returned.
+     *
+     * @param      b     {@inheritDoc}
+     * @param      off   {@inheritDoc}
+     * @param      len   {@inheritDoc}
+     * @return     {@inheritDoc}
+     * @throws     NullPointerException {@inheritDoc}
+     * @throws     IndexOutOfBoundsException {@inheritDoc}
+     * @throws     IOException  if an I/O error occurs.
+     */
+    @Override
+    public int read(byte[] b, int off, int len) throws IOException {
+        if (jfrTracing && FileReadEvent.enabled()) {
+            return traceReadBytes(b, off, len);
+        }
+        return readBytes(b, off, len);
+    }
+
+    @Override
+    public byte[] readAllBytes() throws IOException {
+        if (!isRegularFile())
+            return super.readAllBytes();
+
+        long length = length();
+        long position = position();
+        long size = length - position;
+
+        if (length <= 0 || size <= 0)
+            return super.readAllBytes();
+
+        if (size > (long) Integer.MAX_VALUE) {
+            String msg =
+                String.format("Required array size too large for %s: %d = %d - %d",
+                    path, size, length, position);
+            throw new OutOfMemoryError(msg);
+        }
+
+        int capacity = (int)size;
+        byte[] buf = new byte[capacity];
+
+        int nread = 0;
+        int n;
+        for (;;) {
+            // read to EOF which may read more or less than initial size, e.g.,
+            // file is truncated while we are reading
+            while ((n = read(buf, nread, capacity - nread)) > 0)
+                nread += n;
+
+            // if last call to read() returned -1, we are done; otherwise,
+            // try to read one more byte and if that fails we're done too
+            if (n < 0 || (n = read()) < 0)
+                break;
+
+            // one more byte was read; need to allocate a larger buffer
+            capacity = Math.max(ArraysSupport.newLength(capacity,
+                                                        1,         // min growth
+                                                        capacity), // pref growth
+                                DEFAULT_BUFFER_SIZE);
+            buf = Arrays.copyOf(buf, capacity);
+            buf[nread++] = (byte)n;
+        }
+        return (capacity == nread) ? buf : Arrays.copyOf(buf, nread);
+    }
+
+    /**
+     * @since 11
+     */
+    @Override
+    public byte[] readNBytes(int len) throws IOException {
+        if (len < 0)
+            throw new IllegalArgumentException("len < 0");
+        if (len == 0)
+            return new byte[0];
+
+        if (!isRegularFile())
+            return super.readNBytes(len);
+
+        long length = length();
+        long position = position();
+        long size = length - position;
+
+        if (length <= 0 || size <= 0)
+            return super.readNBytes(len);
+
+        int capacity = (int)Math.min(len, size);
+        byte[] buf = new byte[capacity];
+
+        int remaining = capacity;
+        int nread = 0;
+        int n;
+        do {
+            n = read(buf, nread, remaining);
+            if (n > 0) {
+                nread += n;
+                remaining -= n;
+            } else if (n == 0) {
+                // Block until a byte is read or EOF is detected
+                byte b = (byte)read();
+                if (b == -1 )
+                    break;
+                buf[nread++] = b;
+                remaining--;
+            }
+        } while (n >= 0 && remaining > 0);
+        return (capacity == nread) ? buf : Arrays.copyOf(buf, nread);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public long transferTo(OutputStream out) throws IOException {
+        long transferred = 0L;
+        if (out instanceof FileOutputStream fos && isRegularFile()) {
+            FileChannel fc = getChannel();
+            long pos = fc.position();
+            transferred = fc.transferTo(pos, Long.MAX_VALUE, fos.getChannel());
+            long newPos = pos + transferred;
+            fc.position(newPos);
+            if (newPos >= fc.size()) {
+                return transferred;
+            }
+        }
+        try {
+            return Math.addExact(transferred, super.transferTo(out));
+        } catch (ArithmeticException ignore) {
+            return Long.MAX_VALUE;
         }
     }
 
-    /** VM native ({@code Loader.nativeBuf} -> {@code VM.fileOpen}): path -> file-table entry addr, or 0. */
-    private static native long open0(String name);
-
-    /** The next content byte (0..255), or -1 at end of file. */
-    @Override
-    public int read()
+    private long length() throws IOException {
+        return length0();
+    }
+    private long length0() throws IOException
     {
-        if (entry == 0L || pos >= (int) Magic.load64(entry + 24L))
-        {
-            return -1;
-        }
-        int b = Magic.load8(Magic.load64(entry + 16L) + pos) & 0xff;
-        pos += 1;
-        return b;
+        return MetalFileIo.length(fd);
     }
 
-    @Override
-    public int read(byte[] buf)
+    private long position() throws IOException {
+        return position0();
+    }
+    private long position0() throws IOException
     {
-        return read(buf, 0, buf.length);
+        return MetalFileIo.position(fd);
     }
 
-    /** Fill {@code buf[off..off+len)} from the cursor; the count actually read, or -1 at end of file. */
+    /**
+     * Skips over and discards {@code n} bytes of data from the
+     * input stream.
+     *
+     * <p>The {@code skip} method may, for a variety of
+     * reasons, end up skipping over some smaller number of bytes,
+     * possibly {@code 0}. If {@code n} is negative, the method
+     * will try to skip backwards. In case the backing file does not support
+     * backward skip at its current position, an {@code IOException} is
+     * thrown. The actual number of bytes skipped is returned. If it skips
+     * forwards, it returns a positive value. If it skips backwards, it
+     * returns a negative value.
+     *
+     * <p>This method may skip more bytes than what are remaining in the
+     * backing file. This produces no exception and the number of bytes skipped
+     * may include some number of bytes that were beyond the EOF of the
+     * backing file. Attempting to read from the stream after skipping past
+     * the end will result in -1 indicating the end of the file.
+     *
+     * @param      n   {@inheritDoc}
+     * @return     the actual number of bytes skipped.
+     * @throws     IOException  if n is negative, if the stream does not
+     *             support seek, or if an I/O error occurs.
+     */
     @Override
-    public int read(byte[] buf, int off, int len)
+    public long skip(long n) throws IOException {
+        if (isRegularFile())
+            return skip0(n);
+
+        return super.skip(n);
+    }
+
+    /** lseek(fd, n, SEEK_CUR) less the starting position; past the end is allowed, before 0 is EINVAL. */
+    private long skip0(long n) throws IOException
     {
-        if (entry == 0L)
-        {
-            return -1;
-        }
-        int remain = (int) Magic.load64(entry + 24L) - pos;
-        if (remain <= 0)
-        {
-            return -1;
-        }
-        int n = len < remain ? len : remain;
-        long bytes = Magic.load64(entry + 16L);
-        int i = 0;
-        while (i < n)
-        {
-            buf[off + i] = (byte) Magic.load8(bytes + pos + i);
-            i += 1;
-        }
-        pos += n;
+        long cur = MetalFileIo.position(fd);
+        MetalFileIo.seek(fd, cur + n);
         return n;
     }
 
-    /** Bytes remaining from the cursor to end of file. */
+    /**
+     * Returns an estimate of the number of remaining bytes that can be read (or
+     * skipped over) from this input stream without blocking by the next
+     * invocation of a method for this input stream. Returns 0 when the file
+     * position is beyond EOF. The next invocation might be the same thread
+     * or another thread. A single read or skip of this many bytes will not
+     * block, but may read or skip fewer bytes.
+     *
+     * <p> In some cases, a non-blocking read (or skip) may appear to be
+     * blocked when it is merely slow, for example when reading large
+     * files over slow networks.
+     *
+     * @return     an estimate of the number of remaining bytes that can be read
+     *             (or skipped over) from this input stream without blocking.
+     * @throws     IOException  if this file input stream has been closed by calling
+     *             {@code close} or an I/O error occurs.
+     */
     @Override
-    public int available()
+    public int available() throws IOException {
+        return available0();
+    }
+
+    /** handleAvailable: size less position for a file, clamped to [0, Integer.MAX_VALUE]; the console has none. */
+    private int available0() throws IOException
     {
-        if (entry == 0L)
+        int f = MetalFileIo.fd(fd);
+        if (f <= 2)
         {
             return 0;
         }
-        int remain = (int) Magic.load64(entry + 24L) - pos;
-        return remain > 0 ? remain : 0;
+        long left = MetalFileIo.length(fd) - MetalFileIo.position(fd);
+        return left <= 0L ? 0 : (int) Math.min(left, Integer.MAX_VALUE);
     }
 
-    /** The rest of the file as a fresh array (the whole file when nothing has been read yet). */
+    /**
+     * Closes this file input stream and releases any system resources
+     * associated with the stream.
+     *
+     * <p> If this stream has an associated channel then the channel is closed
+     * as well.
+     *
+     * @apiNote
+     * Overriding {@link #close} to perform cleanup actions is reliable
+     * only when called directly or when called by try-with-resources.
+     *
+     * @implSpec
+     * Subclasses requiring that resource cleanup take place after a stream becomes
+     * unreachable should use the {@link java.lang.ref.Cleaner} mechanism.
+     *
+     * <p>
+     * If this stream has an associated channel then this method will close the
+     * channel, which in turn will close this stream. Subclasses that override
+     * this method should be prepared to handle possible reentrant invocation.
+     *
+     * @throws     IOException  {@inheritDoc}
+     */
     @Override
-    public byte[] readAllBytes()
-    {
-        int n = available();
-        byte[] all = new byte[n];
-        if (n > 0)
-        {
-            int unused = read(all, 0, n);
+    public void close() throws IOException {
+        if (closed) {
+            return;
         }
-        return all;
+        synchronized (closeLock) {
+            if (closed) {
+                return;
+            }
+            closed = true;
+        }
+
+        FileChannel fc = channel;
+        if (fc != null) {
+            // possible race with getChannel(), benign since
+            // FileChannel.close is final and idempotent
+            fc.close();
+        }
+
+        fd.closeAll(new Closeable() {
+            public void close() throws IOException {
+               fd.close();
+           }
+        });
     }
 
-    /** Advance the cursor up to {@code n} bytes; the count actually skipped. */
-    @Override
-    public long skip(long n)
-    {
-        int step = (int) n;
-        int remain = available();
-        if (step > remain)
-        {
-            step = remain;
+    /**
+     * Returns the {@code FileDescriptor}
+     * object  that represents the connection to
+     * the actual file in the file system being
+     * used by this {@code FileInputStream}.
+     *
+     * @return     the file descriptor object associated with this stream.
+     * @throws     IOException  if an I/O error occurs.
+     * @see        java.io.FileDescriptor
+     */
+    public final FileDescriptor getFD() throws IOException {
+        if (fd != null) {
+            return fd;
         }
-        if (step < 0)
-        {
-            step = 0;
-        }
-        pos += step;
-        return step;
+        throw new IOException();
     }
 
-    @Override
-    public void close()
+    /**
+     * Returns the unique {@link java.nio.channels.FileChannel FileChannel}
+     * object associated with this file input stream.
+     *
+     * <p> The initial {@link java.nio.channels.FileChannel#position()
+     * position} of the returned channel will be equal to the
+     * number of bytes read from the file so far.  Reading bytes from this
+     * stream will increment the channel's position.  Changing the channel's
+     * position, either explicitly or by reading, will change this stream's
+     * file position.
+     *
+     * @return  the file channel associated with this file input stream
+     *
+     * @since 1.4
+     */
+    public FileChannel getChannel() {
+        FileChannel fc = this.channel;
+        if (fc == null) {
+            synchronized (this) {
+                fc = this.channel;
+                if (fc == null) {
+                    fc = FileChannelImpl.open(fd, path, true, false, false, false, this);
+                    this.channel = fc;
+                    if (closed) {
+                        try {
+                            // possible race with close(), benign since
+                            // FileChannel.close is final and idempotent
+                            fc.close();
+                        } catch (IOException ioe) {
+                            throw new InternalError(ioe); // should not happen
+                        }
+                    }
+                }
+            }
+        }
+        return fc;
+    }
+
+    /**
+     * Determine whether the file is a regular file.
+     */
+    private boolean isRegularFile() {
+        Boolean isRegularFile = this.isRegularFile;
+        if (isRegularFile == null) {
+            this.isRegularFile = isRegularFile = isRegularFile0(fd);
+        }
+        return isRegularFile;
+    }
+    private boolean isRegularFile0(FileDescriptor fdo)
     {
-        entry = 0L;
+        return MetalFileIo.isRegularFile(fd);          // the C reads this.fd, not the argument
+    }
+
+    // joe-ng: the natives above are Java over the VM's tree (MetalFileIo, from io_util.c / io_util_md.c).
+    // initIDs only caches the JNI field ID of FileInputStream.fd (FileInputStream.c): with no JNI, empty is right.
+    private static void initIDs()
+    {
+    }
+
+    static {
+        initIDs();
     }
 }
