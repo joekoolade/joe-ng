@@ -6477,8 +6477,10 @@ public final class Loader
         return utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/foreign/"))
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/foreign/"))
-                || utf8HasPrefix(base, off, Magic.bytes("sun/nio/fs/"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/nio/file/"))
+                // java/nio/file/ and sun/nio/fs/ are NOT denied any more: java.nio.file runs STOCK
+                // (MacOSXFileSystemProvider, the variant the seed bakes) over the read-only RAMFS, its
+                // UnixNativeDispatcher natives implemented against jdk.internal.misc.MetalRamfs and the ones
+                // not implemented THROWING. (Keep in sync with writer.ReachScan.DENY.)
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/loader/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/security/"))
                 // java/util/ServiceLoader is NOT denied: it is OVERLAID (guestsrc/java/util/ServiceLoader).
