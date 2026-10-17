@@ -4,6 +4,44 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **A WRITABLE FILESYSTEM -- the RAMFS becomes an in-memory tree (2026-10-17).** Fifth step of the file arc; the
+  user chose an in-memory tree over the whole namespace (not /tmp only, not SD-backed). Before it, every create,
+  write, rename and delete was EROFS -- which PLAN.md records as blocking 21 of the 32 zip JUnit tests.
+  - **`MetalRamfs` is one writable tree in the heap**, built on first use from the baked table out of
+    `MetalFsNode`s: a file reads its content IN PLACE from the image until its first write copies it into a heap
+    array (copy-on-write); a directory holds its entries by name; hard links share a node; an unlinked file stays
+    readable through an open fd. An empty `/tmp` (01777) is added, where `java.io.tmpdir` points. Nothing persists:
+    a reboot starts again from the image. Failures are the tree's own codes, mapped by each caller to its errno table.
+  - **DECISIONS where the image says nothing:** baked files 0644, directories 0755, owner 0/0, times 0; new nodes take
+    the requested mode under umask 022; the one user is root, so access() grants read and write. statvfs reports the
+    stored bytes in 4 KiB blocks and NOTHING free -- a heap-backed store has no capacity of its own, and a free figure
+    would be invented.
+  - **`UnixNativeDispatcher`:** open0 with every access mode and O_CREAT/O_EXCL/O_TRUNC/O_APPEND, write0, link0,
+    unlink0, rename0 (POSIX's rules for an existing target), mkdir0/rmdir0, the chmod/chown/utimens families, real
+    link counts, owners and times. `symlink0` THROWS (no links); `mknod0` is ENOTSUP. **`UnixFileDispatcherImpl`:**
+    write0/pwrite0/writev0, truncate0. **`BsdNativeDispatcher`:** clonefile0 copies (Files.copy with
+    COPY_ATTRIBUTES); setattrlist0/fsetattrlist0 set access/modification times and THROW for ATTR_CMN_CRTIME (no
+    creation time is kept); the mount is writable. **`sun.nio.fs.BsdFileSystem`** is overlaid from the JDK 26
+    `macosx/` source for `directCopy0` (fcopyfile COPYFILE_DATA), the fd-to-fd copy Files.copy uses.
+    **`java.io.UnixFileSystem`'s** natives go through the same tree, and relative paths resolve against user.dir.
+  - **NOT yet over the tree:** `java.io.FileInputStream` (its overlay reads the baked table directly, so it does not
+    see a write or a delete) and `FileOutputStream`/`RandomAccessFile` (stock natives, unwired). `Files.createTempFile`
+    works only where the VM's SecureRandom has a seed: under QEMU (no hardware RNG) it refuses by design.
+  - **Probe:** `NioWriteProbe` (28 arms: create/append/truncate, a positional write past the end, overwrite in place
+    and over an image file, copy/replace/attributes, move of a file and a tree, hard link, delete while open,
+    owner-only modes and the umask, DELETE_ON_CLOSE, recursive delete, and the refusals a writable filesystem still
+    gives), host-identical on QEMU against a FRESH WRITABLE copy of `ramfs/` with an empty `tmp/`. **Negative
+    control** on main (91c047b): 27 of its 28 arms fail. `FileProbe`, `NioFileProbe`, `NioReadProbe` and
+    `NioAttrProbe` were written for a read-only tree: their mutating arms now act on scratch paths and read back what
+    they did, their host controls are retaken on the writable copy (the read-only ones kept as
+    `/tmp/reg-*.host.readonly`), and all four are host-identical. `make overlaycheck`: 0 new.
+  - **Regression -- PARTIAL when this card was written, stated as such:** on 9e5bc23, 29 of 76 probes had finished,
+    all 29 host-identical; the rest, the suite and JUnit were still running. **Pi:** PASS (2026-10-17, 9e5bc23) --
+    4 of 4 cores, WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=891), `[main returned normally]`,
+    `gc: collections=7`; batch 1 loads 1578 classes, two more than #383's 1576 (observed; the change adds two classes,
+    `MetalFsNode` and `MetalRamfs$Fd`, not confirmed to be those two), and per-batch `clinits=` are 434/434/435/436,
+    unchanged.
+
 - **`java.nio.file` ATTRIBUTES OVER THE RAMFS -- owner, group, file store, refused setters (2026-10-17).** Fourth
   step of the file arc.
   - **`UnixNativeDispatcher`'s remaining attribute natives**, semantics from `UnixNativeDispatcher.c`:
