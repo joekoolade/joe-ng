@@ -4,6 +4,70 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **STOCK ZipFile AND JarFile OVER THE WRITABLE TREE -- and two VM bugs the stock zip tests found (2026-10-18).**
+  Seventh step of the file arc; takes up the zip JUnit tests PLAN.md set aside as "blocked on a filesystem".
+  - **Before it:** `ZipFile` was a hand-written read-only overlay (no `File`/`Charset` constructors, no `getComment`,
+    no `stream`; a stream read after its ZipFile closed answered a byte; a missing file was `FileNotFoundException`),
+    `ZipUtils` answered null for every FileTime, and `JarFile` was a thin shell over it.
+  - **`ZipFile`, `ZipUtils` and `JarFile` run from the JDK 26 `share/` source.** JarFile has one change: stock's own
+    no-signature decision (`maybeInstantiateVerifier`) is taken before the manifest is read rather than after, so an
+    unsigned jar never constructs the denied JarVerifier -- which answered zeros and failed every manifest read with
+    "Allowed max size: 0 bytes". Observably identical for an unsigned jar (`getTrustedAttributes` trusts every entry
+    when the manifest has no signers); a SIGNED jar still takes the verifying path and halts at its first denied call.
+  - **`jdk.internal.perf.Perf`** is overlaid from the JDK 26 source, its natives decided from `perf.cpp`: with no
+    shared hsperfdata region HotSpot keeps counters in private C-heap memory (`PerfData::create_entry`), so each is a
+    private heap buffer, with the C's argument and duplicate-name checks; `highResCounter` is `os::elapsed_counter`
+    (nanoTime), `registerNatives` only binds JNI; `attach0`/`detach` throw.
+  - **VM bug 1 -- `super.m()` bound past the class that declares `m`.** `globalBufByRef` resolved a direct call
+    by the REGISTRY of compiled bodies, and on a miss climbed to the first ancestor whose body WAS compiled: a method
+    the named class declared but had not compiled yet was skipped. `ZipFileInflaterInputStream.close`'s
+    `super.close()` ran `FilterInputStream.close`, so `closed` was never set, the stream's Inflater was ended under
+    it, and the next read() spun for ever. Resolution now stops at the first DECLARING class (JVMS 5.4.3.3, checked
+    over the cached constant-pool parse, no parse-context change) and the link-stub resolver climbs by the same rule.
+    Found with no instrument that could fire: the spinning task never switched, so the hang dump was silent --
+    QEMU-monitor PC samples, a JOENG_SYMMAP rebuild of the same image, a temporary hot-call-site counter
+    (Inflater.finished/needsInput/inflate) and markers in a temporary copy of InflaterInputStream named it.
+  - **VM bug 2 -- `instanceof` against a class not registered at compile time was false for ever.** The target
+    Type is baked as an immediate and was baked as 0: an instrumented StreamZipEntriesTest printed
+    `e=java.util.zip.ZipEntry inst=false` inside `zf.stream().forEach(e -> ...)`. It now takes the class-literal
+    route (note the pull, redo the compile with the class loaded) and a target still absent is named once
+    (`UNRESOLVED TYPE CHECK`).
+  - **The Inflater/Deflater overlays refuse an ended stream as stock does** (`IllegalStateException`); they answered
+    0, which is what turned bug 1 into an endless loop rather than an exception. **`scripts/run-junit.sh`** strips CRs
+    before matching its end marker: the UART sends CRLF, so `^ALL PASSED$` never matched and every run sat out its
+    full timeout (a group that printed FAILURES in minutes reported `waited 1500s`) holding the generated manifest.
+    **MetalJUnit** reads `@ValueSource`, named `@MethodSource` (local or `Class#method`) and `@BeforeAll`/`@AfterAll`
+    off live annotation instances.
+  - **Negative controls -- the small probes did not reproduce either bug; the stock tests did.** SuperCallProbe and
+    TypeCheckProbe pass on the unfixed commits too (measured, and each says so). The evidence is the stock tests with
+    only the fix reverted: ReadAfterClose 3 of 4 (`Inflater has been closed`) vs 4 of 4; StreamZipEntriesTest alone 2
+    of 4 vs 4 of 4. ZipFileProbe (24 arms) is host-identical; on main the old overlay lacks getComment/stream, and
+    with those removed 6 arms differ, including a read after close answering 100.
+  - **18 stock zip JUnit tests added** (20 host-validated, 126 of 126 on the host JDK 26). **On QEMU, 116 runs over
+    14 classes, 31 failing -- every one named:** 20 are the ZipFS arms (`jdk.zipfs` is not here), 6 the MS932 charset
+    (`jdk.charsets`), 2 the ~2 GiB sparse files of EndOfCenValidation (the tree's files are heap arrays), 1
+    CopyZipFile's compression levels (this Deflater writes stored blocks, so every level is the same size), and 2
+    are the CLOCK: `currentTimeMillis` is time since boot, so every archive written here is dated 1970 and
+    ZipOutputStream adds an extended-timestamp field -- the host JDK fails CorruptedZipFiles.insufficientFilenameLength
+    and Zip64SizeTest identically with the timestamps set to 0. Every ZipFile/JarFile arm passes. The four tests that
+    create temp files (DupEntriesGetInputStream, InvalidCompressedSizeTest, ReadLongZipFileName, ZipFileCharsetTest)
+    need a SecureRandom seed QEMU cannot give -- Pi only; FinalizeInflater (no `Object.finalize` in the overlay) and
+    ZipFileSharedSourceTest (no `Thread.ofPlatform`) are left out, both overlay gaps.
+  - **Gaps it leaves, named:** no wall clock; Deflater writes stored blocks only; the Inflater overlay's
+    `getAdler()` answers 0 (a placeholder, against rule 3); Object.finalize and Thread.Builder missing from overlays.
+  - **Regression (2d09a81, MetalJUnit fix f08d038):** 77 of 80 probes host-identical (80 = 77 + ZipFileProbe,
+    SuperCallProbe, TypeCheckProbe; nine host controls purged from /tmp were regenerated and checked against their
+    last metal run), DigestProbe/MacProbe designed divergences only. **ScopedValueProbe halted ONCE** -- `BOOT
+    RE-ENTERED`, the thread-start trampoline branching to 0 because `resolveRun` was handed a null receiver, zeroed
+    registers -- then passed 3 of 3 on the branch and 3 of 3 on main; the #380 switch-race signature, intermittent,
+    and resolveRun does not use the resolver changed here (log kept, not attributed). Suite against a same-load
+    control on main: identical -- markers all zero, `gc: collections=51`, clinits 356, 3540 s vs 3555 s;
+    `UNRESOLVED TYPE CHECK` never printed. `ran 44, failures 0` -- after f08d038: the new named-@MethodSource support
+    first read the default `value()` ({""}) as a name and ran 23 of the 44. **Pi:** PASS (2026-10-18, 2d09a81) --
+    4 of 4 cores, WiFi join, DHCP, NetDemo HTTP 200 (bytes=888, 891 before; the page is served live -- not
+    attributed), `[main returned normally]`, `gc: collections=7`; batch 1 loads 1581 classes and per-batch
+    `clinits=` read 437/437/438/439/439, as on f36b00e.
+
 - **java.io STREAMS OVER THE WRITABLE TREE -- stock FileInputStream, FileOutputStream, RandomAccessFile
   (2026-10-17).** Sixth step of the file arc, closing the gap #384 named.
   - **Before it:** FileInputStream was a hand-written overlay reading the baked table directly -- blind to writes and

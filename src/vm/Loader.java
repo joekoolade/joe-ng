@@ -12091,7 +12091,22 @@ public final class Loader
             bufResolveLog(refBase, classOff, nameOff, descOff, ib, 3);
             return ib;
         }
+        // THE NAMED CLASS FIRST, and every level after it the same way: a class that DECLARES the method
+        // answers it even when its body is not registered yet (JVMS 5.4.3.3 -- resolution stops at the first
+        // class declaring name+descriptor). The walk below used to test only the REGISTRY at each level, so a
+        // declared but not-yet-compiled method was skipped and the call bound SILENTLY to the nearest compiled
+        // ancestor: `super.close()` in ZipFile$ZipFileInflaterInputStream, naming InflaterInputStream.close,
+        // ran FilterInputStream.close -- so `closed` was never set, the stream's Inflater was ended under it,
+        // and the next read() spun for ever on an Inflater answering 0. A declaring level answers with its
+        // static's phase-A cell, or 0, which sends the site to the link-stub tier: resolveLinkTarget compiles
+        // the declared body on first call. (<init> above is the same rule, special-cased before this existed.)
         int pd = findPdByName(refBase, classOff);
+        if (pd >= 0 && blobDeclares(pdBase[pd], refBase, nameOff, refBase, descOff) == 1)
+        {
+            long own = cellStubAt(refBase, classOff, refBase, nameOff, descOff);
+            bufResolveLog(refBase, classOff, nameOff, descOff, own, 5);
+            return own;
+        }
         while (pd >= 0 && pdSuperOff[pd] != 0)
         {
             int spd = findPdByName(pdBase[pd], pdSuperOff[pd]);
@@ -12117,6 +12132,12 @@ public final class Loader
                     return rgTab[j].buf;
                 }
                 j = rgNext[j];
+            }
+            if (blobDeclares(pdBase[spd], refBase, nameOff, refBase, descOff) == 1)
+            {
+                long declared = cellStubAt(pdBase[spd], pdNameOff[spd], refBase, nameOff, descOff);
+                bufResolveLog(refBase, classOff, nameOff, descOff, declared, 5);
+                return declared;                         // this ancestor declares it: never climb past it
             }
             pd = spd;
         }
@@ -12222,6 +12243,69 @@ public final class Loader
     }
 
     /** Current contents of the phase-A cell for a method ref given as blob base + Utf8 offsets, or 0. */
+    /**
+     * Whether the class whose blob is at {@code base} DECLARES a method named and typed like the Utf8 runs at
+     * {@code (nameBase, nameOff)} / {@code (descBase, descOff)}: 1 yes, 0 no, -1 unknown. Read from the blob's
+     * CACHED constant-pool parse ({@code pcBase}/{@code pcCp}) so the global parse context is untouched --
+     * this is asked mid-patch, with the caller's blob current. A blob never parsed answers -1, and the
+     * callers then keep their previous behaviour rather than guess.
+     */
+    private static int blobDeclares(long base, long nameBase, int nameOff, long descBase, int descOff)
+    {
+        int n = pcN;
+        int ci = 0;
+        while (ci < n && pcBase[ci] != base)
+        {
+            ci += 1;
+        }
+        if (ci >= n)
+        {
+            return -1;
+        }
+        Magic.dsb();                                    // the count was read before the entry (parseConstPool)
+        int[] cp = pcCp[ci];
+        long p = base + pcAfterCp[ci];
+        p += 6;                                         // access_flags, this_class, super_class
+        p += 2 + u2(p) * 2;                             // interfaces
+        int fcount = u2(p);
+        p += 2;
+        int f = 0;
+        while (f < fcount)
+        {
+            p = skipAttributes(p + 8, u2(p + 6));
+            f += 1;
+        }
+        int mcount = u2(p);
+        p += 2;
+        int m = 0;
+        while (m < mcount)
+        {
+            if (utf8EqAt(base, cp[u2(p + 2)], nameBase, nameOff) && utf8EqAt(base, cp[u2(p + 4)], descBase, descOff))
+            {
+                return 1;
+            }
+            p = skipAttributes(p + 8, u2(p + 6));
+            m += 1;
+        }
+        return 0;
+    }
+
+    /**
+     * The callable contents of the phase-A cell for {@code name+desc} DECLARED by the class named at
+     * {@code (clsBase, clsOff)}, or 0 if that class declares no such method (or has no cell table yet). Unlike
+     * {@link #dlStubByRef} the class and the name/descriptor may live in different blobs -- the super-chain walk
+     * names an ancestor out of its own blob while the method still comes from the call site's.
+     */
+    private static long cellStubAt(long clsBase, int clsOff, long refBase, int nameOff, int descOff)
+    {
+        if (dlTab == null)
+        {
+            return 0L;
+        }
+        long cell = dlCellOf(clsBase, clsOff, refBase, nameOff, refBase, descOff);
+        return cell == 0L ? 0L : Magic.load64(cell);
+    }
+
     private static long dlStubByRef(long refBase, int classOff, int nameOff, int descOff)
     {
         if (dlTab == null)
@@ -17156,6 +17240,11 @@ public final class Loader
             buf = compileSigOnDemand(clsU, nameU, descU);   // never compiled AND not dispatchable: JIT it now
             tier = 3;
         }
+        if (buf == 0L && reg >= 0)
+        {
+            buf = inheritedLinkTarget(reg, nameU, descU);  // the named class only INHERITS it
+            tier = 4;
+        }
         if (buf != 0L && !plausibleCode(buf))
         {
             // THE LATE PATHS WERE THE ONE UNGUARDED DISPATCH. Every inline call site gets
@@ -17177,6 +17266,43 @@ public final class Loader
         }
         linkResolveLog(clsU, nameU, descU, buf, tier);
         return buf;
+    }
+
+    /**
+     * A link-stub target the named class INHERITS: the first superclass that DECLARES name+descriptor (JVMS
+     * 5.4.3.3), through the same three tiers {@link #resolveLinkTarget} tries on the named class. globalBufByRef
+     * hands a site here when an ancestor declares the method but has not compiled it; the tiers above ask only
+     * about the named class, so without this such a site could not resolve at all. Stops at the first
+     * declaring class whatever it answers -- climbing past one is the silent mis-binding this exists to avoid.
+     */
+    private static long inheritedLinkTarget(int reg, long nameU, long descU)
+    {
+        int sreg = superRegOf(reg);
+        int guard = 0;
+        while (sreg >= 0 && guard < 64)
+        {
+            long sU = clTab[sreg].base + clTab[sreg].nameOff;
+            long b = bufBySigU(sU, nameU, descU);
+            if (b == 0L)
+            {
+                b = nativeBufAt(sU, 0, nameU, 0);
+            }
+            if (b == 0L)
+            {
+                b = compileSigOnDemand(sU, nameU, descU);
+            }
+            if (b != 0L)
+            {
+                return b;
+            }
+            if (blobDeclares(clTab[sreg].base, nameU, 0, descU, 0) == 1)
+            {
+                return 0L;                              // declared here and still not callable: report, do not climb
+            }
+            sreg = superRegOf(sreg);
+            guard += 1;
+        }
+        return 0L;
     }
 
     /**
@@ -25263,6 +25389,77 @@ public final class Loader
     {
         return classMirror(gType);
     }
+
+    /**
+     * The target Type of an {@code instanceof} / {@code checkcast}, which the compiler bakes as an IMMEDIATE --
+     * so a class not registered when the body compiles was a 0 for ever, and against 0 every instanceof answers
+     * FALSE and every checkcast of a non-null throws. Measured: stock StreamZipEntriesTest's
+     * {@code zf.stream().forEach(e -> assertTrue(e instanceof ZipEntry))} printed {@code e=java.util.zip.ZipEntry
+     * inst=false}, because the lambda body compiled when the lambda was LINKED, before the first ZipEntry
+     * existed. The class-literal route, for the same reason: note the pull, let the compile be discarded and
+     * redone with the class loaded. A class that is still absent afterwards is NAMED (denylisted ones excepted,
+     * where absent is the intended state) rather than left to answer false in silence.
+     */
+    static long typeOfCheckedClass(int classCp)
+    {
+        long type = typeOfClass(classCp);
+        if (type == 0L)
+        {
+            int nameOff = gcp[u2(gbase + gcp[classCp])];
+            if (u1(gbase + nameOff + 2) != 0x5B
+                    && lzCompiling && !lzRetried && notePullNeeded(gbase + nameOff))
+            {
+                return 0L;                                          // discarded compile: retried with it loaded
+            }
+            if (!isDenylisted(gbase + nameOff, 0))
+            {
+                reportUnresolvedTypeCheck(gbase + nameOff);
+            }
+        }
+        return type;
+    }
+
+    /** Name a type-check target that stayed unresolved, once per class (the NULL CLASS LITERAL report's shape). */
+    private static void reportUnresolvedTypeCheck(long clsU)
+    {
+        if (unresTypeSeen == null)
+        {
+            unresTypeSeen = new long[64];
+            unresTypeSeenN = 0;
+        }
+        int k = 0;
+        while (k < unresTypeSeenN)
+        {
+            if (unresTypeSeen[k] == clsU)
+            {
+                return;
+            }
+            k += 1;
+        }
+        if (unresTypeSeenN < 64)
+        {
+            unresTypeSeen[unresTypeSeenN] = clsU;
+            unresTypeSeenN += 1;
+        }
+        Uart.write(Magic.bytes("\n  UNRESOLVED TYPE CHECK: "));
+        printNameAt(clsU, 0);
+        Uart.write(Magic.bytes(" -- instanceof answers false and checkcast throws; "));
+        printWhyUnpulled(clsU);
+        if (!lzCompiling)
+        {
+            Uart.write(Magic.bytes(", and OUTSIDE the retry window"));
+        }
+        else if (lzRetried)
+        {
+            Uart.write(Magic.bytes(", and the body's single retry was already spent"));
+        }
+        Uart.write(Magic.bytes("; needed by "));
+        printCompiling();
+        Uart.putc(0x0A);
+    }
+
+    private static long[] unresTypeSeen;
+    private static int unresTypeSeenN;
 
     static long classLiteral(int classCp)
     {

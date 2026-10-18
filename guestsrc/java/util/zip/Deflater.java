@@ -63,9 +63,23 @@ public class Deflater implements AutoCloseable
     /** Discard all state and start a fresh stream. */
     public void reset()
     {
+        ensureOpen();
         engine.reset(nowrap);
-        ended = false;
         finish = false;
+    }
+
+    /**
+     * Stock's check, with stock's exception: every method that touches the stream refuses an ended Deflater
+     * (setDictionary, deflate, getAdler, getBytesRead/Written and the getTotal pair through them, reset). This
+     * overlay used to answer 0 from deflate and let reset() bring an ended Deflater back -- a closed compressor
+     * that looks like a working one.
+     */
+    private void ensureOpen()
+    {
+        if (ended)
+        {
+            throw new IllegalStateException("Deflater has been closed");
+        }
     }
 
     /** Release the compressor. There is no native resource here, so this only latches the closed state. */
@@ -112,6 +126,7 @@ public class Deflater implements AutoCloseable
     public void setDictionary(byte[] dictionary, int off, int len)
     {
         checkBounds(dictionary, off, len);
+        ensureOpen();
         throw new IllegalStateException("preset dictionaries are not supported");
     }
 
@@ -158,10 +173,7 @@ public class Deflater implements AutoCloseable
     public int deflate(byte[] output, int off, int len)
     {
         checkBounds(output, off, len);
-        if (ended)
-        {
-            return 0;
-        }
+        ensureOpen();
         return engine.deflate(output, off, len);
     }
 
@@ -174,27 +186,30 @@ public class Deflater implements AutoCloseable
     /** Adler-32 of the uncompressed input so far — real, since the zlib trailer needs it. */
     public int getAdler()
     {
+        ensureOpen();
         return engine.adler();
     }
 
     public long getBytesRead()
     {
+        ensureOpen();
         return engine.bytesRead();
     }
 
     public long getBytesWritten()
     {
+        ensureOpen();
         return engine.bytesWritten();
     }
 
     public int getTotalIn()
     {
-        return (int) engine.bytesRead();
+        return (int) getBytesRead();
     }
 
     public int getTotalOut()
     {
-        return (int) engine.bytesWritten();
+        return (int) getBytesWritten();
     }
 
     /**
