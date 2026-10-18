@@ -13,11 +13,15 @@ import java.lang.reflect.Method;
 import java.util.Iterator;
 import java.util.stream.Stream;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * A JUnit runner for bare metal: give it test class names, it discovers the {@code @Test} methods by
@@ -28,14 +32,13 @@ import org.junit.jupiter.params.provider.Arguments;
  * the real JUnit jar, demand-loaded at runtime out of the RAMFS archive named by {@code /etc/init}'s
  * {@code classpath=} -- none of it is baked into the image.
  *
- * <p>{@code @ParameterizedTest} is supported for the {@code @MethodSource} case ONLY in its DEFAULT-NAME form
- * -- the factory is the static method with the same name as the test. That is not a simplification for its own
- * sake: reading {@code @MethodSource("someName")}'s element VALUE needs a live annotation instance (a Proxy),
- * which joe-ng has no runtime for, while {@code isAnnotationPresent} is answered from the classfile. The
- * default-name form is what the stock tests in practice write.
+ * <p>{@code @ParameterizedTest} takes its arguments from {@code @ValueSource} or {@code @MethodSource} -- the
+ * latter by the names it gives (a local factory, or {@code Class#method}), or with none given, the factory named
+ * like the test. Both are read off live annotation instances ({@code getAnnotation}); this harness once supported
+ * only the default-name form, from before joe-ng had annotation instances.
  *
- * <p>It is NOT the Jupiter engine: no nested tests, no lifecycle beyond BeforeEach/AfterEach, no display names,
- * no assumptions, no argument sources other than {@code @MethodSource}. It is the subset that a jtreg
+ * <p>It is NOT the Jupiter engine: no nested tests, no lifecycle beyond BeforeAll/BeforeEach/AfterEach/AfterAll,
+ * no display names, no assumptions, no argument sources other than those two. It is the subset that a jtreg
  * {@code @run junit} test in practice uses, and it runs where the engine cannot (the engine needs annotation
  * element VALUES, ServiceLoader and java.nio.file).
  */
@@ -76,6 +79,10 @@ public class MetalJUnit {
             failed += 1;
             return;
         }
+        if (!invokeStatic(all, BeforeAll.class))
+        {
+            return;
+        }
         int i = 0;
         while (i < all.length) {
             if (all[i].isAnnotationPresent(Test.class)) {
@@ -85,6 +92,36 @@ public class MetalJUnit {
             }
             i += 1;
         }
+        invokeStatic(all, AfterAll.class);
+    }
+
+    /**
+     * Invoke every static method carrying {@code anno} (@BeforeAll / @AfterAll, per-class lifecycle). False if
+     * one threw; that counts as ONE failure for the class, which is how the engine reports a class it could not
+     * set up.
+     */
+    private static boolean invokeStatic(Method[] all, Class<? extends java.lang.annotation.Annotation> anno)
+    {
+        int i = 0;
+        while (i < all.length)
+        {
+            if (all[i].isAnnotationPresent(anno))
+            {
+                try
+                {
+                    all[i].setAccessible(true);
+                    all[i].invoke(null, new Object[0]);
+                }
+                catch (Throwable t)
+                {
+                    run += 1;
+                    report(all[i], "LIFECYCLE " + anno.getSimpleName(), t);
+                    return false;
+                }
+            }
+            i += 1;
+        }
+        return true;
     }
 
     /** One test: fresh instance, @BeforeEach, the test, @AfterEach. A fresh instance per test is JUnit's rule
@@ -123,11 +160,110 @@ public class MetalJUnit {
      * ImmutableCollections$Access$1 and a good deal more closure for no gain here.
      */
     private static void runParameterized(Class<?> c, Method[] all, Method test) {
-        Method factory = findFactory(c, test.getName());
+        ValueSource vs = test.getAnnotation(ValueSource.class);
+        if (vs != null)
+        {
+            Object[] values = values(vs);
+            int i = 0;
+            while (i < values.length)
+            {
+                runOne(c, all, test, new Object[] { values[i] }, "[" + i + "]");
+                i += 1;
+            }
+            if (i == 0)
+            {
+                run += 1;
+                failed += 1;
+                System.out.println("  EMPTY VALUE SOURCE " + test.getName());
+            }
+            return;
+        }
+        MethodSource ms = test.getAnnotation(MethodSource.class);
+        String[] names = ms == null ? new String[0] : ms.value();
+        if (names.length == 0)
+        {
+            names = new String[] { test.getName() };
+        }
+        int n = 0;
+        while (n < names.length)
+        {
+            runFactory(c, all, test, names[n]);
+            n += 1;
+        }
+    }
+
+    /** Every value a @ValueSource names, boxed, in declaration order -- whichever one element it sets. */
+    private static Object[] values(ValueSource vs)
+    {
+        java.util.List<Object> out = new java.util.ArrayList<>();
+        for (int v : vs.ints())
+        {
+            out.add(v);
+        }
+        for (long v : vs.longs())
+        {
+            out.add(v);
+        }
+        for (short v : vs.shorts())
+        {
+            out.add(v);
+        }
+        for (byte v : vs.bytes())
+        {
+            out.add(v);
+        }
+        for (char v : vs.chars())
+        {
+            out.add(v);
+        }
+        for (float v : vs.floats())
+        {
+            out.add(v);
+        }
+        for (double v : vs.doubles())
+        {
+            out.add(v);
+        }
+        for (boolean v : vs.booleans())
+        {
+            out.add(v);
+        }
+        for (String v : vs.strings())
+        {
+            out.add(v);
+        }
+        for (Class<?> v : vs.classes())
+        {
+            out.add(v);
+        }
+        return out.toArray();
+    }
+
+    /** One @MethodSource factory: a local static method, or {@code Class#method}; a trailing "()" is allowed. */
+    private static void runFactory(Class<?> c, Method[] all, Method test, String name)
+    {
+        String bare = name.endsWith("()") ? name.substring(0, name.length() - 2) : name;
+        Class<?> owner = c;
+        int hash = bare.indexOf('#');
+        if (hash >= 0)
+        {
+            try
+            {
+                owner = Class.forName(bare.substring(0, hash));
+            }
+            catch (Throwable t)
+            {
+                run += 1;
+                report(test, "FACTORY CLASS " + bare, t);
+                return;
+            }
+            bare = bare.substring(hash + 1);
+        }
+        Method factory = findFactory(owner, bare);
         if (factory == null) {
             run += 1;
             failed += 1;
-            System.out.println("  NO FACTORY " + test.getName() + " (no static " + test.getName() + "() to source arguments from)");
+            System.out.println("  NO FACTORY " + test.getName() + " (no static " + bare + "() to source arguments from)");
             return;
         }
         Object src;

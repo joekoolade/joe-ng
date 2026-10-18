@@ -50,10 +50,25 @@ public class Inflater implements AutoCloseable
     /** Discard all state and start on a fresh stream. */
     public void reset()
     {
+        ensureOpen();
         engine.reset();
         headerLeft = nowrap ? 0 : 2;
         headerRead = 0;
-        ended = false;
+    }
+
+    /**
+     * Stock's check, with stock's exception: inflate, setDictionary, getAdler, getBytesRead/Written (and the
+     * getTotal pair through them) and reset refuse an ended Inflater. This overlay used to answer 0 from
+     * inflate instead -- and stock InflaterInputStream.read loops while inflate answers 0 and the Inflater
+     * neither needs input nor is finished, so a stream left reading an ended Inflater SPUN FOR EVER rather
+     * than failing (ReadAfterClose, reached through a mis-bound super.close()).
+     */
+    private void ensureOpen()
+    {
+        if (ended)
+        {
+            throw new IllegalStateException("Inflater has been closed");
+        }
     }
 
     /** Release the decoder. There is no native resource here, so this only latches the closed state. */
@@ -106,10 +121,7 @@ public class Inflater implements AutoCloseable
     public int inflate(byte[] output, int off, int len) throws DataFormatException
     {
         Deflater.checkBounds(output, off, len);      // stock range-checks before touching the array
-        if (ended)
-        {
-            return 0;
-        }
+        ensureOpen();
         int n = engine.inflate(output, off, len);
         if (engine.failed())
         {
@@ -150,11 +162,13 @@ public class Inflater implements AutoCloseable
 
     public long getBytesRead()
     {
+        ensureOpen();
         return headerRead + engine.bytesRead();
     }
 
     public long getBytesWritten()
     {
+        ensureOpen();
         return engine.bytesWritten();
     }
 
@@ -177,6 +191,7 @@ public class Inflater implements AutoCloseable
     /** Preset dictionaries are unsupported on metal; nothing in the zip/jar path sets one. */
     public void setDictionary(byte[] dictionary, int off, int len)
     {
+        ensureOpen();
         throw new IllegalStateException("preset dictionaries are not supported");
     }
 

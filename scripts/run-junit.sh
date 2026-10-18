@@ -45,7 +45,11 @@ while [ "$i" -lt "$SECS" ]; do
     # -a IS REQUIRED: a UART log carries stray control bytes, so grep treats it as BINARY and silently
     # matches NOTHING. Without it this loop never breaks and every run sits out the full timeout -- which is
     # exactly what it did, long after the tests had printed ALL PASSED.
-    grep -qaE "^(ALL PASSED|FAILURES)$" "$OUT" && break
+    # ... AND THE CRs MUST GO FIRST, or the loop still never breaks: Uart.putc sends every '\n' as CRLF, so
+    # each log line ends "ALL PASSED\r" and the `$` anchor never meets it. With -a alone this loop sat out the
+    # FULL timeout on every run (a group that printed FAILURES within minutes reported `waited 1500s`), and
+    # held the generated manifest in ramfs/etc/init the whole time.
+    tr -d '\r' < "$OUT" | grep -qaE "^(ALL PASSED|FAILURES)$" && break
     sleep 1
     i=$((i + 1))
 done
