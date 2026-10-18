@@ -2188,15 +2188,19 @@ public final class VM
         }
         long conf = Magic.load64(e + 16L);
         int flen = (int) Magic.load64(e + 24L);
-        long nm = Heap.allocData(128);
-        int nl = manifestValue(conf, flen, Magic.bytes("main"), nm, 120);
+        // Every value buffer is sized by the FILE, which bounds any line in it. They were fixed at 120 / 250
+        // bytes and manifestValue stops at its max without a word, so a long line was cut SILENTLY: a
+        // 279-byte `args=` of JUnit classes arrived as "... CloseWrappedSt" (CANNOT LOAD), and the class after
+        // it never ran.
+        long nm = Heap.allocData(flen + 8);
+        int nl = manifestValue(conf, flen, Magic.bytes("main"), nm, flen);
         if (nl == 0)
         {
             return false;
         }
         byte[] mainClass = heapBytes(nm, nl);
-        long al = Heap.allocData(256);
-        int alen = manifestValue(conf, flen, Magic.bytes("args"), al, 250);
+        long al = Heap.allocData(flen + 8);
+        int alen = manifestValue(conf, flen, Magic.bytes("args"), al, flen);
         byte[] argsLine = heapBytes(al, alen);              // raw space-separated args; argv built after loadAll
         openClasspath(conf, flen);                          // classpath=<jar>: classes the image lacks come from it
         armHangDump(conf, flen);                            // hangdump=<secs>: report every task after that long
@@ -2219,8 +2223,8 @@ public final class VM
      */
     private static void openClasspath(long conf, int flen)
     {
-        long cp = Heap.allocData(256);
-        int n = manifestValue(conf, flen, Magic.bytes("classpath"), cp, 250);
+        long cp = Heap.allocData(flen + 8);
+        int n = manifestValue(conf, flen, Magic.bytes("classpath"), cp, flen);
         if (n == 0)
         {
             return;
