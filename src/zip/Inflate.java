@@ -77,6 +77,7 @@ public final class Inflate
 
     /** Unconsumed compressed input; {@link #input} appends and compacts away what is already consumed. */
     private byte[] in = new byte[0];
+    private byte[] own = in;                           // the private buffer, while `in` is a caller's array
     private int inEnd;                                 // bytes valid in `in`
     private int inPos;                                 // next byte to shift into the bit buffer
     private int bitBuf;                                // bits pulled from `in` but not yet used, LSB first
@@ -113,6 +114,7 @@ public final class Inflate
     /** Start over on a fresh DEFLATE stream, keeping the allocated buffers. */
     public void reset()
     {
+        in = own;
         inEnd = 0;
         inPos = 0;
         bitBuf = 0;
@@ -126,11 +128,37 @@ public final class Inflate
         copyRem = 0;
         copyDist = 0;
         produced = 0L;
+        dictLen = 0L;
+        error = null;
+    }
+
+    /** Bytes of a preset dictionary in the window ahead of the output: history a match may reach, not output. */
+    private long dictLen;
+
+    /**
+     * Preload the sliding window with a preset dictionary, as zlib's {@code inflateSetDictionary} does: its last
+     * 32 KiB become history that back-references may reach, and none of it is output. Called before any output.
+     */
+    public void setDictionary(byte[] b, int off, int len)
+    {
+        int from = len > 32768 ? off + len - 32768 : off;
+        int i = from;
+        while (i < off + len)
+        {
+            win[wpos] = b[i];
+            wpos = (wpos + 1) & 32767;
+            i += 1;
+        }
+        dictLen += off + len - from;
     }
 
     /** Append compressed bytes {@code b[off..off+len)} to the input, dropping what has already been consumed. */
     public void input(byte[] b, int off, int len)
     {
+        if (in != own)
+        {
+            throw new IllegalStateException("input() while a caller's array is attached");
+        }
         int keepFrom = inPos;
         int keep = inEnd - keepFrom;
         if (in.length < keep + len)
@@ -181,6 +209,95 @@ public final class Inflate
     public boolean failed()
     {
         return state == ST_ERROR;
+    }
+
+    /** Why the stream {@link #failed}, in zlib's own words ({@code inflate.c}'s {@code strm->msg}), or null. */
+    public String error()
+    {
+        return error;
+    }
+
+    private String error;
+
+    private void fail(String why)
+    {
+        state = ST_ERROR;
+        error = why;
+    }
+
+    /**
+     * zlib's input contract, for a caller that keeps its input and passes the unconsumed part again
+     * ({@code next_in}/{@code avail_in}): {@code feed} the slice, {@link #inflate}, then {@code release}. The slice
+     * is read IN PLACE when nothing of the engine's own is pending -- copying it instead makes a caller that
+     * inflates a byte at a time over a large slice quadratic -- and appended to the engine's buffer otherwise.
+     */
+    public void feed(byte[] b, int off, int len)
+    {
+        if (in == own && inPos >= inEnd && (bitCnt >> 3) == 0)
+        {
+            long consumed = bytesRead();
+            in = b;
+            inPos = off;
+            inEnd = off + len;
+            markPos = off;
+            dropped = consumed - off;
+            starved = false;
+        }
+        else
+        {
+            input(b, off, len);
+        }
+    }
+
+    /**
+     * End a {@link #feed}: hand back up to {@code maxBack} of the input not consumed yet -- the LAST bytes, which
+     * the caller still owns and will pass again -- and KEEP the rest, which the caller then counts as consumed.
+     * zlib keeps what it pulled into its bit accumulator when the input ran out mid-symbol ({@code avail_in}
+     * reaches 0) and gives input back only when the output filled or the stream ended; a caller that refills
+     * only on {@code needsInput()} waits for ever on a decoder that hands back a partial symbol. Afterwards the
+     * engine reads its own buffer again. Returns how many bytes were handed back.
+     */
+    public int release(int maxBack)
+    {
+        int rem = remaining();
+        int back = rem < maxBack ? rem : maxBack;
+        int keep = rem - back;
+        int inBits = bitCnt >> 3;
+        long consumed = bytesRead();
+        if (keep <= inBits)
+        {
+            int bits = (bitCnt & 7) + keep * 8;         // whole bytes past `keep` are handed back
+            if (bits < 32)
+            {
+                bitBuf = bitBuf & ((1 << bits) - 1);
+            }
+            bitCnt = bits;
+            in = own;
+            inPos = 0;
+            inEnd = 0;
+        }
+        else
+        {
+            int fromArr = keep - inBits;               // the kept bytes still in `in`, from inPos on
+            if (own.length < fromArr)
+            {
+                byte[] bigger = new byte[fromArr];
+                own = bigger;
+            }
+            int i = 0;
+            while (i < fromArr)
+            {
+                own[i] = in[inPos + i];                 // forward copy: safe when `in` IS own (inPos >= 0)
+                i += 1;
+            }
+            in = own;
+            inPos = 0;
+            inEnd = fromArr;
+        }
+        dropped = consumed + (bitCnt >> 3) - inPos;     // bytesRead() is unchanged by the handover
+        markPos = 0;
+        starved = false;
+        return back;
     }
 
     /**
@@ -400,7 +517,7 @@ public final class Inflate
         }
         else
         {
-            state = ST_ERROR;                          // btype 3 is reserved
+            fail("invalid block type");                          // btype 3 is reserved
         }
     }
 
@@ -422,7 +539,7 @@ public final class Inflate
         int inv = nlo | (nhi << 8);
         if ((n ^ 0xFFFF) != inv)
         {
-            state = ST_ERROR;
+            fail("invalid stored block lengths");
             return;
         }
         storedRem = n;
@@ -465,7 +582,7 @@ public final class Inflate
         }
         if (hlit > 286 || hdist > 30)
         {
-            state = ST_ERROR;
+            fail("too many length or distance symbols");
             return;
         }
         int i = 0;
@@ -487,7 +604,7 @@ public final class Inflate
         }
         if (clen.build(lengths, 19) != 0)
         {
-            state = ST_ERROR;
+            fail("invalid code lengths set");
             return;
         }
         int n = 0;
@@ -501,7 +618,7 @@ public final class Inflate
             }
             if (sym < 0)
             {
-                state = ST_ERROR;
+                fail("invalid code lengths set");
                 return;
             }
             if (sym < 16)
@@ -517,7 +634,7 @@ public final class Inflate
                 {
                     if (n == 0)
                     {
-                        state = ST_ERROR;
+                        fail("invalid bit length repeat");
                         return;
                     }
                     value = lengths[n - 1];
@@ -538,7 +655,7 @@ public final class Inflate
                 }
                 if (n + rep > hlit + hdist)
                 {
-                    state = ST_ERROR;
+                    fail("invalid bit length repeat");
                     return;
                 }
                 while (rep > 0)
@@ -551,12 +668,12 @@ public final class Inflate
         }
         if (lengths[256] == 0)                         // no end-of-block code: the stream could never terminate
         {
-            state = ST_ERROR;
+            fail("invalid code -- missing end-of-block");
             return;
         }
         if (dynLit.build(lengths, hlit) != 0)
         {
-            state = ST_ERROR;
+            fail("invalid literal/lengths set");
             return;
         }
         int d = 0;
@@ -567,7 +684,7 @@ public final class Inflate
         }
         if (dynDst.build(lengths, hdist) < 0)
         {
-            state = ST_ERROR;
+            fail("invalid distances set");
             return;
         }
         lit = dynLit;
@@ -589,7 +706,7 @@ public final class Inflate
             }
             if (sym < 0)
             {
-                state = ST_ERROR;
+                fail("invalid literal/length code");
                 return at;
             }
             if (sym < 256)
@@ -609,7 +726,7 @@ public final class Inflate
             sym = sym - 257;
             if (sym >= LEN_BASE.length)
             {
-                state = ST_ERROR;
+                fail("invalid literal/length code");
                 return at;
             }
             int length = LEN_BASE[sym] + bits(LEN_EXTRA[sym]);
@@ -626,7 +743,7 @@ public final class Inflate
             }
             if (dsym < 0 || dsym >= DIST_BASE.length)
             {
-                state = ST_ERROR;
+                fail("invalid distance code");
                 return at;
             }
             int distance = DIST_BASE[dsym] + bits(DIST_EXTRA[dsym]);
@@ -635,9 +752,9 @@ public final class Inflate
                 rewind();
                 return at;
             }
-            if (distance > produced || distance > 32768)
+            if (distance > produced + dictLen || distance > 32768)
             {
-                state = ST_ERROR;                      // reaches before the start of the output
+                fail("invalid distance too far back");                      // reaches before the start of the output
                 return at;
             }
             copyRem = length;

@@ -280,7 +280,9 @@ class ZipUtils {
      * Loads ZIP native library, if not already loaded
      */
     static void loadLibrary() {
-        jdk.internal.loader.BootLoader.loadLibrary("zip");
+        // joe-ng: BootLoader.loadLibrary("zip") binds libzip's JNI natives, and its JNI_OnLoad
+        // (DEF_STATIC_JNI_OnLoad, zip_util.c) only returns JNI_VERSION_1_8. The zip natives here are Java
+        // (Inflater over zip.ZlibInflate), so there is nothing to load: empty is the correct semantics.
     }
 
     private static final Unsafe UNSAFE = Unsafe.getUnsafe();
