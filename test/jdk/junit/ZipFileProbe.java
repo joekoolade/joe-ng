@@ -284,6 +284,22 @@ public class ZipFileProbe
                         + " mr=" + j.isMultiRelease();
             }
         });
+        arm("JarEntry instanceof, from entries() and stream()", () ->
+        {
+            try (JarFile j = new JarFile(f("/tmp/p.jar")))
+            {
+                ZipEntry first = j.entries().nextElement();
+                StringBuilder sb = new StringBuilder();
+                sb.append("entries=").append(first instanceof JarEntry);
+                Iterator<JarEntry> it = j.stream().iterator();
+                sb.append(" stream=").append(it.next() instanceof JarEntry);
+                j.stream().forEach(e -> sb.append(" lambda=").append(e instanceof JarEntry));
+                Object o = j.getJarEntry("probe/Main.txt");
+                sb.append(" object=").append(o instanceof JarEntry).append(" cast=")
+                        .append(((JarEntry) o).getName());
+                return sb.toString();
+            }
+        });
         arm("the image's jar", () ->
         {
             try (JarFile j = new JarFile(new File(f("/lib/app.jar"))))

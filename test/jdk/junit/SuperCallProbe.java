@@ -27,6 +27,11 @@
  * reaches the middle class's close. Bound one level too high, the inflater stream is not marked closed (a read
  * after close answers a byte instead of "Stream closed") and the deflater stream is never finished (no final
  * block, so the bytes do not inflate back).
+ *
+ * <p>A SHAPE GUARD, NOT A REPRODUCTION -- measured: every arm passes on the commit WITHOUT the fix as well, so the
+ * mis-binding needs a registry state this program does not create. The regression evidence is stock
+ * {@code ReadAfterClose} under MetalJUnit: 3 of 4 with the fix reverted (case [2] "Inflater has been closed",
+ * an endless read loop before the Inflater overlay refused an ended stream), 4 of 4 with it.
  */
 public class SuperCallProbe
 {

@@ -87,7 +87,7 @@ final class MetalSymbols implements Symbols
     }
     public void type(CodeBuffer cb, int reg, int classCp)
     {
-        emitAddr(cb, reg, Loader.typeOfClass(classCp));
+        emitAddr(cb, reg, Loader.typeOfCheckedClass(classCp));
     }
     public void interfaceType(CodeBuffer cb, int reg, int ifaceMethodCp)
     {

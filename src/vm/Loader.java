@@ -25390,6 +25390,77 @@ public final class Loader
         return classMirror(gType);
     }
 
+    /**
+     * The target Type of an {@code instanceof} / {@code checkcast}, which the compiler bakes as an IMMEDIATE --
+     * so a class not registered when the body compiles was a 0 for ever, and against 0 every instanceof answers
+     * FALSE and every checkcast of a non-null throws. Measured: stock StreamZipEntriesTest's
+     * {@code zf.stream().forEach(e -> assertTrue(e instanceof ZipEntry))} printed {@code e=java.util.zip.ZipEntry
+     * inst=false}, because the lambda body compiled when the lambda was LINKED, before the first ZipEntry
+     * existed. The class-literal route, for the same reason: note the pull, let the compile be discarded and
+     * redone with the class loaded. A class that is still absent afterwards is NAMED (denylisted ones excepted,
+     * where absent is the intended state) rather than left to answer false in silence.
+     */
+    static long typeOfCheckedClass(int classCp)
+    {
+        long type = typeOfClass(classCp);
+        if (type == 0L)
+        {
+            int nameOff = gcp[u2(gbase + gcp[classCp])];
+            if (u1(gbase + nameOff + 2) != 0x5B
+                    && lzCompiling && !lzRetried && notePullNeeded(gbase + nameOff))
+            {
+                return 0L;                                          // discarded compile: retried with it loaded
+            }
+            if (!isDenylisted(gbase + nameOff, 0))
+            {
+                reportUnresolvedTypeCheck(gbase + nameOff);
+            }
+        }
+        return type;
+    }
+
+    /** Name a type-check target that stayed unresolved, once per class (the NULL CLASS LITERAL report's shape). */
+    private static void reportUnresolvedTypeCheck(long clsU)
+    {
+        if (unresTypeSeen == null)
+        {
+            unresTypeSeen = new long[64];
+            unresTypeSeenN = 0;
+        }
+        int k = 0;
+        while (k < unresTypeSeenN)
+        {
+            if (unresTypeSeen[k] == clsU)
+            {
+                return;
+            }
+            k += 1;
+        }
+        if (unresTypeSeenN < 64)
+        {
+            unresTypeSeen[unresTypeSeenN] = clsU;
+            unresTypeSeenN += 1;
+        }
+        Uart.write(Magic.bytes("\n  UNRESOLVED TYPE CHECK: "));
+        printNameAt(clsU, 0);
+        Uart.write(Magic.bytes(" -- instanceof answers false and checkcast throws; "));
+        printWhyUnpulled(clsU);
+        if (!lzCompiling)
+        {
+            Uart.write(Magic.bytes(", and OUTSIDE the retry window"));
+        }
+        else if (lzRetried)
+        {
+            Uart.write(Magic.bytes(", and the body's single retry was already spent"));
+        }
+        Uart.write(Magic.bytes("; needed by "));
+        printCompiling();
+        Uart.putc(0x0A);
+    }
+
+    private static long[] unresTypeSeen;
+    private static int unresTypeSeenN;
+
     static long classLiteral(int classCp)
     {
         long type = typeOfClass(classCp);
