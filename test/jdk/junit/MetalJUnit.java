@@ -179,10 +179,13 @@ public class MetalJUnit {
             return;
         }
         MethodSource ms = test.getAnnotation(MethodSource.class);
+        // value() DEFAULTS to {""} -- one empty name, not none -- and JUnit reads an empty name as the test's own
+        // (the default-name form). Treating "" as a factory name broke every default-form test (measured:
+        // SplitWithDelimitersTest reported NO FACTORY, and the regression ran 23 of its 44).
         String[] names = ms == null ? new String[0] : ms.value();
         if (names.length == 0)
         {
-            names = new String[] { test.getName() };
+            names = new String[] { "" };
         }
         int n = 0;
         while (n < names.length)
@@ -243,6 +246,10 @@ public class MetalJUnit {
     private static void runFactory(Class<?> c, Method[] all, Method test, String name)
     {
         String bare = name.endsWith("()") ? name.substring(0, name.length() - 2) : name;
+        if (bare.isEmpty())
+        {
+            bare = test.getName();
+        }
         Class<?> owner = c;
         int hash = bare.indexOf('#');
         if (hash >= 0)
