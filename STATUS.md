@@ -4,6 +4,44 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **STOCK Inflater OVER THE VM'S ENGINE -- zlib's inflate() contract in Java (2026-10-18).** Eighth step of the file
+  arc; retires a hand-written overlay that answered `getAdler()` with a constant 0.
+  - **Before it:** the Inflater overlay skipped the zlib header without checking it, NEVER READ THE TRAILER (so 4 bytes
+    stayed in getRemaining and a stream with a corrupt Adler-32 decoded as good), had no dictionary or ByteBuffer
+    support, answered 0 from getAdler, and named every error "invalid deflate stream".
+  - **`java.util.zip.Inflater` runs from the JDK 26 source.** Its natives (`Inflater.c`) are Java over a new
+    `zip.ZlibInflate` held in a handle table (`MetalZStreams`) where the C holds a `z_stream`. ZlibInflate is zlib's
+    contract around the existing `zip.Inflate`: the RFC 1950 header with zlib's three checks and messages, FDICT
+    (needsDictionary, getAdler = the dictionary id, setDictionary checked against it), the Adler-32 trailer CHECKED,
+    and exact input consumption. The caller owns its input, so a call that runs out mid-symbol keeps the partial
+    symbol (`avail_in` reaches 0) and a full or finished one hands the rest back -- GZIPInputStream and
+    ZipInputStream read their trailers out of that remainder. The direct-buffer natives copy through Unsafe.
+  - **The engine** gained in-place input (`feed`/`release`: no copy of the caller's slice, so a byte-at-a-time
+    reader is not quadratic), a preset-dictionary window prefill, and zlib's own error messages at its 14 failure
+    sites (`invalid block type`, `invalid distance too far back`, ...). The class loader's `input()` path is unchanged.
+    `ZipUtils.loadLibrary` is empty: libzip's `JNI_OnLoad` only returns the JNI version, and the natives are Java.
+  - **Host cross-check against the JDK Inflater:** 3000 random cases (levels, both wrap modes, dictionaries, chunkings
+    down to one byte each way, trailing bytes, corruptions). The first run differed in 809 -- the engine handed a
+    starved partial symbol back, so a caller refilling only on needsInput() waited for ever -- and after the fix
+    2986 are identical; the 14 others are corrupted zlib streams read through a 1-byte output buffer, where both
+    throw `incorrect data check` and differ by one byte of garbage output delivered first.
+  - **Probe:** `InflaterProbe` (21 arms over streams REAL zlib compressed, embedded -- this VM's Deflater writes
+    stored blocks only) is host-identical on QEMU at the first run. **Negative control** on main: no ByteBuffer
+    methods (does not compile); with those arms removed, the trailer is left unconsumed, a wrong check is ACCEPTED,
+    dictionaries fail, and every error reads `invalid deflate stream`. `make overlaycheck`: 0 new.
+  - **Regression (0ea2924):** 79 of 81 probes host-identical, DigestProbe/MacProbe designed divergences only
+    (gates clean); suite against a same-load control on main identical -- markers all zero, `gc: collections=51`,
+    clinits 356, 3345 s vs 3675 s; `ran 44, failures 0`; the stock zip tests as before (group A 46/3, the compressor
+    and the 1970 clock) and group B adds DataDescriptor*, GZIPInputStreamAvailable, BasicGZIPInputStreamTest,
+    CloseWrappedStream and Zip64DataDescriptor, all passing -- its only new failures are the known ZipFS/MS932/
+    sparse-file ones. **A harness limit, not this change:** a 279-character `args=` line arrived truncated
+    (`CloseWrappedSt` -- CANNOT LOAD, and the last class never ran); the two passed run alone. Where it is cut is not
+    found yet. **Pi:** PASS (2026-10-18, 0ea2924) -- 4 of 4 cores, WiFi join, DHCP, NetDemo HTTP 200 (bytes=888),
+    `[main returned normally]`, `gc: collections=7`; batch 1 loads 1581 classes and per-batch `clinits=` read
+    437/437/438/439/439, as on 2d09a81.
+  - **Gaps it leaves:** the Deflater is still a hand-written overlay writing stored blocks only (its stock version
+    needs a real compressor); no wall clock; the `args=` truncation.
+
 - **STOCK ZipFile AND JarFile OVER THE WRITABLE TREE -- and two VM bugs the stock zip tests found (2026-10-18).**
   Seventh step of the file arc; takes up the zip JUnit tests PLAN.md set aside as "blocked on a filesystem".
   - **Before it:** `ZipFile` was a hand-written read-only overlay (no `File`/`Charset` constructors, no `getComment`,

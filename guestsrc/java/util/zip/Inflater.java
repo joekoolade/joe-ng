@@ -1,202 +1,870 @@
 /*
- * Copyright (c) 2026 Joseph Kulig.
+ * Copyright (c) 1996, 2025, Oracle and/or its affiliates. All rights reserved.
+ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License 2.0 which is available at
- * https://www.eclipse.org/legal/epl-2.0/
+ * This code is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 only, as
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
- * SPDX-License-Identifier: EPL-2.0
+ * This code is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+ * version 2 for more details (a copy is included in the LICENSE file that
+ * accompanied this code).
  *
- * Created: 2026-08-25
+ * You should have received a copy of the GNU General Public License version
+ * 2 along with this work; if not, write to the Free Software Foundation,
+ * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ *
+ * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
+ * or visit www.oracle.com if you need additional information or have any
+ * questions.
  */
+
 package java.util.zip;
 
-import zip.Inflate;
+import java.lang.ref.Cleaner.Cleanable;
+import java.nio.ByteBuffer;
+import java.nio.ReadOnlyBufferException;
+import java.util.Objects;
+
+import jdk.internal.ref.CleanerFactory;
+import jdk.internal.util.Preconditions;
+
+import static java.util.zip.ZipUtils.NIO_ACCESS;
 
 /**
- * A JDK-free {@code java.util.zip.Inflater} overlay (wins by name). The stock class is a shell over native
- * zlib — {@code init}/{@code inflateBytesBytes}/{@code end} and a {@code Cleaner} over a {@code z_stream}
- * address — none of which exists on metal. This overlay keeps the public API exactly and delegates to
- * {@link zip.Inflate}, joe-ng's own RFC-1951 decoder, so the UNMODIFIED stock {@code InflaterInputStream},
- * {@code ZipInputStream} and {@code JarInputStream} run on top of it unchanged.
+ * This class provides support for general purpose decompression using the
+ * popular ZLIB compression library. The ZLIB compression library was
+ * initially developed as part of the PNG graphics standard and is not
+ * protected by patents. It is fully described in the specifications at
+ * the <a href="package-summary.html#package-description">java.util.zip
+ * package description</a>.
+ * <p>
+ * Unless otherwise noted, passing a {@code null} argument to a constructor
+ * or method in this class will cause a {@link NullPointerException} to be
+ * thrown.
+ * <p>
+ * This class inflates sequences of ZLIB compressed bytes. The input byte
+ * sequence is provided in either a byte array or a {@link ByteBuffer}, via one of the
+ * {@code setInput()} methods. The output byte sequence is written to the
+ * output byte array or {@code ByteBuffer} passed to the {@code inflate()} methods.
+ * <p>
+ * To release the resources used by an {@code Inflater}, an application must close it
+ * by invoking its {@link #end()} or {@link #close()} method.
  *
- * <p>{@link zip.Inflate} is the same class the image-baked class loader inflates jar entries with; here it is
- * simply demand-loaded into the guest world like any other class, so there is one decoder implementation, not
- * two. That is why this overlay needs no VM native at all.
+ * @apiNote
+ * This class implements {@link AutoCloseable} to facilitate its usage with
+ * {@code try}-with-resources statement. The {@linkplain Inflater#close() close() method} simply
+ * calls {@code end()}.
  *
- * <p>The engine decodes RAW DEFLATE. {@code nowrap=false} (the zlib-wrapped form) is handled here by skipping
- * the 2-byte zlib header and ignoring the trailing Adler-32; {@link #getAdler} therefore answers 0. Preset
- * dictionaries are not supported (nothing in the zip/jar path uses them).
+ * <p>
+ * The following code fragment demonstrates a trivial compression
+ * and decompression of a string using {@code Deflater} and {@code Inflater}.
+ * {@snippet id="compdecomp" lang="java" class="Snippets" region="DeflaterInflaterExample"}
+ *
+ * @see         Deflater
+ * @author      David Connelly
+ * @since 1.1
+ *
  */
-public class Inflater implements AutoCloseable
-{
-    private final Inflate engine = new Inflate();
-    private boolean nowrap;
-    private int headerLeft;                              // zlib header bytes still to swallow (nowrap=false)
-    private long headerRead;                             // ... counted into getBytesRead, like zlib does
-    private boolean ended;
 
-    public Inflater()
-    {
-        this(false);
-    }
+public class Inflater implements AutoCloseable {
 
-    public Inflater(boolean nowrap)
-    {
-        this.nowrap = nowrap;
-        reset();
-    }
+    private final InflaterZStreamRef zsRef;
+    private ByteBuffer input = ZipUtils.defaultBuf;
+    private byte[] inputArray;
+    private int inputPos, inputLim;
+    private boolean finished;
+    private boolean pendingOutput;
+    private boolean needDict;
+    private long bytesRead;
+    private long bytesWritten;
 
-    /** Discard all state and start on a fresh stream. */
-    public void reset()
-    {
-        ensureOpen();
-        engine.reset();
-        headerLeft = nowrap ? 0 : 2;
-        headerRead = 0;
+    /*
+     * These fields are used as an "out" parameter from JNI when a
+     * DataFormatException is thrown during the inflate operation.
+     */
+    private int inputConsumed;
+    private int outputConsumed;
+
+    static {
+        ZipUtils.loadLibrary();
+        initIDs();
     }
 
     /**
-     * Stock's check, with stock's exception: inflate, setDictionary, getAdler, getBytesRead/Written (and the
-     * getTotal pair through them) and reset refuse an ended Inflater. This overlay used to answer 0 from
-     * inflate instead -- and stock InflaterInputStream.read loops while inflate answers 0 and the Inflater
-     * neither needs input nor is finished, so a stream left reading an ended Inflater SPUN FOR EVER rather
-     * than failing (ReadAfterClose, reached through a mis-bound super.close()).
+     * Creates a new decompressor. If the parameter 'nowrap' is true then
+     * the ZLIB header and checksum fields will not be used. This provides
+     * compatibility with the compression format used by both GZIP and PKZIP.
+     * <p>
+     * Note: When using the 'nowrap' option it is also necessary to provide
+     * an extra "dummy" byte as input. This is required by the ZLIB native
+     * library in order to support certain optimizations.
+     *
+     * @param nowrap if true then support GZIP compatible compression
      */
-    private void ensureOpen()
+    @SuppressWarnings("this-escape")
+    public Inflater(boolean nowrap) {
+        this.zsRef = new InflaterZStreamRef(this, init(nowrap));
+    }
+
+    /**
+     * Creates a new decompressor.
+     */
+    public Inflater() {
+        this(false);
+    }
+
+    /**
+     * Sets input data for decompression.
+     * <p>
+     * One of the {@code setInput()} methods should be called whenever
+     * {@code needsInput()} returns true indicating that more input data
+     * is required.
+     *
+     * @param input the input data bytes
+     * @param off the start offset of the input data
+     * @param len the length of the input data
+     * @see Inflater#needsInput
+     */
+    public void setInput(byte[] input, int off, int len) {
+        Preconditions.checkFromIndexSize(off, len, input.length, Preconditions.AIOOBE_FORMATTER);
+        synchronized (zsRef) {
+            this.input = null;
+            this.inputArray = input;
+            this.inputPos = off;
+            this.inputLim = off + len;
+        }
+    }
+
+    /**
+     * Sets input data for decompression.
+     * <p>
+     * One of the {@code setInput()} methods should be called whenever
+     * {@code needsInput()} returns true indicating that more input data
+     * is required.
+     *
+     * @param input the input data bytes
+     * @see Inflater#needsInput
+     */
+    public void setInput(byte[] input) {
+        setInput(input, 0, input.length);
+    }
+
+    /**
+     * Sets input data for decompression.
+     * <p>
+     * One of the {@code setInput()} methods should be called whenever
+     * {@code needsInput()} returns true indicating that more input data
+     * is required.
+     * <p>
+     * The given buffer's position will be advanced as inflate
+     * operations are performed, up to the buffer's limit.
+     * The input buffer may be modified (refilled) between inflate
+     * operations; doing so is equivalent to creating a new buffer
+     * and setting it with this method.
+     * <p>
+     * Modifying the input buffer's contents, position, or limit
+     * concurrently with an inflate operation will result in
+     * undefined behavior, which may include incorrect operation
+     * results or operation failure.
+     *
+     * @param input the input data bytes
+     * @see Inflater#needsInput
+     * @since 11
+     */
+    public void setInput(ByteBuffer input) {
+        Objects.requireNonNull(input);
+        synchronized (zsRef) {
+            this.input = input;
+            this.inputArray = null;
+        }
+    }
+
+    /**
+     * Sets the preset dictionary to the given array of bytes. Should be
+     * called when inflate() returns 0 and needsDictionary() returns true
+     * indicating that a preset dictionary is required. The method getAdler()
+     * can be used to get the Adler-32 value of the dictionary needed.
+     * @param dictionary the dictionary data bytes
+     * @param off the start offset of the data
+     * @param len the length of the data
+     * @throws IllegalStateException if the Inflater is closed
+     * @see Inflater#needsDictionary
+     * @see Inflater#getAdler
+     */
+    public void setDictionary(byte[] dictionary, int off, int len) {
+        Preconditions.checkFromIndexSize(off, len, dictionary.length, Preconditions.AIOOBE_FORMATTER);
+        synchronized (zsRef) {
+            ensureOpen();
+            setDictionary(zsRef.address(), dictionary, off, len);
+            needDict = false;
+        }
+    }
+
+    /**
+     * Sets the preset dictionary to the given array of bytes. Should be
+     * called when inflate() returns 0 and needsDictionary() returns true
+     * indicating that a preset dictionary is required. The method getAdler()
+     * can be used to get the Adler-32 value of the dictionary needed.
+     * @param dictionary the dictionary data bytes
+     * @throws IllegalStateException if the Inflater is closed
+     * @see Inflater#needsDictionary
+     * @see Inflater#getAdler
+     */
+    public void setDictionary(byte[] dictionary) {
+        setDictionary(dictionary, 0, dictionary.length);
+    }
+
+    /**
+     * Sets the preset dictionary to the bytes in the given buffer. Should be
+     * called when inflate() returns 0 and needsDictionary() returns true
+     * indicating that a preset dictionary is required. The method getAdler()
+     * can be used to get the Adler-32 value of the dictionary needed.
+     * <p>
+     * The bytes in given byte buffer will be fully consumed by this method.  On
+     * return, its position will equal its limit.
+     *
+     * @param dictionary the dictionary data bytes
+     * @throws IllegalStateException if the Inflater is closed
+     * @see Inflater#needsDictionary
+     * @see Inflater#getAdler
+     * @since 11
+     */
+    public void setDictionary(ByteBuffer dictionary) {
+        synchronized (zsRef) {
+            int position = dictionary.position();
+            int remaining = Math.max(dictionary.limit() - position, 0);
+            ensureOpen();
+            if (dictionary.isDirect()) {
+                NIO_ACCESS.acquireSession(dictionary);
+                try {
+                    long address = NIO_ACCESS.getBufferAddress(dictionary);
+                    setDictionaryBuffer(zsRef.address(), address + position, remaining);
+                } finally {
+                    NIO_ACCESS.releaseSession(dictionary);
+                }
+            } else {
+                byte[] array = ZipUtils.getBufferArray(dictionary);
+                int offset = ZipUtils.getBufferOffset(dictionary);
+                setDictionary(zsRef.address(), array, offset + position, remaining);
+            }
+            dictionary.position(position + remaining);
+            needDict = false;
+        }
+    }
+
+    /**
+     * Returns the total number of bytes remaining in the input buffer.
+     * This can be used to find out what bytes still remain in the input
+     * buffer after decompression has finished.
+     * @return the total number of bytes remaining in the input buffer
+     */
+    public int getRemaining() {
+        synchronized (zsRef) {
+            ByteBuffer input = this.input;
+            return input == null ? inputLim - inputPos : input.remaining();
+        }
+    }
+
+    /**
+     * Returns true if no data remains in the input buffer. This can
+     * be used to determine if one of the {@code setInput()} methods should be
+     * called in order to provide more input.
+     *
+     * @return true if no data remains in the input buffer
+     */
+    public boolean needsInput() {
+        synchronized (zsRef) {
+            ByteBuffer input = this.input;
+            return input == null ? inputLim == inputPos : ! input.hasRemaining();
+        }
+    }
+
+    /**
+     * {@return true if a preset dictionary is needed for decompression}
+     * @see Inflater#setDictionary
+     */
+    public boolean needsDictionary() {
+        synchronized (zsRef) {
+            return needDict;
+        }
+    }
+
+    /**
+     * {@return true if the end of the compressed data stream has been
+     * reached}
+     */
+    public boolean finished() {
+        synchronized (zsRef) {
+            return finished;
+        }
+    }
+
+    /**
+     * Uncompresses bytes into specified buffer. Returns actual number
+     * of bytes uncompressed. A return value of 0 indicates that
+     * needsInput() or needsDictionary() should be called in order to
+     * determine if more input data or a preset dictionary is required.
+     * In the latter case, getAdler() can be used to get the Adler-32
+     * value of the dictionary required.
+     * <p>
+     * If the {@link #setInput(ByteBuffer)} method was called to provide a buffer
+     * for input, the input buffer's position will be advanced by the number of bytes
+     * consumed by this operation, even in the event that a {@link DataFormatException}
+     * is thrown.
+     * <p>
+     * The {@linkplain #getRemaining() remaining byte count} will be reduced by
+     * the number of consumed input bytes.  If the {@link #setInput(ByteBuffer)}
+     * method was called to provide a buffer for input, the input buffer's position
+     * will be advanced the number of consumed bytes.
+     * <p>
+     * These byte totals, as well as
+     * the {@linkplain #getBytesRead() total bytes read}
+     * and the {@linkplain #getBytesWritten() total bytes written}
+     * values, will be updated even in the event that a {@link DataFormatException}
+     * is thrown to reflect the amount of data consumed and produced before the
+     * exception occurred.
+     *
+     * @param output the buffer for the uncompressed data
+     * @param off the start offset of the data
+     * @param len the maximum number of uncompressed bytes
+     * @return the actual number of uncompressed bytes
+     * @throws DataFormatException if the compressed data format is invalid
+     * @throws IllegalStateException if the Inflater is closed
+     * @see Inflater#needsInput
+     * @see Inflater#needsDictionary
+     */
+    public int inflate(byte[] output, int off, int len)
+        throws DataFormatException
     {
-        if (ended)
-        {
+        Preconditions.checkFromIndexSize(off, len, output.length, Preconditions.AIOOBE_FORMATTER);
+        synchronized (zsRef) {
+            ensureOpen();
+            ByteBuffer input = this.input;
+            long result;
+            int inputPos;
+            try {
+                if (input == null) {
+                    inputPos = this.inputPos;
+                    try {
+                        result = inflateBytesBytes(zsRef.address(),
+                            inputArray, inputPos, inputLim - inputPos,
+                            output, off, len);
+                    } catch (DataFormatException e) {
+                        this.inputPos = inputPos + inputConsumed;
+                        throw e;
+                    }
+                } else {
+                    inputPos = input.position();
+                    try {
+                        int inputRem = Math.max(input.limit() - inputPos, 0);
+                        if (input.isDirect()) {
+                            NIO_ACCESS.acquireSession(input);
+                            try {
+                                long inputAddress = NIO_ACCESS.getBufferAddress(input);
+                                result = inflateBufferBytes(zsRef.address(),
+                                    inputAddress + inputPos, inputRem,
+                                    output, off, len);
+                            } finally {
+                                NIO_ACCESS.releaseSession(input);
+                            }
+                        } else {
+                            byte[] inputArray = ZipUtils.getBufferArray(input);
+                            int inputOffset = ZipUtils.getBufferOffset(input);
+                            result = inflateBytesBytes(zsRef.address(),
+                                inputArray, inputOffset + inputPos, inputRem,
+                                output, off, len);
+                        }
+                    } catch (DataFormatException e) {
+                        input.position(inputPos + inputConsumed);
+                        throw e;
+                    }
+                }
+            } catch (DataFormatException e) {
+                bytesRead += inputConsumed;
+                inputConsumed = 0;
+                int written = outputConsumed;
+                bytesWritten += written;
+                outputConsumed = 0;
+                throw e;
+            }
+            int read = (int) (result & 0x7fff_ffffL);
+            int written = (int) (result >>> 31 & 0x7fff_ffffL);
+            if ((result >>> 62 & 1) != 0) {
+                finished = true;
+            }
+            if (written == len && !finished) {
+                pendingOutput = true;
+            } else {
+                pendingOutput = false;
+            }
+            if ((result >>> 63 & 1) != 0) {
+                needDict = true;
+            }
+            if (input != null) {
+                if (read > 0) {
+                    input.position(inputPos + read);
+                }
+            } else {
+                this.inputPos = inputPos + read;
+            }
+            bytesWritten += written;
+            bytesRead += read;
+            return written;
+        }
+    }
+
+    /**
+     * Uncompresses bytes into specified buffer. Returns actual number
+     * of bytes uncompressed. A return value of 0 indicates that
+     * needsInput() or needsDictionary() should be called in order to
+     * determine if more input data or a preset dictionary is required.
+     * In the latter case, getAdler() can be used to get the Adler-32
+     * value of the dictionary required.
+     * <p>
+     * The {@linkplain #getRemaining() remaining byte count} will be reduced by
+     * the number of consumed input bytes.  If the {@link #setInput(ByteBuffer)}
+     * method was called to provide a buffer for input, the input buffer's position
+     * will be advanced the number of consumed bytes.
+     * <p>
+     * These byte totals, as well as
+     * the {@linkplain #getBytesRead() total bytes read}
+     * and the {@linkplain #getBytesWritten() total bytes written}
+     * values, will be updated even in the event that a {@link DataFormatException}
+     * is thrown to reflect the amount of data consumed and produced before the
+     * exception occurred.
+     *
+     * @param output the buffer for the uncompressed data
+     * @return the actual number of uncompressed bytes
+     * @throws DataFormatException if the compressed data format is invalid
+     * @throws IllegalStateException if the Inflater is closed
+     * @see Inflater#needsInput
+     * @see Inflater#needsDictionary
+     */
+    public int inflate(byte[] output) throws DataFormatException {
+        return inflate(output, 0, output.length);
+    }
+
+    /**
+     * Uncompresses bytes into specified buffer. Returns actual number
+     * of bytes uncompressed. A return value of 0 indicates that
+     * needsInput() or needsDictionary() should be called in order to
+     * determine if more input data or a preset dictionary is required.
+     * In the latter case, getAdler() can be used to get the Adler-32
+     * value of the dictionary required.
+     * <p>
+     * On success, the position of the given {@code output} byte buffer will be
+     * advanced by as many bytes as were produced by the operation, which is equal
+     * to the number returned by this method.  Note that the position of the
+     * {@code output} buffer will be advanced even in the event that a
+     * {@link DataFormatException} is thrown.
+     * <p>
+     * The {@linkplain #getRemaining() remaining byte count} will be reduced by
+     * the number of consumed input bytes.  If the {@link #setInput(ByteBuffer)}
+     * method was called to provide a buffer for input, the input buffer's position
+     * will be advanced the number of consumed bytes.
+     * <p>
+     * These byte totals, as well as
+     * the {@linkplain #getBytesRead() total bytes read}
+     * and the {@linkplain #getBytesWritten() total bytes written}
+     * values, will be updated even in the event that a {@link DataFormatException}
+     * is thrown to reflect the amount of data consumed and produced before the
+     * exception occurred.
+     *
+     * @param output the buffer for the uncompressed data
+     * @return the actual number of uncompressed bytes
+     * @throws DataFormatException if the compressed data format is invalid
+     * @throws ReadOnlyBufferException if the given output buffer is read-only
+     * @throws IllegalStateException if the Inflater is closed
+     * @see Inflater#needsInput
+     * @see Inflater#needsDictionary
+     * @since 11
+     */
+    public int inflate(ByteBuffer output) throws DataFormatException {
+        if (output.isReadOnly()) {
+            throw new ReadOnlyBufferException();
+        }
+        synchronized (zsRef) {
+            ensureOpen();
+            ByteBuffer input = this.input;
+            long result;
+            int inputPos;
+            int outputPos = output.position();
+            int outputRem = Math.max(output.limit() - outputPos, 0);
+            try {
+                if (input == null) {
+                    inputPos = this.inputPos;
+                    try {
+                        if (output.isDirect()) {
+                            NIO_ACCESS.acquireSession(output);
+                            try {
+                                long outputAddress = NIO_ACCESS.getBufferAddress(output);
+                                result = inflateBytesBuffer(zsRef.address(),
+                                    inputArray, inputPos, inputLim - inputPos,
+                                    outputAddress + outputPos, outputRem);
+                            } finally {
+                                NIO_ACCESS.releaseSession(output);
+                            }
+                        } else {
+                            byte[] outputArray = ZipUtils.getBufferArray(output);
+                            int outputOffset = ZipUtils.getBufferOffset(output);
+                            result = inflateBytesBytes(zsRef.address(),
+                                inputArray, inputPos, inputLim - inputPos,
+                                outputArray, outputOffset + outputPos, outputRem);
+                        }
+                    } catch (DataFormatException e) {
+                        this.inputPos = inputPos + inputConsumed;
+                        throw e;
+                    }
+                } else {
+                    inputPos = input.position();
+                    int inputRem = Math.max(input.limit() - inputPos, 0);
+                    try {
+                        if (input.isDirect()) {
+                            NIO_ACCESS.acquireSession(input);
+                            try {
+                                long inputAddress = NIO_ACCESS.getBufferAddress(input);
+                                if (output.isDirect()) {
+                                    NIO_ACCESS.acquireSession(output);
+                                    try {
+                                        long outputAddress = NIO_ACCESS.getBufferAddress(output);
+                                        result = inflateBufferBuffer(zsRef.address(),
+                                            inputAddress + inputPos, inputRem,
+                                            outputAddress + outputPos, outputRem);
+                                    } finally {
+                                        NIO_ACCESS.releaseSession(output);
+                                    }
+                                } else {
+                                    byte[] outputArray = ZipUtils.getBufferArray(output);
+                                    int outputOffset = ZipUtils.getBufferOffset(output);
+                                    result = inflateBufferBytes(zsRef.address(),
+                                        inputAddress + inputPos, inputRem,
+                                        outputArray, outputOffset + outputPos, outputRem);
+                                }
+                            } finally {
+                                NIO_ACCESS.releaseSession(input);
+                            }
+                        } else {
+                            byte[] inputArray = ZipUtils.getBufferArray(input);
+                            int inputOffset = ZipUtils.getBufferOffset(input);
+                            if (output.isDirect()) {
+                                NIO_ACCESS.acquireSession(output);
+                                try {
+                                    long outputAddress = NIO_ACCESS.getBufferAddress(output);
+                                    result = inflateBytesBuffer(zsRef.address(),
+                                        inputArray, inputOffset + inputPos, inputRem,
+                                        outputAddress + outputPos, outputRem);
+                                } finally {
+                                    NIO_ACCESS.releaseSession(output);
+                                }
+                            } else {
+                                byte[] outputArray = ZipUtils.getBufferArray(output);
+                                int outputOffset = ZipUtils.getBufferOffset(output);
+                                result = inflateBytesBytes(zsRef.address(),
+                                    inputArray, inputOffset + inputPos, inputRem,
+                                    outputArray, outputOffset + outputPos, outputRem);
+                            }
+                        }
+                    } catch (DataFormatException e) {
+                        input.position(inputPos + inputConsumed);
+                        throw e;
+                    }
+                }
+            } catch (DataFormatException e) {
+                bytesRead += inputConsumed;
+                inputConsumed = 0;
+                int written = outputConsumed;
+                output.position(outputPos + written);
+                bytesWritten += written;
+                outputConsumed = 0;
+                throw e;
+            }
+            int read = (int) (result & 0x7fff_ffffL);
+            int written = (int) (result >>> 31 & 0x7fff_ffffL);
+            if ((result >>> 62 & 1) != 0) {
+                finished = true;
+            }
+            if ((result >>> 63 & 1) != 0) {
+                needDict = true;
+            }
+            if (input != null) {
+                input.position(inputPos + read);
+            } else {
+                this.inputPos = inputPos + read;
+            }
+            // Note: this method call also serves to keep the byteBuffer ref alive
+            output.position(outputPos + written);
+            bytesWritten += written;
+            bytesRead += read;
+            return written;
+        }
+    }
+
+    /**
+     * {@return the ADLER-32 value of the uncompressed data}
+     * @throws IllegalStateException if the Inflater is closed
+     */
+    public int getAdler() {
+        synchronized (zsRef) {
+            ensureOpen();
+            return getAdler(zsRef.address());
+        }
+    }
+
+    /**
+     * Returns the total number of compressed bytes input so far.
+     *
+     * @implSpec
+     * This method returns the equivalent of {@code (int) getBytesRead()}
+     * and therefore cannot return the correct value when it is greater
+     * than {@link Integer#MAX_VALUE}.
+     *
+     * @deprecated Use {@link #getBytesRead()} instead
+     *
+     * @return the total number of compressed bytes input so far
+     * @throws IllegalStateException if the Inflater is closed
+     */
+    @Deprecated(since = "23")
+    public int getTotalIn() {
+        return (int) getBytesRead();
+    }
+
+    /**
+     * Returns the total number of compressed bytes input so far.
+     *
+     * @return the total (non-negative) number of compressed bytes input so far
+     * @throws IllegalStateException if the Inflater is closed
+     * @since 1.5
+     */
+    public long getBytesRead() {
+        synchronized (zsRef) {
+            ensureOpen();
+            return bytesRead;
+        }
+    }
+
+    /**
+     * Returns the total number of uncompressed bytes output so far.
+     *
+     * @implSpec
+     * This method returns the equivalent of {@code (int) getBytesWritten()}
+     * and therefore cannot return the correct value when it is greater
+     * than {@link Integer#MAX_VALUE}.
+     *
+     * @deprecated Use {@link #getBytesWritten()} instead
+     *
+     * @return the total number of uncompressed bytes output so far
+     * @throws IllegalStateException if the Inflater is closed
+     */
+    @Deprecated(since = "23")
+    public int getTotalOut() {
+        return (int) getBytesWritten();
+    }
+
+    /**
+     * Returns the total number of uncompressed bytes output so far.
+     *
+     * @return the total (non-negative) number of uncompressed bytes output so far
+     * @throws IllegalStateException if the Inflater is closed
+     * @since 1.5
+     */
+    public long getBytesWritten() {
+        synchronized (zsRef) {
+            ensureOpen();
+            return bytesWritten;
+        }
+    }
+
+    /**
+     * Resets inflater so that a new set of input data can be processed.
+     * @throws IllegalStateException if the Inflater is closed
+     */
+    public void reset() {
+        synchronized (zsRef) {
+            ensureOpen();
+            reset(zsRef.address());
+            input = ZipUtils.defaultBuf;
+            inputArray = null;
+            finished = false;
+            needDict = false;
+            bytesRead = bytesWritten = 0;
+        }
+    }
+
+    /**
+     * Closes and releases the resources held by this {@code Inflater}
+     * and discards any unprocessed input.
+     * <p>
+     * If the {@code Inflater} is already closed then invoking this method has no effect.
+     *
+     * @implSpec Subclasses should override this method to clean up the resources
+     * acquired by the subclass.
+     *
+     * @see #close()
+     */
+    public void end() {
+        synchronized (zsRef) {
+            // check if already closed
+            if (zsRef.address() == 0) {
+                return;
+            }
+            zsRef.clean();
+            input = ZipUtils.defaultBuf;
+            inputArray = null;
+        }
+    }
+
+
+    /**
+     * Closes and releases the resources held by this {@code Inflater}
+     * and discards any unprocessed input.
+     *
+     * @implSpec This method calls the {@link #end()} method.
+     * @since 25
+     */
+    @Override
+    public void close() {
+        end();
+    }
+
+    private void ensureOpen () {
+        assert Thread.holdsLock(zsRef);
+        if (zsRef.address() == 0) {
             throw new IllegalStateException("Inflater has been closed");
         }
     }
 
-    /** Release the decoder. There is no native resource here, so this only latches the closed state. */
+    boolean hasPendingOutput() {
+        return pendingOutput;
+    }
+
+    // joe-ng: the natives of Inflater.c, in Java over zip.ZlibInflate -- zlib's inflate() contract over the VM's
+    // own DEFLATE engine -- held in a handle table (MetalZStreams) where the C holds a z_stream pointer.
+
+    private static void initIDs()
+    {
+        // Inflater_initIDs caches the JNI field IDs of inputConsumed/outputConsumed and nothing else; the
+        // natives below assign the fields directly, so with no JNI empty is the correct semantics.
+    }
+
+    private static long init(boolean nowrap)
+    {
+        return MetalZStreams.put(new zip.ZlibInflate(nowrap));
+    }
+
+    private static void setDictionary(long addr, byte[] b, int off, int len)
+    {
+        zip.ZlibInflate z = stream(addr);
+        int res = z.setDictionary(b, off, len);
+        if (res != zip.ZlibInflate.OK)
+        {
+            throw new IllegalArgumentException(z.msg);  // checkSetDictionaryResult: strm->msg, as it stands
+        }
+    }
+
+    private static void setDictionaryBuffer(long addr, long bufAddress, int len)
+    {
+        setDictionary(addr, MetalZStreams.fromAddress(bufAddress, len), 0, len);
+    }
+
+    private long inflateBytesBytes(long addr,
+        byte[] inputArray, int inputOff, int inputLen,
+        byte[] outputArray, int outputOff, int outputLen) throws DataFormatException
+    {
+        zip.ZlibInflate z = stream(addr);
+        int ret = z.inflate(inputArray, inputOff, inputLen, outputArray, outputOff, outputLen);
+        if (ret == zip.ZlibInflate.DATA_ERROR)
+        {
+            inputConsumed = z.inUsed;                   // checkInflateStatus sets both before throwing
+            outputConsumed = z.outUsed;
+            throw new DataFormatException(z.msg);
+        }
+        long finished = ret == zip.ZlibInflate.STREAM_END ? 1L : 0L;
+        long needDict = ret == zip.ZlibInflate.NEED_DICT ? 1L : 0L;
+        return ((long) z.inUsed) | (((long) z.outUsed) << 31) | (finished << 62) | (needDict << 63);
+    }
+
+    private long inflateBytesBuffer(long addr,
+        byte[] inputArray, int inputOff, int inputLen,
+        long outputAddress, int outputLen) throws DataFormatException
+    {
+        byte[] out = new byte[outputLen];
+        long r = inflateBytesBytes(addr, inputArray, inputOff, inputLen, out, 0, outputLen);
+        MetalZStreams.toAddress(out, (int) (r >>> 31 & 0x7fff_ffffL), outputAddress);
+        return r;
+    }
+
+    private long inflateBufferBytes(long addr,
+        long inputAddress, int inputLen,
+        byte[] outputArray, int outputOff, int outputLen) throws DataFormatException
+    {
+        return inflateBytesBytes(addr, MetalZStreams.fromAddress(inputAddress, inputLen), 0, inputLen,
+                outputArray, outputOff, outputLen);
+    }
+
+    private long inflateBufferBuffer(long addr,
+        long inputAddress, int inputLen,
+        long outputAddress, int outputLen) throws DataFormatException
+    {
+        return inflateBytesBuffer(addr, MetalZStreams.fromAddress(inputAddress, inputLen), 0, inputLen,
+                outputAddress, outputLen);
+    }
+
+    private static int getAdler(long addr)
+    {
+        return stream(addr).adler();
+    }
+
+    private static void reset(long addr)
+    {
+        stream(addr).reset();
+    }
+
+    private static void end(long addr)
+    {
+        MetalZStreams.remove(addr);
+    }
+
+    private static zip.ZlibInflate stream(long addr)
+    {
+        return (zip.ZlibInflate) MetalZStreams.get(addr);
+    }
+
     /**
-     * JDK 24 made {@code Inflater} {@link AutoCloseable} so it can be a try-with-resources resource; close()
-     * is specified as end(), and end() is idempotent, so repeated closes are harmless.
+     * A reference to the native zlib's z_stream structure. It also
+     * serves as the "cleaner" to clean up the native resource when
+     * the Inflater is ended, closed or cleaned.
      */
-    public void close()
-    {
-        end();
-    }
+    static class InflaterZStreamRef implements Runnable {
 
-    public void end()
-    {
-        ended = true;
-    }
+        private long address; // will be a non-zero value when the native resource is in use
+        private final Cleanable cleanable;
 
-    public void setInput(byte[] input)
-    {
-        setInput(input, 0, input.length);
-    }
-
-    /** Hand the decoder more compressed bytes; it keeps whatever it cannot consume yet. */
-    public void setInput(byte[] input, int off, int len)
-    {
-        Deflater.checkBounds(input, off, len);
-        if (ended || len <= 0)
-        {
-            return;
+        private InflaterZStreamRef(Inflater owner, long addr) {
+            assert addr != 0 : "native address is 0";
+            this.cleanable = (owner != null) ? CleanerFactory.cleaner().register(owner, this) : null;
+            this.address = addr;
         }
-        while (headerLeft > 0 && len > 0)
-        {
-            off += 1;                                    // swallow the zlib CMF/FLG bytes
-            len -= 1;
-            headerLeft -= 1;
-            headerRead += 1;
+
+        long address() {
+            return address;
         }
-        if (len > 0)
-        {
-            engine.input(input, off, len);
+
+        void clean() {
+            cleanable.clean();
         }
-    }
 
-    public int inflate(byte[] output) throws DataFormatException
-    {
-        return inflate(output, 0, output.length);
-    }
-
-    /** Decompress into {@code output[off..off+len)}; the count produced, 0 when more input is needed. */
-    public int inflate(byte[] output, int off, int len) throws DataFormatException
-    {
-        Deflater.checkBounds(output, off, len);      // stock range-checks before touching the array
-        ensureOpen();
-        int n = engine.inflate(output, off, len);
-        if (engine.failed())
-        {
-            throw new DataFormatException("invalid deflate stream");
+        public synchronized void run() {
+            long addr = address;
+            address = 0;
+            if (addr != 0) {
+                end(addr);
+            }
         }
-        return n;
-    }
 
-    /** True when the decoder cannot proceed without more {@link #setInput}. */
-    public boolean needsInput()
-    {
-        return headerLeft > 0 || engine.needsInput();
-    }
-
-    /** joe-ng never uses preset dictionaries, so a stream never stalls waiting for one. */
-    public boolean needsDictionary()
-    {
-        return false;
-    }
-
-    /** True once the final DEFLATE block has been decoded. */
-    public boolean finished()
-    {
-        return engine.finished();
-    }
-
-    /** Package-private hook {@code InflaterInputStream} uses: output is still available with no new input. */
-    boolean hasPendingOutput()
-    {
-        return engine.pendingOutput();
-    }
-
-    /** Compressed bytes handed in but not yet consumed — how far {@code ZipInputStream} must rewind. */
-    public int getRemaining()
-    {
-        return engine.remaining();
-    }
-
-    public long getBytesRead()
-    {
-        ensureOpen();
-        return headerRead + engine.bytesRead();
-    }
-
-    public long getBytesWritten()
-    {
-        ensureOpen();
-        return engine.bytesWritten();
-    }
-
-    /** Always 0: the raw DEFLATE engine does not maintain the zlib wrapper's Adler-32. */
-    public int getAdler()
-    {
-        return 0;
-    }
-
-    public int getTotalIn()
-    {
-        return (int) getBytesRead();
-    }
-
-    public int getTotalOut()
-    {
-        return (int) getBytesWritten();
-    }
-
-    /** Preset dictionaries are unsupported on metal; nothing in the zip/jar path sets one. */
-    public void setDictionary(byte[] dictionary, int off, int len)
-    {
-        ensureOpen();
-        throw new IllegalStateException("preset dictionaries are not supported");
-    }
-
-    public void setDictionary(byte[] dictionary)
-    {
-        setDictionary(dictionary, 0, dictionary.length);
     }
 }
