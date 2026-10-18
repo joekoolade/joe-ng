@@ -4,6 +4,43 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **java.io STREAMS OVER THE WRITABLE TREE -- stock FileInputStream, FileOutputStream, RandomAccessFile
+  (2026-10-17).** Sixth step of the file arc, closing the gap #384 named.
+  - **Before it:** FileInputStream was a hand-written overlay reading the baked table directly -- blind to writes and
+    deletes, and missing stock members (no `getChannel`) -- and FileOutputStream/RandomAccessFile had no natives: the
+    first FileOutputStream halted the VM (`LINK FAILED: java/io/FileOutputStream.initIDs()V`).
+  - **`FileInputStream`, `FileOutputStream`, `RandomAccessFile` and `FileCleanable` are overlaid from the JDK 26
+    `share/` source**; every native is Java over a new `java.io.MetalFileIo`, which does what `io_util.c` /
+    `io_util_md.c` do: fileOpen (a directory is EISDIR; FileNotFoundException `path (reason)`), readSingle/readBytes/
+    writeSingle/writeBytes with the C's null and bounds checks and "Stream Closed", lseek, fstat length, ftruncate.
+    RAF's setLength leaves the pointer as `RandomAccessFile.c` does; a negative seek is "Negative seek offset". The
+    three `initIDs` only cache JNI field IDs: empty is right.
+  - **The console:** fds 1 and 2 write to the UART (as System.out/err), fd 0 reads as an empty stream (as System.in) --
+    the board has no input console.
+  - **`FileCleanable.register` registers NOTHING** -- MEASURED, not assumed: its `PhantomCleanable` super() needs a
+    `CleanerImpl`, which the synchronous Cleaner overlay does not have, and every FileInputStream died with an NPE in
+    `CleanerImpl.getCleanerImpl` from `PhantomCleanable.<init>`. An unclosed stream keeps its fd, as every other
+    Cleaner user here already does; `close()` is unaffected (FileDescriptor closes the fd itself).
+  - **The VM's `fileOpen` native** (the old overlay's open0) is dead and removed: nativeBuf mapping, VM static,
+    force-compile line, stash, body. `FileDemo` catches IOException, which the stock stream methods declare.
+  - **Probe:** `IoStreamProbe` (24 arms: an image file, skip/available and the channel's position and size, what nio
+    wrote and deleted, create/truncate/append and over an image file, the console through FileDescriptor.out,
+    RandomAccessFile write/seek/read/length/setLength both ways/read past the end, the C's error messages),
+    host-identical against a fresh writable copy of `ramfs/`. **Negative control** on main: the probe does not compile
+    (no `FileInputStream.getChannel`); with those two calls removed, nio's writes are invisible, the messages lack
+    their reasons, and the first FileOutputStream halts the VM. `make overlaycheck`: 0 new.
+  - **Regression (f36b00e), complete:** 75 of 77 probes host-identical, DigestProbe/MacProbe their designed
+    divergences only; suite markers all zero, `gc: collections=51`, clinits 356 (351 before; the change adds five
+    classes, not confirmed to be those five); `ran 44, failures 0`. **Pi:** PASS (2026-10-18, f36b00e) -- 4 of 4 cores,
+    WiFi join, DHCP, NetDemo HTTP 200 from example.com (bytes=891), `[main returned normally]`, `gc: collections=7`;
+    batch 1 loads 1581 classes (1578 before) and per-batch `clinits=` are 437/437/438/439 (434/434/435/436 before) --
+    observed, not attributed.
+  - **#384's record, completed:** 74 of 76 probes host-identical, DigestProbe/MacProbe designed divergences only;
+    suite markers all zero, `gc: collections=51`, clinits 351 (unchanged); `ran 44, failures 0`. Its suite took 3015 s
+    against 1365-2595 s before, all of it in LispDemo's eval loop with the output right; a same-load control on 91c047b
+    (before #384) took 2340 s beside f36b00e's 2175 s, so #384 did not slow the VM -- the 3015 s run shared the host
+    with four probe batches and image builds (that last cause inferred, not measured).
+
 - **A WRITABLE FILESYSTEM -- the RAMFS becomes an in-memory tree (2026-10-17).** Fifth step of the file arc; the
   user chose an in-memory tree over the whole namespace (not /tmp only, not SD-backed). Before it, every create,
   write, rename and delete was EROFS -- which PLAN.md records as blocking 21 of the 32 zip JUnit tests.

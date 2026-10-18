@@ -934,6 +934,80 @@ public final class MetalRamfs
         }
     }
 
+    /**
+     * read into {@code b[off..off+len)} at {@code fd}'s position, which then advances: the count, 0 at the end, or a
+     * negative code (BADF if not open for reading, ISDIR on a directory). What java.io's streams read through.
+     */
+    public static int readArray(int fd, byte[] b, int off, int len)
+    {
+        synchronized (LOCK)
+        {
+            Fd f = FDS.get(fd);
+            if (f == null || !f.read)
+            {
+                return -BADF;
+            }
+            MetalFsNode node = f.node;
+            if (node.dir)
+            {
+                return -ISDIR;
+            }
+            if (f.pos >= node.size || len <= 0)
+            {
+                return 0;
+            }
+            int n = (int) Math.min((long) len, node.size - f.pos);
+            for (int k = 0; k < n; k++)
+            {
+                b[off + k] = (byte) node.byteAt(f.pos + k);
+            }
+            f.pos += n;
+            return n;
+        }
+    }
+
+    /**
+     * write {@code b[off..off+len)} at {@code fd}'s position -- the end, for O_APPEND -- which then advances: the
+     * count or a negative code (BADF if not open for writing, FBIG past 2 GiB).
+     */
+    public static int writeArray(int fd, byte[] b, int off, int len)
+    {
+        synchronized (LOCK)
+        {
+            Fd f = FDS.get(fd);
+            if (f == null || !f.write)
+            {
+                return -BADF;
+            }
+            if (len <= 0)
+            {
+                return 0;
+            }
+            if (f.append)
+            {
+                f.pos = f.node.size;
+            }
+            long end = f.pos + len;
+            if (end > Integer.MAX_VALUE - 8L)
+            {
+                return -FBIG;
+            }
+            MetalFsNode node = f.node;
+            if (end > node.size)
+            {
+                node.setSize(end);
+            }
+            else
+            {
+                node.ensureCapacity((int) node.size);
+            }
+            System.arraycopy(b, off, node.data, (int) f.pos, len);
+            f.pos = end;
+            touch(node);
+            return len;
+        }
+    }
+
     /** ftruncate: 0, or INVAL if {@code fd} is not open for writing (or the size is negative), BADF if not open. */
     public static int truncate(int fd, long size)
     {
@@ -1060,6 +1134,36 @@ public final class MetalRamfs
     }
 
     // ---- strings ------------------------------------------------------------------------------------------
+
+    /** strerror(3)'s text for a negative code, as the C's JNU_ThrowIOExceptionWithLastError would print it. */
+    public static String strerror(int code)
+    {
+        switch (code)
+        {
+            case -NOENT:
+                return "No such file or directory";
+            case -EXIST:
+                return "File exists";
+            case -NOTDIR:
+                return "Not a directory";
+            case -ISDIR:
+                return "Is a directory";
+            case -NOTEMPTY:
+                return "Directory not empty";
+            case -INVAL:
+                return "Invalid argument";
+            case -BADF:
+                return "Bad file descriptor";
+            case -PERM:
+                return "Operation not permitted";
+            case -BUSY:
+                return "Resource busy";
+            case -FBIG:
+                return "File too large";
+            default:
+                return "Unknown error: " + code;
+        }
+    }
 
     /** The NUL-terminated UTF-8 string at native address {@code addr} (a NativeBuffer the dispatcher filled). */
     public static String cstring(long addr)

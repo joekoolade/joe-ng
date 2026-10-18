@@ -281,7 +281,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
 
     /** M3: an embedded read-only RAMFS file — laid out like the class table, as a directory of
      *  {nameAddr, nameLen, bytesAddr, bytesLen} entries ({@code vm/VM.fileDir}/{@code fileCount})
-     *  followed by the path + content bytes. {@code VM.fileOpen} resolves a path to its entry. */
+     *  followed by the path + content bytes. {@code MetalRamfs} builds its tree from it ({@code VMNatives.ramfsTable}). */
     private record RFile(String path, byte[] bytes) {}
 
     public ImageBuilder(ClassRegistry registry)
@@ -855,7 +855,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             cur += align8Words(registry.rawBytes(classNames.get(i)).length);
         }
         // M3: RAMFS file table — same {nameAddr, nameLen, bytesAddr, bytesLen} shape as the class table,
-        // then each file's path bytes and content bytes. VM.fileOpen walks the directory by path.
+        // then each file's path bytes and content bytes. MetalRamfs walks it (VMNatives.ramfsTable).
         int fileCount = files.size();
         int fileDirWord = cur;
         cur += fileCount * CLASS_ENTRY_WORDS;
@@ -1509,7 +1509,6 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VM.newUnresolved(J)J", "vm/VM.newUnresolvedAddr"); // late-resolved `new`
         stashHelper(image, staticWord, wordOffset, "vm/VM.ctorRefInit(J)V", "vm/VM.ctorRefInit0");         // ctor-ref <clinit> (JVMS 5.5)
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.printStackTrace(J)V", "vm/VM.printStackTraceAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.fileOpen(J)J",       "vm/VM.fileOpenAddr");   // M3: FileInputStream.open0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.ramfsTable(J)J", "vm/VM.ramfsTableAddr"); // MetalRamfs.table0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.dnsResolve(J)I",     "vm/VM.dnsResolveAddr"); // M3: InetAddress.resolve0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.vhFieldOffset(JJ)J", "vm/VM.vhFieldOffsetAddr"); // M3: VarHandle.fieldOffset0

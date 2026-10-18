@@ -1286,36 +1286,6 @@ final class VMNatives
         return k == 0L ? fileDir : fileCount;
     }
 
-    static long fileOpen(long nameRef)
-    {
-        if (nameRef <= 0x1000L || fileDir == 0L)
-        {
-            return 0L;                                     // boot-time force-compile passes 0; no RAMFS -> 0
-        }
-        long arr = strBytes(nameRef);                      // String -> its value byte[] (len@+16, data@+24)
-        long len = Magic.load64(arr + 16L);
-        int i = 0;
-        while (i < (int) fileCount)
-        {
-            long e = fileDir + i * 32L;
-            if (Magic.load64(e + 8L) == len)
-            {
-                long na = Magic.load64(e);                 // path bytes
-                int k = 0;
-                while (k < (int) len && Magic.load8(na + k) == Magic.load8(arr + 24L + k))
-                {
-                    k += 1;
-                }
-                if (k == (int) len)
-                {
-                    return e;
-                }
-            }
-            i += 1;
-        }
-        return 0L;
-    }
-
     /**
      * Resolve a guest {@code byte[]} hostname to an IPv4 address, returned as a big-endian int (a.b.c.d ->
      * (a&lt;&lt;24)|(b&lt;&lt;16)|(c&lt;&lt;8)|d), 0 on failure. Backs {@code java.net.Inet4AddressImpl.resolve0} (the

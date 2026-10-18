@@ -13,14 +13,15 @@ package demo;
 
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
+import java.io.IOException;
 import magic.Magic;
 
 /**
- * M3: {@code java.io} over the embedded read-only RAMFS. Opens files the writer baked into the image
- * ({@code ramfs/} -> the {@code VM.fileDir} table) through the guest {@link FileInputStream} overlay:
+ * M3: {@code java.io} over the VM's tree. Opens files the writer baked into the image ({@code ramfs/}) through
+ * the stock {@link FileInputStream}, whose natives are Java over {@code MetalRamfs}:
  * {@code available}/{@code readAllBytes} (content checked byte-for-byte), single-byte {@code read()} to
  * end-of-file, {@code skip}, a second file, and a missing path -> real {@code FileNotFoundException}
- * (stock class; its message rides the {@code Throwable.detailMessage} chain).
+ * with the C's {@code path (reason)} message.
  */
 public class FileDemo
 {
@@ -61,9 +62,9 @@ public class FileDemo
             FileInputStream in3 = new FileInputStream("/data/nums.txt");
             Magic.printStr("nums.txt avail=" + in3.available() + " first=" + in3.read() + "\n"); // 9, 49 ('1')
         }
-        catch (FileNotFoundException e)
+        catch (IOException e)
         {
-            Magic.printStr("unexpected FileNotFoundException\n");
+            Magic.printStr("unexpected " + e.getClass().getName() + "\n");
         }
 
         try
@@ -73,7 +74,11 @@ public class FileDemo
         }
         catch (FileNotFoundException e)
         {
-            Magic.printStr("missing -> FileNotFoundException: " + e.getMessage() + "\n");        // /no/such/file
+            Magic.printStr("missing -> FileNotFoundException: " + e.getMessage() + "\n");        // /no/such/file (No such file or directory)
+        }
+        catch (IOException e)
+        {
+            Magic.printStr("missing -> unexpected " + e.getClass().getName() + "\n");
         }
     }
 }
