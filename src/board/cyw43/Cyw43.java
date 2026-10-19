@@ -1422,6 +1422,7 @@ public final class Cyw43
         {
             board.bcm2711.Uart.write(Magic.bytes("wifi: ping no reply\n"));
         }
+        net.Sntp.sync();                                 // the wall clock from a time server, before any program runs
         // Connectivity is up and net.Ip is published. Run the built-in DNS+HTTP demo only when this is the
         // WiFi showcase; when the OS brought the interface up for a launched program, stop here and let the
         // program drive the sockets (M3: stock java.net over net.Tcp).

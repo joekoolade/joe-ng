@@ -3469,6 +3469,26 @@ public final class VM
      */
     static long wallEpochMs;
 
+    /**
+     * Set the wall clock from a real time source (SNTP over the WiFi stack): {@code nowMs} is the time now, in
+     * milliseconds since the epoch, and {@link #wallEpochMs} becomes it minus the time since boot, so
+     * {@code currentTimeMillis} answers {@code nowMs} at this instant and runs on from it. A single 64-bit store,
+     * so a reader on another core sees the old base or the new one, never half of each.
+     */
+    public static void setWallClock(long nowMs)
+    {
+        wallEpochMs = nowMs - Magic.readCNTPCT_EL0() / (Magic.readCNTFRQ_EL0() / 1000L);
+    }
+
+    /**
+     * The wall clock as it reads now ({@code System.currentTimeMillis}). Before {@link #setWallClock} that is the
+     * commit-time floor plus uptime, which the SNTP client uses to refuse an answer earlier than the image's source.
+     */
+    public static long wallClockNowMs()
+    {
+        return wallEpochMs + Magic.readCNTPCT_EL0() / (Magic.readCNTFRQ_EL0() / 1000L);
+    }
+
     // Provided java.base natives the on-metal Loader wires guest calls to (Loader.nativeBuf).
     static long nanoTimeAddr;          // VM.nanoTime()J
     static long cdsSeedAddr;           // VMNatives.cdsRandomSeedForDumping()J
