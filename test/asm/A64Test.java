@@ -117,6 +117,9 @@ public final class A64Test
         T.eqWord("ADD x0,x1,#0",  0x91000020, A64.addImm(0, 1, 0));
         T.eqWord("ADD x1,x1,#1",  0x91000421, A64.addImm(1, 1, 1));
         T.eqWord("SUB x2,x2,#1",  0xD1000442, A64.subImm(2, 2, 1));
+        T.eqWord("ADD x1,x1,#1,LSL#12", 0x91400421, A64Enc.addImmLsl12(1, 1, 1));
+        T.eqWord("SUB x2,x2,#8,LSL#12", 0xD1402042, A64Enc.subImmLsl12(2, 2, 8));
+        T.eqWord("ADD x16,x16,#0xFFF",  0x913FFE10, A64Enc.addImm(16, 16, 0xFFF));
         T.eqWord("MOV SP,x0",     0x9100001F, A64.movToSp(0));
         T.eqWord("MOV x0,x1",     0xAA0103E0, A64.movReg(0, 1));
 
