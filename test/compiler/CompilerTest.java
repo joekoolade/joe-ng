@@ -300,13 +300,16 @@ public final class CompilerTest
             }
         };
         // M8 world unification: the whole registered super chain flattens -- guest java/lang/Object's
-        // 9 virtuals prefix every vtable (matching the on-metal loader's numbering), so Animal's own
-        // sound() lands at slot 9 and Dog overrides it in place.
-        T.eq("Animal vtable size", 10, ClassFile.vtable("vm/Animal", res).size());
-        T.eq("Dog vtable size (override, not append)", 10, ClassFile.vtable("vm/Dog", res).size());
-        T.eq("Animal.sound slot", 9, ClassFile.vtableSlot("vm/Animal", "sound", "()I", res));
-        T.eq("Dog.sound shares slot 9", 9, ClassFile.vtableSlot("vm/Dog", "sound", "()I", res));
-        T.eq("Dog slot 9 impl is Dog", 1, ClassFile.vtable("vm/Dog", res).get(9).owner().equals("vm/Dog") ? 1 : 0);
+        // virtuals prefix every vtable (matching the on-metal loader's numbering), so Animal's own
+        // sound() lands at the first slot after them and Dog overrides it in place. Object's count is READ,
+        // not written down: it was 9 for the hand-written overlay and is 12 for the JDK 26 class (finalize,
+        // wait(long, int) and the private wait0 joined), and the hard-coded 9 went stale silently.
+        int objN = ClassFile.vtable("java/lang/Object", res).size();
+        T.eq("Animal vtable size", objN + 1, ClassFile.vtable("vm/Animal", res).size());
+        T.eq("Dog vtable size (override, not append)", objN + 1, ClassFile.vtable("vm/Dog", res).size());
+        T.eq("Animal.sound slot", objN, ClassFile.vtableSlot("vm/Animal", "sound", "()I", res));
+        T.eq("Dog.sound shares Animal's slot", objN, ClassFile.vtableSlot("vm/Dog", "sound", "()I", res));
+        T.eq("Dog's sound slot impl is Dog", 1, ClassFile.vtable("vm/Dog", res).get(objN).owner().equals("vm/Dog") ? 1 : 0);
 
         // ---- interfaces: implements set, itable slot, resolved implementation ----
         T.eq("Robot implements Speaker", 1, ClassFile.allInterfaces("vm/Robot", res).contains("vm/Speaker") ? 1 : 0);
