@@ -12804,9 +12804,20 @@ public final class Loader
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Object")))
         {
-            // Object.clone() shallow copy: same block-copy as the [T.clone() intrinsic (TIB + body from the
-            // status-word size), so reuse arrayClone. Cloneable collections super.clone() then fix their links.
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("clone0")))            { return VM.arrayCloneAddr; }    // (Object)Object
+            // The stock Object's natives (the overlay is the JDK 26 source). Each instance native takes its
+            // receiver in x0, which is the one argument every helper here reads.
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getClass")))          { return VM.getClassAddr; }      // (obj) -> mirror
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("hashCode")))          { return VM.identityAddr; }      // = identityHashCode
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("notify")))            { return VM.objNotifyAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("notifyAll")))         { return VM.objNotifyAllAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("wait0")))             { return VM.objWaitAddr; }       // (obj, ms)
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("clone")))             { return objectCloneHelper(); }  // Cloneable check, then copy
+        }
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalObjects")))
+        {
+            // Object.clone's shallow copy: the same block copy as the [T.clone() intrinsic (TIB + body, sized by
+            // the status word). Cloneable collections super.clone() and then fix their own links.
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("copy")))              { return VM.arrayCloneAddr; }    // (Object)Object
         }
         // JavaLangAccess.classFileVersion/getClassFileAccessFlags: the same classfile-header reader Class uses,
         // registered under the overlay that declares its own copy (a native binds by DECLARING class).
@@ -21278,6 +21289,32 @@ public final class Loader
         proxyHelperBuf = helperBuf(utf8Blob(Magic.bytes("jdk/internal/misc/MetalProxies")), Magic.bytes("dispatch"),
                 Magic.bytes("(Ljava/lang/Object;Ljava/lang/Object;J)J"));
         return proxyHelperBuf;
+    }
+
+    private static long objectCloneBuf;
+
+    /**
+     * MetalObjects.clone, compiled once -- the body of the native Object.clone(). A static (Object)Object, so the
+     * receiver of the instance native is already where its one argument goes. 0 if it will not compile, which
+     * leaves the native unbound (and so a throw at the call, never a silent copy).
+     */
+    private static long objectCloneHelper()
+    {
+        if (objectCloneBuf != 0L)
+        {
+            return objectCloneBuf;
+        }
+        if (classIndexByName(Magic.bytes("jdk/internal/misc/MetalObjects")) < 0)
+        {
+            loadClassIncremental(Magic.bytes("jdk/internal/misc/MetalObjects"));
+            if (classIndexByName(Magic.bytes("jdk/internal/misc/MetalObjects")) < 0)
+            {
+                return 0L;
+            }
+        }
+        objectCloneBuf = helperBuf(utf8Blob(Magic.bytes("jdk/internal/misc/MetalObjects")), Magic.bytes("clone"),
+                Magic.bytes("(Ljava/lang/Object;)Ljava/lang/Object;"));
+        return objectCloneBuf;
     }
 
     /** Load a 48-bit absolute address into {@code rd}. */
