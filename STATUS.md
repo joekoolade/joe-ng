@@ -4,6 +4,52 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **STOCK Deflater OVER A REAL DEFLATE COMPRESSOR (2026-10-18).** Ninth step of the file arc; retires the
+  hand-written Deflater overlay, the gap the Inflater card left.
+  - **Before it:** the overlay wrote STORED BLOCKS ONLY -- no compression at any level, the header `7801` at every
+    level, no SYNC/FULL flush marker, no dictionaries, invalid levels accepted, no ByteBuffer methods.
+  - **`java.util.zip.Deflater` runs from the JDK 26 source.** Its natives (`Deflater.c`) are Java over a new
+    `zip.ZlibDeflate`, held in the `MetalZStreams` handle table as the Inflater's are; `init` keeps the C's argument
+    checks, and a strategy zlib does not have (3, 4) throws rather than answering. CRC32 and Adler32 take stock's
+    bounds check (`Preconditions.checkFromIndexSize`) -- the old overlay's `Deflater.checkBounds` helper is gone.
+  - **ZlibDeflate** is written from RFC 1951 and zlib's documented design: LZ77 over a 32 KiB window with hash
+    chains, tuned per level by zlib's configuration table (stored 0, greedy 1-3, lazy 4-9), FILTERED and
+    HUFFMAN_ONLY, and per block the smallest of stored / fixed / dynamic codes (lengths limited to 15 bits). zlib's
+    flush contract (NO/SYNC/FULL/FINISH, and the BLOCK flush `deflateParams` takes before a level change), the zlib
+    format (header with FDICT, Adler-32 trailer), preset dictionaries. **The bytes are not zlib's**; nothing
+    specifies them, and every test below checks round trips and contract values, not bytes.
+  - **Host cross-check against the JDK, 3000 random cases** (every level, strategy, wrap mode, dictionaries,
+    chunkings to a byte each way, SYNC/FULL flushes, level changes mid-stream): 0 failures -- every stream inflates
+    back through the JDK Inflater, everything before a SYNC_FLUSH decodes on its own, and the header, Adler-32 and
+    dictionary id equal the JDK's; sizes are within 0.1% of zlib at every level. The first runs found one real bug
+    -- a SYNC marker re-sent on every call with no new input, so a caller flushing into a tiny buffer never
+    finished -- and two harness bugs (a raw stream with a dictionary needs `setDictionary` before inflating;
+    `finished()` must be tested before `needsInput()`).
+  - **Probe:** `DeflaterProbe` (17 arms, implementation-independent values) is host-identical on QEMU at the first
+    run. **Negative control** on the old overlay: no ByteBuffer methods (does not compile); with those arms removed,
+    the failures listed under "before it". `make overlaycheck`: 0 new.
+  - **Regression (bf6a203):** 80 of 82 probes host-identical, DigestProbe/MacProbe designed divergences only (gates
+    clean). AtomicUpdaters' first run printed the host's output plus three `GC: core N stuck parked >10s` lines with
+    three probe batches running; alone it reran host-identical. Suite against a same-load control on 4d7bdc4
+    identical -- markers all zero, `gc: collections=51`, clinits 356, 4050 s vs 3915 s. `ran 44, failures 0`. The
+    stock zip tests in ONE 15-class `args=` line (possible since the card below): 69 run, 2 failing, both the 1970
+    clock; CopyZipFile's compression-levels test now PASSES (it needs a compressor whose sizes differ by level).
+    **Pi:** PASS (2026-10-18, bf6a203) -- 4 of 4 cores, WiFi join, DHCP, NetDemo HTTP 200 (bytes=888),
+    `[main returned normally]`, `gc: collections=7`; per-batch `clinits=` 437/437/438/439/439, as on 0ea2924.
+  - **Gaps it leaves:** no wall clock (`currentTimeMillis` is time since boot, so archives are dated 1970 -- the
+    2 zip failures, which the host reproduces with timestamps set to 0); no `jdk.zipfs`, no `jdk.charsets`.
+
+- **/etc/init VALUE BUFFERS SIZED BY THE FILE (2026-10-18).** Closes the `args=` truncation the Inflater card
+  recorded as unexplained.
+  - **The cause:** `manifestValue` stops at its max without a word, and `main=`/`args=`/`classpath=` had fixed
+    buffers of 120 and 250 bytes in `VM`, so a long line was cut SILENTLY: a 279-byte `args=` of JUnit classes
+    arrived as `... CloseWrappedSt` (CANNOT LOAD) and the class after it never ran (80 run, 29 failing).
+  - **The fix:** each buffer is the file's length plus slack, which bounds any line in it. The same line runs all
+    11 classes (93 run, the 28 known ZipFS/MS932/sparse-file/clock failures).
+  - **Regression (4d7bdc4):** suite clean -- 40/40, markers all zero, `gc: collections=51`, clinits 356, 2865 s;
+    79 of 81 probes host-identical, DigestProbe/MacProbe designed divergences only (gates clean). **Pi:** covered by
+    the Deflater card above (bf6a203 contains it; NetDemo boots from `/etc/init`).
+
 - **STOCK Inflater OVER THE VM'S ENGINE -- zlib's inflate() contract in Java (2026-10-18).** Eighth step of the file
   arc; retires a hand-written overlay that answered `getAdler()` with a constant 0.
   - **Before it:** the Inflater overlay skipped the zlib header without checking it, NEVER READ THE TRAILER (so 4 bytes
