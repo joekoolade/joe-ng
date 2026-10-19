@@ -4,6 +4,51 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **Runtime.gc/freeMemory/totalMemory/maxMemory BOUND, AND A WIDE `iinc` THAT ADDED ZERO (2026-10-19).** Closes
+  the first gap the Object card left; the probe written for it found a compiler bug.
+  - **Before it:** `Runtime.maxMemory()` was `VIRTUALRESOLVE FAILED java/lang/Runtime.maxMemory()J` then
+    `DENYLIST TRAP` (negative control on main with the new `RuntimeProbe`), and the zip test `FinalizeInflater`
+    stopped at `VIRTUALRESOLVE FAILED java/lang/Runtime.gc()V`.
+  - **The natives** (`VMNatives`, bound in `Loader.nativeBufAt`):
+    - `totalMemory` = `maxMemory` = the managed reservation, `Heap.managedTop() - Heap.BASE` (384 MiB): the heap is
+      reserved whole, never grown.
+    - `freeMemory` = that minus what is in use: core 0's live bytes at the last collection plus the new
+      `Heap.servedSinceGc` (every byte served since, free-list reuse included -- `allocSinceGc` counts bump volume
+      only and is the trigger, so it stays as it is), plus each secondary's arena fill.
+    - `gc` collects only on core 0: the collector stops cores 1-3, so a collection started on a secondary waited
+      for ITSELF -- `GC: STW TIMEOUT -- unparked core 2` from the probe's thread arm, measured. A call from a
+      secondary yields until it is scheduled on core 0 (up to 256 tries; best effort).
+    - `Finalizer.isFinalizationEnabled` answers false: `JVM_IsFinalizationEnabled` (`Finalizer.c`) reports whether
+      the VM registers finalizers, and this one never does -- the `--finalization=disabled` answer.
+  - **`Reference.<clinit>` now runs at launch** (`Loader.seedRefAccess`, after `seedBooted`): `runFinalization`
+    threw an NPE because `SharedSecrets.javaLangRefAccess` was null -- the stock class sets it in its initializer,
+    which nothing had triggered. The reference-handler thread is NOT started. Suite clinits unchanged at 356.
+  - **The compiler bug: `iinc` masked its constant to 12 bits.** The probe hung filling a 4 MiB array with stride
+    4096; QEMU-monitor PC sampling (`JOENG_SYMMAP=1`) put every sample in the fill loop, and its disassembly showed
+    `i += 4096` compiled to `add x16, x16, #0`. Any `iinc` delta past 4095 in magnitude was wrong silently: +4096
+    added 0, +4097 added 1 (negative control on main with the new `WideIincProbe`: those values, and the stride-8192
+    loop hung for 900 s). `Baseline.addConst` now splits the constant into an `ADD/SUB #hi, LSL #12` and a low
+    12-bit part; the two encodings are new in `A64Enc` and checked bit-for-bit in `A64Test` (112 checks).
+    `A64Enc.addImm` itself still masks -- its other callers are not audited.
+  - **`CompilerTest` repaired:** it hard-coded Object's vtable size as 9, which #391 made 12 and nobody ran
+    `make test` to see; it reads the size now. (`make test`'s "no deep-stack handlers in VMNatives.class" failure
+    predates this branch -- present at `8869e6d`.)
+  - **New probes:** `RuntimeProbe` (relations only, so the host run is the control: max/total/free consistent, a
+    kept 4 MiB array counted and still counted after `gc`, `System.gc` + `runFinalization` return, `gc` from a
+    thread) and `WideIincProbe` (boundary deltas, wrap, strided loops, frame-local and down loops); both
+    host-identical. Measured on metal: a kept 4 MiB array moved used memory by exactly 0x401000, and after `gc`
+    used fell 41 KB as the rest of the live set shrank -- so the check is `used >= 4 MiB`, not "no change".
+  - **`FinalizeInflater`** (stock zip test, copied unchanged): `ok shouldNotFinalizeInflaterInPool`.
+  - **Regression (dcb16a4):** 85 of 87 probes host-identical, DigestProbe/MacProbe designed divergences only (gates
+    clean). Suite against a same-load control on main identical -- markers all zero, `gc: collections=51`, clinits
+    356. JUnit set plus FinalizeInflater `ran 45, failures 0`. `make overlaycheck`: 0 new.
+  - **Pi:** PASS (2026-10-19, dcb16a4) -- `clock: SNTP 208.113.130.146 -> 2026-10-19 23:50:59 UTC`, 4 of 4 cores,
+    NetDemo HTTP 200 (bytes=888), `[main returned normally]`, `gc: collections=7`, per-batch `clinits=`
+    437/437/438/438/439/439, no failure markers.
+  - **Gaps it leaves:** `wait(-1)` through the direct path still waits forever instead of throwing IAE; no
+    `IllegalMonitorStateException` when the caller does not own the monitor; `Runtime.gc` from a secondary core is
+    best effort; `A64Enc.addImm`'s other callers unaudited for constants past 12 bits.
+
 - **java.lang.Object FROM THE JDK 26 SOURCE (2026-10-19).** The hand-written overlay is replaced by the stock class,
   per standing rule 3.
   - **Before it:** the overlay had no `finalize()` and no `wait(long, int)`, its declared-method list differed from
