@@ -40,7 +40,7 @@ public class Adler32 implements Checksum
     @Override
     public void update(byte[] b, int off, int len)
     {
-        Deflater.checkBounds(b, off, len);
+        jdk.internal.util.Preconditions.checkFromIndexSize(off, len, b.length, jdk.internal.util.Preconditions.AIOOBE_FORMATTER);
         adler = zip.Adler32.update(adler, b, off, len);
     }
 
