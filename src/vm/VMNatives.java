@@ -92,15 +92,20 @@ final class VMNatives
      * {@code offsetSecs}, for {@code Instant.now()} / {@code Clock.systemUTC()}. HotSpot's
      * {@code JVM_GetNanoTimeAdjustment} (prims/jvm.cpp) answers {@code (seconds - offset) * 1e9 + nanos}, and
      * the sentinel -1 when {@code |seconds - offset| >= 2^32} so the caller recomputes its offset. The clock is
-     * the same one {@link #currentTimeMillis} answers -- time since boot, there being no wall clock -- so the
-     * two agree as they do on a JVM.
+     * the same one {@link #currentTimeMillis} answers -- {@link VM#wallEpochMs} plus the time since boot -- so
+     * the two agree as they do on a JVM.
      */
     static long nanoTimeAdjustment(long offsetSecs)
     {
         long ticks = Magic.readCNTPCT_EL0();
         long freq = Magic.readCNTFRQ_EL0();
-        long seconds = ticks / freq;
-        long nanos = ticks % freq * 1000000000L / freq;
+        long seconds = VM.wallEpochMs / 1000L + ticks / freq;
+        long nanos = VM.wallEpochMs % 1000L * 1000000L + ticks % freq * 1000000000L / freq;
+        if (nanos >= 1000000000L)
+        {
+            seconds = seconds + 1L;
+            nanos = nanos - 1000000000L;
+        }
         long diff = seconds - offsetSecs;
         if (diff >= 0x100000000L || diff <= -0x100000000L)
         {
@@ -109,10 +114,13 @@ final class VMNatives
         return diff * 1000000000L + nanos;
     }
 
-    /** {@code java/lang/System.currentTimeMillis()} — ms since boot (no wall clock on bare metal). */
+    /**
+     * {@code java/lang/System.currentTimeMillis()}: {@link VM#wallEpochMs} (the commit time of the image's
+     * source, a lower bound on the time -- there is no real-time clock) plus the milliseconds since boot.
+     */
     static long currentTimeMillis()
     {
-        return Magic.readCNTPCT_EL0() / (Magic.readCNTFRQ_EL0() / 1000L);
+        return VM.wallEpochMs + Magic.readCNTPCT_EL0() / (Magic.readCNTFRQ_EL0() / 1000L);
     }
 
     /**
