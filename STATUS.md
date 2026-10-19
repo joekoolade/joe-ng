@@ -4,6 +4,35 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **WALL CLOCK: THE COMMIT TIME OF THE IMAGE'S SOURCE PLUS THE TIME SINCE BOOT (2026-10-19).** Closes the "no wall
+  clock" gap the Inflater and Deflater cards left.
+  - **Before it:** `System.currentTimeMillis` and `jdk.internal.misc.VM.getNanoTimeAdjustment` (so `Instant.now`,
+    `Clock.systemUTC`, `new Date()`) answered the time SINCE BOOT, so everything was dated 1970 -- a year a zip
+    entry's DOS date field cannot hold, which failed `CorruptedZipFiles.insufficientFilenameLength` and
+    `Zip64SizeTest` (the host reproduces both with timestamps of 0).
+  - **The fix:** the board has no real-time clock, so the writer bakes `vm/VM.wallEpochMs` (new `writer/BuildEpoch`):
+    `SOURCE_DATE_EPOCH` when set, else the committer time of `HEAD` -- never the build time, so one commit still
+    builds one image (the reproducibility the `cdsDumpSeed` card restored). It is a LOWER BOUND on the time, not the
+    time: no image runs before its source was committed. Both natives answer it plus uptime; `nanoTime` is unchanged.
+    A build that can answer neither FAILS rather than baking 0, which is the 1970 clock this replaces.
+  - **Probe:** `WallClockProbe` (11 arms of facts any correct clock answers alike: not before 2026-10-01, the year,
+    currentTimeMillis / Instant / Clock / Date are one clock, monotone, sleep advances it, a zip entry keeps the
+    current time, an undated zip entry is dated now, a new file's mtime) is all `true` on the host and on QEMU.
+    **Negative control** on main (2cbe150): 3 arms answer `false` -- the floor, the year, the undated zip entry.
+  - **The two zip tests:** `ran 13, failures 0` on the branch; on main, same run, `ran 13, failures 2` (the two
+    above). So the zip test failures left are the known ZipFS / MS932 / sparse-file ones.
+  - **Regression (7375bff):** 81 of 83 probes host-identical, DigestProbe/MacProbe designed divergences only (gates
+    clean). SuperCallProbe's first run printed the host's output plus three `GC: core N stuck parked >10s` lines
+    under three-batch load and reran host-identical alone. **macOS purged nine host controls again** (and the
+    `ClassResourceProbe` classpath file, so its first run NPE'd without the JUnit jar); regenerated, all nine are
+    identical. Suite against a same-load control on main identical -- markers all zero, `gc: collections=51`,
+    clinits 356, 3480 s vs 3465 s. `ran 44, failures 0`. **Pi:** PASS (2026-10-19, 7375bff) -- 4 of 4 cores, WiFi
+    join, DHCP, NetDemo HTTP 200 (bytes=891), `[main returned normally]`, `gc: collections=7`; per-batch `clinits=`
+    437/437/438/439/439. NetDemo does not read the clock, so this proves the image is not broken on hardware, not
+    that the clock is right there -- the clock's values are measured on QEMU only.
+  - **Gaps it leaves:** on the Pi the clock runs behind by the age of the commit until something sets it -- SNTP
+    over the WiFi stack (UDP is already there for DHCP and DNS) is the natural next step; QEMU has no network.
+
 - **STOCK Deflater OVER A REAL DEFLATE COMPRESSOR (2026-10-18).** Ninth step of the file arc; retires the
   hand-written Deflater overlay, the gap the Inflater card left.
   - **Before it:** the overlay wrote STORED BLOCKS ONLY -- no compression at any level, the header `7801` at every
