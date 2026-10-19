@@ -4,6 +4,48 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **java.lang.Object FROM THE JDK 26 SOURCE (2026-10-19).** The hand-written overlay is replaced by the stock class,
+  per standing rule 3.
+  - **Before it:** the overlay had no `finalize()` and no `wait(long, int)`, its declared-method list differed from
+    the JDK's, and `clone()` copied ANY object -- a class that is not `Cloneable` got a silent copy instead of
+    `CloneNotSupportedException`. Measured as a negative control on main with a runtime variant of the new probe
+    (`ObjectProbeNeg`): the non-Cloneable clone printed a copy (`ObjectProbeNeg$Plain@6c9a748`), `finalize` was a
+    `NoSuchMethodException`, and the declared methods did not match the host.
+  - **The change:** `guestsrc/java/lang/Object.java` is the JDK 26 file. Its natives stay native and bind in
+    `Loader.nativeBufAt`: `getClass`, `hashCode` (the identity hash), `notify`/`notifyAll`/`wait0` to the existing VM
+    helpers, and `clone` to the new `jdk/internal/misc/MetalObjects.clone`, which makes the `Cloneable` check that
+    HotSpot's `JVM_Clone` makes and then copies through the VM's block copy. `wait(long)` drops only its
+    virtual-thread branch (there are no virtual threads here); each divergence carries a `// joe-ng:` comment.
+  - **Two bugs the stock class exposed, both BOOT RE-ENTERED in the first regression:**
+    - **The `toString` slot moved.** The stock class orders its methods differently, so `toString` is no longer one
+      of vtable slots 1..3, and `fillTib` minted a pruned hole only for those slot NUMBERS -- a class with no
+      `toString` left the slot 0 and baked code branched to it (AtomicUpdaters). `fillTib` now picks the baked-dispatch
+      slots BY NAME and descriptor (`isBakedDispatchSlot`: hashCode/equals/toString).
+    - **`clone` bound while a class was being built.** `nativeBufAt` loaded and compiled `MetalObjects` the moment
+      it was asked for `clone` -- including while another class's vtable was half filled -- and a baked
+      `Locale.initDefault(Category)` then ran with a receiver of `0x100` (ByteViewProbe, DeflaterProbe; reduced to
+      the new `LocaleInitProbe`: `getDefault()` worked, `getDefault(FORMAT)` crashed). An A/B over which natives
+      stayed native named `clone` alone (every native but `clone` native: pass; only `clone` native: fail), and a
+      print showed `MetalObjects.clone` never ran. It binds through a lazy link stub now, which loads and resolves
+      on its first CALL; `nativeBufAt` is a pure lookup again. That the half-built class is what got corrupted is an
+      inference; the crash and its removal are measured.
+    - A stale BOOT RE-ENTERED label ("vtable[3], the slot read at tib+32") claimed a slot it never measured; removed.
+  - **New probes:** `ObjectProbe` (16 arms: toString/hashCode/equals/getClass, clone with and without Cloneable,
+    inherited fields, arrays, `super.finalize`, `wait(long, int)` and its two IAE messages, declared methods with
+    modifiers) and `LocaleInitProbe`; both host-identical.
+  - **Regression (ae87914):** 82 of 85 probes host-identical; DigestProbe/MacProbe designed divergences only (gates
+    clean); AtomicUpdaters differed by three `stuck parked` lines under load and was identical rerun alone. Suite
+    against a same-load control on main identical -- markers all zero, `gc: collections=51`, clinits 356.
+    `ran 44, failures 0`. `make overlaycheck`: 0 new.
+  - **Pi:** PASS (2026-10-19, ae87914) -- `clock: SNTP 23.143.82.48 -> 2026-10-19 20:36:10 UTC`, 4 of 4 cores,
+    NetDemo HTTP 200 (bytes=888), `[main returned normally]`, `gc: collections=7`, per-batch `clinits=`
+    437/437/438/438/439/439, no failure markers.
+  - **Gaps it leaves:** `Runtime.gc`/`freeMemory`/`totalMemory`/`maxMemory` and `Finalizer.isFinalizationEnabled`
+    are unbound (the last should answer false -- this VM never finalizes, like `--finalization=disabled`), so the
+    zip test `FinalizeInflater` still stops at `VIRTUALRESOLVE FAILED java/lang/Runtime.gc()V`; `wait(-1)` through
+    the compiler's direct path waits forever instead of throwing IAE; no `IllegalMonitorStateException` when the
+    caller does not own the monitor.
+
 - **SNTP: THE WALL CLOCK FROM A TIME SERVER ONCE WIFI IS UP (2026-10-19).** Closes the gap the wall-clock card
   left: on the Pi the clock ran behind by the age of the commit.
   - **The change:** new `net/Sntp` (RFC 4330 client) runs from `Cyw43.arpPing` after the gateway ping and before
