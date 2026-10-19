@@ -2842,6 +2842,7 @@ public final class Loader
         seedSavedProps();                                   // jdk.internal.misc.VM.savedProps -> its own snapshot
         seedSystemStreams();                                // System.out/err -> stock PrintStream over the UART
         seedBooted();                                       // jdk.internal.misc.VM.initLevel -> SYSTEM_BOOTED, last
+        seedRefAccess();                                    // Reference.<clinit> -> SharedSecrets.javaLangRefAccess
         long argv = buildArgv(argsLine);                    // after loadAll: guestString needs String's TIB
         long buf = globalMethodBuf(className, Magic.bytes("main"), Magic.bytes("([Ljava/lang/String;)V"));
         if (buf == 0L)
@@ -2904,6 +2905,9 @@ public final class Loader
         // Metal JavaIOAccess: System.console() does `SharedSecrets.getJavaIOAccess().console()` with NO null
         // check, so an unregistered shim is an NPE from inside java.base rather than a missing feature.
         pullClass(Magic.bytes("jdk/internal/access/MetalJavaIOAccess"));
+        // java/lang/ref/Reference: HotSpot initializes it during startup, and its <clinit> is what registers
+        // SharedSecrets.javaLangRefAccess -- read with NO null check by Runtime.runFinalization (seedRefAccess).
+        pullClass(Magic.bytes("java/lang/ref/Reference"));
         // System.out/err: stock PrintStreams over the UART, built by MetalStdStreams (seedSystemStreams).
         pullClass(Magic.bytes("jdk/internal/misc/MetalStdStreams"));
         // The atomic scalar wrappers are frequently referenced only by a class literal; force-load them so the
@@ -2983,6 +2987,7 @@ public final class Loader
         seedSavedProps();                                   // jdk.internal.misc.VM.savedProps -> its own snapshot
         seedSystemStreams();                                // System.out/err -> stock PrintStream over the UART
         seedBooted();                                       // jdk.internal.misc.VM.initLevel -> SYSTEM_BOOTED, last
+        seedRefAccess();                                    // Reference.<clinit> -> SharedSecrets.javaLangRefAccess
         // Build the String[] argv AFTER loadAll: guestString needs the loaded String class's TIB, so the argv
         // MUST be built here, not before resetLoader() (that was the "args[i] throws" bug).
         long argv = buildArgv(argsLine);
@@ -10296,6 +10301,34 @@ public final class Loader
         Magic.store64(slot, 4L);
     }
 
+    /**
+     * Run {@code java.lang.ref.Reference}'s initializer before the program does, as HotSpot does during startup.
+     *
+     * <p>That initializer is the ONLY writer of {@code SharedSecrets.javaLangRefAccess}, and the reader takes it
+     * on trust: {@code Runtime.runFinalization} is {@code SharedSecrets.getJavaLangRefAccess().runFinalization()}
+     * with no null check, because on HotSpot the class is initialized before any program runs ({@code
+     * System.initPhase1} then calls {@code getJavaLangRefAccess().startThreads()} on it). Here nothing touched
+     * Reference unless the program made a Reference, so {@code System.runFinalization()} was an NPE inside
+     * java.base (RuntimeProbe; the zip test FinalizeInflater calls it). Running the stock initializer, rather
+     * than seeding the slot, is rule 2: the class sets up its own statics.
+     *
+     * <p>{@code startThreads} is still NOT called: the Reference Handler would wait on a pending list this
+     * collector never fills, and the Finalizer thread is pointless with finalization disabled.
+     *
+     * <p>Last of the seeds for the reason {@code seedSystemProps} is placed late: an initializer COMPILES, which
+     * re-points the loader's compile cursor, and no seed after it may rely on that cursor.
+     */
+    static void seedRefAccess()
+    {
+        int reg = classRegByNameBytes(Magic.bytes("java/lang/ref/Reference"));
+        if (reg < 0)
+        {
+            reportPropsGap(Magic.bytes("java/lang/ref/Reference is not registered (Runtime.runFinalization NPEs)"));
+            return;
+        }
+        ensureClinit(reg);
+    }
+
     static void seedSavedProps()
     {
         long slot = staticSlotOf(Magic.bytes("jdk/internal/misc/VM"), Magic.bytes("savedProps"));
@@ -12932,6 +12965,16 @@ public final class Loader
             // Four A72s on a BCM2711, and this VM brings all four up. Read by ForkJoinPool's initializer to
             // fix the common pool's parallelism.
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("availableProcessors"))) { return VM.availProcsAddr; } // ()I
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("gc")))                  { return VM.runtimeGcAddr; }    // ()V
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("freeMemory")))          { return VM.runtimeFreeAddr; }  // ()J
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("totalMemory")))         { return VM.runtimeTotalAddr; } // ()J
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("maxMemory")))           { return VM.runtimeMaxAddr; }   // ()J
+        }
+        // Read once, by Finalizer's own initializer (`static final boolean ENABLED`), so every Finalizer path --
+        // register, runFinalization, the finalizer thread's start -- follows this one answer.
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/ref/Finalizer")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isFinalizationEnabled"))) { return VM.finalizationEnabledAddr; } // ()Z
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Float")))
         {

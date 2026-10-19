@@ -588,6 +588,116 @@ final class VMNatives
         return 4;
     }
 
+    /**
+     * {@code Runtime.gc()} -> one full collection, now.
+     *
+     * <p>{@code Runtime.c} calls {@code JVM_GC()}; here the collector is {@code Magic.gc}, which spills the
+     * callee-saved registers so references held only there are on the scanned stack -- the same entry the
+     * allocator uses. Deliberately NOT counted in {@code Heap.gcPressure}: {@code gc: collections=} counts
+     * allocation-pressure collections and is quoted as an identity gate, the reasoning the SMP demo's explicit
+     * collection already records.
+     *
+     * <p>A COLLECTION RUNS ON CORE 0, and this is where that is enforced for a caller that may not be there.
+     * {@code VMGc.stopTheWorld} parks cores 1..3 and never core 0 ({@code VMScheduler} parks only
+     * {@code core != 0}), so the collector must BE core 0: the allocator only ever collects there, and a first
+     * version of this native that collected wherever it was called -- from a spawned thread on core 2 --
+     * waited a second with interrupts masked for core 2 to park ITSELF and printed {@code GC: STW TIMEOUT --
+     * unparked core 2 (collection SKIPPED)} (RuntimeProbe, QEMU). So a caller elsewhere YIELDS until the
+     * scheduler runs it on core 0, with interrupts masked from the check to the collection so it cannot be
+     * migrated in between. If it never lands there the call returns without collecting, which is what the
+     * spec's "best effort" allows -- and the same answer the collector gives when the world will not stop.
+     */
+    static void runtimeGc()
+    {
+        int tries = 0;
+        while (tries < 256)
+        {
+            long daif = Magic.readDaif();
+            Magic.disableIrq();
+            if ((Magic.readMPIDR() & 3L) == 0L)
+            {
+                Magic.gc();
+                if ((daif & 0x80L) == 0L)
+                {
+                    Magic.enableIrq();
+                }
+                return;
+            }
+            if ((daif & 0x80L) == 0L)
+            {
+                Magic.enableIrq();
+            }
+            VMScheduler.taskYield();
+            tries += 1;
+        }
+    }
+
+    /**
+     * The managed heap in bytes: core 0's collected arena (small region + large region) and the three
+     * secondaries' bump arenas -- everything from {@code Heap.BASE} up to {@code Heap.managedTop()}. It is a
+     * FIXED reservation that never grows or shrinks, so {@code totalMemory} and {@code maxMemory} are the same
+     * number, as on a JVM started with {@code -Xms} equal to {@code -Xmx}.
+     */
+    private static long heapReservation()
+    {
+        return Heap.managedTop() - Heap.BASE;
+    }
+
+    /** {@code Runtime.totalMemory()} -> the fixed heap reservation (see {@link #heapReservation}). */
+    static long runtimeTotalMemory()
+    {
+        return heapReservation();
+    }
+
+    /** {@code Runtime.maxMemory()} -> the same reservation: this heap never expands past what it starts with. */
+    static long runtimeMaxMemory()
+    {
+        return heapReservation();
+    }
+
+    /**
+     * {@code Runtime.freeMemory()} -> the reservation less what is in use, which the spec calls "an
+     * approximation" and which is approximate here in one stated way.
+     *
+     * <p>Core 0's arena is collected, so its use is the live set the last collection measured
+     * ({@code VMGc.liveBytes}) plus everything handed out since ({@code Heap.servedSinceGc}) -- an UPPER
+     * bound, since some of what was served since may already be garbage, which is the same over-statement
+     * every non-moving collector's free figure makes between collections. The secondaries' arenas are never
+     * collected, so their use is exact: how far each bump pointer has moved. Every figure is one word read,
+     * so nothing here walks a free list another core may be unlinking.
+     */
+    static long runtimeFreeMemory()
+    {
+        long core0 = VMGc.liveBytes + Heap.servedSinceGc;
+        long core0Size = Heap.LARGE_LIMIT - Heap.BASE;
+        if (core0 > core0Size)
+        {
+            core0 = core0Size;
+        }
+        long used = core0;
+        int c = 1;
+        while (c < 4)
+        {
+            used = used + (Magic.load64(Heap.PTR_CELL + (long) c * 8L) - Heap.arenaBase(c));
+            c += 1;
+        }
+        return heapReservation() - used;
+    }
+
+    /**
+     * {@code Finalizer.isFinalizationEnabled()} -> false.
+     *
+     * <p>{@code Finalizer.c} returns {@code JVM_IsFinalizationEnabled}, which is false under
+     * {@code --finalization=disabled}. That is this VM's behaviour, not a choice made for it: nothing here
+     * registers a finalizable object ({@code Finalizer.register} is called by HotSpot's allocator, and this
+     * allocator has no such call) and no finalizer thread runs, so no {@code finalize()} is ever invoked by the
+     * VM. Answering true would tell {@code Finalizer} to start a thread that drains a queue nothing fills.
+     */
+    static boolean finalizationEnabled()
+    {
+        return false;
+    }
+
     /** {@code Field.fieldAnnoAll0(Class,byte[])} -> every annotation declared on that field. */
     static long fieldAnnoAll(long mirror, long nameArr)
     {

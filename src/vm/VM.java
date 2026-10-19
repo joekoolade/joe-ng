@@ -1906,6 +1906,11 @@ public final class VM
         if (currentTimeMillisAddr == 0L) { long u = VMNatives.currentTimeMillis(); }
         if (identityAddr == 0L) { long u = VMNatives.identity(0L); }
         if (availProcsAddr == 0L) { int u = VMNatives.availableProcessors(); }
+        if (runtimeGcAddr == 0L) { VMNatives.runtimeGc(); }
+        if (runtimeFreeAddr == 0L) { long u = VMNatives.runtimeFreeMemory(); }
+        if (runtimeTotalAddr == 0L) { long u = VMNatives.runtimeTotalMemory(); }
+        if (runtimeMaxAddr == 0L) { long u = VMNatives.runtimeMaxMemory(); }
+        if (finalizationEnabledAddr == 0L) { boolean u = VMNatives.finalizationEnabled(); }
         if (fieldAnnoAllAddr == 0L) { long u = VMNatives.fieldAnnoAll(0L, 0L); }
         if (unsafeStaticAddrAddr == 0L) { long u = VMNatives.unsafeStaticFieldAddr(0L, 0L); }
         if (unsafeFieldOffsetAddr == 0L) { long u = VMNatives.unsafeFieldOffset(0L, 0L); }
@@ -3495,6 +3500,11 @@ public final class VM
     static long currentTimeMillisAddr; // VM.currentTimeMillis()J
     static long identityAddr;          // VM.identity(J)J — the *Bits* pass-throughs
     static long availProcsAddr;        // VMNatives.availableProcessors()I — Runtime.availableProcessors()
+    static long runtimeGcAddr;         // VMNatives.runtimeGc()V — Runtime.gc()
+    static long runtimeFreeAddr;       // VMNatives.runtimeFreeMemory()J — Runtime.freeMemory()
+    static long runtimeTotalAddr;      // VMNatives.runtimeTotalMemory()J — Runtime.totalMemory()
+    static long runtimeMaxAddr;        // VMNatives.runtimeMaxMemory()J — Runtime.maxMemory()
+    static long finalizationEnabledAddr; // VMNatives.finalizationEnabled()Z — Finalizer.isFinalizationEnabled()
     static long fieldAnnoAllAddr;      // VMNatives.fieldAnnoAll(JJ)J — Field.getDeclaredAnnotations()
     static long unsafeStaticAddrAddr;  // VMNatives.unsafeStaticFieldAddr(JJ)J — Unsafe.staticFieldOffset(Field)
     static long unsafeFieldOffsetAddr; // VMNatives.unsafeFieldOffset(JJ)J — Unsafe.objectFieldOffset(Class,String)
