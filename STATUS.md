@@ -4,6 +4,31 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **SNTP: THE WALL CLOCK FROM A TIME SERVER ONCE WIFI IS UP (2026-10-19).** Closes the gap the wall-clock card
+  left: on the Pi the clock ran behind by the age of the commit.
+  - **The change:** new `net/Sntp` (RFC 4330 client) runs from `Cyw43.arpPing` after the gateway ping and before
+    any program: DNS for `pool.ntp.org`, one 48-byte client request (version 4, mode 3) resent every second for 5 s,
+    and the reply is taken only if it is UDP from that server, port 123 to ours, mode 4, version 3-4, stratum not 0
+    (a kiss-o'-death), with OUR transmit timestamp echoed as its originate timestamp. The time is the server's
+    transmit time plus half the round trip, set through the new `VM.setWallClock` (it moves `wallEpochMs`, so both
+    natives follow; `nanoTime` is unchanged). An answer earlier than the commit-time floor is REFUSED, and no
+    answer leaves the clock at commit time + uptime; either way one `clock:` line says which source it runs on.
+    QEMU has no WiFi, so nothing changes there.
+  - **Host check of the same request and arithmetic** (`SntpCheck`, a host mirror): a live reply from
+    pool.ntp.org passed every check (mode 4, version 4, stratum 2, stamp echoed) and landed 76 ms from the Mac's
+    clock; the boot-log date printer (days-from-civil inverse) agreed with `java.time` on 200000 random times.
+  - **Regression (bcbcc1c):** 81 of 83 probes host-identical (incl. `WallClockProbe`), DigestProbe/MacProbe
+    designed divergences only (gates clean); no host controls purged this time. Suite against a same-load control
+    on main identical -- markers all zero, `gc: collections=51`, clinits 356, 3810 s both. `ran 44, failures 0`.
+  - **Pi:** PASS (2026-10-19, bcbcc1c) -- `clock: SNTP 23.186.168.125 -> 2026-10-19 15:47:44 UTC (was 16148 s
+    behind)` right after `wifi: ping reply`, then 4 of 4 cores, NetDemo HTTP 200 (bytes=891), `[main returned
+    normally]`, `gc: collections=7`, per-batch `clinits=` 437/437/438/439/439. The figures agree: the commit is
+    11:18:23 UTC, so 16148 s behind means the floor read 11:18:36 -- the commit plus ~13 s of uptime at the sync.
+    The HTTP response's own `Date:` header, an independent clock, read 15:48:04, 20 s later, after a ~10.5 s first
+    batch and the connect (an inference from the log's order, not a timed measurement).
+  - **Gaps it leaves:** one sync at boot, no re-sync, so the clock drifts with the board's oscillator from then on;
+    the server's leap indicator is not read; a program run on QEMU still sees commit time + uptime.
+
 - **WALL CLOCK: THE COMMIT TIME OF THE IMAGE'S SOURCE PLUS THE TIME SINCE BOOT (2026-10-19).** Closes the "no wall
   clock" gap the Inflater and Deflater cards left.
   - **Before it:** `System.currentTimeMillis` and `jdk.internal.misc.VM.getNanoTimeAdjustment` (so `Instant.now`,
