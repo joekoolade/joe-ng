@@ -169,6 +169,16 @@ public final class Heap
      * <p>Set to 0 to disable.
      */
     public static long allocSinceGc;
+
+    /**
+     * Bytes core 0's collected arena (small and large regions) has HANDED OUT since the last collection --
+     * bump and free-list reuse alike, which is what separates it from {@link #allocSinceGc}: that one counts
+     * only fresh volume, because it is a collection TRIGGER, and changing what it counts would move when
+     * collections happen. This one moves nothing; it exists so {@code Runtime.freeMemory} can answer "live at
+     * the last collection plus served since" ({@code VMNatives.runtimeFreeMemory}) without walking a free
+     * list another core may be unlinking. Written only by core 0's allocator and reset by the collector.
+     */
+    public static long servedSinceGc;
     private static final long GC_TRIGGER_BYTES = 16L * 1024L * 1024L;
 
     /** True if enough has been allocated since the last collection to be worth collecting on volume. */
@@ -320,6 +330,7 @@ public final class Heap
                     addFreeLarge(f + want, rest);
                 }
                 largeReuse = largeReuse + 1L;
+                servedSinceGc = servedSinceGc + Magic.load64(f + ObjectModel.STATUS_OFFSET);
                 zeroPayload(f, (int) Magic.load64(f + ObjectModel.STATUS_OFFSET));
                 return f;
             }
@@ -334,6 +345,7 @@ public final class Heap
         Magic.store64(LARGE_PTR_CELL, p + want);
         Magic.store64(p + ObjectModel.STATUS_OFFSET, want);
         largeBump = largeBump + 1L;
+        servedSinceGc = servedSinceGc + want;
         zeroPayload(p, (int) want);
         return p;
     }
@@ -1373,6 +1385,10 @@ public final class Heap
                         Magic.store64(f + ObjectModel.STATUS_OFFSET, (long) aligned);   // this block's size
                         addFree(f + (long) aligned, rest);                              // ... and the rest
                     }
+                    if (core == 0)
+                    {
+                        servedSinceGc = servedSinceGc + Magic.load64(f + ObjectModel.STATUS_OFFSET);
+                    }
                     return f;                               // status holds the size actually handed out
                 }
                 prev = f;
@@ -1395,6 +1411,10 @@ public final class Heap
                 lastFromFreeList = 0;
                 zeroPayload(p, aligned);
                 allocSinceGc = allocSinceGc + (long) aligned;
+                if (core == 0)
+                {
+                    servedSinceGc = servedSinceGc + (long) aligned;
+                }
                 return p;
             }
             if (core != 0 || attempt == 1)

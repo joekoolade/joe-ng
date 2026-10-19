@@ -90,6 +90,16 @@ public final class A64Enc
     {
         return 0xD100_0000 | ((imm12 & 0xFFF) << 10) | (rn << 5) | rd;
     }
+    /** {@code ADD Xd, Xn, #imm12, LSL #12} -- the shifted form ({@code sh}, bit 22): adds {@code imm12 << 12}. */
+    public static int addImmLsl12(int rd, int rn, int imm12)
+    {
+        return 0x9140_0000 | ((imm12 & 0xFFF) << 10) | (rn << 5) | rd;
+    }
+    /** {@code SUB Xd, Xn, #imm12, LSL #12} -- subtracts {@code imm12 << 12}. */
+    public static int subImmLsl12(int rd, int rn, int imm12)
+    {
+        return 0xD140_0000 | ((imm12 & 0xFFF) << 10) | (rn << 5) | rd;
+    }
     /** {@code MOV SP, Xn} — via ADD SP, Xn, #0 (reg 31 = SP in add-immediate). */
     public static int movToSp(int rn)
     {

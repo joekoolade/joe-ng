@@ -1061,15 +1061,39 @@ public final class Baseline
         if (inReg(slot))
         {
             int r = localReg(slot);
-            cb.emit(delta >= 0 ? A64Enc.addImm(r, r, delta) : A64Enc.subImm(r, r, -delta));
+            addConst(cb, r, delta);
             cb.emit(A64Enc.sxtw(r, r));                    // iinc is an int op: keep it sign-extended (canonInt)
             return;
         }
         int r = SCRATCH;                                   // read-modify-write in the frame
         cb.emit(A64Enc.ldrx(r, 31, localMem(slot)));
-        cb.emit(delta >= 0 ? A64Enc.addImm(r, r, delta) : A64Enc.subImm(r, r, -delta));
+        addConst(cb, r, delta);
         cb.emit(A64Enc.sxtw(r, r));
         cb.emit(A64Enc.strx(r, 31, localMem(slot)));
+    }
+
+    /**
+     * {@code r += delta} for an iinc constant: a signed byte, or a signed SHORT under {@code wide} (-32768..32767).
+     *
+     * <p>ADD/SUB immediate holds 12 bits, so a magnitude above 4095 is split into a low part and a part added
+     * with the instruction's {@code LSL #12} form. Before this split the encoder MASKED the constant to 12 bits:
+     * {@code i += 4096} compiled to {@code add x16, x16, #0} and a loop stepping by a page never advanced
+     * (RuntimeProbe, found by sampling the PC of a spinning core). {@code |delta| <= 32768} needs at most 8 in
+     * the high part, so two instructions always suffice; the common byte-sized delta still emits one.
+     */
+    private static void addConst(CodeBuffer cb, int r, int delta)
+    {
+        int mag = delta >= 0 ? delta : -delta;
+        int lo = mag & 0xFFF;
+        int hi = mag >>> 12;
+        if (hi != 0)
+        {
+            cb.emit(delta >= 0 ? A64Enc.addImmLsl12(r, r, hi) : A64Enc.subImmLsl12(r, r, hi));
+        }
+        if (lo != 0 || hi == 0)
+        {
+            cb.emit(delta >= 0 ? A64Enc.addImm(r, r, lo) : A64Enc.subImm(r, r, lo));
+        }
     }
 
     /**
