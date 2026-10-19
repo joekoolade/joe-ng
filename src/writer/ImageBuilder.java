@@ -1328,6 +1328,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         // StaticSnapshot used when it baked ImmutableCollections.SALT32L, so the baked cell and the value
         // that class's own <clinit> computes on metal AGREE -- the initializer still runs, as on OpenJDK.
         fillStatic(image, staticWord, "vm/VM.cdsDumpSeed", StaticSnapshot.CDS_DUMP_SEED);
+        fillStatic(image, staticWord, "vm/VM.wallEpochMs", BuildEpoch.MILLIS);   // the wall clock's lower bound
         fillStatic(image, staticWord, "vm/VM.imageSymTable", addr(symTableWord));
         fillStatic(image, staticWord, "vm/VM.imageSymCount", symCount);
         fillStatic(image, staticWord, "vm/VM.frameTable",   addr(frameTableWord));

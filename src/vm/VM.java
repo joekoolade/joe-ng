@@ -3459,6 +3459,16 @@ public final class VM
      */
     static long cdsDumpSeed;
 
+    /**
+     * The wall clock's starting point, in milliseconds since the epoch -- WRITER-FILLED with the commit time of
+     * the tree the image was built from (the {@code SOURCE_DATE_EPOCH} convention, so a rebuild of one commit is
+     * the same image). There is no real-time clock on the board, so this is not the time: it is a LOWER BOUND on
+     * it, since no image runs before its source was committed. {@code System.currentTimeMillis} and
+     * {@code Instant.now} answer it plus the time since boot. Before this they answered the time since boot
+     * alone, which dated every file 1970 -- a year a zip entry cannot record (DOS dates begin in 1980).
+     */
+    static long wallEpochMs;
+
     // Provided java.base natives the on-metal Loader wires guest calls to (Loader.nativeBuf).
     static long nanoTimeAddr;          // VM.nanoTime()J
     static long cdsSeedAddr;           // VMNatives.cdsRandomSeedForDumping()J
