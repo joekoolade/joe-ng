@@ -12804,9 +12804,20 @@ public final class Loader
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Object")))
         {
-            // Object.clone() shallow copy: same block-copy as the [T.clone() intrinsic (TIB + body from the
-            // status-word size), so reuse arrayClone. Cloneable collections super.clone() then fix their links.
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("clone0")))            { return VM.arrayCloneAddr; }    // (Object)Object
+            // The stock Object's natives (the overlay is the JDK 26 source). Each instance native takes its
+            // receiver in x0, which is the one argument every helper here reads.
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getClass")))          { return VM.getClassAddr; }      // (obj) -> mirror
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("hashCode")))          { return VM.identityAddr; }      // = identityHashCode
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("notify")))            { return VM.objNotifyAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("notifyAll")))         { return VM.objNotifyAllAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("wait0")))             { return VM.objWaitAddr; }       // (obj, ms)
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("clone")))             { return objectCloneHelper(); }  // Cloneable check, then copy
+        }
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalObjects")))
+        {
+            // Object.clone's shallow copy: the same block copy as the [T.clone() intrinsic (TIB + body, sized by
+            // the status word). Cloneable collections super.clone() and then fix their own links.
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("copy")))              { return VM.arrayCloneAddr; }    // (Object)Object
         }
         // JavaLangAccess.classFileVersion/getClassFileAccessFlags: the same classfile-header reader Class uses,
         // registered under the overlay that declares its own copy (a native binds by DECLARING class).
@@ -13140,10 +13151,10 @@ public final class Loader
         long type = Magic.load64(tib);
         Uart.write(Magic.bytes(" type=0x"));
         VM.printHex(type);
-        Uart.write(Magic.bytes("\n    vtable[3] (the slot read at tib+32) =0x"));
-        VM.printHex(Magic.load64(tib + 32L));
-        // ... and the WHOLE prefix beside it: one zero slot is a clobbered entry, all-zero is a clobbered
-        // or unbuilt TIB, and the two want completely different investigations.
+        // The WHOLE prefix: one zero slot is a clobbered or pruned entry, all-zero is a clobbered or unbuilt TIB,
+        // and the two want completely different investigations. Which slot the call READ is not known here --
+        // the `x16 written at` line of the call-site report decodes the actual load. (This used to print
+        // vtable[3] as "the slot read", which was toString's slot under the hand-written Object only.)
         Uart.write(Magic.bytes("\n    vtable[0..8] ="));
         int vi = 0;
         while (vi < 9)
@@ -16042,6 +16053,17 @@ public final class Loader
         return k == 0x4C || k == 0x5B || k == 0x4A;     // 'L' object, '[' array, 'J' long
     }
 
+    /** Whether vtable slot {@code s} of the class being built is Object's hashCode, equals or toString. */
+    private static boolean isBakedDispatchSlot(int s)
+    {
+        long b = gvTab[s].base;
+        int n = gvTab[s].name;
+        int d = gvTab[s].desc;
+        return (utf8IsAtBase(b, n, Magic.bytes("hashCode")) && utf8IsAtBase(b, d, Magic.bytes("()I")))
+                || (utf8IsAtBase(b, n, Magic.bytes("equals")) && utf8IsAtBase(b, d, Magic.bytes("(Ljava/lang/Object;)Z")))
+                || (utf8IsAtBase(b, n, Magic.bytes("toString")) && utf8IsAtBase(b, d, Magic.bytes("()Ljava/lang/String;")));
+    }
+
     /** Fill the vtable slots (this class's + inherited impl code) and the itable directory. */
     private static void fillTib()
     {
@@ -16061,11 +16083,16 @@ public final class Loader
             // is the general form, and it is why that comment ends "this is the list to add to".
             //
             // Scope is deliberate. Minting EVERY vtable slot costs 3-4x the code arena (measured), and the
-            // universal holes here are slots 4..7 -- wait/wait(J)/notify/notifyAll -- which hole for all 891
+            // universal holes here are the wait/wait(J)/notify/notifyAll slots, which hole for all 891
             // classes in a launcher closure, are final on Object, and dispatch through the monitor intrinsics
-            // rather than the vtable. Minting those would be ~3,500 stubs that can never be reached. Slots
-            // 1..3 hole for 55 classes in that same closure, and are the three baked code actually calls.
-            if (b == 0L && s >= 1 && s <= 3)
+            // rather than the vtable. Minting those would be ~3,500 stubs that can never be reached. The three
+            // hole for 55 classes in that same closure, and are the three baked code actually calls.
+            //
+            // They are matched by NAME, not by slot number. The test was `s >= 1 && s <= 3` while the
+            // hand-written Object declared hashCode, equals, toString first; the stock Object puts clone
+            // between equals and toString, so toString moved to slot 4, its hole went unminted, and baked
+            // String.valueOf branched to 0 (AtomicUpdaters, ByteViewProbe, DeflaterProbe).
+            if (b == 0L && isBakedDispatchSlot(s))
             {
                 b = mintPrunedStub(s);
             }
@@ -21278,6 +21305,34 @@ public final class Loader
         proxyHelperBuf = helperBuf(utf8Blob(Magic.bytes("jdk/internal/misc/MetalProxies")), Magic.bytes("dispatch"),
                 Magic.bytes("(Ljava/lang/Object;Ljava/lang/Object;J)J"));
         return proxyHelperBuf;
+    }
+
+    private static long objectCloneBuf;
+    private static long objectCloneCls;                 // the stub's name runs, held in statics (a GC root) for
+    private static long objectCloneName;                //   as long as the stub may still resolve through them
+    private static long objectCloneDesc;
+
+    /**
+     * The binding of the native Object.clone(): a LINK STUB for MetalObjects.clone, a static (Object)Object, so
+     * the receiver of the instance native is already where its one argument goes. The stub loads and compiles
+     * the helper on its first CALL, never here. MEASURED: when this loaded and compiled the helper, the baked
+     * Locale.initDefault(Category) branched through a receiver of 0x100 (LocaleInitProbe) although the helper
+     * itself never ran, and binding only the OTHER Object natives passed. The mechanism is INFERRED, not
+     * measured: nativeBufAt is asked while a class's vtable is being filled, under the loader's single
+     * in-progress-class context, and a nested load there overwrites it. 0 if the stub table is full, which
+     * leaves the native unbound (a trap at the call, never a silent copy).
+     */
+    private static long objectCloneHelper()
+    {
+        if (objectCloneBuf != 0L)
+        {
+            return objectCloneBuf;
+        }
+        objectCloneCls = utf8Blob(Magic.bytes("jdk/internal/misc/MetalObjects"));
+        objectCloneName = utf8Blob(Magic.bytes("clone"));
+        objectCloneDesc = utf8Blob(Magic.bytes("(Ljava/lang/Object;)Ljava/lang/Object;"));
+        objectCloneBuf = linkStubFor(objectCloneCls, objectCloneName, objectCloneDesc);
+        return objectCloneBuf;
     }
 
     /** Load a 48-bit absolute address into {@code rd}. */
