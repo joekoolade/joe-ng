@@ -22938,13 +22938,7 @@ public final class Loader
     static long newAioobeIndex(long index, long length)
     {
         long exc = newAioobe();
-        int th = classIndexByName(Magic.bytes("java/lang/Throwable"));
-        if (exc == 0L || th < 0)
-        {
-            return exc;
-        }
-        long off = instanceFieldOffset(th, Magic.bytes("detailMessage"));
-        if (off < 0L)
+        if (exc == 0L)
         {
             return exc;
         }
@@ -22960,8 +22954,30 @@ public final class Loader
             text[k] = msg[k];
             k += 1;
         }
-        Magic.store64(exc + off, guestString(text));
+        setDetailMessage(exc, text);
         return exc;
+    }
+
+    /**
+     * Store a fresh guest {@code String} holding {@code ascii} as {@code exc}'s {@code Throwable.detailMessage}.
+     * VM code cannot pass a message to a constructor: a string literal in {@code vm/} code compiles to a raw
+     * {@code byte[]} (the {@code Magic.bytes} contract), so {@code new X("msg")} there hands the constructor a
+     * byte array where a String belongs, and {@code getMessage()} answered null (MonitorStateProbe). Left unset
+     * if Throwable or its field cannot be named.
+     */
+    static void setDetailMessage(long exc, byte[] ascii)
+    {
+        int th = classIndexByName(Magic.bytes("java/lang/Throwable"));
+        if (exc == 0L || th < 0)
+        {
+            return;
+        }
+        long off = instanceFieldOffset(th, Magic.bytes("detailMessage"));
+        if (off < 0L)
+        {
+            return;
+        }
+        Magic.store64(exc + off, guestString(ascii));
     }
 
     /** Copy {@code s} into {@code out} at {@code p}; returns the new position. */
