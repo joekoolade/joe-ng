@@ -1423,16 +1423,33 @@ public final class VMScheduler
     }
 
     /**
-     * {@code obj.wait(ms)} (ms<=0 = wait forever): block the current task until another task notifies {@code obj}.
-     * Per Java rules the caller holds {@code obj}'s monitor; wait RELEASES it (remembering the recursion depth) so
-     * a notifier can enter the same monitor, then REACQUIRES it before returning.
+     * {@code obj.wait(ms)} (ms == 0 = wait forever): block the current task until another task notifies {@code obj}.
+     * The caller must hold {@code obj}'s monitor; wait RELEASES it (remembering the recursion depth) so a notifier
+     * can enter the same monitor, then REACQUIRES it before returning.
+     *
+     * <p>The compiler calls this DIRECTLY for {@code wait()} and {@code wait(long)}, past
+     * {@code Object.wait(long)}'s own argument check, so both checks are made here and in the JDK's order: a
+     * negative timeout is {@code IllegalArgumentException} first, then a caller that does not own the monitor is
+     * {@code IllegalMonitorStateException} (HotSpot's {@code ObjectMonitor::check_owner} message). Before them, a
+     * negative timeout waited forever and a non-owner waited without any monitor (MonitorStateProbe).
      */
     static void objWait(long obj, long ms)
     {
+        if (ms < 0L)
+        {
+            IllegalArgumentException e = new IllegalArgumentException();
+            Loader.setDetailMessage(Magic.addrOf(e), Magic.bytes("timeout value is negative"));
+            throw e;
+        }
         long daif = schedLock();
         int me = curTask();
-        int s = monSlotOf(obj);                            // release the monitor we hold (if any)
-        int saved = (s >= 0 && monOwner[s] == me) ? monCount[s] : 0;
+        int s = monSlotOf(obj);                            // release the monitor we hold
+        if (s < 0 || monOwner[s] != me)
+        {
+            schedUnlock(daif);
+            throw notOwner();
+        }
+        int saved = monCount[s];
         if (saved > 0)
         {
             monObj[s] = 0L;
@@ -1466,10 +1483,11 @@ public final class VMScheduler
         }
     }
 
-    /** {@code obj.notify()}: wake ONE task waiting on {@code obj}. */
+    /** {@code obj.notify()}: wake ONE task waiting on {@code obj}. The caller must own {@code obj}'s monitor. */
     static void objNotify(long obj)
     {
         long daif = schedLock();
+        requireOwner(obj, daif);
         int woken = -1;
         int i = 0;
         while (i < taskCount)                              // just one, and it is the most urgent waiter
@@ -1489,10 +1507,11 @@ public final class VMScheduler
         preemptFor(woken);
     }
 
-    /** {@code obj.notifyAll()}: wake EVERY task waiting on {@code obj}. */
+    /** {@code obj.notifyAll()}: wake EVERY task waiting on {@code obj}. The caller must own {@code obj}'s monitor. */
     static void objNotifyAll(long obj)
     {
         long daif = schedLock();
+        requireOwner(obj, daif);
         int woken = -1;
         int i = 0;
         while (i < taskCount)
@@ -1509,6 +1528,29 @@ public final class VMScheduler
         }
         schedUnlock(daif);
         preemptFor(woken);
+    }
+
+    /**
+     * Throw {@code IllegalMonitorStateException} unless the current task owns {@code obj}'s monitor, releasing the
+     * scheduler lock (taken by the caller as {@code daif}) first. Called with that lock held so the answer cannot
+     * change before the notify that follows it.
+     */
+    private static void requireOwner(long obj, long daif)
+    {
+        int s = monSlotOf(obj);
+        if (s < 0 || monOwner[s] != curTask())
+        {
+            schedUnlock(daif);
+            throw notOwner();
+        }
+    }
+
+    /** HotSpot's {@code ObjectMonitor::check_owner} exception, message set the way VM code must (see setDetailMessage). */
+    private static IllegalMonitorStateException notOwner()
+    {
+        IllegalMonitorStateException e = new IllegalMonitorStateException();
+        Loader.setDetailMessage(Magic.addrOf(e), Magic.bytes("current thread is not owner"));
+        return e;
     }
 
     /** The task id whose java/lang/Thread object is {@code threadObj}, or -1 if none is live. */
