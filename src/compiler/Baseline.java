@@ -219,14 +219,14 @@ public final class Baseline
         {
             // Did this method leave x21 as it found it? It does not own the register, so anything else is a
             // caller's local destroyed. The return value is parked across the report: the helper clobbers x0.
-            cb.emit(A64Enc.ldrx(16, 31, csBase));
+            frameLoad(cb, 16, csBase);
             cb.emit(A64Enc.subReg(17, 21, 16));
             int skip = cb.emit(A64Enc.cbz(17, 0));
-            cb.emit(A64Enc.strx(0, 31, csBase + 8));
+            frameStore(cb, 0, csBase + 8);
             cb.emit(A64Enc.movReg(0, 21));
             cb.emit(A64Enc.movz(1, csId, 0));
             symbols.callHelper(cb, Symbols.WATCH_X21);
-            cb.emit(A64Enc.ldrx(0, 31, csBase + 8));
+            frameLoad(cb, 0, csBase + 8);
             cb.set(skip, A64Enc.cbz(17, cb.wordCount() - skip));
         }
         if (saveLR)
@@ -235,11 +235,11 @@ public final class Baseline
         }
         for (int i = 0; i < regLocals; i++)              // only the register-backed ones
         {
-            cb.emit(A64Enc.ldrx(LOC_BASE + i, 31, localSaveBase + i * 8));
+            frameLoad(cb, LOC_BASE + i, localSaveBase + i * 8);
         }
         if (frameSize > 0)
         {
-            cb.emit(A64Enc.addImm(31, 31, frameSize));
+            addConst(cb, 31, frameSize);
         }
         cb.emit(A64Enc.ret());
     }
@@ -905,7 +905,7 @@ public final class Baseline
         int r = sp % OP_MAX;
         if (sp >= OP_MAX && regHolds[r] == sp - OP_MAX)         // the displaced deeper slot is live in this reg
         {
-            curCb.emit(A64Enc.strx(OP_BASE + r, 31, opStackBase + (sp - OP_MAX) * 8));   // save it before reuse
+            frameStore(curCb, OP_BASE + r, opStackBase + (sp - OP_MAX) * 8);   // save it before reuse
         }
         regHolds[r] = sp;
         sp += 1;
@@ -952,9 +952,9 @@ public final class Baseline
             int held = regHolds[r];
             if (held >= 0 && held < sp && held != slot)
             {
-                curCb.emit(A64Enc.strx(OP_BASE + r, 31, opStackBase + held * 8));
+                frameStore(curCb, OP_BASE + r, opStackBase + held * 8);
             }
-            curCb.emit(A64Enc.ldrx(OP_BASE + r, 31, opStackBase + slot * 8));
+            frameLoad(curCb, OP_BASE + r, opStackBase + slot * 8);
             regHolds[r] = slot;
         }
         return OP_BASE + r;
@@ -972,7 +972,7 @@ public final class Baseline
             int r = slot % OP_MAX;
             if (regHolds[r] == slot)                            // resident (holes are already in memory)
             {
-                cb.emit(A64Enc.strx(OP_BASE + r, 31, opStackBase + slot * 8));
+                frameStore(cb, OP_BASE + r, opStackBase + slot * 8);
             }
         }
     }
@@ -1046,14 +1046,26 @@ public final class Baseline
     private void load(CodeBuffer cb, int slot)
     {
         int r = pushReg();
-        cb.emit(inReg(slot) ? A64Enc.movReg(r, localReg(slot))
-                            : A64Enc.ldrx(r, 31, localMem(slot)));
+        if (inReg(slot))
+        {
+            cb.emit(A64Enc.movReg(r, localReg(slot)));
+        }
+        else
+        {
+            frameLoad(cb, r, localMem(slot));
+        }
     }
     private void store(CodeBuffer cb, int slot)
     {
         int r = popReg();
-        cb.emit(inReg(slot) ? A64Enc.movReg(localReg(slot), r)
-                            : A64Enc.strx(r, 31, localMem(slot)));
+        if (inReg(slot))
+        {
+            cb.emit(A64Enc.movReg(localReg(slot), r));
+        }
+        else
+        {
+            frameStore(cb, r, localMem(slot));
+        }
     }
 
     private void iinc(CodeBuffer cb, int slot, int delta)
@@ -1066,10 +1078,10 @@ public final class Baseline
             return;
         }
         int r = SCRATCH;                                   // read-modify-write in the frame
-        cb.emit(A64Enc.ldrx(r, 31, localMem(slot)));
+        frameLoad(cb, r, localMem(slot));
         addConst(cb, r, delta);
         cb.emit(A64Enc.sxtw(r, r));
-        cb.emit(A64Enc.strx(r, 31, localMem(slot)));
+        frameStore(cb, r, localMem(slot));
     }
 
     /**
@@ -1080,6 +1092,10 @@ public final class Baseline
      * {@code i += 4096} compiled to {@code add x16, x16, #0} and a loop stepping by a page never advanced
      * (RuntimeProbe, found by sampling the PC of a spinning core). {@code |delta| <= 32768} needs at most 8 in
      * the high part, so two instructions always suffice; the common byte-sized delta still emits one.
+     *
+     * <p>The prologue and epilogue use it too, with {@code r = 31} (SP in ADD/SUB immediate): a frame over 4095
+     * bytes was masked the same way, so {@code sub sp} reserved less than the method then wrote, over its
+     * caller's frame (WideFrameProbe on main: a fault loop with SP at {@code 0xfffffffe0dc6acb0}).
      */
     private static void addConst(CodeBuffer cb, int r, int delta)
     {
@@ -1093,6 +1109,55 @@ public final class Baseline
         if (lo != 0 || hi == 0)
         {
             cb.emit(delta >= 0 ? A64Enc.addImm(r, r, lo) : A64Enc.subImm(r, r, lo));
+        }
+    }
+
+    /** The largest byte offset an unsigned-offset {@code LDR/STR Xt, [SP, #off]} reaches: 4095 words. */
+    private static final int FRAME_REACH = 0xFFF * 8;
+
+    /**
+     * {@code LDR Xt, [SP, #off]} for any frame offset. Past {@link #FRAME_REACH} (a frame of more than about 4090
+     * slots) the address is built in {@code rt} itself -- it is about to be overwritten -- as {@code SP + (off
+     * & ~0xFFF)}, and the load takes the remainder. Before this the offset overflowed the 12-bit field into the
+     * register and opcode bits and encoded a different instruction (WideFrameProbe).
+     */
+    private static void frameLoad(CodeBuffer cb, int rt, int off)
+    {
+        if (off <= FRAME_REACH)
+        {
+            cb.emit(A64Enc.ldrx(rt, 31, off));
+            return;
+        }
+        cb.emit(A64Enc.addImmLsl12(rt, 31, off >>> 12));
+        cb.emit(A64Enc.ldrx(rt, rt, off & 0xFFF));
+    }
+    /**
+     * {@code STR Xt, [SP, #off]} for any frame offset. Past {@link #FRAME_REACH} the address goes in x17, or in
+     * x16 when x17 is the value: the IP0/IP1 scratch pair, which no local or operand lives in.
+     */
+    private static void frameStore(CodeBuffer cb, int rt, int off)
+    {
+        if (off <= FRAME_REACH)
+        {
+            cb.emit(A64Enc.strx(rt, 31, off));
+            return;
+        }
+        int t = rt == 17 ? 16 : 17;
+        cb.emit(A64Enc.addImmLsl12(t, 31, off >>> 12));
+        cb.emit(A64Enc.strx(rt, t, off & 0xFFF));
+    }
+    /** {@code rd = SP + off} for any frame offset. */
+    private static void frameAddr(CodeBuffer cb, int rd, int off)
+    {
+        if (off <= 0xFFF)
+        {
+            cb.emit(A64Enc.addImm(rd, 31, off));
+            return;
+        }
+        cb.emit(A64Enc.addImmLsl12(rd, 31, off >>> 12));
+        if ((off & 0xFFF) != 0)
+        {
+            cb.emit(A64Enc.addImm(rd, rd, off & 0xFFF));
         }
     }
 
@@ -3024,19 +3089,19 @@ public final class Baseline
             int arg = nargs - 1 - k;
             if (arg < regArgs)
             {
-                cb.emit(A64Enc.ldrx(arg, 31, opStackBase + slot * 8));
+                frameLoad(cb, arg, opStackBase + slot * 8);
             }
             else
             {
                 // Past the registers: stage it in this frame's outgoing-argument area. x16 is scratch here --
                 // the dispatch sequences that use it run after every argument is in place.
-                cb.emit(A64Enc.ldrx(ARG_TMP_REG, 31, opStackBase + slot * 8));
-                cb.emit(A64Enc.strx(ARG_TMP_REG, 31, outArgsBase + (arg - regArgs) * 8));
+                frameLoad(cb, ARG_TMP_REG, opStackBase + slot * 8);
+                frameStore(cb, ARG_TMP_REG, outArgsBase + (arg - regArgs) * 8);
             }
         }
         if (nargs > MAX_ARG_REGS)
         {
-            cb.emit(A64Enc.addImm(ARG_PTR_REG, 31, outArgsBase));   // x15 = &args[ARG_REGS_WITH_PTR], last
+            frameAddr(cb, ARG_PTR_REG, outArgsBase);   // x15 = &args[ARG_REGS_WITH_PTR], last
         }
         sp -= nargs;                                            // args consumed
     }
@@ -3217,7 +3282,7 @@ public final class Baseline
         }
         for (int i = 0; i < sp; i++)
         {
-            cb.emit(A64Enc.strx(OP_BASE + i, 31, spillBase + i * 8));
+            frameStore(cb, OP_BASE + i, spillBase + i * 8);
         }
     }
     private void reloadLive(CodeBuffer cb)
@@ -3229,7 +3294,7 @@ public final class Baseline
         }
         for (int i = 0; i < sp; i++)
         {
-            cb.emit(A64Enc.ldrx(OP_BASE + i, 31, spillBase + i * 8));
+            frameLoad(cb, OP_BASE + i, spillBase + i * 8);
         }
     }
 
@@ -4559,7 +4624,7 @@ public final class Baseline
     {
         if (frameSize > 0)
         {
-            cb.emit(A64Enc.subImm(31, 31, frameSize));    // sub sp, sp, #frame
+            addConst(cb, 31, -frameSize);    // sub sp, sp, #frame
         }
         if (saveLR)
         {
@@ -4567,11 +4632,11 @@ public final class Baseline
         }
         for (int i = 0; i < regLocals; i++)              // only the register-backed ones
         {
-            cb.emit(A64Enc.strx(LOC_BASE + i, 31, localSaveBase + i * 8));
+            frameStore(cb, LOC_BASE + i, localSaveBase + i * 8);
         }
         if (csCheck)
         {
-            cb.emit(A64Enc.strx(21, 31, csBase));        // x21 as this method FOUND it (it does not own it)
+            frameStore(cb, 21, csBase);        // x21 as this method FOUND it (it does not own it)
             symbols.reportX21Site(csId);
         }
         // instance methods receive `this` as x0 -> slot 0; each parameter is one
@@ -4598,8 +4663,14 @@ public final class Baseline
                 from = ARG_TMP_REG;                      // x16 = the incoming argument, loaded via x15
                 cb.emit(A64Enc.ldrx(ARG_TMP_REG, ARG_PTR_REG, (arg - regArgs) * 8));
             }
-            cb.emit(inReg(slot) ? A64Enc.movReg(localReg(slot), from)
-                                : A64Enc.strx(from, 31, localMem(slot)));
+            if (inReg(slot))
+            {
+                cb.emit(A64Enc.movReg(localReg(slot), from));
+            }
+            else
+            {
+                frameStore(cb, from, localMem(slot));
+            }
             arg++;
             int q = p;
             while (ClassReader.u1(classBytes, q) == '[')  // array prefixes fold into the element

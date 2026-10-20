@@ -120,6 +120,20 @@ public final class A64Test
         T.eqWord("ADD x1,x1,#1,LSL#12", 0x91400421, A64Enc.addImmLsl12(1, 1, 1));
         T.eqWord("SUB x2,x2,#8,LSL#12", 0xD1402042, A64Enc.subImmLsl12(2, 2, 8));
         T.eqWord("ADD x16,x16,#0xFFF",  0x913FFE10, A64Enc.addImm(16, 16, 0xFFF));
+        // The pure encoders refuse what does not fit instead of masking it into another instruction.
+        T.throwsIAE("A64Enc.addImm #0x1000", () -> A64Enc.addImm(1, 1, 0x1000));
+        T.throwsIAE("A64Enc.subImm #-1", () -> A64Enc.subImm(1, 1, -1));
+        T.throwsIAE("A64Enc.movz #0x10000", () -> A64Enc.movz(1, 0x10000, 0));
+        T.throwsIAE("A64Enc.movk hw=4", () -> A64Enc.movk(1, 1, 4));
+        T.throwsIAE("A64Enc.ldrx [sp,#32768]", () -> A64Enc.ldrx(1, 31, 32768));
+        T.throwsIAE("A64Enc.ldrx [sp,#4] misaligned", () -> A64Enc.ldrx(1, 31, 4));
+        T.throwsIAE("A64Enc.strx [sp,#-8]", () -> A64Enc.strx(1, 31, -8));
+        T.throwsIAE("A64Enc.ldrsw [x0,#16384]", () -> A64Enc.ldrsw(1, 0, 16384));
+        T.throwsIAE("A64Enc.bcond +2^18 words", () -> A64Enc.bcond(A64Enc.EQ, 1 << 18));
+        T.throwsIAE("A64Enc.b -2^25-1 words", () -> A64Enc.b(-(1 << 25) - 1));
+        T.throwsIAE("A64Enc.tbz bit 64", () -> A64Enc.tbz(1, 64, 0));
+        T.eqWord("LDR x1,[sp,#32760]", 0xF97FFFE1, A64Enc.ldrx(1, 31, 32760));
+        T.eqWord("B.EQ -2^18 words", 0x54800000, A64Enc.bcond(A64Enc.EQ, -(1 << 18)));
         T.eqWord("MOV SP,x0",     0x9100001F, A64.movToSp(0));
         T.eqWord("MOV x0,x1",     0xAA0103E0, A64.movReg(0, 1));
 
