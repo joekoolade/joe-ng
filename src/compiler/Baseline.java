@@ -125,6 +125,16 @@ public final class Baseline
     private Fixup[] fixups = new Fixup[8];
     private int fixupCount;
 
+    // B.cond/CBZ/CBNZ reach +-1 MiB, and the metal JIT expands bytecode about 44x (a 31 KB block of array stores
+    // compiled to 1.4 MB, LongBranchProbe) -- so a plain 16-bit `ifeq` that javac never widens to goto_w can still
+    // land out of range. A method whose bytecode is longer than FAR_BRANCH_BYTECODE emits every conditional branch
+    // in the LONG form instead (inverted test over an unconditional B, +-128 MiB). 1 MiB / 4096 allows 256 bytes of
+    // code per bytecode byte, well past the measured 44x; the patch loop still checks every displacement and fails
+    // by name (FAIL_BRANCH_RANGE) if that margin were ever exceeded. Decided from the bytecode alone, so a sizing
+    // pass and the real emit agree.
+    private static final int FAR_BRANCH_BYTECODE = 4096;
+    private boolean farBranches;
+
     // ----- symbol seam (PLAN.md §M5.4.2) -----------------------------------
     private static final int SYM_CP = 0;      // symbol identified by a constant-pool index
     private static final int SYM_HELPER = 1;  // symbol is a synthesised runtime helper
@@ -181,6 +191,43 @@ public final class Baseline
         Fixup f = new Fixup(wordIndex, targetBc, kind, arg);
         fixups[fixupCount] = f;
         fixupCount += 1;
+    }
+
+    /**
+     * Emit a conditional branch to bytecode {@code targetBc}: {@code kind} is {@link #FIX_CBZ}/{@link #FIX_CBNZ}
+     * (testing register {@code arg}) or {@link #FIX_BCOND} (condition {@code arg}). In a {@link #farBranches}
+     * method it is two words -- the INVERTED test skipping the next word, then an unconditional B to the target --
+     * so the reach is B's +-128 MiB instead of the conditional forms' +-1 MiB.
+     */
+    private void condBranch(CodeBuffer cb, int targetBc, int kind, int arg)
+    {
+        if (farBranches)
+        {
+            if (kind == FIX_CBZ)
+            {
+                cb.emit(A64Enc.cbnz(arg, 2));
+            }
+            else if (kind == FIX_CBNZ)
+            {
+                cb.emit(A64Enc.cbz(arg, 2));
+            }
+            else
+            {
+                cb.emit(A64Enc.bcond(arg ^ 1, 2));        // A64 inverts a condition by its low bit (EQ/NE, LT/GE, ...)
+            }
+            int w = cb.emit(A64Enc.b(0));
+            addFixup(w, targetBc, FIX_B, 0);
+            return;
+        }
+        int w = cb.emit(A64Enc.b(0));
+        addFixup(w, targetBc, kind, arg);
+    }
+
+    /** True if a {@code kind} branch can reach {@code wordOffset} words: B is 26 bits, the conditional forms 19. */
+    private static boolean branchReaches(int kind, int wordOffset)
+    {
+        int limit = kind == FIX_B ? 1 << 25 : 1 << 18;
+        return wordOffset >= -limit && wordOffset < limit;
     }
 
     /** Encode a pending branch now that the distance to its target is known (in words). */
@@ -1787,8 +1834,7 @@ public final class Baseline
         int v = popReg();
         int target = pos + s2(code, pos + 1);
         syncOut(cb);                                         // flush the remaining stack so the taken edge is canonical
-        int w = cb.emit(A64Enc.b(0));
-        addFixup(w, target, eq ? FIX_CBZ : FIX_CBNZ, v);
+        condBranch(cb, target, eq ? FIX_CBZ : FIX_CBNZ, v);
         recordDepth(target);
     }
 
@@ -1799,8 +1845,7 @@ public final class Baseline
         cb.emit(A64Enc.cmpImm(v, 0));                        // and this is a 64-bit compare
         int target = pos + s2(code, pos + 1);
         syncOut(cb);
-        int w = cb.emit(A64Enc.b(0));
-        addFixup(w, target, FIX_BCOND, cond);
+        condBranch(cb, target, FIX_BCOND, cond);
         recordDepth(target);
     }
 
@@ -1813,8 +1858,7 @@ public final class Baseline
         cb.emit(A64Enc.cmpReg(a, b));
         int target = pos + s2(code, pos + 1);
         syncOut(cb);
-        int w = cb.emit(A64Enc.b(0));
-        addFixup(w, target, FIX_BCOND, cond);
+        condBranch(cb, target, FIX_BCOND, cond);
         recordDepth(target);
     }
 
@@ -1838,8 +1882,7 @@ public final class Baseline
             int target = pos + s4(code, p + 12 + k * 4);
             cb.emitAll(A64Enc.loadImm64(16, low + k));      // case value (sign-extended) in scratch x16
             cb.emit(A64Enc.cmpReg(idx, 16));
-            int w = cb.emit(A64Enc.b(0));                   // placeholder; FIX_BCOND re-encodes as b.eq
-            addFixup(w, target, FIX_BCOND, A64Enc.EQ);
+            condBranch(cb, target, FIX_BCOND, A64Enc.EQ);
             recordDepth(target);
             k += 1;
         }
@@ -1865,8 +1908,7 @@ public final class Baseline
             int target = pos + s4(code, p + 8 + k * 8 + 4);
             cb.emitAll(A64Enc.loadImm64(16, match));
             cb.emit(A64Enc.cmpReg(idx, 16));
-            int w = cb.emit(A64Enc.b(0));
-            addFixup(w, target, FIX_BCOND, A64Enc.EQ);
+            condBranch(cb, target, FIX_BCOND, A64Enc.EQ);
             recordDepth(target);
             k += 1;
         }
@@ -4530,6 +4572,7 @@ public final class Baseline
         }
         emitSyncEnter(cb, isStatic);         // ACC_SYNCHRONIZED: after the prologue (slot 0 = this), before bci 0
 
+        farBranches = code.length > FAR_BRANCH_BYTECODE;
         int[] bcToWord = new int[code.length];
         // Drive sp from the control-flow pre-pass at EVERY reachable bytecode, not just at branch targets
         // recorded so far. A loop header reached linearly before its back-edge is compiled would otherwise carry
@@ -4602,6 +4645,10 @@ public final class Baseline
             if (target < 0)
             {
                 symbols.fail(Symbols.FAIL_BRANCH_TARGET, f.targetBc, 0);
+            }
+            if (!branchReaches(f.kind, target - f.wordIndex))
+            {
+                symbols.fail(Symbols.FAIL_BRANCH_RANGE, f.targetBc, target - f.wordIndex);   // never an encoder throw
             }
             cb.set(f.wordIndex, encodeBranch(f, target - f.wordIndex));
         }

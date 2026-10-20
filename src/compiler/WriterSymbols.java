@@ -548,6 +548,8 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
             "operand stack not empty at " + (b == SITE_NEW ? "new" : "dropToEL1") + ": " + a);
         case FAIL_STACK_DEPTH -> throw new IllegalStateException("inconsistent stack depth at bc: " + a);
         case FAIL_BRANCH_TARGET -> throw new IllegalStateException("branch to non-instruction bc: " + a);
+        case FAIL_BRANCH_RANGE -> throw new IllegalStateException(
+            "branch to bc " + a + " out of reach: " + b + " words");
         case FAIL_STACK_OVERFLOW -> throw new IllegalStateException("operand stack too deep");
         case FAIL_STACK_UNDERFLOW -> throw new IllegalStateException("operand stack underflow");
         default -> throw new IllegalStateException("compile failure " + reason + " (" + a + ", " + b + ")");

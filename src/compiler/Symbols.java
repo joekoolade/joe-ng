@@ -374,6 +374,7 @@ public interface Symbols
     int FAIL_STACK_UNDERFLOW = 9;   // operand stack underflow
     int FAIL_BL_RANGE = 10;         // a = call-site addr >>12, b = target addr >>12 (bl exceeds +-128 MiB)
     int FAIL_ARG_COUNT = 11;        // a = argument count (more args than there are argument registers)
+    int FAIL_BRANCH_RANGE = 12;     // a = target bytecode index, b = word displacement (past the branch's reach)
 
     // Sites for FAIL_STACK_NOT_EMPTY's b argument.
     int SITE_NEW = 0;
