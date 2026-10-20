@@ -4,6 +4,20 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **ENGINE EXCEPTION MESSAGES ARE REAL ON METAL -- AN INFERRED GAP, MEASURED AND RETRACTED (2026-10-20).** The two
+  cards below recorded, as an inference, that literal exception messages in writer-baked non-`java/` code
+  (`crypto/`, `zip/`) were probably null the way `vm/` ones were (`WriterSymbols.string` bakes such a literal as a
+  raw `byte[]`). Measured, it is wrong for every path guest code has:
+  - New `EngineMessageProbe` calls `crypto.Digest`, `crypto.Hmac` and `crypto.Pbkdf2` directly at all 13 of their
+    literal-message throw sites, printing class, message AND length (a `byte[]` posing as a String could not pass by
+    printing similar text). On main a8119a1: host-identical, all 13.
+  - The `zip/` side was already covered: `InflaterProbe` is host-identical with zlib's own words
+    (`incorrect header check`, `invalid block type`) carried from `zip.ZlibInflate` into `DataFormatException`.
+  - Why, from the source rather than an instrument: `crypto/` and `zip/` are DUAL-WORLD (`ImageBuilder`'s
+    demand-loadable list) -- the baked copy backs the VM's own WPA2 supplicant and jar reading, where no message
+    reaches a guest, and the guest world demand-loads the SAME source, which the on-metal JIT compiles with real
+    String literals. Which copy the probe ran was not instrumented; the observable answer is what it guards.
+
 - **Object.wait THROWS InterruptedException (2026-10-20).** Closes the wait-by-interrupt gap the monitor card left.
   - **Before it:** `VMScheduler.objWait` never read the interrupt status. `interrupt()` flips a blocked waiter
     READY, so an interrupted `wait()` simply RETURNED; a status set before the wait was ignored and left set. New
