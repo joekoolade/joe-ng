@@ -4,6 +4,36 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **wait/notify/notifyAll REFUSE A NON-OWNER, AND A `vm/` EXCEPTION MESSAGE WAS NULL (2026-10-20).** Closes the
+  `wait(-1)` / missing `IllegalMonitorStateException` gap the encoder card left.
+  - **Before it:** the compiler lowers `wait()`/`wait(J)`/`notify`/`notifyAll` straight to
+    `VMScheduler.objWait`/`objNotify`/`objNotifyAll` (`monitorOp`), past `Object.wait(long)`'s own check, and the
+    helpers never asked who owned the monitor. New `MonitorStateProbe` (20 lines: unowned wait/notify in every form,
+    `wait(-1)` owned and unowned, `wait(0,-1)`, another object's monitor, interface-typed and array receivers, owned
+    and recursive timed waits, after-exit, `holdsLock`, a thread handshake). **Negative control on main:** 13 of
+    the 20 lines differ -- every refusal answered `ok`.
+  - **The fix:** `objWait` throws `IllegalArgumentException("timeout value is negative")` first (it wins over
+    ownership, as on the JDK), then under `schedLock` throws `IllegalMonitorStateException("current thread is not
+    owner")` unless `monOwner[slot]` is the current task; `objNotify`/`objNotifyAll` take the same `requireOwner`
+    check. Both release the scheduler lock before throwing.
+  - **What the probe found next: the messages were NULL.** A string literal in writer-compiled `vm/` code is a
+    raw `byte[]`, not a String, so `new IllegalMonitorStateException("...")` there gave `getMessage() == null`.
+    New `Loader.setDetailMessage(exc, ascii)` stores a real guest String into `Throwable.detailMessage`;
+    `newAioobeIndex` uses it too. With it the probe is host-identical.
+  - **Regression (a53016d):** 89 of 89 probes pass -- 87 host-identical, DigestProbe/MacProbe gates clean
+    (`failures=0 divergences-unmet=0`). MonitorStateProbe's batch run reported DIFFERS with an EMPTY output: its
+    runner script was missing from the scratchpad (`No such file or directory`, a 138-byte run log), so it never
+    booted; rerun on another worktree at a53016d, IDENTICAL. Suite against a control at fbd20a0 identical --
+    markers zero, `gc: collections=51`, clinits 356. `ran 45, failures 0`. `make overlaycheck`: 0 new.
+  - **Pi:** PASS (2026-10-20, a53016d) -- `clock: SNTP 64.6.144.6 -> 2026-10-20 11:02:45 UTC`, 4 of 4 cores,
+    NetDemo HTTP 200 (bytes=891; the page served by example.com is three bytes longer than at 3567d5d, which is
+    the server's content and not ours -- an inference, the earlier body was not kept), `[main returned normally]`,
+    `gc: collections=7`, per-batch `clinits=` 437/437/438/438/439/439, no failure markers.
+  - **Gaps it leaves:** wait-by-interrupt semantics (`InterruptedException` out of a monitor wait) are not
+    probed; literal exception messages in other writer-baked non-`java/` code (`crypto/`, `zip/`) are likely
+    null the same way -- an inference, not measured (JIT-compiled copies get real Strings); the ScopedValueProbe
+    intermittent; an encoder refusal surfacing as an exception rather than `JIT unsupported`.
+
 - **THE A64 ENCODER REFUSES WHAT DOES NOT FIT, AND FRAMES PAST 4 KB (2026-10-20).** Follows the wide-`iinc` card:
   that bug was an encoder masking a constant, so every masking encoder was audited by making it refuse.
   - **The audit:** `A64Enc` (pure, used by the writer AND the on-metal JIT) masked or silently overflowed every
