@@ -31,12 +31,44 @@ package asm;
  * <p>Operand conventions: register numbers are raw (31 means SP or XZR depending
  * on the instruction), load/store offsets are in <em>bytes</em> and scaled
  * internally, and branch displacements are in <em>words</em> (A64 is fixed-width,
- * and the JIT computes them that way). Callers are trusted; range checking is
- * {@link A64}'s job.
+ * and the JIT computes them that way). {@link A64} still gives the writer its
+ * detailed messages; this class refuses an operand that does not fit its field
+ * (a constant-message {@link IllegalArgumentException}, no concatenation).
+ * Masking it instead encodes a DIFFERENT instruction -- an {@code iinc} of 4096
+ * compiled to {@code add #0} for the life of the project that way.
  */
 public final class A64Enc
 {
     private A64Enc() {}
+
+    /** {@code v} must fit an unsigned field of {@code bits} bits. */
+    private static int unsigned(int v, int bits)
+    {
+        if (v < 0 || v >= (1 << bits))
+        {
+            throw new IllegalArgumentException("A64Enc: unsigned immediate out of range");
+        }
+        return v;
+    }
+    /** {@code v} must fit a two's-complement field of {@code bits} bits; returns it masked to that field. */
+    private static int signed(int v, int bits)
+    {
+        int half = 1 << (bits - 1);
+        if (v < -half || v >= half)
+        {
+            throw new IllegalArgumentException("A64Enc: branch displacement out of range");
+        }
+        return v & ((1 << bits) - 1);
+    }
+    /** A byte offset for the unsigned-offset load/store forms: non-negative, a multiple of the access size, and at most 4095 accesses. */
+    private static int scaledOffset(int byteOffset, int size)
+    {
+        if (byteOffset < 0 || (byteOffset & ((1 << size) - 1)) != 0 || (byteOffset >> size) > 0xFFF)
+        {
+            throw new IllegalArgumentException("A64Enc: load/store offset out of range");
+        }
+        return byteOffset >> size;
+    }
 
     // ----- register aliases + condition codes (ARM-defined) ----------------
     /** Zero register / SP slot, encoding 31. */
@@ -61,17 +93,17 @@ public final class A64Enc
     /** {@code MOVZ Xd, #imm16, LSL #(hw*16)}. */
     public static int movz(int rd, int imm16, int hw)
     {
-        return 0xD280_0000 | (hw << 21) | ((imm16 & 0xFFFF) << 5) | rd;
+        return 0xD280_0000 | (unsigned(hw, 2) << 21) | (unsigned(imm16, 16) << 5) | rd;
     }
     /** {@code MOVN Xd, #imm16, LSL #(hw*16)} — the NOT of the immediate ({@code movn xd, #0} is -1). */
     public static int movn(int rd, int imm16, int hw)
     {
-        return 0x9280_0000 | (hw << 21) | ((imm16 & 0xFFFF) << 5) | rd;
+        return 0x9280_0000 | (unsigned(hw, 2) << 21) | (unsigned(imm16, 16) << 5) | rd;
     }
     /** {@code MOVK Xd, #imm16, LSL #(hw*16)} — insert, keeping the other lanes. */
     public static int movk(int rd, int imm16, int hw)
     {
-        return 0xF280_0000 | (hw << 21) | ((imm16 & 0xFFFF) << 5) | rd;
+        return 0xF280_0000 | (unsigned(hw, 2) << 21) | (unsigned(imm16, 16) << 5) | rd;
     }
     /** {@code MOV Xd, Xm} — alias of ORR Xd, XZR, Xm. */
     public static int movReg(int rd, int rm)
@@ -83,22 +115,22 @@ public final class A64Enc
     /** {@code ADD Xd, Xn, #imm12} (register 31 = SP here). */
     public static int addImm(int rd, int rn, int imm12)
     {
-        return 0x9100_0000 | ((imm12 & 0xFFF) << 10) | (rn << 5) | rd;
+        return 0x9100_0000 | (unsigned(imm12, 12) << 10) | (rn << 5) | rd;
     }
     /** {@code SUB Xd, Xn, #imm12} (register 31 = SP here). */
     public static int subImm(int rd, int rn, int imm12)
     {
-        return 0xD100_0000 | ((imm12 & 0xFFF) << 10) | (rn << 5) | rd;
+        return 0xD100_0000 | (unsigned(imm12, 12) << 10) | (rn << 5) | rd;
     }
     /** {@code ADD Xd, Xn, #imm12, LSL #12} -- the shifted form ({@code sh}, bit 22): adds {@code imm12 << 12}. */
     public static int addImmLsl12(int rd, int rn, int imm12)
     {
-        return 0x9140_0000 | ((imm12 & 0xFFF) << 10) | (rn << 5) | rd;
+        return 0x9140_0000 | (unsigned(imm12, 12) << 10) | (rn << 5) | rd;
     }
     /** {@code SUB Xd, Xn, #imm12, LSL #12} -- subtracts {@code imm12 << 12}. */
     public static int subImmLsl12(int rd, int rn, int imm12)
     {
-        return 0xD140_0000 | ((imm12 & 0xFFF) << 10) | (rn << 5) | rd;
+        return 0xD140_0000 | (unsigned(imm12, 12) << 10) | (rn << 5) | rd;
     }
     /** {@code MOV SP, Xn} — via ADD SP, Xn, #0 (reg 31 = SP in add-immediate). */
     public static int movToSp(int rn)
@@ -152,7 +184,7 @@ public final class A64Enc
     /** {@code CMP Xn, #imm12} — alias of SUBS XZR, Xn, #imm12. */
     public static int cmpImm(int rn, int imm12)
     {
-        return 0xF100_0000 | ((imm12 & 0xFFF) << 10) | (rn << 5) | 31;
+        return 0xF100_0000 | (unsigned(imm12, 12) << 10) | (rn << 5) | 31;
     }
 
     // ----- load/store (immediate, unsigned offset) --------------------------
@@ -160,7 +192,7 @@ public final class A64Enc
     static int ldst(int size, int opc, int rt, int rn, int byteOffset)
     {
         int base = (size << 30) | (0b111 << 27) | (0b01 << 24) | (opc << 22);
-        return base | ((byteOffset >> size) << 10) | (rn << 5) | rt;
+        return base | (scaledOffset(byteOffset, size) << 10) | (rn << 5) | rt;
     }
     /** {@code STR Xt, [Xn, #off]} — 64-bit. */
     public static int strx(int rt, int rn, int off)
@@ -180,7 +212,7 @@ public final class A64Enc
     /** {@code LDRSW Xt, [Xn, #off]} — 32-bit, sign-extended to 64. */
     public static int ldrsw(int rt, int rn, int off)
     {
-        return 0xB980_0000 | ((off >> 2) << 10) | (rn << 5) | rt;
+        return 0xB980_0000 | (scaledOffset(off, 2) << 10) | (rn << 5) | rt;
     }
     /** {@code STRH Wt, [Xn, #off]} — store halfword (char/short elements). */
     public static int strh(int rt, int rn, int off)
@@ -207,12 +239,12 @@ public final class A64Enc
     /** {@code B #wordOffset}. */
     public static int b(int wordOffset)
     {
-        return 0x1400_0000 | (wordOffset & 0x03FF_FFFF);
+        return 0x1400_0000 | signed(wordOffset, 26);
     }
     /** {@code BL #wordOffset} — branch with link. */
     public static int bl(int wordOffset)
     {
-        return 0x9400_0000 | (wordOffset & 0x03FF_FFFF);
+        return 0x9400_0000 | signed(wordOffset, 26);
     }
     /** {@code BLR Xn} — branch-with-link to a register (virtual dispatch). */
     public static int blr(int rn)
@@ -227,23 +259,24 @@ public final class A64Enc
     /** {@code CBZ Xt, #wordOffset} — branch if the register is zero. */
     public static int cbz(int rt, int wordOffset)
     {
-        return 0xB400_0000 | ((wordOffset & 0x7FFFF) << 5) | rt;
+        return 0xB400_0000 | (signed(wordOffset, 19) << 5) | rt;
     }
     /** {@code B.cond #wordOffset}. */
     public static int bcond(int cond, int wordOffset)
     {
-        return 0x5400_0000 | ((wordOffset & 0x7FFFF) << 5) | (cond & 0xF);
+        return 0x5400_0000 | (signed(wordOffset, 19) << 5) | (cond & 0xF);
     }
     /** {@code CBNZ Xt, #wordOffset} — branch if the register is non-zero. */
     public static int cbnz(int rt, int wordOffset)
     {
-        return 0xB500_0000 | ((wordOffset & 0x7FFFF) << 5) | rt;
+        return 0xB500_0000 | (signed(wordOffset, 19) << 5) | rt;
     }
     /** Test-and-branch encoding shared by TBZ/TBNZ; displacement in words (imm14). */
     static int tbit(int base, int rt, int bit, int wordOffset)
     {
+        unsigned(bit, 6);
         return base | ((bit & 0x20) << 26) | ((bit & 0x1F) << 19)
-             | ((wordOffset & 0x3FFF) << 5) | rt;
+             | (signed(wordOffset, 14) << 5) | rt;
     }
     /** {@code TBZ Xt, #bit, #wordOffset} — branch if the bit is clear. */
     public static int tbz(int rt, int bit, int wordOffset)

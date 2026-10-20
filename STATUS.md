@@ -4,6 +4,41 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **THE A64 ENCODER REFUSES WHAT DOES NOT FIT, AND FRAMES PAST 4 KB (2026-10-20).** Follows the wide-`iinc` card:
+  that bug was an encoder masking a constant, so every masking encoder was audited by making it refuse.
+  - **The audit:** `A64Enc` (pure, used by the writer AND the on-metal JIT) masked or silently overflowed every
+    immediate -- ADD/SUB/CMP #imm12, MOVZ/MOVN/MOVK #imm16 and `hw`, the unsigned-offset LDR/STR family (no mask at
+    all: an offset past the field ran into the register and opcode bits), and the B/BL/CBZ/B.cond/TBZ
+    displacements. Each now throws a constant-message `IllegalArgumentException` (no concatenation, so it is legal
+    on metal) instead of encoding a different instruction. `A64Test` gained 13 checks (refusals and the two field
+    edges): 125 checks, 0 failures.
+  - **What the refusal found at once:** every launch on metal died in `MetalSymbols.emitAddr` -> `A64Enc.movz`.
+    Five sites (`emitAddr`, and four in `Loader`: two stub address pairs, the late-patch rewrite, a ctor thunk's
+    TIB) passed a whole address to a 16-bit lane and relied on the mask; correct today because the values are
+    under 4 GiB, so they mask explicitly now.
+  - **The real bug: a frame over 4095 bytes.** The prologue's `sub sp, sp, #frameSize` was masked to 12 bits, so
+    a method with about 500+ locals reserved less stack than it then wrote, over its caller's frame; and past 32760
+    bytes (about 4090 slots) a frame load or store encoded a different instruction. New `WideFrameProbe`
+    (generated: 600 and 2100 long locals, ~9.6 KB and ~33 KB frames). **Negative control on main:** nothing after
+    `launch` for 900 s; QEMU-monitor PC sampling put core 0 in the EL1 sync-exception vector and its handler, SP
+    `0xfffffffe0dc6acb0` and falling by the handler's 0x110 each pass -- a fault loop. **Fix:** the prologue and
+    epilogue go through `addConst` (the `LSL #12` split); frame accesses go through `frameLoad`/`frameStore`/
+    `frameAddr`, which build `SP + (off & ~0xFFF)` (in the load's own destination; in x17, or x16 when x17 is the
+    value, for a store). Any frame that fitted emits exactly the instruction it did before. The fixed 96-byte
+    gc-call frame is left as it is. The unwinder reads frame sizes from metadata, not from the prologue.
+  - **Regression (3567d5d):** 85 of 88 probes host-identical, WideFrameProbe among them; DigestProbe/MacProbe gates
+    clean. **ScopedValueProbe hit BOOT RE-ENTERED once under load** (a branch to x16=0 from a stub, sources
+    `MatchOps$MatchTask.makeChild`) -- the SAME signature is in a kept log from 2026-10-18, before this branch, and
+    it then passed 2/2 alone and 12/12 under equal load (6 branch, 6 main): a rare pre-existing intermittent, still
+    open. Suite against a same-load control on main identical -- markers zero, `gc: collections=51`, clinits 356.
+    `ran 45, failures 0`. `make overlaycheck`: 0 new.
+  - **Pi:** PASS (2026-10-20, 3567d5d) -- `clock: SNTP 212.227.240.160 -> 2026-10-20 02:34:08 UTC`, 4 of 4 cores,
+    NetDemo HTTP 200 (bytes=888), `[main returned normally]`, `gc: collections=7`, per-batch `clinits=`
+    437/437/438/438/439/439, no failure markers.
+  - **Gaps it leaves:** the ScopedValueProbe intermittent; `wait(-1)` and the missing
+    `IllegalMonitorStateException` from the Object card; a refusal inside an on-metal compile surfaces as an
+    exception out of the compiling call, not as a `JIT unsupported` report.
+
 - **Runtime.gc/freeMemory/totalMemory/maxMemory BOUND, AND A WIDE `iinc` THAT ADDED ZERO (2026-10-19).** Closes
   the first gap the Object card left; the probe written for it found a compiler bug.
   - **Before it:** `Runtime.maxMemory()` was `VIRTUALRESOLVE FAILED java/lang/Runtime.maxMemory()J` then

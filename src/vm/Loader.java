@@ -7741,15 +7741,15 @@ public final class Loader
         Magic.store32(buf + w * 4L, A64Enc.subImm(31, 31, 16));     w += 1;  // frame: the receiver must survive
         Magic.store32(buf + w * 4L, A64Enc.strx(0, 31, 0));         w += 1;  //   the resolve call
         long rr = VM.runResolveAddr;
-        Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) rr, 0));         w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) (rr >> 16), 1)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) (rr & 0xFFFFL), 0));         w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((rr >>> 16) & 0xFFFFL), 1)); w += 1;
         Magic.store32(buf + w * 4L, A64Enc.blr(16));                w += 1;  // resolveRun(recv) -> run() buffer
         Magic.store32(buf + w * 4L, A64Enc.movReg(16, 0));          w += 1;  // x16 = the resolved buffer
         Magic.store32(buf + w * 4L, A64Enc.ldrx(0, 31, 0));         w += 1;  // x0 = the receiver again
         Magic.store32(buf + w * 4L, A64Enc.blr(16));                w += 1;  // run() with x0 = receiver
         long te = VM.taskExitAddr;
-        Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) te, 0));         w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) (te >> 16), 1)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) (te & 0xFFFFL), 0));         w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((te >>> 16) & 0xFFFFL), 1)); w += 1;
         Magic.store32(buf + w * 4L, A64Enc.blr(16));                w += 1;  // taskExit() — never returns
         Heap.publishCode(buf, buf + w * 4L);
         VM.runTrampAddr = buf;
@@ -12031,8 +12031,8 @@ public final class Loader
                 VM.printHex(addr);
                 Uart.putc(0x0A);
             }
-            Magic.store32(rsAddr[j], A64Enc.movz(rsReg[j], (int) addr, 0));   // rewrite the movz+movk
-            Magic.store32(rsAddr[j] + 4L, A64Enc.movk(rsReg[j], (int) (addr >> 16), 1));
+            Magic.store32(rsAddr[j], A64Enc.movz(rsReg[j], (int) (addr & 0xFFFFL), 0));   // rewrite the movz+movk
+            Magic.store32(rsAddr[j] + 4L, A64Enc.movk(rsReg[j], (int) ((addr >>> 16) & 0xFFFFL), 1));
             j += 1;
         }
         long tC0 = Magic.readCNTPCT_EL0();
@@ -24292,8 +24292,8 @@ public final class Loader
             Magic.store32(thunk + w * 4L, A64Enc.movz(0, size, 0));                      w += 1;  // x0 = instance size
             long h1 = thunk + w * 4L;
             Magic.store32(h1, A64Enc.bl((int) ((VM.heapAlloc - h1) / 4L)));              w += 1;  // x0 = Heap.alloc(size)
-            Magic.store32(thunk + w * 4L, A64Enc.movz(1, (int) ctib, 0));                w += 1;
-            Magic.store32(thunk + w * 4L, A64Enc.movk(1, (int) (ctib >> 16), 1));        w += 1;  // x1 = the class TIB
+            Magic.store32(thunk + w * 4L, A64Enc.movz(1, (int) (ctib & 0xFFFFL), 0));                w += 1;
+            Magic.store32(thunk + w * 4L, A64Enc.movk(1, (int) ((ctib >>> 16) & 0xFFFFL), 1));        w += 1;  // x1 = the class TIB
             Magic.store32(thunk + w * 4L, A64Enc.strx(1, 0, 0));                         w += 1;  // obj.tib = TIB
             Magic.store32(thunk + w * 4L, A64Enc.strx(0, 31, 8));                        w += 1;  // save obj at [sp+8]
             k = 0;

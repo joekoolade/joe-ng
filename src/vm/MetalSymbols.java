@@ -263,8 +263,8 @@ final class MetalSymbols implements Symbols
     private static void emitAddr(CodeBuffer cb, int reg, long addr)
     {
         Loader.noteCodeRoot(addr);      // the pair below hides this address from any data scan: record it
-        cb.emit(A64Enc.movz(reg, (int) addr, 0));
-        cb.emit(A64Enc.movk(reg, (int) (addr >> 16), 1));
+        cb.emit(A64Enc.movz(reg, (int) (addr & 0xFFFFL), 0));
+        cb.emit(A64Enc.movk(reg, (int) ((addr >>> 16) & 0xFFFFL), 1));
     }
 
     // ----- symbol queries: resolve to a number from the loaded-class tables -----
