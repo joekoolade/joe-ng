@@ -1868,7 +1868,17 @@ public final class VM
         // JIT'd guest code), so force the writer to compile them. Guarded on their stashed addr, so they
         // never actually run on metal (the addr is non-zero there).
         if (startThreadAddr == 0L) { VMScheduler.startThread(0L); }
-        if (objWaitAddr == 0L) { VMScheduler.objWait(0L, 0L); }                  // Object.wait/notify/notifyAll + Thread.join
+        if (objWaitAddr == 0L)                                                   // Object.wait/notify/notifyAll + Thread.join
+        {
+            try
+            {
+                VMScheduler.objWait(0L, 0L);
+            }
+            catch (InterruptedException e)
+            {
+                // unreachable: the call only makes the writer compile objWait (it now declares the interrupt)
+            }
+        }
         if (objNotifyAddr == 0L) { VMScheduler.objNotify(0L); }                  // (JIT'd guest reaches these via stashed addrs)
         if (objNotifyAllAddr == 0L) { VMScheduler.objNotifyAll(0L); }
         if (monEnterAddr == 0L) { VMScheduler.monEnter(0L); }                    // monitorenter/exit + Thread.holdsLock
