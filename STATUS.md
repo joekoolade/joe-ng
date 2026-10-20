@@ -4,6 +4,31 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **Object.wait THROWS InterruptedException (2026-10-20).** Closes the wait-by-interrupt gap the monitor card left.
+  - **Before it:** `VMScheduler.objWait` never read the interrupt status. `interrupt()` flips a blocked waiter
+    READY, so an interrupted `wait()` simply RETURNED; a status set before the wait was ignored and left set. New
+    `InterruptWaitProbe` (pre-set status with `wait()`, `wait(5000)`, `wait(0,1)`; interrupted while blocked,
+    untimed, timed and nested twice; an interrupt to a thread blocked ENTERING a monitor, which must not throw; a
+    normal notify afterwards). **Negative control on main:** the six wait lines answered `returned`, and the
+    status the pre-set cases left behind killed the run in the probe's next `Thread.sleep` with
+    `Exception in thread "main" java/lang/InterruptedException`.
+  - **The fix:** the status is read under the scheduler lock `interrupt()` sets it under, so no interrupt falls
+    between the check and the block. Set on entry: clear it and throw, monitor still held. Set on waking: clear it
+    and throw after the monitor and its recursion depth are restored. `objWait` now declares
+    `throws InterruptedException`; its one Java caller, the dead reachability call in `VM.startScheduler`, catches
+    it. Monitor-enter blocking already re-loops on a spurious READY, and the probe confirms it does not throw.
+  - **Regression (2a56945):** 90 of 90 probes pass -- 88 host-identical, DigestProbe/MacProbe gates clean. Suite
+    against a control at main 5a84b91 identical -- 40 programs returned, markers zero, `gc: collections=51`,
+    clinits 356. `ran 45, failures 0`. `make overlaycheck`: 0 new.
+  - **Harness, not VM:** macOS purged 17 host controls, the suite scripts and two QEMU runners between runs (the
+    first suite attempt never started). The controls were regenerated and each checked equal to the previous run's
+    metal; the suite script was rebuilt from the session record with a per-tag init backup.
+  - **Pi:** PASS (2026-10-20, 2a56945) -- `clock: SNTP 172.233.155.39 -> 2026-10-20 12:43:15 UTC`, 4 of 4 cores,
+    NetDemo HTTP 200 (bytes=891, as at a53016d), `[main returned normally]`, `gc: collections=7`, per-batch
+    `clinits=` 437/437/438/438/439/439, no failure markers.
+  - **Gaps it leaves:** `LockSupport.park`-based waits were already interruptible (ParkProbe) and are untouched;
+    literal exception messages in baked `crypto/`/`zip/` code still unverified; the ScopedValueProbe intermittent.
+
 - **wait/notify/notifyAll REFUSE A NON-OWNER, AND A `vm/` EXCEPTION MESSAGE WAS NULL (2026-10-20).** Closes the
   `wait(-1)` / missing `IllegalMonitorStateException` gap the encoder card left.
   - **Before it:** the compiler lowers `wait()`/`wait(J)`/`notify`/`notifyAll` straight to
