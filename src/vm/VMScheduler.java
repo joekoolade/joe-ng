@@ -1432,8 +1432,14 @@ public final class VMScheduler
      * negative timeout is {@code IllegalArgumentException} first, then a caller that does not own the monitor is
      * {@code IllegalMonitorStateException} (HotSpot's {@code ObjectMonitor::check_owner} message). Before them, a
      * negative timeout waited forever and a non-owner waited without any monitor (MonitorStateProbe).
+     *
+     * <p>The interrupt status is read under the scheduler lock that {@link #interrupt} sets it under, so an interrupt
+     * cannot fall between the check and the block. Set on entry, the wait throws {@code InterruptedException} at
+     * once without releasing the monitor; set on waking (interrupt flips a blocked waiter READY), it throws after
+     * the monitor and its recursion depth are restored. Both clear the status, as on the JDK. Before this an
+     * interrupted wait returned normally and a pre-set status was ignored (InterruptWaitProbe).
      */
-    static void objWait(long obj, long ms)
+    static void objWait(long obj, long ms) throws InterruptedException
     {
         if (ms < 0L)
         {
@@ -1448,6 +1454,12 @@ public final class VMScheduler
         {
             schedUnlock(daif);
             throw notOwner();
+        }
+        if (taskInterrupted[me] != 0)                      // interrupted before waiting: throw, monitor still held
+        {
+            taskInterrupted[me] = 0;
+            schedUnlock(daif);
+            throw new InterruptedException();
         }
         int saved = monCount[s];
         if (saved > 0)
@@ -1481,6 +1493,14 @@ public final class VMScheduler
             monEnter(obj);
             monCount[monSlotOf(obj)] = saved;              // restore the recursion depth
         }
+        daif = schedLock();
+        if (taskInterrupted[me] != 0)                      // woken by Thread.interrupt(): throw with the monitor held
+        {
+            taskInterrupted[me] = 0;
+            schedUnlock(daif);
+            throw new InterruptedException();
+        }
+        schedUnlock(daif);
     }
 
     /** {@code obj.notify()}: wake ONE task waiting on {@code obj}. The caller must own {@code obj}'s monitor. */
