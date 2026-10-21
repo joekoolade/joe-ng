@@ -1,0 +1,9 @@
+format -> Index 5 out of bounds for length 3
+Objects.checkIndex(5, 3) -> java.lang.IndexOutOfBoundsException: Index 5 out of bounds for length 3
+Objects.checkFromToIndex(2, 9, 4) -> java.lang.IndexOutOfBoundsException: Range [2, 9) out of bounds for length 4
+int[2][5] store -> java.lang.ArrayIndexOutOfBoundsException: Index 5 out of bounds for length 2
+long[3][-1] load -> java.lang.ArrayIndexOutOfBoundsException: Index -1 out of bounds for length 3
+char[0][0] load -> java.lang.ArrayIndexOutOfBoundsException: Index 0 out of bounds for length 0
+view get(byte[4], 1) -> java.lang.ArrayIndexOutOfBoundsException: Index 1 out of bounds for length 1
+view set(byte[4], 1) -> java.lang.ArrayIndexOutOfBoundsException: Index 1 out of bounds for length 1
+OobMessageProbe done

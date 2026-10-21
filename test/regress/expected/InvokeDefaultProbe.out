@@ -1,0 +1,15 @@
+greet -> hello bob from proxy
+twice -> 42
+mix -> 1099
+plain -> plain default
+fail -> java.io.IOException: from the default body
+null args -> plain default
+non-default -> java.lang.IllegalArgumentException: "public abstract java.lang.String InvokeDefaultProbe$Greeter.name()" is not a default method
+non-proxy -> java.lang.IllegalArgumentException: 'proxy' is not a proxy instance
+wrong arg type -> java.lang.IllegalArgumentException: Cannot cast java.lang.Integer to java.lang.String
+sub who -> Sub
+sub inherited -> inherited from Base
+Base.who on Sub proxy -> java.lang.IllegalArgumentException: "public default java.lang.String InvokeDefaultProbe$Base.who()" is overridden directly or indirectly by the proxy interfaces
+Base.inherited on Sub proxy -> inherited from Base
+Greeter.plain on Sub proxy -> java.lang.IllegalArgumentException: "public default java.lang.String InvokeDefaultProbe$Greeter.plain()" is not a method declared in the proxy class
+InvokeDefaultProbe done

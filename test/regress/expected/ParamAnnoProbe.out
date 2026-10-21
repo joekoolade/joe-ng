@@ -1,0 +1,91 @@
+== plain count=2
+  rows=2
+  row 0 []
+  row 1 []
+  param 0 toString="int arg0" name=arg0 type=int declared=[] all=[]
+    getAnnotation(Tag)=null present(Mark)=false present(Hidden)=false varargs=false implicit=false synthetic=false modifiers=0 namePresent=false
+    equalsAgain=true sameHash=true equalsOther=false sameExec=true
+  param 1 toString="java.lang.String arg1" name=arg1 type=java.lang.String declared=[] all=[]
+    getAnnotation(Tag)=null present(Mark)=false present(Hidden)=false varargs=false implicit=false synthetic=false modifiers=0 namePresent=false
+    equalsAgain=true sameHash=true equalsOther=false sameExec=true
+== mixed count=5
+  rows=5
+  row 0 [@Tag(first)]
+  row 1 []
+  row 2 [@Mark @Num(3)]
+  row 3 []
+  row 4 [@Num(7)]
+  param 0 toString="int arg0" name=arg0 type=int declared=[@Tag(first)] all=[@Tag(first)]
+    getAnnotation(Tag)=@Tag(first) present(Mark)=false present(Hidden)=false varargs=false implicit=false synthetic=false modifiers=0 namePresent=false
+    equalsAgain=true sameHash=true equalsOther=false sameExec=true
+  param 1 toString="long arg1" name=arg1 type=long declared=[] all=[]
+    getAnnotation(Tag)=null present(Mark)=false present(Hidden)=false varargs=false implicit=false synthetic=false modifiers=0 namePresent=false
+    equalsAgain=true sameHash=true equalsOther=false sameExec=true
+  param 2 toString="java.lang.String arg2" name=arg2 type=java.lang.String declared=[@Mark @Num(3)] all=[@Mark @Num(3)]
+    getAnnotation(Tag)=null present(Mark)=true present(Hidden)=false varargs=false implicit=false synthetic=false modifiers=0 namePresent=false
+    equalsAgain=true sameHash=true equalsOther=false sameExec=true
+  param 3 toString="double arg3" name=arg3 type=double declared=[] all=[]
+    getAnnotation(Tag)=null present(Mark)=false present(Hidden)=false varargs=false implicit=false synthetic=false modifiers=0 namePresent=false
+    equalsAgain=true sameHash=true equalsOther=false sameExec=true
+  param 4 toString="java.util.List<java.lang.String> arg4" name=arg4 type=java.util.List declared=[@Num(7)] all=[@Num(7)]
+    getAnnotation(Tag)=null present(Mark)=false present(Hidden)=false varargs=false implicit=false synthetic=false modifiers=0 namePresent=false
+    equalsAgain=true sameHash=true equalsOther=false sameExec=true
+== varargs count=2
+  rows=2
+  row 0 [@Mark]
+  row 1 [@Tag(rest)]
+  param 0 toString="java.util.Map<java.lang.String, java.lang.Integer> arg0" name=arg0 type=java.util.Map declared=[@Mark] all=[@Mark]
+    getAnnotation(Tag)=null present(Mark)=true present(Hidden)=false varargs=false implicit=false synthetic=false modifiers=0 namePresent=false
+    equalsAgain=true sameHash=true equalsOther=false sameExec=true
+  param 1 toString="int... arg1" name=arg1 type=[I declared=[@Tag(rest)] all=[@Tag(rest)]
+    getAnnotation(Tag)=@Tag(rest) present(Mark)=false present(Hidden)=false varargs=true implicit=false synthetic=false modifiers=0 namePresent=false
+    equalsAgain=true sameHash=true equalsOther=false sameExec=true
+== methodOnly count=1
+  rows=1
+  row 0 []
+  param 0 toString="int arg0" name=arg0 type=int declared=[] all=[]
+    getAnnotation(Tag)=null present(Mark)=false present(Hidden)=false varargs=false implicit=false synthetic=false modifiers=0 namePresent=false
+    equalsAgain=true sameHash=true equalsOther=false sameExec=true
+methodOnly method-level @Mark=true
+== ctor count=2
+  rows=2
+  row 0 [@Tag(ctor)]
+  row 1 []
+  param 0 toString="java.lang.String arg0" name=arg0 type=java.lang.String declared=[@Tag(ctor)] all=[@Tag(ctor)]
+    getAnnotation(Tag)=@Tag(ctor) present(Mark)=false present(Hidden)=false varargs=false implicit=false synthetic=false modifiers=0 namePresent=false
+    equalsAgain=true sameHash=true equalsOther=false sameExec=true
+  param 1 toString="int arg1" name=arg1 type=int declared=[] all=[]
+    getAnnotation(Tag)=null present(Mark)=false present(Hidden)=false varargs=false implicit=false synthetic=false modifiers=0 namePresent=false
+    equalsAgain=true sameHash=true equalsOther=false sameExec=true
+== inner ctor count=3
+  rows=3
+  row 0 []
+  row 1 [@Tag(inner)]
+  row 2 [@Mark]
+  param 0 toString="final ParamAnnoProbe arg0" name=arg0 type=ParamAnnoProbe declared=[] all=[]
+    getAnnotation(Tag)=null present(Mark)=false present(Hidden)=false varargs=false implicit=true synthetic=false modifiers=32784 namePresent=false
+    equalsAgain=true sameHash=true equalsOther=false sameExec=true
+  param 1 toString="java.lang.String arg1" name=arg1 type=java.lang.String declared=[@Tag(inner)] all=[@Tag(inner)]
+    getAnnotation(Tag)=@Tag(inner) present(Mark)=false present(Hidden)=false varargs=false implicit=false synthetic=false modifiers=0 namePresent=false
+    equalsAgain=true sameHash=true equalsOther=false sameExec=true
+  param 2 toString="int arg2" name=arg2 type=int declared=[@Mark] all=[@Mark]
+    getAnnotation(Tag)=null present(Mark)=true present(Hidden)=false varargs=false implicit=false synthetic=false modifiers=0 namePresent=false
+    equalsAgain=true sameHash=true equalsOther=false sameExec=true
+== enum ctor count=3
+  rows=3
+  row 0 []
+  row 1 []
+  row 2 [@Tag(enum)]
+  param 0 toString=" java.lang.String arg0" name=arg0 type=java.lang.String declared=[] all=[]
+    getAnnotation(Tag)=null present(Mark)=false present(Hidden)=false varargs=false implicit=false synthetic=true modifiers=4096 namePresent=false
+    equalsAgain=true sameHash=true equalsOther=false sameExec=true
+  param 1 toString=" int arg1" name=arg1 type=int declared=[] all=[]
+    getAnnotation(Tag)=null present(Mark)=false present(Hidden)=false varargs=false implicit=false synthetic=true modifiers=4096 namePresent=false
+    equalsAgain=true sameHash=true equalsOther=false sameExec=true
+  param 2 toString="java.lang.String arg2" name=arg2 type=java.lang.String declared=[@Tag(enum)] all=[@Tag(enum)]
+    getAnnotation(Tag)=@Tag(enum) present(Mark)=false present(Hidden)=false varargs=false implicit=false synthetic=false modifiers=0 namePresent=false
+    equalsAgain=true sameHash=true equalsOther=false sameExec=true
+stacked method [@Mark @Num(3) @Tag(third)]
+stacked field [@Num(4) @Mark @Tag(f)]
+stacked class [@Mark @Tag(cls) @Num(5)]
+ParamAnnoProbe done

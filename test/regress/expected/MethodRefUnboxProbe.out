@@ -1,0 +1,19 @@
+static I,I -> I boxed: 7
+static J,J -> J boxed: 5000000007
+static I -> ref: ff
+static I,I -> primitive SAM return: 1
+static I -> int via ToIntFunction: 9
+static C -> Z: true false
+static Z,Z -> Z boxed: true false
+static S,S -> I boxed: 2
+static B,B -> I boxed: -4
+static Integer -> long (unbox + widen): 42
+static F,F -> I boxed: -1 1
+static D -> Z: false true
+static D,D -> I boxed: -1 0
+unbound instance, receiver + I -> C boxed: e
+bound instance, I -> C boxed: c
+constructor reference, I: 77
+null argument: NullPointerException
+null argument, bound: NullPointerException
+MethodRefUnboxProbe done

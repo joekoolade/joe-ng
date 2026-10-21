@@ -1,0 +1,14 @@
+frame 0 StackWalkerProbe.level2:84 StackWalkerProbe.java native=false
+frame 1 StackWalkerProbe.level1:79 StackWalkerProbe.java native=false
+frame 2 StackWalkerProbe.main:33 StackWalkerProbe.java native=false
+caller of whoCalls=StackWalkerProbe
+forEach count=2 walk count=2
+lambda top starts=true
+declaring=StackWalkerProbe method=main ste=main
+ste string=StackWalkerProbe.main(StackWalkerProbe.java:38)
+no-retain getDeclaringClass: UOE
+no-retain getCallerClass: UOE
+drop getMethodName: UOE
+drop className=StackWalkerProbe
+options walker caller=StackWalkerProbe
+StackWalkerProbe done

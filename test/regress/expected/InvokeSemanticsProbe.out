@@ -1,0 +1,33 @@
+-- exceptions are wrapped --
+checked -> InvocationTargetException cause=java.io.IOException: checked targetSame=true
+unchecked -> InvocationTargetException cause=java.lang.IllegalStateException: unchecked targetSame=true
+error -> InvocationTargetException cause=java.lang.AssertionError: error targetSame=true
+deep -> InvocationTargetException cause=java.lang.UnsupportedOperationException: deep targetSame=true
+-- widening --
+long <- Integer -> long 7
+long <- Character -> long 65
+long <- Short -> long -3
+int <- Character -> int 66
+int <- Byte -> int 9
+double <- Integer -> double 4.0
+double <- Long -> double 1.099511627776E12
+double <- Float -> double 2.5
+short <- Byte -> short -7
+float <- Long -> float 1.2345679E8
+float <- Integer -> float 1.6777216E7
+object <- Integer -> object 3
+-- mismatches --
+int <- Long -> IllegalArgumentException
+int <- Double -> IllegalArgumentException
+int <- Boolean -> IllegalArgumentException
+short <- Character -> IllegalArgumentException
+int <- String -> IllegalArgumentException
+int <- null -> IllegalArgumentException
+string <- Integer -> IllegalArgumentException
+string <- null -> string null
+-- constructors --
+ctor(long) <- Integer -> long ctor 42
+ctor(long) <- String -> IllegalArgumentException
+ctor(String) ok -> string ctor x
+ctor(String) throws -> InvocationTargetException cause=java.io.IOException: empty
+InvokeSemanticsProbe done

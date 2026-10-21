@@ -1,0 +1,24 @@
+field names P(java.util.List<java.lang.String> args=[C(java.lang.String)])
+field value V(T of Holder)
+field sink P(java.util.Map<java.lang.String, ? super java.lang.Integer> args=[C(java.lang.String), W(? super java.lang.Integer)])
+field arr A(T[] of V(T of Holder))
+field plain C(int)
+method Holder.pick typeparams=[U bounds=[C(java.lang.Number)]] params=[P(java.util.Map<T, U> args=[V(T of Holder), V(U of pick)]), A(U[] of V(U of pick))] returns=P(java.util.List<U> args=[V(U of pick)])
+method Holder.max typeparams=[K bounds=[P(java.lang.Comparable<K> args=[V(K of max)])]] params=[V(K of max), V(K of max)] returns=V(K of max)
+method Holder.narrow typeparams=[S bounds=[V(T of Holder)]] params=[V(S of narrow)] returns=V(S of narrow)
+method Holder.plain typeparams=[] params=[C(int)] returns=C(java.lang.String)
+method Holder.plain typeparams=[] params=[P(java.util.List<java.lang.Integer> args=[C(java.lang.Integer)])] returns=C(java.lang.String)
+ctor(V,List) typeparams=[V bounds=[C(java.lang.Object)]] generic=[V(V of MemberGenericsProbe$Holder), P(java.util.List<? extends T> args=[W(? extends T)])]
+ctor() typeparams=[] generic=[]
+method equals=true identical=false hash=true other=false overloads=false
+method typevar equal=true declaredBy=true declName=pick
+field equals=true other=false
+ctor equals=true other=false hash=true
+ctor typevar declaredBy=true
+method Holder.grid typeparams=[] params=[C([Ljava.lang.String;), C([J), A(T[][] of A(T[] of V(T of Holder)))] returns=C([[I)
+erased grid params=[class [Ljava.lang.String;, class [J, class [[Ljava.lang.Object;] returns=class [[I identity=true,true,true,true
+method HashMap.put typeparams=[] params=[V(K of HashMap), V(V of HashMap)] returns=V(V of HashMap)
+method Collections.emptyList typeparams=[T bounds=[C(java.lang.Object)]] params=[] returns=P(java.util.List<T> args=[V(T of emptyList)])
+method Arrays.asList typeparams=[T bounds=[C(java.lang.Object)]] params=[A(T[] of V(T of asList))] returns=P(java.util.List<T> args=[V(T of asList)])
+method Collections.max typeparams=[T bounds=[C(java.lang.Object), P(java.lang.Comparable<? super T> args=[W(? super T)])]] params=[P(java.util.Collection<? extends T> args=[W(? extends T)])] returns=V(T of max)
+MemberGenericsProbe done

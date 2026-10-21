@@ -1,0 +1,10 @@
+tokens -> 12 34.5 true hello 1234 -7 hasNext=false
+lines -> [first line][second  line][][fourth]
+delimiter -> <a><b><><c>
+hasNextInt/Double -> ints=5 words+doubles=103
+findInLine -> other=thing
+Reader source past one buffer: sum = 4498500 (want 4498500)
+mismatch -> InputMismatchException
+empty -> NoSuchElementException
+CharBuffer -> hey! remaining=4 wrap=bcd compare=-1
+ScannerProbe done

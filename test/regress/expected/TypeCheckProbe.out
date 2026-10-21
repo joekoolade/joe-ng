@@ -1,0 +1,10 @@
+before: false false
+before: false false
+before: a String is not a TreeSet
+lambda instanceof: true
+lambda instanceof ZipEntry: true
+lambda instanceof JarEntry: true
+method instanceof: true
+lambda checkcast: java.util.ArrayDeque
+method checkcast: java.util.TreeSet
+TypeCheckProbe done

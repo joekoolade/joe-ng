@@ -1,0 +1,7 @@
+String.format(%,d) default locale -> 1,234,567 | -9,876,543,210
+String.format(%,.2f) default locale -> 1,234,567.89
+number -> 1,234.568 | -0.001 | parse 1234.5
+integer -> 2 4 1,234,567 | parse 12 | parseIntegerOnly true
+percent -> 26% 1,200% | parse 0.5
+getInstance == getNumberInstance: true
+NumberFormatProbe done

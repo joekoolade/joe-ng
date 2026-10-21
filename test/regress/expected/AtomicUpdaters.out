@@ -1,0 +1,27 @@
+Testing: public int field of current class: public AtomicUpdaters.pub_int
+ - testing getDeclaredField
+ - testing AtomicIntegerFieldUpdater
+Testing: private int field of current class: private AtomicUpdaters.priv_int
+ - testing getDeclaredField
+ - testing AtomicIntegerFieldUpdater
+Testing: public long field of current class: public AtomicUpdaters.pub_long
+ - testing getDeclaredField
+ - testing AtomicLongFieldUpdater
+Testing: private long field of current class: private AtomicUpdaters.priv_long
+ - testing getDeclaredField
+ - testing AtomicLongFieldUpdater
+Testing: public ref field of current class: public AtomicUpdaters.pub_ref
+ - testing getDeclaredField
+ - testing AtomicReferenceFieldUpdater
+Testing: private ref field of current class: private AtomicUpdaters.priv_ref
+ - testing getDeclaredField
+ - testing AtomicReferenceFieldUpdater
+Testing: private int field of class in different package: private java.util.concurrent.atomic.AtomicInteger.value
+ - testing getDeclaredField
+ - testing AtomicIntegerFieldUpdater
+Testing: private long field of class in different package: private java.util.concurrent.atomic.AtomicLong.value
+ - testing getDeclaredField
+ - testing AtomicLongFieldUpdater
+Testing: private reference field of class in different package: private java.util.concurrent.atomic.AtomicReference.value
+ - testing getDeclaredField
+ - testing AtomicReferenceFieldUpdater

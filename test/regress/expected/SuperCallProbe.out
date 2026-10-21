@@ -1,0 +1,8 @@
+top first: A A1x A.st
+super, direct declaration: C>B
+super, inherited from a grandparent: K>G
+super, two arguments: C>B2y
+inherited static through a subclass: B.st
+super.close() finished the deflater stream: finish me
+read after super.close(): java.io.IOException: Stream closed
+SuperCallProbe done

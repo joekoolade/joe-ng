@@ -1426,6 +1426,47 @@ final class VMNatives
                 | ((Magic.load8(ipOut + 2) & 0xFF) << 8) | (Magic.load8(ipOut + 3) & 0xFF);
     }
 
+    /**
+     * The WiFi interface as {@code java.net.NetworkInterface.wifi0(long)} reads it: key 0 the leased IPv4
+     * address, 1 the subnet mask (big-endian ints, a.b.c.d -> (a&lt;&lt;24)|..|d), 2 the station MAC in the low 48
+     * bits. Every key answers 0 until the stack is configured -- net.Ip publishes the lease only once ARP has
+     * found the gateway, which is when the TCP stack can use it -- so 0 at key 0 means "no interface".
+     */
+    static long netifState(long key)
+    {
+        if (net.Ip.ourIp == 0L)
+        {
+            return 0L;
+        }
+        if (key == 0L)
+        {
+            return beInt(net.Ip.ourIp);
+        }
+        if (key == 1L)
+        {
+            return net.Ip.netMask == 0L ? 0L : beInt(net.Ip.netMask);
+        }
+        if (key == 2L && net.Ip.ourMac != 0L)
+        {
+            long mac = 0L;
+            int i = 0;
+            while (i < 6)
+            {
+                mac = (mac << 8) | (Magic.load8(net.Ip.ourMac + i) & 0xFFL);
+                i += 1;
+            }
+            return mac;
+        }
+        return 0L;
+    }
+
+    /** Four bytes at {@code a}, big-endian, as an int (sign-extended into the long the caller narrows). */
+    private static long beInt(long a)
+    {
+        return ((Magic.load8(a) & 0xFF) << 24) | ((Magic.load8(a + 1) & 0xFF) << 16)
+                | ((Magic.load8(a + 2) & 0xFF) << 8) | (Magic.load8(a + 3) & 0xFF);
+    }
+
     /** The net.Tcp handle stored in a FileDescriptor's fd field (offset 16 = first instance field). */
     private static int fdIndex(long fdRef)
     {

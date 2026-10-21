@@ -1,0 +1,7 @@
+nested clinit probe:
+  Trivial = 7
+  Alloc   = 4
+  Str     = 1
+  PlainRe = 1
+  Regex   = 1
+  survived

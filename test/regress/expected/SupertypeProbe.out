@@ -1,0 +1,25 @@
+member x mods=1 in=Target synthetic=false
+member twice mods=1 in=Target synthetic=false
+member SupertypeProbe$Target mods=1 in=Target synthetic=false
+anno class present=true get=type declared=type all=1 decl=1 deprecated=false
+anno field present=true get=field declared=field all=1 decl=1 deprecated=false
+anno method present=true get=method declared=method all=1 decl=1 deprecated=false
+anno ctor(int) present=true get=ctor declared=ctor all=1 decl=1 deprecated=false
+anno ctor() present=false get=null declared=null all=0 decl=0 deprecated=false
+anno module present=false get=null declared=null all=0 decl=0 deprecated=false
+ctor invoke twice=42
+Class is Serializable=true AnnotatedElement=true
+Module is AnnotatedElement=true
+Field is Member=true Method is Member=true
+break first=0 next=6
+BreakIterator is Cloneable=true clone same=false class=true
+copy current=6 next=11 next=16
+orig current=6 next=11
+ifaces AccessibleObject=[interface java.lang.reflect.AnnotatedElement]
+ifaces Field=[interface java.lang.reflect.Member]
+ifaces Module=[interface java.lang.reflect.AnnotatedElement]
+ifaces BreakIterator=[interface java.lang.Cloneable]
+ifaces ZipFile=[interface java.util.zip.ZipConstants, interface java.io.Closeable]
+ifaces JarFile=[]
+ifaces SocksSocketImpl=[interface java.net.SocksConsts]
+SupertypeProbe done

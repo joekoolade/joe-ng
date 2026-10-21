@@ -1,0 +1,19 @@
+nine via class -> 285
+nine via lambda -> 285
+base -> Base:x
+nine -> 285
+seventeen -> [1, 2, 3.5, 4.25, five, 6, 7, 8, 9, 10, 11.5, 12, thirteen, 14, 15, 16.75, seventeen]
+f -> 2.5
+c -> b
+b -> -6
+s -> 900
+nullPrimitive -> java.lang.NullPointerException
+wrongType -> java.lang.ClassCastException
+undeclared -> java.lang.reflect.UndeclaredThrowableException cause=java.io.IOException
+sorted by proxy comparator [a, bb, ccc, dddd]
+proxy class cached true same as instance's true
+isProxyClass(Comparator proxy) true
+map size 1 value second
+not an interface -> IllegalArgumentException
+repeated -> IllegalArgumentException
+ProxyEdgeProbe done

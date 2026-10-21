@@ -1,0 +1,21 @@
+heap: isDirect=false cap=32 order=BIG_ENDIAN
+heap: pos=15 getInt(20)=1020304 neighbours=126,127 getShort(1)=2233 getLong(7)=8899aabbccddeeff
+heap: LE getInt(20)=4030201 LE getShort(1)=3322
+heap: flip remaining=15 bytes=[17, 34, 51, 68, 85, 102, 119, -120, -103, -86, -69, -52, -35, -18, -1]
+heap: slice(1,6) getShort=2233 isDirect=false cap=6
+heap: compact pos=12 first=44
+heap: readOnly put -> ReadOnlyBufferException isReadOnly=true
+heap: asIntBuffer -> v.getInt(4)=-1 v.get(8)=18 asLong[0]=7ffffffff asChar[13]=0
+direct: isDirect=true cap=32 order=BIG_ENDIAN
+direct: pos=15 getInt(20)=1020304 neighbours=126,127 getShort(1)=2233 getLong(7)=8899aabbccddeeff
+direct: LE getInt(20)=4030201 LE getShort(1)=3322
+direct: flip remaining=15 bytes=[17, 34, 51, 68, 85, 102, 119, -120, -103, -86, -69, -52, -35, -18, -1]
+direct: slice(1,6) getShort=2233 isDirect=true cap=6
+direct: compact pos=12 first=44
+direct: readOnly put -> ReadOnlyBufferException isReadOnly=true
+direct: asIntBuffer -> v.getInt(4)=-1 v.get(8)=18 asLong[0]=7ffffffff asChar[13]=0
+heap->direct copy: 102030405060708 equals=true compareTo=0 mismatch=-1
+after change: equals=false mismatch=7 compareTo>0=true
+wrap(1,3): pos=1 lim=4 hasArray=true arrayOffset=0 get=2
+nativeOrder=LITTLE_ENDIAN CharBuffer.wrap=ell
+NioBufferProbe done

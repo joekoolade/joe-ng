@@ -1,0 +1,31 @@
+fileName sample.txt parent /data nameCount 2
+normalize /data/sample.txt
+relativize ../etc/motd
+resolve /data/nums.txt
+absolute true false
+exists sample -> true
+exists missing -> false
+notExists missing -> true
+isDirectory /data -> true
+isDirectory sample -> false
+isRegularFile sample -> true
+isRegularFile /etc -> false
+isReadable sample -> true
+isWritable sample -> true
+size sample -> 118
+size missing -> java.nio.file.NoSuchFileException
+attrs sample -> dir=false regular=true link=false size=118
+attrs /data -> dir=true regular=false
+list /data -> [/data/nums.txt, /data/prog.lisp, /data/sample.txt]
+directoryStream /etc -> true true
+walk /data -> [/data, /data/nums.txt, /data/prog.lisp, /data/sample.txt]
+list a file -> java.nio.file.NotDirectoryException
+toRealPath -> /etc/motd
+isSameFile -> true
+write -> /data/new.txt size 1
+createDirectory -> /data/newdir
+createDirectory again -> java.nio.file.FileAlreadyExistsException
+delete -> false false
+delete again -> java.nio.file.NoSuchFileException
+still there -> true
+NioFileProbe done

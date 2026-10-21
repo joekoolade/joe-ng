@@ -1,0 +1,10 @@
+pre-set wait(): InterruptedException holds=true status=false quick=true
+pre-set wait(5000): InterruptedException holds=true status=false quick=true
+pre-set wait(0,1): InterruptedException holds=true status=false quick=true
+blocked wait(): InterruptedException holds=true status=false quick=true
+blocked wait(10000): InterruptedException holds=true status=false quick=true
+blocked recursive wait(): InterruptedException holds=true status=false outerHolds=true quick=true
+blocked enter: entered status=true
+notified wait: returned
+main status after: false
+InterruptWaitProbe done

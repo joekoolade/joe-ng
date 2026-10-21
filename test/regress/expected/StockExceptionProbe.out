@@ -1,0 +1,19 @@
+serializable=13 of 13
+ITSE instanceof IAE=true
+caught as IAE: java.lang.IllegalThreadStateException: not started
+IAE(msg,cause) msg=wrapped cause=root
+IAE(cause) msg=java.lang.IllegalStateException: root
+CNFE(msg,cause) cause=root
+ROE(msg,cause) cause=root
+IOOBE(int)=Index out of range: 5
+IOOBE(long)=Index out of range: 7
+AIOOBE(int)=Array index out of range: 9
+caught as ROE: java.lang.NoSuchMethodException
+ITE target=root cause=root msg=ite
+NPE() msg=null
+NPE(s) msg=given
+NPE after fillInStackTrace msg=null
+implicit AIOOBE caught as IOOBE: java.lang.ArrayIndexOutOfBoundsException
+implicit ArithmeticException caught as RTE: java.lang.ArithmeticException
+implicit NPE caught as RTE: java.lang.NullPointerException serializable=true
+StockExceptionProbe done

@@ -1,0 +1,29 @@
+create -> /data/w.txt size 5 hello
+append -> hello world
+truncate existing -> bye size 3
+create new over existing -> java.nio.file.FileAlreadyExistsException
+missing parent -> java.nio.file.NoSuchFileException
+directory for writing -> java.nio.file.FileSystemException
+java.io sees it -> true true 3
+positional write past end -> 2 size=12 pos=0 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 65, 66]
+channel truncate -> size=4 pos=4
+overwrite in place -> pos=4 abXYefgh
+overwrite an image file -> 42 restored true sample unchanged true
+buffered writer -> [one, two] 8
+copy -> /data/copy.txt same bytes true same file false
+copy over existing -> java.nio.file.FileAlreadyExistsException
+copy replacing -> abXYefgh
+copy attributes -> 5000 abXYefgh
+move file -> false abXYefgh
+move directory tree -> false deep [/data/m1/d2]
+move onto non-empty directory -> java.nio.file.DirectoryNotEmptyException
+delete non-empty directory -> java.nio.file.DirectoryNotEmptyException
+hard link -> true via link nlink=2
+delete while open -> false read 8 via link nlink=1
+owner-only file -> /tmp rw------- size 0
+owner-only directory -> true rwx------
+umask applies -> rw-r--r--
+delete on close -> false
+recursive delete -> false
+cleanup -> [/data/nums.txt, /data/prog.lisp, /data/sample.txt] tmp []
+NioWriteProbe done

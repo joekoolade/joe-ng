@@ -1983,6 +1983,7 @@ public final class VM
         if (printStackTraceAddr == 0L) { VMNatives.printStackTrace(0L); }       // Throwable.printStackTrace0() native
         if (ramfsTableAddr == 0L) { long u = VMNatives.ramfsTable(0L); }        // MetalRamfs.table0
         if (dnsResolveAddr == 0L) { int u = VMNatives.dnsResolve(0L); }         // java.net.InetAddress.resolve0() native (M3)
+        if (netifStateAddr == 0L) { long u = VMNatives.netifState(-1L); }       // java.net.NetworkInterface.wifi0
         if (vhFieldOffsetAddr == 0L) { long u = VMNatives.vhFieldOffset(0L, 0L); }      // VarHandle.fieldOffset0 native (M3)
         if (fieldModsAddr == 0L) { int u = VMNatives.fieldMods(0L, 0L); }               // Class.fieldMods0 native (reflection)
         if (staticCellAddr == 0L) { long u = VMNatives.staticCell(0L, 0L); }   // Field.staticCell0
@@ -3550,6 +3551,7 @@ public final class VM
     static long printStackTraceAddr;   // VM.printStackTrace(J)V — Throwable.printStackTrace0() native (self in x0)
     static long ramfsTableAddr;        // VMNatives.ramfsTable(J)J — MetalRamfs.table0(long)
     static long dnsResolveAddr;        // VM.dnsResolve(J)I — java.net.InetAddress.resolve0(byte[]) native (M3)
+    static long netifStateAddr;        // VMNatives.netifState(J)J — java.net.NetworkInterface.wifi0(long)
     static long vhFieldOffsetAddr;     // VM.vhFieldOffset(JJ)J — java.lang.invoke.VarHandle.fieldOffset0 (M3)
     static long fieldModsAddr;         // VM.fieldMods(JJ)I — Class.fieldMods0 (reflection)
     static long staticCellAddr;        // VMNatives.staticCell(JJ)J — Field.staticCell0 (reflective statics)

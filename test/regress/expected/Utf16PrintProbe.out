@@ -1,0 +1,6 @@
+length=3 last=20ac
+getBytes(UTF_8)=[72, 105, -30, -126, -84]
+getBytes()=[72, 105, -30, -126, -84]
+PrintStream(UTF_8).print=[72, 105, -30, -126, -84]
+System.out.charset=UTF-8
+Utf16PrintProbe done

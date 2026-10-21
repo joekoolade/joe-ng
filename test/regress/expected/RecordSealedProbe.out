@@ -1,0 +1,22 @@
+Point components 2
+  x type=int generic=int accessor=x declaringRecord=Point unit=null toString=int x
+  y type=double generic=double accessor=y declaringRecord=Point unit=m toString=double y
+Box components 2
+  item type=java.lang.Object generic=T accessor=item declaringRecord=Box unit=null toString=java.lang.Object item
+  tags type=java.util.List generic=java.util.List<java.lang.String> accessor=tags declaringRecord=Box unit=null toString=java.util.List tags
+Empty components 0
+Circle components 1
+  r type=double generic=double accessor=r declaringRecord=Circle unit=null toString=double r
+Square components null
+accessor values 3 4.5
+isRecord Point=true Square=false Color=false Record=false
+sealed Shape=true permits [Circle, Square]
+sealed Animal=true permits [Cat, Dog]
+sealed Cat=false permits null
+sealed Dog=false permits null
+sealed String=false int[]=false
+componentType int[]=int String[][]=class [Ljava.lang.String; String=null
+forPrimitiveName int=int void=void Integer=null
+isHidden Point=false int=false
+getSigners Point=null int=null
+RecordSealedProbe done

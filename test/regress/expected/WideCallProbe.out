@@ -1,0 +1,16 @@
+eight     reflect=204 direct=204
+nine      reflect=285 direct=285
+fifteen   reflect=1|2|3.5|4.25|five|6|7|8|9|10|11.5|12|thirteen|14|15
+          direct=1|2|3.5|4.25|five|6|7|8|9|10|11.5|12|thirteen|14|15
+sixteen   reflect=1|2|3.5|4.25|five|6|7|8|9|10|11.5|12|thirteen|14|15|16.75
+          direct=1|2|3.5|4.25|five|6|7|8|9|10|11.5|12|thirteen|14|15|16.75
+seventeen reflect=1|2|3.5|4.25|five|6|7|8|9|10|11.5|12|thirteen|14|15|16.75|seventeen
+          direct=1|2|3.5|4.25|five|6|7|8|9|10|11.5|12|thirteen|14|15|16.75|seventeen
+twenty    reflect=2870 direct=2870
+twenty params = [int, int, int, int, int, int, int, int, int, int, int, int, int, int, int, int, int, int, int, long]
+ctor(10)  reflect=315 direct=315
+ctor(16)  reflect=1496 direct=1496
+inst(16)  reflect=315:1240:last direct=315:1240:last
+declared methods with >= 8 params = 7
+short args: wrong number of arguments: 3 expected: 9
+WideCallProbe done

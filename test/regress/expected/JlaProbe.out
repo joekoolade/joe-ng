@@ -1,0 +1,12 @@
+utf ascii bytes=000568656c6c6f back=104,101,108,108,111 same=true
+utf empty bytes=0000 back= same=true
+utf nul bytes=000461c08062 back=97,0,98 same=true
+utf latin1 bytes=0005636166c3a9 back=99,97,102,233 same=true
+utf euro bytes=000578e282ac79 back=120,8364,121 same=true
+utf mixed bytes=000a616263c3bfc48078797a back=97,98,99,255,256,120,121,122 same=true
+utf16 sb + double len=4 codes=8364,49,46,53
+utf16 sb + float len=4 codes=8364,48,46,49
+utf16 sb + 1e20 len=7 codes=8364,49,46,48,69,50,48
+latin1 sb + double = e-2.5
+joiner = 60,112,124,8364,62
+JlaProbe done

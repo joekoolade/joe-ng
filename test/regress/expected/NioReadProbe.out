@@ -1,0 +1,14 @@
+readAllBytes sample -> 118
+readString first line -> the quick brown fox jumps over the lazy dog
+readAllLines nums -> 1
+lines sample count -> 3
+newInputStream -> 3 the
+newBufferedReader -> the quick brown fox jumps over the lazy dog
+read missing -> java.nio.file.NoSuchFileException
+seekable channel -> 4 pos=4 size=118 at4=quick
+file channel direct -> 118 then -1 size=118
+file channel positional -> 3 bro pos=0 past end=-1
+channel for write -> opened size=118
+read while interrupted -> ClosedByInterruptException open=false interrupted=true
+interrupt cleared -> false
+NioReadProbe done

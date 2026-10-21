@@ -1,0 +1,24 @@
+v4 literal: v4 len=4 host=93.184.215.14 str=/93.184.215.14 any=false loop=false link=false site=false mc=false
+v4 bytes: v4 len=4 host=10.1.2.200 str=/10.1.2.200 any=false loop=false link=false site=true mc=false
+v4 named: v4 len=4 host=93.184.215.14 str=example.com/93.184.215.14 any=false loop=false link=false site=false mc=false
+loopback4: v4 len=4 host=127.0.0.1 str=/127.0.0.1 any=false loop=true link=false site=false mc=false
+any4: v4 len=4 host=0.0.0.0 str=/0.0.0.0 any=true loop=false link=false site=false mc=false
+linklocal4: v4 len=4 host=169.254.3.4 str=/169.254.3.4 any=false loop=false link=true site=false mc=false
+sitelocal4: v4 len=4 host=192.168.1.247 str=/192.168.1.247 any=false loop=false link=false site=true mc=false
+multicast4: v4 len=4 host=224.0.0.251 str=/224.0.0.251 any=false loop=false link=false site=false mc=true
+any6: v6 len=16 host=0:0:0:0:0:0:0:0 str=/0:0:0:0:0:0:0:0 any=true loop=false link=false site=false mc=false
+loopback6: v6 len=16 host=0:0:0:0:0:0:0:1 str=/0:0:0:0:0:0:0:1 any=false loop=true link=false site=false mc=false
+v6 literal: v6 len=16 host=2001:db8:0:0:8:800:200c:417a str=/2001:db8:0:0:8:800:200c:417a any=false loop=false link=false site=false mc=false
+v6 linklocal: v6 len=16 host=fe80:0:0:0:0:0:0:1 str=/fe80:0:0:0:0:0:0:1 any=false loop=false link=true site=false mc=false
+v4-mapped: v4 len=4 host=192.0.2.1 str=/192.0.2.1 any=false loop=false link=false site=false mc=false
+getLoopbackAddress: v4 len=4 host=127.0.0.1 str=localhost/127.0.0.1 any=false loop=true link=false site=false mc=false
+equal=true sameHash=true hash=167772161
+v4 vs v6 equal=false
+5 bytes: UnknownHostException addr is of illegal length
+bad [::1: rejected cause=none
+bad 1:2:3: rejected cause=none
+bad 0x7f.1: rejected cause=java.lang.IllegalArgumentException
+bad [1.2.3.4]: rejected cause=none
+sockaddr=/93.184.215.14:80 unresolved=false port=80
+unresolved=example.com/<unresolved>:443 isUnresolved=true host=example.com
+InetAddrProbe done

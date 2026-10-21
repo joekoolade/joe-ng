@@ -1,0 +1,6 @@
+int updater total=12000 (want 12000)
+long updater total=12000 (want 12000)
+reference updater total=12000 (want 12000)
+set over negative: ic==10 true ic/5=2 (long)ic=10
+cas over negative: true true ic/3=3
+UpdaterRaceProbe done

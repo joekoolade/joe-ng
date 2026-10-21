@@ -1,0 +1,109 @@
+# The probe regression list, read by scripts/Regress.java. One probe per line:
+#   <Probe> [solo] [cp=<RAMFS classpath>] [gate=<text the metal output must contain>]
+# A probe passes when its metal output equals test/regress/expected/<Probe>.out (the HOST JVM's output),
+# or, with gate=, when the output contains that text (DigestProbe/MacProbe differ from the host by design).
+# solo = never batched: its subject is first initialization, ordering, timing, global state or the stack itself,
+# so running after other probes in the same VM could MASK a failure. "OPEN VM BUG in a batch" marks a probe
+# that passes alone but gives a WRONG answer after other probes ran: a real bug, kept solo until it is fixed
+# (then the mark comes off). This list is that worklist. Adding a probe: generate its host output
+# with javac + java on the seed JDK, check it equals a metal run, commit it as expected/<Probe>.out.
+#
+# Host recipes that are not plain `java -cp <classes> <Probe>`: GvrProbe/ClassResourceProbe add
+# ramfs/lib/junit.jar to -cp; EngineMessageProbe adds out; ReaderProbe takes ramfs/data/sample.txt and
+# ReflectLookupProbe ramfs/lib/app.jar as args[0]; LocaleProbe runs with
+# -Duser.language=en -Duser.country= -Duser.variant= -Duser.script=.
+
+AccessFlagsProbe         solo             # OPEN VM BUG in a batch: ClassCastException [Ljava.lang.reflect.Parameter; -> [?
+AccessRulesProbe
+AnnoContractProbe        solo             # OPEN VM BUG in a batch: @Inner("in").hashCode() wrong
+AnnoDefaultProbe
+AnnoLoadProbe
+ArrayCovarianceProbe
+AtomicUpdaters
+ByteViewProbe
+CarrierLocalProbe
+CharsetIdentityProbe
+ChmRaceProbe             solo             # race; timing-sensitive
+ClassResourceProbe       cp=/lib/junit.jar
+ClinitOrderProbe         solo             # initialization order is the subject
+ClinitRaceProbe          solo             # races a first initialization
+ConcatUtf16Probe
+ConstantDescOrderProbe
+DefaultFrameProbe
+DeflaterProbe
+DigestProbe              gate=failures=0 divergences-unmet=0
+EngineMessageProbe
+ExecutorProbe
+FieldPrimProbe
+FieldSemanticsProbe
+FileProbe
+FirstCallRaceProbe       solo             # races a first compile
+FormatProbe
+FunctionProbe
+GenericsProbe
+GvrProbe                 cp=/lib/junit.jar
+InetAddrProbe            solo             # OPEN VM BUG in a batch: NullPointerException on its first line
+InflaterProbe
+InterruptWaitProbe
+InvokeDefaultProbe
+InvokeSemanticsProbe
+IoStreamProbe            solo             # writes/deletes RAMFS paths other probes use (but an NPE, not a file error, in a batch: check)
+JavaTimeProbe
+JlaProbe
+Lazy                     solo             # lazy initialization is the subject
+LocaleInitProbe          solo             # Locale initialization is the subject
+LocaleProbe              solo             # reads the default locale
+LockProbe
+LongBranchProbe          solo             # ~4 MB of code; would crowd the code arena
+MacProbe                 solo gate=failures=0 divergences-unmet=0  # OPEN VM BUG in a batch: IllegalArgumentException Missing algorithm
+MemberGenericsProbe      solo             # OPEN VM BUG in a batch: erased array identity answers false
+MemberToStringProbe
+MethodRefUnboxProbe
+MonitorStateProbe
+NestedClinitProbe        solo             # initialization order is the subject
+NestingProbe
+NetStaticsProbe
+NetIfProbe
+NioAttrProbe
+NioBufferProbe
+NioFileProbe
+NioReadProbe
+NioWriteProbe            solo             # writes/deletes RAMFS paths other probes use
+NumberFormatProbe
+ObjectProbe
+OobMessageProbe
+ParamAnnoProbe           solo             # OPEN VM BUG in a batch: stops at its first parameter
+ParkProbe
+PrintWriterProbe
+ProxyEdgeProbe
+ProxyProbe
+ReaderProbe
+RecordSealedProbe
+RecordUtf16Probe
+ReflectArrayProbe
+ReflectLookupProbe
+RepeatableProbe          solo             # OPEN VM BUG in a batch: stops at the parameter annotations
+RuntimeProbe
+ScannerProbe
+ScopedValueProbe         solo             # known intermittent
+SecurityExtraProbe       solo             # must run before Security initializes
+SecurityPropsProbe       solo             # reads Security state other probes set
+SecuritySetProbe         solo             # sets Security properties
+SemaphoreProbe
+StackWalkerProbe         solo             # prints stack frames; a batch adds its own
+StockExceptionProbe
+SuperCallProbe
+SupertypeProbe
+SystemLoggerProbe        solo             # logger initialization
+ThrowableToStringProbe
+TlrProbe
+TypeCheckProbe
+UpdaterRaceProbe
+Utf16PrintProbe
+VirtualInvokeProbe       solo             # OPEN VM BUG in a batch: sub-interface default dispatches to the super default
+WallClockProbe           solo             # timing
+WideCallProbe
+WideFrameProbe
+WideIincProbe
+ZipFileProbe             solo             # writes /tmp/p.zip; RAMFS paths other probes use
+ZipNamesProbe

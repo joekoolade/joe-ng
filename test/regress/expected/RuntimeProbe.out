@@ -1,0 +1,13 @@
+max>0 true
+total>0 true
+total<=max true
+0<=free<=total true
+processors>=1 true
+kept 4 MiB counted true
+gc returned
+reachable survived true
+still counted true
+System.gc + runFinalization returned
+gc from a thread true
+free<=total after true
+RuntimeProbe done 4194304

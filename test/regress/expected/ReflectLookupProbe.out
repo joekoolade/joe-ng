@@ -1,0 +1,15 @@
+ctor(int)=int:7 ctor(String)=str:a
+ctor(int) params=[int]
+public constructors=2 declared=3
+declared constructor params=[[], [class java.lang.String], [int]]
+getConstructor() of private: NoSuchMethodException
+m() | m(int 5) | m(String x) | m(int[] 3)
+inherited=base9
+interfaces=[interface ReflectLookupProbe$Greets] Greets declares 1 method(s)
+getMethods lists greet=true
+default=hello pi
+m(long): NoSuchMethodException
+getDeclaredMethod of inherited: NoSuchMethodException
+m(int) params=[int] declaring=Target
+JarFile(File) manifest=true
+ReflectLookupProbe done

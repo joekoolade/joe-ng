@@ -1,0 +1,8 @@
+guarded counter = 80000 (want 80000)
+tryLock while held elsewhere = false, isHeldByCurrentThread = false, isLocked = true
+tryLock after release = true, isHeldByCurrentThread = true
+Condition await/signal = 42
+ArrayBlockingQueue = 499500 true
+LinkedBlockingQueue = 499500 true
+timed poll on empty = null, waited >= 50ms and < 10s = true
+LockProbe done

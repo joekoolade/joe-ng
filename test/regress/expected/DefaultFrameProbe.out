@@ -1,0 +1,9 @@
+forName==literal true
+literal.isAssignableFrom(literal) true
+literal.isAssignableFrom(byName) true
+byName interface=true name=java.lang.System$Logger
+interfaces=21 not self-assignable=0
+Collection<-List true List<-Collection false Iterable<-Deque true Closeable<-AutoCloseable false
+Runnable[]<-Runnable[] true Object[]<-Runnable[] true Runnable[]<-Object[] false
+frame DefaultFrameProbe$Greeter.frames decl=DefaultFrameProbe$Greeter ==Greeter true Greeter.isAssignableFrom true
+frame DefaultFrameProbe.main decl=DefaultFrameProbe ==Greeter false Greeter.isAssignableFrom false

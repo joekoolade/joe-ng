@@ -1,0 +1,10 @@
+permits=3
+tryAcquire=true permits=2
+after acquire(2) permits=0 tryAcquire=false
+after release(3) permits=3
+drained=3 permits=0
+timed tryAcquire=false
+fair=true unfair=false
+forty semaphores, each acquired once: 40
+contended: total=800 (want 800) maxInside=1 permits=1
+SemaphoreProbe done

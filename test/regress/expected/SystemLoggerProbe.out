@@ -1,0 +1,15 @@
+name=probe.logger
+ALL loggable=false
+TRACE loggable=false
+DEBUG loggable=false
+INFO loggable=true
+WARNING loggable=true
+ERROR loggable=true
+OFF loggable=false
+captured lines=4
+header shape=true caller=SystemLoggerProbe main
+record=INFO: hello from the metal
+header shape=true caller=SystemLoggerProbe main
+record=WARNING: x=5 y=five
+second lookup non-null=true
+SystemLoggerProbe done

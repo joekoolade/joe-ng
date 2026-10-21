@@ -1,0 +1,17 @@
+Type.SUCCESS_PRESENT (forced first) nonNull=true
+declared fields, in order:
+   [0] SUCCESS_PRESENT type=org.junit.platform.console.shadow.picocli.CommandLine$ParseResult$GroupValidationResult static=true
+   [1] SUCCESS_ABSENT type=org.junit.platform.console.shadow.picocli.CommandLine$ParseResult$GroupValidationResult static=true
+   [2] type type=org.junit.platform.console.shadow.picocli.CommandLine$ParseResult$GroupValidationResult$Type static=false
+   [3] exception type=org.junit.platform.console.shadow.picocli.CommandLine$ParameterException static=false
+SUCCESS_PRESENT: type=SUCCESS_PRESENT exception=null (correct)
+SUCCESS_ABSENT: type=SUCCESS_ABSENT exception=null (correct)
+instance class = org.junit.platform.console.shadow.picocli.CommandLine$ParseResult$GroupValidationResult
+reflective set/get round-trip nonNull=true same=true
+enum identity: instance.type == Type.SUCCESS_PRESENT -> true  OK
+enum identity: getEnumConstants()[i] == static field -> true
+SUCCESS_PRESENT.success()=true (want true)  blockingFailure()=false (want false)  OK
+SUCCESS_ABSENT.success()=true (want true)  blockingFailure()=false (want false)  OK
+two-arg ctor: type=FAILURE_PRESENT (want FAILURE_PRESENT)  OK
+two-arg ctor: exception=null (want null)
+fresh via reflective ctor: type nonNull=true same=true

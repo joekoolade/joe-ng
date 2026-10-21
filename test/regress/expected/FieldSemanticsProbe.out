@@ -1,0 +1,82 @@
+-- access: a private field of another class --
+get -> java.lang.IllegalAccessException
+getInt -> java.lang.IllegalAccessException
+getLong -> java.lang.IllegalAccessException
+set -> java.lang.IllegalAccessException
+setInt -> java.lang.IllegalAccessException
+canAccess before -> Boolean false
+canAccess after -> Boolean true
+getInt after -> Integer 1
+setInt after -> Integer 8
+canAccess(null) on instance -> java.lang.IllegalArgumentException
+canAccess(unrelated) on instance -> java.lang.IllegalArgumentException
+canAccess(t) on static -> java.lang.IllegalArgumentException
+trySetAccessible -> Boolean true
+getInt after trySetAccessible -> Integer 8
+array setAccessible -> Integer 5
+-- final --
+set final -> java.lang.IllegalAccessException
+setInt final -> java.lang.IllegalAccessException
+get final -> Integer 1
+set final accessible -> Integer 4
+setInt final accessible -> Integer 5
+set static final -> java.lang.IllegalAccessException
+set static final accessible -> java.lang.IllegalAccessException
+get static final -> String orig
+-- receiver --
+get null receiver -> java.lang.NullPointerException
+getInt null receiver -> java.lang.NullPointerException
+get unrelated receiver -> java.lang.IllegalArgumentException
+set unrelated receiver -> java.lang.IllegalArgumentException
+setInt unrelated receiver -> java.lang.IllegalArgumentException
+get String receiver -> java.lang.IllegalArgumentException
+get subclass that shadows -> Integer 10
+setInt subclass that shadows -> String 77/21
+static get with receiver -> Integer 11
+static get null -> Integer 11
+-- set: unbox and widen, or refuse --
+long <- Integer -> Long 7
+long <- Character -> Long 65
+int <- Long -> java.lang.IllegalArgumentException
+int <- Short -> Integer -4
+int <- null -> java.lang.IllegalArgumentException
+int <- String -> java.lang.IllegalArgumentException
+double <- Float -> Double 1.5
+double <- Long -> Double 1.125899906842624E15
+String <- Integer -> java.lang.IllegalArgumentException
+String <- String -> String ok
+String <- null -> null
+Object <- Integer -> Integer 3
+-- typed getters --
+getLong(int) -> Long -4
+getInt(long) -> java.lang.IllegalArgumentException
+getInt(String) -> java.lang.IllegalArgumentException
+getInt(Integer) -> java.lang.IllegalArgumentException
+getBoolean(int) -> java.lang.IllegalArgumentException
+getInt(boolean) -> java.lang.IllegalArgumentException
+getShort(byte) -> Short -5
+getChar(byte) -> java.lang.IllegalArgumentException
+getInt(char) -> Integer 122
+getShort(char) -> java.lang.IllegalArgumentException
+getDouble(long) -> Double 65.0
+getFloat(double) -> java.lang.IllegalArgumentException
+get(byte) -> Byte -5
+get(char) -> Character z
+get(boolean) -> Boolean true
+get(Integer) -> Integer 40
+-- typed setters --
+setInt(long) -> Long -3
+setLong(int) -> java.lang.IllegalArgumentException
+setInt(Integer) -> java.lang.IllegalArgumentException
+setInt(String) -> java.lang.IllegalArgumentException
+setLong(Object) -> java.lang.IllegalArgumentException
+setByte(short) -> Short -2
+setChar(short) -> java.lang.IllegalArgumentException
+setChar(int) -> Integer 113
+setShort(char) -> java.lang.IllegalArgumentException
+setBoolean(int) -> java.lang.IllegalArgumentException
+setBoolean(boolean) -> Boolean false
+setFloat(long) -> java.lang.IllegalArgumentException
+setLong(double) -> Double 9.0
+str still a String: true
+FieldSemanticsProbe done

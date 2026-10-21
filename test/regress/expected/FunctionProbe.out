@@ -1,0 +1,9 @@
+Function andThen/compose/identity: 8 7 id
+BiFunction andThen: 18
+BinaryOperator minBy/maxBy: ab abc tie->first xy
+Consumer/BiConsumer andThen order: a:v b:v c:w7 d:w7
+Predicate and/or/negate/not/isEqual: true false false true true true
+Predicate short-circuits: true, second evaluated 0 times
+stream max/min (ReferencePipeline -> BinaryOperator.maxBy/minBy): banana fig
+Collectors.maxBy/minBy/reducing: banana fig 3
+FunctionProbe done

@@ -1,0 +1,3 @@
+threads that saw the initialized value: 4 of 4
+subclass users that saw an initialized superclass: 3 of 3
+ClinitRaceProbe done

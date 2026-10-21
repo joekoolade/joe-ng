@@ -1,0 +1,31 @@
+Shape.area = public abstract double VirtualInvokeProbe$Shape.area() abstract=true
+Base.sides = public abstract int VirtualInvokeProbe$Base.sides()
+Runnable.run = public abstract void java.lang.Runnable.run()
+Shape declared = [area, kind, label]
+Base declared = [callSecret, greet, secret, sides, take]
+Tag declared = [value, weight]
+area(square) = 4.0
+area(circle) = 3.0
+sides(square) = 4
+greet via Base on square = square greet
+greet via Base on circle = base greet
+take(Object) via Base on square = base take(Object)
+private secret via Base on square = base secret
+kind(square: sub-interface default) = polygon
+kind(circle: class override) = circle
+kind(blob: inherited default) = shape
+label(square) = label:polygon
+  lambda ran
+  anonymous ran
+Supplier.get on lambda = supplied
+compare(lambda) = 1
+compare(CASE_INSENSITIVE) = 0
+Object.toString on Integer = 5
+Object.hashCode on String = 96354
+scale(1.5, 2.5f, 3) = 11.25
+half(5f) = 2.5
+Tag.value reflectively = square
+Tag.weight reflectively = 7
+null receiver: NullPointerException
+wrong receiver: IllegalArgumentException
+VirtualInvokeProbe done

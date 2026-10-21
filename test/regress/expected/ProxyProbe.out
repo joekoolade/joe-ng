@@ -1,0 +1,30 @@
+add 5
+scale 85899345920
+half 2.5
+greet hi bob
+flag true
+mix 1/2/3.5/four
+self same true
+hello handler-hello
+name named
+hashCode 4242
+equals self true other false
+toString ProxyOf(Calc)
+isProxyClass true String false
+handler same true
+instanceof Calc true Named true Proxy true
+interfaces [interface ProxyProbe$Calc, interface ProxyProbe$Named]
+checked arrived: checked
+runtime arrived: from handler
+log Calc.add[2, 3]
+log Calc.scale[8589934592]
+log Calc.half[5.0]
+log Calc.greet[bob]
+log Calc.pingnull
+log Calc.flagnull
+log Calc.mix[1, 2, 3.5, four]
+log Calc.selfnull
+log Calc.hellonull
+log Named.namenull
+log Object.hashCodenull
+ProxyProbe done

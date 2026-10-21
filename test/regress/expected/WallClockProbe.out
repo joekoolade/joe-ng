@@ -1,0 +1,12 @@
+currentTimeMillis >= 2026-10-01 -> true
+year of now >= 2026 -> true
+Instant.now within 2 s of currentTimeMillis -> true
+Clock.systemUTC within 2 s of currentTimeMillis -> true
+new Date() within 2 s of currentTimeMillis -> true
+Instant.now nanos in range -> true
+never backwards over 2000 reads -> monotone
+Thread.sleep(50) advances it by 40..5000 ms -> true
+zip entry keeps the current time to 2 s -> true
+zip entry written without setTime is dated >= 2026 -> true
+file arm skipped (no directory given)
+WallClockProbe done

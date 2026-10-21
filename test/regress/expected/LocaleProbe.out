@@ -1,0 +1,37 @@
+ENGLISH = en
+US = en_US
+UK tag = en-GB
+ROOT tag = und
+CHINA == SIMPLIFIED_CHINESE = true
+of(en) == ENGLISH = true
+of(en,US) == US = true
+new Locale(en) equals ENGLISH = true
+US.hashCode == of(en,US).hashCode = true
+ENGLISH equals US = false
+of(FR,ca) = fr_CA lang=fr country=CA
+variant = de_DE_POSIX variant=POSIX
+default = en
+default FORMAT = en
+default DISPLAY = en
+forLanguageTag(fr-CA) = fr_CA
+forLanguageTag(zh-Hant-TW) script = Hant
+forLanguageTag(iw) lang = he
+of(iw) lang = he
+ext tag = th-TH-u-nu-thai
+ext unicode nu = thai
+ext u value = nu-thai
+ext co tag = de-u-co-phonebk
+ext x tag = en-x-foo
+ext stripExtensions = th-TH
+forLanguageTag(garbage!) tag = und
+toLanguageTag(de_DE_POSIX) = de-DE-POSIX
+builder = de_CH_#Latn tag=de-Latn-CH
+builder bad language = IllformedLocaleException
+ok   TITLE lower(tr) = 116,305,116,108,101
+ok   TITLE lower(ROOT) = 116,105,116,108,101
+ok   title upper(tr) = 84,304,84,76,69
+ok   title upper(ROOT) = 84,73,84,76,69
+StringJoiner = [a, b]
+StringJoiner empty = <>
+map get(of(en,US)) = us
+LocaleProbe done, failures=0

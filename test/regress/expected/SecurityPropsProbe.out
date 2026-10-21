@@ -1,0 +1,15 @@
+networkaddress.cache.ttl=null
+networkaddress.cache.negative.ttl=10
+networkaddress.cache.stale.ttl=null
+security.overridePropertiesFile=true
+security.provider.1=SUN
+security.provider.11=JdkSASL
+crypto.policy=unlimited
+keystore.type=pkcs12
+jdk.includeInExceptions=hostInfoExclSocket
+securerandom.source=file:/dev/random
+no.such.property=null
+certpath starts=MD2, MD5, SHA1 multiline=true
+include: Key 'include' is reserved and cannot be used as a Security property name.
+null key: NPE
+SecurityPropsProbe done

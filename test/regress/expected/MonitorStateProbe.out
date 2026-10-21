@@ -1,0 +1,20 @@
+wait() unowned: IllegalMonitorStateException current thread is not owner
+wait(10) unowned: IllegalMonitorStateException current thread is not owner
+wait(0) unowned: IllegalMonitorStateException current thread is not owner
+wait(10,5) unowned: IllegalMonitorStateException current thread is not owner
+notify unowned: IllegalMonitorStateException current thread is not owner
+notifyAll unowned: IllegalMonitorStateException current thread is not owner
+wait(-1) unowned: IllegalArgumentException timeout value is negative
+wait(-1) owned: IllegalArgumentException timeout value is negative
+wait(0,-1) owned: IllegalArgumentException nanosecond timeout value out of range
+notify other's monitor: IllegalMonitorStateException current thread is not owner
+interface-typed notify unowned: IllegalMonitorStateException current thread is not owner
+interface-typed wait unowned: IllegalMonitorStateException current thread is not owner
+array notifyAll unowned: IllegalMonitorStateException current thread is not owner
+owned notify: ok
+owned timed wait: ok
+recursive owned timed wait: ok
+after exit, notify unowned: IllegalMonitorStateException current thread is not owner
+holdsLock outside: false
+handshake: true
+MonitorStateProbe done

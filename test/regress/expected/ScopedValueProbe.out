@@ -1,0 +1,12 @@
+bound before=false
+run get=outer again=outer
+nested get=inner
+after nested=outer
+bound after=false
+call result=c3
+threw, bound after=false
+orElse=dflt
+unbound get: NoSuchElementException
+orElseThrow: none
+child thread bound=false
+ScopedValueProbe done
