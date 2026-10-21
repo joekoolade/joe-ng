@@ -4477,6 +4477,10 @@ public final class Baseline
     public int handlerWord(int i) { return hHandlerW[i]; }
     public int[] bcToWord() { return lastBcToWord; }
 
+    /** Whether the last body compiled in DEEP mode: its actual peak operand depth (computeDepths, one entry per
+     *  value -- a long is ONE, not javac's two max_stack slots -- plus lowering transients) exceeded OP_MAX. */
+    public boolean deepStack() { return deepStack; }
+
     /**
      * Compile one method body to A64 words at absolute {@code base}; {@code isEntry}
      * means frameless. Frame size and handler word-ranges are read back via the

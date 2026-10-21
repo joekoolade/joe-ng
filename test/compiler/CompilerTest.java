@@ -351,14 +351,15 @@ public final class CompilerTest
         // deep, and NONE of those carries an exception handler. The pairing is what is forbidden, not depth.
         // NEGATIVE CONTROL (run before this shipped): against the failing commit this reports exactly one
         // violation, `lazyCompile(I)J stack=8`.
-        assertNoDeepHandlers(classesDir.resolve("vm/Loader.class"));
-        assertNoDeepHandlers(classesDir.resolve("vm/VMGc.class"));
+        BaselineCompiler.ClassResolver reg = BuildRuntimeImage.classResolver(classesDir);
+        assertNoDeepHandlers(reg, "vm/Loader");
+        assertNoDeepHandlers(reg, "vm/VMGc");
         // VMNatives JOINED THIS GUARD when the reflection entry points took the loader lock: every one
         // of those 23 wrappers now carries a try/finally, so the pairing this check forbids became
         // reachable in a file it did not cover. They are thin by construction (the deepest is stack=6),
         // and the point of checking is that a future edit which fattens one is caught HERE rather than
         // on a Pi -- which is the whole history of the Loader entry above.
-        assertNoDeepHandlers(classesDir.resolve("vm/VMNatives.class"));
+        assertNoDeepHandlers(reg, "vm/VMNatives");
 
         T.summary("compiler");
     }
@@ -386,31 +387,38 @@ public final class CompilerTest
     }
 
     /**
-     * Assert no method in {@code cls} is simultaneously deeper than {@code OP_MAX} and covered by an
-     * exception handler -- the codegen-mode pairing described at the call site. Named in the failure so a
-     * breakage says WHICH method crossed the line rather than only that one did.
+     * Assert no method in {@code cls} both COMPILES in deep-stack mode and is covered by an exception handler --
+     * the codegen-mode pairing described at the call site. Depth is the COMPILER's answer, not javac's
+     * {@code max_stack}: max_stack counts a long or double as two slots, while Baseline's operand stack holds one
+     * entry per value (and adds lowering transients max_stack cannot see), so {@code proxyType(JJJJJ)J} -- five
+     * longs, max_stack 10, peak depth 5 -- tripped the old declared-depth test while compiling shallow. Named in
+     * the failure so a breakage says WHICH method crossed the line rather than only that one did.
      */
-    private static void assertNoDeepHandlers(Path cls) throws Exception
+    private static void assertNoDeepHandlers(BaselineCompiler.ClassResolver res, String cls)
     {
-        ClassFile cf = ClassFile.parse(cls);
+        ClassFile cf = res.resolve(cls);
         int bad = 0;
+        int checked = 0;
         for (ClassFile.Method m : cf.methods())
         {
-            if (m.code == null)
+            if (m.code == null || m.exceptions == null || m.exceptions.length == 0)
             {
                 continue;
             }
-            if (m.maxStack > OP_MAX && m.exceptions != null && m.exceptions.length > 0)
+            BaselineCompiler bc = new BaselineCompiler(cf, res);
+            bc.compileMethod(m, 0x80000L, false);
+            checked += 1;
+            if (bc.lastDeepStack())
             {
                 bad += 1;
-                System.out.println("  deep-stack handler: " + m.name + m.descriptor + " stack=" + m.maxStack);
+                System.out.println("  deep-stack handler: " + m.name + m.descriptor + " max_stack=" + m.maxStack);
             }
         }
-        T.eq("no deep-stack handlers in " + cls.getFileName(), 0, bad);
+        // vm/VMGc has none today, so its check is vacuous until one appears -- which is when it matters.
+        System.out.println("  " + cls + ": " + checked + " handler-bearing methods compiled");
+        T.eq("no deep-stack handlers in " + cls, 0, bad);
     }
 
-    /** Mirrors {@code Baseline.OP_MAX}: past this the operand stack lives in frame memory. */
-    private static final int OP_MAX = 7;
 
     /** Append each word of {@code ws} to {@code l} (loadImm64 now returns int[]). */
     private static void addAll(List<Integer> l, int[] ws)

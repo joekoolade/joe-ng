@@ -176,6 +176,7 @@ public final class Inflate
                 i += 1;
             }
             in = bigger;
+            own = bigger;                              // still the PRIVATE buffer: the next input() must see in == own
         }
         else if (keepFrom != 0)
         {

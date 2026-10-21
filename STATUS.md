@@ -4,6 +4,36 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **MAKE TEST PASSES -- THE DEEP-HANDLER GUARD ASKS THE COMPILER, AND IT WAS HIDING AN Inflate BUG (2026-10-21).**
+  `make test` had stopped at `FAIL no deep-stack handlers in VMNatives.class` since at least 8869e6d; every card
+  since recorded it as "the known failure". It is exit 0 now.
+  - **The guard was wrong, not the code:** `CompilerTest.assertNoDeepHandlers` compared javac's `max_stack` with
+    `OP_MAX` (7). `max_stack` counts a long or double as TWO slots; Baseline's operand stack holds ONE entry per
+    value. `VMNatives.proxyType(JJJJJ)J` -- five longs, `max_stack` 10, peak depth 5 -- tripped it while compiling
+    in the shallow mode. The guard now compiles every handler-bearing method of `vm/Loader`, `vm/VMGc` and
+    `vm/VMNatives` (12, 0 and 43 methods) and asks `Baseline.deepStack()` (via new `BaselineCompiler.lastDeepStack()`
+    and a public `BuildRuntimeImage.classResolver`), so it also sees the lowering transients `max_stack` cannot.
+    **Negative control:** a temporary `deepGuardControl(IIIIIIII)I` with a try/finally around a deep expression
+    tripped it; reverted.
+  - **What the failure was hiding:** it stopped `make test` before `hosttest.ZipTest`, which then failed for real:
+    `Inflate.input`'s grow path replaced the `in` array but not `own`, so the next `input()` after a growth threw
+    `IllegalStateException`. Fixed by `own = bigger`. Metal's `Inflater` path uses `feed`/`release`, so no metal
+    run reached it; the line ships in the image, which is why this went to the Pi. Test results after the fix:
+    compiler 40 checks, zip 91, crypto 98, 0 failures each.
+  - **Regression (8faebdf):** 93 of 93 probes pass -- 91 host-identical, DigestProbe/MacProbe gates clean. Suite
+    against a control at main dcb83a7 identical -- 40 programs returned, markers zero, `gc: collections=51`,
+    clinits 356. `ran 45, failures 0`. `make overlaycheck`: 0 new.
+  - **Harness, not VM:** macOS purged the `/tmp/reg-*.host` controls AND the `.cp` classpath files mid-run (the
+    fourth purge); 31 were regenerated and are backed up in `/tmp/zh/hosts/`. GvrProbe's first metal run lacked
+    its classpath and threw `ClassNotFoundException`; with the `.cp` restored it is identical. Under Spotlight load
+    (load average ~20-30) probes took 15-20 minutes each and jobs hit the 2-hour background limit, so the rest
+    ran in smaller jobs. WallClockProbe's first run added `GC: core stuck parked >10s` lines; run alone it is
+    identical.
+  - **Pi:** PASS (2026-10-21, 8faebdf) -- `clock: SNTP 97.107.136.23 -> 2026-10-21 11:04:12 UTC`, 4 of 4 cores,
+    NetDemo HTTP 200 (bytes=891), `[main returned normally]`, `gc: collections=7`, per-batch `clinits=`
+    437/437/438/438/439/439 and batch 1 at 1584 classes, both as at 3fc4434; `clinitLk=` ends at 24. No failure
+    markers; the one TRAP-WIRED line is the known, unreached `ClassLoaders.appClassLoader`.
+
 - **STOCK java.security.Security, AND ITS EXTRA PROPERTIES FILE WORKS (2026-10-20).** Retires the `Security`
   overlay and the `PropertyExpander` trap-wire every NetDemo boot printed.
   - **Before it:** the overlay was the JDK 26 class with ONE change -- `SecPropLoader.loadMaster` read the master
