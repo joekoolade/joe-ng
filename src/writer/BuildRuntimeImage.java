@@ -54,6 +54,16 @@ public final class BuildRuntimeImage
     }
 
     /**
+     * A class resolver over the same set {@link #populateRegistry} builds, for compiling a single method outside
+     * an image build (CompilerTest's deep-stack-handler guard asks the compiler how deep a method really runs).
+     */
+    public static compiler.BaselineCompiler.ClassResolver classResolver(Path classesDir) throws IOException
+    {
+        ClassRegistry registry = populateRegistry(classesDir);
+        return registry::resolve;
+    }
+
+    /**
      * Fill a {@link ClassRegistry} with the exact class set the image embeds: the compiled tree (guest
      * overrides + demos), the stock java.base classes, and the stock-collection overwrites. Factored out so
      * the closure probe ({@link ClosureProbe}) can measure a demo's reachable closure over the identical set.

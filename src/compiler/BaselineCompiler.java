@@ -132,6 +132,12 @@ public final class BaselineCompiler
                 core.savesLR() ? core.regLocals() : 0, handlers, core.bcToWord());
     }
 
+    /** Whether the last {@link #compileMethod} body compiled in deep-stack mode (see {@link Baseline#deepStack}). */
+    public boolean lastDeepStack()
+    {
+        return core.deepStack();
+    }
+
     /** Back-compat single-method compile with no real calls (spin/fixtures). */
     public void compile(ClassFile.Method method, CodeBuffer cb)
     {
