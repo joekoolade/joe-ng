@@ -94,10 +94,12 @@ public final class ReachScan
         {
             return false;
         }
-        // java/security/Security (stock InetAddress's cache TTLs) and the two sun/security/util classes its
+        // java/security/Security (stock InetAddress's cache TTLs) and the sun/security/util classes its
         // property load uses are narrowed out -- see Loader.isDenylisted.
         if (c.startsWith("java/security/Security") || c.equals("sun/security/util/Debug")
-                || c.equals("sun/security/util/SecurityProperties"))
+                || c.equals("sun/security/util/SecurityProperties")
+                || c.equals("sun/security/util/PropertyExpander")
+                || c.startsWith("sun/security/util/PropertyExpander$"))
         {
             return false;
         }

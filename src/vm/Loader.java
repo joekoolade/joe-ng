@@ -6461,8 +6461,8 @@ public final class Loader
                 // against these by IDENTITY -- and FALLS THROUGH to a char-by-char parse when they miss, so
                 // the answer is correct either way and only the fast path depends on interning.
                 || utf8HasPrefix(base, off, Magic.bytes("sun/security/util/SecurityConstants"))
-                // NARROWED OUT: java.security.Security, the security-PROPERTIES store (OVERLAID from the JDK 26
-                // source; only the master-file read differs). Stock InetAddress's resolver cache reads
+                // NARROWED OUT: java.security.Security, the security-PROPERTIES store (runs STOCK; it reads the
+                // master file through java.nio.file over the RAMFS). Stock InetAddress's resolver cache reads
                 // networkaddress.cache.* through Security.getProperty, and the shipped file sets the negative
                 // TTL to 10 -- so a denied or empty Security would be a silent wrong answer. The PREFIX also
                 // admits its nested types (SecPropLoader, the anonymous Properties). Its provider methods reach
@@ -6475,7 +6475,13 @@ public final class Loader
                 // sun.security.util.SecurityProperties: stock jdk.internal.util.Exceptions asks it which
                 // categories jdk.includeInExceptions names (the shipped file says hostInfoExclSocket), so every
                 // UnknownHostException message goes through it. Plain Java over System and Security properties.
-                || utf8IsAtBase(base, off, Magic.bytes("sun/security/util/SecurityProperties")))
+                || utf8IsAtBase(base, off, Magic.bytes("sun/security/util/SecurityProperties"))
+                // sun.security.util.PropertyExpander: Security expands the java.security.properties file name
+                // and every `include` value through it (${prop} -> System.getProperty). Plain Java, no natives.
+                // Only its encodeURL form reaches sun/net/www/ParseUtil, which stays denied; Security never asks
+                // for it. The $ prefix admits its nested ExpandException.
+                || utf8IsAtBase(base, off, Magic.bytes("sun/security/util/PropertyExpander"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/security/util/PropertyExpander$")))
         {
             return false;
         }
