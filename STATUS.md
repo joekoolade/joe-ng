@@ -4,6 +4,36 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **STOCK java.security.Security, AND ITS EXTRA PROPERTIES FILE WORKS (2026-10-20).** Retires the `Security`
+  overlay and the `PropertyExpander` trap-wire every NetDemo boot printed.
+  - **Before it:** the overlay was the JDK 26 class with ONE change -- `SecPropLoader.loadMaster` read the master
+    file with `FileInputStream` "because java.nio.file is absent". java.nio.file has run stock over the RAMFS since
+    the file arc, so the reason was stale. And the extra-file path was dead: `sun/security/util/PropertyExpander`
+    sat under the `sun/security/` denial, so naming a file in `java.security.properties` halted. New
+    `SecurityExtraProbe` (writes two files under `/tmp`, sets `java.security.properties` to
+    `${probe.secdir}/extra.security` -- an unexpanded name would miss -- whose `include inc.security` is RELATIVE,
+    resolved against the including file's path; an override of a master key; scratch files removed).
+    **Negative control on main e41f7d8:** `DENYLIST TRAP ... denied callee: sun/security/util/PropertyExpander.expand`
+    from `Security$SecPropLoader.loadExtraHelper` <- `Security.<clinit>`.
+  - **The fix:** the overlay is deleted, so stock `loadFromPath` reads the master file through `Path`/`Files`.
+    `PropertyExpander` and its nested `ExpandException` are narrowed out of the denial (`Loader.isDenylisted`
+    and `ReachScan`, kept in sync): plain Java, no natives. Only its `encodeURL` form reaches the still-denied
+    `sun/net/www/ParseUtil`, and `Security` never asks for it. The rest of `sun/security/` stays denied.
+  - **Regression (3fc4434):** 93 of 93 probes pass -- 91 host-identical (SecurityExtraProbe, SecurityPropsProbe,
+    SecuritySetProbe and InetAddrProbe among them), DigestProbe/MacProbe gates clean. Suite against a control at
+    main e41f7d8 identical -- 40 programs returned, markers zero, `gc: collections=51`, clinits 356. `ran 45,
+    failures 0`. `make overlaycheck`: 0 new. `make test`: only the known deep-stack-handler failure.
+  - **Pi:** PASS (2026-10-21, 3fc4434) -- `clock: SNTP 23.142.248.9 -> 2026-10-21 03:05:15 UTC`, 4 of 4 cores,
+    NetDemo HTTP 200 (bytes=888), `[main returned normally]`, `gc: collections=7`, per-batch `clinits=`
+    437/437/438/438/439/439, no failure markers. The `PropertyExpander.expand` TRAP-WIRED line is gone. What the
+    master-file read through `Path` costs, measured against the 341b34c Pi log: batch 1 loads 1584 classes (1580),
+    `clinitLk=` ends at 24 (16), and the java.nio.file initializers now appear under the loader lock
+    (`FileSystemProvider`, `StandardOpenOption`). A new TRAP-WIRED line names
+    `jdk/internal/loader/ClassLoaders.appClassLoader` -- wired, not reached; which caller names it is not
+    instrumented (an inference: `FileSystemProvider`'s installed-provider lookup).
+  - **Gaps it leaves:** the `jdk/internal/loader` denial that trap-wire stands behind; the URL forms of the extra
+    file (`loadFromUrl`) stay behind the `sun/net/www` denial.
+
 - **CONDITIONAL BRANCHES REACH PAST +-1 MiB -- LONG FORM IN LARGE METHODS (2026-10-20).** The metal JIT expands
   bytecode about 44x, so a conditional branch spanning ~24 KB of bytecode already exceeds the +-1 MiB reach of
   `cbz`/`cbnz`/`b.cond` (19-bit word offset). A method well inside the 64 KB classfile limit could not be compiled.
