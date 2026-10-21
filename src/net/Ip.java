@@ -31,6 +31,7 @@ public final class Ip
     // Interface config, published by the driver bring-up (board.cyw43.Cyw43, after DHCP + ARP).
     public static long ourMac;      // heap addr of our 6-byte station MAC
     public static long ourIp;       // heap addr of our 4-byte leased IP
+    public static long netMask;     // heap addr of the lease's 4-byte subnet mask (java.net.NetworkInterface)
     public static long gwMac;       // heap addr of the gateway's 6-byte MAC (all off-subnet traffic routes here)
 
     // Scratch describing the last IPv4 frame recvIp() accepted.

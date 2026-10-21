@@ -1398,6 +1398,7 @@ public final class Cyw43
         // Publish the interface config to the reusable stack (net.*): net.Tcp and the M3 socket layer read it.
         net.Ip.ourMac = ourMac;
         net.Ip.ourIp = ourIp;
+        net.Ip.netMask = snMask;
         net.Ip.gwMac = gwMac;
         board.bcm2711.Uart.write(Magic.bytes("wifi: gateway mac "));
         int i = 0;

@@ -1517,6 +1517,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.printStackTrace(J)V", "vm/VM.printStackTraceAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.ramfsTable(J)J", "vm/VM.ramfsTableAddr"); // MetalRamfs.table0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.dnsResolve(J)I",     "vm/VM.dnsResolveAddr"); // M3: InetAddress.resolve0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.netifState(J)J",     "vm/VM.netifStateAddr"); // NetworkInterface.wifi0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.vhFieldOffset(JJ)J", "vm/VM.vhFieldOffsetAddr"); // M3: VarHandle.fieldOffset0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.fieldMods(JJ)I", "vm/VM.fieldModsAddr");         // reflection: Class.fieldMods0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.fieldTypeChar(JJ)I", "vm/VM.fieldTypeCharAddr"); // reflection: Class.fieldTypeChar0

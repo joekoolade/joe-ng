@@ -49,7 +49,8 @@ public final class ReachScan
         "java/net/HttpConnectSocketImpl", "java/net/SocketCleanable",
         "sun/net/www/", "sun/net/ext/",
         // heavy socket subtrees never taken on the blocking client path (would pull streams/ForkJoin/regex).
-        "sun/nio/ch/Poller", "sun/nio/ch/ExtendedSocketOption", "java/net/NetworkInterface",
+        "sun/nio/ch/Poller", "sun/nio/ch/ExtendedSocketOption",
+        // java/net/NetworkInterface is NOT here any more: overlaid, natives over the WiFi lease (Loader.isDenylisted).
         // jdk/internal/util/Exceptions and sun/net/util/IPAddressUtil are NOT here any more: stock InetAddress
         // calls both on its ordinary paths (see Loader.isDenylisted).
         // jar signature verification: JarVerifier pulls the whole sun.security provider closure for a path

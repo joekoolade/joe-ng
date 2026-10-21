@@ -13,7 +13,11 @@ package demo;
 
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.InterfaceAddress;
+import java.net.NetworkInterface;
 import java.net.Socket;
+import java.util.Enumeration;
+import java.util.HexFormat;
 
 /**
  * M3 networking demo: a plain HTTP GET over STOCK {@code java.net.Socket} / {@code sun.nio.ch.NioSocketImpl}
@@ -47,5 +51,22 @@ public class NetDemo
         System.out.println();
         System.out.print("----- http done bytes=");
         System.out.println(total);
+
+        // The interface the request went out on, as java.net reports it: its lease, broadcast and MAC should
+        // match what the WiFi bring-up printed.
+        Enumeration<NetworkInterface> nis = NetworkInterface.getNetworkInterfaces();
+        while (nis.hasMoreElements())
+        {
+            NetworkInterface ni = nis.nextElement();
+            StringBuilder line = new StringBuilder("netif " + ni.getName());
+            for (InterfaceAddress a : ni.getInterfaceAddresses())
+            {
+                line.append(' ').append(a);
+            }
+            byte[] mac = ni.getHardwareAddress();
+            line.append(" mac ").append(mac == null ? "none" : HexFormat.ofDelimiter(":").formatHex(mac));
+            line.append(" up=").append(ni.isUp()).append(" mtu=").append(ni.getMTU());
+            System.out.println(line);
+        }
     }
 }

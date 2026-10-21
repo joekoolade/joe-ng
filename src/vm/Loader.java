@@ -6531,11 +6531,11 @@ public final class Loader
                 // Heavy socket subtrees statically referenced by NioSocketImpl/Net but never TAKEN on the
                 // blocking client path -- deny so a stray call traps instead of dragging in
                 // streams/ForkJoin/regex/ConcurrentHashMap (which OOM'd the demand-load). Poller = the async
-                // poll path (our fd stays blocking); NetworkInterface/ExtendedSocketOption = bind/opts we
-                // never use. (SocketOptionRegistry IS reached by close() -> overlaid, not denied.)
+                // poll path (our fd stays blocking); ExtendedSocketOption = opts we never use. (SocketOptionRegistry
+                // IS reached by close() -> overlaid, not denied.) java/net/NetworkInterface is NOT denied any more:
+                // it is OVERLAID from the JDK 26 source, its natives Java over the WiFi stack's lease.
                 || utf8HasPrefix(base, off, Magic.bytes("sun/nio/ch/Poller"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/nio/ch/ExtendedSocketOption"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/net/NetworkInterface"))
                 // jdk/internal/util/Exceptions and sun/net/util/IPAddressUtil are NO LONGER DENIED. They were
                 // kept out because their closures (Formatter -> regex, a security-property read, a
                 // ConcurrentHashMap) OOM'd the demand-load of the day; all of those load now, Security is
@@ -12780,6 +12780,10 @@ public final class Loader
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/net/Inet4AddressImpl")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("resolve0")))          { return VM.dnsResolveAddr; }  // (byte[])I -> WiFi DNS
+        }
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/net/NetworkInterface")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("wifi0")))             { return VM.netifStateAddr; }  // (J)J -> the lease
         }
         // M3 socket natives: stock sun.nio.ch backed by net.Tcp (fd int = the net.Tcp handle).
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("sun/nio/ch/Net")))

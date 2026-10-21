@@ -1,0 +1,9 @@
+IP_MULTICAST_IF type=java.net.NetworkInterface
+getByName(no such)=null
+getByName(null) -> NullPointerException
+getByIndex(-1) -> IllegalArgumentException: Interface index can't be negative
+getByIndex(MAX)=null
+getByInetAddress(192.0.2.1)=null
+getByInetAddress(null) -> NullPointerException
+interfaces consistent=true
+NetIfProbe done

@@ -63,6 +63,7 @@ MonitorStateProbe
 NestedClinitProbe        solo             # initialization order is the subject
 NestingProbe
 NetStaticsProbe
+NetIfProbe
 NioAttrProbe
 NioBufferProbe
 NioFileProbe
