@@ -59,11 +59,11 @@ public final class Regress
     /** A solo run is over: the program returned, or the VM stopped it. */
     private static final Pattern SOLO_END = Pattern.compile("\\[main returned normally\\]|^Exception in thread"
             + "|DENYLIST TRAP|^ *FAULT|BOOT RE-ENTERED|LINK FAILED|JIT unsupported|TAIL TARGET IS 0|Halting\\."
-            + "|LAZY INDEX OUT OF RANGE");
+            + "|LAZY INDEX OUT OF RANGE|CAP EXCEEDED");
 
     /** A batch is over. Not "Exception in thread": a probe's own background thread may print that and go on. */
     private static final Pattern BATCH_END = Pattern.compile("^@@@ ProbeBatch end|\\[main returned normally\\]"
-            + "|DENYLIST TRAP|^ *FAULT|BOOT RE-ENTERED|TAIL TARGET IS 0|Halting\\.|LAZY INDEX OUT OF RANGE");
+            + "|DENYLIST TRAP|^ *FAULT|BOOT RE-ENTERED|TAIL TARGET IS 0|Halting\\.|LAZY INDEX OUT OF RANGE|CAP EXCEEDED");
 
     private static final String MARK = "@@@ ProbeBatch ";
     private static final int MAX_PER_BATCH = 25;

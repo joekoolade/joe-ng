@@ -13,7 +13,7 @@
 # ReflectLookupProbe ramfs/lib/app.jar as args[0]; LocaleProbe runs with
 # -Duser.language=en -Duser.country= -Duser.variant= -Duser.script=.
 
-AccessFlagsProbe         solo             # OPEN VM BUG in a batch: ClassCastException [Ljava.lang.reflect.Parameter; -> [?
+AccessFlagsProbe
 AccessRulesProbe
 AnnoContractProbe        solo             # OPEN VM BUG in a batch: @Inner("in").hashCode() wrong
 AnnoDefaultProbe
@@ -73,7 +73,7 @@ NioWriteProbe            solo             # writes/deletes RAMFS paths other pro
 NumberFormatProbe
 ObjectProbe
 OobMessageProbe
-ParamAnnoProbe           solo             # OPEN VM BUG in a batch: stops at its first parameter
+ParamAnnoProbe
 ParkProbe
 PrintWriterProbe
 ProxyEdgeProbe
@@ -83,7 +83,7 @@ RecordSealedProbe
 RecordUtf16Probe
 ReflectArrayProbe
 ReflectLookupProbe
-RepeatableProbe          solo             # OPEN VM BUG in a batch: stops at the parameter annotations
+RepeatableProbe
 RuntimeProbe
 ScannerProbe
 ScopedValueProbe         solo             # known intermittent
