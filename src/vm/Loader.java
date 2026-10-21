@@ -252,6 +252,11 @@ public final class Loader
     private static long[] ifBase;        // interface blob holding the signature
     private static int[] ifNameOff;
     private static int[] ifDescOff;
+    // The blob of the interface that DECLARES this entry within its run: the run's own interface when it
+    // declares (or redeclares) the signature itself, else the ancestor whose run it was copied from. ifBase
+    // cannot answer this -- a redeclaration keeps the inherited entry (and its base) to keep the slot number.
+    // Default selection needs it: JVMS 5.4.3.3 picks the MAXIMALLY SPECIFIC declaring interface.
+    private static long[] ifDecl;
     private static int ifCount;
     private static boolean gIsInterface; // is the class being loaded an interface?
 
@@ -4073,6 +4078,7 @@ public final class Loader
         ifBase = new long[MAXIFM];
         ifNameOff = new int[MAXIFM];
         ifDescOff = new int[MAXIFM];
+        ifDecl = new long[MAXIFM];
         ifCount = 0;
         pdBase = new long[MAXBLOB];
         pdNameOff = new int[MAXBLOB];
@@ -13089,6 +13095,7 @@ public final class Loader
         {
             return 0L;
         }
+        int decl = -2;                                  // the maximally specific declarer, found on first need
         long entry = dir;
         long iface = Magic.load64(entry + ObjectModel.ITABLE_ENTRY_IFACE_OFFSET);
         while (iface != 0L)                             // 0 interfaceType terminates the directory
@@ -13116,6 +13123,21 @@ public final class Loader
                         {
                             return hit;
                         }
+                    }
+                }
+                // An EMPTY slot is resolved to the MAXIMALLY SPECIFIC declaring interface among this receiver's,
+                // not to whichever interface the directory lists first: walking in directory order answered
+                // Shape.kind for a receiver whose Polygon overrides it whenever Shape's entry came first.
+                if (decl == -2)
+                {
+                    decl = dirDeclarer(dir, nameOff, descOff);
+                }
+                if (decl >= 0)
+                {
+                    long d = resolveLinkTarget(clTab[decl].base + clTab[decl].nameOff, nameOff, descOff);
+                    if (d != 0L)
+                    {
+                        return d;
                     }
                 }
                 long b = resolveLinkTarget(clTab[ir].base + clTab[ir].nameOff, nameOff, descOff);
@@ -13155,6 +13177,26 @@ public final class Loader
             iface = Magic.load64(entry + ObjectModel.ITABLE_ENTRY_IFACE_OFFSET);
         }
         return 0L;
+    }
+
+    /**
+     * {@link #mostSpecificDeclarer} over the interfaces an itable directory lists -- the receiver's TRANSITIVE
+     * interface set, so no closure needs recomputing (and the shared closure scratch is not touched).
+     */
+    private static int dirDeclarer(long dir, long nameU, long descU)
+    {
+        int[] regs = new int[MAXIFACEFALLBACK];
+        int n = 0;
+        long entry = dir;
+        long iface = Magic.load64(entry + ObjectModel.ITABLE_ENTRY_IFACE_OFFSET);
+        while (iface != 0L && n < regs.length)
+        {
+            regs[n] = classRegByType(iface);
+            n += 1;
+            entry += ObjectModel.ITABLE_ENTRY_SIZE;
+            iface = Magic.load64(entry + ObjectModel.ITABLE_ENTRY_IFACE_OFFSET);
+        }
+        return mostSpecificDeclarer(regs, n, nameU, descU);
     }
 
     /** 1 if {@code tib} is one of the synthesised TIBs (lambda / annotation) held in {@code lambdaTibRoots}. */
@@ -13412,7 +13454,7 @@ public final class Loader
                 while (s < clTab[r].ifmCount)
                 {
                     int src = clTab[r].ifmStart + s;
-                    ifmAppendUnique(ifBase[src], ifNameOff[src], ifDescOff[src]);
+                    ifmAppendUnique(ifBase[src], ifNameOff[src], ifDescOff[src], ifDecl[src]);
                     s += 1;
                 }
             }
@@ -13427,7 +13469,7 @@ public final class Loader
             int attrs = u2(p + 6);
             if (isVirtual(u2(p), gcp[u2(p + 2)]))
             {
-                ifmAppendUnique(gbase, gcp[u2(p + 2)], gcp[u2(p + 4)]);
+                ifmAppendUnique(gbase, gcp[u2(p + 2)], gcp[u2(p + 4)], gbase);
             }
             p = skipAttributes(p + 8, attrs);
             m += 1;
@@ -13435,8 +13477,13 @@ public final class Loader
         gIfmCount = ifCount - gIfmStart;
     }
 
-    /** Append (base, name, desc) to the current interface's run unless the signature is in it. */
-    private static void ifmAppendUnique(long base, int nameOff, int descOff)
+    /**
+     * Append (base, name, desc) to the current interface's run unless the signature is in it, recording
+     * {@code decl} as the declaring interface's blob. A signature already in the run keeps its entry (and so its
+     * slot), but when the interface being registered declares it ITSELF ({@code decl == gbase}) that entry's
+     * declarer becomes this interface: an override of an inherited default must be visible as one.
+     */
+    private static void ifmAppendUnique(long base, int nameOff, int descOff, long decl)
     {
         int i = gIfmStart;
         while (i < ifCount)
@@ -13444,6 +13491,10 @@ public final class Loader
             if (utf8EqAt(base, nameOff, ifBase[i], ifNameOff[i])
                     && utf8EqAt(base, descOff, ifBase[i], ifDescOff[i]))
             {
+                if (decl == gbase)
+                {
+                    ifDecl[i] = gbase;
+                }
                 return;
             }
             i += 1;
@@ -13452,7 +13503,73 @@ public final class Loader
         ifBase[ifCount] = base;
         ifNameOff[ifCount] = nameOff;
         ifDescOff[ifCount] = descOff;
+        ifDecl[ifCount] = decl;
         ifCount += 1;
+    }
+
+    /** True if registered interface {@code r} itself declares the signature at absolute Utf8 {@code nameU}/{@code descU}. */
+    private static boolean ifaceDeclares(int r, long nameU, long descU)
+    {
+        int s = ifmSlotAbs(r, nameU, descU);
+        return s >= 0 && ifDecl[clTab[r].ifmStart + s] == clTab[r].base;
+    }
+
+    /**
+     * True if interface {@code sub} extends interface {@code sup}, directly or through its super-interfaces.
+     * Breadth-first over the persistent {@code clIfaceReg} lists, bounded so a malformed registry cannot spin.
+     */
+    private static boolean ifaceExtends(int sub, int sup)
+    {
+        int[] work = new int[64];
+        int n = 0;
+        work[n] = sub;
+        n += 1;
+        int i = 0;
+        while (i < n)
+        {
+            int r = work[i];
+            int j = 0;
+            while (j < clIfaceRegN[r])
+            {
+                int x = clIfaceReg[r * MAX_DIRECT_IF + j];
+                if (x == sup)
+                {
+                    return true;
+                }
+                if (x >= 0 && n < work.length)
+                {
+                    work[n] = x;
+                    n += 1;
+                }
+                j += 1;
+            }
+            i += 1;
+        }
+        return false;
+    }
+
+    /**
+     * Of the interfaces {@code regs[0..n)}, the MAXIMALLY SPECIFIC one that declares the signature (JVMS
+     * 5.4.3.3): a declaring interface that no other declaring interface in the set extends. -1 when none of
+     * them declares it. Two unrelated maximally specific declarers keep the first, in the set's order.
+     */
+    private static int mostSpecificDeclarer(int[] regs, int n, long nameU, long descU)
+    {
+        int best = -1;
+        int i = 0;
+        while (i < n)
+        {
+            int r = regs[i];
+            if (r >= 0 && r < clCount && clTab[r] != null && ifaceDeclares(r, nameU, descU))
+            {
+                if (best < 0 || ifaceExtends(r, best))
+                {
+                    best = r;
+                }
+            }
+            i += 1;
+        }
+        return best;
     }
 
     /** Per-interface itable slot for an InterfaceMethodref call site: the signature's position in
@@ -14393,6 +14510,25 @@ public final class Loader
         viHops = hops;
         viIfaceN = n;
         viNames = names;
+        // The MAXIMALLY SPECIFIC declarer first (JVMS 5.4.3.3): the collection order is the receiver's own
+        // interfaces before its superclasses', which picks the less specific default whenever a class
+        // implements the super-interface directly and inherits the overriding sub-interface.
+        int[] regs = new int[n];
+        int q = 0;
+        while (q < n)
+        {
+            regs[q] = regBySigU(names[q]);
+            q += 1;
+        }
+        int decl = mostSpecificDeclarer(regs, n, nameU, descU);
+        if (decl >= 0)
+        {
+            long d = resolveLinkTarget(clTab[decl].base + clTab[decl].nameOff, nameU, descU);
+            if (d != 0L)
+            {
+                return d;
+            }
+        }
         int k = 0;
         while (k < n)
         {
@@ -18857,6 +18993,18 @@ public final class Loader
         // would change which default body runs -- silently.
         buildRegIndex();
         rfDbsCalls += 1;
+        // THE MAXIMALLY SPECIFIC DECLARER, NOT THE FIRST REGISTERED BODY. Taking the first closure interface
+        // whose body happened to be registered answered by HISTORY: with Square extends Base(implements Shape)
+        // implements Polygon(extends Shape, overrides kind), Shape.kind was registered (Base's itable needed
+        // it) and Polygon.kind was not yet, so Square's itable got Shape.kind -- `shape` for a `polygon` --
+        // whenever something had registered the less specific body first (VirtualInvokeProbe in a batch). The
+        // declarer is decided from the interfaces' own declarations; if its body is not registered yet the slot
+        // stays a hole, which refill and late dispatch resolve to that declarer, never to a less specific one.
+        int decl = mostSpecificDeclarer(ifClosureBuf, n, base + nameOff, base + descOff);
+        if (decl >= 0)
+        {
+            return regBodyIn(decl, base, nameOff, descOff);
+        }
         int i = 0;
         while (i < n)
         {
@@ -18888,6 +19036,24 @@ public final class Loader
                 k = rgNext[k];
             }
             i += 1;
+        }
+        return 0L;
+    }
+
+    /** The registered body interface {@code ir} declares for (name, desc in {@code base}), or 0 if none is. */
+    private static long regBodyIn(int ir, long base, int nameOff, int descOff)
+    {
+        long ibase = clTab[ir].base;
+        int k = rgBucket[utf8HashFrom(clTab[ir].nameHash, base, nameOff) & (RGTAB - 1)];
+        while (k >= 0)
+        {
+            if (rgTab[k].base == ibase && rgTab[k].buf != 0L
+                    && utf8EqAt(base, nameOff, rgTab[k].base, rgTab[k].nameOff)
+                    && utf8EqAt(base, descOff, rgTab[k].base, rgTab[k].descOff))
+            {
+                return rgTab[k].buf;
+            }
+            k = rgNext[k];
         }
         return 0L;
     }

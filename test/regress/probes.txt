@@ -30,6 +30,7 @@ ClinitRaceProbe          solo             # races a first initialization
 ConcatUtf16Probe
 ConstantDescOrderProbe
 DefaultFrameProbe
+DefaultSpecificProbe
 DeflaterProbe
 DigestProbe              gate=failures=0 divergences-unmet=0
 EngineMessageProbe
@@ -100,7 +101,7 @@ TlrProbe
 TypeCheckProbe
 UpdaterRaceProbe
 Utf16PrintProbe
-VirtualInvokeProbe       solo             # OPEN VM BUG in a batch: sub-interface default dispatches to the super default
+VirtualInvokeProbe
 WallClockProbe           solo             # timing
 WideCallProbe
 WideFrameProbe

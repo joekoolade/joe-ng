@@ -1,0 +1,12 @@
+Square reflective Shape.kind = polygon
+Square reflective Shape.label = label:polygon
+Square reflective own-class kind = polygon
+Hex reflective Shape.kind = polygon
+Hex reflective Shape.label = label:polygon
+Hex reflective own-class kind = polygon
+Kite reflective Shape.kind = left
+Kite reflective Shape.label = label:left
+Kite reflective own-class kind = left
+invokeinterface Shape.kind = polygon polygon left
+invokevirtual kind = polygon polygon left
+DefaultSpecificProbe done
