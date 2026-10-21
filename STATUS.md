@@ -4,6 +4,58 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **java.net.NetworkInterface FROM THE JDK 26 SOURCE, OVER THE WIFI LEASE (2026-10-21).** Removes a denial (rule 1)
+  and the `NULL CLASS LITERAL: java/net/NetworkInterface.class` line every NetDemo boot printed.
+  - **Before it:** `java/net/NetworkInterface` was denied, so `StandardSocketOptions.IP_MULTICAST_IF.type()` read
+    null and every lookup halted. New `NetIfProbe` (the lookups' misses and argument refusals, then one
+    `consistent=` verdict over whatever interfaces exist; a host lists a dozen and QEMU none, so it prints no names
+    or counts). **Negative control on main c3a0da9:** `IP_MULTICAST_IF type=null`, then
+    `DENYLIST TRAP ... denied callee: java/net/NetworkInterface.getByName`.
+  - **The fix:** the overlay is the stock class; its natives are Java whose semantics are read from
+    `unix/native/libnet/NetworkInterface.c`, over one new native `wifi0` (`VMNatives.netifState`: the lease's
+    address and mask, the station MAC). ONE interface, `wlan0`, index 1, MTU 1500, exists once DHCP and ARP have
+    configured the stack (when `net.Ip` publishes it, now with the mask). No loopback: the stack cannot carry
+    127.0.0.1. `supportsMulticast` is false: no IGMP, no multicast receive. Without WiFi the list is empty, and stock
+    reports "No network interfaces configured". `init()` only caches JNI IDs, so it is empty. `InterfaceAddress` is
+    overlaid from source with ONE added package-private constructor standing for the JNI's field stores. The
+    denial is gone from `Loader.isDenylisted` and `ReachScan`. NetDemo prints the interface after the GET.
+  - **Regression (113661f, the new harness):** 94 of 94 probes pass, NetIfProbe host-identical. Suite against a
+    control at main c3a0da9 identical -- 40 programs returned, markers zero, `gc: collections=51`, clinits 356.
+    `ran 45, failures 0`. `make overlaycheck`: 0 new. `make test`: exit 0.
+  - **Pi:** PASS (2026-10-21, 113661f) -- `clock: SNTP 198.137.202.32 -> 2026-10-21 13:09:52 UTC`, 4 of 4 cores,
+    NetDemo HTTP 200 (bytes=891), then `netif wlan0 /192.168.1.247/24 [/192.168.1.255] mac e4:5f:01:69:a6:c5
+    up=true mtu=1500` -- the address, mask and MAC the bring-up printed (`dhcp ACK ip 192.168.1.247`,
+    `subnet 255.255.255.0`, `mac e4:5f:01:69:a6:c5`). `[main returned normally]`, `gc: collections=7`, no failure
+    markers, and the NULL CLASS LITERAL line is gone. Per-batch `clinits=` 441/441/442/442/443/443 (437..439 at
+    8faebdf) and batch 1 at 1590 classes (1584): NetDemo's new interface code loads and initializes more classes --
+    an inference, not instrumented per class. `clinitLk=` ends at 24, as before.
+  - **Gaps it leaves:** the WiFi side is checked only by NetDemo on the Pi (QEMU has no WiFi); no multicast; the
+    `ClassLoaders.appClassLoader` trap-wire is unchanged.
+
+- **THE PROBE REGRESSION IS BATCHED -- 93 PROBES IN ~25 MINUTES, AND EIGHT BUGS ONLY A BATCH SHOWS (2026-10-21).**
+  The user asked for shorter testing: a regression took over an hour.
+  - **Where the time went (measured):** image build ~1 s, `make` ~7 s; each QEMU boot spends 32-44 s in the first
+    load batch (20-28 s of it the reachability `mark=`) before a probe that runs in seconds, and every probe paid it.
+  - **The harness:** `java scripts/Regress.java [-j N] [--solo] [Probe...]`. It runs `make` once, then N QEMUs at a
+    time. Probes not marked `solo` in `test/regress/probes.txt` run several to a boot through `ProbeBatch` (one
+    marker line before each). The harness splits the log at the markers and compares each section with
+    `test/regress/expected/<Probe>.out` -- the host outputs, now COMMITTED, so a /tmp purge can no longer shrink the
+    set. A probe that differs in a batch, or never ran because an earlier one halted the VM, is rerun ON ITS OWN,
+    and the solo run is the verdict: batching cannot fail a probe, it can only mask one through shared state, which
+    is what `solo` is for (initialization order, timing, global state, the stack). DigestProbe/MacProbe keep their
+    `gate=`. `BuildRuntimeImage --init <file>` bakes a given `/etc/init` without touching `ramfs/etc/init`, so
+    images build in parallel from one checkout -- no worktrees. **Negative control:** a corrupted expected line was
+    reported DIFFERS in the batch, DIFFERS alone, exit 1.
+  - **First full run (fast-regress 7250738):** 93 of 93 pass in 24m26s at `-j 4`. Second run (113661f, the demo
+    suite booting alongside, load average 21-42): 94 of 94 in 31m58s. The 27 solo probes are now most of it.
+  - **What batching found:** eleven probes differed ONLY in a batch and were identical alone. Three share RAMFS files
+    (IoStream, NioWrite, ZipFile). EIGHT give WRONG answers after other probes ran -- VirtualInvokeProbe's
+    sub-interface default dispatches to the super default; AccessFlagsProbe gets `ClassCastException` casting
+    `[Ljava.lang.reflect.Parameter;`; AnnoContractProbe's `@Inner("in").hashCode()` is wrong; MemberGenericsProbe's
+    erased-array identity answers false; InetAddrProbe throws an NPE; MacProbe "Missing algorithm"; ParamAnno and
+    Repeatable stop at their parameter sections. They are marked `solo` as OPEN VM BUGs -- the list is the worklist.
+  - **Gaps it leaves:** the eight bugs; the demo suite and JUnit are not in the harness yet.
+
 - **MAKE TEST PASSES -- THE DEEP-HANDLER GUARD ASKS THE COMPILER, AND IT WAS HIDING AN Inflate BUG (2026-10-21).**
   `make test` had stopped at `FAIL no deep-stack handlers in VMNatives.class` since at least 8869e6d; every card
   since recorded it as "the known failure". It is exit 0 now.
