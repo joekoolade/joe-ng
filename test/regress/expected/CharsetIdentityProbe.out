@@ -1,0 +1,14 @@
+US-ASCII: identical-to=1 forName-same=true class=sun.nio.cs.US_ASCII decoder=sun.nio.cs.US_ASCII$Decoder maxCharsPerByte=1.0
+| getBytes=[72, 105, 63] String=48,69,3f coder=48,69,3f encoder(Hi)=[72, 105]
+ISO-8859-1: identical-to=1 forName-same=true class=sun.nio.cs.ISO_8859_1 decoder=sun.nio.cs.ISO_8859_1$Decoder maxCharsPerByte=1.0
+| getBytes=[72, 105, -23] String=48,69,e9 coder=48,69,e9 encoder(Hi)=[72, 105]
+UTF-8: identical-to=1 forName-same=true class=sun.nio.cs.UTF_8 decoder=sun.nio.cs.UTF_8$Decoder maxCharsPerByte=1.0
+| getBytes=[72, 105, -61, -87] String=48,69,e9 coder=48,69,e9 encoder(Hi)=[72, 105]
+UTF-16BE: identical-to=1 forName-same=true class=sun.nio.cs.UTF_16BE decoder=sun.nio.cs.UTF_16BE$Decoder maxCharsPerByte=1.0
+| getBytes=[0, 72, 0, 105, 0, -23] String=48,69,e9 coder=48,69,e9 encoder(Hi)=[0, 72, 0, 105]
+UTF-16LE: identical-to=1 forName-same=true class=sun.nio.cs.UTF_16LE decoder=sun.nio.cs.UTF_16LE$Decoder maxCharsPerByte=1.0
+| getBytes=[72, 0, 105, 0, -23, 0] String=48,69,e9 coder=48,69,e9 encoder(Hi)=[72, 0, 105, 0]
+UTF-16: identical-to=1 forName-same=true class=sun.nio.cs.UTF_16 decoder=sun.nio.cs.UTF_16$Decoder maxCharsPerByte=1.0
+| getBytes=[-2, -1, 0, 72, 0, 105, 0, -23] String=48,69,e9 coder=48,69,e9 encoder(Hi)=[-2, -1, 0, 72, 0, 105]
+defaultCharset=UTF-8 isSupported(UTF-32)=true
+CharsetIdentityProbe done

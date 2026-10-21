@@ -1,0 +1,14 @@
+utf16 arg: len=5 units=78,3d,48,69,20ac
+utf16 char var: len=3 units=78,3d,20ac
+latin1 char var: len=3 units=78,3d,e9
+non-ascii literal: len=6 units=63,61,66,e9,20,30
+utf16 literal: len=3 units=20ac,30,e9
+latin1 then utf16: len=7 units=63,61,66,e9,48,69,20ac
+utf16 then latin1: len=7 units=48,69,20ac,63,61,66,e9
+utf16 + int + char: len=6 units=48,69,20ac,34,32,20ac
+supplementary: len=5 units=3c,d83d,de00,3e,30
+utf16 + null: len=7 units=48,69,20ac,6e,75,6c,6c
+utf16 + boxed: len=4 units=48,69,20ac,37
+grown utf16: len=40 units=3b1,3b2,3b3,3b4,3b5,3b6,3b7,3b8,3b9,3ba,3bb,3bc,3bd,3be,3bf,3c0,3c1,3c2,3c3,3c4,3c5,3c6,3c7,3c8,3b1,3b2,3b3,3b4,3b5,3b6,3b7,3b8,3b9,3ba,3bb,3bc,3bd,3be,3bf,3c0
+equals(new String)=true hash=112720582
+ConcatUtf16Probe done

@@ -1,0 +1,24 @@
+write an archive -> true
+open by File -> 3 /tmp/p.zip comment=the probe's archive
+entries in order -> [a/stored.txt/0/27/27/f622459d, a//8/0/0/dir, deflated.txt/8/56/fe4f6d28]
+an entry by name -> deflated.txt/8/56/fe4f6d28 absent=null
+a directory by either form -> a/ a/
+read each entry -> true true dir=[]
+available and skip -> 27 7 t 19
+a deflated entry a byte at a time -> true then -1
+read one, close the ZipFile, read: a/stored.txt -> java.util.zip.ZipException: ZipFile closed
+read one, close the ZipFile, read: deflated.txt -> java.io.IOException: Stream closed
+stream of names -> [a/stored.txt, a/, deflated.txt]
+a second ZipFile outlives the first -> true
+the iterator after close -> true
+getEntry after close -> java.lang.IllegalStateException: zip file closed
+a stream after its ZipFile closed -> java.io.IOException: Stream closed
+write a jar -> true
+read the jar -> probe.Main main [META-INF/MANIFEST.MF:JarFileEntry, probe/Main.txt:JarFileEntry] mr=false
+JarEntry instanceof, from entries() and stream() -> entries=true stream=true lambda=true lambda=true object=true cast=probe/Main.txt
+the image's jar -> 5 [META-INF/, META-INF/MANIFEST.MF, app/, app/Greeting.class, app/Main.class] main=app.Main
+not a zip -> java.util.zip.ZipException: zip END header not found
+a missing file -> java.nio.file.NoSuchFileException: /tmp/missing.zip
+a directory -> java.io.FileNotFoundException: /data (Is a directory)
+cleanup -> []
+ZipFileProbe done

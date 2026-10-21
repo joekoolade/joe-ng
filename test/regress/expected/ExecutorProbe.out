@@ -1,0 +1,10 @@
+20 submitted squares, summed = 2470 (want 2470)
+invokeAll: 8 tasks, counter = 8000 (want 8000)
+failing task: ExecutionException caused by java.lang.IllegalStateException: boom
+latch released = true, worker names = pool-worker,pool-worker,pool-worker,pool-worker
+shutdown: terminated = true, isShutdown = true
+Thread(String).getName = probe-named
+set/getUncaughtExceptionHandler round-trips = true
+handlers fired: from runnable | sub:from override | default:to default
+terminated thread's handler = null
+ExecutorProbe done

@@ -1,0 +1,13 @@
+setInt: i==5 true i/5=1 (long)i=5
+set(Integer): i==10 true i/5=2 (long)i=10
+setShort: s==6 true s/3=2 (long)s=6
+setByte: b==7 true (long)b=7
+setChar: c=='A' true (int)c=65
+setBoolean: z=false !z=true
+setLong: l=3
+get f=-2.5 getFloat=-2.5
+get d=-7.25 getDouble=-7.25
+setFloat/setDouble: f=1.75 d=0.125 f*2=3.5 d*8=1.0
+set(boxed): f=-0.0 d=3.5 get f=-0.0 get d=3.5
+getDouble of float field=-0.0 getFloat of int field=10.0
+FieldPrimProbe done

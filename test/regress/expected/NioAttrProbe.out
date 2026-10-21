@@ -1,0 +1,12 @@
+posix permissions -> r--r--r--
+posix owner named -> true
+posix group named -> true
+getOwner named -> true
+map size key -> 118 has permissions=true has owner=true
+lastModified non-negative -> true
+file store usable non-negative -> true true readOnly=false
+setPosixFilePermissions -> r--r-x---
+setLastModifiedTime -> 1000
+setOwner -> kept true
+setPosixFilePermissions missing -> java.nio.file.NoSuchFileException
+NioAttrProbe done

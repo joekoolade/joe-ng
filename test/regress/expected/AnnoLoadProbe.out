@@ -1,0 +1,8 @@
+class [@OnClass @Outer]
+class all [@OnClass @Outer]
+field [@OnField]
+method [@OnMethod]
+param [@OnParam]
+nested one @Inner(x)
+nested many @Inner(y) @Inner(z)
+AnnoLoadProbe done

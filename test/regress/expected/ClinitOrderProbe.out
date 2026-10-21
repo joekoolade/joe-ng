@@ -1,0 +1,5 @@
+order1 early field   = early-value (want early-value)
+order1 ctor saw      = early-value (want early-value)
+order2 ctor saw      = early2-value (want early2-value)
+order2 early field   = early2-value (want early2-value)
+ClinitOrderProbe done

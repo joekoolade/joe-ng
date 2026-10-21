@@ -1,0 +1,41 @@
+-- nestmates --
+outer reads nested private field -> Integer 7
+outer writes nested private field -> Integer 9
+outer calls nested private method -> Integer 18
+outer calls nested private ctor -> Integer 5
+canAccess nested private -> Boolean true
+nested reads outer private static -> Integer 42
+outer reads doubly nested private -> Integer 3
+nest host of Nested -> String AccessRulesProbe
+nest host of Deeper -> String AccessRulesProbe
+nest host of anonymous -> String AccessRulesProbe
+nest host of local -> String AccessRulesProbe
+nest host of top-level -> String AccessRulesProbe
+nest host of String -> String java.lang.String
+nest host of int -> String int
+nest host of int[] -> String [I
+Nested nestmate of Deeper -> Boolean true
+Nested nestmate of MyList -> Boolean true
+Nested nestmate of String -> Boolean false
+nest members count -> Integer 7
+nest members[0] -> String AccessRulesProbe
+nest members contains Deeper -> Boolean true
+String nest members -> Integer 3
+-- class access: a public method of a non-public class --
+iterator class public -> Boolean false
+invoke hasNext -> java.lang.IllegalAccessException
+canAccess hasNext -> Boolean false
+Iterator.hasNext via interface -> Boolean true
+-- the VM's own reflective calls keep working --
+non-public enum constants from another package -> Integer 4
+Enum.valueOf on it -> String REFERENCE
+Class.newInstance of a package-private class here -> String made
+Class.newInstance of a private constructor here -> java.lang.IllegalAccessException
+-- protected instance target --
+modCount on self -> Boolean true
+modCount on other ArrayList -> java.lang.IllegalAccessException
+removeRange on self -> String [b, c]
+removeRange on other ArrayList -> java.lang.IllegalAccessException
+canAccess modCount self -> Boolean true
+canAccess modCount other -> Boolean false
+AccessRulesProbe done

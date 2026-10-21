@@ -1,0 +1,7 @@
+disjoint puts: size = 20000 (want 20000), missing = 0
+merge, one thread: count = 100 (want 100)
+merge counters: keys with a wrong count = 0 of 16, key 0 = 8000 (want 8000)
+putIfAbsent: winners = 5000 (want 5000), size = 5000
+computeIfAbsent: function calls = 5000 (want 5000)
+iterate during writes: ok, final size = 1000
+ChmRaceProbe done

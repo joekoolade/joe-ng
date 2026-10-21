@@ -1,0 +1,14 @@
+temp1 direct=true cap>=100=true limit=100 pos=0
+temp2 direct=true limit=50 sameAsCached=true
+write half: native sees GET / HTTP/1.0 match=true pos=16
+read half: copied out HTTP/1.1 200 OK pos=15
+carrier initial=null
+carrier set=c
+carrier removed=null
+| kept get=init
+| kept get=second
+| terminated:second
+| removed get=init
+| buffers thread released direct=true
+many locals=40 sum=2340 afterSet=21200
+CarrierLocalProbe done

@@ -1,0 +1,5 @@
+single thread: nextInt(100) in range = true
+single thread: two nextLong differ = true
+four threads: out-of-range = 0
+four threads: per-thread first values distinct = true
+TlrProbe done

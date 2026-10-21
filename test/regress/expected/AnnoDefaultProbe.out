@@ -1,0 +1,26 @@
+b -> Byte -3
+c -> Character q
+classes -> Class[] [class java.lang.Integer, class [I]
+cls -> Class class java.lang.String
+d -> Double -2.25
+empty -> int[] []
+f -> Float 1.5
+i -> Integer 7
+ints -> int[] [1, 2, 3]
+l -> Long 1099511627776
+nested -> @Inner(given)
+nesteds -> [@Inner(inner-default), @Inner(two)]
+required -> null
+s -> Short 300
+str -> String hello
+strs -> String[] [a, b]
+unit -> TimeUnit SECONDS
+units -> TimeUnit[] [DAYS, NANOSECONDS]
+z -> Boolean true
+ints after mutating a returned copy -> int[] [1, 2, 3]
+equal across calls -> true
+Inner.value -> String inner-default
+Plain.x -> null
+String.length -> null
+written: required=r d=3.5 f=2.5 c=z l=-9 ints=[4, 5] classes=[class [J, class [[Ljava.lang.String;] nested=@Inner(written) nesteds=[@Inner(w1)] units=[HOURS] i=7 empty=0 str=hello
+AnnoDefaultProbe done

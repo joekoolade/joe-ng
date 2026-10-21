@@ -1,0 +1,20 @@
+ok   pw over BAOS = ctl\n|4
+ok   pw over BAOS checkError = false
+ok   osw over BAOS = osw|3
+ok   pw over PrintStream = via-ps\n|7
+ok   pw over PrintStream checkError = false
+ok   osw over PrintStream = osw-ps|6
+ok   ps.write(int) to wrapped = QR|2
+ok   ps.flush reaches wrapped = 0->3
+ok   ps charset default = UTF-8
+ok   ps latin1 charset = ISO-8859-1 len=1 b0=233
+ok   ps utf8 default bytes = len=2 b0=195
+ok   ps ctor by name = UTF-8
+ok   ps ctor bad name = UnsupportedEncodingException
+ok   ps checkError after throw = true
+ok   System.out checkError = false
+[marker] PrintWriter(System.out) printed this line
+ok   pw over System.out checkError = false
+[marker] OutputStreamWriter(System.out) printed this line
+ok   osw over System.out = returned
+PrintWriterProbe done, failures=0

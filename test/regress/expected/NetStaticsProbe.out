@@ -1,0 +1,9 @@
+POLLIN=1 POLLOUT=4 POLLERR=8 POLLHUP=16 POLLNVAL=32 POLLCONN=4
+useExclusiveBind=false
+ANY_LOCAL_INET4ADDRESS=0.0.0.0 len=4 any=true loop=false
+ANY_LOCAL_INET6ADDRESS=0:0:0:0:0:0:0:0 len=16 any=true loop=false
+INET4_LOOPBACK_ADDRESS=127.0.0.1 len=4 any=false loop=true
+INET6_LOOPBACK_ADDRESS=0:0:0:0:0:0:0:1 len=16 any=false loop=true
+FAST_LOOPBACK=false
+EXTENDED_OPTIONS set=true
+NetStaticsProbe done

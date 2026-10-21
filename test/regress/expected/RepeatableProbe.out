@@ -1,0 +1,16 @@
+stream map keys: Tags Plain Roles get(Tags)=true
+Twice byType(Tag)=Tag[@Tag(a) @Tag(b)] declaredByType(Tag)=Tag[@Tag(a) @Tag(b)] getAnnotation(Tag)=null container=Tag[@Tag(a) @Tag(b)]
+Once byType(Tag)=Tag[@Tag(only)] declaredByType(Tag)=Tag[@Tag(only)] getAnnotation(Tag)=only container=null
+None byType(Tag)=Tag[] declaredByType(Tag)=Tag[] getAnnotation(Tag)=null container=null
+Sub byType(Tag)=Tag[] declaredByType(Tag)=Tag[] getAnnotation(Tag)=null container=null
+field byType(Tag)=Tag[@Tag(f1) @Tag(f2)] declaredByType(Tag)=Tag[@Tag(f1) @Tag(f2)] getAnnotation(Tag)=null container=Tag[@Tag(f1) @Tag(f2)]
+method byType(Tag)=Tag[@Tag(m1) @Tag(m2) @Tag(m3)] declaredByType(Tag)=Tag[@Tag(m1) @Tag(m2) @Tag(m3)] getAnnotation(Tag)=null container=Tag[@Tag(m1) @Tag(m2) @Tag(m3)]
+param byType(Tag)=Tag[@Tag(p1) @Tag(p2)] declaredByType(Tag)=Tag[@Tag(p1) @Tag(p2)] getAnnotation(Tag)=null container=Tag[@Tag(p1) @Tag(p2)]
+Twice byType(Plain)=Plain[@Plain(1)]
+Twice byType(Role)=Role[@Role(admin) @Role(user)]
+Sub byType(Role)=Role[@Role(admin) @Role(user)]
+Sub declaredByType(Role)=Role[]
+Sub getAnnotation(Roles)=Role[@Role(admin) @Role(user)]
+Twice byType(Tags)=1
+Sub getAnnotations=Annotation[@Roles] declared=Annotation[] present(Roles)=true present(Tags)=false
+RepeatableProbe done

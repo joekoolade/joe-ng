@@ -1,0 +1,16 @@
+TestEngine rel TestEngine.class -> 3022 bytes head=cafebabe hash=2cbeec3da069f738
+TestEngine abs /org/.../TestEngine.class -> 3022 bytes head=cafebabe hash=2cbeec3da069f738
+TestEngine abs /META-INF/services/org.junit.platform.engine.TestEngine -> 133 bytes head=6f72672e hash=4e0ffb6b233e3067
+TestEngine rel META-INF/services/org.junit.platform.engine.TestEngine -> null
+default-pkg rel META-INF/services/org.junit.platform.engine.TestEngine -> 133 bytes head=6f72672e hash=4e0ffb6b233e3067
+default-pkg abs /no/such/thing -> null
+getResource rel absent = null
+getResource abs absent = null
+getSystemResource absent = null
+default parent is system = true
+explicit null parent = null
+explicit parent kept = true
+getDefinedPackage(no.such.pkg) = null
+child getDefinedPackage(java.lang) = null
+getDefinedPackage(null) NPE: name cannot be null
+ClassResourceProbe done

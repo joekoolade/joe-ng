@@ -1,0 +1,70 @@
+== GenericsProbe$Box
+  superclass  C(java.lang.Object)
+  typeparam   T bounds=[P(java.lang.Comparable<T> raw=java.lang.Comparable args=[V(T)] owner=null)] declaredBy=true
+== GenericsProbe$IntBox
+  superclass  P(GenericsProbe$Box<java.lang.Integer> raw=GenericsProbe$Box args=[C(java.lang.Integer)] owner=GenericsProbe)
+  interface   P(java.lang.Comparable<GenericsProbe$IntBox> raw=java.lang.Comparable args=[C(GenericsProbe$IntBox)] owner=null)
+  interface   P(java.util.function.Supplier<java.util.List<? extends java.lang.Number>> raw=java.util.function.Supplier args=[P(java.util.List<? extends java.lang.Number> raw=java.util.List args=[W(? extends java.lang.Number upper=[C(java.lang.Number)] lower=[])] owner=null)] owner=null)
+== GenericsProbe$Grid
+  superclass  P(java.util.ArrayList<E[]> raw=java.util.ArrayList args=[A(E[] of V(E))] owner=null)
+  typeparam   E bounds=[C(java.lang.Object)] declaredBy=true
+== GenericsProbe$Outer$Inner
+  superclass  P(java.util.ArrayList<T> raw=java.util.ArrayList args=[V(T)] owner=null)
+== GenericsProbe$Raw
+  superclass  C(java.lang.Object)
+== GenericsProbe$Named
+  superclass  null
+  interface   P(java.lang.Comparable<java.lang.String> raw=java.lang.Comparable args=[C(java.lang.String)] owner=null)
+== GenericsProbe$Pair
+  superclass  C(java.lang.Object)
+  typeparam   K bounds=[C(java.lang.Object)] declaredBy=true
+  typeparam   V bounds=[P(java.util.List<K> raw=java.util.List args=[V(K)] owner=null)] declaredBy=true
+== java.lang.Integer
+  superclass  C(java.lang.Number)
+  interface   P(java.lang.Comparable<java.lang.Integer> raw=java.lang.Comparable args=[C(java.lang.Integer)] owner=null)
+  interface   C(java.lang.constant.Constable)
+  interface   C(java.lang.constant.ConstantDesc)
+== java.lang.String
+  superclass  C(java.lang.Object)
+  interface   C(java.io.Serializable)
+  interface   P(java.lang.Comparable<java.lang.String> raw=java.lang.Comparable args=[C(java.lang.String)] owner=null)
+  interface   C(java.lang.CharSequence)
+  interface   C(java.lang.constant.Constable)
+  interface   C(java.lang.constant.ConstantDesc)
+== java.util.HashMap
+  superclass  P(java.util.AbstractMap<K, V> raw=java.util.AbstractMap args=[V(K), V(V)] owner=null)
+  interface   P(java.util.Map<K, V> raw=java.util.Map args=[V(K), V(V)] owner=null)
+  interface   C(java.lang.Cloneable)
+  interface   C(java.io.Serializable)
+  typeparam   K bounds=[C(java.lang.Object)] declaredBy=true
+  typeparam   V bounds=[C(java.lang.Object)] declaredBy=true
+== java.util.ArrayList
+  superclass  P(java.util.AbstractList<E> raw=java.util.AbstractList args=[V(E)] owner=null)
+  interface   P(java.util.List<E> raw=java.util.List args=[V(E)] owner=null)
+  interface   C(java.util.RandomAccess)
+  interface   C(java.lang.Cloneable)
+  interface   C(java.io.Serializable)
+  typeparam   E bounds=[C(java.lang.Object)] declaredBy=true
+typevar equal across calls=true hash equal=true
+self-bound arg equals T=true
+Box is GenericDeclaration=true
+enclosing method of Inner=null ctor=null
+enclosing method of Box=null ctor=null
+generic static class GenericsProbe$Box<T extends java.lang.Comparable<T>> sealed=false
+generic static class GenericsProbe$IntBox sealed=false
+generic static class GenericsProbe$Pair<K,V extends java.util.List<K>> sealed=false
+generic abstract static interface GenericsProbe$Named sealed=false
+generic abstract static sealed interface GenericsProbe$Shape sealed=true
+generic static final class GenericsProbe$Circle sealed=false
+generic static non-sealed class GenericsProbe$Square sealed=false
+generic static final enum GenericsProbe$Color sealed=false
+generic static final record GenericsProbe$Point<N extends java.lang.Number & java.lang.Comparable<N>> sealed=false
+generic abstract static @interface GenericsProbe$Marker sealed=false
+generic public class java.util.HashMap<K,V> sealed=false
+generic public abstract interface java.lang.Comparable<T> sealed=false
+generic public final class java.lang.String sealed=false
+generic java.lang.Integer[] sealed=false
+generic GenericsProbe$Pair<K,V extends java.util.List<K>>[][] sealed=false
+generic int sealed=false
+generic int[][] sealed=false
+GenericsProbe done

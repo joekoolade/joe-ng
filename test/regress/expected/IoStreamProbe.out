@@ -1,0 +1,24 @@
+read an image file -> hello from ramfs
+skip and available -> 4 114 q pos=5 size=118
+read what nio wrote -> from nio
+read what nio deleted -> java.io.FileNotFoundException: /data/n.txt (No such file or directory)
+missing file -> java.io.FileNotFoundException: /data/missing.txt (No such file or directory)
+a directory -> java.io.FileNotFoundException: /data (Is a directory)
+output create -> first! 6
+output truncates -> 2nd
+output appends -> 2nd+more
+output over an image file -> 7 restored true
+output to a directory -> java.io.FileNotFoundException: /data (Is a directory)
+output with a missing parent -> java.io.FileNotFoundException: /nodir/x.txt (No such file or directory)
+write after close -> java.io.IOException: Stream Closed
+  (printed through fd 1)
+console through FileDescriptor.out -> ok
+random access -> 012X456789 ptr=4 len=10
+setLength shorter -> len=5 ptr=5
+setLength longer -> len=8 [48, 49, 50, 88, 52, 0, 0, 0]
+read past the end -> -1 ptr=100
+negative seek -> java.io.IOException: Negative seek offset
+read-only refuses a write -> java.io.IOException: Bad file descriptor
+read-only of a missing file -> java.io.FileNotFoundException: /data/missing.bin (No such file or directory)
+cleanup -> true true [nums.txt, prog.lisp, sample.txt]
+IoStreamProbe done

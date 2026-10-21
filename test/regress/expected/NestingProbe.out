@@ -1,0 +1,142 @@
+top:
+  name=NestingProbe simple=NestingProbe canonical=NestingProbe type=NestingProbe
+  member=false local=false anon=false
+  enclosingClass=null declaringClass=null
+  enclosingMethod=null
+  enclosingCtor=null
+dollar top:
+  name=Odd$Name simple=Odd$Name canonical=Odd$Name type=Odd$Name
+  member=false local=false anon=false
+  enclosingClass=null declaringClass=null
+  enclosingMethod=null
+  enclosingCtor=null
+member:
+  name=NestingProbe$Member simple=Member canonical=NestingProbe.Member type=NestingProbe$Member
+  member=true local=false anon=false
+  enclosingClass=class NestingProbe declaringClass=class NestingProbe
+  enclosingMethod=null
+  enclosingCtor=null
+inner:
+  name=NestingProbe$Inner simple=Inner canonical=NestingProbe.Inner type=NestingProbe$Inner
+  member=true local=false anon=false
+  enclosingClass=class NestingProbe declaringClass=class NestingProbe
+  enclosingMethod=null
+  enclosingCtor=null
+member of member:
+  name=NestingProbe$Member2$Deeper simple=Deeper canonical=NestingProbe.Member2.Deeper type=NestingProbe$Member2$Deeper
+  member=true local=false anon=false
+  enclosingClass=class NestingProbe$Member2 declaringClass=class NestingProbe$Member2
+  enclosingMethod=null
+  enclosingCtor=null
+local:
+  name=NestingProbe$1Local simple=Local canonical=null type=NestingProbe$1Local
+  member=false local=true anon=false
+  enclosingClass=class NestingProbe declaringClass=null
+  enclosingMethod=public static void NestingProbe.main(java.lang.String[])
+  enclosingCtor=null
+anon:
+  name=NestingProbe$3 simple= canonical=null type=NestingProbe$3
+  member=false local=false anon=true
+  enclosingClass=class NestingProbe declaringClass=null
+  enclosingMethod=public static void NestingProbe.main(java.lang.String[])
+  enclosingCtor=null
+static init:
+  name=NestingProbe$1InStatic simple=InStatic canonical=null type=NestingProbe$1InStatic
+  member=false local=true anon=false
+  enclosingClass=class NestingProbe declaringClass=null
+  enclosingMethod=null
+  enclosingCtor=null
+instance init:
+  name=NestingProbe$1 simple= canonical=null type=NestingProbe$1
+  member=false local=false anon=true
+  enclosingClass=class NestingProbe declaringClass=null
+  enclosingMethod=null
+  enclosingCtor=null
+ctor():
+  name=NestingProbe$1InCtor simple=InCtor canonical=null type=NestingProbe$1InCtor
+  member=false local=true anon=false
+  enclosingClass=class NestingProbe declaringClass=null
+  enclosingMethod=null
+  enclosingCtor=NestingProbe()
+ctor() anon:
+  name=NestingProbe$2 simple= canonical=null type=NestingProbe$2
+  member=false local=false anon=true
+  enclosingClass=class NestingProbe declaringClass=null
+  enclosingMethod=null
+  enclosingCtor=NestingProbe()
+ctor(int):
+  name=NestingProbe$1InCtorInt simple=InCtorInt canonical=null type=NestingProbe$1InCtorInt
+  member=false local=true anon=false
+  enclosingClass=class NestingProbe declaringClass=null
+  enclosingMethod=null
+  enclosingCtor=NestingProbe(int)
+overload(int):
+  name=NestingProbe$1InOverloadInt simple=InOverloadInt canonical=null type=NestingProbe$1InOverloadInt
+  member=false local=true anon=false
+  enclosingClass=class NestingProbe declaringClass=null
+  enclosingMethod=static java.lang.Class NestingProbe.overload(int)
+  enclosingCtor=null
+overload(String[]):
+  name=NestingProbe$1InOverloadArr simple=InOverloadArr canonical=null type=NestingProbe$1InOverloadArr
+  member=false local=true anon=false
+  enclosingClass=class NestingProbe declaringClass=null
+  enclosingMethod=static java.lang.Class NestingProbe.overload(java.lang.String[])
+  enclosingCtor=null
+in lambda:
+  name=NestingProbe$1InLambda simple=InLambda canonical=null type=NestingProbe$1InLambda
+  member=false local=true anon=false
+  enclosingClass=class NestingProbe declaringClass=null
+  enclosingMethod=public static void NestingProbe.main(java.lang.String[])
+  enclosingCtor=null
+generic local:
+  name=NestingProbe$1Holder simple=Holder canonical=null type=NestingProbe$1Holder
+  member=false local=true anon=false
+  enclosingClass=class NestingProbe declaringClass=null
+  enclosingMethod=static java.lang.Class NestingProbe.generic()
+  enclosingCtor=null
+local[]:
+  name=[LNestingProbe$1Local; simple=Local[] canonical=null type=NestingProbe$1Local[]
+  member=false local=false anon=false
+  enclosingClass=null declaringClass=null
+  enclosingMethod=null
+  enclosingCtor=null
+member[][]:
+  name=[[LNestingProbe$Member; simple=Member[][] canonical=NestingProbe.Member[][] type=NestingProbe$Member[][]
+  member=false local=false anon=false
+  enclosingClass=null declaringClass=null
+  enclosingMethod=null
+  enclosingCtor=null
+anon[]:
+  name=[LNestingProbe$3; simple=[] canonical=null type=NestingProbe$3[]
+  member=false local=false anon=false
+  enclosingClass=null declaringClass=null
+  enclosingMethod=null
+  enclosingCtor=null
+int:
+  name=int simple=int canonical=int type=int
+  member=false local=false anon=false
+  enclosingClass=null declaringClass=null
+  enclosingMethod=null
+  enclosingCtor=null
+int[]:
+  name=[I simple=int[] canonical=int[] type=int[]
+  member=false local=false anon=false
+  enclosingClass=null declaringClass=null
+  enclosingMethod=null
+  enclosingCtor=null
+Map.Entry:
+  name=java.util.Map$Entry simple=Entry canonical=java.util.Map.Entry type=java.util.Map$Entry
+  member=true local=false anon=false
+  enclosingClass=interface java.util.Map declaringClass=interface java.util.Map
+  enclosingMethod=null
+  enclosingCtor=null
+String:
+  name=java.lang.String simple=String canonical=java.lang.String type=java.lang.String
+  member=false local=false anon=false
+  enclosingClass=null declaringClass=null
+  enclosingMethod=null
+  enclosingCtor=null
+generic local U bounds = [T]
+bound T declared by = static java.lang.Class NestingProbe.generic()
+generic local toGenericString = class NestingProbe$1Holder<U extends T>
+NestingProbe done

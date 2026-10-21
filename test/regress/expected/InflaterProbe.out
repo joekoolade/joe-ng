@@ -1,0 +1,21 @@
+zlib, whole -> 2263/e02d4b8a read=283 written=2263 adler=83ae004b remaining=0
+zlib, a byte in at a time -> 2263/e02d4b8a read=283 written=2263 adler=83ae004b remaining=0
+zlib, a byte out at a time -> 2263/e02d4b8a read=283 written=2263 adler=83ae004b remaining=0
+raw, whole -> 2263/e02d4b8a read=276 written=2263 adler=0 remaining=0
+raw, 7 in / 13 out -> 2263/e02d4b8a read=276 written=2263 adler=0 remaining=0
+trailing bytes stay unconsumed -> 2263/e02d4b8a read=283 written=2263 adler=83ae004b remaining=5
+a fresh zlib Inflater's adler -> 1 raw=0
+dictionary flow -> n=0 needsDictionary=true id=613c0ffa then 2263/e02d4b8a adler=83ae004b
+the wrong dictionary -> java.lang.IllegalArgumentException: null
+a dictionary nobody asked for -> java.lang.IllegalArgumentException: null
+gzip through GZIPInputStream -> 2263/e02d4b8a
+two gzip members back to back -> 4526/36cf6de1
+InflaterInputStream a byte at a time -> 2263/2aae24ab
+reset and reuse -> true read=283
+ByteBuffer in and out, heap -> 2263/e02d4b8a
+ByteBuffer in and out, direct -> 2263/e02d4b8a in.remaining=0
+a bad header -> java.util.zip.DataFormatException: incorrect header check
+a wrong check -> java.util.zip.DataFormatException: incorrect data check
+a corrupt block -> java.util.zip.DataFormatException: invalid block type
+use after end -> java.lang.IllegalStateException: Inflater has been closed
+InflaterProbe done

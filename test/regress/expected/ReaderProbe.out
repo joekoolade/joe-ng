@@ -1,0 +1,7 @@
+BufferedReader(InputStreamReader): lines=3 chars=115 first=the quick brown fox jumps over the lazy dog
+FileReader lines=3
+OutputStreamWriter UTF-8 bytes=[99, 97, 102, -61, -87, 32, -30, -126, -84, 10]
+getBytes(UTF_16BE)=[0, 72, 0, 105, 32, -84] back=Hi€
+UTF-16LE reader -> one,two,null
+PrintWriter(StringWriter) -> 7-x
+ReaderProbe done

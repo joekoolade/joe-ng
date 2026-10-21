@@ -45,6 +45,13 @@ public final class BuildRuntimeImage
     // stays within the A64 bl +-128 MiB reach; and the bumped loader caps.
     private static final boolean EMBED_ALL_JAVABASE = true;
 
+    /**
+     * {@code --init <file>}: the bytes baked as {@code /etc/init} in place of {@code ramfs/etc/init}, which is left
+     * untouched. This lets several images with different manifests build from one checkout at once (the
+     * regression harness runs probe images in parallel); null bakes the tree's own file.
+     */
+    private static byte[] initOverride;
+
     public static CodeBuffer build(Path classesDir) throws IOException
     {
         ClassRegistry registry = populateRegistry(classesDir);
@@ -229,13 +236,26 @@ public final class BuildRuntimeImage
         {
             return;
         }
+        boolean initBaked = false;
         try (var paths = Files.walk(root))
         {
             for (Path p : (Iterable<Path>) paths.filter(Files::isRegularFile).sorted()::iterator)
             {
                 String name = "/" + root.relativize(p).toString().replace(File.separatorChar, '/');
-                ib.addFile(name, Files.readAllBytes(p));
+                if (initOverride != null && name.equals("/etc/init"))
+                {
+                    ib.addFile(name, initOverride);                // same place in the table as the tree's file
+                    initBaked = true;
+                }
+                else
+                {
+                    ib.addFile(name, Files.readAllBytes(p));
+                }
             }
+        }
+        if (initOverride != null && !initBaked)
+        {
+            ib.addFile("/etc/init", initOverride);
         }
     }
 
@@ -310,6 +330,11 @@ public final class BuildRuntimeImage
             else if (a.equals("--classpath") && i + 1 < args.length)
             {
                 classpath = args[i + 1];
+                i += 2;
+            }
+            else if (a.equals("--init") && i + 1 < args.length)
+            {
+                initOverride = Files.readAllBytes(Path.of(args[i + 1]));
                 i += 2;
             }
             else

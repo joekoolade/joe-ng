@@ -1,0 +1,36 @@
+/: exists=true file=false dir=true read=true write=true hidden=false
+/data: exists=true file=false dir=true read=true write=true hidden=false
+/data/sample.txt: exists=true file=true dir=false length=118 read=true write=true hidden=false
+/data/nums.txt: exists=true file=true dir=false length=9 read=true write=true hidden=false
+/etc/motd: exists=true file=true dir=false length=17 read=true write=true hidden=false
+/etc: exists=true file=false dir=true read=true write=true hidden=false
+/data/missing.txt: exists=false file=false dir=false read=false write=false hidden=false
+/dat: exists=false file=false dir=false read=false write=false hidden=false
+/data/sample.txt/x: exists=false file=false dir=false read=false write=false hidden=false
+list / [conf, data, etc, lib, plugins, tmp]
+list /data [nums.txt, prog.lisp, sample.txt]
+list of a file null
+list of nothing null
+listFiles(isFile) /data /data/nums.txt /data/prog.lisp /data/sample.txt
+canonical /etc/motd
+canonical dir /data
+absolute /data/sample.txt
+parent /data name sample.txt
+mkdir true again false isDirectory true
+createNewFile true again false length 0 isFile true
+createNewFile in a missing directory -> IOException
+renameTo true old false new true
+setLastModified true lastModified 1000
+setExecutable true canExecute true
+setReadOnly true
+list newdir [b.txt]
+delete non-empty dir false
+delete file true delete dir true gone true
+delete missing false
+setLastModified missing false
+mkdirs true true
+createNewFile existing false
+still there true
+read 118 bytes, equals length true
+first line the quick brown fox jumps over the lazy dog
+FileProbe done

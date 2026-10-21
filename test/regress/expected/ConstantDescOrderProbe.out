@@ -1,0 +1,8 @@
+int[] ArrayClassDesc[int, 1]
+String ClassOrInterfaceDesc[String]
+long J
+String[][] [[Ljava/lang/String;
+CD_int I primitive=true display=int
+BSM_PRIMITIVE_CLASS null? false
+CD_int[] [I
+ConstantDescOrderProbe done

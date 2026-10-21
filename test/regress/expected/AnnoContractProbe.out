@@ -1,0 +1,15 @@
+a1.equals(a2) true
+a1.equals(b) true
+a1.equals(c) false
+c.equals(d) (NaN element) true
+a1.equals(m1) false
+a1.equals(null) false
+a1.equals("x") false
+m1.equals(m2) true
+hash a1==a2 true a1==b true c==d true a1!=c true
+hash matches the formula: a1 true c true
+hash marker 0 inner 1335634474
+toString marker @AnnoContractProbe.Marker()
+toString inner @AnnoContractProbe.Inner("in")
+set size 3
+AnnoContractProbe done

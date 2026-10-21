@@ -1,0 +1,157 @@
+-- length and get (boxes to the element's own wrapper) --
+[Z length -> Integer 3
+[Z get(1) -> Boolean false
+[Z get(2) -> Boolean true
+[Z get(3) -> java.lang.ArrayIndexOutOfBoundsException
+[Z get(-1) -> java.lang.ArrayIndexOutOfBoundsException
+[B length -> Integer 3
+[B get(1) -> Byte -2
+[B get(2) -> Byte 3
+[B get(3) -> java.lang.ArrayIndexOutOfBoundsException
+[B get(-1) -> java.lang.ArrayIndexOutOfBoundsException
+[C length -> Integer 3
+[C get(1) -> Character b
+[C get(2) -> Character c
+[C get(3) -> java.lang.ArrayIndexOutOfBoundsException
+[C get(-1) -> java.lang.ArrayIndexOutOfBoundsException
+[S length -> Integer 3
+[S get(1) -> Short -200
+[S get(2) -> Short 300
+[S get(3) -> java.lang.ArrayIndexOutOfBoundsException
+[S get(-1) -> java.lang.ArrayIndexOutOfBoundsException
+[I length -> Integer 3
+[I get(1) -> Integer -20
+[I get(2) -> Integer 30
+[I get(3) -> java.lang.ArrayIndexOutOfBoundsException
+[I get(-1) -> java.lang.ArrayIndexOutOfBoundsException
+[J length -> Integer 3
+[J get(1) -> Long -5
+[J get(2) -> Long 7
+[J get(3) -> java.lang.ArrayIndexOutOfBoundsException
+[J get(-1) -> java.lang.ArrayIndexOutOfBoundsException
+[F length -> Integer 3
+[F get(1) -> Float -2.25
+[F get(2) -> Float 3.0
+[F get(3) -> java.lang.ArrayIndexOutOfBoundsException
+[F get(-1) -> java.lang.ArrayIndexOutOfBoundsException
+[D length -> Integer 3
+[D get(1) -> Double -1.75
+[D get(2) -> Double 1.0E100
+[D get(3) -> java.lang.ArrayIndexOutOfBoundsException
+[D get(-1) -> java.lang.ArrayIndexOutOfBoundsException
+[Ljava.lang.String; length -> Integer 3
+[Ljava.lang.String; get(1) -> String y
+[Ljava.lang.String; get(2) -> String z
+[Ljava.lang.String; get(3) -> java.lang.ArrayIndexOutOfBoundsException
+[Ljava.lang.String; get(-1) -> java.lang.ArrayIndexOutOfBoundsException
+[Ljava.lang.Number; length -> Integer 3
+[Ljava.lang.Number; get(1) -> Long 2
+[Ljava.lang.Number; get(2) -> Double 3.0
+[Ljava.lang.Number; get(3) -> java.lang.ArrayIndexOutOfBoundsException
+[Ljava.lang.Number; get(-1) -> java.lang.ArrayIndexOutOfBoundsException
+getLength(String) -> java.lang.IllegalArgumentException
+getLength(null) -> java.lang.NullPointerException
+get(Integer, 0) -> java.lang.IllegalArgumentException
+-- typed getters: widening allowed, narrowing refused --
+getInt(int[],1) -> Integer -20
+getInt(int[],2) -> Integer 30
+getInt(byte[],1) -> Integer -2
+getInt(char[],2) -> Integer 99
+getInt(short[],1) -> Integer -200
+getInt(long[],1) -> java.lang.IllegalArgumentException
+getInt(boolean[],0) -> java.lang.IllegalArgumentException
+getLong(int[],1) -> Long -20
+getLong(long[],0) -> Long 1099511627776
+getLong(char[],0) -> Long 97
+getFloat(long[],0) -> Float 1.0995116E12
+getFloat(float[],1) -> Float -2.25
+getFloat(double[],1) -> java.lang.IllegalArgumentException
+getDouble(float[],1) -> Double -2.25
+getDouble(double[],2) -> Double 1.0E100
+getDouble(int[],2) -> Double 30.0
+getShort(byte[],1) -> Short -2
+getShort(short[],2) -> Short 300
+getShort(char[],0) -> java.lang.IllegalArgumentException
+getChar(char[],1) -> Character b
+getChar(byte[],0) -> java.lang.IllegalArgumentException
+getByte(byte[],2) -> Byte 3
+getByte(int[],0) -> java.lang.IllegalArgumentException
+getBoolean(boolean[],1) -> Boolean false
+getBoolean(byte[],0) -> java.lang.IllegalArgumentException
+getInt(Integer[],0) -> java.lang.IllegalArgumentException
+getInt(int[],3) -> java.lang.ArrayIndexOutOfBoundsException
+-- typed setters --
+setInt(int[],0,77) -> [I [[77, -20, 30]]
+setInt(long[],1,-9) -> [J [[1099511627776, -9, 7]]
+setInt(double[],0,3) -> [D [[3.0, -1.75, 1.0E100]]
+setLong(int[],0,1) -> java.lang.IllegalArgumentException
+setByte(short[],2,-1) -> [S [[100, -200, -1]]
+setByte(char[],0,1) -> java.lang.IllegalArgumentException
+setChar(int[],2,'A') -> [I [[77, -20, 65]]
+setChar(char[],2,'q') -> [C [[a, b, q]]
+setShort(byte[],0,5) -> java.lang.IllegalArgumentException
+setShort(float[],0,5) -> [F [[5.0, -2.25, 3.0]]
+setFloat(double[],1,0.25f) -> [D [[3.0, 0.25, 1.0E100]]
+setFloat(long[],0,1f) -> java.lang.IllegalArgumentException
+setDouble(float[],0,1.0) -> java.lang.IllegalArgumentException
+setBoolean(boolean[],1,true) -> [Z [[true, true, true]]
+setBoolean(int[],0,true) -> java.lang.IllegalArgumentException
+setByte(byte[],1,99) -> [B [[1, 99, 3]]
+setLong(long[],2,max) -> [J [[1099511627776, -9, 9223372036854775807]]
+setDouble(double[],2,-0.0) -> [D [[3.0, 0.25, -0.0]]
+setInt(String[],0,1) -> java.lang.IllegalArgumentException
+setInt(int[],5,1) -> java.lang.ArrayIndexOutOfBoundsException
+-- set: unbox and widen, or refuse --
+set(int[],1,Short) -> [I [[77, 12, 65]]
+set(int[],1,Character) -> [I [[77, 90, 65]]
+set(long[],0,Integer) -> [J [[42, -9, 9223372036854775807]]
+set(double[],0,Float) -> [D [[2.5, 0.25, -0.0]]
+set(int[],1,Long) -> java.lang.IllegalArgumentException
+set(int[],1,null) -> java.lang.IllegalArgumentException
+set(int[],1,String) -> java.lang.IllegalArgumentException
+set(char[],0,Byte) -> java.lang.IllegalArgumentException
+set(boolean[],0,Boolean) -> [Z [[false, true, true]]
+set(boolean[],0,Integer) -> java.lang.IllegalArgumentException
+set(String[],0,"w") -> [Ljava.lang.String; [[w, y, z]]
+set(String[],1,null) -> [Ljava.lang.String; [[w, null, z]]
+set(String[],2,Integer) -> java.lang.IllegalArgumentException
+set(Number[],0,Short) -> [Ljava.lang.Number; [[8, 2, 3.0]]
+set(Number[],1,String) -> java.lang.IllegalArgumentException
+set(String,0,x) -> java.lang.IllegalArgumentException
+-- newInstance --
+newInstance(boolean,2) -> [Z [[false, false]]
+newInstance(byte,2) -> [B [[0, 0]]
+newInstance(short,2) -> [S [[0, 0]]
+newInstance(int,2) -> [I [[0, 0]]
+newInstance(long,2) -> [J [[0, 0]]
+newInstance(float,2) -> [F [[0.0, 0.0]]
+newInstance(double,2) -> [D [[0.0, 0.0]]
+newInstance(java.lang.String,2) -> [Ljava.lang.String; [[null, null]]
+newInstance(java.lang.Runnable,2) -> [Ljava.lang.Runnable; [[null, null]]
+newInstance([I,2) -> [[I [[null, null]]
+newInstance([Ljava.lang.Object;,2) -> [[Ljava.lang.Object; [[null, null]]
+newInstance(char,2)[1] as int -> Integer 0
+newInstance(void,1) -> java.lang.IllegalArgumentException
+newInstance(null,1) -> java.lang.NullPointerException
+newInstance(int,-1) -> java.lang.NegativeArraySizeException
+newInstance(int,0) -> [I [[]]
+instanceof long[] -> Boolean true
+instanceof CharSequence[] -> Boolean true
+arrayType int -> String [I
+arrayType String[] -> String [[Ljava.lang.String;
+componentType [J -> Class long
+-- multi-dimensional --
+new(int,2,3) -> [[I [[[0, 0, 0], [0, 0, 0]]]
+new(String,2,1) -> [[Ljava.lang.String; [[[null], [null]]]
+new(double,1,2,2) -> [[[D [[[[0.0, 0.0], [0.0, 0.0]]]]
+new(int[],2) -> [[I [[null, null]]
+new(String[],2,1) -> [[[Ljava.lang.String; [[[null], [null]]]
+new(long,3,0) -> [[J [[[], [], []]]
+new(long,0,3) -> [[J [[]]
+new(int,no dims) -> java.lang.IllegalArgumentException
+new(int,null dims) -> java.lang.NullPointerException
+new(int,2,-1) -> java.lang.NegativeArraySizeException
+new(void,1,1) -> java.lang.IllegalArgumentException
+inner type -> String [C
+int[][] cast -> Integer 6
+ReflectArrayProbe done

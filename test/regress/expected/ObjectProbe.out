@@ -1,0 +1,17 @@
+toString is name@hex(hashCode) -> true
+hashCode == identityHashCode -> true
+hashCode stable -> true
+equals self, other -> true,false
+getClass -> java.lang.Object
+clone of a class without Cloneable -> java.lang.CloneNotSupportedException: ObjectProbe$Plain
+clone of a Cloneable class -> true Copyable v=42 shallow=true
+clone copies a superclass's fields -> true v=5 w=6
+array clone -> [3, 4, 5] [x, y] true
+super.finalize from an override -> ran=2
+wait(1, 500000) holding the monitor returns -> returned
+wait(1, -1) -> java.lang.IllegalArgumentException: nanosecond timeout value out of range
+wait(1, 1000000) -> java.lang.IllegalArgumentException: nanosecond timeout value out of range
+wait(-1, 0) -> java.lang.IllegalArgumentException: timeoutMillis value is negative
+Object's declared methods -> [private final native wait01, protected finalize0, protected native clone0, public equals1, public final native getClass0, public final native notify0, public final native notifyAll0, public final wait0, public final wait1, public final wait2, public native hashCode0, public toString0]
+finalize is protected and deprecated -> true true
+ObjectProbe done

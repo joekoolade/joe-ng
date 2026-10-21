@@ -1,0 +1,13 @@
+1 java.lang.RuntimeException: boom
+2 java.lang.IllegalStateException
+3 java.lang.Throwable: t
+4 java.lang.Error
+5 ThrowableToStringProbe$Localized: localized(x)
+6 ThrowableToStringProbe$Quiet
+7 msg=java.lang.IllegalArgumentException: inner
+8 java.lang.RuntimeException: java.lang.IllegalArgumentException: inner
+9 java.io.UncheckedIOException: java.io.IOException: io
+10 class=java.lang.ClassCastException starts=true
+11 java.lang.ArrayIndexOutOfBoundsException: Index 2 out of bounds for length 1
+12 java.lang.StringBuilder
+ThrowableToStringProbe done

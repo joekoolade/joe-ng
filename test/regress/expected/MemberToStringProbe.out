@@ -1,0 +1,76 @@
+describe:
+  toString        = public default java.lang.String MemberToStringProbe$Shape.describe(int) throws java.io.IOException
+  toGenericString = public default java.lang.String MemberToStringProbe$Shape.describe(int) throws java.io.IOException
+  exceptions      = [class java.io.IOException]
+  generic excs    = [class java.io.IOException]
+draw:
+  toString        = protected final synchronized void MemberToStringProbe$Base.draw(java.lang.String[][]) throws java.io.IOException,java.lang.InterruptedException
+  toGenericString = protected final synchronized void MemberToStringProbe$Base.draw(java.lang.String[][]) throws java.io.IOException,java.lang.InterruptedException
+  exceptions      = [class java.io.IOException, class java.lang.InterruptedException]
+  generic excs    = [class java.io.IOException, class java.lang.InterruptedException]
+rethrow:
+  toString        = public static synchronized void MemberToStringProbe.rethrow(java.lang.Exception) throws java.lang.Exception
+  toGenericString = public static synchronized <X extends java.lang.Exception> void MemberToStringProbe.rethrow(X) throws X
+  exceptions      = [class java.lang.Exception]
+  generic excs    = [X]
+maxOf:
+  toString        = static final java.lang.Comparable MemberToStringProbe.maxOf(java.lang.Comparable[])
+  toGenericString = static final <T extends java.lang.Comparable<? super T>> T MemberToStringProbe.maxOf(T...)
+  exceptions      = []
+  generic excs    = []
+plain:
+  toString        = public long[] MemberToStringProbe.plain(int,java.lang.Object[],java.util.List)
+  toGenericString = public long[] MemberToStringProbe.plain(int,java.lang.Object[],java.util.List<java.lang.String>)
+  exceptions      = []
+  generic excs    = []
+main:
+  toString        = public static void MemberToStringProbe.main(java.lang.String[]) throws java.lang.Exception
+  toGenericString = public static void MemberToStringProbe.main(java.lang.String[]) throws java.lang.Exception
+  exceptions      = [class java.lang.Exception]
+  generic excs    = [class java.lang.Exception]
+<init>[class java.lang.Object, interface java.util.List]:
+  toString        = MemberToStringProbe(java.lang.Object,java.util.List) throws java.io.IOException
+  toGenericString = <T> MemberToStringProbe(T,java.util.List<? extends T>) throws java.io.IOException
+  exceptions      = [class java.io.IOException]
+  generic excs    = [class java.io.IOException]
+<init>[]:
+  toString        = private MemberToStringProbe() throws java.lang.CloneNotSupportedException,java.lang.IllegalStateException
+  toGenericString = private MemberToStringProbe() throws java.lang.CloneNotSupportedException,java.lang.IllegalStateException
+  exceptions      = [class java.lang.CloneNotSupportedException, class java.lang.IllegalStateException]
+  generic excs    = [class java.lang.CloneNotSupportedException, class java.lang.IllegalStateException]
+<init>[class [Ljava.lang.String;]:
+  toString        = MemberToStringProbe(java.lang.String[])
+  toGenericString = MemberToStringProbe(java.lang.String...)
+  exceptions      = []
+  generic excs    = []
+wait:
+  toString        = public final void java.lang.Object.wait(long) throws java.lang.InterruptedException
+  toGenericString = public final void java.lang.Object.wait(long) throws java.lang.InterruptedException
+  exceptions      = [class java.lang.InterruptedException]
+  generic excs    = [class java.lang.InterruptedException]
+getBytes:
+  toString        = public byte[] java.lang.String.getBytes(java.lang.String) throws java.io.UnsupportedEncodingException
+  toGenericString = public byte[] java.lang.String.getBytes(java.lang.String) throws java.io.UnsupportedEncodingException
+  exceptions      = [class java.io.UnsupportedEncodingException]
+  generic excs    = [class java.io.UnsupportedEncodingException]
+of:
+  toString        = public static java.util.List java.util.List.of(java.lang.Object[])
+  toGenericString = public static <E> java.util.List<E> java.util.List.of(E...)
+  exceptions      = []
+  generic excs    = []
+max:
+  toString        = public static java.lang.Object java.util.Collections.max(java.util.Collection)
+  toGenericString = public static <T extends java.lang.Object & java.lang.Comparable<? super T>> T java.util.Collections.max(java.util.Collection<? extends T>)
+  exceptions      = []
+  generic excs    = []
+reversed:
+  toString        = public default java.util.Comparator java.util.Comparator.reversed()
+  toGenericString = public default java.util.Comparator<T> java.util.Comparator.reversed()
+  exceptions      = []
+  generic excs    = []
+<init>[class [B, class java.lang.String]:
+  toString        = public java.lang.String(byte[],java.lang.String) throws java.io.UnsupportedEncodingException
+  toGenericString = public java.lang.String(byte[],java.lang.String) throws java.io.UnsupportedEncodingException
+  exceptions      = [class java.io.UnsupportedEncodingException]
+  generic excs    = [class java.io.UnsupportedEncodingException]
+MemberToStringProbe done

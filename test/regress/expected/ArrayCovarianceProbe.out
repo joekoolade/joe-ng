@@ -1,0 +1,29 @@
+-- instanceof (compiled) --
+String[] instanceof CharSequence[] true
+String[] instanceof Comparable[] true
+Sub[] instanceof Base[] true
+Impl[] instanceof Base[] true
+ArrayList[] instanceof Collection[] true
+ArrayList[] instanceof Iterable[] true
+ArrayList[] instanceof RandomAccess[] true
+int[][] instanceof Object[] true
+int[][] instanceof Cloneable[] true
+String[][] instanceof CharSequence[][] true
+String[][] instanceof Serializable[] true
+Impl instanceof Base true
+-- checkcast (compiled) --
+casts ok 111
+-- reflective --
+Sub[] -> Base[] isInstance=true isAssignableFrom=true cast=ok
+Impl[] -> Base[] isInstance=true isAssignableFrom=true cast=ok
+Impl[] -> Sub[] isInstance=true isAssignableFrom=true cast=ok
+String[] -> Comparable[] isInstance=true isAssignableFrom=true cast=ok
+String[] -> Object[] isInstance=true isAssignableFrom=true cast=ok
+ArrayList[] -> List[] isInstance=true isAssignableFrom=true cast=ok
+int[][] -> Object[] isInstance=true isAssignableFrom=true cast=ok
+int[][] -> long[][] isInstance=false isAssignableFrom=false cast=CCE
+String[] -> Integer[] isInstance=false isAssignableFrom=false cast=CCE
+Sub[] -> Impl[] isInstance=false isAssignableFrom=false cast=CCE
+String[] -> Cloneable isInstance=true isAssignableFrom=true cast=ok
+String[] -> Serializable isInstance=true isAssignableFrom=true cast=ok
+ArrayCovarianceProbe done

@@ -1,0 +1,18 @@
+date=2026-10-13 dow=TUESDAY doy=286
+plus30=2026-11-12 minus1y=2025-10-13 leap=false
+feb29+1y=2025-02-28
+days to 2027=80
+next monday=2026-10-19
+ldt=2026-10-13T22:08:01.123 t=07:05
+instant=2023-11-14T22:13:20.000000042Z ms=1700000000000
+utc=2023-11-14T22:13:20.000000042Z
+odt=2026-10-13T22:08:01.123-05:00 instant=2026-10-14T03:08:01.123Z
+offset id=-05:00 secs=-18000
+dur=PT6862H8M1.123S hours=6862
+iso=2026-10-13T22:08:01.123
+pattern=2026-10-13 22:08:01.123
+parse=FRIDAY
+fmt=2026-10-13 22:08:01
+zone=GMT
+now answered=true zdt answered=true
+JavaTimeProbe done

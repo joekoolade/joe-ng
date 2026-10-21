@@ -1,0 +1,18 @@
+round trip at every level, zlib and raw -> ++++++++++++++++++++++
+counts, adler and header -> read=17255 totalIn=17255 adler=7cfbc04 header=78da written=bytes-out:true
+headers by level -> 7801 7801 785e 785e 785e 785e 789c 78da 78da 78da
+level 9 < level 1 < level 0, level 0 is no smaller than the input -> true true true compresses-below-a-fifth=true
+strategies round trip -> +++
+empty streams, exact bytes -> 789c030000000001 raw=0300 stored=010000ffff
+sync flush makes everything so far decodable -> decoded=5000 same=true ends=0000ffff
+full flush and a level change mid-stream -> true read=17255
+preset dictionary -> id=613c0ffa needsDictionary=true asks=613c0ffa FDICT=true back=true
+a dictionary after input -> java.lang.IllegalArgumentException: null
+DeflaterOutputStream, then InflaterInputStream -> true smaller=true
+GZIPOutputStream, then GZIPInputStream -> true magic=1f8b08
+a DEFLATED zip entry is compressed -> true archive-smaller-than-a-third=true
+ByteBuffer in and out, heap and direct -> true in.remaining=0
+an invalid level -> java.lang.IllegalArgumentException: null
+setLevel out of range -> java.lang.IllegalArgumentException: invalid compression level
+use after end -> java.lang.IllegalStateException: Deflater has been closed
+DeflaterProbe done
