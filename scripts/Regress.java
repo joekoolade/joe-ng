@@ -29,9 +29,11 @@ import java.util.regex.Pattern;
  * The probe regression: every probe in {@code test/regress/probes.txt} booted on QEMU and its output compared with
  * {@code test/regress/expected/<Probe>.out} -- the host JVM's output, committed so it cannot be purged from /tmp.
  *
- * <p>Usage, from the repo root: {@code java scripts/Regress.java [-j N] [--solo] [Probe ...]}. With no probe names
- * it runs the whole list. {@code -j} is how many QEMUs run at once (default 4); {@code --solo} boots every probe on
- * its own, the slow form, for when batching itself is in question.
+ * <p>Usage, from the repo root: {@code java scripts/Regress.java [-j N] [--solo | --batch] [Probe ...]}. With no
+ * probe names it runs the whole list. {@code -j} is how many QEMUs run at once (default 4); {@code --solo} boots
+ * every probe on its own, the slow form, for when batching itself is in question; {@code --no-make} skips the build (another run just did it); {@code --batch} runs the named
+ * probes as ONE batch in the order given, solo marks ignored and no solo reruns -- the tool for narrowing a
+ * failure that only a batch shows down to the probe that sets it up.
  *
  * <p>WHY BATCHES: a boot costs ~40 s before main runs and a probe runs in seconds, so one image per probe spent
  * most of an hour booting. Probes not marked {@code solo} run several to a boot through {@code ProbeBatch}. A probe
@@ -83,6 +85,8 @@ public final class Regress
     {
         int jobs = 4;
         boolean allSolo = false;
+        boolean oneBatch = false;
+        boolean doMake = true;
         List<String> wanted = new ArrayList<>();
         int i = 0;
         while (i < args.length)
@@ -95,6 +99,16 @@ public final class Regress
             else if (args[i].equals("--solo"))
             {
                 allSolo = true;
+                i += 1;
+            }
+            else if (args[i].equals("--no-make"))
+            {
+                doMake = false;                                   // out/ is already built (parallel runs)
+                i += 1;
+            }
+            else if (args[i].equals("--batch"))
+            {
+                oneBatch = true;
                 i += 1;
             }
             else
@@ -130,14 +144,17 @@ public final class Regress
             }
         }
 
-        runDir = Path.of("/tmp/joeng-regress/" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")));
+        runDir = Path.of("/tmp/joeng-regress/" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")) + "-" + ProcessHandle.current().pid());
         Files.createDirectories(runDir);
         log("logs in " + runDir);
 
         Path init = ROOT.resolve("ramfs/etc/init");
         byte[] initBefore = Files.exists(init) ? Files.readAllBytes(init) : null;
-        log("make build jdktests plugins");
-        if (run(List.of("make", "build", "jdktests", "plugins"), runDir.resolve("make.log")) != 0)
+        if (doMake)
+        {
+            log("make build jdktests plugins");
+        }
+        if (doMake && run(List.of("make", "build", "jdktests", "plugins"), runDir.resolve("make.log")) != 0)
         {
             die("make failed; see " + runDir.resolve("make.log"));
         }
@@ -151,7 +168,7 @@ public final class Regress
             log("WARNING: make changed ramfs/etc/init; restored it");
         }
 
-        List<Job> plan = plan(probes, allSolo, jobs);
+        List<Job> plan = oneBatch ? List.of(new Job("batch1", List.copyOf(probes), true)) : plan(probes, allSolo, jobs);
         int batched = 0;
         int batches = 0;
         for (Job j : plan)
@@ -176,7 +193,7 @@ public final class Regress
         List<Job> retry = new ArrayList<>();
         for (Job j : plan)
         {
-            if (!j.batch())
+            if (!j.batch() || oneBatch)
             {
                 continue;
             }
