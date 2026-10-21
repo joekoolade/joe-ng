@@ -4,6 +4,42 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **DEFAULT METHODS RESOLVE TO THE MAXIMALLY SPECIFIC DECLARER, NOT THE FIRST REGISTERED BODY (2026-10-21).** The
+  first of the eight batch-only failures the new harness found -- and not a batch artifact: a silent wrong answer
+  in ordinary dispatch.
+  - **Narrowing it:** `--batch` (new: one batch, given order, no reruns) showed VirtualInvokeProbe failing as the
+    FIRST probe of a one-probe batch, so no other probe set it up; delta-debugging copies cut it to
+    `new Square()` + reflective `Shape.kind`. A first hypothesis (directory walk order in `resolveViaItableDir`)
+    died to an instrument: the slot was FILLED, with `Shape.kind`. A second instrument on `defaultBySig` measured
+    the cause: Square's closure is `[Polygon, Shape]`, `Polygon.kind` had NO registry entry yet and
+    `Shape.kind` did (Base's itable had needed it), so the first registered body won.
+  - **Before it:** new `DefaultSpecificProbe` (`Square extends Base(implements Shape) implements Polygon`;
+    `Hex extends PolyBase(implements Polygon) implements Shape`; a diamond `Kite implements Plain, Left` where
+    only `Left` overrides; each reached reflectively first). **Negative control on main a84441a:** Hex and Kite
+    answer `shape` -- for plain `invokeinterface` and `invokevirtual` too, in an ordinary launched program.
+  - **The fix (JVMS 5.4.3.3):** new `ifDecl[]` records which interface DECLARES each entry of a flattened
+    interface run (a redeclaration keeps its inherited slot, so `ifBase` could not say). `defaultBySig` picks the
+    declaring interface no other declaring interface extends and returns its registered body -- or leaves a HOLE
+    when that body is not registered yet, never a less specific one. `resolveViaItableDir` (empty slot) and
+    `resolveViaInterfaces` resolve to the same declarer instead of the first in walk order. VirtualInvokeProbe's
+    `solo` mark is removed.
+  - **Regression (22530ae):** 95 of 95 probes pass, VirtualInvokeProbe now inside a batch, no batch-only misses.
+    Suite against a control at main a84441a identical -- 40 programs returned, markers zero,
+    `gc: collections=51`, clinits 356. `ran 45, failures 0`. `make overlaycheck`: 0 new. `make test`: exit 0.
+  - **Pi:** PASS (2026-10-21, 22530ae) -- `clock: SNTP 40.160.237.131 -> 2026-10-21 21:58:56 UTC`, 4 of 4 cores,
+    NetDemo HTTP 200 (bytes=889; the page varies), `netif wlan0 /192.168.1.247/24 [/192.168.1.255] mac
+    e4:5f:01:69:a6:c5 up=true mtu=1500`, `[main returned normally]`, `gc: collections=7`, per-batch `clinits=`
+    441/441/442/442/443/443 and batch 1 at 1590 classes, as at 113661f; batch 1 `tot=` 10.70 s (10.71 s). What it
+    COSTS, measured against the 113661f log: the imap refill grows -- `imap=` 9.96 ms at batch 1 (3.03) and
+    50.8 ms cumulative at batch 6 (12.6) -- and the per-batch `clinit=` reads ~8.1 ms where it read ~1.9 ms. The
+    imap rise is the new declarer search (an inference: `ifaceDeclares` is a linear scan per closure interface,
+    not instrumented); the `clinit=` rise is NOT explained. The refill's `probe=`/`hnam=` counters read 0k because
+    the new path does not increment them -- an instrument gap, not less work.
+  - **Gaps it leaves:** the `clinit=` rise and the imap cost (a declarer cache would bound it); an ABSTRACT
+    redeclaration as the most specific method should raise `AbstractMethodError` and is not modelled; seven
+    batch-only failures remain (Parameter[] cast, annotation hashCode, MemberGenerics identity, InetAddr NPE,
+    Mac "Missing algorithm", ParamAnno/Repeatable).
+
 - **java.net.NetworkInterface FROM THE JDK 26 SOURCE, OVER THE WIFI LEASE (2026-10-21).** Removes a denial (rule 1)
   and the `NULL CLASS LITERAL: java/net/NetworkInterface.class` line every NetDemo boot printed.
   - **Before it:** `java/net/NetworkInterface` was denied, so `StandardSocketOptions.IP_MULTICAST_IF.type()` read
