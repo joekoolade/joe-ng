@@ -4,6 +4,34 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **CONDITIONAL BRANCHES REACH PAST +-1 MiB -- LONG FORM IN LARGE METHODS (2026-10-20).** The metal JIT expands
+  bytecode about 44x, so a conditional branch spanning ~24 KB of bytecode already exceeds the +-1 MiB reach of
+  `cbz`/`cbnz`/`b.cond` (19-bit word offset). A method well inside the 64 KB classfile limit could not be compiled.
+  - **Before it:** new `LongBranchProbe` (generated: `near`, 2600 stores under one `ifeq` -- 30700 bytes of
+    bytecode, ~1.39 MB of code; `fwd` and `loop`, 2800 stores past a forward and a backward `goto_w`).
+    **Negative control on main 6c8bc31:** an `IllegalArgumentException` from `A64Enc.signed` <- `cbz` <-
+    `Baseline.encodeBranch` escaped the compiler into guest code -- an encoder range check surfacing as a guest
+    exception, not a compile failure.
+  - **The fix:** in a method over `FAR_BRANCH_BYTECODE` (4096 bytes of bytecode), every conditional branch --
+    `if*`, `ifnull`/`ifnonnull`, and the `tableswitch`/`lookupswitch` case compares -- is emitted as the inverted
+    condition skipping one word, then an unconditional `b` (+-128 MiB) with a `FIX_B` fixup. Smaller methods keep
+    the single-word form, so ordinary code is unchanged in size. The patch loop now checks reach for every fixup
+    and fails through `symbols.fail(FAIL_BRANCH_RANGE, targetBc, words)` (new code 12; the writer's message names
+    the target and the distance), so an out-of-reach branch is a named compile failure, never an encoder throw.
+  - **A capacity limit, not this bug:** a first probe with three ~2.7 MB methods ran the code arena out
+    (`code arena OOM`); `fwd`/`loop` were shrunk to 2800 stores. `HUGE body` reports 0x151B7C, 0x16BB20, 0x16BB3C.
+  - **Regression (341b34c):** 92 of 92 probes pass -- 90 host-identical, DigestProbe/MacProbe gates clean
+    (`failures=0 divergences-unmet=0`). Suite against a control at main 6c8bc31 identical -- 40 programs returned,
+    markers zero, `gc: collections=51`, clinits 356. `ran 45, failures 0`. `make overlaycheck`: 0 new. `make test`:
+    only the known `no deep-stack handlers in VMNatives.class`.
+  - **Harness, not VM:** the combined regression job hit the 2-hour background limit after 68 of 92 probes (both
+    suites had finished); the remaining 24 ran as three separate jobs, all identical.
+  - **Pi:** PASS (2026-10-20, 341b34c) -- `clock: SNTP 172.104.28.175 -> 2026-10-20 23:50:10 UTC`, 4 of 4 cores,
+    NetDemo HTTP 200 (bytes=888; 891 at 2a56945 -- the response varies, e.g. its `Age:` header, which is an
+    inference, not measured), `[main returned normally]`, `gc: collections=7`, per-batch `clinits=`
+    437/437/438/438/439/439, no failure markers. Image 36,158,180 bytes, ~137 KB over 2a56945 (the image's own
+    large methods now take the two-word form; not separately measured).
+
 - **ENGINE EXCEPTION MESSAGES ARE REAL ON METAL -- AN INFERRED GAP, MEASURED AND RETRACTED (2026-10-20).** The two
   cards below recorded, as an inference, that literal exception messages in writer-baked non-`java/` code
   (`crypto/`, `zip/`) were probably null the way `vm/` ones were (`WriterSymbols.string` bakes such a literal as a
