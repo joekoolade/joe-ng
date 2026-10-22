@@ -51,7 +51,7 @@ InflaterProbe
 InterruptWaitProbe
 InvokeDefaultProbe
 InvokeSemanticsProbe
-IoStreamProbe            solo             # writes/deletes RAMFS paths other probes use (but an NPE, not a file error, in a batch: check)
+IoStreamProbe
 JavaTimeProbe
 JlaProbe
 Lazy                     solo             # lazy initialization is the subject
@@ -72,7 +72,7 @@ NioAttrProbe
 NioBufferProbe
 NioFileProbe
 NioReadProbe
-NioWriteProbe            solo             # writes/deletes RAMFS paths other probes use
+NioWriteProbe
 NumberFormatProbe
 ObjectProbe
 OobMessageProbe
@@ -109,5 +109,5 @@ WallClockProbe           solo             # timing
 WideCallProbe
 WideFrameProbe
 WideIincProbe
-ZipFileProbe             solo             # writes /tmp/p.zip; RAMFS paths other probes use
+ZipFileProbe
 ZipNamesProbe
