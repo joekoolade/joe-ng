@@ -8474,6 +8474,11 @@ public final class Loader
     private static final int MAXPENDPULL = 32;
     private static long[] lzPullU;
     private static int lzPullN;
+    // The length-prefixed names notePullNeededElement BUILT (an array's element class has no Utf8 entry of its
+    // own to point at). Held here, as traced byte[]s, so the payload addresses in lzPullU stay valid until
+    // drainPendingPulls has copied them; reset whenever the pull list is empty.
+    private static byte[][] lzPullKeep;
+    private static int lzPullKeepN;
     private static boolean lzRetried;
     /** Bounds the ON-DEMAND compile paths to one pull-and-retry each. Separate from {@link #lzRetried},
      *  which those paths save and restore around their own attempt so a nested compile is unaffected. */
@@ -8509,38 +8514,122 @@ public final class Loader
      *  first: a pull runs initializers, which can re-enter the compiler and note pulls of their own. */
     private static void drainPendingPulls()
     {
-        long[] want = new long[lzPullN];
+        // EVERY NAME IS COPIED BEFORE ANYTHING LOADS. A load runs initializers, which can re-enter the compiler
+        // and note pulls of their own -- and a note made while the list is empty resets lzPullKeep, which would
+        // drop a built element name this loop had not read yet.
         int n = lzPullN;
+        byte[][] names = new byte[n][];
         int i = 0;
         while (i < n)
         {
-            want[i] = lzPullU[i];
+            long u = lzPullU[i];
+            int len = u2(u);
+            byte[] slash = new byte[len];
+            int k = 0;
+            while (k < len)
+            {
+                slash[k] = (byte) u1(u + 2 + k);
+                k += 1;
+            }
+            names[i] = slash;
             i += 1;
         }
         lzPullN = 0;
         i = 0;
         while (i < n)
         {
-            int len = u2(want[i]);
-            byte[] slash = new byte[len];
-            int k = 0;
-            while (k < len)
-            {
-                slash[k] = (byte) u1(want[i] + 2 + k);
-                k += 1;
-            }
+            byte[] slash = names[i];
             if (classIndexByName(slash) < 0)
             {
                 if (LOAD_LOG)
                 {
                     Uart.write(Magic.bytes("  staticresolve "));
-                    printNameAt(want[i], 0);
+                    Uart.write(slash);
                     Uart.putc(0x0A);
                 }
                 long pulled = loadClassIncremental(slash);
             }
             i += 1;
         }
+    }
+
+    /**
+     * Two byte[]s with equal contents. Written out because java.util.Arrays is not usable from here: its
+     * initializer is a bake stub, and a baked Loader method that reaches it halts the boot (bakeresolve-early).
+     */
+    private static boolean sameBytes(byte[] a, byte[] b)
+    {
+        if (a.length != b.length)
+        {
+            return false;
+        }
+        int i = 0;
+        while (i < a.length)
+        {
+            if (a[i] != b[i])
+            {
+                return false;
+            }
+            i += 1;
+        }
+        return true;
+    }
+
+    /** {@link #isDenylisted} for a class name that is an {@code n}-byte slice at {@code base+off}, not a Utf8 entry. */
+    private static boolean isDenylistedSlice(long base, int off, int n)
+    {
+        byte[] b = new byte[n + 2];
+        b[0] = (byte) (n >> 8);
+        b[1] = (byte) n;
+        int k = 0;
+        while (k < n)
+        {
+            b[k + 2] = (byte) u1(base + off + k);
+            k += 1;
+        }
+        return isDenylisted(Magic.addrOf(b) + 24L, 0);
+    }
+
+    /**
+     * {@link #notePullNeeded} for the element class of an ARRAY type check, whose name is a slice of the array
+     * descriptor ({@code n} bytes at {@code base+off}) rather than a Utf8 entry of its own. The length-prefixed
+     * name is built as a byte[] and held in {@link #lzPullKeep} until the drain copies it.
+     */
+    private static boolean notePullNeededElement(long base, int off, int n)
+    {
+        if (lzPullN == 0)
+        {
+            lzPullKeepN = 0;                            // nothing pending refers to an earlier built name
+        }
+        if (lzPullKeep == null)
+        {
+            lzPullKeep = new byte[MAXPENDPULL][];
+        }
+        if (lzPullKeepN >= MAXPENDPULL)
+        {
+            return false;
+        }
+        byte[] b = new byte[n + 2];
+        b[0] = (byte) (n >> 8);
+        b[1] = (byte) n;
+        int k = 0;
+        while (k < n)
+        {
+            b[k + 2] = (byte) u1(base + off + k);
+            k += 1;
+        }
+        int j = 0;
+        while (j < lzPullKeepN)                         // the same element noted twice: reuse its name
+        {
+            if (sameBytes(lzPullKeep[j], b))
+            {
+                return notePullNeeded(Magic.addrOf(lzPullKeep[j]) + 24L);
+            }
+            j += 1;
+        }
+        lzPullKeep[lzPullKeepN] = b;
+        lzPullKeepN += 1;
+        return notePullNeeded(Magic.addrOf(b) + 24L);   // byte[] elements start 24 bytes in
     }
 
     /** One permanently-zero word, shared by every static a late compile could not resolve. */
@@ -25693,6 +25782,36 @@ public final class Loader
     static long typeOfCheckedClass(int classCp)
     {
         long type = typeOfClass(classCp);
+        int nameOff0 = gcp[u2(gbase + gcp[classCp])];
+        if (u1(gbase + nameOff0 + 2) == 0x5B)
+        {
+            // AN ARRAY OF A CLASS NOTHING PULLED. typeOfClass does not answer 0 for it: it answers the array Type
+            // keyed by element Type 0 -- ONE shared "array of ?" node -- so `(Parameter[]) x` compiled before
+            // Parameter was registered cast against that node and threw `cannot be cast to class [?` for ever
+            // (AccessFlagsProbe in a batch: Executable.getParameters' clone() checkcast, compiled lazily). Same
+            // route as a class: pull the ELEMENT and redo the compile.
+            int len = u2(gbase + nameOff0);
+            int d = 0;
+            while (d < len && u1(gbase + nameOff0 + 2 + d) == 0x5B)
+            {
+                d += 1;
+            }
+            if (d < len && u1(gbase + nameOff0 + 2 + d) == 0x4C
+                    && elementTypeOfArrayDescN(gbase, nameOff0 + 2 + d - 1, len - d + 1) == 0L)
+            {
+                int elOff = nameOff0 + 2 + d + 1;       // past the '['s and the 'L'
+                int elLen = len - d - 2;                // minus the trailing ';'
+                if (lzCompiling && !lzRetried && notePullNeededElement(gbase, elOff, elLen))
+                {
+                    return 0L;                          // discarded compile: retried with the element loaded
+                }
+                if (!isDenylistedSlice(gbase, elOff, elLen))
+                {
+                    reportUnresolvedTypeCheck(gbase + nameOff0);
+                }
+            }
+            return type;
+        }
         if (type == 0L)
         {
             int nameOff = gcp[u2(gbase + gcp[classCp])];
