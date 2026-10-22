@@ -39,6 +39,7 @@ public class ProbeBatch
             {
                 System.out.flush();
                 System.out.println("@@@ ProbeBatch " + name + " threw " + e.getCause());
+                e.getCause().printStackTrace(System.out);   // a throw already fails the diff; the trace names where
             }
             catch (Throwable t)
             {
