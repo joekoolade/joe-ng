@@ -4,6 +4,25 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **THE SHARED-RAMFS PROBES RUN BATCHED; FILEPROBE CLEANS UP AFTER ITSELF (2026-10-22).** Test-only.
+  - **IoStreamProbe's recorded batch symptom is gone.** `probes.txt` said "an NPE, not a file error, in a batch:
+    check". As the only probe of a batch it passes, and after its thirteen alphabetical predecessors the NPE does
+    not appear -- most likely one of #404/#405's loader fixes, not measured further. What remained was a real
+    shared-file dependency: FileProbe's `mkdirs("/data/x/y/z")` was never undone, so IoStreamProbe's cleanup
+    listing of `/data` read `[nums.txt, prog.lisp, sample.txt, x]`. FileProbe now deletes z, y and x silently
+    before `FileProbe done`, so its expected output is unchanged.
+  - **IoStreamProbe, NioWriteProbe and ZipFileProbe lose their `solo` marks.** Every file probe in one batch
+    passes in both orders (FileProbe..ZipNamesProbe 8/8; ZipFileProbe..FileProbe reversed 7/7).
+  - **Regression (c637d82):** 98 of 98 probes pass, 82 in 5 batches and 16 solo, in 17m34s (about 20-22 minutes
+    with 19 solo). Suite against a control at main 941872b identical -- 40 programs returned, markers zero,
+    `gc: collections=51`, clinits 356. `ran 45, failures 0`. `make overlaycheck`: 0 new. `make test`: exit 0.
+  - **Pi:** not run -- the change is to probe sources and `probes.txt`. The probe classes are carried in the
+    image's RAMFS (FileProbe's name is in the ccde6ec image), so the image bytes do differ; nothing NetDemo runs
+    changed.
+  - **What stays solo:** probes whose subject is initialization order, timing, races or global state (Locale,
+    Security, logger), plus LongBranchProbe (code-arena size), StackWalkerProbe (a batch adds frames) and
+    ScopedValueProbe (known intermittent).
+
 - **ARRAY TYPES STAY UNIQUE PAST 64; AN OBJECT METHOD THROUGH AN INTERFACE REACHES THE OVERRIDE (2026-10-22).**
   The last two batch-only failures. No `OPEN VM BUG` marks remain in `probes.txt`.
   - **Array Types stopped being unique.** `refArrayTib`'s cache held 64 reference-array Types and silently
