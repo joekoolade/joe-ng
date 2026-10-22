@@ -4,6 +4,40 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **ARRAY TYPE CHECKS PULL AN UNREGISTERED ELEMENT CLASS, NOT AN "ARRAY OF ?" TYPE (2026-10-22).** Three more of the
+  batch-only failures, one cause.
+  - **Before it:** `typeOfClass` answers an array type check with the array Type keyed by its ELEMENT Type, and an
+    element nothing had registered is element 0 -- ONE shared "array of unknown" node. A `checkcast` compiled
+    against it threw `cannot be cast to class [?` for ever. Stock `Executable.getParameters()`'s
+    `(Parameter[]) clone()`, compiled lazily, is such a site. **Negative control on main 9ceebc1**, each probe the
+    only one in a `--batch` (so loaded through `Class.forName`): AccessFlagsProbe, ParamAnnoProbe and
+    RepeatableProbe all throw `ClassCastException: class [Ljava.lang.reflect.Parameter; cannot be cast to class [?`.
+    MemberGenericsProbe passes alone there -- its failure needs predecessors and is a different bug.
+  - **The fix:** `typeOfCheckedClass` takes the class route for arrays -- note the innermost element class for a
+    pull and redo the compile, `UNRESOLVED TYPE CHECK` if it stays absent. The element name is a slice of the
+    descriptor, so `notePullNeededElement` builds a length-prefixed byte[] held reachable until
+    `drainPendingPulls` has copied every pending name, which it now does BEFORE loading anything. The first build
+    used `java.util.Arrays.equals` and halted the boot (`CAP EXCEEDED: bakeresolve-early`): Arrays' initializer is
+    a bake stub; a written-out compare replaced it. The three probes' `solo` marks are removed -- batched, they run
+    through the path that failed. `Regress.java` now ends a run on `CAP EXCEEDED` (that boot sat out a 12-minute
+    ceiling).
+  - **No small probe reproduces it:** a LateArrayCastProbe (cast sites compiled by `getMethod` before `Late`
+    loads) passed on main too, so it was dropped -- the same shape as the 2026-10-18 class case, where only the
+    stock path reproduced. The evidence is the three stock-reflection probes.
+  - **Regression (e0850a2):** 95 of 95 probes pass. Suite against a control at main 9ceebc1 identical -- 40
+    programs returned, markers zero, `gc: collections=51`, clinits 356. `ran 45, failures 0`.
+    `make overlaycheck`: 0 new. `make test`: exit 0.
+  - **Pi:** PASS (2026-10-22, e0850a2) -- `clock: SNTP 45.55.58.103 -> 2026-10-22 02:34:49 UTC`, 4 of 4 cores,
+    NetDemo HTTP 200 (bytes=892), `netif wlan0 /192.168.1.247/24 [/192.168.1.255] mac e4:5f:01:69:a6:c5 up=true
+    mtu=1500`, `[main returned normally]`, `gc: collections=7`, per-batch `clinits=` 441/441/442/442/443/443 and
+    batch 1 at 1590 classes, as at 22530ae; batch 1 `tot=` 10.79 s (10.70); no failure markers, no
+    `UNRESOLVED TYPE CHECK`.
+  - **Gaps it leaves:** the reachability MARK still pends an array cast's descriptor name as-is, so it never pulls
+    the element (the lazy route now covers it); `new Late[][] { { new Late("c") } }` (max_stack 9) is refused by
+    the metal compiler as `FAIL_STACK_OVERFLOW` (`JIT unsupported: reason=8 a=7`) on main -- a real compiler bug,
+    found while writing the dropped probe; four batch-only failures remain (MemberGenerics identity, annotation
+    hashCode, InetAddr NPE, Mac "Missing algorithm").
+
 - **DEFAULT METHODS RESOLVE TO THE MAXIMALLY SPECIFIC DECLARER, NOT THE FIRST REGISTERED BODY (2026-10-21).** The
   first of the eight batch-only failures the new harness found -- and not a batch artifact: a silent wrong answer
   in ordinary dispatch.
