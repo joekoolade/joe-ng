@@ -1,0 +1,6 @@
+inner hash via Inner=1335634474 via Object=1335634474 formula=1335634474
+outer hash=-1204291968
+inner equals self via Inner=true other=false
+inner toString via Inner equals via Object=true
+lambda hash via Named==via Object true equals self=true
+IfaceObjectMethodProbe done

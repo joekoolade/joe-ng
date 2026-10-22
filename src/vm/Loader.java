@@ -22912,7 +22912,35 @@ public final class Loader
                 return s;
             }
         }
-        return globalVtableSlot(idx);
+        int g = globalVtableSlot(idx);
+        if (g < 0 && isObjectPublicMethod(idx))
+        {
+            // An Object method named through an INTERFACE (`inner.hashCode()` on an annotation-typed receiver
+            // is `invokeinterface Inner.hashCode`, routed here by lowerInvokeInterface). The interface has no
+            // vtable and its chain never reaches Object's entries, so this used to answer -1 and the site went
+            // to VIRTUAL_RESOLVE -- which, against a synthesised annotation object (no registry entry), fell
+            // back to Object.hashCode: an IDENTITY hash. Object's own slot is in the prefix every vtable shares,
+            // so it dispatches to the receiver's override exactly as an Object-typed call does.
+            g = objectVtableSlot(mrefNameOff(idx), mrefDescOff(idx));
+        }
+        return g;
+    }
+
+    /** {@code java/lang/Object}'s vtable slot for name+descriptor (offsets in the current blob), or -1. */
+    private static int objectVtableSlot(int nameOff, int descOff)
+    {
+        int i = 0;
+        while (i < vtCount)
+        {
+            if (utf8IsAtBase(vtClassBase[i], vtClassOff[i], Magic.bytes("java/lang/Object"))
+                    && utf8EqAt(gbase, nameOff, vtNameBase[i], vtNameOff[i])
+                    && utf8EqAt(gbase, descOff, vtNameBase[i], vtDescOff[i]))
+            {
+                return vtSlot[i];
+            }
+            i += 1;
+        }
+        return -1;
     }
 
 
@@ -25543,14 +25571,41 @@ public final class Loader
         {
             tib = makeArrayTib(ObjectModel.WORD, elementType);   // reference elements are 8-byte pointers
         }
-        if (refArrCount < refArrTib.length)
+        if (refArrCount >= refArrTib.length)
         {
-            refArrElem[refArrCount] = elementType;
-            refArrTib[refArrCount] = tib;
-            refArrAdopted[refArrCount] = adopted;
-            refArrCount += 1;
+            growRefArrCache();
         }
+        refArrElem[refArrCount] = elementType;
+        refArrTib[refArrCount] = tib;
+        refArrAdopted[refArrCount] = adopted;
+        refArrCount += 1;
         return tib;
+    }
+
+    /**
+     * Double the reference-array cache. It used to stop at 64 and SILENTLY stop caching, so every array Type
+     * asked for after that was minted afresh: two `Object[][]` nodes, two mirrors, and `Object[][].class`
+     * answering false against the erased parameter type of a method -- MemberGenericsProbe after sixteen
+     * probes in one batch had filled it. An array Type must be unique like a class Type; identity, covariance
+     * and the mirror cache all key on it. Copied by hand: java.util.Arrays is a bake stub here.
+     */
+    private static void growRefArrCache()
+    {
+        int n = refArrTib.length * 2;
+        long[] elem = new long[n];
+        long[] tibs = new long[n];
+        boolean[] adopted = new boolean[n];
+        int i = 0;
+        while (i < refArrCount)
+        {
+            elem[i] = refArrElem[i];
+            tibs[i] = refArrTib[i];
+            adopted[i] = refArrAdopted[i];
+            i += 1;
+        }
+        refArrElem = elem;
+        refArrTib = tibs;
+        refArrAdopted = adopted;
     }
 
     /**
