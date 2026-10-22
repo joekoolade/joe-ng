@@ -4,6 +4,35 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **ARRAY TYPES STAY UNIQUE PAST 64; AN OBJECT METHOD THROUGH AN INTERFACE REACHES THE OVERRIDE (2026-10-22).**
+  The last two batch-only failures. No `OPEN VM BUG` marks remain in `probes.txt`.
+  - **Array Types stopped being unique.** `refArrayTib`'s cache held 64 reference-array Types and silently
+    stopped caching when full, so every array type asked for afterwards was minted afresh -- two `Object[][]`
+    Types, two mirrors, and MemberGenericsProbe's `gp[2] == Object[][].class` false. Measured: a one-time print
+    showed the cache full at 64 during JavaTimeProbe, the eleventh of the sixteen predecessors; neither half of
+    them alone filled it. The cache now doubles. **New ArrayTypeIdentityProbe** builds a 100-deep `Object[]`
+    chain twice and compares link by link; on main 54 of 100 are identical.
+  - **An Object method through an interface took an identity hash.** `inner.hashCode()` on an annotation-typed
+    receiver is `invokeinterface Inner.hashCode`, which `lowerInvokeInterface` routes to the virtual path -- but
+    `vtableSlotOf` answered -1 for an interface owner (no vtable, and its chain never reaches Object's entries),
+    so the site went to `VIRTUAL_RESOLVE`, which against a synthesised annotation object fell back to
+    `Object.hashCode`. Measured at the site: `defaultDispatch=0`, `vtableSlot=-1`. A reduction failed as the
+    ONLY probe of a batch, so no predecessor was involved; the Object-typed call of the same method (the outer
+    annotation's hash) was right. An Object public method that misses now resolves to `java/lang/Object`'s own
+    slot, in the prefix every vtable shares. **New IfaceObjectMethodProbe**; with only this fix removed the
+    `Inner`-typed hash is an identity hash and `toString` through `Inner` differs from the Object-typed call.
+  - **Regression (ccde6ec):** 98 of 98 probes pass, none differing only in a batch. Suite against a control at
+    main 934f402 identical -- 40 programs returned, markers zero, `gc: collections=51`, clinits 356.
+    `ran 45, failures 0`. `make overlaycheck`: 0 new. `make test`: exit 0.
+  - **Pi:** PASS (2026-10-22, ccde6ec) -- `clock: SNTP 198.178.138.198 -> 2026-10-22 16:46:09 UTC`, 4 of 4 cores,
+    NetDemo HTTP 200 (bytes=891), `netif wlan0 /192.168.1.247/24 [/192.168.1.255] mac e4:5f:01:69:a6:c5 up=true
+    mtu=1500`, `[main returned normally]`, `gc: collections=7`, per-batch `clinits=` 441/441/442/442/443/443 and
+    batch 1 at 1590 classes, as at c55e02f; batch 1 `tot=` 10.42 s (10.73); no failure markers. The first
+    `sdcard.sh` copy of `kernel8.img` failed with ENOSPC on a card with 205 MiB free; a second copy succeeded
+    and every file compared equal.
+  - **Gaps it leaves:** the batch-only list is empty; solo marks that remain are for probes whose subject is
+    ordering, timing or shared RAMFS paths.
+
 - **A PULL-AND-RETRY COMPILE NO LONGER INHERITS STALE SITE OR TYPE STATE (2026-10-22).** Two more of the
   batch-only failures (InetAddrProbe, MacProbe), both left behind by a lazy compile that pulls a class and
   compiles again.

@@ -15,11 +15,12 @@
 
 AccessFlagsProbe
 AccessRulesProbe
-AnnoContractProbe        solo             # OPEN VM BUG in a batch: @Inner("in").hashCode() wrong
+AnnoContractProbe
 AnnoDefaultProbe
 AnnoLoadProbe
 ArrayAllocDepthProbe
 ArrayCovarianceProbe
+ArrayTypeIdentityProbe
 AtomicUpdaters
 ByteViewProbe
 CarrierLocalProbe
@@ -44,6 +45,7 @@ FormatProbe
 FunctionProbe
 GenericsProbe
 GvrProbe                 cp=/lib/junit.jar
+IfaceObjectMethodProbe
 InetAddrProbe
 InflaterProbe
 InterruptWaitProbe
@@ -58,7 +60,7 @@ LocaleProbe              solo             # reads the default locale
 LockProbe
 LongBranchProbe          solo             # ~4 MB of code; would crowd the code arena
 MacProbe                 gate=failures=0 divergences-unmet=0
-MemberGenericsProbe      solo             # OPEN VM BUG in a batch: erased array identity answers false
+MemberGenericsProbe
 MemberToStringProbe
 MethodRefUnboxProbe
 MonitorStateProbe

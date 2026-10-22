@@ -1,0 +1,7 @@
+chain depth=100 identical=100
+deepest name ok=true
+Object[][].class==chain[1] true
+new Object[1][1].getClass()==Object[][].class true
+String[][][].class==newInstance true
+component of chain[2]==chain[1] true
+ArrayTypeIdentityProbe done
