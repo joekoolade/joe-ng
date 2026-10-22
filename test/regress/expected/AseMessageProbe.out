@@ -1,0 +1,8 @@
+String into Integer[]: java.lang.String
+int[] into String[]: [I
+String[][] into String[]: [[Ljava.lang.String;
+nested enum into Number[]: AseMessageProbe$Color
+Object into Runnable[]: java.lang.Object
+Object into Object[][]: java.lang.Object
+Integer into Number[]: stored
+AseMessageProbe done

@@ -21,6 +21,7 @@ AnnoLoadProbe
 ArrayAllocDepthProbe
 ArrayCovarianceProbe
 ArrayTypeIdentityProbe
+AseMessageProbe
 AtomicUpdaters
 ByteViewProbe
 CarrierLocalProbe
