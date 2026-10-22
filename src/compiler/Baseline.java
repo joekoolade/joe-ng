@@ -939,7 +939,7 @@ public final class Baseline
         {
             if (sp >= OP_MAX)
             {
-                symbols.fail(Symbols.FAIL_STACK_OVERFLOW, sp, 0);
+                symbols.fail(Symbols.FAIL_STACK_OVERFLOW, sp, curPos);   // b = the bytecode being lowered
             }
             int r = OP_BASE + sp;      // avoid post-increment on a field (javac -> dup_x1)
             sp += 1;
@@ -947,7 +947,7 @@ public final class Baseline
         }
         if (sp >= opStackSlots)
         {
-            symbols.fail(Symbols.FAIL_STACK_OVERFLOW, sp, 0);   // pre-pass under-counted the peak (a bug)
+            symbols.fail(Symbols.FAIL_STACK_OVERFLOW, sp, curPos);   // pre-pass under-counted the peak (a bug)
         }
         int r = sp % OP_MAX;
         if (sp >= OP_MAX && regHolds[r] == sp - OP_MAX)         // the displaced deeper slot is live in this reg
@@ -4094,6 +4094,13 @@ public final class Baseline
             int trans = 0;
             if (op == 0xC0 || op == 0xC1)                              // checkcast / instanceof: +1 (target Type)
             {
+                trans = d + 1;
+            }
+            else if (op == 0xBC || op == 0xBD)                         // newarray / anewarray: +1 (element size
+            {                                                          //   pushed over the length for the alloc call)
+                // Uncounted, a method whose net peak is exactly OP_MAX was classified shallow and its 8th push
+                // failed at emit: `m.invoke(null, new String[1])` inside a concatenation (LacRepro's main) died
+                // as `JIT unsupported: reason=8 a=7 b=217` -- b the anewarray.
                 trans = d + 1;
             }
             else if (op == 0xBA && symbols.isConcatIndy(((code[pc + 1] & 0xFF) << 8) | (code[pc + 2] & 0xFF)))

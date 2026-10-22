@@ -4,6 +4,34 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **AN ARRAY ALLOCATION AT OPERAND DEPTH 7 COMPILES; THE DEPTH PRE-PASS COUNTS ITS ELEMENT-SIZE PUSH (2026-10-22).**
+  Closes the `FAIL_STACK_OVERFLOW` gap the previous card recorded -- and corrects that card's reading of it.
+  - **Before it:** `newarray`/`anewarray` lower by pushing the element size over the length for the allocation
+    call, one entry above the net depth, and `computeDepths` did not count it. A method whose net peak was exactly
+    `OP_MAX` (7) was classified shallow and its eighth push failed at emit: `JIT unsupported: reason=8 a=7`.
+    Ordinary code reaches it -- `m.invoke(null, new String[1])` inside a string concatenation, or a call whose
+    seventh argument is a new array. **Correction:** the previous card blamed the nested initializer
+    `new Late[][] { { new Late("c") } }`; that was an inference, and it was wrong. The two overflow sites in
+    `pushReg` now report the bytecode offset as `b`, and the report read `b=217` -- an `anewarray` at depth 7, not
+    the initializer. With only this transient counted, every nested-initializer case in the probe passes.
+  - **The fix:** `trans = d + 1` for `newarray`/`anewarray`, beside `checkcast`/`instanceof`, so such a method
+    compiles in the spilling mode. `multianewarray` already moves its counts straight into argument registers.
+  - **Probe:** new ArrayAllocDepthProbe -- an int and a reference array allocated as the seventh argument of a
+    call, plus deep initializers (nested, flat, triple, mixed, reached reflectively, inside a concatenation).
+    **Negative control on main c5ff288:** the probe does not compile (`JIT unsupported: reason=8 a=7 b=0`, the
+    old report without the offset).
+  - **Regression (682b51e):** 96 of 96 probes pass. Suite against a control at main c5ff288 identical -- 40
+    programs returned, markers zero, `gc: collections=51`, clinits 356. `ran 45, failures 0`.
+    `make overlaycheck`: 0 new. `make test`: exit 0.
+  - **Pi:** PASS (2026-10-22, 682b51e) -- `clock: SNTP 142.248.192.33 -> 2026-10-22 11:42:39 UTC`, 4 of 4 cores,
+    NetDemo HTTP 200 (bytes=891), `netif wlan0 /192.168.1.247/24 [/192.168.1.255] mac e4:5f:01:69:a6:c5 up=true
+    mtu=1500`, `[main returned normally]`, `gc: collections=7`, per-batch `clinits=` 441/441/442/442/443/443 and
+    batch 1 at 1590 classes, as at e0850a2; batch 1 `tot=` 10.43 s (10.79); no `JIT unsupported`, no
+    `CAP EXCEEDED`, no failure markers. The image's own methods go through the same pre-pass (the writer bakes
+    with this compiler), so the few at a net peak of 7 with an allocation now bake in the spilling mode.
+  - **Gaps it leaves:** the mark's array-element pull and the four batch-only failures from the previous card are
+    unchanged.
+
 - **ARRAY TYPE CHECKS PULL AN UNREGISTERED ELEMENT CLASS, NOT AN "ARRAY OF ?" TYPE (2026-10-22).** Three more of the
   batch-only failures, one cause.
   - **Before it:** `typeOfClass` answers an array type check with the array Type keyed by its ELEMENT Type, and an

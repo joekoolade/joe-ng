@@ -18,6 +18,7 @@ AccessRulesProbe
 AnnoContractProbe        solo             # OPEN VM BUG in a batch: @Inner("in").hashCode() wrong
 AnnoDefaultProbe
 AnnoLoadProbe
+ArrayAllocDepthProbe
 ArrayCovarianceProbe
 AtomicUpdaters
 ByteViewProbe

@@ -1,0 +1,11 @@
+newarray at depth 7 = 25
+anewarray at depth 7 = 26
+nested = 1 1 c
+flat = 2 ab
+triple = xy
+mixed = s m 7
+args = pqr
+nested reflective = d
+invoked = e
+inline invoke = f
+ArrayAllocDepthProbe done
