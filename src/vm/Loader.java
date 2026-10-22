@@ -535,6 +535,7 @@ public final class Loader
         }
         restoreCtxForCompile(clinitBase[i], blobLenOf(clinitBase[i]), reg);
         gMaxLocals = clinitLocals[i];                   // AFTER the restore: parseFields/parseVtable clobber it
+        boolean reuseWas = compileReuseTib;              // a nested load resets it: restore, never clear
         compileReuseTib = true;                         // the class's TIB exists and is filled -- do not rebuild it
         int rcMark = rcCount;                           // this compile's own reloc sites start here
         int rsMark = rsCount;
@@ -559,7 +560,7 @@ public final class Loader
         // a word: compileMethodOnDemand (reflection), compileSigOnDemand (phase-A cells) and two probes.
         long buf = compile(clinitCode[i], clinitCodeLen[i], clinitDescOff[i], clinitStatic[i], 0);
         lzCompiling = outerCompiling;
-        compileReuseTib = false;
+        compileReuseTib = reuseWas;
         boolean pulled = lzPullN > 0;
         if (pulled)
         {
@@ -9233,6 +9234,12 @@ public final class Loader
         return mBuf[0];
     }
     // When set, compile() reuses the caller's already-allocated gTib (two-phase clinit) instead of rebuilding it.
+    //
+    // Every setter RESTORES the value it found rather than clearing it, because compiles nest: lazyCompileLocked's
+    // pull-and-retry drains pending pulls, each load's loadBodies used to end with `= false`, and the retry then
+    // compiled with the flag clear -- so buildTib gave the class a THROWAWAY Type and TIB, and every
+    // self-reference in that body baked them. `new InetAddress[]{a}` inside InetAddress.getAllByName became an
+    // array of an unregistered Type, and storing an Inet4Address into it threw ArrayStoreException.
     private static boolean compileReuseTib;
 
     /**
@@ -10187,11 +10194,12 @@ public final class Loader
         lbParseT += lbB - lb1;
         gType = clTab[reg].type;                            // restore this class's Type + TIB (allocated in phase A)
         gTib = clTab[reg].tib;
+        boolean reuseWas = compileReuseTib;              // a nested load resets it: restore, never clear
         compileReuseTib = true;                         // keep runClinit's compile() from reallocating gTib (would
         long lb2 = Magic.readCNTPCT_EL0();
         runClinit(bytes);                               //   leave compileClass filling a throwaway TIB, not clTab[reg].tib)
         lbClinitT += Magic.readCNTPCT_EL0() - lb2;
-        compileReuseTib = false;
+        compileReuseTib = reuseWas;
         gType = clTab[reg].type;                            // (runClinit's compile leaves gType/gTib alone now, but be safe)
         gTib = clTab[reg].tib;
         provideKnownStatics();                          // seed static tables a skipped <clinit> would have built
@@ -11781,6 +11789,13 @@ public final class Loader
      *
      * <p>It also stops the TRAPWIRE table growing without bound: that arm re-recorded the same site on every
      * batch, and the table filling is what makes a fired trap report an EMPTY callee.
+     *
+     * <p>"Cannot change" holds only while an index names the same SITE, and it does not: the five compile
+     * paths that pull and retry roll {@code rcCount} back to drop the abandoned body's sites, and the drain
+     * between them can run the batch-end {@code patchRelocs} over those sites first. A doomed
+     * {@code InetAddress.getByName} site settled here, the retry recorded {@code Set.of(E,E,E)} into the same
+     * index, and {@code FileSystemProvider.<clinit>} called getByName with {@code StandardOpenOption.CREATE}
+     * as the host. So recording a site clears this, as it does {@link #rcReg}.
      */
     private static long[] rcStub;                       //   the link stub this site settled on, 0 = not yet
     private static int rcCount;
@@ -11878,6 +11893,7 @@ public final class Loader
         rcDesc[rcCount] = mrefDescOff(idx);
         rcTail[rcCount] = 0;
         rcReg[rcCount] = -1;                            // not yet resolved through the direct registry tier
+        rcStub[rcCount] = 0L;                           // nor settled on a link stub: see rcStub
         rcCount += 1;
     }
 
@@ -11896,7 +11912,8 @@ public final class Loader
         rcDesc[rcCount] = mrefDescOff(idx);
         rcTail[rcCount] = 1;
         rcReg[rcCount] = -1;                            // see rcReg: 0 is a VALID registry index, so an unset
-        rcCount += 1;                                   //   entry would memoise the site to rgTab[0]
+        rcStub[rcCount] = 0L;                           //   entry would memoise the site to rgTab[0]; see rcStub
+        rcCount += 1;
     }
 
     /** Record an unresolved cross-class static-field address load at {@code loadAddr} (2 words, into {@code reg}). */
@@ -15536,6 +15553,7 @@ public final class Loader
         {
             return -1;                                     // no such method, or abstract/native (no Code)
         }
+        boolean reuseWas = compileReuseTib;              // a nested load resets it: restore, never clear
         compileReuseTib = true;                            // do NOT rebuild/refill the class's TIB
         int rcMark = rcCount;                              // this compile's own reloc sites start here
         int rsMark = rsCount;
@@ -15547,7 +15565,7 @@ public final class Loader
         lzRetried = false;
         compile(code, gcodeLen, descOff, isStatic, isSync);
         lzCompiling = outerCompiling;
-        compileReuseTib = false;
+        compileReuseTib = reuseWas;
         boolean pulled = lzPullN > 0;
         if (pulled)
         {
@@ -15771,6 +15789,7 @@ public final class Loader
         // ("in the classDir, but resolved outside the retry window" -- the report named the cause precisely).
         int rcMark = rcCount;                              // patch only THIS compile's relocs
         int rsMark = rsCount;
+        boolean reuseWas = compileReuseTib;              // a nested load resets it: restore, never clear
         compileReuseTib = true;
         boolean outerCompiling = lzCompiling;
         boolean outerRetried = lzRetried;
@@ -15781,7 +15800,7 @@ public final class Loader
         // JLS 8.8.3 forbids `synchronized` on a constructor, so isSync is 0 by the language, not by omission.
         compile(code, gcodeLen, descOff, 0, 0);           // <init> is an instance method (receiver = the new object)
         lzCompiling = outerCompiling;
-        compileReuseTib = false;
+        compileReuseTib = reuseWas;
         boolean pulled = lzPullN > 0;
         if (pulled)
         {
@@ -17734,6 +17753,7 @@ public final class Loader
         }
         int rcMark = rcCount;                           // patch only THIS compile's relocs (see patchRelocsFrom)
         int rsMark = rsCount;
+        boolean reuseWas = compileReuseTib;              // a nested load resets it: restore, never clear
         compileReuseTib = true;
         boolean outerCompiling = lzCompiling;
         boolean outerRetried = lzRetried;
@@ -17743,7 +17763,7 @@ public final class Loader
         lzRetried = false;
         compile(code, gcodeLen, descOff, isStatic, isSync);
         lzCompiling = outerCompiling;
-        compileReuseTib = false;
+        compileReuseTib = reuseWas;
         boolean pulled = lzPullN > 0;
         if (pulled)
         {
@@ -18054,6 +18074,7 @@ public final class Loader
             printNameAt(lzTab[idx].blob, lzTab[idx].descOff);
             Uart.putc(0x0A);
         }
+        boolean reuseWas = compileReuseTib;              // a nested load resets it: restore, never clear
         compileReuseTib = true;                         // keep this class's TIB (already filled)
         int rcMark = rcCount;                           // this compile's own reloc sites start here
         int rsMark = rsCount;
@@ -18092,7 +18113,7 @@ public final class Loader
             buf = compile(code, len, descOff, isStatic, isSync);
             lzCompiling = false;
         }
-        compileReuseTib = false;
+        compileReuseTib = reuseWas;
         patchRelocsFrom(rcMark, rsMark);                // batch-end patchRelocs is long past: resolve OUR sites now,
         if (buf == 0L)                                  // or a `bl 0` wild-branches to address 0 (see patchRelocsFrom)
         {

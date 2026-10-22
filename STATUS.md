@@ -4,6 +4,40 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **A PULL-AND-RETRY COMPILE NO LONGER INHERITS STALE SITE OR TYPE STATE (2026-10-22).** Two more of the
+  batch-only failures (InetAddrProbe, MacProbe), both left behind by a lazy compile that pulls a class and
+  compiles again.
+  - **A reused reloc slot kept the old site's link stub.** `rcStub` -- the per-site "settled on this link stub"
+    memo -- was never cleared when a slot was recorded. The pull-and-retry paths roll `rcCount` back to drop the
+    abandoned body's sites, and the drain in between can patch those sites first. Measured with link-stub
+    prints: only ONE stub was minted (index 15, `InetAddress.getByName`), the `Set.of(E,E,E)` site resolved to
+    nothing at patch time, and it entered stub 15 -- so `FileSystemProvider.<clinit>` called `getByName` with
+    `StandardOpenOption.CREATE` as the host (an `impl == null` print in the overlay read `host=[CREATE]`), and
+    `impl` was null because `InetAddress` was mid-initialization: the NPE at `getAllByName:1533`. The trace's
+    "impossible" frame (`FileSystemProvider.<clinit>` -> `getByName`) was TRUE. Recording a site now clears
+    `rcStub`, as it already cleared `rcReg`.
+  - **The retried compile gave its own class a throwaway Type.** Every compile path set `compileReuseTib` and then
+    CLEARED it, so `loadBodies`, run by `drainPendingPulls` inside `lazyCompileLocked`'s retry, left it false and
+    the retry's `buildTib` allocated a fresh, unregistered Type and TIB. Measured: `gType` matched the registry at
+    compile start (0x67E28B0) and read 0x476E748 at the `anewarray`, with `allocTib` firing for
+    `java/net/InetAddress` mid-compile and the reset tagged to `loadBodies`. `new InetAddress[]{a}` in
+    `getAllByName` built an array of that Type and the store threw `ArrayStoreException`. Each setter now restores
+    the value it found. `jdk/internal/misc/Blocker` got a throwaway Type the same way in the same boot.
+  - **Negative control on main d3bcd34:** InetAddrProbe throws the NPE in a batch after any of several
+    predecessors (`--batch FileProbe InetAddrProbe` and a seven-probe list without FileProbe both fail); a
+    reduction probe calling `getAllByName` as the only probe of a batch threw the `ArrayStoreException`. Both
+    pass with the fix. `ProbeBatch` now prints a throwing probe's stack trace, which is what named the frame.
+  - **Regression (c55e02f):** 96 of 96 probes pass; InetAddrProbe and MacProbe run batched now. Suite against a
+    control at main d3bcd34 identical -- 40 programs returned, markers zero, `gc: collections=51`, clinits 356.
+    `ran 45, failures 0`. `make overlaycheck`: 0 new. `make test`: exit 0. One earlier full run showed
+    `GC: STW TIMEOUT` once in RuntimeProbe's batch; it passed alone and in the next full run (intermittent).
+  - **Pi:** PASS (2026-10-22, c55e02f) -- `clock: SNTP 69.164.213.136 -> 2026-10-22 15:45:36 UTC`, 4 of 4 cores,
+    NetDemo HTTP 200 (bytes=891), `netif wlan0 /192.168.1.247/24 [/192.168.1.255] mac e4:5f:01:69:a6:c5 up=true
+    mtu=1500`, `[main returned normally]`, `gc: collections=7`, per-batch `clinits=` 441/441/442/442/443/443 and
+    batch 1 at 1590 classes, as at 682b51e; batch 1 `tot=` 10.73 s (10.43); no failure markers.
+  - **Gaps it leaves:** two batch-only failures remain, still `solo` -- AnnoContractProbe (annotation
+    `hashCode`) and MemberGenericsProbe (erased array identity).
+
 - **AN ARRAY ALLOCATION AT OPERAND DEPTH 7 COMPILES; THE DEPTH PRE-PASS COUNTS ITS ELEMENT-SIZE PUSH (2026-10-22).**
   Closes the `FAIL_STACK_OVERFLOW` gap the previous card recorded -- and corrects that card's reading of it.
   - **Before it:** `newarray`/`anewarray` lower by pushing the element size over the length for the allocation

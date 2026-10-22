@@ -44,7 +44,7 @@ FormatProbe
 FunctionProbe
 GenericsProbe
 GvrProbe                 cp=/lib/junit.jar
-InetAddrProbe            solo             # OPEN VM BUG in a batch: NullPointerException on its first line
+InetAddrProbe
 InflaterProbe
 InterruptWaitProbe
 InvokeDefaultProbe
@@ -57,7 +57,7 @@ LocaleInitProbe          solo             # Locale initialization is the subject
 LocaleProbe              solo             # reads the default locale
 LockProbe
 LongBranchProbe          solo             # ~4 MB of code; would crowd the code arena
-MacProbe                 solo gate=failures=0 divergences-unmet=0  # OPEN VM BUG in a batch: IllegalArgumentException Missing algorithm
+MacProbe                 gate=failures=0 divergences-unmet=0
 MemberGenericsProbe      solo             # OPEN VM BUG in a batch: erased array identity answers false
 MemberToStringProbe
 MethodRefUnboxProbe
