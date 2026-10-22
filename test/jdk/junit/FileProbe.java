@@ -127,6 +127,11 @@ public class FileProbe
             String first = new String(all, "UTF-8").split("\n")[0];
             System.out.println("first line " + first);
         }
+        // Remove what this probe made, silently: a batch shares /data, and a probe that lists it later
+        // (IoStreamProbe's cleanup check) would otherwise see this x/ as its own leftover.
+        f("/data/x/y/z").delete();
+        f("/data/x/y").delete();
+        f("/data/x").delete();
         System.out.println("FileProbe done");
     }
 }
