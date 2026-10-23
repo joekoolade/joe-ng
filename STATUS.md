@@ -4,6 +4,32 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **THE UNUSED IN-FLIGHT EXCEPTION SLOT IS GONE (2026-10-23).** Follows the per-thread exceptions card below,
+  which left `symbols.exceptionSlot` and its plumbing unused.
+  - **Why remove it:** the exception now stays on the operand stack, and nothing emitted a load of the global
+    `vm/VM.$exception` word. Keeping the seam would make it easy to bring the cross-thread race back.
+  - **Removed:**
+    - `Symbols.exceptionSlot` and its writer, metal and metal-writer implementations;
+    - `Loader.exceptionSlotAddr` and its heap word;
+    - `MetalWriterSymbols`' exc sites and accessors;
+    - the retired `SelfBuild`'s relocation loops for them. `SELF_BUILD` is permanently false, so those edits
+      only keep it compiling.
+  - The image is 552 bytes smaller (36,254,344).
+  - **Checks (87a4bb1):**
+    - `make test`: exit 0. `make overlaycheck`: 0 new;
+    - 14 of 14 targeted probes pass: ExcMessageRaceProbe, ArithMessageProbe, AseMessageProbe, OobMessageProbe,
+      ThrowableToStringProbe, StockExceptionProbe, TypeCheckProbe, InflaterProbe, NativeArgProbe,
+      DefaultFrameProbe, WideFrameProbe, LongBranchProbe, MonitorStateProbe, ArraycopyCheckProbe;
+    - NOT RUN: the all-probe regression, the demo suites and JUnit.
+  - **Pi:** PASS (2026-10-23, 87a4bb1). The first boot printed nothing. The card's image matched the build byte
+    for byte, and QEMU booted the same image, so the setup was suspected; the user reflashed it and it booted.
+    - `clock: SNTP 100.34.187.168 -> 2026-10-23 20:15:27 UTC`; 4 of 4 cores.
+    - NetDemo HTTP 200 (bytes=892).
+    - `netif wlan0 /192.168.1.247/24 [/192.168.1.255] mac e4:5f:01:69:a6:c5 up=true mtu=1500`,
+      `[main returned normally]`, `gc: collections=7`.
+    - Per-batch `clinits=` 441/441/442/442/443/443 and batch 1 at 1590 classes, as at d33267f.
+    - Batch 1 `tot=` 10.18 s (d33267f 10.73). No failure markers and no `vtparity` line.
+
 - **A STALE PROBE CLASS IN OUT/ IS NO LONGER BAKED: `JDKTESTS` PURGES THE UNNAMED PACKAGE FIRST
   (2026-10-23).** Follows the "stale classes in `out/` are baked" item in the reproducible-image card below.
   The classes behind that card's 103,808 bytes are not known, so whether all of them were in the unnamed
