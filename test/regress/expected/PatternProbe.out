@@ -1,0 +1,7 @@
+pattern probe:
+  compile("abc")         ok
+  compile("[a-z]")       ok
+  compile("\\s")          ok
+  compile("\\p{Cntrl}")   ok
+  compile("\\p{Cntrl}",256) ok
+  compile("\\p{Alpha}")   ok

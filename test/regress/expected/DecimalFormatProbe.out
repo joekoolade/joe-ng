@@ -1,0 +1,12 @@
+symbols: decimal=. grouping=, pattern=; percent=% zero=0 digit=# minus=- exp=E NaN=NaN monetary=.,
+non-ASCII symbols: perMill=true infinity=true currency=true intl=XXX
+#,##0.00 -> 1,234,567.89 | -0.01 | 12,345.68
+0.###E0 -> 1.234E4 | 12.30E-05
+00.0% -> 25.6%
+#,##0.00;(#,##0.00) -> (42.50)
+per mille -> true
+NaN/infinity -> NaN true true
+parse -> 1234.5 -7 0.125
+custom separators -> 1.234,50, equals(root) = false, clone equals = true
+String.format(US, %,.2f) -> 1,234,567.89
+DecimalFormatProbe done

@@ -1,0 +1,11 @@
+nextInt = -1170105035, nextInt(100) = 63, nextLong = -5843495416241995736
+nextDouble = 0.30871945533265976, nextFloat = 0.27707845, nextBoolean = true, nextGaussian = 0.2809776380727795
+nextBytes = [-103, -114, 104, 94, -120, 92, -77]
+nextInt(5, 10) = 6, nextLong(1000) = 928, nextLong(10, 20) = 15
+nextDouble(5.0) = 4.99089300031422, nextDouble(1, 2) = 1.1519582485629762, nextFloat(2) = 0.8795996, nextFloat(1, 3) = 2.4998121
+ints(5, 0, 10) = [4, 0, 0, 1, 8]
+setSeed(42) replays: true
+two unseeded instances differ: true
+ThreadLocalRandom ranged in bounds: true true true
+shared Random(7), 4 threads: same values as one thread drawing 8000 = true
+RandomProbe done

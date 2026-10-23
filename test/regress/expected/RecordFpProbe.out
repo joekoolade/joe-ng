@@ -1,0 +1,27 @@
+-- double components --
+  1.5 = D[d=1.5]
+  0.1 = D[d=0.1]
+  -2.75 = D[d=-2.75]
+  0.0 = D[d=0.0]
+  -0.0 = D[d=-0.0]
+  NaN = D[d=NaN]
+  +Infinity = D[d=Infinity]
+  -Infinity = D[d=-Infinity]
+  1e20 = D[d=1.0E20]
+  1e-9 = D[d=1.0E-9]
+-- float components: NOT a widened double --
+  1.5f = F[f=1.5]
+  0.1f = F[f=0.1]
+  -0.0f = F[f=-0.0]
+  NaN f = F[f=NaN]
+  +Infinity f = F[f=Infinity]
+-- char components --
+  'A' = C[c=A]
+  '0' = C[c=0]
+-- integral and reference: the built-in comparison --
+  ints = Ints[b=-1, sh=-2, i=-3, l=-4, z=true]
+  ints extremes = Ints[b=-128, sh=-32768, i=-2147483648, l=-9223372036854775808, z=false]
+  refs = Ref[s=hi, o=obj]
+  null ref = Ref[s=null, o=null]
+  mixed = Mixed[i=7, d=2.5, s=s, f=1.25]
+RecordFpProbe done

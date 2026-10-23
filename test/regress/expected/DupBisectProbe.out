@@ -1,0 +1,18 @@
+BISECT A: engines alone options=4 map=5 usageHelp=1  OK
+   o --disable-ansi-colors usageHelp=false inherited=false scope=LOCAL
+   o --disable-banner usageHelp=false inherited=false scope=LOCAL
+   o --help usageHelp=true inherited=false scope=LOCAL
+   o --version usageHelp=false inherited=false scope=LOCAL
+BISECT B: junit alone options=3 map=4 usageHelp=0  OK
+   o --help usageHelp=false inherited=false scope=LOCAL
+   o --version usageHelp=false inherited=false scope=LOCAL
+   o --disable-ansi-colors usageHelp=false inherited=false scope=LOCAL
+BISECT C: junit (parent) options=3 map=4 usageHelp=0  OK
+   o --help usageHelp=false inherited=false scope=LOCAL
+   o --version usageHelp=false inherited=false scope=LOCAL
+   o --disable-ansi-colors usageHelp=false inherited=false scope=LOCAL
+BISECT C: sub engines options=4 map=5 usageHelp=1  OK
+   o --disable-ansi-colors usageHelp=false inherited=false scope=LOCAL
+   o --disable-banner usageHelp=false inherited=false scope=LOCAL
+   o --help usageHelp=true inherited=false scope=LOCAL
+   o --version usageHelp=false inherited=false scope=LOCAL

@@ -1,0 +1,16 @@
+class BaseCommand declaredFields=5
+   f commandSpec type=org.junit.platform.console.shadow.picocli.CommandLine$Model$CommandSpec generic=class org.junit.platform.console.shadow.picocli.CommandLine$Model$CommandSpec mixinPresent=false mixinGet=false optPresent=false anns=[Spec]
+   f ansiColorOption type=org.junit.platform.console.options.AnsiColorOptionMixin generic=class org.junit.platform.console.options.AnsiColorOptionMixin mixinPresent=true mixinGet=true optPresent=false anns=[Mixin]
+   f disableBanner type=boolean generic=boolean mixinPresent=false mixinGet=false optPresent=true anns=[Option]
+   f helpRequested type=boolean generic=boolean mixinPresent=false mixinGet=false optPresent=true anns=[Option]
+   f versionRequested type=boolean generic=boolean mixinPresent=false mixinGet=false optPresent=true anns=[Option]
+class MainCommand declaredFields=6
+   f consoleTestExecutorFactory type=org.junit.platform.console.command.ConsoleTestExecutor$Factory generic=interface org.junit.platform.console.command.ConsoleTestExecutor$Factory mixinPresent=false mixinGet=false optPresent=false anns=[]
+   f helpRequested type=boolean generic=boolean mixinPresent=false mixinGet=false optPresent=true anns=[Option]
+   f versionRequested type=boolean generic=boolean mixinPresent=false mixinGet=false optPresent=true anns=[Option]
+   f ansiColorOption type=org.junit.platform.console.options.AnsiColorOptionMixin generic=class org.junit.platform.console.options.AnsiColorOptionMixin mixinPresent=true mixinGet=true optPresent=false anns=[Mixin]
+   f commandSpec type=org.junit.platform.console.shadow.picocli.CommandLine$Model$CommandSpec generic=class org.junit.platform.console.shadow.picocli.CommandLine$Model$CommandSpec mixinPresent=false mixinGet=false optPresent=false anns=[Spec]
+   f commandResult type=org.junit.platform.console.command.CommandResult generic=org.junit.platform.console.command.CommandResult<?> mixinPresent=false mixinGet=false optPresent=false anns=[]
+class ListTestEnginesCommand declaredFields=0
+mixin spec options=1 (want 1)
+   o --disable-ansi-colors

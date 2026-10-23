@@ -1,0 +1,27 @@
+-- StringBuilder.append(int): widened to long --
+  append(Integer.MIN_VALUE) = -2147483648
+  append(Integer.MAX_VALUE) = 2147483647
+  append(-1) = -1
+  append(0) = 0
+  append(42) = 42
+  append(-2147483647) = -2147483647
+  surrounded = [-2147483648]
+  twice = -2147483648:-2147483648
+-- StringBuilder.append(long): delegates to Long.toString --
+  append(Long.MIN_VALUE) = -9223372036854775808
+  append(Long.MAX_VALUE) = 9223372036854775807
+-- the paths already repaired on 2026-09-19 --
+  String.valueOf(int MIN) = -2147483648
+  String.valueOf(long MIN) = -9223372036854775808
+  concat int MIN = -2147483648
+  concat long MIN = -9223372036854775808
+  Integer.toString(MIN) = -2147483648
+  Long.toString(MIN) = -9223372036854775808
+-- record toString: reaches Loader.putDec, the newly-found site --
+  long MIN + int MIN = Rec[l=-9223372036854775808, i=-2147483648, s=x]
+  long MAX + int MAX = Rec[l=9223372036854775807, i=2147483647, s=y]
+  ordinary = Rec[l=42, i=-7, s=z]
+  zeros = Rec[l=0, i=0, s=]
+  long MIN alone = Rec[l=-9223372036854775808, i=1, s=a]
+  int MIN alone = Rec[l=1, i=-2147483648, s=b]
+MinValueProbe done

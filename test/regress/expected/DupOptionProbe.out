@@ -1,0 +1,63 @@
+names.length     = 2 / 2
+names[1]         = [--help] [--help]
+anno==lit        = false
+anno.equals(lit) = true
+lit.equals(anno) = true
+hash anno/lit    = 1333069025 / 1333069025
+len anno/lit     = 6 / 6
+anno.eq(recv[1]) = true
+hash recv[1]     = 1333069025
+lit map size     = 2
+lit ck lit       = true
+lit ck anno      = true
+anno map size    = 2
+anno ck lit      = true
+anno ck other    = true
+anno keySet n    = 2
+unmod keySet n   = 2
+unmod ck other   = true
+guard adds       = 1 (want 1)
+GUARD OK
+pico options0    = 0 map=0
+pico after1      = 2 map=4
+pico after2      = 2 map=4
+pico after4      = 2 map=4 (want 2 / 4)
+pico mixin keys  = 4
+  mixin key      = [-h] recvHas=true
+  mixin key      = [--help] recvHas=true
+  mixin key      = [-V] recvHas=true
+  mixin key      = [--version] recvHas=true
+pico mixin iter  = 4
+PICO GUARD OK
+walk org.junit.platform.console.command.ExecuteTestsCommand
+  [0] org.junit.platform.console.command.ExecuteTestsCommand fields=4 help=0
+  [1] org.junit.platform.console.command.BaseCommand fields=5 help=1
+  [2] java.lang.Object fields=0 help=0
+  hops=3 helpTotal=1  OK
+walk org.junit.platform.console.command.MainCommand
+  [0] org.junit.platform.console.command.MainCommand fields=6 help=1
+  [1] java.lang.Object fields=0 help=0
+  hops=2 helpTotal=1  OK
+walk org.junit.platform.console.command.DiscoverTestsCommand
+  [0] org.junit.platform.console.command.DiscoverTestsCommand fields=3 help=0
+  [1] org.junit.platform.console.command.BaseCommand fields=5 help=1
+  [2] java.lang.Object fields=0 help=0
+  hops=3 helpTotal=1  OK
+walk org.junit.platform.console.command.ListTestEnginesCommand
+  [0] org.junit.platform.console.command.ListTestEnginesCommand fields=0 help=0
+  [1] org.junit.platform.console.command.BaseCommand fields=5 help=1
+  [2] java.lang.Object fields=0 help=0
+  hops=3 helpTotal=1  OK
+opt disableBanner names0=--disable-banner usageHelp=false versionHelp=false required=false hidden=false scope=LOCAL
+opt helpRequested names0=-h usageHelp=true versionHelp=false required=false hidden=false scope=LOCAL
+opt versionRequested names0=--version usageHelp=false versionHelp=true required=false hidden=false scope=LOCAL
+cmd org.junit.platform.console.command.MainCommand name=junit mixinStd=false scope=INHERIT helpCommand=false subs=0
+cmd org.junit.platform.console.command.ExecuteTestsCommand name=execute mixinStd=false scope=LOCAL helpCommand=false subs=0
+spec parent options=1 map=2 usageHelp=1  OK
+spec sub1 options=1 map=2 usageHelp=1  OK
+spec sub2 options=1 map=2 usageHelp=1  OK
+spec sub3 options=1 map=2 usageHelp=1  OK
+tree junit options=3 map=4 usageHelp=0  OK
+tree discover options=36 map=56 usageHelp=1  OK
+tree execute options=39 map=59 usageHelp=1  OK
+tree engines options=4 map=5 usageHelp=1  OK

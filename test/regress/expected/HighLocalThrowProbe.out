@@ -1,0 +1,6 @@
+A deepOnly  = A-ok (want A-ok)
+B deepCatch = B (want B)
+D deepNested= D (want D)
+result = boom:66 (want boom:66)
+deep   = deep (want deep)
+[probe done]

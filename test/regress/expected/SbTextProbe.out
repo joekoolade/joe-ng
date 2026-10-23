@@ -1,0 +1,33 @@
+-- append(char) --
+  A len=1 [41]
+  00e9 len=1 [e9]
+  00ff last ok len=1 [ff]
+  0100 first bad len=1 [100]
+  euro 20ac len=1 [20ac]
+  ffff len=1 [ffff]
+-- INFLATE: ASCII first, then a character above 255 --
+  ab then euro len=3 [61 62 20ac]
+  euro then ab len=3 [20ac 61 62]
+  grow past 16 len=17 [30 31 32 33 34 35 36 37 38 39 61 62 63 64 65 66 20ac]
+-- append(String) --
+  ascii len=2 [68 69]
+  latin1 len=1 [e9]
+  utf16 len=3 [61 20ac 62]
+  cjk len=2 [4e2d 6587]
+  surrogate pair len=2 [d835 dc00]
+-- insert / reverse / length over UTF16 --
+  insert euro len=3 [61 20ac 62]
+  reverse utf16 len=3 [62 20ac 61]
+  charAt/len len=2 [20ac 78]
+-- the ctor forms --
+  ctor String utf16 len=1 [20ac]
+  ctor CharSeq utf16 len=2 [20ac 7a]
+-- supertypes the overlay dropped --
+  cmp lt sign len=2 [6c 74]
+  cmp gt sign len=2 [67 74]
+  cmp eq sign len=2 [65 71]
+  is Comparable len=1 [31]
+  is Serializable len=1 [31]
+  is CharSequence len=1 [31]
+  is Appendable len=1 [31]
+SbTextProbe done

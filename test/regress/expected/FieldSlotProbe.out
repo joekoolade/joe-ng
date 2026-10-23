@@ -1,0 +1,11 @@
+Base.shared  on Base  = base-shared  OK
+Base.shared  on Sub   = base-shared  OK
+Other.shared on Other = other-shared  OK
+Base.first   on Sub   = base-first  OK
+Sub.extra    on Sub   = sub-extra  OK
+round-trip   on Sub   = written  OK
+Other untouched       = other-shared  OK
+RT BaseCommand.ansiColorOption on ListTestEnginesCommand
+   before=null afterIsWhatWeWrote=true after=org.junit.platform.console.options.AnsiColorOptionMixin  OK
+RT MainCommand.ansiColorOption on MainCommand
+   before=null afterIsWhatWeWrote=true after=org.junit.platform.console.options.AnsiColorOptionMixin  OK

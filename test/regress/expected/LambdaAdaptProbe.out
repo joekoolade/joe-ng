@@ -1,0 +1,15 @@
+  ok   boolean -> true
+  ok   byte -> -7
+  ok   char -> q
+  ok   short -> -300
+  ok   int -> 1234
+  ok   long -> 9876543210
+  ok   late-class ref -> true
+-- again, through Method.invoke
+  ok   boolean -> true
+  ok   byte -> -7
+  ok   char -> q
+  ok   short -> -300
+  ok   int -> 1234
+  ok   long -> 9876543210
+  ok   late-class ref -> true

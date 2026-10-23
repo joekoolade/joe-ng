@@ -1,0 +1,9 @@
+ok   cross-method, denied catch first = IllegalStateException handler
+ok   same-method inline throw = RuntimeException handler
+ok   same-method via callee = RuntimeException handler
+ok   no matching handler: escapes = escaped to the caller
+ok   finally still runs, then outer = finally outer
+ok   Charset.forName unknown = UnsupportedCharsetException no-such-charset
+ok   String.getBytes unknown = UnsupportedEncodingException no-such-charset
+ok   Charset.forName(null) = java.lang.IllegalArgumentException
+CatchDeniedProbe done, failures=0

@@ -1,0 +1,9 @@
+AllDefaulted empty.len=0 (want 0) oneDefault.len=1 twoDefault.len=2 (want 2) single=java.lang.Object name=?
+   empty[has null]=false oneDefault=[java.lang.String] twoDefault=[java.lang.String,java.lang.Integer]
+WrittenEmpty empty.len=0 (want 0) oneDefault.len=0 twoDefault.len=2 (want 2) single=java.lang.Object name=w
+   empty[has null]=false oneDefault=[] twoDefault=[java.lang.String,java.lang.Integer]
+WrittenNonEmp empty.len=1 (want 0) oneDefault.len=2 twoDefault.len=2 (want 2) single=java.lang.Object name=wn
+   empty[has null]=false oneDefault=[java.lang.Long,java.lang.Short] twoDefault=[java.lang.String,java.lang.Integer]
+opt disableBanner converter.len=0 (want 0) type.len=0 (want 0) consumer=org.junit.platform.console.shadow.picocli.CommandLine$NullParameterConsumer preproc=org.junit.platform.console.shadow.picocli.CommandLine$NoOpParameterPreprocessor candidates=org.junit.platform.console.shadow.picocli.CommandLine$NoCompletionCandidates  OK
+opt helpRequested converter.len=0 (want 0) type.len=0 (want 0) consumer=org.junit.platform.console.shadow.picocli.CommandLine$NullParameterConsumer preproc=org.junit.platform.console.shadow.picocli.CommandLine$NoOpParameterPreprocessor candidates=org.junit.platform.console.shadow.picocli.CommandLine$NoCompletionCandidates  OK
+opt versionRequested converter.len=0 (want 0) type.len=0 (want 0) consumer=org.junit.platform.console.shadow.picocli.CommandLine$NullParameterConsumer preproc=org.junit.platform.console.shadow.picocli.CommandLine$NoOpParameterPreprocessor candidates=org.junit.platform.console.shadow.picocli.CommandLine$NoCompletionCandidates  OK

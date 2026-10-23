@@ -1,0 +1,69 @@
+timeunit probe:
+  -- saturation --
+  NANOSECONDS <- SECONDS convert(9223372036854775807) = 9223372036854775807
+  NANOSECONDS <- SECONDS convert(-9223372036854775808) = -9223372036854775808
+  NANOSECONDS <- SECONDS convert(10000000000) = 9223372036854775807
+  NANOSECONDS <- DAYS convert(9223372036854775807) = 9223372036854775807
+  MILLISECONDS <- DAYS convert(9223372036854775807) = 9223372036854775807
+  MICROSECONDS <- HOURS convert(-9223372036854775808) = -9223372036854775808
+  -- the clamp boundary --
+  NANOSECONDS <- SECONDS convert(9223372036) = 9223372036000000000
+  NANOSECONDS <- SECONDS convert(9223372037) = 9223372036854775807
+  NANOSECONDS <- SECONDS convert(-9223372036) = -9223372036000000000
+  NANOSECONDS <- SECONDS convert(-9223372037) = -9223372036854775808
+  -- ordinary (the built-in comparison) --
+  MILLISECONDS <- NANOSECONDS convert(5000000000) = 5000
+  SECONDS <- MILLISECONDS convert(1500) = 1
+  NANOSECONDS <- DAYS convert(365) = 31536000000000000
+  NANOSECONDS <- DAYS convert(-365) = -31536000000000000
+  MINUTES <- SECONDS convert(3661) = 61
+  HOURS <- MINUTES convert(1439) = 23
+  DAYS <- HOURS convert(47) = 1
+  SECONDS <- SECONDS convert(42) = 42
+  -- truncation, both signs --
+  SECONDS <- MILLISECONDS convert(1999) = 1
+  SECONDS <- MILLISECONDS convert(-1999) = -1
+  SECONDS <- MILLISECONDS convert(999) = 0
+  SECONDS <- MILLISECONDS convert(-999) = 0
+  -- toXxx --
+  DAYS.toNanos(365)          = 31536000000000000
+  DAYS.toNanos(MAX)          = 9223372036854775807
+  DAYS.toNanos(MIN)          = -9223372036854775808
+  SECONDS.toMillis(MAX)      = 9223372036854775807
+  NANOSECONDS.toMillis(1999999999) = 1999
+  MILLISECONDS.toSeconds(-1999) = -1
+  HOURS.toDays(47)           = 1
+  MINUTES.toHours(1439)      = 23
+  DAYS.toDays(7)             = 7
+  MICROSECONDS.toNanos(5)    = 5000
+  -- convert(Duration) --
+  NANOSECONDS convert(Duration 1500000000ns) = 1500000000
+  MILLISECONDS convert(Duration 1500000000ns) = 1500
+  SECONDS convert(Duration 1500000000ns) = 1
+  SECONDS convert(Duration 90000000000ns) = 90
+  MINUTES convert(Duration 90000000000ns) = 1
+  MILLISECONDS convert(Duration 2500000000ns) = 2500
+  NANOSECONDS convert(Duration 0ns) = 0
+  NANOSECONDS convert(Duration -1ns) = -1
+  NANOSECONDS convert(Duration -1500000000ns) = -1500000000
+  MILLISECONDS convert(Duration -1500000000ns) = -1500
+  SECONDS convert(Duration -1500000000ns) = -1
+  SECONDS convert(Duration -90000000000ns) = -90
+  MINUTES convert(Duration -90000000000ns) = -1
+  ofNanos(-1).getSeconds()   = -1
+  ofNanos(-1).getNano()      = 999999999
+  ofNanos(1).getSeconds()    = 0
+  ofNanos(1).getNano()       = 1
+  ofSeconds(-2).getSeconds() = -2
+  ofSeconds(-2).getNano()    = 0
+  -- enum surface --
+  values().length            = 7
+  values() in order          = NANOSECONDS,MICROSECONDS,MILLISECONDS,SECONDS,MINUTES,HOURS,DAYS
+  ordinal()==index for all   = true
+  valueOf("SECONDS")         = SECONDS
+  valueOf round-trips        = true
+  toString(MILLISECONDS)     = MILLISECONDS
+  compareTo(SECONDS,MINUTES) = -1
+  compareTo(DAYS,NANOSECONDS)= 6
+  NANOSECONDS==values()[0]   = true
+TimeUnitProbe done

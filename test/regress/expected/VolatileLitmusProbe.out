@@ -1,0 +1,4 @@
+rounds = 20000
+forbidden r1==0 && r2==0 = 0
+every round saw a store = true
+VolatileLitmusProbe done

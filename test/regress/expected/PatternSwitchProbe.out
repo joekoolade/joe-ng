@@ -1,0 +1,15 @@
+classify -> null
+classify -> big int 500
+classify -> negative int -3
+classify -> int 7
+classify -> long 9
+classify -> empty string
+classify -> string 5
+classify -> other number BigDecimal
+classify -> other number Double
+classify -> int[4]
+classify -> other StringBuilder
+areas -> 12 9 -1 10
+nested -> ints 3 | string+pair s3 | objects | objects
+last label guarded -> long string | fell through to default | fell through to default
+PatternSwitchProbe done

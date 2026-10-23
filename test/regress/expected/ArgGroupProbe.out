@@ -1,0 +1,20 @@
+class TestConsoleOutputOptionsMixin fields=1
+   f consoleOutputOptions type=org.junit.platform.console.options.TestConsoleOutputOptionsMixin$ConsoleOutputOptions generic=org.junit.platform.console.options.TestConsoleOutputOptionsMixin$ConsoleOutputOptions agPresent=true agGet=true
+     heading=[%n@|bold CONSOLE OUTPUT|@%n%n] headingKey=[__no_heading_key__] exclusive=true multiplicity=[0..1] validate=false order=5
+class TestDiscoveryOptionsMixin fields=4
+   f CP_OPTION type=java.lang.String generic=java.lang.String agPresent=false agGet=false
+   f selectorOptions type=org.junit.platform.console.options.TestDiscoveryOptionsMixin$SelectorOptions generic=org.junit.platform.console.options.TestDiscoveryOptionsMixin$SelectorOptions agPresent=true agGet=true
+     heading=[%n@|bold SELECTORS|@%n%n] headingKey=[__no_heading_key__] exclusive=true multiplicity=[0..1] validate=false order=2
+   f filterOptions type=org.junit.platform.console.options.TestDiscoveryOptionsMixin$FilterOptions generic=org.junit.platform.console.options.TestDiscoveryOptionsMixin$FilterOptions agPresent=true agGet=true
+     heading=[%n  For more information on selectors including syntax examples, see%n  @|underline https://docs.junit.org/${junit.docs.version}/running-tests/discovery-selectors.html|@%n%n@|bold FILTERS|@%n%n] headingKey=[__no_heading_key__] exclusive=true multiplicity=[0..1] validate=false order=3
+   f runtimeConfigurationOptions type=org.junit.platform.console.options.TestDiscoveryOptionsMixin$RuntimeConfigurationOptions generic=org.junit.platform.console.options.TestDiscoveryOptionsMixin$RuntimeConfigurationOptions agPresent=true agGet=true
+     heading=[%n@|bold RUNTIME CONFIGURATION|@%n%n] headingKey=[__no_heading_key__] exclusive=true multiplicity=[0..1] validate=false order=4
+SPEC BUILT ok, options=6 argGroups=1
+EXECUTE SPEC: options=39 argGroups=5
+  group validate=false min=0 max=1 args=13 subgroups=0
+  group validate=false min=0 max=1 args=10 subgroups=0
+  group validate=false min=0 max=1 args=3 subgroups=0
+  group validate=false min=0 max=1 args=6 subgroups=0
+  group validate=false min=0 max=1 args=3 subgroups=0
+   SPEC group: validate=false (want false) exclusive=false multiplicity=0..1 args=6  OK
+     multiplicity fields: min=0 (want 0) max=1 (want 1) isVariable=false  OK

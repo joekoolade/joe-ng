@@ -1,0 +1,63 @@
+-- unmodifiable views: mutation must be refused, and the BACKING must not move --
+  unmodifiableList is the backing object = false
+  unmodifiableList read-through = size=2 [a,b]
+  unmodifiableList get(1) = b
+  unmodifiableList.add = UnsupportedOperationException
+    backing after add = size=2 [a,b]
+  unmodifiableList.set = UnsupportedOperationException
+    backing after set = size=2 [a,b]
+  unmodifiableList.remove = UnsupportedOperationException
+    backing after remove = size=2 [a,b]
+  unmodifiableList.clear = UnsupportedOperationException
+    backing after clear = size=2 [a,b]
+  unmodifiableSet is the backing object = false
+  unmodifiableSet contains(s) = true
+  unmodifiableSet.add = UnsupportedOperationException
+    backing after add = size=1 [s]
+  unmodifiableMap is the backing object = false
+  unmodifiableMap get(k) = v
+  unmodifiableMap.put = UnsupportedOperationException
+    backing after put = size=1 k=v z=null
+  unmodifiableCollection is the backing object = false
+  unmodifiableCollection.add = UnsupportedOperationException
+    backing after add = size=1 [c]
+-- empty constants: shared, and immutable --
+  emptyList() == emptyList() = true
+  emptyList size/isEmpty = 0/true
+  emptyList.add = UnsupportedOperationException
+    a FRESH emptyList after that = size=0 []
+  emptySet() == emptySet() = true
+  emptySet.add = UnsupportedOperationException
+    a FRESH emptySet after that = size=0 []
+  emptyMap() == emptyMap() = true
+  emptyMap.put = UnsupportedOperationException
+    a FRESH emptyMap size after that = 0
+-- singletons: one element, and immutable --
+  singletonList contents = size=1 [one]
+  singletonList.add = UnsupportedOperationException
+  singletonList.set = UnsupportedOperationException
+    singletonList after = size=1 [one]
+  singleton contents = size=1 [one]
+  singleton.add = UnsupportedOperationException
+    singleton after = size=1 [one]
+  singletonMap get/size = v/1
+  singletonMap.put = UnsupportedOperationException
+    singletonMap size after = 1
+-- synchronized wrappers: a wrapper is the only shape that can hold a lock --
+  synchronizedList is the backing object = false
+  synchronizedList after add = size=2 [p,q]
+    backing sees it = size=2 [p,q]
+  synchronizedSet is the backing object = false
+  synchronizedMap is the backing object = false
+  synchronizedCollection is the backing object = false
+-- ordering and iteration: the built-in comparison --
+  sort(List) natural = size=4 [apple,apple,fig,pear]
+  sort(List) Integer = size=4 [-3,0,5,12]
+  sort(List,Comparator.reverseOrder) descending = size=4 [12,5,0,-3]
+  reverse = size=4 [-3,0,5,12]
+  Collections.reverseOrder(null).compare(1,2) = 1
+  addAll varargs = size=3 [x,y,z]
+  enumeration walk = xyz
+  list(enumeration) = size=3 [x,y,z]
+  shuffle(list, Random(12345)) = size=8 [6,0,1,4,5,3,7,2]
+CollectionsProbe done

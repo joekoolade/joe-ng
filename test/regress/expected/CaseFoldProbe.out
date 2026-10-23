@@ -1,0 +1,10 @@
+junit re "10s" = true g1=10 g2=s (want true 10 s)
+junit re "5 m" = true g1=5 g2=m (want true 5 m)
+junit re "42" = true g1=42 g2=null (want true 42 null)
+junit re "3ms" = true g1=3 g2=ms (want true 3 ms)
+junit re "7H" = true g1=7 g2=H (want true 7 H)
+closure [017E-0180] matches s = true (want true)
+closure [017E-0180] matches t = false (want false)
+closure [2129-212B] matches k = true (want true)
+closure [2129-212B] matches t = false (want false)
+CaseFoldProbe done
