@@ -1680,19 +1680,6 @@ public final class Baseline
         }
     }
 
-    /** Load the synthetic $exception static slot into {@code destReg}. */
-    private void emitLoadException(CodeBuffer cb, int destReg)
-    {
-        symbols.exceptionSlot(cb, destReg);
-        cb.emit(A64Enc.ldrx(destReg, destReg, 0));
-    }
-    /** Store {@code valReg} into the synthetic $exception static slot (via x16). */
-    private void emitStoreException(CodeBuffer cb, int valReg)
-    {
-        symbols.exceptionSlot(cb, 16);
-        cb.emit(A64Enc.strx(valReg, 16, 0));
-    }
-
     /** instanceof/checkcast: push the target class's Type address, call the VM helper. */
     /**
      * {@code checkcast}: on the metal JIT, test with {@code VM.castOk(objref, targetType)} and throw a real
@@ -1719,8 +1706,13 @@ public final class Baseline
         spillLive(cb);                                           // preserve the operand stack across the call
         symbols.callHelper(cb, Symbols.CAST_OK);                 // x0 = 1 (holds) / 0 (throw)
         reloadLive(cb);
+        // The objref's register is resolved HERE, on the path both outcomes share: in a deep method opSlot can
+        // emit a reload and mark the slot resident, and doing that inside the throw block would leave the
+        // fall-through believing a register holds the objref when only the (skipped) throw path loaded it.
+        int obj = opSlot(sp - 1);
         int skip = cb.emit(A64Enc.cbnz(0, 0));                   // holds -> skip the throw
-        throwImplicit(cb, pos, Symbols.NEW_CCE);                 // else ClassCastException at this bytecode
+        symbols.type(cb, 16, classIndex);                        // x16 = target Type again (the call clobbered t)
+        throwImplicit(cb, pos, Symbols.NEW_CCE, obj, 16);        // ClassCastException(objref, target)
         cb.set(skip, A64Enc.cbnz(0, cb.wordCount() - skip));
     }
 
@@ -2693,16 +2685,11 @@ public final class Baseline
         lowerCall(cpIndex, cb, true);                            // constructor: receiver is arg0
     }
 
-    /**
-     * athrow: stash the exception, then for each covering try/catch entry test the
-     * thrown type against the catch type ({@code VM.instanceOf}) and branch to the
-     * handler (exception on the operand stack). No matching handler in this method
-     * halts — cross-method unwinding is not implemented yet.
-     */
+    /** athrow: null-check the exception on top of the stack and dispatch it with {@link #throwStored}. */
     private void athrow(CodeBuffer cb, int pos)
     {
         int athrowStart = cb.wordCount();
-        int ref = popReg();
+        int ref = opSlot(sp - 1);                               // stays on top: throwStored takes it from there
         // JVMS athrow: "if objectref is null, athrow throws a NullPointerException instead of objectref."
         // Without this the null goes to the handler search as the thrown object, where `instanceOf(null, T)`
         // matches nothing, the unwind is handed 0, and the VM reports `BAD THROW exc=0x0` -- an internal
@@ -2713,15 +2700,21 @@ public final class Baseline
         // Same guard the deref/receiver checks use, so it costs one never-taken branch and is emitted ONLY by
         // the metal JIT (implicitChecks) -- the writer stays check-free and the self-hosting fixpoint holds.
         nullCheck(cb, ref, pos);
-        emitStoreException(cb, ref);                            // $exception = ref (non-null past the check)
         throwStored(cb, pos, athrowStart);
     }
 
     /**
-     * Dispatch the exception already stored in {@code $exception} (the throwing bytecode is at {@code pos},
-     * whose machine code starts at word {@code athrowStart}): try each covering try/catch entry, else
-     * unwind to a caller. Shared by explicit {@code athrow} and the implicit null/bounds checks. Never
-     * falls through — every path branches to a handler or halts after the unwind call.
+     * Dispatch the exception ON TOP OF THE OPERAND STACK (the throwing bytecode is at {@code pos}, whose machine
+     * code starts at word {@code athrowStart}): try each covering try/catch entry, else unwind to a caller. Shared
+     * by explicit {@code athrow} and the implicit checks. Never falls through — every path branches to a handler
+     * or halts after the unwind call. Each helper call gets a
+     * {@link #dup} of it, and the stack slot carries it across the call ({@link #emitCall} preserves the operands
+     * below its arguments), so a matching handler is entered with it already in place and the unwind consumes it.
+     *
+     * <p>IT USED TO LIVE IN ONE GLOBAL WORD ({@code symbols.exceptionSlot}) between those calls, re-read after each:
+     * a throw on another core in that window replaced it, so a thread could catch, or unwind with, ANOTHER THREAD'S
+     * exception. Measured with ExcMessageRaceProbe (four threads failing casts and stores): a data abort at a
+     * garbage address and a nested fault in the unwind, instead of 24000 caught exceptions.
      */
     private void throwStored(CodeBuffer cb, int pos, int athrowStart)
     {
@@ -2730,8 +2723,7 @@ public final class Baseline
             // Record the throw-site frame chain into the exception BEFORE the (possibly same-method) handler
             // search, so printStackTrace() has frames even when this method catches it inline. captureTrace
             // is idempotent (first throw wins), so a later cross-method unwind won't overwrite it.
-            int te = pushReg();
-            emitLoadException(cb, te);
+            dup(cb);
             int tp = pushReg();
             symbols.codePc(cb, tp, athrowStart);
             int ts = pushReg();
@@ -2749,23 +2741,22 @@ public final class Baseline
                 emitCatch(cb, exHandlerPc[i]);    // finally / catch-all
                 return;
             }
-            int obj = pushReg();
-            emitLoadException(cb, obj);
+            dup(cb);
             int t = pushReg();
             symbols.type(cb, t, exCatchType[i]);
             emitCall(cb, 2, true, false, SYM_HELPER, Symbols.INSTANCE_OF);  // (exc, catchType) -> int
             int cond = popReg();
+            opSlot(sp - 1);                 // the exception resident BEFORE the branch (see emitCatch): a reload
+                                            //   emitted after it would run on the matched path only
             int skip = cb.emit(A64Enc.cbz(cond, 0));
             emitCatch(cb, exHandlerPc[i]);                       // matched
             cb.set(skip, A64Enc.cbz(cond, cb.wordCount() - skip));
         }
-        // no local handler: unwind the stack — unwind(exc, thisPC, SP)
-        int exc = pushReg();
-        emitLoadException(cb, exc);
+        // no local handler: unwind the stack — unwind(exc, thisPC, SP); the exception on top is the first argument
         int pc = pushReg();
         symbols.codePc(cb, pc, athrowStart);                    // a PC inside this method (relocated by the writer)
-        int sp = pushReg();
-        cb.emit(A64Enc.movFromSp(sp));
+        int spReg = pushReg();
+        cb.emit(A64Enc.movFromSp(spReg));
         emitCall(cb, 3, false, false, SYM_HELPER, Symbols.UNWIND);
         emitHalt(cb);                                            // unwind never returns
     }
@@ -2810,7 +2801,6 @@ public final class Baseline
         // them here is correct; sp is restored below for the code after the (skipped) throw block.
         int athrowStart = cb.wordCount();
         emitCall(cb, 0, true, false, SYM_HELPER, newHelper);    // -> exception object pushed (at sp=0)
-        emitStoreException(cb, popReg());                       // $exception = it
         throwStored(cb, pos, athrowStart);                      // handler search + unwind — never falls through
         sp = savedSp;                                           // restore the model for the code after the check
         if (deepStack)
@@ -2953,15 +2943,24 @@ public final class Baseline
         cb.set(over, A64Enc.bcond(A64Enc.LO, cb.wordCount() - over));
     }
 
-    /** Push the pending exception and branch to a handler (which expects it at depth 1). */
+    /**
+     * Branch to a handler with the exception on top of the stack (it expects it at depth 1). A handler takes it
+     * in SLOT 0'S REGISTER (x9) even in a deep method -- the merge-point code marks slot 0 resident there, because
+     * that is how the cross-method unwind delivers it -- so it is moved there explicitly: in a deep method the
+     * helper calls before this left it only in memory, and the handler read whatever x9 held (InflaterProbe:
+     * {@code BAD THROW exc=0xFFFFFFFFFFFFFFFF} from a synchronized block's rethrow).
+     */
     private void emitCatch(CodeBuffer cb, int handlerPc)
     {
-        emitLoadException(cb, pushReg());
-        syncOut(cb);            // deep: spill the exception (slot 0) to memory; the handler reloads it via syncIn
+        int exc = opSlot(sp - 1);
+        if (exc != OP_BASE)
+        {
+            cb.emit(A64Enc.movReg(OP_BASE, exc));
+        }
+        syncOut(cb);            // deep: also spill it to slot 0's memory home
         int w = cb.emit(A64Enc.b(0));
         addFixup(w, handlerPc, FIX_B, 0);
-        recordDepth(handlerPc);
-        sp = 0;                                                  // fall-through (next check) resumes empty
+        recordDepth(handlerPc);                                  // fall-through (next check) keeps the exception
     }
 
     private void emitHalt(CodeBuffer cb)
@@ -3295,7 +3294,7 @@ public final class Baseline
         symbols.callHelper(cb, Symbols.ARRAY_STORE_OK);          // x0 = 1 (ok) / 0 (throw)
         reloadLive(cb);
         int skip = cb.emit(A64Enc.cbnz(0, 0));                   // ok -> skip the throw
-        throwImplicit(cb, pos, Symbols.NEW_ASE);                 // not assignable -> ArrayStoreException
+        throwImplicit(cb, pos, Symbols.NEW_ASE, valReg, valReg); // not assignable -> ArrayStoreException(value)
         cb.set(skip, A64Enc.cbnz(0, cb.wordCount() - skip));
     }
 
@@ -4119,9 +4118,11 @@ public final class Baseline
             {
                 trans = d + 2;                                        // typeSwitch: selector copy + label Type
             }
-            else if (op == 0xBF && symbols.captureTraces())
+            else if (op == 0xBF)
             {
-                trans = d + 2;                                        // athrow: throwStored trace/unwind temporaries
+                // athrow: throwStored keeps the exception on top and pushes over it -- a dup, the pc and the sp for
+                // captureTrace (+3), or a dup and a Type for a catch check, the pc and the sp for the unwind (+2).
+                trans = d + (symbols.captureTraces() ? 3 : 2);
             }
             if (trans > peak) { peak = trans; }
             int len = opLen(op, code, pc);

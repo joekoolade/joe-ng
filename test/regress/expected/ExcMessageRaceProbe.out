@@ -1,0 +1,3 @@
+casts: right = 12000 (want 12000), wrong = 0
+stores: right = 12000 (want 12000), wrong = 0
+ExcMessageRaceProbe done

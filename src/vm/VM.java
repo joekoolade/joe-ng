@@ -1390,10 +1390,11 @@ public final class VM
         return Loader.newArith();
     }
 
-    /** Allocate a mini {@code java/lang/ClassCastException} — the JIT calls this on a failed {@code checkcast}. */
-    static long newCce()
+    /** Allocate a {@code java/lang/ClassCastException} — the JIT calls this on a failed {@code checkcast},
+     *  passing the object and the target Type so the message can name both. */
+    static long newCce(long ref, long targetType)
     {
-        return Loader.newCce();
+        return Loader.newCce(ref, targetType);
     }
 
     /**
@@ -1421,22 +1422,14 @@ public final class VM
         {
             return 1;      // a RAW array (no Type node) cast to an array class: trust the verifier, as checkCast does
         }
-        // FAILING PATH ONLY: hand the two types to newCce so the exception can NAME them, as stock does.
-        // Recorded rather than printed -- a print here would fire inside whatever the cast was part of, and
-        // a caught ClassCastException is legitimate control flow in some libraries.
-        // A RAW ARRAY carries a small TAG in its TIB slot, not a Type pointer, so it must NOT be
-        // dereferenced -- one reaches here whenever the cast target is not an array type. 0 means "cannot be
-        // named", which the message renders rather than faulting on.
-        long tib = Magic.load64(ref);
-        Loader.noteCastFailure(tib, tib > ObjectModel.MAX_RAW_ARRAY_TIB ? Magic.load64(tib) : 0L, targetType);
-        return 0;
+        return 0;          // the JIT passes ref and targetType to newCce, which names them
     }
 
-    /** Allocate a mini {@code java/lang/ArrayStoreException} — the JIT calls this when an {@code aastore}
-     *  stores a value not assignable to the array's element type. */
-    static long newAse()
+    /** Allocate a {@code java/lang/ArrayStoreException} — the JIT calls this when an {@code aastore}
+     *  stores a value not assignable to the array's element type, passing the value. */
+    static long newAse(long value)
     {
-        return Loader.newArrayStoreException();
+        return Loader.newArrayStoreException(value);
     }
 
     /** Allocate a mini {@code java/lang/NegativeArraySizeException} — the JIT calls this when a
@@ -1689,13 +1682,7 @@ public final class VM
         {
             return 1;                                      // primitive-element array (shouldn't reach aastore) / unknown
         }
-        int ok = instanceOf(value, elemType);              // 1 if value's Type <: element Type, else 0
-        if (ok == 0)
-        {
-            long vtib = Magic.load64(value);
-            Loader.noteStoreFailure(vtib > ObjectModel.MAX_RAW_ARRAY_TIB ? Magic.load64(vtib) : 0L);   // names the ASE
-        }
-        return ok;
+        return instanceOf(value, elemType);                // 1 if value's Type <: element Type, else 0
     }
 
     /** {@code java/lang/InternalError} — the fault handler's catch-all for an unexpected hardware trap. */
@@ -1950,9 +1937,9 @@ public final class VM
         if (watchX21Addr == 0L) { watchX21(0L, 0L); }                     // ... and its argument-side twin
         if (newAioobeAddr == 0L) { long u = newAioobe(); }
         if (newAioobeIndexAddr == 0L) { long u = newAioobeIndex(0L, 0L); }
-        if (newAseAddr == 0L) { long u = newAse(); }                  // ArrayStoreException (aastore mismatch)
+        if (newAseAddr == 0L) { long u = newAse(0L); }                // ArrayStoreException (aastore mismatch)
         if (arrayStoreOkAddr == 0L) { int u = arrayStoreOk(0L, 0L); } // aastore covariant check
-        if (newCceAddr == 0L) { long u = newCce(); }                  // ClassCastException (failed checkcast)
+        if (newCceAddr == 0L) { long u = newCce(0L, 0L); }            // ClassCastException (failed checkcast)
         if (castOkAddr == 0L) { int u = castOk(0L, 0L); }             // checkcast predicate
         if (newUnresolvedAddr == 0L) { long u = newUnresolved(-1L); } // `new` the loader cannot resolve early
         if (ctorRefInit0 == 0L) { ctorRefInit(-1L); }                 // a constructor reference's <clinit> (JVMS 5.5)
@@ -3050,7 +3037,11 @@ public final class VM
     // frame just like a compiled one.
     static long jitFrameTable, jitFrameCount;
     static long jitLocalTable, jitLocalCount;   // parallel {codeStart, codeEnd, regLocals} — unwind's pre-try local restore
-    static long unwindLocBuf;                   // 16-slot scratch: reconstructs the handler's callee-saved locals during unwind
+    // 16 slots PER TASK (MAX_TASKS of them, indexed by curTask()): an unwind's scratch for reconstructing the
+    // handler's callee-saved locals. It was ONE buffer for the whole VM, so two tasks unwinding at once on two
+    // cores resumed into handlers holding each other's locals (ExcMessageRaceProbe: a captured AtomicInteger
+    // that held another thread's String). A task id is stable across migration, so preemption is safe too.
+    static long unwindLocBufs;
 
     /** Point the JIT unwind tables (frame/local/handler) at their fixed scratch region if not yet set. These
      *  tables persist for the whole run behind these static pointers, but every JIT frame keeps writing to them,
@@ -3543,14 +3534,14 @@ public final class VM
     static long newAioobeAddr;         // VM.newAioobe()J — a java/lang/ArrayIndexOutOfBoundsException
     static long newAioobeIndexAddr;    // VM.newAioobeIndex(JJ)J — ... with stock's index/length message
     static long newArithAddr;          // VM.newArith()J  — a java/lang/ArithmeticException (divide by zero)
-    static long newAseAddr;            // VM.newAse()J    — a java/lang/ArrayStoreException (aastore mismatch)
+    static long newAseAddr;            // VM.newAse(J)J   — a java/lang/ArrayStoreException (aastore mismatch)
     static long newNaseAddr;           // VM.newNase(J)J   — a java/lang/NegativeArraySizeException (newarray < 0)
     static long dremAddr;              // VM.drem(DD)D    — frem/drem (AArch64 has no remainder instruction)
     static long multiNewArrayAddr;     // VM.multiNewArray(JIIIII)J — multianewarray (JVMS 6.5)
     static long monEnterSyncAddr;      // VM.monEnterSync(JJ)V — a synchronized METHOD's implicit monitorenter
     static long monExitSyncAddr;       // VM.monExitSync()V    — ... and its release on normal return
     static long arrayStoreOkAddr;      // VM.arrayStoreOk(JJ)I — aastore covariant type check
-    static long newCceAddr;            // VM.newCce()J    — a java/lang/ClassCastException (failed checkcast)
+    static long newCceAddr;            // VM.newCce(JJ)J  — a java/lang/ClassCastException (failed checkcast)
     static long castOkAddr;            // VM.castOk(JJ)I  — checkcast predicate (1 = holds, 0 = throw)
     static long newUnresolvedAddr;     // VM.newUnresolved(J)J — an executed `new` the loader resolves late
     static long ctorRefInit0;          // VM.ctorRefInit(J)V — a constructor reference initializes its target (JVMS 5.5)

@@ -97,11 +97,11 @@ public interface Symbols
     int JOIN_TIMED = 38;        // vm/VM.joinTimed(JJ)I         — Thread.join(Duration)
     int PARK = 39;              // vm/VM.park()V                — LockSupport.park
     int UNPARK = 40;            // vm/VM.unpark(J)V             — LockSupport.unpark
-    int NEW_ASE = 41;           // vm/VM.newAse()J    — a java/lang/ArrayStoreException (aastore type mismatch)
+    int NEW_ASE = 41;           // vm/VM.newAse(J)J   — a java/lang/ArrayStoreException (aastore type mismatch)
     int ARRAY_STORE_OK = 42;    // vm/VM.arrayStoreOk(JJ)I — 1 if a value may be aastore'd into an array, else 0
     int NEW_UNRESOLVED = 43;    // vm/VM.newUnresolved(J)J — `new` the loader cannot resolve at compile time
     int CAST_OK = 44;           // vm/VM.castOk(JJ)I  — 1 if a checkcast holds, else 0 (the JIT then throws)
-    int NEW_CCE = 45;           // vm/VM.newCce()J    — a java/lang/ClassCastException (failed checkcast)
+    int NEW_CCE = 45;           // vm/VM.newCce(JJ)J   — a java/lang/ClassCastException (failed checkcast)
     int SET_PRIO = 46;          // vm/VMScheduler.setPriority(JI)V — Thread.setPriority (0..1024 scale)
     int GET_PRIO = 47;          // vm/VMScheduler.getPriority(J)I  — Thread.getPriority (0..1024 scale)
     // NOTE FOR THE NEXT HELPER ADDED: these ids are ONE namespace (everything MetalSymbols.helperAddr

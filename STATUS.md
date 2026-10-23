@@ -4,6 +4,49 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **AN EXCEPTION IN FLIGHT BELONGS TO ITS THREAD: NO GLOBAL SLOT, A PER-TASK UNWIND BUFFER, AND CCE/ASE BUILT
+  FROM THEIR OPERANDS (2026-10-23).** Found by a new race probe, run on main first.
+  - **New ExcMessageRaceProbe:** four threads × 3000 rounds each throw and catch a `ClassCastException` (each
+    thread casts to a different box type) and an `ArrayStoreException`, and count right and wrong messages.
+    Output generated on the host JVM with `-XX:-OmitStackTraceInFastThrow`; HotSpot otherwise drops the
+    messages of hot implicit exceptions (noted in the `probes.txt` header). Marked `solo`.
+  - **Measured on main:** a data abort (`far=0xE2AA1F03E1580090`) and a nested fault. Three pieces of exception
+    state were shared by every core:
+    - the in-flight exception: `athrow` and the implicit checks stored it in one static slot
+      (`symbols.exceptionSlot`) between the throw and the handler test;
+    - `VMUnwind`'s register-restore buffer, one for the whole VM. With the slot fixed, the probe printed
+      `VIRTUALRESOLVE FAILED java/lang/String.incrementAndGet`: another task's saved registers;
+    - the CCE/ASE message statics (`noteCastFailure`/`noteStoreFailure`): `CLASS NAME UNRESOLVED type=0`.
+    Which of the three caused main's data abort was not isolated; all three are races.
+  - **What it does now:**
+    - the exception stays on top of the operand stack from the throw through `captureTrace`, each typed-handler
+      `instanceOf` and `VMUnwind.unwind`;
+    - `VMUnwind` keeps 16 slots per task (`unwindLocBufs`, indexed by `curTask()`);
+    - `VM.newCce(ref, targetType)` and `VM.newAse(value)` take the operands and build the message from them.
+  - **Two bugs in the first version, both in methods with a deep operand stack (more than 7 entries):**
+    - `checkCast` resolved the object's register inside the throw block, so on the passing path the reload
+      never ran and the register held stale data: a deterministic NPE at `th.start()` in the probe's `main`.
+      Found by bisecting the thread body. The register is now resolved before the branch.
+    - the full regression hung InflaterProbe (`BAD THROW exc=0xFFFFFFFFFFFFFFFF` in `Inflater.inflate`):
+      a handler expects the exception in x9, and the new inline-catch path left it only in memory. `emitCatch`
+      now moves it to x9, and the typed-handler test makes it resident before its branch.
+  - **Found, not changed:** `symbols.exceptionSlot` and its writer plumbing are now unused by Baseline.
+    `SelfBuild` has no `newNase` entry (pre-existing).
+  - **Checks (d33267f):**
+    - full regression: 103 of 103 in 18m21s. AccessFlagsProbe, ExecutorProbe and RuntimeProbe differed in their
+      batch by a watchdog line only (`GC: core stuck parked`, `LOADER LOCK stuck`, `STW TIMEOUT`) and passed
+      alone;
+    - demo suite: matches the control at d7784d0 (40 returned normally, `gc: collections=51`, 0 markers,
+      HML/HML, 4 of 4 cores);
+    - JUnit: `ran 45, failures 0`.
+  - **Pi:** PASS (2026-10-23, d33267f).
+    - `clock: SNTP 66.118.229.14 -> 2026-10-23 17:15:19 UTC`; 4 of 4 cores.
+    - NetDemo HTTP 200 (bytes=892; the response headers vary).
+    - `netif wlan0 /192.168.1.247/24 [/192.168.1.255] mac e4:5f:01:69:a6:c5 up=true mtu=1500`,
+      `[main returned normally]`, `gc: collections=7`.
+    - Per-batch `clinits=` 441/441/442/442/443/443 and batch 1 at 1590 classes, as at bd8ffb4.
+    - Batch 1 `tot=` 10.73 s (bd8ffb4 10.77). No failure markers and no `vtparity` line.
+
 - **TWO BUILDS OF ONE COMMIT GIVE THE SAME IMAGE: APP.JAR'S ENTRY TIMESTAMPS ARE PINNED (2026-10-23).** Two
   builds of 4ec41b0 in the flash checkout gave images of the same size that differed at byte 31,963,643 (the
   card below).
