@@ -4,6 +4,36 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **TWO BUILDS OF ONE COMMIT GIVE THE SAME IMAGE: APP.JAR'S ENTRY TIMESTAMPS ARE PINNED (2026-10-23).** Two
+  builds of 4ec41b0 in the flash checkout gave images of the same size that differed at byte 31,963,643 (the
+  card below).
+  - **Measured:** two local builds of one tree differed in 10 bytes, all inside `/lib/app.jar`'s zip headers
+    (the DOS modification time). `make image` repacks the jar every time, and `jar --create` stamps each entry
+    with the build's clock. The rest of the image was identical.
+  - **What it does now:** the `appjar` rule passes `--date=2026-01-01T00:00:00Z` (`JARDATE` in the Makefile).
+  - **Checks:**
+    - two incremental builds are identical, and so are two `make clean` builds;
+    - in the flash checkout, a rebuild after flashing was byte-identical to the card's image;
+    - ReflectLookupProbe (reads app.jar), ZipFileProbe and ClassResourceProbe pass 3 of 3.
+    - NOT RUN: the all-probe regression, the demo suites and JUnit.
+  - **Found, not changed:**
+    - `vm/VM.wallEpochMs` (`writer/BuildEpoch`) differs between checkouts at different commits. That is by
+      design: it is `SOURCE_DATE_EPOCH` or HEAD's commit time, never the build time.
+    - STALE CLASSES IN `out/` ARE BAKED. Before a `make clean`, the main checkout built an image 103,808 bytes
+      larger than a clean build of the same tree. `BuildRuntimeImage.registerTree` registers every `.class` under
+      `out/`, and nothing removes one whose source is gone. `guest` wipes only the guest package directories,
+      and test classes land in `out/`'s root. The leftovers were deleted by the clean, so which classes they
+      were is not known. A probe-harness run, `make test` and `make overlaycheck` did not recreate them.
+      Workaround: `make clean` before an image that will be compared.
+    - Sorting `registerTree`'s walk was tried. It gave a byte-identical image on this disk, so it was not kept.
+  - **Pi:** PASS (2026-10-23, bd8ffb4).
+    - `clock: SNTP 216.66.48.42 -> 2026-10-23 11:51:57 UTC`; 4 of 4 cores.
+    - NetDemo HTTP 200 (bytes=891).
+    - `netif wlan0 /192.168.1.247/24 [/192.168.1.255] mac e4:5f:01:69:a6:c5 up=true mtu=1500`,
+      `[main returned normally]`, `gc: collections=7`.
+    - Per-batch `clinits=` 441/441/442/442/443/443 and batch 1 at 1590 classes, as at 4ec41b0.
+    - Batch 1 `tot=` 10.77 s (4ec41b0 10.77). No failure markers and no `vtparity` line.
+
 - **A DIVIDE BY ZERO IN A CALL-FREE METHOD REACHES ITS CALLER'S HANDLER; ARITHMETICEXCEPTION SAYS "/ BY ZERO"
   (2026-10-23).** Found by a new probe of `ArithmeticException` messages, run on main first.
   - **Measured on main with the new probe:** its first case, `7 / 0` in a lambda body, was not caught by the
