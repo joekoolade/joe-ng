@@ -2746,6 +2746,8 @@ public final class Baseline
             symbols.type(cb, t, exCatchType[i]);
             emitCall(cb, 2, true, false, SYM_HELPER, Symbols.INSTANCE_OF);  // (exc, catchType) -> int
             int cond = popReg();
+            opSlot(sp - 1);                 // the exception resident BEFORE the branch (see emitCatch): a reload
+                                            //   emitted after it would run on the matched path only
             int skip = cb.emit(A64Enc.cbz(cond, 0));
             emitCatch(cb, exHandlerPc[i]);                       // matched
             cb.set(skip, A64Enc.cbz(cond, cb.wordCount() - skip));
@@ -2941,10 +2943,21 @@ public final class Baseline
         cb.set(over, A64Enc.bcond(A64Enc.LO, cb.wordCount() - over));
     }
 
-    /** Branch to a handler with the exception already on top of the stack (it expects it at depth 1). */
+    /**
+     * Branch to a handler with the exception on top of the stack (it expects it at depth 1). A handler takes it
+     * in SLOT 0'S REGISTER (x9) even in a deep method -- the merge-point code marks slot 0 resident there, because
+     * that is how the cross-method unwind delivers it -- so it is moved there explicitly: in a deep method the
+     * helper calls before this left it only in memory, and the handler read whatever x9 held (InflaterProbe:
+     * {@code BAD THROW exc=0xFFFFFFFFFFFFFFFF} from a synchronized block's rethrow).
+     */
     private void emitCatch(CodeBuffer cb, int handlerPc)
     {
-        syncOut(cb);            // deep: spill the exception (slot 0) to memory; the handler reloads it via syncIn
+        int exc = opSlot(sp - 1);
+        if (exc != OP_BASE)
+        {
+            cb.emit(A64Enc.movReg(OP_BASE, exc));
+        }
+        syncOut(cb);            // deep: also spill it to slot 0's memory home
         int w = cb.emit(A64Enc.b(0));
         addFixup(w, handlerPc, FIX_B, 0);
         recordDepth(handlerPc);                                  // fall-through (next check) keeps the exception
