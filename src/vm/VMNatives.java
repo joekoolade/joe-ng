@@ -254,11 +254,6 @@ final class VMNatives
         return x;
     }
 
-    /**
-     * {@code java/lang/System.arraycopy(src, srcPos, dst, dstPos, len)} — the most-used java.base native.
-     * The element size comes from the source array's header (TIB slot), so it's generic over element type;
-     * the copy is byte-wise and overlap-safe (like {@code memmove}, as {@code arraycopy} requires).
-     */
     /** Element size (bytes) of an array: a raw array keeps it in @0; a typed array keeps it in its array Type's tag. */
     static long elemSize(long arr)
     {
@@ -270,30 +265,10 @@ final class VMNatives
         return Magic.load64(Magic.load64(tib)) & 0xFFFFL;  // typed: arr@0=TIB, TIB[0]=Type, Type[0]=tag|elemSize
     }
 
+    /** {@code java/lang/System.arraycopy(src, srcPos, dst, dstPos, len)}, the most-used java.base native: see {@link ArrayCopy}. */
     static void arraycopy(long src, int srcPos, long dst, int dstPos, int len)
     {
-        long es = elemSize(src);                            // element size (bytes), raw header or typed array Type
-        long n = (long) len * es;
-        long from = src + 24L + (long) srcPos * es;        // ARRAY_BASE_OFFSET = 24
-        long to = dst + 24L + (long) dstPos * es;
-        if (to <= from)                                    // forward copy (no clobber when dst <= src)
-        {
-            long i = 0L;
-            while (i < n)
-            {
-                Magic.store8(to + i, (byte) Magic.load8(from + i));
-                i = i + 1L;
-            }
-        }
-        else                                               // backward copy (overlap: dst after src)
-        {
-            long i = n;
-            while (i > 0L)
-            {
-                i = i - 1L;
-                Magic.store8(to + i, (byte) Magic.load8(from + i));
-            }
-        }
+        ArrayCopy.arraycopy(src, srcPos, dst, dstPos, len);   // the checks, stock's messages, then the copy
     }
 
     /**

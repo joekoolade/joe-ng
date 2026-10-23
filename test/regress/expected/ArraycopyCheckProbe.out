@@ -1,0 +1,27 @@
+null src: java.lang.NullPointerException: null dst [0, 0]
+null dst: java.lang.NullPointerException: null dst null
+String src: java.lang.ArrayStoreException: arraycopy: source type java.lang.String is not an array dst [null, null]
+String dst: java.lang.ArrayStoreException: arraycopy: destination type java.lang.String is not an array dst s
+int[] to long[]: java.lang.ArrayStoreException: arraycopy: type mismatch: can not copy int[] into long[] dst [0, 0]
+int[] to Object[]: java.lang.ArrayStoreException: arraycopy: type mismatch: can not copy int[] into object array[] dst [null, null]
+Object[] to int[]: java.lang.ArrayStoreException: arraycopy: type mismatch: can not copy object array[] into int[] dst [0, 0]
+src negative: java.lang.ArrayIndexOutOfBoundsException: arraycopy: source index -1 out of bounds for int[2] dst [0, 0]
+dst negative: java.lang.ArrayIndexOutOfBoundsException: arraycopy: destination index -1 out of bounds for int[2] dst [0, 0]
+length negative: java.lang.ArrayIndexOutOfBoundsException: arraycopy: length -1 is negative dst [0, 0]
+src overrun: java.lang.ArrayIndexOutOfBoundsException: arraycopy: last source index 3 out of bounds for int[2] dst [0, 0]
+dst overrun: java.lang.ArrayIndexOutOfBoundsException: arraycopy: last destination index 4 out of bounds for object array[3] dst [null, null, null]
+Integer among Strings: java.lang.ArrayStoreException: arraycopy: element type mismatch: can not cast one of the elements of java.lang.Object[] to the type of the destination array, java.lang.String dst [a, b, null, null]
+Integer among Strings from 1: java.lang.ArrayStoreException: arraycopy: element type mismatch: can not cast one of the elements of java.lang.Object[] to the type of the destination array, java.lang.String dst [b, null, null]
+String[][] to Integer[][]: java.lang.ArrayStoreException: arraycopy: type mismatch: can not copy [Ljava.lang.String;[] into [Ljava.lang.Integer;[] dst [[null]]
+Integer[] to Number[]: copied [1, 2]
+Object[] of Integers to Number[]: copied [1, 2]
+nulls to String[]: copied [null, null]
+boolean[] to byte[]: java.lang.ArrayStoreException: arraycopy: type mismatch: can not copy boolean[] into byte[] dst [0, 0]
+int[] to float[]: java.lang.ArrayStoreException: arraycopy: type mismatch: can not copy int[] into float[] dst [0.0, 0.0]
+String[] of nulls to Integer[]: copied [null, null]
+char[] middle: copied ..bcd.
+zero length at the end: copied [0, 0]
+overlap forward [1, 1, 2, 3, 4]
+overlap backward [b, c, d, e, e]
+through a frame that does not catch: arraycopy: element type mismatch: can not cast one of the elements of java.lang.Object[] to the type of the destination array, java.lang.String
+ArraycopyCheckProbe done
