@@ -188,6 +188,7 @@ class Array {
     public static Object get(Object array, int index)
         throws IllegalArgumentException, ArrayIndexOutOfBoundsException
     {
+        checkElement(array, index, false);
         if (array instanceof Object[] a)
         {
             return a[index];
@@ -246,6 +247,7 @@ class Array {
     public static boolean getBoolean(Object array, int index)
         throws IllegalArgumentException, ArrayIndexOutOfBoundsException
     {
+        checkElement(array, index, true);
         if (array instanceof boolean[] a)
         {
             return a[index];
@@ -272,6 +274,7 @@ class Array {
     public static byte getByte(Object array, int index)
         throws IllegalArgumentException, ArrayIndexOutOfBoundsException
     {
+        checkElement(array, index, true);
         if (array instanceof byte[] a)
         {
             return a[index];
@@ -298,6 +301,7 @@ class Array {
     public static char getChar(Object array, int index)
         throws IllegalArgumentException, ArrayIndexOutOfBoundsException
     {
+        checkElement(array, index, true);
         if (array instanceof char[] a)
         {
             return a[index];
@@ -324,6 +328,7 @@ class Array {
     public static short getShort(Object array, int index)
         throws IllegalArgumentException, ArrayIndexOutOfBoundsException
     {
+        checkElement(array, index, true);
         if (array instanceof short[] a)
         {
             return a[index];
@@ -354,6 +359,7 @@ class Array {
     public static int getInt(Object array, int index)
         throws IllegalArgumentException, ArrayIndexOutOfBoundsException
     {
+        checkElement(array, index, true);
         if (array instanceof int[] a)
         {
             return a[index];
@@ -392,6 +398,7 @@ class Array {
     public static long getLong(Object array, int index)
         throws IllegalArgumentException, ArrayIndexOutOfBoundsException
     {
+        checkElement(array, index, true);
         if (array instanceof long[] a)
         {
             return a[index];
@@ -434,6 +441,7 @@ class Array {
     public static float getFloat(Object array, int index)
         throws IllegalArgumentException, ArrayIndexOutOfBoundsException
     {
+        checkElement(array, index, true);
         if (array instanceof float[] a)
         {
             return a[index];
@@ -480,6 +488,7 @@ class Array {
     public static double getDouble(Object array, int index)
         throws IllegalArgumentException, ArrayIndexOutOfBoundsException
     {
+        checkElement(array, index, true);
         if (array instanceof double[] a)
         {
             return a[index];
@@ -531,6 +540,12 @@ class Array {
     public static void set(Object array, int index, Object value)
         throws IllegalArgumentException, ArrayIndexOutOfBoundsException
     {
+        checkArray(array, false);
+        if (value == null && !(array instanceof Object[]))
+        {
+            throw new IllegalArgumentException();  // unboxing null, before the bounds check, as HotSpot does
+        }
+        checkElement(array, index, false);
         if (array instanceof Object[] a)
         {
             if (value != null && !a.getClass().getComponentType().isInstance(value))
@@ -574,7 +589,6 @@ class Array {
         }
         else
         {
-            getLength(array);                      // NPE for null, IAE for a non-array, before the mismatch
             throw new IllegalArgumentException("argument type mismatch");
         }
     }
@@ -599,6 +613,7 @@ class Array {
     public static void setBoolean(Object array, int index, boolean z)
         throws IllegalArgumentException, ArrayIndexOutOfBoundsException
     {
+        checkElement(array, index, true);
         if (array instanceof boolean[] a)
         {
             a[index] = z;
@@ -627,6 +642,7 @@ class Array {
     public static void setByte(Object array, int index, byte b)
         throws IllegalArgumentException, ArrayIndexOutOfBoundsException
     {
+        checkElement(array, index, true);
         if (array instanceof byte[] a)
         {
             a[index] = b;
@@ -680,6 +696,7 @@ class Array {
     public static void setChar(Object array, int index, char c)
         throws IllegalArgumentException, ArrayIndexOutOfBoundsException
     {
+        checkElement(array, index, true);
         if (array instanceof char[] a)
         {
             a[index] = c;
@@ -728,6 +745,7 @@ class Array {
     public static void setShort(Object array, int index, short s)
         throws IllegalArgumentException, ArrayIndexOutOfBoundsException
     {
+        checkElement(array, index, true);
         if (array instanceof short[] a)
         {
             a[index] = s;
@@ -776,6 +794,7 @@ class Array {
     public static void setInt(Object array, int index, int i)
         throws IllegalArgumentException, ArrayIndexOutOfBoundsException
     {
+        checkElement(array, index, true);
         if (array instanceof int[] a)
         {
             a[index] = i;
@@ -819,6 +838,7 @@ class Array {
     public static void setLong(Object array, int index, long l)
         throws IllegalArgumentException, ArrayIndexOutOfBoundsException
     {
+        checkElement(array, index, true);
         if (array instanceof long[] a)
         {
             a[index] = l;
@@ -857,6 +877,7 @@ class Array {
     public static void setFloat(Object array, int index, float f)
         throws IllegalArgumentException, ArrayIndexOutOfBoundsException
     {
+        checkElement(array, index, true);
         if (array instanceof float[] a)
         {
             a[index] = f;
@@ -890,6 +911,7 @@ class Array {
     public static void setDouble(Object array, int index, double d)
         throws IllegalArgumentException, ArrayIndexOutOfBoundsException
     {
+        checkElement(array, index, true);
         if (array instanceof double[] a)
         {
             a[index] = d;
@@ -906,17 +928,19 @@ class Array {
     private static Object newArray(Class<?> componentType, int length)
         throws NegativeArraySizeException
     {
-        if (componentType == void.class)
+        // HotSpot's order and messages (Reflection::reflect_new_array): null, then the length, then void and the
+        // dimension limit, which carry no message.
+        if (componentType == null)
         {
-            throw new IllegalArgumentException("Can not create array of void");
+            throw new NullPointerException();
         }
         if (length < 0)
         {
             throw new NegativeArraySizeException(String.valueOf(length));
         }
-        if (dimensionsOf(componentType) >= 255)
+        if (componentType == void.class || dimensionsOf(componentType) >= 255)
         {
-            throw new IllegalArgumentException("Array type exceeds the 255-dimension limit");
+            throw new IllegalArgumentException();
         }
         return newArray0(componentType, length);
     }
@@ -925,22 +949,16 @@ class Array {
         int[] dimensions)
         throws IllegalArgumentException, NegativeArraySizeException
     {
+        // HotSpot's order and messages (Reflection::reflect_new_multi_array): null, the dimension count, every
+        // count, then void and the combined dimension limit.
         if (componentType == null || dimensions == null)
         {
             throw new NullPointerException();
         }
         int n = dimensions.length;
-        if (n == 0)
+        if (n == 0 || n > 255)
         {
-            throw new IllegalArgumentException("Empty dimensions array");
-        }
-        if (componentType == void.class)
-        {
-            throw new IllegalArgumentException("Can not create array of void");
-        }
-        if (dimensionsOf(componentType) + n > 255)
-        {
-            throw new IllegalArgumentException("Array type exceeds the 255-dimension limit");
+            throw new IllegalArgumentException();
         }
         for (int d : dimensions)
         {
@@ -948,6 +966,10 @@ class Array {
             {
                 throw new NegativeArraySizeException(String.valueOf(d));
             }
+        }
+        if (componentType == void.class || dimensionsOf(componentType) + n > 255)
+        {
+            throw new IllegalArgumentException();
         }
         // levels[k] is the component type of the arrays made at depth k: componentType itself at the innermost
         // depth, one array type wrapped around it per level outwards.
@@ -1004,6 +1026,39 @@ class Array {
      * array")}, an array whose element type cannot be widened to or from the accessor's {@code
      * IllegalArgumentException("argument type mismatch")}.
      */
+    /**
+     * {@code check_array} in HotSpot's jvm.cpp: a null array is an NPE, a non-array "Argument is not an array",
+     * and a reference array given to a primitive accessor "Argument is not an array of primitive type".
+     */
+    private static void checkArray(Object array, boolean primitiveOnly)
+    {
+        if (array == null)
+        {
+            throw new NullPointerException();
+        }
+        if (!array.getClass().isArray())
+        {
+            throw new IllegalArgumentException("Argument is not an array");
+        }
+        if (primitiveOnly && array instanceof Object[])
+        {
+            throw new IllegalArgumentException("Argument is not an array of primitive type");
+        }
+    }
+
+    /**
+     * {@link #checkArray}, then the index: out of bounds is an {@code ArrayIndexOutOfBoundsException} with no
+     * message, as HotSpot's {@code Reflection::array_get}/{@code array_set} throw it, and before any type check.
+     */
+    private static void checkElement(Object array, int index, boolean primitiveOnly)
+    {
+        checkArray(array, primitiveOnly);
+        if (index < 0 || index >= getLength(array))
+        {
+            throw new ArrayIndexOutOfBoundsException();
+        }
+    }
+
     private static RuntimeException mismatch(Object array)
     {
         if (array == null)

@@ -2874,7 +2874,7 @@ public final class Baseline
         cb.emit(A64Enc.sxtw(lenReg, lenReg));                   // the length is an int: canonicalise before testing
         cb.emit(A64Enc.cmpImm(lenReg, 0));
         int over = cb.emit(A64Enc.bcond(A64Enc.GE, 0));         // length >= 0 -> skip the throw block
-        throwImplicit(cb, pos, Symbols.NEW_NASE);
+        throwImplicit(cb, pos, Symbols.NEW_NASE, lenReg, lenReg);    // stock's message is the length
         cb.set(over, A64Enc.bcond(A64Enc.GE, cb.wordCount() - over));
     }
 

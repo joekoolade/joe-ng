@@ -1,0 +1,65 @@
+newInstance(String, -1): java.lang.NegativeArraySizeException: -1
+newInstance(int, -1): java.lang.NegativeArraySizeException: -1
+newInstance(null, 1): java.lang.NullPointerException
+newInstance(void, 1): java.lang.IllegalArgumentException: null
+newInstance(int, 2, -1): java.lang.NegativeArraySizeException: -1
+newInstance(int, new int[0]): java.lang.IllegalArgumentException: null
+newInstance(int, 0).length: 0
+getLength(String): java.lang.IllegalArgumentException: Argument is not an array
+getLength(null): java.lang.NullPointerException
+get(int[2], 2): java.lang.ArrayIndexOutOfBoundsException: null
+get(int[2], -1): java.lang.ArrayIndexOutOfBoundsException: null
+getInt(String[1], 0): java.lang.IllegalArgumentException: Argument is not an array of primitive type
+getInt(long[1], 0): java.lang.IllegalArgumentException: argument type mismatch
+getLong(int[1], 0): 5
+set(String[1], 0, 7): java.lang.IllegalArgumentException: array element type mismatch
+set(int[1], 0, 7L): java.lang.IllegalArgumentException: argument type mismatch
+setInt(long[1], 0, 3) then get: 3
+set(int[1], 0, null): java.lang.IllegalArgumentException: null
+Arrays.copyOf(int[2], -1): java.lang.NegativeArraySizeException: -1
+Arrays.copyOf(Object[], 1, Integer[].class) of a String: java.lang.ArrayStoreException: arraycopy: element type mismatch: can not cast one of the elements of java.lang.Object[] to the type of the destination array, java.lang.Integer
+Arrays.copyOfRange(int[2], 3, 4): java.lang.ArrayIndexOutOfBoundsException: arraycopy: length -1 is negative
+Arrays.copyOfRange(int[2], 1, 0): java.lang.IllegalArgumentException: 1 > 0
+Arrays.copyOfRange(int[3], 1, 5): [2, 3, 0, 0]
+int[] clone is a copy: 1,9 same=false class=true
+String[][] clone is shallow: true class=true
+identityHashCode(null): 0
+Thread.sleep(-1): java.lang.IllegalArgumentException: timeout value is negative
+Thread.sleep(0, 1000000): java.lang.IllegalArgumentException: nanosecond timeout value out of range
+join(-1): java.lang.IllegalArgumentException: timeout value is negative
+Class.forName(null): java.lang.NullPointerException
+Class.forName(""): java.lang.ClassNotFoundException: 
+Class.forName("[I"): class [I
+Class.forName("int"): java.lang.ClassNotFoundException: int
+Class.forName("java/lang/String"): java.lang.ClassNotFoundException: java/lang/String
+Class.forName("[Ljava.lang.String;"): class [Ljava.lang.String;
+String.valueOf(char[], 1, 5): java.lang.StringIndexOutOfBoundsException: Range [1, 1 + 5) out of bounds for length 2
+new String(byte[], -1, 1): java.lang.StringIndexOutOfBoundsException: Range [-1, -1 + 1) out of bounds for length 2
+StringBuilder.append(char[], 1, 5): java.lang.IndexOutOfBoundsException: Range [1, 6) out of bounds for length 1
+newInstance(void, -1): java.lang.NegativeArraySizeException: -1
+newInstance(void, 2, -1): java.lang.NegativeArraySizeException: -1
+get(Object[1], 1): java.lang.ArrayIndexOutOfBoundsException: null
+set(String[1], 1, 7): java.lang.ArrayIndexOutOfBoundsException: null
+set(int[1], 5, null): java.lang.IllegalArgumentException: null
+set(int[1], 0, "s"): java.lang.IllegalArgumentException: argument type mismatch
+setInt(Object[1], 0, 1): java.lang.IllegalArgumentException: Argument is not an array of primitive type
+getInt(String, 0): java.lang.IllegalArgumentException: Argument is not an array
+getInt(int[1], 1): java.lang.ArrayIndexOutOfBoundsException: null
+set(long[1], 0, Integer 3) then get: 3
+new int[n]: java.lang.NegativeArraySizeException: -3
+new String[n]: java.lang.NegativeArraySizeException: -3
+new int[2][n]: java.lang.NegativeArraySizeException: -3
+Class.forName("[[I") == int[][].class: true
+Class.forName("[I") == int[].class: true
+Class.forName("[Ljava.lang.String;") == String[].class: true
+Class.forName("[V"): java.lang.ClassNotFoundException: [V
+Class.forName("["): java.lang.ClassNotFoundException: [
+Class.forName("[II"): java.lang.ClassNotFoundException: [II
+Class.forName("[L;"): java.lang.ClassNotFoundException: [L;
+Class.forName("[Ljava.lang.String"): java.lang.ClassNotFoundException: [Ljava/lang/String
+Class.forName("[Ljava/lang/String;"): java.lang.ClassNotFoundException: [Ljava/lang/String;
+Class.forName("[LNoSuchClass;"): java.lang.ClassNotFoundException: NoSuchClass
+Class.forName of Noisy[] (no initializer): NativeArgProbe$Noisy
+Noisy initialized
+then Noisy.touch(): 1
+NativeArgProbe done

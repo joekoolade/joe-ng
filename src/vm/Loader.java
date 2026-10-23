@@ -7328,6 +7328,10 @@ public final class Loader
             slash[i] = (byte) (c == 0x2E ? 0x2F : c);   // '.' -> '/' (classDir keys are internal names)
             i += 1;
         }
+        if (len > 0 && slash[0] == 0x5B)                // '[': an ARRAY class, named by its descriptor
+        {
+            return arrayForName(slash);
+        }
         int ci = classIndexByName(slash);
         if (ci >= 0)
         {
@@ -7349,6 +7353,63 @@ public final class Loader
         long type = loadClassIncremental(slash);
         ensureClinit(classRegByType(type));             // JVMS 5.5: forName INITIALIZES, and this batch's
         return type == 0L ? 0L : classMirror(type);     // runClinits left a gated initializer pending
+    }
+
+    /**
+     * {@code Class.forName} of an ARRAY name -- {@code "[I"}, {@code "[[Ljava.lang.String;"} -- already turned to
+     * the internal form {@code desc}. It used to look the descriptor up as a CLASS name and answer not found, so
+     * every reflective route to an array class by name threw ClassNotFoundException.
+     *
+     * <p>The descriptor must be exact: one to 255 '[', then one primitive char that is not 'V', or
+     * {@code L<name>;} with a non-empty name; anything else is not found, as on stock. A reference element is
+     * LOADED but not INITIALIZED -- stock's {@code forName} initializes the class it names, and an array class has
+     * no initializer, so its element's {@code <clinit>} waits for the element's own first active use.
+     */
+    private static long arrayForName(byte[] desc)
+    {
+        int len = desc.length;
+        int dims = 0;
+        while (dims < len && desc[dims] == 0x5B)
+        {
+            dims += 1;
+        }
+        if (dims > 255 || dims == len)
+        {
+            return 0L;
+        }
+        int c = desc[dims];
+        if (c == 0x4C)                                  // 'L': a class element, "L<name>;"
+        {
+            if (len < dims + 3 || desc[len - 1] != 0x3B)
+            {
+                return 0L;
+            }
+            byte[] el = new byte[len - dims - 2];
+            int k = 0;
+            while (k < el.length)
+            {
+                int b = desc[dims + 1 + k];
+                if (b == 0x3B || b == 0x5B)             // ';' or '[' inside the name: malformed
+                {
+                    return 0L;
+                }
+                el[k] = (byte) b;
+                k += 1;
+            }
+            if (classIndexByName(el) < 0)
+            {
+                if (isDenylisted(utf8Blob(el), 0) || loadClassIncremental(el) == 0L)
+                {
+                    return 0L;
+                }
+            }
+        }
+        else if (atypeForDescChar(c) < 0 || len != dims + 1)
+        {
+            return 0L;                                  // 'V', an unknown char, or trailing bytes
+        }
+        long tib = arrayTibOfDesc(utf8Blob(desc), 0);
+        return tib <= ObjectModel.MAX_RAW_ARRAY_TIB ? 0L : classMirror(Magic.load64(tib));
     }
 
     /**
@@ -23405,12 +23466,30 @@ public final class Loader
         return primNameBytes(c);
     }
 
-    /** Allocate a mini {@code java/lang/NegativeArraySizeException} — the JIT's newarray/anewarray length helper.
-     *  The class is already force-loaded by {@link #pullSupportClasses} and flagged instantiated, so this needs
-     *  no seeding of its own. */
-    static long newNase()
+    /**
+     * Allocate a mini {@code java/lang/NegativeArraySizeException} — the JIT's newarray/anewarray/multianewarray
+     * length helper — whose message is the length in decimal, as stock's is ({@code "-1"}). It used to carry
+     * none. The class is already force-loaded by {@link #pullSupportClasses} and flagged instantiated, so this
+     * needs no seeding of its own.
+     */
+    static long newNase(long length)
     {
-        return newExc(Magic.bytes("java/lang/NegativeArraySizeException"));
+        long exc = newExc(Magic.bytes("java/lang/NegativeArraySizeException"));
+        if (exc == 0L)
+        {
+            return exc;
+        }
+        byte[] msg = new byte[12];
+        int n = putDecAt(msg, 0, (int) length);
+        byte[] text = new byte[n];
+        int k = 0;
+        while (k < n)
+        {
+            text[k] = msg[k];
+            k += 1;
+        }
+        setDetailMessage(exc, text);
+        return exc;
     }
 
     // ----- multianewarray (JVMS 6.5) ---------------------------------------

@@ -1440,10 +1440,10 @@ public final class VM
     }
 
     /** Allocate a mini {@code java/lang/NegativeArraySizeException} — the JIT calls this when a
-     *  {@code newarray}/{@code anewarray} length is negative (JVMS 6.5). */
-    static long newNase()
+     *  {@code newarray}/{@code anewarray}/{@code multianewarray} length is negative (JVMS 6.5), passing it. */
+    static long newNase(long length)
     {
-        return Loader.newNase();
+        return Loader.newNase(length);
     }
 
     /** {@code multianewarray} (JVMS 6.5): the first {@code dims} levels of the array type named by the
@@ -1957,7 +1957,7 @@ public final class VM
         if (newUnresolvedAddr == 0L) { long u = newUnresolved(-1L); } // `new` the loader cannot resolve early
         if (ctorRefInit0 == 0L) { ctorRefInit(-1L); }                 // a constructor reference's <clinit> (JVMS 5.5)
         if (newArithAddr == 0L) { long u = newArith(); }
-        if (newNaseAddr == 0L) { long u = newNase(); }                // NegativeArraySizeException (newarray < 0)
+        if (newNaseAddr == 0L) { long u = newNase(0L); }                // NegativeArraySizeException (newarray < 0)
         if (dremAddr == 0L) { double u = drem(1.0, 1.0); }            // frem/drem
         if (multiNewArrayAddr == 0L) { long u = multiNewArray(0L, 0, 0, 0, 0, 0); }   // multianewarray
         if (monEnterSyncAddr == 0L) { monEnterSync(0L, 0L); }         // a synchronized METHOD's implicit monitor
@@ -3544,7 +3544,7 @@ public final class VM
     static long newAioobeIndexAddr;    // VM.newAioobeIndex(JJ)J — ... with stock's index/length message
     static long newArithAddr;          // VM.newArith()J  — a java/lang/ArithmeticException (divide by zero)
     static long newAseAddr;            // VM.newAse()J    — a java/lang/ArrayStoreException (aastore mismatch)
-    static long newNaseAddr;           // VM.newNase()J   — a java/lang/NegativeArraySizeException (newarray < 0)
+    static long newNaseAddr;           // VM.newNase(J)J   — a java/lang/NegativeArraySizeException (newarray < 0)
     static long dremAddr;              // VM.drem(DD)D    — frem/drem (AArch64 has no remainder instruction)
     static long multiNewArrayAddr;     // VM.multiNewArray(JIIIII)J — multianewarray (JVMS 6.5)
     static long monEnterSyncAddr;      // VM.monEnterSync(JJ)V — a synchronized METHOD's implicit monitorenter

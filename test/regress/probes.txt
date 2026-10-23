@@ -66,6 +66,7 @@ MemberGenericsProbe
 MemberToStringProbe
 MethodRefUnboxProbe
 MonitorStateProbe
+NativeArgProbe
 NestedClinitProbe        solo             # initialization order is the subject
 NestingProbe
 NetStaticsProbe

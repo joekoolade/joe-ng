@@ -111,7 +111,7 @@ public interface Symbols
     // every negative-length throw branched into the late-virtual trampoline with the LENGTH in x0 and
     // reported `BAD RECEIVER recv=0xFFFFFFFFFFFFFFFF site=storeFence()V`, naming a method nothing had called.
     // Take the max over the WHOLE file, not the line above.
-    int NEW_NASE = 53;          // vm/VM.newNase()J   — a java/lang/NegativeArraySizeException (newarray/anewarray)
+    int NEW_NASE = 53;          // vm/VM.newNase(J)J   — a java/lang/NegativeArraySizeException (newarray/anewarray)
     int DREM = 54;              // vm/VM.drem(DD)D    — frem/drem (no AArch64 remainder instruction)
     int MULTI_NEW_ARRAY = 55;   // vm/VM.multiNewArray(JIIIII)J — multianewarray (JVMS 6.5)
     int MON_ENTER_SYNC = 56;    // vm/VM.monEnterSync(JJ)V — a SYNCHRONIZED METHOD's implicit monitorenter
