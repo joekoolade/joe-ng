@@ -1,0 +1,34 @@
+7 / 0 -> java.lang.ArithmeticException: / by zero
+7 % 0 -> java.lang.ArithmeticException: / by zero
+7L / 0L -> java.lang.ArithmeticException: / by zero
+7L % 0L -> java.lang.ArithmeticException: / by zero
+0 / 0 -> java.lang.ArithmeticException: / by zero
+divideDeep(1, 0) -> java.lang.ArithmeticException: / by zero
+remDeep(1L, 0L) -> java.lang.ArithmeticException: / by zero
+divideDeep from main -> caught: / by zero
+char / 0 -> java.lang.ArithmeticException: / by zero
+short % 0 -> java.lang.ArithmeticException: / by zero
+byte / 0 -> java.lang.ArithmeticException: / by zero
+MIN_VALUE / -1 = -2147483648
+MIN_VALUE % -1 = 0
+Long.MIN_VALUE / -1 = -9223372036854775808
+Long.MIN_VALUE % -1 = 0
+7.0 / 0 = Infinity, 0.0 % 0 = NaN
+Math.floorDiv(7, 0) -> java.lang.ArithmeticException: / by zero
+Math.floorMod(7L, 0L) -> java.lang.ArithmeticException: / by zero
+Math.ceilDiv(7, 0) -> java.lang.ArithmeticException: / by zero
+Integer.divideUnsigned(7, 0) -> java.lang.ArithmeticException: / by zero
+Long.remainderUnsigned(7, 0) -> java.lang.ArithmeticException: / by zero
+Math.addExact(MAX, 1) -> java.lang.ArithmeticException: integer overflow
+Math.multiplyExact(MAX, 2L) -> java.lang.ArithmeticException: long overflow
+Math.negateExact(MIN) -> java.lang.ArithmeticException: integer overflow
+Math.toIntExact(1L << 40) -> java.lang.ArithmeticException: integer overflow
+Math.divideExact(MIN, -1) -> java.lang.ArithmeticException: integer overflow
+Math.absExact(Long.MIN) -> java.lang.ArithmeticException: Overflow to represent absolute value of Long.MIN_VALUE
+BigInteger.ONE / 0 -> java.lang.ArithmeticException: BigInteger divide by zero
+BigInteger.ONE mod 0 -> java.lang.ArithmeticException: BigInteger: modulus not positive
+BigInteger 2^40 intValueExact -> java.lang.ArithmeticException: BigInteger out of int range
+BigDecimal.ONE / 0 -> java.lang.ArithmeticException: Division by zero
+BigDecimal.ZERO / 0 -> java.lang.ArithmeticException: Division undefined
+BigDecimal 1/3 exact -> java.lang.ArithmeticException: Non-terminating decimal expansion; no exact representable decimal result.
+ArithMessageProbe done

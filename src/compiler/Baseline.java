@@ -3881,6 +3881,14 @@ public final class Baseline
             {
                 return true;
             }
+            // idiv/ldiv/irem/lrem emit divisorCheck, whose throw path is a BL to newArith -- the same reason.
+            // MEASURED missing: `static int divideDeep(int a, int b) { return a / b; }` saved no LR, so a divide
+            // by zero in it unwound to an `<unclaimed pc>` and skipped its caller's catch (ArithMessageProbe).
+            if (symbols.implicitChecks()
+                && (op == 0x6C || op == 0x6D || op == 0x70 || op == 0x71))
+            {
+                return true;
+            }
             if (op == 0xB8)                                      // invokestatic
             {
                 int idx = u2(code, pos + 1);
