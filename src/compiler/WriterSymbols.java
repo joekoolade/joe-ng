@@ -35,9 +35,6 @@ import compiler.BaselineCompiler.TypeRef;
  */
 final class WriterSymbols implements Symbols, ClassFile.Resolver
 {
-    /** Synthetic statics slot holding the in-flight exception during athrow dispatch. */
-    private static final String EXCEPTION_KEY = "vm/VM.$exception";
-
     /**
      * Runtime-helper method keys, indexed by the ids in {@link Symbols}, and SPARSE: the host writer emits
      * only a handful of these, so ids it never reaches stay null rather than being padded with a guess. A
@@ -338,11 +335,6 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         relocs.strRefs().add(new StrRef(cb.reserveAddr(0), 0, lenName));
         cb.emit(A64.addImm(0, 0, ObjectModel.ARRAY_BASE_OFFSET));
         callHelper(cb, Symbols.ENSURE_INIT);
-    }
-
-    public void exceptionSlot(CodeBuffer cb, int reg)
-    {
-        relocs.staticRefs().add(new StaticRef(cb.reserveAddr(reg), reg, EXCEPTION_KEY));
     }
 
     // ----- Symbols: numeric / boolean queries resolved against the classfiles -----

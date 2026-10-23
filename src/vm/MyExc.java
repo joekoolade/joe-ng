@@ -19,7 +19,7 @@ package vm;
  */
 public final class MyExc extends RuntimeException
 {
-    /** Same-method throw/catch — the metal writer's exceptionSlot (athrow/inline-catch) target. */
+    /** Same-method throw/catch — the metal writer's athrow/inline-catch target. */
     public static int probe()
     {
         try

@@ -244,10 +244,6 @@ final class MetalSymbols implements Symbols
         // under the bump allocator.
         emitAddr(cb, reg, Loader.internStringObj(stringCp));
     }
-    public void exceptionSlot(CodeBuffer cb, int reg)
-    {
-        emitAddr(cb, reg, Loader.exceptionSlotAddr());   // the metal in-flight-exception word
-    }
     // The JIT compiles real java.base-shaped code, which relies on the VM throwing NPE/AIOOBE on a bad
     // deref/index — and the mini exception hierarchy is loaded here, so we can allocate the object.
     public boolean implicitChecks()

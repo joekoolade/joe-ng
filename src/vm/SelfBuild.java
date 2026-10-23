@@ -106,7 +106,7 @@ final class SelfBuild
         Uart.putc(selfBuildInterfaceAndRun() ? 0x69 : 0x78);  // 'i' interface dispatch reloc OK / 'x' broken
         Uart.putc(0x0A);
 
-        // M5.5c step 3b.2: throw/catch (exceptionSlot). Build MyExc.probe (= try { throw new
+        // M5.5c step 3b.2: throw/catch. Build MyExc.probe (= try { throw new
         // MyExc(); } catch (MyExc e) { return 1; }) and run it -> 1 (same-method, inline catch).
         Uart.putc(selfBuildExceptionAndRun() ? 0x65 : 0x78);  // 'e' exception reloc OK / 'x' broken
         Uart.putc(0x0A);
@@ -486,8 +486,6 @@ final class SelfBuild
     private static byte[][] ifIface;   // distinct interfaces referenced by invokeinterface
     private static long[] ifTypeAddr;  // ... its (interface) Type address
     private static int ifCount;
-
-    private static long excSlot;       // the closure's in-flight-exception word (athrow/catch)
 
     /**
      * Build {@code Cell.make} (= {@code new Cell(v).value}) into a Heap buffer, lay out
@@ -896,12 +894,6 @@ final class SelfBuild
                 }
                 f += 1;
             }
-            int x = 0;
-            while (x < sym.excCount())
-            {
-                patchAddrWords(words, sym.excSiteWord(x), sym.excReg(x), excSlot);  // the shared exc slot
-                x += 1;
-            }
             writeWords(buf, baseOff, words);
             m += 1;
         }
@@ -1138,7 +1130,6 @@ final class SelfBuild
         }
         long codeBuf = Heap.allocData(cur * 4);
 
-        excSlot = Heap.allocData(8);                            // the closure's in-flight-exception word
         layoutClassRegions(codeBuf);
         boolean ok = patchNewAndWrite(codeBuf);
         Heap.publishCode(codeBuf, codeBuf + cur * 4L);
@@ -1252,7 +1243,7 @@ final class SelfBuild
         // It must be relocation-free (else its bytes depend on layout we're not reproducing here).
         if (sym.callCount() != 0 || sym.helperCount() != 0 || sym.staticCount() != 0
                 || sym.tibCount() != 0 || sym.typeCount() != 0 || sym.strCount() != 0
-                || sym.ifCount() != 0 || sym.excCount() != 0)
+                || sym.ifCount() != 0)
         {
             return false;
         }
@@ -1283,7 +1274,7 @@ final class SelfBuild
         // Exactly one relocation: a call to instanceOf; nothing else.
         if (sym.callCount() != 1 || !sym.callNameIs(0, Magic.bytes("instanceOf"))
                 || sym.helperCount() != 0 || sym.staticCount() != 0 || sym.tibCount() != 0
-                || sym.typeCount() != 0 || sym.strCount() != 0 || sym.ifCount() != 0 || sym.excCount() != 0)
+                || sym.typeCount() != 0 || sym.strCount() != 0 || sym.ifCount() != 0)
         {
             return false;
         }
@@ -1395,7 +1386,6 @@ final class SelfBuild
             s += 1;
         }
 
-        excSlot = Heap.allocData(8);                            // the closure's in-flight-exception word
         layoutClassRegionsG(codeBuf);
         boolean ok = patchCrossAndWrite(codeBuf);
         Heap.publishCode(codeBuf, codeBuf + cur * 4L);
@@ -1788,39 +1778,14 @@ final class SelfBuild
             useClinit(utf8Copy(sym.tibClassOff(t)));
             t += 1;
         }
-        // 4: statics region -- real static fields (getstatic/putstatic) and the shared $exception
-        //    slot (athrow/catch), merged by emission order as the seed's single staticRefs list is,
-        //    plus each field owner's <clinit>.
+        // 4: statics region -- real static fields (getstatic/putstatic), in emission order as the seed's
+        //    staticRefs list is, plus each field owner's <clinit>.
         int si = 0;
-        int xi = 0;
-        int ns = sym.staticCount();
-        int nx = sym.excCount();
-        while (si < ns || xi < nx)
+        while (si < sym.staticCount())
         {
-            boolean takeStatic;
-            if (si >= ns)
-            {
-                takeStatic = false;
-            }
-            else if (xi >= nx)
-            {
-                takeStatic = true;
-            }
-            else
-            {
-                takeStatic = sym.staticSiteWord(si) < sym.excSiteWord(xi);
-            }
-            if (takeStatic)
-            {
-                drAddStat(utf8Copy(sym.staticClassOff(si)), utf8Copy(sym.staticNameOff(si)));
-                useClinit(utf8Copy(sym.staticClassOff(si)));
-                si += 1;
-            }
-            else
-            {
-                drAddStat(Magic.bytes("vm/VM"), Magic.bytes("$exception"));
-                xi += 1;
-            }
+            drAddStat(utf8Copy(sym.staticClassOff(si)), utf8Copy(sym.staticNameOff(si)));
+            useClinit(utf8Copy(sym.staticClassOff(si)));
+            si += 1;
         }
         useClinit(ownerCls);                                 // 5: the method's own class <clinit>
         t = 0;
@@ -2176,13 +2141,6 @@ final class SelfBuild
         {
             patchAddrWords(words, sym.strSiteWord(sg), sym.strReg(sg), strImgAddr(utf8Copy(sym.strUtf8Off(sg))));
             sg += 1;
-        }
-        int x = 0;
-        while (x < sym.excCount())
-        {
-            patchAddrWords(words, sym.excSiteWord(x), sym.excReg(x),
-                           statImgAddr(Magic.bytes("vm/VM"), Magic.bytes("$exception")));
-            x += 1;
         }
         int pc = 0;
         while (pc < sym.pcCount())
@@ -3328,12 +3286,6 @@ final class SelfBuild
                     patchAddrWords(words, sym.ifSiteWord(f), sym.ifReg(f), ifTypeAddr[k]);
                 }
                 f += 1;
-            }
-            int xc = 0;
-            while (xc < sym.excCount())
-            {
-                patchAddrWords(words, sym.excSiteWord(xc), sym.excReg(xc), excSlot);
-                xc += 1;
             }
             int pcx = 0;
             while (pcx < sym.pcCount())                        // athrow self-PC: relocate to its final address

@@ -8989,17 +8989,6 @@ public final class Loader
 
     /** The on-metal symbol seam: resolves the shared Baseline core's references to addresses. */
     private static final MetalSymbols METAL_SYMBOLS = new MetalSymbols();
-    private static long gExcSlot;   // one heap word holding the in-flight exception during athrow
-
-    /** Address of the metal in-flight-exception slot (the writer's vm/VM.$exception). */
-    static long exceptionSlotAddr()
-    {
-        if (gExcSlot == 0L)
-        {
-            gExcSlot = Heap.allocData(8);
-        }
-        return gExcSlot;
-    }
 
 
 
