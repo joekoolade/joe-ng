@@ -4,6 +4,44 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **A DIVIDE BY ZERO IN A CALL-FREE METHOD REACHES ITS CALLER'S HANDLER; ARITHMETICEXCEPTION SAYS "/ BY ZERO"
+  (2026-10-23).** Found by a new probe of `ArithmeticException` messages, run on main first.
+  - **Measured on main with the new probe:** its first case, `7 / 0` in a lambda body, was not caught by the
+    caller's `catch (ArithmeticException)`. The VM printed it as uncaught and the program ended.
+    - The same divide is caught when the handler is in the SAME method.
+    - In `static int divideDeep(int a, int b) { return a / b; }` it skipped the caller's handler. The trace went
+      from `divideDeep` to an `<unclaimed pc=0x63F36EC>` and then straight to `Loader.launchMain`.
+    - The exception had no message; stock's is `/ by zero`.
+  - **Cause:** with implicit checks on, `Baseline.isNonLeaf` counted the field, array and `arraylength` opcodes
+    as calls, because their throw path is a BL to a VM helper. It did not count `idiv`/`ldiv`/`irem`/`lrem`,
+    whose `divisorCheck` throw path is a BL to `newArith`. A method whose only call was that divide saved no
+    LR, so the unwinder read a junk return address. This affected every such method on the metal, not only
+    probe code.
+  - **What it does now:** the four opcodes make a method non-leaf under implicit checks. The baked image's code
+    has implicit checks off and is unchanged. `Loader.newArith` sets the message `/ by zero`.
+  - **New ArithMessageProbe** (output generated on the host JVM):
+    - the implicit divide and remainder exceptions for int, long, char, short and byte;
+    - the call-free crossing in both widths, from a lambda and directly from `main`;
+    - the non-throwing `MIN_VALUE / -1` and `% -1` edges;
+    - the library's own `ArithmeticException`s from `Math`, `Integer`/`Long` unsigned division, `BigInteger`
+      and `BigDecimal`.
+  - **Checks (4ec41b0):** ArithMessageProbe passes. A batch of eight neighbouring probes passes 8 of 8:
+    ArithMessageProbe, OobMessageProbe, NativeArgProbe, ThrowableToStringProbe, StockExceptionProbe,
+    ArraycopyCheckProbe, WideIincProbe, TypeCheckProbe. `make test`: exit 0. `make overlaycheck`: 0 new.
+    - NOT RUN: the all-probe regression, the demo suites and JUnit. They now run only on request.
+  - **Pi:** PASS (2026-10-23, 4ec41b0).
+    - `clock: SNTP 192.231.84.116 -> 2026-10-23 11:35:03 UTC`; 4 of 4 cores.
+    - NetDemo HTTP 200 (bytes=891, `Age: 8342`).
+    - `netif wlan0 /192.168.1.247/24 [/192.168.1.255] mac e4:5f:01:69:a6:c5 up=true mtu=1500`,
+      `[main returned normally]`, `gc: collections=7`.
+    - Per-batch `clinits=` 441/441/442/442/443/443 and batch 1 at 1590 classes, as at b48ead2.
+    - Batch 1 `tot=` 10.77 s (b48ead2 10.18, 8af4cb3 10.73); one run each, not investigated. No failure
+      markers and no `vtparity` line.
+    - The WiFi join logged `(skip ch=0x...01`. This is `Cyw43.recvCtrl` logging an event frame that arrived
+      while it waited for an ioctl reply, and the join printed extra events (1, 0, 6, 3) this time.
+  - **Not reproducible byte for byte:** two builds of 4ec41b0 in the flash checkout gave images of the same size
+    that differ at byte 31,963,643. The card holds the second build. Cause not looked into.
+
 - **CLASS.FORNAME NAMES ARRAY CLASSES; NASE CARRIES ITS LENGTH; REFLECTIVE ARRAY ERRORS MATCH HOTSPOT
   (2026-10-23).** A new probe of the natives' argument checks, run on main first, found four differences from
   stock.
