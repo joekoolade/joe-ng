@@ -215,6 +215,9 @@ plugins:
 # The classpath jar: an ordinary Java program compiled OUTSIDE the classDir (out/) and packaged with the seed
 # JDK's `jar` tool into ramfs/lib/app.jar. It is deliberately NOT embedded as a class -- on the metal it exists
 # only inside the archive, and /etc/init's `classpath=` line is what makes it loadable (vm/JarFs).
+# `--date` pins every entry's timestamp. Without it each `make image` stamped the build's clock into the jar,
+# so two builds of one commit differed in ten bytes of the RAMFS and nothing else (measured 2026-10-23).
+JARDATE := 2026-01-01T00:00:00Z
 JARSRC := $(shell find jarsrc -name '*.java' 2>/dev/null)
 JARCLASSES := $(OUT)/../.appjar
 .PHONY: appjar
@@ -222,7 +225,7 @@ appjar: guest
 	@if [ -n "$(JARSRC)" ]; then \
 	  rm -rf $(JARCLASSES) && mkdir -p $(JARCLASSES) ramfs/lib && \
 	  $(JAVAC) -implicit:none -sourcepath '' --patch-module java.base=guestsrc --add-reads java.base=ALL-UNNAMED -cp $(OUT) -d $(JARCLASSES) $(JARSRC) && \
-	  jar --create --file ramfs/lib/app.jar --main-class app.Main -C $(JARCLASSES) . && \
+	  jar --create --date=$(JARDATE) --file ramfs/lib/app.jar --main-class app.Main -C $(JARCLASSES) . && \
 	  ls -l ramfs/lib/app.jar; fi
 
 # The JUnit API + engine, staged into the RAMFS so the guest can load it at RUNTIME. Deliberately a COPY of
