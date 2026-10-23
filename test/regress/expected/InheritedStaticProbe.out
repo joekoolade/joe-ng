@@ -1,0 +1,6 @@
+one level -> base-shared 7
+two levels -> base-shared 7
+interface static via implementor -> [alpha, beta]
+write via subclass, read via declarer -> 42 written via Mid
+shadowing -> shadow-own | base still written via Mid
+InheritedStaticProbe done

@@ -1,0 +1,8 @@
+A inline recv, 2-field holder:
+      this.tag=PROBE out=W reports=java.util.Optional flag=true
+F quiet 2-field holder:
+      this.tag=PROBE out=W reports=java.util.Optional flag=true
+E direct supplier (control):
+      this.tag=PROBE out=W reports=java.util.Optional flag=true
+(want this.tag=PROBE out=W reports=java.util.Optional flag=true)
+CaptureProbe done

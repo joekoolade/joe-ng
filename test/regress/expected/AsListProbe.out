@@ -1,0 +1,4 @@
+asList(Object[3]) = non-null size=3
+asList(varargs 2)  = non-null size=2
+asList(empty)      = non-null size=0
+addAll(asList)     = OK size=3

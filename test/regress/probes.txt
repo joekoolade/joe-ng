@@ -13,52 +13,92 @@
 # ReflectLookupProbe ramfs/lib/app.jar as args[0]; LocaleProbe runs with
 # -Duser.language=en -Duser.country= -Duser.variant= -Duser.script=. ExcMessageRaceProbe runs with
 # -XX:-OmitStackTraceInFastThrow (else HotSpot drops the message of a hot implicit exception).
+#
+# Compiled into the image (Makefile JDKTESTS) but NOT listed, and why (2026-10-23):
+#   OPEN VM BUGS, differ from the host alone -- AnnoProxyProbe (getClasses counts a member class inherited
+#   through an interface; stock: superclasses only), AssertMsgProbe and TraceProbe (a stack trace continues
+#   below main into vm.Loader.launchMain/vm.VM.launchInit/vm.VM.run), TextProbe (DENYLIST TRAP at
+#   Character$UnicodeBlock.of from picocli's CJK width check).
+#   METAL-ONLY BY DESIGN, no host control -- ArchiveProbe, BoxCacheProbe (print addresses and image/heap),
+#   ResourceProbe, ServiceLoaderProbe (no URL support, denied providers), UsageProbe (os.name, terminal
+#   width), SynthNameProbe (hidden-class addresses), SecureRandomProbe, LazyModsProbe (use magic/ or demo/).
+#   OTHER -- FirstCallRaceStress (right answer, but QEMU prints LOADER LOCK watchdog lines), EmptySentinelProbe
+#   (Set.of order is randomized per host run), JUnitApiProbe (fails an assertion on purpose), PicoDirect and
+#   TreeProbe (live in JUnit's packages), MetalJUnit, SampleTest, ProbeBatch (harness pieces).
 
 AccessFlagsProbe
 AccessRulesProbe
+AnnoClassArrayProbe      cp=/lib/junit.jar
 AnnoContractProbe
 AnnoDefaultProbe
 AnnoLoadProbe
+AnnoSlotProbe            cp=/lib/junit.jar
+ArgGroupProbe            cp=/lib/junit.jar
 ArithMessageProbe
 ArrayAllocDepthProbe
 ArrayCovarianceProbe
 ArraycopyCheckProbe
+ArrayElemProbe
 ArrayTypeIdentityProbe
 AseMessageProbe
+AsListProbe              cp=/lib/junit.jar
+AssignableProbe          cp=/lib/junit.jar
+AtomicRaceProbe          solo             # race; timing-sensitive
 AtomicUpdaters
+BannerProbe              cp=/lib/junit.jar
+BigMathProbe
+BitwiseRmwProbe
 ByteViewProbe
+CaptureProbe
 CarrierLocalProbe
+CaseFoldProbe
+CatchDeniedProbe
+CharProbe
 CharsetIdentityProbe
 ChmRaceProbe             solo             # race; timing-sensitive
 ClassResourceProbe       cp=/lib/junit.jar
 ClinitOrderProbe         solo             # initialization order is the subject
 ClinitRaceProbe          solo             # races a first initialization
+CmpProbe
+CollectionsProbe
+ComponentTypeProbe
 ConcatUtf16Probe
 ConstantDescOrderProbe
+ConstantDescProbe
+CslmRaceProbe            solo             # race; timing-sensitive
+CtorRefFieldProbe
+DecimalFormatProbe
 DefaultFrameProbe
 DefaultSpecificProbe
 DeflaterProbe
 DigestProbe              gate=failures=0 divergences-unmet=0
+DupBisectProbe           cp=/lib/junit.jar
+DupOptionProbe           cp=/lib/junit.jar
 EngineMessageProbe
 ExcMessageRaceProbe      solo             # race; timing-sensitive
 ExecutorProbe
 FieldPrimProbe
 FieldSemanticsProbe
+FieldSlotProbe           cp=/lib/junit.jar
 FileProbe
 FirstCallRaceProbe       solo             # races a first compile
 FormatProbe
 FunctionProbe
 GenericsProbe
 GvrProbe                 cp=/lib/junit.jar
+HighLocalThrowProbe      cp=/lib/junit.jar
 IfaceObjectMethodProbe
 InetAddrProbe
 InflaterProbe
+InheritedStaticProbe
 InterruptWaitProbe
 InvokeDefaultProbe
 InvokeSemanticsProbe
 IoStreamProbe
 JavaTimeProbe
 JlaProbe
+Lambda4Probe
+LambdaAdaptProbe
 Lazy                     solo             # lazy initialization is the subject
 LocaleInitProbe          solo             # Locale initialization is the subject
 LocaleProbe              solo             # reads the default locale
@@ -67,10 +107,14 @@ LongBranchProbe          solo             # ~4 MB of code; would crowd the code 
 MacProbe                 gate=failures=0 divergences-unmet=0
 MemberGenericsProbe
 MemberToStringProbe
+MethodRefBoxFloatProbe
 MethodRefUnboxProbe
+MinValueProbe
+MixinProbe               cp=/lib/junit.jar
 MonitorStateProbe
 NativeArgProbe
 NestedClinitProbe        solo             # initialization order is the subject
+NestedEnumProbe          cp=/lib/junit.jar
 NestingProbe
 NetStaticsProbe
 NetIfProbe
@@ -83,37 +127,60 @@ NumberFormatProbe
 ObjectProbe
 OobMessageProbe
 ParamAnnoProbe
+ParameterProbe
 ParkProbe
+ParseOptProbe            cp=/lib/junit.jar
+PatternProbe
+PatternSwitchProbe
 PrintWriterProbe
 ProxyEdgeProbe
 ProxyProbe
+RandomFpProbe
+RandomProbe
 ReaderProbe
+RecordFpProbe
 RecordSealedProbe
 RecordUtf16Probe
 ReflectArrayProbe
 ReflectLookupProbe
 RepeatableProbe
 RuntimeProbe
+SbFpProbe
+SbProbe
+SbTextProbe
 ScannerProbe
 ScopedValueProbe         solo             # known intermittent
+SecretKeyFactoryProbe    gate=failures=0 divergences-unmet=0
 SecurityExtraProbe       solo             # must run before Security initializes
+SecurityProbe
 SecurityPropsProbe       solo             # reads Security state other probes set
 SecuritySetProbe         solo             # sets Security properties
 SemaphoreProbe
+SerLambdaProbe
+SortPrimProbe
 StackWalkerProbe         solo             # prints stack frames; a batch adds its own
 StockExceptionProbe
+StreamProbe
 SuperCallProbe
 SupertypeProbe
 SystemLoggerProbe        solo             # logger initialization
 ThrowableToStringProbe
+TimeUnitProbe
 TlrProbe
+TreeifyProbe
 TypeCheckProbe
+UnsafeAccessProbe
+UnsafeAll                solo             # reruns other probes' mains; their static counters add up
+UnsafeAtomicProbe
 UpdaterRaceProbe
 Utf16PrintProbe
+VarHandleProbe
 VirtualInvokeProbe
+VolatileLitmusProbe      solo             # race; timing-sensitive
 WallClockProbe           solo             # timing
 WideCallProbe
 WideFrameProbe
 WideIincProbe
+WrapProbe
 ZipFileProbe
 ZipNamesProbe

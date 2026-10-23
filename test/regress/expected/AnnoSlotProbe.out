@@ -1,0 +1,6 @@
+OnlyThird  name=c first=false second=false third=true size=-1   (want c/false/false/true/-1)
+OnlySecond name=b first=false second=true third=false size=-1   (want b/false/true/false/-1)
+Reordered  name=a first=true second=false third=false size=9   (want a/true/false/false/9)
+MainCommand.helpRequested names0=-h usageHelp=false versionHelp=false help=true hidden=false   (want usageHelp=false)
+BaseCommand.helpRequested names0=-h usageHelp=true versionHelp=false help=false hidden=false   (want usageHelp=true)
+MainCommand.versionRequested names0=--version usageHelp=false versionHelp=true help=false hidden=false   (want versionHelp=true)

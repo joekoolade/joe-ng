@@ -1,0 +1,20 @@
+-- zero-arg Runnable, intersection-cast --
+  ran = 1
+  instanceof Serializable = 1
+  instanceof Runnable = 1
+  instanceof Object = 1
+-- plain lambda: the control, NOT serializable --
+  ran = 1
+  instanceof Serializable = 0
+  instanceof Runnable = 1
+-- capturing, intersection-cast (the kind-6 shift path) --
+  called = cap:60
+  instanceof Serializable = 1
+  instanceof Callable = 1
+-- a method reference, intersection-cast --
+  ran = 1
+  instanceof Serializable = 1
+-- the directory survived: dispatch again after the type tests --
+  re-ran = 1
+  re-called = cap:60
+SerLambdaProbe done

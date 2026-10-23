@@ -1,0 +1,27 @@
+orInt         ret=12 field=14 (want ret=12 field=14) OK
+orIntAcq      ret=12 field=14 (want ret=12 field=14) OK
+orIntRel      ret=12 field=14 (want ret=12 field=14) OK
+andInt        ret=12 field=8 (want ret=12 field=8) OK
+andIntAcq     ret=12 field=8 (want ret=12 field=8) OK
+andIntRel     ret=12 field=8 (want ret=12 field=8) OK
+xorInt        ret=12 field=6 (want ret=12 field=6) OK
+xorIntAcq     ret=12 field=6 (want ret=12 field=6) OK
+xorIntRel     ret=12 field=6 (want ret=12 field=6) OK
+orLong        ret=3298534883340 field=3298534883342 (want ret=3298534883340 field=3298534883342) OK
+orLongAcq     ret=3298534883340 field=3298534883342 (want ret=3298534883340 field=3298534883342) OK
+orLongRel     ret=3298534883340 field=3298534883342 (want ret=3298534883340 field=3298534883342) OK
+andLong       ret=3298534883340 field=1099511627784 (want ret=3298534883340 field=1099511627784) OK
+andLongAcq    ret=3298534883340 field=1099511627784 (want ret=3298534883340 field=1099511627784) OK
+andLongRel    ret=3298534883340 field=1099511627784 (want ret=3298534883340 field=1099511627784) OK
+xorLong       ret=3298534883340 field=2199023255558 (want ret=3298534883340 field=2199023255558) OK
+xorLongAcq    ret=3298534883340 field=2199023255558 (want ret=3298534883340 field=2199023255558) OK
+xorLongRel    ret=3298534883340 field=2199023255558 (want ret=3298534883340 field=2199023255558) OK
+orIdem        ret=14 field=14 (want ret=14 field=14) OK
+signOr        ret=1 field=-2147483647 (want ret=1 field=-2147483647) OK
+signOr2       ret=-2147483647 field=-2147483645 (want ret=-2147483647 field=-2147483645) OK
+signAnd       ret=-1 field=2147483647 (want ret=-1 field=2147483647) OK
+signAnd2      ret=2147483647 field=15 (want ret=2147483647 field=15) OK
+signXor       ret=1 field=-2147483647 (want ret=1 field=-2147483647) OK
+signXor2      ret=-2147483647 field=1 (want ret=-2147483647 field=1) OK
+setDone prev=0 bit=1073741824 (want prev=0 bit=1073741824)
+BitwiseRmwProbe done

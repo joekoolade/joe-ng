@@ -1,0 +1,4 @@
+CD_Class null       = false (want false)
+BSM_PRIMITIVE null  = false (want false)
+CD_int null         = false (want false)
+ConstantDescProbe done

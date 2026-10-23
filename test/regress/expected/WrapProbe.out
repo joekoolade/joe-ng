@@ -1,0 +1,103 @@
+-- Boolean: interning and the singletons --
+  valueOf(true) == TRUE = 1
+  valueOf(false) == FALSE = 1
+  valueOf(true) == valueOf(true) = 1
+  autobox true == TRUE = 1
+  TRUE != FALSE = 1
+  TYPE == boolean.class = 1
+-- Boolean: values --
+  TRUE.booleanValue() = 1
+  TRUE.hashCode() = 1231
+  FALSE.hashCode() = 1237
+  TRUE.toString() = true
+  Boolean.toString(false) = false
+  TRUE.equals(TRUE) = 1
+  TRUE.equals(FALSE) = 0
+  TRUE.equals("true") = 0
+  TRUE.compareTo(FALSE) = gt
+  FALSE.compareTo(TRUE) = lt
+  compare(true,true) = eq
+  parseBoolean("TrUe") = 1
+  parseBoolean("yes") = 0
+  valueOf("true") == TRUE = 1
+-- Boolean: stock-only statics --
+  hashCode(true) = 1231
+  hashCode(false) = 1237
+  hashCode(true) == TRUE.hashCode() = 1
+  logicalAnd(true,false) = 0
+  logicalOr(true,false) = 1
+  logicalXor(true,true) = 0
+  logicalXor(true,false) = 1
+-- Byte: interning, both ends, above the range --
+  valueOf(5) interned = 1
+  autobox 5 == valueOf(5) = 1
+  valueOf(MIN) interned = 1
+  valueOf(MAX) interned = 1
+  MIN end value = -128
+  MAX end value = 127
+  MIN_VALUE/MAX_VALUE = -128/127
+  SIZE/BYTES = 8/1
+  TYPE == byte.class = 1
+-- Byte: values and parsing --
+  (byte)-1 hashCode = -1
+  (byte)-1 toString = -1
+  equals same/other = 1/0
+  equals across types = 0
+  compareTo -1,1 = lt
+  compare -1,1 = lt
+  parseByte("127") = 127
+  parseByte("-128") = -128
+  parseByte("7f",16) = 127
+  decode("0x7F") = 127
+  decode("010") = 8
+  decode("#7F") = 127
+  toUnsignedInt(-1) = 255
+  toUnsignedLong(-1) = 255
+  parseByte("128") = threw NumberFormatException
+  parseByte("xyz") = threw NumberFormatException
+-- Byte: stock-only --
+  Byte.toString((byte)-42) = -42
+  compareUnsigned -1,1 = gt
+  compareUnsigned 1,-1 = lt
+  compareUnsigned equal = eq
+  shortValue of (byte)-1 = -1
+-- Short: interning, both ends, above the range --
+  valueOf(5) interned = 1
+  autobox 5 == valueOf(5) = 1
+  valueOf(-128) interned = 1
+  valueOf(127) interned = 1
+  valueOf(1000) FRESH = 0
+  valueOf(-129) FRESH = 0
+  -128 end value = -128
+  127 end value = 127
+  MIN_VALUE/MAX_VALUE = -32768/32767
+  SIZE/BYTES = 16/2
+  TYPE == short.class = 1
+-- Short: values and parsing --
+  (short)-1 hashCode = -1
+  (short)-1 toString = -1
+  compare -1,1 = lt
+  parseShort("32767") = 32767
+  parseShort("-32768") = -32768
+  parseShort("7fff",16) = 32767
+  decode("0x7FFF") = 32767
+  parseShort("32768") = threw NumberFormatException
+-- Short: stock-only --
+  Short.toString((short)-4242) = -4242
+  compareUnsigned -1,1 = gt
+  compareUnsigned 1,-1 = lt
+  toUnsignedInt(-1) = 65535
+  toUnsignedLong(-1) = 65535
+  toUnsignedInt(256) = 256
+  reverseBytes(0x1234) = 13330
+  reverseBytes(0x00FF) = -256
+  reverseBytes twice = 4660
+  byteValue of (short)300 = 44
+-- the narrowing accessors through a Number-typed reference --
+  Number(Byte -1).intValue = -1
+  Number(Byte -1).longValue = -1
+  Number(Byte -1).shortValue = -1
+  Number(Short 300).byteValue = 44
+  Number(Short 300).intValue = 300
+  Number(Short 300).doubleValue = 3000
+WrapProbe done

@@ -1,0 +1,35 @@
+--- constants, natural order
+    GroupValidationResult.SUCCESS_PRESENT = true  its .type = SUCCESS_PRESENT
+    Type.SUCCESS_PRESENT = SUCCESS_PRESENT
+    Type.getEnumConstants = len=5
+--- bisect
+  bare command, no args   : OK
+  option declared, no args: OK
+  option declared, passed : OK
+  mixin, no args       : OK
+  mixin, --m           : OK
+  subcommand, none     : OK
+  subcommand, invoked  : OK
+  subcommand + option  : OK
+  40 options, none      : OK
+  40 options, one       : OK
+  40 options, several   : OK
+  inherited option, none: OK
+  inherited option, set : OK
+  argGroup, none        : OK
+  argGroup, one member  : OK
+--- root container
+    built root, group=null
+    before: validationResult=null matches=1
+    validate() returned NORMALLY
+    after:  validationResult=SUCCESS_PRESENT
+    after:  type=SUCCESS_PRESENT exception=null success()=true
+--- tiny: CommandLine built
+    tiny parseArgs OK
+command instance = org.junit.platform.console.command.ListTestEnginesCommand
+CommandLine built = true
+--- parseArgs --disable-ansi-colors
+    OK
+--- parseArgs --disable-banner
+    OK
+--- validateArgs on 0 group(s)

@@ -1,0 +1,8 @@
+SUCCESS_PRESENT null=false
+SUCCESS_ABSENT  null=false
+FAILURE_PRESENT null=false
+FAILURE_PARTIAL null=false
+SUCCESS_ABSENT == FAILURE_PARTIAL = false   (want false)
+SUCCESS.blockingFailure() = false   (want false)
+FAILED.blockingFailure()  = true   (want true)
+SUCCESS.kind null=false   (want false)

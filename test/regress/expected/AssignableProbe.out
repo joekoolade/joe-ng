@@ -1,0 +1,12 @@
+Collection <- List      = true (want true)
+Collection <- ArrayList = true (want true)
+List       <- ArrayList = true (want true)
+Iterable   <- ArrayList = true (want true)
+Number     <- Integer   = true (want true)
+Object     <- String    = true (want true)
+self       <- self      = true (want true)
+List       <- Collection= false (want false)
+Integer    <- Number    = false (want false)
+List       <- String    = false (want false)
+picocli isMultiValue(List) = true (want true)
+AssignableProbe done

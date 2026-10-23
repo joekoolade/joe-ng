@@ -1,0 +1,61 @@
+-- identity: stock's singletons and its reversed() overrides --
+  naturalOrder() == naturalOrder() = 1
+  reverseOrder() == reverseOrder() = 1
+  naturalOrder() == reverseOrder() = 0
+  naturalOrder().reversed() == reverseOrder() = 1
+  reverseOrder().reversed() == naturalOrder() = 1
+  byLen.reversed().reversed() == byLen = 1
+-- ordering: the built-in comparison --
+  nat b,a = gt
+  nat a,b = lt
+  nat a,a = eq
+  rev b,a = lt
+  rev a,b = gt
+  byLen xx,y = gt
+  byLen y,xx = lt
+  byLen xx,yy = eq
+  byHead ax,by = lt
+  comparing(head,rev) ax,by = gt
+  byLen.reversed() xx,y = lt
+-- thenComparing: the tie-break chain --
+  len,nat bb,aa = gt
+  len,nat aa,bb = lt
+  len,nat a,bb = lt
+  len,then head bb,ba = eq
+  len,then head+rev ab,bb = gt
+  head,thenInt len ab,abc = lt
+-- stock-only: the widths the overlay dropped --
+  comparingLong xx,y = gt
+  comparingDouble xx,y = gt
+  head,thenLong ab,abc = lt
+  head,thenDouble ab,abc = lt
+-- stock-only: max/min, and the TIE returns the FIRST argument --
+  nat.max(a,b) = b
+  nat.min(a,b) = a
+  rev.max(a,b) = a
+  max tie is first arg = 1
+  min tie is first arg = 1
+-- stock-only: the null-friendly wrappers --
+  nullsFirst null,a = lt
+  nullsFirst a,null = gt
+  nullsFirst null,null = eq
+  nullsFirst b,a = gt
+  nullsLast null,a = gt
+  nullsLast a,null = lt
+  nullsLast null,null = eq
+  nullsLast b,a = gt
+  nullsFirst(null) b,a = eq
+  nullsFirst(null) null,a = lt
+-- stock-only: NullComparator's own reversed/thenComparing overrides --
+  nullsFirst.reversed null,a = gt
+  nullsFirst.reversed b,a = lt
+  nullsFirst.then null,a = lt
+  nullsFirst.then aa,b = lt
+-- Integer.MIN_VALUE: correct in BOTH states, so a control --
+  minValue a,b = lt
+  minValue reversed a,b = gt
+  minValue a,a = eq
+-- end to end: a real sort through the chain --
+  sort len,nat = a,b,aa,bb,cc
+  sort nullsFirst = null,null,a,b
+CmpProbe done

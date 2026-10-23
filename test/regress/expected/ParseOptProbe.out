@@ -1,0 +1,8 @@
+direct set inherited boolean: before=false after=true  OK
+Type.getEnumConstants: len=5
+   const SUCCESS_PRESENT = present
+   const SUCCESS_ABSENT = present
+   const FAILURE_PRESENT = present
+   const FAILURE_ABSENT = present
+   const FAILURE_PARTIAL = present
+PARSE OK

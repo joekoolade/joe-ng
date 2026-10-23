@@ -1,0 +1,10 @@
+want 80000
+AtomicInteger.incrementAndGet = 80000
+AtomicLong.incrementAndGet = 80000
+AtomicLong.getAndAdd(3) = 240000 (want 240000)
+AtomicReference CAS loop = 80000
+AtomicIntegerArray CAS loop = 80000 neighbours 0,0
+AtomicLongArray CAS loop = 80000 neighbours 0,0
+AtomicReferenceArray CAS loop = 80000 neighbours 0,0
+AtomicBoolean spinlock, plain counter = 80000
+AtomicRaceProbe done

@@ -1,0 +1,61 @@
+char probe:
+  -- ascii (coverage: correct in both states) --
+  U+0041 letter=true digit=false alnum=true alpha=true ws=false space=false upper=true lower=false idStart=true idPart=true type=1
+  U+007A letter=true digit=false alnum=true alpha=true ws=false space=false upper=false lower=true idStart=true idPart=true type=2
+  U+0035 letter=false digit=true alnum=true alpha=false ws=false space=false upper=false lower=false idStart=false idPart=true type=9
+  U+0020 letter=false digit=false alnum=false alpha=false ws=true space=true upper=false lower=false idStart=false idPart=false type=12
+  U+0009 letter=false digit=false alnum=false alpha=false ws=true space=false upper=false lower=false idStart=false idPart=false type=15
+  U+005F letter=false digit=false alnum=false alpha=false ws=false space=false upper=false lower=false idStart=true idPart=true type=23
+  U+0024 letter=false digit=false alnum=false alpha=false ws=false space=false upper=false lower=false idStart=true idPart=true type=26
+  U+000A letter=false digit=false alnum=false alpha=false ws=true space=false upper=false lower=false idStart=false idPart=false type=15
+  U+0000 letter=false digit=false alnum=false alpha=false ws=false space=false upper=false lower=false idStart=false idPart=true type=15
+  -- non-ascii (the discriminating arms) --
+  U+00E9 letter=true digit=false alnum=true alpha=true ws=false space=false upper=false lower=true idStart=true idPart=true type=2
+  U+00C9 letter=true digit=false alnum=true alpha=true ws=false space=false upper=true lower=false idStart=true idPart=true type=1
+  U+00DF letter=true digit=false alnum=true alpha=true ws=false space=false upper=false lower=true idStart=true idPart=true type=2
+  U+00A0 letter=false digit=false alnum=false alpha=false ws=false space=true upper=false lower=false idStart=false idPart=false type=12
+  U+00B5 letter=true digit=false alnum=true alpha=true ws=false space=false upper=false lower=true idStart=true idPart=true type=2
+  U+03A9 letter=true digit=false alnum=true alpha=true ws=false space=false upper=true lower=false idStart=true idPart=true type=1
+  U+03C9 letter=true digit=false alnum=true alpha=true ws=false space=false upper=false lower=true idStart=true idPart=true type=2
+  U+4E2D letter=true digit=false alnum=true alpha=true ws=false space=false upper=false lower=false idStart=true idPart=true type=5
+  U+0661 letter=false digit=true alnum=true alpha=false ws=false space=false upper=false lower=false idStart=false idPart=true type=9
+  U+0966 letter=false digit=true alnum=true alpha=false ws=false space=false upper=false lower=false idStart=false idPart=true type=9
+  U+2160 letter=false digit=false alnum=false alpha=true ws=false space=false upper=true lower=false idStart=true idPart=true type=10
+  U+FF21 letter=true digit=false alnum=true alpha=true ws=false space=false upper=true lower=false idStart=true idPart=true type=1
+  U+200B letter=false digit=false alnum=false alpha=false ws=false space=false upper=false lower=false idStart=false idPart=true type=16
+  U+D800 letter=false digit=false alnum=false alpha=false ws=false space=false upper=false lower=false idStart=false idPart=false type=19
+  U+FFFF letter=false digit=false alnum=false alpha=false ws=false space=false upper=false lower=false idStart=false idPart=false type=0
+  -- digit / numeric value --
+  digit(U+0037,10)=7
+  digit(U+0066,16)=15
+  digit(U+0046,16)=15
+  digit(U+007A,36)=35
+  digit(U+0038,8)=-1
+  digit(U+0661,10)=1
+  digit(U+0966,10)=0
+  digit(U+00E9,16)=-1
+  numericValue(U+0037)=7
+  numericValue(U+0066)=15
+  numericValue(U+0661)=1
+  numericValue(U+2160)=1
+  numericValue(U+00BD)=-2
+  numericValue(U+0041)=10
+  -- case mapping --
+  U+0061 upper=U+0041 lower=U+0061
+  U+0041 upper=U+0041 lower=U+0061
+  U+0035 upper=U+0035 lower=U+0035
+  U+00E9 upper=U+00C9 lower=U+00E9
+  U+00C9 upper=U+00C9 lower=U+00E9
+  U+03C9 upper=U+03A9 lower=U+03C9
+  U+03A9 upper=U+03A9 lower=U+03C9
+  U+00FF upper=U+0178 lower=U+00FF
+  U+4E2D upper=U+4E2D lower=U+4E2D
+  -- code points (regression cover) --
+  isHigh(D800)=true isLow(DC00)=true pair=true
+  toCodePoint=65536 charCount(10000)=2 charCount(41)=1
+  isValidCP(10FFFF)=true isValidCP(110000)=false isBmp(FFFF)=true
+  isLetter(cp 1D400)=true isDigit(cp 1D7CE)=true
+  -- boxing (regression cover) --
+  valueOf interned=true above cache fresh=true
+  MIN=0 MAX=65535 compare=-1 toString=Q
+survived

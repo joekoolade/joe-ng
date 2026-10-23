@@ -1,0 +1,9 @@
+static F,F -> F: 3.75 3.4028235E38
+static D -> D: 4.0 NaN 1.4142135623730951
+static D,D -> D: 2.5 -0.0 Infinity
+bound instance -> D: 0.730519863614471 0.08825840967622589
+unbound instance -> F: -3.25
+stream reduce(0.0, Double::sum) -> 7.0
+stream map(Math::sqrt) -> [2.0, 3.0, 0.5]
+result is a real Double: true 0.30000000000000004 bits=3fd3333333333334
+MethodRefBoxFloatProbe done
