@@ -329,9 +329,6 @@ public interface Symbols
     /** Load into {@code reg} the address of the interned string at String index {@code stringCp}. */
     void string(CodeBuffer cb, int reg, int stringCp);
 
-    /** Load into {@code reg} the address of the synthetic in-flight-exception static slot. */
-    void exceptionSlot(CodeBuffer cb, int reg);
-
     /**
      * Load into {@code reg} the absolute PC of the instruction at word index
      * {@code targetWord} within this same method — a self reference (the athrow site

@@ -2711,9 +2711,9 @@ public final class Baseline
      * {@link #dup} of it, and the stack slot carries it across the call ({@link #emitCall} preserves the operands
      * below its arguments), so a matching handler is entered with it already in place and the unwind consumes it.
      *
-     * <p>IT USED TO LIVE IN ONE GLOBAL WORD ({@code symbols.exceptionSlot}) between those calls, re-read after each:
-     * a throw on another core in that window replaced it, so a thread could catch, or unwind with, ANOTHER THREAD'S
-     * exception. Measured with ExcMessageRaceProbe (four threads failing casts and stores): a data abort at a
+     * <p>IT USED TO LIVE IN ONE GLOBAL WORD (a synthetic {@code vm/VM.$exception} static) between those calls,
+     * re-read after each: a throw on another core in that window replaced it, so a thread could catch, or unwind
+     * with, ANOTHER THREAD'S exception. Measured with ExcMessageRaceProbe (four threads failing casts and stores): a data abort at a
      * garbage address and a nested fault in the unwind, instead of 24000 caught exceptions.
      */
     private void throwStored(CodeBuffer cb, int pos, int athrowStart)
