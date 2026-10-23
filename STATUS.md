@@ -4,6 +4,50 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **CLASS.FORNAME NAMES ARRAY CLASSES; NASE CARRIES ITS LENGTH; REFLECTIVE ARRAY ERRORS MATCH HOTSPOT
+  (2026-10-23).** A new probe of the natives' argument checks, run on main first, found four differences from
+  stock.
+  - **Measured on main with the new probe:**
+    - `Class.forName("[I")`, `"[Ljava.lang.String;"` and the other array names threw `ClassNotFoundException`.
+    - `Class.forName(null)` threw `ClassNotFoundException` instead of an NPE.
+    - `new int[n]` with a negative `n` threw a `NegativeArraySizeException` with no message; stock's message is
+      the length (`-3`).
+    - `java.lang.reflect.Array` checked in another order and with other messages than stock.
+  - **What it does now:**
+    - `Loader.forNameMirror` routes a name starting with `[` to a new `arrayForName`. It checks the descriptor:
+      1 to 255 dimensions, then a non-void primitive with nothing after it, or `L<name>;` with a non-empty name.
+      It loads the element class without initializing it and returns the array class's mirror. The probe checks
+      that the answer is the class literal and that the element's initializer does not run.
+    - `Class.forName`: null is an NPE. A miss names the element class for a well-formed array name, as stock
+      does.
+    - The implicit check behind `newarray`/`anewarray`/`multianewarray` passes the length to `VM.newNase`, whose
+      descriptor is now `(J)J`, and the message is the length in decimal.
+    - The `Array` overlay checks in HotSpot's order:
+      - null is an NPE;
+      - "Argument is not an array";
+      - "Argument is not an array of primitive type" for a typed get or set on an `Object[]`;
+      - then a bare `ArrayIndexOutOfBoundsException`.
+    - `Array.set`: a null into a primitive array is a bare `IllegalArgumentException`, and a wrong value type is
+      "argument type mismatch".
+    - `newInstance`/`multiNewArray`: a negative length is a NASE carrying the length; void, no dimensions, or
+      more than 255 dimensions is a bare IAE.
+  - **New NativeArgProbe:** 63 cases, with output generated on the host JVM. It covers `Array` create/get/set,
+    `Arrays.copyOf`/`copyOfRange`, `clone`, `identityHashCode`, sleep and join arguments, `forName`, the
+    `String`/`StringBuilder` range checks, and negative array sizes. An NPE prints its class only, because the
+    host's helpful NPE messages are not implemented here.
+  - **Regression (b48ead2):** 101 of 101 probes pass, 85 in 5 batches and 16 solo, in 21m40s. Nothing differed
+    only in a batch. The RuntimeProbe STW TIMEOUT recorded on the card below did not recur.
+  - **Other checks:** the suite matches a control at main 2c03fd3: 40 programs returned, markers zero,
+    `gc: collections=51`, clinits 356. JUnit `ran 45, failures 0`. `make overlaycheck`: 0 new. `make test`:
+    exit 0.
+  - **Pi:** PASS (2026-10-23, b48ead2).
+    - `clock: SNTP 64.131.47.178 -> 2026-10-23 11:19:16 UTC`; 4 of 4 cores.
+    - NetDemo HTTP 200 (bytes=891: the response's `Age:` header was `7394`, against `5` at 8af4cb3).
+    - `netif wlan0 /192.168.1.247/24 [/192.168.1.255] mac e4:5f:01:69:a6:c5 up=true mtu=1500`,
+      `[main returned normally]`, `gc: collections=7`.
+    - Per-batch `clinits=` 441/441/442/442/443/443 and batch 1 at 1590 classes, as at 8af4cb3.
+    - Batch 1 `tot=` 10.18 s (10.73). No failure markers, and no `vtparity` line.
+
 - **SYSTEM.ARRAYCOPY CHECKS ITS ARGUMENTS AND THROWS STOCK'S EXCEPTIONS (2026-10-22).** The native copied
   `len * elemSize(src)` bytes and checked nothing.
   - **Measured on main with the new probe:**
