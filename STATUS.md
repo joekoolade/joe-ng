@@ -4,6 +4,24 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **ARRAYSTOREEXCEPTION NAMES THE STORED VALUE'S CLASS, AS STOCK DOES (2026-10-22).** A failed covariant
+  `aastore` used to throw an `ArrayStoreException` with no message; stock's message is the stored value's class
+  name as `getClass().getName()` spells it (`java.lang.String`, `[I`, `[[Ljava.lang.String;`,
+  `AseMessageProbe$Color`).
+  - **How:** `VM.arrayStoreOk` notes the value's class when its `instanceOf` check fails, and
+    `Loader.newArrayStoreException` writes that class's name into the new exception's message field. A value
+    with no class name (a lambda) gets no message, since that name is a JVM implementation detail.
+  - **New AseMessageProbe:** six failing stores and one legal store. The output matches the host JVM. On main
+    every message is `null`.
+  - **Regression (2a7fbd6):** 99 of 99 probes pass, 83 in 5 batches and 16 solo, in 17m59s. Suite against a
+    control at main 29ca5b8 identical -- 40 programs returned, markers zero, `gc: collections=51`, clinits 356.
+    `ran 45, failures 0`. `make overlaycheck`: 0 new. `make test`: exit 0.
+  - **Pi:** PASS (2026-10-22, 2a7fbd6) -- `clock: SNTP 69.10.208.170 -> 2026-10-22 23:22:05 UTC`, 4 of 4 cores,
+    NetDemo HTTP 200 (bytes=891), `netif wlan0 /192.168.1.247/24 [/192.168.1.255] mac e4:5f:01:69:a6:c5 up=true
+    mtu=1500`, `[main returned normally]`, `gc: collections=7`, per-batch `clinits=` 441/441/442/442/443/443 and
+    batch 1 at 1590 classes, as at ccde6ec; batch 1 `tot=` 10.58 s (10.42); no failure markers.
+  - **Not checked:** whether `System.arraycopy`'s type-mismatch message matches stock.
+
 - **THE SHARED-RAMFS PROBES RUN BATCHED; FILEPROBE CLEANS UP AFTER ITSELF (2026-10-22).** Test-only.
   - **IoStreamProbe's recorded batch symptom is gone.** `probes.txt` said "an NPE, not a file error, in a batch:
     check". As the only probe of a batch it passes, and after its thirteen alphabetical predecessors the NPE does
