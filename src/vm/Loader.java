@@ -23396,10 +23396,13 @@ public final class Loader
         return p;
     }
 
-    /** Allocate a mini {@code java/lang/ArithmeticException} — the JIT's divide-by-zero helper. */
+    /**
+     * Allocate a {@code java/lang/ArithmeticException} — the JIT's divide-by-zero helper — with stock's message,
+     * {@code "/ by zero"}, which HotSpot gives every integer divide and remainder alike.
+     */
     static long newArith()
     {
-        return newExc(Magic.bytes("java/lang/ArithmeticException"));
+        return newExcWithMessage(Magic.bytes("java/lang/ArithmeticException"), Magic.bytes("/ by zero"));
     }
 
     /** The Type of the value a failing {@code aastore} tried to store, recorded by {@link VM#arrayStoreOk}. */

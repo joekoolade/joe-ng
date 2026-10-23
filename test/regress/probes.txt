@@ -18,6 +18,7 @@ AccessRulesProbe
 AnnoContractProbe
 AnnoDefaultProbe
 AnnoLoadProbe
+ArithMessageProbe
 ArrayAllocDepthProbe
 ArrayCovarianceProbe
 ArraycopyCheckProbe
