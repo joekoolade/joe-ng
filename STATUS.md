@@ -4,6 +4,33 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **55 MORE PROBES ARE IN THE REGRESSION; THE REST ARE LISTED WITH A REASON (2026-10-23).** 72 probes were
+  compiled into every image (Makefile `JDKTESTS`) and never run by `scripts/Regress.java`.
+  - **Host controls:** each was compiled and run twice on the seed JDK with the JUnit jar on the classpath.
+    EmptySentinelProbe's output changed between runs (`Set.of` order). JUnitApiProbe, PicoDirect and TreeProbe
+    did not run cleanly on the host.
+  - **Registered:** 55 probes. 54 have host-generated `expected/<P>.out` with blank lines stripped, because the
+    harness drops blank lines from the metal output. SecretKeyFactoryProbe uses the Digest/Mac `gate=`.
+    - **First run:** 55 pass, and 11 others differ alone (left out, below). AtomicRace, CslmRace and
+      VolatileLitmus are `solo`.
+    - **Second run:** 55 of 55 pass in 13m4s. UnsafeAll and UnsafeAtomicProbe differed only in their batch,
+      their second batch-only miss: UnsafeAll calls UnsafeAccessProbe's and UnsafeAtomicProbe's mains, and
+      their `static int divergences` counters add up (3 to 6, 2 to 4). That is the probes' own state, not a VM
+      bug, and UnsafeAll is `solo`.
+  - **Open VM differences from stock found by the run** (left out, listed in the `probes.txt` header):
+    - TraceProbe and AssertMsgProbe: a stack trace continues below `main` into `vm.Loader.launchMain`,
+      `vm.VM.launchInit` and `vm.VM.run`. Stock stops at `main` (TraceProbe len=8 vs 4).
+    - AnnoProxyProbe: `getClasses` counts a member class inherited through two interfaces as 1. The host says
+      0, which matches the javadoc (superclasses only).
+    - TextProbe: `DENYLIST TRAP` at `Character$UnicodeBlock.of`, from picocli's `isCodePointCJK`.
+  - **Left out by design:**
+    - metal-only, no host control: ArchiveProbe, BoxCacheProbe, ResourceProbe, ServiceLoaderProbe, UsageProbe,
+      SynthNameProbe, SecureRandomProbe, LazyModsProbe;
+    - FirstCallRaceStress: right answer, but QEMU prints `LOADER LOCK` watchdog lines;
+    - MetalJUnit, SampleTest and ProbeBatch are harness pieces.
+  - The image is unchanged (probe list and expected outputs only), so no Pi run. NOT RUN: the all-probe
+    regression, the demo suites and JUnit.
+
 - **THE UNUSED IN-FLIGHT EXCEPTION SLOT IS GONE (2026-10-23).** Follows the per-thread exceptions card below,
   which left `symbols.exceptionSlot` and its plumbing unused.
   - **Why remove it:** the exception now stays on the operand stack, and nothing emitted a load of the global
