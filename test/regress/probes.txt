@@ -11,7 +11,8 @@
 # Host recipes that are not plain `java -cp <classes> <Probe>`: GvrProbe/ClassResourceProbe add
 # ramfs/lib/junit.jar to -cp; EngineMessageProbe adds out; ReaderProbe takes ramfs/data/sample.txt and
 # ReflectLookupProbe ramfs/lib/app.jar as args[0]; LocaleProbe runs with
-# -Duser.language=en -Duser.country= -Duser.variant= -Duser.script=.
+# -Duser.language=en -Duser.country= -Duser.variant= -Duser.script=. ExcMessageRaceProbe runs with
+# -XX:-OmitStackTraceInFastThrow (else HotSpot drops the message of a hot implicit exception).
 
 AccessFlagsProbe
 AccessRulesProbe
@@ -39,6 +40,7 @@ DefaultSpecificProbe
 DeflaterProbe
 DigestProbe              gate=failures=0 divergences-unmet=0
 EngineMessageProbe
+ExcMessageRaceProbe      solo             # race; timing-sensitive
 ExecutorProbe
 FieldPrimProbe
 FieldSemanticsProbe

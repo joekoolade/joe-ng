@@ -23405,30 +23405,31 @@ public final class Loader
         return newExcWithMessage(Magic.bytes("java/lang/ArithmeticException"), Magic.bytes("/ by zero"));
     }
 
-    /** The Type of the value a failing {@code aastore} tried to store, recorded by {@link VM#arrayStoreOk}. */
-    private static long aseValueType;
-
-    /** {@link VM#arrayStoreOk} records a FAILING store here so {@link #newArrayStoreException} can name it. */
-    static void noteStoreFailure(long valueType)
-    {
-        aseValueType = valueType;
-    }
-
     /**
      * Allocate a {@code java/lang/ArrayStoreException} — the JIT's aastore type-mismatch helper — carrying the
      * message stock gives it: the stored value's class name, as {@code getClass().getName()} spells it
      * ({@code java.lang.String}, {@code [I}). It used to carry none, so the one fact a reader needs -- what was
      * being stored -- was missing; a value whose Type cannot be read leaves the message out rather than guess.
+     *
+     * <p>The JIT passes the VALUE. It used to be recorded in a static by the failing check and read back here,
+     * which another core's failing store could overwrite or clear in between (ExcMessageRaceProbe).
      */
-    static long newArrayStoreException()
+    static long newArrayStoreException(long value)
     {
         long e = newExc(Magic.bytes("java/lang/ArrayStoreException"));
-        if (e != 0L && aseValueType != 0L && classNameLen(aseValueType) > 0)   // a lambda has no name: omit
+        long valueType = value == 0L ? 0L : typeOfObject(value);
+        if (e != 0L && valueType != 0L && classNameLen(valueType) > 0)   // a lambda has no name: omit
         {
-            Magic.store64(e + 80L, classNameString(aseValueType));
+            Magic.store64(e + 80L, classNameString(valueType));
         }
-        aseValueType = 0L;
         return e;
+    }
+
+    /** {@code obj}'s Type, or 0 for a RAW array, whose TIB slot holds a small tag rather than a Type pointer. */
+    private static long typeOfObject(long obj)
+    {
+        long tib = Magic.load64(obj);
+        return tib > ObjectModel.MAX_RAW_ARRAY_TIB ? Magic.load64(tib) : 0L;
     }
 
     /**
@@ -23568,49 +23569,36 @@ public final class Loader
         return arr;
     }
 
-    /** Allocate a mini {@code java/lang/ClassCastException} — the JIT's failed-checkcast helper. */
-    private static long cceFromTib;
-    private static long cceFromType;
-    private static long cceToType;
-
-    /** {@link VM#castOk} records a FAILING cast here so {@link #newCce} can describe it. */
-    static void noteCastFailure(long fromTib, long fromType, long toType)
-    {
-        cceFromTib = fromTib;
-        cceFromType = fromType;
-        cceToType = toType;
-    }
-
     /**
      * A {@code ClassCastException} that SAYS WHAT COULD NOT BE CAST TO WHAT, as stock does.
      *
      * <p>A bare ClassCastException names neither side, so the only way to find out is to disassemble the
      * method and work out which {@code checkcast} it was -- which is exactly what the console launcher's
-     * failure in {@code EngineExecutionOrchestrator} cost. The names come from the pair {@code castOk}
-     * recorded on its failing path; if either is unavailable the message is simply omitted, so this can
-     * never turn a cast failure into a different failure.
+     * failure in {@code EngineExecutionOrchestrator} cost. The JIT passes the object and the target Type; with
+     * no target the message is simply omitted, so this can never turn a cast failure into a different failure.
+     *
+     * <p>They used to be recorded in statics by {@code castOk}'s failing path and read back here, which another
+     * core's failing cast could overwrite or clear in between (ExcMessageRaceProbe).
      */
-    static long newCce()
+    static long newCce(long ref, long targetType)
     {
         long e = newExc(Magic.bytes("java/lang/ClassCastException"));
-        if (e != 0L && cceToType != 0L)
+        if (e != 0L && ref != 0L && targetType != 0L)
         {
-            Magic.store64(e + 80L, guestString(castFailureMessage(cceFromType, cceToType)));
+            long tib = Magic.load64(ref);
+            Magic.store64(e + 80L, guestString(castFailureMessage(tib, typeOfObject(ref), targetType)));
         }
-        cceFromTib = 0L;
-        cceFromType = 0L;
-        cceToType = 0L;
         return e;
     }
 
     /** "class a.B cannot be cast to class c.D", or null when either Type cannot be named. */
-    private static byte[] castFailureMessage(long fromType, long toType)
+    private static byte[] castFailureMessage(long fromTib, long fromType, long toType)
     {
         byte[] out = new byte[512];
         int p = putUtf8Bytes(out, 0, Magic.bytes("class "));
-        p = putTypeName(out, p, fromType);
+        p = putTypeName(out, p, fromType, fromTib);
         p = putUtf8Bytes(out, p, Magic.bytes(" cannot be cast to class "));
-        p = putTypeName(out, p, toType);
+        p = putTypeName(out, p, toType, 0L);
         byte[] exact = new byte[p];
         int q = 0;
         while (q < p)
@@ -23629,14 +23617,14 @@ public final class Loader
      * binary name, mirroring a hidden class), so a message that bailed out on one would omit itself exactly
      * when the cast failed for the most surprising reason.
      */
-    private static int putTypeName(byte[] out, int p, long type)
+    private static int putTypeName(byte[] out, int p, long type, long tib)
     {
         if (type <= 0x1000L)
         {
             // No Type node. Say what was actually READ rather than guessing which kind of object it is --
             // inferring from an absence is what produced two wrong readings of this very failure.
             p = putUtf8Bytes(out, p, Magic.bytes("<no Type; tib="));
-            p = putHex(out, p, cceFromTib);
+            p = putHex(out, p, tib);
             return putUtf8Bytes(out, p, Magic.bytes(">"));
         }
         // AN ARRAY TYPE IS NOT SYNTHESISED, AND SAYING SO WAS COSTING A DIAGNOSIS. Array Types carry no

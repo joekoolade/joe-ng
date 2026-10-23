@@ -14,7 +14,7 @@ package vm;
 import magic.Magic;
 import board.bcm2711.Uart;
 import static vm.VM.*;   // exception-table state + shared helpers stay in VM: handlerTable/Count, jitHandler*,
-                         // unwindLog/Logged, unwindLocBuf, faultDepth, and printHex/printStr/frameSizeAt/
+                         // unwindLog/Logged, unwindLocBufs, faultDepth, and printHex/printStr/frameSizeAt/
                          // jitRegLocalsAt/instanceOf — all reached here by simple name.
 
 /**
@@ -25,7 +25,7 @@ import static vm.VM.*;   // exception-table state + shared helpers stay in VM: h
  * uncaught exception at the top. It is reached only by address: image {@code athrow} lowers to the UNWIND
  * helper (WriterSymbols), the metal JIT and the fault path ({@code VM.throwFromFault}) call the writer-stashed
  * {@code VM.unwindAddr}/{@code VM.captureTraceAddr}. All mutable state (the handler/frame tables, the unwind
- * scratch buffer, the fault-depth flag) stays in {@link VM}; only the walk logic lives here.
+ * scratch buffers, the fault-depth flag) stays in {@link VM}; only the walk logic lives here.
  */
 final class VMUnwind
 {
@@ -181,10 +181,11 @@ final class VMUnwind
             }
         }
         captureTrace(exc, pc, sp);                     // fill exc's backtrace if not already captured at the throw site
-        if (unwindLocBuf == 0L)
+        if (unwindLocBufs == 0L)
         {
-            unwindLocBuf = Heap.allocData(16 * 8);     // 16 callee-saved local slots, reused across unwinds
+            unwindLocBufs = Heap.allocData(MAX_TASKS * 16 * 8);   // 16 callee-saved local slots per task
         }
+        long unwindLocBuf = unwindLocBufs + (long) curTask() * 16L * 8L;   // this task's own, never another's
         // Seed with the register snapshot AT THE THROW: this method's OWN prologue saved the throwing frame's
         // x19..x28 (10 slots) at [our_sp + 8 + k*8]. That captures every handler local a shallow-regLocals callee
         // preserved but never re-saved (its value flowed through untouched into our prologue's save). Slots that

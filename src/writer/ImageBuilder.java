@@ -1503,14 +1503,14 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VM.newAioobe()J",      "vm/VM.newAioobeAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.newAioobeIndex(JJ)J", "vm/VM.newAioobeIndexAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.newArith()J",       "vm/VM.newArithAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VM.newAse()J",          "vm/VM.newAseAddr");     // ArrayStoreException
+        stashHelper(image, staticWord, wordOffset, "vm/VM.newAse(J)J",         "vm/VM.newAseAddr");     // ArrayStoreException
         stashHelper(image, staticWord, wordOffset, "vm/VM.newNase(J)J",        "vm/VM.newNaseAddr");    // NegativeArraySizeException
         stashHelper(image, staticWord, wordOffset, "vm/VM.drem(DD)D",          "vm/VM.dremAddr");       // frem / drem
         stashHelper(image, staticWord, wordOffset, "vm/VM.multiNewArray(JIIIII)J", "vm/VM.multiNewArrayAddr"); // multianewarray
         stashHelper(image, staticWord, wordOffset, "vm/VM.monEnterSync(JJ)V", "vm/VM.monEnterSyncAddr");  // synchronized method
         stashHelper(image, staticWord, wordOffset, "vm/VM.monExitSync()V",    "vm/VM.monExitSyncAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.arrayStoreOk(JJ)I",  "vm/VM.arrayStoreOkAddr"); // aastore check
-        stashHelper(image, staticWord, wordOffset, "vm/VM.newCce()J",          "vm/VM.newCceAddr");     // ClassCastException
+        stashHelper(image, staticWord, wordOffset, "vm/VM.newCce(JJ)J",        "vm/VM.newCceAddr");     // ClassCastException
         stashHelper(image, staticWord, wordOffset, "vm/VM.castOk(JJ)I",        "vm/VM.castOkAddr");     // checkcast predicate
         stashHelper(image, staticWord, wordOffset, "vm/VM.newUnresolved(J)J", "vm/VM.newUnresolvedAddr"); // late-resolved `new`
         stashHelper(image, staticWord, wordOffset, "vm/VM.ctorRefInit(J)V", "vm/VM.ctorRefInit0");         // ctor-ref <clinit> (JVMS 5.5)
