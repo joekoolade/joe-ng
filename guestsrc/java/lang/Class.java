@@ -65,12 +65,41 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
      */
     public static Class<?> forName(String name, boolean initialize, ClassLoader loader) throws ClassNotFoundException
     {
-        Class<?> c = (name == null) ? null : forName0(jdk.internal.misc.MetalNames.utf8(name));
+        if (name == null)
+        {
+            throw new NullPointerException();           // as stock: a null name is not a missing class
+        }
+        Class<?> c = forName0(jdk.internal.misc.MetalNames.utf8(name));
         if (c == null)
         {
-            throw new ClassNotFoundException(name);
+            throw new ClassNotFoundException(notFoundMessage(name));
         }
         return c;
+    }
+
+    /**
+     * The message HotSpot's ClassNotFoundException carries for {@code name}: the name itself, except for an
+     * ARRAY name, where a well-formed {@code [..L<element>;} whose element is missing names only the element, and
+     * a malformed one is reported in internal form ('.' as '/'). A name containing '/' is refused as given.
+     */
+    private static String notFoundMessage(String name)
+    {
+        if (!name.startsWith("[") || name.indexOf('/') >= 0)
+        {
+            return name;
+        }
+        int dims = 0;
+        while (dims < name.length() && name.charAt(dims) == '[')
+        {
+            dims++;
+        }
+        int len = name.length();
+        if (dims <= 255 && len > dims + 2 && name.charAt(dims) == 'L' && name.charAt(len - 1) == ';'
+                && name.indexOf(';') == len - 1 && name.indexOf('[', dims) < 0)
+        {
+            return name.substring(dims + 1, len - 1);
+        }
+        return name.replace('.', '/');
     }
 
     /** VM native ({@code Loader.nativeBuf} -> {@code VM.forName}): raw binary-name bytes -> Class mirror, or null. */
