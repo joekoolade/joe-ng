@@ -4,6 +4,56 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **SYSTEM.ARRAYCOPY CHECKS ITS ARGUMENTS AND THROWS STOCK'S EXCEPTIONS (2026-10-22).** The native copied
+  `len * elemSize(src)` bytes and checked nothing.
+  - **Measured on main with the new probe:**
+    - a null source "copied" from address 0;
+    - a String was copied as if it were an array;
+    - `int[]` into `long[]` copied four bytes;
+    - `int[]` into `Object[]` stored int bits as references, and `Arrays.deepToString` then threw an NPE.
+    - A negative position or an overlong range wrote outside the destination.
+  - **What it does now:** new `vm/ArrayCopy` does HotSpot's checks in HotSpot's order (`JVM_ArrayCopy`, then
+    `TypeArrayKlass`/`ObjArrayKlass::copy_array` in the JDK 26 tree), with HotSpot's messages.
+    - A null array is an NPE.
+    - A non-array, an array of the other kind, or another primitive element type is an `ArrayStoreException`.
+      Nothing is copied.
+    - A negative position or length, or a range past either end, is an `ArrayIndexOutOfBoundsException`.
+      Nothing is copied.
+    - Reference arrays whose element types are unrelated are checked one element at a time. The elements
+      before the first bad one stay copied, as on stock.
+    - Elements of 8 or 4 bytes are copied whole, so a reference or long is never half-written.
+    - A raw (untyped) array is only bounds-checked, and is refused only against an array of another element
+      size.
+  - **How it throws:** the native throws directly. `VMNatives.arraycopy` is an ordinary frame under the guest's
+    call, so the unwinder carries the exception to the guest's handler. The probe's last case crosses a frame
+    that has no handler. This needed `Magic.fromAddr` in the writer's intrinsic table; Baseline already lowered
+    it.
+  - **New ArraycopyCheckProbe:** 26 cases, with output generated on the host JVM. Covered:
+    - element size does not decide compatibility (`boolean[]` against `byte[]`, `int[]` against `float[]`);
+    - a `String[]` of nulls copies into an `Integer[]`;
+    - partial copies;
+    - overlap in both directions.
+  - **Regression (8af4cb3):** 100 of 100 probes pass, 84 in 5 batches and 16 solo, in 22m36s.
+    - RuntimeProbe differed in its batch and passed alone. The only difference was
+      `GC: STW TIMEOUT -- unparked core 1 3 (collection SKIPPED)`. The same line hit RuntimeProbe's batch in a
+      run on 2026-10-22 at 08:02, before this change, so it predates it. Not marked solo yet.
+  - **Other checks:** the suite matches a control at main 8a0d0c0: 40 programs returned, markers zero,
+    `gc: collections=51`, clinits 356. JUnit `ran 45, failures 0`. `make overlaycheck`: 0 new. `make test`:
+    exit 0.
+  - **Pi:** PASS (2026-10-23, 8af4cb3).
+    - `clock: SNTP 96.19.94.82 -> 2026-10-23 01:47:59 UTC`; 4 of 4 cores.
+    - NetDemo HTTP 200 (bytes=888: the response's `Age:` header was `5`, against `2742` at 2a7fbd6).
+    - `netif wlan0 /192.168.1.247/24 [/192.168.1.255] mac e4:5f:01:69:a6:c5 up=true mtu=1500`,
+      `[main returned normally]`, `gc: collections=7`.
+    - Per-batch `clinits=` 441/441/442/442/443/443 and batch 1 at 1590 classes, as at 2a7fbd6.
+    - Batch 1 `tot=` 10.73 s (10.58). No failure markers.
+  - **A CORRECTION to the 2a7fbd6 card below:** that Pi run printed `vtparity java/lang/String DIFF slot 0`
+    right after `launch demo/NetDemo`, and the card did not mention it.
+    - The line appears in no other Pi log in this record, and the 8af4cb3 run above does not print it.
+    - Booting the saved 2a7fbd6 Pi image on QEMU does not print it either, so it is not a fixed property of
+      that image.
+    - OPEN: a one-in-about-30 Pi event, cause not looked into.
+
 - **ARRAYSTOREEXCEPTION NAMES THE STORED VALUE'S CLASS, AS STOCK DOES (2026-10-22).** A failed covariant
   `aastore` used to throw an `ArrayStoreException` with no message; stock's message is the stored value's class
   name as `getClass().getName()` spells it (`java.lang.String`, `[I`, `[[Ljava.lang.String;`,

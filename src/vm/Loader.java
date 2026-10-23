@@ -23367,6 +23367,44 @@ public final class Loader
         return e;
     }
 
+    /**
+     * A {@code java/lang/<name>} exception whose detail message is {@code msg} (left null when {@code msg} is
+     * null) -- for a VM native that must throw with stock's text, {@link ArrayCopy} first.
+     */
+    static long newExcWithMessage(byte[] name, byte[] msg)
+    {
+        long e = newExc(name);
+        if (e != 0L && msg != null)
+        {
+            setDetailMessage(e, msg);
+        }
+        return e;
+    }
+
+    /** {@code type}'s name as {@code Class.getName()} spells it, as raw ASCII; empty if it has none (a lambda). */
+    static byte[] typeNameBytes(long type)
+    {
+        int len = type == 0L ? 0 : classNameLen(type);
+        byte[] out = new byte[len < 0 ? 0 : len];
+        if (out.length > 0)
+        {
+            writeClassName(type, Magic.addrOf(out) + (long) ObjectModel.ARRAY_BASE_OFFSET, 0);
+        }
+        return out;
+    }
+
+    /** A PRIMITIVE array Type's element descriptor char ('I' for {@code int[]}), or 0 for any other Type. */
+    static int primArrayElemChar(long type)
+    {
+        return primElemCharOf(type);
+    }
+
+    /** {@code c}'s primitive name ("int" for 'I') as raw ASCII. */
+    static byte[] primName(int c)
+    {
+        return primNameBytes(c);
+    }
+
     /** Allocate a mini {@code java/lang/NegativeArraySizeException} — the JIT's newarray/anewarray length helper.
      *  The class is already force-loaded by {@link #pullSupportClasses} and flagged instantiated, so this needs
      *  no seeding of its own. */

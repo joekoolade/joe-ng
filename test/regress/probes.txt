@@ -20,6 +20,7 @@ AnnoDefaultProbe
 AnnoLoadProbe
 ArrayAllocDepthProbe
 ArrayCovarianceProbe
+ArraycopyCheckProbe
 ArrayTypeIdentityProbe
 AseMessageProbe
 AtomicUpdaters
