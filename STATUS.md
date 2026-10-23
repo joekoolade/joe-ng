@@ -4,6 +4,26 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **A STALE PROBE CLASS IN OUT/ IS NO LONGER BAKED: `JDKTESTS` PURGES THE UNNAMED PACKAGE FIRST
+  (2026-10-23).** Follows the "stale classes in `out/` are baked" item in the reproducible-image card below.
+  The classes behind that card's 103,808 bytes are not known, so whether all of them were in the unnamed
+  package is not known either.
+  - **Measured on main:**
+    - a planted `out/RetiredProbe.class` grew the image by 904 bytes, and its name was in the image;
+    - a planted `out/vm/RetiredHelper.class` was not in the image. Only the reachable closure of a src package
+      is compiled in, so the leak is the unnamed package, where probes and JDK tests land.
+  - **What it does now:**
+    - `jdktests` runs `rm -f out/*.class`, then compiles JDKTESTS and `test/realjdk`;
+    - `SOURCES` no longer includes `test/realjdk`, which is guest code;
+    - `realjdktests` is an alias for `jdktests`.
+  - **Checks (e64555c):**
+    - with the stale class present, the image is byte-identical to the baseline and to a `make clean` build;
+      both have 591 root classes;
+    - `make test`: exit 0. `make overlaycheck`: 0 new. `make realjdktests` still produces `StockDescProbe`;
+    - ArithMessageProbe passes through the harness's own build.
+    - NOT RUN: the all-probe regression, the demo suites, JUnit and the Pi. The image from a clean checkout is
+      unchanged.
+
 - **AN EXCEPTION IN FLIGHT BELONGS TO ITS THREAD: NO GLOBAL SLOT, A PER-TASK UNWIND BUFFER, AND CCE/ASE BUILT
   FROM THEIR OPERANDS (2026-10-23).** Found by a new race probe, run on main first.
   - **New ExcMessageRaceProbe:** four threads × 3000 rounds each throw and catch a `ClassCastException` (each
