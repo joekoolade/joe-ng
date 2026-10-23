@@ -1689,7 +1689,13 @@ public final class VM
         {
             return 1;                                      // primitive-element array (shouldn't reach aastore) / unknown
         }
-        return instanceOf(value, elemType);                // 1 if value's Type <: element Type, else 0
+        int ok = instanceOf(value, elemType);              // 1 if value's Type <: element Type, else 0
+        if (ok == 0)
+        {
+            long vtib = Magic.load64(value);
+            Loader.noteStoreFailure(vtib > ObjectModel.MAX_RAW_ARRAY_TIB ? Magic.load64(vtib) : 0L);   // names the ASE
+        }
+        return ok;
     }
 
     /** {@code java/lang/InternalError} — the fault handler's catch-all for an unexpected hardware trap. */

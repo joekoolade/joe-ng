@@ -23341,10 +23341,30 @@ public final class Loader
         return newExc(Magic.bytes("java/lang/ArithmeticException"));
     }
 
-    /** Allocate a mini {@code java/lang/ArrayStoreException} — the JIT's aastore type-mismatch helper. */
+    /** The Type of the value a failing {@code aastore} tried to store, recorded by {@link VM#arrayStoreOk}. */
+    private static long aseValueType;
+
+    /** {@link VM#arrayStoreOk} records a FAILING store here so {@link #newArrayStoreException} can name it. */
+    static void noteStoreFailure(long valueType)
+    {
+        aseValueType = valueType;
+    }
+
+    /**
+     * Allocate a {@code java/lang/ArrayStoreException} — the JIT's aastore type-mismatch helper — carrying the
+     * message stock gives it: the stored value's class name, as {@code getClass().getName()} spells it
+     * ({@code java.lang.String}, {@code [I}). It used to carry none, so the one fact a reader needs -- what was
+     * being stored -- was missing; a value whose Type cannot be read leaves the message out rather than guess.
+     */
     static long newArrayStoreException()
     {
-        return newExc(Magic.bytes("java/lang/ArrayStoreException"));
+        long e = newExc(Magic.bytes("java/lang/ArrayStoreException"));
+        if (e != 0L && aseValueType != 0L && classNameLen(aseValueType) > 0)   // a lambda has no name: omit
+        {
+            Magic.store64(e + 80L, classNameString(aseValueType));
+        }
+        aseValueType = 0L;
+        return e;
     }
 
     /** Allocate a mini {@code java/lang/NegativeArraySizeException} — the JIT's newarray/anewarray length helper.
