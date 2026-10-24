@@ -95,6 +95,10 @@ final class VMUnwind
             }
             cpc = Magic.load64(csp) - 4L;                      // caller's return address (the call site)
             csp += cfs;
+            if (VM.isLaunchFrame(cpc))
+            {
+                break;                                         // below main(): the VM's launch frames, not the program's
+            }
         }
         if (n < 8)
         {

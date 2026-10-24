@@ -1331,6 +1331,13 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         fillStatic(image, staticWord, "vm/VM.wallEpochMs", BuildEpoch.MILLIS);   // the wall clock's lower bound
         fillStatic(image, staticWord, "vm/VM.imageSymTable", addr(symTableWord));
         fillStatic(image, staticWord, "vm/VM.imageSymCount", symCount);
+        String launchKey = BaselineCompiler.key("vm/Loader", "launchMain", "([B[B)V");
+        int launchWord = wordOffset.get(launchKey);
+        if (launchWord >= 0)
+        {
+            fillStatic(image, staticWord, "vm/VM.launchMainStart", addr(launchWord));
+            fillStatic(image, staticWord, "vm/VM.launchMainEnd", addr(launchWord + sizeWords.get(launchKey)));
+        }
         fillStatic(image, staticWord, "vm/VM.frameTable",   addr(frameTableWord));
         fillStatic(image, staticWord, "vm/VM.frameCount",   frameEntries.size());
         fillStatic(image, staticWord, "vm/VM.localTable",   addr(localTableWord));
