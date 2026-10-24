@@ -6237,9 +6237,11 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("java/util/spi/"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/util/spi/"))      // CalendarProvider: Calendar.getInstance
                 // java/text and its provider interfaces (increment 2): SimpleDateFormat / DateFormat run stock over
-                // the same provider layer. Its denied neighbours stay denied: jdk/internal/icu and sun/text outside
-                // sun/text/resources (Normalizer's tables), which only Normalizer/Collator/Bidi paths reach.
-                || utf8HasPrefix(base, off, Magic.bytes("java/text/")))
+                // the same provider layer. And all of sun/text (increment 4): BreakIterator runs stock, on
+                // RuleBasedBreakIterator and its rule data. jdk/internal/icu stays denied -- only Normalizer/Bidi
+                // reach it.
+                || utf8HasPrefix(base, off, Magic.bytes("java/text/"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/text/")))
         {
             return false;
         }
@@ -6598,9 +6600,9 @@ public final class Loader
                 // java/util/concurrent/TimeUnit$1 (the ChronoUnit switch map) is NOT denied either: its
                 // <clinit> calls ChronoUnit.values(), which loads now that java/time/temporal/ does.
                 || utf8HasPrefix(base, off, Magic.bytes("sun/text/"))
-                // grapheme-boundary tables (\b{g}): a 15x15 [[Z built via multianewarray in its <clinit>; a
-                // literal split never matches graphemes, so this whole subtree is cold.
-                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/util/regex/Grapheme"))
+                // jdk/internal/util/regex/Grapheme is NOT denied any more (increment 4): its 15x15 [[Z table is
+                // built by multianewarray, which the metal JIT lowers through VM.multiNewArray, and
+                // BreakIterator.getCharacterInstance is the grapheme iterator.
                 // jdk/internal/lang/CaseFolding WAS denied here, on the premise its own comment stated:
                 // "case-folding tables ([[I via multianewarray): only CASE_INSENSITIVE regex needs them".
                 // THAT PREMISE EXPIRED: JUnit's TimeoutDurationParser.<clinit> compiles

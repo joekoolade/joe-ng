@@ -67,8 +67,8 @@ public final class ReachScan
         // Character.getName. Character$UnicodeBlock/UnicodeScript are NOT denied any more: picocli's CJK width
         // check calls UnicodeBlock.of. (Keep in sync with Loader.isDenylisted.)
         "java/lang/CharacterName",
-        // grapheme-boundary tables (\b{g}): a 15x15 [[Z built via multianewarray; cold for a literal match.
-        "jdk/internal/util/regex/Grapheme",
+        // jdk/internal/util/regex/Grapheme is NOT here any more: BreakIterator.getCharacterInstance uses it, and its
+        // multianewarray table builds on metal. (Keep in sync with Loader.isDenylisted.)
         // jdk/internal/lang/CaseFolding is NOT here any more: it was denied as "only CASE_INSENSITIVE regex
         // needs them", and JUnit's TimeoutDurationParser compiles exactly such a pattern. It is overlaid in
         // guestsrc instead -- see Loader.isDenylisted. (Keep in sync with that list.)
@@ -88,7 +88,8 @@ public final class ReachScan
         // Loader.isDenylisted.
         if (c.startsWith("sun/util/locale/") || c.startsWith("sun/util/cldr/")
                 || c.startsWith("sun/util/resources/") || c.startsWith("sun/text/resources/")
-                || c.startsWith("java/util/spi/") || c.startsWith("sun/util/spi/") || c.startsWith("java/text/"))
+                || c.startsWith("java/util/spi/") || c.startsWith("sun/util/spi/") || c.startsWith("java/text/")
+                || c.startsWith("sun/text/"))
         {
             return false;
         }
