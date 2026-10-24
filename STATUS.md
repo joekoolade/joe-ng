@@ -4,6 +4,29 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **A LAMBDA'S CLASS NAME CARRIES ITS HOST CLASS, AS STOCK (2026-10-24).** `getClass().getName()` on a lambda
+  answered `$$Lambda/0x<type address>`, without the `SynthNameProbe$$Lambda/0x...` host prefix that stock
+  hidden classes carry.
+  - **Fix:** `buildLambdaTib` runs while the host method compiles, so each synthesised-TIB root now records the
+    compile context's class (`lambdaHostBase`/`lambdaHostNameOff`). They are set explicitly at all three sites,
+    because allocArray does not zero. `classNameLen` and `writeSynthName` prefix the dotted binary name.
+    Annotation instances and proxies have no host and keep the bare form.
+  - The synthesised-type lookup is now bounded by `lambdaTibRootN` instead of the array length; slots past the
+    count were never written.
+  - SynthNameProbe masks the per-run address (`/0x<addr>`) so it compares with the host, and is registered.
+  - **Measured (QEMU):** 8 lambda probes, 8 pass: Capture, CtorRefField, Lambda4, LambdaAdapt,
+    MethodRefBoxFloat, MethodRefUnbox, SerLambda and ThrowableToString. SynthNameProbe and AnnoProxyProbe pass
+    solo, 2 of 2. `make test` and `make overlaycheck` (0 new) pass.
+  - **Pi 4 (c2e37dc): PASS.** HTTP 200 `bytes=891`, `[main returned normally]`, `gc: collections=7`.
+  - **#419 cost, a second Pi sample:** batch 1 `tot=11347ms` and `compile=2758ms` (9bb1d21: 11267/2703; before
+    #419: 10222–10522 / 1793–2083). The roughly +0.9 s therefore REPRODUCES on the Pi.
+    - Sequential QEMU boots (`-j 1`) showed no time cost (`tot` 16261 denied vs 16137 un-denied), with the
+      same counts: +3 blobs and +2 registered initializers.
+    - A temporary first-run print showed the UnicodeBlock initializer RUNS only in TextProbe, which uses it.
+    - So the Pi cost comes from loading and registering the classes, not from running them. Why the Pi shows a
+      cost QEMU does not is NOT measured.
+  - NOT RUN: the all-probe regression, the demo suites and JUnit.
+
 - **`Character$UnicodeBlock` / `$UnicodeScript` ARE UN-DENIED; TextProbe PASSES (2026-10-24).** picocli measures
   every usage line with `isCodePointCJK`, which calls `Character.UnicodeBlock.of`. That trapped (TextProbe:
   `DENYLIST TRAP`). Both classes were denied as "the name-only half of Character". Rule 1 says implement, so they
