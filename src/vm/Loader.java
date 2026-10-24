@@ -6221,14 +6221,21 @@ public final class Loader
      */
     private static boolean isDenylisted(long base, int off)
     {
-        // NARROWED OUT of the sun/util/ denial: the CORE of sun/util/locale -- BaseLocale, LocaleUtils,
-        // LanguageTag, InternalLocaleBuilder, LocaleExtensions, LocaleMatcher -- which stock java/util/Locale
-        // is built on. Pure string logic with no natives, so Locale runs STOCK (its overlay is deleted). The
-        // PROVIDER subtree stays denied: LocaleProviderAdapter / LocaleResources / LocaleServiceProviderPool
-        // read locale DATA through ResourceBundle and the service machinery, and are reached only by the
-        // display-name and localized-format paths. (Keep in sync with writer.ReachScan.isDenied.)
+        // NARROWED OUT of the sun/util/ denial: all of sun/util/locale. Its CORE (BaseLocale, LocaleUtils,
+        // LanguageTag, ...) is what stock java/util/Locale is built on, and its PROVIDER subtree is the locale
+        // data layer (the locale-provider arc, 2026-10-24): Calendar's constructor reads the first day of the
+        // week through CalendarDataUtility, and Date.toString names its zone through TimeZoneNameUtility. The
+        // provider reaches the CLDR adapter (sun/util/cldr), its compiled bundles (sun/util/resources,
+        // sun/text/resources -- the seed's java.base classes, embedded like the rest) and the provider
+        // interfaces (java/util/spi, sun/util/spi), so those are narrowed out together. A DENIED class literal
+        // answers null, which is how Calendar.getInstance reached ConcurrentHashMap.get(null) as an NPE. (Keep in sync with
+        // writer.ReachScan.isDenied.)
         if (utf8HasPrefix(base, off, Magic.bytes("sun/util/locale/"))
-                && !utf8HasPrefix(base, off, Magic.bytes("sun/util/locale/provider/")))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/util/cldr/"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/util/resources/"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/text/resources/"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/util/spi/"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/util/spi/")))     // CalendarProvider: Calendar.getInstance
         {
             return false;
         }

@@ -1,0 +1,12 @@
+epoch getTime = 0
+default zone id = GMT
+GMT offset = 0
+calendar fields = 2024-10-24 12:0 dow=5 doy=298
+calendar set/add = 2/29 1709166600000
+leap year = true false
+Calendar.getInstance = 1970
+zone by id = America/Chicago
+compareTo/before = -1 true
+epoch toString = Thu Jan 01 00:00:00 GMT 1970
+fixed toString = Thu Oct 24 12:00:00 GMT 2024
+DateProbe done

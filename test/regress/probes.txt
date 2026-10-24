@@ -9,7 +9,7 @@
 # with javac + java on the seed JDK, check it equals a metal run, commit it as expected/<Probe>.out.
 #
 # Host recipes that are not plain `java -cp <classes> <Probe>`: GvrProbe/ClassResourceProbe add
-# ramfs/lib/junit.jar to -cp; EngineMessageProbe adds out; ReaderProbe takes ramfs/data/sample.txt and
+# ramfs/lib/junit.jar to -cp; EngineMessageProbe adds out; DateProbe runs with -Duser.timezone=GMT; ReaderProbe takes ramfs/data/sample.txt and
 # ReflectLookupProbe ramfs/lib/app.jar as args[0]; LocaleProbe runs with
 # -Duser.language=en -Duser.country= -Duser.variant= -Duser.script=. ExcMessageRaceProbe runs with
 # -XX:-OmitStackTraceInFastThrow (else HotSpot drops the message of a hot implicit exception).
@@ -65,6 +65,7 @@ ConstantDescOrderProbe
 ConstantDescProbe
 CslmRaceProbe            solo             # race; timing-sensitive
 CtorRefFieldProbe
+DateProbe
 DecimalFormatProbe
 DefaultFrameProbe
 DefaultSpecificProbe

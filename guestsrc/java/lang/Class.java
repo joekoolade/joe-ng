@@ -78,6 +78,19 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
     }
 
     /**
+     * Stock's {@code Class.forName(Module, String)}: the named class, or NULL when it is not found -- it never
+     * throws ClassNotFoundException. Every class here is in the one unnamed module, so the module selects
+     * nothing. The locale data layer loads its bundles through this ({@code sun.util.resources.Bundles}), and
+     * the overlay used to drop it: {@code LINK FAILED ... no body for that name+descriptor}, then a trap.
+     */
+    public static Class<?> forName(Module module, String name)
+    {
+        java.util.Objects.requireNonNull(module);
+        java.util.Objects.requireNonNull(name);
+        return forName0(jdk.internal.misc.MetalNames.utf8(name));
+    }
+
+    /**
      * The message HotSpot's ClassNotFoundException carries for {@code name}: the name itself, except for an
      * ARRAY name, where a well-formed {@code [..L<element>;} whose element is missing names only the element, and
      * a malformed one is reported in internal form ('.' as '/'). A name containing '/' is refused as given.
