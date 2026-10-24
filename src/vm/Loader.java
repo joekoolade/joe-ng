@@ -2441,7 +2441,7 @@ public final class Loader
                 // OUTER Character declares exactly ONE non-constant static, TYPE = getPrimitiveClass("char"),
                 // and seedPrimType fills that cell anyway. Everything else on the outer class is a
                 // compile-time constant (JLS 4.12.4), and the 347 UnicodeBlock constants belong to the NESTED
-                // Character$UnicodeBlock, which is a different name and is DENIED outright. The boot arm that
+                // Character$UnicodeBlock, which is a different name with its own <clinit>. The boot arm that
                 // says so is the class-literal demo's `char isPrimitive=true name=char` -- javac compiles
                 // char.class to a getstatic of this very field, so a null TYPE would fail there and nowhere
                 // else.
@@ -6571,18 +6571,12 @@ public final class Loader
                 // java/time is NOT DENIED any more (the date/time arc). It was kept out because Formatter NAMES
                 // ten of its classes for %t and the dependency pass of the day pulled +357 classes into every
                 // batch; System.Logger's log() formats through ZonedDateTime.now(), and rule 1 says implement.
-                // THE NAME-ONLY HALF OF stock java/lang/Character, which is the java/time situation one
-                // class along. The loader pulls every CONSTANT_Class a blob NAMES, and under rule 2 a pulled
-                // class's <clinit> RUNS -- so naming these costs running them:
-                //   Character$UnicodeBlock  -- a <clinit> that constructs 347 blocks and maps their names
-                //   Character$UnicodeScript -- the same shape for scripts
-                //   CharacterName           -- reads a "uniName.dat" RESOURCE this VM's classDir has no copy of
-                // All three are reached ONLY from UnicodeBlock.of / UnicodeScript.of / Character.getName, and
-                // nothing on the classification, case or digit paths touches them. Denied here so they are
-                // trap-wired-but-unreached, which is what this list is for.
+                // java/lang/CharacterName reads a "uniName.dat" RESOURCE this VM's classDir has no copy of, and
+                // is reached only from Character.getName. Character$UnicodeBlock and Character$UnicodeScript are
+                // NOT denied any more (2026-10-24): picocli's CJK width check calls UnicodeBlock.of on every
+                // usage line (TextProbe trapped here), and rule 1 says implement. Their <clinit>s build 347
+                // blocks / the script tables, and run only when a program first uses them.
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/CharacterName"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/Character$UnicodeBlock"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/Character$UnicodeScript"))
                 // java/util/concurrent/TimeUnit$1 (the ChronoUnit switch map) is NOT denied either: its
                 // <clinit> calls ChronoUnit.values(), which loads now that java/time/temporal/ does.
                 || utf8HasPrefix(base, off, Magic.bytes("sun/text/"))
