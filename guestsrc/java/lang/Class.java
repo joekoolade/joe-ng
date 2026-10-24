@@ -946,65 +946,32 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
     }
 
     /**
-     * The PUBLIC member classes of this class, including those inherited from superclasses and
-     * superinterfaces. Never null.
+     * The PUBLIC member classes of this class and of its SUPERCLASSES, most-derived first. Never null.
+     *
+     * <p>Stock's body (JDK 26), and that is the point: the javadoc's "inherited from superclasses" means the
+     * superclass chain ONLY, and stock neither walks interfaces nor de-duplicates. This overlay used to do both,
+     * so a member class reachable through an interface was counted where every JVM answers 0 (AnnoProxyProbe).
      *
      * <p>Landed beside {@link #getDeclaredClasses} deliberately: a member a name-winning overlay does not
      * declare CEASES TO EXIST, and shipping one half of a pair is how that trap has cost this project a boot
-     * ten times over. Nothing reached so far calls it -- {@code ReflectionUtils} uses the declared form -- so
-     * it is here to be present and correct rather than because something waits on it.
-     *
-     * <p>Walks the superclass chain and the interfaces, most-derived first, and de-duplicates by name: a
-     * class and its superclass may both report the same inherited member.
+     * ten times over.
      */
     public Class<?>[] getClasses()
     {
-        java.util.ArrayList<Class<?>> out = new java.util.ArrayList<Class<?>>();
-        java.util.HashSet<String> seen = new java.util.HashSet<String>();
-        Class<?> c = this;
-        while (c != null)
+        java.util.List<Class<?>> list = new java.util.ArrayList<>();
+        Class<?> currentClass = this;
+        while (currentClass != null)
         {
-            collectPublicClasses(c, out, seen);
-            c = c.getSuperclass();
-        }
-        collectInterfaceClasses(this, out, seen);
-        return out.toArray(new Class<?>[0]);
-    }
-
-    /**
-     * Public member classes of {@code c}'s interfaces, TRANSITIVELY -- a super-interface's members are
-     * inherited too, so a walk of the DIRECT interfaces alone misses them. Same shape as
-     * {@link #collectInterfaceMethods}, deliberately: two walks over the same relation that disagreed about
-     * transitivity would be the kind of half-correct member this overlay keeps getting bitten by.
-     */
-    private static void collectInterfaceClasses(Class<?> c, java.util.ArrayList<Class<?>> out,
-            java.util.HashSet<String> seen)
-    {
-        Class<?> k = c;
-        while (k != null)
-        {
-            Class<?>[] ifs = k.getInterfaces();
-            for (int i = 0; i < ifs.length; i++)
+            for (Class<?> m : currentClass.getDeclaredClasses())
             {
-                collectPublicClasses(ifs[i], out, seen);
-                collectInterfaceClasses(ifs[i], out, seen);   // super-interfaces
+                if (java.lang.reflect.Modifier.isPublic(m.getModifiers()))
+                {
+                    list.add(m);
+                }
             }
-            k = k.getSuperclass();
+            currentClass = currentClass.getSuperclass();
         }
-    }
-
-    /** Adds {@code c}'s public member classes that have not been seen; a member of an interface is public. */
-    private static void collectPublicClasses(Class<?> c, java.util.ArrayList<Class<?>> out,
-            java.util.HashSet<String> seen)
-    {
-        Class<?>[] d = c.getDeclaredClasses();
-        for (int i = 0; i < d.length; i++)
-        {
-            if (java.lang.reflect.Modifier.isPublic(d[i].getModifiers()) && seen.add(d[i].getName()))
-            {
-                out.add(d[i]);
-            }
-        }
+        return list.toArray(new Class<?>[0]);
     }
 
     /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.classDeclClasses}): mirror -> Class[]. */

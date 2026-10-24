@@ -299,8 +299,9 @@ public class AnnoProxyProbe
         // how it got recorded rather than papered over. Implementing it needs element ENUMERATION (equals,
         // hashCode and toString all do), which the annotation runtime does not have: it can find one element
         // by name, not walk them.
-        System.out.println("distinct instances= "
-                + (da == Annotated.class.getAnnotation(Tag.class) ? "same" : "fresh (see note)"));
+        //
+        // The identity used to be PRINTED here ("same" on the host, "fresh" on metal), which asserted the very
+        // accident this note rules out and kept the probe out of the regression (2026-10-24). Removed.
 
         // getDeclaredAnnotations: the PLURAL, which JUnit's findAnnotation walks to reach META-annotations.
         // An empty answer would not fail -- it would silently report that nothing is annotated -- so the
@@ -489,7 +490,8 @@ public class AnnoProxyProbe
         System.out.println("getClasses pub    = " + (gpub ? 1 : 0) + " (want 1)");
         System.out.println("getClasses noPriv = " + (gpriv ? 0 : 1) + " (want 1)");
 
-        // getClasses inherits a member declared in a SUPER-interface (Impl -> ImplBase -> MidIface -> TopIface).
+        // getClasses does NOT inherit a member declared in a SUPER-interface (Impl -> ImplBase -> MidIface ->
+        // TopIface): stock walks the superclass chain only, and the host control answers 0.
         Class<?>[] gi = Impl.class.getClasses();
         boolean deep = false;
         for (int i = 0; i < gi.length; i++)
@@ -497,7 +499,7 @@ public class AnnoProxyProbe
             if (gi[i].getName().endsWith("$FromIface")) { deep = true; }
         }
         System.out.println("getClasses ifaceDeep = " + (deep ? 1 : 0)
-                + " (want 1, inherited through 2 interfaces)");
+                + " (want 0, superclasses only -- not through 2 interfaces)");
 
         // ---- records: hashCode / equals / toString via ObjectMethods indy ----
         Pt p1 = new Pt(7, "a");
