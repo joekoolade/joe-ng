@@ -36,9 +36,9 @@ public class Throwable implements java.io.Serializable
     // which then hits the unresolved-call trap. Never set true.
     static boolean jfrTracing;
 
-    // Inline backtrace: up to 8 frame code-addresses (0-terminated), captured at THROW time by {@code VM.unwind}
-    // (which already walks the frame chain to search for a handler). Kept as inline longs -- NOT a {@code long[]}
-    // -- so the VM fills them without allocating an array during exception propagation. {@code printStackTrace()}
+    // Inline backtrace: up to 8 frame code-addresses (0-terminated), captured at CONSTRUCTION by
+    // fillInStackTrace (VMUnwind.fillInTrace), or at THROW time by VMUnwind.captureTrace if still empty. Kept as
+    // inline longs -- NOT a {@code long[]} -- so the VM fills them without allocating during exception propagation. {@code printStackTrace()}
     // names each PC's method over the UART via {@code Loader.reportMethodAt}, reusing the unwind frame-walk. These
     // are the first instance fields, so a Throwable's backtrace lives at object offsets 16..72 (header is 16).
     long bt0, bt1, bt2, bt3, bt4, bt5, bt6, bt7;
@@ -49,21 +49,25 @@ public class Throwable implements java.io.Serializable
 
     public Throwable()
     {
+        fillInStackTrace();
     }
 
     public Throwable(String message)
     {
+        fillInStackTrace();
         detailMessage = message;
     }
 
     public Throwable(String message, Throwable cause)
     {
+        fillInStackTrace();
         detailMessage = message;
         this.cause = cause;
     }
 
     public Throwable(Throwable cause)
     {
+        fillInStackTrace();
         detailMessage = cause == null ? null : cause.toString();
         this.cause = cause;
     }
@@ -84,14 +88,18 @@ public class Throwable implements java.io.Serializable
      * <p>{@code enableSuppression} IS HONOURED, because ignoring it is observable: {@code getSuppressed()}
      * would answer a non-empty array where stock answers an empty one, and JUnit reads it.
      *
-     * <p>{@code writableStackTrace} IS NOT, and that is a stated divergence rather than an oversight. This
-     * VM captures the backtrace into {@code bt0..bt7} inside {@code VM.unwind} at THROW time, not here, so
-     * honouring it needs VM work rather than a field. What it costs precisely: an exception stock would
-     * leave traceless carries a trace here -- MORE information than stock, never less -- and
-     * {@code setStackTrace} is permitted where stock would ignore it.
+     * <p>{@code writableStackTrace} is honoured for the CONSTRUCTION capture only, and that is a stated
+     * divergence: false skips {@code fillInStackTrace()} as stock does, but an exception that reaches a throw
+     * with an empty backtrace is still filled there ({@code VMUnwind.captureTrace}). What it costs precisely:
+     * an exception stock would leave traceless carries a trace here -- MORE information than stock, never
+     * less -- and {@code setStackTrace} is permitted where stock would ignore it.
      */
     protected Throwable(String message, Throwable cause, boolean enableSuppression, boolean writableStackTrace)
     {
+        if (writableStackTrace)
+        {
+            fillInStackTrace();
+        }
         detailMessage = message;
         this.cause = cause;
         suppressionEnabled = enableSuppression;
@@ -133,10 +141,10 @@ public class Throwable implements java.io.Serializable
     /**
      * The stack trace, materialised from the inline backtrace {@link #printStackTrace} already uses.
      *
-     * <p>joe-ng captures the backtrace at THROW time rather than at construction (so propagation allocates
-     * nothing), which means an exception built but not yet thrown reports an EMPTY trace. That is what stock
-     * code that walks the array wants -- it loops and finds nothing -- rather than a null, which is what the
-     * absence of this method used to produce: the call landed on an empty vtable slot and surfaced as a bare
+     * <p>The backtrace is taken at CONSTRUCTION, as on a JVM ({@link #fillInStackTrace}), so an exception
+     * built but never thrown has its construction frames. One that has none -- allocated by the VM without a
+     * constructor, or of a class whose {@code fillInStackTrace} skips the capture -- is filled at its throw.
+     * Never null: the absence of this method used to land on an empty vtable slot and surface as a bare
      * ArrayIndexOutOfBoundsException from the dispatch guard, three frames from anything relevant.
      */
     public StackTraceElement[] getStackTrace()
@@ -256,19 +264,23 @@ public class Throwable implements java.io.Serializable
     }
 
     /**
-     * A no-op that returns {@code this}, as the stock signature requires.
-     *
-     * <p>joe-ng captures the backtrace at CONSTRUCTION (the {@code bt0..bt7} slots the VM fills), so there is
-     * no separate fill step to perform and re-capturing here would REPLACE a trace taken at the throw site
-     * with one taken wherever this happens to be called -- strictly worse information. Stock code overrides
-     * this to make an exception cheap by skipping the capture; subclasses that do so (
-     * {@code IllegalAccessException}, {@code InvocationTargetException}) were the ones the overlay check
-     * flagged, because their calls to {@code super.fillInStackTrace()} resolved nowhere.
+     * Record the current stack into the inline backtrace ({@code bt0..bt7}), as stock does: the constructors
+     * call this, and an explicit call REPLACES the trace with one taken here. The VM skips this frame and the
+     * exception's own {@code <init>} chain ({@code VMUnwind.fillInTrace}), so the trace starts at the
+     * {@code new}. A {@code setStackTrace} override is dropped, as stock's {@code UNASSIGNED_STACK} reset does.
+     * Stock code overrides this to make an exception cheap by skipping the capture; subclasses that call
+     * {@code super.fillInStackTrace()} ({@code NullPointerException}, {@code IllegalAccessException},
+     * {@code InvocationTargetException}) need it declared.
      */
     public synchronized Throwable fillInStackTrace()
     {
+        fillInStackTrace0(this);
+        stackTrace = null;
         return this;
     }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VMUnwind.fillInTrace}): the current frames -> bt0..bt7. */
+    private static native void fillInStackTrace0(Throwable t);
 
     public void printStackTrace()
     {

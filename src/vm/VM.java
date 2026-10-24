@@ -1972,6 +1972,7 @@ public final class VM
         if (declFieldDescAddr == 0L) { long u = VMNatives.declaredFieldDescAt(0L, -1L); }
         if (declFieldCountAddr == 0L) { long u = VMNatives.declaredFieldCount(0L); }
         if (stackTraceAddr == 0L) { long u = VMNatives.throwableTrace(0L); }          // Throwable.stackTrace0
+        if (fillTraceAddr == 0L) { VMUnwind.fillInTrace(0L); }                       // Throwable.fillInStackTrace0
         if (virtualResolveAddr == 0L) { long u = VMNatives.virtualResolve(0L, 0L); }  // late virtual dispatch
         if (printStackTraceAddr == 0L) { VMNatives.printStackTrace(0L); }       // Throwable.printStackTrace0() native
         if (ramfsTableAddr == 0L) { long u = VMNatives.ramfsTable(0L); }        // MetalRamfs.table0
@@ -3660,6 +3661,7 @@ public final class VM
     static long declFieldDescAddr;     // VMNatives.declaredFieldDescAt(JJ)J — Class.declaredFieldDescAt0
     static long declFieldCountAddr;    // VMNatives.declaredFieldCount(J)J — Class.declaredFieldCount0
     static long stackTraceAddr;        // VM.throwableTrace(J)J — Throwable.stackTrace0 (inline bt -> STE[])
+    static long fillTraceAddr;         // VMUnwind.fillInTrace(J)V — Throwable.fillInStackTrace0 (trace at construction)
     static long virtualResolveAddr;    // VM.virtualResolve(JJ)J — late virtual dispatch (receiver + site idx)
     static long badTailTargetAddr;     // VM.badTailTarget(JJ)V -- a trampoline whose resolved target came back 0
     static long reportFaultAddr;       // VM.reportFault()V — the exception-vector handler's address
