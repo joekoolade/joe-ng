@@ -88,6 +88,22 @@ public final class Module implements java.lang.reflect.AnnotatedElement
         return new java.lang.annotation.Annotation[0];
     }
 
+    /**
+     * Stock's resource read for a module. This VM has the one unnamed module, so it is stock's unnamed-module arm:
+     * the classpath jar first, then java.base's own resources ({@link ClassLoader#javaBaseResource}).
+     * {@code sun.util.resources.BreakIteratorResourceBundle} loads the break-iterator rule data through this, and
+     * the overlay used to drop it. A leading '/' is not part of a module resource name, as in stock.
+     */
+    public java.io.InputStream getResourceAsStream(String name) throws java.io.IOException
+    {
+        if (name.startsWith("/"))
+        {
+            name = name.substring(1);
+        }
+        java.io.InputStream in = ClassLoader.getSystemResourceAsStream(name);
+        return in != null ? in : ClassLoader.javaBaseResource(name);
+    }
+
     @Override
     public String toString()
     {

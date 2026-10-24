@@ -201,6 +201,33 @@ public class ClassLoader
         return SYSTEM.getResourceAsStream(name);
     }
 
+    /**
+     * joe-ng: one of java.base's OWN resources -- {@code java/util/currency.data}, the break-iterator rule data --
+     * or null. They live inside the JDK's modules image, in no jar, so the build copies each one the VM serves
+     * out of the seed's image to {@code /lib/java.base/<name>} in the RAMFS (Makefile {@code JAVA_BASE_RES}).
+     * {@link Class#getResourceAsStream} and {@link Module#getResourceAsStream} fall back to this when the
+     * classpath jar has nothing; stock java.base reads its resources through exactly those two methods.
+     */
+    static java.io.InputStream javaBaseResource(String name)
+    {
+        java.io.File f = new java.io.File(JAVA_BASE_RESOURCES + name);
+        if (!f.isFile())
+        {
+            return null;
+        }
+        try
+        {
+            return new java.io.FileInputStream(f);
+        }
+        catch (java.io.FileNotFoundException e)
+        {
+            return null;
+        }
+    }
+
+    /** Where the build puts java.base's own resources in the RAMFS (see {@link #javaBaseResource}). */
+    private static final String JAVA_BASE_RESOURCES = "/lib/java.base/";
+
     /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.resourceExists} -> {@code JarFs.hasResource}). */
     private static native long resourceExists0(byte[] name);
 

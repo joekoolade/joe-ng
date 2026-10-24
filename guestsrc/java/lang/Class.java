@@ -1645,27 +1645,8 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
     {
         name = resolveName(name);
         java.io.InputStream in = ClassLoader.getSystemResourceAsStream(name);
-        if (in != null)
-        {
-            return in;
-        }
-        java.io.File f = new java.io.File(JAVA_BASE_RESOURCES + name);
-        if (!f.isFile())
-        {
-            return null;
-        }
-        try
-        {
-            return new java.io.FileInputStream(f);
-        }
-        catch (java.io.FileNotFoundException e)
-        {
-            return null;
-        }
+        return in != null ? in : ClassLoader.javaBaseResource(name);
     }
-
-    /** Where the build puts java.base's own resources in the RAMFS (see {@link #getResourceAsStream}). */
-    private static final String JAVA_BASE_RESOURCES = "/lib/java.base/";
 
     /**
      * Stock's unnamed-module arm, as {@link #getResourceAsStream}. It answers what {@link ClassLoader#getResource}

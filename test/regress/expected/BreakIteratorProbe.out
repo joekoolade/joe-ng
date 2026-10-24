@@ -1,0 +1,8 @@
+line = 0 7 14 19 21 26 32 37 41 48 52
+word = 0 5 6 7 12 13 14 18 19 20 21 30 31 32 36 37 39 40 41 45 46 48 51 52
+sentence = 0 14 41 48 52
+line root = 0 2 4 6 7
+line following(7) = 14 19 true 52
+word empty = 0
+character = 0 1 3 4
+BreakIteratorProbe done
