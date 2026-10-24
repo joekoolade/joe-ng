@@ -4,6 +4,27 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **A STACK TRACE ENDS AT `main` (2026-10-24).** Both stack walks used to continue below a launched program's
+  `main()` into `vm.Loader.launchMain`, `vm.VM.launchInit` and `vm.VM.run`. One walk builds an exception's
+  trace (`VMUnwind.captureTrace`), the other builds `Thread.getStackTrace` (`Loader.traceWalk`). On a JVM a
+  trace ends at `main`.
+  - **Fix:** the writer bakes `Loader.launchMain`'s `[start, end)` into `VM.launchMainStart/End`. Both walks
+    stop when the next return address lands inside it (`VM.isLaunchFrame`).
+    - The stop leaves `traceStopPc` at 0, so the uncaught-exception report does not call the trace truncated.
+    - A spawned thread's trace already stopped at its `run()`.
+  - **Measured (QEMU):** 7 trace probes, 6 pass.
+    - AssertMsgProbe is now `frames = 1`, the same as the host (was 5). It is registered as `solo`, because a
+      batch adds `ProbeBatch.main` below it.
+    - TraceProbe's thrown arms match the host: len=4 (was 8) and len=2.
+    - TraceProbe still differs in one arm. A created-but-never-thrown exception has `len=0` here and 1 on the
+      host, because this VM records the trace when the exception is thrown and stock records it when the
+      exception is created. TraceProbe stays unlisted, with that narrower reason in `probes.txt`.
+    - StackWalker, StockException, ThrowableToString, ExcMessageRace and HighLocalThrow pass. So do
+      `make test` and `make overlaycheck` (0 new).
+  - **Pi 4 (a792b5a): PASS.** WiFi joined, HTTP 200 `bytes=891`, `[main returned normally]`,
+    `gc: collections=7`.
+  - NOT RUN: the all-probe regression, the demo suites and JUnit.
+
 - **55 MORE PROBES ARE IN THE REGRESSION; THE REST ARE LISTED WITH A REASON (2026-10-23).** 72 probes were
   compiled into every image (Makefile `JDKTESTS`) and never run by `scripts/Regress.java`.
   - **Host controls:** each was compiled and run twice on the seed JDK with the JUnit jar on the classpath.
