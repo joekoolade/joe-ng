@@ -49,14 +49,27 @@ public final class SynthNameProbe
         String nm = mref.getClass().getName();
         String again = f1.getClass().getName();
 
-        System.out.println("lambda1 name = " + n1);
-        System.out.println("lambda2 name = " + n2);
-        System.out.println("mref    name = " + nm);
+        // The address after "/0x" differs per run and per VM, so it is printed as <addr>: everything else in the
+        // name -- the HOST CLASS prefix above all -- is compared with the host.
+        System.out.println("lambda1 name = " + masked(n1));
+        System.out.println("lambda2 name = " + masked(n2));
+        System.out.println("mref    name = " + masked(nm));
         System.out.println("nonNull = " + (n1 != null && n2 != null && nm != null) + " (want true)");
         System.out.println("marked  = " + (n1 != null && n1.contains("$$Lambda")) + " (want true)");
         System.out.println("distinct = " + (n1 != null && !n1.equals(n2)) + " (want true)");
         System.out.println("stable   = " + (n1 != null && n1.equals(again)) + " (want true)");
         System.out.println("control  = " + "abc".getClass().getName() + " (want java.lang.String)");
         System.out.println("SynthNameProbe done");
+    }
+
+    /** {@code name} with the hex address after {@code "/0x"} replaced by {@code <addr>}. */
+    private static String masked(String name)
+    {
+        if (name == null)
+        {
+            return "null";
+        }
+        int at = name.indexOf("/0x");
+        return at < 0 ? name : name.substring(0, at) + "/0x<addr>";
     }
 }

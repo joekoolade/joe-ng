@@ -1,0 +1,9 @@
+lambda1 name = SynthNameProbe$$Lambda/0x<addr>
+lambda2 name = SynthNameProbe$$Lambda/0x<addr>
+mref    name = SynthNameProbe$$Lambda/0x<addr>
+nonNull = true (want true)
+marked  = true (want true)
+distinct = true (want true)
+stable   = true (want true)
+control  = java.lang.String (want java.lang.String)
+SynthNameProbe done
