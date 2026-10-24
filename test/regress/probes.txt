@@ -15,9 +15,8 @@
 # -XX:-OmitStackTraceInFastThrow (else HotSpot drops the message of a hot implicit exception).
 #
 # Compiled into the image (Makefile JDKTESTS) but NOT listed, and why (2026-10-23):
-#   OPEN VM BUGS, differ from the host alone -- AnnoProxyProbe (getClasses counts a member class inherited
-#   through an interface; stock: superclasses only), TextProbe (DENYLIST TRAP at
-#   Character$UnicodeBlock.of from picocli's CJK width check).
+#   OPEN VM BUGS, differ from the host alone -- TextProbe (DENYLIST TRAP at Character$UnicodeBlock.of from
+#   picocli's CJK width check).
 #   METAL-ONLY BY DESIGN, no host control -- ArchiveProbe, BoxCacheProbe (print addresses and image/heap),
 #   ResourceProbe, ServiceLoaderProbe (no URL support, denied providers), UsageProbe (os.name, terminal
 #   width), SynthNameProbe (hidden-class addresses), SecureRandomProbe, LazyModsProbe (use magic/ or demo/).
@@ -31,6 +30,7 @@ AnnoClassArrayProbe      cp=/lib/junit.jar
 AnnoContractProbe
 AnnoDefaultProbe
 AnnoLoadProbe
+AnnoProxyProbe
 AnnoSlotProbe            cp=/lib/junit.jar
 ArgGroupProbe            cp=/lib/junit.jar
 ArithMessageProbe

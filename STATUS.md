@@ -4,6 +4,20 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **`Class.getClasses` WALKS SUPERCLASSES ONLY, AS STOCK (2026-10-24).** The overlay also walked every interface,
+  transitively, and de-duplicated by name. So it returned a public member class reachable only through an
+  interface, which no JVM does (AnnoProxyProbe `ifaceDeep`: 1, host 0). It is now JDK 26's body: the superclass
+  chain, each public declared member, no de-duplication.
+  - **AnnoProxyProbe is registered.** Two changes to the probe:
+    - Its `ifaceDeep` label said `want 1`; it is corrected to the stock answer, 0.
+    - Its `distinct instances` line printed annotation-instance IDENTITY (host "same" by caching, metal
+      "fresh"), which its own comment says is unspecified and must not be asserted. The line is removed.
+  - The `Annotation.equals` gap (identity equals) that the comment records is unchanged.
+  - **Measured (QEMU):** 6 annotation probes, 5 pass. AnnoProxy differed only in the identity line; after its
+    removal, AnnoProxyProbe solo passes 1 of 1. `make test` and `make overlaycheck` (0 new) pass.
+  - **Pi 4 (e746845): PASS.** HTTP 200 `bytes=891`, `[main returned normally]`, `gc: collections=7`.
+  - NOT RUN: the all-probe regression, the demo suites and JUnit.
+
 - **A THROWABLE'S BACKTRACE IS TAKEN AT CONSTRUCTION (2026-10-24).** The inline backtrace (`bt0..bt7`) used to
   be recorded only at the throw. So an exception that was built but never thrown had an empty trace (TraceProbe:
   len=0, stock 1), and a trace named the throw site rather than the `new`.
