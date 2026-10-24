@@ -4,6 +4,27 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **LOCALE PROVIDER ARC, INCREMENT 4: BreakIterator RUNS STOCK ON ITS OWN RULE DATA (2026-10-24).** The overlay
+  was a hand-written whitespace/hyphen LINE breaker standing in for the denied `java/text/spi` lookup. It is
+  deleted (java/text has no overlays left), and stock runs on `RuleBasedBreakIterator`.
+  - **Un-denied:** `sun/text` (`jdk/internal/icu` stays denied; only Normalizer/Bidi reach it), and
+    `jdk/internal/util/regex/Grapheme`, the character-instance iterator, whose `[[Z` table multianewarray builds
+    on metal.
+  - **The rule data** are java.base RESOURCES (`sun/text/resources/{Line,Word,Sentence}BreakIteratorData`), read
+    through `Module.getResourceAsStream`, which the Module overlay never declared. It is added as stock's
+    unnamed-module arm. The `/lib/java.base` fallback is now one helper, `ClassLoader.javaBaseResource`, shared by
+    Class and Module, and `JAVA_BASE_RES` copies the three files.
+  - **BreakIteratorProbe** (new, registered; host `--limit-modules java.base`) matches the host: line, word,
+    sentence and root-line boundaries, following/preceding/isBoundary/last, empty text, and the grapheme
+    character instance.
+  - **Measured (QEMU):** 14 picocli/regex/locale probes, 14 pass: BreakIterator, Banner, ParseOpt, Text,
+    DupOption, Mixin, ArgGroup, Pattern, CaseFold, LocaleSymbols, DateFormat, Format, Char and SbText.
+    `make test` and `make overlaycheck` (0 new; 118 overlays) pass.
+  - **Pi 4 (d5e2114): PASS.** HTTP 200 `bytes=891`, `[main returned normally]`, `gc: collections=7`.
+  - **Cost (Pi, NetDemo batch 1, against increment 3):** +1641 blobs (was +1637), `clinits=462` (460),
+    `tot=13281ms` (13266), `rounds=47` (47). Negligible.
+  - NOT RUN: the all-probe regression, the demo suites and JUnit.
+
 - **LOCALE PROVIDER ARC, INCREMENT 3: DecimalFormatSymbols, DateFormatSymbols AND NumberFormat RUN STOCK
   (2026-10-24).** The three overlays existed only to step around the locale-provider layer, and each recorded its
   cost: every locale got the ROOT data, so en_US formatted currency as `¤`/`XXX`. They are deleted (−3,780 lines).
