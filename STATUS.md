@@ -4,6 +4,33 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **LOCALE PROVIDER ARC, INCREMENT 1: THE CLDR LOCALE-DATA LAYER RUNS STOCK; Calendar AND Date.toString WORK
+  (2026-10-24).** DateProbe, a new shape probe, found that `new GregorianCalendar(...)` and `Date.toString()` both
+  halted. They hit the denied `CalendarDataUtility.retrieveFirstDayOfWeek` and
+  `TimeZoneNameUtility.retrieveDisplayName`. `sun/util/calendar` itself was not the wall.
+  - **Un-denied together, in Loader.isDenylisted and ReachScan.isDenied:**
+    - `sun/util/locale/provider`;
+    - `sun/util/cldr`;
+    - `sun/util/resources` and `sun/text/resources`: the compiled bundles, which are the seed's own java.base
+      classes already embedded by `EMBED_ALL_JAVABASE`, so no files are hand-made;
+    - the provider interfaces `java/util/spi` and `sun/util/spi`.
+  - **Two walls, each measured:**
+    - `Bundles.findBundleOf` calls `Class.forName(Module, String)`, which the Class overlay never declared. It
+      is added: the class or null, never ClassNotFoundException.
+    - `Calendar.getInstance` NPE'd in `ConcurrentHashMap.get`, because `CalendarProvider.class`
+      (`sun/util/spi`) was a DENIED class literal, which answers null.
+  - **DateProbe is registered** (host recipe `-Duser.timezone=GMT`) and matches the host in every arm.
+  - **Measured (QEMU):** 14 locale/format/time probes, 14 pass: Date, Locale, LocaleInit, JavaTime, Format,
+    DecimalFormat, NumberFormat, Scanner, SystemLogger, Text, Banner, WallClock, TimeUnit and Char.
+    `make test` and `make overlaycheck` (0 new) pass.
+  - **Pi 4 (db36933): PASS.** HTTP 200 `bytes=892`, `[main returned normally]`, `gc: collections=7`.
+  - **COST:** the reachability closure now reaches the provider layer and the `FormatData` bundles from the base
+    closure (Locale, Formatter) without running them.
+    - **Pi**, NetDemo batch 1 against c2e37dc: +1629 blobs (was +1593), `clinits=460` (was 443),
+      `compile=2832ms` (was 2758), `tot=11698ms` (was 11347).
+    - **Sequential QEMU**, SbProbe batch 1: +1306 blobs (was +1270), `tot=18841ms` (was 16137).
+  - NOT RUN: the all-probe regression, the demo suites and JUnit.
+
 - **A LAMBDA'S CLASS NAME CARRIES ITS HOST CLASS, AS STOCK (2026-10-24).** `getClass().getName()` on a lambda
   answered `$$Lambda/0x<type address>`, without the `SynthNameProbe$$Lambda/0x...` host prefix that stock
   hidden classes carry.
