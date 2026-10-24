@@ -16,8 +16,8 @@
 #
 # Compiled into the image (Makefile JDKTESTS) but NOT listed, and why (2026-10-23):
 #   OPEN VM BUGS, differ from the host alone -- AnnoProxyProbe (getClasses counts a member class inherited
-#   through an interface; stock: superclasses only), AssertMsgProbe and TraceProbe (a stack trace continues
-#   below main into vm.Loader.launchMain/vm.VM.launchInit/vm.VM.run), TextProbe (DENYLIST TRAP at
+#   through an interface; stock: superclasses only), TraceProbe (a never-thrown exception has len=0, stock
+#   len=1: the backtrace is captured at THROW, stock captures at construction), TextProbe (DENYLIST TRAP at
 #   Character$UnicodeBlock.of from picocli's CJK width check).
 #   METAL-ONLY BY DESIGN, no host control -- ArchiveProbe, BoxCacheProbe (print addresses and image/heap),
 #   ResourceProbe, ServiceLoaderProbe (no URL support, denied providers), UsageProbe (os.name, terminal
@@ -42,6 +42,7 @@ ArrayElemProbe
 ArrayTypeIdentityProbe
 AseMessageProbe
 AsListProbe              cp=/lib/junit.jar
+AssertMsgProbe           solo cp=/lib/junit.jar  # prints stack frames; a batch adds its own
 AssignableProbe          cp=/lib/junit.jar
 AtomicRaceProbe          solo             # race; timing-sensitive
 AtomicUpdaters

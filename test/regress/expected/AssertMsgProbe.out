@@ -1,0 +1,11 @@
+assert message probe:
+  assertEquals(2,3) direct -> org.opentest4j.AssertionFailedError
+  message = [expected: <2> but was: <3>]
+  ITE.getCause() null? false
+  assertEquals(2,3) via Method.invoke -> org.opentest4j.AssertionFailedError
+  message = [expected: <2> but was: <3>]
+stackTrace probe:
+  getStackTrace null? false
+  frames = 1
+    at AssertMsgProbe.main(AssertMsgProbe.java:27)
+survived

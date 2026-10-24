@@ -3030,6 +3030,18 @@ public final class VM
     static long localTable, localCount;       // parallel {codeStart, codeEnd, regLocals} for IMAGE methods
     static long imageSymTable, imageSymCount; // stack-trace symbols: {codeStart, codeEnd, nameAddr, srcAddr, lineAddr}
 
+    // [start, end) of Loader.launchMain's image code, filled by the writer. A launched program's bottom frame
+    // is main(), and its return address lands in here: a stack trace stops at that frame, as on a JVM, instead
+    // of continuing into launchMain / launchInit / run, which no stock trace has.
+    static long launchMainStart;
+    static long launchMainEnd;
+
+    /** Whether {@code pc} is a return address into {@code Loader.launchMain}, i.e. the frame below main(). */
+    static boolean isLaunchFrame(long pc)
+    {
+        return pc >= launchMainStart && pc < launchMainEnd;
+    }
+
     // A second frame table for methods JIT-compiled at runtime: their code isn't in
     // the image, so the writer can't describe them. The loader appends one entry per
     // compiled method (codeStart, codeEnd, frameSize) as it emits. Same triple

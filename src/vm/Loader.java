@@ -3373,7 +3373,7 @@ public final class Loader
     /**
      * Walk the frame chain from ({@code pc},{@code sp}) with {@link VM#frameSizeAt}: record each frame's PC into
      * {@code arr} (a StackTraceElement[]) if non-0, else just count. Stops at the run-trampoline (so a spawned
-     * thread's bottom frame is run(), not the trampoline). {@code savedX30} (non-0 only for a parked thread) lets
+     * thread's bottom frame is run(), not the trampoline) and at main()'s caller ({@link VM#isLaunchFrame}). {@code savedX30} (non-0 only for a parked thread) lets
      * the FIRST frame step over a leaf {@code taskYield} whose caller return is in x30, not on the stack.
      */
     private static int traceWalk(long pc, long sp, long savedX30, long arr, long steTib)
@@ -3407,6 +3407,10 @@ public final class Loader
             cpc = Magic.load64(csp) - 4L;                  // caller's return address (the call site)
             csp += cfs;
             first = false;
+            if (VM.isLaunchFrame(cpc))
+            {
+                break;                                     // below main(): end the trace at main, as on a JVM
+            }
         }
         return n;
     }
