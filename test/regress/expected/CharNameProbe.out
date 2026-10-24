@@ -1,0 +1,12 @@
+A = LATIN CAPITAL LETTER A
+space = SPACE
+e-acute = LATIN SMALL LETTER E WITH ACUTE
+euro = EURO SIGN
+emoji = GRINNING FACE
+hangul = HANGUL SYLLABLES AC00
+cjk = CJK UNIFIED IDEOGRAPHS 4E00
+unassigned = null
+codePointOf LATIN SMALL LETTER Z = 7a
+codePointOf lower-case name = 20ac
+codePointOf bogus = THREW java.lang.IllegalArgumentException: Unrecognized character name :NOT A REAL CHARACTER NAME
+CharNameProbe done

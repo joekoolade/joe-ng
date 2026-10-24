@@ -6591,12 +6591,10 @@ public final class Loader
                 // java/time is NOT DENIED any more (the date/time arc). It was kept out because Formatter NAMES
                 // ten of its classes for %t and the dependency pass of the day pulled +357 classes into every
                 // batch; System.Logger's log() formats through ZonedDateTime.now(), and rule 1 says implement.
-                // java/lang/CharacterName reads a "uniName.dat" RESOURCE this VM's classDir has no copy of, and
-                // is reached only from Character.getName. Character$UnicodeBlock and Character$UnicodeScript are
-                // NOT denied any more (2026-10-24): picocli's CJK width check calls UnicodeBlock.of on every
-                // usage line (TextProbe trapped here), and rule 1 says implement. Their <clinit>s build 347
-                // blocks / the script tables, and run only when a program first uses them.
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/CharacterName"))
+                // java/lang/CharacterName, Character$UnicodeBlock and Character$UnicodeScript are NOT denied any
+                // more (2026-10-24). picocli's CJK width check calls UnicodeBlock.of on every usage line (TextProbe
+                // trapped here); CharacterName reads the java.base resource java/lang/uniName.dat, which the build
+                // now copies to /lib/java.base (Makefile JAVA_BASE_RES). Rule 1 says implement.
                 // java/util/concurrent/TimeUnit$1 (the ChronoUnit switch map) is NOT denied either: its
                 // <clinit> calls ChronoUnit.values(), which loads now that java/time/temporal/ does.
                 || utf8HasPrefix(base, off, Magic.bytes("sun/text/"))

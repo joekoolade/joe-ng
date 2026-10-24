@@ -4,6 +4,30 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **Character.getName AND codePointOf WORK: CharacterName RUNS STOCK ON uniName.dat (2026-10-24).**
+  `java/lang/CharacterName` was denied because it reads the java.base resource `java/lang/uniName.dat` (the Unicode
+  name table, through an InflaterInputStream over `Class.getResourceAsStream`), which the VM had no copy of. The
+  locale arc's resource route serves it now: `uniName.dat` is in `JAVA_BASE_RES`, and CharacterName is out of
+  both deny lists.
+  - **CharNameProbe** (new, registered) matches the host: table names, the rule-built Hangul and CJK names, null
+    for an unassigned code point, and `codePointOf` (exact, case-insensitive, IllegalArgumentException).
+  - **Measured (QEMU):** 8 char/text probes, 8 pass: CharName, Char, Text, Banner, CatchDenied, CaseFold, Pattern
+    and BreakIterator. `make test` and `make overlaycheck` (0 new) pass.
+  - **Pi 4 (6a94114): NOT CLEAN, two boots, both network-level:**
+    - Boot 1: HTTP 200 but the body was truncated, `bytes=536` (every earlier run read 891-892), with no trap and
+      `[main returned normally]`.
+    - Boot 2: the WPA 4-way handshake failed BEFORE launch (`no mac`, `no eapol msg3`, `4-way failed`), so
+      NetDemo threw `UnknownHostException: example.com`.
+    - The change touches neither the WiFi driver (which runs before launch) nor the socket read, and the short
+      GET is a recorded intermittent. But two non-clean boots in a row are recorded as such: re-boot before
+      merging.
+  - **Flash:** this card wrote badly. `sdcard.sh` reported `kernel8.img DIFFERS` (it differed from offset
+    959489), and a rewrite then found `armstub8-joe.bin` bad. Both were recopied with `cp -X` and verified from
+    a remount before eject.
+  - **Cost (Pi batch 1, against increment 4):** +1653 blobs (was +1641), `clinits=467` (462), `tot=13513ms`
+    (13281).
+  - NOT RUN: the all-probe regression, the demo suites and JUnit.
+
 - **LOCALE PROVIDER ARC, INCREMENT 4: BreakIterator RUNS STOCK ON ITS OWN RULE DATA (2026-10-24).** The overlay
   was a hand-written whitespace/hyphen LINE breaker standing in for the denied `java/text/spi` lookup. It is
   deleted (java/text has no overlays left), and stock runs on `RuleBasedBreakIterator`.

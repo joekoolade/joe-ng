@@ -52,6 +52,7 @@ CaptureProbe
 CarrierLocalProbe
 CaseFoldProbe
 CatchDeniedProbe
+CharNameProbe
 CharProbe
 CharsetIdentityProbe
 ChmRaceProbe             solo             # race; timing-sensitive
