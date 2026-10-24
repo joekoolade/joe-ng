@@ -1,0 +1,26 @@
+base length      = 39 (want 39)
+text plain len   = 39 (want 39)
+text CJK len     = 39 (want 39)
+substring plain  = [s=<s>]] (want [<s>])
+substring CJK    = 6 (want 6)
+append plain len = 42 (want 42)
+append CJK       = 42 (want 42)
+append tail      = [XYZ] (want [XYZ])
+concat plain len = 42 (want 42)
+concat CJK       = 42 (want 42)
+styled dest len  = 39 (want >= 39)
+styled dest head = [Usage:] (want [Usage:])
+lit u00ff len    = 1 (want 1)
+lit u00ff char0  = 255 (want 255)
+lit eacute len   = 1 (want 1)
+lit euro len     = 1 (want 1)
+lit ascii len    = 3 (want 3)
+replace srcLen   = 55
+replace dstLen   = 55 (want the same)
+replace sameLen  = 1 (want 1)
+loop plainLen    = 55
+loop breakLen    = 55 (want the same)
+loop segments    = 3
+loop maxBoundary = 55 (want <= 55)
+loop inBounds    = 1 (want 1)
+TextProbe done

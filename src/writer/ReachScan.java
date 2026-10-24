@@ -63,11 +63,10 @@ public final class ReachScan
         // java/util/concurrent -- the philosophers demand-load java/util/concurrent/Semaphore.)
         "jdk/internal/icu/", "java/text/", "sun/text/",
         // java/time and TimeUnit$1 are NOT denied (the date/time arc). (Keep in sync with Loader.isDenylisted.)
-        // The name-only half of stock java/lang/Character: UnicodeBlock's <clinit> builds 347 blocks,
-        // UnicodeScript the same for scripts, and CharacterName reads a "uniName.dat" resource this VM has
-        // no copy of. Reached only from UnicodeBlock.of / UnicodeScript.of / Character.getName -- nothing on
-        // the classification, case or digit paths. (Keep in sync with Loader.isDenylisted.)
-        "java/lang/CharacterName", "java/lang/Character$UnicodeBlock", "java/lang/Character$UnicodeScript",
+        // CharacterName reads a "uniName.dat" resource this VM has no copy of; reached only from
+        // Character.getName. Character$UnicodeBlock/UnicodeScript are NOT denied any more: picocli's CJK width
+        // check calls UnicodeBlock.of. (Keep in sync with Loader.isDenylisted.)
+        "java/lang/CharacterName",
         // grapheme-boundary tables (\b{g}): a 15x15 [[Z built via multianewarray; cold for a literal match.
         "jdk/internal/util/regex/Grapheme",
         // jdk/internal/lang/CaseFolding is NOT here any more: it was denied as "only CASE_INSENSITIVE regex
