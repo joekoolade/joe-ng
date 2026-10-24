@@ -83,9 +83,12 @@ public final class ReachScan
 
     static boolean isDenied(String c)
     {
-        // The core of sun/util/locale is narrowed out of the sun/util/ deny (stock Locale runs on it); its
-        // provider/ subtree stays denied. See Loader.isDenylisted.
-        if (c.startsWith("sun/util/locale/") && !c.startsWith("sun/util/locale/provider/"))
+        // All of sun/util/locale is narrowed out of the sun/util/ deny, with the locale-data layer it reaches:
+        // the CLDR adapter, its compiled bundles and the java/util/spi provider interfaces. See
+        // Loader.isDenylisted.
+        if (c.startsWith("sun/util/locale/") || c.startsWith("sun/util/cldr/")
+                || c.startsWith("sun/util/resources/") || c.startsWith("sun/text/resources/")
+                || c.startsWith("java/util/spi/") || c.startsWith("sun/util/spi/"))
         {
             return false;
         }
