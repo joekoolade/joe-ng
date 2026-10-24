@@ -17,6 +17,7 @@ ramfs/plugins/
 # The classpath jar + its staging dir (built from jarsrc/ at image time)
 ramfs/lib/app.jar
 ramfs/lib/tzdb.dat
+ramfs/lib/java.base/
 .appjar/
 
 # JUnit console-standalone jar (downloaded by `make junit`; host-side test tooling, not vendored).

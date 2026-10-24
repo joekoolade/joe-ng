@@ -9,7 +9,7 @@
 # with javac + java on the seed JDK, check it equals a metal run, commit it as expected/<Probe>.out.
 #
 # Host recipes that are not plain `java -cp <classes> <Probe>`: GvrProbe/ClassResourceProbe add
-# ramfs/lib/junit.jar to -cp; EngineMessageProbe adds out; DateProbe and DateFormatProbe run with -Duser.timezone=GMT; ReaderProbe takes ramfs/data/sample.txt and
+# ramfs/lib/junit.jar to -cp; EngineMessageProbe adds out; DateProbe and DateFormatProbe run with -Duser.timezone=GMT, LocaleSymbolsProbe with --limit-modules java.base -Duser.timezone=GMT (java.base's ROOT+ENGLISH CLDR data, which is what the image carries); ReaderProbe takes ramfs/data/sample.txt and
 # ReflectLookupProbe ramfs/lib/app.jar as args[0]; LocaleProbe runs with
 # -Duser.language=en -Duser.country= -Duser.variant= -Duser.script=. ExcMessageRaceProbe runs with
 # -XX:-OmitStackTraceInFastThrow (else HotSpot drops the message of a hot implicit exception).
@@ -102,6 +102,7 @@ LambdaAdaptProbe
 Lazy                     solo             # lazy initialization is the subject
 LocaleInitProbe          solo             # Locale initialization is the subject
 LocaleProbe              solo             # reads the default locale
+LocaleSymbolsProbe
 LockProbe
 LongBranchProbe          solo             # ~4 MB of code; would crowd the code arena
 MacProbe                 gate=failures=0 divergences-unmet=0

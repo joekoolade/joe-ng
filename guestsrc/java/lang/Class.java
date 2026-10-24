@@ -1635,12 +1635,37 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
      * {@link #getClassLoader} being null, is the system loader, exactly as stock does for a bootstrap class.
      * The bytes come out of the classpath jar ({@link ClassLoader#getResourceAsStream}); every class here is in
      * the unnamed module, so stock's named-module encapsulation check has nothing to apply to.
+     *
+     * <p>A name the jar does not hold is then looked up among java.base's OWN resources, which the build copies
+     * out of the seed's modules image to {@code /lib/java.base/<name>} in the RAMFS -- stock java.base reads them
+     * through this method ({@code java.util.Currency} reads {@code /java/util/currency.data}), and they are not in
+     * any jar. Only the files the Makefile copies are there, so this answers null for everything else.
      */
     public java.io.InputStream getResourceAsStream(String name)
     {
         name = resolveName(name);
-        return ClassLoader.getSystemResourceAsStream(name);
+        java.io.InputStream in = ClassLoader.getSystemResourceAsStream(name);
+        if (in != null)
+        {
+            return in;
+        }
+        java.io.File f = new java.io.File(JAVA_BASE_RESOURCES + name);
+        if (!f.isFile())
+        {
+            return null;
+        }
+        try
+        {
+            return new java.io.FileInputStream(f);
+        }
+        catch (java.io.FileNotFoundException e)
+        {
+            return null;
+        }
     }
+
+    /** Where the build puts java.base's own resources in the RAMFS (see {@link #getResourceAsStream}). */
+    private static final String JAVA_BASE_RESOURCES = "/lib/java.base/";
 
     /**
      * Stock's unnamed-module arm, as {@link #getResourceAsStream}. It answers what {@link ClassLoader#getResource}
