@@ -4,6 +4,25 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **`Character$UnicodeBlock` / `$UnicodeScript` ARE UN-DENIED; TextProbe PASSES (2026-10-24).** picocli measures
+  every usage line with `isCodePointCJK`, which calls `Character.UnicodeBlock.of`. That trapped (TextProbe:
+  `DENYLIST TRAP`). Both classes were denied as "the name-only half of Character". Rule 1 says implement, so they
+  are removed from `Loader.isDenylisted` and from ReachScan's list together. `CharacterName` stays denied: it
+  needs a `uniName.dat` resource the VM does not have.
+  - **Measured (QEMU):** 9 probes, 9 pass: TextProbe (now registered, `cp=/lib/junit.jar`), Char, CaseFold,
+    Pattern, SbText, Banner, ParseOpt, Mixin and ArgGroup. `make test` and `make overlaycheck` (0 new) pass.
+  - **Pi 4 (9bb1d21): PASS.** HTTP 200 `bytes=891`, `[main returned normally]`, `gc: collections=7`.
+  - **COST, MEASURED ON THE PI against e746845. NetDemo, which never uses either class, now pays for them:**
+    - batch 1 loads +1593 blobs (was +1590) and runs `clinits=443` (was 441); batch 6 runs `clinits=445`
+      (was 443);
+    - batch 1 `compile=2703ms` (was 1847) and `tot=11267ms` (was 10311). Earlier Pi runs of batch 1 ranged
+      10222–10522 ms, so +956 ms is outside the run-to-run variance;
+    - the final heap is +6 KB, and `gc: collections` is unchanged at 7.
+    - The likely route is the loader pulling every class a blob NAMES (Character names its nested classes), with
+      rule 2 running each pulled `<clinit>`. That is NOT measured. Not pulling a nested class that is only named
+      is the open follow-up.
+  - NOT RUN: the all-probe regression, the demo suites and JUnit.
+
 - **`Class.getClasses` WALKS SUPERCLASSES ONLY, AS STOCK (2026-10-24).** The overlay also walked every interface,
   transitively, and de-duplicated by name. So it returned a public member class reachable only through an
   interface, which no JVM does (AnnoProxyProbe `ifaceDeep`: 1, host 0). It is now JDK 26's body: the superclass
