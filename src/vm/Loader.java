@@ -219,6 +219,11 @@ public final class Loader
     // PARTIALLY; latching there would leave the rest zero for ever, and a 0 slot reached from baked code is
     // a wild branch rather than a named trap.
     private static boolean[] lambdaTibFilled;
+    // The HOST class of each synthesised TIB above -- the class whose method the lambda was compiled in -- as
+    // its blob base + name Utf8 offset, so getName() can answer stock's `Host$$Lambda/0x...`. 0 for the
+    // synthesised kinds that have no host (annotation instances, proxies), which keep the bare `$$Lambda/`.
+    private static long[] lambdaHostBase;
+    private static int[] lambdaHostNameOff;
     private static int lambdaTibRootN;
 
     // Field registry: per instance field of each class, its class/name (base+offset)
@@ -4054,6 +4059,8 @@ public final class Loader
         lambdaTibVtCap = new int[MAXLAMBDATIB];
         lambdaTibFilled = new boolean[MAXLAMBDATIB];    // beside the table it tracks: a latch that outlives
                                                         //   its array would skip a TIB that needs filling
+        lambdaHostBase = new long[MAXLAMBDATIB];
+        lambdaHostNameOff = new int[MAXLAMBDATIB];
         lambdaTibRootN = 0;
         pcBase = new long[MAXPARSECACHE];
         pcBytes = new byte[MAXPARSECACHE][];
@@ -6905,20 +6912,37 @@ public final class Loader
     /** {@link #isSynthesisedTib} keyed by TYPE: a synthesised TIB holds its Type in slot 0. */
     private static int isSynthesisedType(long type)
     {
+        return synthIndexOf(type) >= 0 ? 1 : 0;
+    }
+
+    /** The synthesised-TIB table index whose TIB carries {@code type}, or -1. */
+    private static int synthIndexOf(long type)
+    {
         if (lambdaTibRoots == null)
         {
-            return 0;
+            return -1;
         }
         int i = 0;
-        while (i < lambdaTibRoots.length)
+        while (i < lambdaTibRootN)
         {
             if (lambdaTibRoots[i] != 0L && Magic.load64(lambdaTibRoots[i]) == type)
             {
-                return 1;
+                return i;
             }
             i += 1;
         }
-        return 0;
+        return -1;
+    }
+
+    /** Length of the host-class prefix of synthesised type {@code type}'s name: its binary name, or 0. */
+    private static int synthHostLen(long type)
+    {
+        int i = synthIndexOf(type);
+        if (i < 0 || lambdaHostBase[i] == 0L)
+        {
+            return 0;
+        }
+        return u2(lambdaHostBase[i] + lambdaHostNameOff[i]);
     }
 
     /** How many times {@code Class.getName()} has answered null; the report itself is capped at 8. */
@@ -7167,7 +7191,7 @@ public final class Loader
             }
             i += 1;
         }
-        return isSynthesisedType(type) != 0 ? SYNTH_NAME_LEN : 0;
+        return isSynthesisedType(type) != 0 ? synthHostLen(type) + SYNTH_NAME_LEN : 0;
     }
 
     /** {@code "$$Lambda/0x"} + 16 hex digits -- the length {@link #writeSynthName} writes. */
@@ -7181,12 +7205,27 @@ public final class Loader
      * unrelated. This VM has just paid five boots chasing exactly that shape for a different object.
      *
      * <p>The shape is stock's: a hidden class reads {@code Outer$$Lambda/0x00007f...}, its name deliberately
-     * opaque and NOT a binary name that could be looked up. The outer class is not recorded here, so the
-     * prefix is bare -- and the TYPE ADDRESS is what makes it distinct per lambda, which matters because a
-     * single constant name would make every lambda compare equal by name.
+     * opaque and NOT a binary name that could be looked up. A lambda's host class (recorded when its TIB was
+     * built) is the {@code Outer}, dotted; an annotation instance or proxy has none and stays bare. The TYPE
+     * ADDRESS is what makes it distinct per lambda, which matters because a single constant name would make
+     * every lambda compare equal by name.
      */
     private static int writeSynthName(long type, long dst, int pos)
     {
+        int si = synthIndexOf(type);
+        if (si >= 0 && lambdaHostBase[si] != 0L)
+        {
+            long src = lambdaHostBase[si] + lambdaHostNameOff[si];
+            int len = u2(src);
+            int h = 0;
+            while (h < len)
+            {
+                int c = u1(src + 2L + h);
+                Magic.store8(dst + pos + h, (byte) (c == 0x2F ? 0x2E : c));   // '/' -> '.'
+                h += 1;
+            }
+            pos += len;
+        }
         byte[] pre = Magic.bytes("$$Lambda/0x");
         int k = 0;
         while (k < pre.length)
@@ -21899,6 +21938,8 @@ public final class Loader
             lambdaTibRoots[lambdaTibRootN] = tib;       // the same GC root a lambda's TIB has: nothing scanned
             lambdaTibVtCap[lambdaTibRootN] = onv;       //   would otherwise reach it
             lambdaTibFilled[lambdaTibRootN] = false;
+            lambdaHostBase[lambdaTibRootN] = 0L;        // a proxy has no host class
+            lambdaHostNameOff[lambdaTibRootN] = 0;
             lambdaTibRootN += 1;
         }
         return classMirror(type);
@@ -22188,6 +22229,8 @@ public final class Loader
         {
             lambdaTibRoots[lambdaTibRootN] = tib;       // same GC root as a lambda TIB, for the same reason:
             lambdaTibVtCap[lambdaTibRootN] = onv2;      //   nothing scanned would otherwise reference it
+            lambdaHostBase[lambdaTibRootN] = 0L;        // an annotation instance has no host class
+            lambdaHostNameOff[lambdaTibRootN] = 0;
             lambdaTibFilled[lambdaTibRootN] = false;    // EXPLICIT: allocArray does not zero its elements on
                                                         //   this VM, so a garbage `true` here would skip a TIB
                                                         //   that still needs filling -- a 0 vtable slot, i.e.
@@ -25058,6 +25101,8 @@ public final class Loader
             lambdaTibVtCap[lambdaTibRootN] = onv;   // ... and how many vtable slots it has room for
             lambdaTibFilled[lambdaTibRootN] = false;// ... and NOT yet filled (explicit: see the field's note --
                                                     //   allocArray leaves elements undefined on this VM)
+            lambdaHostBase[lambdaTibRootN] = gbase; // ... and the class being compiled: the lambda's host
+            lambdaHostNameOff[lambdaTibRootN] = gThisNameOff;
             lambdaTibRootN += 1;
         }
         return tib;
