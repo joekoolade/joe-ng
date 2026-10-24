@@ -106,6 +106,64 @@ final class VMUnwind
         }
     }
 
+    /**
+     * {@code Throwable.fillInStackTrace0(Throwable)} native: record the CURRENT frame chain into {@code exc}'s
+     * inline backtrace, as stock does when an exception is CONSTRUCTED -- so a trace names the line of the
+     * {@code new}, and an exception that is never thrown still has one. The frames stock leaves out are skipped
+     * first ({@link Loader#ctorFrameKind}): {@code fillInStackTrace}, then the exception's own {@code <init>}
+     * chain. It REPLACES any earlier trace, as an explicit {@code fillInStackTrace()} call does on a JVM; the
+     * throw-time {@link #captureTrace} then keeps it. An exception the VM allocates without a constructor, and
+     * one whose class overrides {@code fillInStackTrace} to skip the capture, is still filled at its throw.
+     */
+    static void fillInTrace(long exc)
+    {
+        long lr = Magic.readLR();                              // FIRST op: x30 = the return into fillInStackTrace0's caller
+        long mysp = Magic.readSP();                            // this frame's base (SP is stable post-prologue)
+        if (exc <= 0x1000L)
+        {
+            return;                                            // boot force-compile passes 0
+        }
+        long cpc = lr - 4L;
+        long csp = mysp + frameSizeAt(VM.fillTraceAddr);       // the caller's SP: ours plus our own frame
+        int phase = Loader.FRAME_FILL;
+        int n = 0;
+        while (n < 8 && cpc > 0x1000L)
+        {
+            if (phase != Loader.FRAME_KEEP)
+            {
+                int kind = Loader.ctorFrameKind(cpc, exc);
+                if (kind == Loader.FRAME_INIT)
+                {
+                    phase = Loader.FRAME_INIT;                 // fillInStackTrace frames end at the first <init>
+                }
+                else if (kind != phase)
+                {
+                    phase = Loader.FRAME_KEEP;                 // the first frame stock keeps
+                }
+            }
+            if (phase == Loader.FRAME_KEEP)
+            {
+                Magic.store64(exc + 16L + n * 8L, cpc);
+                n += 1;
+            }
+            long cfs = frameSizeAt(cpc);
+            if (cfs == 0L)
+            {
+                break;                                         // top of the resolvable stack
+            }
+            cpc = Magic.load64(csp) - 4L;                      // caller's return address (the call site)
+            csp += cfs;
+            if (VM.isLaunchFrame(cpc))
+            {
+                break;                                         // below main(): the VM's launch frames
+            }
+        }
+        if (n < 8)
+        {
+            Magic.store64(exc + 16L + n * 8L, 0L);             // 0-terminate (an empty trace stays all-zero)
+        }
+    }
+
     /** One report per boot: the first bad throw is the informative one; the rest are its wreckage. */
     private static boolean badThrowReported;
 

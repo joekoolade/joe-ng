@@ -12897,6 +12897,7 @@ public final class Loader
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Throwable")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("stackTrace0")))       { return VM.stackTraceAddr; }    // (Throwable)[STE
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fillInStackTrace0"))) { return VM.fillTraceAddr; }     // (Throwable)V
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Field")))
         {
@@ -13086,6 +13087,7 @@ public final class Loader
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Throwable")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("stackTrace0")))       { return VM.stackTraceAddr; }    // (Throwable)[STE
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fillInStackTrace0"))) { return VM.fillTraceAddr; }     // (Throwable)V
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Method")))
         {
@@ -26197,6 +26199,138 @@ public final class Loader
             }
         }
         return 0L;
+    }
+
+    /** {@link #ctorFrameKind}: a frame stock keeps in a construction-time trace. */
+    static final int FRAME_KEEP = 0;
+    /** {@link #ctorFrameKind}: a {@code fillInStackTrace} frame of a class the exception is an instance of. */
+    static final int FRAME_FILL = 1;
+    /** {@link #ctorFrameKind}: an {@code <init>} frame of a class the exception is an instance of. */
+    static final int FRAME_INIT = 2;
+
+    /**
+     * Which frames a trace taken at CONSTRUCTION leaves out, for the frame at {@code pc} and exception
+     * {@code exc}. HotSpot's {@code java_lang_Throwable::fill_in_stack_trace} skips the {@code fillInStackTrace}
+     * frames at the top, then every {@code <init>} frame whose holder {@code exc} is an instance of -- so
+     * {@code new X()} reports the line of the {@code new}, and a constructor that builds a DIFFERENT exception
+     * keeps its own frame. The method is named from the JIT registry or, for baked code (stock exception
+     * constructors live in the image), from the image symbol table; a pc found in neither is kept.
+     */
+    static int ctorFrameKind(long pc, long exc)
+    {
+        long blk = Heap.codeBlockStartAt(pc);
+        if (blk != 0L)
+        {
+            int i = 0;
+            while (i < rgCount)
+            {
+                if (rgTab[i].buf == blk)
+                {
+                    int kind = ctorNameKind(rgTab[i].base + rgTab[i].nameOff + 2L, u2(rgTab[i].base + rgTab[i].nameOff));
+                    if (kind == FRAME_KEEP)
+                    {
+                        return FRAME_KEEP;
+                    }
+                    long type = typeByName(rgTab[i].base + rgTab[i].classOff + 2L, u2(rgTab[i].base + rgTab[i].classOff));
+                    return type != 0L && VM.instanceOf(exc, type) != 0 ? kind : FRAME_KEEP;
+                }
+                i += 1;
+            }
+            return FRAME_KEEP;
+        }
+        long tab = VM.imageSymTable;
+        long k = 0;
+        while (k < VM.imageSymCount)
+        {
+            long e = tab + k * 40L;
+            if (pc >= Magic.load64(e) && pc < Magic.load64(e + 8L))
+            {
+                long sym = Magic.load64(e + 16L);              // "owner/Class.method", length-prefixed
+                int symLen = u2(sym);
+                int dot = symLen - 1;
+                while (dot > 0 && u1(sym + 2L + dot) != 0x2E)
+                {
+                    dot -= 1;
+                }
+                if (dot <= 0)
+                {
+                    return FRAME_KEEP;
+                }
+                int kind = ctorNameKind(sym + 2L + dot + 1L, symLen - dot - 1);
+                if (kind == FRAME_KEEP)
+                {
+                    return FRAME_KEEP;
+                }
+                long type = typeByName(sym + 2L, dot);
+                return type != 0L && VM.instanceOf(exc, type) != 0 ? kind : FRAME_KEEP;
+            }
+            k += 1;
+        }
+        return FRAME_KEEP;
+    }
+
+    /** {@link #FRAME_FILL} for the name {@code fillInStackTrace}, {@link #FRAME_INIT} for {@code <init>}, else keep. */
+    private static int ctorNameKind(long p, int len)
+    {
+        if (bytesAt(p, len, Magic.bytes("<init>")))
+        {
+            return FRAME_INIT;
+        }
+        if (bytesAt(p, len, Magic.bytes("fillInStackTrace")))
+        {
+            return FRAME_FILL;
+        }
+        return FRAME_KEEP;
+    }
+
+    /** Whether the {@code len} bytes at {@code p} are exactly {@code want}. */
+    private static boolean bytesAt(long p, int len, byte[] want)
+    {
+        if (len != want.length)
+        {
+            return false;
+        }
+        int j = 0;
+        while (j < len)
+        {
+            if (u1(p + j) != (want[j] & 0xFF))
+            {
+                return false;
+            }
+            j += 1;
+        }
+        return true;
+    }
+
+    /** The Type of the registered class whose internal name is the {@code len} bytes at {@code p}, or 0. */
+    private static long typeByName(long p, int len)
+    {
+        int ci = 0;
+        while (ci < clCount)
+        {
+            RVMClass c = clTab[ci];
+            if (c != null && u2(c.base + c.nameOff) == len && sameBytesAt(c.base + c.nameOff + 2L, p, len))
+            {
+                return c.type;
+            }
+            ci += 1;
+        }
+        return 0L;
+    }
+
+    /** Whether the {@code len} bytes at {@code a} and at {@code b} are equal. */
+    private static boolean sameBytesAt(long a, long b, int len)
+    {
+        int j = 0;
+        while (j < len)
+        {
+            if (u1(a + j) != u1(b + j))
+            {
+                return false;
+            }
+            j += 1;
+        }
+        return true;
     }
 
     /** Class mirror of the registered class whose name Utf8 is {@code base + off}, or 0. */

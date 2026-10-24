@@ -1608,6 +1608,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredFieldDescAt(JJ)J", "vm/VM.declFieldDescAddr"); // Class.declaredFieldDescAt0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredFieldCount(J)J", "vm/VM.declFieldCountAddr"); // Class.declaredFieldCount0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.throwableTrace(J)J", "vm/VM.stackTraceAddr");        // Throwable.stackTrace0
+        stashHelper(image, staticWord, wordOffset, "vm/VMUnwind.fillInTrace(J)V", "vm/VM.fillTraceAddr");          // Throwable.fillInStackTrace0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.virtualResolve(JJ)J", "vm/VM.virtualResolveAddr"); // late virtual dispatch
         stashHelper(image, staticWord, wordOffset, "vm/VM.getClassOf(J)J",    "vm/VM.getClassAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.watchRet(JJ)V",   "vm/VM.watchRetAddr");   // DEBUG call-site watch

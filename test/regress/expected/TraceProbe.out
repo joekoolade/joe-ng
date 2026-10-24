@@ -1,0 +1,13 @@
+thrown across a call: len=4
+    [0] TraceProbe.level2:104
+    [1] TraceProbe.level1:99
+    [2] TraceProbe.caught:88
+    [3] TraceProbe.main:43
+thrown and caught here: len=2
+    [0] TraceProbe.here:111
+    [1] TraceProbe.main:44
+never thrown: len=1
+    [0] TraceProbe.main:45
+after setStackTrace: len=1
+    [0] A.m:7
+TraceProbe done

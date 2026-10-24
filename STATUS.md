@@ -4,6 +4,31 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **A THROWABLE'S BACKTRACE IS TAKEN AT CONSTRUCTION (2026-10-24).** The inline backtrace (`bt0..bt7`) used to
+  be recorded only at the throw. So an exception that was built but never thrown had an empty trace (TraceProbe:
+  len=0, stock 1), and a trace named the throw site rather than the `new`.
+  - **Fix:** the overlay's constructors now call `fillInStackTrace()` as stock's do. The 4-arg constructor calls
+    it only when `writableStackTrace` is true.
+    - `fillInStackTrace` calls a new native `fillInStackTrace0`, which is `VMUnwind.fillInTrace`. It walks from
+      its own frame (`readLR`/`readSP`, the denylistTrap idiom).
+    - It skips what HotSpot's `fill_in_stack_trace` skips: the `fillInStackTrace` frames, then every `<init>`
+      whose holder the exception is an instance of. `Loader.ctorFrameKind` names each frame from the JIT
+      registry or the image symbol table, because the stock exception constructors are baked.
+    - Like the throw-time walk, it stops below `main`.
+    - An explicit `fillInStackTrace()` replaces the trace and drops a `setStackTrace` override.
+  - **Still filled at the throw:** an exception whose backtrace is empty. That covers the VM's implicit
+    NPE/AIOOBE/..., which are allocated without a constructor, and a class that overrides `fillInStackTrace` to
+    skip the capture. That is more information than stock, never less.
+  - **Measured (QEMU):** 16 exception-related probes, 16 pass. TraceProbe now matches the host in every arm and
+    is registered (`solo`).
+    - Also passing: AssertMsg, ArithMessage, AseMessage, CatchDenied, EngineMessage, ExcMessageRace,
+      HighLocalThrow, OobMessage, StackWalker, StockException, ThrowableToString, MonitorState, ParseOpt,
+      DupOption and Mixin.
+    - The picocli batch took 384 s; the comparable batch before this change took 500 s, so there was no slowdown.
+    - `make test` and `make overlaycheck` (0 new) pass.
+  - **Pi 4 (8015d3f): PASS.** HTTP 200 `bytes=891`, `[main returned normally]`, `gc: collections=7`.
+  - NOT RUN: the all-probe regression, the demo suites and JUnit.
+
 - **A STACK TRACE ENDS AT `main` (2026-10-24).** Both stack walks used to continue below a launched program's
   `main()` into `vm.Loader.launchMain`, `vm.VM.launchInit` and `vm.VM.run`. One walk builds an exception's
   trace (`VMUnwind.captureTrace`), the other builds `Thread.getStackTrace` (`Loader.traceWalk`). On a JVM a
