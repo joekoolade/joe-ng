@@ -6235,7 +6235,11 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("sun/util/resources/"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/text/resources/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/util/spi/"))
-                || utf8HasPrefix(base, off, Magic.bytes("sun/util/spi/")))     // CalendarProvider: Calendar.getInstance
+                || utf8HasPrefix(base, off, Magic.bytes("sun/util/spi/"))      // CalendarProvider: Calendar.getInstance
+                // java/text and its provider interfaces (increment 2): SimpleDateFormat / DateFormat run stock over
+                // the same provider layer. Its denied neighbours stay denied: jdk/internal/icu and sun/text outside
+                // sun/text/resources (Normalizer's tables), which only Normalizer/Collator/Bidi paths reach.
+                || utf8HasPrefix(base, off, Magic.bytes("java/text/")))
         {
             return false;
         }

@@ -4,6 +4,32 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **LOCALE PROVIDER ARC, INCREMENT 2: java/text RUNS STOCK; SimpleDateFormat AND DateFormat WORK (2026-10-24).**
+  DateFormatProbe (new; host recipe `-Duser.timezone=GMT`) found `DateFormatSymbols` and Formatter's `%t` already
+  working over increment 1's provider layer. SimpleDateFormat stopped at the java/text denial (`CTOR SKIPPED`,
+  then `UNRESOLVED NEW`).
+  - **Un-denied:** java/text, in Loader.isDenylisted and ReachScan.isDenied. It carries java/text/spi with it:
+    the `DateFormatProvider` etc. literals that `LocaleServiceProviderPool` read as NULL.
+  - **Still denied:** jdk/internal/icu, and sun/text outside sun/text/resources. The overlays (DateFormatSymbols,
+    DecimalFormatSymbols, NumberFormat, BreakIterator) still win their names.
+  - **DateFormatProbe is registered** and matches the host byte for byte: symbols, `%tB/%tA/%tF/%tT`,
+    SimpleDateFormat format/parse/toPattern with names and zone, `getDateInstance` LONG/SHORT, and
+    `getDateTimeInstance` MEDIUM (U+202F before PM).
+  - **Regress harness fix:** Regress wrote `.metal` in UTF-8 after reading the log as ISO-8859-1. So `diff`
+    showed a non-ASCII line as different although the verdict was IDENTICAL. It writes ISO-8859-1 now.
+  - **Measured (QEMU):** 14 probes, 14 pass: DateFormat, Date, Locale, LocaleInit, JavaTime, Format,
+    DecimalFormat, NumberFormat, Scanner, SystemLogger, Text, Banner, Pattern and Utf16Print. `make test` and
+    `make overlaycheck` (0 new) pass.
+  - **Pi 4 (d3f18c3): PASS.** HTTP 200 `bytes=892`, `[main returned normally]`, `gc: collections=7`.
+    - The flash needed `cp -X`: `sdcard.sh`'s plain `cp` failed writing the macOS `._*` xattr sidecars on the
+      card (`Attribute not found`, then `No space left on device` with 202 MB free). `fsck_msdos -n` was clean.
+      The 8 boot files were copied with `cp -X`, `cmp`-verified and ejected.
+  - **COST:** the closure reaches more java/text classes from the base closure without running them.
+    - **Pi**, NetDemo batch 1 against increment 1: +1668 blobs (was +1629), `clinits=468` (460),
+      `compile=2881ms` (2832), `tot=11963ms` (11698).
+    - **Sequential QEMU**, SbProbe batch 1: +1396 (was +1306), `tot=20015ms` (18841).
+  - NOT RUN: the all-probe regression, the demo suites and JUnit.
+
 - **LOCALE PROVIDER ARC, INCREMENT 1: THE CLDR LOCALE-DATA LAYER RUNS STOCK; Calendar AND Date.toString WORK
   (2026-10-24).** DateProbe, a new shape probe, found that `new GregorianCalendar(...)` and `Date.toString()` both
   halted. They hit the denied `CalendarDataUtility.retrieveFirstDayOfWeek` and

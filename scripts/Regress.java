@@ -498,7 +498,11 @@ public final class Regress
             }
             else
             {
-                Files.write(runDir.resolve(p.name() + (job.batch() ? ".batch" : ".solo") + ".metal"), got);
+                // ISO-8859-1, the charset the log was read in: the bytes go back out as the board printed them. The
+                // default (UTF-8) re-encoded each byte of a non-ASCII character, so a .metal file differed from its
+                // expected file under `diff` while the comparison below -- both sides ISO-8859-1 -- was IDENTICAL.
+                Files.write(runDir.resolve(p.name() + (job.batch() ? ".batch" : ".solo") + ".metal"), got,
+                            StandardCharsets.ISO_8859_1);
                 if (p.gate() != null)
                 {
                     v = got.stream().anyMatch(l -> l.contains(p.gate())) ? "GATE OK" : "GATE FAILED";

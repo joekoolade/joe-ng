@@ -88,7 +88,7 @@ public final class ReachScan
         // Loader.isDenylisted.
         if (c.startsWith("sun/util/locale/") || c.startsWith("sun/util/cldr/")
                 || c.startsWith("sun/util/resources/") || c.startsWith("sun/text/resources/")
-                || c.startsWith("java/util/spi/") || c.startsWith("sun/util/spi/"))
+                || c.startsWith("java/util/spi/") || c.startsWith("sun/util/spi/") || c.startsWith("java/text/"))
         {
             return false;
         }
