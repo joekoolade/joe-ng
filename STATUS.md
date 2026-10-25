@@ -4,6 +4,36 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **THE JIT CODE ARENA MOVED ABOVE THE SCRATCH BAND: 64-96 MiB, 32 MiB; THE HEAP MOVED UP 32 MiB (2026-10-25).**
+  Two walls were closing on the arena at 36-48 MiB:
+  - the image (36,533,992 bytes from 0x80000) was ~674 KiB from `Heap.CODE_BASE`, and BootImageWriter refuses
+    the overlap;
+  - 12 MiB overflowed: a 22-probe Regress batch ended `code arena OOM`.
+  - **New map:**
+    - image up to `Heap.IMAGE_CEILING` 0x02F0_0000 (~11.7 MiB of headroom);
+    - code reachability and pin bitmaps 0x02F0_0000-0x0300_0000, 512 KiB each, doubled for the arena;
+    - scratch band 48-64 MiB unchanged;
+    - code arena 0x0400_0000-0x0600_0000;
+    - `BASE` 0x0600_0000, `LARGE_BASE` 0x0E00_0000, `LARGE_LIMIT` 0x1200_0000 (every heap region keeps its
+      size), with the secondaries' arenas from `LARGE_LIMIT`.
+    - Code stays within ~96 MiB of the image's helpers, inside `bl`'s ±128 MiB.
+  - **Also changed:**
+    - VM's image-code range test uses `IMAGE_CEILING`.
+    - `Symbols.CODE_TOP_BYTE_MAX` 2→5; the scratch band now passes the dispatch guard and holds no
+      vtable-reachable words.
+    - `VMGc.META_HIGH` and `Loader.noteCodeRoot` use `LARGE_LIMIT` (they were a literal 0x1000_0000).
+    - ScratchMap registers the moved bitmaps.
+  - **Measured (QEMU):**
+    - the former OOM batch, the same 22 probes as one `--batch`: 22 of 22, no `code arena OOM`, no
+      `SCRATCH MAP OVERLAP`;
+    - 16 SMP/race/long-branch probes solo, including LongBranchProbe: 16 of 16;
+    - `make test` and `make overlaycheck` pass.
+  - **Pi 4 (2cee6a8): PASS, clean.** HTTP 200 `bytes=891`, `[main returned normally]`, `gc: collections=7`, no
+    faults. This image includes CharacterName (#425), whose two earlier boots were not clean, so it is also that
+    change's clean Pi boot.
+  - **The new sdcard.sh ran for the first time:** all 8 files OK, all 8 OK again after the remount, ejected.
+  - NOT RUN: the all-probe regression, the demo suites and JUnit.
+
 - **sdcard.sh COPIES WITHOUT XATTRS, VERIFIES EVERY FILE, REWRITES ONCE, RE-VERIFIES FROM THE MEDIUM; FULL REGRESSION
   ON a336aff (2026-10-24).**
   - **sdcard.sh**, for three failures seen flashing that day:
