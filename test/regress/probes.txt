@@ -126,6 +126,7 @@ NioBufferProbe
 NioFileProbe
 NioReadProbe
 NioWriteProbe
+NormalizerProbe
 NumberFormatProbe
 ObjectProbe
 OobMessageProbe

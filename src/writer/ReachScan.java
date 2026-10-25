@@ -59,9 +59,9 @@ public final class ReachScan
         // jdk/internal/logger is NOT here any more: System.getLogger runs stock (see Loader.isDenylisted).
         "java/lang/reflect/", "jdk/internal/reflect/",
         "jdk/internal/module/", "java/lang/module/", "java/text/spi/",
-        // cold ICU/normalizer/break-iterator, pulled by Pattern but never run for a literal match. (NOT
-        // java/util/concurrent -- the philosophers demand-load java/util/concurrent/Semaphore.)
-        "jdk/internal/icu/", "java/text/", "sun/text/",
+        // java/text and sun/text are narrowed out in isDenied, and jdk/internal/icu is not denied at all
+        // (Normalizer/Bidi run on ICU). (NOT java/util/concurrent -- the philosophers demand-load Semaphore.)
+        "java/text/", "sun/text/",
         // java/time and TimeUnit$1 are NOT denied (the date/time arc). (Keep in sync with Loader.isDenylisted.)
         // java/lang/CharacterName and Character$UnicodeBlock/UnicodeScript are NOT denied any more: picocli's CJK
         // width check calls UnicodeBlock.of, and CharacterName's uniName.dat is copied to /lib/java.base.

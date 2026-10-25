@@ -1,0 +1,13 @@
+NFD = 65 301 74 65 301 20 41 30a 6e 67 73 74 72 6f 308 6d 20 fb01 20 2460
+NFC of NFD = e9 74 e9 20 c5 6e 67 73 74 72 f6 6d 20 fb01 20 2460
+NFKD = 65 301 74 65 301 20 41 30a 6e 67 73 74 72 6f 308 6d 20 66 69 20 31
+NFKC = e9 74 e9 20 c5 6e 67 73 74 72 f6 6d 20 66 69 20 31
+isNormalized NFC/NFD = true false
+strip accents = Creme Brulee
+hangul NFD = 1100 1161
+regex CANON_EQ = true
+bidi LTR = ltr=true mixed=false runs=1 [0,5 L0]
+bidi RTL = ltr=false mixed=false runs=1 [0,4 L1]
+bidi mixed = ltr=false mixed=true runs=3 [0,4 L0] [4,7 L1] [7,11 L0]
+requiresBidi = false true
+NormalizerProbe done
