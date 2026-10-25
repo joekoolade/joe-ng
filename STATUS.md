@@ -4,6 +4,29 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **java.text.Normalizer, Bidi AND REGEX CANON_EQ RUN ON ICU (2026-10-25).** `jdk/internal/icu` is un-denied.
+  - **Data:** its four java.base data files (`jdk/internal/icu/impl/data/icudata/{nfc.nrm,nfkc.nrm,uprops.icu,ubidi.icu}`,
+    read by ICUBinary through `Class.getResourceAsStream`) are in `JAVA_BASE_RES`.
+  - **What it took:** Bidi worked at once. Normalizer stopped at the Unsafe overlay's stub
+    `copySwapMemory: not implemented`, which is the byte-swapping bulk copy a non-native-order heap ByteBuffer
+    uses. It is now implemented as stock specifies: stock's checks, then element by element with the bytes
+    reversed, in the overlap-safe direction (HotSpot's `Copy::conjoint_swap`). The absolute-address overload is
+    added with it.
+  - **NormalizerProbe** (new, registered) matches the host: NFD/NFC/NFKD/NFKC as code points, `isNormalized`,
+    accent stripping, Hangul, `Pattern.CANON_EQ`, and Bidi runs/levels/`requiresBidi`.
+  - **Measured (QEMU):** 12 probes, 12 pass: Normalizer, UnsafeAll, UnsafeAccess, UnsafeAtomic, ByteView,
+    NioBuffer, Pattern, CaseFold, Text, BreakIterator, CharName and Utf16Print. `make test` and
+    `make overlaycheck` (0 new) pass.
+  - **Pi 4 (a2589ad): PASS.** HTTP 200 `bytes=892`, `[main returned normally]`.
+  - **COST (Pi NetDemo, against 2cee6a8):** batch 1 +1740 blobs (was +1653), `clinits=507` (467),
+    `tot=14482ms` (13524), and **`gc: collections=8` (was 7)**. Pattern names Normalizer for CANON_EQ, so the
+    closure reaches ICU from any regex user; that route is NOT measured.
+  - **The flash:** the new sdcard.sh's remount check caught the four `armstub8-*.bin` reading back as ALL ZEROS
+    from the card, although the pre-remount compare passed (page cache). config.txt boots `armstub8-joe.bin`, so
+    the Pi would not have started. Deleting the four files on the card and copying them fresh fixed it, verified
+    from a remount. In-place overwrite of small files is what fails on this card.
+  - NOT RUN: the all-probe regression, the demo suites and JUnit.
+
 - **THE JIT CODE ARENA MOVED ABOVE THE SCRATCH BAND: 64-96 MiB, 32 MiB; THE HEAP MOVED UP 32 MiB (2026-10-25).**
   Two walls were closing on the arena at 36-48 MiB:
   - the image (36,533,992 bytes from 0x80000) was ~674 KiB from `Heap.CODE_BASE`, and BootImageWriter refuses
