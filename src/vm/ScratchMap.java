@@ -66,6 +66,8 @@ final class ScratchMap
         lo = new long[MAX];
         hi = new long[MAX];
         n = 0;
+        add(VMGc.CODE_BITMAP, VMGc.CODE_BITMAP_END);        // code-reachability bitmap (below the band since 2026-10-24)
+        add(Heap.CODE_PIN_BITMAP, Heap.CODE_PIN_END);       // code pin bitmap (ditto)
         add(VM.SEC_STUB, VM.PT_BASE);                       // secondary boot stub
         add(VM.PT_BASE, VM.LOCK_ADDR);                      // page tables (1 L1 + 4 L2)
         add(VM.LOCK_ADDR, VM.PC_VBAR);                      // shared HW-spinlock word
@@ -76,13 +78,11 @@ final class ScratchMap
         add(CodeEdges.TAB, CodeEdges.TAB_END);              // code->code edge census
         add(CodeCompact.PLAN_TAB, Loader.CODE_ROOTS);       // compaction relocation plan
         add(Loader.CODE_ROOTS, Loader.CODE_ROOTS_END);
-        add(VMGc.CODE_BITMAP, Heap.CODE_BLOCKS);            // code-reachability bitmap
         add(Heap.CODE_BLOCKS, Heap.CODE_BLOCKS_END);        // code block registry
         add(Heap.CODE_BLOCKS_END, Heap.STATS);              // CODE_INDEX (address->index hash)
         add(Heap.STATS, 0x0374_0400L);                      // allocation histograms + LARGE_RING
         add(0x0374_0400L, 0x0376_0000L);                    // VMGc.STALE_TAB
-        add(0x0376_0000L, Heap.CODE_PIN_BITMAP);            // VMGc.FREED_RANGES
-        add(Heap.CODE_PIN_BITMAP, 0x037C_0000L);            // code pin bitmap
+        add(0x0376_0000L, 0x0378_0000L);                    // VMGc.FREED_RANGES
         add(0x037C_0000L, 0x0380_0000L);                    // VMGc.SWEPT_LOG
         add(0x0380_0000L, VMGc.MARK_BITMAP);                // cores 1-3 stacks (VM.SEC_STACK_HI, grow DOWN)
         add(VMGc.MARK_BITMAP, Heap.JIT_TABLES);             // heap block-start bitmap (3 MiB)

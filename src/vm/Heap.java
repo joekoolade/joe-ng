@@ -39,9 +39,9 @@ public final class Heap
     public static final long PTR_CELL  = 0x03FF_0000L;
     /** Base of the per-core free-list heads: core c's head is {@code FREE_CELL + c*8}. */
     public static final long FREE_CELL = 0x03FF_0100L;
-    /** Start of CORE 0's allocation region (64 MiB) — above the ~29 MiB all-java.base image (from 0x80000)
-     *  and the 48-56 MiB scratch band; grows up. {@link VM#gcCollect} walks BASE..PTR_CELL. */
-    public static final long BASE      = 0x0400_0000L;
+    /** Start of CORE 0's allocation region (96 MiB) — above the image (from 0x80000, below IMAGE_CEILING), the
+     *  48-64 MiB scratch band and the 64-96 MiB JIT code arena; grows up. */
+    public static final long BASE      = 0x0600_0000L;   // 96 MiB: above the JIT code arena (see CODE_BASE)
 
     // ----- JIT code arena (#43) -------------------------------------------------------------------------
     // Demand-loaded methods are compiled into their OWN low arena, NOT interleaved with the data heap. Data
@@ -56,8 +56,16 @@ public final class Heap
     // passed 32 MiB (it reached 0x0200_2D48): class and descriptor names came back with a few bytes replaced
     // by machine code, in a different place on every boot. BootImageWriter.writeImage now FAILS THE BUILD on
     // the overlap, so this constant and the image size can never silently cross again.
-    public static final long CODE_BASE     = 0x0240_0000L;   // 36 MiB
-    public static final long CODE_LIMIT    = 0x0300_0000L;   // 48 MiB (= VM.SEC_STUB) — overflow guard
+    //
+    // MOVED ABOVE THE SCRATCH BAND (2026-10-24): 64-96 MiB, the old data-heap base, with the heap moved up 32 MiB
+    // to make room. At 36-48 MiB the arena had two walls closing on it: the image had grown to within ~674 KiB of
+    // CODE_BASE (the build refuses the overlap), and 12 MiB overflowed in a 22-probe Regress batch
+    // (`code arena OOM`). Every code buffer is still within ~96 MiB of the image's helpers, inside A64 `bl`'s
+    // +-128 MiB. The image may now grow to IMAGE_CEILING, the code bitmaps sitting just below the scratch band.
+    public static final long CODE_BASE     = 0x0400_0000L;   // 64 MiB
+    public static final long CODE_LIMIT    = 0x0600_0000L;   // 96 MiB (= BASE) — overflow guard; 32 MiB arena
+    /** The image (loaded at 0x80000) must end below this: the code bitmaps begin here (see VMGc.CODE_BITMAP). */
+    public static final long IMAGE_CEILING = 0x02F0_0000L;   // 47 MiB
     public static final long CODE_PTR_CELL = 0x03FF_0200L;   // code-arena bump pointer (near PTR_CELL/FREE_CELL)
 
     // ----- the large-object region -----------------------------------------------------------------------
@@ -78,8 +86,8 @@ public final class Heap
      */
     public static final long PAGE       = 4096L;
     public static final long LARGE_REQ  = 16384L;
-    public static final long LARGE_BASE = 0x0C00_0000L;      // top 64 MiB of core 0's arena
-    public static final long LARGE_LIMIT = 0x1000_0000L;
+    public static final long LARGE_BASE = 0x0E00_0000L;      // top 64 MiB of core 0's arena (moved up with BASE)
+    public static final long LARGE_LIMIT = 0x1200_0000L;     // ... and where the secondaries' arenas begin
     /**
      * Largest byte size an array allocation may ask for. {@link #alloc} takes an INT and rounds it up to 8
      * ({@code (size + 7) & -8}), so this is the largest multiple of 8 that survives that rounding without
@@ -106,8 +114,8 @@ public final class Heap
      * needs an owner-keyed table and a fixpoint over it; that is worth building only if the retention this
      * costs turns out to matter, which {@code codeLive} against {@code codeUsed} will show.
      */
-    public static final long CODE_PIN_BITMAP = 0x0378_0000L;
-    private static final long CODE_PIN_END   = 0x037C_0000L;   // 256 KiB = 1 bit per 8 B of a 16 MiB arena
+    public static final long CODE_PIN_BITMAP = 0x02F8_0000L;
+    static final long CODE_PIN_END           = 0x0300_0000L;   // 512 KiB = 1 bit per 8 B of the 32 MiB arena
 
     /**
      * One past the last byte of the code block containing {@code addr}, or 0 if no block does.
@@ -237,10 +245,10 @@ public final class Heap
      *  whose own log showed eleven. */
     static int  gcPressure;
 
-    /** Base of core {@code c}'s arena. Core 0 = {@link #BASE}; secondaries carve 64 MiB slots from 256 MiB up. */
+    /** Base of core {@code c}'s arena. Core 0 = {@link #BASE}; secondaries carve 64 MiB slots from {@link #LARGE_LIMIT} up. */
     static long arenaBase(int core)
     {
-        return core == 0 ? BASE : 0x1000_0000L + (long) (core - 1) * 0x0400_0000L;
+        return core == 0 ? BASE : LARGE_LIMIT + (long) (core - 1) * 0x0400_0000L;
     }
 
     /** End of core {@code c}'s arena: core 0 runs up to the secondaries' base; each secondary has 64 MiB. */

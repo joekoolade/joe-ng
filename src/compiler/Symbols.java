@@ -131,9 +131,11 @@ public interface Symbols
 
     /**
      * The largest value a code address's top byte (bits 31..24) can take, for the dispatch-target guard.
-     * Image code sits below {@code 0x0200_0000} and the JIT arena spans {@code [0x0200_0000, 0x0300_0000)}
-     * ({@code vm/Heap.CODE_BASE}/{@code CODE_LIMIT}), so a real target's top byte is at most 2 — while the
-     * data heap begins at {@code vm/Heap.BASE == 0x0400_0000}, giving it a top byte of 4 or more.
+     * Image code sits below {@code vm/Heap.IMAGE_CEILING == 0x02F0_0000} and the JIT arena spans
+     * {@code [0x0400_0000, 0x0600_0000)} ({@code vm/Heap.CODE_BASE}/{@code CODE_LIMIT}), so a real target's top
+     * byte is at most 5 — while the data heap begins at {@code vm/Heap.BASE == 0x0600_0000}, giving it a top
+     * byte of 6 or more. (The fixed scratch band, 0x0300_0000-0x0400_0000, has top byte 3 and so passes; it
+     * holds no vtable-reachable words.)
      *
      * <p>The guard previously tested {@code addr >> 28 == 0}, i.e. a ceiling of {@code 0x1000_0000}, which is
      * {@code Heap.LARGE_LIMIT} — the top of the LARGE-OBJECT region rather than the top of CODE. Every
@@ -141,7 +143,7 @@ public interface Symbols
      * and wild-branched. That is how {@code java/util/jar/Attributes/TestAttrsNL} faults at
      * {@code elr=0x0416_1D80}: a plausible-looking, 4-aligned, non-null word that is simply not code.
      */
-    int CODE_TOP_BYTE_MAX = 2;
+    int CODE_TOP_BYTE_MAX = 5;
 
     /** Emit a {@code BL} to the method at Methodref/InterfaceMethodref index {@code methodCp}. */
     void call(CodeBuffer cb, int methodCp);

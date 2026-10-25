@@ -419,7 +419,7 @@ final class VMGc
     private static final long META_LOW  = 0x0008_0000L;
     /** One past the highest: core 0's arena ends where core 1's begins ({@code Heap.arenaLimit(0)}), and
      *  TIBs only ever live in the image or in core 0's heap. Anything else is garbage -> stay conservative. */
-    private static final long META_HIGH = 0x1000_0000L;
+    private static final long META_HIGH = Heap.LARGE_LIMIT;
 
     /**
      * Scan one marked block's payload for references, using the block's own TYPE METADATA where it has any.
@@ -862,11 +862,12 @@ final class VMGc
         return false;
     }
 
-    /** One bit per 8 bytes of the 16 MiB code arena (256 KiB), recording every word seen pointing into it.
+    /** One bit per 8 bytes of the 32 MiB code arena (512 KiB), recording every word seen pointing into it.
      *  A compiled method is reachable iff any bit inside its extent is set — the code-side equivalent of a
-     *  mark bit, kept out of line because the arena has no headers to hold one. */
-    static final long CODE_BITMAP = 0x0350_0000L;
-    private static final long CODE_BITMAP_END = 0x0354_0000L;
+     *  mark bit, kept out of line because the arena has no headers to hold one. At {@link Heap#IMAGE_CEILING},
+     *  below the scratch band, since the arena moved and doubled. */
+    static final long CODE_BITMAP = 0x02F0_0000L;
+    static final long CODE_BITMAP_END = 0x02F8_0000L;
 
     /** Bytes of compiled code still reachable at the last collection, and the total ever compiled. The ratio
      *  decides whether reclaiming code is worth building: if nearly all of it is live, a code collector buys
