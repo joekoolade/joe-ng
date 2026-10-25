@@ -2727,7 +2727,7 @@ public final class VM
         while (i < 128 && shown < 12)
         {
             long w = Magic.load64(p);
-            if (Loader.plausibleCode(w) || (w >= 0x80000L && w < Heap.CODE_BASE))
+            if (Loader.plausibleCode(w) || (w >= 0x80000L && w < Heap.IMAGE_CEILING))
             {
                 Uart.write(Magic.bytes("  [sp+"));
                 printDec(i * 8);

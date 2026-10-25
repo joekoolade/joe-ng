@@ -42,18 +42,19 @@ public final class BootImageWriter
     }
 
     /**
-     * The JIT code arena's base ({@code Heap.CODE_BASE}). The image is loaded at {@code 0x80000} and the arena
-     * bump-allocates upward from here, so THE IMAGE MUST END BELOW THIS ADDRESS. Duplicated as a literal
-     * because the writer runs on the seed JVM and must not load the metal {@code Heap}.
+     * {@code Heap.IMAGE_CEILING}: the image is loaded at {@code 0x80000}, and the code bitmaps begin here, below
+     * the fixed scratch band -- so THE IMAGE MUST END BELOW THIS ADDRESS. Until 2026-10-24 the ceiling was the
+     * JIT code arena itself ({@code Heap.CODE_BASE == 0x0240_0000}); the arena moved above the scratch band.
+     * Duplicated as a literal because the writer runs on the seed JVM and must not load the metal {@code Heap}.
      */
-    private static final long CODE_BASE = 0x0240_0000L;
+    private static final long IMAGE_CEILING = 0x02F0_0000L;
 
     /** Write the raw image bytes to {@code path}. */
     public void writeImage(Path path) throws IOException
     {
         byte[] bytes = code.toBytes();
         long end = code.base() + bytes.length;
-        if (end > CODE_BASE)
+        if (end > IMAGE_CEILING)
         {
             // THE IMAGE HAS GROWN INTO THE JIT CODE ARENA. Nothing at runtime can detect this: the arena
             // bump-allocates from CODE_BASE and the first compiled body simply overwrites whatever the image
@@ -65,9 +66,9 @@ public final class BootImageWriter
             // a red demo suite on hardware and several boots bisecting a change that was only moving the
             // furniture. Fail the BUILD instead -- this is the one place that knows both numbers.
             throw new IllegalStateException(String.format(
-                    "image overruns the JIT code arena: ends at 0x%X, Heap.CODE_BASE is 0x%X (over by %d bytes)."
-                    + " Raise Heap.CODE_BASE (and this constant) above the image, or shrink the image.",
-                    end, CODE_BASE, end - CODE_BASE));
+                    "image overruns Heap.IMAGE_CEILING: ends at 0x%X, the ceiling is 0x%X (over by %d bytes)."
+                    + " Move the code bitmaps (and this constant) up, or shrink the image.",
+                    end, IMAGE_CEILING, end - IMAGE_CEILING));
         }
         Files.write(path, bytes);
     }

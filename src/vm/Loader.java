@@ -3668,7 +3668,7 @@ public final class Loader
         {
             return;    // the sizing pass emits the same addresses to a throwaway buffer; only the real
         }              // emit pass produces code that will run, and it is the one relocRecording marks
-        if (addr < Heap.BASE || addr >= 0x1000_0000L)
+        if (addr < Heap.BASE || addr >= Heap.LARGE_LIMIT)
         {
             return;
         }
