@@ -2799,10 +2799,64 @@ public final class Unsafe
         MetalOffHeap.free(address);
     }
 
+    /**
+     * Stock's bulk copy that byte-swaps each {@code elemSize}-byte element on the way: what a heap
+     * {@code ByteBuffer} in the non-native byte order does for {@code getChars}/{@code getInts}/... (ICU's data
+     * loading, behind java.text.Normalizer, is the first caller reached). Stock's checks, then the copy the
+     * HotSpot native does (Copy::conjoint_swap): element by element, its bytes reversed, and in the direction
+     * that is safe when the regions overlap, as {@link #copyMemory} is.
+     */
     public void copySwapMemory(Object srcBase, long srcOffset, Object destBase, long destOffset,
                                long bytes, long elemSize)
     {
-        throw new InternalError("jdk.internal.misc.Unsafe.copySwapMemory: not implemented");
+        checkSize(bytes);
+        if (elemSize != 2L && elemSize != 4L && elemSize != 8L)
+        {
+            throw invalidInput();
+        }
+        if (bytes % elemSize != 0L)
+        {
+            throw invalidInput();
+        }
+        checkPrimitivePointer(srcBase, srcOffset);
+        checkPrimitivePointer(destBase, destOffset);
+        if (bytes == 0L)
+        {
+            return;
+        }
+        long s = at(srcBase, srcOffset);
+        long d = at(destBase, destOffset);
+        boolean down = d > s && d < s + bytes;              // overlapping and moving UP: go from the end
+        long e = down ? bytes - elemSize : 0L;
+        while (down ? e >= 0L : e < bytes)
+        {
+            swapOne(s + e, d + e, elemSize);
+            e = down ? e - elemSize : e + elemSize;
+        }
+    }
+
+    /** As {@link #copySwapMemory(Object, long, Object, long, long, long)} between absolute addresses. */
+    public void copySwapMemory(long srcAddress, long destAddress, long bytes, long elemSize)
+    {
+        copySwapMemory(null, srcAddress, null, destAddress, bytes, elemSize);
+    }
+
+    /** Copy one {@code size}-byte element from {@code src} to {@code dst}, its bytes reversed. Reads all first. */
+    private static void swapOne(long src, long dst, long size)
+    {
+        long v = 0L;
+        long k = 0L;
+        while (k < size)
+        {
+            v = v | ((Magic.load8(src + k) & 0xFFL) << (k * 8L));
+            k = k + 1L;
+        }
+        k = 0L;
+        while (k < size)
+        {
+            Magic.store8(dst + size - 1L - k, (byte) (v >>> (k * 8L)));
+            k = k + 1L;
+        }
     }
 
     /** Stock reports whether the CPU has cache-line writeback (CLWB and friends). AArch64 has DC CVAC and

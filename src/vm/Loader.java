@@ -6238,10 +6238,12 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("sun/util/spi/"))      // CalendarProvider: Calendar.getInstance
                 // java/text and its provider interfaces (increment 2): SimpleDateFormat / DateFormat run stock over
                 // the same provider layer. And all of sun/text (increment 4): BreakIterator runs stock, on
-                // RuleBasedBreakIterator and its rule data. jdk/internal/icu stays denied -- only Normalizer/Bidi
-                // reach it.
+                // RuleBasedBreakIterator and its rule data. And jdk/internal/icu (2026-10-25): java.text.Normalizer,
+                // java.text.Bidi and regex CANON_EQ run stock on ICU, its data files (nfc.nrm, nfkc.nrm,
+                // uprops.icu, ubidi.icu) copied to /lib/java.base like the other java.base resources.
                 || utf8HasPrefix(base, off, Magic.bytes("java/text/"))
-                || utf8HasPrefix(base, off, Magic.bytes("sun/text/")))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/text/"))
+                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/icu/")))
         {
             return false;
         }
@@ -6584,9 +6586,8 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/module/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/module/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/text/spi/"))
-                // cold ICU/normalizer/break-iterator: Pattern references but never runs them for a literal match.
                 // (NOT java/util/concurrent -- the philosophers demand-load java/util/concurrent/Semaphore.)
-                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/icu/"))
+                // java/text, sun/text and jdk/internal/icu are narrowed out above (the locale provider arc).
                 || utf8HasPrefix(base, off, Magic.bytes("java/text/"))
                 // java/time is NOT DENIED any more (the date/time arc). It was kept out because Formatter NAMES
                 // ten of its classes for %t and the dependency pass of the day pulled +357 classes into every
