@@ -4,6 +4,30 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **sdcard.sh COPIES WITHOUT XATTRS, VERIFIES EVERY FILE, REWRITES ONCE, RE-VERIFIES FROM THE MEDIUM; FULL REGRESSION
+  ON a336aff (2026-10-24).**
+  - **sdcard.sh**, for three failures seen flashing that day:
+    - `cp -X`: the macOS `._*` xattr sidecar writes failed on the card (`Attribute not found`, then
+      `No space left on device` with 200 MB free).
+    - Every file is checked and named, and failures are rewritten once. `kernel8.img` came back different from
+      offset 959489 at the same length, and the old check stopped there, so a second bad file
+      (`armstub8-joe.bin`) showed only on a hand recheck.
+    - After the check, an unmount/remount and a second compare: a read right after a write can come from the page
+      cache.
+    - NOT exercised end to end: no card was mounted (`sh -n` only).
+  - **Full regression on main a336aff + this script** (no image change):
+    - **Regress: 168 of 168.** 157 in the run. The 2 h background limit stopped it before its RESULT line. The
+      11 left without a verdict passed on a solo rerun (`-j 2`).
+    - **Control suite (d7784d0) and branch suite are identical:** 40 programs, every marker 0,
+      `gc: collections=51`.
+    - **JUnit:** `ran 45, failures 0`.
+  - **FINDING, batch-only:** batch2 (22 probes) ended `code arena OOM` at its 16th probe (DeflaterProbe), which
+    passes solo. Earlier full runs passed with batches this size; the locale arc's stock classes compile more per
+    program. Not yet measured how close the other batches are.
+  - **Host:** each raspi4b QEMU uses ~3 of the Mac's 8 cores. `-j 4` beside a demo suite drove load to ~32 and
+    caused the time-outs and `GC: core stuck parked` lines (SystemLoggerProbe DIFFERS in its first solo run, OK
+    on the rerun). Run the suites after Regress.
+
 - **Character.getName AND codePointOf WORK: CharacterName RUNS STOCK ON uniName.dat (2026-10-24).**
   `java/lang/CharacterName` was denied because it reads the java.base resource `java/lang/uniName.dat` (the Unicode
   name table, through an InflaterInputStream over `Class.getResourceAsStream`), which the VM had no copy of. The
