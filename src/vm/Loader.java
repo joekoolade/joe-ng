@@ -3197,10 +3197,32 @@ public final class Loader
         return obj;
     }
 
-    /** TIB of {@code java/lang/StackTraceElement} (0 if not loaded). */
+    /** TIB of {@code java/lang/StackTraceElement}, pulling the class if it is not loaded yet (0 only if absent). */
     private static long steTib()
     {
         int i = classIndexByName(Magic.bytes("java/lang/StackTraceElement"));
+        if (i < 0)
+        {
+            // PULL IT, do not answer 0. The stack-trace natives build StackTraceElements whatever the program's
+            // closure held, and a 0 TIB makes every element a receiver with no Type: its first virtual call
+            // (getClassName) went through late dispatch on a garbage itable directory and surfaced as an NPE
+            // inside resolveViaItableDir. It hid while the class rode into every batch by reference; deferring
+            // the logger (closureDeferred) moved StackWalker -- the referrer -- to a late pull, and
+            // SystemLoggerProbe's caller lookup found it.
+            VM.loaderLock(VM.LOCK_REFLECT);
+            try
+            {
+                if (classIndexByName(Magic.bytes("java/lang/StackTraceElement")) < 0)
+                {
+                    loadClassIncremental(Magic.bytes("java/lang/StackTraceElement"));
+                }
+            }
+            finally
+            {
+                VM.loaderUnlock();
+            }
+            i = classIndexByName(Magic.bytes("java/lang/StackTraceElement"));
+        }
         return i >= 0 ? clTab[i].tib : 0L;
     }
 
@@ -5176,7 +5198,21 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("java/util/spi/"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/util/spi/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/Character$Unicode"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/lang/CharacterName"));
+                || utf8IsAtBase(base, off, Magic.bytes("java/lang/CharacterName"))
+                // ... and the date/time, generic-signature and logger subsystems (2026-10-25): reached in every
+                // first batch only through Formatter's %t arm (java/time, Calendar/Date/TimeZone and their
+                // sun/util/calendar engine), generic-signature reflection (sun/reflect/generics) and
+                // PlatformLogger (jdk/internal/logger).
+                || utf8HasPrefix(base, off, Magic.bytes("java/time/"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/util/calendar/"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/reflect/generics/"))
+                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/logger/"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/util/Calendar"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/util/GregorianCalendar"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/util/JapaneseImperialCalendar"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/util/TimeZone"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/util/SimpleTimeZone"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/util/Date"));
     }
 
     private static void addPend(long base, int classOff, int nameOff, int descOff, int kind)
