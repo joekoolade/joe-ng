@@ -4843,6 +4843,7 @@ public final class Loader
             while (r < pendN)                           //   pends: an older one either pulled its class already
             {                                           //   or named one the dir does not have, and neither
                 if (!nameRegistered(pendBase[r], pendClass[r])   // answer changes by being asked again.
+                        && !closureDeferred(pendBase[r], pendClass[r])
                         && registerNameFromDir(pendBase[r], pendClass[r]) != 0L)
                 {
                     grew = true;
@@ -5146,6 +5147,37 @@ public final class Loader
     /** Append a pending ref (dedup-free; the pull/resolve phases idempotently re-check registration). */
     /** One-time report: the pend list filled, so RTA is silently incomplete from here on. */
     private static boolean pendFullReported;
+
+    /**
+     * Classes the batch closure does NOT pull because a reached method names them -- left to late resolution,
+     * which pulls a class the first time compiled code actually reaches it (link stubs, the late static and
+     * type-check paths). A superclass or interface of a pulled class is still pulled ({@link #pullStructural}).
+     *
+     * <p>WHY. RTA is flow-insensitive: a method counts as reached if any reached method names it, whatever arm it
+     * sits in. Un-denying the locale-provider, text and ICU subsystems (2026-10-24/25) therefore pulled them into
+     * EVERY program's first batch through cold arms -- Pattern.normalizeSlice (CANON_EQ) brings all of ICU,
+     * Formatter$FormatSpecifier.localizedMagnitude brings NumberFormat/DecimalFormat and the provider layer,
+     * Locale.getDisplayName brings MessageFormat and the date formats, ConditionalSpecialCasing brings
+     * BreakIterator. MEASURED by naming each pull's referring method, then by deferring: SbProbe's batch 1 went
+     * +1457 blobs / clinits=416 / pend=68877 -> +1096 / 305 / 45767, below its count before those subsystems were
+     * opened (+1267 / 350), with 20 locale/format/text probes still matching the host.
+     *
+     * <p>Only subsystems whose entry points are COLD for most programs belong here: a class most programs run
+     * would just pay the late pull on every boot instead of once in the batch.
+     */
+    private static boolean closureDeferred(long base, int off)
+    {
+        return utf8HasPrefix(base, off, Magic.bytes("jdk/internal/icu/"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/text/"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/text/"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/util/locale/provider/"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/util/cldr/"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/util/resources/"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/util/spi/"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/util/spi/"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/Character$Unicode"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/lang/CharacterName"));
+    }
 
     private static void addPend(long base, int classOff, int nameOff, int descOff, int kind)
     {
