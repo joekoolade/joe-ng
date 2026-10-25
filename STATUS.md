@@ -4,6 +4,32 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **THE COLD SUBSYSTEMS ARE DEFERRED FROM THE BATCH CLOSURE TO LATE RESOLUTION; NetDemo's BATCH 1 IS 2.4 s FASTER ON
+  THE PI (2026-10-25).** This session's un-denials (locale provider, java/text, sun/text, ICU,
+  CharacterName/UnicodeBlock) had pulled those subsystems into EVERY program's first batch: NetDemo's batch 1 on
+  the Pi went 10.3 s → 14.5 s. RTA is flow-insensitive, so a cold arm of a reached method counts.
+  - **Measured with a temporary instrument** naming each pull's referring method, on SbProbe (which uses none of
+    it):
+    - `Pattern.normalizeSlice` (CANON_EQ) → Normalizer and ~60 ICU classes;
+    - `Formatter$FormatSpecifier.localizedMagnitude/print` → NumberFormat, DecimalFormat, DateFormatSymbols and
+      the provider layer;
+    - `Locale.getDisplayName` → MessageFormat and the date formats;
+    - `ConditionalSpecialCasing` → BreakIterator;
+    - the calendar initializers → the zone-name/CLDR side.
+  - **Fix:** `Loader.closureDeferred` names those subsystems, and markReachable's pend pull skips them. They are
+    NOT denied: late resolution pulls each one the first time compiled code reaches it, and supertypes are still
+    pulled structurally.
+  - **Sequential QEMU, batch 1** (main e50c753 → this): SbProbe +1457 → +1096 blobs, clinits 416 → 305,
+    tot 24694 → 18720 ms; CharProbe tot 23982 → 18788 ms.
+  - **Correctness:** the 20 probes that USE the deferred classes pass 20 of 20 against the host, and a broad
+    45-probe sample passes 45 of 45. `make test` and `make overlaycheck` pass.
+  - **Pi 4 (4ccc26a): PASS.** HTTP 200 `bytes=892`, `[main returned normally]`.
+    - Against a2589ad: batch 1 +1486 blobs (was +1740), `clinits=412` (507), `tot=12088ms` (14482), and
+      **`gc: collections=7` (was 8)**.
+    - Batch-1 `rounds=52` (47): more fixpoint rounds over a smaller closure; the time includes it.
+  - NOT RUN: the all-probe regression, the demo suites and JUnit. This changes WHEN classes load for every
+    program, so a full regression is the right check before more is built on it.
+
 - **java.text.Normalizer, Bidi AND REGEX CANON_EQ RUN ON ICU (2026-10-25).** `jdk/internal/icu` is un-denied.
   - **Data:** its four java.base data files (`jdk/internal/icu/impl/data/icudata/{nfc.nrm,nfkc.nrm,uprops.icu,ubidi.icu}`,
     read by ICUBinary through `Class.getResourceAsStream`) are in `JAVA_BASE_RES`.
