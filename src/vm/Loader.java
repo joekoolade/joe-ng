@@ -7271,7 +7271,28 @@ public final class Loader
             }
             i += 1;
         }
+        long baked = bakedTypeName(type);
+        if (baked != 0L)
+        {
+            return u2(baked);
+        }
         return isSynthesisedType(type) != 0 ? synthHostLen(type) + SYNTH_NAME_LEN : 0;
+    }
+
+    /**
+     * The name Utf8 ({u2 len}{bytes}) of a writer-baked class Type the registry does not hold, or 0. A baked
+     * class is registered only when its blob is pulled, and VM code can `new` one without that (see
+     * ImageBuilder's type-name table); getName() on such an object used to answer NULL.
+     */
+    private static long bakedTypeName(long type)
+    {
+        long rel = type - VM.bakedTypeBase;
+        if (VM.bakedTypeNames == 0L || rel < 0L || rel % ObjectModel.TYPE_SIZE != 0L)
+        {
+            return 0L;
+        }
+        long i = rel / ObjectModel.TYPE_SIZE;
+        return i < VM.bakedTypeCount ? Magic.load64(VM.bakedTypeNames + i * 8L) : 0L;
     }
 
     /** {@code "$$Lambda/0x"} + 16 hex digits -- the length {@link #writeSynthName} writes. */
@@ -7415,6 +7436,19 @@ public final class Loader
                 return pos + len;
             }
             i += 1;
+        }
+        long baked = bakedTypeName(type);
+        if (baked != 0L)
+        {
+            int len = u2(baked);
+            int k = 0;
+            while (k < len)
+            {
+                int c = u1(baked + 2L + k);
+                Magic.store8(dst + pos + k, (byte) (c == 0x2F ? 0x2E : c));   // '/' -> '.'
+                k += 1;
+            }
+            return pos + len;
         }
         return writeSynthName(type, dst, pos);   // unregistered => synthesised; classNameLen sized it
     }

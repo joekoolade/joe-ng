@@ -643,11 +643,25 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             }
         }
         StrIntTable typeWord = new StrIntTable();
+        int typeBaseWord = cur;                                     // the class Types are contiguous from here
         for (int _s3 = 0; _s3 < typeClasses.size(); _s3++)
         {
             String cls = typeClasses.at(_s3);
             typeWord.put(cls, cur);
             cur += TYPE_WORDS;
+        }
+        // THE NAME OF EVERY BAKED CLASS TYPE, by its index in that run: Type i is at typeBaseWord + i*TYPE_WORDS,
+        // its name Utf8 address is word i of this table. A Type carries no name, and the loader names a class by
+        // its REGISTRY entry -- which a baked class gets only once its blob is pulled. VM code that `new`s a
+        // baked class directly (VMScheduler.notOwner's IllegalMonitorStateException) therefore made objects
+        // whose getName() answered NULL once nothing in the batch happened to pull that class.
+        int typeNameTabWord = cur;
+        cur += typeClasses.size() * 2;
+        int[] typeNameWord = new int[typeClasses.size()];
+        for (int _s3 = 0; _s3 < typeClasses.size(); _s3++)
+        {
+            typeNameWord[_s3] = cur;
+            cur += align8Words(2 + typeClasses.at(_s3).length());
         }
         StrIntTable tibWord = new StrIntTable();
         for (int _s4 = 0; _s4 < tibClasses.size(); _s4++)
@@ -1361,6 +1375,14 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             writeLong(image, w + 4, addr(bakedDescWord[i]));
             writeLong(image, w + 6, addr(wordOffset.get(k)));
         }
+        for (int _s3 = 0; _s3 < typeClasses.size(); _s3++)
+        {
+            writeBytes(image, typeNameWord[_s3], utf8(typeClasses.at(_s3)));
+            writeLong(image, typeNameTabWord + _s3 * 2, addr(typeNameWord[_s3]));
+        }
+        fillStatic(image, staticWord, "vm/VM.bakedTypeBase", addr(typeBaseWord));
+        fillStatic(image, staticWord, "vm/VM.bakedTypeCount", typeClasses.size());
+        fillStatic(image, staticWord, "vm/VM.bakedTypeNames", addr(typeNameTabWord));
         fillStatic(image, staticWord, "vm/VM.bakedTable", addr(bakedTableWord));
         fillStatic(image, staticWord, "vm/VM.bakedCount", bakedLink.size());
         for (int i = 0; i < vtSigClasses.size(); i++)

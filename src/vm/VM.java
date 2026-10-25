@@ -2493,6 +2493,9 @@ public final class VM
     static long longToStringAddr;      // baked stock Long.toString(J)
     static long integerToHexStringAddr;// baked stock Integer.toHexString(I)
     static long stringEqualsAddr;      // baked stock String.equals(Object) — content compare
+    static long bakedTypeBase;         // first baked class Type; they are contiguous, ObjectModel.TYPE_SIZE apart
+    static long bakedTypeCount;        // ... how many
+    static long bakedTypeNames;        // ... and word i is the name Utf8 ({u2 len}{bytes}) of Type i
     static long bakedTable;            // M8 endgame: baked-method LINK table {classUtf8, nameUtf8, descUtf8, code}*
     static long bakedCount;            // ... its entry count (Loader.bakedBuf scans it at lazy-compile time)
     static long vtSigTable;            // M8 unification: per-baked-class writer vtable signatures {classUtf8, slots, count, 0}*
