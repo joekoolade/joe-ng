@@ -157,6 +157,10 @@ final class MetalSymbols implements Symbols
     {
         return Loader.isMhSigPoly(methodCp);
     }
+    public int dynSiteIndex(int cpIndex)
+    {
+        return Loader.dynSiteIndex(cpIndex);
+    }
     public boolean isGetCallerClass(int methodCp)
     {
         return Loader.isGetCallerClass(methodCp);
@@ -496,6 +500,14 @@ final class MetalSymbols implements Symbols
         if (helper == Symbols.MH_INVOKE)
         {
             return Loader.mhTramp();                    // the same, for MethodHandle signature-polymorphic calls
+        }
+        if (helper == Symbols.INDY_INVOKE)
+        {
+            return Loader.indyTramp();                  // ... and for invokedynamic the JIT does not lower itself
+        }
+        if (helper == Symbols.LDC_CONST)
+        {
+            return VM.ldcConstAddr;
         }
         if (helper == Symbols.ENSURE_INIT)
         {

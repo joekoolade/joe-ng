@@ -90,6 +90,7 @@ GenericsProbe
 GvrProbe                 cp=/lib/junit.jar
 HighLocalThrowProbe      cp=/lib/junit.jar
 IfaceObjectMethodProbe
+IndyProbe
 InetAddrProbe
 InflaterProbe
 InheritedStaticProbe

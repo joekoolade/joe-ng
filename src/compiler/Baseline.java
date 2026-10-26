@@ -377,7 +377,14 @@ public final class Baseline
         }
         else if (op == 0x14)
         {
-            loadConst(cb, ClassReader.longValue(classBytes, cpOff, u2(code, pos + 1)));
+            if (cpTag[u2(code, pos + 1)] == 17)                     // ldc2_w of a long/double DYNAMIC constant
+            {
+                ldcDynamic(cb, u2(code, pos + 1));
+            }
+            else
+            {
+                loadConst(cb, ClassReader.longValue(classBytes, cpOff, u2(code, pos + 1)));
+            }
             return 3;
         }
 
@@ -2328,8 +2335,31 @@ public final class Baseline
         }
         else
         {
-            symbols.fail(Symbols.FAIL_OPCODE, 0xBA, 0);          // unsupported bootstrap
+            lowerIndyCall(cpIndex, cb);                          // any other bootstrap: linked at run time
         }
+    }
+
+    /**
+     * An invokedynamic the JIT does not lower itself: an ordinary call of the site's descriptor to the INDY_INVOKE
+     * trampoline, x17 = the dynamic site. Its resolver links the site once through the stock bootstrap machinery
+     * and then runs the CallSite's current target with these same arguments.
+     */
+    private void lowerIndyCall(int cpIndex, CodeBuffer cb)
+    {
+        int idx = symbols.dynSiteIndex(cpIndex);
+        cb.emit(A64Enc.movz(17, idx & 0xFFFF, 0));               // fixed width: sizing must not depend on idx
+        cb.emit(A64Enc.movk(17, (idx >> 16) & 0xFFFF, 1));
+        trampolineCall(cb, cpIndex, -1, false, Symbols.INDY_INVOKE);
+    }
+
+    /** ldc/ldc_w/ldc2_w of a MethodType, MethodHandle or dynamic constant: the LDC_CONST helper's answer. */
+    private void ldcDynamic(CodeBuffer cb, int cpIndex)
+    {
+        int idx = symbols.dynSiteIndex(cpIndex);
+        int r = pushReg();
+        cb.emit(A64Enc.movz(r, idx & 0xFFFF, 0));
+        cb.emit(A64Enc.movk(r, (idx >> 16) & 0xFFFF, 1));
+        emitCall(cb, 1, true, false, SYM_HELPER, Symbols.LDC_CONST);
     }
 
     /**
@@ -2360,15 +2390,18 @@ public final class Baseline
      */
     private void lowerTypeSwitch(int cpIndex, CodeBuffer cb)
     {
+        // What the inline lowering cannot do -- a deep operand stack, a label count past the immediates, a
+        // String/Integer/enum label -- goes to the stock SwitchBootstraps.typeSwitch through the generic
+        // invokedynamic path instead of failing the compile (which used to halt any program with such a switch).
         if (deepStack)
         {
-            symbols.fail(Symbols.FAIL_OPCODE, 0xBA, 4);
+            lowerIndyCall(cpIndex, cb);
             return;
         }
         int n = symbols.typeSwitchLabelCount(cpIndex);
         if (n > 4095)
         {
-            symbols.fail(Symbols.FAIL_OPCODE, 0xBA, 5);    // cmp #imm12 / movz #imm16 range
+            lowerIndyCall(cpIndex, cb);
             return;
         }
         int k = 0;
@@ -2376,7 +2409,7 @@ public final class Baseline
         {
             if (symbols.typeSwitchLabelClass(cpIndex, k) == -1)
             {
-                symbols.fail(Symbols.FAIL_OPCODE, 0xBA, 3);
+                lowerIndyCall(cpIndex, cb);
                 return;
             }
             k += 1;
@@ -2440,7 +2473,7 @@ public final class Baseline
         {
             if (symbols.typeSwitchPrimitiveLabel(cpIndex, k) != selKind)
             {
-                symbols.fail(Symbols.FAIL_OPCODE, 0xBA, 6);
+                lowerIndyCall(cpIndex, cb);                         // the stock bootstrap handles mixed labels
                 return;
             }
             k += 1;
@@ -3962,6 +3995,17 @@ public final class Baseline
             {
                 return true;
             }
+            // An ldc of a MethodHandle, MethodType or dynamic constant is a BL to the LDC_CONST helper. MEASURED
+            // missing: a generated `get()` that is only `ldc <condy>; areturn` saved no LR, and its `ret` returned
+            // to the instruction after the BL -- the X30 == PC spin the guarded-static case above records.
+            if (op == 0x12 || op == 0x13 || op == 0x14)
+            {
+                int ci = op == 0x12 ? (code[pos + 1] & 0xFF) : u2(code, pos + 1);
+                if (cpTag[ci] == 15 || cpTag[ci] == 16 || cpTag[ci] == 17)
+                {
+                    return true;
+                }
+            }
             if (op == 0xB8)                                      // invokestatic
             {
                 int idx = u2(code, pos + 1);
@@ -4502,6 +4546,10 @@ public final class Baseline
         {
             int r = pushReg();
             symbols.classLiteral(cb, r, cpIndex);
+        }
+        else if (cpTag[cpIndex] == 15 || cpTag[cpIndex] == 16 || cpTag[cpIndex] == 17)
+        {
+            ldcDynamic(cb, cpIndex);                                           // MethodHandle / MethodType / Dynamic
         }
         else
         {

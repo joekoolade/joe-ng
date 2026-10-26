@@ -335,8 +335,26 @@ class MethodHandleNatives {
         int flags = acc | MN_IS_METHOD | (kind << MN_REFERENCE_KIND_SHIFT);
         UNSAFE.putReference(self, MN_CLAZZ, MethodHandle.class);
         UNSAFE.putInt(self, MN_FLAGS, flags);
-        UNSAFE.putReference(self, MN_METHOD, new ResolvedMethodName(MethodHandle.class, -1L, NONVIRTUAL_VTABLE_INDEX));
+        UNSAFE.putReference(self, MN_METHOD, new ResolvedMethodName(MethodHandle.class, intrinsicTarget(name),
+                NONVIRTUAL_VTABLE_INDEX));
         return self;
+    }
+
+    /**
+     * The vmtarget of a signature-polymorphic INTRINSIC: a negative code the VM's linkTo* resolver recognizes,
+     * since such a method has no body to index. invokeBasic is the one a handle can reach as a TARGET -- a
+     * DirectMethodHandle on MethodHandle.invokeBasic, called through linkToSpecial, which must run invokeBasic
+     * on its receiver (HotSpot's MethodHandle intrinsic does the same).
+     */
+    private static long intrinsicTarget(String name) {
+        return switch (name) {
+            case "invokeBasic" -> -10L;
+            case "linkToStatic" -> -11L;
+            case "linkToSpecial" -> -12L;
+            case "linkToVirtual" -> -13L;
+            case "linkToInterface" -> -14L;
+            default -> -1L;
+        };
     }
 
     private static final int SP_VIRTUAL = 1;
@@ -625,6 +643,129 @@ class MethodHandleNatives {
         }
         return mt;
     }
+
+    // ---- joe-ng: invokedynamic and loadable dynamic constants -------------------------------------------
+    //
+    // The JIT lowers four bootstraps itself (string concat, lambdas, record ObjectMethods, class-label
+    // typeSwitch). Every other invokedynamic -- SwitchBootstraps with String/Integer/enum labels, enumSwitch, a
+    // library's own bootstrap -- and every ldc of a MethodType, MethodHandle or dynamic constant comes here, which
+    // is HotSpot's linkCallSite / linkDynamicConstant upcall. The call site's bootstrap specifier is read from the
+    // CALLER'S OWN CONSTANT POOL with java.lang.classfile (the VM hands over the class's bytes): every bootstrap
+    // argument is a ConstantDesc whose resolveConstantDesc against the caller's lookup is exactly the resolution
+    // JVMS 5.4.3.6 specifies. The site then links through stock CallSite.makeSite.
+    //
+    // Linked once per site and kept here: the map is also what keeps each CallSite and constant reachable, which
+    // lets the VM cache their addresses (the collector does not move objects). Two threads racing on one site
+    // both run the bootstrap and the first result published wins, as JVMS 6.5 allows.
+
+    private static final java.util.concurrent.ConcurrentHashMap<Class<?>, java.lang.classfile.ClassModel> MODELS =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.concurrent.ConcurrentHashMap<Class<?>, java.util.concurrent.ConcurrentHashMap<Integer, Object>>
+            LINKED = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final Object NULL_CONSTANT = new Object();
+
+    /**
+     * Initialize ConstantDescs BEFORE anything parses a descriptor. JDK 26 has an initialization-order hazard here,
+     * MEASURED on HotSpot with -Xshare:off: if PrimitiveClassDescImpl initializes first (ClassDesc.ofDescriptor("I")
+     * is enough), its constructor starts ConstantDescs.<clinit>, which copies PrimitiveClassDescImpl.CD_int while that
+     * class is still mid-initialization -- null -- and then fails building BSM_CLASS_DATA_AT. A stock JVM normally
+     * never sees it because the CDS archive initializes ConstantDescs at startup; here the linker's own asSymbol()
+     * parse of a call-site descriptor was the first touch.
+     */
+    private static void constantDescsFirst() {
+        if (java.lang.constant.ConstantDescs.CD_Object == null) {
+            throw new InternalError("ConstantDescs did not initialize");
+        }
+    }
+
+    /** The CallSite of the invokedynamic whose InvokeDynamic entry is {@code cp} in {@code caller}'s pool. */
+    static CallSite linkIndy(Class<?> caller, int cp) throws Throwable {
+        constantDescsFirst();
+        java.util.concurrent.ConcurrentHashMap<Integer, Object> m = linkedOf(caller);
+        Object v = m.get(cp);
+        if (v != null) {
+            return (CallSite) v;
+        }
+        java.lang.constant.DynamicCallSiteDesc d = model(caller).constantPool()
+                .entryByIndex(cp, java.lang.classfile.constantpool.InvokeDynamicEntry.class).asSymbol();
+        Lookup lookup = IMPL_LOOKUP.in(caller);
+        MethodHandle bsm = (MethodHandle) d.bootstrapMethod().resolveConstantDesc(lookup);
+        java.lang.constant.ConstantDesc[] sa = d.bootstrapArgs();
+        Object[] statics = new Object[sa.length];
+        for (int i = 0; i < sa.length; i++) {
+            statics[i] = sa[i].resolveConstantDesc(lookup);
+        }
+        MethodType type = (MethodType) d.invocationType().resolveConstantDesc(lookup);
+        CallSite cs = CallSite.makeSite(bsm, d.invocationName(), type, statics.length == 0 ? null : statics, caller);
+        Object prev = m.putIfAbsent(cp, cs);
+        return prev == null ? cs : (CallSite) prev;
+    }
+
+    /** The value of the loadable constant {@code cp} (a MethodType, MethodHandle or dynamic constant). */
+    static Object linkConstant(Class<?> caller, int cp) throws Throwable {
+        constantDescsFirst();
+        java.util.concurrent.ConcurrentHashMap<Integer, Object> m = linkedOf(caller);
+        Object v = m.get(cp);
+        if (v == null) {
+            java.lang.constant.ConstantDesc d = model(caller).constantPool()
+                    .entryByIndex(cp, java.lang.classfile.constantpool.LoadableConstantEntry.class).constantValue();
+            Object r = d.resolveConstantDesc(IMPL_LOOKUP.in(caller));
+            Object prev = m.putIfAbsent(cp, r == null ? NULL_CONSTANT : r);
+            v = prev == null ? (r == null ? NULL_CONSTANT : r) : prev;
+        }
+        return v == NULL_CONSTANT ? null : v;
+    }
+
+    /** {@link #linkConstant} for a PRIMITIVE-typed dynamic constant, as the raw bits the operand stack holds. */
+    static long constantBits(Class<?> caller, int cp) throws Throwable {
+        Object v = linkConstant(caller, cp);
+        if (v instanceof Integer x) {
+            return x;
+        } else if (v instanceof Long x) {
+            return x;
+        } else if (v instanceof Float x) {
+            return Float.floatToRawIntBits(x);
+        } else if (v instanceof Double x) {
+            return Double.doubleToRawLongBits(x);
+        } else if (v instanceof Boolean x) {
+            return x ? 1 : 0;
+        } else if (v instanceof Character x) {
+            return x;
+        } else if (v instanceof Short x) {
+            return x;
+        } else if (v instanceof Byte x) {
+            return x;
+        }
+        throw new BootstrapMethodError("dynamic constant of a primitive type answered " + v);
+    }
+
+    private static java.util.concurrent.ConcurrentHashMap<Integer, Object> linkedOf(Class<?> caller) {
+        java.util.concurrent.ConcurrentHashMap<Integer, Object> m = LINKED.get(caller);
+        if (m == null) {
+            java.util.concurrent.ConcurrentHashMap<Integer, Object> fresh = new java.util.concurrent.ConcurrentHashMap<>();
+            m = LINKED.putIfAbsent(caller, fresh);
+            if (m == null) {
+                m = fresh;
+            }
+        }
+        return m;
+    }
+
+    private static java.lang.classfile.ClassModel model(Class<?> caller) {
+        java.lang.classfile.ClassModel cm = MODELS.get(caller);
+        if (cm == null) {
+            byte[] bytes = classBytes0(caller);
+            if (bytes == null) {
+                throw new InternalError("joe-ng: no class file for " + caller.getName());
+            }
+            cm = java.lang.classfile.ClassFile.of().parse(bytes);
+            MODELS.putIfAbsent(caller, cm);
+        }
+        return cm;
+    }
+
+    /** VM native: a copy of the class file the class was loaded from, or null. */
+    private static native byte[] classBytes0(Class<?> c);
 
     /** VM native: see {@link #declaredIndex}. */
     private static native int declared0(Class<?> c, byte[] name, byte[] desc);

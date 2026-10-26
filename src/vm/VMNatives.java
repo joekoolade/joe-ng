@@ -373,6 +373,28 @@ final class VMNatives
         return Loader.mhResolve(save, (int) idx);
     }
 
+    /** The indy trampoline's resolver ({@code Loader.indyTramp}); may run the bootstrap (guest code). */
+    static long indyResolve(long save, long idx)
+    {
+        return Loader.indyResolve(save, (int) idx);
+    }
+
+    /** The LDC_CONST helper: a loadable dynamic constant's value (an object address, or a primitive's bits). */
+    static long ldcConst(long idx)
+    {
+        return Loader.ldcConst((int) idx);
+    }
+
+    /** {@code MethodHandleNatives.classBytes0(Class)}: a guest copy of the class's class file, or null. */
+    static long classBytes(long mirror)
+    {
+        if (mirror <= 0x1000L)
+        {
+            return 0L;                                     // boot force-compile passes 0
+        }
+        return Loader.classFileCopy(Magic.load64(mirror + 16L));
+    }
+
     /** {@code Throwable.stackTrace0(Throwable)} native: its inline backtrace as a StackTraceElement[]. */
     static long throwableTrace(long exc)
     {

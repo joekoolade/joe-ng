@@ -13036,6 +13036,7 @@ public final class Loader
         // over these -- one class's own declaration per call, plus the reflection natives' methodInfo0.
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/invoke/MethodHandleNatives")))
         {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("classBytes0")))      { return VM.classBytesAddr; }        // (Class)byte[]
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declared0")))        { return VM.mhDeclaredAddr; }        // (Class,byte[],byte[])I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("methodInfo0")))      { return VM.methodInfoAddr; }        // (I,byte[],long[])I
         }
@@ -13056,6 +13057,13 @@ public final class Loader
         // which makes the boot loader's classes answer that Module from getModule(). Here every class already
         // answers Module.UNNAMED, the object defineUnnamedModule hands BootLoader, so EMPTY is the correct
         // semantics. getSystemPackageNames/getSystemPackageLocation stay unmapped and trap if reached.
+        // jdk/internal/misc/PreviewFeatures.isPreviewEnabled() -> FALSE: JVM_IsPreviewEnabled answers
+        // Arguments::enable_preview(), the --enable-preview flag, which this VM never has. Reached from
+        // SwitchBootstraps.<clinit> (pattern switches linked through the generic invokedynamic path).
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/PreviewFeatures")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isPreviewEnabled"))) { return VM.sockZeroAddr; } // ()Z -> false
+        }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalHiddenClasses")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("defineClass0"))) { return VM.defineClassAddr; } // (String,byte[],int,int)Class
@@ -14828,13 +14836,29 @@ public final class Loader
             c = superRegOf(c);
             hops += 1;
         }
-        int direct = n;
+        // The superinterface CLOSURE, every level (JVMS 5.4.3.3 searches all superinterfaces). This walked ONE
+        // level above the class chain's own interfaces, so a default declared three interfaces up was never
+        // found. MEASURED: java.lang.classfile's StringEntryImpl -> StringEntry -> ConstantValueEntry ->
+        // LoadableConstantEntry, whose default typeKind() failed late dispatch (VIRTUALRESOLVE FAILED) inside
+        // SwitchBootstraps' generated switch (IndyDbg). Each interface is expanded once: names are per-blob
+        // addresses, so the same interface can appear twice and is told apart by its registry index.
+        int[] expanded = new int[MAXIFACEFALLBACK];
+        int ne = 0;
         int i = 0;
-        while (i < direct)                              // level 2: each interface's own super-interfaces
+        while (i < n)
         {
             int r = regBySigU(names[i]);
-            if (r >= 0)
+            boolean seen = r < 0;
+            int e = 0;
+            while (!seen && e < ne)
             {
+                seen = expanded[e] == r;
+                e += 1;
+            }
+            if (!seen && ne < MAXIFACEFALLBACK)
+            {
+                expanded[ne] = r;
+                ne += 1;
                 n = collectIfaceNames(r, names, n);
             }
             i += 1;
@@ -15164,12 +15188,46 @@ public final class Loader
      */
     static long mhTramp()
     {
-        if (mhTrampAddr != 0L)
+        if (mhTrampAddr == 0L)
         {
-            return mhTrampAddr;
+            long buf = buildSaveAreaTramp(VM.mhResolveAddr, 4);
+            mhTrampLo = buf + 4L;
+            mhTrampHi = saveTrampHi;
+            mhTrampAddr = buf;
+            registerTrampFrames();
         }
+        return mhTrampAddr;
+    }
+
+    /** The invokedynamic trampoline: {@link #mhTramp}'s shape, resolved by {@link #indyResolve}. */
+    static long indyTramp()
+    {
+        if (indyTrampAddr == 0L)
+        {
+            long buf = buildSaveAreaTramp(VM.indyResolveAddr, 5);
+            indyTrampLo = buf + 4L;
+            indyTrampHi = saveTrampHi;
+            indyTrampAddr = buf;
+            registerTrampFrames();
+        }
+        return indyTrampAddr;
+    }
+
+    private static long indyTrampAddr;
+    private static long indyTrampLo;
+    private static long indyTrampHi;
+
+    /** Where the last {@link #buildSaveAreaTramp}'s frame is torn down (its unwind range ends there). */
+    private static long saveTrampHi;
+
+    /**
+     * A resolve trampoline whose resolver is handed the SAVE AREA: save x0..x15 + LR (LR at [sp+0], where VM.unwind
+     * reads it), call {@code ra(&saved x0, x17)}, restore and tail-branch to what it answered -- so the target
+     * returns straight to the call site and an exception thrown by the resolver unwinds through this frame.
+     */
+    private static long buildSaveAreaTramp(long ra, int guardKind)
+    {
         long buf = Heap.allocCode(256);
-        long ra = VM.mhResolveAddr;
         int w = 0;
         Magic.store32(buf + w * 4L, A64Enc.subImm(STUB_SP, STUB_SP, STUB_FRAME)); w += 1;
         int r = 0;
@@ -15186,7 +15244,7 @@ public final class Loader
         Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((ra >> 32) & 0xFFFF), 2)); w += 1;
         Magic.store32(buf + w * 4L, A64Enc.blr(16));                               w += 1;   // x0 = target
         Magic.store32(buf + w * 4L, A64Enc.movReg(16, 0));                         w += 1;
-        w = emitTailGuard(buf, w, 4);
+        w = emitTailGuard(buf, w, guardKind);
         r = 0;
         while (r <= STUB_SAVE_HI)
         {
@@ -15194,14 +15252,247 @@ public final class Loader
             r += 1;
         }
         Magic.store32(buf + w * 4L, A64Enc.ldrx(STUB_LR, STUB_SP, STUB_LR_OFF));   w += 1;
-        mhTrampHi = buf + w * 4L;
+        saveTrampHi = buf + w * 4L;
         Magic.store32(buf + w * 4L, A64Enc.addImm(STUB_SP, STUB_SP, STUB_FRAME)); w += 1;
         Magic.store32(buf + w * 4L, A64Enc.br(16));                                w += 1;   // tail-call
         Heap.publishCode(buf, buf + w * 4L);
-        mhTrampAddr = buf;
-        mhTrampLo = buf + 4L;
-        registerTrampFrames();
         return buf;
+    }
+
+    // ---- invokedynamic and loadable dynamic constants the JIT does not lower itself -----------------------
+    //
+    // A site is (caller Type, constant-pool index); the guest linker in MethodHandleNatives reads the bootstrap
+    // specifier out of the caller's own class file and links it with stock CallSite.makeSite. dsVal caches what it
+    // answered -- a CallSite, a constant, or a primitive constant's raw bits -- which is safe to hold as an address
+    // because the guest's LINKED map keeps it reachable and the collector does not move objects.
+
+    private static final int MAXDSITE = 4096;
+    private static long[] dsType;
+    private static int[] dsCp;
+    private static long[] dsDesc;                       // absolute Utf8 descriptor, or 0 for a MethodType/MethodHandle
+    private static long[] dsVal;
+    private static int[] dsDone;
+    private static int dsCount;
+
+    private static final int DYN_INDY = 0;
+    private static final int DYN_CONST = 1;
+    private static final int DYN_BITS = 2;
+    private static final int[] dynLinkerIdx = { -1, -1, -1 };
+    private static long mhOffCsTarget = -1L;
+
+    /** The site index of the invokedynamic or loadable constant at {@code cpIndex} of the class being compiled. */
+    static int dynSiteIndex(int cpIndex)
+    {
+        if (dsType == null)
+        {
+            dsType = new long[MAXDSITE];
+            dsCp = new int[MAXDSITE];
+            dsDesc = new long[MAXDSITE];
+            dsVal = new long[MAXDSITE];
+            dsDone = new int[MAXDSITE];
+        }
+        int reg = classRegByNameAt(gbase, gThisNameOff);
+        long type = reg >= 0 ? clTab[reg].type : 0L;
+        int i = 0;
+        while (i < dsCount)                             // dedup: the compiler visits each site in both passes
+        {
+            if (dsType[i] == type && dsCp[i] == cpIndex)
+            {
+                return i;
+            }
+            i += 1;
+        }
+        if (dsCount >= MAXDSITE)
+        {
+            capHalt(Magic.bytes("MAXDSITE"), dsCount);
+        }
+        int tag = u1(gbase + gcp[cpIndex] - 1L);         // gcp points just PAST an entry's tag byte
+        dsType[dsCount] = type;
+        dsCp[dsCount] = cpIndex;
+        dsDesc[dsCount] = (tag == 17 || tag == 18) ? gbase + mrefDescOff(cpIndex) : 0L;
+        dsVal[dsCount] = 0L;
+        dsDone[dsCount] = 0;
+        dsCount += 1;
+        return dsCount - 1;
+    }
+
+    /**
+     * The indy trampoline's resolver: link the site once (the guest's linkIndy), then run its CallSite's CURRENT
+     * target -- read each call, so a MutableCallSite retargets -- as invokeBasic: the arguments are shifted one
+     * register right and the target handle goes in x0, which is a LambdaForm method's layout.
+     */
+    static long indyResolve(long save, int idx)
+    {
+        if (save == 0L || dsType == null || idx < 0 || idx >= dsCount)
+        {
+            return 0L;                                  // boot force-compile passes 0
+        }
+        if (dsDone[idx] == 0)
+        {
+            long cs = dynLink(idx, DYN_INDY);           // may throw BootstrapMethodError: unwinds to the site
+            dsVal[idx] = cs;
+            Magic.dsb();
+            dsDone[idx] = 1;
+        }
+        if (mhOffCsTarget < 0L)
+        {
+            mhOffCsTarget = declaredFieldOffset(Magic.bytes("java/lang/invoke/CallSite"), Magic.bytes("target"));
+        }
+        long target = Magic.load64(dsVal[idx] + mhOffCsTarget);
+        int n = descParamCountAt(dsDesc[idx]);
+        if (n > STUB_SAVE_HI - 1)
+        {
+            Uart.write(Magic.bytes("\n  INDY LINK: unsupported arity for "));
+            printNameAt(dsDesc[idx], 0);
+            Uart.putc(0x0A);
+            return 0L;
+        }
+        int r = n;
+        while (r > 0)
+        {
+            Magic.store64(save + r * 8L, Magic.load64(save + (r - 1) * 8L));
+            r -= 1;
+        }
+        Magic.store64(save, target);
+        return lambdaFormTarget(target);
+    }
+
+    /** The LDC_CONST helper: a loadable dynamic constant's value -- an object, or a primitive's raw bits. */
+    static long ldcConst(int idx)
+    {
+        if (dsType == null || idx < 0 || idx >= dsCount)
+        {
+            return 0L;                                  // boot force-compile passes 0
+        }
+        if (dsDone[idx] != 0)
+        {
+            return dsVal[idx];
+        }
+        long d = dsDesc[idx];
+        boolean prim = d != 0L && u1(d + 2L) != 0x4C && u1(d + 2L) != 0x5B;   // not 'L' and not '['
+        long v = dynLink(idx, prim ? DYN_BITS : DYN_CONST);
+        dsVal[idx] = v;
+        Magic.dsb();
+        dsDone[idx] = 1;
+        return v;
+    }
+
+    /** Call the guest linker of {@code kind} (MethodHandleNatives.linkIndy / linkConstant / constantBits). */
+    private static long dynLink(int idx, int kind)
+    {
+        int li = dynLinkerIdx[kind];
+        if (li < 0)
+        {
+            int reg = classRegByNameBytes(Magic.bytes("java/lang/invoke/MethodHandleNatives"));
+            if (reg < 0)
+            {
+                ensureMhnLoaded();
+                reg = classRegByNameBytes(Magic.bytes("java/lang/invoke/MethodHandleNatives"));
+            }
+            if (reg >= 0)
+            {
+                byte[] name = kind == DYN_INDY ? Magic.bytes("linkIndy")
+                        : kind == DYN_CONST ? Magic.bytes("linkConstant") : Magic.bytes("constantBits");
+                byte[] desc = kind == DYN_INDY ? Magic.bytes("(Ljava/lang/Class;I)Ljava/lang/invoke/CallSite;")
+                        : kind == DYN_CONST ? Magic.bytes("(Ljava/lang/Class;I)Ljava/lang/Object;")
+                        : Magic.bytes("(Ljava/lang/Class;I)J");
+                li = methodResolveExact(clTab[reg].type, guestBytes(name), guestBytes(desc));
+                dynLinkerIdx[kind] = li;
+            }
+        }
+        RVMMethod m = li < 0 ? null : reflEntry(li);
+        if (m == null || m.buf == 0L)
+        {
+            Uart.write(Magic.bytes("\n  INDY LINK: no MethodHandleNatives linker\n"));
+            return 0L;
+        }
+        return Magic.call2(m.buf, classMirror(dsType[idx]), (long) dsCp[idx]);
+    }
+
+    /** Pull java/lang/invoke/MethodHandleNatives in when a dynamic site is the program's first use of it. */
+    private static void ensureMhnLoaded()
+    {
+        VM.loaderLock(VM.LOCK_REFLECT);
+        try
+        {
+            long t = loadClassIncremental(Magic.bytes("java/lang/invoke/MethodHandleNatives"));
+            if (t != 0L)
+            {
+                ensureInitOfType(t);
+            }
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
+    }
+
+    /** {@code MethodHandleNatives.classBytes0}: a guest copy of the class file the class was loaded from, or 0. */
+    static long classFileCopy(long type)
+    {
+        int reg = regOfType(type);
+        if (reg < 0 || clTab[reg] == null)
+        {
+            return 0L;
+        }
+        long base = clTab[reg].base;
+        if (base == 0L || u4(base) != 0xCAFEBABE)
+        {
+            return 0L;
+        }
+        return guestBytes(VM.heapBytes(base, classFileLength(base)));
+    }
+
+    /** The length of the class file at {@code base}, by walking its structure (JVMS 4.1). */
+    private static int classFileLength(long base)
+    {
+        int count = u2(base + 8L);
+        long p = base + 10L;
+        int i = 1;
+        while (i < count)
+        {
+            int tag = u1(p);
+            if (tag == 1)
+            {
+                p += 3L + u2(p + 1L);
+            }
+            else if (tag == 5 || tag == 6)
+            {
+                p += 9L;
+                i += 1;                                 // a long or double takes two slots
+            }
+            else if (tag == 7 || tag == 8 || tag == 16 || tag == 19 || tag == 20)
+            {
+                p += 3L;
+            }
+            else if (tag == 15)
+            {
+                p += 4L;
+            }
+            else
+            {
+                p += 5L;
+            }
+            i += 1;
+        }
+        p += 6L;                                        // access_flags, this_class, super_class
+        p += 2L + 2L * u2(p);                           // interfaces
+        int f = u2(p);
+        p += 2L;
+        while (f > 0)
+        {
+            p = skipAttributes(p + 8L, u2(p + 6L));
+            f -= 1;
+        }
+        int m = u2(p);
+        p += 2L;
+        while (m > 0)
+        {
+            p = skipAttributes(p + 8L, u2(p + 6L));
+            m -= 1;
+        }
+        p = skipAttributes(p + 2L, u2(p));
+        return (int) (p - base);
     }
 
     // Field offsets of the four objects a dispatch walks, looked up once against each DECLARING class (the field
@@ -15259,6 +15550,12 @@ public final class Loader
             return 0L;
         }
         long mn = Magic.load64(save + last * 8L);
+        if (memberNameEntryQuiet(mn) == -10L)
+        {
+            // The MemberName IS MethodHandle.invokeBasic (a handle whose target is that intrinsic): run
+            // invokeBasic on the receiver, which is the handle in x0 -- the trailing MemberName is dropped.
+            return lambdaFormTarget(Magic.load64(save));
+        }
         if (utf8IsAtBase(nameU, 0, Magic.bytes("linkToStatic")) || utf8IsAtBase(nameU, 0, Magic.bytes("linkToSpecial")))
         {
             return memberNameTarget(mn);
@@ -15328,6 +15625,18 @@ public final class Loader
             return -1L;
         }
         return vt;
+    }
+
+    /** A MemberName's vmtarget without any report: a registry index, a negative intrinsic code, or -1. */
+    private static long memberNameEntryQuiet(long mn)
+    {
+        if (mhOffMethod < 0L)
+        {
+            mhOffMethod = declaredFieldOffset(Magic.bytes("java/lang/invoke/MemberName"), Magic.bytes("method"));
+            mhOffVmtarget = declaredFieldOffset(Magic.bytes("java/lang/invoke/ResolvedMethodName"), Magic.bytes("vmtarget"));
+        }
+        long rmn = mn == 0L ? 0L : Magic.load64(mn + mhOffMethod);
+        return rmn == 0L ? -1L : Magic.load64(rmn + mhOffVmtarget);
     }
 
     /** linkToVirtual/linkToInterface: the MemberName's method as the RECEIVER's class runs it. */
@@ -18531,6 +18840,10 @@ public final class Loader
         if (mhTrampAddr != 0L)
         {
             VM.addJitFrame(mhTrampLo, mhTrampHi, STUB_FRAME, 0L);
+        }
+        if (indyTrampAddr != 0L)
+        {
+            VM.addJitFrame(indyTrampLo, indyTrampHi, STUB_FRAME, 0L);
         }
     }
 
