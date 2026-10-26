@@ -128,6 +128,10 @@ public interface Symbols
     // Reflection.getCallerClass(): the class of a code address -- the CALL SITE in the caller of the method
     // that asked (its saved LR - 4). See Baseline.lowerGetCallerClass.
     int CALLER_CLASS = 63;      // vm/VMNatives.classAtPc(J)J — the Class mirror of the method containing a pc
+    // A java.lang.invoke.MethodHandle signature-polymorphic call (invokeExact, invoke, invokeBasic, linkTo*): the
+    // method-handle trampoline. Same shape as VIRTUAL_RESOLVE -- x17 = the site, x0..x15 preserved, tail-branch
+    // to the target -- and its resolver reads the KIND from the site's name. See Baseline.lowerMhCall.
+    int MH_INVOKE = 64;         // vm/Loader.mhTramp() -> VMNatives.mhResolve(JJ)J
 
     /**
      * The largest value a code address's top byte (bits 31..24) can take, for the dispatch-target guard.
@@ -244,6 +248,14 @@ public interface Symbols
 
     /** True if the method ref at {@code methodCp} is {@code getClass()Ljava/lang/Class;} — intrinsified to GET_CLASS. */
     boolean isGetClass(int methodCp);
+
+    /**
+     * True if the method ref at {@code methodCp} is one of {@code java/lang/invoke/MethodHandle}'s
+     * signature-polymorphic methods the VM links itself -- {@code invokeExact}, {@code invoke},
+     * {@code invokeBasic} and the four {@code linkTo*} -- lowered to the MH_INVOKE trampoline rather than to an
+     * ordinary call, since no method with the site's descriptor exists to call.
+     */
+    boolean isMhSigPoly(int methodCp);
 
     /**
      * True if the invokestatic is {@code jdk.internal.reflect.Reflection.getCallerClass()} -- intrinsified to

@@ -1,0 +1,19 @@
+static (int,int)int = 42
+static identity = true
+static void x3 = 3
+target throws = caught boom
+final-class virtual = [t]
+virtual override = named
+virtual other receiver = 5
+interface Integer = -1
+interface String = 1
+constructor = (1,2)
+getter/setter = 7 11 11
+static getter = 9
+double args = -1 1
+float args = -1 0
+wrong type = WrongMethodTypeException: handle's method type (int,int)int but found (int,int)long
+invoke same type = 42
+null handle = NullPointerException
+hot loop = 499500
+MhInvokeProbe done

@@ -254,6 +254,29 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         return r.name().equals("getClass") && r.descriptor().equals("()Ljava/lang/Class;");
     }
 
+    /**
+     * A MethodHandle signature-polymorphic call needs the metal's MH_INVOKE trampoline, which the image does not
+     * carry, so the writer refuses the method and it compiles on metal on first call (a bake stub) -- the
+     * answer the writer gives every construct it cannot compile.
+     */
+    public boolean isMhSigPoly(int methodCp)
+    {
+        ClassFile.MemberRef r = cf.memberRef(methodCp);
+        if (!r.owner().equals("java/lang/invoke/MethodHandle"))
+        {
+            return false;
+        }
+        switch (r.name())
+        {
+            case "invokeExact", "invoke", "invokeBasic", "linkToStatic", "linkToSpecial", "linkToVirtual",
+                    "linkToInterface":
+                throw new UnsupportedOperationException("signature-polymorphic MethodHandle." + r.name()
+                        + " not compiled by the host writer");
+            default:
+                return false;
+        }
+    }
+
     /** {@code Reflection.getCallerClass()}: intrinsified here too, so a BAKED caller-sensitive method agrees. */
     public boolean isGetCallerClass(int methodCp)
     {

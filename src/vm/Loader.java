@@ -14315,9 +14315,17 @@ public final class Loader
                 z += 1;
             }
         }
-        long nameAddr = gbase + mrefNameOff(methodCp);
-        long descAddr = gbase + mrefDescOff(methodCp);
-        long clsAddr = gbase + refClassNameOff(methodCp);
+        return siteIndexFor(gbase + mrefNameOff(methodCp), gbase + mrefDescOff(methodCp),
+                gbase + refClassNameOff(methodCp));
+    }
+
+    /** {@link #virtualSiteIndex} keyed by absolute Utf8 addresses -- also how a linkToVirtual site is made. */
+    private static int siteIndexFor(long nameAddr, long descAddr, long clsAddr)
+    {
+        if (vsName == null)
+        {
+            return -1;
+        }
         // Dedup, because a site is now allocated for EVERY dispatch guard, and the compiler visits each site
         // more than once (size pass then emit pass). Without this the table would fill with duplicates and
         // the two passes would bake different indices for the same call.
@@ -14542,7 +14550,7 @@ public final class Loader
         {
             return 0L;
         }
-        if (recv < Heap.BASE || recv >= Heap.managedTop() || (recv & 7L) != 0L)
+        if (!receiverAddress(recv))
         {
             return 0L;
         }
@@ -14561,13 +14569,34 @@ public final class Loader
         return memoBuf;
     }
 
+    /**
+     * Whether {@code a} can be a dispatch receiver: 8-aligned, and in the managed heap OR in the boot IMAGE. The
+     * image half was missing, so a writer-BAKED object -- the Integer cache, a string literal -- was reported as
+     * "BAD RECEIVER" and dispatched to the denylist trap. MEASURED: one linkToVirtual handle on Object.toString
+     * worked for a heap object and trapped for Integer.valueOf(5) (MhInvokeProbe). Before method handles a baked
+     * receiver reached this resolver only through a vtable slot found null at dispatch; linkToVirtual sends it
+     * every receiver.
+     */
+    private static boolean receiverAddress(long a)
+    {
+        if ((a & 7L) != 0L)
+        {
+            return false;
+        }
+        if (a >= Heap.BASE && a < Heap.managedTop())
+        {
+            return true;
+        }
+        return a >= VM.STACK_TOP && a < Heap.IMAGE_CEILING;
+    }
+
     private static long virtualResolveLocked(long recv, int idx)
     {
         if (recv == 0L || idx < 0 || idx >= vsCount || clTab == null)
         {
             return VM.denylistTrapAddr;
         }
-        if (recv < Heap.BASE || recv >= Heap.managedTop() || (recv & 7L) != 0L)
+        if (!receiverAddress(recv))
         {
             // NOT AN OBJECT AT ALL. The bound is managedTop(), NOT LARGE_LIMIT: that is only where the
             // SECONDARIES' arenas begin, so LARGE_LIMIT rejects every object cores 1-3 allocate -- which is
@@ -15076,6 +15105,302 @@ public final class Loader
         virtualTrampLo = buf + 4L;                      // the `sub sp` above establishes it
         registerTrampFrames();
         return buf;
+    }
+
+    // ---- java.lang.invoke: the MethodHandle signature-polymorphic call ------------------------------------
+    //
+    // `mh.invokeExact(a, b)`, `mh.invokeBasic(...)` and `MethodHandle.linkToStatic(..., mn)` have no method of
+    // the site's descriptor to call: HotSpot links each to an intrinsic. Here every such site is compiled as
+    // an ordinary call of its own descriptor -- the arguments land in x0.. exactly as they would for a real
+    // method -- to the MH trampoline below, with x17 = the site. The trampoline saves x0..x15, asks
+    // mhResolve for the target, restores, and tail-branches, so the target returns straight to the site.
+    // What makes that work is the shape of a LambdaForm method: it takes the handle as its FIRST parameter
+    // and the call's arguments after it, which is precisely the register layout of `mh.invokeBasic(args)`.
+
+    private static long mhTrampAddr;
+    private static long mhTrampLo;
+    private static long mhTrampHi;
+
+    /** True if the *ref at {@code idx} is a MethodHandle signature-polymorphic method the VM links itself. */
+    static boolean isMhSigPoly(int idx)
+    {
+        if (!utf8IsAtBase(gbase, refClassNameOff(idx), Magic.bytes("java/lang/invoke/MethodHandle")))
+        {
+            return false;
+        }
+        int n = mrefNameOff(idx);
+        return utf8IsAtBase(gbase, n, Magic.bytes("invokeExact"))
+                || utf8IsAtBase(gbase, n, Magic.bytes("invoke"))
+                || utf8IsAtBase(gbase, n, Magic.bytes("invokeBasic"))
+                || utf8IsAtBase(gbase, n, Magic.bytes("linkToStatic"))
+                || utf8IsAtBase(gbase, n, Magic.bytes("linkToSpecial"))
+                || utf8IsAtBase(gbase, n, Magic.bytes("linkToVirtual"))
+                || utf8IsAtBase(gbase, n, Magic.bytes("linkToInterface"));
+    }
+
+    /**
+     * The MH trampoline: {@link #virtualTramp}'s shape, with the resolver handed the SAVE AREA (x0 = the address
+     * of the saved x0) rather than the receiver, because a linkTo* target is named by the LAST argument and an
+     * invoke's handle may be REPLACED (invoke adapts it), so mhResolve has to read and write the saved registers.
+     */
+    static long mhTramp()
+    {
+        if (mhTrampAddr != 0L)
+        {
+            return mhTrampAddr;
+        }
+        long buf = Heap.allocCode(256);
+        long ra = VM.mhResolveAddr;
+        int w = 0;
+        Magic.store32(buf + w * 4L, A64Enc.subImm(STUB_SP, STUB_SP, STUB_FRAME)); w += 1;
+        int r = 0;
+        while (r <= STUB_SAVE_HI)
+        {
+            Magic.store32(buf + w * 4L, A64Enc.strx(r, STUB_SP, STUB_SAVE0 + r * ObjectModel.WORD)); w += 1;
+            r += 1;
+        }
+        Magic.store32(buf + w * 4L, A64Enc.strx(STUB_LR, STUB_SP, STUB_LR_OFF));   w += 1;   // LR at [sp+0] for VM.unwind
+        Magic.store32(buf + w * 4L, A64Enc.addImm(0, STUB_SP, STUB_SAVE0));       w += 1;   // x0 = &saved x0
+        Magic.store32(buf + w * 4L, A64Enc.movReg(1, 17));                         w += 1;   // x1 = site idx
+        Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) (ra & 0xFFFF), 0));         w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((ra >> 16) & 0xFFFF), 1)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((ra >> 32) & 0xFFFF), 2)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.blr(16));                               w += 1;   // x0 = target
+        Magic.store32(buf + w * 4L, A64Enc.movReg(16, 0));                         w += 1;
+        w = emitTailGuard(buf, w, 4);
+        r = 0;
+        while (r <= STUB_SAVE_HI)
+        {
+            Magic.store32(buf + w * 4L, A64Enc.ldrx(r, STUB_SP, STUB_SAVE0 + r * ObjectModel.WORD)); w += 1;
+            r += 1;
+        }
+        Magic.store32(buf + w * 4L, A64Enc.ldrx(STUB_LR, STUB_SP, STUB_LR_OFF));   w += 1;
+        mhTrampHi = buf + w * 4L;
+        Magic.store32(buf + w * 4L, A64Enc.addImm(STUB_SP, STUB_SP, STUB_FRAME)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.br(16));                                w += 1;   // tail-call
+        Heap.publishCode(buf, buf + w * 4L);
+        mhTrampAddr = buf;
+        mhTrampLo = buf + 4L;
+        registerTrampFrames();
+        return buf;
+    }
+
+    // Field offsets of the four objects a dispatch walks, looked up once against each DECLARING class (the field
+    // registry keys a field by the class that declares it, so DirectMethodHandle would not find `form`).
+    private static long mhOffForm = -1L;
+    private static long mhOffVmentry = -1L;
+    private static long mhOffMethod = -1L;
+    private static long mhOffVmtarget = -1L;
+
+    /** Each linker's reflection index, found once (it is compiled on demand: nothing in Java calls it). */
+    private static int mhLinkExactIdx = -1;
+    private static int mhLinkGenericIdx = -1;
+
+    /**
+     * The MH trampoline's resolver: the code {@code save}'s call should run. {@code save} is the trampoline's save
+     * area (x_r at {@code save + r*8}); the site's NAME is the kind.
+     *
+     * <ul>
+     *   <li>{@code invokeBasic}: the handle's LambdaForm -- {@code mh.form.vmentry}, a MemberName.
+     *   <li>{@code linkToStatic}/{@code linkToSpecial}: the trailing MemberName itself. The callee ignores the
+     *       extra register it arrives in, which is HotSpot's "drop the trailing argument" for free.
+     *   <li>{@code linkToVirtual}/{@code linkToInterface}: the MemberName's method dispatched on the receiver in
+     *       x0, through the late-virtual resolver (a site registered for that method).
+     *   <li>{@code invokeExact}/{@code invoke}: the guest linker first -- it throws WrongMethodTypeException, or
+     *       for invoke returns an adapted handle, which replaces x0 in the save area -- then as invokeBasic.
+     * </ul>
+     *
+     * Answers 0 after naming what failed; the trampoline's tail guard then halts at the call site.
+     */
+    static long mhResolve(long save, int idx)
+    {
+        if (save == 0L || vsName == null || idx < 0 || idx >= vsCount)
+        {
+            return 0L;                                  // boot force-compile passes 0
+        }
+        long nameU = vsName[idx];
+        if (utf8IsAtBase(nameU, 0, Magic.bytes("invokeBasic")))
+        {
+            return lambdaFormTarget(Magic.load64(save));
+        }
+        boolean exact = utf8IsAtBase(nameU, 0, Magic.bytes("invokeExact"));
+        if (exact || utf8IsAtBase(nameU, 0, Magic.bytes("invoke")))
+        {
+            long linked = mhLink(Magic.load64(save), vsDesc[idx], exact);
+            Magic.store64(save, linked);                // invoke may have adapted the handle: run the adapted one
+            return lambdaFormTarget(linked);
+        }
+        int last = descParamCountAt(vsDesc[idx]) - 1;   // linkTo* is static: the MemberName is the last argument
+        if (last < 0 || last > STUB_SAVE_HI - 1)
+        {
+            Uart.write(Magic.bytes("\n  MH LINK: unsupported arity for "));
+            printNameAt(nameU, 0);
+            printNameAt(vsDesc[idx], 0);
+            Uart.putc(0x0A);
+            return 0L;
+        }
+        long mn = Magic.load64(save + last * 8L);
+        if (utf8IsAtBase(nameU, 0, Magic.bytes("linkToStatic")) || utf8IsAtBase(nameU, 0, Magic.bytes("linkToSpecial")))
+        {
+            return memberNameTarget(mn);
+        }
+        return memberNameDispatch(Magic.load64(save), mn);
+    }
+
+    /** The code of {@code mh}'s LambdaForm: {@code mh.form.vmentry}'s method. */
+    private static long lambdaFormTarget(long mh)
+    {
+        if (mh == 0L)
+        {
+            return 0L;
+        }
+        if (mhOffForm < 0L)
+        {
+            mhOffForm = declaredFieldOffset(Magic.bytes("java/lang/invoke/MethodHandle"), Magic.bytes("form"));
+            mhOffVmentry = declaredFieldOffset(Magic.bytes("java/lang/invoke/LambdaForm"), Magic.bytes("vmentry"));
+        }
+        long form = Magic.load64(mh + mhOffForm);
+        if (form == 0L)
+        {
+            Uart.write(Magic.bytes("\n  MH LINK: a method handle with no LambdaForm\n"));
+            return 0L;
+        }
+        return memberNameTarget(Magic.load64(form + mhOffVmentry));
+    }
+
+    /** The current body of the method a resolved MemberName names: its ResolvedMethodName's registry index. */
+    private static long memberNameTarget(long mn)
+    {
+        long e = memberNameEntry(mn);
+        if (e < 0L)
+        {
+            return 0L;
+        }
+        RVMMethod m = reflEntry((int) e);
+        if (m == null || m.buf == 0L)
+        {
+            Uart.write(Magic.bytes("\n  MH LINK: no body for "));
+            if (m != null)
+            {
+                printNameAt(m.base + m.classOff, 0);
+                Uart.putc(0x2E);
+                printNameAt(m.base + m.nameOff, 0);
+                printNameAt(m.base + m.descOff, 0);
+            }
+            Uart.putc(0x0A);
+            return 0L;
+        }
+        return m.buf;
+    }
+
+    /** The reflection index a MemberName's ResolvedMethodName carries, or -1 after naming why there is none. */
+    private static long memberNameEntry(long mn)
+    {
+        if (mhOffMethod < 0L)
+        {
+            mhOffMethod = declaredFieldOffset(Magic.bytes("java/lang/invoke/MemberName"), Magic.bytes("method"));
+            mhOffVmtarget = declaredFieldOffset(Magic.bytes("java/lang/invoke/ResolvedMethodName"), Magic.bytes("vmtarget"));
+        }
+        long rmn = mn == 0L ? 0L : Magic.load64(mn + mhOffMethod);
+        long vt = rmn == 0L ? -1L : Magic.load64(rmn + mhOffVmtarget);
+        if (vt < 0L)
+        {
+            Uart.write(Magic.bytes("\n  MH LINK: an unresolved MemberName (no vmtarget)\n"));
+            return -1L;
+        }
+        return vt;
+    }
+
+    /** linkToVirtual/linkToInterface: the MemberName's method as the RECEIVER's class runs it. */
+    private static long memberNameDispatch(long recv, long mn)
+    {
+        long e = memberNameEntry(mn);
+        RVMMethod m = e < 0L ? null : reflEntry((int) e);
+        if (m == null || recv == 0L)
+        {
+            return 0L;
+        }
+        int site;
+        VM.loaderLock(VM.LOCK_REFLECT);                 // the site table is the compiler's, written under the lock
+        try
+        {
+            site = siteIndexFor(m.base + m.nameOff, m.base + m.descOff, m.base + m.classOff);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
+        return site < 0 ? 0L : virtualResolve(recv, site);
+    }
+
+    /** Run the guest linker (MethodHandleNatives.linkExact / linkGeneric) on {@code mh} and the site's descriptor. */
+    private static long mhLink(long mh, long descU, boolean exact)
+    {
+        int li = exact ? mhLinkExactIdx : mhLinkGenericIdx;
+        if (li < 0)
+        {
+            int reg = classRegByNameBytes(Magic.bytes("java/lang/invoke/MethodHandleNatives"));
+            if (reg < 0)
+            {
+                Uart.write(Magic.bytes("\n  MH LINK: java/lang/invoke/MethodHandleNatives is not loaded\n"));
+                return 0L;
+            }
+            li = methodResolveExact(clTab[reg].type,
+                    guestBytes(exact ? Magic.bytes("linkExact") : Magic.bytes("linkGeneric")),
+                    guestBytes(Magic.bytes("(Ljava/lang/invoke/MethodHandle;Ljava/lang/String;)Ljava/lang/invoke/MethodHandle;")));
+            if (exact)
+            {
+                mhLinkExactIdx = li;
+            }
+            else
+            {
+                mhLinkGenericIdx = li;
+            }
+        }
+        RVMMethod m = li < 0 ? null : reflEntry(li);
+        if (m == null || m.buf == 0L)
+        {
+            Uart.write(Magic.bytes("\n  MH LINK: no MethodHandleNatives linker\n"));
+            return 0L;
+        }
+        long desc = guestString(VM.heapBytes(descU + 2L, u2(descU)));
+        return Magic.call2(m.buf, mh, desc);            // may throw WrongMethodTypeException: unwinds to the site
+    }
+
+    /** Byte offset of the instance field the named class itself declares, or -1. */
+    private static long declaredFieldOffset(byte[] cls, byte[] field)
+    {
+        int reg = classRegByNameBytes(cls);
+        if (reg < 0)
+        {
+            return -1L;
+        }
+        long g = guestBytes(field);
+        return fieldOffsetOfType(clTab[reg].type, g + 24L, field.length);
+    }
+
+    /** The number of parameters in the absolute {@code {u2 len}(...)ret} descriptor at {@code descU}. */
+    private static int descParamCountAt(long descU)
+    {
+        long p = descU + 3L;                            // past the u2 length and '('
+        int n = 0;
+        while (u1(p) != 0x29)                           // ')'
+        {
+            while (u1(p) == 0x5B)                       // '[' prefixes
+            {
+                p += 1;
+            }
+            if (u1(p) == 0x4C)                          // 'L' ... ';'
+            {
+                while (u1(p) != 0x3B)
+                {
+                    p += 1;
+                }
+            }
+            p += 1;
+            n += 1;
+        }
+        return n;
     }
 
     /** VarHandle overlay: vtable slot of an op by NAME only (its op names are unique), regardless of the
@@ -18183,6 +18508,10 @@ public final class Loader
         if (virtualTrampAddr != 0L)
         {
             VM.addJitFrame(virtualTrampLo, virtualTrampHi, STUB_FRAME, 0L);
+        }
+        if (mhTrampAddr != 0L)
+        {
+            VM.addJitFrame(mhTrampLo, mhTrampHi, STUB_FRAME, 0L);
         }
     }
 
