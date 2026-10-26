@@ -5,7 +5,7 @@ Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constrain
 Newest entries are at the top.
 
 - **MORE COLD SUBSYSTEMS DEFERRED, TWO LATENT BUGS FIXED; NetDemo's BATCH 1 IS 5.7 s ON THE PI (was 14.5 s two merges
-  ago) -- BUT THE DEMO SUITE'S LISP INTERPRETER HANGS, ALREADY ON MAIN (2026-10-25).**
+  ago); FULL REGRESSION PASSES, WITH ONE UNREPRODUCED SUITE STALL (2026-10-25/26).**
   - **Deferred** (Loader.closureDeferred): java/time, java/util Calendar/GregorianCalendar/JapaneseImperialCalendar/
     TimeZone/SimpleTimeZone/Date, sun/util/calendar, sun/reflect/generics and jdk/internal/logger.
     - Named by a second pass of the pull-reason instrument over SbProbe: Formatter's %t arm, the calendar
@@ -26,13 +26,20 @@ Newest entries are at the top.
     `clinits=296`, `tot=5709ms` (4ccc26a: +1486 / 412 / 12088; a2589ad: +1740 / 507 / 14482).
     `gc: collections=6` (7, 8).
   - **FULL REGRESSION on c75d6c1:**
-    - **Regress: 169 of 169** (RuntimeProbe differed in its batch twice by a `GC: STW TIMEOUT` line; identical
-      alone).
-    - **The branch demo suite FAILED:** demo/LispDemo hangs after its first progress dot (`loaderOwner=-1`, main
-      task ready) and the suite hit the 2 h limit. Everything before it passed (churn `gc: collections=49`, was 51).
-    - **PRE-EXISTING ON MAIN:** LispDemo alone hangs the same way on main ed1ed26 (#429, the first deferral). The
-      last passing suite was 463d0f6, so the cause is #428 or #429; e50c753 is not yet run to split them.
-    - The control suite and JUnit were NOT RUN.
+    - **Regress: 169 of 169.** RuntimeProbe differed in its batch twice by a `GC: STW TIMEOUT` line; identical alone.
+    - **Branch demo suite:** the FIRST run stalled in demo/LispDemo after its ninth progress dot and got no output
+      for ~2 h. Everything before it passed (churn `gc: collections=49`, was 51).
+    - **Three later runs of the same code all passed** (40 programs, markers 0, `lisp: evals=600`, 855-885 s
+      against the control's 1245 s). The last two ran with a monitor that samples every core's PC if the log stalls
+      300 s, and it never fired.
+    - **The stall's cause is unknown.** It happened right after the -j 4 Regress on a loaded host and has not
+      recurred. `/tmp/suite-sample.sh` is the instrument for next time.
+    - **CORRECTION.** An earlier version of this card said LispDemo HANGS, alone and on main. That came from my
+      misreading `hangdump=300`, which prints its dump at 300 s whether or not the program is progressing. Timed
+      without it, LispDemo alone completes on 463d0f6 (590 s), e50c753 (650 s) and c75d6c1 (350 s twice), and the
+      free list never passed 1,813 blocks.
+    - **Control suite (d7784d0):** 40 programs, markers 0, `gc: collections=51`.
+    - **JUnit:** `ran 45, failures 0`.
 
 - **THE COLD SUBSYSTEMS ARE DEFERRED FROM THE BATCH CLOSURE TO LATE RESOLUTION; NetDemo's BATCH 1 IS 2.4 s FASTER ON
   THE PI (2026-10-25).** This session's un-denials (locale provider, java/text, sun/text, ICU,
