@@ -112,6 +112,7 @@ MemberGenericsProbe
 MemberToStringProbe
 MethodRefBoxFloatProbe
 MethodRefUnboxProbe
+MethodTypeProbe
 MinValueProbe
 MixinProbe               cp=/lib/junit.jar
 MonitorStateProbe

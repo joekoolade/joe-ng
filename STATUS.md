@@ -4,6 +4,28 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **java.lang.invoke ARC, INCREMENT 0: STOCK MethodType RUNS (2026-10-26).** The arc runs stock JDK 26
+  java.lang.invoke with the JVM side implemented here; the user chose this over reflection-backed handles. The
+  increment plan and the facts it rests on are in the `mh-arc-plan` memory.
+  - **Pregenerated Holder classes:** a source read found that the seed's java.base ships them
+    (`DirectMethodHandle$Holder`, 215 shapes, among others), so direct handles need no class spinning. The JDK
+    SOURCE Holder is empty: never overlay it.
+  - **The change:** `java/lang/invoke/MethodType` (with MethodTypeForm) is un-denied in both lists and added to
+    `closureDeferred`. Un-denied alone, it cost every first batch +22 blobs / +12 clinits; deferred, SbProbe is
+    back to +788 / 187.
+  - The ConstantDescs/PrimitiveClassDescImpl ordering NPE that the stashed attempt hit does not appear, so its
+    active-use init-guard rewrite (which regressed the demo suite) is not needed here.
+  - **MethodTypeProbe**, the existing 2026-09-20 probe, now registered, matches the host in all 23 arms:
+    interning by identity, erase/wrap/unwrap/generic, change/insert/drop/append, the negative arms, and the
+    descriptor round trip.
+    - My first cut overwrote that file with a weaker 15-arm probe. It was restored before the commit was pushed.
+  - **Measured (QEMU):** 12 nearby probes pass 12 of 12: MethodType, ConstantDesc(Order), VarHandle, UnsafeAll,
+    UnsafeAtomic, AtomicUpdaters, ChmRace, Collections, Stream, RecordSealed and PatternSwitch. `make test` and
+    `make overlaycheck` (0 new) pass.
+  - **Pi 4 (a65b667): PASS.** HTTP 200 `bytes=891`, `[main returned normally]`, `gc: collections=6`. Batch 1 is
+    +1192 blobs, `clinits=296`, `tot=5747ms` (c75d6c1: +1192 / 296 / 5709).
+  - NOT RUN: the all-probe regression, the demo suites and JUnit.
+
 - **MORE COLD SUBSYSTEMS DEFERRED, TWO LATENT BUGS FIXED; NetDemo's BATCH 1 IS 5.7 s ON THE PI (was 14.5 s two merges
   ago); FULL REGRESSION PASSES, WITH ONE UNREPRODUCED SUITE STALL (2026-10-25/26).**
   - **Deferred** (Loader.closureDeferred): java/time, java/util Calendar/GregorianCalendar/JapaneseImperialCalendar/
