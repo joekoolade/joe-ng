@@ -2376,58 +2376,13 @@ public final class Loader
 
     private static boolean clinitBlocked()
     {
-        // THE TEMPLATE-GENERATED VarHandle CLASSES. Each one's <clinit> is a single statement --
-        // `FORM = new VarForm(ThisHandle.class, Object.class, <width>.TYPE, new Class[0])` -- read off the
-        // generated class with javap, not assumed. `VarForm` is DENIED, so running it halts at
-        // `UNRESOLVED NEW: java/lang/invoke/VarForm`, which is where stock VarHandle first got to.
-        //
-        // UN-DENYING VarForm IS THE EXPENSIVE ANSWER AND THIS IS THE CHEAP ONE. Its constructor allocates
-        // MethodType[] and MemberName[] and calls initMethodTypes, so it pulls the MethodType interning
-        // machinery and MemberName -- the MethodHandle runtime this VM deliberately does not carry.
-        //
-        // SKIPPING IS MEASURED-SAFE, which is the only reason it is allowed under the all-<clinit>s rule.
-        // FORM's one consumer is `super(..., FORM, exact)`, which stores it in VarHandle.vform -- and vform
-        // is read at EXACTLY THREE sites in stock VarHandle (isAccessModeSupported, getMethodHandle,
-        // updateVarForm), NONE of them on the access path. Every accessor reads only fieldOffset,
-        // receiverType and (for the Object form) fieldType. So get/set/CAS are correct with a null vform,
-        // and the three mode-reflection methods NPE LOUDLY rather than answering wrongly.
-        //
-        // Named one width at a time rather than by a bare "VarHandle" prefix, which would also catch stock
-        // java/lang/invoke/VarHandle itself -- whose <clinit> we DO want (it sets $assertionsDisabled, and
-        // leaving that false enables stock's own asserts, the AbstractStringBuilder hazard this file
-        // records) -- and VarHandle$AccessMode, whose constants a later toMethodHandle arm would want.
-        // THE BYTE-ARRAY-VIEW FAMILY, blocked by ONE prefix because the whole family wants it -- the six
-        // VarHandleByteArrayAs{Ints,Longs,Shorts,Chars,Floats,Doubles} outer classes, their nested
-        // ArrayHandle/ByteBufferHandle/ByteArrayViewVarHandle, and VarHandleByteArrayBase. Two separate
-        // reasons, and both were read rather than assumed:
-        //
-        //   (1) Each ArrayHandle's <clinit> is `FORM = new VarForm(...)`, exactly like the nine field width
-        //       classes above, and VarForm is DENIED. Same measured-safe argument: vform is read at three
-        //       sites in stock VarHandle, none on the access path.
-        //
-        //   (2) The OUTER class's <clinit> is three statics -- NIO_ACCESS = SharedSecrets.getJavaNioAccess(),
-        //       SCOPED_MEMORY_ACCESS = ScopedMemoryAccess.getScopedMemoryAccess(), and ALIGN. The first two
-        //       serve only the ByteBuffer handle, which nothing here can reach (joe-ng implements
-        //       byteArrayViewVarHandle and NOT byteBufferViewVarHandle). ALIGN is the one an ArrayHandle
-        //       reads, in its bounds check -- and it is `Integer.BYTES - 1`, a compile-time constant
-        //       expression (JLS 15.28) that javac INLINES. VERIFIED WITH javap -c, not inferred: `index`
-        //       opens `iload_1; aload_0; arraylength; iconst_3; isub` with no getstatic ALIGN anywhere. So
-        //       nothing on the access path reads a static of the outer class and blocking it costs nothing.
-        //
-        // A bare "VarHandleByteArray" prefix is safe where a bare "VarHandle" one is not: it cannot catch
-        // stock java/lang/invoke/VarHandle (whose <clinit> we DO want) and it cannot catch VarHandleBytes --
-        // that name diverges at the 'A' of "...ByteArray" vs the 's' of "...Bytes".
-        return utf8HasPrefix(gbase, gThisNameOff, Magic.bytes("java/lang/invoke/VarHandleByteArray"))
-                || utf8HasPrefix(gbase, gThisNameOff, Magic.bytes("java/lang/invoke/VarHandleBooleans"))
-                || utf8HasPrefix(gbase, gThisNameOff, Magic.bytes("java/lang/invoke/VarHandleBytes"))
-                || utf8HasPrefix(gbase, gThisNameOff, Magic.bytes("java/lang/invoke/VarHandleChars"))
-                || utf8HasPrefix(gbase, gThisNameOff, Magic.bytes("java/lang/invoke/VarHandleDoubles"))
-                || utf8HasPrefix(gbase, gThisNameOff, Magic.bytes("java/lang/invoke/VarHandleFloats"))
-                || utf8HasPrefix(gbase, gThisNameOff, Magic.bytes("java/lang/invoke/VarHandleInts"))
-                || utf8HasPrefix(gbase, gThisNameOff, Magic.bytes("java/lang/invoke/VarHandleLongs"))
-                || utf8HasPrefix(gbase, gThisNameOff, Magic.bytes("java/lang/invoke/VarHandleReferences"))
-                || utf8HasPrefix(gbase, gThisNameOff, Magic.bytes("java/lang/invoke/VarHandleShorts"))
-                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/System"))
+        // THE TEMPLATE-GENERATED VarHandle CLASSES ARE NO LONGER BLOCKED (java.lang.invoke arc, 2026-10-26). Their
+        // <clinit> is `FORM = new VarForm(...)`, skipped while VarForm was DENIED on the argument that vform is
+        // read only by the three mode-reflection methods. VarForm runs stock now, and a skipped FORM was MEASURED
+        // to be exactly the silent wrong answer rule 2 forbids: every handle's vform stayed null, so
+        // isAccessModeSupported reached a null receiver (MemberNameProbe). The byte-array-view family's outer
+        // <clinit> (NIO_ACCESS, SCOPED_MEMORY_ACCESS, ALIGN) runs too.
+        return utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/System"))
                 || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Integer$IntegerCache"))
                 // primitive wrappers: <clinit> sets TYPE = Class.getPrimitiveClass(...) (a native)
                 || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Integer"))
@@ -5215,7 +5170,9 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("java/util/Date"))
                 // ... and stock MethodType (java.lang.invoke arc inc 0): named from cold arms of the base
                 // closure (+22 blobs / +12 clinits on SbProbe's batch 1 when it was simply un-denied).
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/MethodType"));
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/MethodType"))
+                || (utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/"))
+                        && !utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/VarHandle")));
     }
 
     private static void addPend(long base, int classOff, int nameOff, int descOff, int kind)
@@ -6359,6 +6316,10 @@ public final class Loader
                 // ClassFileFormatVersion and a ClassFileDumper that writes to a filesystem.
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/MethodHandleStatics"))
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/invoke/MhUtil"))
+                // java.lang.invoke arc: STOCK jdk/internal/reflect/Reflection (exact name, no nested classes),
+                // whose filter map MethodHandles$Lookup.<clinit> registers into. getCallerClass is intrinsified
+                // at the call site; areNestMates is a native and THROWS until it is implemented.
+                || utf8IsAtBase(base, off, Magic.bytes("jdk/internal/reflect/Reflection"))
                 // Reflection arc: these java/lang/reflect classes are overlaid (JDK-free) and DO run on metal
                 // (Class.getModifiers/getDeclaredField*, reflective Field.get/set); the rest of java/lang/reflect
                 // stays denied below.
@@ -6593,8 +6554,7 @@ public final class Loader
         {
             return false;
         }
-        return utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/foreign/"))
+        return utf8HasPrefix(base, off, Magic.bytes("java/lang/foreign/"))
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/foreign/"))
                 // java/nio/file/ and sun/nio/fs/ are NOT denied any more: java.nio.file runs STOCK
                 // (MacOSXFileSystemProvider, the variant the seed bakes) over the read-only RAMFS, its
@@ -12968,6 +12928,7 @@ public final class Loader
             // ensureClinit first. nativeBuf keys on the DECLARING class, so it needs registering under both.
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("allocInstance0")))      { return VM.allocInstanceAddr; } // (Class)Object
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("ensureClassInitialized0"))) { return VM.ensureMirrorInitAddr; } // (Class)V
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("shouldBeInitialized0"))) { return VM.shouldBeInitAddr; } // (Class)J
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/String")))
         {
@@ -13065,6 +13026,13 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("methodInfo0")))      { return VM.methodInfoAddr; }       // (I,byte[],long[])I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("exact0")))           { return VM.methodResolveExactAddr; } // (Class,byte[],byte[])I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("itableTarget0")))    { return VM.methodItableTargetAddr; } // (Object,I)J
+        }
+        // java.lang.invoke arc: MemberName resolution (the MethodHandleNatives overlay) walks JVMS 5.4.3 in Java
+        // over these -- one class's own declaration per call, plus the reflection natives' methodInfo0.
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/invoke/MethodHandleNatives")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declared0")))        { return VM.mhDeclaredAddr; }        // (Class,byte[],byte[])I
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("methodInfo0")))      { return VM.methodInfoAddr; }        // (I,byte[],long[])I
         }
         // Reflective Constructor.newInstance: resolve <init> by arity, read its descriptor (shared methodInfo0),
         // and allocate the instance.
@@ -15463,6 +15431,36 @@ public final class Loader
             return idx;
         }
         return compileMethodOnDemand(type, nameArr, descArr);
+    }
+
+    /**
+     * {@code MethodHandleNatives.declared0}: the reflection index of the method the class whose Type is
+     * {@code type} ITSELF declares with exactly this name and descriptor -- a body (compiled on demand), or an
+     * abstract/native one through {@link #bodylessIndex} -- or -1.
+     *
+     * <p>Two things {@link #methodResolveDesc} does are WRONG for MemberName resolution and are absent here. It
+     * runs the class's initializer, and HotSpot resolves a MemberName with {@code ClassInitMode::dont_init}:
+     * DirectMethodHandle decides for itself whether a handle needs an initialization barrier
+     * ({@code Unsafe.shouldBeInitialized}), and an eager one makes that answer always "no". And it falls back to
+     * a NAME-ONLY match, where resolution that finds no exact descriptor must fail -- the JVMS 5.4.3.3 walk over
+     * superclasses and superinterfaces is the caller's, one class at a time.
+     */
+    static int mhDeclaredIndex(long type, long nameArr, long descArr)
+    {
+        int idx = methodResolveExact(type, nameArr, descArr);
+        if (idx >= 0 || type == 0L || nameArr <= 0x1000L || descArr <= 0x1000L)
+        {
+            return idx;
+        }
+        VM.loaderLock(VM.LOCK_REFLECT);                 // bodylessIndex re-points the shared parse globals
+        try
+        {
+            return bodylessIndex(type, nameArr, descArr);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
     }
 
     /**
@@ -25021,6 +25019,46 @@ public final class Loader
         {
             ensureClinit(reg);
         }
+    }
+
+    /**
+     * {@code Unsafe.shouldBeInitialized}: whether the class whose Type is {@code type} still needs its JVMS 5.5
+     * initialization -- HotSpot's {@code !is_initialized()}, which covers the superclass chain. Walked rather
+     * than read off one flag: a class with no initializer of its own is ST_INITIALIZED from load, and its
+     * {@code superInited} flag is set only when {@link #ensureClinit} visits it, so for a class nothing has
+     * visited yet whose superclasses ARE initialized the flag alone would say "needs init" where HotSpot says
+     * it is initialized. That case rests on READING, not on a failure: an A/B with the flag alone still passed
+     * MemberNameProbe, whose arm calls the class first (an invokestatic visits it). The cost of the flag-alone
+     * answer is only a needless initialization barrier, which can push a handle off a pregenerated form. A class
+     * with no registry entry is one {@code ensureClinit} cannot initialize, so a barrier would only add a no-op.
+     */
+    static boolean typeNeedsInit(long type)
+    {
+        if (type == 0L || !runtimeUp)
+        {
+            return false;
+        }
+        int reg = regOfType(type);
+        int steps = 0;
+        while (reg >= 0 && clTab[reg] != null && steps < 64)
+        {
+            if (clTab[reg].state < RVMClass.ST_INITIALIZED)
+            {
+                return true;
+            }
+            if (clTab[reg].superInited)
+            {
+                return false;
+            }
+            int sup = superRegOf(reg);
+            if (sup == reg)
+            {
+                return false;
+            }
+            reg = sup;
+            steps += 1;                                 // a superclass chain is acyclic; this only bounds a bad one
+        }
+        return false;
     }
 
     /** Registry index of the loaded class/interface whose Type node is {@code type}, or -1. */

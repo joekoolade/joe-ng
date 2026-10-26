@@ -39,7 +39,8 @@ public final class ReachScan
     /** Metal-absent subtrees to prune: pulled only by never-executed cold paths on metal. Keep in sync with
      *  the loader's denylist (Loader.isDenylisted). */
     static final String[] DENY = {
-        "java/lang/invoke/", "java/lang/foreign/", "jdk/internal/foreign/",
+        // java/lang/invoke/ is NOT here any more: stock java.lang.invoke runs (the java.lang.invoke arc).
+        "java/lang/foreign/", "jdk/internal/foreign/",
         // sun/nio/fs/ and java/nio/file/ run stock over the RAMFS (see Loader.isDenylisted).
         "jdk/internal/loader/",
         "java/security/", "java/util/ServiceLoader", "java/util/spi/", "sun/util/",
@@ -149,6 +150,7 @@ public final class ReachScan
                 || c.startsWith("java/lang/invoke/MethodHandles")
                 || c.startsWith("java/lang/invoke/MethodType")          // java.lang.invoke arc inc 0 (MethodTypeForm too)
                 || c.startsWith("jdk/internal/invoke/MhUtil")
+                || c.equals("jdk/internal/reflect/Reflection")          // java.lang.invoke arc: Lookup's field filter
                 || c.startsWith("java/lang/reflect/Modifier")           // STOCK (overlay deleted); the rest are
                                                                         // reflection-arc overlays that run
                 || c.startsWith("java/lang/reflect/Field")              //   on metal; rest of java/lang/reflect denied

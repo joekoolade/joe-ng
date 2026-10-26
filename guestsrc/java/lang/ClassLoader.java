@@ -52,6 +52,12 @@ public class ClassLoader
         this.parent = parent;
     }
 
+    /** Stock's: this loader's unnamed module -- the one module every class here belongs to (see Module). */
+    public final Module getUnnamedModule()
+    {
+        return Module.UNNAMED;
+    }
+
     /** Stock's accessor for the delegation parent. */
     public final ClassLoader getParent()
     {
@@ -73,6 +79,24 @@ public class ClassLoader
     public static ClassLoader getSystemClassLoader()
     {
         return SYSTEM;
+    }
+
+    /**
+     * Stock's registration hook, which every class loader's initializer may call (jdk.internal.misc.CDS's
+     * nested loaders do, URLClassLoader does). TRUE, and that is a statement about this overlay rather than a
+     * placeholder: stock's distinction is whether loadClass locks the LOADER or a per-name lock object, and
+     * {@link #loadClass} here takes no loader lock at all -- the VM's loader lock serializes every definition --
+     * so every loader already behaves as a registered parallel-capable one.
+     */
+    protected static boolean registerAsParallelCapable()
+    {
+        return true;
+    }
+
+    /** Stock's query: true for every loader here, for the reason {@link #registerAsParallelCapable} gives. */
+    public final boolean isRegisteredAsParallelCapable()
+    {
+        return true;
     }
 
     /** Load the class named {@code name} (binary, dotted), demand-loading it from the classDir (M1 forName). */

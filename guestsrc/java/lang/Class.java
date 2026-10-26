@@ -767,6 +767,14 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
         {
             throw new NullPointerException();
         }
+        // Every non-primitive type is an Object (JLS 4.10.2) -- INTERFACES included, and the VM's Type walk
+        // cannot show that for one: an interface Type is a chain dead end that never reaches Object. MEASURED:
+        // Object.class.isAssignableFrom(an interface) answered false, so stock DirectMethodHandle.make refused a
+        // handle to hashCode() looked up through an interface with InternalError (MemberNameProbe).
+        if (this == Object.class)
+        {
+            return !other.isPrimitive();
+        }
         return assignable0(other.typeAddr, typeAddr);
     }
 

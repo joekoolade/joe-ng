@@ -2953,10 +2953,22 @@ public final class Unsafe
 
     private static native void ensureClassInitialized0(Class<?> c);
 
+    /**
+     * Stock's: whether {@code c} still needs initializing (HotSpot's {@code !is_initialized()}). DirectMethodHandle
+     * asks it to decide whether a static method or field handle needs an initialization barrier, so a constant
+     * answer either way is wrong somewhere: "no" skips a pending initializer, "yes" only costs a barrier.
+     */
     public boolean shouldBeInitialized(Class<?> c)
     {
-        throw new InternalError("jdk.internal.misc.Unsafe.shouldBeInitialized: not implemented");
+        if (c == null)
+        {
+            throw new NullPointerException();
+        }
+        return shouldBeInitialized0(c) != 0L;
     }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.shouldBeInit}): 1 if {@code c} needs initializing. */
+    private static native long shouldBeInitialized0(Class<?> c);
 
     /**
      * Stock's contract: block until an {@link #unpark}, an interrupt, or the time runs out. {@code time} is a

@@ -41,6 +41,45 @@ public final class Module implements java.lang.reflect.AnnotatedElement
         return false;
     }
 
+    /**
+     * Stock's answers for an UNNAMED module, which every module here is: it reads every module and exports and
+     * opens every package to everyone (Module.canRead and implIsExportedOrOpen both open with
+     * {@code if (!isNamed()) return true}). The package name is null-checked first, as stock does. Reached by
+     * the stock reflection and method-handle access checks (jdk.internal.reflect.Reflection,
+     * sun.invoke.util.VerifyAccess).
+     */
+    public boolean canRead(Module other)
+    {
+        java.util.Objects.requireNonNull(other);
+        return true;
+    }
+
+    public boolean isExported(String pn)
+    {
+        java.util.Objects.requireNonNull(pn);
+        return true;
+    }
+
+    public boolean isExported(String pn, Module other)
+    {
+        java.util.Objects.requireNonNull(pn);
+        java.util.Objects.requireNonNull(other);
+        return true;
+    }
+
+    public boolean isOpen(String pn)
+    {
+        java.util.Objects.requireNonNull(pn);
+        return true;
+    }
+
+    public boolean isOpen(String pn, Module other)
+    {
+        java.util.Objects.requireNonNull(pn);
+        java.util.Objects.requireNonNull(other);
+        return true;
+    }
+
     /** Null for an unnamed module, per the JDK contract. */
     public java.lang.module.ModuleDescriptor getDescriptor()
     {
