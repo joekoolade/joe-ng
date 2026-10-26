@@ -2087,7 +2087,7 @@ public final class Baseline
             // the site index in x17 BEFORE emitCall -- arg marshalling writes x0..x15 and leaves x17 alone --
             // and let the trampoline resolve against the receiver it finds in x0 and tail-branch.
             symbols.virtualSite(cb, cpIndex);
-            emitCall(cb, paramCount(cpIndex), returnsValue(cpIndex), true, SYM_HELPER, Symbols.VIRTUAL_RESOLVE);
+            lateVirtualCall(cb, cpIndex, pos);
             return;
         }
         int nargs = paramCount(cpIndex) + 1;    // receiver + params
@@ -3109,6 +3109,48 @@ public final class Baseline
         }
         reloadLive(cb);
         if (returnsValue)
+        {
+            cb.emit(A64Enc.movReg(pushReg(), 0));
+        }
+    }
+
+    /**
+     * An {@code invokevirtual} whose class has no vtable slot at compile time: marshal like {@link #emitCall} and
+     * call the VIRTUAL_RESOLVE trampoline (x17 already holds the site index), with the receiver NULL-CHECKED
+     * first, as the slotted path does. It used to go through emitCall, which checks nothing, so a null receiver
+     * reached the trampoline's resolver -- and that answers the denylist trap for a receiver it cannot dispatch
+     * on. MEASURED: a null VarHandle.vform made isAccessModeSupported print a DENYLIST TRAP with an empty callee,
+     * where JVMS 6.5 invokevirtual throws NullPointerException.
+     */
+    private void lateVirtualCall(CodeBuffer cb, int cpIndex, int pos)
+    {
+        int nargs = paramCount(cpIndex) + 1;
+        if (nargs > MAX_ARG_REGS && !deepStack)
+        {
+            symbols.fail(Symbols.FAIL_ARG_COUNT, nargs, 0);   // unreachable in valid bytecode: see emitCall
+        }
+        if (deepStack)
+        {
+            marshalArgsFromMemory(cb, nargs);                 // receiver -> x0
+            nullCheck(cb, 0, pos);
+        }
+        else
+        {
+            int[] src = new int[nargs];
+            for (int k = 0; k < nargs; k++)
+            {
+                src[k] = popReg();                            // src[nargs-1] = the receiver (deepest)
+            }
+            nullCheck(cb, src[nargs - 1], pos);
+            for (int k = 0; k < nargs; k++)
+            {
+                cb.emit(A64Enc.movReg(nargs - 1 - k, src[k]));
+            }
+            spillLive(cb);
+        }
+        symbols.callHelper(cb, Symbols.VIRTUAL_RESOLVE);
+        reloadLive(cb);
+        if (returnsValue(cpIndex))
         {
             cb.emit(A64Enc.movReg(pushReg(), 0));
         }

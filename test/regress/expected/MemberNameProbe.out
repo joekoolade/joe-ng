@@ -1,0 +1,33 @@
+findStatic = invokeStatic MemberNameProbe.twice:(int)int mods=[static] decl=MemberNameProbe
+findVirtual final class = invokeVirtual java.lang.String.length:()int mods=[public] decl=String
+findVirtual non-final = invokeVirtual java.lang.Object.toString:()String mods=[public] decl=Object
+findVirtual interface = invokeInterface MemberNameProbe$Shape.area:(Object)int mods=[public abstract] decl=Shape
+findVirtual default = invokeInterface MemberNameProbe$Shape.scaled:(Object)int mods=[public] decl=Shape
+findVirtual inherited = invokeVirtual MemberNameProbe$Base.v:(Object)void mods=[] decl=Base
+Object method via interface = invokeVirtual java.lang.Object.toString:()String mods=[public] decl=Object
+findConstructor = newInvokeSpecial java.util.ArrayList.<init>:()void mods=[public] decl=ArrayList
+findSpecial = invokeSpecial java.lang.Object.toString:()String mods=[public] decl=Object
+findGetter = getField MemberNameProbe.fi:()int mods=[] decl=MemberNameProbe
+findSetter = putField MemberNameProbe.fi:(int)void mods=[] decl=MemberNameProbe
+findStaticGetter = getStatic MemberNameProbe.si:()int mods=[static] decl=MemberNameProbe
+unreflect = invokeStatic MemberNameProbe.twice:(int)int mods=[static] decl=MemberNameProbe
+unreflectConstructor = newInvokeSpecial java.util.ArrayList.<init>:()void mods=[public] decl=ArrayList
+unreflectGetter = getField MemberNameProbe.fi:()int mods=[] decl=MemberNameProbe
+handle type = (int)int
+handle toString = MethodHandle(String)int
+no such method = THREW java.lang.NoSuchMethodException: no such method: MemberNameProbe.nope(int)int/invokeStatic
+wrong type = THREW java.lang.NoSuchMethodException: no such method: MemberNameProbe.twice(int)long/invokeStatic
+static as virtual = THREW java.lang.IllegalAccessException: no such method: MemberNameProbe.twice(int)int/invokeVirtual
+no such field = THREW java.lang.NoSuchFieldException: no such field: MemberNameProbe.nope/int/getField
+static as instance field = THREW java.lang.IllegalAccessException: expected a non-static field: MemberNameProbe.si/int/getStatic
+private of a nestmate = invokeStatic MemberNameProbe$Other.secret:()Object mods=[private static] decl=Other
+package-private of java.base = THREW java.lang.IllegalAccessException: no such method: java.lang.String.checkIndex(int,int)void/invokeStatic
+VH static int = 5 5 5 true
+VH static long = 1099511627776 1099511627776 1099511627777
+VH static ref = x true y
+VH final field modes = true false String
+VH toString = VarHandle[varType=int, coord=[class MemberNameProbe]]
+package name identity = true java.lang java.lang java.lang
+ConcurrentSkipListMap init = {1=a, 2=b}
+CompletableFuture init = cf
+MemberNameProbe done

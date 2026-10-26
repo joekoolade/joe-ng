@@ -2042,12 +2042,14 @@ public final class VM
         if (methodResolveAddr == 0L) { int u = VMNatives.methodResolve(0L, 0L); } // Method.methodResolve0 native (reflection M2)
         if (methodResolveDescAddr == 0L) { int u = VMNatives.methodResolveDesc(0L, 0L, 0L); } // Method.methodResolveDesc0
         if (methodResolveExactAddr == 0L) { int u = VMNatives.methodResolveExact(0L, 0L, 0L); } // Method.exact0
+        if (mhDeclaredAddr == 0L) { int u = VMNatives.mhDeclared(0L, 0L, 0L); }   // MethodHandleNatives.declared0
         if (methodItableTargetAddr == 0L) { long u = VMNatives.methodItableTarget(0L, 0L); } // Method.itableTarget0
         if (methodInfoAddr == 0L) { int u = VMNatives.methodInfo(0L, 0L, 0L); }   // Method.methodInfo0 native (reflection M2)
         if (constructorResolveAddr == 0L) { int u = VMNatives.constructorResolve(0L, 0L); } // Constructor.ctorResolve0 (M2)
         if (ctorResolveDescAddr == 0L) { int u = VMNatives.ctorResolveDesc(0L, 0L); } // Constructor.ctorResolveDesc0
         if (allocInstanceAddr == 0L) { long u = VMNatives.allocInstance(0L); }    // Constructor.allocInstance0 native (M2)
         if (ensureMirrorInitAddr == 0L) { long u = VMNatives.ensureMirrorInit(0L); } // Unsafe.ensureClassInitialized0
+        if (shouldBeInitAddr == 0L) { long u = VMNatives.shouldBeInit(0L); }          // Unsafe.shouldBeInitialized0
         if (superclassAddr == 0L) { long u = VMNatives.superclassOf(0L); }      // Class.superclass0() native (M4)
         if (currentThreadAddr == 0L) { long u = VMNatives.currentThreadObj(); } // Thread.currentThread0() native (M4)
 
@@ -3629,12 +3631,14 @@ public final class VM
     static long methodResolveAddr;     // VM.methodResolve(JJ)I — Method.methodResolve0 (reflection M2)
     static long methodResolveDescAddr; // VM.methodResolveDesc(JJJ)I — Method.methodResolveDesc0 (overload-exact)
     static long methodResolveExactAddr; // VMNatives.methodResolveExact(JJJ)I — Method.exact0 (virtual dispatch step)
+    static long mhDeclaredAddr;        // VMNatives.mhDeclared(JJJ)I — MethodHandleNatives.declared0 (MemberName resolve)
     static long methodItableTargetAddr; // VMNatives.methodItableTarget(JJ)J — Method.itableTarget0 (synthesised receivers)
     static long methodInfoAddr;        // VM.methodInfo(JJJ)I — Method.methodInfo0 (reflection M2)
     static long constructorResolveAddr;// VM.constructorResolve(JJ)I — Constructor.ctorResolve0 (reflection M2)
     static long ctorResolveDescAddr;   // VMNatives.ctorResolveDesc(JJ)I — Constructor.ctorResolveDesc0
     static long allocInstanceAddr;     // VM.allocInstance(J)J — Constructor.allocInstance0 (reflection M2)
     static long ensureMirrorInitAddr;  // VMNatives.ensureMirrorInit(J)J — Unsafe.ensureClassInitialized0
+    static long shouldBeInitAddr;      // VMNatives.shouldBeInit(J)J — Unsafe.shouldBeInitialized0
     static long superclassAddr;        // VM.superclassOf(J)J — Class.superclass0(Class) native (M4)
     static long currentThreadAddr;     // VM.currentThreadObj()J — Thread.currentThread0() native (M4)
     static long watchRetAddr;          // VM.watchRet(J)V — DEBUG: value returned by a watched call site

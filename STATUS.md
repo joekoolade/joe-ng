@@ -4,6 +4,46 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **java.lang.invoke ARC, INCREMENT 1: STOCK MethodHandles OVER JAVA MemberName NATIVES (2026-10-26).** Stock
+  java.lang.invoke now builds method handles and VarHandles on metal. Invoking a handle (the JIT's
+  invokeBasic/linkTo* lowering) is increment 2.
+  - **What changed:**
+    - The MethodHandles/MethodHandleStatics shells are deleted, and the rest of java/lang/invoke is un-denied
+      and deferred (VarHandle* excepted).
+    - **MethodHandleNatives overlay** from the JDK 26 source, with natives written in Java against
+      methodHandles.cpp:
+      - resolve walks JVMS 5.4.3 over a new declared0 native (Loader.mhDeclaredIndex), with HotSpot's flags.
+        Statically bound virtuals answer REF_invokeSpecial; invoke/invokeExact raise InternalError("appendix").
+      - The access check is HotSpot's verify_member_access, not jdk.internal.reflect's.
+      - staticFieldBase answers null, to match joe-ng's Unsafe pairing.
+    - The **ResolvedMethodName overlay** declares the injected vmtarget, which holds a REGISTRY INDEX, never a
+      code address, and vmindex. MemberName runs stock.
+    - The CDS and Reflection overlays are rebuilt from the JDK source.
+    - Stock-semantics members added: Unsafe.shouldBeInitialized, the unnamed module's Module.canRead/
+      isExported/isOpen, ClassLoader.getUnnamedModule and registerAsParallelCapable.
+  - **FOUR VM BUGS, all silent wrong answers before this arc reached them:**
+    1. `Object.class.isAssignableFrom(anInterface)` was false.
+    2. clinitBlocked skipped the generated VarHandle classes' `<clinit>`, so every vform was null (rule 2).
+    3. The JIT's late-virtual path (no vtable slot at compile time, i.e. a deferred class) had no receiver null
+       check, so a null receiver printed a DENYLIST TRAP instead of throwing NPE. NullDispatchProbe A/B: fails
+       without the fix, passes with it.
+    4. **`Class.getPackageName` did not intern.** Stock VerifyAccess.isSamePackage compares with `==`, so every
+       same-package class check failed. **The first Pi image (07dfdb2) died on it**:
+       ExceptionInInitializerError in ConcurrentSkipListMap.<clinit>, reached from InetAddress. The probes
+       missed it because the unnamed package's `""` literal is identical by accident. MemberNameProbe's three
+       new arms fail as the Pi did without the fix.
+  - **A claim I retracted before committing:** the shouldBeInitialized super-chain walk is justified by
+    READING, not measurement. An A/B with the one-flag version still passed.
+  - **Measured (QEMU):**
+    - The 44-probe targeted set passes 44 of 44 at b710d21. MemberNameProbe has 34 arms.
+    - One batch hung in SemaphoreProbe. It is **PRE-EXISTING**: the same 12-probe batch hangs identically at
+      a65b667. The probes pass solo; the batch was formed by the hand-picked list. Not investigated.
+    - `make test` and `make overlaycheck` (0 new) pass.
+  - **Pi 4 (b710d21): PASS.** HTTP 200 `bytes=891`, `[main returned normally]`, `gc: collections=6`.
+    - Batch 1: +1170 blobs, `clinits=294`, `tot=5618ms` (a65b667: +1192 / 296 / 5747).
+    - The run has 32 batches where a65b667 had 6: the stock VarHandle path loads late.
+  - NOT RUN: the all-probe regression, the demo suites and JUnit.
+
 - **java.lang.invoke ARC, INCREMENT 0: STOCK MethodType RUNS (2026-10-26).** The arc runs stock JDK 26
   java.lang.invoke with the JVM side implemented here; the user chose this over reflection-backed handles. The
   increment plan and the facts it rests on are in the `mh-arc-plan` memory.

@@ -109,6 +109,7 @@ LockProbe
 LongBranchProbe          solo             # ~4 MB of code; would crowd the code arena
 MacProbe                 gate=failures=0 divergences-unmet=0
 MemberGenericsProbe
+MemberNameProbe
 MemberToStringProbe
 MethodRefBoxFloatProbe
 MethodRefUnboxProbe
@@ -128,6 +129,7 @@ NioFileProbe
 NioReadProbe
 NioWriteProbe
 NormalizerProbe
+NullDispatchProbe
 NumberFormatProbe
 ObjectProbe
 OobMessageProbe

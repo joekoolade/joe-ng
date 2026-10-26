@@ -1,0 +1,14 @@
+MethodType = (int)int
+MethodType generic = (Object,Object)Object
+findStatic invokeExact = 42
+findVirtual invoke = hi there
+findVirtual String.length = 5
+findConstructor = [x]
+findGetter = 7
+bindTo = hi bound
+invokeWithArguments = 9
+insertArguments = 5
+asType = 8
+unreflect = 16
+type() = (int)int
+MethodHandleProbe done

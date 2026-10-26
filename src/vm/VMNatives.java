@@ -1263,6 +1263,16 @@ final class VMNatives
         return Loader.methodResolveExact(Magic.load64(mirrorRef + 16L), nameArrRef, descArrRef);
     }
 
+    /** {@code MethodHandleNatives.declared0(Class,byte[],byte[])} -> see {@code Loader.mhDeclaredIndex}. */
+    static int mhDeclared(long mirrorRef, long nameArrRef, long descArrRef)
+    {
+        if (mirrorRef <= 0x1000L || nameArrRef <= 0x1000L)
+        {
+            return -1;                                     // boot force-compile passes 0
+        }
+        return Loader.mhDeclaredIndex(Magic.load64(mirrorRef + 16L), nameArrRef, descArrRef);
+    }
+
     /** Reflection: {@code Method.itableTarget0(Object,int)} -> the receiver's itable answer for that method, or 0. */
     static long methodItableTarget(long recv, long rgIndex)
     {
@@ -1336,6 +1346,17 @@ final class VMNatives
         }
         Loader.ensureInitOfType(Magic.load64(mirrorRef + 16L));
         return 0L;
+    }
+
+    /** {@code Unsafe.shouldBeInitialized0(Class)}: 1 if the class still needs initializing (see
+     *  {@code Loader.typeNeedsInit}), else 0. A LONG result for the reason {@code classModifiers} gives. */
+    static long shouldBeInit(long mirrorRef)
+    {
+        if (mirrorRef <= 0x1000L)
+        {
+            return 0L;                                     // boot force-compile passes 0
+        }
+        return Loader.typeNeedsInit(Magic.load64(mirrorRef + 16L)) ? 1L : 0L;
     }
 
     /**

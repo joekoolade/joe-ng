@@ -1,0 +1,4 @@
+deferred abstract class = NullPointerException
+deferred final class = NullPointerException
+slotted class (control) = NullPointerException
+NullDispatchProbe done
