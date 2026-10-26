@@ -3197,10 +3197,32 @@ public final class Loader
         return obj;
     }
 
-    /** TIB of {@code java/lang/StackTraceElement} (0 if not loaded). */
+    /** TIB of {@code java/lang/StackTraceElement}, pulling the class if it is not loaded yet (0 only if absent). */
     private static long steTib()
     {
         int i = classIndexByName(Magic.bytes("java/lang/StackTraceElement"));
+        if (i < 0)
+        {
+            // PULL IT, do not answer 0. The stack-trace natives build StackTraceElements whatever the program's
+            // closure held, and a 0 TIB makes every element a receiver with no Type: its first virtual call
+            // (getClassName) went through late dispatch on a garbage itable directory and surfaced as an NPE
+            // inside resolveViaItableDir. It hid while the class rode into every batch by reference; deferring
+            // the logger (closureDeferred) moved StackWalker -- the referrer -- to a late pull, and
+            // SystemLoggerProbe's caller lookup found it.
+            VM.loaderLock(VM.LOCK_REFLECT);
+            try
+            {
+                if (classIndexByName(Magic.bytes("java/lang/StackTraceElement")) < 0)
+                {
+                    loadClassIncremental(Magic.bytes("java/lang/StackTraceElement"));
+                }
+            }
+            finally
+            {
+                VM.loaderUnlock();
+            }
+            i = classIndexByName(Magic.bytes("java/lang/StackTraceElement"));
+        }
         return i >= 0 ? clTab[i].tib : 0L;
     }
 
@@ -5176,7 +5198,21 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("java/util/spi/"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/util/spi/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/Character$Unicode"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/lang/CharacterName"));
+                || utf8IsAtBase(base, off, Magic.bytes("java/lang/CharacterName"))
+                // ... and the date/time, generic-signature and logger subsystems (2026-10-25): reached in every
+                // first batch only through Formatter's %t arm (java/time, Calendar/Date/TimeZone and their
+                // sun/util/calendar engine), generic-signature reflection (sun/reflect/generics) and
+                // PlatformLogger (jdk/internal/logger).
+                || utf8HasPrefix(base, off, Magic.bytes("java/time/"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/util/calendar/"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/reflect/generics/"))
+                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/logger/"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/util/Calendar"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/util/GregorianCalendar"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/util/JapaneseImperialCalendar"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/util/TimeZone"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/util/SimpleTimeZone"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/util/Date"));
     }
 
     private static void addPend(long base, int classOff, int nameOff, int descOff, int kind)
@@ -7235,7 +7271,28 @@ public final class Loader
             }
             i += 1;
         }
+        long baked = bakedTypeName(type);
+        if (baked != 0L)
+        {
+            return u2(baked);
+        }
         return isSynthesisedType(type) != 0 ? synthHostLen(type) + SYNTH_NAME_LEN : 0;
+    }
+
+    /**
+     * The name Utf8 ({u2 len}{bytes}) of a writer-baked class Type the registry does not hold, or 0. A baked
+     * class is registered only when its blob is pulled, and VM code can `new` one without that (see
+     * ImageBuilder's type-name table); getName() on such an object used to answer NULL.
+     */
+    private static long bakedTypeName(long type)
+    {
+        long rel = type - VM.bakedTypeBase;
+        if (VM.bakedTypeNames == 0L || rel < 0L || rel % ObjectModel.TYPE_SIZE != 0L)
+        {
+            return 0L;
+        }
+        long i = rel / ObjectModel.TYPE_SIZE;
+        return i < VM.bakedTypeCount ? Magic.load64(VM.bakedTypeNames + i * 8L) : 0L;
     }
 
     /** {@code "$$Lambda/0x"} + 16 hex digits -- the length {@link #writeSynthName} writes. */
@@ -7379,6 +7436,19 @@ public final class Loader
                 return pos + len;
             }
             i += 1;
+        }
+        long baked = bakedTypeName(type);
+        if (baked != 0L)
+        {
+            int len = u2(baked);
+            int k = 0;
+            while (k < len)
+            {
+                int c = u1(baked + 2L + k);
+                Magic.store8(dst + pos + k, (byte) (c == 0x2F ? 0x2E : c));   // '/' -> '.'
+                k += 1;
+            }
+            return pos + len;
         }
         return writeSynthName(type, dst, pos);   // unregistered => synthesised; classNameLen sized it
     }
