@@ -137,6 +137,21 @@ public final class MemberNameProbe
                     + vh.isAccessModeSupported(VarHandle.AccessMode.SET) + " " + vh.varType().getSimpleName();
         });
         arm("VH toString", () -> l.findVarHandle(me, "fi", int.class).toString());
+        // Stock VerifyAccess.isSamePackage compares package names with ==, so getPackageName must intern. The
+        // probe's own classes are in the unnamed package, whose "" literal is identical by accident -- which is
+        // how a fresh-substring getPackageName passed every arm above and still failed every java.base class
+        // that builds a VarHandle on a nested class of its own package (the two arms after this one).
+        arm("package name identity", () -> (String.class.getPackageName() == Integer.class.getPackageName())
+                + " " + int[].class.getPackageName() + " " + String[][].class.getPackageName()
+                + " " + int.class.getPackageName());
+        arm("ConcurrentSkipListMap init", () ->
+        {
+            java.util.concurrent.ConcurrentSkipListMap<Integer, String> m = new java.util.concurrent.ConcurrentSkipListMap<>();
+            m.put(2, "b");
+            m.put(1, "a");
+            return m.toString();
+        });
+        arm("CompletableFuture init", () -> java.util.concurrent.CompletableFuture.completedFuture("cf").get());
         System.out.println("MemberNameProbe done");
     }
 

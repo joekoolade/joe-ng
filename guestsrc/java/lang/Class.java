@@ -665,11 +665,29 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
     }
 
     /** The package name (the binary name up to, but excluding, the last '.'), or "" for the default package. */
+    /**
+     * Stock's: an array answers for its element type, a primitive is in {@code "java.lang"}, and the name is
+     * INTERNED -- which is part of the contract, not an optimization: stock {@code VerifyAccess.isSamePackage}
+     * compares two package names with {@code ==}. This returned a fresh substring each call, so every
+     * same-package check failed and stock MethodHandles refused a nested class of the caller's own package
+     * ("symbolic reference class is not accessible": CompletableFuture$Completion from CompletableFuture,
+     * ConcurrentSkipListMap's initializer -> ExceptionInInitializerError on the Pi). Not cached, as stock
+     * caches it: a mirror is VM-allocated and has no field for it, and {@code intern} gives the identity.
+     */
     public String getPackageName()
     {
-        String n = getName();
+        Class<?> c = this;
+        while (c.isArray())
+        {
+            c = c.getComponentType();
+        }
+        if (c.isPrimitive())
+        {
+            return "java.lang".intern();
+        }
+        String n = c.getName();
         int dot = n.lastIndexOf('.');
-        return dot < 0 ? "" : n.substring(0, dot);
+        return dot < 0 ? "".intern() : n.substring(0, dot).intern();
     }
 
     /**

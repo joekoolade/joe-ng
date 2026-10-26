@@ -27,4 +27,7 @@ VH static long = 1099511627776 1099511627776 1099511627777
 VH static ref = x true y
 VH final field modes = true false String
 VH toString = VarHandle[varType=int, coord=[class MemberNameProbe]]
+package name identity = true java.lang java.lang java.lang
+ConcurrentSkipListMap init = {1=a, 2=b}
+CompletableFuture init = cf
 MemberNameProbe done
