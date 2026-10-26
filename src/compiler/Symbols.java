@@ -132,6 +132,10 @@ public interface Symbols
     // method-handle trampoline. Same shape as VIRTUAL_RESOLVE -- x17 = the site, x0..x15 preserved, tail-branch
     // to the target -- and its resolver reads the KIND from the site's name. See Baseline.lowerMhCall.
     int MH_INVOKE = 64;         // vm/Loader.mhTramp() -> VMNatives.mhResolve(JJ)J
+    // invokedynamic with a bootstrap the JIT does not lower itself: the indy trampoline (x17 = the dynamic site).
+    int INDY_INVOKE = 65;       // vm/Loader.indyTramp() -> VMNatives.indyResolve(JJ)J
+    // ldc of a MethodType, MethodHandle or dynamic constant: x0 = the dynamic site -> its value (object or bits).
+    int LDC_CONST = 66;         // vm/VMNatives.ldcConst(J)J
 
     /**
      * The largest value a code address's top byte (bits 31..24) can take, for the dispatch-target guard.
@@ -256,6 +260,13 @@ public interface Symbols
      * ordinary call, since no method with the site's descriptor exists to call.
      */
     boolean isMhSigPoly(int methodCp);
+
+    /**
+     * The index of the DYNAMIC SITE for the invokedynamic or loadable constant at {@code cpIndex} -- what the
+     * INDY_INVOKE trampoline and the LDC_CONST helper are handed. Both link through a guest linker that reads the
+     * bootstrap specifier from the class file, which only the metal can do, so the writer refuses the method.
+     */
+    int dynSiteIndex(int cpIndex);
 
     /**
      * True if the invokestatic is {@code jdk.internal.reflect.Reflection.getCallerClass()} -- intrinsified to

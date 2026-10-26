@@ -277,6 +277,12 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         }
     }
 
+    /** A dynamic site links through the metal's guest linker: the method compiles on metal on first call. */
+    public int dynSiteIndex(int cpIndex)
+    {
+        throw new UnsupportedOperationException("invokedynamic / dynamic constant not compiled by the host writer");
+    }
+
     /** {@code Reflection.getCallerClass()}: intrinsified here too, so a BAKED caller-sensitive method agrees. */
     public boolean isGetCallerClass(int methodCp)
     {

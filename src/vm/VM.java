@@ -1975,6 +1975,9 @@ public final class VM
         if (fillTraceAddr == 0L) { VMUnwind.fillInTrace(0L); }                       // Throwable.fillInStackTrace0
         if (virtualResolveAddr == 0L) { long u = VMNatives.virtualResolve(0L, 0L); }  // late virtual dispatch
         if (mhResolveAddr == 0L) { long u = VMNatives.mhResolve(0L, 0L); }            // MethodHandle sig-poly calls
+        if (indyResolveAddr == 0L) { long u = VMNatives.indyResolve(0L, 0L); }        // invokedynamic (generic)
+        if (ldcConstAddr == 0L) { long u = VMNatives.ldcConst(-1L); }                 // ldc of a dynamic constant
+        if (classBytesAddr == 0L) { long u = VMNatives.classBytes(0L); }              // MethodHandleNatives.classBytes0
         if (printStackTraceAddr == 0L) { VMNatives.printStackTrace(0L); }       // Throwable.printStackTrace0() native
         if (ramfsTableAddr == 0L) { long u = VMNatives.ramfsTable(0L); }        // MetalRamfs.table0
         if (dnsResolveAddr == 0L) { int u = VMNatives.dnsResolve(0L); }         // java.net.InetAddress.resolve0() native (M3)
@@ -2635,6 +2638,10 @@ public final class VM
         else if (kind == 4L)
         {
             Uart.write(Magic.bytes("method-handle (a MethodHandle signature-polymorphic call)"));
+        }
+        else if (kind == 5L)
+        {
+            Uart.write(Magic.bytes("invokedynamic (a call site linked at run time)"));
         }
         else
         {
@@ -3676,6 +3683,9 @@ public final class VM
     static long fillTraceAddr;         // VMUnwind.fillInTrace(J)V — Throwable.fillInStackTrace0 (trace at construction)
     static long virtualResolveAddr;    // VM.virtualResolve(JJ)J — late virtual dispatch (receiver + site idx)
     static long mhResolveAddr;         // VMNatives.mhResolve(JJ)J — the MH trampoline's resolver (save area + site)
+    static long indyResolveAddr;       // VMNatives.indyResolve(JJ)J — the indy trampoline's resolver (save area + site)
+    static long ldcConstAddr;          // VMNatives.ldcConst(J)J — a loadable dynamic constant's value
+    static long classBytesAddr;        // VMNatives.classBytes(J)J — MethodHandleNatives.classBytes0
     static long badTailTargetAddr;     // VM.badTailTarget(JJ)V -- a trampoline whose resolved target came back 0
     static long reportFaultAddr;       // VM.reportFault()V — the exception-vector handler's address
     static long irqHandlerAddr;        // VM.irqHandler()V — the IRQ-vector handler's address (writer-stashed)

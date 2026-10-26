@@ -1,0 +1,8 @@
+String labels = first, second, long gamma, other xy
+Integer labels = one, two, negative, int 9
+enum constant labels = equilateral, isosceles, square 3
+enum switch with null = null color, red, green, other BLUE
+user bootstrap = hi! again!
+ConstantBootstraps condy = null
+user condy = area=42 true
+IndyProbe done

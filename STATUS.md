@@ -4,6 +4,32 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **invokedynamic AND DYNAMIC CONSTANTS LINKED AT RUN TIME (2026-10-26).** Every invokedynamic the JIT does not lower
+  itself, and every ldc of a MethodType, MethodHandle or dynamic constant, used to FAIL THE COMPILE and halt the
+  program. That covered pattern switches with String/Integer/enum labels, enum switches with `case null`, and any
+  library bootstrap.
+  - **Now:** they link through stock CallSite.makeSite. The guest linker (MethodHandleNatives.linkIndy /
+    linkConstant / constantBits) reads the bootstrap specifier from the CALLER'S OWN CLASS FILE with
+    java.lang.classfile.
+    - The JIT side is Baseline.lowerIndyCall (the INDY_INVOKE trampoline: shift the arguments, run the target as
+      invokeBasic) and ldcDynamic (the LDC_CONST helper).
+    - lowerTypeSwitch hands the shapes it cannot inline to the same path.
+  - **Six more fixes:**
+    - Empty ConstantDesc/Constable overlays deleted; stock java.lang.constant runs.
+    - A JDK 26 init-order hazard (PrimitiveClassDescImpl before ConstantDescs -> null CD_int), MEASURED on HotSpot
+      with -Xshare:off: the linker initializes ConstantDescs first.
+    - PreviewFeatures.isPreviewEnabled -> false.
+    - A handle targeting the invokeBasic intrinsic now works.
+    - resolveViaInterfaces walks the WHOLE superinterface closure. It stopped one level up, which missed
+      StringEntryImpl's typeKind() default.
+    - isNonLeaf now counts a condy ldc as a call. `ldc; areturn` used to spin with X30 == PC; QEMU-monitor register
+      sampling named it.
+  - **Measured (QEMU):** IndyProbe (new) passes 8 of 8 against the host, and 48 of 48 targeted probes pass (no
+    batch hang this run). `make test` and `make overlaycheck` (0 new) pass.
+  - **Pi 4 (9d2a39f): PASS.** HTTP 200 `bytes=888`, `[main returned normally]`, `gc: collections=6`, 32 batches.
+    Batch 1: +1172 blobs, `clinits=296`, identical counts to f60cfa1.
+  - NOT RUN: the all-probe regression, the demo suites and JUnit.
+
 - **java.lang.invoke ARC, INCREMENT 3: SPUN LambdaForms (HIDDEN CLASSES) AND BOUND HANDLES (2026-10-26).**
   Every method handle now works on metal, not just the pregenerated shapes. Stock InvokerBytecodeGenerator spins
   the class with java.lang.classfile, and Lookup.defineHiddenClass defines it.

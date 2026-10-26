@@ -189,6 +189,11 @@ final class MetalWriterSymbols implements Symbols
     {
         return false;
     }
+    public int dynSiteIndex(int cpIndex)
+    {
+        fail(Symbols.FAIL_OPCODE, 0xBA, 7);
+        return 0;
+    }
     public void staticField(CodeBuffer cb, int reg, int fieldCp)
     {
         staticSite[staticN] = cb.reserveAddr(reg);
