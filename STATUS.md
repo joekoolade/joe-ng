@@ -4,6 +4,36 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **java.lang.invoke ARC, INCREMENT 2: INVOKING METHOD HANDLES (2026-10-26).** Stock method handles can now be
+  INVOKED on metal, for every handle whose LambdaForm shape the seed pregenerates.
+  - **The JIT:** Baseline.lowerMhCall compiles each MethodHandle signature-polymorphic call (invokeExact,
+    invoke, invokeBasic, linkTo*) as an ordinary call of the site's own descriptor, to a new MH_INVOKE
+    trampoline with x17 = the site.
+  - **The trampoline:** Loader.mhTramp has virtualTramp's shape, with its frame registered, but hands the
+    resolver the SAVE AREA. Loader.mhResolve reads the kind from the site NAME:
+    - invokeBasic runs `mh.form.vmentry`. The ResolvedMethodName's vmtarget is a registry index, read through
+      to the current body.
+    - linkToStatic/linkToSpecial run the trailing MemberName's method.
+    - linkToVirtual/linkToInterface go through virtualResolve, on a site registered for the MemberName's method.
+    - invokeExact/invoke first run a guest linker (MethodHandleNatives.linkExact / linkGeneric, i.e.
+      Invokers.checkExactType / checkGenericType). WrongMethodTypeException unwinds through the trampoline, and
+      an adapted handle replaces the saved x0.
+  - **The writer** refuses such sites (bake stub).
+  - **VM BUG:** virtualResolve rejected writer-BAKED receivers (the Integer cache, literals) as BAD RECEIVER.
+    Loader.receiverAddress now accepts the image range. MEASURED: an Object.toString linkToVirtual handle
+    trapped on Integer.valueOf(5) and passes with the fix.
+  - **MhInvokeProbe** (new, 19 arms): the four dispatch kinds, two receivers through one handle, constructor,
+    getter/setter, double and float arguments, a target exception, WrongMethodTypeException, invoke, a null
+    handle, a hot loop. It matches the host.
+  - **MethodHandleProbe** (unregistered) passes through findGetter. bindTo needs BoundMethodHandle, which needs
+    the denied BootLoader.loadClassOrNull; any shape outside the pregenerated Holders needs class spinning
+    (later increments).
+  - **Measured (QEMU):** 45 of 45 targeted probes pass. The pre-existing SemaphoreProbe batch hang recurred,
+    and the seven probes in it passed solo. `make test` and `make overlaycheck` (0 new) pass.
+  - **Pi 4 (500bbeb): PASS.** HTTP 200 `bytes=892`, `[main returned normally]`, `gc: collections=6`.
+    - Batch 1: +1170 blobs, `clinits=294`, `tot=5627ms`, 32 batches, identical counts to b710d21.
+  - NOT RUN: the all-probe regression, the demo suites and JUnit.
+
 - **java.lang.invoke ARC, INCREMENT 1: STOCK MethodHandles OVER JAVA MemberName NATIVES (2026-10-26).** Stock
   java.lang.invoke now builds method handles and VarHandles on metal. Invoking a handle (the JIT's
   invokeBasic/linkTo* lowering) is increment 2.
