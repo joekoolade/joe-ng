@@ -4,6 +4,35 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **java.lang.invoke ARC, INCREMENT 3: SPUN LambdaForms (HIDDEN CLASSES) AND BOUND HANDLES (2026-10-26).**
+  Every method handle now works on metal, not just the pregenerated shapes. Stock InvokerBytecodeGenerator spins
+  the class with java.lang.classfile, and Lookup.defineHiddenClass defines it.
+  - **jdk.internal.misc.MetalHiddenClasses (new):**
+    - It RENAMES a hidden class (this_class Utf8 + "+N", as HotSpot suffixes one), because the registry is keyed
+      by name and every spun class of a kind is called the same.
+    - It stores class data BEFORE initialization, since a spun `<clinit>` reads it.
+    - MetalJavaLangAccess.defineClass/classData route to it, and so does Class.isHidden.
+    - **A/B on the rename:** without it, three arms threw ClassCastException and asSpreader silently printed
+      467804648 for 7+8+9.
+  - **jdk/internal/loader/BootLoader un-denied:** ClassSpecializer finds the BoundMethodHandle species through
+    loadClassOrNull.
+    - MetalJLA gains findBootstrapClassOrNull, defineUnnamedModule and addEnableNativeAccess (a no-op: FFM/JNI
+      are absent).
+    - setBootLoaderUnnamedModule0 maps to a no-op.
+    - A **BootLoader overlay** (JDK source) keeps loadLibrary a no-op. Un-denying it had silently retired the
+      provided-native no-op, and five probes (IoStream, InetAddr, NetStatics, ZipFile, ReflectLookup) then
+      failed solo in the `<clinit>` of every library-loading class. **That is a recurrence of a trap worth
+      remembering: un-denying a class retires any nativeBufAt answer keyed on it.**
+  - **Probes:** MethodHandleProbe (13 arms) is now registered and passing. MhSpinProbe (new, 18 arms) covers 12
+    bound handles of one kind, the combinators, collector/spreader, varargs invoke, the public
+    defineHiddenClassWithClassData, and two hidden classes from the same bytes. Both match the host.
+  - **Measured (QEMU):** 47 of 47 targeted probes pass, with only the pre-existing SemaphoreProbe batch hang.
+    `make test` and `make overlaycheck` (0 new) pass.
+  - **Pi 4 (f60cfa1): PASS.** HTTP 200 `bytes=891`, `[main returned normally]`, `gc: collections=6`, 32 batches.
+    - Batch 1: +1172 blobs, `clinits=296` (500bbeb: +1170 / 294). The un-denied BootLoader family is now in the
+      boot closure, which is +2 classes.
+  - NOT RUN: the all-probe regression, the demo suites and JUnit.
+
 - **java.lang.invoke ARC, INCREMENT 2: INVOKING METHOD HANDLES (2026-10-26).** Stock method handles can now be
   INVOKED on metal, for every handle whose LambdaForm shape the seed pregenerates.
   - **The JIT:** Baseline.lowerMhCall compiles each MethodHandle signature-polymorphic call (invokeExact,
