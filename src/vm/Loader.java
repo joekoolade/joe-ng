@@ -5212,7 +5212,10 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("java/util/JapaneseImperialCalendar"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/util/TimeZone"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/util/SimpleTimeZone"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/util/Date"));
+                || utf8HasPrefix(base, off, Magic.bytes("java/util/Date"))
+                // ... and stock MethodType (java.lang.invoke arc inc 0): named from cold arms of the base
+                // closure (+22 blobs / +12 clinits on SbProbe's batch 1 when it was simply un-denied).
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/MethodType"));
     }
 
     private static void addPend(long base, int classOff, int nameOff, int descOff, int kind)
@@ -6345,6 +6348,10 @@ public final class Loader
         // prefix deny below. Everything else in java/lang/invoke stays denied.
         if (utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/VarHandle"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/MethodHandles"))
+                // java.lang.invoke arc, increment 0 (2026-10-26): STOCK MethodType (the prefix covers
+                // MethodTypeForm, which it needs). Pure shape computation plus an intern table; constructing one
+                // reaches neither LambdaForm nor Invokers. Keep in sync with writer.ReachScan.isDenied.
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/MethodType"))
                 // Stock VarHandle.<clinit> reads MethodHandleStatics.UNSAFE. NOT covered by the
                 // "MethodHandles" prefix above -- that stops at the lower-case 's', so MethodHandleStatics
                 // was DENIED and its UNSAFE read NULL, which is the NPE stock VarHandle's initializer died

@@ -147,6 +147,7 @@ public final class ReachScan
                 // lower-case 's'); stock VarHandle.<clinit> reads its UNSAFE. See Loader.isDenylisted.
                 || c.startsWith("java/lang/invoke/MethodHandleStatics")
                 || c.startsWith("java/lang/invoke/MethodHandles")
+                || c.startsWith("java/lang/invoke/MethodType")          // java.lang.invoke arc inc 0 (MethodTypeForm too)
                 || c.startsWith("jdk/internal/invoke/MhUtil")
                 || c.startsWith("java/lang/reflect/Modifier")           // STOCK (overlay deleted); the rest are
                                                                         // reflection-arc overlays that run
