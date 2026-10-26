@@ -1,0 +1,18 @@
+many bound handles = 100 101 102 103 104 105 106 107 108 109 110 111
+bound string handles = [a!, bb!, ccc!]
+guardWithTest = pos 5, neg -3
+catchException = OK, recovered empty
+filterReturnValue = (String)int 4
+filterArguments = 5
+permuteArguments = 3+1+2=6
+dropArguments = 9
+foldArguments = 30+10+20=60
+asCollector = 3
+varargs invoke = true 2 0
+asSpreader = 7+8+9=24
+constant/identity = K 77
+arrayElementGetter = 5
+invokeWithArguments = 4+5+6=15
+defineHiddenClass = true hello from a hidden class / the data / true
+two hidden classes, one name = true first second
+MhSpinProbe done
