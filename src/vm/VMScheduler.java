@@ -1036,12 +1036,32 @@ public final class VMScheduler
             if (taskInterrupted[me] != 0)                  // Thread.interrupt(): wake early (Thread.sleep then throws)
             {
                 daif = schedLock();
-                taskState[me] = TASK_READY;
+                markRunning(me);
                 schedUnlock(daif);
                 return;
             }
             taskYield();
         }
+        daif = schedLock();
+        markRunning(me);                                   // woken READY while still on this core: we are running
+        schedUnlock(daif);
+    }
+
+    /**
+     * The calling task, leaving a wait, is RUNNING -- set under {@code SCHED_LOCK} by every wait loop's exit.
+     *
+     * <p>A wait loop can exit while its state still says BLOCKED. When the yielding task cannot continue and its
+     * core has no idle task (core 0), {@link #pickNext} RESUMES it rather than idle the core ({@code fall = cur}),
+     * so the loop re-tests its condition as a busy-wait -- and a condition that comes true there (parkNanos's
+     * deadline, a semaphore token, a released monitor) exits the loop with the state never reset. The task then
+     * runs on, still BLOCKED, until its next yield, where pickNext switches to any READY task and never picks the
+     * BLOCKED one again: nothing is left to wake it. MEASURED: SemaphoreProbe batched after Executor/Lock/Park
+     * hung with every thread done and main BLOCKED with waitOn=-3 (a parkNanos waiter) -- yield-polling in
+     * Thread.join in one boot, in the loader lock in another.
+     */
+    private static void markRunning(int me)
+    {
+        taskState[me] = TASK_RUNNING;
     }
 
     /** {@code Thread.interrupt()}: set the interrupt flag and wake the task if it is sleeping or blocked. */
@@ -1144,6 +1164,7 @@ public final class VMScheduler
             daif = schedLock();
         }
         taskPermit[me] = 0;                                // consume the permit
+        markRunning(me);
         schedUnlock(daif);
     }
 
@@ -1184,6 +1205,7 @@ public final class VMScheduler
         }
         taskWake[me] = 0L;                                 // a later untimed BLOCKED wait must not be deadline-woken
         taskPermit[me] = 0;                                // consume the permit if that is what woke us
+        markRunning(me);
         schedUnlock(daif);
     }
 
@@ -1227,6 +1249,7 @@ public final class VMScheduler
             daif = schedLock();
         }
         semCount[s] = semCount[s] - 1;
+        markRunning(me);
         schedUnlock(daif);
     }
 
@@ -1247,6 +1270,7 @@ public final class VMScheduler
             if (Magic.readCNTPCT_EL0() >= deadline)
             {
                 taskWake[me] = 0L;
+                markRunning(me);
                 schedUnlock(daif);
                 return false;                              // timed out with no token
             }
@@ -1259,6 +1283,7 @@ public final class VMScheduler
         }
         taskWake[me] = 0L;                                 // got a token: drop the deadline marker
         semCount[s] = semCount[s] - 1;
+        markRunning(me);
         schedUnlock(daif);
         return true;
     }
@@ -1379,6 +1404,7 @@ public final class VMScheduler
             monCount[s] = 0;
         }
         monCount[s] += 1;                                  // acquire / recurse
+        markRunning(me);
         schedUnlock(daif);
     }
 
@@ -1486,8 +1512,11 @@ public final class VMScheduler
         taskState[me] = TASK_BLOCKED;
         schedUnlock(daif);
         taskYield();                                       // parked until objNotify/objNotifyAll flips us READY
+        long woke = schedLock();
+        markRunning(me);                                   // a fallback resume returns here still BLOCKED
         taskWaitObj[me] = 0L;
         taskWake[me] = 0L;
+        schedUnlock(woke);
         if (saved > 0)                                     // reacquire the monitor (blocks if the notifier still holds it)
         {
             monEnter(obj);

@@ -170,6 +170,7 @@ SemaphoreProbe
 SerLambdaProbe
 SortPrimProbe
 StackWalkerProbe         solo             # prints stack frames; a batch adds its own
+StaleBlockedProbe
 StockExceptionProbe
 StreamProbe
 SuperCallProbe
