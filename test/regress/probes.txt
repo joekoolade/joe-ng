@@ -111,10 +111,12 @@ MacProbe                 gate=failures=0 divergences-unmet=0
 MemberGenericsProbe
 MemberNameProbe
 MemberToStringProbe
+MethodHandleProbe
 MethodRefBoxFloatProbe
 MethodRefUnboxProbe
 MethodTypeProbe
 MhInvokeProbe
+MhSpinProbe
 MinValueProbe
 MixinProbe               cp=/lib/junit.jar
 MonitorStateProbe

@@ -6320,6 +6320,11 @@ public final class Loader
                 // whose filter map MethodHandles$Lookup.<clinit> registers into. getCallerClass is intrinsified
                 // at the call site; areNestMates is a native and THROWS until it is implemented.
                 || utf8IsAtBase(base, off, Magic.bytes("jdk/internal/reflect/Reflection"))
+                // java.lang.invoke arc: STOCK jdk/internal/loader/BootLoader (and its Holder; ArchivedClassLoaders,
+                // which its initializer asks for CDS state and gets null) -- the rest of jdk/internal/loader stays
+                // denied. Keep in sync with writer.ReachScan.isDenied.
+                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/loader/BootLoader"))
+                || utf8IsAtBase(base, off, Magic.bytes("jdk/internal/loader/ArchivedClassLoaders"))
                 // Reflection arc: these java/lang/reflect classes are overlaid (JDK-free) and DO run on metal
                 // (Class.getModifiers/getDeclaredField*, reflective Field.get/set); the rest of java/lang/reflect
                 // stays denied below.
@@ -13045,6 +13050,20 @@ public final class Loader
         }
         // FileDescriptor.<clinit> runs (to register the JavaIOFileDescriptorAccess); its 3 natives are inert
         // on metal -- initIDs is a no-op, and handle/append are Windows/append-mode fields unused by sockets.
+        // jdk/internal/loader/BootLoader runs STOCK (the java.lang.invoke arc: ClassSpecializer finds the
+        // pregenerated BoundMethodHandle species through loadClassOrNull). Its initializer's one native,
+        // setBootLoaderUnnamedModule0, is JVM_SetBootLoaderUnnamedModule -> Modules::set_bootloader_unnamed_module,
+        // which makes the boot loader's classes answer that Module from getModule(). Here every class already
+        // answers Module.UNNAMED, the object defineUnnamedModule hands BootLoader, so EMPTY is the correct
+        // semantics. getSystemPackageNames/getSystemPackageLocation stay unmapped and trap if reached.
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalHiddenClasses")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("defineClass0"))) { return VM.defineClassAddr; } // (String,byte[],int,int)Class
+        }
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/loader/BootLoader")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("setBootLoaderUnnamedModule0"))) { return VM.sockNoopAddr; }
+        }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/io/FileDescriptor")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("initIDs")))           { return VM.sockNoopAddr; }

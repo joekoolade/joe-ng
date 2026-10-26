@@ -151,6 +151,8 @@ public final class ReachScan
                 || c.startsWith("java/lang/invoke/MethodType")          // java.lang.invoke arc inc 0 (MethodTypeForm too)
                 || c.startsWith("jdk/internal/invoke/MhUtil")
                 || c.equals("jdk/internal/reflect/Reflection")          // java.lang.invoke arc: Lookup's field filter
+                || c.startsWith("jdk/internal/loader/BootLoader")       // java.lang.invoke arc: species lookup
+                || c.equals("jdk/internal/loader/ArchivedClassLoaders")
                 || c.startsWith("java/lang/reflect/Modifier")           // STOCK (overlay deleted); the rest are
                                                                         // reflection-arc overlays that run
                 || c.startsWith("java/lang/reflect/Field")              //   on metal; rest of java/lang/reflect denied

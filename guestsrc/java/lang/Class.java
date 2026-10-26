@@ -571,13 +571,13 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
     }
 
     /**
-     * Stock's native, decided rather than defaulted: false. A hidden class comes only from
-     * {@code Lookup.defineHiddenClass}, which this VM does not provide; its lambdas and annotation instances are
-     * VM-synthesised objects, not hidden classes, and they have no {@code Class} of their own to ask.
+     * Stock's native: whether this class was defined by {@code Lookup.defineHiddenClass} -- recorded by
+     * jdk.internal.misc.MetalHiddenClasses, the one place such a class is defined. The VM's own lambdas and
+     * annotation instances are synthesised objects, not hidden classes, and they have no Class of their own.
      */
     public boolean isHidden()
     {
-        return false;
+        return jdk.internal.misc.MetalHiddenClasses.isHidden(this);
     }
 
     /** Stock's native: null. Signers are set by a class loader verifying a signed jar, which this VM never does. */

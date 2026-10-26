@@ -173,13 +173,32 @@ public final class MetalJavaLangAccess implements JavaLangAccess
     {
         throw unsupported("defineClass");
     }
+    /**
+     * Lookup.defineClass / defineHiddenClass: define the bytes at run time (jdk.internal.misc.MetalHiddenClasses),
+     * a hidden class renamed so it cannot collide with another of the same name. There is one class namespace,
+     * so the loader and protection domain have nothing to select; java.lang.invoke's spun LambdaForm classes are
+     * the caller.
+     */
     @Override public Class<?> defineClass(ClassLoader cl, Class<?> lookup, String name, byte[] b, ProtectionDomain pd, boolean initialize, int flags, Object classData)
     {
-        throw unsupported("defineClass");
+        return jdk.internal.misc.MetalHiddenClasses.define(b, flags, classData, initialize);
     }
+    /**
+     * The named class, or null when there is none -- looked up in the VM's ONE class namespace. Stock answers only
+     * classes the BOOTSTRAP loader defines; this VM has no separate boot loader, so an application class answers
+     * too, which is the one difference. jdk.internal.loader.BootLoader.loadClassOrNull is the caller, and its
+     * user here is ClassSpecializer finding the pregenerated BoundMethodHandle species.
+     */
     @Override public Class<?> findBootstrapClassOrNull(String name)
     {
-        throw unsupported("findBootstrapClassOrNull");
+        try
+        {
+            return Class.forName(name, false, null);
+        }
+        catch (ClassNotFoundException e)
+        {
+            return null;
+        }
     }
     @Override public Package definePackage(ClassLoader cl, String name, Module module)
     {
@@ -189,9 +208,14 @@ public final class MetalJavaLangAccess implements JavaLangAccess
     {
         throw unsupported("defineModule");
     }
+    /**
+     * The one unnamed module every class here belongs to. Stock makes a fresh unnamed module per loader; this VM
+     * has one class namespace and one module (see java.lang.Module), so a second instance would be a module no
+     * class answers from getModule(). BootLoader's initializer is the caller.
+     */
     @Override public Module defineUnnamedModule(ClassLoader loader)
     {
-        throw unsupported("defineUnnamedModule");
+        return ClassLoader.getSystemClassLoader().getUnnamedModule();
     }
     @Override public void addReads(Module m1, Module m2)
     {
@@ -235,9 +259,14 @@ public final class MetalJavaLangAccess implements JavaLangAccess
         // One unnamed module, which exports and opens every package: true is the exact answer. Was false.
         return true;
     }
+    /**
+     * A no-op, and correct here: stock sets the module's enable-native-access flag, which only gates the
+     * restricted FFM and JNI methods (ensureNativeAccess) -- and neither exists on this VM (java.lang.foreign is
+     * denied and ensureNativeAccess throws). BootLoader's initializer calls it for the boot loader's module.
+     */
     @Override public void addEnableNativeAccess(Module m)
     {
-        throw unsupported("addEnableNativeAccess");
+        java.util.Objects.requireNonNull(m);
     }
     @Override public boolean addEnableNativeAccess(ModuleLayer layer, String name)
     {
@@ -484,9 +513,10 @@ public final class MetalJavaLangAccess implements JavaLangAccess
     {
         return prefix.concat(String.valueOf(value)).concat(suffix);
     }
+    /** A hidden class's class data, as MetalHiddenClasses.define stored it (MethodHandles.classData's source). */
     @Override public Object classData(Class<?> c)
     {
-        throw unsupported("classData");
+        return jdk.internal.misc.MetalHiddenClasses.classData(c);
     }
     @Override public NativeLibraries nativeLibrariesFor(ClassLoader loader)
     {
