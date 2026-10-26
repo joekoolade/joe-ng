@@ -13037,6 +13037,7 @@ public final class Loader
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/invoke/MethodHandleNatives")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("classBytes0")))      { return VM.classBytesAddr; }        // (Class)byte[]
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoPresent0")))     { return VM.annoPresentAddr; }       // (I,byte[])I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declared0")))        { return VM.mhDeclaredAddr; }        // (Class,byte[],byte[])I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("methodInfo0")))      { return VM.methodInfoAddr; }        // (I,byte[],long[])I
         }

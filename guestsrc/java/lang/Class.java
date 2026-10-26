@@ -53,7 +53,19 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
      * incremental loader), then runs its {@code <clinit>}. Throws {@code ClassNotFoundException} if the class
      * is not embedded or the name is not a valid binary name.
      */
+    @jdk.internal.reflect.CallerSensitive
     public static Class<?> forName(String name) throws ClassNotFoundException
+    {
+        return forName(name, true, null);
+    }
+
+    /**
+     * Stock's {@code @CallerSensitiveAdapter} twin of {@link #forName(String)}, which a method handle or reflective
+     * call to that method is bound to (MethodHandleImpl.bindCaller looks for exactly this signature). There is one
+     * class namespace, so the caller selects no loader, and the answer is {@link #forName(String)}'s.
+     */
+    @jdk.internal.reflect.CallerSensitiveAdapter
+    private static Class<?> forName(String name, Class<?> caller) throws ClassNotFoundException
     {
         return forName(name, true, null);
     }
@@ -1644,16 +1656,44 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
         return getName();
     }
 
-    /** Null: joe-ng loads every class through one VM loader, which is the bootstrap loader's own answer. */
+    /**
+     * The defining loader as a stock JVM reports it: NULL (the bootstrap loader) for the JDK's own classes and the
+     * VM's, the SYSTEM loader for an application's. joe-ng has one class namespace, so the answer is decided by
+     * NAME -- the java/, javax/, jdk/, sun/ and com/sun/ packages are what the bootstrap loader defines -- rather
+     * than by which loader read the bytes; an array answers for its element type, a primitive is bootstrap.
+     *
+     * <p>This answered NULL FOR EVERY CLASS, which made every application class look like a bootstrap class --
+     * and stock code branches on exactly that. MEASURED: a method handle to the caller-sensitive
+     * MethodHandles.lookup() binds to its caller through the {@code lookup(Class)} adapter, which REFUSES a
+     * bootstrap caller ("calling lookup() reflectively is not supported", CallerSensitiveProbe).
+     */
     public ClassLoader getClassLoader()
     {
-        return null;
+        return getClassLoader0();
     }
 
     /** Stock's unchecked accessor, which java.base calls in place of {@link #getClassLoader}; the same answer. */
     ClassLoader getClassLoader0()
     {
-        return null;
+        Class<?> c = this;
+        while (c.isArray())
+        {
+            c = c.getComponentType();
+        }
+        if (c.isPrimitive() || isBootName(c.getName()))
+        {
+            return null;
+        }
+        return ClassLoader.getSystemClassLoader();
+    }
+
+    /** Whether {@code n} (a binary name) is in a package the bootstrap loader defines -- the JDK's or the VM's own. */
+    private static boolean isBootName(String n)
+    {
+        return n.startsWith("java.") || n.startsWith("javax.") || n.startsWith("jdk.") || n.startsWith("sun.")
+                || n.startsWith("com.sun.") || n.startsWith("vm.") || n.startsWith("magic.")
+                || n.startsWith("compiler.") || n.startsWith("classfile.") || n.startsWith("asm.")
+                || n.startsWith("objectmodel.") || n.startsWith("board.") || n.startsWith("crypto.");
     }
 
     /**
