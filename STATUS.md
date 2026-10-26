@@ -4,6 +4,25 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **SCHEDULER LOST WAKEUP: A WAIT THAT EXITS WHILE STILL BLOCKED STRANDS ITS TASK (2026-10-26).** This is the
+  SemaphoreProbe batch hang recorded as pre-existing at a65b667.
+  - **The cause:** pickNext RESUMES a task that cannot continue when its core has no idle task (core 0,
+    `fall = cur`), so wait loops busy-wait. A condition that comes true there (parkNanos's deadline, a semaphore
+    token, a released monitor) exited the loop still BLOCKED. At the task's next yield it was switched out and
+    never scheduled again.
+  - **Measured:** hang dumps show every thread `done=1` and main BLOCKED `waitOn=-3` (a parkNanos waiter),
+    in Thread.join in one boot and in VM.loaderLock in the other.
+  - **The fix:** VMScheduler.markRunning at every wait-loop exit (park, parkNanos, semWait, semWaitTimeout,
+    monEnter, objWait, sleep).
+  - **A/B:**
+    - The hanging batch went from 3 of 3 boots hung to 3 of 3 passing.
+    - StaleBlockedProbe (new) went from 2 of 2 hung to 2 of 2 printing `rounds=20`.
+  - **Measured (QEMU):** 39 of 39 targeted probes pass (concurrency-heavy). `make test` and `make overlaycheck`
+    pass. FirstCallRaceStress was NOT run.
+  - **Pi 4 (6780017): PASS.** HTTP 200 `bytes=888`, `[main returned normally]`, `gc: collections=6`, 32 batches,
+    with batch-1 counts identical to 9d2a39f (+1172 / 296).
+  - NOT RUN: the all-probe regression, the demo suites and JUnit.
+
 - **invokedynamic AND DYNAMIC CONSTANTS LINKED AT RUN TIME (2026-10-26).** Every invokedynamic the JIT does not lower
   itself, and every ldc of a MethodType, MethodHandle or dynamic constant, used to FAIL THE COMPILE and halt the
   program. That covered pattern switches with String/Integer/enum labels, enum switches with `case null`, and any
