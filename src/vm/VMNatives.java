@@ -363,6 +363,16 @@ final class VMNatives
         return Loader.virtualResolve(recv, (int) idx);
     }
 
+    /**
+     * The MH trampoline's resolver ({@code Loader.mhTramp}): the code a MethodHandle signature-polymorphic call
+     * runs, given the trampoline's save area and the site. May run guest code (the invokeExact/invoke linker),
+     * whose exception unwinds through the trampoline's registered frame to the call site.
+     */
+    static long mhResolve(long save, long idx)
+    {
+        return Loader.mhResolve(save, (int) idx);
+    }
+
     /** {@code Throwable.stackTrace0(Throwable)} native: its inline backtrace as a StackTraceElement[]. */
     static long throwableTrace(long exc)
     {

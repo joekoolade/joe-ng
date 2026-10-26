@@ -1948,6 +1948,11 @@ public final class Baseline
             lowerGetCallerClass(cb);
             return;
         }
+        if (symbols.isMhSigPoly(cpIndex))        // MethodHandle.linkTo*: not an active use of anything
+        {
+            lowerMhCall(cb, cpIndex, -1, false);
+            return;
+        }
         initGuardAt(cb, cpIndex, false);         // a REAL static call: JVMS 5.5 active use
         lowerCall(cpIndex, cb, false);
     }
@@ -2027,6 +2032,11 @@ public final class Baseline
     /** Virtual dispatch through the receiver's TIB vtable. Uses x16 (scratch) for the target. */
     private void lowerInvokeVirtual(int cpIndex, CodeBuffer cb, int pos)
     {
+        if (symbols.isMhSigPoly(cpIndex))                       // MethodHandle.invokeExact/invoke/invokeBasic
+        {
+            lowerMhCall(cb, cpIndex, pos, true);
+            return;
+        }
         if (symbols.isGetClass(cpIndex))                        // Object.getClass(): intrinsic, not vtable dispatch
         {                                                       // (works uniformly on arrays, whose TIB has no vtable)
             nullCheck(cb, opSlot(sp - 1), pos);                 // the receiver is the sole operand on top
@@ -2087,7 +2097,7 @@ public final class Baseline
             // the site index in x17 BEFORE emitCall -- arg marshalling writes x0..x15 and leaves x17 alone --
             // and let the trampoline resolve against the receiver it finds in x0 and tail-branch.
             symbols.virtualSite(cb, cpIndex);
-            lateVirtualCall(cb, cpIndex, pos);
+            trampolineCall(cb, cpIndex, pos, true, Symbols.VIRTUAL_RESOLVE);
             return;
         }
         int nargs = paramCount(cpIndex) + 1;    // receiver + params
@@ -3115,16 +3125,32 @@ public final class Baseline
     }
 
     /**
-     * An {@code invokevirtual} whose class has no vtable slot at compile time: marshal like {@link #emitCall} and
-     * call the VIRTUAL_RESOLVE trampoline (x17 already holds the site index), with the receiver NULL-CHECKED
-     * first, as the slotted path does. It used to go through emitCall, which checks nothing, so a null receiver
-     * reached the trampoline's resolver -- and that answers the denylist trap for a receiver it cannot dispatch
-     * on. MEASURED: a null VarHandle.vform made isAccessModeSupported print a DENYLIST TRAP with an empty callee,
+     * A {@code java.lang.invoke.MethodHandle} signature-polymorphic call: the MH_INVOKE trampoline with x17 = the
+     * site, whose resolver reads the kind from the site's NAME and everything else from its descriptor and the
+     * argument registers -- {@code invokeBasic} dispatches on the handle's LambdaForm, {@code linkTo*} on the
+     * trailing MemberName, {@code invokeExact}/{@code invoke} check (or adapt) the handle first. The arguments
+     * are marshalled exactly as for an ordinary call of that descriptor, which is the whole trick: a LambdaForm
+     * method takes the handle as its first parameter, so the registers are already in its layout. The
+     * invokevirtual forms null-check the handle first, as invokevirtual must.
+     */
+    private void lowerMhCall(CodeBuffer cb, int cpIndex, int pos, boolean hasReceiver)
+    {
+        symbols.virtualSite(cb, cpIndex);
+        trampolineCall(cb, cpIndex, pos, hasReceiver, Symbols.MH_INVOKE);
+    }
+
+    /**
+     * Marshal like {@link #emitCall} and call a resolve TRAMPOLINE (x17 already holds the site index), with the
+     * receiver, if there is one, NULL-CHECKED first, as the slotted virtual path does.
+     *
+     * <p>The late-virtual path used to go through emitCall, which checks nothing, so a null receiver reached
+     * the trampoline's resolver -- and that answers the denylist trap for a receiver it cannot dispatch on.
+     * MEASURED: a null VarHandle.vform made isAccessModeSupported print a DENYLIST TRAP with an empty callee,
      * where JVMS 6.5 invokevirtual throws NullPointerException.
      */
-    private void lateVirtualCall(CodeBuffer cb, int cpIndex, int pos)
+    private void trampolineCall(CodeBuffer cb, int cpIndex, int pos, boolean hasReceiver, int helper)
     {
-        int nargs = paramCount(cpIndex) + 1;
+        int nargs = paramCount(cpIndex) + (hasReceiver ? 1 : 0);
         if (nargs > MAX_ARG_REGS && !deepStack)
         {
             symbols.fail(Symbols.FAIL_ARG_COUNT, nargs, 0);   // unreachable in valid bytecode: see emitCall
@@ -3132,7 +3158,10 @@ public final class Baseline
         if (deepStack)
         {
             marshalArgsFromMemory(cb, nargs);                 // receiver -> x0
-            nullCheck(cb, 0, pos);
+            if (hasReceiver)
+            {
+                nullCheck(cb, 0, pos);
+            }
         }
         else
         {
@@ -3141,14 +3170,17 @@ public final class Baseline
             {
                 src[k] = popReg();                            // src[nargs-1] = the receiver (deepest)
             }
-            nullCheck(cb, src[nargs - 1], pos);
+            if (hasReceiver)
+            {
+                nullCheck(cb, src[nargs - 1], pos);
+            }
             for (int k = 0; k < nargs; k++)
             {
                 cb.emit(A64Enc.movReg(nargs - 1 - k, src[k]));
             }
             spillLive(cb);
         }
-        symbols.callHelper(cb, Symbols.VIRTUAL_RESOLVE);
+        symbols.callHelper(cb, helper);
         reloadLive(cb);
         if (returnsValue(cpIndex))
         {

@@ -185,6 +185,10 @@ final class MetalWriterSymbols implements Symbols
     {
         return false;
     }
+    public boolean isMhSigPoly(int methodCp)
+    {
+        return false;
+    }
     public void staticField(CodeBuffer cb, int reg, int fieldCp)
     {
         staticSite[staticN] = cb.reserveAddr(reg);

@@ -153,6 +153,10 @@ final class MetalSymbols implements Symbols
     {
         return Loader.isGetClass(methodCp);
     }
+    public boolean isMhSigPoly(int methodCp)
+    {
+        return Loader.isMhSigPoly(methodCp);
+    }
     public boolean isGetCallerClass(int methodCp)
     {
         return Loader.isGetCallerClass(methodCp);
@@ -488,6 +492,10 @@ final class MetalSymbols implements Symbols
         if (helper == Symbols.VIRTUAL_RESOLVE)
         {
             return Loader.virtualTramp();               // built on first use, like the link trampoline
+        }
+        if (helper == Symbols.MH_INVOKE)
+        {
+            return Loader.mhTramp();                    // the same, for MethodHandle signature-polymorphic calls
         }
         if (helper == Symbols.ENSURE_INIT)
         {

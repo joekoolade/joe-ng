@@ -592,6 +592,40 @@ class MethodHandleNatives {
         return sb.append(')').append(rtype.descriptorString()).toString();
     }
 
+    // ---- joe-ng: the invokeExact / invoke linker --------------------------------------------------------
+    //
+    // HotSpot links `invokevirtual MethodHandle.invokeExact:(desc)` by an upcall (linkMethod) that answers an
+    // invoker LambdaForm -- invokeExact_MT / invoke_MT -- plus an APPENDIX, the site's MethodType. That
+    // invoker's body is `checkExactType(mh, mt); mh.invokeBasic(args)`, or `checkGenericType(mh, mt)
+    // .invokeBasic(args)` for invoke. The VM's method-handle trampoline does the same thing in two halves: it
+    // calls one of these two methods with the receiver and the site's descriptor, then performs the
+    // invokeBasic itself on the handle they return, with the original arguments. The one step left out is
+    // checkCustomized, which only respins a hot handle's form for HotSpot's JIT to inline.
+
+    /** Site MethodTypes by descriptor: built once each, and identical across sites (MethodType interns). */
+    private static final java.util.concurrent.ConcurrentHashMap<String, MethodType> SITE_TYPES =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** invokeExact's half: WrongMethodTypeException unless the handle's type IS the site's. */
+    static MethodHandle linkExact(MethodHandle mh, String siteDesc) {
+        Invokers.checkExactType(mh, siteType(siteDesc));
+        return mh;
+    }
+
+    /** invoke's half: the handle adapted to the site's type (asType, which is the identity when they match). */
+    static MethodHandle linkGeneric(MethodHandle mh, String siteDesc) {
+        return Invokers.checkGenericType(mh, siteType(siteDesc));
+    }
+
+    private static MethodType siteType(String desc) {
+        MethodType mt = SITE_TYPES.get(desc);
+        if (mt == null) {
+            mt = MethodType.fromMethodDescriptorString(desc, null);
+            SITE_TYPES.putIfAbsent(desc, mt);
+        }
+        return mt;
+    }
+
     /** VM native: see {@link #declaredIndex}. */
     private static native int declared0(Class<?> c, byte[] name, byte[] desc);
 
