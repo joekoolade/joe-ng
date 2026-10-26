@@ -4,6 +4,36 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **MORE COLD SUBSYSTEMS DEFERRED, TWO LATENT BUGS FIXED; NetDemo's BATCH 1 IS 5.7 s ON THE PI (was 14.5 s two merges
+  ago) -- BUT THE DEMO SUITE'S LISP INTERPRETER HANGS, ALREADY ON MAIN (2026-10-25).**
+  - **Deferred** (Loader.closureDeferred): java/time, java/util Calendar/GregorianCalendar/JapaneseImperialCalendar/
+    TimeZone/SimpleTimeZone/Date, sun/util/calendar, sun/reflect/generics and jdk/internal/logger.
+    - Named by a second pass of the pull-reason instrument over SbProbe: Formatter's %t arm, the calendar
+      initializers, generic-signature reflection and PlatformLogger were the entry edges.
+    - Streams and regex stay in the batch: most programs run them.
+  - **Latent bug 1:** `Loader.steTib()` answered 0 for an unloaded StackTraceElement, so the stack-trace natives
+    built elements with a 0 TIB.
+    - SystemLoggerProbe NPE'd inside `resolveViaItableDir`.
+    - Fix: steTib now pulls the class under the (re-entrant) loader lock.
+  - **Latent bug 2:** `Class.getName()` answered NULL for a writer-baked class the registry never held: VM code
+    `new`s baked classes (VMScheduler.notOwner's IllegalMonitorStateException).
+    - Found as MonitorStateProbe in a full-regression batch.
+    - Fix: the image carries a Type→name table (`VM.bakedTypeBase/Count/Names`), and classNameLen/writeClassName
+      fall back to it.
+  - **Sequential QEMU, SbProbe batch 1:** +1096 → +788 blobs, clinits 305 → 187, rounds 54 → 36,
+    tot 18720 → 7899 ms (main before any deferral: 24694 ms).
+  - **Pi 4 (c75d6c1): PASS.** HTTP 200 `bytes=888`, `[main returned normally]`. Batch 1: +1192 blobs,
+    `clinits=296`, `tot=5709ms` (4ccc26a: +1486 / 412 / 12088; a2589ad: +1740 / 507 / 14482).
+    `gc: collections=6` (7, 8).
+  - **FULL REGRESSION on c75d6c1:**
+    - **Regress: 169 of 169** (RuntimeProbe differed in its batch twice by a `GC: STW TIMEOUT` line; identical
+      alone).
+    - **The branch demo suite FAILED:** demo/LispDemo hangs after its first progress dot (`loaderOwner=-1`, main
+      task ready) and the suite hit the 2 h limit. Everything before it passed (churn `gc: collections=49`, was 51).
+    - **PRE-EXISTING ON MAIN:** LispDemo alone hangs the same way on main ed1ed26 (#429, the first deferral). The
+      last passing suite was 463d0f6, so the cause is #428 or #429; e50c753 is not yet run to split them.
+    - The control suite and JUnit were NOT RUN.
+
 - **THE COLD SUBSYSTEMS ARE DEFERRED FROM THE BATCH CLOSURE TO LATE RESOLUTION; NetDemo's BATCH 1 IS 2.4 s FASTER ON
   THE PI (2026-10-25).** This session's un-denials (locale provider, java/text, sun/text, ICU,
   CharacterName/UnicodeBlock) had pulled those subsystems into EVERY program's first batch: NetDemo's batch 1 on
