@@ -4,6 +4,33 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **TCP: EVERY BOOT OPENED THE SAME CONNECTION (2026-10-27, branch tcp-fresh-tuple, 79d3a94).** Pi-only; QEMU
+  has no WiFi.
+  - **Symptom:** three Pi boots in a row resolved example.com, then timed out in `Tcp.connect` (6 s). The connect
+    native returned 0, so stock NioSocketImpl parked, and the VM halted in the unimplemented `sun/nio/ch/Net.poll`
+    (DENYLIST TRAP).
+  - **It was not #438:** the CONTROL image 3d1e23a, which had reached HTTP 200 earlier the same day, failed
+    identically on the same network. The scheduler change was cleared and #438 merged.
+  - **Not the network:** from the Mac on the same network, both IPv4 addresses (104.20.23.154, 172.66.147.243)
+    connected in 0.09 s and 0.02 s. The Pi's ping to the gateway and SNTP both worked in the failing boots.
+  - **Cause, SUSPECTED and not measured:** every connect used a constant local port (0xC001 + slot) and a
+    constant ISN (0x1000). Each boot therefore opened the identical 4-tuple, and boots that halted
+    mid-connection never closed theirs. A peer or NAT still holding that 4-tuple may answer a new SYN with an ACK of
+    the old connection (RFC 5961). connect ignored everything except SYN|ACK and RST.
+  - **Fix:**
+    - A fresh ephemeral port (49152 + 14 bits) and ISN per connect, from a counter-seeded splitmix64.
+    - In SYN-SENT, an ACK that does not acknowledge our ISN gets a RST (RFC 9293), and a RST counts only if it
+      acknowledges our SYN.
+    - A timed-out connect prints `tcp: connect timed out: syns= fromPeer= lastFlags= lport=`.
+  - **Pi 4 (79d3a94): HTTP 200 `bytes=888` on the FIRST boot.** 61 batches, batch 1 +1172, gc collections=7,
+    the same as the 3d1e23a boot that worked. One success after three failures, with port/ISN the only change,
+    supports the suspected cause; the remote state clearing by coincidence is not excluded.
+  - **OPEN:**
+    - A refused or timed-out connect still halts in Net.poll instead of throwing ConnectException.
+    - DNS (0xC000) and SNTP (0xC001) still use constant UDP source ports.
+  - **NOT RUN:** full regression, the demo suite, JUnit (no VM code changed). make test and make overlaycheck
+    (0 new) OK.
+
 - **SCHEDULER SPAWN RACES: A NEW TASK PUBLISHED BEFORE IT WAS COMPLETE, AND A SLOT RECYCLED UNDER A CORE
   (2026-10-27, branch sched-spawn-race, 64cc351).** Found because StaleBlockedProbe (120 thread starts) opens
   regression batch 6, which hung once in #437's full run.
