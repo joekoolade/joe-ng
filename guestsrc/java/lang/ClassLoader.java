@@ -35,12 +35,15 @@ public class ClassLoader
      * under it. Built in that order, through the explicit-parent constructor, so neither reads a static that is
      * still being assigned.
      */
-    private static final ClassLoader PLATFORM = new ClassLoader((ClassLoader) null);
+    private static final ClassLoader PLATFORM = new ClassLoader("platform", null);
 
-    private static final ClassLoader SYSTEM = new ClassLoader(PLATFORM);
+    private static final ClassLoader SYSTEM = new ClassLoader("app", PLATFORM);
 
     /** The delegation parent, as stock keeps it; null means the bootstrap loader. */
     private final ClassLoader parent;
+
+    /** Stock's: the loader's name, or null if it was not given one. */
+    private final String name;
 
     /** Stock's default: the parent is the system class loader. */
     protected ClassLoader()
@@ -51,7 +54,24 @@ public class ClassLoader
     /** Stock's: a loader delegating to {@code parent}, null for the bootstrap loader. */
     protected ClassLoader(ClassLoader parent)
     {
+        this(null, parent);
+    }
+
+    /** Stock's: a named loader delegating to {@code parent}; an empty name is refused, as stock refuses it. */
+    protected ClassLoader(String name, ClassLoader parent)
+    {
+        if (name != null && name.isEmpty())
+        {
+            throw new IllegalArgumentException("name must be non-empty or null");
+        }
+        this.name = name;
         this.parent = parent;
+    }
+
+    /** Stock's: the name given at construction, or null. The built-in loaders are "platform" and "app". */
+    public String getName()
+    {
+        return name;
     }
 
     /** Stock's: this loader's unnamed module -- the one module every class here belongs to (see Module). */

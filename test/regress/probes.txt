@@ -8,7 +8,7 @@
 # (then the mark comes off). This list is that worklist. Adding a probe: generate its host output
 # with javac + java on the seed JDK, check it equals a metal run, commit it as expected/<Probe>.out.
 #
-# Host recipes that are not plain `java -cp <classes> <Probe>`: GvrProbe/ClassResourceProbe add
+# Host recipes that are not plain `java -cp <classes> <Probe>`: GvrProbe/ClassResourceProbe/LoaderProbe add
 # ramfs/lib/junit.jar to -cp; EngineMessageProbe adds out; DateProbe and DateFormatProbe run with -Duser.timezone=GMT, LocaleSymbolsProbe with --limit-modules java.base -Duser.timezone=GMT and BreakIteratorProbe with --limit-modules java.base (java.base's ROOT+ENGLISH CLDR data, which is what the image carries); ReaderProbe takes ramfs/data/sample.txt and
 # ReflectLookupProbe ramfs/lib/app.jar as args[0]; LocaleProbe runs with
 # -Duser.language=en -Duser.country= -Duser.variant= -Duser.script=. ExcMessageRaceProbe runs with
@@ -104,6 +104,7 @@ JlaProbe
 Lambda4Probe
 LambdaAdaptProbe
 Lazy                     solo             # lazy initialization is the subject
+LoaderProbe              cp=/lib/junit.jar
 LocaleInitProbe          solo             # Locale initialization is the subject
 LocaleProbe              solo             # reads the default locale
 LocaleSymbolsProbe

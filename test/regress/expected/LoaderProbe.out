@@ -1,0 +1,23 @@
+app loader is the system loader = true
+app loader name = app
+parent is the platform loader = true
+platform loader name = platform
+platform parent = null
+context loader is the app loader = true
+String / int[] / String[] loader = null null null
+LoaderProbe[][] loader is app = true
+jar class loader is app = true
+unnamed module = true
+loadClass app class = true
+loadClass java.base class = true
+forName with app loader = true
+platform cannot see an app class = THREW java.lang.ClassNotFoundException: LoaderProbe
+loadClass absent = THREW java.lang.ClassNotFoundException: no.such.Clazz
+getResource protocol + tail = jar ...lib/junit.jar!/META-INF/services/org.junit.platform.engine.TestEngine
+getResource bytes = 133 bytes hash=4e0ffb6b233e3067
+getResourceAsStream bytes = 133 bytes hash=4e0ffb6b233e3067
+getResources count = 1
+Class.getResource of a jar class = jar ...lib/junit.jar!/org/junit/platform/engine/TestEngine.class
+getSystemResource absent = null
+pattern switch in an app class = int42 strs other
+LoaderProbe done
