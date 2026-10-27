@@ -66,8 +66,7 @@ public final class MetalJavaLangAccess implements JavaLangAccess
 
     /**
      * java.lang's side of the members below that stock's System$2 answers by calling a package-private java.lang
-     * method -- registered by java.lang.MetalSystemLoader's initializer, the first thing it does (the built-in
-     * loaders it then creates are the first callers). Null before that, and a call then names itself.
+     * method -- registered by java.lang.MetalSystemLoader's initializer, which the first such call runs.
      */
     private static volatile MetalLangBridge bridge;
 
@@ -77,12 +76,29 @@ public final class MetalJavaLangAccess implements JavaLangAccess
         bridge = b;
     }
 
+    /**
+     * The bridge, registering it first if no call has yet: initializing java.lang.MetalSystemLoader does that.
+     * Through Class.forName on purpose -- a reference the loader can see would pull the bridge, and the stock
+     * loader code its methods call, into the closure of every program that merely uses JavaLangAccess.
+     */
     private static MetalLangBridge bridge(String member)
     {
         MetalLangBridge b = bridge;
         if (b == null)
         {
-            throw unsupported(member + " (before the system class loader was installed)");
+            try
+            {
+                Class.forName("java.lang.MetalSystemLoader");
+            }
+            catch (ClassNotFoundException e)
+            {
+                throw unsupported(member + " (java.lang.MetalSystemLoader is missing)");
+            }
+            b = bridge;
+            if (b == null)
+            {
+                throw unsupported(member + " (java.lang.MetalSystemLoader registered no bridge)");
+            }
         }
         return b;
     }

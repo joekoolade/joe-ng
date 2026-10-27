@@ -1929,9 +1929,37 @@ public abstract class ClassLoader {
                 throw new IllegalStateException(msg);
             default:
                 // system fully initialized
-                assert VM.isBooted() && Holder.scl != null;
-                return Holder.scl;
+                // joe-ng: the system class loader is installed on FIRST USE, not by System.initPhase3 (which this
+                // VM does not run): building the stock loader stack eagerly put its whole reachable closure --
+                // +567 classes, launch time ~2.6x on QEMU -- in front of every program, including the many that
+                // never ask for a loader. The answer is stock's; only its moment moves.
+                ClassLoader scl = Holder.scl;
+                if (scl == null) {
+                    scl = installSystemClassLoader();
+                }
+                return scl;
         }
+    }
+
+    // joe-ng: true while installSystemClassLoader runs -- the window stock spends at initLevel 3, in which a
+    // re-entrant getSystemClassLoader (a java.system.class.loader constructor calling it) is refused.
+    private static boolean installingSystemClassLoader;
+
+    // joe-ng: initSystemClassLoader, on first use (see getSystemClassLoader).
+    private static synchronized ClassLoader installSystemClassLoader() {
+        if (Holder.scl == null) {
+            if (installingSystemClassLoader) {
+                throw new IllegalStateException(
+                        "getSystemClassLoader cannot be called during the system class loader instantiation");
+            }
+            installingSystemClassLoader = true;
+            try {
+                initSystemClassLoader();
+            } finally {
+                installingSystemClassLoader = false;
+            }
+        }
+        return Holder.scl;
     }
 
     static ClassLoader getBuiltinPlatformClassLoader() {
@@ -1949,7 +1977,8 @@ public abstract class ClassLoader {
      * @see java.lang.System#initPhase3
      */
     static synchronized ClassLoader initSystemClassLoader() {
-        if (VM.initLevel() != 3) {
+        // joe-ng: or on first use at level 4 (installSystemClassLoader)
+        if (VM.initLevel() != 3 && !installingSystemClassLoader) {
             throw new InternalError("system class loader cannot be set at initLevel " +
                                     VM.initLevel());
         }

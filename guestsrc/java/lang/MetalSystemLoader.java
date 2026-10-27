@@ -17,34 +17,26 @@ import java.util.concurrent.ConcurrentHashMap;
 import jdk.internal.access.MetalJavaLangAccess;
 import jdk.internal.access.MetalLangBridge;
 import jdk.internal.loader.NativeLibraries;
-import jdk.internal.misc.VM;
 
 /**
- * The class-loader half of stock {@code System.initPhase3}, which joe-ng does not run: raise the init level to 3,
- * install the system class loader, make it the main thread's context loader, and raise the level to 4
- * ({@code SYSTEM_BOOTED}). Its initializer IS the work; {@code Loader.seedBooted} runs it once, after the other
- * launch seeds, so the system properties it reads (java.class.path, java.system.class.loader) are already there.
+ * java.lang's side of the JavaLangAccess members stock's System$2 answers with a package-private java.lang call
+ * ({@link Bridge}), which MetalJavaLangAccess -- in jdk.internal.access -- cannot make itself. Its initializer
+ * registers the bridge; MetalJavaLangAccess runs it on the first such call, through Class.forName, so nothing
+ * reaches this class (or the loader code behind the bridge) before a program asks for it. The built-in loaders
+ * ClassLoaders creates are the first callers (ClassLoaderValue, ServicesCatalog).
  *
- * <p>Without it {@code ClassLoader.getSystemClassLoader()} answered null at level 4 (stock's {@code Holder.scl},
- * which only initSystemClassLoader writes) and the main thread had NO context loader -- MEASURED by LoaderProbe,
- * "context loader is the app loader = false". A thread inherits its creator's context loader, so seeding the
- * main thread is enough.
- *
- * <p>It first hands MetalJavaLangAccess the java.lang side of the JavaLangAccess members stock's System$2 answers
- * with a package-private call ({@link Bridge}): the built-in loaders initSystemClassLoader creates are their
- * first callers (ClassLoaderValue, ServicesCatalog).
+ * <p>This class used to run System.initPhase3's class-loader half at LAUNCH as well: level 3, the system class
+ * loader, the main thread's context loader, level 4. It was right about the answers and wrong about the cost --
+ * the stock loader stack's reachable closure (+567 classes) went in front of every program. The system loader is
+ * now installed on first use (ClassLoader.getSystemClassLoader), and so is the main thread's context loader
+ * (Thread.getContextClassLoader).
  */
 final class MetalSystemLoader
 {
     static
     {
         MetalJavaLangAccess.setBridge(new Bridge());
-        VM.initLevel(3);
-        ClassLoader scl = ClassLoader.initSystemClassLoader();
-        Thread.currentThread().setContextClassLoader(scl);
-        VM.initLevel(4);
     }
-
     private MetalSystemLoader()
     {
     }

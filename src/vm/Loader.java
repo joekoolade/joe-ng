@@ -2874,9 +2874,6 @@ public final class Loader
         // java/lang/ref/Reference: HotSpot initializes it during startup, and its <clinit> is what registers
         // SharedSecrets.javaLangRefAccess -- read with NO null check by Runtime.runFinalization (seedRefAccess).
         pullClass(Magic.bytes("java/lang/ref/Reference"));
-        // java/lang/MetalSystemLoader: stock System.initPhase3's class-loader half, run by seedBooted. Only the VM
-        // names it, so nothing else would pull it.
-        pullClass(Magic.bytes("java/lang/MetalSystemLoader"));
         // System.out/err: stock PrintStreams over the UART, built by MetalStdStreams (seedSystemStreams).
         pullClass(Magic.bytes("jdk/internal/misc/MetalStdStreams"));
         // The atomic scalar wrappers are frequently referenced only by a class literal; force-load them so the
@@ -5174,6 +5171,18 @@ public final class Loader
                 // ... and stock MethodType (java.lang.invoke arc inc 0): named from cold arms of the base
                 // closure (+22 blobs / +12 clinits on SbProbe's batch 1 when it was simply un-denied).
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/MethodType"))
+                // ... and the stock class-loader stack (the loader arc, 2026-10-26): Class.getClassLoader0 and
+                // ClassLoader.getSystemClassLoader name jdk.internal.loader.ClassLoaders, whose initializer builds
+                // the built-in loaders, URLClassPath and the URL handlers -- reached by every first batch through
+                // those two calls and MEASURED at +567 blobs / clinits 184 -> 362 on HelloDemo, launch ~2.6x on
+                // QEMU. Installing the system loader on first use did NOT help by itself (1331 -> 1329 blobs):
+                // the cost is the closure, which RTA computes from what is NAMED, not from what runs.
+                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/loader/"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/net/www/"))
+                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/module/ServicesCatalog"))
+                || utf8IsAtBase(base, off, Magic.bytes("jdk/internal/module/Resources"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/SecureClassLoader"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/security/CodeSource"))
                 || (utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/"))
                         && !utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/VarHandle")));
     }
@@ -10621,23 +10630,23 @@ public final class Loader
      * queues every record until a boot that never came, and {@code jdk.internal.util.Exceptions.setup} refused to
      * run, so exception texts omitted the host.
      *
-     * <p>It is done THE WAY initPhase3 does it, by running {@code java.lang.MetalSystemLoader}'s initializer: level
-     * 3, {@code ClassLoader.initSystemClassLoader()}, the main thread's context loader, level 4. This used to store
-     * 4 into the cell and claim the system loader and the context loader were "already in place here"; neither was
-     * (LoaderProbe: "context loader is the app loader = false"), and stock ClassLoader answers null from
-     * getSystemClassLoader at level 4 until initSystemClassLoader has run. An ENSURE like the other seeds: the
-     * initializer runs once per VM. Last of the seeds, because every one before it is part of what "booted" means
-     * -- the properties above all, since ClassLoaders.<clinit> reads java.class.path.
+     * <p>initPhase3 also installs the system class loader and the main thread's context loader before setting
+     * the level. Here those two happen on FIRST USE instead (stock ClassLoader.getSystemClassLoader, the Thread
+     * overlay's getContextClassLoader): doing them at launch -- tried, measured -- put the stock loader stack's
+     * whole reachable closure (+567 classes, launch ~2.6x on QEMU) in front of every program. This used to claim
+     * the two were "already in place here"; neither was (LoaderProbe: "context loader is the app loader =
+     * false"). Set by storing the cell, as the other launch seeds do: nothing can be waiting on the level's lock
+     * yet. Last of the seeds, because every one before it is part of what "booted" means.
      */
     static void seedBooted()
     {
-        int reg = classRegByNameBytes(Magic.bytes("java/lang/MetalSystemLoader"));
-        if (reg < 0)
+        long slot = staticSlotOf(Magic.bytes("jdk/internal/misc/VM"), Magic.bytes("initLevel"));
+        if (slot == 0L)
         {
-            reportPropsGap(Magic.bytes("java/lang/MetalSystemLoader is not registered (no system class loader)"));
+            reportPropsGap(Magic.bytes("jdk/internal/misc/VM.initLevel has no static cell (isBooted stays false)"));
             return;
         }
-        ensureClinit(reg);
+        Magic.store64(slot, 4L);
     }
 
     /**
