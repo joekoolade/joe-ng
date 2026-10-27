@@ -1,0 +1,13 @@
+location = file:/probe/lib/code.jar
+signers / certificates = null null
+equals same location = true
+hashCode stable = true
+implies a directory wildcard = true
+does not imply a sibling = false
+toString = (file:/probe/lib/code.jar <no signer certificates>)
+null location = null
+SecureClassLoader parent = true
+SecureClassLoader delegates = true
+SecureClassLoader is parallel capable = false
+define with a CodeSource = loader=true cs=(file:/probe/lib/code.jar <no signer certificates>) same pd twice=true
+CodeSourceProbe done

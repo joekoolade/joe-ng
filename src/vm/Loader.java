@@ -6498,6 +6498,14 @@ public final class Loader
                 // holder with no natives, no imports and no <clinit>. CodeSource is only a field TYPE; with a
                 // null code source (all this VM builds) it is never loaded.
                 || utf8IsAtBase(base, off, Magic.bytes("java/security/ProtectionDomain"))
+                // CodeSource + SecureClassLoader: what every stock built-in loader is (BuiltinClassLoader extends
+                // SecureClassLoader) and defines a class with. Certificates are FIELD TYPES only -- an unsigned
+                // class path never builds one -- and CodeSource's one sun.security reference (IOUtils) is in
+                // readObject. CodeSigner is exact: it is the other field type, and its cert path stays denied.
+                // The prefix on SecureClassLoader admits its nested CodeSourceKey.
+                || utf8IsAtBase(base, off, Magic.bytes("java/security/CodeSource"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/security/CodeSigner"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/SecureClassLoader"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/security/Privileged"))
                 // The java.security EXCEPTION hierarchy: ordinary Throwables with no machinery behind them.
                 // They are what a stub in this subsystem THROWS, so denying them would leave a stub unable

@@ -61,6 +61,7 @@ ClassResourceProbe       cp=/lib/junit.jar
 ClinitOrderProbe         solo             # initialization order is the subject
 ClinitRaceProbe          solo             # races a first initialization
 CmpProbe
+CodeSourceProbe
 CollectionsProbe
 ComponentTypeProbe
 ConcatUtf16Probe

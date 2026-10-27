@@ -195,6 +195,9 @@ public final class ReachScan
                 || c.startsWith("java/security/Guard")
                 || c.startsWith("java/security/Principal")
                 || c.equals("java/security/ProtectionDomain")              // Class.getProtectionDomain's answer
+                || c.equals("java/security/CodeSource")                    // a built-in loader's define record
+                || c.equals("java/security/CodeSigner")
+                || c.startsWith("java/security/SecureClassLoader")
                 || c.startsWith("java/security/Privileged")
                 || c.startsWith("java/security/GeneralSecurityException")
                 || c.startsWith("java/security/NoSuchAlgorithmException")
