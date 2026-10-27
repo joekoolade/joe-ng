@@ -70,8 +70,8 @@ class MethodHandleNatives {
     // method declared in package-private AbstractStringBuilder. The check is not redundant with Lookup's: a
     // refusal here is a LinkageError, which MemberName reports as "no such method" -- the message a caller sees.
     //
-    // STATED LIMIT: CALLER_SENSITIVE is never set, so a handle to an @CallerSensitive method is not bound to
-    // its caller.
+    // CALLER_SENSITIVE is set from the method's @jdk.internal.reflect.CallerSensitive annotation, as HotSpot's
+    // class-file parser sets Method::caller_sensitive, so Lookup binds such a handle to its caller.
 
     static void init(MemberName self, Object ref) {
         if (ref instanceof Field f) {
@@ -399,6 +399,12 @@ class MethodHandleNatives {
             kind = Modifier.isStatic(acc) ? REF_invokeStatic : REF_invokeSpecial;
         }
         int flags = (acc & MODS) | (ctor ? MN_IS_CONSTRUCTOR : MN_IS_METHOD) | (kind << MN_REFERENCE_KIND_SHIFT);
+        if (!ctor && annoPresent0(idx, CALLER_SENSITIVE_DESC) != 0) {
+            // MEASURED without it: MethodHandles.lookup() invoked through a handle returned a FULL-PRIVILEGE
+            // Lookup on java.lang.invoke.DirectMethodHandle$Holder -- getCallerClass saw the LambdaForm frame,
+            // not the caller -- and revealDirect cracked another lookup's caller-sensitive handle.
+            flags |= MN_CALLER_SENSITIVE;
+        }
         UNSAFE.putReference(self, MN_CLAZZ, clazz);
         UNSAFE.putInt(self, MN_FLAGS, flags);
         UNSAFE.putReference(self, MN_METHOD, new ResolvedMethodName(holder, idx, vmindex));
@@ -766,6 +772,12 @@ class MethodHandleNatives {
 
     /** VM native: a copy of the class file the class was loaded from, or null. */
     private static native byte[] classBytes0(Class<?> c);
+
+    private static final byte[] CALLER_SENSITIVE_DESC =
+            jdk.internal.misc.MetalNames.utf8("Ljdk/internal/reflect/CallerSensitive;");
+
+    /** VM native (the reflection one): whether the method at registry index {@code idx} carries the annotation. */
+    private static native int annoPresent0(int idx, byte[] descriptor);
 
     /** VM native: see {@link #declaredIndex}. */
     private static native int declared0(Class<?> c, byte[] name, byte[] desc);

@@ -64,6 +64,45 @@ public final class MetalJavaLangAccess implements JavaLangAccess
         return new InternalError("joe-ng: JavaLangAccess." + member + " is not implemented on this VM");
     }
 
+    /**
+     * java.lang's side of the members below that stock's System$2 answers by calling a package-private java.lang
+     * method -- registered by java.lang.MetalSystemLoader's initializer, which the first such call runs.
+     */
+    private static volatile MetalLangBridge bridge;
+
+    /** java.lang.MetalSystemLoader's registration; once. */
+    public static void setBridge(MetalLangBridge b)
+    {
+        bridge = b;
+    }
+
+    /**
+     * The bridge, registering it first if no call has yet: initializing java.lang.MetalSystemLoader does that.
+     * Through Class.forName on purpose -- a reference the loader can see would pull the bridge, and the stock
+     * loader code its methods call, into the closure of every program that merely uses JavaLangAccess.
+     */
+    private static MetalLangBridge bridge(String member)
+    {
+        MetalLangBridge b = bridge;
+        if (b == null)
+        {
+            try
+            {
+                Class.forName("java.lang.MetalSystemLoader");
+            }
+            catch (ClassNotFoundException e)
+            {
+                throw unsupported(member + " (java.lang.MetalSystemLoader is missing)");
+            }
+            b = bridge;
+            if (b == null)
+            {
+                throw unsupported(member + " (java.lang.MetalSystemLoader registered no bridge)");
+            }
+        }
+        return b;
+    }
+
     @Override public List<Method> getDeclaredPublicMethods(Class<?> klass, String name, Class<?>... parameterTypes)
     {
         throw unsupported("getDeclaredPublicMethods");
@@ -167,11 +206,11 @@ public final class MetalJavaLangAccess implements JavaLangAccess
     }
     @Override public ConcurrentHashMap<?, ?> createOrGetClassLoaderValueMap(ClassLoader cl)
     {
-        throw unsupported("createOrGetClassLoaderValueMap");
+        return bridge("createOrGetClassLoaderValueMap").createOrGetClassLoaderValueMap(cl);
     }
     @Override public Class<?> defineClass(ClassLoader cl, String name, byte[] b, ProtectionDomain pd, String source)
     {
-        throw unsupported("defineClass");
+        return bridge("defineClass").defineClass(cl, name, b, pd, source);
     }
     /**
      * Lookup.defineClass / defineHiddenClass: define the bytes at run time (jdk.internal.misc.MetalHiddenClasses),
@@ -184,38 +223,31 @@ public final class MetalJavaLangAccess implements JavaLangAccess
         return jdk.internal.misc.MetalHiddenClasses.define(b, flags, classData, initialize);
     }
     /**
-     * The named class, or null when there is none -- looked up in the VM's ONE class namespace. Stock answers only
-     * classes the BOOTSTRAP loader defines; this VM has no separate boot loader, so an application class answers
-     * too, which is the one difference. jdk.internal.loader.BootLoader.loadClassOrNull is the caller, and its
-     * user here is ClassSpecializer finding the pregenerated BoundMethodHandle species.
+     * Stock's: a class the BOOTSTRAP loader defines, or null (ClassLoader.findBootstrapClassOrNull). This used to
+     * answer application classes too, when there was no separate boot loader to ask; stock ClassLoader has one now.
+     * jdk.internal.loader.BootLoader.loadClassOrNull and ClassLoaders' boot loader are the callers.
      */
     @Override public Class<?> findBootstrapClassOrNull(String name)
     {
-        try
-        {
-            return Class.forName(name, false, null);
-        }
-        catch (ClassNotFoundException e)
-        {
-            return null;
-        }
+        return bridge("findBootstrapClassOrNull").findBootstrapClassOrNull(name);
     }
     @Override public Package definePackage(ClassLoader cl, String name, Module module)
     {
-        throw unsupported("definePackage");
+        return bridge("definePackage").definePackage(cl, name, module);
     }
     @Override public Module defineModule(ClassLoader loader, ModuleDescriptor descriptor, URI uri)
     {
         throw unsupported("defineModule");
     }
     /**
-     * The one unnamed module every class here belongs to. Stock makes a fresh unnamed module per loader; this VM
-     * has one class namespace and one module (see java.lang.Module), so a second instance would be a module no
-     * class answers from getModule(). BootLoader's initializer is the caller.
+     * Stock's is {@code new Module(loader)}. Each loader's constructor has already made its unnamed module, and
+     * Class.getModule answers that instance, so this hands back the same one rather than a second module no class
+     * answers from getModule: the bootstrap loader's (BootLoader's initializer is the caller) is
+     * {@code Object.class.getModule()}.
      */
     @Override public Module defineUnnamedModule(ClassLoader loader)
     {
-        return ClassLoader.getSystemClassLoader().getUnnamedModule();
+        return loader == null ? Object.class.getModule() : loader.getUnnamedModule();
     }
     @Override public void addReads(Module m1, Module m2)
     {
@@ -452,9 +484,10 @@ public final class MetalJavaLangAccess implements JavaLangAccess
     {
         throw unsupported("setCause");
     }
+    /** Stock's. */
     @Override public ProtectionDomain protectionDomain(Class<?> c)
     {
-        throw unsupported("protectionDomain");
+        return c.getProtectionDomain();
     }
     @Override public MethodHandle stringConcatHelper(String name, MethodType methodType)
     {
@@ -520,7 +553,7 @@ public final class MetalJavaLangAccess implements JavaLangAccess
     }
     @Override public NativeLibraries nativeLibrariesFor(ClassLoader loader)
     {
-        throw unsupported("nativeLibrariesFor");
+        return bridge("nativeLibrariesFor").nativeLibrariesFor(loader);
     }
     @Override public Thread[] getAllThreads()
     {
@@ -626,7 +659,7 @@ public final class MetalJavaLangAccess implements JavaLangAccess
     }
     @Override public String getLoaderNameID(ClassLoader loader)
     {
-        throw unsupported("getLoaderNameID");
+        return bridge("getLoaderNameID").getLoaderNameID(loader);
     }
     @Override public void copyToSegmentRaw(String string, MemorySegment segment, long offset)
     {

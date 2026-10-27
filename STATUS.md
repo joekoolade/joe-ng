@@ -4,6 +4,57 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **STOCK CLASS LOADERS: java.lang.ClassLoader + jdk.internal.loader + file:/jar: URLs, AND @CallerSensitive
+  METHOD HANDLES (2026-10-26/27, branch caller-sensitive, 9 commits).** Rule 1/3 work; the user chose the real
+  loader subsystem over a minimal shim.
+  - **Why:**
+    - A handle to `MethodHandles.lookup()` answered a FULL-PRIVILEGE Lookup on `DirectMethodHandle$Holder`:
+      CALLER_SENSITIVE was never set.
+    - `Class.getClassLoader()` answered null for every class, so java.base ran bootstrap-only paths for
+      application classes.
+    - Fixing the second exposed the denied ClassLoaders behind `MethodHandle.isBuiltinLoader` (IndyProbe).
+  - **What runs now:**
+    - **Stock code:** java.lang.ClassLoader from the JDK 26 source, with natives Java over
+      jdk.internal.misc.MetalLoaders. ClassLoaders/BuiltinClassLoader/URLClassPath, SecureClassLoader/CodeSource,
+      and the sun/net/www file: and jar: handlers are all stock.
+    - **Loader identity:** findLoadedClass0 answers the VM's one namespace when THIS loader defines the class, so
+      visibility falls out. The Class mirror carries stock's classLoader/protectionDomain/signers (32 -> 56 bytes).
+      Each loader has its own unnamed Module.
+    - **First use, not launch:** the system class loader and main's context loader are installed on first use
+      (initPhase3's loader half). Every Thread constructor now inherits the context loader; three never did.
+    - **Seeded properties:** java.class.path from `classpath=`. The VM resource natives are retired.
+  - **Silent wrong answers found on the way:**
+    - **JarFile's manifest limit** came from the DENIED `SignatureFileVerifier.MAX_SIG_FILE_SIZE`, which read 0,
+      so URLClassPath dropped the class-path jar in silence. Found by constructing URLClassPath$JarLoader
+      reflectively.
+    - **The unresolved-`new` table** (256) returned SITE 0 when full and ALLOCATED site 0's class.
+      MetalStdStreams$Uart objects came back from `new IsAcceptable()` and from the VarHandle behind
+      AtomicReferenceArray.AA. MEASURED "CAP EXCEEDED: MAXUNRES count=256" at NormalizerProbe. Now 4096, and a full
+      table halts.
+  - **Launch cost, MEASURED (LOAD_TRACE, HelloDemo, QEMU):**
+    - before: +764 blobs / clinits 184 / 29.1 s;
+    - eager stock loaders: +1331 / 362 / 76.6 s;
+    - first-use install only: +1329;
+    - with the loader stack in closureDeferred: **+775 / 185 / 29.1 s**.
+  - **Probes:** LoaderProbe 23/23, CodeSourceProbe 12/12, UrlProbe 18/18 and CallerSensitiveProbe 5/5 (all new)
+    match the host. IndyProbe and MhSpinProbe pass again.
+  - **QEMU full regression on 3d1e23a: 181 of 181 pass** (78 min, -j 4, under caffeinate). Two batch-only
+    differences, identical alone:
+    - **batch 6 HUNG at its first probe**, StaleBlockedProbe, with no output for 58 min. It passed solo, and the
+      same batch passed in the d3ddfeb and 2d9ea24 full runs. OPEN: a lost-wakeup-shaped hang that batch state
+      cannot explain.
+    - **RuntimeProbe** printed two `GC: STW TIMEOUT ... (collection SKIPPED)` lines (host awake, -j 4 load).
+  - **Pi 4 (3d1e23a): HTTP 200 `bytes=891`** on the third boot. 61 batches (32), gc collections=7 (6), batch 1
+    unchanged (+1172).
+    - **The first TWO boots failed:** `UnknownHostException: example.com` after WiFi/DHCP succeeded.
+    - **The DNS client is unchanged.** Resolution now first passes the ServiceLoader lookup for a resolver
+      provider through the stock loaders, which is those extra batches; they also ran in the boot that worked.
+    - **NOT attributed:** the 858e7f8 control image was not re-booted on the same network.
+  - **Process:** the host's overnight Maintenance Sleep (~900 s chunks) fabricated pathological timings and
+    "core stuck parked" lines. A fix built on that misreading (pendHot) was A/B'd, measured worthless (91 vs 93 s)
+    and reverted.
+  - **NOT RUN:** the demo suite, JUnit.
+
 - **SCHEDULER LOST WAKEUP: A WAIT THAT EXITS WHILE STILL BLOCKED STRANDS ITS TASK (2026-10-26).** This is the
   SemaphoreProbe batch hang recorded as pre-existing at a65b667.
   - **The cause:** pickNext RESUMES a task that cannot continue when its core has no idle task (core 0,

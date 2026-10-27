@@ -1,0 +1,6 @@
+lookup() through a handle = CallerSensitiveProbe full=true
+Class.forName through a handle = CallerSensitiveProbe$Target
+revealDirect refuses another lookup's CS handle = IllegalArgumentException
+revealDirect by its own lookup = invokeStatic java.lang.Class.forName:(String)Class
+plain method unaffected = 1
+CallerSensitiveProbe done

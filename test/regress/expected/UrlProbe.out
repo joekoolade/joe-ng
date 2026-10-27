@@ -1,0 +1,20 @@
+file URL = file ...lib/junit.jar
+file URL head bytes = 504b0304
+file URL content length = true
+jar URL = jar ...lib/junit.jar!/META-INF/services/org.junit.platform.engine.TestEngine
+jar URL bytes = 133 bytes hash=4e0ffb6b233e3067
+jar URL content length = 133
+JarURLConnection entry name = META-INF/services/org.junit.platform.engine.TestEngine
+JarURLConnection jar file URL = file ...lib/junit.jar
+JarURLConnection getJarEntry = META-INF/services/org.junit.platform.engine.TestEngine
+JarURLConnection manifest = org.junit.platform.console.ConsoleLauncher
+relative URL = jar ...lib/junit.jar!/META-INF/services/other.txt
+round trip equals = true
+to URI scheme = jar
+absent jar entry = THREW java.io.FileNotFoundException
+absent jar file = THREW java.nio.file.NoSuchFileException
+absent file = THREW java.io.FileNotFoundException
+unknown protocol = THREW java.net.MalformedURLException
+jar URL without !/ = THREW java.net.MalformedURLException
+uncached connection bytes = 133 bytes hash=4e0ffb6b233e3067
+UrlProbe done

@@ -215,6 +215,24 @@ public class JarFile extends ZipFile {
     // this will be set when the thread is initializing a JAR verifier
     private static final ScopedValue<Boolean> IN_VERIFIER_INIT = ScopedValue.newInstance();
 
+    // joe-ng: stock reads this limit from sun.security.util.SignatureFileVerifier.MAX_SIG_FILE_SIZE, and that
+    // class is DENIED here (no signature verification), so the constant read as ZERO and every META-INF read
+    // through getBytes failed: "Unsupported size: 56 for JarEntry META-INF/MANIFEST.MF. Allowed max size: 0
+    // bytes". MEASURED twice -- the manifest read (see getManifestFromReference) and then, once the stock
+    // URLClassPath existed, hasClassPathAttribute -> checkForSpecialAttributes, which made URLClassPath drop the
+    // class-path jar in silence and every ClassLoader.getResource answer null. Computed here exactly as stock's
+    // SignatureFileVerifier.initializeMaxSigFileSize computes it, so the value is the stock one rather than a
+    // stand-in, and both reads are fixed at the root instead of one call site at a time.
+    private static final int MAX_SIG_FILE_SIZE = initializeMaxSigFileSize();
+
+    private static int initializeMaxSigFileSize() {
+        int tmp = Integer.getInteger("jdk.jar.maxSignatureFileSize", 16000000);
+        if (tmp < 0 || tmp > jdk.internal.util.ArraysSupport.SOFT_MAX_ARRAY_LENGTH) {
+            tmp = 16000000;
+        }
+        return tmp;
+    }
+
     /**
      * Returns the version that represents the unversioned configuration of a
      * multi-release jar file.
@@ -791,11 +809,11 @@ public class JarFile extends ZipFile {
     private byte[] getBytes(ZipEntry ze) throws IOException {
         try (InputStream is = super.getInputStream(ze)) {
             long uncompressedSize = ze.getSize();
-            if (uncompressedSize > SignatureFileVerifier.MAX_SIG_FILE_SIZE) {
+            if (uncompressedSize > MAX_SIG_FILE_SIZE) {
                 throw new IOException("Unsupported size: " + uncompressedSize +
                         " for JarEntry " + ze.getName() +
                         ". Allowed max size: " +
-                        SignatureFileVerifier.MAX_SIG_FILE_SIZE + " bytes. " +
+                        MAX_SIG_FILE_SIZE + " bytes. " +
                         "You can use the jdk.jar.maxSignatureFileSize " +
                         "system property to increase the default value.");
             }

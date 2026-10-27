@@ -64,6 +64,14 @@ public class Thread implements Runnable, MetalThreadEntry
     private Object[] scopedValueCache;
     // @152 -- stock's head of this thread's stack of StackableScopes (ScopedValueContainer, structured scopes).
     private volatile jdk.internal.vm.StackableScope headStackableScopes;
+    // @160 -- joe-ng: whether contextClassLoader holds this thread's answer. Every constructor sets it (inheriting
+    // the creator's loader, as stock does); only a thread the VM allocates itself -- the boot thread that runs
+    // main -- starts without it, and its first getContextClassLoader installs the system loader then. Stock sets
+    // main's context loader in System.initPhase3; joe-ng installs the system class loader on first use instead,
+    // because building it eagerly put the stock loader stack's whole reachable closure (+567 classes) in front
+    // of every launch. Kept apart from the field's VALUE because null is a real answer: InnocuousThread writes
+    // a null context loader straight into the field through Unsafe.
+    private volatile boolean contextClassLoaderSet;
 
     // null unless explicitly set (stock)
     private static volatile UncaughtExceptionHandler defaultUncaughtExceptionHandler;
@@ -78,17 +86,30 @@ public class Thread implements Runnable, MetalThreadEntry
     /** No-arg ctor: a Thread subclass overrides run() (its own body is the task); there is no separate target. */
     public Thread()
     {
+        inheritContextClassLoader();
     }
 
     public Thread(Runnable r)
     {
         target = r;
+        inheritContextClassLoader();
     }
 
     public Thread(Runnable r, String threadName)
     {
         target = r;
         name = threadName;
+        inheritContextClassLoader();
+    }
+
+    /**
+     * Stock: a new thread starts with its creator's context class loader. These three constructors used to
+     * leave it null, whatever the creator's was.
+     */
+    private void inheritContextClassLoader()
+    {
+        contextClassLoader = currentThread().getContextClassLoader();
+        contextClassLoaderSet = true;
     }
 
     /**
@@ -100,7 +121,7 @@ public class Thread implements Runnable, MetalThreadEntry
     {
         target = r;
         name = threadName;
-        contextClassLoader = currentThread().contextClassLoader;   // stock: inherited from the creating thread
+        inheritContextClassLoader();                               // stock: inherited from the creating thread
         if (inheritThreadLocals)
         {
             Thread parent = currentThread();
@@ -279,15 +300,25 @@ public class Thread implements Runnable, MetalThreadEntry
         return false;
     }
 
-    /** Null unless set: joe-ng loads every class through one VM loader, the bootstrap loader's own answer. */
+    /**
+     * Stock's answer: the loader set on this thread or inherited from its creator. A thread the VM allocated
+     * itself (the boot thread that runs main) has neither, and answers the system class loader -- stock's main
+     * thread context loader -- installing it on this first ask (see {@code contextClassLoaderSet}).
+     */
     public ClassLoader getContextClassLoader()
     {
+        if (!contextClassLoaderSet)
+        {
+            contextClassLoader = ClassLoader.getSystemClassLoader();
+            contextClassLoaderSet = true;
+        }
         return contextClassLoader;
     }
 
     public void setContextClassLoader(ClassLoader cl)
     {
         contextClassLoader = cl;
+        contextClassLoaderSet = true;
     }
 
     /** Every thread belongs to the one flat group (no hierarchy on joe-ng). */

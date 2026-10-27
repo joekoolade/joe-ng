@@ -41,6 +41,8 @@ public final class JarFs
 
     private static ZipDir dir;                         // the opened classpath jar, or null
 
+    private static byte[] openedPath = new byte[0];    // its RAMFS path, empty when none is open
+
     private static long[] cacheName;                   // blob holding the class's internal name ...
     private static int[] cacheNameLen;                 // ... and its length
     private static long[] cacheBlob;                   // the inflated classfile blob, 0 for a known miss
@@ -88,6 +90,15 @@ public final class JarFs
      * Open the RAMFS file {@code path} as the classpath jar, copying it out of the image into the heap (the
      * directory indexes it in place). Returns false if the file is missing or is not a readable zip.
      */
+    /**
+     * The RAMFS path of the open class-path jar, or an empty array when none is open -- the value of
+     * {@code java.class.path}, which stock ClassLoaders builds the application loader's URLClassPath from.
+     */
+    public static byte[] path()
+    {
+        return openedPath;
+    }
+
     public static boolean open(byte[] path)
     {
         long e = VM.fileFind(path);
@@ -110,6 +121,7 @@ public final class JarFs
             return false;
         }
         dir = opened;
+        openedPath = path;
         cacheName = new long[MAXCACHE];
         cacheNameLen = new int[MAXCACHE];
         cacheBlob = new long[MAXCACHE];

@@ -1168,13 +1168,6 @@ final class VMNatives
     }
 
     /**
-     * {@code ClassLoader.resourceExists0(byte[])} native: does the classpath jar carry this exact path?
-     *
-     * <p>The guest side serves resources as an EMPTY enumeration, which is the truthful answer only when the
-     * resource is genuinely absent. This is what lets it tell the two cases apart and report the second
-     * rather than answer it wrongly in silence.
-     */
-    /**
      * {@code SecureRandom.hwEntropy0(byte[], int)} native: fill the array with hardware entropy.
      *
      * @param arr the guest {@code byte[]} to fill
@@ -1194,35 +1187,27 @@ final class VMNatives
         return Rng.fill(arr + ObjectModel.ARRAY_BASE_OFFSET, (int) n);
     }
 
-    static long resourceExists(long nameArr)
-    {
-        if (nameArr == 0L)
-        {
-            return 0L;
-        }
-        int len = (int) Magic.load64(nameArr + ObjectModel.ARRAY_LENGTH_OFFSET);
-        return JarFs.hasResource(nameArr + ObjectModel.ARRAY_BASE_OFFSET, len) ? 1L : 0L;
-    }
-
     /**
-     * {@code ClassLoader.resourceBytes0(byte[])} native: the classpath jar entry's bytes, or 0 when absent.
-     *
-     * <p>The bytes are COPIED into a guest {@code byte[]} rather than handed over as ZipDir produced them: the
-     * inflate runs in the baked world, whose arrays carry no array Type, and guest code goes on to
-     * {@code checkcast} and store what it gets.
+     * {@code MetalLoaders.lookup0(byte[])} native: the Class mirror of a binary name, loaded into the live program
+     * if it is not yet, WITHOUT running its {@code <clinit>} -- or 0. What stock ClassLoader's
+     * findLoadedClass0/findBootstrapClass stand on (loadClass does not initialize). {@link #forName} is the
+     * initializing twin, for Class.forName.
      */
-    static long resourceBytes(long nameArr)
+    static long forNameNoInit(long nameArr)
     {
-        if (nameArr == 0L)
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
         {
-            return 0L;
+            return Loader.forNameMirror(nameArr, false);
         }
-        int len = (int) Magic.load64(nameArr + ObjectModel.ARRAY_LENGTH_OFFSET);
-        return Loader.guestBytes(JarFs.resourceData(nameArr + ObjectModel.ARRAY_BASE_OFFSET, len));
+        finally
+        {
+            VM.loaderUnlock();
+        }
     }
 
     /**
-     * Reflection M3: {@code ClassLoader.defineClass0(name, byte[], off, len)} native — materialize a class from
+     * Reflection M3: {@code MetalLoaders.defineClass0(name, byte[], off, len)} native — materialize a class from
      * the SUPPLIED classfile bytes into the live program and return its Class mirror. 0 => the guest throws
      * {@code ClassFormatError}/returns null. The {@code name} arg is advisory (the loader uses the classfile's
      * own this_class); boot force-compile passes a 0 array (guarded in {@code defineFromBytes}).

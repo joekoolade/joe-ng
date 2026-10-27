@@ -43,6 +43,22 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
      */
     transient ClassValue.ClassValueMap classValueMap;
 
+    /**
+     * Stock's defining-loader and protection-domain fields, which HotSpot fills when a loader DEFINES the class.
+     * Here ClassLoader.defineClass1 fills them (the stock natives are Java on this VM). Null for every class the VM
+     * loads itself, out of the image or the class-path jar -- {@link #getClassLoader0} decides those by name.
+     * Package-private where stock's are private final: java.lang.ClassLoader writes them.
+     *
+     * <p>Counted in {@code Loader.classMirror}'s allocation (offsets 32 and 40, and signers at 48), which must
+     * grow with this list.
+     */
+    transient ClassLoader classLoader;
+
+    transient java.security.ProtectionDomain protectionDomain;
+
+    /** Stock's signers field (offset 48), written by {@link #setSigners}. */
+    private transient Object[] signers;
+
     private Class()
     {
     }
@@ -53,7 +69,19 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
      * incremental loader), then runs its {@code <clinit>}. Throws {@code ClassNotFoundException} if the class
      * is not embedded or the name is not a valid binary name.
      */
+    @jdk.internal.reflect.CallerSensitive
     public static Class<?> forName(String name) throws ClassNotFoundException
+    {
+        return forName(name, true, null);
+    }
+
+    /**
+     * Stock's {@code @CallerSensitiveAdapter} twin of {@link #forName(String)}, which a method handle or reflective
+     * call to that method is bound to (MethodHandleImpl.bindCaller looks for exactly this signature). There is one
+     * class namespace, so the caller selects no loader, and the answer is {@link #forName(String)}'s.
+     */
+    @jdk.internal.reflect.CallerSensitiveAdapter
+    private static Class<?> forName(String name, Class<?> caller) throws ClassNotFoundException
     {
         return forName(name, true, null);
     }
@@ -148,9 +176,15 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
         return null;
     }
 
+    /**
+     * The unnamed module of this class's defining loader -- stock's answer for every class outside a named
+     * module, which on this VM is every class (there is no module graph). The bootstrap loader's unnamed module
+     * is {@link Module#UNNAMED}.
+     */
     public Module getModule()
     {
-        return Module.UNNAMED;
+        ClassLoader l = getClassLoader0();
+        return l == null ? Module.UNNAMED : l.getUnnamedModule();
     }
 
 
@@ -580,10 +614,20 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
         return jdk.internal.misc.MetalHiddenClasses.isHidden(this);
     }
 
-    /** Stock's native: null. Signers are set by a class loader verifying a signed jar, which this VM never does. */
+    /** Stock's: the signers ClassLoader.setSigners recorded (only a signed jar's classes have any), copied. */
     public Object[] getSigners()
     {
-        return null;
+        Object[] s = this.signers;
+        return s == null ? null : s.clone();
+    }
+
+    /** Stock's: record the signers of this class; ignored for a primitive or an array class. */
+    void setSigners(Object[] signers)
+    {
+        if (!isPrimitive() && !isArray())
+        {
+            this.signers = signers;
+        }
     }
 
     /** Stock's: a nominal descriptor for this class -- empty only for a hidden one, and this VM makes none. */
@@ -805,9 +849,8 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
      * name -- so leaving them undeclared bought nothing and cost a DENYLIST TRAP on the day one is reached.
      *
      * <p>The half NOT added here is the half that needs machinery joe-ng does not have:
-     * {@code getAnnotation}/{@code getAnnotations} need a live annotation instance (a Proxy runtime),
-     * {@code getProtectionDomain} needs {@code java/security} (denylisted) and the generic-signature methods
-     * need a signature parser. Those stay in the backlog rather than being answered wrongly. ({@code getResource*}
+     * {@code getAnnotation}/{@code getAnnotations} need a live annotation instance (a Proxy runtime) and the
+     * generic-signature methods need a signature parser. Those stay in the backlog rather than being answered wrongly. ({@code getResource*}
      * was in this list; it is declared below {@link #getClassLoader} now.)
      */
     @SuppressWarnings("unchecked")
@@ -1644,16 +1687,81 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
         return getName();
     }
 
-    /** Null: joe-ng loads every class through one VM loader, which is the bootstrap loader's own answer. */
+    /**
+     * The defining loader as a stock JVM reports it: NULL (the bootstrap loader) for the JDK's own classes and the
+     * VM's, the SYSTEM loader for an application's. joe-ng has one class namespace, so the answer is decided by
+     * NAME -- the java/, javax/, jdk/, sun/ and com/sun/ packages are what the bootstrap loader defines -- rather
+     * than by which loader read the bytes; an array answers for its element type, a primitive is bootstrap.
+     *
+     * <p>This answered NULL FOR EVERY CLASS, which made every application class look like a bootstrap class --
+     * and stock code branches on exactly that. MEASURED: a method handle to the caller-sensitive
+     * MethodHandles.lookup() binds to its caller through the {@code lookup(Class)} adapter, which REFUSES a
+     * bootstrap caller ("calling lookup() reflectively is not supported", CallerSensitiveProbe).
+     */
     public ClassLoader getClassLoader()
     {
-        return null;
+        return getClassLoader0();
     }
 
-    /** Stock's unchecked accessor, which java.base calls in place of {@link #getClassLoader}; the same answer. */
+    /** Holder for the protection domain returned when the internal domain is null (stock's). */
+    private static class Holder
+    {
+        private static final java.security.ProtectionDomain allPermDomain;
+
+        static
+        {
+            java.security.Permissions perms = new java.security.Permissions();
+            perms.add(new java.security.AllPermission());
+            allPermDomain = new java.security.ProtectionDomain(null, perms);
+        }
+    }
+
+    /**
+     * Stock's: the domain the defining loader supplied (ClassLoader.defineClass1 records it), else the all-permission
+     * domain -- which is the answer for every class the VM loads itself. MEASURED need: once an application class
+     * reported the system loader, the hidden-class definer asked for this
+     * (MethodHandles.Lookup.lookupClassProtectionDomain) and the JavaLangAccess stub threw.
+     */
+    public java.security.ProtectionDomain getProtectionDomain()
+    {
+        if (protectionDomain == null)
+        {
+            return Holder.allPermDomain;
+        }
+        return protectionDomain;
+    }
+
+    /**
+     * Stock's unchecked accessor, which java.base calls in place of {@link #getClassLoader}; the same answer. A
+     * class some loader DEFINED answers that loader (recorded by ClassLoader.defineClass1); any other answers the
+     * built-in loader that would own it -- the bootstrap loader for a JDK or VM class, the application loader for
+     * the rest. An array answers for its element type.
+     */
     ClassLoader getClassLoader0()
     {
-        return null;
+        Class<?> c = this;
+        while (c.isArray())
+        {
+            c = c.getComponentType();
+        }
+        if (c.classLoader != null)
+        {
+            return c.classLoader;
+        }
+        if (c.isPrimitive() || isBootName(c.getName()))
+        {
+            return null;
+        }
+        return jdk.internal.loader.ClassLoaders.appClassLoader();
+    }
+
+    /** Whether {@code n} (a binary name) is in a package the bootstrap loader defines -- the JDK's or the VM's own. */
+    private static boolean isBootName(String n)
+    {
+        return n.startsWith("java.") || n.startsWith("javax.") || n.startsWith("jdk.") || n.startsWith("sun.")
+                || n.startsWith("com.sun.") || n.startsWith("vm.") || n.startsWith("magic.")
+                || n.startsWith("compiler.") || n.startsWith("classfile.") || n.startsWith("asm.")
+                || n.startsWith("objectmodel.") || n.startsWith("board.") || n.startsWith("crypto.");
     }
 
     /**
@@ -1671,7 +1779,7 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
     {
         name = resolveName(name);
         java.io.InputStream in = ClassLoader.getSystemResourceAsStream(name);
-        return in != null ? in : ClassLoader.javaBaseResource(name);
+        return in != null ? in : jdk.internal.misc.MetalLoaders.javaBaseResource(name);
     }
 
     /**
