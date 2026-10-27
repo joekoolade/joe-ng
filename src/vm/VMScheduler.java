@@ -1743,13 +1743,23 @@ public final class VMScheduler
     }
 
     /** Create a READY task running {@code entry} on a fresh 32 KiB stack; returns its task id. */
-    /** A terminated task slot (ran taskExit -> taskDone) whose stack + slot can be recycled, or -1 if none. */
+    /**
+     * A terminated task slot (ran taskExit -> taskDone) whose stack + slot can be recycled, or -1 if none. Called
+     * under the scheduler lock.
+     *
+     * <p>DONE IS NOT GONE. taskExit marks the task done and then yields, so for a while the exiting task is still a
+     * core's current task, or that core is still ON its stack while switching away -- the two cases claimable()
+     * already refuses a task for. Recycling such a slot rewrote its frame and its done flag under the core still
+     * running it: the new thread never started and a join() on it waited for ever. MEASURED with a hang dump
+     * (StaleBlockedProbe's batch on QEMU, tasks=40 = MAX_TASKS): main in threadJoin, and the joined task "running"
+     * on core 2 inside taskExit with done=0.
+     */
     static int reuseSlot()
     {
         int s = 0;
         while (s < taskCount)
         {
-            if (taskDone[s] == 1)                          // taskExit ran: never scheduled again, slot is free
+            if (taskDone[s] == 1 && !stillOnACore(s))      // taskExit ran AND no core is still on it
             {
                 return s;
             }
@@ -1758,7 +1768,40 @@ public final class VMScheduler
         return -1;
     }
 
+    /** Whether any core has task {@code t} as its current task, or is still on its stack (see markLeaving). */
+    private static boolean stillOnACore(int t)
+    {
+        int c = 0;
+        while (c < 4)
+        {
+            if (coreSched[c] != 0 && coreTask[c] == t)
+            {
+                return true;
+            }
+            if (coreLeavingAddr != 0L && Magic.load64(coreLeavingAddr + c * 8L) == (long) (t + 1))
+            {
+                return true;
+            }
+            c += 1;
+        }
+        return false;
+    }
+
     static int spawn(long entry)
+    {
+        return spawnWith(entry, 0L, 0L);
+    }
+
+    /**
+     * {@link #spawn}, with the new task's x0 and its java.lang.Thread set BEFORE it becomes runnable. Both used to
+     * be written by the callers after spawn returned -- after {@code TASK_READY} -- so another core could pick the
+     * task up first: the run-trampoline then entered with x0 = 0, resolveRun(0) answered 0, and the unguarded
+     * {@code blr x16} branched to address 0 (MEASURED, StaleBlockedProbe's batch on QEMU: "BOOT RE-ENTERED ...
+     * branched TO x16=0", the call site in the run-trampoline right after `blr` to Loader.resolveRun). The same
+     * window left taskThreadObj 0, so the new task's currentThread() would have minted a Thread of its own.
+     * READY is published under the scheduler lock, whose release orders every write above it.
+     */
+    static int spawnWith(long entry, long arg0, long threadObj)
     {
         int id;
         long daif = schedLock();
@@ -1797,28 +1840,29 @@ public final class VMScheduler
             Magic.store64(frame + r * 8L, 0L);             // x0..x30 = 0
             r += 1;
         }
+        Magic.store64(frame + 0L, arg0);                   // x0 = the receiver (0 for a plain spawn)
         Magic.store64(frame + 248L, entry);                // ELR_EL1 = task entry PC
         Magic.store64(frame + 256L, 0x5L);                 // SPSR_EL1 = EL1h (M=0b0101), DAIF clear -> IRQs on
         taskSp[id] = frame;
         taskWake[id] = 0L;                                 // reset per-task state (matters when recycling a slot)
         taskWaitOn[id] = 0;
         taskWaitObj[id] = 0L;
-        taskThreadObj[id] = 0L;
+        taskThreadObj[id] = threadObj;                     // currentThread() of the new task, before it can run
         taskInterrupted[id] = 0;
         taskPermit[id] = 0;
         taskMonWait[id] = 0L;
         taskBasePrio[id] = taskBasePrio[curTask()];        // inherit the creator's OWN priority (Thread
         taskPrio[id] = taskBasePrio[id];                   //   semantics) -- never a boost it merely borrowed
-        taskState[id] = TASK_READY;                        // now runnable
+        long ready = schedLock();
+        taskState[id] = TASK_READY;                        // now runnable: every field above is visible first
+        schedUnlock(ready);
         return id;
     }
 
     /** Like {@link #spawn}, but the task starts with {@code arg0} in x0 (so it can enter an instance method). */
     static int spawnArg(long entry, long arg0)
     {
-        int id = spawn(entry);
-        Magic.store64(taskSp[id] + 0L, arg0);              // x0 slot of the initial frame = receiver
-        return id;
+        return spawnWith(entry, arg0, 0L);
     }
 
     /**
@@ -1829,9 +1873,9 @@ public final class VMScheduler
      */
     static void startThread(long runnable)
     {
-        int id = spawnArg(runTrampAddr, runnable);
-        taskThreadObj[id] = runnable;                      // guest Thread.start() spawns the Thread ITSELF (M4):
-    }                                                      //   record it so currentThread() returns that object
+        // guest Thread.start() spawns the Thread ITSELF (M4): record it so currentThread() returns that object
+        spawnWith(runTrampAddr, runnable, runnable);
+    }
 
     /** Allocate a fresh counting semaphore initialised to {@code initial}; returns its index (a "fork"). */
     static int newSem(int initial)
