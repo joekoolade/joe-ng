@@ -172,6 +172,7 @@ SecuritySetProbe         solo             # sets Security properties
 SemaphoreProbe
 SerLambdaProbe
 SortPrimProbe
+SpawnRaceProbe           solo
 StackWalkerProbe         solo             # prints stack frames; a batch adds its own
 StaleBlockedProbe
 StockExceptionProbe
