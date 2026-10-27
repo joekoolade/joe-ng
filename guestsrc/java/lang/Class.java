@@ -817,9 +817,8 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
      * name -- so leaving them undeclared bought nothing and cost a DENYLIST TRAP on the day one is reached.
      *
      * <p>The half NOT added here is the half that needs machinery joe-ng does not have:
-     * {@code getAnnotation}/{@code getAnnotations} need a live annotation instance (a Proxy runtime),
-     * {@code getProtectionDomain} needs {@code java/security} (denylisted) and the generic-signature methods
-     * need a signature parser. Those stay in the backlog rather than being answered wrongly. ({@code getResource*}
+     * {@code getAnnotation}/{@code getAnnotations} need a live annotation instance (a Proxy runtime) and the
+     * generic-signature methods need a signature parser. Those stay in the backlog rather than being answered wrongly. ({@code getResource*}
      * was in this list; it is declared below {@link #getClassLoader} now.)
      */
     @SuppressWarnings("unchecked")
@@ -1670,6 +1669,30 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
     public ClassLoader getClassLoader()
     {
         return getClassLoader0();
+    }
+
+    /** Holder for the protection domain returned when the internal domain is null (stock's). */
+    private static class Holder
+    {
+        private static final java.security.ProtectionDomain allPermDomain;
+
+        static
+        {
+            java.security.Permissions perms = new java.security.Permissions();
+            perms.add(new java.security.AllPermission());
+            allPermDomain = new java.security.ProtectionDomain(null, perms);
+        }
+    }
+
+    /**
+     * Stock's answer for a class whose internal domain is null -- which here is every class, because a domain is
+     * only ever supplied by a defineClass that names one and no definition path records it. MEASURED need: once
+     * an application class reported the system loader, the hidden-class definer asked for this
+     * (MethodHandles.Lookup.lookupClassProtectionDomain) and the JavaLangAccess stub threw.
+     */
+    public java.security.ProtectionDomain getProtectionDomain()
+    {
+        return Holder.allPermDomain;
     }
 
     /** Stock's unchecked accessor, which java.base calls in place of {@link #getClassLoader}; the same answer. */

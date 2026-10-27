@@ -30,17 +30,19 @@ package java.lang;
  */
 public class ClassLoader
 {
-    private static final ClassLoader SYSTEM = new ClassLoader();
+    /**
+     * Stock's two built-in loaders: the PLATFORM loader (parent: the bootstrap loader) and the application loader
+     * under it. Built in that order, through the explicit-parent constructor, so neither reads a static that is
+     * still being assigned.
+     */
+    private static final ClassLoader PLATFORM = new ClassLoader((ClassLoader) null);
+
+    private static final ClassLoader SYSTEM = new ClassLoader(PLATFORM);
 
     /** The delegation parent, as stock keeps it; null means the bootstrap loader. */
     private final ClassLoader parent;
 
-    /**
-     * Stock's default: the parent is the system class loader. For {@link #SYSTEM} itself that read happens while
-     * {@code SYSTEM} is still being assigned, so its parent is null -- the bootstrap loader, which is what the
-     * single VM loader underneath it is. (Stock's application loader has the PLATFORM loader as its parent; this
-     * VM has no platform loader to name.)
-     */
+    /** Stock's default: the parent is the system class loader. */
     protected ClassLoader()
     {
         this(getSystemClassLoader());
@@ -75,10 +77,33 @@ public class ClassLoader
         return null;
     }
 
-    /** The single application class loader (no real delegation hierarchy here). */
+    /** The application class loader: what {@link Class#getClassLoader} answers for an application class. */
     public static ClassLoader getSystemClassLoader()
     {
         return SYSTEM;
+    }
+
+    /**
+     * Stock's platform loader, the system loader's parent. No class reports it as its defining loader (a JDK
+     * class answers the bootstrap loader, null, from {@link Class#getClassLoader}), but stock code compares against
+     * it: {@code jdk.internal.misc.VM.isSystemDomainLoader} does, on every hidden-class definition. The overlay
+     * used to drop it, which nothing reached while getClassLoader answered null for every class -- MEASURED once it
+     * stopped: {@code LINK FAILED ... getPlatformClassLoader()} then a TRAPWIRE in {@code makeHiddenClassDefiner}
+     * (IndyProbe's type switch, MhSpinProbe's defineHiddenClassWithClassData).
+     */
+    public static ClassLoader getPlatformClassLoader()
+    {
+        return PLATFORM;
+    }
+
+    /** Stock's: the class loader of {@code caller}, null for the bootstrap loader or a null caller. */
+    static ClassLoader getClassLoader(Class<?> caller)
+    {
+        if (caller == null)
+        {
+            return null;
+        }
+        return caller.getClassLoader0();
     }
 
     /**

@@ -452,9 +452,10 @@ public final class MetalJavaLangAccess implements JavaLangAccess
     {
         throw unsupported("setCause");
     }
+    /** Stock's. */
     @Override public ProtectionDomain protectionDomain(Class<?> c)
     {
-        throw unsupported("protectionDomain");
+        return c.getProtectionDomain();
     }
     @Override public MethodHandle stringConcatHelper(String name, MethodType methodType)
     {

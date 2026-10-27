@@ -186,6 +186,7 @@ public final class ReachScan
                 || c.startsWith("java/security/UnresolvedPermission")
                 || c.startsWith("java/security/Guard")
                 || c.startsWith("java/security/Principal")
+                || c.equals("java/security/ProtectionDomain")              // Class.getProtectionDomain's answer
                 || c.startsWith("java/security/Privileged")
                 || c.startsWith("java/security/GeneralSecurityException")
                 || c.startsWith("java/security/NoSuchAlgorithmException")

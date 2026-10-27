@@ -6480,6 +6480,11 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("java/security/UnresolvedPermission"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/security/Guard"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/security/Principal"))
+                // ProtectionDomain: what Class.getProtectionDomain answers, and what the hidden-class definer
+                // asks for once an application class reports the system loader. In JDK 26 it is a 278-line
+                // holder with no natives, no imports and no <clinit>. CodeSource is only a field TYPE; with a
+                // null code source (all this VM builds) it is never loaded.
+                || utf8IsAtBase(base, off, Magic.bytes("java/security/ProtectionDomain"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/security/Privileged"))
                 // The java.security EXCEPTION hierarchy: ordinary Throwables with no machinery behind them.
                 // They are what a stub in this subsystem THROWS, so denying them would leave a stub unable
