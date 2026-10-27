@@ -4,6 +4,30 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **SCHEDULER SPAWN RACES: A NEW TASK PUBLISHED BEFORE IT WAS COMPLETE, AND A SLOT RECYCLED UNDER A CORE
+  (2026-10-27, branch sched-spawn-race, 64cc351).** Found because StaleBlockedProbe (120 thread starts) opens
+  regression batch 6, which hung once in #437's full run.
+  - **Race 1:** spawnArg/startThread wrote the receiver (x0) and taskThreadObj AFTER spawn set TASK_READY, and
+    that store was outside the scheduler lock. Another core could run the task first: the run-trampoline's
+    `blr x16` on resolveRun(0) branched to 0. MEASURED "BOOT RE-ENTERED ... x16=0" at Loader.resolveRun's call
+    site (symbol map). Now spawnWith(entry, arg0, threadObj) fills everything in and publishes READY under the
+    lock.
+  - **Race 2:** reuseSlot recycled any task with done=1, but taskExit marks done and THEN yields, so a core can
+    still be on it. MEASURED with hangdump=300: main in threadJoin, the joined task running on core 2 in
+    taskExit with done=0. reuseSlot now skips a slot still on a core (stillOnACore, claimable()'s two tests).
+  - **SpawnRaceProbe (new, solo, host-comparable):** 400 threads in rounds of 8, each checking
+    currentThread() == itself. main c0e23f9: 1 of 4 boots pass (2 hang, 1 FAULT elr=0); this branch 4 of 4.
+  - **QEMU:** StaleBlockedProbe's batch 3 of 3 (main: 1 halt in 3). Targeted set 18/18. make test, make
+    overlaycheck (0 new) OK.
+  - **Pi 4 (64cc351): NOT VALIDATED to HTTP 200.** One boot: DNS resolved, then the TCP connect to example.com
+    did not complete within Tcp.connect's 6 s. The connect native returned 0, which stock NioSocketImpl reads as
+    in-progress, so it parked and reached the unimplemented `sun/nio/ch/Net.poll` -> DENYLIST TRAP halt.
+    - That path is not touched by this change. 61 batches and batch 1 (+1172) as in the 3d1e23a boot that
+      worked.
+    - **OPEN (VM gap, pre-existing):** a refused or timed-out connect must raise ConnectException like stock,
+      not halt. Today's network is suspect (DNS failed in 2 of 3 boots on 3d1e23a) but no control was booted.
+  - **NOT RUN:** full regression, the demo suite, JUnit, a second Pi boot.
+
 - **STOCK CLASS LOADERS: java.lang.ClassLoader + jdk.internal.loader + file:/jar: URLs, AND @CallerSensitive
   METHOD HANDLES (2026-10-26/27, branch caller-sensitive, 9 commits).** Rule 1/3 work; the user chose the real
   loader subsystem over a minimal shim.
