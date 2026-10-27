@@ -13,6 +13,7 @@ package net;
 
 import magic.Magic;
 import vm.Heap;
+import vm.VM;
 
 /**
  * A blocking TCP client, factored out of the CYW43 WiFi HTTP-GET demo into a reusable connection table so the
@@ -85,12 +86,15 @@ public final class Tcp
         Magic.store8(rip[h] + 2, (ipBe >> 8) & 0xFF);
         Magic.store8(rip[h] + 3, ipBe & 0xFF);
         rport[h] = port;
-        lport[h] = 0xC001 + h;                          // a distinct ephemeral port per slot
-        int isn = 0x1000;
+        lport[h] = 49152 + (int) (nextRandom() & 0x3FFF);  // a fresh ephemeral port per connection
+        int isn = (int) nextRandom();                   // and a fresh initial sequence number
         snd[h] = isn;
         rcv[h] = 0;
         plen[h] = 0;
 
+        int syns = 0;
+        int fromPeer = 0;
+        int lastFlags = -1;
         long freq = Magic.readCNTFRQ_EL0();
         long endT = Magic.readCNTPCT_EL0() + freq * 6L;
         long nextSend = 0L;
@@ -99,7 +103,9 @@ public final class Tcp
             long now = Magic.readCNTPCT_EL0();
             if (now >= nextSend)
             {
+                snd[h] = isn;
                 sendSeg(h, 0x02, 0L, 0);                 // SYN
+                syns += 1;
                 nextSend = now + freq / 2L;
             }
             long tcp = recvSeg(h);
@@ -108,11 +114,24 @@ public final class Tcp
                 continue;
             }
             int flags = Magic.load8(tcp + 13) & 0x3F;
-            if ((flags & 0x04) != 0)                     // RST
+            fromPeer += 1;
+            lastFlags = flags;
+            boolean ackOk = (flags & 0x10) != 0 && Ip.readBe32(tcp + 8) == isn + 1;
+            if ((flags & 0x04) != 0)                     // RST: refused, if it acknowledges our SYN (RFC 9293)
             {
-                return 0;
+                if (ackOk)
+                {
+                    return 0;
+                }
+                continue;
             }
-            if ((flags & 0x12) == 0x12)                  // SYN|ACK
+            if ((flags & 0x10) != 0 && !ackOk)           // an ACK of something we never sent: the peer
+            {                                            //   holds an old connection on this 4-tuple. RST
+                snd[h] = Ip.readBe32(tcp + 8);           //   it (seq = their ack, RFC 9293 3.10.7.3) and
+                sendSeg(h, 0x04, 0L, 0);                 //   keep sending our SYN
+                continue;
+            }
+            if ((flags & 0x12) == 0x12)                  // SYN|ACK of our SYN
             {
                 rcv[h] = Ip.readBe32(tcp + 4) + 1;       // their ISN + 1
                 snd[h] = isn + 1;
@@ -120,7 +139,40 @@ public final class Tcp
                 return 1;
             }
         }
+        board.bcm2711.Uart.write(Magic.bytes("tcp: connect timed out: syns="));
+        VM.printDec(syns);
+        board.bcm2711.Uart.write(Magic.bytes(" fromPeer="));
+        VM.printDec(fromPeer);
+        board.bcm2711.Uart.write(Magic.bytes(" lastFlags="));
+        VM.printDec(lastFlags);
+        board.bcm2711.Uart.write(Magic.bytes(" lport="));
+        VM.printDec(lport[h]);
+        board.bcm2711.Uart.write(Magic.bytes("\n"));
         return 0;
+    }
+
+    /** splitmix64 state, seeded from the counter on first use (boot-to-boot timing jitter differs per boot). */
+    private static long rngState;
+
+    /**
+     * The next value of a per-boot pseudo-random stream, for ephemeral ports and initial sequence numbers. Both
+     * used to be CONSTANTS (port 0xC001 + slot, ISN 0x1000), so every boot opened the SAME connection -- same
+     * address, port and ISN -- and an earlier boot that halted mid-connection never closed it. A peer or NAT still
+     * holding that 4-tuple may answer a new SYN with an ACK of the old connection (RFC 5961), which connect used to
+     * ignore until it timed out. That was the SUSPECTED cause of three Pi boots in a row timing out (2026-10-27)
+     * while the host reached the same server in milliseconds; it is not measured.
+     */
+    private static long nextRandom()
+    {
+        if (rngState == 0L)
+        {
+            rngState = Magic.readCNTPCT_EL0() ^ 0x5DEECE66DL;
+        }
+        rngState = rngState + 0x9E3779B97F4A7C15L;
+        long z = rngState;
+        z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
+        z = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
+        return z ^ (z >>> 31);
     }
 
     /** Convenience for driver code (e.g. the WiFi HTTP demo): allocate + connect to a 4-byte IPv4 at
