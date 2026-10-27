@@ -42,7 +42,7 @@ public final class ReachScan
         // java/lang/invoke/ is NOT here any more: stock java.lang.invoke runs (the java.lang.invoke arc).
         "java/lang/foreign/", "jdk/internal/foreign/",
         // sun/nio/fs/ and java/nio/file/ run stock over the RAMFS (see Loader.isDenylisted).
-        "jdk/internal/loader/",
+        // jdk/internal/loader/ is NOT here any more: the stock built-in loaders run (see Loader.isDenylisted).
         "java/security/", "java/util/ServiceLoader", "java/util/spi/", "sun/util/",
         // java/net is loadable (M3 sockets). SocksSocketImpl IS on the taken path (Socket.createImpl always
         // wraps the platform impl in it) -- overlaid as a pure delegator, so NOT denied. The HTTP-CONNECT
@@ -151,8 +151,6 @@ public final class ReachScan
                 || c.startsWith("java/lang/invoke/MethodType")          // java.lang.invoke arc inc 0 (MethodTypeForm too)
                 || c.startsWith("jdk/internal/invoke/MhUtil")
                 || c.equals("jdk/internal/reflect/Reflection")          // java.lang.invoke arc: Lookup's field filter
-                || c.startsWith("jdk/internal/loader/BootLoader")       // java.lang.invoke arc: species lookup
-                || c.equals("jdk/internal/loader/ArchivedClassLoaders")
                 || c.startsWith("java/lang/reflect/Modifier")           // STOCK (overlay deleted); the rest are
                                                                         // reflection-arc overlays that run
                 || c.startsWith("java/lang/reflect/Field")              //   on metal; rest of java/lang/reflect denied
@@ -198,6 +196,9 @@ public final class ReachScan
                 || c.equals("java/security/CodeSource")                    // a built-in loader's define record
                 || c.equals("java/security/CodeSigner")
                 || c.startsWith("java/security/SecureClassLoader")
+                // the stock built-in loaders' two jdk/internal/module helpers (see Loader.isDenylisted)
+                || c.startsWith("jdk/internal/module/ServicesCatalog")
+                || c.equals("jdk/internal/module/Resources")
                 || c.startsWith("java/security/Privileged")
                 || c.startsWith("java/security/GeneralSecurityException")
                 || c.startsWith("java/security/NoSuchAlgorithmException")

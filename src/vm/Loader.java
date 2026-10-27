@@ -2874,6 +2874,9 @@ public final class Loader
         // java/lang/ref/Reference: HotSpot initializes it during startup, and its <clinit> is what registers
         // SharedSecrets.javaLangRefAccess -- read with NO null check by Runtime.runFinalization (seedRefAccess).
         pullClass(Magic.bytes("java/lang/ref/Reference"));
+        // java/lang/MetalSystemLoader: stock System.initPhase3's class-loader half, run by seedBooted. Only the VM
+        // names it, so nothing else would pull it.
+        pullClass(Magic.bytes("java/lang/MetalSystemLoader"));
         // System.out/err: stock PrintStreams over the UART, built by MetalStdStreams (seedSystemStreams).
         pullClass(Magic.bytes("jdk/internal/misc/MetalStdStreams"));
         // The atomic scalar wrappers are frequently referenced only by a class literal; force-load them so the
@@ -6320,11 +6323,6 @@ public final class Loader
                 // whose filter map MethodHandles$Lookup.<clinit> registers into. getCallerClass is intrinsified
                 // at the call site; areNestMates is a native and THROWS until it is implemented.
                 || utf8IsAtBase(base, off, Magic.bytes("jdk/internal/reflect/Reflection"))
-                // java.lang.invoke arc: STOCK jdk/internal/loader/BootLoader (and its Holder; ArchivedClassLoaders,
-                // which its initializer asks for CDS state and gets null) -- the rest of jdk/internal/loader stays
-                // denied. Keep in sync with writer.ReachScan.isDenied.
-                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/loader/BootLoader"))
-                || utf8IsAtBase(base, off, Magic.bytes("jdk/internal/loader/ArchivedClassLoaders"))
                 // Reflection arc: these java/lang/reflect classes are overlaid (JDK-free) and DO run on metal
                 // (Class.getModifiers/getDeclaredField*, reflective Field.get/set); the rest of java/lang/reflect
                 // stays denied below.
@@ -6351,8 +6349,8 @@ public final class Loader
                 // here first, exactly as java/text/BreakIterator needed.
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Executable"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Parameter"))
-                // M3: java/lang/ClassLoader is overlaid (JDK-free) -- loadClass -> forName, defineClass(byte[]).
-                // Allowed here; jdk/internal/loader + java/security stay denied below (no delegation/unloading).
+                // java/lang/ClassLoader is STOCK (overlaid from the JDK 26 source, natives Java over the VM's one
+                // class namespace -- jdk.internal.misc.MetalLoaders), and so is jdk/internal/loader below it.
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/ClassLoader"))
                 // ExtendedSocketOptions is overlaid to a no-op (Net.<clinit> sets EXTENDED_OPTIONS from it);
                 // the rest of sun/net/ext stays denied.
@@ -6506,6 +6504,14 @@ public final class Loader
                 || utf8IsAtBase(base, off, Magic.bytes("java/security/CodeSource"))
                 || utf8IsAtBase(base, off, Magic.bytes("java/security/CodeSigner"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/security/SecureClassLoader"))
+                // NARROWED OUT of the jdk/internal/module/ denial, for the stock built-in loaders: ServicesCatalog
+                // (ArchivedClassLoaders collects each built-in loader's -- unconditionally, archive() runs with no
+                // CDS archive -- and only its register(Module) path, never taken without a module graph, touches
+                // java.lang.module) and Resources (BuiltinClassLoader.findResource maps every resource name to a
+                // package with it; plain Java over java.nio.file). The module SYSTEM stays denied: no
+                // ModuleBootstrap runs, so BuiltinClassLoader's package-to-module map stays empty.
+                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/module/ServicesCatalog"))
+                || utf8IsAtBase(base, off, Magic.bytes("jdk/internal/module/Resources"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/security/Privileged"))
                 // The java.security EXCEPTION hierarchy: ordinary Throwables with no machinery behind them.
                 // They are what a stub in this subsystem THROWS, so denying them would leave a stub unable
@@ -6591,7 +6597,11 @@ public final class Loader
                 // (MacOSXFileSystemProvider, the variant the seed bakes) over the read-only RAMFS, its
                 // UnixNativeDispatcher natives implemented against jdk.internal.misc.MetalRamfs and the ones
                 // not implemented THROWING. (Keep in sync with writer.ReachScan.DENY.)
-                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/loader/"))
+                // jdk/internal/loader/ is NOT denied any more: the stock built-in loaders (ClassLoaders,
+                // BuiltinClassLoader, URLClassPath) run over the class-path jar through file:/jar: URLs -- the
+                // loader arc. BootLoader is overlaid (loadLibrary stays a no-op). The native-library natives
+                // (NativeLibraries.load/findBuiltinLib, NativeLibrary.findEntry0) are unbound and trap if reached:
+                // this VM loads no native libraries.
                 || utf8HasPrefix(base, off, Magic.bytes("java/security/"))
                 // java/util/ServiceLoader is NOT denied: it is OVERLAID (guestsrc/java/util/ServiceLoader).
                 // Stock discovery goes through ClassLoader.getResources -> java/net/URL -> a protocol handler
@@ -7459,6 +7469,16 @@ public final class Loader
      */
     static long forNameMirror(long nameArr)
     {
+        return forNameMirror(nameArr, true);
+    }
+
+    /**
+     * As {@link #forNameMirror(long)}, initializing the class only when {@code init} is set: ClassLoader.loadClass
+     * and Class.forName(name, false, loader) must not run a {@code <clinit>} (JVMS 5.5 names the initializing
+     * triggers, and loading is not one of them).
+     */
+    static long forNameMirror(long nameArr, boolean init)
+    {
         if (nameArr <= 0x1000L)
         {
             return 0L;                                  // boot force-compile guard passes 0
@@ -7484,7 +7504,10 @@ public final class Loader
         int ci = classIndexByName(slash);
         if (ci >= 0)
         {
-            ensureClinit(ci);                               // JVMS 5.5: Class.forName(name) INITIALIZES the class
+            if (init)
+            {
+                ensureClinit(ci);                           // JVMS 5.5: Class.forName(name) INITIALIZES the class
+            }
             return classMirror(clTab[ci].type);             // already loaded: cached mirror (identity-stable)
         }
         // A DENIED CLASS IS NOT FOUND, which is the truth: it is deliberately absent from this VM.
@@ -7500,8 +7523,11 @@ public final class Loader
             return 0L;                                  // => the guest throws ClassNotFoundException
         }
         long type = loadClassIncremental(slash);
-        ensureClinit(classRegByType(type));             // JVMS 5.5: forName INITIALIZES, and this batch's
-        return type == 0L ? 0L : classMirror(type);     // runClinits left a gated initializer pending
+        if (init)
+        {
+            ensureClinit(classRegByType(type));         // JVMS 5.5: forName INITIALIZES, and this batch's
+        }                                               // runClinits left a gated initializer pending
+        return type == 0L ? 0L : classMirror(type);
     }
 
     /**
@@ -10593,20 +10619,25 @@ public final class Loader
      * {@code System.initPhase3} leaves it. This VM runs no initPhase, so the level stayed 0 and
      * {@code VM.isBooted()} answered false for ever: {@code System.getLogger} handed out a BootstrapLogger that
      * queues every record until a boot that never came, and {@code jdk.internal.util.Exceptions.setup} refused to
-     * run, so exception texts omitted the host. Level 4 does nothing else in stock (initPhase3 sets it after the
-     * system class loader and the TCCL, both of which are already in place here), so the flag is the whole of it.
-     * Set by storing the cell, as the other launch seeds do: nothing can be waiting on the level's lock yet.
-     * Last of the seeds, because every one before it is part of what "booted" means.
+     * run, so exception texts omitted the host.
+     *
+     * <p>It is done THE WAY initPhase3 does it, by running {@code java.lang.MetalSystemLoader}'s initializer: level
+     * 3, {@code ClassLoader.initSystemClassLoader()}, the main thread's context loader, level 4. This used to store
+     * 4 into the cell and claim the system loader and the context loader were "already in place here"; neither was
+     * (LoaderProbe: "context loader is the app loader = false"), and stock ClassLoader answers null from
+     * getSystemClassLoader at level 4 until initSystemClassLoader has run. An ENSURE like the other seeds: the
+     * initializer runs once per VM. Last of the seeds, because every one before it is part of what "booted" means
+     * -- the properties above all, since ClassLoaders.<clinit> reads java.class.path.
      */
     static void seedBooted()
     {
-        long slot = staticSlotOf(Magic.bytes("jdk/internal/misc/VM"), Magic.bytes("initLevel"));
-        if (slot == 0L)
+        int reg = classRegByNameBytes(Magic.bytes("java/lang/MetalSystemLoader"));
+        if (reg < 0)
         {
-            reportPropsGap(Magic.bytes("jdk/internal/misc/VM.initLevel has no static cell (isBooted stays false)"));
+            reportPropsGap(Magic.bytes("java/lang/MetalSystemLoader is not registered (no system class loader)"));
             return;
         }
-        Magic.store64(slot, 4L);
+        ensureClinit(reg);
     }
 
     /**
@@ -10912,6 +10943,10 @@ public final class Loader
         putProp(buf, props, Magic.bytes("stderr.encoding"), Magic.bytes("UTF-8"));
         putProp(buf, props, Magic.bytes("stdin.encoding"), Magic.bytes("UTF-8"));
         putProp(buf, props, Magic.bytes("sun.jnu.encoding"), Magic.bytes("UTF-8"));
+        // The class path: stock ClassLoaders.<clinit> builds the application loader's URLClassPath from it, which
+        // is how ClassLoader.getResource answers a URL into the jar. The init file's classpath= jar, or "" (stock's
+        // default with no class path given).
+        putProp(buf, props, Magic.bytes("java.class.path"), JarFs.path());
     }
 
     /** One {@code props.setProperty(key, value)} through the ordinary call convention. */
@@ -13295,11 +13330,12 @@ public final class Loader
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("hwEntropy0")))        { return VM.hwEntropyAddr; }  // (byte[],I)I
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/ClassLoader")))
+        // The VM's one class namespace, under stock java.lang.ClassLoader (whose natives are Java over these).
+        // Keyed by the helper, not ClassLoader: stock declares its own defineClass0 with another signature.
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalLoaders")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("defineClass0")))      { return VM.defineClassAddr; }   // (String,byte[],II)Class
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("resourceExists0")))   { return VM.resourceExistsAddr; } // (byte[])J
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("resourceBytes0")))    { return VM.resourceBytesAddr; }  // (byte[])[B
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("lookup0")))           { return VM.forNameNoInitAddr; } // (byte[])Class
         }
         // System.exit -> Runtime.exit -> Shutdown.exit -> beforeHalt(); runHooks(); halt(status) -> halt0.
         // Both ends are NATIVE, so the class loaded fine and the calls resolved nowhere -- reported as
@@ -26747,10 +26783,11 @@ public final class Loader
             }
             i += 1;
         }
-        // header(16) + typeAddr(@16) + classValueMap(@24). Class mirrors are allocated HERE rather than by a
-        // constructor, so this size must track the overlay's field count by hand: a field declared in
-        // guestsrc/java/lang/Class.java but not counted here is written PAST the object.
-        long obj = Heap.alloc(32);
+        // header(16) + typeAddr(@16) + classValueMap(@24) + classLoader(@32) + protectionDomain(@40) +
+        // signers(@48). Class mirrors are allocated HERE rather than by a constructor, so this size must track the
+        // overlay's field count by hand: a field declared in guestsrc/java/lang/Class.java but not counted here is
+        // written PAST the object.
+        long obj = Heap.alloc(56);
         long ctib = classTib();
         if (mirN >= mirType.length)
         {

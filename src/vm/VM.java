@@ -2013,8 +2013,7 @@ public final class VM
         if (forNameAddr == 0L) { long u = VMNatives.forName(0L); }              // Class.forName0() native (reflection M1)
         if (assignableAddr == 0L) { long u = VMNatives.assignable(0L, 0L); }    // Class.assignable0 (interfaces too)
         if (hwEntropyAddr == 0L) { long u = VMNatives.hwEntropy(0L, 0L); } // SecureRandom.hwEntropy0
-        if (resourceExistsAddr == 0L) { long u = VMNatives.resourceExists(0L); } // ClassLoader.resourceExists0
-        if (resourceBytesAddr == 0L) { long u = VMNatives.resourceBytes(0L); }  // ClassLoader.resourceBytes0
+        if (forNameNoInitAddr == 0L) { long u = VMNatives.forNameNoInit(0L); }  // MetalLoaders.lookup0 (no <clinit>)
         if (methodAnnoAllAddr == 0L) { long u = VMNatives.methodAnnoAll(-1L); } // Executable.annoAll0
         if (recordHashAddr == 0L) { long u = recordHash(0L); }                   // record hashCode
         if (recordEqualsAddr == 0L) { long u = recordEquals(0L, 0L); }           // record equals
@@ -3610,8 +3609,7 @@ public final class VM
     static long forNameAddr;           // VM.forName(J)J — Class.forName0(byte[]) native (reflection arc M1)
     static long assignableAddr;        // VMNatives.assignable(JJ)J — Class.assignable0(J,J)
     static long hwEntropyAddr;         // VMNatives.hwEntropy(JJ)J — SecureRandom.hwEntropy0(byte[],int)
-    static long resourceExistsAddr;    // VMNatives.resourceExists(J)J — ClassLoader.resourceExists0(byte[])
-    static long resourceBytesAddr;     // VMNatives.resourceBytes(J)J — ClassLoader.resourceBytes0(byte[])
+    static long forNameNoInitAddr;     // VMNatives.forNameNoInit(J)J — MetalLoaders.lookup0(byte[]), no <clinit>
     static long methodAnnoAllAddr;     // VMNatives.methodAnnoAll(J)J — Executable.annoAll0(int)
     static long recordHashAddr;        // VM.recordHash(J)J — a record's synthesised hashCode
     static long recordEqualsAddr;      // VM.recordEquals(JJ)J — a record's synthesised equals

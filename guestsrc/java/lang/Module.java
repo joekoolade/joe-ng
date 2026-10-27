@@ -12,7 +12,8 @@
 package java.lang;
 
 /**
- * The bare minimum of a module for joe-ng: a single UNNAMED module that every class belongs to.
+ * The bare minimum of a module for joe-ng: UNNAMED modules only, one per class loader as in stock (each loader's
+ * constructor makes its own, and the bootstrap loader's is {@link #UNNAMED}).
  *
  * <p>joe-ng has no module layer at all -- the boot image is a flat class directory plus demand-loaded jar
  * entries, with no module graph, no readability edges and no {@code ModuleDescriptor}. Stock library code
@@ -28,11 +29,16 @@ package java.lang;
  */
 public final class Module implements java.lang.reflect.AnnotatedElement
 {
-    /** Every class belongs to this one instance -- there is no second module to distinguish it from. */
-    static final Module UNNAMED = new Module();
+    /** The bootstrap loader's unnamed module: every JDK and VM class's module. */
+    static final Module UNNAMED = new Module((ClassLoader) null);
 
-    private Module()
+    /** The loader this module is the unnamed module of; null for the bootstrap loader's. */
+    private final ClassLoader loader;
+
+    /** Stock's: create the unnamed module for {@code loader} -- what every ClassLoader constructor calls. */
+    Module(ClassLoader loader)
     {
+        this.loader = loader;
     }
 
     /** Always false: joe-ng's class space is flat, so nothing is in a named module. */
@@ -92,9 +98,10 @@ public final class Module implements java.lang.reflect.AnnotatedElement
         return null;
     }
 
+    /** Stock's: the loader this is the unnamed module of. */
     public ClassLoader getClassLoader()
     {
-        return null;
+        return loader;
     }
 
     /** Null: joe-ng has no module GRAPH either, so there is no layer to report. */
@@ -129,7 +136,7 @@ public final class Module implements java.lang.reflect.AnnotatedElement
 
     /**
      * Stock's resource read for a module. This VM has the one unnamed module, so it is stock's unnamed-module arm:
-     * the classpath jar first, then java.base's own resources ({@link ClassLoader#javaBaseResource}).
+     * the classpath jar first, then java.base's own resources ({@link jdk.internal.misc.MetalLoaders#javaBaseResource}).
      * {@code sun.util.resources.BreakIteratorResourceBundle} loads the break-iterator rule data through this, and
      * the overlay used to drop it. A leading '/' is not part of a module resource name, as in stock.
      */
@@ -140,12 +147,13 @@ public final class Module implements java.lang.reflect.AnnotatedElement
             name = name.substring(1);
         }
         java.io.InputStream in = ClassLoader.getSystemResourceAsStream(name);
-        return in != null ? in : ClassLoader.javaBaseResource(name);
+        return in != null ? in : jdk.internal.misc.MetalLoaders.javaBaseResource(name);
     }
 
+    /** Stock's form for an unnamed module. */
     @Override
     public String toString()
     {
-        return "unnamed module";
+        return "unnamed module @" + Integer.toHexString(hashCode());
     }
 }

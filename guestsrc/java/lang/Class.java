@@ -43,6 +43,22 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
      */
     transient ClassValue.ClassValueMap classValueMap;
 
+    /**
+     * Stock's defining-loader and protection-domain fields, which HotSpot fills when a loader DEFINES the class.
+     * Here ClassLoader.defineClass1 fills them (the stock natives are Java on this VM). Null for every class the VM
+     * loads itself, out of the image or the class-path jar -- {@link #getClassLoader0} decides those by name.
+     * Package-private where stock's are private final: java.lang.ClassLoader writes them.
+     *
+     * <p>Counted in {@code Loader.classMirror}'s allocation (offsets 32 and 40, and signers at 48), which must
+     * grow with this list.
+     */
+    transient ClassLoader classLoader;
+
+    transient java.security.ProtectionDomain protectionDomain;
+
+    /** Stock's signers field (offset 48), written by {@link #setSigners}. */
+    private transient Object[] signers;
+
     private Class()
     {
     }
@@ -160,9 +176,15 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
         return null;
     }
 
+    /**
+     * The unnamed module of this class's defining loader -- stock's answer for every class outside a named
+     * module, which on this VM is every class (there is no module graph). The bootstrap loader's unnamed module
+     * is {@link Module#UNNAMED}.
+     */
     public Module getModule()
     {
-        return Module.UNNAMED;
+        ClassLoader l = getClassLoader0();
+        return l == null ? Module.UNNAMED : l.getUnnamedModule();
     }
 
 
@@ -592,10 +614,20 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
         return jdk.internal.misc.MetalHiddenClasses.isHidden(this);
     }
 
-    /** Stock's native: null. Signers are set by a class loader verifying a signed jar, which this VM never does. */
+    /** Stock's: the signers ClassLoader.setSigners recorded (only a signed jar's classes have any), copied. */
     public Object[] getSigners()
     {
-        return null;
+        Object[] s = this.signers;
+        return s == null ? null : s.clone();
+    }
+
+    /** Stock's: record the signers of this class; ignored for a primitive or an array class. */
+    void setSigners(Object[] signers)
+    {
+        if (!isPrimitive() && !isArray())
+        {
+            this.signers = signers;
+        }
     }
 
     /** Stock's: a nominal descriptor for this class -- empty only for a hidden one, and this VM makes none. */
@@ -1685,17 +1717,26 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
     }
 
     /**
-     * Stock's answer for a class whose internal domain is null -- which here is every class, because a domain is
-     * only ever supplied by a defineClass that names one and no definition path records it. MEASURED need: once
-     * an application class reported the system loader, the hidden-class definer asked for this
+     * Stock's: the domain the defining loader supplied (ClassLoader.defineClass1 records it), else the all-permission
+     * domain -- which is the answer for every class the VM loads itself. MEASURED need: once an application class
+     * reported the system loader, the hidden-class definer asked for this
      * (MethodHandles.Lookup.lookupClassProtectionDomain) and the JavaLangAccess stub threw.
      */
     public java.security.ProtectionDomain getProtectionDomain()
     {
-        return Holder.allPermDomain;
+        if (protectionDomain == null)
+        {
+            return Holder.allPermDomain;
+        }
+        return protectionDomain;
     }
 
-    /** Stock's unchecked accessor, which java.base calls in place of {@link #getClassLoader}; the same answer. */
+    /**
+     * Stock's unchecked accessor, which java.base calls in place of {@link #getClassLoader}; the same answer. A
+     * class some loader DEFINED answers that loader (recorded by ClassLoader.defineClass1); any other answers the
+     * built-in loader that would own it -- the bootstrap loader for a JDK or VM class, the application loader for
+     * the rest. An array answers for its element type.
+     */
     ClassLoader getClassLoader0()
     {
         Class<?> c = this;
@@ -1703,11 +1744,15 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
         {
             c = c.getComponentType();
         }
+        if (c.classLoader != null)
+        {
+            return c.classLoader;
+        }
         if (c.isPrimitive() || isBootName(c.getName()))
         {
             return null;
         }
-        return ClassLoader.getSystemClassLoader();
+        return jdk.internal.loader.ClassLoaders.appClassLoader();
     }
 
     /** Whether {@code n} (a binary name) is in a package the bootstrap loader defines -- the JDK's or the VM's own. */
@@ -1734,7 +1779,7 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
     {
         name = resolveName(name);
         java.io.InputStream in = ClassLoader.getSystemResourceAsStream(name);
-        return in != null ? in : ClassLoader.javaBaseResource(name);
+        return in != null ? in : jdk.internal.misc.MetalLoaders.javaBaseResource(name);
     }
 
     /**
