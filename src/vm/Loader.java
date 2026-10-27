@@ -27736,7 +27736,17 @@ public final class Loader
     // compiled. Recorded (not halted on) because every real instance is a DENYLISTED class on a branch that
     // is never taken; the site index is baked into the trap call so the runtime can name the class if the
     // branch ever IS taken. Small by construction -- a whole jar batch produces about five.
-    private static final int MAXUNRES = 256;
+    /**
+     * Distinct `new` sites compiled before their class was registered. Was 256, and FULL RETURNED SITE 0 -- which
+     * resolveUnresolvedNew then RESOLVED AND ALLOCATED, so every later deferred `new` past the cap built an
+     * instance of whatever class site 0 named (MetalStdStreams$Uart, the first one a launch records): a SILENT
+     * wrong type. MEASURED in a 24-probe batch once the loader stack was closure-deferred (more classes arrive
+     * late, so more `new` sites are compiled against unregistered classes): ICU's `new IsAcceptable()` and the
+     * VarHandle behind AtomicReferenceArray.AA both came back as Uart objects, and the next call on them failed
+     * to dispatch. The batch passed 24/24 without the deferral and halted deterministically with it. Sized like
+     * the sibling site tables; a full table now halts by name, as MAXVSITE's does.
+     */
+    private static final int MAXUNRES = 4096;
     private static long[] unresBase;
     private static int[] unresOff;
     private static int unresN;
@@ -27762,7 +27772,7 @@ public final class Loader
         }
         if (unresN >= MAXUNRES)
         {
-            return 0;                                   // full: the trap still fires, it just names site 0
+            capHalt(Magic.bytes("MAXUNRES"), unresN);    // returning a stale index would MIS-RESOLVE silently
         }
         unresBase[unresN] = gbase;
         unresOff[unresN] = off;
