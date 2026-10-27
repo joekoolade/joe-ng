@@ -190,6 +190,7 @@ UnsafeAccessProbe
 UnsafeAll                solo             # reruns other probes' mains; their static counters add up
 UnsafeAtomicProbe
 UpdaterRaceProbe
+UrlProbe
 Utf16PrintProbe
 VarHandleProbe
 VirtualInvokeProbe

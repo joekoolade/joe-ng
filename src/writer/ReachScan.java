@@ -177,6 +177,14 @@ public final class ReachScan
                 || c.startsWith("java/lang/reflect/UndeclaredThrowableException")
                 || c.startsWith("java/lang/ClassLoader")                 // M3: JDK-free overlay (defineClass/loadClass)
                 || c.startsWith("sun/net/ext/ExtendedSocketOptions")    // overlaid no-op; rest of sun/net/ext denied
+                // the file: and jar: URL protocols (see Loader.isDenylisted); http/, content/, jrt stay denied
+                || c.startsWith("sun/net/www/protocol/file/")
+                || c.startsWith("sun/net/www/protocol/jar/")
+                || c.equals("sun/net/www/ParseUtil")
+                || c.equals("sun/net/www/URLConnection")
+                || c.equals("sun/net/www/MessageHeader")
+                || c.startsWith("sun/net/www/MimeTable")
+                || c.equals("sun/net/www/MimeEntry")
                 // The java.security PERMISSION + MARKER layer: plain data structures and string matching,
                 // no natives and no provider machinery. The PROVIDER/POLICY/cert subsystem stays denied.
                 || c.startsWith("java/security/Permission")

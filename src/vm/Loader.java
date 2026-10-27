@@ -6357,6 +6357,19 @@ public final class Loader
                 // ExtendedSocketOptions is overlaid to a no-op (Net.<clinit> sets EXTENDED_OPTIONS from it);
                 // the rest of sun/net/ext stays denied.
                 || utf8HasPrefix(base, off, Magic.bytes("sun/net/ext/ExtendedSocketOptions"))
+                // NARROWED OUT of the sun/net/www/ denial: the file: and jar: URL protocols, which a class path
+                // is read through (stock URLClassPath, ClassLoader.getResource). java.net.URL picks the handler
+                // by name in URL.DefaultFactory. Both are plain Java over java.io.File / java.util.jar.JarFile:
+                // ParseUtil (URL <-> path encoding), the sun.net.www.URLConnection base and its MessageHeader,
+                // and MimeTable/MimeEntry for a file: connection's content-type header. http/, content/ and
+                // the jrt: handler (the modules image, which this VM does not have) stay denied.
+                || utf8HasPrefix(base, off, Magic.bytes("sun/net/www/protocol/file/"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/net/www/protocol/jar/"))
+                || utf8IsAtBase(base, off, Magic.bytes("sun/net/www/ParseUtil"))
+                || utf8IsAtBase(base, off, Magic.bytes("sun/net/www/URLConnection"))
+                || utf8IsAtBase(base, off, Magic.bytes("sun/net/www/MessageHeader"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/net/www/MimeTable"))
+                || utf8IsAtBase(base, off, Magic.bytes("sun/net/www/MimeEntry"))
                 // NARROWED OUT of the java/text/ denial: joe-ng OVERLAYS BreakIterator (whitespace line
                 // breaking, no locale tables), so the reason for the broad denial -- stock's factory going
                 // through the java/text/spi/ provider machinery -- does not apply to it. Without this the
