@@ -4136,6 +4136,7 @@ public final class Loader
         vtSlot = new int[MAXVT];
         vtBuf = new long[MAXVT];
         vtCount = 0;
+        vtBucket = null;                                // the class-name index is keyed by table INDEX: rebuild
         gvTab = new VtSlot[MAXMV];
         int gvi = 0;
         while (gvi < MAXMV)                             // pre-fill: slots are overwritten (reused) per class
@@ -8607,6 +8608,34 @@ public final class Loader
             vtBucketTail[h] = vtIndexed;
             vtIndexed += 1;
         }
+    }
+
+    /**
+     * The vtable-table entry of class {@code cls} (a Utf8 run) whose name and descriptor match, or -1 -- the
+     * FIRST such entry in table order, which is what the front-to-back scans this replaces answered: the
+     * class-name chains are kept ascending, so the first hit in the chain is that entry.
+     *
+     * <p>Those scans compared class, name and descriptor byte by byte across EVERY entry of every class, and
+     * {@link #globalVtableSlot} repeated the scan once per superclass level for an inherited method. Profiled on
+     * InvokeGapProbe (QEMU, 2026-10-28): byte compares were ~60% of the busy core, under
+     * {@code lowerInvokeVirtual -> globalVtableSlot} and {@code virtualResolve -> bufBySigU}; guest code was
+     * under 4%. A class's chain is its own flattened vtable plus hash neighbours.
+     */
+    private static int vtEntryOf(long clsBase, int clsOff, long nameBase, int nameOff, long descBase, int descOff)
+    {
+        buildVtIndex();
+        int i = vtBucket[utf8Hash(clsBase, clsOff) & (VTTAB - 1)];
+        while (i >= 0)
+        {
+            if (utf8EqAt(clsBase, clsOff, vtClassBase[i], vtClassOff[i])
+                    && utf8EqAt(nameBase, nameOff, vtNameBase[i], vtNameOff[i])
+                    && utf8EqAt(descBase, descOff, vtNameBase[i], vtDescOff[i]))
+            {
+                return i;
+            }
+            i = vtNextIdx[i];
+        }
+        return -1;
     }
 
     private static void inheritVtable(int superOff)
@@ -14292,21 +14321,8 @@ public final class Loader
                 return own;
             }
         }
-        int classOff = refClassNameOff(idx);
-        int nameOff = mrefNameOff(idx);
-        int descOff = mrefDescOff(idx);
-        int i = 0;
-        while (i < vtCount)
-        {
-            if (utf8EqAt(gbase, classOff, vtClassBase[i], vtClassOff[i])
-                    && utf8EqAt(gbase, nameOff, vtNameBase[i], vtNameOff[i])
-                    && utf8EqAt(gbase, descOff, vtNameBase[i], vtDescOff[i]))
-            {
-                return vtSlot[i];
-            }
-            i += 1;
-        }
-        return -1;
+        int i = vtEntryOf(gbase, refClassNameOff(idx), gbase, mrefNameOff(idx), gbase, mrefDescOff(idx));
+        return i >= 0 ? vtSlot[i] : -1;
     }
 
     /**
@@ -14360,17 +14376,11 @@ public final class Loader
         int classOff = refClassNameOff(idx);
         int nameOff = mrefNameOff(idx);
         int descOff = mrefDescOff(idx);
-        int i = 0;
-        while (i < vtCount)                             // class-qualified (invokevirtual)
+        int i = vtEntryOf(gbase, classOff, gbase, nameOff, gbase, descOff);   // class-qualified (invokevirtual)
+        if (i >= 0)
         {
-            if (utf8EqAt(gbase, classOff, vtClassBase[i], vtClassOff[i])
-                    && utf8EqAt(gbase, nameOff, vtNameBase[i], vtNameOff[i])
-                    && utf8EqAt(gbase, descOff, vtNameBase[i], vtDescOff[i]))
-            {
-                logVtableSlot(classOff, nameOff, descOff, vtSlot[i], 0x51);   // 'Q' class-qualified
-                return vtSlot[i];
-            }
-            i += 1;
+            logVtableSlot(classOff, nameOff, descOff, vtSlot[i], 0x51);   // 'Q' class-qualified
+            return vtSlot[i];
         }
         // INHERITED: walk the referenced class's OWN SUPERCLASS CHAIN, most-derived first. That is what
         // virtual dispatch means, and the slot is only meaningful within this chain's flattened numbering.
@@ -14378,17 +14388,11 @@ public final class Loader
         int chain = reg;
         while (chain >= 0)
         {
-            i = 0;
-            while (i < vtCount)
+            i = vtEntryOf(clTab[chain].base, clTab[chain].nameOff, gbase, nameOff, gbase, descOff);
+            if (i >= 0)
             {
-                if (utf8EqAt(clTab[chain].base, clTab[chain].nameOff, vtClassBase[i], vtClassOff[i])
-                        && utf8EqAt(gbase, nameOff, vtNameBase[i], vtNameOff[i])
-                        && utf8EqAt(gbase, descOff, vtNameBase[i], vtDescOff[i]))
-                {
-                    logVtableSlot(classOff, nameOff, descOff, vtSlot[i], 0x48);   // 'H' cHain
-                    return vtSlot[i];
-                }
-                i += 1;
+                logVtableSlot(classOff, nameOff, descOff, vtSlot[i], 0x48);   // 'H' cHain
+                return vtSlot[i];
             }
             chain = superRegOf(chain);
         }
@@ -19441,37 +19445,41 @@ public final class Loader
      *  of which self-compiles on entry if still lazy. 0 if unknown. */
     private static long bufBySigU(long clsU, long nameU, long descU)
     {
-        int k = 0;
-        while (k < rgCount)
+        // The registry through its class+name index (rgBucket). The scan answered the LOWEST index with a
+        // buffer, and those chains are newest-first, so walk the whole chain and keep the oldest hit.
+        buildRegIndex();
+        int best = -1;
+        int k = rgBucket[utf8Hash2(clsU, 0, nameU, 0) & (RGTAB - 1)];
+        while (k >= 0)
         {
             if (rgTab[k].buf != 0L
                     && utf8EqAt(rgTab[k].base, rgTab[k].classOff, clsU, 0)
                     && utf8EqAt(rgTab[k].base, rgTab[k].nameOff, nameU, 0)
                     && utf8EqAt(rgTab[k].base, rgTab[k].descOff, descU, 0))
             {
-                return rgTab[k].buf;
+                best = k;
             }
-            k += 1;
+            k = rgNext[k];
+        }
+        if (best >= 0)
+        {
+            return rgTab[best].buf;
         }
         long cell = dlCellOf(clsU, 0, nameU, 0, descU, 0);   // tier 2: a celled static, callable via its cell
         if (cell != 0L)
         {
             return Magic.load64(cell);
         }
-        k = 0;
-        while (k < vtCount)
+        // Every matching vtable entry names the same class, so regBySigU answers the same for all of them and
+        // the first match decides, as it did in the scan.
+        k = vtEntryOf(clsU, 0, nameU, 0, descU, 0);
+        if (k >= 0)
         {
-            if (utf8EqAt(vtClassBase[k], vtClassOff[k], clsU, 0)
-                    && utf8EqAt(vtNameBase[k], vtNameOff[k], nameU, 0)
-                    && utf8EqAt(vtNameBase[k], vtDescOff[k], descU, 0))
+            int r = regBySigU(clsU);
+            if (r >= 0 && clTab[r].tib != 0L)
             {
-                int r = regBySigU(clsU);
-                if (r >= 0 && clTab[r].tib != 0L)
-                {
-                    return Magic.load64(clTab[r].tib + 8 + vtSlot[k] * 8L);
-                }
+                return Magic.load64(clTab[r].tib + 8 + vtSlot[k] * 8L);
             }
-            k += 1;
         }
         return 0L;
     }
