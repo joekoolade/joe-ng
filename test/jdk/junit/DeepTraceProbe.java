@@ -43,6 +43,30 @@ public final class DeepTraceProbe
         {
             print("thrown 2 calls deep", e);
         }
+        try
+        {
+            npe(20, null);
+        }
+        catch (NullPointerException e)
+        {
+            print("implicit NPE 20 calls deep", e);
+        }
+        try
+        {
+            div(20, 0);
+        }
+        catch (ArithmeticException e)
+        {
+            print("implicit divide by zero 20 calls deep", e);
+        }
+        try
+        {
+            oob(20, new int[1]);
+        }
+        catch (ArrayIndexOutOfBoundsException e)
+        {
+            print("implicit index out of bounds 20 calls deep", e);
+        }
         if (deep != null)
         {
             deep.fillInStackTrace();
@@ -60,6 +84,33 @@ public final class DeepTraceProbe
         return rec(n - 1) + 1;
     }
 
+    private static int npe(int n, String s)
+    {
+        if (n == 0)
+        {
+            return s.length();
+        }
+        return npe(n - 1, s) + 1;
+    }
+
+    private static int div(int n, int d)
+    {
+        if (n == 0)
+        {
+            return 7 / d;
+        }
+        return div(n - 1, d) + 1;
+    }
+
+    private static int oob(int n, int[] a)
+    {
+        if (n == 0)
+        {
+            return a[n + 5];
+        }
+        return oob(n - 1, a) + 1;
+    }
+
     private static void print(String what, Throwable t)
     {
         StackTraceElement[] st = t.getStackTrace();
@@ -71,7 +122,8 @@ public final class DeepTraceProbe
         {
             String m = st[i].getClassName() + "." + st[i].getMethodName();
             kept += 1;
-            if (m.equals("DeepTraceProbe.rec"))
+            if (m.equals("DeepTraceProbe.rec") || m.equals("DeepTraceProbe.npe") || m.equals("DeepTraceProbe.div")
+                    || m.equals("DeepTraceProbe.oob"))
             {
                 recFrames += 1;
             }

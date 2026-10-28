@@ -75,22 +75,58 @@ final class VMUnwind
                 Loader.printFrameAt(Magic.load64(sp) - 4L);
             }
         }
-        long cpc = pc;
-        long csp = sp;
-        int n = 0;
         traceStopPc = 0L;
         traceStopWord = 0L;
-        while (n < 8 && cpc > 0x1000L)
+        int n = throwFrames(exc, pc, sp, 0L);                  // pass 1: the inline slots, and the true depth
+        if (n < 8)
         {
-            Magic.store64(exc + 16L + n * 8L, cpc);
+            Magic.store64(exc + 16L + n * 8L, 0L);             // 0-terminate the backtrace
+        }
+        if (n > 8)
+        {
+            // Deeper than the slots: every frame, as stock. Only an exception that reaches its throw with NO
+            // trace gets here: the JIT's implicit NPE / ArithmeticException / AIOOBE, which newExc allocates
+            // without a constructor so fillInTrace never ran (DeepTraceProbe: 8 frames before this), and one
+            // whose class overrides fillInStackTrace to skip the capture. The implicit paths have just allocated
+            // the exception itself, so one more allocation is nothing new for them.
+            long arr = Loader.newThrowableBacktrace(exc, n);
+            if (arr != 0L)
+            {
+                throwFrames(exc, pc, sp, arr);                 // pass 2: the same walk, into the array
+            }
+        }
+    }
+
+    /**
+     * {@link #captureTrace}'s walk from the throwing frame ({@code cpc}, {@code csp}) to the top of the
+     * resolvable stack, below {@code main}, or {@link #MAX_TRACE_DEPTH}. With {@code arr == 0} the first eight pcs
+     * go into the inline {@code bt0..bt7} and the stop state is recorded; otherwise every pc goes into the
+     * {@code long[]} {@code arr}. Returns the number of frames. Allocates nothing.
+     */
+    private static int throwFrames(long exc, long cpc, long csp, long arr)
+    {
+        int n = 0;
+        while (n < MAX_TRACE_DEPTH && cpc > 0x1000L)
+        {
+            if (arr != 0L)
+            {
+                Magic.store64(arr + 24L + n * 8L, cpc);
+            }
+            else if (n < 8)
+            {
+                Magic.store64(exc + 16L + n * 8L, cpc);
+            }
             n += 1;
             long cfs = frameSizeAt(cpc);
             if (cfs == 0L)
             {
                 // Top of the JIT/image stack -- OR a pc no frame table claims. Record both so the printer can
                 // tell those apart instead of ending the trace identically for each.
-                traceStopPc = cpc;
-                traceStopWord = Magic.load64(csp);
+                if (arr == 0L)
+                {
+                    traceStopPc = cpc;
+                    traceStopWord = Magic.load64(csp);
+                }
                 break;
             }
             cpc = Magic.load64(csp) - 4L;                      // caller's return address (the call site)
@@ -100,10 +136,7 @@ final class VMUnwind
                 break;                                         // below main(): the VM's launch frames, not the program's
             }
         }
-        if (n < 8)
-        {
-            Magic.store64(exc + 16L + n * 8L, 0L);             // 0-terminate the backtrace
-        }
+        return n;
     }
 
     /**

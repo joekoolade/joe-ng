@@ -1,4 +1,7 @@
 thrown 20 calls deep: frames=22 rec=21 others: DeepTraceProbe.main
 thrown 2 calls deep: frames=4 rec=3 others: DeepTraceProbe.main
+implicit NPE 20 calls deep: frames=22 rec=21 others: DeepTraceProbe.main
+implicit divide by zero 20 calls deep: frames=22 rec=21 others: DeepTraceProbe.main
+implicit index out of bounds 20 calls deep: frames=22 rec=21 others: DeepTraceProbe.main
 re-captured from main: frames=1 rec=0 others: DeepTraceProbe.main
 DeepTraceProbe done
