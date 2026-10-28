@@ -585,6 +585,7 @@ public final class Loader
             odRetried = false;
             return again;
         }
+        registerCoCompiled();                           // a private static helper the initializer calls
         patchRelocsFrom(rcMark, rsMark);                // resolve OUR sites: batch patchRelocs is long past
         if (buf == 0L)
         {
@@ -19056,6 +19057,7 @@ public final class Loader
             lzCompiling = false;
         }
         compileReuseTib = reuseWas;
+        registerCoCompiled();                           // the same-class callees compile() built beside it
         patchRelocsFrom(rcMark, rsMark);                // batch-end patchRelocs is long past: resolve OUR sites now,
         if (buf == 0L)                                  // or a `bl 0` wild-branches to address 0 (see patchRelocsFrom)
         {
@@ -19083,6 +19085,40 @@ public final class Loader
             Magic.store64(lzTab[idx].slot, buf);
         }
         return buf;
+    }
+
+    /**
+     * Register the SAME-CLASS CALLEES that {@link #compile} built beside the method it was asked for. Its
+     * discover pass ({@code scanCallees}) adds every same-class {@code invokestatic}/{@code invokespecial}
+     * target as {@code m[1..]}, each in its own buffer, and the caller BLs straight to them -- so they run.
+     * The lazy and {@code <clinit>} paths registered only {@code m[0]}, leaving every other body in a code
+     * block no registry entry claimed: a frame there printed as {@code <unclaimed pc ... after X.<init>>}, a
+     * {@code StackTraceElement} for it was {@code <vm>.<unknown>}, and the uncaught-exception walk stopped at
+     * it. The constructor a public one reaches by {@code this(...)} is exactly such a callee, which is why
+     * every NetDemo boot carried one unclaimed pc in {@code Socket.<init>} (MEASURED, CtorChainTraceProbe:
+     * the {@code this(...)} target compiled through {@code sizeMethod} with no lazy compile of its own).
+     *
+     * <p>APPENDED, as {@link #registerAll} does on the other on-demand paths: an entry already pointing at
+     * the method's deferral stub stays valid (the stub still compiles a copy on its own first call), and the
+     * new one claims the body that is actually running. Called right after the final compile, before
+     * {@code patchRelocsFrom} can start anything that reuses the {@code m[]} tables.
+     */
+    private static void registerCoCompiled()
+    {
+        int i = 1;
+        while (i < mCount)
+        {
+            if (mDefer[i] == 0 && mBuf[i] != 0L)
+            {
+                int nameOff = findNameByCode(mCode[i]);
+                if (nameOff != 0)
+                {
+                    register(gbase, gThisNameOff, nameOff, mDescOff[i], mBuf[i], mLine[i], mSrc[i],
+                             accessInContext(gbase, nameOff, mDescOff[i]));
+                }
+            }
+            i += 1;
+        }
     }
 
     /**
