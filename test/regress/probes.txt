@@ -69,6 +69,7 @@ ConnectFailProbe
 CtorChainTraceProbe
 DeepTraceProbe
 InvokeGapProbe
+ThrowableStockProbe
 ConstantDescOrderProbe
 ConstantDescProbe
 CslmRaceProbe            solo             # race; timing-sensitive

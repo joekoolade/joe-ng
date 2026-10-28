@@ -3465,17 +3465,35 @@ public final class Loader
         return thrBacktraceOff;
     }
 
-    /** {@code exc}'s full-depth backtrace ({@code long[]} of pcs), or 0 when its trace fits the inline slots. */
+    /**
+     * {@code exc}'s full-depth backtrace ({@code long[]} of pcs), or 0 when its trace is the inline slots. The
+     * field holds {@code exc} ITSELF for an inline trace (see {@link #newThrowableBacktrace}), and null when none
+     * was captured; both answer 0 here.
+     */
     static long throwableBacktrace(long exc)
     {
         long off = throwableBacktraceOff();
-        return off > 0L ? Magic.load64(exc + off) : 0L;
+        long bt = off > 0L ? Magic.load64(exc + off) : 0L;
+        return bt == exc ? 0L : bt;
+    }
+
+    /**
+     * Whether {@code exc} is a VM-allocated exception still waiting for its trace: {@link #newExc} sets its
+     * backtrace to itself, and nothing has filled the inline slots yet. These, and only these, are filled at the
+     * throw ({@code VMUnwind.captureTrace}); a constructed exception has its trace from construction, or none
+     * when stock would have none (a false {@code writableStackTrace}, or an overridden {@code fillInStackTrace}).
+     */
+    static boolean awaitsThrowTrace(long exc)
+    {
+        long off = throwableBacktraceOff();
+        return off > 0L && Magic.load64(exc + off) == exc && Magic.load64(exc + 16L) == 0L;
     }
 
     /**
      * Give {@code exc} a fresh {@code long[n]} backtrace and return it, or 0 when the field is unknown. With
-     * {@code n == 0} it CLEARS the field instead -- a re-capture ({@code fillInStackTrace()} again) that now fits
-     * the inline slots must not leave an older, deeper trace in place.
+     * {@code n == 0} it records that the trace is the INLINE slots instead, by storing {@code exc} itself:
+     * stock's Throwable reads a null backtrace as "no trace captured", so it must be non-null, and a re-capture
+     * ({@code fillInStackTrace()} again) that now fits the slots must not leave an older, deeper trace in place.
      */
     static long newThrowableBacktrace(long exc, int n)
     {
@@ -3486,7 +3504,7 @@ public final class Loader
         }
         if (n == 0)
         {
-            Magic.store64(exc + off, 0L);
+            Magic.store64(exc + off, exc);
             return 0L;
         }
         long arr = Heap.allocArray(n, 8);
@@ -19333,6 +19351,12 @@ public final class Loader
     {
         if (clTab == null)
         {
+            // Name the stub: which method fired is the whole diagnosis, and the halt alone does not say.
+            Uart.write(Magic.bytes("\n  bake stub fired before the loader exists: "));
+            printNameAt(clsU, 0);
+            Uart.putc(0x2E);
+            printNameAt(nameU, 0);
+            printNameAt(descU, 0);
             capHalt(Magic.bytes("bakeresolve-early"), 0);   // a stub fired before the loader exists
         }
         if (LOAD_LOG)
@@ -24366,17 +24390,11 @@ public final class Loader
      */
     static void setDetailMessage(long exc, byte[] ascii)
     {
-        int th = classIndexByName(Magic.bytes("java/lang/Throwable"));
-        if (exc == 0L || th < 0)
+        if (exc == 0L)
         {
             return;
         }
-        long off = instanceFieldOffset(th, Magic.bytes("detailMessage"));
-        if (off < 0L)
-        {
-            return;
-        }
-        Magic.store64(exc + off, guestString(ascii));
+        setThrowableMessage(exc, guestString(ascii));
     }
 
     /** Copy {@code s} into {@code out} at {@code p}; returns the new position. */
@@ -24444,7 +24462,7 @@ public final class Loader
         long valueType = value == 0L ? 0L : typeOfObject(value);
         if (e != 0L && valueType != 0L && classNameLen(valueType) > 0)   // a lambda has no name: omit
         {
-            Magic.store64(e + 80L, classNameString(valueType));
+            setThrowableMessage(e, classNameString(valueType));
         }
         return e;
     }
@@ -24610,7 +24628,7 @@ public final class Loader
         if (e != 0L && ref != 0L && targetType != 0L)
         {
             long tib = Magic.load64(ref);
-            Magic.store64(e + 80L, guestString(castFailureMessage(tib, typeOfObject(ref), targetType)));
+            setThrowableMessage(e, guestString(castFailureMessage(tib, typeOfObject(ref), targetType)));
         }
         return e;
     }
@@ -24775,7 +24793,90 @@ public final class Loader
         long tib = i >= 0 ? clTab[i].tib : 0L;
         long obj = Heap.alloc(i >= 0 ? (16 + clTab[i].fieldCount * 8) : 16);
         Magic.store64(obj + 0L, tib);
+        if (i >= 0)
+        {
+            initVmThrowable(obj);
+        }
         return obj;
+    }
+
+    /** Throwable's instance-field offsets, found by name once: 0 until known, -1 when absent. */
+    private static long thrCauseOff;
+    private static long thrStackTraceOff;
+    private static long thrSuppressedOff;
+    private static long thrMessageOff;
+
+    /** Slot addresses of Throwable's two sentinel statics, once found (0 until then). */
+    private static long thrUnassignedSlot;
+    private static long thrSentinelSlot;
+
+    private static long throwableFieldOff(long cached, byte[] name)
+    {
+        if (cached != 0L || clTab == null)
+        {
+            return cached;
+        }
+        int ti = classIndexByName(Magic.bytes("java/lang/Throwable"));
+        return ti >= 0 ? instanceFieldOffset(ti, name) : 0L;    // -1 if absent: cached by the caller
+    }
+
+    /**
+     * Give a VM-allocated exception the state stock's field initializers give a constructed one. No constructor
+     * runs ({@link #newExc}), so {@code cause = this}, {@code stackTrace = UNASSIGNED_STACK} and
+     * {@code suppressedExceptions = SUPPRESSED_SENTINEL} were never set: stock's {@code initCause} then throws
+     * IllegalStateException ("Can't overwrite cause") and {@code addSuppressed} drops every exception -- on an
+     * implicit NPE, a try-with-resources whose close() also throws lost the close() failure. The sentinels are
+     * Throwable's statics and are read once Throwable has initialized; until then those two fields stay null,
+     * which stock reads as suppression disabled. {@code backtrace = this} marks the exception for
+     * {@code VMUnwind.captureTrace}, which fills its trace at the throw.
+     */
+    private static void initVmThrowable(long exc)
+    {
+        thrCauseOff = throwableFieldOff(thrCauseOff, Magic.bytes("cause"));
+        thrStackTraceOff = throwableFieldOff(thrStackTraceOff, Magic.bytes("stackTrace"));
+        thrSuppressedOff = throwableFieldOff(thrSuppressedOff, Magic.bytes("suppressedExceptions"));
+        long btOff = throwableBacktraceOff();
+        if (btOff > 0L)
+        {
+            Magic.store64(exc + btOff, exc);
+        }
+        if (thrCauseOff > 0L)
+        {
+            Magic.store64(exc + thrCauseOff, exc);
+        }
+        if (thrUnassignedSlot == 0L)
+        {
+            thrUnassignedSlot = staticSlotOf(Magic.bytes("java/lang/Throwable"), Magic.bytes("UNASSIGNED_STACK"));
+        }
+        if (thrSentinelSlot == 0L)
+        {
+            thrSentinelSlot = staticSlotOf(Magic.bytes("java/lang/Throwable"), Magic.bytes("SUPPRESSED_SENTINEL"));
+        }
+        if (thrStackTraceOff > 0L && thrUnassignedSlot != 0L)
+        {
+            Magic.store64(exc + thrStackTraceOff, Magic.load64(thrUnassignedSlot));
+        }
+        if (thrSuppressedOff > 0L && thrSentinelSlot != 0L)
+        {
+            Magic.store64(exc + thrSuppressedOff, Magic.load64(thrSentinelSlot));
+        }
+    }
+
+    /** {@code exc}'s {@code Throwable.detailMessage} (a guest String reference), or 0. */
+    static long throwableMessage(long exc)
+    {
+        thrMessageOff = throwableFieldOff(thrMessageOff, Magic.bytes("detailMessage"));
+        return thrMessageOff > 0L ? Magic.load64(exc + thrMessageOff) : 0L;
+    }
+
+    /** Store the guest String {@code msg} as {@code exc}'s {@code Throwable.detailMessage}. */
+    private static void setThrowableMessage(long exc, long msg)
+    {
+        thrMessageOff = throwableFieldOff(thrMessageOff, Magic.bytes("detailMessage"));
+        if (thrMessageOff > 0L)
+        {
+            Magic.store64(exc + thrMessageOff, msg);
+        }
     }
 
     private static final byte[][] excMissed = new byte[16][];

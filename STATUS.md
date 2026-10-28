@@ -4,6 +4,47 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **THROWABLE OVERLAY REBUILT FROM THE JDK 26 SOURCE (2026-10-28, branch throwable-stock, 4e9ac02).**
+  - **Before:** the hand-written overlay differed from stock in observable ways:
+    - `printStackTrace(PrintWriter/PrintStream)` ignored the stream and wrote to the UART.
+    - `initCause` never refused a second cause.
+    - An exception with a false `writableStackTrace`, or whose class overrides `fillInStackTrace`, still got a
+      trace at its throw.
+    - An exception the VM raises itself (implicit NPE, `/ by zero`, AIOOBE) is allocated without a constructor,
+      so it lacked the field-initializer state: `addSuppressed` dropped everything, so a try-with-resources
+      around an implicit NPE lost the `close()` failure.
+  - **Now:** stock Throwable with three `joe-ng:` changes:
+    - The inline `bt0..bt7` stay the first fields, at the VM's offsets +16..+72.
+    - `fillInStackTrace(int)` calls the static native `fillInStackTrace0` instead of being native.
+    - `getOurStackTrace` builds elements through the native `stackTrace0`, not `StackTraceElement.of`.
+  - **VM side:**
+    - `backtrace` is non-null once a trace exists, as stock expects: the exception itself for an inline
+      trace, a `long[]` when deeper.
+    - `Loader.newExc` sets `cause = this`, `stackTrace = UNASSIGNED_STACK`, and
+      `suppressedExceptions = SUPPRESSED_SENTINEL`.
+    - `captureTrace` fills only VM-raised exceptions.
+    - `detailMessage` is found by name, so the four hardcoded `+80`s are gone.
+  - **Three writer fixes, all exposed because stock `printStackTrace()` reaches `System.err`:**
+    - **Line-table alignment (LATENT):** each baked method's line table is an odd number of 4-byte words, and
+      nothing re-aligned after them. The sum had stayed even by luck. The new methods flipped it, the bake
+      stub table landed at `...C`, and boot took an alignment fault in the first `bakeResolve`. The writer now
+      pads to 8 bytes.
+    - **`bakeNoClinit`:** `System` joins it. Its `<clinit>` is the native `registerNatives`, and the metal
+      loader already blocks it.
+    - **`noSnapshot`:** `System` joins it. Its statics are the build host's.
+    - `bakeresolve-early` now names the stub that fired.
+  - **New probe:** ThrowableStockProbe, 14 arms, compared against the host JVM.
+  - **QEMU:** 19/19 exception and trace probes pass, including ThrowableStockProbe matching the host. make test
+    passes; make overlaycheck 0 new.
+  - **Pi 4 (4e9ac02), NetDemo:**
+    - HTTP 200, `bytes=889`; the `Age:` header was 2 digits this time against 4 last boot.
+    - `idle read timed out: Read timed out after 2000+ ms`, which is a SocketTimeoutException constructed and
+      caught through the stock code.
+    - `[main returned normally]`, 61 batches, gc collections=7, roots=0x83E.
+    - New lines `arrayadopt [Ljava/lang/StackTraceElement;` and `[Ljava/lang/Throwable;`, expected now that
+      stock Throwable's statics hold those arrays.
+  - **NOT RUN:** full regression, the demo suite, JUnit.
+
 - **JAVA.LANG.INVOKE ARC, INCREMENTS 4-6: VOID VARHANDLE SITES, HIDDEN NESTMATES, METHODHANDLEPROXIES (2026-10-28,
   branch invoke-gaps, 1974010).**
   - **The plan's numbering is stale:** its increments 4-6 had landed in increments 2 and 3, and its step 7
