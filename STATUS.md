@@ -4,6 +4,34 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **JAVA.LANG.INVOKE ARC, INCREMENTS 4-6: VOID VARHANDLE SITES, HIDDEN NESTMATES, METHODHANDLEPROXIES (2026-10-28,
+  branch invoke-gaps, 1974010).**
+  - **The plan's numbering is stale:** its increments 4-6 had landed in increments 2 and 3, and its step 7
+    (invokedynamic) in #435. The next gaps were found with a probe instead: `InvokeGapProbe`, 18 arms over the
+    invoke surface no other probe reached, compared with the host JVM. Four arms failed.
+  - **Inc 4, void VarHandle sites:** `vh.getAndAdd(a, i, v);` with the result discarded has a `V` site
+    descriptor, which matched no generated accessor and halted the VM. `resolveVhAccessor` now retries a void
+    site with each return type, as stock's invoker does.
+  - **Inc 5, hidden NESTMATE classes:** `LambdaMetafactory.metafactory` failed with "Exception finding
+    constructor": its generated class is a hidden NESTMATE of the caller, and the VM ignored the flag, so the
+    class could not reach the private constructor. `MetalHiddenClasses` records the lookup class's nest host at
+    define time, and `Class.getNestHost` answers it.
+  - **Inc 6, MethodHandleProxies:** `asInterfaceInstance` threw an NPE, for two reasons:
+    - `SharedSecrets.JavaLangReflectAccess` was never registered: the `AccessibleObject` overlay had dropped
+      the registration. Stock `ReflectAccess` now runs (allowed in Loader and ReachScan), and the reflection
+      overlays gained the 10 stock members it calls. Two throw UnsupportedOperationException instead of
+      answering: type-annotation bytes and constructor accessors, which this VM does not keep.
+    - Stock spins a dynamic module per proxy class, and `java/lang/module` is denied. The overlay is the JDK 26
+      source with one `joe-ng:` change: the generated package name, with no module (this VM has one unnamed
+      module).
+  - **QEMU:** InvokeGapProbe 18/18 match the host (about 4.5 min alone; each generated class is costly).
+    25/25 targeted invoke/reflection/proxy probes pass. make test passes; make overlaycheck 0 new, 137 overlay
+    classes.
+  - **Pi 4 (1974010), NetDemo:** HTTP 200 `bytes=891`, `idle read timed out: Read timed out after 2000+ ms`,
+    `[main returned normally]`, 61 batches, gc collections=7, roots=0x7AF. NetDemo does not reach the four
+    fixed paths; this shows the image still boots and runs on hardware.
+  - **NOT RUN:** InvokeGapProbe on the Pi, full regression, the demo suite, JUnit.
+
 - **NET.POLL AND NON-BLOCKING SOCKET READS: `setSoTimeout` WORKS (2026-10-28, branch net-poll, bb820ba).**
   - **Before:**
     - Stock NioSocketImpl bounds a read with `setSoTimeout` by switching the socket to non-blocking
