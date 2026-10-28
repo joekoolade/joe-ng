@@ -39,6 +39,28 @@ public final class Heap
     public static final long PTR_CELL  = 0x03FF_0000L;
     /** Base of the per-core free-list heads: core c's head is {@code FREE_CELL + c*8}. */
     public static final long FREE_CELL = 0x03FF_0100L;
+    /**
+     * Per-core EXACT-SIZE free lists for blocks of at most {@link #SMALL_MAX} bytes: core c's list of k*8-byte
+     * blocks is headed at {@code SIZE_HEADS + (c * SIZE_CLASSES + k) * 8}. The {@code FREE_CELL} list keeps only
+     * the larger blocks.
+     *
+     * <p>Why: with ONE first-fit list every allocation walked past every free block too small for it.
+     * MEASURED on InvokeGapProbe (QEMU, 2026-10-28): 174.8 million blocks walked for 1.08 million
+     * allocations, ~161 per allocation, and a bump allocation walked the whole list before bumping --
+     * {@code allocLocked} was the largest self cost once the loader's name scans were indexed. Segregated by
+     * exact size, a small request is one pop; a block from the large list fits any small request, so its
+     * head is taken without a walk.
+     *
+     * <p>In the free page between the head cells and {@code CODE_BASE}: 4 cores x 65 heads, then each core's
+     * byte total at {@link #SIZE_BYTES}.
+     */
+    public static final long SIZE_HEADS = 0x03FF_1000L;
+    /** Largest block on an exact-size list. */
+    static final int SMALL_MAX = 512;
+    /** Heads per core: index k = size / 8, so 0 and 1 are never used (a block is at least a header). */
+    static final int SIZE_CLASSES = SMALL_MAX / 8 + 1;
+    /** Bytes on core c's exact-size lists, at {@code SIZE_BYTES + c*8} -- what the miss diagnostics add back. */
+    static final long SIZE_BYTES = 0x03FF_1900L;
     /** Start of CORE 0's allocation region (96 MiB) — above the image (from 0x80000, below IMAGE_CEILING), the
      *  48-64 MiB scratch band and the 64-96 MiB JIT code arena; grows up. */
     public static final long BASE      = 0x0600_0000L;   // 96 MiB: above the JIT code arena (see CODE_BASE)
@@ -276,6 +298,7 @@ public final class Heap
         {
             Magic.store64(PTR_CELL + c * 8L, arenaBase(c));
             Magic.store64(FREE_CELL + c * 8L, 0L);
+            clearSizeLists(c);
             c += 1;
         }
         Magic.store64(CODE_PTR_CELL, CODE_BASE);
@@ -1353,6 +1376,20 @@ public final class Heap
             }                                               //   live only in a register the sweep may not
             long prev = 0L;                                 //   scan -- the caller would get freed memory
 
+            if (aligned <= SMALL_MAX)
+            {
+                long sized = takeSized(core, aligned);
+                if (sized != 0L)
+                {
+                    lastFromFreeList = 1;
+                    zeroPayload(sized, aligned);
+                    if (core == 0)
+                    {
+                        servedSinceGc = servedSinceGc + Magic.load64(sized + ObjectModel.STATUS_OFFSET);
+                    }
+                    return sized;
+                }
+            }
             long f = Magic.load64(freeCell);
             scanFreeBytes = 0L;
             scanFreeMax = 0L;
@@ -1402,7 +1439,8 @@ public final class Heap
                 prev = f;
                 f = Magic.load64(f);
             }
-            long p = Magic.load64(ptrCell);
+            scanFreeBytes = scanFreeBytes + Magic.load64(SIZE_BYTES + core * 8L);   // the general list was walked;
+            long p = Magic.load64(ptrCell);                                         //   the sized lists are counted
             if (p + aligned <= arenaLimit(core))
             {
                 noteBumpCause((long) aligned, 0);            // shortage, or space of the wrong shape?
@@ -1529,14 +1567,76 @@ public final class Heap
     /** Reset the current core's free list (start of a sweep — the GC runs on the collecting core). */
     static void resetFreeList()
     {
-        Magic.store64(FREE_CELL + (int) (Magic.readMPIDR() & 3L) * 8L, 0L);
+        int core = (int) (Magic.readMPIDR() & 3L);
+        Magic.store64(FREE_CELL + core * 8L, 0L);
+        clearSizeLists(core);
         Magic.store64(LARGE_FREE_CELL, 0L);            // the large sweep rebuilds this list too, and old
     }                                                  //   entries are re-walked as dead blocks anyway
 
-    /** Add a reclaimed block to the current core's free list. */
+    /** Empty core {@code core}'s free lists -- the general one and every exact-size one. */
+    public static void clearCoreFreeLists(int core)
+    {
+        Magic.store64(FREE_CELL + core * 8L, 0L);
+        clearSizeLists(core);
+    }
+
+    /** Empty core {@code core}'s exact-size lists and zero their byte total. */
+    private static void clearSizeLists(int core)
+    {
+        long h = SIZE_HEADS + (long) core * SIZE_CLASSES * 8L;
+        int k = 0;
+        while (k < SIZE_CLASSES)
+        {
+            Magic.store64(h + k * 8L, 0L);
+            k += 1;
+        }
+        Magic.store64(SIZE_BYTES + core * 8L, 0L);
+    }
+
+    /**
+     * A block for a request of {@code aligned} (at most {@link #SMALL_MAX}) bytes from core {@code core}'s
+     * exact-size lists, or 0. Its own size first; failing that the smallest larger size held, split so the rest
+     * goes back on the list its size names -- or handed out whole when the rest could not be a block (8 bytes
+     * over), as the first-fit list did. The status word holds the size actually handed out.
+     */
+    private static long takeSized(int core, int aligned)
+    {
+        long heads = SIZE_HEADS + (long) core * SIZE_CLASSES * 8L;
+        int k = aligned >> 3;
+        while (k < SIZE_CLASSES)
+        {
+            long cell = heads + k * 8L;
+            long f = Magic.load64(cell);
+            if (f != 0L)
+            {
+                long size = (long) k * 8L;
+                Magic.store64(cell, Magic.load64(f));                  // pop
+                long bytes = SIZE_BYTES + core * 8L;
+                Magic.store64(bytes, Magic.load64(bytes) - size);
+                long rest = size - (long) aligned;
+                if (rest >= (long) ObjectModel.HEADER_SIZE)
+                {
+                    Magic.store64(f + ObjectModel.STATUS_OFFSET, (long) aligned);
+                    addFree(f + (long) aligned, rest);
+                }
+                return f;
+            }
+            k += 1;
+        }
+        return 0L;
+    }
+
+    /** Add a reclaimed block to the current core's free list: its exact-size list when small, else the general one. */
     static void addFree(long addr, long size)
     {
-        long freeCell = FREE_CELL + (int) (Magic.readMPIDR() & 3L) * 8L;
+        int core = (int) (Magic.readMPIDR() & 3L);
+        long freeCell = FREE_CELL + core * 8L;
+        if (size >= (long) ObjectModel.HEADER_SIZE && size <= (long) SMALL_MAX && (size & 7L) == 0L)
+        {
+            freeCell = SIZE_HEADS + ((long) core * SIZE_CLASSES + (size >> 3)) * 8L;
+            long bytes = SIZE_BYTES + core * 8L;
+            Magic.store64(bytes, Magic.load64(bytes) + size);
+        }
         Magic.store64(addr, Magic.load64(freeCell));             // next
         Magic.store64(addr + ObjectModel.STATUS_OFFSET, size);   // size
         Magic.store64(freeCell, addr);

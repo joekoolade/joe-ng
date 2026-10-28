@@ -3929,7 +3929,7 @@ public final class Loader
                         z += 8L;
                     }
                     Magic.store64(Heap.PTR_CELL, demandHeapMark);   // reclaim the previous demo's dead code + objects
-                    Magic.store64(Heap.FREE_CELL, 0L);              // core 0's free-list entries are above it again
+                    Heap.clearCoreFreeLists(0);                     // core 0's free-list entries are above it again
                 }
                 // Code-arena rewind (same batch-death model): zero every code byte the previous batches wrote
                 // above the mark -- a stale JIT buffer executed through a dangling pointer is the worst kind of
