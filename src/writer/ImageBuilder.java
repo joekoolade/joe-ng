@@ -928,6 +928,11 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             symLineWord[i] = cur;
             cur += 1 + symLine[i].length;                          // {count}{(off,line) ints}
         }
+        // The line tables are 4-byte words and {count} makes each one an ODD number of them, so the run can
+        // end 4 bytes off an 8-byte boundary -- and every table after it holds 8-byte entries. It stayed even
+        // by the luck of the sum until rebuilding Throwable from the JDK source flipped it: the bake stub table
+        // landed at ...C and the first bakeResolve took an alignment fault in System.<clinit>.
+        cur = (cur + 1) & ~1;
         // --- M8 endgame: baked-method LINK table -- the writer-compiled stock methods the on-metal
         //     Loader may run instead of lazy-compiling its own copy. {classUtf8Addr, nameUtf8Addr,
         //     descUtf8Addr, codeAddr} per entry (4 longs); the name runs are {u2 len}{bytes}, the same
@@ -1917,7 +1922,12 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 // VM.initClasses time -- scheduled there it NPEs at boot (measured, once stock Locale's baked
                 // bodies made it reachable). It is also on noSnapshot: the seed JVM's values describe the build
                 // host. So its initializer runs on METAL, against the VM's seeded properties.
-                || cls.equals("jdk/internal/util/StaticProperty");
+                || cls.equals("jdk/internal/util/StaticProperty")
+                // System's <clinit> is `registerNatives()`, a native the BAKED world cannot resolve, so scheduled
+                // into VM.initClasses it halts the boot at bakeresolve-early. On metal its initializer is blocked
+                // too (Loader.clinitBlocked: in/out/err/props are seeded instead). Nothing baked reached System
+                // until stock Throwable's printStackTrace() read System.err.
+                || cls.equals("java/lang/System");
     }
 
     /** Owner class of a method key ("o/C.m(desc)") or field key ("o/C.f"). */
@@ -2566,7 +2576,10 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         return cls.equals("java/util/Locale") || cls.startsWith("sun/util/locale/")
                 || cls.equals("jdk/internal/util/StaticProperty")
                 || cls.startsWith("java/util/concurrent/atomic/Atomic")
-                || cls.equals("java/util/Random");
+                || cls.equals("java/util/Random")
+                // System's in/out/err/props are the BUILD HOST's streams and properties; on metal the Loader
+                // seeds them (seedSystemStreams, seedSystemProps), so the cells must start zeroed.
+                || cls.equals("java/lang/System");
     }
 
     private Resolved lookup(String key)

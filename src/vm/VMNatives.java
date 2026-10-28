@@ -1864,7 +1864,7 @@ final class VMNatives
         {
             Loader.printClassName(Magic.load64(tib));      // TIB[0] = Type -> the exception's class name
         }
-        long msg = Magic.load64(self + 80L);               // Throwable.detailMessage (after the 8-slot backtrace)
+        long msg = Loader.throwableMessage(self);          // Throwable.detailMessage, by name
         if (msg > 0x1000L)
         {
             Uart.write(Magic.bytes(": "));

@@ -31,7 +31,8 @@ final class VMUnwind
 {
     /**
      * Record the throw-site frame chain into {@code exc}'s inline backtrace (Throwable.bt0..bt7 @ exc+16..+72),
-     * first throw only (a re-throw / cross-method unwind won't overwrite). {@code pc} is a code address in the
+     * for an exception the VM allocated without a constructor ({@code Loader.awaitsThrowTrace}), first throw
+     * only (a re-throw / cross-method unwind won't overwrite). {@code pc} is a code address in the
      * throwing method, {@code sp} its stack pointer. The metal JIT calls this at every {@code athrow} (via the
      * CAPTURE_TRACE helper) so {@code printStackTrace()} has frames even for a same-method inline catch;
      * {@link #unwind} also calls it (idempotent) for the uncaught path. Walks saved LRs with {@link #frameSizeAt}.
@@ -56,9 +57,9 @@ final class VMUnwind
 
     static void captureTrace(long exc, long pc, long sp)
     {
-        if (exc <= 0x1000L || Magic.load64(exc + 16L) != 0L)   // boot force-compile passes 0; already captured -> keep
+        if (exc <= 0x1000L || !Loader.awaitsThrowTrace(exc))   // boot force-compile passes 0; only a VM-made exception
         {
-            return;
+            return;                                          //   is filled here (a constructed one has its trace or none)
         }
         if (NPE_TRACE && Loader.isNpe(exc))
         {
@@ -84,11 +85,10 @@ final class VMUnwind
         }
         if (n > 8)
         {
-            // Deeper than the slots: every frame, as stock. Only an exception that reaches its throw with NO
-            // trace gets here: the JIT's implicit NPE / ArithmeticException / AIOOBE, which newExc allocates
-            // without a constructor so fillInTrace never ran (DeepTraceProbe: 8 frames before this), and one
-            // whose class overrides fillInStackTrace to skip the capture. The implicit paths have just allocated
-            // the exception itself, so one more allocation is nothing new for them.
+            // Deeper than the slots: every frame, as stock. Only an exception newExc allocated without a
+            // constructor gets here -- the JIT's implicit NPE / ArithmeticException / AIOOBE, so fillInTrace never
+            // ran (DeepTraceProbe: 8 frames before this). Those paths have just allocated the exception itself,
+            // so one more allocation is nothing new for them.
             long arr = Loader.newThrowableBacktrace(exc, n);
             if (arr != 0L)
             {
@@ -145,8 +145,9 @@ final class VMUnwind
      * {@code new}, and an exception that is never thrown still has one. The frames stock leaves out are skipped
      * first ({@link Loader#ctorFrameKind}): {@code fillInStackTrace}, then the exception's own {@code <init>}
      * chain. It REPLACES any earlier trace, as an explicit {@code fillInStackTrace()} call does on a JVM; the
-     * throw-time {@link #captureTrace} then keeps it. An exception the VM allocates without a constructor, and
-     * one whose class overrides {@code fillInStackTrace} to skip the capture, is still filled at its throw.
+     * throw-time {@link #captureTrace} then keeps it. Only an exception the VM allocates without a constructor
+     * is filled at its throw; one whose class overrides {@code fillInStackTrace} to skip the capture, or that
+     * was built with a false {@code writableStackTrace}, has no trace, as stock.
      */
     static void fillInTrace(long exc)
     {
@@ -374,7 +375,7 @@ final class VMUnwind
                 // an absent/invalid exception object means a real frame-table gap (overflowed/unregistered method).
                 long xt = Magic.load64(exc);
                 // IS IT ACTUALLY A THROWABLE? Everything below reads Throwable's LAYOUT off this object -- the
-                // backtrace at +16..+72 and detailMessage at +80 -- so on any other object those are unrelated
+                // backtrace at +16..+72 and detailMessage after it -- so on any other object those are unrelated
                 // instance fields, and the "stack trace" is FABRICATED from whatever they hold. That is not
                 // hypothetical: a thrown non-Throwable printed a plausible-looking frame at pc 0x060B9DB8,
                 // which was simply a heap reference in one of its fields, and it sent the diagnosis chasing a
@@ -401,8 +402,8 @@ final class VMUnwind
                     Loader.printFrameAt(pc);
                     // IS IT A MIS-TYPED EXCEPTION RATHER THAN A WRONG OPERAND? joe-ng has produced
                     // wrong-typed objects before -- a `new` of a class the compile could not resolve once took
-                    // the CURRENT class's TIB. If this object carries a Throwable-shaped payload (a String at
-                    // +80, pcs in the backtrace slots) then it IS an exception wearing the wrong Type, which is
+                    // the CURRENT class's TIB. If this object carries a Throwable-shaped payload (a String
+                    // after the slots, pcs in the backtrace slots) then it IS an exception wearing the wrong Type, which is
                     // a completely different bug from athrow being handed the wrong value. Dump the head.
                     Uart.write(Magic.bytes("\n  words:"));
                     int wi = 0;
@@ -428,7 +429,7 @@ final class VMUnwind
                 {
                     Uart.write(Magic.bytes("\nException in thread \"main\" "));
                     Loader.printClassName(Magic.load64(xt));
-                    long msg = Magic.load64(exc + 80L);          // Throwable.detailMessage (after the 8-slot backtrace)
+                    long msg = Loader.throwableMessage(exc);     // Throwable.detailMessage, by name
                     if (msg > 0x1000L)
                     {
                         Uart.write(Magic.bytes(": "));

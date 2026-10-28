@@ -1,0 +1,15 @@
+implicit NPE getCause = null
+implicit NPE initCause = java.lang.IllegalStateException: c
+initCause twice = THREW java.lang.IllegalStateException: Can't overwrite cause with java.lang.IllegalStateException: second
+implicit NPE addSuppressed = 1 s
+try-with-resources over an implicit NPE = 1 java.io.IOException: close failed
+implicit NPE has frames = len < implicitNpe
+writableStackTrace=false, thrown = 0 0
+fillInStackTrace overridden, thrown = 0
+setStackTrace then get = 1 A.b(A.java:7)
+setStackTrace null element = THREW java.lang.NullPointerException: stackTrace[0]
+refill drops setStackTrace = lambda$main$10
+printStackTrace(PrintWriter) =  | java.lang.RuntimeException: outer | 	Suppressed: java.io.IOException: side | Caused by: java.lang.IllegalStateException: inner
+toString / getLocalizedMessage = java.lang.Throwable: java.lang.IllegalStateException: why / java.lang.IllegalStateException: why / null
+addSuppressed self and null = Self-suppression not permitted / Cannot suppress a null exception.
+ThrowableStockProbe done
