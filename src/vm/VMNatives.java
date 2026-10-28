@@ -1713,6 +1713,23 @@ final class VMNatives
         return net.Tcp.available(fdIndex(fdRef));
     }
 
+    /**
+     * {@code Net.poll(fd, events, timeout)}: wait until the socket is ready for {@code events} or {@code timeout} ms
+     * pass (negative: no limit), and answer the ready events, 0 on timeout (net.Tcp.poll). Stock
+     * NioSocketImpl parks here whenever a non-blocking read answers UNAVAILABLE -- which is how
+     * {@code setSoTimeout} bounds a read. Unbound, it was a DENYLIST TRAP that halted the VM.
+     */
+    static int sockPoll(long fdRef, long events, long timeout)
+    {
+        return net.Tcp.poll(fdIndex(fdRef), (int) events, timeout);
+    }
+
+    /** {@code IOUtil.configureBlocking(fd, blocking)}: NioSocketImpl's first step for a timed read (net.Tcp). */
+    static void sockConfigureBlocking(long fdRef, long blocking)
+    {
+        net.Tcp.setBlocking(fdIndex(fdRef), blocking != 0L);
+    }
+
     /** IOUtil.fdVal(fd) -> the fd int (the net.Tcp handle). */
     static int fdVal(long fdRef)
     {

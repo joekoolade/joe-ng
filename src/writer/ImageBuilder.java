@@ -1557,6 +1557,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockWrite0(JJJ)I",   "vm/VM.sockWrite0Addr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockClose0(J)V",     "vm/VM.sockClose0Addr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockAvailable(J)I",  "vm/VM.sockAvailableAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockPoll(JJJ)I",     "vm/VM.sockPollAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockConfigureBlocking(JJ)V", "vm/VM.sockConfigureBlockingAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.fdVal(J)I",          "vm/VM.fdValAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.setFdVal(JJ)V",      "vm/VM.setFdValAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.staticCell(JJ)J",   "vm/VM.staticCellAddr");

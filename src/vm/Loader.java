@@ -13240,6 +13240,7 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("socket0")))           { return VM.sockSocket0Addr; }
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("connect0")))          { return VM.sockConnect0Addr; }
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("available")))         { return VM.sockAvailableAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("poll")))              { return VM.sockPollAddr; }     // (FD,I,J)I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("localPort")))         { return VM.sockZeroAddr; }     // -> 0
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getIntOption0")))     { return VM.sockZeroAddr; }     // -> 0 (SO_LINGER)
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("localInetAddress")))  { return VM.sockZeroAddr; }     // -> null wildcard
@@ -13274,6 +13275,7 @@ public final class Loader
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fdVal")))             { return VM.fdValAddr; }
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("setfdVal")))          { return VM.setFdValAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("configureBlocking"))) { return VM.sockConfigureBlockingAddr; }
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("initIDs")))           { return VM.sockNoopAddr; }
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("iovMax")))            { return VM.iovMaxAddr; }
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("writevMax")))         { return VM.writevMaxAddr; }

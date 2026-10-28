@@ -1993,6 +1993,8 @@ public final class VM
         if (sockWrite0Addr == 0L) { int u = VMNatives.sockWrite0(0L, 0L, 0L); }         // compilation of the helper)
         if (sockClose0Addr == 0L) { VMNatives.sockClose0(0L); }
         if (sockAvailableAddr == 0L) { int u = VMNatives.sockAvailable(0L); }
+        if (sockPollAddr == 0L) { int u = VMNatives.sockPoll(0L, 0L, 0L); }             // Net.poll
+        if (sockConfigureBlockingAddr == 0L) { VMNatives.sockConfigureBlocking(0L, 0L); } // IOUtil.configureBlocking
         if (fdValAddr == 0L) { int u = VMNatives.fdVal(0L); }
         if (setFdValAddr == 0L) { VMNatives.setFdVal(0L, 0L); }
         if (sockNoopAddr == 0L) { VMNatives.sockNoop(); }
@@ -3589,6 +3591,8 @@ public final class VM
     static long sockWrite0Addr;
     static long sockClose0Addr;
     static long sockAvailableAddr;
+    static long sockPollAddr;              // VMNatives.sockPoll(JJJ)I -- Net.poll
+    static long sockConfigureBlockingAddr; // VMNatives.sockConfigureBlocking(JJ)V -- IOUtil.configureBlocking
     static long fdValAddr;
     static long setFdValAddr;
     static long sockNoopAddr;
