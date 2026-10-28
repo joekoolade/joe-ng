@@ -188,6 +188,14 @@ public class Throwable implements java.io.Serializable
      *  fields above. */
     private boolean suppressionEnabled = true;
 
+    /**
+     * joe-ng: stock's VM-private backtrace field, declared after the hardcoded offsets like the fields above.
+     * {@code VMUnwind.fillInTrace} sets it to a {@code long[]} of EVERY kept frame's pc when the stack is deeper
+     * than the eight inline slots, and to null otherwise; {@code getStackTrace} and {@code printStackTrace}
+     * read it in preference to {@code bt0..bt7}. Stock's trace is not limited to eight frames.
+     */
+    private transient Object backtrace;
+
     public final void addSuppressed(Throwable exception)
     {
         if (exception == this)

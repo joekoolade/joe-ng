@@ -1854,10 +1854,13 @@ final class VMNatives
             printStr(msg);
         }
         Uart.putc(0x0A);
+        long deep = Loader.throwableBacktrace(self);       // every frame, when there were more than eight
+        int n = deep != 0L ? Magic.load32(deep + ObjectModel.ARRAY_LENGTH_OFFSET) : 8;
         int i = 0;
-        while (i < 8)
+        while (i < n)
         {
-            long fpc = Magic.load64(self + 16L + i * 8L);
+            long fpc = deep != 0L ? Magic.load64(deep + ObjectModel.ARRAY_BASE_OFFSET + i * 8L)
+                                  : Magic.load64(self + 16L + i * 8L);
             if (fpc == 0L)
             {
                 break;
