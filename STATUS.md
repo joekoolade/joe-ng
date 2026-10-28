@@ -3,6 +3,7 @@
 The per-increment record: what each change fixed, how it was measured, and what QEMU and the Pi showed.
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
+
 - **THROWABLE OVERLAY REBUILT FROM THE JDK 26 SOURCE (2026-10-28, branch throwable-stock, 4e9ac02).**
   - **Before:** the hand-written overlay differed from stock in observable ways:
     - `printStackTrace(PrintWriter/PrintStream)` ignored the stream and wrote to the UART.
@@ -43,7 +44,6 @@ Newest entries are at the top.
     - New lines `arrayadopt [Ljava/lang/StackTraceElement;` and `[Ljava/lang/Throwable;`, expected now that
       stock Throwable's statics hold those arrays.
   - **NOT RUN:** full regression, the demo suite, JUnit.
-
 
 - **JAVA.LANG.INVOKE ARC, INCREMENTS 4-6: VOID VARHANDLE SITES, HIDDEN NESTMATES, METHODHANDLEPROXIES (2026-10-28,
   branch invoke-gaps, 1974010).**
