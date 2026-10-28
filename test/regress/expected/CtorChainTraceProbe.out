@@ -1,0 +1,15 @@
+guest this(...) chain: java.lang.IllegalStateException: n=3
+    [0] CtorChainTraceProbe$Chain.fail
+    [1] CtorChainTraceProbe$Chain.<init>
+    [2] CtorChainTraceProbe$Chain.<init>
+    [3] CtorChainTraceProbe.main
+java.base public this(...) chain: java.lang.IllegalArgumentException: Illegal Capacity: -1
+    [0] java.util.Hashtable.<init>
+    [1] java.util.Hashtable.<init>
+    [2] CtorChainTraceProbe.main
+Socket(null address, port): java.lang.NullPointerException
+    [0] java.util.Objects.requireNonNull
+    [1] java.net.Socket.<init>
+    [2] java.net.Socket.<init>
+    [3] CtorChainTraceProbe.main
+CtorChainTraceProbe done

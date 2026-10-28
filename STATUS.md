@@ -4,6 +4,35 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **A SAME-CLASS CALLEE COMPILED BESIDE ITS CALLER WAS NEVER REGISTERED: THE `this(...)` CONSTRUCTOR FRAME NO
+  TABLE CLAIMED (2026-10-28, branch cocompiled-callees-registered, 4971b43).** This explains the "STATED LIMIT"
+  further down: the one `unclaimed pc` inside `java/net/Socket.<init>` in every NetDemo boot. It was also where
+  the 2026-10-27 Pi `ConnectException` trace stopped.
+  - **Cause, MEASURED with a temporary instrument (removed):**
+    - `Loader.compile`'s discover pass (`scanCallees`) adds every same-class `invokestatic`/`invokespecial`
+      target as `m[1..]` and compiles each into its own buffer, and the caller BLs straight to them.
+    - The lazy and `<clinit>` paths registered only `m[0]`; `registerAll` covers the other on-demand paths.
+    - `Chain.<init>(IZ)V` never went through `lazyCompile` or a link stub (no `jitc` line). Its block was
+      allocated by `sizeMethod` during its caller's compile.
+    - So its frame printed as `<unclaimed pc>`, its `StackTraceElement` was `<vm>.<unknown>`, and the
+      uncaught walk stopped there.
+  - **Fix:** `registerCoCompiled()` APPENDS registry entries for `m[1..]` right after the final compile, on the
+    lazy and `<clinit>` paths (as `registerAll` already does elsewhere), before `patchRelocsFrom` can reuse
+    the `m[]` tables.
+  - **New probe `CtorChainTraceProbe`:** three `this(...)` chains: a guest class, `Hashtable(-1)`, and Socket's
+    private constructor via a null address. The refused connect itself cannot be compared with the host: its
+    lower frames differ, and the VM keeps eight. Before the fix the delegated constructor was `<vm>.<unknown>` in
+    all three arms; after it the output matches the host, solo and batched. The first batched run differed only
+    because the probe printed `ProbeBatch`'s reflective frames above `main`; the probe now stops at its own
+    `main`.
+  - **QEMU:** targeted Regress 15/15 (stack-trace, caller-sensitive, reflection-lookup, clinit and connect
+    probes). make test and make overlaycheck (0 new) OK.
+  - **Pi 4 (4971b43):** HTTP 200 on the first boot, `[main returned normally]`, 61 batches, batch 1 +1174,
+    gc collections=7. `bytes=891` against 888: the response's `Age: 3584` header is three characters longer than
+    `Age: 1`. GC `roots` 0x739 -> 0x7C9, presumably the new registry entries (not measured). The connect
+    succeeded, so the trace improvement itself is measured on QEMU only.
+  - **NOT RUN:** full regression, the demo suite, JUnit.
+
 - **DNS AND SNTP: CONSTANT UDP PORTS AND A CONSTANT DNS ID (2026-10-27, branch udp-fresh-ports, 4551964).**
   The OPEN item from the TCP cards below. Pi-only; QEMU has no WiFi, so no QEMU path reaches this code.
   - **Before:** DNS sent from port 0xC000 with id 0x1234 on every boot, and SNTP from 0xC001. A DNS answer was
