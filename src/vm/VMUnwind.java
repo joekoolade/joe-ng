@@ -125,9 +125,40 @@ final class VMUnwind
         }
         long cpc = lr - 4L;
         long csp = mysp + frameSizeAt(VM.fillTraceAddr);       // the caller's SP: ours plus our own frame
+        int n = keptFrames(exc, cpc, csp, 0L);                 // pass 1: the inline slots, and the true depth
+        if (n < 8)
+        {
+            Magic.store64(exc + 16L + n * 8L, 0L);             // 0-terminate (an empty trace stays all-zero)
+        }
+        if (n > 8)
+        {
+            long arr = Loader.newThrowableBacktrace(exc, n);   // deeper than the slots: every frame, as stock
+            if (arr != 0L)
+            {
+                keptFrames(exc, cpc, csp, arr);                // pass 2: the same walk, into the array
+            }
+        }
+        else
+        {
+            Loader.newThrowableBacktrace(exc, 0);              // fits the slots: clear an older deep trace
+        }
+    }
+
+    /** Stock's {@code MaxJavaStackTraceDepth} default: a trace keeps at most this many frames. */
+    static final int MAX_TRACE_DEPTH = 1024;
+
+    /**
+     * {@link #fillInTrace}'s walk from the caller's frame ({@code cpc}, {@code csp}): skip the frames stock leaves
+     * out ({@link Loader#ctorFrameKind}), then keep every frame up to the top of the resolvable stack, below
+     * {@code main}, or {@link #MAX_TRACE_DEPTH}. With {@code arr == 0} the first eight kept pcs go into the
+     * inline {@code bt0..bt7}; otherwise every kept pc goes into the {@code long[]} {@code arr}, which pass 1
+     * sized. Returns the number of frames kept. Allocates nothing, so the two passes see the same stack.
+     */
+    private static int keptFrames(long exc, long cpc, long csp, long arr)
+    {
         int phase = Loader.FRAME_FILL;
         int n = 0;
-        while (n < 8 && cpc > 0x1000L)
+        while (n < MAX_TRACE_DEPTH && cpc > 0x1000L)
         {
             if (phase != Loader.FRAME_KEEP)
             {
@@ -143,7 +174,14 @@ final class VMUnwind
             }
             if (phase == Loader.FRAME_KEEP)
             {
-                Magic.store64(exc + 16L + n * 8L, cpc);
+                if (arr != 0L)
+                {
+                    Magic.store64(arr + 24L + n * 8L, cpc);
+                }
+                else if (n < 8)
+                {
+                    Magic.store64(exc + 16L + n * 8L, cpc);
+                }
                 n += 1;
             }
             long cfs = frameSizeAt(cpc);
@@ -158,10 +196,7 @@ final class VMUnwind
                 break;                                         // below main(): the VM's launch frames
             }
         }
-        if (n < 8)
-        {
-            Magic.store64(exc + 16L + n * 8L, 0L);             // 0-terminate (an empty trace stays all-zero)
-        }
+        return n;
     }
 
     /** One report per boot: the first bad throw is the informative one; the rest are its wreckage. */

@@ -67,6 +67,7 @@ ComponentTypeProbe
 ConcatUtf16Probe
 ConnectFailProbe
 CtorChainTraceProbe
+DeepTraceProbe
 ConstantDescOrderProbe
 ConstantDescProbe
 CslmRaceProbe            solo             # race; timing-sensitive

@@ -3400,7 +3400,9 @@ public final class Loader
 
     /**
      * Materialise a {@code StackTraceElement[]} from a Throwable's INLINE backtrace ({@code bt0..bt7} at
-     * {@code obj+16..+72}, 0-terminated), which {@link VM#unwind} fills at THROW time.
+     * {@code obj+16..+72}, 0-terminated), which {@link VM#unwind} fills at THROW time -- or, when the trace was
+     * deeper than eight frames, from the full-depth {@code long[]} in {@code Throwable.backtrace} that
+     * {@code VMUnwind.fillInTrace} records (DeepTraceProbe: a 20-deep throw used to come back as 8 frames).
      *
      * <p>An exception that has been constructed but not yet thrown therefore yields an EMPTY array, which is
      * correct rather than merely convenient: stock semantics would capture at construction, and joe-ng
@@ -3415,10 +3417,18 @@ public final class Loader
             return 0L;
         }
         long tib = steTib();
+        long deep = throwableBacktrace(exc);             // every frame, when there were more than eight
         int n = 0;
-        while (n < 8 && Magic.load64(exc + 16L + (long) n * 8L) != 0L)
+        if (deep != 0L)
         {
-            n += 1;
+            n = Magic.load32(deep + ObjectModel.ARRAY_LENGTH_OFFSET);
+        }
+        else
+        {
+            while (n < 8 && Magic.load64(exc + 16L + (long) n * 8L) != 0L)
+            {
+                n += 1;
+            }
         }
         long arr = Heap.allocArray(n, 8);
         if (tib != 0L)
@@ -3428,10 +3438,60 @@ public final class Loader
         int i = 0;
         while (i < n)
         {
-            Magic.store64(arr + 24L + (long) i * 8L,
-                    frameToElement(Magic.load64(exc + 16L + (long) i * 8L), tib));
+            long fpc = deep != 0L ? Magic.load64(deep + ObjectModel.ARRAY_BASE_OFFSET + (long) i * 8L)
+                                  : Magic.load64(exc + 16L + (long) i * 8L);
+            Magic.store64(arr + 24L + (long) i * 8L, frameToElement(fpc, tib));
             i += 1;
         }
+        return arr;
+    }
+
+    /**
+     * Object offset of {@code Throwable.backtrace}, found by name once: 0 until it is known, -1 when the class
+     * is registered but has no such field (the eight inline slots are then the whole trace).
+     */
+    private static long thrBacktraceOff;
+
+    private static long throwableBacktraceOff()
+    {
+        if (thrBacktraceOff == 0L && clTab != null)
+        {
+            int ti = classIndexByName(Magic.bytes("java/lang/Throwable"));
+            if (ti >= 0)
+            {
+                thrBacktraceOff = instanceFieldOffset(ti, Magic.bytes("backtrace"));   // -1 if absent: cached
+            }
+        }
+        return thrBacktraceOff;
+    }
+
+    /** {@code exc}'s full-depth backtrace ({@code long[]} of pcs), or 0 when its trace fits the inline slots. */
+    static long throwableBacktrace(long exc)
+    {
+        long off = throwableBacktraceOff();
+        return off > 0L ? Magic.load64(exc + off) : 0L;
+    }
+
+    /**
+     * Give {@code exc} a fresh {@code long[n]} backtrace and return it, or 0 when the field is unknown. With
+     * {@code n == 0} it CLEARS the field instead -- a re-capture ({@code fillInStackTrace()} again) that now fits
+     * the inline slots must not leave an older, deeper trace in place.
+     */
+    static long newThrowableBacktrace(long exc, int n)
+    {
+        long off = throwableBacktraceOff();
+        if (off <= 0L)
+        {
+            return 0L;
+        }
+        if (n == 0)
+        {
+            Magic.store64(exc + off, 0L);
+            return 0L;
+        }
+        long arr = Heap.allocArray(n, 8);
+        Magic.store64(arr + ObjectModel.TIB_OFFSET, primArrayTib(11));   // long[]
+        Magic.store64(exc + off, arr);
         return arr;
     }
 
