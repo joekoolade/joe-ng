@@ -4,6 +4,26 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **DNS AND SNTP: CONSTANT UDP PORTS AND A CONSTANT DNS ID (2026-10-27, branch udp-fresh-ports, 4551964).**
+  The OPEN item from the TCP cards below. Pi-only; QEMU has no WiFi, so no QEMU path reaches this code.
+  - **Before:** DNS sent from port 0xC000 with id 0x1234 on every boot, and SNTP from 0xC001. A DNS answer was
+    accepted from any address and to any port if it came from port 53 with id 0x1234, so it was trivially
+    forgeable (RFC 5452).
+  - **Fix:** each DNS lookup takes a fresh port and id (resends keep both), and an answer must come from `dnsIp`
+    port 53, to that port, with that id. SNTP takes a fresh port per exchange. The splitmix64 stream moved from
+    `Tcp` to `net.Ip` (`nextRandom`, `ephemeralPort`), so all three protocols share it.
+  - **Pi 4 (4551964), boot 1:** SNTP and DNS answered on the new ports
+    (`clock: SNTP 5.254.77.191 -> 2026-10-28 02:45:33 UTC`). The TCP connect then TIMED OUT:
+    `tcp: connect timed out: syns=12 fromPeer=0 lastFlags=-1 lport=56227`, so not one segment came back. That
+    raised a stock `ConnectException: Connection timed out` with a full stack. This was the first time #440's
+    failure path ran on hardware, and there was no Net.poll trap.
+  - **Pi 4 (4551964), boot 2, same card power-cycled:** HTTP 200 `bytes=888`, `[main returned normally]`. 61
+    batches, batch 1 +1174, gc collections=7. The boot-1 timeout was therefore intermittent and not this
+    change; its cause is not determined.
+  - **Timing:** boot 2's batch-line `clinit` from batch 30 on is ~8.1-8.7 ms, rising to ~12 ms from batch 49,
+    which matches 79d3a94. The roughly doubled times seen on 421a8ec's single boot were most likely noise.
+  - **NOT RUN:** full regression, the demo suite, JUnit. make test and make overlaycheck (0 new) OK.
+
 - **A FAILED CONNECT HALTED THE VM INSTEAD OF THROWING (2026-10-27, branch connect-exception, 421a8ec).** The
   OPEN item from the TCP card below.
   - **Cause:** the connect native answered every failure with 0. Stock NioSocketImpl reads 0 as "in progress",

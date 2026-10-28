@@ -36,7 +36,6 @@ public final class Sntp
     /** Seconds from the NTP epoch (1900-01-01) to the Unix epoch (1970-01-01). */
     private static final long NTP_UNIX_OFFSET = 2208988800L;
 
-    private static final int LOCAL_PORT = 0xC001;          // DNS uses 0xC000
     private static final int NTP_PORT = 123;
     private static final int RX_WAIT_MS = 200;
 
@@ -84,6 +83,7 @@ public final class Sntp
         long sentAt = 0L;
         long stampHi = 0L;
         long stampLo = 0L;
+        int localPort = Ip.ephemeralPort();               // one per exchange; resends keep it
         while (Magic.readCNTPCT_EL0() < endT)
         {
             long now = Magic.readCNTPCT_EL0();
@@ -92,7 +92,7 @@ public final class Sntp
                 sentAt = now;
                 stampHi = now >>> 32;                     // our transmit timestamp: any value the reply must echo
                 stampLo = now & 0xFFFFFFFFL;
-                int flen = build(buf, serverIp, (int) stampHi, (int) stampLo);
+                int flen = build(buf, serverIp, localPort, (int) stampHi, (int) stampLo);
                 Ip.send(buf, flen);
                 nextSend = now + freq;
             }
@@ -106,7 +106,7 @@ public final class Sntp
                 continue;                                // not UDP, or not from the server
             }
             long udp = ip + Ip.lastIhl;
-            if (be16(udp) != NTP_PORT || be16(udp + 2) != LOCAL_PORT || be16(udp + 4) < 8 + 48)
+            if (be16(udp) != NTP_PORT || be16(udp + 2) != localPort || be16(udp + 4) < 8 + 48)
             {
                 continue;
             }
@@ -134,8 +134,11 @@ public final class Sntp
         return 0L;
     }
 
-    /** An Ethernet/IPv4/UDP/NTP client request to {@code serverIp} in {@code buf}; returns the frame length. */
-    private static int build(long buf, long serverIp, int stampHi, int stampLo)
+    /**
+     * An Ethernet/IPv4/UDP/NTP client request from {@code localPort} to {@code serverIp} in {@code buf}; returns the
+     * frame length.
+     */
+    private static int build(long buf, long serverIp, int localPort, int stampHi, int stampLo)
     {
         int i = 0;
         while (i < 6)
@@ -157,7 +160,7 @@ public final class Sntp
         Magic.store8(m, 0x23);                           // LI 0, version 4, mode 3 (client)
         Ip.be32(m + 40, stampHi);                        // transmit timestamp, echoed as the reply's originate
         Ip.be32(m + 44, stampLo);
-        Ip.be16(udp + 0, LOCAL_PORT);
+        Ip.be16(udp + 0, localPort);
         Ip.be16(udp + 2, NTP_PORT);
         Ip.be16(udp + 4, 8 + 48);
         Ip.be16(udp + 6, 0);                             // no UDP checksum (allowed over IPv4)
