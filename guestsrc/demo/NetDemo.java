@@ -16,6 +16,7 @@ import java.io.OutputStream;
 import java.net.InterfaceAddress;
 import java.net.NetworkInterface;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.util.Enumeration;
 import java.util.HexFormat;
 
@@ -24,6 +25,10 @@ import java.util.HexFormat;
  * running on bare metal, backed by joe-ng's net.Tcp stack. Resolves the host (InetAddress overlay -> WiFi
  * DNS), opens a socket, writes the request, reads the response, closes. Launched via the /etc/init manifest
  * with {@code net=1} so the OS brings the WiFi interface up first.
+ *
+ * <p>Every read has a timeout ({@code setSoTimeout}), which is what a real client sets: stock NioSocketImpl then
+ * reads non-blocking and waits in {@code Net.poll}, so this exercises that path on every response. A second
+ * connection that sends nothing must time out with stock's {@code SocketTimeoutException}.
  */
 public class NetDemo
 {
@@ -31,6 +36,7 @@ public class NetDemo
     {
         String host = args.length > 0 ? args[0] : "example.com";
         Socket s = new Socket(host, 80);
+        s.setSoTimeout(15000);
         System.out.println("socket connected");
 
         OutputStream o = s.getOutputStream();
@@ -51,6 +57,22 @@ public class NetDemo
         System.out.println();
         System.out.print("----- http done bytes=");
         System.out.println(total);
+
+        // A read nothing will answer: the server is still waiting for a request.
+        Socket idle = new Socket(host, 80);
+        idle.setSoTimeout(2000);
+        long t0 = System.nanoTime();
+        try
+        {
+            int r = idle.getInputStream().read();
+            System.out.println("idle read returned " + r + " -- expected a timeout");
+        }
+        catch (SocketTimeoutException e)
+        {
+            long ms = (System.nanoTime() - t0) / 1000000L;
+            System.out.println("idle read timed out: " + e.getMessage() + " after " + (ms / 100L * 100L) + "+ ms");
+        }
+        idle.close();
 
         // The interface the request went out on, as java.net reports it: its lease, broadcast and MAC should
         // match what the WiFi bring-up printed.

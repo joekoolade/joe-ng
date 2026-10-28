@@ -58,6 +58,16 @@ public final class Tcp
     private static long[] rxb   = new long[MAXCONN];  // per-conn RX scratch (also backs pending-read data)
     private static long[] ppay  = new long[MAXCONN];  // pending unread payload address (into rxb)
     private static int[]  plen  = new int[MAXCONN];   // pending unread byte count
+    private static int[]  nb    = new int[MAXCONN];   // 1 = non-blocking (IOUtil.configureBlocking(fd, false))
+
+    /** {@code sun.nio.ch.IOStatus.UNAVAILABLE}: a non-blocking read found nothing to return yet. */
+    public static final int UNAVAILABLE = -2;
+
+    /** The Linux {@code <poll.h>} bits, as {@code Net.pollinValue()} and its siblings answer them here. */
+    public static final int POLLIN = 0x1;
+    public static final int POLLOUT = 0x4;
+    public static final int POLLHUP = 0x10;
+    public static final int POLLNVAL = 0x20;
 
     /**
      * Allocate a socket slot (like {@code Net.socket()}): reserve a connection handle without connecting.
@@ -77,6 +87,7 @@ public final class Tcp
                 }
                 st[i] = RESERVED;
                 plen[i] = 0;
+                nb[i] = 0;                               // a new socket blocks, as on a JVM
                 return i;
             }
             i = i + 1;
@@ -130,7 +141,7 @@ public final class Tcp
                 syns += 1;
                 nextSend = now + freq / 2L;
             }
-            long tcp = recvSeg(h);
+            long tcp = recvSeg(h, RX_WAIT_MS);
             if (tcp == 0L)
             {
                 continue;
@@ -203,59 +214,98 @@ public final class Tcp
     }
 
     /**
-     * Block until inbound data arrives, copy up to {@code len} bytes into {@code buf+off}, ACK it, and return
-     * the count. Returns -1 at end-of-stream (peer FIN), or 0 on timeout with no data. Payload beyond
-     * {@code len} is held in the connection and returned by the next read (so this honours arbitrary read
-     * sizes).
+     * Copy up to {@code len} received bytes into {@code buf+off}, ACKing what arrives, and return the count; -1 at
+     * end-of-stream (the peer's FIN or RST) or on a socket that is not connected. Payload beyond {@code len} is
+     * held for the next read. A BLOCKING socket waits until there is data or end-of-stream, with no time limit,
+     * as {@code read(2)} does -- {@code setSoTimeout} is how a caller bounds it, through {@link #poll}. A
+     * NON-blocking socket answers {@link #UNAVAILABLE} when nothing has arrived.
+     *
+     * <p>This used to give up after a fixed 8 s and return 0, which no stream read may return for a non-empty
+     * buffer: NetDemo's {@code while (n > 0)} loop took it as the end and reported {@code bytes=0}.
      */
     public static int read(int h, long buf, int off, int len)
     {
-        if (h < 0 || st[h] == FREE)
+        if (h < 0 || h >= MAXCONN || (st[h] != CONNECTED && st[h] != CLOSED))
         {
             return -1;
         }
-        if (plen[h] > 0)                                 // serve buffered bytes first (no new frame yet)
+        while (true)
         {
-            return drainPending(h, buf, off, len);
+            if (plen[h] > 0)                             // serve buffered bytes first (no new frame yet)
+            {
+                return drainPending(h, buf, off, len);
+            }
+            if (st[h] == CLOSED)
+            {
+                return -1;                               // FIN or RST already seen and drained
+            }
+            boolean got = pump(h, nb[h] != 0 ? 0 : RX_WAIT_MS);
+            if (!got && nb[h] != 0)
+            {
+                return UNAVAILABLE;
+            }
         }
-        if (st[h] == CLOSED)
+    }
+
+    /**
+     * {@code Net.poll}: wait until connection {@code h} is ready for {@code events} ({@link #POLLIN} /
+     * {@link #POLLOUT}), or {@code timeoutMs} elapses (negative: no limit, 0: just look). Returns the ready
+     * events, 0 on timeout, {@link #POLLNVAL} for a handle that is not a socket, and {@link #POLLHUP} for one
+     * that will never become ready (not connected, or closed with only {@code POLLOUT} asked for). Readable
+     * means data is pending or the peer has closed (a read then answers -1); writable means connected, since
+     * {@link #write} never waits.
+     */
+    public static int poll(int h, int events, long timeoutMs)
+    {
+        if (h < 0 || h >= MAXCONN || st[h] == FREE)
         {
-            return -1;                                   // FIN already seen and drained
+            return POLLNVAL;
         }
         long freq = Magic.readCNTFRQ_EL0();
-        long endT = Magic.readCNTPCT_EL0() + freq * 8L;
-        while (Magic.readCNTPCT_EL0() < endT)
+        long endT = Magic.readCNTPCT_EL0() + (timeoutMs < 0L ? 0L : timeoutMs * freq / 1000L);
+        while (true)
         {
-            long tcp = recvSeg(h);
-            if (tcp == 0L)
+            int ready = 0;
+            if ((events & POLLIN) != 0 && (plen[h] > 0 || st[h] == CLOSED))
             {
-                continue;
+                ready = ready | POLLIN;
             }
-            int flags = Magic.load8(tcp + 13) & 0x3F;
-            int segSeq = Ip.readBe32(tcp + 4);
-            int dataOff = ((Magic.load8(tcp + 12) >> 4) & 0x0F) * 4;
-            int payLen = Ip.lastIpTotal - Ip.lastIhl - dataOff;
-            long payload = tcp + dataOff;
-            if (payLen > 0 && segSeq == rcv[h])          // in-order data
+            if ((events & POLLOUT) != 0 && st[h] == CONNECTED)
             {
-                rcv[h] = rcv[h] + payLen;
-                sendSeg(h, 0x10, 0L, 0);                 // ACK
-                ppay[h] = payload;                       // payload lives in rxb[h] until the next recvSeg
-                plen[h] = payLen;
-                int n = drainPending(h, buf, off, len);
-                if ((flags & 0x01) != 0)                 // FIN rode along with the data
+                ready = ready | POLLOUT;
+            }
+            if (ready != 0)
+            {
+                return ready;
+            }
+            if (st[h] != CONNECTED || plen[h] > 0)
+            {
+                return POLLHUP;                          // nothing this socket can still deliver
+            }
+            int waitMs = RX_WAIT_MS;
+            if (timeoutMs >= 0L)
+            {
+                long left = (endT - Magic.readCNTPCT_EL0()) * 1000L / freq;
+                if (left <= 0L)
                 {
-                    finish(h);
+                    return 0;                            // timed out
                 }
-                return n;
+                if (left < waitMs)
+                {
+                    waitMs = (int) left;
+                }
             }
-            if ((flags & 0x01) != 0)                     // FIN, no (new) data
-            {
-                finish(h);
-                return -1;
-            }
+            pump(h, waitMs);
         }
-        return 0;                                        // timeout, no data
+    }
+
+    /** {@code IOUtil.configureBlocking}: make connection {@code h}'s reads blocking or non-blocking. */
+    public static void setBlocking(int h, boolean blocking)
+    {
+        if (h >= 0 && h < MAXCONN)
+        {
+            nb[h] = blocking ? 0 : 1;
+        }
     }
 
     /** Close the connection (send FIN|ACK if still open) and free the slot. */
@@ -280,6 +330,53 @@ public final class Tcp
     }
 
     // ----- internals -----
+
+    /**
+     * Receive at most one segment for connection {@code h}, waiting up to {@code ms}, and apply it: in-order data
+     * becomes the pending read (and is ACKed), a FIN closes the receive side, and a RST whose sequence number is
+     * the one we expect ends the connection. Returns true if a segment for {@code h} arrived. Called only with
+     * nothing pending, because the next frame is received into {@code rxb[h]}, where the pending payload lives.
+     *
+     * <p>A RST reads as end-of-stream (-1). Stock throws {@code SocketException("Connection reset")} for it;
+     * before this, a RST was ignored and the read waited out its time limit.
+     */
+    private static boolean pump(int h, int ms)
+    {
+        long tcp = recvSeg(h, ms);
+        if (tcp == 0L)
+        {
+            return false;
+        }
+        int flags = Magic.load8(tcp + 13) & 0x3F;
+        int segSeq = Ip.readBe32(tcp + 4);
+        int dataOff = ((Magic.load8(tcp + 12) >> 4) & 0x0F) * 4;
+        int payLen = Ip.lastIpTotal - Ip.lastIhl - dataOff;
+        if ((flags & 0x04) != 0)                         // RST
+        {
+            if (segSeq == rcv[h])
+            {
+                st[h] = CLOSED;
+            }
+            return true;
+        }
+        if (payLen > 0 && segSeq == rcv[h])              // in-order data
+        {
+            rcv[h] = rcv[h] + payLen;
+            sendSeg(h, 0x10, 0L, 0);                     // ACK
+            ppay[h] = tcp + dataOff;                     // payload lives in rxb[h] until the next recvSeg
+            plen[h] = payLen;
+            if ((flags & 0x01) != 0)                     // FIN rode along with the data
+            {
+                finish(h);
+            }
+            return true;
+        }
+        if ((flags & 0x01) != 0)                         // FIN, no (new) data
+        {
+            finish(h);
+        }
+        return true;
+    }
 
     /** Copy up to {@code len} pending bytes into {@code buf+off}; advance the pending window. */
     private static int drainPending(int h, long buf, int off, int len)
@@ -350,10 +447,10 @@ public final class Tcp
         Ip.send(buf, 14 + 20 + tcpLen);
     }
 
-    /** Block for the next TCP segment belonging to connection {@code h}; return its TCP header addr or 0. */
-    private static long recvSeg(int h)
+    /** Wait up to {@code ms} for the next TCP segment belonging to connection {@code h}; its TCP header or 0. */
+    private static long recvSeg(int h, int ms)
     {
-        long ip = Ip.recvIp(rxb[h], 2048, RX_WAIT_MS);
+        long ip = Ip.recvIp(rxb[h], 2048, ms);
         if (ip == 0L)
         {
             return 0L;

@@ -4,6 +4,40 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **NET.POLL AND NON-BLOCKING SOCKET READS: `setSoTimeout` WORKS (2026-10-28, branch net-poll, bb820ba).**
+  - **Before:**
+    - Stock NioSocketImpl bounds a read with `setSoTimeout` by switching the socket to non-blocking
+      (`IOUtil.configureBlocking`), reading, and parking in `Net.poll` while the read answers UNAVAILABLE.
+      Neither native was bound, so the first timed read would have been a DENYLIST TRAP.
+    - The VM's read always blocked, then gave up after a fixed 8 s and returned 0, which no stream read may
+      return for a non-empty buffer. NetDemo's `while (n > 0)` took it as end-of-stream: SUSPECTED to be the
+      recorded intermittent `bytes=0` (not measured).
+  - **Fix (net.Tcp):**
+    - A per-socket blocking flag and one segment step (`pump`) shared by every path.
+    - A blocking read waits for data or end-of-stream with no time limit, as read(2); a non-blocking one
+      answers UNAVAILABLE.
+    - `poll(h, events, timeoutMs)`: POLLIN when data is pending or the peer closed, POLLOUT when connected, 0
+      on timeout, POLLNVAL / POLLHUP otherwise.
+    - A RST at the expected sequence number reads as end-of-stream. Stock throws "Connection reset" (OPEN);
+      it used to be ignored.
+    - Bound as `Net.poll` and `IOUtil.configureBlocking`.
+  - **NetDemo:** every read now has a 15 s timeout, so each response read goes through `Net.poll`. A second
+    connection sends nothing and reads with a 2 s timeout. Host JVM control: HTTP 200 `bytes=888`, then
+    `idle read timed out: Read timed out after 2000+ ms`.
+  - **Pi 4 (bb820ba):** HTTP 200 `bytes=891` (the `Age:` header, as on the last boots), then
+    `idle read timed out: Read timed out after 2000+ ms` -- matching the host. `[main returned normally]`, 61
+    batches, gc collections=7.
+  - **Two new compile-time notices on that path:**
+    - `UNRESOLVED STATIC (reads null): sun/nio/ch/ExtendedSocketOption.SO_OOBINLINE -- DENYLISTED`, needed by
+      NioSocketImpl.
+    - `TRAP-WIRED: sun/nio/ch/Poller.poll(...) -- DENYLISTED`: park's virtual-thread branch, not taken here.
+    - Neither halted the run. Whether SO_OOBINLINE's null is ever read at run time is not measured.
+  - **QEMU:** cannot reach this code (no network). make test, make overlaycheck (0 new) and 8/8
+    network/trace probes pass, which shows nothing else moved.
+  - **Also Pi-validated this session:** main 1c48636 (#444's first hardware run): HTTP 200,
+    `[main returned normally]`, 61 batches, gc collections=7.
+  - **NOT RUN:** full regression, the demo suite, JUnit.
+
 - **IMPLICIT EXCEPTIONS STILL KEPT EIGHT FRAMES (2026-10-28, branch implicit-exc-depth, 5dc8b37).** The rest of
   the full-depth backtrace (#443).
   - **Cause, MEASURED:** the JIT's implicit `NullPointerException`, `ArithmeticException` and
