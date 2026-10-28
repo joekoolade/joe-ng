@@ -1669,11 +1669,17 @@ public final class Cyw43
     /**
      * Send a DNS A-query for {@code host} to {@code dnsIp} (via the gateway) and parse the first A record
      * into {@code ipOut}. Resends every 0.5 s, drains fast (the unicast-RX pattern). Returns true on answer.
+     *
+     * <p>Each lookup takes a fresh source port and query id (resends keep both), and an answer counts only if it
+     * comes from {@code dnsIp} port 53 to that port with that id (RFC 5452). The port and id used to be the
+     * constants 0xC000 and 0x1234 on every boot, and the destination port and source address went unchecked.
      */
     public static boolean dnsResolve(byte[] host, long ipOut)
     {
         long buf = Heap.allocData(256);
-        int flen = buildDnsQuery(buf, host);
+        int localPort = net.Ip.ephemeralPort();
+        int id = (int) (net.Ip.nextRandom() & 0xFFFF);
+        int flen = buildDnsQuery(buf, host, localPort, id);
         long rx = Heap.allocData(2048);
         long freq = Magic.readCNTFRQ_EL0();
         long endT = Magic.readCNTPCT_EL0() + freq * 6L;
@@ -1708,17 +1714,21 @@ public final class Cyw43
                 continue;
             }
             long ip = eth + 14;
-            if ((Magic.load8(ip + 9) & 0xFF) != 17)
+            if ((Magic.load8(ip + 9) & 0xFF) != 17 || !net.Ip.eq(ip + 12, dnsIp))
             {
-                continue;                                // not UDP
+                continue;                                // not UDP, or not from our DNS server
             }
             long udp = ip + (Magic.load8(ip) & 0x0F) * 4;
             if (((Magic.load8(udp) & 0xFF) << 8 | (Magic.load8(udp + 1) & 0xFF)) != 53)
             {
-                continue;                                // not from a DNS server
+                continue;                                // not from the DNS port
+            }
+            if (((Magic.load8(udp + 2) & 0xFF) << 8 | (Magic.load8(udp + 3) & 0xFF)) != localPort)
+            {
+                continue;                                // not to this lookup's port
             }
             long d = udp + 8;
-            if (((Magic.load8(d) & 0xFF) << 8 | (Magic.load8(d + 1) & 0xFF)) != 0x1234)
+            if (((Magic.load8(d) & 0xFF) << 8 | (Magic.load8(d + 1) & 0xFF)) != id)
             {
                 continue;                                // id mismatch
             }
@@ -1746,8 +1756,11 @@ public final class Cyw43
         return false;
     }
 
-    /** Build a DNS A-record query for {@code host} into {@code buf}; returns the total frame length. */
-    private static int buildDnsQuery(long buf, byte[] host)
+    /**
+     * Build a DNS A-record query for {@code host} from {@code localPort} with query id {@code id} into {@code buf};
+     * returns the total frame length.
+     */
+    private static int buildDnsQuery(long buf, byte[] host, int localPort, int id)
     {
         int i = 0;
         while (i < 6)
@@ -1761,7 +1774,7 @@ public final class Cyw43
         long ip = buf + 14;
         long udp = buf + 34;
         long d = buf + 42;
-        be16(d + 0, 0x1234);                             // id
+        be16(d + 0, id);                                 // id
         be16(d + 2, 0x0100);                             // flags: recursion desired
         be16(d + 4, 1);                                  // qdcount
         be16(d + 6, 0);
@@ -1771,7 +1784,7 @@ public final class Cyw43
         be16(d + 12 + qn, 1);                            // qtype = A
         be16(d + 12 + qn + 2, 1);                        // qclass = IN
         int dnsLen = 12 + qn + 4;
-        be16(udp + 0, 0xC000);                           // src port (ephemeral)
+        be16(udp + 0, localPort);                        // src port (ephemeral)
         be16(udp + 2, 53);                               // dst port = DNS
         be16(udp + 4, 8 + dnsLen);
         be16(udp + 6, 0);                                // no UDP checksum

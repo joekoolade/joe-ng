@@ -108,8 +108,8 @@ public final class Tcp
         Magic.store8(rip[h] + 2, (ipBe >> 8) & 0xFF);
         Magic.store8(rip[h] + 3, ipBe & 0xFF);
         rport[h] = port;
-        lport[h] = 49152 + (int) (nextRandom() & 0x3FFF);  // a fresh ephemeral port per connection
-        int isn = (int) nextRandom();                   // and a fresh initial sequence number
+        lport[h] = Ip.ephemeralPort();                  // a fresh ephemeral port per connection
+        int isn = (int) Ip.nextRandom();                // and a fresh initial sequence number
         snd[h] = isn;
         rcv[h] = 0;
         plen[h] = 0;
@@ -171,30 +171,6 @@ public final class Tcp
         VM.printDec(lport[h]);
         board.bcm2711.Uart.write(Magic.bytes("\n"));
         return -ETIMEDOUT;
-    }
-
-    /** splitmix64 state, seeded from the counter on first use (boot-to-boot timing jitter differs per boot). */
-    private static long rngState;
-
-    /**
-     * The next value of a per-boot pseudo-random stream, for ephemeral ports and initial sequence numbers. Both
-     * used to be CONSTANTS (port 0xC001 + slot, ISN 0x1000), so every boot opened the SAME connection -- same
-     * address, port and ISN -- and an earlier boot that halted mid-connection never closed it. A peer or NAT still
-     * holding that 4-tuple may answer a new SYN with an ACK of the old connection (RFC 5961), which connect used to
-     * ignore until it timed out. That was the SUSPECTED cause of three Pi boots in a row timing out (2026-10-27)
-     * while the host reached the same server in milliseconds; it is not measured.
-     */
-    private static long nextRandom()
-    {
-        if (rngState == 0L)
-        {
-            rngState = Magic.readCNTPCT_EL0() ^ 0x5DEECE66DL;
-        }
-        rngState = rngState + 0x9E3779B97F4A7C15L;
-        long z = rngState;
-        z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
-        z = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
-        return z ^ (z >>> 31);
     }
 
     /** Convenience for driver code (e.g. the WiFi HTTP demo): allocate + connect to a 4-byte IPv4 at

@@ -194,4 +194,33 @@ public final class Ip
             i = i + 1;
         }
     }
+
+    /** splitmix64 state, seeded from the counter on first use (boot-to-boot timing jitter differs per boot). */
+    private static long rngState;
+
+    /**
+     * The next value of a per-boot pseudo-random stream, for ephemeral ports, TCP initial sequence numbers and DNS
+     * query ids. All of them used to be CONSTANTS (TCP port 0xC001 + slot and ISN 0x1000, DNS port 0xC000 and id
+     * 0x1234, SNTP port 0xC001), so every boot opened the SAME flows. For TCP that left an earlier boot's connection
+     * where a new SYN could meet it (RFC 5961) -- the SUSPECTED, not measured, cause of three Pi boots in a row
+     * timing out (2026-10-27). For DNS, a constant port and id make an answer trivially forgeable (RFC 5452).
+     */
+    public static long nextRandom()
+    {
+        if (rngState == 0L)
+        {
+            rngState = Magic.readCNTPCT_EL0() ^ 0x5DEECE66DL;
+        }
+        rngState = rngState + 0x9E3779B97F4A7C15L;
+        long z = rngState;
+        z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
+        z = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
+        return z ^ (z >>> 31);
+    }
+
+    /** A fresh local port from the dynamic range (RFC 6335: 49152..65535). */
+    public static int ephemeralPort()
+    {
+        return 49152 + (int) (nextRandom() & 0x3FFF);
+    }
 }
