@@ -4,6 +4,21 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **IMPLICIT EXCEPTIONS STILL KEPT EIGHT FRAMES (2026-10-28, branch implicit-exc-depth, 5dc8b37).** The rest of
+  the full-depth backtrace (#443).
+  - **Cause, MEASURED:** the JIT's implicit `NullPointerException`, `ArithmeticException` and
+    `ArrayIndexOutOfBoundsException` are allocated by `newExc` without a constructor, so the construction-time
+    capture never ran. `captureTrace` filled them at the throw, keeping eight. DeepTraceProbe's three new arms
+    (each 20 calls deep) gave `frames=8` with no `main` frame in all three.
+  - **Fix:** `captureTrace` takes the same two-pass walk as `fillInTrace`; a trace deeper than eight goes into
+    the `Throwable.backtrace` `long[]`. The paths that reach it have just allocated the exception, so the
+    extra allocation is not new behaviour for them. It also reaches an exception whose class overrides
+    `fillInStackTrace` to skip the capture (filled at throw, as before).
+  - **QEMU:** DeepTraceProbe now `frames=22 rec=21` down to `main` in every arm, matching the host. Targeted
+    Regress 17/17 (exception-message, null-dispatch, array-check and trace probes). make test and make
+    overlaycheck (0 new) OK.
+  - **NOT RUN:** the Pi (pushed on request before a Pi boot), full regression, the demo suite, JUnit.
+
 - **A THROWABLE KEPT ONLY EIGHT FRAMES (2026-10-28, branch full-depth-backtrace, d60d29a).** The backtrace lived
   in eight inline slots (`Throwable.bt0..bt7`), so `getStackTrace()` and `printStackTrace()` cut every trace to
   its eight innermost frames. That is a silent wrong answer for any caller walking the trace for its own frame.
