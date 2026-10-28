@@ -21,6 +21,14 @@ import java.lang.annotation.Annotation;
  */
 public class AccessibleObject implements AnnotatedElement
 {
+    static
+    {
+        // joe-ng: stock's registration, which this overlay had dropped -- so SharedSecrets.getJavaLangReflectAccess()
+        // answered null, and MethodHandleProxies.newProxyClass (JLRA.getExecutableSharedParameterTypes) and
+        // Reflection.isTrustedFinalField both NPE'd on it (InvokeGapProbe). ReflectAccess is the JDK 26 source.
+        jdk.internal.access.SharedSecrets.setJavaLangReflectAccess(new ReflectAccess());
+    }
+
     static final int ACC_PUBLIC    = 0x0001;
     static final int ACC_PRIVATE   = 0x0002;
     static final int ACC_PROTECTED = 0x0004;
@@ -259,5 +267,11 @@ public class AccessibleObject implements AnnotatedElement
         String who = (caller == null) ? "<unknown>" : caller.getName();
         return new IllegalAccessException("Class " + who + " can not access a " + kind
                 + " member of class " + declaring.getName());
+    }
+
+    /** Stock's: the object this one was copied from, or null for an original (ReflectAccess.getRoot). */
+    AccessibleObject getRoot()
+    {
+        return null;
     }
 }

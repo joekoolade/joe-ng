@@ -6411,6 +6411,10 @@ public final class Loader
                 // shell and got through as one; deleted, the stock class met this prefix denial and `new
                 // InvocationTargetException` became an UNRESOLVED NEW (StockExceptionProbe).
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/InvocationTargetException"))
+                // STOCK ReflectAccess (exact name): AccessibleObject.<clinit> registers it as SharedSecrets'
+                // JavaLangReflectAccess, which MethodHandleProxies and Reflection.isTrustedFinalField read. Denied,
+                // `new ReflectAccess` was an UNRESOLVED NEW in that initializer (InvokeGapProbe).
+                || utf8IsAtBase(base, off, Magic.bytes("java/lang/reflect/ReflectAccess"))
                 // Executable is the shared supertype of Method and Constructor, and Parameter is what its
                 // getParameters() answers. Both are OVERLAID (see guestsrc) rather than allowed through to
                 // stock, whose versions are built on the denied sun/reflect/generics + sun/reflect/annotation
@@ -14537,6 +14541,43 @@ public final class Loader
         {
             return 0L;
         }
+        long buf = vhChainResolve(ci, idx, d);
+        if (buf == 0L && d.length > 2 && d[d.length - 2] == 0x29 && d[d.length - 1] == 0x56)
+        {
+            // A site that DISCARDS the result: javac types `vh.getAndAdd(a, i, v);` as returning void, while the
+            // accessor returns the old value (VarHandleLongs$Array.getAndAdd is (LVarHandle;LObject;IJ)J). Stock
+            // invocation lets a void site drop any return, and here dropping it costs nothing -- the value is
+            // left in x0/d0 unread -- so the same parameters are tried with each return an accessor can have.
+            // A class declares at most one accessor per name and parameter list, so the first hit is THE one.
+            // MEASURED (InvokeGapProbe "array VarHandle"): VIRTUALRESOLVE FAILED ...getAndAdd([JIJ)V, a TRAP.
+            byte[][] rets = { Magic.bytes("I"), Magic.bytes("J"), Magic.bytes("Z"), Magic.bytes("B"), Magic.bytes("S"),
+                              Magic.bytes("C"), Magic.bytes("F"), Magic.bytes("D"), Magic.bytes("Ljava/lang/Object;") };
+            int r = 0;
+            while (buf == 0L && r < rets.length)
+            {
+                byte[] alt = new byte[d.length - 1 + rets[r].length];
+                int k = 0;
+                while (k < d.length - 1)
+                {
+                    alt[k] = d[k];
+                    k += 1;
+                }
+                int j = 0;
+                while (j < rets[r].length)
+                {
+                    alt[k + j] = rets[r][j];
+                    j += 1;
+                }
+                buf = vhChainResolve(ci, idx, alt);
+                r += 1;
+            }
+        }
+        return buf;
+    }
+
+    /** The VarHandle accessor named by site {@code idx} with descriptor {@code d}, up {@code ci}'s chain, or 0. */
+    private static long vhChainResolve(int ci, int idx, byte[] d)
+    {
         long descU = utf8Blob(d);
         long buf = 0L;
         int c = ci;

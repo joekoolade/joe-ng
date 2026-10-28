@@ -159,6 +159,7 @@ public final class ReachScan
                 || c.startsWith("java/lang/reflect/Array")
                 || c.startsWith("java/lang/reflect/AccessibleObject")
                 || c.startsWith("java/lang/reflect/InvocationTargetException")  // stock exception, no natives
+                || c.equals("java/lang/reflect/ReflectAccess")          // stock JavaLangReflectAccess (Loader)
                 || c.startsWith("java/lang/reflect/Member")             // stock interfaces the overlays implement
                 || c.startsWith("java/lang/reflect/AnnotatedElement")   //   (see Loader.isDenylisted)
                 || c.startsWith("java/lang/reflect/Type")               // the generic-type interfaces and

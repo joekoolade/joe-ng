@@ -36,6 +36,12 @@ public final class MetalHiddenClasses
     /** The flag Lookup.ClassOption.HIDDEN_CLASS sets (MethodHandleNatives.Constants.HIDDEN_CLASS). */
     public static final int HIDDEN_CLASS = 0x00000002;
 
+    /** The flag Lookup.ClassOption.NESTMATE sets (MethodHandleNatives.Constants.NESTMATE_CLASS). */
+    public static final int NESTMATE_CLASS = 0x00000001;
+
+    /** A hidden NESTMATE's nest host: its lookup class's host, as HotSpot sets it (InstanceKlass::set_nest_host). */
+    private static final ConcurrentHashMap<Class<?>, Class<?>> NEST = new ConcurrentHashMap<>();
+
     private static final ConcurrentHashMap<Class<?>, Object> DATA = new ConcurrentHashMap<>();
     private static final Set<Class<?>> HIDDEN = ConcurrentHashMap.newKeySet();
     private static final AtomicLong SEQ = new AtomicLong();
@@ -48,7 +54,7 @@ public final class MetalHiddenClasses
      * Define {@code b} -- as a hidden class (renamed, recorded, its class data stored) when {@code flags} says
      * so -- and initialize it if asked. The class data is in place before any initializer can run.
      */
-    public static Class<?> define(byte[] b, int flags, Object classData, boolean initialize)
+    public static Class<?> define(byte[] b, int flags, Object classData, boolean initialize, Class<?> lookup)
     {
         boolean hidden = (flags & HIDDEN_CLASS) != 0;
         byte[] bytes = hidden ? renamed(b, "+" + SEQ.incrementAndGet()) : b;
@@ -65,6 +71,13 @@ public final class MetalHiddenClasses
         {
             DATA.put(c, classData);
         }
+        if (hidden && (flags & NESTMATE_CLASS) != 0 && lookup != null)
+        {
+            // Before initialization, like the class data: a spun <clinit> may touch its host's private members.
+            // Without it a spun lambda class was its own nest host, so the caller could not reach its PRIVATE
+            // constructor and LambdaMetafactory failed "Exception finding constructor" (InvokeGapProbe).
+            NEST.put(c, lookup.getNestHost());
+        }
         if (initialize)
         {
             Unsafe.getUnsafe().ensureClassInitialized(c);
@@ -76,6 +89,12 @@ public final class MetalHiddenClasses
     public static Object classData(Class<?> c)
     {
         return DATA.get(c);
+    }
+
+    /** {@code Class.getNestHost}: a hidden nestmate's host, or null for any other class. */
+    public static Class<?> nestHost(Class<?> c)
+    {
+        return NEST.get(c);
     }
 
     /** {@code Class.isHidden}: whether {@code c} was defined here as a hidden class. */

@@ -1553,6 +1553,11 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
         {
             return this;
         }
+        Class<?> hiddenHost = jdk.internal.misc.MetalHiddenClasses.nestHost(this);   // joe-ng: a hidden nestmate
+        if (hiddenHost != null)
+        {
+            return hiddenHost;
+        }
         String host = nestPart0(this, -1L);
         return host == null ? this : classNamed(host);
     }

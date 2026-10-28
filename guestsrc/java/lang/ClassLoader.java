@@ -1145,7 +1145,7 @@ public abstract class ClassLoader {
                                  int flags,
                                  Object classData) {
         byte[] tb = (off == 0 && len == b.length) ? b : java.util.Arrays.copyOfRange(b, off, off + len);
-        return jdk.internal.misc.MetalHiddenClasses.define(tb, flags, classData, initialize);
+        return jdk.internal.misc.MetalHiddenClasses.define(tb, flags, classData, initialize, lookup);
     }
 
     // true if the name is null or has the potential to be a valid binary name

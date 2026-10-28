@@ -804,4 +804,19 @@ public abstract class Executable extends AccessibleObject implements Member, Gen
 
     /** VM native ({@code Loader.nativeBuf} -> {@code VM.annoPresent}): registry index + descriptor -> 0/1. */
     private static native int annoPresent0(int rgIndex, byte[] descriptor);
+
+    /** Stock's: the exception types without a defensive copy (ReflectAccess, MethodHandleProxies). */
+    Class<?>[] getSharedExceptionTypes()
+    {
+        return getExceptionTypes();
+    }
+
+    /**
+     * Stock's: the raw RuntimeVisibleTypeAnnotations bytes. This VM does not keep them, and answering null would
+     * claim "no type annotations" for a member that has some -- so it says what is missing instead.
+     */
+    byte[] getTypeAnnotationBytes()
+    {
+        throw new UnsupportedOperationException("joe-ng: type annotation bytes are not kept for " + getName());
+    }
 }
