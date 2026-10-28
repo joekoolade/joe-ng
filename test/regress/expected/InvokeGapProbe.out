@@ -1,0 +1,19 @@
+static VarHandle = true 10 15
+array VarHandle = 10 true 4
+MutableCallSite = one two
+VolatileCallSite = 2
+SwitchPoint = fast slow true
+MethodHandleProxies = 42 true
+LambdaMetafactory = 9
+StringConcatFactory = x=42!
+findSpecial = base
+privateLookupIn = derived
+revealDirect = sum invokeStatic sum
+countedLoop = 10
+tryFinally = body
+array helpers = 4 9
+invokers = 3 7
+explicitCastArguments = 7
+zero/empty/throwException = 0 null thrown
+Supplier via metafactory = supplied ()String
+InvokeGapProbe done

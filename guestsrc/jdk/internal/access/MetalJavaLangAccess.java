@@ -220,7 +220,7 @@ public final class MetalJavaLangAccess implements JavaLangAccess
      */
     @Override public Class<?> defineClass(ClassLoader cl, Class<?> lookup, String name, byte[] b, ProtectionDomain pd, boolean initialize, int flags, Object classData)
     {
-        return jdk.internal.misc.MetalHiddenClasses.define(b, flags, classData, initialize);
+        return jdk.internal.misc.MetalHiddenClasses.define(b, flags, classData, initialize, lookup);
     }
     /**
      * Stock's: a class the BOOTSTRAP loader defines, or null (ClassLoader.findBootstrapClassOrNull). This used to

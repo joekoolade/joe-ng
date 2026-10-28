@@ -28,6 +28,7 @@ public final class Field extends AccessibleObject implements Member
     private final byte[] nameBytes;
     private final int modifiers;
     private final int typeChar;
+    private Field root;                // stock's: the Field this one was copied from (copy / getRoot)
 
     public Field(Class<?> clazz, String name, int modifiers, int typeChar)
     {
@@ -704,5 +705,44 @@ public final class Field extends AccessibleObject implements Member
     public boolean isEnumConstant()
     {
         return (modifiers & 0x4000) != 0;               // ACC_ENUM
+    }
+
+    /** Stock's: a fresh Field for the same field, not accessible, whose root is this one (ReflectAccess). */
+    Field copy()
+    {
+        Field f = new Field(clazz, name, modifiers, typeChar);
+        f.root = root != null ? root : this;
+        return f;
+    }
+
+    @Override
+    Field getRoot()
+    {
+        return root;
+    }
+
+    /**
+     * Stock's: a final field that even setAccessible cannot open for writing -- a static final, or a final field
+     * of a hidden class or a record (what HotSpot marks trusted final in fieldDescriptor::is_trusted_final).
+     */
+    boolean isTrustedFinal()
+    {
+        return Modifier.isFinal(modifiers) && (Modifier.isStatic(modifiers) || clazz.isHidden() || clazz.isRecord());
+    }
+
+    /**
+     * Stock's check before Lookup.unreflectSetter hands out a setter for a final field: the field must be
+     * accessible to {@code caller}. Stock also asks whether the declaring package is open to the caller's module
+     * and how illegal final-field mutation is configured; there is one unnamed module here and no such option,
+     * so the member-access check is the whole of it.
+     */
+    void checkAllowedToUnreflectFinalSetter(Class<?> caller) throws IllegalAccessException
+    {
+        java.util.Objects.requireNonNull(caller);
+        if (!verifyMemberAccess(caller, clazz, clazz, modifiers))
+        {
+            throw new IllegalAccessException("class " + caller.getName() + " cannot unreflect a setter for final field "
+                    + clazz.getName() + "." + name);
+        }
     }
 }

@@ -30,6 +30,7 @@ public final class Constructor<T> extends Executable
     private final int paramCount;
     private final byte[] paramChars;   // first descriptor char of each parameter ('I'/'J'/'Z'/.../'L'/'[')
     private final int rgIndex;         // this <init>'s slot in the VM's method registry (descriptor lookup key)
+    private Constructor<T> root;       // stock's: the Constructor this one was copied from (copy / getRoot)
 
     private Constructor(Class<T> clazz, int access, long buf, int paramCount, byte[] paramChars, int rgIndex)
     {
@@ -212,6 +213,29 @@ public final class Constructor<T> extends Executable
                                                 InstantiationException
     {
         checkAccess(clazz, access, Magic.readLR(), clazz);   // stock's target for a constructor
+        return construct(args);
+    }
+
+    /**
+     * Stock's: construct with the access check made against {@code caller} instead of the calling frame
+     * (ReflectAccess.newInstance, for a caller-sensitive path that already knows its caller).
+     */
+    T newInstanceWithCaller(Object[] args, boolean checkAccess, Class<?> caller)
+        throws InstantiationException, IllegalAccessException, InvocationTargetException
+    {
+        if (checkAccess && !override && !verifyMemberAccess(caller, clazz, clazz, access))
+        {
+            throw new IllegalAccessException("class " + (caller == null ? "<none>" : caller.getName())
+                    + " cannot access a member of " + clazz.getName() + " with modifiers \""
+                    + Modifier.toString(access & Modifier.constructorModifiers()) + "\"");
+        }
+        return construct(args);
+    }
+
+    /** The construction both entries share, once access has been decided. */
+    @SuppressWarnings("unchecked")
+    private T construct(Object[] args) throws InstantiationException, InvocationTargetException
+    {
         checkArgCount(args, paramCount);
         Object obj = allocInstance0(clazz);
         if (obj == null)
@@ -249,5 +273,29 @@ public final class Constructor<T> extends Executable
     public boolean isVarArgs()
     {
         return (access & 0x0080) != 0;
+    }
+
+    /** Stock's: a fresh Constructor for the same constructor, not accessible, whose root is this one. */
+    Constructor<T> copy()
+    {
+        Constructor<T> c = new Constructor<>(clazz, access, buf, paramCount, paramChars, rgIndex);
+        c.root = root != null ? root : this;
+        return c;
+    }
+
+    @Override
+    Constructor<T> getRoot()
+    {
+        return root;
+    }
+
+    /**
+     * Stock's: a copy that constructs through {@code accessor} (ReflectionFactory, for serialization). This VM
+     * constructs by calling the body directly and has no accessor objects, so it says so rather than ignore one.
+     */
+    Constructor<T> newWithAccessor(jdk.internal.reflect.ConstructorAccessor accessor)
+    {
+        throw new UnsupportedOperationException("joe-ng: constructor accessors are not used on this VM ("
+                + clazz.getName() + ")");
     }
 }

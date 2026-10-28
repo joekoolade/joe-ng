@@ -68,6 +68,7 @@ ConcatUtf16Probe
 ConnectFailProbe
 CtorChainTraceProbe
 DeepTraceProbe
+InvokeGapProbe
 ConstantDescOrderProbe
 ConstantDescProbe
 CslmRaceProbe            solo             # race; timing-sensitive

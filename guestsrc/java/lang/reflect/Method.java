@@ -32,6 +32,7 @@ public final class Method extends Executable
     private final byte[] paramChars;   // first descriptor char of each parameter ('I'/'J'/'Z'/.../'L'/'[')
     private final int returnChar;
     private final int rgIndex;         // this method's slot in the VM's method registry (annotation lookup key)
+    private Method root;               // stock's: the Method this one was copied from (copy / getRoot)
 
     private Method(Class<?> clazz, String name, int access, long buf, int paramCount, byte[] paramChars, int returnChar,
             int rgIndex)
@@ -472,5 +473,19 @@ public final class Method extends Executable
         if (tc == 'F') { return Float.valueOf(Float.intBitsToFloat((int) ret)); }   // freturn/dreturn move the
         if (tc == 'D') { return Double.valueOf(Double.longBitsToDouble(ret)); }     //   raw bits into x0
         return Magic.fromAddr(ret);                        // 'L' / '[' reference
+    }
+
+    /** Stock's: a fresh Method for the same method, not accessible, whose root is this one (ReflectAccess). */
+    Method copy()
+    {
+        Method m = new Method(clazz, name, access, buf, paramCount, paramChars, returnChar, rgIndex);
+        m.root = root != null ? root : this;
+        return m;
+    }
+
+    @Override
+    Method getRoot()
+    {
+        return root;
     }
 }
