@@ -4,6 +4,28 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **VTABLE-SLOT AND bufBySigU LOOKUPS INDEXED: InvokeGapProbe 266 s -> 111 s (2026-10-28, branch vt-index, 3553f08).**
+  - **Profile:** sampled on QEMU through the monitor every 0.25 s, naming the image-code words on the busy core's
+    stack (JOENG_SYMMAP). One core does the work. Of its 1086 samples, ~60% were byte-by-byte name compares
+    (`u1`/`u2`/`utf8EqAt`); guest JIT code was under 4%.
+    - The compares sat under `Baseline.lowerInvokeVirtual -> globalVtableSlot`, which scanned EVERY vtable
+      entry of every class and repeated the scan once per superclass level for an inherited method, and under
+      `virtualResolve -> bufBySigU`, which scanned the whole method registry and then the whole vtable table.
+    - The loader's batch lines account for only ~28 s of the 266 s, because they do not time lazy compiles.
+  - **Fix:** both tables already had indexes that these lookups bypassed.
+    - `exactVtableSlot`, `globalVtableSlot` (both passes) and `bufBySigU`'s vtable fallback go through the
+      class-name vtable index via `vtEntryOf`. Its chains are kept ascending, so the first hit is the scan's
+      first match.
+    - `bufBySigU`'s registry pass uses `rgBucket`. Those chains are newest-first, so it walks the whole chain
+      and keeps the lowest index with a buffer, as the scan did.
+    - resetLoader now clears the vtable index explicitly.
+  - **QEMU:** InvokeGapProbe 266 s -> 111 s solo, still identical to the host. Re-profile: busy samples
+    1086 -> 453, and byte compares ~60% -> ~34%.
+  - **Next lever:** `Heap.allocLocked` is now the top self cost at 23% (the first-fit free-list walk).
+  - **Other checks:** 26/26 dispatch-heavy probes pass. make test passes; make overlaycheck 0 new.
+  - **Pi 4:** 3553f08 was flashed; no boot log was reported, so NOT VALIDATED here.
+  - **NOT RUN:** full regression, the demo suite, JUnit.
+
 - **THROWABLE OVERLAY REBUILT FROM THE JDK 26 SOURCE (2026-10-28, branch throwable-stock, 4e9ac02).**
   - **Before:** the hand-written overlay differed from stock in observable ways:
     - `printStackTrace(PrintWriter/PrintStream)` ignored the stream and wrote to the UART.
