@@ -4,6 +4,37 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **A FAILED CONNECT HALTED THE VM INSTEAD OF THROWING (2026-10-27, branch connect-exception, 421a8ec).** The
+  OPEN item from the TCP card below.
+  - **Cause:** the connect native answered every failure with 0. Stock NioSocketImpl reads 0 as "in progress",
+    parks, and calls the unimplemented `sun/nio/ch/Net.poll` (DENYLIST TRAP). Stock C `connect0` throws instead
+    (`handleSocketError`: ECONNREFUSED/ETIMEDOUT -> ConnectException).
+  - **Fix:**
+    - `Tcp.connect` returns 1 or a negated errno: an RST acknowledging our SYN or a 127/8 address -> ECONNREFUSED,
+      a timeout -> ETIMEDOUT, no IP -> ENETUNREACH, a bad handle -> EBADF. `VMNatives.sockConnect0` answers
+      EINVAL for a missing address.
+    - A VM native cannot throw a guest exception, so `guestsrc/sun/nio/ch/Net.java` (NEW, from the JDK 26 source)
+      throws in `connect(...)` on a code below `IOStatus.UNSUPPORTED_CASE`, with stock's exception classes and
+      strerror messages. Marked `joe-ng:`.
+    - The hand-written `guestsrc/sun/net/ext/ExtendedSocketOptions.java` overlay is DELETED: it lacked
+      setOption/getOption, which stock Net calls. Stock runs now (no jdk.net -> NoExtendedSocketOptions).
+      Overlay class count 130 -> 132 (Net, Net$1, Net$2 in; ExtendedSocketOptions out).
+  - **New probe `ConnectFailProbe`** (127.0.0.1 port 1, no network needed): Socket(host,port), Socket.connect with
+    the after-state, the loopback address, ten refused in a row. QEMU output matches the host JVM; Regress 4/4 of
+    the targeted set.
+  - **Pi 4 (421a8ec): HTTP 200 `bytes=888` on the first boot, `[main returned normally]`.** 61 batches, gc
+    collections=7, batch 1 +1174 (79d3a94: +1172; the +2 is presumably Net$1/Net$2, not measured). Socket close
+    ran stock ExtendedSocketOptions on the Pi for the first time and printed nothing. The connect SUCCEEDED, so the
+    failure path is measured on QEMU only.
+  - **Observed, not attributed:**
+    - DHCP needed four discovers and the gateway ping got no reply; TCP still connected.
+    - From batch 30 on, batch-line `mark` and `clinit` times are about twice the 79d3a94 boot's (mark ~8 -> ~16.5
+      ms, clinit ~8.2 -> ~19.8 ms); batches 1-29 match. One boot each, so noise is not excluded; under a second
+      in total.
+  - **OPEN:** DNS (0xC000) and SNTP (0xC001) still use constant UDP source ports.
+  - **NOT RUN:** full regression, the demo suite, JUnit, a second Pi boot. make test and make overlaycheck
+    (0 new) OK.
+
 - **TCP: EVERY BOOT OPENED THE SAME CONNECTION (2026-10-27, branch tcp-fresh-tuple, 79d3a94).** Pi-only; QEMU
   has no WiFi.
   - **Symptom:** three Pi boots in a row resolved example.com, then timed out in `Tcp.connect` (6 s). The connect
