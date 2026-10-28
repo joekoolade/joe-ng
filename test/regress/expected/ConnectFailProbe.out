@@ -1,0 +1,6 @@
+Socket(host, port) = THREW java.net.ConnectException: Connection refused
+  after: connected=false closed=true
+Socket.connect = THREW java.net.ConnectException: Connection refused
+loopback address = THREW java.net.ConnectException: Connection refused
+ten refused in a row = refused=10
+ConnectFailProbe done

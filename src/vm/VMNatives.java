@@ -1652,7 +1652,10 @@ final class VMNatives
         return net.Tcp.alloc();
     }
 
-    /** Net.connect0(preferIPv6, FileDescriptor fd, InetAddress remote, int port) -> 1 on success, 0 else. */
+    /**
+     * Net.connect0(preferIPv6, FileDescriptor fd, InetAddress remote, int port) -> 1 on success, else a negated
+     * errno (net.Tcp.connect); the sun.nio.ch.Net overlay throws for it, since a VM native cannot throw.
+     */
     static int sockConnect0(long preferIPv6, long fdRef, long inetRef, long port)
     {
         // Stock InetAddress keeps its address in holder.address -- the field the C (NET_InetAddressToSockaddr)
@@ -1661,13 +1664,13 @@ final class VMNatives
         long holderOff = fieldOffsetNamed(inetRef, Magic.bytes("holder"));
         if (holderOff < 0L)
         {
-            return 0;
+            return -net.Tcp.EINVAL;
         }
         long holder = Magic.load64(inetRef + holderOff);
         long addrOff = fieldOffsetNamed(holder, Magic.bytes("address"));
         if (addrOff < 0L)
         {
-            return 0;
+            return -net.Tcp.EINVAL;
         }
         int ipBe = (int) Magic.load64(holder + addrOff); // InetAddressHolder.address: big-endian IPv4
         return net.Tcp.connect(fdIndex(fdRef), ipBe, (int) port);

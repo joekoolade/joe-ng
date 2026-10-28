@@ -38,6 +38,17 @@ public final class Tcp
 
     private static final int RX_WAIT_MS = 200;
 
+    /**
+     * Why a {@link #connect} failed, as the NEGATED Linux errno the C library would have set -- the socket layer
+     * (the sun.nio.ch.Net overlay) throws for each exactly what unix/native/libnio/ch/Net.c handleSocketError
+     * throws for that errno.
+     */
+    public static final int EBADF = 9;
+    public static final int EINVAL = 22;
+    public static final int ENETUNREACH = 101;
+    public static final int ETIMEDOUT = 110;
+    public static final int ECONNREFUSED = 111;
+
     private static int[]  st    = new int[MAXCONN];   // slot state
     private static long[] rip   = new long[MAXCONN];  // remote IPv4 (4-byte heap buf)
     private static int[]  rport = new int[MAXCONN];   // remote port
@@ -73,13 +84,24 @@ public final class Tcp
         return -1;
     }
 
-    /** Connect an alloc()'d handle to {@code ipBe}:{@code port} (blocking SYN/SYN-ACK; ipBe = big-endian IPv4
-     *  int). Returns 1 on success, 0 on reset/timeout. */
+    /**
+     * Connect an alloc()'d handle to {@code ipBe}:{@code port} (blocking SYN/SYN-ACK; ipBe = big-endian IPv4
+     * int). Returns 1 on success, else a negated errno: -ECONNREFUSED (a RST of our SYN, or a loopback address,
+     * where nothing on this VM listens), -ETIMEDOUT, -ENETUNREACH (no WiFi lease), -EBADF (not a socket).
+     */
     public static int connect(int h, int ipBe, int port)
     {
         if (h < 0 || h >= MAXCONN || st[h] == FREE)
         {
-            return 0;
+            return -EBADF;
+        }
+        if (((ipBe >>> 24) & 0xFF) == 127)
+        {
+            return -ECONNREFUSED;                        // 127/8: no socket on this VM listens
+        }
+        if (Ip.ourIp == 0L)
+        {
+            return -ENETUNREACH;                         // no interface is up (no WiFi, or QEMU)
         }
         Magic.store8(rip[h] + 0, (ipBe >> 24) & 0xFF);
         Magic.store8(rip[h] + 1, (ipBe >> 16) & 0xFF);
@@ -121,7 +143,7 @@ public final class Tcp
             {
                 if (ackOk)
                 {
-                    return 0;
+                    return -ECONNREFUSED;
                 }
                 continue;
             }
@@ -148,7 +170,7 @@ public final class Tcp
         board.bcm2711.Uart.write(Magic.bytes(" lport="));
         VM.printDec(lport[h]);
         board.bcm2711.Uart.write(Magic.bytes("\n"));
-        return 0;
+        return -ETIMEDOUT;
     }
 
     /** splitmix64 state, seeded from the counter on first use (boot-to-boot timing jitter differs per boot). */
@@ -184,7 +206,7 @@ public final class Tcp
         {
             return -1;
         }
-        if (connect(h, Ip.readBe32(ipAddr), port) == 0)
+        if (connect(h, Ip.readBe32(ipAddr), port) != 1)
         {
             close(h);
             return -1;

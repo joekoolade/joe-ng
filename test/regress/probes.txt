@@ -65,6 +65,7 @@ CodeSourceProbe
 CollectionsProbe
 ComponentTypeProbe
 ConcatUtf16Probe
+ConnectFailProbe
 ConstantDescOrderProbe
 ConstantDescProbe
 CslmRaceProbe            solo             # race; timing-sensitive
