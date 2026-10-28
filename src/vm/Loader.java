@@ -6361,8 +6361,9 @@ public final class Loader
                 // java/lang/ClassLoader is STOCK (overlaid from the JDK 26 source, natives Java over the VM's one
                 // class namespace -- jdk.internal.misc.MetalLoaders), and so is jdk/internal/loader below it.
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/ClassLoader"))
-                // ExtendedSocketOptions is overlaid to a no-op (Net.<clinit> sets EXTENDED_OPTIONS from it);
-                // the rest of sun/net/ext stays denied.
+                // ExtendedSocketOptions runs STOCK (Net.<clinit> sets EXTENDED_OPTIONS from it): its forName of
+                // jdk.net.ExtendedSocketOptions finds no class, so it answers NoExtendedSocketOptions, exactly as
+                // a JDK without the jdk.net module does. The rest of sun/net/ext stays denied.
                 || utf8HasPrefix(base, off, Magic.bytes("sun/net/ext/ExtendedSocketOptions"))
                 // NARROWED OUT of the sun/net/www/ denial: the file: and jar: URL protocols, which a class path
                 // is read through (stock URLClassPath, ClassLoader.getResource). java.net.URL picks the handler
