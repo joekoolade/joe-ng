@@ -4,6 +4,28 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **A THROWABLE KEPT ONLY EIGHT FRAMES (2026-10-28, branch full-depth-backtrace, d60d29a).** The backtrace lived
+  in eight inline slots (`Throwable.bt0..bt7`), so `getStackTrace()` and `printStackTrace()` cut every trace to
+  its eight innermost frames. That is a silent wrong answer for any caller walking the trace for its own frame.
+  Stock keeps up to `MaxJavaStackTraceDepth` (1024).
+  - **Fix:**
+    - `VMUnwind.fillInTrace` (construction-time capture) walks the whole stack. Pass 1 fills the inline slots
+      and counts. With more than eight kept frames, pass 2 writes every pc (cap 1024) into a `long[]` stored in
+      stock's `private transient Object backtrace` field, which is new in the Throwable overlay and declared
+      after the hardcoded offsets.
+    - A re-capture that fits the slots clears the field.
+    - `traceFromThrowable` and the `printStackTrace` native read the array when present.
+    - The throw-time `captureTrace` and the fault path still allocate nothing and keep eight.
+  - **New probe `DeepTraceProbe`:** CONTROL with the VM change stashed: a 20-deep throw gave `frames=8 rec=8` and
+    never reached `main`. With the change: `frames=22 rec=21` down to `main`, matching the host. Re-capturing
+    from `main` shrinks the trace to 1 frame (the array is cleared).
+  - **QEMU:** targeted Regress 16/16 (exception, trace, caller-sensitive and connect probes). make test and
+    make overlaycheck (0 new) OK.
+  - **Pi 4 (d60d29a):** HTTP 200 on the first boot, `[main returned normally]`, 61 batches, batch 1 +1174,
+    gc collections=7, no FAULT/TRAP lines. `bytes=891`: the `Age: 4699` header, as on 4971b43. GC `roots`
+    0x7C9 -> 0x87C, `heap` 0x2256CC -> 0x225703; not attributed.
+  - **NOT RUN:** full regression, the demo suite, JUnit.
+
 - **A SAME-CLASS CALLEE COMPILED BESIDE ITS CALLER WAS NEVER REGISTERED: THE `this(...)` CONSTRUCTOR FRAME NO
   TABLE CLAIMED (2026-10-28, branch cocompiled-callees-registered, 4971b43).** This explains the "STATED LIMIT"
   further down: the one `unclaimed pc` inside `java/net/Socket.<init>` in every NetDemo boot. It was also where
