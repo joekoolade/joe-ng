@@ -6704,7 +6704,6 @@ public final class Loader
                 // jar's bytes. The overlay reads META-INF/services/* through getResourceAsStream instead. The
                 // denial had to come out first: a denied class is trap-wired at PATCH TIME, so no link stub
                 // ever runs and the overlay would never be consulted.
-                || utf8HasPrefix(base, off, Magic.bytes("java/util/spi/"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/util/"))
                 // java/net is LOADABLE now (M3: stock java.net over net.Tcp). SocksSocketImpl IS taken
                 // (Socket.createImpl always wraps the platform impl in it) -- overlaid as a pure delegator,
@@ -6755,11 +6754,12 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/"))
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/reflect/"))
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/module/"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/module/"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/text/spi/"))
+                // java/lang/module/ is NOT denied any more (2026-10-29). Nothing in the VM keyed a native on it,
+                // and stock MethodHandleProxies reads ModuleDescriptor$Modifier.SYNTHETIC -- denied, that read
+                // null (its overlay works around it).
+                // java/util/spi/, java/text/, java/text/spi/ and sun/text/ are NOT listed: the first clause above
+                // allows all four prefixes and returns before this one, so entries here could never match.
                 // (NOT java/util/concurrent -- the philosophers demand-load java/util/concurrent/Semaphore.)
-                // java/text, sun/text and jdk/internal/icu are narrowed out above (the locale provider arc).
-                || utf8HasPrefix(base, off, Magic.bytes("java/text/"))
                 // java/time is NOT DENIED any more (the date/time arc). It was kept out because Formatter NAMES
                 // ten of its classes for %t and the dependency pass of the day pulled +357 classes into every
                 // batch; System.Logger's log() formats through ZonedDateTime.now(), and rule 1 says implement.
@@ -6769,7 +6769,6 @@ public final class Loader
                 // now copies to /lib/java.base (Makefile JAVA_BASE_RES). Rule 1 says implement.
                 // java/util/concurrent/TimeUnit$1 (the ChronoUnit switch map) is NOT denied either: its
                 // <clinit> calls ChronoUnit.values(), which loads now that java/time/temporal/ does.
-                || utf8HasPrefix(base, off, Magic.bytes("sun/text/"))
                 // jdk/internal/util/regex/Grapheme is NOT denied any more (increment 4): its 15x15 [[Z table is
                 // built by multianewarray, which the metal JIT lowers through VM.multiNewArray, and
                 // BreakIterator.getCharacterInstance is the grapheme iterator.
