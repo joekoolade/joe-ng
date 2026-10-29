@@ -12076,16 +12076,25 @@ public final class Loader
         int classOff = refClassNameOff(idx);
         int nameOff = mrefNameOff(idx);
         int descOff = mrefDescOff(idx);
-        int i = 0;
-        while (i < rgCount)
+        // The registry through its class+name index (rgBucket), as bufBySigU: the scan answered the LOWEST
+        // matching index, and those chains are newest-first, so walk the whole chain and keep the oldest hit.
+        // The scan was 4.0% of the busy core on InvokeGapProbe after #450 (qprof-tally.pl caller view).
+        buildRegIndex();
+        int best = -1;
+        int i = rgBucket[utf8Hash2(gbase, classOff, gbase, nameOff) & (RGTAB - 1)];
+        while (i >= 0)
         {
             if (utf8EqAt(gbase, classOff, rgTab[i].base, rgTab[i].classOff)
                     && utf8EqAt(gbase, nameOff, rgTab[i].base, rgTab[i].nameOff)
                     && utf8EqAt(gbase, descOff, rgTab[i].base, rgTab[i].descOff))
             {
-                return rgTab[i].buf;
+                best = i;
             }
-            i += 1;
+            i = rgNext[i];
+        }
+        if (best >= 0)
+        {
+            return rgTab[best].buf;
         }
         gbMiss += 1;
         if (reportUnresolved != 0)                      // probe mode: name the unembedded reference (surface)
@@ -17069,32 +17078,16 @@ public final class Loader
     private static int classRegOf(int classIdx)
     {
         int nameOff = gcp[u2(gbase + gcp[classIdx])];   // Class entry -> name Utf8 offset
-        int i = 0;
-        while (i < clCount)
-        {
-            if (utf8EqAt(gbase, nameOff, clTab[i].base, clTab[i].nameOff))
-            {
-                return i;
-            }
-            i += 1;
-        }
-        return -1;
+        // The class-name index (classRegAt): the same predicate as the scan this was, and the LOWEST matching
+        // index, which is what the scan's first match answered. Profiled on InvokeGapProbe after #450 with
+        // scripts/qprof-tally.pl's caller view: the scan was 6.1% of the busy core.
+        return classRegAt(gbase, nameOff);
     }
 
     /** True if the class of {@code *ref} {@code idx} is a loaded (registered) class. */
     private static boolean refClassRegistered(int idx)
     {
-        int classOff = refClassNameOff(idx);
-        int i = 0;
-        while (i < clCount)
-        {
-            if (utf8EqAt(gbase, classOff, clTab[i].base, clTab[i].nameOff))
-            {
-                return true;
-            }
-            i += 1;
-        }
-        return false;
+        return classRegAt(gbase, refClassNameOff(idx)) >= 0;   // the class-name index, as classRegOf
     }
 
     /**
