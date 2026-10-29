@@ -4,6 +4,32 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **classRegOf / refClassRegistered / globalBuf THROUGH THE EXISTING INDEXES: InvokeGapProbe 87 s -> 63 s; qprof-tally caller view (2026-10-29, branch qprof-callers, 5d7f90f).**
+  - **Caller view (de90aab):** with a 5th argument, `qprof-tally.pl` takes a regex over leaf methods and walks
+    each matching sample out to the nearest frame that is neither a match nor a repeat of the leaf. It then
+    counts that frame, and that frame paired with the next distinct one.
+    - On InvokeGapProbe after #450, the byte compares (`u1`/`u2`/`utf8EqAt`) were 50% of the busy core. Their
+      top callers: `ifmSlotAbs` 8.5% (6.3% via `ifaceDeclares`), `classRegOf` 6.1%, `globalBuf` 4.0%.
+  - **Fix:** the lookups below now use indexes that already existed, keeping the scan's lowest-index answer.
+    - `classRegOf` and its twin `refClassRegistered` scanned every registered class comparing names. They now
+      go through `classRegAt`, the class-name index.
+    - `globalBuf` scanned the whole method registry. It now goes through `rgBucket`, walking the newest-first
+      chain for the lowest hit, as `bufBySigU` did in #449.
+  - **QEMU:**
+    - InvokeGapProbe solo 87 s -> 63 s, output identical to the host.
+    - Under qprof.sh: 92 s -> 59 s, busy samples 378 -> 245, and both lookups gone from the caller view.
+    - 26/26 dispatch-heavy probes pass. make test passes; make overlaycheck 0 new.
+  - **Pi 4 (5d7f90f), NetDemo:**
+    - HTTP 200 `bytes=891` (the `Age:` header was 4 digits), `idle read timed out` as on the host,
+      `[main returned normally]`, 61 batches.
+    - gc collections=7, heap=0x225807 against 0x225853 on 4ddc8a1. Batch 1 `compile=` 598 ms against 592 ms,
+      unchanged: NetDemo barely uses these lookups.
+    - The batch-line `rb:n=` (calls into the class-name index) grew 29979 -> 46758 by batch 61. Expected:
+      classRegOf and refClassRegistered now count there.
+  - **Next lever:** `ifmSlotAbs` at 8.2%, via `mostSpecificDeclarer` -> `ifaceDeclares`. It scans one
+    interface's methods for each interface in a closure, and needs an interface-method index.
+  - **NOT RUN:** full regression (last was 103e20d), the demo suite, JUnit.
+
 - **FULL REGRESSION 187/187 ON 103e20d (#447 + #449 + #450 together); scripts/qprof (2026-10-28, branch qprof-and-status).**
   - **Full regression, main 103e20d:** 187/187 pass, in 25m57s against 42m44s on ed6be58 (both `-j 4`, so not a
     clean timing comparison). This is the first full run since #446 to cover the Throwable rebuild, the lookup
