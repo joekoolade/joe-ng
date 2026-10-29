@@ -4,6 +4,30 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **INTERFACE-METHOD RUNS INDEXED: InvokeGapProbe 69 s -> ~61 s, A/B (2026-10-29, branch ifm-index, 1d968c7).**
+  - **Before:**
+    - `ifmSlotAbs` and `ifmSlotIn` scanned an interface's flattened method run comparing name and descriptor byte
+      by byte, and `mostSpecificDeclarer` asks once per interface of a class's closure.
+    - After #452 this was the top remaining caller of the byte compares on InvokeGapProbe: 8.2% of the busy core
+      in the qprof-tally caller view.
+  - **Now:** a chained index keyed on (run start, name, descriptor).
+    - It is filled as each entry is appended in `ifmAppendUnique`; the run start is known only then.
+    - It is cleared with the table in resetLoader.
+    - The table is append-only, and an entry's names never change.
+    - A run holds each signature at most once, so a hit in the right run is the entry the scan would have found.
+  - **QEMU:**
+    - InvokeGapProbe solo, A/B back to back on the same host state: main c3bff63 69 s, 69 s; this branch 63 s,
+      59 s. Output identical to the host.
+    - Under qprof.sh, the byte compares fell from 43.7% to 31.2% of the busy core and `ifmSlotAbs` left the
+      caller view. No remaining caller is above 2.3%, so per-lookup indexing has about run its course.
+    - 30/30 dispatch, default-method and interface probes pass. make test passes; make overlaycheck 0 new.
+  - **Measurement note:** the #452 card's "63 s" was measured in an earlier session; today's same-state control
+    for main is 69 s. Compare speedups only by a back-to-back A/B solo. qprof's wall time is not usable for this,
+    because the sampler pauses QEMU on every tick.
+  - **Pi 4 (1d968c7), NetDemo:** HTTP 200 `bytes=892` (a 5-digit `Age:`), `idle read timed out` as on the host,
+    `[main returned normally]`, 61 batches, gc collections=7, heap=0x2257B3. Batch 1 `compile=` 592 ms.
+  - **NOT RUN:** full regression (last was 103e20d; #452 and this are not covered), the demo suite, JUnit.
+
 - **IMAGE WRITER REFUSES A MISALIGNED 64-BIT WORD (2026-10-29, branch writer-align-check, 32cca6b).**
   - **Why:** every 64-bit word the VM reads out of the image is read with a 64-bit load, which takes an
     alignment fault when the address is not a multiple of 8. In #447, a run of an odd number of 4-byte words
