@@ -4,6 +4,25 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **SOCKET UN-DENY: ExtendedSocketOption + Poller; forName(name, false, ..) no longer initializes (2026-10-29, branch net-undeny, 7b4542a).**
+  - **Un-denied** in both lists: `sun/nio/ch/ExtendedSocketOption` (one static `SocketOption`, no natives; denied,
+    `SO_OOBINLINE` read null) and `sun/nio/ch/Poller` (reached only from a VIRTUAL thread, and `isVirtual()` is false
+    here, so its `<clinit>` -- kqueue pollers and their threads -- never runs; the stock call links lazily instead of
+    being TRAP-WIRED).
+  - **Bug found: `Class.forName(name, false, loader)` RAN the `<clinit>`** -- the `Class` overlay ignored the flag.
+    MEASURED: `forName("sun.nio.ch.Poller", false, null)` ran `Poller.<clinit>` into KQueue's missing natives and
+    halted. Now loads without initializing via `MetalLoaders.lookup` (the native `ClassLoader.loadClass` stands on).
+  - **Gap found: `Net.setIntOption0` had no VM native**, so `Socket.setOOBInline` halted on the unlinked call (blamed
+    on the deny list). It now throws `UnsupportedOperationException` naming itself (verified on QEMU with a temporary
+    probe line). STILL OPEN: `getIntOption0` answers 0 for every option and `SocketOptionRegistry` returns one dummy
+    key, so a set-then-get cannot round-trip -- socket options are a separate increment.
+  - **Measured:** new `SockOptProbe` (SO_OOBINLINE read; Poller loaded uninitialized) against the host; 30/30 probes
+    (every listed probe that calls forName, the network probes, the clinit-order probes); `make test` OK; overlaycheck
+    0 new.
+  - **Pi (7b4542a, NetDemo):** HTTP 200, bytes=891, `gc: collections=7`; the `UNRESOLVED STATIC ... ExtendedSocketOption
+    .SO_OOBINLINE -- DENYLISTED` and `TRAP-WIRED ... Poller.poll -- DENYLISTED` lines are gone.
+  - **NOT RUN:** full regression on this branch.
+
 - **STW TIMEOUT FIXED: a core still parked for one collection parks for the next in place (2026-10-29, branch stw-timeout, 288b1b9).**
   - **Symptom:** `GC: STW TIMEOUT -- unparked core N (collection SKIPPED)` in RuntimeProbe, batch 5, in the last two
     full regressions (core 3, then core 1); identical when rerun solo.
