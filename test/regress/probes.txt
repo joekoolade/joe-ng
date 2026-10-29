@@ -11,7 +11,7 @@
 # Host recipes that are not plain `java -cp <classes> <Probe>`: GvrProbe/ClassResourceProbe/LoaderProbe add
 # ramfs/lib/junit.jar to -cp; EngineMessageProbe adds out; DateProbe and DateFormatProbe run with -Duser.timezone=GMT, LocaleSymbolsProbe with --limit-modules java.base -Duser.timezone=GMT and BreakIteratorProbe with --limit-modules java.base (java.base's ROOT+ENGLISH CLDR data, which is what the image carries); ReaderProbe takes ramfs/data/sample.txt and
 # ReflectLookupProbe ramfs/lib/app.jar as args[0]; LocaleProbe runs with
-# -Duser.language=en -Duser.country= -Duser.variant= -Duser.script=. ExcMessageRaceProbe runs with
+# -Duser.language=en -Duser.country= -Duser.variant= -Duser.script=. SockOptProbe (like NetStaticsProbe) takes --add-opens java.base/sun.nio.ch=ALL-UNNAMED. ExcMessageRaceProbe runs with
 # -XX:-OmitStackTraceInFastThrow (else HotSpot drops the message of a hot implicit exception).
 #
 # Compiled into the image (Makefile JDKTESTS) but NOT listed, and why (2026-10-23):
@@ -176,6 +176,7 @@ SecurityPropsProbe       solo             # reads Security state other probes se
 SecuritySetProbe         solo             # sets Security properties
 SemaphoreProbe
 SerLambdaProbe
+SockOptProbe
 SortPrimProbe
 SpawnRaceProbe           solo
 StackWalkerProbe         solo             # prints stack frames; a batch adds its own

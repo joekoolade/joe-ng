@@ -49,8 +49,8 @@ public final class ReachScan
         // proxy impl + www/ext + the GC-auto-close SocketCleanable stay trapped (never taken).
         "java/net/HttpConnectSocketImpl", "java/net/SocketCleanable",
         "sun/net/www/", "sun/net/ext/",
-        // heavy socket subtrees never taken on the blocking client path (would pull streams/ForkJoin/regex).
-        "sun/nio/ch/Poller", "sun/nio/ch/ExtendedSocketOption",
+        // sun/nio/ch/Poller and sun/nio/ch/ExtendedSocketOption are NOT here any more (2026-10-29): see
+        // Loader.isDenylisted -- Poller is reached only from a virtual thread, which this VM never has.
         // java/net/NetworkInterface is NOT here any more: overlaid, natives over the WiFi lease (Loader.isDenylisted).
         // jdk/internal/util/Exceptions and sun/net/util/IPAddressUtil are NOT here any more: stock InetAddress
         // calls both on its ordinary paths (see Loader.isDenylisted).

@@ -622,9 +622,14 @@ public class Net {
                                             int level, int opt)
         throws IOException;
 
-    private static native void setIntOption0(FileDescriptor fd, boolean mayNeedConversion,
-                                             int level, int opt, int arg, boolean isIPv6)
-        throws IOException;
+    // joe-ng: no VM native sets a socket option -- the TCP stack keeps no per-socket options -- so the stub
+    // THROWS, naming itself, rather than halting on the unlinked native (Socket.setOOBInline did, once
+    // sun/nio/ch/ExtendedSocketOption came off the deny list) or pretending the option was set.
+    private static void setIntOption0(FileDescriptor fd, boolean mayNeedConversion,
+                                      int level, int opt, int arg, boolean isIPv6)
+        throws IOException {
+        throw new UnsupportedOperationException("joe-ng: Net.setIntOption0 is not implemented");
+    }
 
     /**
      * Polls a file descriptor for events.

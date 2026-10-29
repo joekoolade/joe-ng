@@ -87,9 +87,11 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
     }
 
     /**
-     * As {@link #forName(String)}, with an explicit {@code initialize} flag and class loader. On metal the
-     * class is always initialized when loaded (the loader runs {@code <clinit>} as part of the batch); the
-     * {@code initialize} flag and {@code loader} are accepted for source compatibility.
+     * As {@link #forName(String)}, with an explicit {@code initialize} flag and class loader. With
+     * {@code initialize} false the class is loaded but its {@code <clinit>} does NOT run -- loading is not one of
+     * JVMS 5.5's initializing triggers, and the first active use initializes it as usual. This used to initialize
+     * regardless (MEASURED 2026-10-29: {@code forName("sun.nio.ch.Poller", false, null)} ran Poller's
+     * {@code <clinit>}, which builds kqueue pollers). The {@code loader} selects nothing: there is one namespace.
      */
     public static Class<?> forName(String name, boolean initialize, ClassLoader loader) throws ClassNotFoundException
     {
@@ -97,7 +99,9 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
         {
             throw new NullPointerException();           // as stock: a null name is not a missing class
         }
-        Class<?> c = forName0(jdk.internal.misc.MetalNames.utf8(name));
+        Class<?> c = initialize
+                ? forName0(jdk.internal.misc.MetalNames.utf8(name))
+                : jdk.internal.misc.MetalLoaders.lookup(name);
         if (c == null)
         {
             throw new ClassNotFoundException(notFoundMessage(name));
