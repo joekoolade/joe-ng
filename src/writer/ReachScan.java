@@ -43,7 +43,7 @@ public final class ReachScan
         "java/lang/foreign/", "jdk/internal/foreign/",
         // sun/nio/fs/ and java/nio/file/ run stock over the RAMFS (see Loader.isDenylisted).
         // jdk/internal/loader/ is NOT here any more: the stock built-in loaders run (see Loader.isDenylisted).
-        "java/security/", "java/util/ServiceLoader", "java/util/spi/", "sun/util/",
+        "java/security/", "java/util/ServiceLoader", "sun/util/",
         // java/net is loadable (M3 sockets). SocksSocketImpl IS on the taken path (Socket.createImpl always
         // wraps the platform impl in it) -- overlaid as a pure delegator, so NOT denied. The HTTP-CONNECT
         // proxy impl + www/ext + the GC-auto-close SocketCleanable stay trapped (never taken).
@@ -59,10 +59,11 @@ public final class ReachScan
         "sun/security/", "java/util/jar/JarVerifier",
         // jdk/internal/logger is NOT here any more: System.getLogger runs stock (see Loader.isDenylisted).
         "java/lang/reflect/", "jdk/internal/reflect/",
-        "jdk/internal/module/", "java/lang/module/", "java/text/spi/",
-        // java/text and sun/text are narrowed out in isDenied, and jdk/internal/icu is not denied at all
-        // (Normalizer/Bidi run on ICU). (NOT java/util/concurrent -- the philosophers demand-load Semaphore.)
-        "java/text/", "sun/text/",
+        "jdk/internal/module/",
+        // java/lang/module/ is NOT denied any more (see Loader.isDenylisted). java/util/spi/, java/text/,
+        // java/text/spi/ and sun/text/ are not listed: isDenied allows those prefixes before it consults this
+        // array, so entries here could never match. jdk/internal/icu is not denied at all (Normalizer/Bidi run
+        // on ICU). (NOT java/util/concurrent -- the philosophers demand-load Semaphore.)
         // java/time and TimeUnit$1 are NOT denied (the date/time arc). (Keep in sync with Loader.isDenylisted.)
         // java/lang/CharacterName and Character$UnicodeBlock/UnicodeScript are NOT denied any more: picocli's CJK
         // width check calls UnicodeBlock.of, and CharacterName's uniName.dat is copied to /lib/java.base.

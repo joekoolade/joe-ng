@@ -4,6 +4,20 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **DENY LISTS: four dead entries dropped, java/lang/module/ un-denied (2026-10-29, branch deny-cleanup, 83f69f2).**
+  - **Dead entries:** `java/util/spi/`, `java/text/`, `java/text/spi/` and `sun/text/` were listed in both
+    `Loader.isDenylisted` and `ReachScan.DENY`, but the allow clause ahead of them admits all four prefixes and
+    returns first, so they could never match. Removed from both lists; no behaviour change.
+  - **`java/lang/module/` un-denied** in both lists. Nothing in the VM keyed a native or a special case on it, and
+    stock `MethodHandleProxies` reads `ModuleDescriptor$Modifier.SYNTHETIC`, which read null while denied (its
+    overlay works around that).
+  - **Measured:** `make test` OK; overlaycheck 0 new (141 overlays); 27/27 module-adjacent probes pass on QEMU.
+  - **NOT exercised:** no image build, before or after, names any `java/lang/module` class, so the un-denial is
+    safe but no probe reaches it yet. Full regression NOT RUN on this branch; Pi NOT RUN.
+  - **Full regression on main 7d73bf3:** 187/187 in 18m07. `RuntimeProbe` again differed in batch 5 with
+    `GC: STW TIMEOUT -- unparked core 3 (collection SKIPPED)` and passed solo -- the second run in a row at the
+    same probe and batch.
+
 - **INTERFACE-METHOD RUNS INDEXED: InvokeGapProbe 69 s -> ~61 s, A/B (2026-10-29, branch ifm-index, 1d968c7).**
   - **Before:**
     - `ifmSlotAbs` and `ifmSlotIn` scanned an interface's flattened method run comparing name and descriptor byte
