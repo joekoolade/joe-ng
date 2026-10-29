@@ -4149,6 +4149,7 @@ public final class Loader
         ifDescOff = new int[MAXIFM];
         ifDecl = new long[MAXIFM];
         ifCount = 0;
+        ifBucket = null;                                // the run index is keyed by entry INDEX: cleared with it
         pdBase = new long[MAXBLOB];
         pdNameOff = new int[MAXBLOB];
         pdDone = new int[MAXBLOB];
@@ -14011,7 +14012,72 @@ public final class Loader
         ifNameOff[ifCount] = nameOff;
         ifDescOff[ifCount] = descOff;
         ifDecl[ifCount] = decl;
+        ifIndexEntry(ifCount, gIfmStart);
         ifCount += 1;
+    }
+
+    /**
+     * Index over the interface-method runs, keyed on (run start, name, descriptor): chained, filled as each
+     * entry is appended (an entry's run start is known only then), and cleared with the table in resetLoader.
+     *
+     * <p>{@link #ifmSlotAbs} and {@link #ifmSlotIn} SCANNED the interface's run comparing name and descriptor
+     * byte by byte, and {@code mostSpecificDeclarer} asks once per interface of a class's closure. Profiled on
+     * InvokeGapProbe after #452 (scripts/qprof-tally.pl caller view): the top remaining caller of the byte
+     * compares, 8.2% of the busy core. A run holds each signature at most once ({@link #ifmAppendUnique}), so
+     * a hit in the right run is the one entry the scan would have found.
+     */
+    private static final int IFTAB = 8192;              // power of two >= MAXIFM; chained
+    private static int[] ifBucket;                      // (run start, name, desc) hash -> newest entry, -1 if none
+    private static int[] ifNext;                        // entry -> next older entry with the same hash
+
+    private static int ifKey(long nameBase, int nameOff, long descBase, int descOff, int runStart)
+    {
+        return (utf8Hash2(nameBase, nameOff, descBase, descOff) ^ (runStart * 0x9E3779B1)) & (IFTAB - 1);
+    }
+
+    /** Link entry {@code i}, in the run starting at {@code runStart}, into the index. */
+    private static void ifIndexEntry(int i, int runStart)
+    {
+        if (ifBucket == null)
+        {
+            ifBucket = new int[IFTAB];
+            ifNext = new int[MAXIFM];
+            int b = 0;
+            while (b < IFTAB)
+            {
+                ifBucket[b] = -1;
+                b += 1;
+            }
+        }
+        int h = ifKey(ifBase[i], ifNameOff[i], ifBase[i], ifDescOff[i], runStart);
+        ifNext[i] = ifBucket[h];
+        ifBucket[h] = i;
+    }
+
+    /**
+     * Slot of the signature (name at {@code nameBase+nameOff}, descriptor at {@code descBase+descOff}) in
+     * registered interface {@code r}'s run, or -1: the entry in that run, whose names match, through the index.
+     */
+    private static int ifmSlotFind(int r, long nameBase, int nameOff, long descBase, int descOff)
+    {
+        int count = clTab[r].ifmCount;
+        if (count == 0 || ifBucket == null)
+        {
+            return -1;
+        }
+        int start = clTab[r].ifmStart;
+        int i = ifBucket[ifKey(nameBase, nameOff, descBase, descOff, start)];
+        while (i >= 0)
+        {
+            if (i >= start && i < start + count
+                    && utf8EqAt(nameBase, nameOff, ifBase[i], ifNameOff[i])
+                    && utf8EqAt(descBase, descOff, ifBase[i], ifDescOff[i]))
+            {
+                return i - start;
+            }
+            i = ifNext[i];
+        }
+        return -1;
     }
 
     /** True if registered interface {@code r} itself declares the signature at absolute Utf8 {@code nameU}/{@code descU}. */
@@ -14099,35 +14165,13 @@ public final class Loader
      */
     private static int ifmSlotAbs(int r, long nameU, long descU)
     {
-        int s = 0;
-        while (s < clTab[r].ifmCount)
-        {
-            int i = clTab[r].ifmStart + s;
-            if (utf8EqAt(nameU, 0, ifBase[i], ifNameOff[i])
-                    && utf8EqAt(descU, 0, ifBase[i], ifDescOff[i]))
-            {
-                return s;
-            }
-            s += 1;
-        }
-        return -1;
+        return ifmSlotFind(r, nameU, 0, descU, 0);
     }
 
     /** Slot of (name, desc in {@code base}) within registered interface {@code r}'s run, or -1. */
     private static int ifmSlotIn(int r, long base, int nameOff, int descOff)
     {
-        int s = 0;
-        while (s < clTab[r].ifmCount)
-        {
-            int i = clTab[r].ifmStart + s;
-            if (utf8EqAt(base, nameOff, ifBase[i], ifNameOff[i])
-                    && utf8EqAt(base, descOff, ifBase[i], ifDescOff[i]))
-            {
-                return s;
-            }
-            s += 1;
-        }
-        return -1;
+        return ifmSlotFind(r, base, nameOff, base, descOff);
     }
 
     /** Per-interface itable for interface {@code ir} on the CURRENT class: slot s = the class's
