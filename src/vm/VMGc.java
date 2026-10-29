@@ -351,9 +351,18 @@ final class VMGc
                 {
                     Uart.putc(0x20);
                     printDec(c);
+                    Uart.write(Magic.bytes(" task "));
+                    printDec(coreTask[c]);
+                    Uart.write(Magic.bytes(" parkedGen="));
+                    printDec((int) gcParked[c]);
+                    Uart.write(Magic.bytes(" gen="));
+                    printDec((int) gcGen);
+                    stwLate[c] = Magic.readCNTPCT_EL0();   // it says where it was when it next switches
                 }
                 c += 1;
             }
+            Uart.write(Magic.bytes(" loaderOwner="));
+            printDec(loaderOwner);
             Uart.write(Magic.bytes(" (collection SKIPPED)\n"));
             gcStop = 0;                               // release whoever DID park: we are not collecting
             Magic.dsb();

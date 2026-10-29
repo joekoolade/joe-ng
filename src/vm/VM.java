@@ -568,6 +568,8 @@ public final class VM
     static long   gcGen;                    // bumped by stopTheWorld BEFORE it raises gcStop (ordered by dsb)
     static long[] gcParked;                 // index = core: the generation that core last parked for
     static long   stwTimeouts;              // collections that started with a core still unparked (a bug signal)
+    static long[] stwLate;                  // index = core: CNTPCT when a stop-the-world gave up on it, 0 = none --
+                                            //   that core reports where it was when it next reaches pickNext
     /** The scheduler's cross-core lock (a {@link Magic#spinLock} word). Held only with IRQs masked, and only
      *  across task-table updates -- never across a UART write or an allocation. A different cache line from
      *  {@link #LOCK_ADDR} so the SMP job-queue demo and the scheduler don't false-share. */
@@ -913,6 +915,7 @@ public final class VM
         coreIdle = new int[4];
         coreSched = new int[4];
         gcParked = new long[4];
+        stwLate = new long[4];
         // Initialise every element explicitly. Heap.allocArray does NOT zero its elements (a block off the
         // free list carries whatever the dead object left), and on real hardware DRAM starts full of
         // firmware leftovers -- so "a fresh int[] reads as zeroes" is a QEMU accident, not a guarantee.
@@ -933,6 +936,7 @@ public final class VM
             coreTask[c] = 0;
             coreSched[c] = 0;
             gcParked[c] = 0L;
+            stwLate[c] = 0L;
             c += 1;
         }
         // The scheduler's lock word is raw scratch RAM, not a Java field: nothing zeroed it, and spinLock
