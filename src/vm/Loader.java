@@ -6731,14 +6731,14 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("org/junit/platform/reporting/"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/net/www/"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/net/ext/"))
-                // Heavy socket subtrees statically referenced by NioSocketImpl/Net but never TAKEN on the
-                // blocking client path -- deny so a stray call traps instead of dragging in
-                // streams/ForkJoin/regex/ConcurrentHashMap (which OOM'd the demand-load). Poller = the async
-                // poll path (our fd stays blocking); ExtendedSocketOption = opts we never use. (SocketOptionRegistry
-                // IS reached by close() -> overlaid, not denied.) java/net/NetworkInterface is NOT denied any more:
-                // it is OVERLAID from the JDK 26 source, its natives Java over the WiFi stack's lease.
-                || utf8HasPrefix(base, off, Magic.bytes("sun/nio/ch/Poller"))
-                || utf8HasPrefix(base, off, Magic.bytes("sun/nio/ch/ExtendedSocketOption"))
+                // sun/nio/ch/Poller and sun/nio/ch/ExtendedSocketOption are NOT denied any more (2026-10-29). They
+                // were kept out because their closures OOM'd the demand-load of the day. ExtendedSocketOption is one
+                // static SocketOption with no natives; denied, NioSocketImpl read its SO_OOBINLINE as null on every
+                // connection. Poller is reached only from a VIRTUAL thread (NioSocketImpl.park/shutdown*), and
+                // Thread.isVirtual() is false here, so its <clinit> (kqueue pollers + their threads) never runs --
+                // the stock call now links lazily instead of being TRAP-WIRED. (SocketOptionRegistry IS reached by
+                // close() -> overlaid, not denied.) java/net/NetworkInterface is NOT denied either: it is OVERLAID
+                // from the JDK 26 source, its natives Java over the WiFi stack's lease.
                 // jdk/internal/util/Exceptions and sun/net/util/IPAddressUtil are NO LONGER DENIED. They were
                 // kept out because their closures (Formatter -> regex, a security-property read, a
                 // ConcurrentHashMap) OOM'd the demand-load of the day; all of those load now, Security is
