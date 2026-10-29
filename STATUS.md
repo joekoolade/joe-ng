@@ -4,6 +4,28 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **FULL REGRESSION 187/187 ON 103e20d (#447 + #449 + #450 together); scripts/qprof (2026-10-28, branch qprof-and-status).**
+  - **Full regression, main 103e20d:** 187/187 pass, in 25m57s against 42m44s on ed6be58 (both `-j 4`, so not a
+    clean timing comparison). This is the first full run since #446 to cover the Throwable rebuild, the lookup
+    index and the exact-size free lists.
+    - RuntimeProbe differed in its batch and passed solo. The only extra line was
+      `GC: STW TIMEOUT -- unparked core 3 (collection SKIPPED)`.
+    - That line is NOT new: it appears in 14 earlier regression runs back to 2026-10-25, before any of these
+      changes, and `pmset -g log` shows no host sleep during this run. It is a pre-existing intermittent under
+      four parallel QEMUs; its cause is not measured.
+  - **scripts/qprof.sh, qprof.pl, qprof-tally.pl:** the host-side QEMU sampler that found both InvokeGapProbe
+    costs (#449, #450), committed from session scratch.
+    - qprof.sh builds a JOENG_SYMMAP image and boots it with a monitor socket.
+    - qprof.pl records each busy core's PC, LR and image-code stack words per tick, with timestamped serial
+      lines.
+    - qprof-tally.pl gives leaf and inclusive counts, optionally for a time window.
+    - Run end to end on 103e20d: `qprof.sh InvokeGapProbe` gave 378 busy samples and
+      `[main returned normally]` at 92 s.
+  - **Post-#450 profile:** byte compares are ~50% of the busy core again (`u1` 22%, `utf8EqAt` 20%, `u2` 8%), under
+    lazy compile (45% inclusive) and `loadAll` (32%). `classRegOf` (5.8%) and `classIndexByName` (3.2%) are the
+    named lookups that stand out. Which callers do the comparing is not yet measured.
+  - **Also:** the #449 card now records its Pi boot (3553f08), reported after the merge.
+
 - **EXACT-SIZE FREE LISTS FOR SMALL BLOCKS: the allocator's first-fit walk 174.8M -> 0.87M blocks (2026-10-28, branch alloc-freelist, 4ddc8a1).**
   - **Before:** `Heap.allocLocked` walked one first-fit free list per core. It was the top self cost on
     InvokeGapProbe (23% of the busy core) once the loader's name scans were indexed (#449).
@@ -48,7 +70,9 @@ Newest entries are at the top.
     1086 -> 453, and byte compares ~60% -> ~34%.
   - **Next lever:** `Heap.allocLocked` is now the top self cost at 23% (the first-fit free-list walk).
   - **Other checks:** 26/26 dispatch-heavy probes pass. make test passes; make overlaycheck 0 new.
-  - **Pi 4:** 3553f08 was flashed; no boot log was reported, so NOT VALIDATED here.
+  - **Pi 4 (3553f08), NetDemo, reported after the merge:** HTTP 200 `bytes=888`, `idle read timed out` as on
+    the host, `[main returned normally]`, 61 batches, gc collections=7, roots=0x83E. Batch 1 `compile=` 729 ms
+    against 738 ms on 4e9ac02 -- NetDemo builds few classes at run time, so it barely exercises these lookups.
   - **NOT RUN:** full regression, the demo suite, JUnit.
 
 - **THROWABLE OVERLAY REBUILT FROM THE JDK 26 SOURCE (2026-10-28, branch throwable-stock, 4e9ac02).**
