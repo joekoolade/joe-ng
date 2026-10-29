@@ -734,12 +734,28 @@ public final class VMScheduler
     {
         taskSp[coreTask[core]] = curSp;
         Magic.dsb();                                       // we got here by observing gcStop; order the gcGen
-        gcParked[core] = gcGen;                            //   read after it, then publish the generation we
-        Magic.dsb();                                       //   parked for -- never cleared, so the NEXT
+        long gen = gcGen;                                  //   read after it, then publish the generation we
+        gcParked[core] = gen;                              //   parked for -- never cleared, so the NEXT
+        Magic.dsb();                                       //   collection cannot mistake it for parked
         long stuck = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * 10L;
         int said = 0;
-        while (gcStop != 0)                                //   collection cannot mistake it for parked
+        while (gcStop != 0)
         {
+            // A NEW collection can start while this core is still here: core 0 clears gcStop and raises it again
+            // for the next one, and a core that did not run in that gap never saw the 0. It is still stopped --
+            // it has not run since it saved its context -- so it parks for the new generation in place. Waiting
+            // for the old one instead was the intermittent `GC: STW TIMEOUT` (MEASURED 2026-10-29, RuntimeProbe's
+            // back-to-back collections in a -j 4 batch: the "unparked" core was in this loop, published gen 10,
+            // while the collector waited for 11 -- and the collection was skipped with every core stopped).
+            long now = gcGen;
+            if (now != gen)
+            {
+                Magic.dsb();
+                gen = now;
+                gcParked[core] = gen;
+                Magic.dsb();
+                stuck = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * 10L;
+            }
             // A park is meant to last a collection. If gcStop is never cleared this spins for ever and the
             // whole boot goes silent -- which is exactly what a stop-the-world bug looks like from outside.
             // Say so once, then keep spinning: leaving the park would let this core mutate a half-swept heap.
@@ -774,6 +790,10 @@ public final class VMScheduler
         if (hangDumpAt != 0L && Magic.readCNTPCT_EL0() > hangDumpAt)
         {
             hangDump(curSp);                               // VM.HANG_LOCK: what every task is doing, once per core
+        }
+        if (stwLate != null && core != 0 && stwLate[core] != 0L)
+        {
+            stwLateReport(core, curSp);                    // a stop-the-world gave up waiting for this core
         }
         if (gcStop != 0 && core != 0)
         {
@@ -928,6 +948,29 @@ public final class VMScheduler
         Uart.write(Magic.bytes(" interrupted task "));
         printDec(coreTask[core]);
         Uart.write(Magic.bytes(taskIdle[coreTask[core]] != 0 ? " (idle)" : ""));
+        hangDumpStack(curSp);
+        Magic.spinUnlock(HANG_LOCK);
+    }
+
+    /**
+     * This core missed a stop-the-world deadline ({@code stwLate[core]} is when the collector gave up) and has
+     * now reached the scheduler: say how long after the deadline, which task, and the stack it switched from --
+     * the work that ran a second without a switch point. On QEMU a launched program gets no timer ticks, so
+     * only a yield or a block reaches here.
+     */
+    private static void stwLateReport(int core, long curSp)
+    {
+        long late = Magic.readCNTPCT_EL0() - stwLate[core];
+        stwLate[core] = 0L;
+        Magic.spinLock(HANG_LOCK);
+        Uart.write(Magic.bytes("\nGC: STW-late core "));
+        printDec(core);
+        Uart.write(Magic.bytes(" task "));
+        printDec(coreTask[core]);
+        Uart.write(Magic.bytes(taskIdle[coreTask[core]] != 0 ? " (idle)" : ""));
+        Uart.write(Magic.bytes(" reached the scheduler "));
+        printDec((int) (late * 1000L / Magic.readCNTFRQ_EL0()));
+        Uart.write(Magic.bytes("ms after the give-up, from:"));
         hangDumpStack(curSp);
         Magic.spinUnlock(HANG_LOCK);
     }
