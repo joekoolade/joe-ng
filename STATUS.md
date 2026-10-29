@@ -4,6 +4,23 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **STW TIMEOUT FIXED: a core still parked for one collection parks for the next in place (2026-10-29, branch stw-timeout, 288b1b9).**
+  - **Symptom:** `GC: STW TIMEOUT -- unparked core N (collection SKIPPED)` in RuntimeProbe, batch 5, in the last two
+    full regressions (core 3, then core 1); identical when rerun solo.
+  - **Measured cause:** a new timeout readout (task, the core's published generation vs the collector's) and a
+    late-core report (where the missed core was when it next reached the scheduler) showed the "unparked" core was
+    its IDLE task, INSIDE `gcPark`, with `parkedGen=10 gen=11`, and it reached the scheduler 2-9 ms after the give-up.
+    In back-to-back collections core 0 clears `gcStop` and raises it again; a parked core that did not run in that
+    gap never saw the 0, kept the old generation published, and the collector waited a second for one it would never
+    publish. The world WAS stopped -- the skip was unnecessary, not unsafe.
+  - **Fix:** `VMScheduler.gcPark` re-publishes a new generation while still parked (it has not run since saving its
+    context). The timeout readout and the late-core report stay; both print only on a timeout.
+  - **Measured:** batch 5 at host load (4 concurrent copies): 3 of 8 boots timed out before, 0 of 8 after, no `STW`
+    line. 17/17 threading and GC probes; `make test` OK; overlaycheck 0 new.
+  - **Pi (288b1b9, NetDemo):** 4 of 4 cores, HTTP 200, bytes=891, `gc: collections=7`, no `STW` line.
+  - **NOT RUN:** full regression on this branch. Not checked: whether the older Pi demo-suite STW TIMEOUT with SMP on
+    (memory `smp-suite-failure`) is the same race.
+
 - **DENY LISTS: four dead entries dropped, java/lang/module/ un-denied (2026-10-29, branch deny-cleanup, 83f69f2).**
   - **Dead entries:** `java/util/spi/`, `java/text/`, `java/text/spi/` and `sun/text/` were listed in both
     `Loader.isDenylisted` and `ReachScan.DENY`, but the allow clause ahead of them admits all four prefixes and
