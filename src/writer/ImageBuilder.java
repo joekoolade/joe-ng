@@ -2393,6 +2393,18 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     /** Write a 64-bit value as two little-endian image ints at word index {@code w}. */
     private static void writeLong(int[] image, int w, long v)
     {
+        // Every 64-bit word the VM reads out of the image is read with a 64-bit load, which takes an
+        // alignment fault when the address is not a multiple of 8 -- and the image loads at 0x80000, so that
+        // is exactly an EVEN word index. A table that starts 4 bytes off (a preceding run of an odd number
+        // of 4-byte words) used to surface at BOOT as a data abort far from its cause: the bake stub table
+        // landed at ...C and the first bakeResolve faulted in System.<clinit> (#447). Refuse it here, where
+        // the stack trace names the table being written.
+        if ((w & 1) != 0)
+        {
+            throw new IllegalStateException(String.format(
+                    "misaligned 64-bit image word at 0x%08x (word %d): the table being written starts 4 bytes "
+                    + "off an 8-byte boundary -- pad the run before it (cur = (cur + 1) & ~1)", addr(w), w));
+        }
         image[w]     = (int) (v & 0xFFFFFFFFL);
         image[w + 1] = (int) (v >>> 32);
     }

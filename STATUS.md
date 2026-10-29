@@ -4,6 +4,22 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **IMAGE WRITER REFUSES A MISALIGNED 64-BIT WORD (2026-10-29, branch writer-align-check, 32cca6b).**
+  - **Why:** every 64-bit word the VM reads out of the image is read with a 64-bit load, which takes an
+    alignment fault when the address is not a multiple of 8. In #447, a run of an odd number of 4-byte words
+    (the symbol line tables) left the bake stub table at `...C`. That surfaced at BOOT, as a data abort in the
+    first `bakeResolve` inside `System.<clinit>`, far from its cause.
+  - **Now:** `ImageBuilder.writeLong`, the one helper all 92 64-bit image writes go through, throws on an odd
+    word index (the image loads at 0x80000, so even = 8-byte aligned). The error names the address, and the
+    stack trace names the table being written.
+  - **Checked:**
+    - make build, make test and an image build pass unchanged; the check only adds a throw.
+    - Negative test: forcing the line-table run to end 4 bytes off failed the image build with
+      `misaligned 64-bit image word at 0x023d86e4` from `ImageBuilder.java:1378`, the baked-method link table
+      -- the first 8-byte table after that run. Restored afterwards.
+  - **Pi:** not booted; the image is byte-for-byte unchanged.
+  - **NOT RUN:** full regression (last was 103e20d; #452 is not yet covered).
+
 - **classRegOf / refClassRegistered / globalBuf THROUGH THE EXISTING INDEXES: InvokeGapProbe 87 s -> 63 s; qprof-tally caller view (2026-10-29, branch qprof-callers, 5d7f90f).**
   - **Caller view (de90aab):** with a 5th argument, `qprof-tally.pl` takes a regex over leaf methods and walks
     each matching sample out to the nearest frame that is neither a match nor a repeat of the leaf. It then
