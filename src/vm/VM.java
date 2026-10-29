@@ -294,6 +294,10 @@ public final class VM
         {
             denylistTrap();
         }
+        if (nativeMissingAddr == 0L)                       // ... and nativeMissing, reached only from a minted thunk
+        {
+            nativeMissing(-1);
+        }
         if (throwFromFaultAddr == 0L)                      // force throwFromFault compiled (fault -> exception)
         {
             throwFromFault(0L);
@@ -2663,13 +2667,40 @@ public final class VM
         }
     }
 
+    /**
+     * A call to native method {@code k} of {@link Loader#missingNativeThunk}'s table, which this VM does not
+     * implement: throw {@code UnsatisfiedLinkError} naming it (CLAUDE.md rule 3 -- a stub THROWS). Entered by
+     * {@code br} from the thunk, so x30 is still the caller's return address and the error unwinds as if the
+     * native itself had thrown. {@code k < 0} is the force-compile call in {@link #installFaultVectors}.
+     */
+    static void nativeMissing(int k)
+    {
+        if (k < 0)
+        {
+            return;
+        }
+        throw (UnsatisfiedLinkError) Magic.fromAddr(Loader.missingNativeError(k));
+    }
+
     static void denylistTrap()
     {
         long lr = Magic.readLR();                              // FIRST op: x30 = caller's return addr (the bl site + 4)
         long mysp = Magic.readSP();                            // denylistTrap's own frame base (SP is stable post-prologue)
-        Uart.write(Magic.bytes("\nDENYLIST TRAP: call into a pruned (metal-absent) class -- see Loader.isDenylisted\n"));
         int k = Loader.trapIndexFor(lr);                       // #43: match against the TRAPWIRE table printed at patch time
-        Uart.write(Magic.bytes("  denied callee:"));
+        // SAY WHICH TRAP THIS IS. Every unresolvable call lands here, and a callee whose class is NOT denied --
+        // a method with no body, a missing native the thunk table could not serve -- was reported as a denylist
+        // trap, sending the reader to a list that had nothing to do with it. Only a known, non-denied callee
+        // changes the wording; an unknown site (k < 0) keeps it, because that is not measured.
+        if (k >= 0 && !Loader.trapCalleeDenied(k))
+        {
+            Uart.write(Magic.bytes("\nLINK TRAP: call to a method this VM could not link -- its class is NOT denied"
+                    + " (the LINK FAILED line above says why)\n"));
+        }
+        else
+        {
+            Uart.write(Magic.bytes("\nDENYLIST TRAP: call into a pruned (metal-absent) class -- see Loader.isDenylisted\n"));
+        }
+        Uart.write(Magic.bytes("  callee:"));
         Loader.printTrapCallee(k);                             // WHAT was denied, not just which slot said so
         Uart.write(Magic.bytes("\n  fired TRAPWIRE index="));
         printDec(k);
@@ -3499,6 +3530,7 @@ public final class VM
     static long scFloatAddr;           // VMConcat.scFloat(JI)V  — ... and a float (its OWN shortest string)
     static long printStrAddr;          // VM.printStr(J)V
     static long denylistTrapAddr;      // VM.denylistTrap()V — patchRelocs points calls into pruned classes here (#43)
+    static long nativeMissingAddr;     // VM.nativeMissing(I)V — a call to a native this VM does not implement throws here
     /**
      * The seed {@code jdk.internal.misc.CDS.getRandomSeedForDumping()} answers on metal -- WRITER-FILLED,
      * so it is a property of the BUILD and not of the clock. It is the same value the writer used when it
