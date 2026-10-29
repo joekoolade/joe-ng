@@ -4,6 +4,31 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **EXACT-SIZE FREE LISTS FOR SMALL BLOCKS: the allocator's first-fit walk 174.8M -> 0.87M blocks (2026-10-28, branch alloc-freelist, 4ddc8a1).**
+  - **Before:** `Heap.allocLocked` walked one first-fit free list per core. It was the top self cost on
+    InvokeGapProbe (23% of the busy core) once the loader's name scans were indexed (#449).
+    - MEASURED with temporary counters: 174.8 million blocks walked for ~1.08 million allocations, ~161 per
+      allocation. A bump allocation walked the whole list first.
+  - **Now:** blocks of at most 512 bytes live on per-core exact-size lists, one per 8-byte size, with heads at
+    `SIZE_HEADS` (0x03FF_1000) in the free page beside the existing head cells. `FREE_CELL` keeps the larger
+    blocks.
+    - A small request pops its own size. Failing that, it splits the smallest larger size held (or hands that
+      block out whole when it is 8 bytes over, as first-fit did). Failing that, it takes the general list's
+      head, which always fits.
+    - `addFree` routes by size. `resetFreeList`, `Heap.init` and the loader's rewind path clear the new lists
+      too.
+    - A per-core byte total keeps the debug noSpace/wrongShape survey counting every free byte.
+  - **QEMU:**
+    - InvokeGapProbe solo: blocks walked 174.8M -> 868,524, and 111 s -> 87 s. The output is identical to the
+      host, and gc collections=9 before and after.
+    - 26/26 allocation-heavy and multi-core probes pass, including all the race probes. make test passes; make
+      overlaycheck 0 new.
+  - **Pi 4 (4ddc8a1), NetDemo:**
+    - HTTP 200 `bytes=888`, `idle read timed out` as on the host, `[main returned normally]`, 61 batches.
+    - gc collections=7 and heap=0x225853, against 0x225802 on 3553f08, so memory use is unchanged.
+    - Batch 1 `compile=` 592 ms against 729 ms on 3553f08. That is one boot each, not a measured speedup.
+  - **NOT RUN:** full regression (none since #446), the demo suite, JUnit.
+
 - **VTABLE-SLOT AND bufBySigU LOOKUPS INDEXED: InvokeGapProbe 266 s -> 111 s (2026-10-28, branch vt-index, 3553f08).**
   - **Profile:** sampled on QEMU through the monitor every 0.25 s, naming the image-code words on the busy core's
     stack (JOENG_SYMMAP). One core does the work. Of its 1086 samples, ~60% were byte-by-byte name compares
