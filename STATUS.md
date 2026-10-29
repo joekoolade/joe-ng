@@ -48,7 +48,9 @@ Newest entries are at the top.
     1086 -> 453, and byte compares ~60% -> ~34%.
   - **Next lever:** `Heap.allocLocked` is now the top self cost at 23% (the first-fit free-list walk).
   - **Other checks:** 26/26 dispatch-heavy probes pass. make test passes; make overlaycheck 0 new.
-  - **Pi 4:** 3553f08 was flashed; no boot log was reported, so NOT VALIDATED here.
+  - **Pi 4 (3553f08), NetDemo, reported after the merge:** HTTP 200 `bytes=888`, `idle read timed out` as on
+    the host, `[main returned normally]`, 61 batches, gc collections=7, roots=0x83E. Batch 1 `compile=` 729 ms
+    against 738 ms on 4e9ac02 -- NetDemo builds few classes at run time, so it barely exercises these lookups.
   - **NOT RUN:** full regression, the demo suite, JUnit.
 
 - **THROWABLE OVERLAY REBUILT FROM THE JDK 26 SOURCE (2026-10-28, branch throwable-stock, 4e9ac02).**
