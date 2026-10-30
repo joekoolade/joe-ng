@@ -4069,6 +4069,20 @@ public final class Loader
         dblValueOfBuf = 0L;                             //   (the boxing twins, for the same reason)
         fltValueOfBuf = 0L;
         fltToStrBuf = 0L;                               //   it names would call into swept memory
+        // THE SAME RULE FOR THE CACHED HELPER BINDINGS, and the first one MEASURED wrong. objectCloneBuf holds a
+        // LINK STUB, and a stub is just "resolve link entry k": lkCount went back to 0 above, so in the next
+        // launch entry k named some OTHER method, and every Object.clone() ran that instead. The demo suite's
+        // MessageDigest.clone handed back its receiver (copy == this), so the original and the clone shared one
+        // engine -- `sha256 clone = ...FORK-WRONG` on QEMU and the Pi, while DigestProbe, booted alone with a
+        // single launch, passed. The other three cache compiled bodies of this launch, the dblToStrBuf hazard.
+        objectCloneBuf = 0L;
+        objectCloneCls = 0L;
+        objectCloneName = 0L;
+        objectCloneDesc = 0L;
+        proxyHelperBuf = 0L;
+        annoEqBuf = 0L;
+        annoHashBuf = 0L;
+        annoStrBuf = 0L;
         lzInitDropped = 0;                              // per LAUNCH, beside the table they describe --
         lzInitWant = 0;                                 //   reportPendInitDrops prints at the end of one
         lzInitWantMax = 0;
