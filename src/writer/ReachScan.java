@@ -59,8 +59,7 @@ public final class ReachScan
         "sun/security/", "java/util/jar/JarVerifier",
         // jdk/internal/logger is NOT here any more: System.getLogger runs stock (see Loader.isDenylisted).
         // java/lang/reflect/ and jdk/internal/reflect/ are NOT here any more: both packages load
-        // (see Loader.isDenylisted).
-        "jdk/internal/module/",
+        // (see Loader.isDenylisted). jdk/internal/module/ is not here either.
         // java/lang/module/ is NOT denied any more (see Loader.isDenylisted). java/util/spi/, java/text/,
         // java/text/spi/ and sun/text/ are not listed: isDenied allows those prefixes before it consults this
         // array, so entries here could never match. jdk/internal/icu is not denied at all (Normalizer/Bidi run
@@ -175,9 +174,6 @@ public final class ReachScan
                 || c.equals("java/security/CodeSource")                    // a built-in loader's define record
                 || c.equals("java/security/CodeSigner")
                 || c.startsWith("java/security/SecureClassLoader")
-                // the stock built-in loaders' two jdk/internal/module helpers (see Loader.isDenylisted)
-                || c.startsWith("jdk/internal/module/ServicesCatalog")
-                || c.equals("jdk/internal/module/Resources")
                 || c.startsWith("java/security/Privileged")
                 || c.startsWith("java/security/GeneralSecurityException")
                 || c.startsWith("java/security/NoSuchAlgorithmException")
