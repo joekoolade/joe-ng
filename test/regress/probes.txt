@@ -164,6 +164,7 @@ RecordSealedProbe
 RecordUtf16Probe
 ReflectArrayProbe
 ReflectLookupProbe
+ReflectUndenyProbe
 RepeatableProbe
 RuntimeProbe
 SbFpProbe

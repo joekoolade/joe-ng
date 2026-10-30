@@ -6433,44 +6433,19 @@ public final class Loader
                 // Stock VarHandle.<clinit> reads MethodHandleStatics.UNSAFE. NOT covered by the
                 // "MethodHandles" prefix above -- that stops at the lower-case 's', so MethodHandleStatics
                 // was DENIED and its UNSAFE read NULL, which is the NPE stock VarHandle's initializer died
-                // of. Overlaid, because its real <clinit> pulls the denied java/lang/reflect
-                // ClassFileFormatVersion and a ClassFileDumper that writes to a filesystem.
+                // of. Overlaid, because its real <clinit> pulls java/lang/reflect/ClassFileFormatVersion and a
+                // ClassFileDumper that writes to a filesystem.
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/MethodHandleStatics"))
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/invoke/MhUtil"))
                 // java.lang.invoke arc: STOCK jdk/internal/reflect/Reflection (exact name, no nested classes),
                 // whose filter map MethodHandles$Lookup.<clinit> registers into. getCallerClass is intrinsified
                 // at the call site; areNestMates is a native and THROWS until it is implemented.
                 || utf8IsAtBase(base, off, Magic.bytes("jdk/internal/reflect/Reflection"))
-                // Reflection arc: these java/lang/reflect classes are overlaid (JDK-free) and DO run on metal
-                // (Class.getModifiers/getDeclaredField*, reflective Field.get/set); the rest of java/lang/reflect
-                // stays denied below.
                 // Serialization's DESCRIBE path: ObjectStreamClass.<init> calls
                 // ReflectionFactory.newConstructorForSerialization for every serializable class it describes,
                 // and describing is all ObjectStreamClass.lookup does. Overlaid (see guestsrc); the rest of
                 // jdk/internal/reflect/ stays denied below.
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/reflect/ReflectionFactory"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Modifier"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Field"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Method"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Constructor"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Array"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/AccessibleObject"))
-                // InvocationTargetException runs STOCK: a plain exception, no natives. It was a hand-written overlay
-                // shell and got through as one; deleted, the stock class met this prefix denial and `new
-                // InvocationTargetException` became an UNRESOLVED NEW (StockExceptionProbe).
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/InvocationTargetException"))
-                // STOCK ReflectAccess (exact name): AccessibleObject.<clinit> registers it as SharedSecrets'
-                // JavaLangReflectAccess, which MethodHandleProxies and Reflection.isTrustedFinalField read. Denied,
-                // `new ReflectAccess` was an UNRESOLVED NEW in that initializer (InvokeGapProbe).
-                || utf8IsAtBase(base, off, Magic.bytes("java/lang/reflect/ReflectAccess"))
-                // Executable is the shared supertype of Method and Constructor, and Parameter is what its
-                // getParameters() answers. Both are OVERLAID (see guestsrc) rather than allowed through to
-                // stock, whose versions are built on the denied sun/reflect/generics + sun/reflect/annotation
-                // machinery. An overlay cannot rescue a DENIED class -- a denied class is trap-wired at PATCH
-                // TIME, so no link stub runs and the overlay is never consulted -- so the denial is narrowed
-                // here first, exactly as java/text/BreakIterator needed.
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Executable"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Parameter"))
                 // java/lang/ClassLoader is STOCK (overlaid from the JDK 26 source, natives Java over the VM's one
                 // class namespace -- jdk.internal.misc.MetalLoaders), and so is jdk/internal/loader below it.
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/ClassLoader"))
@@ -6545,56 +6520,6 @@ public final class Loader
                 // U+0300 and throws above it. Stock String's Turkish case mapping reaches it through
                 // ConditionalSpecialCasing. The rest of sun/text/ (the ICU-backed normalizer) stays denied.
                 || utf8HasPrefix(base, off, Magic.bytes("sun/text/Normalizer"))
-                // NARROWED OUT of the java/lang/reflect/ denial: `Type` is an empty MARKER INTERFACE with one
-                // default method and no natives, so the stock class loads as-is -- no overlay needed, which is
-                // the right shape (guestsrc is for classes that need natives). It is denied only by the broad
-                // prefix that keeps out the reflection IMPLEMENTATION machinery, and a marker is not that.
-                //
-                // Needed because `Field.getGenericType()` and `Class` itself are declared in terms of it: a
-                // return type that cannot load makes the method unresolvable however simple its body.
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Type"))
-                // NARROWED OUT for the same reason: `Member` (four abstract methods and two int constants) and
-                // `AnnotatedElement` (three abstract readers plus defaults) are the INTERFACES that Field,
-                // Executable, AccessibleObject, Class and Module implement. While denied, the overlays could name
-                // them in `implements` and calls through them still bound late, but the interface closure skipped
-                // them: `instanceof Member` answered false and `getInterfaces()` left them out (SupertypeProbe).
-                // AnnotatedElement's ByType defaults reach the denied sun/reflect/annotation machinery, which
-                // stays denied and trap-wired on that path alone.
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Member"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/AnnotatedElement"))
-                // The generic-type half of java/lang/reflect, NARROWED OUT so stock Class.getGenericSuperclass/
-                // getGenericInterfaces/getTypeParameters run: the interfaces their answers are typed by
-                // (ParameterizedType, WildcardType, GenericArrayType, GenericDeclaration -- TypeVariable is
-                // already matched by the "Type" prefix above) and the two errors the stock parser throws. The
-                // implementation is sun/reflect/generics, pure Java and not denied. A type variable's ANNOTATION
-                // readers reach the denied sun/reflect/annotation and trap on that path alone.
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/ParameterizedType"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/WildcardType"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/GenericArrayType"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/GenericDeclaration"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/GenericSignatureFormatError"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/MalformedParameterizedTypeException"))
-                // NARROWED OUT for accessFlags(): the AccessFlag enum and its Location, and the
-                // ClassFileFormatVersion enum ReflectionFactory.parseAccessFlags keys them by. Pure Java, no natives.
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/AccessFlag"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/ClassFileFormatVersion"))
-                // RecordComponent: OVERLAID (see guestsrc) -- Class.getRecordComponents answers in its terms.
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/RecordComponent"))
-                // Dynamic proxies: the handler interface and the wrapper for an undeclared checked exception.
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/InvocationHandler"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/UndeclaredThrowableException"))
-                // NARROWED OUT of the java/lang/reflect/ denial, and NOT overlaid: guestsrc is for classes
-                // that need NATIVES, and this one needs none. picocli's ObjectScope asks
-                // `Proxy.isProxyClass(obj.getClass())`, whose whole body is
-                //     Proxy.class.isAssignableFrom(cl) && ProxyBuilder.isProxyClass(cl)
-                // and the && SHORT-CIRCUITS: nothing on metal extends Proxy, so the answer is false and
-                // ProxyBuilder sits on a never-taken branch -- it stays denied and trap-wired, the same shape
-                // as Poller/IPAddressUtil. The stock class gives the true answer with no code of ours.
-                //
-                // Its <clinit> IS blocked (see clinitBlocked): it builds a jdk/internal/loader/ClassLoaderValue
-                // cache, which stays denied. Sound here because isProxyClass reads no static of Proxy -- only
-                // the class literal.
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Proxy"))
                 // NARROWED OUT of the java/security/ denial: the PERMISSION + MARKER layer, which needs no
                 // natives and no provider machinery -- it is plain data structures and string matching, and
                 // the stock classes load AS-IS (guestsrc is for classes that need natives, and these do not).
@@ -6779,7 +6704,13 @@ public final class Loader
                 // a verifying one traps loudly instead of exploding the closure.
                 || utf8HasPrefix(base, off, Magic.bytes("sun/security/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/util/jar/JarVerifier"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/"))
+                // java/lang/reflect/ is NOT denied any more (2026-10-30). The prefix had been narrowed one class
+                // at a time until only eight were left behind it -- the Annotated*Type interfaces,
+                // InaccessibleObjectException, MalformedParametersException and ReflectPermission: interfaces,
+                // exceptions and a BasicPermission, no natives -- so the whole package loads. Its overlays
+                // (Field, Method, Constructor, Executable, Parameter, Array, AccessibleObject, RecordComponent,
+                // Proxy) are unaffected; that a denied class is trap-wired at PATCH TIME, so an overlay can never
+                // rescue one, is the reason each of them had to be narrowed out first.
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/reflect/"))
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/module/"))
                 // java/lang/module/ is NOT denied any more (2026-10-29). Nothing in the VM keyed a native on it,
