@@ -574,6 +574,8 @@ public final class VM
     static long   stwTimeouts;              // collections that started with a core still unparked (a bug signal)
     static long[] stwLate;                  // index = core: CNTPCT when a stop-the-world gave up on it, 0 = none --
                                             //   that core reports where it was when it next reaches pickNext
+    static long[] faultRegs;                // index = core * 32 + r: x0..x30 at that core's latest fault, slot 31 =
+                                            //   1 when the copy is real -- see stashFaultRegs
     /** The scheduler's cross-core lock (a {@link Magic#spinLock} word). Held only with IRQs masked, and only
      *  across task-table updates -- never across a UART write or an allocation. A different cache line from
      *  {@link #LOCK_ADDR} so the SMP job-queue demo and the scheduler don't false-share. */
@@ -920,6 +922,7 @@ public final class VM
         coreSched = new int[4];
         gcParked = new long[4];
         stwLate = new long[4];
+        faultRegs = new long[4 * 32];
         // Initialise every element explicitly. Heap.allocArray does NOT zero its elements (a block off the
         // free list carries whatever the dead object left), and on real hardware DRAM starts full of
         // firmware leftovers -- so "a fresh int[] reads as zeroes" is a QEMU accident, not a guarantee.
@@ -941,6 +944,7 @@ public final class VM
             coreSched[c] = 0;
             gcParked[c] = 0L;
             stwLate[c] = 0L;
+            faultRegs[c * 32 + 31] = 0L;
             c += 1;
         }
         // The scheduler's lock word is raw scratch RAM, not a Java field: nothing zeroed it, and spinLock
@@ -2440,11 +2444,13 @@ public final class VM
     {
         long esr = Magic.readESR_EL1();
         long elr = Magic.readELR_EL1();
+        stashFaultRegs(sp, elr);
         if (faultDepth != 0)                                            // a fault DURING the unwind of a prior fault:
         {                                                              // turning THIS one into an exception + unwinding
             reportNestedFault(esr, elr, Magic.readFAR_EL1());          // would re-fault forever (the silent reboot loop
         }                                                              // seen on QEMU) -- report both faults + halt.
         faultDepth = 1;                                                // cleared in unwind once a handler is resumed
+        fault0Core = (int) (Magic.readMPIDR() & 3L);
         fault0Esr = esr;
         fault0Elr = elr;
         fault0Far = Magic.readFAR_EL1();
@@ -2582,6 +2588,69 @@ public final class VM
     }
     static int  faultDepth;            // 1 while a hardware fault is being turned into a Java exception + unwound
     static long fault0Esr, fault0Elr, fault0Far;   // the FIRST fault's syndrome, kept for the nested-fault report
+    static int  fault0Core;                        // ... and the core it was taken on
+
+    /**
+     * Copy this core's x0..x30 at the fault into {@link #faultRegs}. Only the scheduler's switch stub saves them
+     * (at {@code sp - SCHED_FRAME}, ELR at +248) before calling {@link #throwFromFault}; the boot-time vector
+     * saves nothing. So the copy is marked real only when the saved ELR EQUALS the live one -- otherwise those
+     * words are whatever was below the stack, and printing them as registers would report a state never
+     * measured. Off-cost: 31 loads per fault, printed only by {@link #reportNestedFault}.
+     */
+    static void stashFaultRegs(long sp, long elr)
+    {
+        if (faultRegs == null || sp == 0L)
+        {
+            return;
+        }
+        int core = (int) (Magic.readMPIDR() & 3L);
+        if (faultDepth != 0 && fault0Core == core)
+        {
+            return;                                    // a nested fault on the SAME core keeps the original's copy
+        }
+        int base = core * 32;
+        long save = sp - SCHED_FRAME;
+        if (Magic.load64(save + 248L) != elr)
+        {
+            faultRegs[base + 31] = 0L;
+            return;
+        }
+        int r = 0;
+        while (r <= 30)
+        {
+            faultRegs[base + r] = Magic.load64(save + r * 8L);
+            r += 1;
+        }
+        faultRegs[base + 31] = 1L;
+    }
+
+    /** Print core {@code c}'s stashed fault registers, x30 named, or say there is no real copy. */
+    static void printFaultRegs(int c)
+    {
+        Uart.write(Magic.bytes("\n  core "));
+        printDec(c);
+        Uart.write(Magic.bytes(" regs at its last fault:"));
+        if (faultRegs == null || faultRegs[c * 32 + 31] == 0L)
+        {
+            Uart.write(Magic.bytes(" NOT SAVED (no switch-stub frame)"));
+            return;
+        }
+        int r = 0;
+        while (r <= 30)
+        {
+            if (r % 4 == 0)
+            {
+                Uart.write(Magic.bytes("\n   "));
+            }
+            Uart.write(Magic.bytes(" x"));
+            printDec(r);
+            Uart.putc(0x3D);
+            printHex(faultRegs[c * 32 + r]);
+            r += 1;
+        }
+        Uart.write(Magic.bytes("\n    x30 in: "));
+        Loader.printFrameAt(faultRegs[c * 32 + 30] - 4L);
+    }
 
     /** A second CPU fault fired while {@link #throwFromFault} was still turning the FIRST one into a Java
      *  exception (the unwind itself re-faulted -- a bad frame-table entry, a wild handler PC, an unmapped
@@ -2590,7 +2659,9 @@ public final class VM
     static void reportNestedFault(long esr, long elr, long far)
     {
         Uart.lock();                                       // halts at the end: hold the console for the whole report
-        Uart.write(Magic.bytes("\nNESTED FAULT (unwind re-faulted; halting to avoid a reboot loop)\n  original: esr="));
+        Uart.write(Magic.bytes("\nNESTED FAULT (unwind re-faulted; halting to avoid a reboot loop)\n  original: core="));
+        printDec(fault0Core);
+        Uart.write(Magic.bytes(" esr="));
         printHex(fault0Esr);
         Uart.write(Magic.bytes(" elr="));
         printHex(fault0Elr);
@@ -2598,7 +2669,13 @@ public final class VM
         printHex(fault0Far);
         Uart.write(Magic.bytes("\n    at "));
         Loader.reportMethodAt(fault0Elr);
-        Uart.write(Magic.bytes("\n  nested:   esr="));
+        Uart.write(Magic.bytes("\n    elr in: "));                // names IMAGE code, which reportMethodAt cannot
+        Loader.printFrameAt(fault0Elr);
+        printFaultRegs(fault0Core);
+        Uart.write(Magic.bytes("\n  nested:   core="));
+        int me = (int) (Magic.readMPIDR() & 3L);
+        printDec(me);
+        Uart.write(Magic.bytes(" esr="));
         printHex(esr);
         Uart.write(Magic.bytes(" elr="));
         printHex(elr);
@@ -2606,6 +2683,12 @@ public final class VM
         printHex(far);
         Uart.write(Magic.bytes("\n    at "));
         Loader.reportMethodAt(elr);
+        Uart.write(Magic.bytes("\n    elr in: "));
+        Loader.printFrameAt(elr);
+        if (me != fault0Core)
+        {
+            printFaultRegs(me);                            // a DIFFERENT core faulted: faultDepth is global
+        }
         Uart.putc(0x0A);
         while (true)
         {
