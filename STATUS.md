@@ -4,6 +4,19 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **jdk/internal/module IS NO LONGER DENIED (2026-10-30, branch module-undeny, 02587bc).**
+  - **Before:** the package was denied by prefix with two exceptions for the built-in loaders (`ServicesCatalog`,
+    `Resources`); `ModuleDescriptor.read` trapped at `ModuleInfo.read`, and `newModule`'s name checks (`Checks`)
+    were trap-wired.
+  - **Now:** the prefix and both exceptions are gone from `Loader.isDenylisted` and `ReachScan.DENY`. No natives in
+    the package. It is `closureDeferred` (Class, Module, System and StackTraceElement name ModuleBootstrap/Modules/
+    ModuleHashes from module-graph arms a VM with no boot layer never takes). No ModuleBootstrap runs.
+  - **Closure:** SbProbe's first batch unchanged (+797 blobs, pend=30347, clinits=189); image 312 bytes smaller.
+  - **Probe:** `ModuleInternalProbe` (read of an embedded javac module-info, newModule valid/bad/reserved names,
+    the Modules/Checks/ModuleBootstrap initializers, an enum's constants), expected output from the host JVM.
+    **Negative control** (old deny list): DENYLIST TRAP at `jdk/internal/module/ModuleInfo.read`.
+  - **QEMU:** full regression 193/193 (19m51s, `/tmp/regress-full-02587bc.log`). NOT RUN: demo suite, Pi boot.
+
 - **jdk/internal/reflect IS NO LONGER DENIED (2026-10-30, branch internal-reflect-undeny, 073bc3b).**
   - **Before:** the package was denied by prefix with two exceptions, `Reflection` and `ReflectionFactory` (both
     overlaid); the accessor interfaces and classes, the `@CallerSensitive` annotations and `ConstantPool` were

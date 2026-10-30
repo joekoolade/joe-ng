@@ -5288,8 +5288,10 @@ public final class Loader
                 // the cost is the closure, which RTA computes from what is NAMED, not from what runs.
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/loader/"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/net/www/"))
-                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/module/ServicesCatalog"))
-                || utf8IsAtBase(base, off, Magic.bytes("jdk/internal/module/Resources"))
+                // ... and jdk/internal/module/ (2026-10-30, un-denied): Class, Module, System and StackTraceElement
+                // name ModuleBootstrap/Modules/ModuleHashes from module-graph arms a VM with no boot layer never
+                // takes. ServicesCatalog and Resources were here already (built-in loaders).
+                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/module/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/security/SecureClassLoader"))
                 || utf8IsAtBase(base, off, Magic.bytes("java/security/CodeSource"))
                 || (utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/"))
@@ -6543,14 +6545,6 @@ public final class Loader
                 || utf8IsAtBase(base, off, Magic.bytes("java/security/CodeSource"))
                 || utf8IsAtBase(base, off, Magic.bytes("java/security/CodeSigner"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/security/SecureClassLoader"))
-                // NARROWED OUT of the jdk/internal/module/ denial, for the stock built-in loaders: ServicesCatalog
-                // (ArchivedClassLoaders collects each built-in loader's -- unconditionally, archive() runs with no
-                // CDS archive -- and only its register(Module) path, never taken without a module graph, touches
-                // java.lang.module) and Resources (BuiltinClassLoader.findResource maps every resource name to a
-                // package with it; plain Java over java.nio.file). The module SYSTEM stays denied: no
-                // ModuleBootstrap runs, so BuiltinClassLoader's package-to-module map stays empty.
-                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/module/ServicesCatalog"))
-                || utf8IsAtBase(base, off, Magic.bytes("jdk/internal/module/Resources"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/security/Privileged"))
                 // The java.security EXCEPTION hierarchy: ordinary Throwables with no machinery behind them.
                 // They are what a stub in this subsystem THROWS, so denying them would leave a stub unable
@@ -6708,7 +6702,11 @@ public final class Loader
                 // NativeAccessor invoke0/newInstance0) are unbound, so reaching one THROWS UnsatisfiedLinkError
                 // naming the method (missingNativeError) -- the Method/Constructor/Field overlays do not route
                 // through these accessors.
-                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/module/"))
+                // jdk/internal/module/ is NOT denied any more (2026-10-30). ServicesCatalog and Resources had been
+                // narrowed out for the built-in loaders; the rest (ModuleBootstrap, Modules, ModuleInfo, the
+                // finders) has no natives. No ModuleBootstrap runs -- there is no boot layer, so
+                // BuiltinClassLoader's package-to-module map stays empty -- and the package is closureDeferred, so
+                // only code that actually runs pulls it.
                 // java/lang/module/ is NOT denied any more (2026-10-29). Nothing in the VM keyed a native on it,
                 // and stock MethodHandleProxies reads ModuleDescriptor$Modifier.SYNTHETIC -- denied, that read
                 // null (its overlay works around it).

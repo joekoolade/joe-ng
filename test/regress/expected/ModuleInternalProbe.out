@@ -1,0 +1,7 @@
+read module-info: probe.m requires=[java.base, java.logging] uses=[java.lang.Runnable]
+newModule valid: a.b exports=a.b.c
+newModule bad name: threw java.lang.IllegalArgumentException
+newModule reserved: threw java.lang.IllegalArgumentException
+initializers: Modules Checks ModuleBootstrap
+IllegalNativeAccess: ALLOW WARN DENY
+ModuleInternalProbe done

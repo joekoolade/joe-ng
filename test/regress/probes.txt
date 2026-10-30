@@ -166,6 +166,7 @@ ReflectArrayProbe
 ReflectLookupProbe
 ReflectUndenyProbe
 InternalReflectProbe
+ModuleInternalProbe
 RepeatableProbe
 RuntimeProbe
 SbFpProbe
