@@ -4,6 +4,18 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **jdk/internal/reflect IS NO LONGER DENIED (2026-10-30, branch internal-reflect-undeny, 073bc3b).**
+  - **Before:** the package was denied by prefix with two exceptions, `Reflection` and `ReflectionFactory` (both
+    overlaid); the accessor interfaces and classes, the `@CallerSensitive` annotations and `ConstantPool` were
+    trap-wired, and `Class.forName` of one threw `ClassNotFoundException`.
+  - **Now:** the prefix and both exceptions are gone from `Loader.isDenylisted` and `ReachScan.DENY`. The package's
+    natives (`ConstantPool`'s 18, `invoke0`/`newInstance0` of the two NativeAccessors) stay unbound, so reaching one
+    throws `UnsatisfiedLinkError` naming the method. The Method/Constructor/Field overlays do not use these accessors.
+  - **Probe:** `InternalReflectProbe` (by name: `@CallerSensitive` and its presence on `Class.forName`, accessor
+    interfaces and hierarchy, `ConstantPool` native count), expected output from the host JVM. **Negative control**
+    (old deny list): all five arms threw `ClassNotFoundException`.
+  - **QEMU:** full regression 192/192 (19m00s, `/tmp/regress-full-073bc3b.log`). NOT RUN: demo suite, Pi boot.
+
 - **java/lang/reflect IS NO LONGER DENIED (2026-10-30, branch reflect-undeny, 81f244e).**
   - **Before:** the package was denied by prefix with 22 allow-list exceptions, so the last eight classes behind it
     (`Annotated*Type`, `InaccessibleObjectException`, `MalformedParametersException`, `ReflectPermission`, …) were
