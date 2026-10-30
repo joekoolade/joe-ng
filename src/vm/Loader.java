@@ -1158,7 +1158,7 @@ public final class Loader
 
     private static void warnClinitUnderLock(int i)
     {
-        if (VM.smpSched == 0 || VM.loaderOwner != VM.curTask())
+        if (!VM.loaderLockLive() || VM.loaderOwner != VM.curTask())
         {
             return;                                      // not holding it (or the lock is inert): nothing to say
         }
@@ -9244,6 +9244,12 @@ public final class Loader
     }
 
     /** Compare the Utf8 at {@code off} against {@code expected} (bytes packed big-endian, {@code len} bytes). */
+    /** {@link #gbase} for the fault report ({@code VM.stashFaultRegs}): which blob the parser was reading. */
+    static long gbaseForReport()
+    {
+        return gbase;
+    }
+
     private static boolean isName(long base, int off, long expected, int len)
     {
         if (off == 0)
@@ -9323,11 +9329,11 @@ public final class Loader
      * on. Each budget says so when it is spent, because a report that goes quiet without a word reads
      * exactly like a condition that stopped.
      *
-     * <p>NOTE THE PRECONDITION IT CANNOT CHECK: {@code loaderLock} is a NO-OP while {@code smpSched == 0},
-     * on the stated premise "one core in the table: no other compiler to race". That premise is about
-     * CORES and the hazard is about TASKS -- a single core still time-slices preemptively -- so this guard
-     * stays silent in exactly the configuration where the lock protects nothing. Recorded rather than
-     * fixed here.
+     * <p>NOTE THE PRECONDITION IT CANNOT CHECK: {@code loaderLock} used to be a NO-OP while {@code smpSched
+     * == 0}, on the premise "one core in the table: no other compiler to race". That premise is about CORES
+     * and the hazard is about TASKS -- a single core still time-slices preemptively -- and the Pi caught it
+     * biting in the dining philosophers. The gate is {@code VM.loaderLockLive} now: live whenever core 0's
+     * tick is armed too. It is still inert on one core with the tick off, and this guard is silent there.
      */
     private static final int SAID_MAX_BENIGN = 12;       // owner == -1: nobody to race, so a handful is plenty
     private static final int SAID_MAX_COLLIDE = 8;       // owner is ANOTHER TASK: rare per event, but it repeats per method
@@ -9338,7 +9344,7 @@ public final class Loader
 
     private static void checkCompileLockHeld(int where)
     {
-        if (VM.smpSched == 0 || VM.loaderOwner == VM.curTask())
+        if (!VM.loaderLockLive() || VM.loaderOwner == VM.curTask())
         {
             return;                                      // held by us (possibly re-entrant), or the lock is inert
         }
@@ -9476,7 +9482,7 @@ public final class Loader
                 }
             }
         }
-        if (VM.smpSched == 0 || VM.loaderOwner == VM.curTask())
+        if (!VM.loaderLockLive() || VM.loaderOwner == VM.curTask())
         {
             return;                                      // held by us (possibly re-entrant), or the lock is inert
         }
@@ -9841,11 +9847,12 @@ public final class Loader
      * rather than printing a state number this file records being misread three times. Silent unless the
      * hazard actually bites, which is the measurement this wants before a restructure.
      *
-     * <p>AND IT IS WHY {@code loaderLock}'s {@code smpSched == 0} gate MUST NOT BE CLOSED FIRST. That gate
-     * makes the lock inert on a single scheduling core, which is wrong on its own terms (the hazard is per
-     * TASK and one core still time-slices preemptively) -- but closing it while the section spans guest code
-     * would extend this deadlock exposure to every single-core boot, including the demo suite. Order: make
-     * the clinit run phase lock-free, then close the gate.
+     * <p>AND IT IS WHY {@code loaderLock}'s single-core gate MUST NOT BE CLOSED ENTIRELY FIRST. The gate makes
+     * the lock inert on one scheduling core, which is wrong on its own terms (the hazard is per TASK) -- but
+     * closing it while the section spans guest code would extend this deadlock exposure to every single-core
+     * boot. It was closed only where the race was MEASURED: {@code VM.loaderLockLive} is live while core 0's
+     * tick preempts (the Pi caught two philosophers in the parser at once). Order for the rest: make the
+     * clinit run phase lock-free, then close the gate.
      */
     private static void loadAll()
     {
@@ -18486,9 +18493,23 @@ public final class Loader
             // that is not denied (Net.setIntOption0, 2026-10-29). The throw makes it catchable and turns the
             // missing native into a worklist entry the program writes; the UnsatisfiedLinkError IS the report,
             // so nothing is printed.
-            long thunk = lnkFailWhy == 3 && declaredNative(lkClsU[idx], lkNameU[idx], lkDescU[idx])
-                    ? missingNativeThunk(lkClsU[idx], lkNameU[idx], lkDescU[idx])
-                    : 0L;
+            //
+            // The named class can only INHERIT the native -- javac emits `invokestatic Sub.missing` for a call
+            // through a subclass -- so the declaring class is searched up the chain, as virtualResolve does
+            // (NativeMissingProbe "inherited static"; before this the call halted on LINK FAILED).
+            long thunk = 0L;
+            if (lnkFailWhy == 3)
+            {
+                int nreg = regBySigU(lkClsU[idx]);
+                if (nreg >= 0)
+                {
+                    thunk = missingNativeOnChain(nreg, lkNameU[idx], lkDescU[idx]);
+                }
+                else if (declaredNative(lkClsU[idx], lkNameU[idx], lkDescU[idx]))
+                {
+                    thunk = missingNativeThunk(lkClsU[idx], lkNameU[idx], lkDescU[idx]);
+                }
+            }
             if (thunk != 0L)
             {
                 buf = thunk;

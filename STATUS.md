@@ -4,6 +4,33 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **LOADER LOCK IS LIVE WHILE CORE 0's TICK PREEMPTS; inherited missing natives throw; fault report names task + lock owner (2026-10-30, branch native-gaps, d217fc1).**
+  - **The Pi bug:** the SMP demo suite faulted on all four Pi boots before the fix, in dining philosophers after `P4 hungry`, in
+    `Loader.u1` reading a garbage name offset in `isVirtual`, reported as a NESTED FAULT. QEMU ran clean.
+  - **Measured with the new fault report (430c940):** task 2 faulted, then task 3 at the same pc, both on core 0, both
+    with `loaderOwner=-1`. `gbase` was sane (`0xF5F1C8`); the bad address was `gbase + 0xC1EE0565`, an offset that was
+    identical on every faulting boot.
+  - **Cause:** `resetTaskTable` sets `smpSched` to 0 before the philosophers, and `loaderLock` was a no-op at
+    `smpSched == 0` although the timer still time-slices core 0. The hazard was already recorded in comments
+    (`checkCompileLockHeld`, the note above `loadAll`).
+  - **Fix (d217fc1):** `VM.loaderLockLive()` is `smpSched != 0` OR the `CNTP_CTL_EL0` enable bit (read from the
+    register, not a flag). Re-entry is checked before the gate; unlock is ungated so a hold taken while live is
+    released after the tick stops; `resetTaskTable` releases and reports a lock held by a discarded task. Still inert on
+    one core with the tick off, per the `loadAll` note (initializers run under the lock).
+  - **Pi (d217fc1 suite image):** philosophers all `done`, no fault; `lk:wait=5 yields=51 rel=47` (the lock
+    really blocked 5 times; QEMU shows `lk:wait=0`); priority HML/60ms, smp 60/60/60/60, churn and lisp stable,
+    `gc: collections=60`, WiFi + `HTTP/1.1 200 OK`. One `INITIALIZER RUNNING UNDER THE LOADER LOCK`
+    (`AbstractQueuedSynchronizer$Node`, also on QEMU): the recorded hazard, did not block.
+  - **QEMU suite:** 40 returned normally, `gc: collections=50`, 0 failure markers, `CTOR SKIPPED=2` (intended).
+    `demo-suite.sh` now also counts the four lock markers.
+  - **Also on the branch:** 34715e5 a static call to an INHERITED missing native (`Sub.missing()`) throws
+    `UnsatisfiedLinkError` instead of halting, and new `LinkTrapProbe` covers the `LINK TRAP` label; 55b0833 and 430c940
+    the nested-fault report names each core and prints its registers, task, `loaderOwner` and `Loader.gbase`.
+  - **Tests:** 16/16 lock/race/clinit probes and 21/21 native probes, `make test` OK, overlaycheck 0 new.
+    NOT RUN: full regression, NetDemo Pi boot.
+  - **Open, pre-existing:** the MessageDigest demo prints `sha256 clone = …/FORK-WRONG` on QEMU and the Pi, on
+    430c940 as well, so not caused by this branch; no suite marker counts it.
+
 - **MISSING NATIVES THROW UnsatisfiedLinkError naming the method, instead of halting (2026-10-29, branch native-ule, 094fb27).**
   - **Before:** a call to a `native` method with no VM implementation failed to link and HALTED the task at the link
     trap, labelled `DENYLIST TRAP` even when its class was not denied. A program could not catch it.
