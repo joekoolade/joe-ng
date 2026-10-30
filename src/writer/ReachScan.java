@@ -58,8 +58,8 @@ public final class ReachScan
         // an unsigned jar never takes (see Loader.isDenylisted).
         "sun/security/", "java/util/jar/JarVerifier",
         // jdk/internal/logger is NOT here any more: System.getLogger runs stock (see Loader.isDenylisted).
-        // java/lang/reflect/ is NOT here any more: the whole package loads (see Loader.isDenylisted).
-        "jdk/internal/reflect/",
+        // java/lang/reflect/ and jdk/internal/reflect/ are NOT here any more: both packages load
+        // (see Loader.isDenylisted).
         "jdk/internal/module/",
         // java/lang/module/ is NOT denied any more (see Loader.isDenylisted). java/util/spi/, java/text/,
         // java/text/spi/ and sun/text/ are not listed: isDenied allows those prefixes before it consults this
@@ -152,7 +152,6 @@ public final class ReachScan
                 || c.startsWith("java/lang/invoke/MethodHandles")
                 || c.startsWith("java/lang/invoke/MethodType")          // java.lang.invoke arc inc 0 (MethodTypeForm too)
                 || c.startsWith("jdk/internal/invoke/MhUtil")
-                || c.equals("jdk/internal/reflect/Reflection")          // java.lang.invoke arc: Lookup's field filter
                 || c.startsWith("java/lang/ClassLoader")                 // M3: JDK-free overlay (defineClass/loadClass)
                 || c.startsWith("sun/net/ext/ExtendedSocketOptions")    // stock (no jdk.net); rest of sun/net/ext denied
                 // the file: and jar: URL protocols (see Loader.isDenylisted); http/, content/, jrt stay denied
