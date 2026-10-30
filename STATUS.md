@@ -4,6 +4,21 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **Object.clone() RAN ANOTHER METHOD after the first launch: the cached link stub outlived the link table (2026-10-30, branch digest-clone, 08344bf).**
+  - **Symptom:** the demo suite's DigestDemo printed `sha256 clone = c92b2be3…/FORK-WRONG` on QEMU and the Pi.
+    `c92b2be3…` is the SHA-256 of 150+50+50 bytes (host-measured): the clone and the original shared ONE engine.
+    `DigestProbe`'s clone arm passed, because it boots alone in one launch.
+  - **Measured with temporary prints:** `Impl.clone` and `MessageDigest.clone` ran, `MetalObjects.clone` never did, and
+    the "copy" was the receiver (`copy != this` false). `MessageDigestSpi`'s `super.clone()` compiled to the cached
+    `objectCloneBuf` link stub (global=0, native=stub).
+  - **Cause:** `resetLoader` sets `lkCount = 0` per launch, but `objectCloneBuf` kept the old stub, whose link index
+    named another method in the next launch.
+  - **Fix:** reset `objectCloneBuf` (and its name statics) per launch, beside `dblToStrBuf`; also `proxyHelperBuf` and
+    the three `anno*Buf` caches, which hold compiled bodies of a launch (same rule; those four not measured failing).
+  - **QEMU:** suite `sha256 clone = 44cae522…/fork-ok`; all 159 `(want …)` lines match; 40 returned normally,
+    `gc: collections=50`, 0 failure markers. 24/24 clone/proxy/annotation probes (batched), `make test` OK,
+    overlaycheck 0 new. NOT RUN: full regression, Pi boot.
+
 - **LOADER LOCK IS LIVE WHILE CORE 0's TICK PREEMPTS; inherited missing natives throw; fault report names task + lock owner (2026-10-30, branch native-gaps, d217fc1).**
   - **The Pi bug:** the SMP demo suite faulted on all four Pi boots before the fix, in dining philosophers after `P4 hungry`, in
     `Loader.u1` reading a garbage name offset in `isVirtual`, reported as a NESTED FAULT. QEMU ran clean.
