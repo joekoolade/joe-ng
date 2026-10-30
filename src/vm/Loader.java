@@ -6437,15 +6437,6 @@ public final class Loader
                 // ClassFileDumper that writes to a filesystem.
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/MethodHandleStatics"))
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/invoke/MhUtil"))
-                // java.lang.invoke arc: STOCK jdk/internal/reflect/Reflection (exact name, no nested classes),
-                // whose filter map MethodHandles$Lookup.<clinit> registers into. getCallerClass is intrinsified
-                // at the call site; areNestMates is a native and THROWS until it is implemented.
-                || utf8IsAtBase(base, off, Magic.bytes("jdk/internal/reflect/Reflection"))
-                // Serialization's DESCRIBE path: ObjectStreamClass.<init> calls
-                // ReflectionFactory.newConstructorForSerialization for every serializable class it describes,
-                // and describing is all ObjectStreamClass.lookup does. Overlaid (see guestsrc); the rest of
-                // jdk/internal/reflect/ stays denied below.
-                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/reflect/ReflectionFactory"))
                 // java/lang/ClassLoader is STOCK (overlaid from the JDK 26 source, natives Java over the VM's one
                 // class namespace -- jdk.internal.misc.MetalLoaders), and so is jdk/internal/loader below it.
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/ClassLoader"))
@@ -6711,7 +6702,12 @@ public final class Loader
                 // (Field, Method, Constructor, Executable, Parameter, Array, AccessibleObject, RecordComponent,
                 // Proxy) are unaffected; that a denied class is trap-wired at PATCH TIME, so an overlay can never
                 // rescue one, is the reason each of them had to be narrowed out first.
-                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/reflect/"))
+                // jdk/internal/reflect/ is NOT denied any more (2026-10-30). Reflection and ReflectionFactory were
+                // already narrowed out (both overlaid); the rest is accessor interfaces and classes, the
+                // @CallerSensitive annotations and ConstantPool. Its natives (ConstantPool's, and the two
+                // NativeAccessor invoke0/newInstance0) are unbound, so reaching one THROWS UnsatisfiedLinkError
+                // naming the method (missingNativeError) -- the Method/Constructor/Field overlays do not route
+                // through these accessors.
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/module/"))
                 // java/lang/module/ is NOT denied any more (2026-10-29). Nothing in the VM keyed a native on it,
                 // and stock MethodHandleProxies reads ModuleDescriptor$Modifier.SYNTHETIC -- denied, that read

@@ -1,0 +1,6 @@
+CallerSensitive: jdk.internal.reflect.CallerSensitive isAnnotation=true
+forName is @CallerSensitive: present=true
+accessor interfaces: true true true
+accessor hierarchy: MethodHandleFieldAccessorImpl FieldAccessorImpl isFieldAccessor=true
+ConstantPool natives: native methods=18
+InternalReflectProbe done
