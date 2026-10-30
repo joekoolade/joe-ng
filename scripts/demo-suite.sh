@@ -82,4 +82,8 @@ for m in "^ *FAULT " "esr=0x" "BOOT RE-ENTERED" "DENYLIST TRAP" "LINK FAILED" "V
     printf "%s=%s | " "$m" "$(LC_ALL=C grep -ac "$m" /tmp/arm-$T.txt)"
 done
 echo
+# Self-checking demo lines that print a value other than the one they want: silent wrong answers no marker sees.
+printf "want: "
+LC_ALL=C awk -f "$(dirname "$0")/want-mismatch.awk" /tmp/arm-$T.txt | tail -1
+LC_ALL=C awk -f "$(dirname "$0")/want-mismatch.awk" /tmp/arm-$T.txt | sed '$d' | head -10
 LC_ALL=C grep -a -A3 "^Exception in thread" /tmp/arm-$T.txt | head -5 | cut -c1-150
