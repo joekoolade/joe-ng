@@ -77,7 +77,8 @@ n=$(LC_ALL=C grep -an "churnMB" /tmp/arm-$T.txt | cut -d: -f1)
 for m in "^ *FAULT " "esr=0x" "BOOT RE-ENTERED" "DENYLIST TRAP" "LINK FAILED" "VIRTUALRESOLVE FAILED" "unclaimed pc" \
          "heap OOM" "STW TIMEOUT" "Exception in thread" "JIT unsupported" "UNRESOLVED NEW" "CAP EXCEEDED" \
          "DISPATCH ON UNREGISTERED" "^FAIL " "not implemented" "NullPointerException" "LOADER LOCK stuck" "RUNTRAMP" \
-         "CTOR SKIPPED" "TAIL TARGET" "LAZY INDEX" "UNBOXABLE"; do
+         "CTOR SKIPPED" "TAIL TARGET" "LAZY INDEX" "UNBOXABLE" \
+         "LOADER LOCK released" "WITHOUT THE LOADER LOCK" "UNDER THE LOADER LOCK" "TWO COMPILERS"; do
     printf "%s=%s | " "$m" "$(LC_ALL=C grep -ac "$m" /tmp/arm-$T.txt)"
 done
 echo

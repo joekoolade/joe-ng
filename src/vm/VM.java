@@ -669,17 +669,41 @@ public final class VM
         loaderLock(LOCK_UNSPECIFIED);
     }
 
+    /**
+     * Whether the loader lock has anyone to exclude. The hazard is per TASK, not per core: with the secondaries
+     * gone ({@code smpSched == 0}) core 0 still time-slices whenever its timer is armed, and a tick that lands
+     * mid-parse hands the static parse context to the next task. MEASURED on the Pi (2026-10-30): the dining
+     * philosophers run on core 0 alone with preemption on, and two philosophers faulted in turn inside
+     * {@code Loader.isVirtual} reading a garbage name offset, both with {@code loaderOwner=-1}. The timer bit
+     * is read from the register rather than mirrored in a flag, because the suite arms the tick inline at
+     * several sites and a flag one of them forgot would reopen exactly this.
+     *
+     * <p>Still inert on a single core with the timer off. A task there switches only when it blocks, and the
+     * lock is held across {@code <clinit>} bodies that may block (see the note above {@code Loader.loadAll}),
+     * so closing the gate there too waits on making the initializer phase lock-free.
+     */
+    static boolean loaderLockLive()
+    {
+        if (smpSched != 0)
+        {
+            return true;
+        }
+        return (Magic.readCNTP_CTL_EL0() & 1L) != 0L;   // core 0's tick is armed: it preempts
+    }
+
     static void loaderLock(int site)
     {
-        if (smpSched == 0)
-        {
-            return;                                     // one core in the table: no other compiler to race
-        }
         int me = curTask();
         if (loaderOwner == me)
         {
             loaderDepth = loaderDepth + 1;              // re-entry: a <clinit> compiling inside a compile
             return;
+        }
+        // Checked AFTER the re-entry test: a hold taken while the lock was live must count its nested
+        // acquisitions even if the tick has been stopped since, or the inner release would drop the outer hold.
+        if (!loaderLockLive())
+        {
+            return;                                     // nothing can switch tasks under us: no one to race
         }
         long stuck = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * 10L;
         int said = 0;
@@ -843,7 +867,7 @@ public final class VM
      */
     static void loaderForceRelease()
     {
-        if (smpSched == 0 || loaderOwner != curTask())
+        if (loaderOwner != curTask())
         {
             return;                                     // not ours to drop
         }
@@ -857,7 +881,9 @@ public final class VM
     /** Release one level of the loader lock. */
     static void loaderUnlock()
     {
-        if (smpSched == 0 || loaderOwner != curTask())
+        // NOT gated on loaderLockLive: a hold taken while the tick ran must be released after it stops, or the
+        // owner id stays recorded and the next preemptive window waits on it for ever.
+        if (loaderOwner != curTask())
         {
             return;
         }
@@ -1129,6 +1155,21 @@ public final class VM
         // Draining HERE makes every caller safe instead of relying on each to remember (two of them did not).
         // A no-op when smpSched is already 0, so the single-core path pays nothing.
         VMScheduler.stopSmpScheduling();
+        // A task discarded here may still hold the loader lock: the lock is live while the tick preempts
+        // (loaderLockLive), and a window can end with a philosopher stopped mid-compile. Its id is about to be
+        // reused, so a stale owner would read as a RE-ENTRY to the new task with that id, or strand every
+        // later acquisition. Drop it and say so; the compile it abandoned can never run (see loaderForceRelease).
+        if (loaderOwner > 0)
+        {
+            Uart.write(Magic.bytes("\nLOADER LOCK released at task-table reset: owner task "));
+            printDec(loaderOwner);
+            Uart.write(Magic.bytes(" depth "));
+            printDec(loaderDepth);
+            Uart.putc(0x0A);
+            loaderDepth = 0;
+            loaderOwner = -1;
+            loaderReleases = loaderReleases + 1;
+        }
         taskCount = 1;
         taskState[0] = TASK_READY;
         int c = 0;
