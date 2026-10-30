@@ -58,7 +58,8 @@ public final class ReachScan
         // an unsigned jar never takes (see Loader.isDenylisted).
         "sun/security/", "java/util/jar/JarVerifier",
         // jdk/internal/logger is NOT here any more: System.getLogger runs stock (see Loader.isDenylisted).
-        "java/lang/reflect/", "jdk/internal/reflect/",
+        // java/lang/reflect/ is NOT here any more: the whole package loads (see Loader.isDenylisted).
+        "jdk/internal/reflect/",
         "jdk/internal/module/",
         // java/lang/module/ is NOT denied any more (see Loader.isDenylisted). java/util/spi/, java/text/,
         // java/text/spi/ and sun/text/ are not listed: isDenied allows those prefixes before it consults this
@@ -152,29 +153,6 @@ public final class ReachScan
                 || c.startsWith("java/lang/invoke/MethodType")          // java.lang.invoke arc inc 0 (MethodTypeForm too)
                 || c.startsWith("jdk/internal/invoke/MhUtil")
                 || c.equals("jdk/internal/reflect/Reflection")          // java.lang.invoke arc: Lookup's field filter
-                || c.startsWith("java/lang/reflect/Modifier")           // STOCK (overlay deleted); the rest are
-                                                                        // reflection-arc overlays that run
-                || c.startsWith("java/lang/reflect/Field")              //   on metal; rest of java/lang/reflect denied
-                || c.startsWith("java/lang/reflect/Method")
-                || c.startsWith("java/lang/reflect/Constructor")
-                || c.startsWith("java/lang/reflect/Array")
-                || c.startsWith("java/lang/reflect/AccessibleObject")
-                || c.startsWith("java/lang/reflect/InvocationTargetException")  // stock exception, no natives
-                || c.equals("java/lang/reflect/ReflectAccess")          // stock JavaLangReflectAccess (Loader)
-                || c.startsWith("java/lang/reflect/Member")             // stock interfaces the overlays implement
-                || c.startsWith("java/lang/reflect/AnnotatedElement")   //   (see Loader.isDenylisted)
-                || c.startsWith("java/lang/reflect/Type")               // the generic-type interfaces and
-                || c.startsWith("java/lang/reflect/ParameterizedType")  //   errors stock generics reflection
-                || c.startsWith("java/lang/reflect/WildcardType")       //   is typed by (see Loader.isDenylisted)
-                || c.startsWith("java/lang/reflect/GenericArrayType")
-                || c.startsWith("java/lang/reflect/GenericDeclaration")
-                || c.startsWith("java/lang/reflect/GenericSignatureFormatError")
-                || c.startsWith("java/lang/reflect/MalformedParameterizedTypeException")
-                || c.startsWith("java/lang/reflect/AccessFlag")         // accessFlags(): pure Java enums
-                || c.startsWith("java/lang/reflect/ClassFileFormatVersion")
-                || c.startsWith("java/lang/reflect/RecordComponent")    // overlaid: getRecordComponents
-                || c.startsWith("java/lang/reflect/InvocationHandler")  // dynamic proxies
-                || c.startsWith("java/lang/reflect/UndeclaredThrowableException")
                 || c.startsWith("java/lang/ClassLoader")                 // M3: JDK-free overlay (defineClass/loadClass)
                 || c.startsWith("sun/net/ext/ExtendedSocketOptions")    // stock (no jdk.net); rest of sun/net/ext denied
                 // the file: and jar: URL protocols (see Loader.isDenylisted); http/, content/, jrt stay denied

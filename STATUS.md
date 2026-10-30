@@ -4,6 +4,16 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **java/lang/reflect IS NO LONGER DENIED (2026-10-30, branch reflect-undeny, 81f244e).**
+  - **Before:** the package was denied by prefix with 22 allow-list exceptions, so the last eight classes behind it
+    (`Annotated*Type`, `InaccessibleObjectException`, `MalformedParametersException`, `ReflectPermission`, …) were
+    trap-wired at patch time; a class literal or `instanceof` read null/false.
+  - **Now:** the prefix and every exception are gone from `Loader.isDenylisted` and `ReachScan.DENY`; the whole
+    package loads. `jdk/internal/reflect/` stays denied.
+  - **Probe:** `ReflectUndenyProbe` (ReflectPermission.implies, both exceptions constructed and caught by type, class
+    literals), expected output from the host JVM.
+  - **QEMU:** full regression 191/191 (20m39s, `/tmp/regress-full-81f244e.log`). NOT RUN: Pi boot.
+
 - **AUDIT: loader statics that survive resetLoader (2026-10-30, branch launch-caches, 5093b44).**
   - **Scope:** after `objectCloneBuf` (#460), every caching static in `Loader` that `resetLoader` does not clear.
   - **Reset now (wrong by construction, NOT measured failing):** the proxy and annotation TIB tables (`proxyN`,

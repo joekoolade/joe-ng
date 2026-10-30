@@ -1,0 +1,6 @@
+ReflectPermission: suppressAccessChecks implies=true
+InaccessibleObjectException: closed isRuntime=true
+MalformedParametersException: bad isRuntime=true
+class literals: java.lang.reflect.AnnotatedType true AnnotatedType
+catch by type: caught x
+ReflectUndenyProbe done
