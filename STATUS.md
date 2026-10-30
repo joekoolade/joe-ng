@@ -4,6 +4,21 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **MISSING NATIVES THROW UnsatisfiedLinkError naming the method, instead of halting (2026-10-29, branch native-ule, 094fb27).**
+  - **Before:** a call to a `native` method with no VM implementation failed to link and HALTED the task at the link
+    trap, labelled `DENYLIST TRAP` even when its class was not denied. A program could not catch it.
+  - **Now:** the link stub resolves such a call to a per-method thunk that calls `VM.nativeMissing(k)`, which throws
+    `UnsatisfiedLinkError("joe-ng: native <class>.<name><desc> is not implemented")`. Static and private calls are
+    checked on the named class; instance calls (resolved at dispatch) walk the receiver's superclass chain for the
+    `native` declaration. The `LINK FAILED` line is not printed in this case -- the error carries it.
+  - **Label:** a trap on a callee whose class is NOT denied now prints `LINK TRAP ... its class is NOT denied`.
+  - **Measured:** new `NativeMissingProbe` (static x2, instance, ten args, three frames down with `finally`) matches
+    the host: all five throw a named ULE, `finally blocks run 4`. 19 other targeted probes pass (invoke, dispatch,
+    exception, proxy, loader, network); `make test` OK; overlaycheck 0 new.
+  - **NOT exercised:** the `LINK TRAP` label (no probe reaches a non-native link failure); a native INHERITED from a
+    superclass on a static-link path still halts (only the named class is checked).
+  - **NOT RUN:** full regression, Pi boot.
+
 - **SOCKET UN-DENY: ExtendedSocketOption + Poller; forName(name, false, ..) no longer initializes (2026-10-29, branch net-undeny, 7b4542a).**
   - **Un-denied** in both lists: `sun/nio/ch/ExtendedSocketOption` (one static `SocketOption`, no natives; denied,
     `SO_OOBINLINE` read null) and `sun/nio/ch/Poller` (reached only from a VIRTUAL thread, and `isVirtual()` is false

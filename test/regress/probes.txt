@@ -130,6 +130,7 @@ MinValueProbe
 MixinProbe               cp=/lib/junit.jar
 MonitorStateProbe
 NativeArgProbe
+NativeMissingProbe
 NestedClinitProbe        solo             # initialization order is the subject
 NestedEnumProbe          cp=/lib/junit.jar
 NestingProbe

@@ -12311,6 +12311,16 @@ public final class Loader
         printNameAt(trapWireMth[k], 0);
     }
 
+    /** Whether trap-wired callee {@code k}'s class is on the deny list (false for an unknown index). */
+    static boolean trapCalleeDenied(int k)
+    {
+        if (k < 0 || k >= trapWireCount || trapWireCls[k] == 0L)
+        {
+            return false;
+        }
+        return isDenylisted(trapWireCls[k], 0);
+    }
+
     static int trapIndexFor(long lr)
     {
         long site = lr - 4L;
@@ -15023,6 +15033,10 @@ public final class Loader
             // call site is redirected to the generated static instead, which needs no argument shuffling --
             // an invokevirtual already passes (x0=handle, x1=holder, x2=value), and that IS its signature.
             buf = resolveVhAccessor(ci, idx);
+        }
+        if (buf == 0L)
+        {
+            buf = missingNativeOnChain(ci, vsName[idx], vsDesc[idx]);   // an unimplemented native THROWS
         }
         if (buf == 0L)
         {
@@ -18466,7 +18480,20 @@ public final class Loader
             // TERMINAL: this stub has no other tier to try, so the call really is about to trap. (The chain
             // walkers that also call resolveLinkTarget report through VIRTUALRESOLVE FAILED when THEIR whole
             // walk is over -- not per level.)
-            if (lnkFailWhy == 1)
+            //
+            // A NATIVE THIS VM DOES NOT IMPLEMENT is checked first. CLAUDE.md rule 3: it THROWS, naming itself,
+            // instead of halting the task on the trap -- which also reported it as a DENYLIST TRAP for a class
+            // that is not denied (Net.setIntOption0, 2026-10-29). The throw makes it catchable and turns the
+            // missing native into a worklist entry the program writes; the UnsatisfiedLinkError IS the report,
+            // so nothing is printed.
+            long thunk = lnkFailWhy == 3 && declaredNative(lkClsU[idx], lkNameU[idx], lkDescU[idx])
+                    ? missingNativeThunk(lkClsU[idx], lkNameU[idx], lkDescU[idx])
+                    : 0L;
+            if (thunk != 0L)
+            {
+                buf = thunk;
+            }
+            else if (lnkFailWhy == 1)
             {
                 reportLinkFail(lkClsU[idx], lkNameU[idx], lkDescU[idx],
                         Magic.bytes("class not in the classDir (nothing can load it)"));
@@ -18481,7 +18508,10 @@ public final class Loader
                 reportLinkFail(lkClsU[idx], lkNameU[idx], lkDescU[idx],
                         Magic.bytes("class OK but no body for that name+descriptor"));
             }
-            buf = VM.denylistTrapAddr;
+            if (thunk == 0L)
+            {
+                buf = VM.denylistTrapAddr;
+            }
         }
         lkMemo[idx] = buf;
         }
@@ -18490,6 +18520,254 @@ public final class Loader
             VM.loaderUnlock();   // see the note in lazyCompile: a throw here used to strand the lock
         }
         return buf;
+    }
+
+    // ---- Natives this VM does not implement: each gets a thunk that throws UnsatisfiedLinkError ----
+    private static final int MAXMISSINGNATIVE = 128;
+    private static final long[] mnCls = new long[MAXMISSINGNATIVE];     // the callee's Utf8 ADDRESSES (u2 len + bytes)
+    private static final long[] mnName = new long[MAXMISSINGNATIVE];
+    private static final long[] mnDesc = new long[MAXMISSINGNATIVE];
+    private static final long[] mnThunk = new long[MAXMISSINGNATIVE];
+    private static int mnCount;
+
+    /**
+     * A branch target for a call to the native {@code cls.name desc} that throws {@code UnsatisfiedLinkError}: a
+     * thunk {@code movz x0,#k ; br VM.nativeMissing}, one per method and shared by every site that calls it. A
+     * {@code br} writes no x30, so {@link VM#nativeMissing} sees the CALLER's return address and the error unwinds
+     * as if the native itself had thrown. 0 when the table is full or the helper was not baked: the caller keeps
+     * the trap.
+     */
+    private static long missingNativeThunk(long clsU, long nameU, long descU)
+    {
+        int k = 0;
+        while (k < mnCount)
+        {
+            if (utf8Same(mnCls[k], clsU) && utf8Same(mnName[k], nameU) && utf8Same(mnDesc[k], descU))
+            {
+                return mnThunk[k];
+            }
+            k += 1;
+        }
+        long t = VM.nativeMissingAddr;
+        if (mnCount >= MAXMISSINGNATIVE || t == 0L)
+        {
+            return 0L;
+        }
+        long buf = Heap.allocCode(32);
+        Heap.pinCodeAt(buf);                                 // only a memoised link target names it
+        int w = 0;
+        Magic.store32(buf + w * 4L, A64Enc.movz(0, mnCount, 0));                         w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) (t & 0xFFFF), 0));             w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((t >> 16) & 0xFFFF), 1));     w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((t >> 32) & 0xFFFF), 2));     w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.br(16));                                      w += 1;
+        Heap.publishCode(buf, buf + w * 4L);
+        mnCls[mnCount] = clsU;
+        mnName[mnCount] = nameU;
+        mnDesc[mnCount] = descU;
+        mnThunk[mnCount] = buf;
+        mnCount += 1;
+        return buf;
+    }
+
+    /**
+     * The missing-native thunk for {@code name desc} when class {@code ci} or a superclass DECLARES it native, or
+     * 0 -- the late-virtual twin of the link-stub check (an instance native is dispatched, not linked). The nearest
+     * declaring class names it, as an inherited method's own class would.
+     */
+    private static long missingNativeOnChain(int ci, long nameU, long descU)
+    {
+        int c = ci;
+        int hops = 0;
+        while (c >= 0 && hops < 64)
+        {
+            long clsU = clTab[c].base + clTab[c].nameOff;
+            if (declaredNative(clsU, nameU, descU))
+            {
+                return missingNativeThunk(clsU, nameU, descU);
+            }
+            c = superRegOf(c);
+            hops += 1;
+        }
+        return 0L;
+    }
+
+    /**
+     * The {@code UnsatisfiedLinkError} for missing native {@code k}, its message naming the method: {@code joe-ng:
+     * native sun.nio.ch.Net.setIntOption0(Ljava/io/FileDescriptor;ZIIIZ)V is not implemented}. Loads the error
+     * class first if no program has used it yet -- {@link #newExc} of an unloaded class gives an exception with no
+     * Type, which nothing can catch.
+     */
+    static long missingNativeError(int k)
+    {
+        byte[] name = Magic.bytes("java/lang/UnsatisfiedLinkError");
+        VM.loaderLock(VM.LOCK_REFLECT);
+        try
+        {
+            if (classIndexByName(name) < 0)
+            {
+                loadClassIncremental(name);
+            }
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
+        byte[] pre = Magic.bytes("joe-ng: native ");
+        byte[] post = Magic.bytes(" is not implemented");
+        int len = pre.length + u2(mnCls[k]) + 1 + u2(mnName[k]) + u2(mnDesc[k]) + post.length;
+        byte[] msg = new byte[len];
+        int p = 0;
+        int i = 0;
+        while (i < pre.length)
+        {
+            msg[p] = pre[i];
+            p += 1;
+            i += 1;
+        }
+        p = putDotted(msg, p, mnCls[k]);
+        msg[p] = (byte) '.';
+        p += 1;
+        p = putUtf8(msg, p, mnName[k]);
+        p = putUtf8(msg, p, mnDesc[k]);
+        i = 0;
+        while (i < post.length)
+        {
+            msg[p] = post[i];
+            p += 1;
+            i += 1;
+        }
+        return newExcWithMessage(name, msg);
+    }
+
+    /** Append the Utf8 at {@code utf8Addr} as it is. */
+    private static int putUtf8(byte[] out, int p, long utf8Addr)
+    {
+        int len = u2(utf8Addr);
+        int i = 0;
+        while (i < len && p < out.length)
+        {
+            out[p] = (byte) u1(utf8Addr + 2L + i);
+            p += 1;
+            i += 1;
+        }
+        return p;
+    }
+
+    /** Two Utf8s, each at an absolute address (u2 len + bytes), are byte-equal. */
+    private static boolean utf8Same(long a, long b)
+    {
+        int len = u2(a);
+        if (len != u2(b))
+        {
+            return false;
+        }
+        int i = 0;
+        while (i < len)
+        {
+            if (u1(a + 2L + i) != u1(b + 2L + i))
+            {
+                return false;
+            }
+            i += 1;
+        }
+        return true;
+    }
+
+    /** The Utf8 entry at blob offset {@code off} (u2 len + bytes) equals the Utf8 at absolute address {@code u}. */
+    private static boolean utf8BlobSame(long base, int off, long u)
+    {
+        return utf8Same(base + off, u);
+    }
+
+    /**
+     * Whether class {@code clsU} itself DECLARES {@code name desc} as a native method. Reads the classfile bytes
+     * directly -- its own constant-pool walk, never the shared parse context ({@code gbase}/{@code gcp}), which a
+     * failing link must not disturb. Only the named class is consulted: a native inherited from a superclass
+     * keeps the trap.
+     */
+    private static boolean declaredNative(long clsU, long nameU, long descU)
+    {
+        int pd = findPdByName(clsU, 0);
+        if (pd < 0)
+        {
+            return false;
+        }
+        long base = pdBase[pd];
+        int n = u2(base + 8L);                                // constant_pool_count
+        int[] off = new int[n];
+        long p = base + 10L;
+        int i = 1;
+        while (i < n)
+        {
+            int tag = u1(p);
+            off[i] = (int) (p + 1L - base);                   // a Utf8's offset is its u2 length
+            if (tag == 1)
+            {
+                p += 3L + u2(p + 1L);
+            }
+            else if (tag == 5 || tag == 6)
+            {
+                p += 9L;
+                i += 1;                                        // long/double take two slots
+            }
+            else if (tag == 7 || tag == 8 || tag == 16 || tag == 19 || tag == 20)
+            {
+                p += 3L;
+            }
+            else if (tag == 15)
+            {
+                p += 4L;
+            }
+            else if (tag == 3 || tag == 4 || tag == 9 || tag == 10 || tag == 11 || tag == 12 || tag == 17
+                    || tag == 18)
+            {
+                p += 5L;
+            }
+            else
+            {
+                return false;                                  // not a classfile we can read: keep the trap
+            }
+            i += 1;
+        }
+        p += 6L;                                               // access_flags, this_class, super_class
+        p += 2L + u2(p) * 2L;                                  // interfaces
+        int fcount = u2(p);
+        p += 2L;
+        int f = 0;
+        while (f < fcount)
+        {
+            p = skipMemberAttrs(p + 8L, u2(p + 6L));
+            f += 1;
+        }
+        int mcount = u2(p);
+        p += 2L;
+        int m = 0;
+        while (m < mcount)
+        {
+            int access = u2(p);
+            if ((access & 0x0100) != 0 && utf8BlobSame(base, off[u2(p + 2L)], nameU)
+                    && utf8BlobSame(base, off[u2(p + 4L)], descU))
+            {
+                return true;
+            }
+            p = skipMemberAttrs(p + 8L, u2(p + 6L));
+            m += 1;
+        }
+        return false;
+    }
+
+    /** Skip {@code count} attributes starting at {@code p} (each u2 name, u4 length, then the bytes). */
+    private static long skipMemberAttrs(long p, int count)
+    {
+        int a = 0;
+        while (a < count)
+        {
+            long alen = ((long) u2(p + 2L) << 16) | u2(p + 4L);
+            p += 6L + alen;
+            a += 1;
+        }
+        return p;
     }
 
     /**

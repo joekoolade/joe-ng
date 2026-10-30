@@ -1,0 +1,7 @@
+static: java.lang.UnsatisfiedLinkError names the method true
+static again: java.lang.UnsatisfiedLinkError names the method true
+instance: java.lang.UnsatisfiedLinkError names the method true
+ten args: java.lang.UnsatisfiedLinkError names the method true
+three frames down: java.lang.UnsatisfiedLinkError names the method true
+finally blocks run 4
+NativeMissingProbe done

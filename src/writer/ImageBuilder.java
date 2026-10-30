@@ -1498,6 +1498,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VM.recordEquals(JJ)J",  "vm/VM.recordEqualsAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.recordToString(J)J", "vm/VM.recordToStringAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.denylistTrap()V",   "vm/VM.denylistTrapAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.nativeMissing(I)V", "vm/VM.nativeMissingAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.nanoTime()J",       "vm/VM.nanoTimeAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.cdsRandomSeedForDumping()J",
                     "vm/VM.cdsSeedAddr");
