@@ -4,6 +4,15 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **DEMO SUITE COUNTS `(want …)` MISMATCHES (2026-10-30, branch want-check, d3511e0).**
+  - **Why:** DigestDemo's `sha256 clone = …FORK-WRONG (want …)` sat in every suite log on QEMU and the Pi without
+    tripping a marker.
+  - **Now:** `scripts/want-mismatch.awk` checks each line ending in `(want X)` (value equals X, or ends with it after a
+    space or `=`; a comma list against the values after each `=`; a ` -- note` in the parenthesis is dropped), and
+    `demo-suite.sh` prints `want: checked=N mismatch=M` plus up to 10 offending lines.
+  - **Measured:** the 7 saved suite logs from before the clone fix each report `mismatch=1` (the FORK-WRONG line);
+    the fixed run and a fresh QEMU suite report `checked=160 mismatch=0`. Script-only change.
+
 - **Object.clone() RAN ANOTHER METHOD after the first launch: the cached link stub outlived the link table (2026-10-30, branch digest-clone, 08344bf).**
   - **Symptom:** the demo suite's DigestDemo printed `sha256 clone = c92b2be3…/FORK-WRONG` on QEMU and the Pi.
     `c92b2be3…` is the SHA-256 of 150+50+50 bytes (host-measured): the clone and the original shared ONE engine.
