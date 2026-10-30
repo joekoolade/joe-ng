@@ -4,6 +4,21 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **AUDIT: loader statics that survive resetLoader (2026-10-30, branch launch-caches, 5093b44).**
+  - **Scope:** after `objectCloneBuf` (#460), every caching static in `Loader` that `resetLoader` does not clear.
+  - **Reset now (wrong by construction, NOT measured failing):** the proxy and annotation TIB tables (`proxyN`,
+    `annoTibN`), rooted only through `lambdaTibRoots` (dropped by the reset) and looked up by raw Type address, so an
+    entry can outlive its Type and match a reused address; and the cached registry Types `thrTypeCache`,
+    `cloneableTypeCache`, `serializableTypeCache`.
+  - **Measured with a temporary check:** `thrTypeCache` filled at generation 4 and matched a fresh lookup to the end
+    of the suite; the Cloneable/Serializable caches never filled. The suite resets only in its early demos.
+  - **Left alone (read):** recomputed per use, keyed to their current table, cleared by `clearSiteMemos`, or
+    deliberately permanent (the lazy/virtual/mh/indy trampolines, re-registered each reset).
+  - **No probe possible:** a guest program never triggers `resetLoader` and `ProbeBatch` runs one launch; the demo
+    suite (with `want:`) is this bug class's test.
+  - **QEMU:** suite 40 returned normally, `gc: collections=50`, `want: checked=160 mismatch=0`, 0 failure markers;
+    14/14 annotation/proxy/Object-method probes, `make test` OK, overlaycheck 0 new. NOT RUN: full regression, Pi.
+
 - **DEMO SUITE COUNTS `(want …)` MISMATCHES (2026-10-30, branch want-check, d3511e0).**
   - **Why:** DigestDemo's `sha256 clone = …FORK-WRONG (want …)` sat in every suite log on QEMU and the Pi without
     tripping a marker.
@@ -27,6 +42,9 @@ Newest entries are at the top.
   - **QEMU:** suite `sha256 clone = 44cae522…/fork-ok`; all 159 `(want …)` lines match; 40 returned normally,
     `gc: collections=50`, 0 failure markers. 24/24 clone/proxy/annotation probes (batched), `make test` OK,
     overlaycheck 0 new. NOT RUN: full regression, Pi boot.
+  - **CORRECTION (2026-10-30, launch-caches):** those 24 probes did NOT cross a reset, as the PR claimed. `ProbeBatch`
+    runs a batch in ONE launch, and a guest program never triggers `resetLoader` (only the suite's early demos and
+    `launch()` do), so no probe can reproduce this class of bug; the demo suite is its test, now with `want:`.
 
 - **LOADER LOCK IS LIVE WHILE CORE 0's TICK PREEMPTS; inherited missing natives throw; fault report names task + lock owner (2026-10-30, branch native-gaps, d217fc1).**
   - **The Pi bug:** the SMP demo suite faulted on all four Pi boots before the fix, in dining philosophers after `P4 hungry`, in

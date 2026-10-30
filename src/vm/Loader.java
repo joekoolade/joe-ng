@@ -4132,6 +4132,20 @@ public final class Loader
         lambdaHostBase = new long[MAXLAMBDATIB];
         lambdaHostNameOff = new int[MAXLAMBDATIB];
         lambdaTibRootN = 0;
+        // The proxy and annotation TIB tables are rooted ONLY through lambdaTibRoots, which was just dropped,
+        // and they find entries by raw Type ADDRESS. Kept, an entry outlives the Type it names: once the GC
+        // frees that Type its address can come back as a different class's, and the lookup would hand out a
+        // TIB built for another interface, whose slots call the anno*/proxy helper bodies reset per launch
+        // (see objectCloneBuf). Not measured failing -- the suite resets only in its early demos, before
+        // either table fills -- but wrong by construction, so they reset beside the root they depend on.
+        proxyN = 0;
+        annoTibN = 0;
+        // The same for a cached registry Type: it names a class of the registry this method replaces.
+        // MEASURED stable in the suite (thrTypeCache filled at generation 4 and matched a fresh lookup to the
+        // end; the Cloneable/Serializable pair never filled), so this is hygiene, not a fix.
+        thrTypeCache = 0L;
+        cloneableTypeCache = 0L;
+        serializableTypeCache = 0L;
         pcBase = new long[MAXPARSECACHE];
         pcBytes = new byte[MAXPARSECACHE][];
         pcCp = new int[MAXPARSECACHE][];
