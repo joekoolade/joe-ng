@@ -574,8 +574,9 @@ public final class VM
     static long   stwTimeouts;              // collections that started with a core still unparked (a bug signal)
     static long[] stwLate;                  // index = core: CNTPCT when a stop-the-world gave up on it, 0 = none --
                                             //   that core reports where it was when it next reaches pickNext
-    static long[] faultRegs;                // index = core * 32 + r: x0..x30 at that core's latest fault, slot 31 =
-                                            //   1 when the copy is real -- see stashFaultRegs
+    static long[] faultRegs;                // index = core * 40 + r: x0..x30 at that core's latest fault, slot 31 =
+                                            //   1 when the copy is real, 32 = task, 33 = loaderOwner, 34 = Loader's
+                                            //   gbase -- see stashFaultRegs
     /** The scheduler's cross-core lock (a {@link Magic#spinLock} word). Held only with IRQs masked, and only
      *  across task-table updates -- never across a UART write or an allocation. A different cache line from
      *  {@link #LOCK_ADDR} so the SMP job-queue demo and the scheduler don't false-share. */
@@ -922,7 +923,7 @@ public final class VM
         coreSched = new int[4];
         gcParked = new long[4];
         stwLate = new long[4];
-        faultRegs = new long[4 * 32];
+        faultRegs = new long[4 * 40];
         // Initialise every element explicitly. Heap.allocArray does NOT zero its elements (a block off the
         // free list carries whatever the dead object left), and on real hardware DRAM starts full of
         // firmware leftovers -- so "a fresh int[] reads as zeroes" is a QEMU accident, not a guarantee.
@@ -944,7 +945,7 @@ public final class VM
             coreSched[c] = 0;
             gcParked[c] = 0L;
             stwLate[c] = 0L;
-            faultRegs[c * 32 + 31] = 0L;
+            faultRegs[c * 40 + 31] = 0L;
             c += 1;
         }
         // The scheduler's lock word is raw scratch RAM, not a Java field: nothing zeroed it, and spinLock
@@ -2608,7 +2609,10 @@ public final class VM
         {
             return;                                    // a nested fault on the SAME core keeps the original's copy
         }
-        int base = core * 32;
+        int base = core * 40;
+        faultRegs[base + 32] = curTask();               // WHICH task, and whether it held the loader lock: a fault
+        faultRegs[base + 33] = loaderOwner;             //   in the parser while another task owns it is a lock bug
+        faultRegs[base + 34] = Loader.gbaseForReport();
         long save = sp - SCHED_FRAME;
         if (Magic.load64(save + 248L) != elr)
         {
@@ -2630,9 +2634,20 @@ public final class VM
         Uart.write(Magic.bytes("\n  core "));
         printDec(c);
         Uart.write(Magic.bytes(" regs at its last fault:"));
-        if (faultRegs == null || faultRegs[c * 32 + 31] == 0L)
+        if (faultRegs == null)
         {
-            Uart.write(Magic.bytes(" NOT SAVED (no switch-stub frame)"));
+            Uart.write(Magic.bytes(" NOT SAVED (no table yet)"));
+            return;
+        }
+        Uart.write(Magic.bytes("\n    task="));
+        printDec((int) faultRegs[c * 40 + 32]);
+        Uart.write(Magic.bytes(" loaderOwner="));
+        printDec((int) faultRegs[c * 40 + 33]);
+        Uart.write(Magic.bytes(" Loader.gbase="));
+        printHex(faultRegs[c * 40 + 34]);
+        if (faultRegs[c * 40 + 31] == 0L)
+        {
+            Uart.write(Magic.bytes("\n    registers NOT SAVED (no switch-stub frame)"));
             return;
         }
         int r = 0;
@@ -2645,11 +2660,11 @@ public final class VM
             Uart.write(Magic.bytes(" x"));
             printDec(r);
             Uart.putc(0x3D);
-            printHex(faultRegs[c * 32 + r]);
+            printHex(faultRegs[c * 40 + r]);
             r += 1;
         }
         Uart.write(Magic.bytes("\n    x30 in: "));
-        Loader.printFrameAt(faultRegs[c * 32 + 30] - 4L);
+        Loader.printFrameAt(faultRegs[c * 40 + 30] - 4L);
     }
 
     /** A second CPU fault fired while {@link #throwFromFault} was still turning the FIRST one into a Java
@@ -2685,6 +2700,12 @@ public final class VM
         Loader.reportMethodAt(elr);
         Uart.write(Magic.bytes("\n    elr in: "));
         Loader.printFrameAt(elr);
+        Uart.write(Magic.bytes("\n    task="));                // the NESTED fault's own task: a different task
+        printDec(curTask());                                   //   on the same core means the first was preempted
+        Uart.write(Magic.bytes(" loaderOwner="));
+        printDec(loaderOwner);
+        Uart.write(Magic.bytes(" Loader.gbase="));
+        printHex(Loader.gbaseForReport());
         if (me != fault0Core)
         {
             printFaultRegs(me);                            // a DIFFERENT core faulted: faultDepth is global

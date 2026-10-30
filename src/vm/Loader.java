@@ -9244,6 +9244,12 @@ public final class Loader
     }
 
     /** Compare the Utf8 at {@code off} against {@code expected} (bytes packed big-endian, {@code len} bytes). */
+    /** {@link #gbase} for the fault report ({@code VM.stashFaultRegs}): which blob the parser was reading. */
+    static long gbaseForReport()
+    {
+        return gbase;
+    }
+
     private static boolean isName(long base, int off, long expected, int len)
     {
         if (off == 0)
