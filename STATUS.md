@@ -27,6 +27,9 @@ Newest entries are at the top.
   - **QEMU:** suite `sha256 clone = 44cae522…/fork-ok`; all 159 `(want …)` lines match; 40 returned normally,
     `gc: collections=50`, 0 failure markers. 24/24 clone/proxy/annotation probes (batched), `make test` OK,
     overlaycheck 0 new. NOT RUN: full regression, Pi boot.
+  - **CORRECTION (2026-10-30, launch-caches):** those 24 probes did NOT cross a reset, as the PR claimed. `ProbeBatch`
+    runs a batch in ONE launch, and a guest program never triggers `resetLoader` (only the suite's early demos and
+    `launch()` do), so no probe can reproduce this class of bug; the demo suite is its test, now with `want:`.
 
 - **LOADER LOCK IS LIVE WHILE CORE 0's TICK PREEMPTS; inherited missing natives throw; fault report names task + lock owner (2026-10-30, branch native-gaps, d217fc1).**
   - **The Pi bug:** the SMP demo suite faulted on all four Pi boots before the fix, in dining philosophers after `P4 hungry`, in
