@@ -15,7 +15,8 @@
  * On this VM it used to HALT the task on the link trap (reported as a DENYLIST TRAP for a class that is not
  * denied). Shapes: a static native, called twice (the second call reuses the memoised target); an instance
  * native; a native with ten arguments, past the eight passed in registers; and one thrown three frames down,
- * whose {@code finally} blocks must run on the way out. HotSpot's message text differs from this VM's, so only
+ * whose {@code finally} blocks must run on the way out; and a static native called through a SUBCLASS, which
+ * names a class that only inherits it. HotSpot's message text differs from this VM's, so only
  * the error's class and whether its message names the method are printed; the host diff is the gate.
  */
 public class NativeMissingProbe
@@ -35,8 +36,14 @@ public class NativeMissingProbe
         report("instance", () -> new NativeMissingProbe().inst(5));
         report("ten args", () -> many(1, 2, 3, 4, 5, 6, 7, 8, 9, 10));
         report("three frames down", () -> depth(3));
+        report("inherited static", () -> Sub.missing());
         System.out.println("finally blocks run " + unwound);
         System.out.println("NativeMissingProbe done");
+    }
+
+    /** javac emits {@code invokestatic NativeMissingProbe$Sub.missing}: the named class only INHERITS the native. */
+    static final class Sub extends NativeMissingProbe
+    {
     }
 
     static int depth(int n)

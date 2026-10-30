@@ -110,6 +110,7 @@ JlaProbe
 Lambda4Probe
 LambdaAdaptProbe
 Lazy                     solo             # lazy initialization is the subject
+LinkTrapProbe            solo gate=LINK TRAP: call to a method this VM could not link     # halts a task on purpose; metal-only
 LoaderProbe              cp=/lib/junit.jar
 LocaleInitProbe          solo             # Locale initialization is the subject
 LocaleProbe              solo             # reads the default locale

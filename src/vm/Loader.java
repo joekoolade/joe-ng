@@ -18486,9 +18486,23 @@ public final class Loader
             // that is not denied (Net.setIntOption0, 2026-10-29). The throw makes it catchable and turns the
             // missing native into a worklist entry the program writes; the UnsatisfiedLinkError IS the report,
             // so nothing is printed.
-            long thunk = lnkFailWhy == 3 && declaredNative(lkClsU[idx], lkNameU[idx], lkDescU[idx])
-                    ? missingNativeThunk(lkClsU[idx], lkNameU[idx], lkDescU[idx])
-                    : 0L;
+            //
+            // The named class can only INHERIT the native -- javac emits `invokestatic Sub.missing` for a call
+            // through a subclass -- so the declaring class is searched up the chain, as virtualResolve does
+            // (NativeMissingProbe "inherited static"; before this the call halted on LINK FAILED).
+            long thunk = 0L;
+            if (lnkFailWhy == 3)
+            {
+                int nreg = regBySigU(lkClsU[idx]);
+                if (nreg >= 0)
+                {
+                    thunk = missingNativeOnChain(nreg, lkNameU[idx], lkDescU[idx]);
+                }
+                else if (declaredNative(lkClsU[idx], lkNameU[idx], lkDescU[idx]))
+                {
+                    thunk = missingNativeThunk(lkClsU[idx], lkNameU[idx], lkDescU[idx]);
+                }
+            }
             if (thunk != 0L)
             {
                 buf = thunk;
