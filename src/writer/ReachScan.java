@@ -43,7 +43,8 @@ public final class ReachScan
         "java/lang/foreign/", "jdk/internal/foreign/",
         // sun/nio/fs/ and java/nio/file/ run stock over the RAMFS (see Loader.isDenylisted).
         // jdk/internal/loader/ is NOT here any more: the stock built-in loaders run (see Loader.isDenylisted).
-        "java/security/", "java/util/ServiceLoader", "sun/util/",
+        "java/security/", "java/util/ServiceLoader",
+        // sun/util/ is NOT here any more: the whole package loads (see Loader.isDenylisted).
         // java/net is loadable (M3 sockets). SocksSocketImpl IS on the taken path (Socket.createImpl always
         // wraps the platform impl in it) -- overlaid as a pure delegator, so NOT denied. The HTTP-CONNECT
         // proxy impl + www/ext + the GC-auto-close SocketCleanable stay trapped (never taken).
@@ -84,18 +85,10 @@ public final class ReachScan
 
     static boolean isDenied(String c)
     {
-        // All of sun/util/locale is narrowed out of the sun/util/ deny, with the locale-data layer it reaches:
-        // the CLDR adapter, its compiled bundles and the java/util/spi provider interfaces. See
+        // The locale-data layer: its compiled bundles and the java/util/spi provider interfaces. See
         // Loader.isDenylisted.
-        if (c.startsWith("sun/util/locale/") || c.startsWith("sun/util/cldr/")
-                || c.startsWith("sun/util/resources/") || c.startsWith("sun/text/resources/")
-                || c.startsWith("java/util/spi/") || c.startsWith("sun/util/spi/") || c.startsWith("java/text/")
+        if (c.startsWith("sun/text/resources/") || c.startsWith("java/util/spi/") || c.startsWith("java/text/")
                 || c.startsWith("sun/text/"))
-        {
-            return false;
-        }
-        // sun/util/logging/PlatformLogger is narrowed out too: stock jdk/internal/logger is built on it.
-        if (c.startsWith("sun/util/logging/"))
         {
             return false;
         }
@@ -105,16 +98,6 @@ public final class ReachScan
                 || c.equals("sun/security/util/SecurityProperties")
                 || c.equals("sun/security/util/PropertyExpander")
                 || c.startsWith("sun/security/util/PropertyExpander$"))
-        {
-            return false;
-        }
-        // sun/util/calendar/ (ZoneInfo, ZoneInfoFile, the calendar systems) is narrowed out -- see Loader.isDenylisted.
-        if (c.startsWith("sun/util/calendar/"))
-        {
-            return false;
-        }
-        // sun/util/PreHashedMap (StandardCharsets' alias/class maps) is narrowed out too -- see Loader.isDenylisted.
-        if (c.equals("sun/util/PreHashedMap") || c.startsWith("sun/util/PreHashedMap$"))
         {
             return false;
         }

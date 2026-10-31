@@ -1,0 +1,6 @@
+list bundle keys: [a, b, c] b=cb a=pa via=sun.util.ResourceBundleEnumeration
+properties utf-8: [greet, n] greet.length=9 last=32
+properties iso-8859-1 fallback: k.length=3 mid=233
+buddhist calendar: sun.util.BuddhistCalendar type=buddhist year=2513
+buddhist by locale: buddhist year=2514 era=1
+SunUtilProbe done
