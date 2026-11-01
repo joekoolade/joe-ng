@@ -167,6 +167,7 @@ ReflectLookupProbe
 ReflectUndenyProbe
 InternalReflectProbe
 ModuleInternalProbe
+SunUtilProbe
 RepeatableProbe
 RuntimeProbe
 SbFpProbe

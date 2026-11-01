@@ -6372,21 +6372,14 @@ public final class Loader
      */
     private static boolean isDenylisted(long base, int off)
     {
-        // NARROWED OUT of the sun/util/ denial: all of sun/util/locale. Its CORE (BaseLocale, LocaleUtils,
-        // LanguageTag, ...) is what stock java/util/Locale is built on, and its PROVIDER subtree is the locale
-        // data layer (the locale-provider arc, 2026-10-24): Calendar's constructor reads the first day of the
-        // week through CalendarDataUtility, and Date.toString names its zone through TimeZoneNameUtility. The
-        // provider reaches the CLDR adapter (sun/util/cldr), its compiled bundles (sun/util/resources,
-        // sun/text/resources -- the seed's java.base classes, embedded like the rest) and the provider
-        // interfaces (java/util/spi, sun/util/spi), so those are narrowed out together. A DENIED class literal
-        // answers null, which is how Calendar.getInstance reached ConcurrentHashMap.get(null) as an NPE. (Keep in sync with
-        // writer.ReachScan.isDenied.)
-        if (utf8HasPrefix(base, off, Magic.bytes("sun/util/locale/"))
-                || utf8HasPrefix(base, off, Magic.bytes("sun/util/cldr/"))
-                || utf8HasPrefix(base, off, Magic.bytes("sun/util/resources/"))
-                || utf8HasPrefix(base, off, Magic.bytes("sun/text/resources/"))
+        // The locale data layer (the locale-provider arc, 2026-10-24): Calendar's constructor reads the first day
+        // of the week through CalendarDataUtility, and Date.toString names its zone through TimeZoneNameUtility.
+        // The provider reaches its compiled bundles (sun/text/resources -- the seed's java.base classes, embedded
+        // like the rest) and the provider interfaces (java/util/spi). A DENIED class literal answers null, which
+        // is how Calendar.getInstance reached ConcurrentHashMap.get(null) as an NPE. (sun/util/ itself is no
+        // longer denied at all -- see below. Keep in sync with writer.ReachScan.isDenied.)
+        if (utf8HasPrefix(base, off, Magic.bytes("sun/text/resources/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/util/spi/"))
-                || utf8HasPrefix(base, off, Magic.bytes("sun/util/spi/"))      // CalendarProvider: Calendar.getInstance
                 // java/text and its provider interfaces (increment 2): SimpleDateFormat / DateFormat run stock over
                 // the same provider layer. And all of sun/text (increment 4): BreakIterator runs stock, on
                 // RuleBasedBreakIterator and its rule data. And jdk/internal/icu (2026-10-25): java.text.Normalizer,
@@ -6395,31 +6388,6 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("java/text/"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/text/"))
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/icu/")))
-        {
-            return false;
-        }
-        // NARROWED OUT too: sun/util/logging/PlatformLogger. Stock jdk/internal/logger (System.getLogger) is
-        // built on it: SimpleConsoleLogger.<clinit> maps its default level through PlatformLogger.toPlatformLevel,
-        // and the console logger's configuration is a PlatformLogger.ConfigurableBridge. Pure Java with no
-        // natives; java.logging is absent here, so its bridge to java.util.logging is never taken.
-        // (Keep in sync with writer.ReachScan.isDenied.)
-        if (utf8HasPrefix(base, off, Magic.bytes("sun/util/logging/")))
-        {
-            return false;
-        }
-        // NARROWED OUT too: sun/util/calendar/ -- ZoneInfo, ZoneInfoFile (the tzdb.dat reader) and the calendar
-        // systems. TimeZone.getDefault resolves its ID through ZoneInfoFile, and ZoneId.systemDefault through
-        // TimeZone, so java.time's default zone needs them. Pure Java with no natives; the rules come from
-        // /lib/tzdb.dat (see TZDB in the Makefile). (Keep in sync with writer.ReachScan.isDenied.)
-        if (utf8HasPrefix(base, off, Magic.bytes("sun/util/calendar/")))
-        {
-            return false;
-        }
-        // NARROWED OUT too: sun/util/PreHashedMap, the base of the generated sun/nio/cs/StandardCharsets alias and
-        // class maps. Pure collection code, no natives; while denied, Charset.forName("UTF-16BE") trapped in
-        // StandardCharsets.canonicalize at aliasMap().get. (Keep in sync with writer.ReachScan.isDenied.)
-        if (utf8IsAtBase(base, off, Magic.bytes("sun/util/PreHashedMap"))
-                || utf8HasPrefix(base, off, Magic.bytes("sun/util/PreHashedMap$")))
         {
             return false;
         }
@@ -6642,7 +6610,11 @@ public final class Loader
                 // jar's bytes. The overlay reads META-INF/services/* through getResourceAsStream instead. The
                 // denial had to come out first: a denied class is trap-wired at PATCH TIME, so no link stub
                 // ever runs and the overlay would never be consulted.
-                || utf8HasPrefix(base, off, Magic.bytes("sun/util/"))
+                // sun/util/ is NOT denied any more (2026-10-31). Its subpackages had been narrowed out one by one
+                // (locale, cldr, resources, spi, logging, calendar, PreHashedMap); the three classes still behind
+                // the prefix are each on an ordinary java.util path: ResourceBundleEnumeration (getKeys of a
+                // List/PropertyResourceBundle), PropertyResourceBundleCharset (new PropertyResourceBundle(
+                // InputStream)) and BuddhistCalendar (the "buddhist" calendar type). Pure Java, no natives.
                 // java/net is LOADABLE now (M3: stock java.net over net.Tcp). SocksSocketImpl IS taken
                 // (Socket.createImpl always wraps the platform impl in it) -- overlaid as a pure delegator,
                 // NOT denied. The HTTP-CONNECT proxy impl + www/ext + GC-auto-close SocketCleanable stay trapped.
