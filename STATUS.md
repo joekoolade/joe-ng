@@ -4,6 +4,30 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **sun/net/www IS NO LONGER DENIED, EXCEPT protocol/https (2026-11-01, branch net-www-undeny, 9d0dfeb).**
+  - **Before:** denied by prefix with `file:`/`jar:`, `ParseUtil`, `URLConnection`, `MessageHeader` and `MimeTable`/
+    `MimeEntry` narrowed out. Every other URL scheme had no handler (`MalformedURLException`), and the `jrt` Handler's
+    constructor was skipped -- the suite's long-standing CTOR SKIPPED=2.
+  - **Now:** the prefix and the narrowing allows are gone from `Loader.isDenylisted` and `ReachScan`; http, ftp,
+    mailto and jrt handlers and the HTTP client load (no natives on the unix side; it stays `closureDeferred`).
+    `URL.openConnection` answers a real `HttpURLConnection`, and the HTTP-proxy socket #467 left throwing constructs.
+  - **https stays denied:** `HttpsURLConnectionImpl` extends `javax/net/ssl/HttpsURLConnection`, which is not in the
+    classDir (`ImageBuilder.demandLoadable` ships only named `javax/` classes; the SSL implementation is in the denied
+    `sun/security`). Un-denied, `openConnection` printed `UNREGISTERED SUPER (fields alias)` and `CTOR SKIPPED ...
+    ABSENT from the classDir; NOT intended`, then took a WILD BRANCH into a static cell (`vm/Heap.servedSinceGc`,
+    named with a `JOENG_SYMMAP` rebuild) -- BOOT RE-ENTERED. **FOUND, NOT FIXED:** the VM registers a class whose
+    superclass can never load; a JVM throws `NoClassDefFoundError`. (Must still allow a superclass that exists but is
+    not registered YET -- `Integer extends Number` prints the same warning at boot, harmlessly.)
+  - **Closure:** SbProbe's first batch unchanged (+797 blobs, pend=30347, clinits=189); image +4904 bytes.
+  - **Probe:** `NetWwwProbe` (9 arms, no network: http connection + configure + bad method, ftp, mailto, jrt URL,
+    ChunkedInputStream by name, HTTP-proxy socket twice), expected from the host JVM. **Negative control:** http/ftp/
+    mailto threw `MalformedURLException`, jrt stopped the program at `UNRESOLVED NEW`. URL/Loader/CodeSource/
+    ClassResource/SockOpt/InetAddr/NetLeftovers probes pass solo; `make test`, `overlaycheck` OK.
+  - **QEMU:** demo suite 40 returns, `want: checked=160 mismatch=0`, `gc: collections=50`, **CTOR SKIPPED=0** (was 2),
+    UNDER THE LOADER LOCK=1 (expected). NOT RUN: full regression; no request fetched through `URL` (needs network).
+  - **Pi (`9d0dfeb`):** suite passes (collections=50, HML both, steps/core 61/60/60/59), no CTOR SKIPPED, WiFi + HTTP
+    200 (NetDemo's raw-socket GET).
+
 - **A FAILED `<clinit>` MAKES ITS CLASS ERRONEOUS (2026-11-01, branch clinit-erroneous, 3842780).**
   - **Before:** `clinitRan`/`clinitDone` were set whether or not the body completed, so after an initializer threw,
     the next active use found nothing pending and proceeded against whatever statics the body had set: `new`, static
