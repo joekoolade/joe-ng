@@ -6511,19 +6511,6 @@ public final class Loader
                 // java/lang/ClassLoader is STOCK (overlaid from the JDK 26 source, natives Java over the VM's one
                 // class namespace -- jdk.internal.misc.MetalLoaders), and so is jdk/internal/loader below it.
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/ClassLoader"))
-                // NARROWED OUT of the sun/net/www/ denial: the file: and jar: URL protocols, which a class path
-                // is read through (stock URLClassPath, ClassLoader.getResource). java.net.URL picks the handler
-                // by name in URL.DefaultFactory. Both are plain Java over java.io.File / java.util.jar.JarFile:
-                // ParseUtil (URL <-> path encoding), the sun.net.www.URLConnection base and its MessageHeader,
-                // and MimeTable/MimeEntry for a file: connection's content-type header. http/, content/ and
-                // the jrt: handler (the modules image, which this VM does not have) stay denied.
-                || utf8HasPrefix(base, off, Magic.bytes("sun/net/www/protocol/file/"))
-                || utf8HasPrefix(base, off, Magic.bytes("sun/net/www/protocol/jar/"))
-                || utf8IsAtBase(base, off, Magic.bytes("sun/net/www/ParseUtil"))
-                || utf8IsAtBase(base, off, Magic.bytes("sun/net/www/URLConnection"))
-                || utf8IsAtBase(base, off, Magic.bytes("sun/net/www/MessageHeader"))
-                || utf8HasPrefix(base, off, Magic.bytes("sun/net/www/MimeTable"))
-                || utf8IsAtBase(base, off, Magic.bytes("sun/net/www/MimeEntry"))
                 // NARROWED OUT of the java/text/ denial: joe-ng OVERLAYS BreakIterator (whitespace line
                 // breaking, no locale tables), so the reason for the broad denial -- stock's factory going
                 // through the java/text/spi/ provider machinery -- does not apply to it. Without this the
@@ -6682,8 +6669,7 @@ public final class Loader
                 || utf8IsAtBase(base, off, Magic.bytes("sun/security/util/SecurityProperties"))
                 // sun.security.util.PropertyExpander: Security expands the java.security.properties file name
                 // and every `include` value through it (${prop} -> System.getProperty). Plain Java, no natives.
-                // Only its encodeURL form reaches sun/net/www/ParseUtil, which stays denied; Security never asks
-                // for it. The $ prefix admits its nested ExpandException.
+                // Only its encodeURL form reaches sun/net/www/ParseUtil; Security never asks for it. The $ prefix admits its nested ExpandException.
                 || utf8IsAtBase(base, off, Magic.bytes("sun/security/util/PropertyExpander"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/security/util/PropertyExpander$")))
         {
@@ -6736,7 +6722,19 @@ public final class Loader
                 // statement that vintage could not work, and it is the line to delete when java.math does.
                 || utf8HasPrefix(base, off, Magic.bytes("org/junit/vintage/"))
                 || utf8HasPrefix(base, off, Magic.bytes("org/junit/platform/reporting/"))
-                || utf8HasPrefix(base, off, Magic.bytes("sun/net/www/"))
+                // sun/net/www/ is NOT denied any more (2026-11-01) -- EXCEPT protocol/https/. file: and jar: had
+                // been narrowed out for the class path; now the http, ftp, mailto and jrt handlers and the HTTP
+                // client load too, so URL.openConnection answers a real HttpURLConnection and the HTTP-proxy
+                // socket's initializer finds its client. No natives on the unix side. It stays closureDeferred
+                // (pulled when reached).
+                //
+                // https stays denied because its connection class EXTENDS javax/net/ssl/HttpsURLConnection, and
+                // javax/net/ssl is not in the classDir (ImageBuilder.demandLoadable ships only named javax/
+                // classes; its implementation, sun/security/ssl, is denied). Un-denied, `new URL("https:..")
+                // .openConnection()` registered HttpsURLConnectionImpl with an UNREGISTERED SUPER, skipped the
+                // absent superclass's constructor, and took a WILD BRANCH into a static cell (BOOT RE-ENTERED).
+                // Denied, the URL has no handler: MalformedURLException, as before. It belongs to the security arc.
+                || utf8HasPrefix(base, off, Magic.bytes("sun/net/www/protocol/https/"))
                 // sun/net/ext/ is NOT denied any more (2026-11-01): it holds only ExtendedSocketOptions, which runs
                 // STOCK (Net.<clinit> sets EXTENDED_OPTIONS from it). Its forName of jdk.net.ExtendedSocketOptions
                 // finds no class, so it answers NoExtendedSocketOptions, as a JDK without jdk.net does.

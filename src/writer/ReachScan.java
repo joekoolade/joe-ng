@@ -45,9 +45,10 @@ public final class ReachScan
         // jdk/internal/loader/ is NOT here any more: the stock built-in loaders run (see Loader.isDenylisted).
         "java/security/", "java/util/ServiceLoader",
         // sun/util/ is NOT here any more: the whole package loads (see Loader.isDenylisted).
-        // java/net is loadable (M3 sockets) and nothing in it is denied; sun/net/ext/ is not denied either
-        // (see Loader.isDenylisted). The HTTP-proxy socket's client, sun/net/www/protocol/http, is.
-        "sun/net/www/",
+        // java/net is loadable (M3 sockets) and nothing in it is denied; neither sun/net/ext/ nor sun/net/www/ is
+        // denied any more -- except the https handler, whose connection class extends the absent
+        // javax/net/ssl/HttpsURLConnection (see Loader.isDenylisted).
+        "sun/net/www/protocol/https/",
         // sun/nio/ch/Poller and sun/nio/ch/ExtendedSocketOption are NOT here any more (2026-10-29): see
         // Loader.isDenylisted -- Poller is reached only from a virtual thread, which this VM never has.
         // java/net/NetworkInterface is NOT here any more: overlaid, natives over the WiFi lease (Loader.isDenylisted).
@@ -133,14 +134,6 @@ public final class ReachScan
                 || c.startsWith("java/lang/invoke/MethodType")          // java.lang.invoke arc inc 0 (MethodTypeForm too)
                 || c.startsWith("jdk/internal/invoke/MhUtil")
                 || c.startsWith("java/lang/ClassLoader")                 // M3: JDK-free overlay (defineClass/loadClass)
-                // the file: and jar: URL protocols (see Loader.isDenylisted); http/, content/, jrt stay denied
-                || c.startsWith("sun/net/www/protocol/file/")
-                || c.startsWith("sun/net/www/protocol/jar/")
-                || c.equals("sun/net/www/ParseUtil")
-                || c.equals("sun/net/www/URLConnection")
-                || c.equals("sun/net/www/MessageHeader")
-                || c.startsWith("sun/net/www/MimeTable")
-                || c.equals("sun/net/www/MimeEntry")
                 // The java.security PERMISSION + MARKER layer: plain data structures and string matching,
                 // no natives and no provider machinery. The PROVIDER/POLICY/cert subsystem stays denied.
                 || c.startsWith("java/security/Permission")
