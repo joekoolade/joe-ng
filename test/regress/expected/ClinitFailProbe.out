@@ -1,0 +1,16 @@
+Error init, first new: threw java.lang.InternalError
+Error init, second new: threw java.lang.NoClassDefFoundError
+Error init, static call: threw java.lang.NoClassDefFoundError
+Error init, static read: threw java.lang.NoClassDefFoundError
+Error init, static call again: threw java.lang.NoClassDefFoundError
+Runtime init, first read: threw java.lang.ExceptionInInitializerError cause java.lang.IllegalStateException
+Runtime init, second read: threw java.lang.NoClassDefFoundError
+Runtime init, static call: threw java.lang.NoClassDefFoundError
+subclass of failed: threw java.lang.NoClassDefFoundError
+forName of failed: threw java.lang.NoClassDefFoundError
+forName no-init: returned ClinitFailProbe$RuntimeInit
+uses failing, first: threw java.lang.ExceptionInInitializerError cause java.lang.IllegalStateException
+uses failing, second: threw java.lang.NoClassDefFoundError
+failing it used, after: threw java.lang.NoClassDefFoundError
+two threads, one failing init: returned [ExceptionInInitializerError, NoClassDefFoundError]
+ClinitFailProbe done

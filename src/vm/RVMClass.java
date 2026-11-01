@@ -46,6 +46,10 @@ final class RVMClass
                          //   separately from `state` because a class with no <clinit> of its own reaches
                          //   ST_INITIALIZED at LOAD, which says nothing about its superclass.
     int     state;       // 4-phase lifecycle position (ST_*), advanced by the loader, never regressed
+    boolean initFailed;  // ERRONEOUS (JVMS 12.4.2 steps 7 and 10-12): its <clinit>, or its superclass's, threw.
+                         //   Every later initialization attempt throws NoClassDefFoundError. A flag beside
+                         //   `state` rather than a state value, because `state` only advances and a failed class
+                         //   is still below ST_INITIALIZED -- which is what keeps the init guards firing for it.
 
     // ----- JikesRVM 4-phase class lifecycle: load -> resolve -> instantiate -> initialize -----
     /** Classfile parsed, RVMClass created (registration in progress). */
