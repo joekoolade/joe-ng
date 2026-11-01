@@ -170,6 +170,7 @@ ModuleInternalProbe
 SunUtilProbe
 NetLeftoversProbe
 ClinitFailProbe solo
+NetWwwProbe
 RepeatableProbe
 RuntimeProbe
 SbFpProbe

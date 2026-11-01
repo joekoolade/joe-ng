@@ -1,0 +1,10 @@
+http connection: sun.net.www.protocol.http.HttpURLConnection connected-host=example.com
+http configure: POST [one, two] timeout=1234 follow=false
+http bad method: threw java.net.ProtocolException
+ftp connection: sun.net.www.protocol.ftp.FtpURLConnection
+mailto connection: sun.net.www.protocol.mailto.MailToURLConnection
+jrt url: jrt /java.base/java/lang/Object.class
+chunked stream class: java.io.InputStream
+HTTP proxy socket: connected=false closed=false
+HTTP proxy socket again: connected=false
+NetWwwProbe done
