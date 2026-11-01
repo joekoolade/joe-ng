@@ -1,0 +1,7 @@
+present superclass: AbsentSuperProbe$Base sub of base
+absent superclass: threw java.lang.NoClassDefFoundError AbsentSuperProbe$Gone
+absent superclass, forName: threw java.lang.NoClassDefFoundError AbsentSuperProbe$Gone
+present interface: AbsentSuperProbe$Face impl
+absent interface: threw java.lang.NoClassDefFoundError AbsentSuperProbe$Gone
+absent interface, forName: threw java.lang.NoClassDefFoundError AbsentSuperProbe$Gone
+AbsentSuperProbe done
