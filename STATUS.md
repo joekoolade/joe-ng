@@ -4,6 +4,30 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **java/net LEFTOVERS ARE NO LONGER DENIED (2026-11-01, branch net-leftovers-undeny, e3ec8d6).**
+  - **Before:** three deny entries: `java/net/SocketCleanable`, `java/net/HttpConnectSocketImpl` and the `sun/net/ext/`
+    prefix (with `ExtendedSocketOptions` allowed out of it).
+  - **Now:** all three are gone from `Loader.isDenylisted` and `ReachScan.DENY`. `SocketCleanable` no longer exists in
+    JDK 26 and `sun/net/ext/` holds only `ExtendedSocketOptions` (+ `$NoExtendedSocketOptions`), so two of the entries
+    denied nothing. `HttpConnectSocketImpl` (the HTTP-proxy socket) loads; its `<clinit>` reflects on
+    `sun.net.www.protocol.http.HttpURLConnection`, still denied, so `new Socket(httpProxy)` throws `InternalError`
+    where it used to stop the program at `UNRESOLVED NEW` (measured with temporary probe arms, not committed). HTTP
+    proxying needs `sun/net/www`.
+  - **Closure:** SbProbe's first batch unchanged (+797 blobs, pend=30347, clinits=189).
+  - **Probe:** `NetLeftoversProbe` (HttpConnectSocketImpl by name without init, `supportedOptions`, NO_PROXY and SOCKS
+    sockets), expected output from the host JVM. **Negative control:** by-name arm threw `ClassNotFoundException`.
+    Solo with SbProbe, SockOptProbe, NetIfProbe, InetAddrProbe, NetStaticsProbe, ConnectFailProbe, UrlProbe: all pass;
+    `make test` and `overlaycheck` OK.
+  - **FOUND, NOT FIXED: a FAILED `<clinit>` leaves the class usable.** The second `new Socket(httpProxy)` succeeded.
+    Reduced to `ClinitFailProbe` (kept out of this change): after an initializer throws, later `new`, static reads and
+    calls, subclasses and `Class.forName` all succeed against the statics set before the throw, where JVMS 12.4.2
+    requires `NoClassDefFoundError`; and a non-Error escapes unwrapped instead of in `ExceptionInInitializerError`.
+    8 of 10 arms differ from the host.
+  - **QEMU:** demo suite 40 returns, `want: checked=160 mismatch=0`, `gc: collections=50`, CTOR SKIPPED=2 and UNDER
+    THE LOADER LOCK=1 (both expected). NOT RUN: full regression.
+  - **Pi (`e3ec8d6`):** suite passes (collections=50 at the churn demo, HML both, steps/core 61/60/59/60), WiFi + HTTP
+    200.
+
 - **sun/util IS NO LONGER DENIED (2026-10-31, branch sun-util-undeny, e5b819b).**
   - **Before:** the package was denied by prefix, with locale, cldr, resources, spi, logging, calendar and
     `PreHashedMap` narrowed out one by one. Three classes were still behind it: `ResourceBundleEnumeration`,
