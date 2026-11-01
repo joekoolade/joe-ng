@@ -169,6 +169,7 @@ InternalReflectProbe
 ModuleInternalProbe
 SunUtilProbe
 NetLeftoversProbe
+ClinitFailProbe solo
 RepeatableProbe
 RuntimeProbe
 SbFpProbe

@@ -1748,12 +1748,26 @@ public final class Loader
             int sup = superRegOf(reg);
             if (sup >= 0 && sup != reg)
             {
-                ensureClinit(sup);
+                try
+                {
+                    ensureClinit(sup);
+                }
+                catch (Throwable t)
+                {
+                    // JVMS 12.4.2 step 7: the superclass's initialization completed abruptly, so this class's
+                    // does too -- it is ERRONEOUS, and the same exception propagates.
+                    markInitFailed(reg);
+                    throw t;
+                }
             }
             if (sup < 0 || sup == reg || clTab[sup].state >= RVMClass.ST_INITIALIZED || !initInFlight(sup))
             {
                 clTab[reg].superInited = true;
             }
+        }
+        if (clTab[reg].initFailed)
+        {
+            throw noClassDefFound(reg);                 // JVMS 12.4.2 step 5: an erroneous class never initializes
         }
         if (clTab[reg].state >= RVMClass.ST_INITIALIZED)
         {
@@ -1787,9 +1801,83 @@ public final class Loader
         initPrereq(reg);                                // the one edge no bytecode scan can see (see below)
         if (awaitOtherInitializer(reg))
         {
+            if (clTab[reg].initFailed)
+            {
+                throw noClassDefFound(reg);             // the task we waited for FAILED it (step 2, then step 5)
+            }
             return;                                     // another task ran it to completion while we waited
         }
         runPendingClinit(reg);
+        if (clTab[reg].initFailed)
+        {
+            throw noClassDefFound(reg);                 // runPendingClinit waited on another task, which failed it
+        }
+    }
+
+    /**
+     * {@link #initClinitDeps} for initializer record {@code i} of {@code reg}, run before its body. Those classes
+     * stand for active uses the BODY makes (JVMS 5.5), so a dependency whose initialization throws is the body
+     * throwing at that use: {@code reg} becomes ERRONEOUS too (step 10), and the record is retired as run and
+     * done. Without this the exception escaped with the record still CLAIMED and never done -- waiters on other
+     * tasks yielded for ever, and this task's next attempt took the step-3 "recursive request" return and used
+     * the class as if it had initialized.
+     */
+    private static void initDepsOrFail(int i, int reg)
+    {
+        try
+        {
+            initClinitDeps(i, reg);
+        }
+        catch (Throwable t)
+        {
+            markInitFailed(reg);
+            clinitRan[i] = 1;
+            clinitDone[i] = 1;
+            throw initializerFailure(t);
+        }
+    }
+
+    /**
+     * Mark {@code reg} ERRONEOUS (JVMS 12.4.2). Its state stays below ST_INITIALIZED, so every init guard keeps
+     * reaching {@link #ensureClinit}, which now throws {@code NoClassDefFoundError} instead of returning as if it
+     * had initialized. Before this, a class whose initializer threw was used for ever against whatever statics
+     * the body had set before the throw: a silent wrong answer (ClinitFailProbe). The barrier makes the flag
+     * visible to a waiter on another core before {@code clinitDone} releases it.
+     */
+    private static void markInitFailed(int reg)
+    {
+        clTab[reg].initFailed = true;
+        Magic.dsb();
+    }
+
+    /** {@code NoClassDefFoundError("Could not initialize class a.b.C")}, as HotSpot words it, for erroneous {@code reg}. */
+    private static Error noClassDefFound(int reg)
+    {
+        byte[] pre = Magic.bytes("Could not initialize class ");
+        long nameU = clTab[reg].base + clTab[reg].nameOff;
+        byte[] msg = new byte[pre.length + u2(nameU)];
+        int p = putAsciiAt(msg, 0, pre);
+        putDotted(msg, p, nameU);
+        return (Error) Magic.fromAddr(newExcWithMessage(Magic.bytes("java/lang/NoClassDefFoundError"), msg));
+    }
+
+    /**
+     * What a failed initializer throws the first time (JVMS 12.4.2 step 11): an {@code Error} as it is, anything
+     * else wrapped in {@code ExceptionInInitializerError} with it as the cause.
+     */
+    private static Error initializerFailure(Throwable t)
+    {
+        if (t instanceof Error)
+        {
+            return (Error) t;
+        }
+        long e = newExc(Magic.bytes("java/lang/ExceptionInInitializerError"));
+        thrCauseOff = throwableFieldOff(thrCauseOff, Magic.bytes("cause"));
+        if (thrCauseOff > 0L)
+        {
+            Magic.store64(e + thrCauseOff, Magic.addrOf(t));
+        }
+        return (Error) Magic.fromAddr(e);
     }
 
     /** True if {@code reg}'s initializer is claimed -- by any task, this one included -- and has not finished. */
@@ -1986,7 +2074,7 @@ public final class Loader
                 //
                 // clinitRan[i] is already 1, so an initializer cycle re-entering this class stops here rather
                 // than recursing -- the same guard the comment above relies on.
-                initClinitDeps(i, reg);
+                initDepsOrFail(i, reg);
                 if (LOAD_LOG)
                 {
                     Uart.write(Magic.bytes("  clinit-lazy "));
@@ -2015,7 +2103,7 @@ public final class Loader
                 // GVR.<clinit> first -- which reads Type.SUCCESS_*, still null, because Type's own body had
                 // not run yet. Every GVR constant came out with a null `type`, blockingFailure() compared
                 // null to null, and a SUCCESS reported a BLOCKING FAILURE.
-                initClinitDeps(i, reg);
+                initDepsOrFail(i, reg);
                 if (clinitRan[i] != 0)
                 {
                     ran = 1;                             // a nested active use ran it during the walk above
@@ -2029,6 +2117,14 @@ public final class Loader
                     long unused = Magic.call0(entry);
                     clTab[reg].state = RVMClass.ST_INITIALIZED;
                     noteBootInited(reg);
+                }
+                catch (Throwable t)
+                {
+                    // JVMS 12.4.2 steps 10-12: the body threw. The class is ERRONEOUS -- marked BEFORE the
+                    // finally releases the waiters, so a task woken by clinitDone sees it -- and the first throw
+                    // is the exception itself if it is an Error, else ExceptionInInitializerError around it.
+                    markInitFailed(reg);
+                    throw initializerFailure(t);
                 }
                 finally
                 {
@@ -2852,6 +2948,11 @@ public final class Loader
         pullClass(Magic.bytes("java/lang/ClassNotFoundException"));
         pullClass(Magic.bytes("java/lang/NoSuchMethodException"));
         pullClass(Magic.bytes("java/lang/NoSuchFieldException"));
+        // A FAILED initializer (JVMS 12.4.2): the first use throws ExceptionInInitializerError around a non-Error,
+        // every later one NoClassDefFoundError. Loaded up front because the throw happens inside the failing
+        // initialization, often under the loader lock, which is no place to start loading a class.
+        pullClass(Magic.bytes("java/lang/ExceptionInInitializerError"));
+        pullClass(Magic.bytes("java/lang/NoClassDefFoundError"));
         // System.in's empty-stream seed needs this class present; nothing else guarantees it, and a program
         // that touches System.in would otherwise find null (see seedSystemIn). Tiny, and loaded once.
         pullClass(Magic.bytes("java/io/ByteArrayInputStream"));

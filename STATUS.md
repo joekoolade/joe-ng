@@ -4,6 +4,27 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **A FAILED `<clinit>` MAKES ITS CLASS ERRONEOUS (2026-11-01, branch clinit-erroneous, 3842780).**
+  - **Before:** `clinitRan`/`clinitDone` were set whether or not the body completed, so after an initializer threw,
+    the next active use found nothing pending and proceeded against whatever statics the body had set: `new`, static
+    reads and calls, subclasses and `Class.forName` all SUCCEEDED (a silent wrong answer). A non-Error escaped
+    unwrapped. Found un-denying `HttpConnectSocketImpl` (a second `new Socket(httpProxy)` succeeded).
+  - **Now (JVMS 12.4.2):** `RVMClass.initFailed` marks the class erroneous; its state stays below ST_INITIALIZED, so
+    the init guards keep reaching `ensureClinit`, which throws `NoClassDefFoundError("Could not initialize class
+    a.b.C")`. The first failure throws the Error itself or `ExceptionInInitializerError` with the cause (step 11). A
+    failing superclass fails the subclass (step 7). A task that waited on another task's initializer checks the flag
+    when it wakes (set with a `dsb` before `clinitDone` releases it). The dependency pre-pass (`initDepsOrFail`) fails
+    the class too: before, a throwing dependency left the record claimed and never done, so waiters yielded for ever
+    and the same task's next attempt took the step-3 recursive return. EIIE and NCDFE are preloaded.
+  - **Probe:** `ClinitFailProbe` (15 arms incl. a class whose initializer uses a failing class and two threads racing
+    one failing initializer), expected from the host JVM. **Negative control** (old Loader): 13 of 15 differ; the
+    racing waiter returned normally into the half-initialized class. Now all match, three repeats stable.
+  - **Closure:** SbProbe's first batch unchanged; image +12168 bytes.
+  - **QEMU:** full regression 196/196 (21m47s, `/tmp/regress-full-3842780.log`). Demo suite 40 returns, `want:
+    checked=160 mismatch=0`, `gc: collections=50`, CTOR SKIPPED=2 and UNDER THE LOADER LOCK=1 (both expected).
+  - **Pi (`3842780`):** suite passes (collections=50 at the churn demo, HML both, steps/core 61/60/60/59), WiFi +
+    HTTP 200.
+
 - **java/net LEFTOVERS ARE NO LONGER DENIED (2026-11-01, branch net-leftovers-undeny, e3ec8d6).**
   - **Before:** three deny entries: `java/net/SocketCleanable`, `java/net/HttpConnectSocketImpl` and the `sun/net/ext/`
     prefix (with `ExtendedSocketOptions` allowed out of it).
