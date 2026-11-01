@@ -2068,7 +2068,7 @@ public final class VM
         if (classNameAddr == 0L) { long u = VMNatives.classNameOf(0L); }        // Class.getName0() native (M4)
         if (forNameAddr == 0L) { long u = VMNatives.forName(0L); }              // Class.forName0() native (reflection M1)
         if (assignableAddr == 0L) { long u = VMNatives.assignable(0L, 0L); }    // Class.assignable0 (interfaces too)
-        if (hwEntropyAddr == 0L) { long u = VMNatives.hwEntropy(0L, 0L); } // SecureRandom.hwEntropy0
+        if (hwEntropyAddr == 0L) { long u = VMNatives.hwEntropy(0L, 0L); } // MetalRamfs.hwEntropy0
         if (forNameNoInitAddr == 0L) { long u = VMNatives.forNameNoInit(0L); }  // MetalLoaders.lookup0 (no <clinit>)
         if (methodAnnoAllAddr == 0L) { long u = VMNatives.methodAnnoAll(-1L); } // Executable.annoAll0
         if (recordHashAddr == 0L) { long u = recordHash(0L); }                   // record hashCode
@@ -2823,6 +2823,10 @@ public final class VM
         if (k < 0)
         {
             return;
+        }
+        if (Loader.missingNativeUnsupported(k))
+        {
+            throw (UnsupportedOperationException) Magic.fromAddr(Loader.missingNativeError(k));   // a VarHandle mode
         }
         throw (UnsatisfiedLinkError) Magic.fromAddr(Loader.missingNativeError(k));
     }
@@ -3793,7 +3797,7 @@ public final class VM
     static long classNameAddr;         // VM.classNameOf(J)J — Class.getName0(Class) native (M4)
     static long forNameAddr;           // VM.forName(J)J — Class.forName0(byte[]) native (reflection arc M1)
     static long assignableAddr;        // VMNatives.assignable(JJ)J — Class.assignable0(J,J)
-    static long hwEntropyAddr;         // VMNatives.hwEntropy(JJ)J — SecureRandom.hwEntropy0(byte[],int)
+    static long hwEntropyAddr;         // VMNatives.hwEntropy(JJ)J — MetalRamfs.hwEntropy0(byte[],int)
     static long forNameNoInitAddr;     // VMNatives.forNameNoInit(J)J — MetalLoaders.lookup0(byte[]), no <clinit>
     static long methodAnnoAllAddr;     // VMNatives.methodAnnoAll(J)J — Executable.annoAll0(int)
     static long recordHashAddr;        // VM.recordHash(J)J — a record's synthesised hashCode
@@ -4782,22 +4786,22 @@ public final class VM
         Uart.write(Magic.bytes("charset: new String(byte[]) / getBytes() (stock, UTF-8 fast path):\n"));
         Loader.launchMain(Magic.bytes("demo/CharsetDemo"), Magic.bytes(""));
 
-        // java.security.MessageDigest over joe-ng's own crypto.Digest: known-answer vectors plus the two
+        // java.security.MessageDigest, the stock JCA and SUN provider: known-answer vectors plus the two
         // arms that DISCRIMINATE (byte-at-a-time streaming across the block and length-field boundaries,
-        // and a clone that must DEEP-copy its engine). PI-GATED here because crypto/ is newly dual-world
-        // and a wrong digest is a stable, right-length, silent wrong answer.
-        Uart.write(Magic.bytes("MessageDigest (stock API, joe-ng crypto.Digest):\n"));
+        // and a clone that must DEEP-copy its engine). PI-GATED here because a wrong digest is a stable,
+        // right-length, silent wrong answer.
+        Uart.write(Magic.bytes("MessageDigest (stock JCA, SUN provider):\n"));
         Loader.launchMain(Magic.bytes("demo/DigestDemo"), Magic.bytes(""));
 
         // What the BOARD has, before any demo asks for it -- one line, so a log says whether this machine
         // can seed a SecureRandom at all. The probe is read-only and degrades to "absent" under QEMU.
         board.bcm2711.Rng.report();
 
-        // java.security.SecureRandom over joe-ng's own crypto.Sha1Prng: a KNOWN-ANSWER stream (a DRBG's
-        // output always looks correct, so nothing weaker is a test), the refusal that is this class's
-        // whole safety property, and a read-only probe of the BCM2711 hardware RNG -- which is measurably
-        // absent under QEMU, so what a real Pi answers is the thing this line exists to report.
-        Uart.write(Magic.bytes("SecureRandom (stock API, joe-ng crypto.Sha1Prng):\n"));
+        // java.security.SecureRandom, the stock JCA and SUN provider: a KNOWN-ANSWER SHA1PRNG stream (a DRBG's
+        // output always looks correct, so nothing weaker is a test), two self-seeded instances that must
+        // differ, and a read-only probe of the BCM2711 hardware RNG -- which is measurably absent under QEMU,
+        // so what a real Pi answers is the thing this line exists to report.
+        Uart.write(Magic.bytes("SecureRandom (stock JCA, SUN provider):\n"));
         Loader.launchMain(Magic.bytes("demo/SecureRandomDemo"), Magic.bytes(""));
 
         // The GC milestone: churn far beyond the arena size -- completes only if allocation pressure

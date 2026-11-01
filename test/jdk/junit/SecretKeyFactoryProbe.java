@@ -16,10 +16,11 @@ import javax.crypto.spec.PBEKeySpec;
 import javax.crypto.spec.SecretKeySpec;
 
 /**
- * {@code javax.crypto.SecretKeyFactory} on the metal, over joe-ng's own {@code crypto.Pbkdf2}.
+ * {@code javax.crypto.SecretKeyFactory} on the metal: the STOCK JCA and SunJCE (it began as the test of an
+ * overlay over joe-ng's own {@code crypto.Pbkdf2}, retired in the security arc).
  *
  * <p><b>THE SAME SOURCE IS THE ORACLE.</b> Run on a host JVM every call below reaches the JDK's own SunJCE
- * factory, so each expected value is an independent known answer; run on metal they reach the overlay. The
+ * factory, so each expected value is an independent known answer; run on metal they reach the same SunJCE. The
  * hex must come out byte-identical in both worlds.
  *
  * <p>The arms that DISCRIMINATE, as opposed to merely exercising the API:
@@ -39,7 +40,6 @@ import javax.crypto.spec.SecretKeySpec;
 public class SecretKeyFactoryProbe
 {
     private static int fails = 0;
-    private static int unmet = 0;
 
     private static void say(String what, Object got, Object want)
     {
@@ -51,17 +51,6 @@ public class SecretKeyFactoryProbe
         System.out.println((ok ? "ok   " : "FAIL ") + what + " = " + got + " (want " + want + ")");
     }
 
-    /** An arm where joe-ng deliberately differs from stock; counted apart so `failures` reads 0 in both. */
-    private static void diverge(String what, Object got, Object wantHere, String onStock)
-    {
-        boolean ok = got == null ? wantHere == null : got.equals(wantHere);
-        if (!ok)
-        {
-            unmet += 1;
-        }
-        System.out.println((ok ? "ok*  " : "diff ") + what + " = " + got + " (want here " + wantHere
-                + "; a stock JVM says " + onStock + ")");
-    }
 
     private static String hex(byte[] b)
     {
@@ -255,10 +244,8 @@ public class SecretKeyFactoryProbe
         }
         say("translateKey(a key of another algorithm)", badKey, "InvalidKeyException");
 
-        // ---- STATED DIVERGENCES ------------------------------------------------------------------------
-        diverge("provider",
-                SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").getProvider().getName(),
-                "joe-ng", "SunJCE");
+        // ---- what the retired overlay answered differently ---------------------------------------------
+        say("provider", SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").getProvider().getName(), "SunJCE");
 
         String t224 = "none";
         try
@@ -269,8 +256,7 @@ public class SecretKeyFactoryProbe
         {
             t224 = "NSAE";
         }
-        diverge("PBKDF2WithHmacSHA512/224", t224, "NSAE",
-                "an instance -- crypto.Digest has no truncated SHA-512");
+        say("PBKDF2WithHmacSHA512/224", t224, "none");
 
         String t256 = "none";
         try
@@ -281,8 +267,7 @@ public class SecretKeyFactoryProbe
         {
             t256 = "NSAE";
         }
-        diverge("PBKDF2WithHmacSHA512/256", t256, "NSAE",
-                "an instance -- crypto.Digest has no truncated SHA-512");
+        say("PBKDF2WithHmacSHA512/256", t256, "none");
 
         String spec7 = "none";
         try
@@ -294,8 +279,7 @@ public class SecretKeyFactoryProbe
         {
             spec7 = "InvalidKeySpecException";
         }
-        diverge("keyLength 7 bits (under one byte)", spec7, "InvalidKeySpecException",
-                "a ZERO-LENGTH key, silently");
+        say("keyLength 7 bits (under one byte)", spec7, "none");     // stock: a ZERO-LENGTH key, silently
 
         String gks = "none";
         try
@@ -306,10 +290,9 @@ public class SecretKeyFactoryProbe
         {
             gks = "InvalidKeySpecException";
         }
-        diverge("getKeySpec(key, PBEKeySpec.class)", gks, "InvalidKeySpecException",
-                "a PBEKeySpec -- its key RETAINS the password");
+        say("getKeySpec(key, PBEKeySpec.class)", gks, "none");     // stock: a PBEKeySpec retaining the password
 
-        System.out.println("SecretKeyFactoryProbe done, failures=" + fails + " divergences-unmet=" + unmet);
+        System.out.println("SecretKeyFactoryProbe done, failures=" + fails);
     }
 
     /** {@return the simple name of what the PBEKeySpec constructor threw, or "none"} */

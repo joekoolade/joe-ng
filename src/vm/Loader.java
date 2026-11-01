@@ -5354,6 +5354,65 @@ public final class Loader
     private static boolean pendFullReported;
 
     /**
+     * The security subsystem beyond its {@link #securityCore}: the JCA -- providers, engines, keys, certificates,
+     * keystores, TLS -- under java/security, sun/security, javax/ and java.base's com/sun/crypto and com/sun/security.
+     * Ordinary programs NAME it from cold arms (Class.getProtectionDomain, URLClassLoader's CodeSource,
+     * SecureRandom in a hash seed) and almost never run it, so it is pulled when reached. MEASURED: un-denied but
+     * eager, SbProbe's first batch went +797 blobs / pend=30347 / clinits=189 -> +1373 / 53032 / 350.
+     */
+    private static boolean securityDeferred(long base, int off)
+    {
+        if (utf8HasPrefix(base, off, Magic.bytes("javax/"))
+                || utf8HasPrefix(base, off, Magic.bytes("com/sun/crypto/"))
+                || utf8HasPrefix(base, off, Magic.bytes("com/sun/security/")))
+        {
+            return true;
+        }
+        return (utf8HasPrefix(base, off, Magic.bytes("java/security/"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/security/")))
+                && !securityCore(base, off);
+    }
+
+    /**
+     * The part of java/security and sun/security that ordinary programs RUN, so it stays in the eager closure: the
+     * permission and marker layer, ProtectionDomain/CodeSource/SecureClassLoader (every built-in loader is a
+     * SecureClassLoader), the exception hierarchy, and the security-PROPERTIES store (Security plus the three
+     * sun/security/util classes its initializer and stock InetAddress/Exceptions reach). These were the classes
+     * narrowed out of the old deny prefixes, one measured need at a time; prefix matching admits each class's
+     * nested and package-private companions (BasicPermission -> BasicPermissionCollection).
+     */
+    private static boolean securityCore(long base, int off)
+    {
+        return utf8HasPrefix(base, off, Magic.bytes("java/security/Permission"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/BasicPermission"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/AllPermission"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/SecurityPermission"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/UnresolvedPermission"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/Guard"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/Principal"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/security/ProtectionDomain"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/security/CodeSource"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/security/CodeSigner"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/SecureClassLoader"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/Privileged"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/GeneralSecurityException"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/NoSuchAlgorithmException"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/NoSuchProviderException"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/DigestException"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/InvalidKeyException"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/InvalidParameterException"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/InvalidAlgorithmParameterException"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/KeyException"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/SignatureException"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/ProviderException"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/Security"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/security/util/SecurityConstants"))
+                || utf8IsAtBase(base, off, Magic.bytes("sun/security/util/Debug"))
+                || utf8IsAtBase(base, off, Magic.bytes("sun/security/util/SecurityProperties"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/security/util/PropertyExpander"));
+    }
+
+    /**
      * Classes the batch closure does NOT pull because a reached method names them -- left to late resolution,
      * which pulls a class the first time compiled code actually reaches it (link stubs, the late static and
      * type-check paths). A superclass or interface of a pulled class is still pulled ({@link #pullStructural}).
@@ -5372,7 +5431,8 @@ public final class Loader
      */
     private static boolean closureDeferred(long base, int off)
     {
-        return utf8HasPrefix(base, off, Magic.bytes("jdk/internal/icu/"))
+        return securityDeferred(base, off)
+                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/icu/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/text/"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/text/"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/util/locale/provider/"))
@@ -6582,114 +6642,7 @@ public final class Loader
                 // sun/text/Normalizer is OVERLAID (from the JDK 26 source): getCombiningClass is exact below
                 // U+0300 and throws above it. Stock String's Turkish case mapping reaches it through
                 // ConditionalSpecialCasing. The rest of sun/text/ (the ICU-backed normalizer) stays denied.
-                || utf8HasPrefix(base, off, Magic.bytes("sun/text/Normalizer"))
-                // NARROWED OUT of the java/security/ denial: the PERMISSION + MARKER layer, which needs no
-                // natives and no provider machinery -- it is plain data structures and string matching, and
-                // the stock classes load AS-IS (guestsrc is for classes that need natives, and these do not).
-                // They were denied only by the broad prefix that keeps out the PROVIDER/POLICY subsystem.
-                //
-                // Prefix matching covers each class's package-private collection companion for free:
-                // "java/security/BasicPermission" also matches BasicPermissionCollection, "java/security/
-                // Permissions" matches PermissionsHash and PermissionsEnumerator, and so on.
-                //
-                // What STAYS denied is everything that needs a subsystem this VM does not carry: Provider/
-                // Security/Policy (a provider registry read from a properties FILE), KeyStore/Signature/
-                // KeyFactory (java.math + sun.security.provider), and java/security/cert (X.509 parsing).
-                || utf8HasPrefix(base, off, Magic.bytes("java/security/Permission"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/security/BasicPermission"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/security/AllPermission"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/security/SecurityPermission"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/security/UnresolvedPermission"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/security/Guard"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/security/Principal"))
-                // ProtectionDomain: what Class.getProtectionDomain answers, and what the hidden-class definer
-                // asks for once an application class reports the system loader. In JDK 26 it is a 278-line
-                // holder with no natives, no imports and no <clinit>. CodeSource is only a field TYPE; with a
-                // null code source (all this VM builds) it is never loaded.
-                || utf8IsAtBase(base, off, Magic.bytes("java/security/ProtectionDomain"))
-                // CodeSource + SecureClassLoader: what every stock built-in loader is (BuiltinClassLoader extends
-                // SecureClassLoader) and defines a class with. Certificates are FIELD TYPES only -- an unsigned
-                // class path never builds one -- and CodeSource's one sun.security reference (IOUtils) is in
-                // readObject. CodeSigner is exact: it is the other field type, and its cert path stays denied.
-                // The prefix on SecureClassLoader admits its nested CodeSourceKey.
-                || utf8IsAtBase(base, off, Magic.bytes("java/security/CodeSource"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/security/CodeSigner"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/security/SecureClassLoader"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/security/Privileged"))
-                // The java.security EXCEPTION hierarchy: ordinary Throwables with no machinery behind them.
-                // They are what a stub in this subsystem THROWS, so denying them would leave a stub unable
-                // to name its own failure.
-                || utf8HasPrefix(base, off, Magic.bytes("java/security/GeneralSecurityException"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/security/NoSuchAlgorithmException"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/security/NoSuchProviderException"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/security/DigestException"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/security/InvalidKeyException"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/security/InvalidParameterException"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/security/InvalidAlgorithmParameterException"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/security/KeyException"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/security/SignatureException"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/security/ProviderException"))
-                // MessageDigest + its SPI + Provider are OVERLAID (see guestsrc/java/security): stock's
-                // getInstance goes through sun.security.jca -> a Provider registry read from a properties
-                // FILE -> ServiceLoader over the module graph -> java.lang.invoke, and all three of those
-                // are deliberately absent here. The denial has to be narrowed FIRST -- a denied class is
-                // trap-wired at PATCH TIME, so no link stub runs and the overlay is never consulted.
-                || utf8HasPrefix(base, off, Magic.bytes("java/security/MessageDigest"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/security/Provider"))
-                // SecureRandom + its SPI are OVERLAID over crypto.Sha1Prng. The prefix covers
-                // SecureRandomSpi too. Stock reaches sun.security.jca and a regex over the
-                // securerandom.strongAlgorithms property, neither of which exists here.
-                || utf8HasPrefix(base, off, Magic.bytes("java/security/SecureRandom"))
-                // Digest{Input,Output}Stream are STOCK: pure java.io filter streams over a MessageDigest,
-                // no natives and nothing to overlay.
-                // javax/crypto/Mac is OVERLAID (see guestsrc/javax/crypto). javax/ is not denied, but three
-                // PURE INTERFACES it needs sit under the java/security/ blanket: Key (what init() takes),
-                // KeySpec (what SecretKeySpec is) and AlgorithmParameterSpec (an empty marker). None has a
-                // native, a field or an implementation closure.
-                //
-                // EXACT matches, not prefixes, and "java/security/Key" is why: as a PREFIX it would also
-                // open KeyFactory, KeyStore, KeyPairGenerator and KeyRep -- the java.math-dependent half of
-                // java.security that this file records as deliberately out of reach. The entries above use
-                // prefix matching on purpose (BasicPermission catches BasicPermissionCollection); here the
-                // same technique would quietly admit a subsystem.
-                || utf8IsAtBase(base, off, Magic.bytes("java/security/Key"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/security/spec/KeySpec"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/security/spec/AlgorithmParameterSpec"))
-                // javax/crypto/SecretKeyFactory is OVERLAID over crypto.Pbkdf2, and its two companions are
-                // NOT: SecretKeyFactorySpi is purely abstract and PBEKeySpec imports only KeySpec and
-                // Arrays, so both load STOCK. What they need from here is the exception their signatures
-                // name. EXACT, for the reason above: "java/security/spec/" as a prefix would open the whole
-                // spec package -- the RSA/EC/DSA key specs, which need BigInteger, which this file records
-                // as not working here.
-                || utf8IsAtBase(base, off, Magic.bytes("java/security/spec/InvalidKeySpecException"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/security/DigestInputStream"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/security/DigestOutputStream"))
-                // NARROWED OUT of the sun/security/ denial, which exists for JAR SIGNATURE VERIFICATION
-                // (JarVerifier -> the whole provider closure). This class is not that: 66 lines of String
-                // constants plus one AllPermission. PropertyPermission.getMask compares its actions string
-                // against these by IDENTITY -- and FALLS THROUGH to a char-by-char parse when they miss, so
-                // the answer is correct either way and only the fast path depends on interning.
-                || utf8HasPrefix(base, off, Magic.bytes("sun/security/util/SecurityConstants"))
-                // NARROWED OUT: java.security.Security, the security-PROPERTIES store (runs STOCK; it reads the
-                // master file through java.nio.file over the RAMFS). Stock InetAddress's resolver cache reads
-                // networkaddress.cache.* through Security.getProperty, and the shipped file sets the negative
-                // TTL to 10 -- so a denied or empty Security would be a silent wrong answer. The PREFIX also
-                // admits its nested types (SecPropLoader, the anonymous Properties). Its provider methods reach
-                // sun/security/jca, which STAYS denied: properties need no providers.
-                || utf8HasPrefix(base, off, Magic.bytes("java/security/Security"))
-                // sun.security.util.Debug: Security.<clinit> assigns sdebug = Debug.getInstance("properties"),
-                // which is null unless java.security.debug is set. Its initializer only reads two system
-                // properties; plain Java, no natives.
-                || utf8IsAtBase(base, off, Magic.bytes("sun/security/util/Debug"))
-                // sun.security.util.SecurityProperties: stock jdk.internal.util.Exceptions asks it which
-                // categories jdk.includeInExceptions names (the shipped file says hostInfoExclSocket), so every
-                // UnknownHostException message goes through it. Plain Java over System and Security properties.
-                || utf8IsAtBase(base, off, Magic.bytes("sun/security/util/SecurityProperties"))
-                // sun.security.util.PropertyExpander: Security expands the java.security.properties file name
-                // and every `include` value through it (${prop} -> System.getProperty). Plain Java, no natives.
-                // Only its encodeURL form reaches sun/net/www/ParseUtil; Security never asks for it. The $ prefix admits its nested ExpandException.
-                || utf8IsAtBase(base, off, Magic.bytes("sun/security/util/PropertyExpander"))
-                || utf8HasPrefix(base, off, Magic.bytes("sun/security/util/PropertyExpander$")))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/text/Normalizer")))
         {
             return false;
         }
@@ -6704,7 +6657,10 @@ public final class Loader
                 // loader arc. BootLoader is overlaid (loadLibrary stays a no-op). The native-library natives
                 // (NativeLibraries.load/findBuiltinLib, NativeLibrary.findEntry0) are unbound and trap if reached:
                 // this VM loads no native libraries.
-                || utf8HasPrefix(base, off, Magic.bytes("java/security/"))
+                // java/security/ is NOT denied any more (security arc, 2026-11-01): the JCA runs STOCK -- provider
+                // lookup through sun.security.jca, the SUN/SunJCE/SunRsaSign/SunEC providers, X.509, KeyStore.
+                // None of java/security, sun/security, javax/crypto, javax/net or javax/security has a native. The
+                // cold part of it is closureDeferred (see securityCore).
                 // java/util/ServiceLoader is NOT denied: it is OVERLAID (guestsrc/java/util/ServiceLoader).
                 // Stock discovery goes through ClassLoader.getResources -> java/net/URL -> a protocol handler
                 // in jdk/internal/loader, which stays denied -- so there is no way to hand the stock class the
@@ -6772,7 +6728,7 @@ public final class Loader
                 // sun.security provider closure (SunEC, BigDecimal, regex, streams) -- hundreds of classes for
                 // a code path an unsigned jar never runs. Denied, so `new JarInputStream(in, false)` works and
                 // a verifying one traps loudly instead of exploding the closure.
-                || utf8HasPrefix(base, off, Magic.bytes("sun/security/"))
+                // sun/security/ is NOT denied any more either (security arc): the provider implementations.
                 || utf8HasPrefix(base, off, Magic.bytes("java/util/jar/JarVerifier"))
                 // java/lang/reflect/ is NOT denied any more (2026-10-30). The prefix had been narrowed one class
                 // at a time until only eight were left behind it -- the Annotated*Type interfaces,
@@ -13274,6 +13230,9 @@ public final class Loader
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalRamfs")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("table0")))            { return VM.ramfsTableAddr; } // (J)J
+            // The BCM2711 hardware RNG, behind /dev/random and /dev/urandom. Keyed by DECLARING CLASS like every
+            // native here -- registering one under the wrong class is the LINK FAILED this file paid for once.
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("hwEntropy0")))        { return VM.hwEntropyAddr; }  // ([BI)I
         }
         // Atomic*FieldUpdater overlays resolve the target field's byte offset the same way as VarHandle, and
         // resolve their caller's class (getCallerClass) for the field-access check.
@@ -13555,13 +13514,6 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("paramMeta0")))    { return VM.methodParamMetaAddr; } // (I,J)J
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("paramName0")))    { return VM.methodParamNameAddr; } // (I,J)String
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("paramAnnoRow0")))    { return VM.methodParamAnnoRowAddr; } // (I,J)[Annotation
-        }
-        // The BCM2711 hardware RNG, behind java.security.SecureRandom's self-seeding. Keyed by DECLARING
-        // CLASS like every native here -- registering one under the wrong class is the LINK FAILED this
-        // file already paid for once.
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/security/SecureRandom")))
-        {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("hwEntropy0")))        { return VM.hwEntropyAddr; }  // (byte[],I)I
         }
         // The VM's one class namespace, under stock java.lang.ClassLoader (whose natives are Java over these).
         // Keyed by the helper, not ClassLoader: stock declares its own defineClass0 with another signature.
@@ -14750,6 +14702,59 @@ public final class Loader
         return buf;
     }
 
+    /** The registry index of the TARGET handle's class when {@code recv} (of registered class {@code ci}) is a
+     *  LazyInitializingVarHandle, else -1. */
+    private static int lazyVhTargetReg(long recv, int ci)
+    {
+        byte[] lazy = Magic.bytes("java/lang/invoke/LazyInitializingVarHandle");
+        if (!utf8IsAtBase(clTab[ci].base, clTab[ci].nameOff, lazy))
+        {
+            return -1;
+        }
+        long off = instanceFieldOffset(ci, Magic.bytes("target"));
+        if (off < 0L)
+        {
+            return -1;
+        }
+        long target = Magic.load64(recv + off);
+        if (target == 0L || !receiverAddress(target))
+        {
+            return -1;
+        }
+        long tib = Magic.load64(target + ObjectModel.TIB_OFFSET);
+        if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
+        {
+            return -1;
+        }
+        return regOfType(Magic.load64(tib));
+    }
+
+    /**
+     * Whether {@code nameU} is a VarHandle ACCESS MODE (one of VarHandle's own signature-polymorphic natives) that
+     * no class of handle class {@code hc}'s chain below VarHandle declares under ANY descriptor.
+     */
+    private static boolean vhModeUnsupported(int hc, long nameU)
+    {
+        byte[] vh = Magic.bytes("java/lang/invoke/VarHandle");
+        int c = hc;
+        int hops = 0;
+        while (c >= 0 && hops < MAXCHAIN)
+        {
+            long clsU = clTab[c].base + clTab[c].nameOff;
+            if (utf8IsAtBase(clTab[c].base, clTab[c].nameOff, vh))
+            {
+                return declaresMethod(clsU, nameU, 0L, true);   // the mode IS an access mode
+            }
+            if (declaresMethod(clsU, nameU, 0L, false))
+            {
+                return false;
+            }
+            c = superRegOf(c);
+            hops += 1;
+        }
+        return false;
+    }
+
     /** The VarHandle accessor named by site {@code idx} with descriptor {@code d}, up {@code ci}'s chain, or 0. */
     private static long vhChainResolve(int ci, int idx, byte[] d)
     {
@@ -15124,6 +15129,30 @@ public final class Loader
             // call site is redirected to the generated static instead, which needs no argument shuffling --
             // an invokevirtual already passes (x0=handle, x1=holder, x2=value), and that IS its signature.
             buf = resolveVhAccessor(ci, idx);
+            int ti = buf == 0L ? lazyVhTargetReg(recv, ci) : -1;
+            int hc = ti >= 0 ? ti : ci;
+            if (ti >= 0)
+            {
+                // A LazyInitializingVarHandle: what findStaticVarHandle answers for a class not initialized yet
+                // (SSLContext's VH_DEFAULT_CONTEXT). It shares its TARGET's vform and declares no accessor, so
+                // the access mode resolves against the TARGET's class -- and the handle passed stays the
+                // WRAPPER, because every static accessor opens with `(FieldStaticReadWrite) ob.target()`, which
+                // is the wrapper's hook for running the class's initializer on first access. Resolving against
+                // the target and passing the target instead would skip that initializer.
+                //
+                // The site memo below stays right: the accessor is chosen by the descriptor alone (its
+                // primitives pick the VarHandleX family; read modes live on FieldStaticReadOnly, which
+                // FieldStaticReadWrite extends), so every wrapper reaching this site resolves the same way.
+                buf = resolveVhAccessor(ti, idx);
+            }
+            if (buf == 0L && vhModeUnsupported(hc, vsName[idx]))
+            {
+                // An ACCESS MODE this handle does not support -- `set` on a final static's FieldStaticReadOnly.
+                // Stock throws UnsupportedOperationException naming the mode (VarForm.getMemberName), and so
+                // does this. Only when NO accessor of that name exists anywhere up the handle's chain: one that
+                // exists under another descriptor is a resolution gap in this VM, and keeps the named trap.
+                buf = missingNativeThunk(0L, vsName[idx], 0L);
+            }
         }
         if (buf == 0L)
         {
@@ -18628,6 +18657,8 @@ public final class Loader
     }
 
     // ---- Natives this VM does not implement: each gets a thunk that throws UnsatisfiedLinkError ----
+    // An entry with mnCls 0 is instead an UNSUPPORTED VarHandle ACCESS MODE (mnName the mode, mnDesc unused),
+    // whose thunk throws UnsupportedOperationException naming the mode, as stock does.
     private static final int MAXMISSINGNATIVE = 128;
     private static final long[] mnCls = new long[MAXMISSINGNATIVE];     // the callee's Utf8 ADDRESSES (u2 len + bytes)
     private static final long[] mnName = new long[MAXMISSINGNATIVE];
@@ -18647,7 +18678,9 @@ public final class Loader
         int k = 0;
         while (k < mnCount)
         {
-            if (utf8Same(mnCls[k], clsU) && utf8Same(mnName[k], nameU) && utf8Same(mnDesc[k], descU))
+            if (clsU == 0L ? mnCls[k] == 0L && utf8Same(mnName[k], nameU)
+                    : mnCls[k] != 0L && utf8Same(mnCls[k], clsU) && utf8Same(mnName[k], nameU)
+                            && utf8Same(mnDesc[k], descU))
             {
                 return mnThunk[k];
             }
@@ -18697,6 +18730,34 @@ public final class Loader
         return 0L;
     }
 
+    /** Whether thunk {@code k} is an unsupported VarHandle access mode rather than a missing native. */
+    static boolean missingNativeUnsupported(int k)
+    {
+        return mnCls[k] == 0L;
+    }
+
+    /** The {@code UnsupportedOperationException} for unsupported access mode {@code k}, its message the mode's
+     *  name ({@code set}) exactly as stock's VarForm gives it. Loads the class first, as missingNativeError does. */
+    private static long unsupportedModeError(int k)
+    {
+        byte[] name = Magic.bytes("java/lang/UnsupportedOperationException");
+        VM.loaderLock(VM.LOCK_REFLECT);
+        try
+        {
+            if (classIndexByName(name) < 0)
+            {
+                loadClassIncremental(name);
+            }
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
+        byte[] msg = new byte[u2(mnName[k])];
+        putUtf8(msg, 0, mnName[k]);
+        return newExcWithMessage(name, msg);
+    }
+
     /**
      * The {@code UnsatisfiedLinkError} for missing native {@code k}, its message naming the method: {@code joe-ng:
      * native sun.nio.ch.Net.setIntOption0(Ljava/io/FileDescriptor;ZIIIZ)V is not implemented}. Loads the error
@@ -18705,6 +18766,10 @@ public final class Loader
      */
     static long missingNativeError(int k)
     {
+        if (missingNativeUnsupported(k))
+        {
+            return unsupportedModeError(k);
+        }
         byte[] name = Magic.bytes("java/lang/UnsatisfiedLinkError");
         VM.loaderLock(VM.LOCK_REFLECT);
         try
@@ -18793,6 +18858,13 @@ public final class Loader
      */
     private static boolean declaredNative(long clsU, long nameU, long descU)
     {
+        return declaresMethod(clsU, nameU, descU, true);
+    }
+
+    /** Whether class {@code clsU} itself declares a method {@code name desc} -- any descriptor when {@code descU}
+     *  is 0, and only a NATIVE one when {@code nativeOnly}. The classfile walk {@link #declaredNative} describes. */
+    private static boolean declaresMethod(long clsU, long nameU, long descU, boolean nativeOnly)
+    {
         int pd = findPdByName(clsU, 0);
         if (pd < 0)
         {
@@ -18851,8 +18923,8 @@ public final class Loader
         while (m < mcount)
         {
             int access = u2(p);
-            if ((access & 0x0100) != 0 && utf8BlobSame(base, off[u2(p + 2L)], nameU)
-                    && utf8BlobSame(base, off[u2(p + 4L)], descU))
+            if ((!nativeOnly || (access & 0x0100) != 0) && utf8BlobSame(base, off[u2(p + 2L)], nameU)
+                    && (descU == 0L || utf8BlobSame(base, off[u2(p + 4L)], descU)))
             {
                 return true;
             }
@@ -25673,6 +25745,19 @@ public final class Loader
      */
     private static void printWhyLambdaIface(int idx)
     {
+        long clsU = lambdaIfaceNameU(idx);
+        if (clsU == 0L)
+        {
+            Uart.write(Magic.bytes("non-reference return"));
+            return;
+        }
+        printWhyUnpulled(clsU);
+    }
+
+    /** The lambda's functional interface name as a Utf8-shaped run in {@code indyNameBuf}, or 0 if the indy
+     *  descriptor returns a primitive. */
+    private static long lambdaIfaceNameU(int idx)
+    {
         long p = gbase + mrefDescOff(idx) + 2;
         while (u1(p) != ')')
         {
@@ -25681,8 +25766,7 @@ public final class Loader
         p += 1;
         if (u1(p) != 'L')
         {
-            Uart.write(Magic.bytes("non-reference return"));
-            return;
+            return 0L;
         }
         long start = p + 1;
         long q = start;
@@ -25691,7 +25775,7 @@ public final class Loader
             q += 1;
         }
         int off = internIndyNameAt(start, (int) (q - start));
-        printWhyUnpulled(indyNameBuf + off);
+        return indyNameBuf + off;
     }
 
     /**
@@ -26061,7 +26145,18 @@ public final class Loader
     static long buildLambdaTib(int idx)
     {
         long ifaceType = lambdaIfaceType(idx);
-        if (ifaceType == 0L)
+        long ifaceU = ifaceType == 0L ? lambdaIfaceNameU(idx) : 0L;
+        if (ifaceType == 0L && ifaceU != 0L && lzCompiling && !lzRetried
+                && VM.dirBytes(ifaceU + 2L, u2(ifaceU)) != 0L && notePullNeeded(ifaceU))
+        {
+            // A LATE compile met a lambda whose interface is in the classDir but not loaded -- a deferred
+            // package (closureDeferred), which the batch pull loop skips by design. Note it for the pull-and-
+            // recompile the late path already runs, the same route an unpulled constructor-reference target
+            // takes below: NOT demand-loaded here, because a load can collect and this code buffer is not
+            // reachable yet. SILENT: the TIB built now is discarded with the body, and only an interface
+            // still missing after the pull is a failure worth naming.
+        }
+        else if (ifaceType == 0L)
         {
             // 0 is also the itable directory's END SENTINEL, so a lambda built with it satisfies NO interface
             // and every dispatch on it throws NPE from the directory miss, far from the indy that caused it.

@@ -31,6 +31,7 @@ final class MetalFsNode
     long atime;                                          // nanoseconds since the epoch
     long mtime;
     long ctime;
+    int device;                                          // MetalRamfs.DEV_* for a character device, else 0
     long baked;                                          // the table entry while the content is the image's, else 0
     byte[] data;                                         // the content once written; capacity may exceed size
     long size;

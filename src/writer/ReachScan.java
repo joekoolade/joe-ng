@@ -43,7 +43,8 @@ public final class ReachScan
         "java/lang/foreign/", "jdk/internal/foreign/",
         // sun/nio/fs/ and java/nio/file/ run stock over the RAMFS (see Loader.isDenylisted).
         // jdk/internal/loader/ is NOT here any more: the stock built-in loaders run (see Loader.isDenylisted).
-        "java/security/", "java/util/ServiceLoader",
+        // java/security/ is NOT here any more: the stock JCA runs (see Loader.isDenylisted).
+        "java/util/ServiceLoader",
         // sun/util/ is NOT here any more: the whole package loads (see Loader.isDenylisted).
         // java/net is loadable (M3 sockets) and nothing in it is denied; neither sun/net/ext/ nor sun/net/www/ is
         // denied any more, https included (see Loader.isDenylisted).
@@ -54,7 +55,8 @@ public final class ReachScan
         // calls both on its ordinary paths (see Loader.isDenylisted).
         // jar signature verification: JarVerifier pulls the whole sun.security provider closure for a path
         // an unsigned jar never takes (see Loader.isDenylisted).
-        "sun/security/", "java/util/jar/JarVerifier",
+        // sun/security/ is NOT here any more: the stock providers run (see Loader.isDenylisted).
+        "java/util/jar/JarVerifier",
         // jdk/internal/logger is NOT here any more: System.getLogger runs stock (see Loader.isDenylisted).
         // java/lang/reflect/ and jdk/internal/reflect/ are NOT here any more: both packages load
         // (see Loader.isDenylisted). jdk/internal/module/ is not here either.
@@ -86,15 +88,6 @@ public final class ReachScan
         // Loader.isDenylisted.
         if (c.startsWith("sun/text/resources/") || c.startsWith("java/util/spi/") || c.startsWith("java/text/")
                 || c.startsWith("sun/text/"))
-        {
-            return false;
-        }
-        // java/security/Security (stock InetAddress's cache TTLs) and the sun/security/util classes its
-        // property load uses are narrowed out -- see Loader.isDenylisted.
-        if (c.startsWith("java/security/Security") || c.equals("sun/security/util/Debug")
-                || c.equals("sun/security/util/SecurityProperties")
-                || c.equals("sun/security/util/PropertyExpander")
-                || c.startsWith("sun/security/util/PropertyExpander$"))
         {
             return false;
         }
@@ -131,45 +124,7 @@ public final class ReachScan
                 || c.startsWith("java/lang/invoke/MethodHandles")
                 || c.startsWith("java/lang/invoke/MethodType")          // java.lang.invoke arc inc 0 (MethodTypeForm too)
                 || c.startsWith("jdk/internal/invoke/MhUtil")
-                || c.startsWith("java/lang/ClassLoader")                 // M3: JDK-free overlay (defineClass/loadClass)
-                // The java.security PERMISSION + MARKER layer: plain data structures and string matching,
-                // no natives and no provider machinery. The PROVIDER/POLICY/cert subsystem stays denied.
-                || c.startsWith("java/security/Permission")
-                || c.startsWith("java/security/BasicPermission")
-                || c.startsWith("java/security/AllPermission")
-                || c.startsWith("java/security/SecurityPermission")
-                || c.startsWith("java/security/UnresolvedPermission")
-                || c.startsWith("java/security/Guard")
-                || c.startsWith("java/security/Principal")
-                || c.equals("java/security/ProtectionDomain")              // Class.getProtectionDomain's answer
-                || c.equals("java/security/CodeSource")                    // a built-in loader's define record
-                || c.equals("java/security/CodeSigner")
-                || c.startsWith("java/security/SecureClassLoader")
-                || c.startsWith("java/security/Privileged")
-                || c.startsWith("java/security/GeneralSecurityException")
-                || c.startsWith("java/security/NoSuchAlgorithmException")
-                || c.startsWith("java/security/NoSuchProviderException")
-                || c.startsWith("java/security/DigestException")
-                || c.startsWith("java/security/InvalidKeyException")
-                || c.startsWith("java/security/InvalidParameterException")
-                || c.startsWith("java/security/InvalidAlgorithmParameterException")
-                || c.startsWith("java/security/KeyException")
-                || c.startsWith("java/security/SignatureException")
-                || c.startsWith("java/security/ProviderException")
-                || c.startsWith("java/security/MessageDigest")
-                || c.startsWith("java/security/Provider")
-                // SecureRandom + SecureRandomSpi: overlaid over crypto.Sha1Prng.
-                || c.startsWith("java/security/SecureRandom")
-                // Mirrors Loader.isDenylisted: three PURE INTERFACES the javax/crypto/Mac overlay needs.
-                // EXACT (equals, not startsWith) -- "java/security/Key" as a prefix would also open
-                // KeyFactory/KeyStore/KeyPairGenerator, the java.math-dependent half.
-                || c.equals("java/security/Key")
-                || c.equals("java/security/spec/KeySpec")
-                || c.equals("java/security/spec/AlgorithmParameterSpec")
-                || c.equals("java/security/spec/InvalidKeySpecException")
-                || c.startsWith("java/security/DigestInputStream")
-                || c.startsWith("java/security/DigestOutputStream")
-                || c.startsWith("sun/security/util/SecurityConstants"))
+                || c.startsWith("java/lang/ClassLoader"))                // M3: JDK-free overlay (defineClass/loadClass)
         {
             return false;
         }

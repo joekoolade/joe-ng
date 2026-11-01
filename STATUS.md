@@ -4,6 +4,45 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **THE STOCK JCA RUNS: java/security + sun/security UN-DENIED, javax/ SHIPPED, SECURITY OVERLAYS RETIRED
+  (2026-11-01, branch security-arc).**
+  - **Before:** `java/security/` and `sun/security/` were denied except a narrowed permission/marker layer;
+    MessageDigest, MessageDigestSpi, Provider, SecureRandom, SecureRandomSpi, Mac, MacSpi, SecretKeyFactory and
+    SecretKeySpec were hand-written overlays over `crypto/`; only named `javax/` classes shipped. The new
+    `SecurityStockProbe` hit a DENYLIST TRAP at `Providers.getProviderList` on its first arm.
+  - **Now:** both prefixes are off `Loader.isDenylisted` and `ReachScan.DENY` (its narrow allows deleted as dead);
+    the nine overlays are `git rm`'d; `ImageBuilder.demandLoadable` ships all of `javax/` plus `com/sun/crypto/provider/`
+    and `com/sun/security/ntlm/`; the Makefile copies the JCE policy files to `ramfs/conf/security/policy/`
+    (`JceSecurity.<clinit>` throws without them). No natives exist in any of these packages.
+  - **Closure:** `Loader.securityDeferred` (in `closureDeferred`) defers the JCA except `securityCore` (permissions,
+    ProtectionDomain/CodeSource/SecureClassLoader, the exceptions, the `Security` properties store). SbProbe's first
+    batch: eager-undenied +1373 blobs / pend=53032 / clinits=350 -> **+790 / 29777 / 187** (main +797 / 30347 / 189).
+    Image +~1.4 MB (the shipped class bytes).
+  - **Three VM bugs found on the way, each fixed:**
+    - A LATE compile's lambda whose functional interface was unloaded (deferred) was built with Type 0
+      (`LAMBDA IFACE UNRESOLVED sun/security/provider/EntropySource`); `buildLambdaTib` now notes the pull and the
+      body is recompiled, like an unpulled constructor-reference target.
+    - A static-field VarHandle looked up before its class initializes is a `LazyInitializingVarHandle`; the access
+      mode resolved against the wrapper's class and trapped (`SSLContext.getDefault`). It now resolves against the
+      `target`'s class and passes the wrapper (the accessor's `ob.target()` runs the initializer).
+    - A write mode on a read-only handle (`set` on a final static) trapped; it throws
+      `UnsupportedOperationException: set` as stock does, through the missing-native thunk table -- only when no
+      class below VarHandle declares the mode at all.
+  - **Entropy:** `MetalRamfs` creates `/dev/random` and `/dev/urandom` ONLY if the hardware RNG answers at tree build
+    (native `hwEntropy0`, rebound from the retired SecureRandom overlay); reads are `Rng.fill` (short, never padded),
+    writes are discarded. Their existence is what stock NativePRNG and SeedGenerator key on; QEMU keeps the
+    ThreadedSeedGenerator fallback.
+  - **Probes:** `SecurityStockProbe` (16 arms: SUN provider, SHA-256/SHA3-256, HMAC, SHA1PRNG, AES/GCM, AES keygen,
+    X.509 parse + verify, EC/RSA sign/verify, PKCS12, SSLContext, BigInteger) 16/16 = host. `LazyVarHandleProbe`
+    (20 arms) = host; before the fix `VIRTUALRESOLVE FAILED ...LazyInitializingVarHandle.get()I`. DigestProbe, MacProbe
+    and SecretKeyFactoryProbe: divergence arms now check the stock answer, gates dropped, host outputs committed.
+    SecureRandomDemo's "self-seeded from hardware" was unmeasured (QEMU has no RNG) and now says "self-seeded".
+  - **QEMU:** targeted probes all pass (lambda, VarHandle, security, file-system sets); `make test`, `overlaycheck` OK;
+    demo suite `want: checked=160 mismatch=0`, every failure counter 0. NOT RUN: full regression.
+  - **Pi:** demo suite passed through the HTTP GET; `hw rng: RNG200 at 0xFE104000, live`, `/dev/random: present,
+    reads 32+32 bytes, two reads differ`, `write accepted`, `NativePRNG: draws differ, default algorithm NativePRNG`.
+  - **Correction to the card below:** its "NOT RUN: demo suite, Pi boot" is stale -- both passed on main 384b198.
+
 - **AN ABSENT SUPERTYPE THROWS NoClassDefFoundError; https UN-DENIED (2026-11-01, branch absent-super, c8b8454 +
   8a535c9).**
   - **Before:** a class whose superclass could never load registered anyway -- `UNREGISTERED SUPER (fields alias)`,

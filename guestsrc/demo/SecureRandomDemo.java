@@ -11,6 +11,9 @@
  */
 package demo;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.security.SecureRandom;
 import magic.Magic;
 
@@ -23,9 +26,10 @@ import magic.Magic;
  * <li>The stream is a KNOWN ANSWER. A DRBG's output always looks correct, so the only check worth having is
  *     that these exact bytes are what a JDK produces for this seed. {@code crypto.CryptoTest} does the wide
  *     version (400 comparisons); this is the one line the suite can afford to print.
- * <li>An UNSEEDED generator REFUSES. That is the safety property of the whole class: joe-ng has no
- *     validated entropy source, and a generator that quietly seeded itself from a clock would pass every
- *     other arm here while producing a predictable stream.
+ * <li>Two UNSEEDED generators must DIFFER. SecureRandom is the stock JCA now, and with no /dev/random its
+ *     DRBG self-seeds from sun.security.provider's ThreadedSeedGenerator (thread-scheduling jitter), not
+ *     from the board's RNG. A stuck seed source would hand every instance the same stream, which looks
+ *     perfectly random one instance at a time.
  * </ul>
  *
  * <p>The last section is a MEASUREMENT the emulator cannot make. The BCM2711 carries a hardware RNG at
@@ -88,11 +92,11 @@ public final class SecureRandomDemo
         r2.setSeed(new byte[] { 1, 2, 3, 4 });
         arm("sha1prng nextInt", Integer.toString(r2.nextInt()), "-229803143");
 
-        // SELF-SEEDING, and the arm is written so BOTH outcomes are legitimate and one failure is not.
-        // On a board with a live hardware RNG an unseeded generator now works; on one without (QEMU) it
-        // still refuses. What is NEVER acceptable is self-seeding that SUCCEEDS and hands two fresh
-        // generators the SAME seed -- a stuck source, which would produce a perfectly random-looking
-        // stream that is identical on every boot and in every instance. That is the arm below.
+        // SELF-SEEDING. The stock DRBG seeds itself from whatever SeedGenerator finds -- with no /dev/random
+        // that is ThreadedSeedGenerator, NOT the hardware RNG, so the line says only what it measured. A
+        // refusal is still reported as one. What is NEVER acceptable is self-seeding that SUCCEEDS and hands
+        // two fresh generators the SAME seed -- a stuck source, which would produce a perfectly
+        // random-looking stream that is identical on every boot and in every instance.
         String selfSeed;
         try
         {
@@ -102,13 +106,14 @@ public final class SecureRandomDemo
             new SecureRandom().nextBytes(two);
             selfSeed = hex(one).equals(hex(two))
                     ? "BROKEN: two fresh generators produced the SAME bytes"
-                    : "self-seeded from hardware, two instances differ";
+                    : "self-seeded, two instances differ";
         }
         catch (Error e)
         {
             selfSeed = "refused (no entropy source on this board)";
         }
         System.out.println("  unseeded = " + selfSeed);
+        devices();
 
         System.out.println("  hw RNG @0xFE104000: CTRL=" + peek(0xFE10_4000L)
                 + " STATUS=" + peek(0xFE10_4004L)
@@ -151,6 +156,56 @@ public final class SecureRandomDemo
                         + "  words " + w0 + " " + w1 + " " + w2
                         + "  (distinct=" + vary + ", drained=" + (before > after) + ")");
             }
+        }
+    }
+
+    /**
+     * {@code /dev/random} and {@code /dev/urandom}, which the RAMFS creates ONLY when the hardware RNG answers -- so
+     * "absent" is the right answer under QEMU and on a board whose RNG failed its liveness check, and "present" is
+     * the Pi's. When present: two reads must differ, a write must be accepted (NativePRNG's setSeed writes there),
+     * and stock NativePRNG -- which registers itself only when both files are readable -- must produce bytes.
+     */
+    private static void devices()
+    {
+        File random = new File("/dev/random");
+        File urandom = new File("/dev/urandom");
+        if (!random.exists() && !urandom.exists())
+        {
+            System.out.println("  /dev/random: absent (no hardware entropy source)");
+            return;
+        }
+        try
+        {
+            byte[] one = new byte[32];
+            byte[] two = new byte[32];
+            int n1;
+            int n2;
+            try (FileInputStream in = new FileInputStream(random))
+            {
+                n1 = in.read(one);
+            }
+            try (FileInputStream in = new FileInputStream(urandom))
+            {
+                n2 = in.read(two);
+            }
+            System.out.println("  /dev/random: present, reads " + n1 + "+" + n2 + " bytes, "
+                    + (hex(one).equals(hex(two)) ? "BROKEN: two reads gave the SAME bytes" : "two reads differ"));
+            try (FileOutputStream out = new FileOutputStream(random, true))
+            {
+                out.write(new byte[] { 1, 2, 3 });
+            }
+            System.out.println("  /dev/random: write accepted");
+            SecureRandom nat = SecureRandom.getInstance("NativePRNG");
+            byte[] a = new byte[16];
+            byte[] b = new byte[16];
+            nat.nextBytes(a);
+            nat.nextBytes(b);
+            System.out.println("  NativePRNG: " + (hex(a).equals(hex(b)) ? "BROKEN: repeated output" : "draws differ")
+                    + ", default algorithm " + new SecureRandom().getAlgorithm());
+        }
+        catch (Exception e)
+        {
+            System.out.println("  /dev/random: present but FAILED: " + e);
         }
     }
 }

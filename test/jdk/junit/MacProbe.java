@@ -17,7 +17,8 @@ import javax.crypto.ShortBufferException;
 import javax.crypto.spec.SecretKeySpec;
 
 /**
- * {@code javax.crypto.Mac} on the metal, over joe-ng's own {@code crypto.Hmac}.
+ * {@code javax.crypto.Mac} on the metal: the STOCK JCA and SunJCE (it began as the test of an overlay over
+ * joe-ng's own {@code crypto.Hmac}, retired in the security arc).
  *
  * <p>THE POINT OF RUNNING THIS SOURCE ON A HOST JVM IS THAT IT IS A CONTROL: there the same calls reach the
  * JDK's own SunJCE Mac, so every arm below is an independent known answer. Only the provider NAME is
@@ -41,8 +42,6 @@ import javax.crypto.spec.SecretKeySpec;
 public class MacProbe
 {
     private static int fails = 0;
-    /** Arms where joe-ng deliberately differs from stock: counted SEPARATELY so both worlds read 0 above. */
-    private static int unmet = 0;
 
     private static void say(String what, Object got, Object want)
     {
@@ -54,16 +53,6 @@ public class MacProbe
         System.out.println((ok ? "ok   " : "FAIL ") + what + " = " + got + " (want " + want + ")");
     }
 
-    private static void diverge(String what, Object got, Object wantHere, String onStock)
-    {
-        boolean ok = got == null ? wantHere == null : got.equals(wantHere);
-        if (!ok)
-        {
-            unmet += 1;
-        }
-        System.out.println((ok ? "ok*  " : "diff ") + what + " = " + got + " (want here " + wantHere
-                + "; a stock JVM says " + onStock + ")");
-    }
 
     private static String hex(byte[] b)
     {
@@ -239,12 +228,8 @@ public class MacProbe
         {
             nsae = true;
         }
-        // A HOST CONTROL corrected this arm before it shipped: a stock JVM DOES carry HmacSHA3-256, so
-        // "is refused" is joe-ng's answer, not a universal one. Written as say() it would have read as a
-        // regression on every host run -- the same trap SecureRandomProbe hit, where the control refused
-        // two arms and one of them tested a member that does not exist.
-        diverge("HmacSHA3-256", nsae ? "NoSuchAlgorithmException" : "an instance",
-                "NoSuchAlgorithmException", "an instance (SHA-3 is a sponge, not a parameter of SHA-2)");
+        // SunJCE carries HmacSHA3-256 (the retired overlay refused it).
+        say("HmacSHA3-256", nsae ? "NoSuchAlgorithmException" : "an instance", "an instance");
 
         boolean truncRefused = false;
         try
@@ -255,8 +240,7 @@ public class MacProbe
         {
             truncRefused = true;
         }
-        diverge("HmacSHA512/256", truncRefused ? "NoSuchAlgorithmException" : "an instance",
-                "NoSuchAlgorithmException", "an instance (a truncated variant is a different MAC)");
+        say("HmacSHA512/256", truncRefused ? "NoSuchAlgorithmException" : "an instance", "an instance");
 
         boolean uninit = false;
         try
@@ -315,9 +299,8 @@ public class MacProbe
         say("equals: different bytes", Boolean.valueOf(sk.equals(new SecretKeySpec(ascii("other"),
                 "HmacSHA256"))), Boolean.FALSE);
 
-        // ---- the one deliberate divergence ---------------------------------------------------------
-        diverge("provider", Mac.getInstance("HmacSHA256").getProvider().getName(), "joe-ng", "SunJCE");
+        say("provider", Mac.getInstance("HmacSHA256").getProvider().getName(), "SunJCE");
 
-        System.out.println("MacProbe done, failures=" + fails + " divergences-unmet=" + unmet);
+        System.out.println("MacProbe done, failures=" + fails);
     }
 }
