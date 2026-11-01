@@ -46,10 +46,11 @@ final class RVMClass
                          //   separately from `state` because a class with no <clinit> of its own reaches
                          //   ST_INITIALIZED at LOAD, which says nothing about its superclass.
     int     state;       // 4-phase lifecycle position (ST_*), advanced by the loader, never regressed
-    boolean superAbsent; // its SUPERCLASS can never load: unregistered, in neither the classDir nor the classpath
+    int     absentSuperOff; // name offset (in base) of a SUPERTYPE that can never load, 0 if none: the superclass
+                         //   or a direct superinterface is unregistered, in neither the classDir nor the classpath
                          //   jar, and not denylisted (javax/net/ssl/HttpsURLConnection under the https handler).
                          //   Kept below ST_INITIALIZED so every use reaches ensureClinit, which throws
-                         //   NoClassDefFoundError naming the superclass -- what a JVM throws at load time.
+                         //   NoClassDefFoundError naming that supertype -- what a JVM throws at load time.
     boolean initFailed;  // ERRONEOUS (JVMS 12.4.2 steps 7 and 10-12): its <clinit>, or its superclass's, threw.
                          //   Every later initialization attempt throws NoClassDefFoundError. A flag beside
                          //   `state` rather than a state value, because `state` only advances and a failed class

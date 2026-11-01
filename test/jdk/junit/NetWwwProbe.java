@@ -19,8 +19,8 @@ import java.net.URL;
 import java.net.URLConnection;
 
 /**
- * sun/net/www/ is no longer denied (except protocol/https, which needs javax/net/ssl and sun/security): the http, ftp,
- * mailto and jrt URL handlers and the HTTP client load. No arm
+ * sun/net/www/ is no longer denied: the http, https, ftp, mailto and jrt URL handlers and the HTTP client load (an
+ * https CONNECTION needs javax/net/ssl and sun/security, so no arm opens one). No arm
  * touches the network -- connections are created and configured but never connected -- so the host answers the same.
  * The jrt arm is the suite's old CTOR SKIPPED (the jrt Handler's constructor was skipped while it was denied), and the
  * HTTP-proxy socket arm is the one #467 left throwing InternalError because its initializer reflects on the HTTP
@@ -75,6 +75,11 @@ public class NetWwwProbe
             HttpURLConnection c = (HttpURLConnection) url("http://example.com/").openConnection();
             c.setRequestMethod("BREW");
             return "accepted";
+        });
+        report("https url", () ->
+        {
+            URL u = url("https://example.com/x");
+            return u.getProtocol() + " port=" + u.getDefaultPort();
         });
         report("ftp connection", () -> url("ftp://example.com/f.txt").openConnection().getClass().getName());
         report("mailto connection", () -> url("mailto:a@example.com").openConnection().getClass().getName());

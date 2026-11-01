@@ -61,6 +61,23 @@ public class AbsentSuperProbe
         }
     }
 
+    public interface Face
+    {
+        String face();
+    }
+
+    public static class Impl implements Face
+    {
+        public Impl()
+        {
+        }
+
+        public String face()
+        {
+            return "impl";
+        }
+    }
+
     static class Definer extends ClassLoader
     {
         Definer()
@@ -97,6 +114,15 @@ public class AbsentSuperProbe
     {
         return Base64.getDecoder().decode(SUB_CLASS);
     }
+
+    /** Impl's own classfile, embedded for the same reason as Sub's. Regenerate if Impl or Face changes. */
+    static final String IMPL_CLASS =
+              "yv66vgAAAEYAGQoAAgADBwAEDAAFAAYBABBqYXZhL2xhbmcvT2JqZWN0AQAGPGluaXQ+AQADKClWCAAIAQAEaW1wbAcACgEAFUFi"
+            + "c2VudFN1cGVyUHJvYmUkSW1wbAcADAEAFUFic2VudFN1cGVyUHJvYmUkRmFjZQEABENvZGUBAA9MaW5lTnVtYmVyVGFibGUBAARm"
+            + "YWNlAQAUKClMamF2YS9sYW5nL1N0cmluZzsBAApTb3VyY2VGaWxlAQAVQWJzZW50U3VwZXJQcm9iZS5qYXZhAQAITmVzdEhvc3QH"
+            + "ABUBABBBYnNlbnRTdXBlclByb2JlAQAMSW5uZXJDbGFzc2VzAQAESW1wbAEABEZhY2UAIQAJAAIAAQALAAAAAgABAAUABgABAA0A"
+            + "AAAhAAEAAQAAAAUqtwABsQAAAAEADgAAAAoAAgAAAEgABABJAAEADwAQAAEADQAAABsAAQABAAAAAxIHsAAAAAEADgAAAAYAAQAA"
+            + "AE0AAwARAAAAAgASABMAAAACABQAFgAAABIAAgAJABQAFwAJAAsAFAAYBgk=";
 
     /** Replace every occurrence of {@code from} with {@code to} (same length, so the constant pool stays valid). */
     static byte[] patch(byte[] b, String from, String to)
@@ -143,6 +169,29 @@ public class AbsentSuperProbe
             Definer d = new Definer();
             d.define("AbsentSuperProbe$Sue", b);
             return Class.forName("AbsentSuperProbe$Sue", false, d).getName();
+        });
+        report("present interface", () ->
+        {
+            byte[] b = patch(Base64.getDecoder().decode(IMPL_CLASS), "AbsentSuperProbe$Impl", "AbsentSuperProbe$Impm");
+            Class<?> c = new Definer().define("AbsentSuperProbe$Impm", b);
+            Object o = c.getDeclaredConstructor().newInstance();
+            return c.getInterfaces()[0].getName() + " " + ((Face) o).face();
+        });
+        report("absent interface", () ->
+        {
+            byte[] b = patch(patch(Base64.getDecoder().decode(IMPL_CLASS), "AbsentSuperProbe$Impl",
+                    "AbsentSuperProbe$Impn"), "AbsentSuperProbe$Face", "AbsentSuperProbe$Gone");
+            Class<?> c = new Definer().define("AbsentSuperProbe$Impn", b);
+            Object o = c.getDeclaredConstructor().newInstance();
+            return "constructed " + o.getClass().getName() + " interfaces=" + c.getInterfaces().length;
+        });
+        report("absent interface, forName", () ->
+        {
+            byte[] b = patch(patch(Base64.getDecoder().decode(IMPL_CLASS), "AbsentSuperProbe$Impl",
+                    "AbsentSuperProbe$Impo"), "AbsentSuperProbe$Face", "AbsentSuperProbe$Gone");
+            Definer d = new Definer();
+            d.define("AbsentSuperProbe$Impo", b);
+            return Class.forName("AbsentSuperProbe$Impo", false, d).getName();
         });
         System.out.println("AbsentSuperProbe done");
     }

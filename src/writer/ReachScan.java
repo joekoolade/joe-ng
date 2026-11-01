@@ -46,9 +46,7 @@ public final class ReachScan
         "java/security/", "java/util/ServiceLoader",
         // sun/util/ is NOT here any more: the whole package loads (see Loader.isDenylisted).
         // java/net is loadable (M3 sockets) and nothing in it is denied; neither sun/net/ext/ nor sun/net/www/ is
-        // denied any more -- except the https handler, whose connection class extends the absent
-        // javax/net/ssl/HttpsURLConnection (see Loader.isDenylisted).
-        "sun/net/www/protocol/https/",
+        // denied any more, https included (see Loader.isDenylisted).
         // sun/nio/ch/Poller and sun/nio/ch/ExtendedSocketOption are NOT here any more (2026-10-29): see
         // Loader.isDenylisted -- Poller is reached only from a virtual thread, which this VM never has.
         // java/net/NetworkInterface is NOT here any more: overlaid, natives over the WiFi lease (Loader.isDenylisted).

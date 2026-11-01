@@ -1839,15 +1839,16 @@ public final class Loader
     }
 
     /**
-     * Throw {@code NoClassDefFoundError} naming the missing superclass if {@code reg}'s superclass can never load
-     * (RVMClass.superAbsent) -- the JVM refuses such a class at load time, so every use of it, initializing or
-     * not, fails the same way. A subclass of it fails too: its superclass walk reaches this through ensureClinit.
+     * Throw {@code NoClassDefFoundError} naming the missing supertype if {@code reg}'s superclass or a direct
+     * superinterface can never load (RVMClass.absentSuperOff) -- the JVM refuses such a class at load time, so every
+     * use of it, initializing or not, fails the same way. A subclass of it fails too: its superclass walk reaches
+     * this through ensureClinit.
      */
     private static void linkable(int reg)
     {
-        if (reg >= 0 && clTab != null && clTab[reg] != null && clTab[reg].superAbsent)
+        if (reg >= 0 && clTab != null && clTab[reg] != null && clTab[reg].absentSuperOff != 0)
         {
-            long superU = clTab[reg].base + clTab[reg].superNameOff;
+            long superU = clTab[reg].base + clTab[reg].absentSuperOff;
             byte[] msg = new byte[u2(superU)];
             putUtf8(msg, 0, superU);
             throw (Error) Magic.fromAddr(newExcWithMessage(Magic.bytes("java/lang/NoClassDefFoundError"), msg));
@@ -6739,19 +6740,17 @@ public final class Loader
                 // statement that vintage could not work, and it is the line to delete when java.math does.
                 || utf8HasPrefix(base, off, Magic.bytes("org/junit/vintage/"))
                 || utf8HasPrefix(base, off, Magic.bytes("org/junit/platform/reporting/"))
-                // sun/net/www/ is NOT denied any more (2026-11-01) -- EXCEPT protocol/https/. file: and jar: had
-                // been narrowed out for the class path; now the http, ftp, mailto and jrt handlers and the HTTP
+                // sun/net/www/ is NOT denied any more (2026-11-01), https included. file: and jar: had been
+                // narrowed out for the class path; now the http, https, ftp, mailto and jrt handlers and the HTTP
                 // client load too, so URL.openConnection answers a real HttpURLConnection and the HTTP-proxy
                 // socket's initializer finds its client. No natives on the unix side. It stays closureDeferred
                 // (pulled when reached).
                 //
-                // https stays denied because its connection class EXTENDS javax/net/ssl/HttpsURLConnection, and
-                // javax/net/ssl is not in the classDir (ImageBuilder.demandLoadable ships only named javax/
-                // classes; its implementation, sun/security/ssl, is denied). Un-denied, `new URL("https:..")
-                // .openConnection()` registered HttpsURLConnectionImpl with an UNREGISTERED SUPER, skipped the
-                // absent superclass's constructor, and took a WILD BRANCH into a static cell (BOOT RE-ENTERED).
-                // Denied, the URL has no handler: MalformedURLException, as before. It belongs to the security arc.
-                || utf8HasPrefix(base, off, Magic.bytes("sun/net/www/protocol/https/"))
+                // An https CONNECTION still cannot be made: HttpsURLConnectionImpl extends
+                // javax/net/ssl/HttpsURLConnection, which is not in the classDir (ImageBuilder.demandLoadable ships
+                // only named javax/ classes; the SSL implementation, sun/security/ssl, is denied). openConnection
+                // throws NoClassDefFoundError naming it (RVMClass.absentSuperOff) -- it took a WILD BRANCH before
+                // that was fixed, which is why https was held back one change. The handler and URL work.
                 // sun/net/ext/ is NOT denied any more (2026-11-01): it holds only ExtendedSocketOptions, which runs
                 // STOCK (Net.<clinit> sets EXTENDED_OPTIONS from it). Its forName of jdk.net.ExtendedSocketOptions
                 // finds no class, so it answers NoExtendedSocketOptions, as a JDK without jdk.net does.
@@ -8478,7 +8477,7 @@ public final class Loader
         gThisNameOff = gcp[u2(gbase + gcp[u2(p + 2)])];   // this_class -> Class -> name Utf8 offset
         gSuperNameOff = u2(p + 4) == 0 ? 0 : gcp[u2(gbase + gcp[u2(p + 4)])];   // super_class -> name
         superUnregistered = false;
-        gSuperAbsent = false;
+        gAbsentSuperOff = 0;
         int islot = superFieldCount();                  // own instance fields sit after inherited ones
         p += 6;                                         // access_flags, this_class, super_class
         gImplIfCount = u2(p);                           // interfaces this class implements
@@ -8488,6 +8487,10 @@ public final class Loader
         {
             int ci = u2(p + 2 + ii * 2);                // Class entry index
             gImplIfName[ii] = gcp[u2(gbase + gcp[ci])]; // -> interface name Utf8 offset
+            if (gAbsentSuperOff == 0 && absentSupertype(gImplIfName[ii]))
+            {
+                gAbsentSuperOff = gImplIfName[ii];      // a superinterface that can never load: same as a superclass
+            }
             ii += 1;
         }
         p += 2 + gImplIfCount * 2;                      // interfaces
@@ -8747,8 +8750,21 @@ public final class Loader
      * was skipped (`CTOR SKIPPED ... ABSENT from the classDir; NOT intended`), and the next call through the
      * superclass took a WILD BRANCH -- `new URL("https:..").openConnection()` went BOOT RE-ENTERED through
      * HttpsURLConnectionImpl, whose javax/net/ssl superclass the image does not ship.
+     *
+     * <p>The same holds for a direct SUPERINTERFACE (see {@link #absentSupertype}): a class implementing an interface
+     * that cannot load was constructed with {@code getInterfaces().length == 0}. Holds the absent name's offset in
+     * {@code gbase}, or 0.
      */
-    private static boolean gSuperAbsent;
+    private static int gAbsentSuperOff;
+
+    /** Whether the supertype named at {@code nameOff} in {@code gbase} can never load (see {@link #gAbsentSuperOff}). */
+    private static boolean absentSupertype(int nameOff)
+    {
+        return nameOff != 0
+                && classRegByName(nameOff) < 0
+                && VM.dirBytes(gbase + nameOff + 2L, u2(gbase + nameOff)) == 0L
+                && !isDenylisted(gbase, nameOff);
+    }
 
     private static int superFieldCount()
     {
@@ -8759,9 +8775,10 @@ public final class Loader
         }
         superUnregistered = gSuperNameOff != 0
                 && !utf8IsAtBase(gbase, gSuperNameOff, Magic.bytes("java/lang/Object"));
-        gSuperAbsent = superUnregistered
-                && VM.dirBytes(gbase + gSuperNameOff + 2L, u2(gbase + gSuperNameOff)) == 0L
-                && !isDenylisted(gbase, gSuperNameOff);
+        if (superUnregistered && absentSupertype(gSuperNameOff))
+        {
+            gAbsentSuperOff = gSuperNameOff;
+        }
         return 0;
     }
 
@@ -10123,10 +10140,10 @@ public final class Loader
             {
                 lcPend += 1;
             }
-            else if (clTab[lc].superAbsent)
+            else if (clTab[lc].absentSuperOff != 0)
             {
                 lcPend += 1;                            // never INITIALIZED: its guards must keep reaching
-            }                                           //   ensureClinit, which throws (RVMClass.superAbsent)
+            }                                           //   ensureClinit, which throws (RVMClass.absentSuperOff)
             else if (clTab[lc].state >= RVMClass.ST_INSTANTIATED)
             {
                 clTab[lc].state = RVMClass.ST_INITIALIZED;
@@ -10547,6 +10564,7 @@ public final class Loader
             clTab[clCount].ifmStart = gIfmStart;            // the flattened per-interface method run
             clTab[clCount].ifmCount = gIfmCount;            //   = this interface's itable slot numbering
             clTab[clCount].superNameOff = gSuperNameOff;
+            clTab[clCount].absentSuperOff = gAbsentSuperOff;          // an interface extending one that cannot load
             clTab[clCount].superReg = classRegByName(gSuperNameOff);   // an interface's super is Object (-1); kept for symmetry
             captureDirectIfaces();                      // an interface's extended interfaces (List extends Iterable)
             clTab[clCount].modifiers = gClassModifiers;     // cached Class.getModifiers() (captured post-cp, no re-parse)
@@ -13941,7 +13959,7 @@ public final class Loader
         clTab[clCount].nameHash = utf8Hash(gbase, gThisNameOff);       // folded once; see RVMClass.nameHash
         clTab[clCount].tib = gTib;
         clTab[clCount].type = gType;
-        clTab[clCount].superAbsent = gSuperAbsent;
+        clTab[clCount].absentSuperOff = gAbsentSuperOff;
         clTab[clCount].fieldCount = gifCount;
         clTab[clCount].vtCount = gvCount;
         clTab[clCount].statics = gStatics;
