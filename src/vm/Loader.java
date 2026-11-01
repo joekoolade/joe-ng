@@ -1765,6 +1765,7 @@ public final class Loader
                 clTab[reg].superInited = true;
             }
         }
+        linkable(reg);
         if (clTab[reg].initFailed)
         {
             throw noClassDefFound(reg);                 // JVMS 12.4.2 step 5: an erroneous class never initializes
@@ -1834,6 +1835,22 @@ public final class Loader
             clinitRan[i] = 1;
             clinitDone[i] = 1;
             throw initializerFailure(t);
+        }
+    }
+
+    /**
+     * Throw {@code NoClassDefFoundError} naming the missing superclass if {@code reg}'s superclass can never load
+     * (RVMClass.superAbsent) -- the JVM refuses such a class at load time, so every use of it, initializing or
+     * not, fails the same way. A subclass of it fails too: its superclass walk reaches this through ensureClinit.
+     */
+    private static void linkable(int reg)
+    {
+        if (reg >= 0 && clTab != null && clTab[reg] != null && clTab[reg].superAbsent)
+        {
+            long superU = clTab[reg].base + clTab[reg].superNameOff;
+            byte[] msg = new byte[u2(superU)];
+            putUtf8(msg, 0, superU);
+            throw (Error) Magic.fromAddr(newExcWithMessage(Magic.bytes("java/lang/NoClassDefFoundError"), msg));
         }
     }
 
@@ -7620,6 +7637,7 @@ public final class Loader
         int ci = classIndexByName(slash);
         if (ci >= 0)
         {
+            linkable(ci);                                   // loaded or not, initialized or not: no class at all
             if (init)
             {
                 ensureClinit(ci);                           // JVMS 5.5: Class.forName(name) INITIALIZES the class
@@ -7639,6 +7657,10 @@ public final class Loader
             return 0L;                                  // => the guest throws ClassNotFoundException
         }
         long type = loadClassIncremental(slash);
+        if (type != 0L)
+        {
+            linkable(classRegByType(type));
+        }
         if (init)
         {
             ensureClinit(classRegByType(type));         // JVMS 5.5: forName INITIALIZES, and this batch's
@@ -8456,6 +8478,7 @@ public final class Loader
         gThisNameOff = gcp[u2(gbase + gcp[u2(p + 2)])];   // this_class -> Class -> name Utf8 offset
         gSuperNameOff = u2(p + 4) == 0 ? 0 : gcp[u2(gbase + gcp[u2(p + 4)])];   // super_class -> name
         superUnregistered = false;
+        gSuperAbsent = false;
         int islot = superFieldCount();                  // own instance fields sit after inherited ones
         p += 6;                                         // access_flags, this_class, super_class
         gImplIfCount = u2(p);                           // interfaces this class implements
@@ -8714,6 +8737,19 @@ public final class Loader
      */
     private static boolean superUnregistered;
 
+    /**
+     * The superclass is not merely unregistered but ABSENT: no bytes in the classDir or the classpath jar
+     * ({@link VM#dirBytes}), and not denylisted (a denylisted superclass is the deliberate, documented
+     * constructor-skip case). Unregistered-but-present is normal and must stay allowed: a superclass pulled later
+     * in the same load prints the UNREGISTERED SUPER line harmlessly (`Integer extends Number` at boot).
+     *
+     * <p>Such a class used to register anyway. Its fields aliased the superclass's, the superclass constructor
+     * was skipped (`CTOR SKIPPED ... ABSENT from the classDir; NOT intended`), and the next call through the
+     * superclass took a WILD BRANCH -- `new URL("https:..").openConnection()` went BOOT RE-ENTERED through
+     * HttpsURLConnectionImpl, whose javax/net/ssl superclass the image does not ship.
+     */
+    private static boolean gSuperAbsent;
+
     private static int superFieldCount()
     {
         int r = classRegByName(gSuperNameOff);
@@ -8723,6 +8759,9 @@ public final class Loader
         }
         superUnregistered = gSuperNameOff != 0
                 && !utf8IsAtBase(gbase, gSuperNameOff, Magic.bytes("java/lang/Object"));
+        gSuperAbsent = superUnregistered
+                && VM.dirBytes(gbase + gSuperNameOff + 2L, u2(gbase + gSuperNameOff)) == 0L
+                && !isDenylisted(gbase, gSuperNameOff);
         return 0;
     }
 
@@ -10084,6 +10123,10 @@ public final class Loader
             {
                 lcPend += 1;
             }
+            else if (clTab[lc].superAbsent)
+            {
+                lcPend += 1;                            // never INITIALIZED: its guards must keep reaching
+            }                                           //   ensureClinit, which throws (RVMClass.superAbsent)
             else if (clTab[lc].state >= RVMClass.ST_INSTANTIATED)
             {
                 clTab[lc].state = RVMClass.ST_INITIALIZED;
@@ -13898,6 +13941,7 @@ public final class Loader
         clTab[clCount].nameHash = utf8Hash(gbase, gThisNameOff);       // folded once; see RVMClass.nameHash
         clTab[clCount].tib = gTib;
         clTab[clCount].type = gType;
+        clTab[clCount].superAbsent = gSuperAbsent;
         clTab[clCount].fieldCount = gifCount;
         clTab[clCount].vtCount = gvCount;
         clTab[clCount].statics = gStatics;

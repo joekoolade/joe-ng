@@ -171,6 +171,7 @@ SunUtilProbe
 NetLeftoversProbe
 ClinitFailProbe solo
 NetWwwProbe
+AbsentSuperProbe
 RepeatableProbe
 RuntimeProbe
 SbFpProbe

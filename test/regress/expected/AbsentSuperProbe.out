@@ -1,0 +1,4 @@
+present superclass: AbsentSuperProbe$Base sub of base
+absent superclass: threw java.lang.NoClassDefFoundError AbsentSuperProbe$Gone
+absent superclass, forName: threw java.lang.NoClassDefFoundError AbsentSuperProbe$Gone
+AbsentSuperProbe done
