@@ -1,7 +1,7 @@
 # The probe regression list, read by scripts/Regress.java. One probe per line:
 #   <Probe> [solo] [cp=<RAMFS classpath>] [gate=<text the metal output must contain>]
 # A probe passes when its metal output equals test/regress/expected/<Probe>.out (the HOST JVM's output),
-# or, with gate=, when the output contains that text (DigestProbe/MacProbe differ from the host by design).
+# or, with gate=, when the output contains that text (LinkTrapProbe halts a task on purpose).
 # solo = never batched: its subject is first initialization, ordering, timing, global state or the stack itself,
 # so running after other probes in the same VM could MASK a failure. "OPEN VM BUG in a batch" marks a probe
 # that passes alone but gives a WRONG answer after other probes ran: a real bug, kept solo until it is fixed
@@ -80,7 +80,7 @@ DecimalFormatProbe
 DefaultFrameProbe
 DefaultSpecificProbe
 DeflaterProbe
-DigestProbe              gate=failures=0 divergences-unmet=0
+DigestProbe
 DupBisectProbe           cp=/lib/junit.jar
 DupOptionProbe           cp=/lib/junit.jar
 EngineMessageProbe
@@ -117,7 +117,7 @@ LocaleProbe              solo             # reads the default locale
 LocaleSymbolsProbe
 LockProbe
 LongBranchProbe          solo             # ~4 MB of code; would crowd the code arena
-MacProbe                 gate=failures=0 divergences-unmet=0
+MacProbe
 MemberGenericsProbe
 MemberNameProbe
 MemberToStringProbe
@@ -172,6 +172,8 @@ NetLeftoversProbe
 ClinitFailProbe solo
 NetWwwProbe
 AbsentSuperProbe
+SecurityStockProbe
+LazyVarHandleProbe
 RepeatableProbe
 RuntimeProbe
 SbFpProbe
@@ -179,7 +181,7 @@ SbProbe
 SbTextProbe
 ScannerProbe
 ScopedValueProbe         solo             # known intermittent
-SecretKeyFactoryProbe    gate=failures=0 divergences-unmet=0
+SecretKeyFactoryProbe
 SecurityExtraProbe       solo             # must run before Security initializes
 SecurityProbe
 SecurityPropsProbe       solo             # reads Security state other probes set

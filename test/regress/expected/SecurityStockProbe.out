@@ -1,0 +1,17 @@
+SUN provider: SUN
+SHA-256 provider: SUN
+SHA-256(abc): ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+SHA3-256(abc): 3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532
+HmacSHA256: 9c196e32dc0175f86f4b1cb89289d6619de6bee699e4c378e68309ed97a1a6ab
+SHA1PRNG seeded: -720715128
+AES/GCM round trip: 62eab96033359197cf5649807d175e6059575c -> abc
+AES keygen: 32 bytes
+X.509 parse: CN=joe-ng probe,O=joe-ng SHA384withECDSA serial=ac33ff5062922bc1
+X.509 self-verify: verified
+EC key from cert: EC 91 bytes
+RSA sign/verify: verify=true bits=1024
+EC sign/verify: verify=true
+PKCS12 keystore: empty size=0
+SSLContext: Default
+BigInteger.modPow: 418355429
+SecurityStockProbe done

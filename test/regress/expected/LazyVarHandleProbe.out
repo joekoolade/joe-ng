@@ -1,0 +1,21 @@
+compareAndSet null->a: true now=a
+compareAndSet null->b (fails): false now=a
+compareAndSet a->c: true now=c
+get: c
+getVolatile: c
+set: d
+getAndSet: d now=e
+long getAndAdd: 0 now=5
+long compareAndSet: true now=9
+other class's static, first access runs its init: 7 late-init
+other class's static, compareAndSet: true now=swapped
+outside: compareAndSet start->a: true now=a
+outside: compareAndSet fails: false now=a
+outside: getVolatile: a
+outside: set: c
+outside: getAndSet: c now=d
+outside: long getAndAdd: 1 now=6
+outside: long compareAndSet: true now=9
+outside: final static get: fixed
+outside: final static set refused: threw java.lang.UnsupportedOperationException set
+LazyVarHandleProbe done

@@ -46,6 +46,21 @@ public final class MetalRamfs
     /** VM native ({@code VMNatives.ramfsTable}): {@code k == 0} the table's address, {@code k == 1} its count. */
     private static native long table0(long k);
 
+    /**
+     * VM native ({@code VMNatives.hwEntropy}, over {@code board.bcm2711.Rng}): fill {@code out[0..len)} from the
+     * BCM2711's hardware RNG. The count written -- SHORT when the FIFO ran dry, 0 where there is no usable source
+     * (QEMU, or a board whose RNG failed the driver's liveness check).
+     */
+    private static native int hwEntropy0(byte[] out, int len);
+
+    /**
+     * The entropy device behind {@code /dev/random} and {@code /dev/urandom}. Both read the hardware RNG directly:
+     * there is no kernel pool here, so the blocking/non-blocking distinction Linux draws has nothing to choose
+     * between. A write is accepted and DISCARDED (Linux mixes it into the pool; with no pool, there is nothing to
+     * mix into), which is what NativePRNG's setSeed and SeedGenerator need -- neither may fail on it.
+     */
+    private static final int DEV_RANDOM = 1;
+
     private static final int ENTRY = 32;
     private static final int UMASK = 022;
 
@@ -155,8 +170,57 @@ public final class MetalRamfs
         {
             r.kids.put("tmp", newNode(true, 01777, 0L));
         }
+        addEntropyDevices(r);
         root = r;
         return r;
+    }
+
+    /**
+     * {@code /dev/random} and {@code /dev/urandom}, but ONLY when the hardware RNG answers. Their EXISTENCE is the
+     * signal stock code reads: sun.security.provider's NativePRNG registers itself only when both files can be
+     * read, and SeedGenerator falls back to ThreadedSeedGenerator (thread-scheduling jitter) when
+     * {@code securerandom.source=file:/dev/random} cannot be opened. A device that existed with nothing behind it
+     * would turn that working fallback into an end-of-file InternalError at the first seed. The probe draws four
+     * bytes and discards them.
+     */
+    private static void addEntropyDevices(MetalFsNode r)
+    {
+        if (hwEntropy0(new byte[4], 4) != 4)
+        {
+            return;
+        }
+        MetalFsNode dev = r.kids.get("dev");
+        if (dev == null)
+        {
+            dev = newNode(true, 0755, 0L);
+            r.kids.put("dev", dev);
+        }
+        MetalFsNode random = newNode(false, 0666, 0L);
+        random.device = DEV_RANDOM;
+        dev.kids.put("random", random);
+        MetalFsNode urandom = newNode(false, 0666, 0L);
+        urandom.device = DEV_RANDOM;
+        dev.kids.put("urandom", urandom);
+    }
+
+    /**
+     * Read up to {@code len} bytes from entropy device into {@code b[off..)}: the count, which is SHORT if the
+     * hardware FIFO ran dry -- a short read, as read(2) is allowed to give, never padded -- and 0 (end of file)
+     * only if it gave nothing at all.
+     */
+    private static int deviceRead(byte[] b, int off, int len)
+    {
+        if (len <= 0)
+        {
+            return 0;
+        }
+        byte[] got = off == 0 ? b : new byte[len];
+        int n = hwEntropy0(got, len);
+        if (got != b)
+        {
+            System.arraycopy(got, 0, b, off, n);
+        }
+        return n;
     }
 
     /** The node at {@code p}, or null. */
@@ -843,12 +907,22 @@ public final class MetalRamfs
             {
                 return -ISDIR;
             }
+            Unsafe u = Unsafe.getUnsafe();
+            if (node.device != 0)
+            {
+                byte[] got = new byte[Math.max(len, 0)];
+                int n = deviceRead(got, 0, len);
+                for (int k = 0; k < n; k++)
+                {
+                    u.putByte(addr + k, got[k]);
+                }
+                return n;
+            }
             if (pos >= node.size || len <= 0)
             {
                 return 0;
             }
             int n = (int) Math.min((long) len, node.size - pos);
-            Unsafe u = Unsafe.getUnsafe();
             if (node.data != null)
             {
                 byte[] d = node.data;
@@ -909,6 +983,10 @@ public final class MetalRamfs
             {
                 return 0;
             }
+            if (f.node.device != 0)
+            {
+                return len;                            // accepted and discarded -- see DEV_RANDOM
+            }
             long end = pos + len;
             if (pos < 0L || end > Integer.MAX_VALUE - 8L)
             {
@@ -952,6 +1030,10 @@ public final class MetalRamfs
             {
                 return -ISDIR;
             }
+            if (node.device != 0)
+            {
+                return deviceRead(b, off, len);        // a device has no position to advance
+            }
             if (f.pos >= node.size || len <= 0)
             {
                 return 0;
@@ -982,6 +1064,10 @@ public final class MetalRamfs
             if (len <= 0)
             {
                 return 0;
+            }
+            if (f.node.device != 0)
+            {
+                return len;                            // accepted and discarded -- see DEV_RANDOM
             }
             if (f.append)
             {

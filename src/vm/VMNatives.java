@@ -1168,7 +1168,8 @@ final class VMNatives
     }
 
     /**
-     * {@code SecureRandom.hwEntropy0(byte[], int)} native: fill the array with hardware entropy.
+     * {@code MetalRamfs.hwEntropy0(byte[], int)} native, what {@code /dev/random} and {@code /dev/urandom} read:
+     * fill the array with hardware entropy.
      *
      * @param arr the guest {@code byte[]} to fill
      * @param len how many bytes are wanted

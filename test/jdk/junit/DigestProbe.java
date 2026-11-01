@@ -19,7 +19,8 @@ import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 
 /**
- * {@code java.security.MessageDigest} on the metal, over joe-ng's own {@code crypto.Digest}.
+ * {@code java.security.MessageDigest} on the metal: the STOCK JCA and SUN provider (it began as the test of an
+ * overlay over joe-ng's own {@code crypto.Digest}, retired in the security arc).
  *
  * <p>Every digest arm is a KNOWN-ANSWER vector, not a self-consistency check. A digest that is
  * self-consistent and wrong is the worst failure a hash function has: it is stable, it is the right length,
@@ -44,8 +45,6 @@ import java.nio.ByteBuffer;
 public class DigestProbe
 {
     private static int fails = 0;
-    /** Arms where joe-ng deliberately differs from stock: counted SEPARATELY so both worlds read 0 above. */
-    private static int unmet = 0;
 
     private static void say(String what, Object got, Object want)
     {
@@ -57,21 +56,6 @@ public class DigestProbe
         System.out.println((ok ? "ok   " : "FAIL ") + what + " = " + got + " (want " + want + ")");
     }
 
-    /**
-     * An arm where joe-ng DELIBERATELY differs from a stock JVM. Printed with both answers and NOT counted
-     * as a failure, so "failures=0" means the same thing in both worlds and a real regression still stands
-     * out. Reporting these as FAIL on the host control would train a reader to ignore the count.
-     */
-    private static void diverge(String what, Object got, Object wantHere, String onStock)
-    {
-        boolean ok = got == null ? wantHere == null : got.equals(wantHere);
-        if (!ok)
-        {
-            unmet += 1;
-        }
-        System.out.println((ok ? "ok*  " : "diff ") + what + " = " + got + " (want here " + wantHere
-                + "; a stock JVM says " + onStock + ")");
-    }
 
     private static String hex(byte[] b)
     {
@@ -156,12 +140,11 @@ public class DigestProbe
         {
             noAlg = "NSAE";
         }
-        // NOT implemented, and it says so rather than answering something plausible. A real JVM HAS
-        // SHA-3, so this is a capability joe-ng lacks, not a behaviour it changed.
-        diverge("SHA3-256 unsupported", noAlg, "NSAE", "a digest (the JDK implements SHA-3)");
+        // The stock SUN provider carries SHA-3. (The retired overlay refused it -- a capability gap.)
+        say("SHA3-256 available", noAlg, "none");
 
         // ---- provider --------------------------------------------------------------------------------
-        diverge("provider name", MessageDigest.getInstance("SHA-256").getProvider().getName(), "joe-ng", "SUN");
+        say("provider name", MessageDigest.getInstance("SHA-256").getProvider().getName(), "SUN");
 
         // ---- STREAMING: byte-at-a-time must equal one shot, across both block boundaries -------------
         // 200 bytes spans several 64-byte blocks AND crosses 56 (where the length field starts), which is
@@ -319,14 +302,11 @@ public class DigestProbe
         say("DigestOutputStream wrote", Integer.valueOf(sink.toByteArray().length), Integer.valueOf(200));
         say("DigestOutputStream digest", hex(outMd.digest()), want);
 
-        // toString names the algorithm and the provider rather than being Object's. The provider name is
-        // the only part that differs from stock.
-        diverge("toString", MessageDigest.getInstance("SHA-256").toString(),
-                "SHA-256 Message Digest from joe-ng, <initialized>",
-                "SHA-256 Message Digest from SUN, <initialized>");
+        // toString names the algorithm and the provider rather than being Object's, and stock ends it with a
+        // line separator (it is built with PrintStream.println), shown escaped so the line stays one line.
+        say("toString", MessageDigest.getInstance("SHA-256").toString().replace("\n", "\\n"),
+                "SHA-256 Message Digest from SUN, <initialized>\\n");
 
-        // On a stock JVM the three divergence arms are unmet BY CONSTRUCTION (that is what they record);
-        // on joe-ng all three must be met. `failures` must be 0 in BOTH worlds.
-        System.out.println("DigestProbe done, failures=" + fails + " divergences-unmet=" + unmet);
+        System.out.println("DigestProbe done, failures=" + fails);
     }
 }
