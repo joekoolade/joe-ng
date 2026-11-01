@@ -45,11 +45,9 @@ public final class ReachScan
         // jdk/internal/loader/ is NOT here any more: the stock built-in loaders run (see Loader.isDenylisted).
         "java/security/", "java/util/ServiceLoader",
         // sun/util/ is NOT here any more: the whole package loads (see Loader.isDenylisted).
-        // java/net is loadable (M3 sockets). SocksSocketImpl IS on the taken path (Socket.createImpl always
-        // wraps the platform impl in it) -- overlaid as a pure delegator, so NOT denied. The HTTP-CONNECT
-        // proxy impl + www/ext + the GC-auto-close SocketCleanable stay trapped (never taken).
-        "java/net/HttpConnectSocketImpl", "java/net/SocketCleanable",
-        "sun/net/www/", "sun/net/ext/",
+        // java/net is loadable (M3 sockets) and nothing in it is denied; sun/net/ext/ is not denied either
+        // (see Loader.isDenylisted). The HTTP-proxy socket's client, sun/net/www/protocol/http, is.
+        "sun/net/www/",
         // sun/nio/ch/Poller and sun/nio/ch/ExtendedSocketOption are NOT here any more (2026-10-29): see
         // Loader.isDenylisted -- Poller is reached only from a virtual thread, which this VM never has.
         // java/net/NetworkInterface is NOT here any more: overlaid, natives over the WiFi lease (Loader.isDenylisted).
@@ -135,7 +133,6 @@ public final class ReachScan
                 || c.startsWith("java/lang/invoke/MethodType")          // java.lang.invoke arc inc 0 (MethodTypeForm too)
                 || c.startsWith("jdk/internal/invoke/MhUtil")
                 || c.startsWith("java/lang/ClassLoader")                 // M3: JDK-free overlay (defineClass/loadClass)
-                || c.startsWith("sun/net/ext/ExtendedSocketOptions")    // stock (no jdk.net); rest of sun/net/ext denied
                 // the file: and jar: URL protocols (see Loader.isDenylisted); http/, content/, jrt stay denied
                 || c.startsWith("sun/net/www/protocol/file/")
                 || c.startsWith("sun/net/www/protocol/jar/")

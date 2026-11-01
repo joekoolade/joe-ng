@@ -6410,10 +6410,6 @@ public final class Loader
                 // java/lang/ClassLoader is STOCK (overlaid from the JDK 26 source, natives Java over the VM's one
                 // class namespace -- jdk.internal.misc.MetalLoaders), and so is jdk/internal/loader below it.
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/ClassLoader"))
-                // ExtendedSocketOptions runs STOCK (Net.<clinit> sets EXTENDED_OPTIONS from it): its forName of
-                // jdk.net.ExtendedSocketOptions finds no class, so it answers NoExtendedSocketOptions, exactly as
-                // a JDK without the jdk.net module does. The rest of sun/net/ext stays denied.
-                || utf8HasPrefix(base, off, Magic.bytes("sun/net/ext/ExtendedSocketOptions"))
                 // NARROWED OUT of the sun/net/www/ denial: the file: and jar: URL protocols, which a class path
                 // is read through (stock URLClassPath, ClassLoader.getResource). java.net.URL picks the handler
                 // by name in URL.DefaultFactory. Both are plain Java over java.io.File / java.util.jar.JarFile:
@@ -6615,11 +6611,11 @@ public final class Loader
                 // the prefix are each on an ordinary java.util path: ResourceBundleEnumeration (getKeys of a
                 // List/PropertyResourceBundle), PropertyResourceBundleCharset (new PropertyResourceBundle(
                 // InputStream)) and BuddhistCalendar (the "buddhist" calendar type). Pure Java, no natives.
-                // java/net is LOADABLE now (M3: stock java.net over net.Tcp). SocksSocketImpl IS taken
-                // (Socket.createImpl always wraps the platform impl in it) -- overlaid as a pure delegator,
-                // NOT denied. The HTTP-CONNECT proxy impl + www/ext + GC-auto-close SocketCleanable stay trapped.
-                || utf8HasPrefix(base, off, Magic.bytes("java/net/HttpConnectSocketImpl"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/net/SocketCleanable"))
+                // java/net is LOADABLE (M3: stock java.net over net.Tcp), and nothing in it is denied any more
+                // (2026-11-01). SocksSocketImpl is overlaid as a pure delegator. HttpConnectSocketImpl (the
+                // HTTP-proxy socket) loads, but its <clinit> reflects on sun.net.www.protocol.http.HttpURLConnection,
+                // which is denied below: new Socket(httpProxy) throws ExceptionInInitializerError naming it instead
+                // of halting at a denylist trap. java/net/SocketCleanable no longer exists in JDK 26.
                 // org/junit/platform/reporting/ writes an XML report to a FILE. Its
                 // OpenTestReportGeneratingListener is on the TestExecutionListener services path, so
                 // ServiceLoader discovers it and constructs it -- and its constructor calls
@@ -6640,7 +6636,9 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("org/junit/vintage/"))
                 || utf8HasPrefix(base, off, Magic.bytes("org/junit/platform/reporting/"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/net/www/"))
-                || utf8HasPrefix(base, off, Magic.bytes("sun/net/ext/"))
+                // sun/net/ext/ is NOT denied any more (2026-11-01): it holds only ExtendedSocketOptions, which runs
+                // STOCK (Net.<clinit> sets EXTENDED_OPTIONS from it). Its forName of jdk.net.ExtendedSocketOptions
+                // finds no class, so it answers NoExtendedSocketOptions, as a JDK without jdk.net does.
                 // sun/nio/ch/Poller and sun/nio/ch/ExtendedSocketOption are NOT denied any more (2026-10-29). They
                 // were kept out because their closures OOM'd the demand-load of the day. ExtendedSocketOption is one
                 // static SocketOption with no natives; denied, NioSocketImpl read its SO_OOBINLINE as null on every
