@@ -4,6 +4,31 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **AN ABSENT SUPERTYPE THROWS NoClassDefFoundError; https UN-DENIED (2026-11-01, branch absent-super, c8b8454 +
+  8a535c9).**
+  - **Before:** a class whose superclass could never load registered anyway -- `UNREGISTERED SUPER (fields alias)`,
+    the superclass constructor skipped (`CTOR SKIPPED ... ABSENT from the classDir; NOT intended`), and the next call
+    through the superclass took a WILD BRANCH (the https handler, #469). A class implementing an absent interface was
+    constructed with `getInterfaces().length == 0`. A JVM refuses both at load time.
+  - **Now:** `parseFields` records the first direct supertype (superclass or interface) that is unregistered, absent
+    from `VM.dirBytes` (classDir, then classpath jar) and not denylisted, in `RVMClass.absentSuperOff`.
+    Unregistered-but-present stays allowed (`Integer extends Number` at boot) and a denylisted supertype keeps its
+    documented constructor-skip. The batch-end sweep never promotes such a class to ST_INITIALIZED, so every use reaches
+    `ensureClinit`, and `Loader.linkable` throws `NoClassDefFoundError` naming the supertype; `Class.forName` checks it
+    with or without initialization; a subclass fails through its superclass walk.
+  - **https un-denied:** `sun/net/www/protocol/https/` is off the deny list; the handler and `https:` URLs work (port
+    443). A connection still cannot be made (`javax/net/ssl` is not shipped; security arc), but `openConnection` now
+    throws `NoClassDefFoundError: javax/net/ssl/HttpsURLConnection` instead of wild-branching (temporary probe arm,
+    not committed).
+  - **Probe:** `AbsentSuperProbe` (6 arms: superclass and interface, each present / absent / absent via `forName`;
+    the probe's own nested classes are embedded as Base64 classfiles and renamed, since probe classes are not readable
+    as resources here), expected from the host JVM. **Negative control** (old Loader): the absent-superclass class was
+    constructed (CTOR SKIPPED) and `forName` returned it; on the superclass-only fix the absent-interface class was
+    constructed with no interfaces. `NetWwwProbe` gains an https URL arm.
+  - **Closure:** SbProbe's first batch unchanged (+797 blobs, pend=30347, clinits=189).
+  - **QEMU:** full regression 198/198 (18m50s, `/tmp/regress-full-8a535c9.log`) -- also the first full run covering
+    #469. `make test`, `overlaycheck` OK. NOT RUN: demo suite, Pi boot.
+
 - **sun/net/www IS NO LONGER DENIED, EXCEPT protocol/https (2026-11-01, branch net-www-undeny, 9d0dfeb).**
   - **Before:** denied by prefix with `file:`/`jar:`, `ParseUtil`, `URLConnection`, `MessageHeader` and `MimeTable`/
     `MimeEntry` narrowed out. Every other URL scheme had no handler (`MalformedURLException`), and the `jrt` Handler's
