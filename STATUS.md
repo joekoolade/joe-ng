@@ -4,6 +4,22 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **sun/util IS NO LONGER DENIED (2026-10-31, branch sun-util-undeny, e5b819b).**
+  - **Before:** the package was denied by prefix, with locale, cldr, resources, spi, logging, calendar and
+    `PreHashedMap` narrowed out one by one. Three classes were still behind it: `ResourceBundleEnumeration`,
+    `PropertyResourceBundleCharset` and `BuddhistCalendar`. `ListResourceBundle.getKeys` hit `UNRESOLVED NEW
+    sun/util/ResourceBundleEnumeration` (CTOR SKIPPED) and the probe never finished.
+  - **Now:** the prefix and the narrowing allows it needed are gone from `Loader.isDenylisted` and
+    `ReachScan.isDenied`/`DENY`; the `closureDeferred` entries stay. No natives in the three classes.
+  - **Closure:** SbProbe's first batch unchanged (+797 blobs, pend=30347, clinits=189); image 776 bytes smaller.
+  - **Probe:** `SunUtilProbe` (bundle keys merged with the parent's, UTF-8 `.properties`, the ISO-8859-1 fallback,
+    the `buddhist` calendar by type and by `th-TH`), expected output from the host JVM. 12/12 solo with the locale,
+    date, format, logger and charset probes; `make test` and `overlaycheck` OK.
+  - **QEMU:** demo suite 40 returns, `want: checked=160 mismatch=0`, `gc: collections=50`, CTOR SKIPPED=2 and UNDER
+    THE LOADER LOCK=1 (both expected). NOT RUN: full regression.
+  - **Pi (`e5b819b`, also the first Pi boot of #465):** suite passes (collections=50 at the churn demo, HML both,
+    steps/core 61/60/60/59), WiFi + HTTP 200 (891 bytes).
+
 - **jdk/internal/module IS NO LONGER DENIED (2026-10-30, branch module-undeny, 02587bc).**
   - **Before:** the package was denied by prefix with two exceptions for the built-in loaders (`ServicesCatalog`,
     `Resources`); `ModuleDescriptor.read` trapped at `ModuleInfo.read`, and `newModule`'s name checks (`Checks`)
