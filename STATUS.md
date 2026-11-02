@@ -4,6 +4,21 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **SIGNED JARS VERIFY: JarVerifier UN-DENIED, THE JarFile OVERLAY DELETED (2026-11-01, branch jar-verifier).**
+  - **Before:** `java/util/jar/JarVerifier` was denied because it pulls the `sun/security` closure, and the JarFile
+    overlay was stock plus two workarounds for that denial (a local `MAX_SIG_FILE_SIZE`, and skipping the verifier
+    for an unsigned jar). A verifying open of a signed jar hit `UNRESOLVED NEW: java/util/jar/JarVerifier` at
+    `JarFile.getManifestFromReference` and the boot stalled with no probe arm printed.
+  - **Now:** JarVerifier is off `Loader.isDenylisted` and `ReachScan.DENY`, the overlay is `git rm`'d (stock JarFile;
+    `java/util/jar` has no natives), and JarVerifier joins `securityDeferred`, since only a signed jar reaches it.
+  - **Probe:** `JarVerifyProbe` (11 arms) embeds a jarsigner-signed EC (secp256r1) jar and builds a TAMPERED copy
+    (a.txt changed, signature files kept) and an EXTENDED one (an entry the manifest omits) at run time, CRCs valid.
+    = host: signers `[CN=joe-ng jar probe]` once read, `SecurityException: SHA-384 digest error for a.txt` through
+    JarFile and JarInputStream, the extra entry `unsigned`, `verify=false` returns the forged bytes.
+  - **Closure:** SbProbe's first batch +790 blobs / pend=29797 / clinits=187 (was 790 / 29777 / 187).
+  - **QEMU:** JarVerifyProbe and 11 jar/classpath/loader/security probes pass (ClassResourceProbe, LoaderProbe,
+    UrlProbe, ZipFileProbe, ...); `make test`, `overlaycheck` OK. NOT RUN: full regression, demo suite, Pi.
+
 - **THE STOCK JCA RUNS: java/security + sun/security UN-DENIED, javax/ SHIPPED, SECURITY OVERLAYS RETIRED
   (2026-11-01, branch security-arc).**
   - **Before:** `java/security/` and `sun/security/` were denied except a narrowed permission/marker layer;
