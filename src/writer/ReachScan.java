@@ -53,10 +53,8 @@ public final class ReachScan
         // java/net/NetworkInterface is NOT here any more: overlaid, natives over the WiFi lease (Loader.isDenylisted).
         // jdk/internal/util/Exceptions and sun/net/util/IPAddressUtil are NOT here any more: stock InetAddress
         // calls both on its ordinary paths (see Loader.isDenylisted).
-        // jar signature verification: JarVerifier pulls the whole sun.security provider closure for a path
-        // an unsigned jar never takes (see Loader.isDenylisted).
         // sun/security/ is NOT here any more: the stock providers run (see Loader.isDenylisted).
-        "java/util/jar/JarVerifier",
+        // java/util/jar/JarVerifier is NOT here any more: signed jars verify stock (see Loader.isDenylisted).
         // jdk/internal/logger is NOT here any more: System.getLogger runs stock (see Loader.isDenylisted).
         // java/lang/reflect/ and jdk/internal/reflect/ are NOT here any more: both packages load
         // (see Loader.isDenylisted). jdk/internal/module/ is not here either.

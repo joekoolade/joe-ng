@@ -1,0 +1,12 @@
+manifest attribute: signed
+entries: [META-INF/MANIFEST.MF, META-INF/PROBE.SF, META-INF/PROBE.EC, META-INF/, a.txt, b.txt]
+a.txt content: hello from a signed jar
+signers after reading: a.txt=[CN=joe-ng jar probe] b.txt=[CN=joe-ng jar probe]
+signers before reading: unsigned
+JarInputStream verifying: META-INF/PROBE.SF=unsigned META-INF/PROBE.EC=unsigned META-INF/=unsigned a.txt=[CN=joe-ng jar probe] b.txt=[CN=joe-ng jar probe] X-Probe=signed
+tampered entry: threw java.lang.SecurityException SHA-384 digest error for a.txt
+tampered, verify=false: hello from a FORGED jar
+tampered, untouched entry: second entry
+extended jar: a.txt=[CN=joe-ng jar probe] b.txt=[CN=joe-ng jar probe] c.txt=unsigned
+tampered via JarInputStream: threw java.lang.SecurityException SHA-384 digest error for a.txt
+JarVerifyProbe done

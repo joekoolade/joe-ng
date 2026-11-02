@@ -5364,7 +5364,8 @@ public final class Loader
     {
         if (utf8HasPrefix(base, off, Magic.bytes("javax/"))
                 || utf8HasPrefix(base, off, Magic.bytes("com/sun/crypto/"))
-                || utf8HasPrefix(base, off, Magic.bytes("com/sun/security/")))
+                || utf8HasPrefix(base, off, Magic.bytes("com/sun/security/"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/util/jar/JarVerifier")))   // only a SIGNED jar
         {
             return true;
         }
@@ -6723,13 +6724,10 @@ public final class Loader
                 // ConcurrentHashMap) OOM'd the demand-load of the day; all of those load now, Security is
                 // narrowed in above, and stock InetAddress calls both on its ordinary paths (literal parsing,
                 // IPv4-mapped conversion, the UnknownHostException message).
-                // Jar signature verification: joe-ng reads archives, it does not authenticate them. Left
-                // loadable, JarInputStream's default verifying constructor drags in JarVerifier -> the whole
-                // sun.security provider closure (SunEC, BigDecimal, regex, streams) -- hundreds of classes for
-                // a code path an unsigned jar never runs. Denied, so `new JarInputStream(in, false)` works and
-                // a verifying one traps loudly instead of exploding the closure.
                 // sun/security/ is NOT denied any more either (security arc): the provider implementations.
-                || utf8HasPrefix(base, off, Magic.bytes("java/util/jar/JarVerifier"))
+                // java/util/jar/JarVerifier is NOT denied any more (2026-11-01): signed jars verify stock, through
+                // sun.security.util.SignatureFileVerifier, and JarFile runs stock (its overlay only worked around
+                // the denial). Its closure is deferred with the rest of the JCA -- see securityDeferred.
                 // java/lang/reflect/ is NOT denied any more (2026-10-30). The prefix had been narrowed one class
                 // at a time until only eight were left behind it -- the Annotated*Type interfaces,
                 // InaccessibleObjectException, MalformedParametersException and ReflectPermission: interfaces,
