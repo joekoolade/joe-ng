@@ -62,14 +62,6 @@ public final class RxQueues
     private static int[] qBuf;                           // MAXQ * DEPTH buffer indices
     private static int[] qLen;                           // ... and their frame lengths
 
-    // What the RX side MEASURED, printed by the TCP timeout report.
-    public static int framesIn;                          // frames dispatched
-    public static int toQueue;                           // ... delivered to a queue
-    public static int arpAnswered;                       // ARP requests seen (answered if for us)
-    public static int dropNoQueue;                       // IPv4 with no bound port, events, other ethertypes
-    public static int dropFull;                          // a queue was full
-    public static int dropPool;                          // no free buffer when a frame arrived
-
     /** Allocate the pool, the queue table and their semaphores, and bind the control queue. Call once. */
     public static void init()
     {
@@ -198,7 +190,6 @@ public final class RxQueues
         {
             freeList[freeTop] = b;
             freeTop = freeTop + 1;
-            dropFull = dropFull + 1;
             unlock();
             return false;
         }
@@ -206,7 +197,6 @@ public final class RxQueues
         qBuf[slot] = b;
         qLen[slot] = len;
         qCount[q] = qCount[q] + 1;
-        toQueue = toQueue + 1;
         unlock();
         VMScheduler.kernelPost(qSem[q]);
         return true;
@@ -275,7 +265,6 @@ public final class RxQueues
      */
     public static void dispatch(int b, int len)
     {
-        framesIn = framesIn + 1;
         long rx = bufAddr(b);
         int ch = Magic.load8(rx + 5) & 0x0F;
         if (ch == 0)
@@ -289,7 +278,6 @@ public final class RxQueues
             {
                 board.cyw43.Cyw43.logRxEvent(rx, len);
             }
-            dropNoQueue = dropNoQueue + 1;
             freeBuf(b);
             return;
         }
@@ -298,7 +286,6 @@ public final class RxQueues
         int et = (Magic.load8(eth + 12) & 0xFF) << 8 | (Magic.load8(eth + 13) & 0xFF);
         if (et == 0x0806)
         {
-            arpAnswered = arpAnswered + 1;
             Ip.answerArp(eth);
             freeBuf(b);
             return;
@@ -311,7 +298,6 @@ public final class RxQueues
                 freeBuf(b);                              // answered here: a re-handshake must be, or the AP
                 return;                                  //   deauths us (reason 15, Pi run 13)
             }
-            dropNoQueue = dropNoQueue + 1;
             freeBuf(b);
             return;
         }
@@ -357,7 +343,6 @@ public final class RxQueues
         if (q < 0)
         {
             NetStats.udpNoPorts = NetStats.udpNoPorts + 1;
-            dropNoQueue = dropNoQueue + 1;
             freeBuf(b);
             return;
         }
@@ -370,17 +355,5 @@ public final class RxQueues
             NetStats.udpRcvbufErrors = NetStats.udpRcvbufErrors + 1;
             NetStats.ipInDiscards = NetStats.ipInDiscards + 1;
         }
-    }
-
-    /** Free pool buffers (diagnostics). */
-    public static int freeCount()
-    {
-        return freeTop;
-    }
-
-    /** Frames waiting in queue {@code q} (diagnostics). */
-    public static int depth(int q)
-    {
-        return q < 0 || q >= MAXQ ? 0 : qCount[q];
     }
 }

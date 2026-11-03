@@ -107,54 +107,9 @@ public final class Ip
      * and every later IPv4 frame for it is dropped at the router. Public because every receive loop must call
      * it, not only this one: the driver's DNS resolver has its own loop.
      */
-    // MEASUREMENT (ARP trace): every ARP frame the RX path saw -- does the gateway lose track of us?
-    private static final int ARP_TRACE = 48;
-    private static long[] arpT = new long[ARP_TRACE];    // CNTPCT when seen
-    private static int[] arpOp = new int[ARP_TRACE];     // opcode (1 request, 2 reply)
-    private static int[] arpSip = new int[ARP_TRACE];    // sender IP (last octet)
-    private static int[] arpTip = new int[ARP_TRACE];    // target IP (last octet)
-    private static int[] arpUni = new int[ARP_TRACE];    // 1 = sent to our MAC, 0 = broadcast/other
-    private static int[] arpAns = new int[ARP_TRACE];    // 1 = we sent a reply
-    private static int arpN;                             // records written (wraps: the latest ARP_TRACE kept)
-
-    /** MEASUREMENT: print the ARP trace, times in ms relative to {@code t0} (a CNTPCT stamp). */
-    public static void printArp(long t0)
-    {
-        long tick = Magic.readCNTFRQ_EL0() / 1000L;
-        board.bcm2711.Uart.write(Magic.bytes("arp: seen="));
-        vm.VM.printDec(arpN);
-        board.bcm2711.Uart.write(Magic.bytes("\n"));
-        int first = arpN > ARP_TRACE ? arpN - ARP_TRACE : 0;
-        int i = first;
-        while (i < arpN)
-        {
-            int k = i % ARP_TRACE;
-            board.bcm2711.Uart.write(Magic.bytes("arp: op="));
-            vm.VM.printDec(arpOp[k]);
-            board.bcm2711.Uart.write(Magic.bytes(" sip=."));
-            vm.VM.printDec(arpSip[k]);
-            board.bcm2711.Uart.write(Magic.bytes(" tip=."));
-            vm.VM.printDec(arpTip[k]);
-            board.bcm2711.Uart.write(arpUni[k] != 0 ? Magic.bytes(" uni") : Magic.bytes(" bcast"));
-            board.bcm2711.Uart.write(arpAns[k] != 0 ? Magic.bytes(" answered") : Magic.bytes(" -"));
-            board.bcm2711.Uart.write(Magic.bytes(" t="));
-            vm.VM.printDec((int) ((arpT[k] - t0) / tick));
-            board.bcm2711.Uart.write(Magic.bytes("ms\n"));
-            i = i + 1;
-        }
-    }
-
     public static void answerArp(long eth)
     {
         long arp = eth + 14;
-        int rec = arpN % ARP_TRACE;                      // MEASUREMENT: record what arrived
-        arpT[rec] = Magic.readCNTPCT_EL0();
-        arpOp[rec] = ((Magic.load8(arp + 6) & 0xFF) << 8) | (Magic.load8(arp + 7) & 0xFF);
-        arpSip[rec] = Magic.load8(arp + 17) & 0xFF;
-        arpTip[rec] = Magic.load8(arp + 27) & 0xFF;
-        arpUni[rec] = (ourMac != 0L && eq6(eth, ourMac)) ? 1 : 0;
-        arpAns[rec] = 0;
-        arpN = arpN + 1;
         if ((((Magic.load8(arp + 6) & 0xFF) << 8) | (Magic.load8(arp + 7) & 0xFF)) != 1)
         {
             return;                                      // not a request
@@ -194,22 +149,6 @@ public final class Ip
             i = i + 1;
         }
         send(buf, 60);
-        arpAns[rec] = 1;                                 // MEASUREMENT
-    }
-
-    /** True when the 6 bytes at {@code a} equal those at {@code b}. */
-    private static boolean eq6(long a, long b)
-    {
-        int i = 0;
-        while (i < 6)
-        {
-            if (Magic.load8(a + i) != Magic.load8(b + i))
-            {
-                return false;
-            }
-            i = i + 1;
-        }
-        return true;
     }
 
     /** One's-complement IPv4 header checksum over {@code len} bytes at {@code addr}. */

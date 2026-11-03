@@ -44,8 +44,7 @@ public final class Supplicant
     private static final int KI_MSG4 = 0x030a;           // + Secure
     private static final int KI_GROUP2 = 0x0302;         // MIC | Secure | ver 2
 
-    // What the supplicant MEASURED.
-    public static int frames;                            // EAPOL frames received after bring-up
+    // Completed handshakes, printed as each one finishes.
     public static int rekeys;                            // completed re-handshakes (pairwise msg4 sent)
     public static int groupRekeys;                       // completed group-key handshakes
     public static int rejected;                          // MIC/replay/unwrap/format failures
@@ -82,7 +81,6 @@ public final class Supplicant
      */
     public static void input(long eth, int len)
     {
-        frames = frames + 1;
         if (!ready || len < 14 + 99)
         {
             return;

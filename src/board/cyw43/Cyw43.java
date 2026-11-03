@@ -1829,53 +1829,6 @@ public final class Cyw43
         board.bcm2711.Uart.write(Magic.bytes(" idOk="));
         VM.printDec(idOk);
         board.bcm2711.Uart.putc(0x0A);
-        if (net.RxQueues.active)                         // MEASUREMENT: is the RX task alive, reading, dispatching?
-        {
-            board.bcm2711.Uart.write(Magic.bytes("dns: rx q="));
-            VM.printDec(q);
-            board.bcm2711.Uart.write(Magic.bytes(" polls="));
-            VM.printDec(WlanPoll.polls);
-            board.bcm2711.Uart.write(Magic.bytes(" irq="));
-            VM.printDec(WlanPoll.irqPolls);
-            board.bcm2711.Uart.write(Magic.bytes(" frames="));
-            VM.printDec(WlanPoll.frames);
-            board.bcm2711.Uart.write(Magic.bytes(" rechecks="));
-            VM.printDec(WlanPoll.rechecks);
-            board.bcm2711.Uart.write(Magic.bytes(" in="));
-            VM.printDec(net.RxQueues.framesIn);
-            board.bcm2711.Uart.write(Magic.bytes(" toQ="));
-            VM.printDec(net.RxQueues.toQueue);
-            board.bcm2711.Uart.write(Magic.bytes(" noQ="));
-            VM.printDec(net.RxQueues.dropNoQueue);
-            board.bcm2711.Uart.write(Magic.bytes(" (events="));
-            VM.printDec(rxEvents);
-            board.bcm2711.Uart.write(Magic.bytes(") eapol="));
-            VM.printDec(Supplicant.frames);
-            board.bcm2711.Uart.write(Magic.bytes(" rekeys="));
-            VM.printDec(Supplicant.rekeys);
-            board.bcm2711.Uart.write(Magic.bytes(" (arp="));
-            VM.printDec(net.RxQueues.arpAnswered);
-            board.bcm2711.Uart.write(Magic.bytes(") full="));
-            VM.printDec(net.RxQueues.dropFull);
-            board.bcm2711.Uart.write(Magic.bytes(" pool="));
-            VM.printDec(net.RxQueues.dropPool);
-            board.bcm2711.Uart.write(Magic.bytes(" free="));
-            VM.printDec(net.RxQueues.freeCount());
-            board.bcm2711.Uart.write(Magic.bytes(" ctrlQ="));
-            VM.printDec(net.RxQueues.depth(net.RxQueues.Q_CTRL));
-            board.bcm2711.Uart.write(Magic.bytes(" emptyClears="));
-            VM.printDec(emptyClears);
-            board.bcm2711.Uart.write(Magic.bytes(" credit="));
-            VM.printDec(txSeq);
-            board.bcm2711.Uart.write(Magic.bytes("/"));
-            VM.printDec(txMaxNow());
-            board.bcm2711.Uart.write(Magic.bytes(" waits="));
-            VM.printDec(creditWaits());
-            board.bcm2711.Uart.write(Magic.bytes(" forced="));
-            VM.printDec(creditForced());
-            board.bcm2711.Uart.putc(0x0A);
-            net.NetStats.print();                        // MEASUREMENT: where did the replies go (checksum, port, address)?
-        }
         return false;
     }
 
@@ -2718,14 +2671,6 @@ public final class Cyw43
         int nlen = (hw >> 16) & 0xFFFF;
         if (len < 12 || ((len ^ nlen) & 0xFFFF) != 0xFFFF)
         {
-            if (hw != 0)                                 // MEASUREMENT: not "empty" -- a header we cannot parse
-            {
-                if (rxBadHdr < BAD_HDRS)
-                {
-                    rxBadHw[rxBadHdr] = hw;
-                }
-                rxBadHdr = rxBadHdr + 1;
-            }
             return 0;                                    // no frame / invalid header
         }
         int body = len - 4;
@@ -2750,22 +2695,11 @@ public final class Cyw43
             done = done + n;
         }
         txMax = Magic.load8(dst + 9) & 0xFF;             // SDPCM sw header: the firmware's tx window (max seq)
-        int ch = Magic.load8(dst + 5) & 0x0F;
-        if (ch == 3)
-        {
-            rxGlom = rxGlom + 1;                         // MEASUREMENT: a glom (superframe) descriptor
-        }
         if (rest > 0)
         {
             // An oversize frame must be read to its end: what is left in the F2 FIFO would otherwise be parsed
             // as the next frame's header -- garbage, so every later read looks "empty" until the stream
             // happens to realign, while real frames queue up behind it in the chip.
-            rxOversize = rxOversize + 1;
-            if (len > rxOversizeMax)
-            {
-                rxOversizeMax = len;
-                rxOversizeCh = ch;
-            }
             if (drainBuf == 0L)
             {
                 drainBuf = vm.Heap.allocData(512);
@@ -2784,15 +2718,7 @@ public final class Cyw43
         return len;
     }
 
-    // MEASUREMENT (F2 stream health): headers that were neither empty nor valid, oversize frames, glom frames.
-    private static final int BAD_HDRS = 8;
-    public static int rxBadHdr;
-    public static int[] rxBadHw = new int[BAD_HDRS];
-    public static int rxOversize;
-    public static int rxOversizeMax;
-    public static int rxOversizeCh;
-    public static int rxGlom;
-    private static long drainBuf;
+    private static long drainBuf;                        // where the unread rest of an oversize frame goes
 
     // RX glom (superframe). The firmware may bundle several frames into one F2 transfer: first a DESCRIPTOR
     // (channel 3 with flag 0x80; its payload is one little-endian u16 length per subframe), then the
@@ -2805,10 +2731,6 @@ public final class Cyw43
     public static long glomBuf;                          // the last superframe read
     public static int[] glomLens = new int[GLOM_SUBS];   // its descriptor lengths
     public static int glomCount;                         // how many of glomLens are valid
-    public static int rxGlomDesc;                        // MEASUREMENT: descriptors seen
-    public static int rxGlomSub;                         // MEASUREMENT: subframes delivered (counted by WlanPoll)
-    public static int rxGlomBad;                         // MEASUREMENT: superframes discarded as malformed
-    public static int rxGlomMaxSubs;                     // MEASUREMENT: most subframes in one superframe
 
     /** True if the frame at {@code dst} is a glom descriptor (channel 3, descriptor flag set). */
     public static boolean isGlomDesc(long dst)
@@ -2823,7 +2745,6 @@ public final class Cyw43
      */
     public static int readSuperframe(long desc, int len)
     {
-        rxGlomDesc = rxGlomDesc + 1;
         int doff = Magic.load8(desc + 7) & 0xFF;
         int total = 0;
         int count = 0;
@@ -2840,10 +2761,6 @@ public final class Cyw43
             p = p + 2;
         }
         glomCount = count;
-        if (count > rxGlomMaxSubs)
-        {
-            rxGlomMaxSubs = count;
-        }
         if (glomBuf == 0L)
         {
             glomBuf = vm.Heap.allocData(GLOM_MAX);
@@ -2864,14 +2781,12 @@ public final class Cyw43
             long to = done < keep ? glomBuf + done : drainBuf;
             if (!Sdio.cmd53Read(F2, 0, true, to, 1, n))
             {
-                rxGlomBad = rxGlomBad + 1;
                 return 0;
             }
             done = done + n;
         }
         if (keep == 0 || count > GLOM_SUBS || total < 12)
         {
-            rxGlomBad = rxGlomBad + 1;
             return 0;
         }
         int hw = Magic.load32(glomBuf);
@@ -2879,7 +2794,6 @@ public final class Cyw43
         int nlen = (hw >> 16) & 0xFFFF;
         if (hlen < 12 || ((hlen ^ nlen) & 0xFFFF) != 0xFFFF || (Magic.load8(glomBuf + 5) & 0x8F) != 0x03)
         {
-            rxGlomBad = rxGlomBad + 1;
             return 0;
         }
         txMax = Magic.load8(glomBuf + 9) & 0xFF;         // the superframe header carries the tx window too
@@ -2892,9 +2806,6 @@ public final class Cyw43
      * transmit waits -- briefly, see {@link #waitCredit} -- for the window to open.
      */
     private static int txMax = 4;
-    static int creditWaitCount;                          // transmits that found the window closed
-    static int creditForcedCount;                        // ... and sent anyway after the wait ran out
-    static int creditRxCount;                            // ... of which sent at once by the RX task (no wait)
 
     /** True when {@code txSeq} is inside the window (brcmfmac: (u8)(max - seq) nonzero and below 0x80). */
     private static boolean haveCredit()
@@ -2905,7 +2816,7 @@ public final class Cyw43
 
     /**
      * Wait up to 20 ms for transmit credit. Once the RX task runs it reads the frames that move the window, so
-     * yielding is enough; before that nobody reads, and the wait just runs out -- the old behaviour, counted.
+     * yielding is enough; before that nobody reads, and the wait just runs out -- the old behaviour.
      */
     private static void waitCredit()
     {
@@ -2913,11 +2824,8 @@ public final class Cyw43
         {
             return;
         }
-        creditWaitCount = creditWaitCount + 1;
         if (WlanPoll.onRxTask())                         // the RX task reads the frames that open the window:
-        {                                                //   waiting here only stalls them. Send (counted)
-            creditForcedCount = creditForcedCount + 1;
-            creditRxCount = creditRxCount + 1;
+        {                                                //   waiting here only stalls them. Send.
             return;
         }
         long endT = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() / 50L;
@@ -2925,8 +2833,7 @@ public final class Cyw43
         {
             if (Magic.readCNTPCT_EL0() >= endT)
             {
-                creditForcedCount = creditForcedCount + 1;
-                return;
+                return;                                  // ran out: send anyway (the old behaviour)
             }
             if (net.RxQueues.active)
             {
@@ -2935,35 +2842,6 @@ public final class Cyw43
         }
     }
 
-    /** The next SDPCM transmit sequence number (diagnostics). */
-    static int txSeqNow()
-    {
-        return txSeq & 0xFF;
-    }
-
-    /** The firmware's last advertised transmit window (diagnostics). */
-    static int txMaxNow()
-    {
-        return txMax;
-    }
-
-    /** Transmits that waited for credit (diagnostics). */
-    public static int creditWaits()
-    {
-        return creditWaitCount;
-    }
-
-    /** Transmits sent with the window still closed after the wait (diagnostics). */
-    public static int creditForced()
-    {
-        return creditForcedCount;
-    }
-
-    /** Forced transmits that came from the RX task itself (diagnostics). */
-    public static int creditRx()
-    {
-        return creditRxCount;
-    }
 
     /** Clear the SDIOD frame-interrupt status and the SDHCI card interrupt (de-asserting DAT1). */
     static void clearFrameInts()
@@ -2973,79 +2851,6 @@ public final class Cyw43
         Sdio.maskCardInt();                              // CARD_INT is not write-1-to-clear (Pi run 6: it stayed
         Sdio.clearCardInt();                             //   0x100 with SD_INTSTATUS and CCCR INT_PENDING both 0);
         Sdio.unmaskCardInt();                            //   toggling its Status Enable is what drops it (SDHCI)
-        if (ints != 0)
-        {
-            clrSeen = clrSeen | ints;
-        }
-        if (emptyClears < STORM_SAMPLES)
-        {
-            sampleBefore = ints;
-        }
-    }
-
-    // MEASUREMENT (storm): what the empty-chip clear saw and left behind. Filled by clearFrameInts and
-    // stormSample; printed once by WlanPoll after STORM_REPORT empty polls.
-    static final int STORM_SAMPLES = 8;
-    static int emptyClears;                              // clears done with the chip empty
-    static int clrSeen;                                  // OR of every SD_INTSTATUS value read before a clear
-    static int sampleBefore;                             // SD_INTSTATUS before the clear (sampled polls only)
-    static int[] stormRow;                               // per sample: sdiodBefore, sdiodAfter, hciBefore,
-                                                         //   hciAfter, intpend (CCCR 0x05)
-
-    /** Record, for one of the first STORM_SAMPLES empty polls, the interrupt state on both sides of the clear. */
-    static void stormSample(int hciBefore)
-    {
-        int k = emptyClears;
-        emptyClears = emptyClears + 1;
-        if (k >= STORM_SAMPLES)
-        {
-            return;
-        }
-        if (stormRow == null)
-        {
-            stormRow = new int[STORM_SAMPLES * 5];
-        }
-        stormRow[k * 5] = sampleBefore;
-        stormRow[k * 5 + 1] = bpRead32(SDIOD_CORE + SD_INTSTATUS);
-        stormRow[k * 5 + 2] = hciBefore;
-        stormRow[k * 5 + 3] = Sdio.interrupt();
-        stormRow[k * 5 + 4] = Sdio.cmd52Read(F0, 0x05);  // CCCR INT_PENDING: the card's own view
-    }
-
-    /** Print the storm measurement: one line per sample plus the OR of all status bits seen. */
-    public static void stormReport(int polls, int irqPolls, int frames)
-    {
-        board.bcm2711.Uart.write(Magic.bytes("wifi: STORM? polls="));
-        VM.printDec(polls);
-        board.bcm2711.Uart.write(Magic.bytes(" irq="));
-        VM.printDec(irqPolls);
-        board.bcm2711.Uart.write(Magic.bytes(" frames="));
-        VM.printDec(frames);
-        board.bcm2711.Uart.write(Magic.bytes(" emptyClears="));
-        VM.printDec(emptyClears);
-        board.bcm2711.Uart.write(Magic.bytes(" sdiodSeenOR="));
-        VM.printHex(clrSeen & 0xFFFFFFFFL);
-        board.bcm2711.Uart.write(Magic.bytes(" sdiodMask="));
-        VM.printHex(bpRead32(SDIOD_CORE + SD_INTMASK) & 0xFFFFFFFFL);
-        board.bcm2711.Uart.write(Magic.bytes("\n"));
-        int k = 0;
-        while (stormRow != null && k < STORM_SAMPLES)
-        {
-            board.bcm2711.Uart.write(Magic.bytes("  empty#"));
-            VM.printDec(k);
-            board.bcm2711.Uart.write(Magic.bytes(" sdiod "));
-            VM.printHex(stormRow[k * 5] & 0xFFFFFFFFL);
-            board.bcm2711.Uart.write(Magic.bytes(" -> "));
-            VM.printHex(stormRow[k * 5 + 1] & 0xFFFFFFFFL);
-            board.bcm2711.Uart.write(Magic.bytes(" hci "));
-            VM.printHex(stormRow[k * 5 + 2] & 0xFFFFFFFFL);
-            board.bcm2711.Uart.write(Magic.bytes(" -> "));
-            VM.printHex(stormRow[k * 5 + 3] & 0xFFFFFFFFL);
-            board.bcm2711.Uart.write(Magic.bytes(" intpend "));
-            VM.printHex(stormRow[k * 5 + 4] & 0xFFFFFFFFL);
-            board.bcm2711.Uart.write(Magic.bytes("\n"));
-            k = k + 1;
-        }
     }
 
     /** Copy the bytes of {@code s} to {@code dst} then a NUL; returns the length written (incl. NUL). */
@@ -3283,7 +3088,6 @@ public final class Cyw43
         board.bcm2711.Uart.putc(0x0A);
     }
 
-    // MEASUREMENT (Pi run 12): after bring-up, frames the RX task cannot route were only counted (noQ).
     public static int rxEvents;                          // firmware event frames (SDPCM channel 1)
 
     /**

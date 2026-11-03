@@ -92,36 +92,8 @@ public final class Tcp
     private static int[]  finOut = new int[MAXCONN];  // 1 = our FIN is sent (shutdown SHUT_WR): writes get EPIPE
     private static int[]  rdShut = new int[MAXCONN];  // 1 = shutdown SHUT_RD: reads end once the buffer is empty
 
-    // What each connection MEASURED.
-    private static int[]  segs  = new int[MAXCONN];   // segments received since connect (any flags)
-    private static int[]  lastFl = new int[MAXCONN];  // flags of the last segment received
-    private static int[]  inord = new int[MAXCONN];   // data segments accepted at rcv
-    private static int[]  ooo   = new int[MAXCONN];   // data segments past rcv (held for reassembly or dropped)
-    private static int[]  rbytes = new int[MAXCONN];  // payload bytes accepted in order (incl. merged runs)
-    private static int[]  wbytes = new int[MAXCONN];  // payload bytes written
-    private static long[] tStart = new long[MAXCONN]; // CNTPCT when connect() began (trace times are from here)
-    private static long[] tConn = new long[MAXCONN];  // CNTPCT when the SYN-ACK was accepted
-    private static long[] tWr   = new long[MAXCONN];  // CNTPCT of the first data write (0 = none)
-    private static int[]  isn0  = new int[MAXCONN];   // our ISN (the trace prints seq relative to it)
+    private static int[]  isn0  = new int[MAXCONN];   // our ISN (the SYN-ACK must acknowledge isn0 + 1)
     private static int[]  pisn  = new int[MAXCONN];   // the peer's ISN (0 until the SYN-ACK)
-    private static int[]  dumped = new int[MAXCONN];  // 1 = this connection's trace has been printed
-
-    /**
-     * MEASUREMENT: the first {@link #TRACE_SEGS} segments of each connection, sent or received, RECORDED when
-     * they happen (a received one when the RX task reads it off the chip -- its arrival time) and PRINTED only
-     * when the connection ends badly (RST, a refused or timed-out connect, a poll timeout). Printing from the RX
-     * task would stall the very ACKs being measured: one UART line is ~7 ms.
-     */
-    private static final int TRACE_SEGS = 64;
-    private static int[]  trc    = new int[MAXCONN];
-    private static int[]  trTx   = new int[MAXCONN * TRACE_SEGS];
-    private static int[]  trFl   = new int[MAXCONN * TRACE_SEGS];
-    private static int[]  trSeq  = new int[MAXCONN * TRACE_SEGS];
-    private static int[]  trAck  = new int[MAXCONN * TRACE_SEGS];
-    private static int[]  trLen  = new int[MAXCONN * TRACE_SEGS];
-    private static int[]  trWin  = new int[MAXCONN * TRACE_SEGS];
-    private static int[]  trRcv  = new int[MAXCONN * TRACE_SEGS];   // our rcv after the segment (rx only)
-    private static long[] trT    = new long[MAXCONN * TRACE_SEGS];
 
     private static int lock = -1;                     // one mutex over the whole table (-1: before init, no-op)
     private static long syncRx;                       // receive buffer for the pre-RX-task path
@@ -239,19 +211,8 @@ public final class Tcp
         refused[h] = 0;
         rst[h] = 0;
         waiting[h] = 0;
-        trc[h] = 0;
-        dumped[h] = 0;
-        tStart[h] = Magic.readCNTPCT_EL0();
-        tConn[h] = 0L;
-        tWr[h] = 0L;
         isn0[h] = isn;
         pisn[h] = 0;
-        segs[h] = 0;
-        lastFl[h] = -1;
-        inord[h] = 0;
-        ooo[h] = 0;
-        rbytes[h] = 0;
-        wbytes[h] = 0;
         st[h] = SYN_SENT;
         NetStats.tcpActiveOpens = NetStats.tcpActiveOpens + 1;
         unlock();
@@ -273,7 +234,6 @@ public final class Tcp
                 st[h] = RESERVED;
                 NetStats.tcpAttemptFails = NetStats.tcpAttemptFails + 1;
                 unlock();
-                dump(h, Magic.bytes("refused"));
                 return -ECONNREFUSED;
             }
             long now = Magic.readCNTPCT_EL0();
@@ -305,16 +265,6 @@ public final class Tcp
         {
             return 1;
         }
-        board.bcm2711.Uart.write(Magic.bytes("tcp: connect timed out: syns="));
-        VM.printDec(syns);
-        board.bcm2711.Uart.write(Magic.bytes(" fromPeer="));
-        VM.printDec(segs[h]);
-        board.bcm2711.Uart.write(Magic.bytes(" lastFlags="));
-        VM.printDec(lastFl[h]);
-        board.bcm2711.Uart.write(Magic.bytes(" lport="));
-        VM.printDec(lport[h]);
-        board.bcm2711.Uart.write(Magic.bytes("\n"));
-        dump(h, Magic.bytes("connect timed out"));
         return -ETIMEDOUT;
     }
 
@@ -349,7 +299,6 @@ public final class Tcp
         }
         if (st[h] == CLOSED)
         {
-            dump(h, Magic.bytes("write after close"));
             return rst[h] != 0 ? -ECONNRESET : -EPIPE;
         }
         if (st[h] != CONNECTED)
@@ -360,17 +309,6 @@ public final class Tcp
         {
             return -EPIPE;                               // write(2) after shutdown(SHUT_WR)
         }
-        if (tWr[h] == 0L)                                // MEASUREMENT: how stale is the connection by now?
-        {
-            tWr[h] = Magic.readCNTPCT_EL0();
-            board.bcm2711.Uart.write(Magic.bytes("tcp: h="));
-            VM.printDec(h);
-            board.bcm2711.Uart.write(Magic.bytes(" first write "));
-            VM.printDec(len);
-            board.bcm2711.Uart.write(Magic.bytes(" bytes, "));
-            VM.printDec(msBetween(tConn[h], tWr[h]));
-            board.bcm2711.Uart.write(Magic.bytes(" ms after the SYN-ACK\n"));
-        }
         lock();
         if (st[h] != CONNECTED)                          // the RX task closed it since the look above
         {
@@ -380,7 +318,6 @@ public final class Tcp
         }
         sendSeg(h, 0x18, buf + off, len);               // PSH|ACK
         snd[h] = snd[h] + len;
-        wbytes[h] = wbytes[h] + len;
         unlock();
         return len;
     }
@@ -422,10 +359,6 @@ public final class Tcp
             {
                 int r = rst[h] != 0 ? -ECONNRESET : -1;  // RST: reset (stock throws); FIN: end-of-stream
                 unlock();
-                if (rst[h] != 0)
-                {
-                    dump(h, Magic.bytes("reset"));
-                }
                 return r;
             }
             if (nb[h] != 0 && looked)
@@ -494,7 +427,6 @@ public final class Tcp
                 if (left <= 0L)
                 {
                     unlock();
-                    report(h);
                     return 0;                            // timed out
                 }
                 if (left < waitMs)
@@ -530,12 +462,6 @@ public final class Tcp
             sendSeg(h, 0x11, 0L, 0);                     // FIN|ACK
             snd[h] = snd[h] + 1;
         }
-        unlock();
-        if (tConn[h] != 0L && dumped[h] == 0)
-        {
-            NetStats.print();                            // MEASUREMENT: the stack's counters at every close
-        }
-        lock();
         st[h] = FREE;
         unlock();
     }
@@ -626,7 +552,6 @@ public final class Tcp
         }
         int sport = ((Magic.load8(tcp) & 0xFF) << 8) | (Magic.load8(tcp + 1) & 0xFF);
         int dport = ((Magic.load8(tcp + 2) & 0xFF) << 8) | (Magic.load8(tcp + 3) & 0xFF);
-        long now = Magic.readCNTPCT_EL0();
         lock();
         int h = find(ip + 12, sport, dport);
         if (h < 0)
@@ -637,20 +562,13 @@ public final class Tcp
         }
         int flags = Magic.load8(tcp + 13) & 0x3F;
         int payLen = tlen - dataOff;
-        segs[h] = segs[h] + 1;
-        lastFl[h] = flags;
-        int k = trace(h, false, tcp, payLen, now);       // before applying it: its ACK must trace after it
         if (st[h] == SYN_SENT)
         {
-            synSent(h, tcp, flags, dataOff, now);
+            synSent(h, tcp, flags, dataOff);
         }
         else
         {
             established(h, tcp, flags, payLen, dataOff);
-        }
-        if (k >= 0)
-        {
-            trRcv[k] = rcv[h];                           // our rcv once the segment was applied
         }
         if (waiting[h] != 0 && lock >= 0)
         {
@@ -678,7 +596,7 @@ public final class Tcp
     }
 
     /** A segment for a connection whose SYN is out: the SYN-ACK completes it, a RST refuses it. */
-    private static void synSent(int h, long tcp, int flags, int dataOff, long now)
+    private static void synSent(int h, long tcp, int flags, int dataOff)
     {
         boolean ackOk = (flags & 0x10) != 0 && Ip.readBe32(tcp + 8) == isn0[h] + 1;
         if ((flags & 0x04) != 0)                         // RST: refused, if it acknowledges our SYN (RFC 9293)
@@ -707,7 +625,6 @@ public final class Tcp
             una[h] = snd[h];
             peerMss[h] = mssOption(tcp, dataOff);
             st[h] = CONNECTED;
-            tConn[h] = now;
             sendSeg(h, 0x10, 0L, 0);                     // ACK: the handshake's third segment (Pi run 9)
         }
     }
@@ -849,13 +766,10 @@ public final class Tcp
             if (off == 0)
             {
                 rcv[h] = rcv[h] + len;
-                inord[h] = inord[h] + 1;
-                rbytes[h] = rbytes[h] + len;
                 mergeHoles(h);
             }
             else
             {
-                ooo[h] = ooo[h] + 1;
                 holdRun(h, seq, seq + len);
             }
         }
@@ -995,7 +909,6 @@ public final class Tcp
                     int e = holeE[base + i];
                     if (e - rcv[h] > 0)
                     {
-                        rbytes[h] = rbytes[h] + (e - rcv[h]);
                         rcv[h] = e;
                     }
                     removeHole(h, i);
@@ -1098,172 +1011,6 @@ public final class Tcp
         Ip.copy4(rip[h], ip + 16);
         Ip.be16(ip + 10, Ip.cksum(ip, 20));
         lastWin[h] = win;
-        trace(h, true, tcp, payLen, Magic.readCNTPCT_EL0());
         Ip.send(buf, 14 + 20 + tcpLen);
-    }
-
-    // ----- measurement -----
-
-    /** Milliseconds between two CNTPCT readings. */
-    private static int msBetween(long from, long to)
-    {
-        return (int) ((to - from) / (Magic.readCNTFRQ_EL0() / 1000L));
-    }
-
-    /**
-     * MEASUREMENT: record one segment of connection {@code h} (see {@link #TRACE_SEGS}) under the lock; the
-     * record's index, or -1 once the trace is full.
-     */
-    private static int trace(int h, boolean tx, long tcp, int payLen, long when)
-    {
-        if (trc[h] >= TRACE_SEGS)
-        {
-            return -1;
-        }
-        int k = h * TRACE_SEGS + trc[h];
-        trTx[k] = tx ? 1 : 0;
-        trFl[k] = Magic.load8(tcp + 13) & 0x3F;
-        trSeq[k] = Ip.readBe32(tcp + 4);
-        trAck[k] = Ip.readBe32(tcp + 8);
-        trLen[k] = payLen;
-        trWin[k] = ((Magic.load8(tcp + 14) & 0xFF) << 8) | (Magic.load8(tcp + 15) & 0xFF);
-        trRcv[k] = rcv[h];
-        trT[k] = when;
-        trc[h] = trc[h] + 1;
-        return k;
-    }
-
-    /**
-     * MEASUREMENT: print connection {@code h}'s end state, its recorded segments and the stack's counters, once
-     * per connection. Sequence numbers are relative to the ISN that owns them (ours for our seq and their ack,
-     * the peer's for theirs; raw before the SYN-ACK told us the peer's); t is ms since connect began, and for a
-     * received segment it is when the RX task read it off the chip. Never called under the lock.
-     */
-    private static void dump(int h, byte[] why)
-    {
-        if (dumped[h] != 0)
-        {
-            return;
-        }
-        dumped[h] = 1;
-        board.bcm2711.Uart.write(Magic.bytes("tcp: h="));
-        VM.printDec(h);
-        board.bcm2711.Uart.write(Magic.bytes(" end ("));
-        board.bcm2711.Uart.write(why);
-        board.bcm2711.Uart.write(Magic.bytes(") st="));
-        VM.printDec(st[h]);
-        board.bcm2711.Uart.write(Magic.bytes(" wrote="));
-        VM.printDec(wbytes[h]);
-        board.bcm2711.Uart.write(Magic.bytes(" unacked="));
-        VM.printDec(snd[h] - una[h]);
-        board.bcm2711.Uart.write(Magic.bytes(" read="));
-        VM.printDec(rbytes[h]);
-        board.bcm2711.Uart.write(Magic.bytes(" unread="));
-        VM.printDec(readable(h));
-        board.bcm2711.Uart.write(Magic.bytes(" segs="));
-        VM.printDec(segs[h]);
-        board.bcm2711.Uart.write(Magic.bytes(" inorder="));
-        VM.printDec(inord[h]);
-        board.bcm2711.Uart.write(Magic.bytes(" ooo="));
-        VM.printDec(ooo[h]);
-        board.bcm2711.Uart.write(Magic.bytes(" holes="));
-        VM.printDec(holes[h]);
-        board.bcm2711.Uart.write(Magic.bytes(" peerMss="));
-        VM.printDec(peerMss[h]);
-        board.bcm2711.Uart.write(Magic.bytes(" connToWrite="));
-        VM.printDec(tWr[h] == 0L ? -1 : msBetween(tConn[h], tWr[h]));
-        board.bcm2711.Uart.write(Magic.bytes("ms sinceWrite="));
-        VM.printDec(tWr[h] == 0L ? -1 : msBetween(tWr[h], Magic.readCNTPCT_EL0()));
-        board.bcm2711.Uart.write(Magic.bytes("ms traced="));
-        VM.printDec(trc[h]);
-        board.bcm2711.Uart.write(Magic.bytes("\n"));
-        int n = trc[h];
-        int i = 0;
-        while (i < n)
-        {
-            int k = h * TRACE_SEGS + i;
-            boolean tx = trTx[k] != 0;
-            board.bcm2711.Uart.write(Magic.bytes("tcp: h="));
-            VM.printDec(h);
-            if (tx)
-            {
-                board.bcm2711.Uart.write(Magic.bytes(" tx"));
-            }
-            else
-            {
-                board.bcm2711.Uart.write(Magic.bytes(" rx"));
-            }
-            board.bcm2711.Uart.write(Magic.bytes(" flags="));
-            VM.printDec(trFl[k]);
-            board.bcm2711.Uart.write(Magic.bytes(" seq="));
-            if (tx)
-            {
-                VM.printDec(trSeq[k] - isn0[h]);
-            }
-            else
-            {
-                VM.printDec(pisn[h] == 0 ? trSeq[k] : trSeq[k] - pisn[h]);
-            }
-            board.bcm2711.Uart.write(Magic.bytes(" ack="));
-            if (tx)
-            {
-                VM.printDec(pisn[h] == 0 ? trAck[k] : trAck[k] - pisn[h]);
-            }
-            else
-            {
-                VM.printDec(trAck[k] - isn0[h]);
-            }
-            board.bcm2711.Uart.write(Magic.bytes(" len="));
-            VM.printDec(trLen[k]);
-            board.bcm2711.Uart.write(Magic.bytes(" win="));
-            VM.printDec(trWin[k]);
-            if (!tx)
-            {
-                board.bcm2711.Uart.write(Magic.bytes(" rcv="));
-                VM.printDec(pisn[h] == 0 ? trRcv[k] : trRcv[k] - pisn[h]);
-            }
-            board.bcm2711.Uart.write(Magic.bytes(" t="));
-            VM.printDec(msBetween(tStart[h], trT[k]));
-            board.bcm2711.Uart.write(Magic.bytes("ms\n"));
-            i = i + 1;
-        }
-        NetStats.print();
-        board.cyw43.WlanPoll.printBeat(tStart[h]);      // MEASUREMENT: did the RX task stall?
-        Ip.printArp(tStart[h]);                          // MEASUREMENT: did the gateway lose our MAC?
-    }
-
-    /** A poll ran out of time: the connection's trace and the RX path's counters. */
-    private static void report(int h)
-    {
-        board.bcm2711.Uart.write(Magic.bytes("tcp: poll timed out: h="));
-        VM.printDec(h);
-        board.bcm2711.Uart.write(Magic.bytes(" | rx: frames="));
-        VM.printDec(RxQueues.framesIn);
-        board.bcm2711.Uart.write(Magic.bytes(" toQueue="));
-        VM.printDec(RxQueues.toQueue);
-        board.bcm2711.Uart.write(Magic.bytes(" noQueue="));
-        VM.printDec(RxQueues.dropNoQueue);
-        board.bcm2711.Uart.write(Magic.bytes(" full="));
-        VM.printDec(RxQueues.dropFull);
-        board.bcm2711.Uart.write(Magic.bytes(" pool="));
-        VM.printDec(RxQueues.dropPool);
-        board.bcm2711.Uart.write(Magic.bytes(" arp="));
-        VM.printDec(RxQueues.arpAnswered);
-        board.bcm2711.Uart.write(Magic.bytes(" polls="));
-        VM.printDec(board.cyw43.WlanPoll.polls);
-        board.bcm2711.Uart.write(Magic.bytes(" irq="));
-        VM.printDec(board.cyw43.WlanPoll.irqPolls);
-        board.bcm2711.Uart.write(Magic.bytes(" chip="));
-        VM.printDec(board.cyw43.WlanPoll.frames);
-        board.bcm2711.Uart.write(Magic.bytes(" credit="));
-        VM.printDec(board.cyw43.Cyw43.creditWaits());
-        board.bcm2711.Uart.write(Magic.bytes("/"));
-        VM.printDec(board.cyw43.Cyw43.creditForced());
-        board.bcm2711.Uart.write(Magic.bytes(" fromRx="));
-        VM.printDec(board.cyw43.Cyw43.creditRx());
-        board.bcm2711.Uart.write(Magic.bytes("\n"));
-        dump(h, Magic.bytes("poll timed out"));
-        board.cyw43.Cyw43.stormReport(board.cyw43.WlanPoll.polls, board.cyw43.WlanPoll.irqPolls,
-                board.cyw43.WlanPoll.frames);           // MEASUREMENT (storm)
     }
 }
