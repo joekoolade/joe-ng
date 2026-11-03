@@ -17,6 +17,7 @@ ramfs/plugins/
 # The classpath jar + its staging dir (built from jarsrc/ at image time)
 ramfs/lib/app.jar
 ramfs/lib/tzdb.dat
+ramfs/lib/security/
 ramfs/lib/java.base/
 .appjar/
 

@@ -1,5 +1,6 @@
 HttpConnectSocketImpl by name: java.net.DelegatingSocketImpl statics=6
 supportedOptions: keepAlive=true noDelay=true
+setTcpNoDelay(true) reads back: noDelay=true
 NO_PROXY socket: connected=false closed=false
 SOCKS socket: connected=false closed=false
 NetLeftoversProbe done

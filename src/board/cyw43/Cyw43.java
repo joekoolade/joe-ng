@@ -446,6 +446,8 @@ public final class Cyw43
         board.bcm2711.Gic.initSpi(board.bcm2711.Bcm2711.SDIO_SPI);
     }
 
+    private static boolean waitFrameWarned;              // the after-start misuse below was reported once
+
     /**
      * Block on the SDIO card interrupt until the chip signals a frame, then read it. The task sleeps in
      * semWait (no busy-polling) until the ISR ({@link #onIrq}) disables the GIC SPI and posts WIFI_SEM; we
@@ -454,11 +456,22 @@ public final class Cyw43
      */
     public static int waitFrameIrq(long dst, int cap, int ms)
     {
+        if (net.RxQueues.active)                         // the RX task owns the chip: a second reader would
+        {                                                //   steal its frames and its interrupt
+            if (!waitFrameWarned)
+            {
+                waitFrameWarned = true;
+                board.bcm2711.Uart.write(Magic.bytes("wifi: BUG waitFrameIrq called after the rx task started\n"));
+            }
+            vm.VMScheduler.kernelSleep(ms);              // as if nothing arrived: callers loop on 0
+            return 0;
+        }
         if (!vm.VMScheduler.semWaitTimeout(vm.VM.WIFI_SEM, ms))
         {
             return 0;                                    // no frame within the timeout (GIC SPI still armed)
         }
         int len = readFrameOnce(dst, cap);               // the ISR posted: read the frame the chip signaled
+        net.NetStats.rxSync(dst, len);
         int ints = bpRead32(SDIOD_CORE + SD_INTSTATUS);
         bpWrite32(SDIOD_CORE + SD_INTSTATUS, ints);      // write-1-to-clear the SDIOD interrupt status
         Sdio.clearCardInt();                             // clear the SDHCI card-int status (de-assert DAT1)
@@ -587,6 +600,7 @@ public final class Cyw43
     private static final int WLC_SET_SSID     = 26;      // associate to a wlc_ssid_t {len, SSID[32]}
     private static final int WLC_SET_WSEC     = 134;     // 0 = open, 4 = AES/CCMP
     private static final int WLC_SET_WPA_AUTH = 165;     // 0 = no WPA, 0x80 = WPA2-PSK
+    private static final int WLC_SET_PM       = 86;      // power save: 0 = off (PM_OFF), 1 = PM_MAX, 2 = PM_FAST
     private static final int WLC_SET_WSEC_PMK = 268;     // set passphrase/PMK (wsec_pmk_t)
 
     /**
@@ -689,6 +703,10 @@ public final class Cyw43
         setInt(WLC_SET_WSEC, 4);                         // AES/CCMP
         setInt(WLC_SET_AUTH, 0);                         // open 802.11 auth
         setInt(WLC_SET_WPA_AUTH, 0x80);                  // WPA2-PSK
+        // Power save OFF. With the firmware's default PM the AP buffers our unicast frames while the radio
+        // dozes; Pi run 15 measured TCP segments held for 9-12 s and then delivered in one burst while the RX
+        // task polled an empty chip every 100 ms -- long enough for the TLS server to give up.
+        setInt(WLC_SET_PM, 0);
         setInt(WLC_UP, 0);                               // WLC_SET_SSID then associates
         // Set the association RSN IE (brcmf_configure_wpaie) BEFORE the join, so the firmware advertises the
         // SAME IE in the assoc request that we echo in EAPOL msg2's key data (host path) / the handshake.
@@ -713,7 +731,7 @@ public final class Cyw43
         }
     }
 
-    private static byte[] staPmk;                        // PBKDF2(psk, ssid), precomputed pre-association
+    static byte[] staPmk;                        // PBKDF2(psk, ssid), precomputed pre-association
 
     /**
      * Hand the firmware the 32-byte PMK for its own supplicant (brcmf_set_wsec → WLC_SET_WSEC_PMK). Struct
@@ -864,6 +882,7 @@ public final class Cyw43
         installKey(0, tk, 16, apMac, true);              // pairwise TK, bound to the AP
         installKey(gtkId, gtk, 16, new byte[6], false);  // group GTK
         board.bcm2711.Uart.write(Magic.bytes("wifi: keys installed\n"));
+        Supplicant.established(ie, ieLen, kck, kek);     // later re-handshakes run on the RX task
         return true;
     }
 
@@ -904,7 +923,7 @@ public final class Cyw43
 
     /** Build + send an EAPOL-Key frame; computes the MIC over the frame (MIC field zeroed) with KCK when the
      *  key-info MIC bit is set. */
-    private static void sendEapol(byte[] apMac, int keyInfo, byte[] replay, int keyLen, byte[] nonce,
+    static void sendEapol(byte[] apMac, int keyInfo, byte[] replay, int keyLen, byte[] nonce,
             byte[] keyData, int kdLen, byte[] kck)
     {
         int eapLen = 95 + kdLen;                         // EAPOL body length (after the 4-byte EAPOL header)
@@ -958,7 +977,7 @@ public final class Cyw43
 
     /** Find the GTK KDE (OUI 00-0f-ac, type 1) in unwrapped key data; copies the 16-byte GTK to {@code out}
      *  and returns its key id, or -1 if absent. */
-    private static int extractGtk(byte[] kd, int len, byte[] out)
+    static int extractGtk(byte[] kd, int len, byte[] out)
     {
         int p = 0;
         while (p + 2 <= len)
@@ -987,7 +1006,7 @@ public final class Cyw43
     }
 
     /** Install a key via WLC_SET_KEY (brcmf_wsec_key_le): CCMP algo, ea = peer for the pairwise key. */
-    private static void installKey(int index, byte[] key, int keyLen, byte[] ea, boolean pairwise)
+    static void installKey(int index, byte[] key, int keyLen, byte[] ea, boolean pairwise)
     {
         long b = Heap.allocData(200);                    // zeroed
         Magic.store32(b + 0, index);
@@ -1006,10 +1025,15 @@ public final class Cyw43
             Magic.store8(b + 156 + i, ea[i] & 0xFF);     // ea = peer MAC (pairwise) / zero (group)
             i = i + 1;
         }
-        readCtrl(sendBcdc(WLC_SET_KEY, b, 164, true));
+        int id = sendBcdc(WLC_SET_KEY, b, 164, true);
+        if (WlanPoll.onRxTask())
+        {
+            return;                                      // the RX task is the one that would read the ack: a
+        }                                                //   later recvCtrl skips it by id
+        readCtrl(id);
     }
 
-    private static byte[] slice(byte[] src, int off, int len)
+    static byte[] slice(byte[] src, int off, int len)
     {
         byte[] b = new byte[len];
         int i = 0;
@@ -1022,7 +1046,7 @@ public final class Cyw43
     }
 
     /** PTK = PRF(PMK, "Pairwise key expansion", min(AA,SPA)||max(AA,SPA)||min(An,Sn)||max(An,Sn), 48). */
-    private static void derivePtk(byte[] pmk, byte[] aa, byte[] spa, byte[] an, byte[] sn, byte[] ptk)
+    static void derivePtk(byte[] pmk, byte[] aa, byte[] spa, byte[] an, byte[] sn, byte[] ptk)
     {
         byte[] data = new byte[76];
         boolean aaFirst = cmp(aa, spa, 6) < 0;
@@ -1036,7 +1060,7 @@ public final class Cyw43
     }
 
     /** A pseudo-random SNonce from the counter-timer (good enough for a one-shot join). */
-    private static void genNonce(byte[] out)
+    static void genNonce(byte[] out)
     {
         int i = 0;
         while (i < 32)
@@ -1048,7 +1072,7 @@ public final class Cyw43
     }
 
     /** Copy {@code len} bytes from heap {@code addr} into a fresh byte[]. */
-    private static byte[] heapBytes(long addr, int len)
+    static byte[] heapBytes(long addr, int len)
     {
         byte[] b = new byte[len];
         int i = 0;
@@ -1060,7 +1084,7 @@ public final class Cyw43
         return b;
     }
 
-    private static void put(byte[] dst, int off, byte[] src, int len)
+    static void put(byte[] dst, int off, byte[] src, int len)
     {
         int i = 0;
         while (i < len)
@@ -1071,7 +1095,7 @@ public final class Cyw43
     }
 
     /** Unsigned lexicographic compare of the first {@code len} bytes. */
-    private static int cmp(byte[] a, byte[] b, int len)
+    static int cmp(byte[] a, byte[] b, int len)
     {
         int i = 0;
         while (i < len)
@@ -1289,7 +1313,6 @@ public final class Cyw43
     static void txDataP(long frame, int flen, int prio)
     {
         long tx = Heap.allocData(2048);
-        Magic.store8(tx + 4, txSeq & 0xFF);              // SDPCM seq
         Magic.store8(tx + 5, 2);                         // channel 2 = data
         Magic.store8(tx + 6, 0);
         Magic.store8(tx + 7, 12);                        // dataoffset
@@ -1304,10 +1327,25 @@ public final class Cyw43
             i = i + 1;
         }
         int total = 12 + 4 + flen;
+        net.NetStats.out(frame, flen);
         store16(tx + 0, total);
         store16(tx + 2, ~total);
+        sendFrame(tx, total);
+    }
+
+    /**
+     * Put one built SDPCM frame ({@code total} bytes at {@code tx}) on the bus: wait for transmit credit, then,
+     * holding the bus, stamp the next sequence number and write it. The sequence is stamped under the lock
+     * because transmits come from any task once the RX task runs.
+     */
+    private static void sendFrame(long tx, int total)
+    {
+        waitCredit();
+        WlanPoll.busLock();
+        Magic.store8(tx + 4, txSeq & 0xFF);              // SDPCM seq
         Sdio.cmd53Write(F2, 0, true, tx, 1, (total + 3) & ~3);
         txSeq = txSeq + 1;
+        WlanPoll.busUnlock();
     }
 
     static long ourIp;                                   // our leased IP (4 bytes)
@@ -1423,6 +1461,7 @@ public final class Cyw43
         {
             board.bcm2711.Uart.write(Magic.bytes("wifi: ping no reply\n"));
         }
+        WlanPoll.start();                                // the RX task owns the chip from here (NAPI-style)
         net.Sntp.sync();                                 // the wall clock from a time server, before any program runs
         // Connectivity is up and net.Ip is published. Run the built-in DNS+HTTP demo only when this is the
         // WiFi showcase; when the OS brought the interface up for a launched program, stop here and let the
@@ -1684,15 +1723,26 @@ public final class Cyw43
         long freq = Magic.readCNTFRQ_EL0();
         long endT = Magic.readCNTPCT_EL0() + freq * 6L;
         long nextSend = 0L;
-        while (Magic.readCNTPCT_EL0() < endT)
+        // What the lookup SAW, printed only on failure: a failed lookup reaches the guest as a bare
+        // UnknownHostException (InetSocketAddress drops the cause), so this is the one place the reason exists.
+        int sends = 0;
+        int frames = 0;
+        int ipv4 = 0;
+        int fromDns = 0;
+        int toUs = 0;
+        int idOk = 0;
+        int q = net.RxQueues.active ? net.RxQueues.bindUdp(localPort) : -1;
+        boolean found = false;
+        while (!found && Magic.readCNTPCT_EL0() < endT)
         {
             long now = Magic.readCNTPCT_EL0();
             if (now >= nextSend)
             {
                 txData(buf, flen);
                 nextSend = now + freq / 2L;
+                sends = sends + 1;
             }
-            int len = waitFrameIrq(rx, 2048, RX_WAIT_MS);
+            int len = rxFrame(q, rx, 2048);
             if (len == 0)
             {
                 continue;
@@ -1701,6 +1751,7 @@ public final class Cyw43
             {
                 continue;
             }
+            frames = frames + 1;
             long eth = rx + (Magic.load8(rx + 7) & 0xFF);
             eth = eth + 4 + (Magic.load8(eth + 3) & 0xFF) * 4;
             int et = (Magic.load8(eth + 12) & 0xFF) << 8 | (Magic.load8(eth + 13) & 0xFF);
@@ -1713,11 +1764,13 @@ public final class Cyw43
             {
                 continue;
             }
+            ipv4 = ipv4 + 1;
             long ip = eth + 14;
             if ((Magic.load8(ip + 9) & 0xFF) != 17 || !net.Ip.eq(ip + 12, dnsIp))
             {
                 continue;                                // not UDP, or not from our DNS server
             }
+            fromDns = fromDns + 1;
             long udp = ip + (Magic.load8(ip) & 0x0F) * 4;
             if (((Magic.load8(udp) & 0xFF) << 8 | (Magic.load8(udp + 1) & 0xFF)) != 53)
             {
@@ -1727,31 +1780,101 @@ public final class Cyw43
             {
                 continue;                                // not to this lookup's port
             }
+            toUs = toUs + 1;
             long d = udp + 8;
             if (((Magic.load8(d) & 0xFF) << 8 | (Magic.load8(d + 1) & 0xFF)) != id)
             {
                 continue;                                // id mismatch
             }
+            idOk = idOk + 1;
             int ancount = (Magic.load8(d + 6) & 0xFF) << 8 | (Magic.load8(d + 7) & 0xFF);
             if (ancount < 1)
             {
                 continue;
             }
-            long q = skipName(d + 12) + 4;               // skip question: qname + qtype(2) + qclass(2)
+            long rr = skipName(d + 12) + 4;              // skip question: qname + qtype(2) + qclass(2)
             int a = 0;
             while (a < ancount)
             {
-                q = skipName(q);                         // answer name (often a compression pointer)
-                int type = (Magic.load8(q) & 0xFF) << 8 | (Magic.load8(q + 1) & 0xFF);
-                int rdlen = (Magic.load8(q + 8) & 0xFF) << 8 | (Magic.load8(q + 9) & 0xFF);
+                rr = skipName(rr);                       // answer name (often a compression pointer)
+                int type = (Magic.load8(rr) & 0xFF) << 8 | (Magic.load8(rr + 1) & 0xFF);
+                int rdlen = (Magic.load8(rr + 8) & 0xFF) << 8 | (Magic.load8(rr + 9) & 0xFF);
                 if (type == 1 && rdlen == 4)             // A record
                 {
-                    copy4(q + 10, ipOut);
-                    return true;
+                    copy4(rr + 10, ipOut);
+                    found = true;
+                    break;
                 }
-                q = q + 10 + rdlen;
+                rr = rr + 10 + rdlen;
                 a = a + 1;
             }
+        }
+        net.RxQueues.unbind(q);
+        if (found)
+        {
+            return true;
+        }
+        board.bcm2711.Uart.write(Magic.bytes("dns: no A record for "));
+        board.bcm2711.Uart.write(host);
+        board.bcm2711.Uart.write(Magic.bytes(" in 6 s: sends="));
+        VM.printDec(sends);
+        board.bcm2711.Uart.write(Magic.bytes(" frames="));
+        VM.printDec(frames);
+        board.bcm2711.Uart.write(Magic.bytes(" ipv4="));
+        VM.printDec(ipv4);
+        board.bcm2711.Uart.write(Magic.bytes(" fromDns="));
+        VM.printDec(fromDns);
+        board.bcm2711.Uart.write(Magic.bytes(" toPort="));
+        VM.printDec(toUs);
+        board.bcm2711.Uart.write(Magic.bytes(" idOk="));
+        VM.printDec(idOk);
+        board.bcm2711.Uart.putc(0x0A);
+        if (net.RxQueues.active)                         // MEASUREMENT: is the RX task alive, reading, dispatching?
+        {
+            board.bcm2711.Uart.write(Magic.bytes("dns: rx q="));
+            VM.printDec(q);
+            board.bcm2711.Uart.write(Magic.bytes(" polls="));
+            VM.printDec(WlanPoll.polls);
+            board.bcm2711.Uart.write(Magic.bytes(" irq="));
+            VM.printDec(WlanPoll.irqPolls);
+            board.bcm2711.Uart.write(Magic.bytes(" frames="));
+            VM.printDec(WlanPoll.frames);
+            board.bcm2711.Uart.write(Magic.bytes(" rechecks="));
+            VM.printDec(WlanPoll.rechecks);
+            board.bcm2711.Uart.write(Magic.bytes(" in="));
+            VM.printDec(net.RxQueues.framesIn);
+            board.bcm2711.Uart.write(Magic.bytes(" toQ="));
+            VM.printDec(net.RxQueues.toQueue);
+            board.bcm2711.Uart.write(Magic.bytes(" noQ="));
+            VM.printDec(net.RxQueues.dropNoQueue);
+            board.bcm2711.Uart.write(Magic.bytes(" (events="));
+            VM.printDec(rxEvents);
+            board.bcm2711.Uart.write(Magic.bytes(") eapol="));
+            VM.printDec(Supplicant.frames);
+            board.bcm2711.Uart.write(Magic.bytes(" rekeys="));
+            VM.printDec(Supplicant.rekeys);
+            board.bcm2711.Uart.write(Magic.bytes(" (arp="));
+            VM.printDec(net.RxQueues.arpAnswered);
+            board.bcm2711.Uart.write(Magic.bytes(") full="));
+            VM.printDec(net.RxQueues.dropFull);
+            board.bcm2711.Uart.write(Magic.bytes(" pool="));
+            VM.printDec(net.RxQueues.dropPool);
+            board.bcm2711.Uart.write(Magic.bytes(" free="));
+            VM.printDec(net.RxQueues.freeCount());
+            board.bcm2711.Uart.write(Magic.bytes(" ctrlQ="));
+            VM.printDec(net.RxQueues.depth(net.RxQueues.Q_CTRL));
+            board.bcm2711.Uart.write(Magic.bytes(" emptyClears="));
+            VM.printDec(emptyClears);
+            board.bcm2711.Uart.write(Magic.bytes(" credit="));
+            VM.printDec(txSeq);
+            board.bcm2711.Uart.write(Magic.bytes("/"));
+            VM.printDec(txMaxNow());
+            board.bcm2711.Uart.write(Magic.bytes(" waits="));
+            VM.printDec(creditWaits());
+            board.bcm2711.Uart.write(Magic.bytes(" forced="));
+            VM.printDec(creditForced());
+            board.bcm2711.Uart.putc(0x0A);
+            net.NetStats.print();                        // MEASUREMENT: where did the replies go (checksum, port, address)?
         }
         return false;
     }
@@ -2501,17 +2624,34 @@ public final class Cyw43
         Magic.store32(tx + 20, (reqId << 16) | (isSet ? 0x02 : 0));   // flags: id | SET
         Magic.store32(tx + 24, 0);
         int frameLen = 12 + 16 + dataLen;
-        Magic.store8(tx + 4, txSeq & 0xFF);
         Magic.store8(tx + 5, 0);                         // control channel
         Magic.store8(tx + 6, 0);
         Magic.store8(tx + 7, 12);
         store16(tx + 0, frameLen);
         store16(tx + 2, ~frameLen);
-        Sdio.cmd53Write(F2, 0, true, tx, 1, (frameLen + 3) & ~3);
-        txSeq = txSeq + 1;
+        sendFrame(tx, frameLen);
         int id = reqId;
         reqId = reqId + 1;
         return id;
+    }
+
+    /**
+     * The next received frame for a consumer: from its queue {@code q} once the RX task owns the chip, else
+     * straight off the chip (bring-up, where this task is the only reader). 0 when nothing came within
+     * {@link #RX_WAIT_MS}.
+     */
+    static int rxFrame(int q, long dst, int cap)
+    {
+        if (net.RxQueues.active)
+        {
+            if (q < 0)
+            {
+                vm.VMScheduler.kernelSleep(RX_WAIT_MS);  // no queue could be bound (table full): nothing
+                return 0;                                //   can arrive for this consumer
+            }
+            return net.RxQueues.recv(q, dst, cap, RX_WAIT_MS);
+        }
+        return waitFrameIrq(dst, cap, RX_WAIT_MS);
     }
 
     /** Read the ioctl ack matching request {@code id} and log its status word (0 = OK). */
@@ -2539,7 +2679,7 @@ public final class Cyw43
         long endT = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * 3L / 2L;   // ~1.5 s (was 600 * 2 ms poll)
         while (Magic.readCNTPCT_EL0() < endT)
         {
-            int len = waitFrameIrq(dst, cap, RX_WAIT_MS);
+            int len = rxFrame(net.RxQueues.Q_CTRL, dst, cap);
             if (len == 0)
             {
                 continue;
@@ -2567,7 +2707,7 @@ public final class Cyw43
      * so we never over-read into the next frame (the bug that corrupted the escan stream). Returns the frame
      * length, or 0 if this attempt saw no valid frame.
      */
-    private static int readFrameOnce(long dst, int cap)
+    static int readFrameOnce(long dst, int cap)
     {
         if (!Sdio.cmd53Read(F2, 0, true, dst, 1, 4))     // hw header
         {
@@ -2578,11 +2718,21 @@ public final class Cyw43
         int nlen = (hw >> 16) & 0xFFFF;
         if (len < 12 || ((len ^ nlen) & 0xFFFF) != 0xFFFF)
         {
+            if (hw != 0)                                 // MEASUREMENT: not "empty" -- a header we cannot parse
+            {
+                if (rxBadHdr < BAD_HDRS)
+                {
+                    rxBadHw[rxBadHdr] = hw;
+                }
+                rxBadHdr = rxBadHdr + 1;
+            }
             return 0;                                    // no frame / invalid header
         }
         int body = len - 4;
+        int rest = 0;
         if (body > cap - 4)
         {
+            rest = body - (cap - 4);                     // the part that does not fit: drained below
             body = cap - 4;                              // clamp to the buffer (event frames can be large)
         }
         int done = 0;
@@ -2599,7 +2749,303 @@ public final class Cyw43
             }
             done = done + n;
         }
+        txMax = Magic.load8(dst + 9) & 0xFF;             // SDPCM sw header: the firmware's tx window (max seq)
+        int ch = Magic.load8(dst + 5) & 0x0F;
+        if (ch == 3)
+        {
+            rxGlom = rxGlom + 1;                         // MEASUREMENT: a glom (superframe) descriptor
+        }
+        if (rest > 0)
+        {
+            // An oversize frame must be read to its end: what is left in the F2 FIFO would otherwise be parsed
+            // as the next frame's header -- garbage, so every later read looks "empty" until the stream
+            // happens to realign, while real frames queue up behind it in the chip.
+            rxOversize = rxOversize + 1;
+            if (len > rxOversizeMax)
+            {
+                rxOversizeMax = len;
+                rxOversizeCh = ch;
+            }
+            if (drainBuf == 0L)
+            {
+                drainBuf = vm.Heap.allocData(512);
+            }
+            while (rest > 0)
+            {
+                int n = rest > 512 ? 512 : rest;
+                if (!Sdio.cmd53Read(F2, 0, true, drainBuf, 1, n))
+                {
+                    break;
+                }
+                rest = rest - n;
+            }
+            return cap;
+        }
         return len;
+    }
+
+    // MEASUREMENT (F2 stream health): headers that were neither empty nor valid, oversize frames, glom frames.
+    private static final int BAD_HDRS = 8;
+    public static int rxBadHdr;
+    public static int[] rxBadHw = new int[BAD_HDRS];
+    public static int rxOversize;
+    public static int rxOversizeMax;
+    public static int rxOversizeCh;
+    public static int rxGlom;
+    private static long drainBuf;
+
+    // RX glom (superframe). The firmware may bundle several frames into one F2 transfer: first a DESCRIPTOR
+    // (channel 3 with flag 0x80; its payload is one little-endian u16 length per subframe), then the
+    // SUPERFRAME itself (channel 3, no flag): a 12-byte superframe header padded to its data offset, then the
+    // subframes, each a whole SDPCM frame (own hw + sw header, channel 1 or 2) at the start of its descriptor
+    // length -- the first one after the superframe header. Dropping channel 3 (Pi run 18: glom=6, connect
+    // timed out with no SYN-ACK) discards every frame inside. Layout per brcmfmac's brcmf_sdio_rxglom.
+    private static final int GLOM_MAX = 32768;          // largest superframe kept (bigger ones are drained)
+    private static final int GLOM_SUBS = 64;             // most subframes in one descriptor
+    public static long glomBuf;                          // the last superframe read
+    public static int[] glomLens = new int[GLOM_SUBS];   // its descriptor lengths
+    public static int glomCount;                         // how many of glomLens are valid
+    public static int rxGlomDesc;                        // MEASUREMENT: descriptors seen
+    public static int rxGlomSub;                         // MEASUREMENT: subframes delivered (counted by WlanPoll)
+    public static int rxGlomBad;                         // MEASUREMENT: superframes discarded as malformed
+    public static int rxGlomMaxSubs;                     // MEASUREMENT: most subframes in one superframe
+
+    /** True if the frame at {@code dst} is a glom descriptor (channel 3, descriptor flag set). */
+    public static boolean isGlomDesc(long dst)
+    {
+        return (Magic.load8(dst + 5) & 0x8F) == 0x83;
+    }
+
+    /**
+     * Read the superframe that follows the glom descriptor at {@code desc} ({@code len} bytes) into
+     * {@link #glomBuf}, with its subframe lengths in {@link #glomLens}. The caller holds the bus. Returns the
+     * superframe length, or 0 if it was malformed or too big (it has still been read out of the FIFO).
+     */
+    public static int readSuperframe(long desc, int len)
+    {
+        rxGlomDesc = rxGlomDesc + 1;
+        int doff = Magic.load8(desc + 7) & 0xFF;
+        int total = 0;
+        int count = 0;
+        int p = doff;
+        while (p + 2 <= len)
+        {
+            int sub = (Magic.load8(desc + p) & 0xFF) | (Magic.load8(desc + p + 1) & 0xFF) << 8;
+            if (count < GLOM_SUBS)
+            {
+                glomLens[count] = sub;
+            }
+            count = count + 1;
+            total = total + sub;
+            p = p + 2;
+        }
+        glomCount = count;
+        if (count > rxGlomMaxSubs)
+        {
+            rxGlomMaxSubs = count;
+        }
+        if (glomBuf == 0L)
+        {
+            glomBuf = vm.Heap.allocData(GLOM_MAX);
+        }
+        if (drainBuf == 0L)
+        {
+            drainBuf = vm.Heap.allocData(512);
+        }
+        int keep = total > GLOM_MAX ? 0 : total;
+        int done = 0;
+        while (done < total)                             // read it all, so the FIFO stays aligned
+        {
+            int n = total - done;
+            if (n > 512)
+            {
+                n = 512;
+            }
+            long to = done < keep ? glomBuf + done : drainBuf;
+            if (!Sdio.cmd53Read(F2, 0, true, to, 1, n))
+            {
+                rxGlomBad = rxGlomBad + 1;
+                return 0;
+            }
+            done = done + n;
+        }
+        if (keep == 0 || count > GLOM_SUBS || total < 12)
+        {
+            rxGlomBad = rxGlomBad + 1;
+            return 0;
+        }
+        int hw = Magic.load32(glomBuf);
+        int hlen = hw & 0xFFFF;
+        int nlen = (hw >> 16) & 0xFFFF;
+        if (hlen < 12 || ((hlen ^ nlen) & 0xFFFF) != 0xFFFF || (Magic.load8(glomBuf + 5) & 0x8F) != 0x03)
+        {
+            rxGlomBad = rxGlomBad + 1;
+            return 0;
+        }
+        txMax = Magic.load8(glomBuf + 9) & 0xFF;         // the superframe header carries the tx window too
+        return total;
+    }
+
+    /**
+     * The firmware's transmit window: the highest SDPCM sequence number it will accept, from the last frame it
+     * sent us. A frame sent beyond it is dropped by the firmware (brcmfmac's txctl / data_ok check), so a
+     * transmit waits -- briefly, see {@link #waitCredit} -- for the window to open.
+     */
+    private static int txMax = 4;
+    static int creditWaitCount;                          // transmits that found the window closed
+    static int creditForcedCount;                        // ... and sent anyway after the wait ran out
+    static int creditRxCount;                            // ... of which sent at once by the RX task (no wait)
+
+    /** True when {@code txSeq} is inside the window (brcmfmac: (u8)(max - seq) nonzero and below 0x80). */
+    private static boolean haveCredit()
+    {
+        int d = (txMax - txSeq) & 0xFF;
+        return d != 0 && (d & 0x80) == 0;
+    }
+
+    /**
+     * Wait up to 20 ms for transmit credit. Once the RX task runs it reads the frames that move the window, so
+     * yielding is enough; before that nobody reads, and the wait just runs out -- the old behaviour, counted.
+     */
+    private static void waitCredit()
+    {
+        if (haveCredit())
+        {
+            return;
+        }
+        creditWaitCount = creditWaitCount + 1;
+        if (WlanPoll.onRxTask())                         // the RX task reads the frames that open the window:
+        {                                                //   waiting here only stalls them. Send (counted)
+            creditForcedCount = creditForcedCount + 1;
+            creditRxCount = creditRxCount + 1;
+            return;
+        }
+        long endT = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() / 50L;
+        while (!haveCredit())
+        {
+            if (Magic.readCNTPCT_EL0() >= endT)
+            {
+                creditForcedCount = creditForcedCount + 1;
+                return;
+            }
+            if (net.RxQueues.active)
+            {
+                vm.VMScheduler.kernelYield();
+            }
+        }
+    }
+
+    /** The next SDPCM transmit sequence number (diagnostics). */
+    static int txSeqNow()
+    {
+        return txSeq & 0xFF;
+    }
+
+    /** The firmware's last advertised transmit window (diagnostics). */
+    static int txMaxNow()
+    {
+        return txMax;
+    }
+
+    /** Transmits that waited for credit (diagnostics). */
+    public static int creditWaits()
+    {
+        return creditWaitCount;
+    }
+
+    /** Transmits sent with the window still closed after the wait (diagnostics). */
+    public static int creditForced()
+    {
+        return creditForcedCount;
+    }
+
+    /** Forced transmits that came from the RX task itself (diagnostics). */
+    public static int creditRx()
+    {
+        return creditRxCount;
+    }
+
+    /** Clear the SDIOD frame-interrupt status and the SDHCI card interrupt (de-asserting DAT1). */
+    static void clearFrameInts()
+    {
+        int ints = bpRead32(SDIOD_CORE + SD_INTSTATUS);
+        bpWrite32(SDIOD_CORE + SD_INTSTATUS, ints);      // write-1-to-clear
+        Sdio.maskCardInt();                              // CARD_INT is not write-1-to-clear (Pi run 6: it stayed
+        Sdio.clearCardInt();                             //   0x100 with SD_INTSTATUS and CCCR INT_PENDING both 0);
+        Sdio.unmaskCardInt();                            //   toggling its Status Enable is what drops it (SDHCI)
+        if (ints != 0)
+        {
+            clrSeen = clrSeen | ints;
+        }
+        if (emptyClears < STORM_SAMPLES)
+        {
+            sampleBefore = ints;
+        }
+    }
+
+    // MEASUREMENT (storm): what the empty-chip clear saw and left behind. Filled by clearFrameInts and
+    // stormSample; printed once by WlanPoll after STORM_REPORT empty polls.
+    static final int STORM_SAMPLES = 8;
+    static int emptyClears;                              // clears done with the chip empty
+    static int clrSeen;                                  // OR of every SD_INTSTATUS value read before a clear
+    static int sampleBefore;                             // SD_INTSTATUS before the clear (sampled polls only)
+    static int[] stormRow;                               // per sample: sdiodBefore, sdiodAfter, hciBefore,
+                                                         //   hciAfter, intpend (CCCR 0x05)
+
+    /** Record, for one of the first STORM_SAMPLES empty polls, the interrupt state on both sides of the clear. */
+    static void stormSample(int hciBefore)
+    {
+        int k = emptyClears;
+        emptyClears = emptyClears + 1;
+        if (k >= STORM_SAMPLES)
+        {
+            return;
+        }
+        if (stormRow == null)
+        {
+            stormRow = new int[STORM_SAMPLES * 5];
+        }
+        stormRow[k * 5] = sampleBefore;
+        stormRow[k * 5 + 1] = bpRead32(SDIOD_CORE + SD_INTSTATUS);
+        stormRow[k * 5 + 2] = hciBefore;
+        stormRow[k * 5 + 3] = Sdio.interrupt();
+        stormRow[k * 5 + 4] = Sdio.cmd52Read(F0, 0x05);  // CCCR INT_PENDING: the card's own view
+    }
+
+    /** Print the storm measurement: one line per sample plus the OR of all status bits seen. */
+    public static void stormReport(int polls, int irqPolls, int frames)
+    {
+        board.bcm2711.Uart.write(Magic.bytes("wifi: STORM? polls="));
+        VM.printDec(polls);
+        board.bcm2711.Uart.write(Magic.bytes(" irq="));
+        VM.printDec(irqPolls);
+        board.bcm2711.Uart.write(Magic.bytes(" frames="));
+        VM.printDec(frames);
+        board.bcm2711.Uart.write(Magic.bytes(" emptyClears="));
+        VM.printDec(emptyClears);
+        board.bcm2711.Uart.write(Magic.bytes(" sdiodSeenOR="));
+        VM.printHex(clrSeen & 0xFFFFFFFFL);
+        board.bcm2711.Uart.write(Magic.bytes(" sdiodMask="));
+        VM.printHex(bpRead32(SDIOD_CORE + SD_INTMASK) & 0xFFFFFFFFL);
+        board.bcm2711.Uart.write(Magic.bytes("\n"));
+        int k = 0;
+        while (stormRow != null && k < STORM_SAMPLES)
+        {
+            board.bcm2711.Uart.write(Magic.bytes("  empty#"));
+            VM.printDec(k);
+            board.bcm2711.Uart.write(Magic.bytes(" sdiod "));
+            VM.printHex(stormRow[k * 5] & 0xFFFFFFFFL);
+            board.bcm2711.Uart.write(Magic.bytes(" -> "));
+            VM.printHex(stormRow[k * 5 + 1] & 0xFFFFFFFFL);
+            board.bcm2711.Uart.write(Magic.bytes(" hci "));
+            VM.printHex(stormRow[k * 5 + 2] & 0xFFFFFFFFL);
+            board.bcm2711.Uart.write(Magic.bytes(" -> "));
+            VM.printHex(stormRow[k * 5 + 3] & 0xFFFFFFFFL);
+            board.bcm2711.Uart.write(Magic.bytes(" intpend "));
+            VM.printHex(stormRow[k * 5 + 4] & 0xFFFFFFFFL);
+            board.bcm2711.Uart.write(Magic.bytes("\n"));
+            k = k + 1;
+        }
     }
 
     /** Copy the bytes of {@code s} to {@code dst} then a NUL; returns the length written (incl. NUL). */
@@ -2834,6 +3280,42 @@ public final class Cyw43
         board.bcm2711.Uart.write(Magic.bytes("  "));
         board.bcm2711.Uart.write(label);
         VM.printHex((long) (value & 0xFFFFFFFFL));      // printHex already emits the "0x" prefix
+        board.bcm2711.Uart.putc(0x0A);
+    }
+
+    // MEASUREMENT (Pi run 12): after bring-up, frames the RX task cannot route were only counted (noQ).
+    public static int rxEvents;                          // firmware event frames (SDPCM channel 1)
+
+    /**
+     * Print a firmware event the RX task received after bring-up, when it is about the link (E_DEAUTH 5,
+     * E_DEAUTH_IND 6, E_DISASSOC 11, E_DISASSOC_IND 12, E_LINK 16); count every event. {@code rx} is the
+     * SDPCM frame.
+     */
+    public static void logRxEvent(long rx, int len)
+    {
+        rxEvents = rxEvents + 1;
+        int eth = findEthertype(rx, len);
+        if (eth < 0)
+        {
+            return;
+        }
+        long em = rx + eth + 12;
+        int flags = ((Magic.load8(em + 2) & 0xFF) << 8) | (Magic.load8(em + 3) & 0xFF);
+        int et = beU32(em + 4);
+        if (et != 5 && et != 6 && et != 11 && et != 12 && et != 16)
+        {
+            return;
+        }
+        board.bcm2711.Uart.write(Magic.bytes("wifi: rx event "));
+        VM.printDec(et);
+        board.bcm2711.Uart.write(Magic.bytes(" status "));
+        VM.printDec(beU32(em + 8));
+        board.bcm2711.Uart.write(Magic.bytes(" reason "));
+        VM.printDec(beU32(em + 12));
+        board.bcm2711.Uart.write(Magic.bytes(" flags="));
+        VM.printHex(flags);
+        board.bcm2711.Uart.write(Magic.bytes(" events="));
+        VM.printDec(rxEvents);
         board.bcm2711.Uart.putc(0x0A);
     }
 }

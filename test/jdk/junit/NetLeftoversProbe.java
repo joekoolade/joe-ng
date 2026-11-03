@@ -68,6 +68,14 @@ public class NetLeftoversProbe
             return "keepAlive=" + s.contains(StandardSocketOptions.SO_KEEPALIVE) + " noDelay="
                     + s.contains(StandardSocketOptions.TCP_NODELAY);
         });
+        report("setTcpNoDelay(true) reads back", () ->
+        {
+            Socket s = new Socket();
+            s.setTcpNoDelay(true);
+            boolean got = s.getTcpNoDelay();
+            s.close();
+            return "noDelay=" + got;
+        });
         report("NO_PROXY socket", () ->
         {
             Socket s = new Socket(Proxy.NO_PROXY);

@@ -1690,22 +1690,63 @@ final class VMNatives
         return Loader.vhFieldOffset(raw, name.length, Magic.load64(obj));
     }
 
-    /** SocketDispatcher.read0(fd, address, len) -> bytes read into {@code address}, or -1 at EOF. */
+    /**
+     * SocketDispatcher.read0(fd, address, len) -> bytes read into {@code address}, -1 at EOF, or a negated errno
+     * (the SocketDispatcher overlay throws for it, as SocketDispatcher.c does).
+     */
     static int sockRead0(long fdRef, long address, long len)
     {
-        return net.Tcp.read(fdIndex(fdRef), address, 0, (int) len);
+        int r = net.Tcp.read(fdIndex(fdRef), address, 0, (int) len);
+        sockIoTrace(Magic.bytes("tcp: read#"), sockReads, fdRef, len, r);   // MEASUREMENT
+        sockReads = sockReads + 1;
+        return r;
     }
 
-    /** SocketDispatcher.write0(fd, address, len) -> bytes written from {@code address}. */
+    // MEASUREMENT: every socket read/write the guest makes (first SOCK_TRACE of each), with the RX task's
+    // deepest stack use so far -- the Pi run 7 IOOBE (off=-1 len=8 on the 442-byte ClientHello array) needs to
+    // be placed: a corrupted FIRST write, or a later one.
+    private static final int SOCK_TRACE = 40;
+    private static int sockReads;
+    private static int sockWrites;
+
+    private static void sockIoTrace(byte[] label, int k, long fdRef, long len, int r)
+    {
+        if (k >= SOCK_TRACE)
+        {
+            return;
+        }
+        board.bcm2711.Uart.write(label);
+        VM.printDec(k);
+        board.bcm2711.Uart.write(Magic.bytes(" h="));
+        VM.printDec(fdIndex(fdRef));
+        board.bcm2711.Uart.write(Magic.bytes(" len="));
+        VM.printDec((int) len);
+        board.bcm2711.Uart.write(Magic.bytes(" -> "));
+        VM.printDec(r);
+        board.bcm2711.Uart.write(Magic.bytes(" rxStack="));
+        VM.printDec((int) (board.bcm2711.Sdio.rxSpTop - board.bcm2711.Sdio.rxSpMin));
+        board.bcm2711.Uart.write(Magic.bytes("\n"));
+    }
+
+    /** SocketDispatcher.write0(fd, address, len) -> bytes written from {@code address}, or a negated errno. */
     static int sockWrite0(long fdRef, long address, long len)
     {
-        return net.Tcp.write(fdIndex(fdRef), address, 0, (int) len);
+        int r = net.Tcp.write(fdIndex(fdRef), address, 0, (int) len);
+        sockIoTrace(Magic.bytes("tcp: write#"), sockWrites, fdRef, len, r);   // MEASUREMENT
+        sockWrites = sockWrites + 1;
+        return r;
     }
 
     /** UnixDispatcher.close0(fd). */
     static void sockClose0(long fdRef)
     {
         net.Tcp.close(fdIndex(fdRef));
+    }
+
+    /** Net.shutdown0(fd, how) -> 0, or a negated errno (net.Tcp.shutdown); the Net overlay throws for it. */
+    static int sockShutdown0(long fdRef, long how)
+    {
+        return net.Tcp.shutdown(fdIndex(fdRef), (int) how);
     }
 
     /** Net.available(fd) -> bytes buffered for a non-blocking read. */

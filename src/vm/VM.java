@@ -481,7 +481,8 @@ public final class VM
 
     static final long SCHED_FRAME = 272L;   // 31 GP regs + ELR + SPSR, 16-byte aligned (34 * 8)
     static final int  MAX_TASKS = 40;       // boot + demo/philosopher tasks + nested-thread tests (slots aren't reused)
-    static final int  NUM_SEM = 16;         // reserved 0..4 (M7/console/wifi) + dynamically-allocated forks
+    static final int  NUM_SEM = 64;         // reserved 0..4 (M7/console/wifi) + dynamically-allocated forks and the
+                                            //   network RX path's queue/lock semaphores (net.RxQueues)
     public static final int  WIFI_SEM = 4;  // posted by the SDIO RX ISR when a WiFi frame arrives
     static final int  SEM_RESERVED = 5;     // dynamic semaphores (forks) allocate at/after this index
     static int nextSem = SEM_RESERVED;      // next free semaphore index (newSem hands these out)
@@ -2047,6 +2048,7 @@ public final class VM
         if (sockWrite0Addr == 0L) { int u = VMNatives.sockWrite0(0L, 0L, 0L); }         // compilation of the helper)
         if (sockClose0Addr == 0L) { VMNatives.sockClose0(0L); }
         if (sockAvailableAddr == 0L) { int u = VMNatives.sockAvailable(0L); }
+        if (sockShutdown0Addr == 0L) { int u = VMNatives.sockShutdown0(0L, 0L); }
         if (sockPollAddr == 0L) { int u = VMNatives.sockPoll(0L, 0L, 0L); }             // Net.poll
         if (sockConfigureBlockingAddr == 0L) { VMNatives.sockConfigureBlocking(0L, 0L); } // IOUtil.configureBlocking
         if (fdValAddr == 0L) { int u = VMNatives.fdVal(0L); }
@@ -3776,6 +3778,7 @@ public final class VM
     static long sockWrite0Addr;
     static long sockClose0Addr;
     static long sockAvailableAddr;
+    static long sockShutdown0Addr;
     static long sockPollAddr;              // VMNatives.sockPoll(JJJ)I -- Net.poll
     static long sockConfigureBlockingAddr; // VMNatives.sockConfigureBlocking(JJ)V -- IOUtil.configureBlocking
     static long fdValAddr;
@@ -3883,6 +3886,7 @@ public final class VM
     static long taskBAddr;             // VM.taskB()V — demo task entry (writer-stashed)
     static long taskCAddr;             // VM.taskC()V — demo task entry (writer-stashed)
     static long taskRAddr;             // VM.taskR()V — UART reader task entry (writer-stashed)
+    public static long netRxTaskAddr;  // board.cyw43.WlanPoll.rxTask()V -- the WiFi RX poller task (writer-stashed)
     static long secondaryMainAddr;     // VM.secondaryMain(I)V — secondary-core entry (writer-stashed)
     static long ticks;                 // periodic timer interrupts serviced so far
 

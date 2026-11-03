@@ -1451,6 +1451,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.taskC()V",          "vm/VM.taskCAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.taskR()V",          "vm/VM.taskRAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.smpTask()V",        "vm/VM.smpTaskAddr");
+        stashHelper(image, staticWord, wordOffset, "board/cyw43/WlanPoll.rxTask()V",   "vm/VM.netRxTaskAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.prioTask(I)V",      "vm/VM.prioTaskAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.setPriority(JI)V",  "vm/VM.setPrioAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.getPriority(J)I",   "vm/VM.getPrioAddr");
@@ -1563,6 +1564,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockWrite0(JJJ)I",   "vm/VM.sockWrite0Addr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockClose0(J)V",     "vm/VM.sockClose0Addr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockAvailable(J)I",  "vm/VM.sockAvailableAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockShutdown0(JJ)I",  "vm/VM.sockShutdown0Addr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockPoll(JJJ)I",     "vm/VM.sockPollAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockConfigureBlocking(JJ)V", "vm/VM.sockConfigureBlockingAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.fdVal(J)I",          "vm/VM.fdValAddr");

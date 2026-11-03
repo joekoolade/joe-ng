@@ -228,7 +228,9 @@ public final class Loader
 
     // Field registry: per instance field of each class, its class/name (base+offset)
     // and slot, so a cross-class get/putfield can find the offset.
-    private static final int MAXFIELD = 4096;
+    // 16384, not 4096: the cap matched MAXCLASS, but classes average MORE than one instance field, and the TLS
+    // stack (SslEngineProbe, 2767 classes) filled 4096 first -- `CAP EXCEEDED: MAXFIELD count=4095`.
+    private static final int MAXFIELD = 16384;
     private static RVMField[] fldTab;   // global instance-field registry (reified: reuses RVMField; slot/access/descOff)
     private static int fldCount;
 
@@ -4265,6 +4267,7 @@ public final class Loader
         thrTypeCache = 0L;
         cloneableTypeCache = 0L;
         serializableTypeCache = 0L;
+        arrayIfaceScanned = 0;
         pcBase = new long[MAXPARSECACHE];
         pcBytes = new byte[MAXPARSECACHE][];
         pcCp = new int[MAXPARSECACHE][];
@@ -13357,6 +13360,7 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("socket0")))           { return VM.sockSocket0Addr; }
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("connect0")))          { return VM.sockConnect0Addr; }
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("available")))         { return VM.sockAvailableAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("shutdown0")))         { return VM.sockShutdown0Addr; } // (FD,I)I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("poll")))              { return VM.sockPollAddr; }     // (FD,I,J)I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("localPort")))         { return VM.sockZeroAddr; }     // -> 0
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getIntOption0")))     { return VM.sockZeroAddr; }     // -> 0 (SO_LINGER)
@@ -17722,7 +17726,7 @@ public final class Loader
      * The cumulative totals are accumulated either way -- a few adds per batch -- so turning this on does not
      * change what the numbers mean.
      */
-    private static final boolean BATCH_COST = true;
+    private static final boolean BATCH_COST = false;
 
     private static final boolean LOAD_PROFILE = false;
 
@@ -26883,11 +26887,21 @@ public final class Loader
     /** Cached Types of the two interfaces every array implements; 0 until each is found (Types never move). */
     private static long cloneableTypeCache;
     private static long serializableTypeCache;
+    /** {@code clTab[0, arrayIfaceScanned)} has been searched for those two names. */
+    private static int arrayIfaceScanned;
 
     /**
      * Is {@code type} {@code java/lang/Cloneable} or {@code java/io/Serializable} -- the two interfaces every array
      * type implements (JLS 4.10.3)? Allocation- and lock-free, because {@code VM.typeAssignable} asks it from
-     * checkcast and instanceof: a hit on the cached Types first, and the registry scan only while one is unfound.
+     * checkcast and instanceof.
+     *
+     * <p>EACH REGISTRY ENTRY IS SEARCHED ONCE. This used to scan ALL of {@code clTab} on every call while either
+     * Type was still unfound -- and a program that never loads one of them (no class it runs implements
+     * Cloneable) never finds it, so every array-against-interface type check paid O(classes loaded) for ever.
+     * MEASURED by qprof on SslEngineProbe: 76% of 273 samples in this method, under instanceOf/castOk, with the
+     * TLS handshake starved. A Type can only be one of these two if its class is REGISTERED, and {@code clTab}
+     * is append-only ({@code type} is written once, before {@code clCount} moves -- see the ctProbe note), so
+     * the entries added since the last call are the only ones that can change the answer.
      */
     static boolean isArrayInterface(long type)
     {
@@ -26895,34 +26909,30 @@ public final class Loader
         {
             return false;
         }
-        if (type == cloneableTypeCache || type == serializableTypeCache)
+        if (cloneableTypeCache == 0L || serializableTypeCache == 0L)
         {
-            return true;
-        }
-        if (cloneableTypeCache != 0L && serializableTypeCache != 0L)
-        {
-            return false;
-        }
-        int i = 0;
-        while (i < clCount)
-        {
-            if (clTab[i] != null && clTab[i].type == type)
+            int n = clCount;
+            int i = arrayIfaceScanned;
+            while (i < n)
             {
-                if (utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/Cloneable")))
+                if (clTab[i] != null)
                 {
-                    cloneableTypeCache = type;
-                    return true;
+                    if (cloneableTypeCache == 0L
+                            && utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/Cloneable")))
+                    {
+                        cloneableTypeCache = clTab[i].type;
+                    }
+                    else if (serializableTypeCache == 0L
+                            && utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/io/Serializable")))
+                    {
+                        serializableTypeCache = clTab[i].type;
+                    }
                 }
-                if (utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/io/Serializable")))
-                {
-                    serializableTypeCache = type;
-                    return true;
-                }
-                return false;
+                i += 1;
             }
-            i += 1;
+            arrayIfaceScanned = n;
         }
-        return false;
+        return type == cloneableTypeCache || type == serializableTypeCache;
     }
 
     static long objectTypeAddr()
