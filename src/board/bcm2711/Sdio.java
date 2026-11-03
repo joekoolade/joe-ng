@@ -43,6 +43,10 @@ public final class Sdio
     // The microSD card is on EMMC2 (0xFE340000); the WiFi hangs off the legacy Arasan/EMMC block below.
     static long base = 0xFE30_0000L;
 
+    // MEASUREMENT: how deep the WiFi RX task's 32 KB heap stack goes (set by board.cyw43.WlanPoll at task entry).
+    public static long rxSpTop;
+    public static long rxSpMin;
+
     // WiFi SDIO is bonded to GPIO34..39 in ALT3 (CLK, CMD, DAT0..3).
     private static final int PIN_FIRST = 34, PIN_LAST = 39;
 
@@ -324,6 +328,11 @@ public final class Sdio
     /** Issue a command with argument {@code arg}; wait for completion. False on error/timeout. */
     private static boolean command(int cmdtm, long arg)
     {
+        long sp = Magic.readSP();                        // MEASUREMENT: RX task stack depth
+        if (sp <= rxSpTop && sp > rxSpTop - 0x10000L && sp < rxSpMin)
+        {
+            rxSpMin = sp;
+        }
         if (!waitClear(base + STATUS, SR_CMD_INHIBIT))
         {
             return false;

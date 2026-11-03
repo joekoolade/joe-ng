@@ -1920,6 +1920,46 @@ public final class VMScheduler
         spawnWith(runTrampAddr, runnable, runnable);
     }
 
+    /**
+     * Kernel-side semaphores for board and network code (the WiFi RX task's queues and locks, net.RxQueues):
+     * a counting semaphore usable from any task on any core. Allocate them once, at bring-up -- {@link #newSem}
+     * takes no lock.
+     */
+    public static int kernelSem(int initial)
+    {
+        return newSem(initial);
+    }
+
+    /** Yield the CPU from kernel code (board/network tasks): the public face of {@link #taskYield}. */
+    public static void kernelYield()
+    {
+        taskYield();
+    }
+
+    /** Sleep the calling task for {@code ms} milliseconds from kernel code. */
+    public static void kernelSleep(long ms)
+    {
+        sleep(ms);
+    }
+
+    /** The calling task's id (as {@link #spawnKernel} returned it), for kernel code that must know who runs it. */
+    public static int kernelTaskId()
+    {
+        return curTask();
+    }
+
+    /** Start a kernel task (a static no-arg method's writer-stashed entry) on any core. Returns its id. */
+    public static int spawnKernel(long entry)
+    {
+        return spawn(entry);
+    }
+
+    /** Post a {@link #kernelSem} from task context (never from an ISR: that is {@link #semPostRaw}). */
+    public static void kernelPost(int s)
+    {
+        semPost(s);
+    }
+
     /** Allocate a fresh counting semaphore initialised to {@code initial}; returns its index (a "fork"). */
     static int newSem(int initial)
     {

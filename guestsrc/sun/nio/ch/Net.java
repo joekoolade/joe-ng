@@ -402,6 +402,13 @@ public class Net {
             arg = (b) ? 1 : 0;
         }
 
+        // joe-ng: the VM's TCP stack (net/Tcp.write) sends every write at once as its own segment -- there is no
+        // Nagle buffering -- so TCP_NODELAY on is exactly what it already does, and setting it is a no-op by
+        // construction (HttpClient.openServer sets it on every connection). Asking for Nagle (off) is behaviour
+        // the stack does not have, so that, like every other option, still reaches the throwing stub.
+        if (name == StandardSocketOptions.TCP_NODELAY && arg == 1)
+            return;
+
         boolean mayNeedConversion = (family == UNSPEC);
         setIntOption0(fd, mayNeedConversion, key.level(), key.name(), arg, isIPv6);
     }
@@ -447,6 +454,11 @@ public class Net {
         OptionKey key = SocketOptionRegistry.findOption(name, family);
         if (key == null)
             throw new AssertionError("Option not found");
+
+        // joe-ng: TCP_NODELAY reads back as the stack's real, fixed behaviour (no Nagle; see setSocketOption),
+        // not the VM native's blanket 0.
+        if (name == StandardSocketOptions.TCP_NODELAY)
+            return Boolean.TRUE;
 
         boolean mayNeedConversion = (family == UNSPEC);
         int value = getIntOption0(fd, mayNeedConversion, key.level(), key.name());
@@ -592,7 +604,17 @@ public class Net {
     public static final int SHUT_WR = 1;
     public static final int SHUT_RDWR = 2;
 
-    static native void shutdown(FileDescriptor fd, int how) throws IOException;
+    // joe-ng: shutdown0 is a VM native, and a VM native cannot throw. It answers a NEGATED errno (net.Tcp.shutdown,
+    // which already answers 0 for ENOTCONN, the one errno Net.c ignores), and this throws what handleSocketError
+    // throws for it.
+    static void shutdown(FileDescriptor fd, int how) throws IOException {
+        int n = shutdown0(fd, how);
+        if (n < 0) {
+            throw connectFailure(-n);
+        }
+    }
+
+    private static native int shutdown0(FileDescriptor fd, int how);
 
     private static native int localPort(FileDescriptor fd)
         throws IOException;

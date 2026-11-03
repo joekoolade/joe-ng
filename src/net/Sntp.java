@@ -84,7 +84,9 @@ public final class Sntp
         long stampHi = 0L;
         long stampLo = 0L;
         int localPort = Ip.ephemeralPort();               // one per exchange; resends keep it
-        while (Magic.readCNTPCT_EL0() < endT)
+        int q = RxQueues.active ? RxQueues.bindUdp(localPort) : -1;
+        long got = 0L;
+        while (got == 0L && Magic.readCNTPCT_EL0() < endT)
         {
             long now = Magic.readCNTPCT_EL0();
             if (now >= nextSend)
@@ -96,7 +98,7 @@ public final class Sntp
                 Ip.send(buf, flen);
                 nextSend = now + freq;
             }
-            long ip = Ip.recvIp(rx, 2048, RX_WAIT_MS);
+            long ip = Ip.recvIp(q, rx, 2048, RX_WAIT_MS);
             if (ip == 0L)
             {
                 continue;
@@ -129,9 +131,10 @@ public final class Sntp
             }
             long rttMs = (Magic.readCNTPCT_EL0() - sentAt) / (freq / 1000L);
             long ms = (secs - NTP_UNIX_OFFSET) * 1000L + (frac * 1000L >>> 32);
-            return ms + rttMs / 2L;
+            got = ms + rttMs / 2L;
         }
-        return 0L;
+        RxQueues.unbind(q);
+        return got;
     }
 
     /**

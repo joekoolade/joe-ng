@@ -1,0 +1,9 @@
+server key: EC CN=localhost san=[[2, localhost]]
+TLSv1.3 session: TLSv1.3 TLS_AES_256_GCM_SHA384 | server got hello over TLS 1.3 | client got echo hello over TLS 1.3
+TLSv1.2 session: TLSv1.2 TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 | server got hello over TLS 1.2 | client got echo hello over TLS 1.2
+peer certificate: CN=localhost
+hostname checked, right host: TLSv1.3 TLS_AES_256_GCM_SHA384 | server got named | client got echo named
+hostname checked, wrong host: threw javax.net.ssl.SSLHandshakeException (certificate_unknown) No subject alternative DNS name matching wrong.example found.
+default trust store: more than 100 roots
+default trust rejects self-signed: threw javax.net.ssl.SSLHandshakeException (certificate_unknown) PKIX path building failed: sun.security.provider.certpath.SunCertPathBuilderException: unable to find valid certification path to requested target
+SslEngineProbe done

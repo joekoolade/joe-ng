@@ -175,6 +175,7 @@ AbsentSuperProbe
 SecurityStockProbe
 LazyVarHandleProbe
 JarVerifyProbe
+SslEngineProbe           solo             # the whole TLS stack; crowds the code arena (batch-6 code arena OOM, 2026-11-03)
 RepeatableProbe
 RuntimeProbe
 SbFpProbe
