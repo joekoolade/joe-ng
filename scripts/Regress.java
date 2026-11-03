@@ -56,14 +56,18 @@ public final class Regress
             + "|sync: static|ARRAY ELEMENT|^  iface tier|UNRESOLVED STATIC|CTOR SKIPPED|^    tried|HUGE body"
             + "|^code arena");
 
+    /** The VM printed this and halted for good (Heap, VMScheduler: a {@code wfe} spin), so no end marker follows. */
+    private static final String HALTED = "|code arena OOM|heap OOM|large region OOM|MONITOR TABLE FULL";
+
     /** A solo run is over: the program returned, or the VM stopped it. */
     private static final Pattern SOLO_END = Pattern.compile("\\[main returned normally\\]|^Exception in thread"
             + "|DENYLIST TRAP|^ *FAULT|BOOT RE-ENTERED|LINK FAILED|JIT unsupported|TAIL TARGET IS 0|Halting\\."
-            + "|LAZY INDEX OUT OF RANGE|CAP EXCEEDED");
+            + "|LAZY INDEX OUT OF RANGE|CAP EXCEEDED" + HALTED);
 
     /** A batch is over. Not "Exception in thread": a probe's own background thread may print that and go on. */
     private static final Pattern BATCH_END = Pattern.compile("^@@@ ProbeBatch end|\\[main returned normally\\]"
-            + "|DENYLIST TRAP|^ *FAULT|BOOT RE-ENTERED|TAIL TARGET IS 0|Halting\\.|LAZY INDEX OUT OF RANGE|CAP EXCEEDED");
+            + "|DENYLIST TRAP|^ *FAULT|BOOT RE-ENTERED|TAIL TARGET IS 0|Halting\\.|LAZY INDEX OUT OF RANGE|CAP EXCEEDED"
+            + HALTED);
 
     private static final String MARK = "@@@ ProbeBatch ";
     private static final int MAX_PER_BATCH = 25;
@@ -400,6 +404,7 @@ public final class Regress
                 .redirectErrorStream(true).redirectOutput(logFile.toFile()).start();
         Pattern end = job.batch() ? BATCH_END : SOLO_END;
         boolean finished = false;
+        String endLine = null;
         while (!finished && (System.nanoTime() - t0) / 1_000_000_000L < ceiling && q.isAlive())
         {
             Thread.sleep(2000);
@@ -408,6 +413,7 @@ public final class Regress
                 if (end.matcher(line).find())
                 {
                     finished = true;
+                    endLine = line;
                     break;
                 }
             }
@@ -484,6 +490,10 @@ public final class Regress
         }
 
         StringBuilder report = new StringBuilder(tag + " (" + secs + "s" + (finished ? "" : ", NO END MARKER") + "):");
+        if (endLine != null && !endLine.startsWith(MARK + "end") && !endLine.contains("[main returned normally]"))
+        {
+            report.append(" STOPPED BY \"").append(endLine.strip()).append('"');   // the VM halted: say how
+        }
         for (Probe p : job.probes())
         {
             List<String> got = sections.get(p.name());
