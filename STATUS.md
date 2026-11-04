@@ -4,6 +4,34 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **Loader: markReachable's PER-BATCH ROUND COSTS ARE INCREMENTAL (2026-11-04, PR #483, bbb55de).**
+  - **Before:** `markReachable` runs once per demand-load batch (1,275 batches, 2,834 rounds on SslEngineProbe) and
+    rebuilt state that only grows. Guest timers over one SslEngineProbe run (QEMU), mark 23.1 s: name index rehash
+    6.5 s, the per-batch full clear of the 65,536-bucket REACHTAB tables and MAXBLOB watermarks 6.9 s, the pend index
+    (5,668 calls) 1.8 s, the static pend index 0.9 s.
+  - **Now:**
+    - `buildNameIndex` hashes only pds added since the last call (`pnIndexed`). Chains head-insert in ascending
+      order, so the chains are identical to a full rebuild.
+    - `buildPendIndex` / `buildStaticPendIndex` index only pends appended since the last call (`pvIndexed`,
+      `psIndexed`) -- pends are append-only within a batch -- and record each bucket slot (`pvSlot`, `psSlot`) so
+      `clearPendIndexes` resets just those buckets before `pendN` returns to 0.
+    - The per-batch reset clears only the `reachTab` / `collectedTab` slots this batch touched (`reachSlotOf`,
+      `colSlotOf`, recorded by `addReach` / `addCollected`) plus the per-pd watermarks. A fresh or reallocated table
+      sets `markFullClear` and takes the old full clear.
+  - **Equivalence:** a checker image compared the sparse reset against the full clear: **0 mismatches** over 12,611
+    checks. Its first run reported `badClear=1274` -- `reachN = 0` ran BEFORE the sparse clear walked the old list --
+    and the fix (reset after the clear) is what shipped.
+  - **QEMU, paired concurrent triplets with an A/A control** (main / branch / A-A = main plus a reachable,
+    never-executed method, +792 B): 502/490/513, 518/506/529, 519/509/528 s -- **branch 3 of 3 faster, -1.9% to
+    -2.4%**; the A/A is +2%, so layout noise alone is as large as the gain and a small 3-of-3 result needs this
+    control. gc=18 in every run. `make test`, `overlaycheck` OK; 30 targeted probes pass.
+  - **Pi (one boot):** HttpsDemo example.com `200 OK`, 577 bytes, TLS_AES_256_GCM_SHA384; attempt 1 Broken pipe at
+    510.2 s (run 28: 533.8 s), attempt 2 connected in 1.6 s; `https: done` **528,740 ms** (run 28: 555,446 ms, -4.8%);
+    `gc: collections=17` (run 28: 16); no traps. Same shape as run 28 (one failed attempt), but not a Pi A/B.
+  - **Measured and NOT kept** (same session): caching `patchRelocs`' failing re-lookups measured slower in 3 of 3
+    pairs (319/324, 322/329, 331/336 s); the A/A control (532/537/542, 536/538/545, 551/557/559 s for
+    main/branch/A-A) showed that gap is layout noise, and the change was dropped as no gain.
+
 - **Loader: THREE PER-BATCH WHOLE-WORLD PASSES ARE CHEAPER (2026-11-04, PR #481, 99e45ca).**
   - **Before:** every demand-load batch re-runs passes over the whole loaded world, so their cost grows with the world,
     not the batch. Guest timers over one SslEngineProbe run (QEMU): 1,275 batches, load 72.6 s of 283 s -- mark 25.4
