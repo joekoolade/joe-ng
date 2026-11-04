@@ -4347,6 +4347,8 @@ public final class Loader
         hvLen = null;
         hvTo = null;
         collectedTab = new long[REACHTAB];
+        colN = 0;
+        markFullClear = true;
         pdPendTo = new int[MAXBLOB];
         pdVirtTo = new int[MAXBLOB];
         pdPendEpoch = new int[MAXBLOB];
@@ -4378,6 +4380,7 @@ public final class Loader
         reachCode = new long[MAXREACH];
         reachTab = new long[REACHTAB];
         reachN = 0;
+        markFullClear = true;                           // a fresh table: see markFullClear
         reachRefused = 0;                               // resets BESIDE the table it counts, like every
                                                         //   other watermark here
         VM.jitFrameCount = 0L;                           // a demo's JIT'd frames/handlers are dead once it returns;
@@ -4535,6 +4538,16 @@ public final class Loader
                                                          //   every blob, every round -- a linear scan makes that
                                                          //   blobs x methods x reachN
     private static int reachN;
+    /**
+     * The {@code reachTab} slot of each reached method and the {@code collectedTab} slot of each collected
+     * one, so {@link #markReachable} empties only those instead of both whole tables per batch.
+     * {@code markFullClear} is set whenever either table is reallocated -- allocation promises no zeroes --
+     * and makes the next reset clear everything.
+     */
+    private static int[] reachSlotOf;
+    private static int[] colSlotOf;
+    private static int colN;
+    private static boolean markFullClear = true;
     static int reachRefused;                             // refusals of an UNMARKED method past MAXREACH.
                                                          //   Not a distinct-method count (see addReach), so
                                                          //   it bounds the shortfall rather than naming it
@@ -4619,6 +4632,8 @@ public final class Loader
             return false;
         }
         collectedTab[i] = code;
+        colSlotOf[colN] = i;                            // for the sparse clear in markReachable
+        colN += 1;
         return true;
     }
 
@@ -4672,6 +4687,7 @@ public final class Loader
         }
         reachTab[i] = code;
         reachCode[reachN] = code;
+        reachSlotOf[reachN] = i;                        // for the sparse clear in markReachable
         reachN += 1;
         return true;
     }
@@ -4961,7 +4977,6 @@ public final class Loader
         resetMethodTables();
         mrReset += Magic.readCNTPCT_EL0() - ts0;
         long ts1 = Magic.readCNTPCT_EL0();
-        reachN = 0;
         // ALLOCATED ONCE, NOT PER BATCH. These are fixed-size scratch, and rebuilding them every batch cost
         // `MAXPEND * 36` bytes a batch by this method's own accounting below -- ~9.4MB, which Heap.alloc then
         // ZEROES, on every one of a launcher boot's 165 batches. That was ~50% of `mark` and invisible: the
@@ -4976,6 +4991,7 @@ public final class Loader
         // against ~9.4MB allocated and zeroed.
         if (pendBase == null)                            // resetLoader nulls these per LAUNCH to free them
         {
+            markFullClear = true;
             cumBytes += (long) MAXPEND * 36L + 16384L * 16L + (long) MAXBLOB * 21L;   // see loadCostReport
             reachTab = new long[REACHTAB];
             collectedTab = new long[REACHTAB];
@@ -4993,7 +5009,13 @@ public final class Loader
             instBase = new long[MAXPEND];
             instOff = new int[MAXPEND];
         }
-        else
+        if (reachSlotOf == null)
+        {
+            reachSlotOf = new int[MAXREACH];
+            colSlotOf = new int[MAXREACH];
+            markFullClear = true;
+        }
+        if (markFullClear)
         {
             int z = 0;
             while (z < REACHTAB)                         // open-addressed: a probe walks until it finds a 0
@@ -5013,7 +5035,43 @@ public final class Loader
                 pdInstantiated[z] = false;
                 z += 1;
             }
+            markFullClear = false;
         }
+        else
+        {
+            // ONLY THE SLOTS THIS LAUNCH'S LAST BATCH FILLED. Both tables are 262,144 longs and were zeroed in
+            // full at the start of EVERY batch, while a batch late in a run marks a handful of methods.
+            // MEASURED on SslEngineProbe (2026-11-04): 6.9 s for this reset over 1,275 batches. A slot is
+            // filled only by addReach / addCollected, which record it; reachN and colN bound the lists, and
+            // collected methods are reached ones, so neither list can outgrow MAXREACH. A table reallocated
+            // by resetLoader (no promise of zeroes) is cleared in full first: see markFullClear.
+            int z = 0;
+            while (z < reachN)
+            {
+                reachTab[reachSlotOf[z]] = 0L;
+                z += 1;
+            }
+            z = 0;
+            while (z < colN)
+            {
+                collectedTab[colSlotOf[z]] = 0L;
+                z += 1;
+            }
+            z = 0;
+            while (z < pdCount)                          // watermarks: only blobs exist below pdCount, and it
+            {                                            //   only grows within a launch (a reset clears in full)
+                pdPendTo[z] = 0;
+                pdVirtTo[z] = 0;
+                pdDfltTo[z] = 0;
+                pdSeeded[z] = 0;
+                pdSeedC[z] = 0;
+                pdInstantiated[z] = false;
+                z += 1;
+            }
+        }
+        reachN = 0;                                     // AFTER the clear above, which walks the old list
+        colN = 0;
+        clearPendIndexes();                             // BEFORE pendN returns to 0: it empties by pend
         pendPullTo = 0;
         pendN = 0;
         instN = 0;
@@ -6211,71 +6269,136 @@ public final class Loader
     private static int[] psBucket;                       // ... and the same for STATIC/special pends, keyed on the
     private static int[] psNext;                         //   callee CLASS name, for resolveBlob
 
-    /** Index this round's STATIC/special pends (kind 0) by callee class name, for {@link #resolveBlob}. */
+    /**
+     * Pends already in {@code psBucket}/{@code pvBucket}, and the bucket each one went into (-1 for a pend of
+     * the other kind), so the start of the next batch can empty exactly those buckets.
+     *
+     * <p>BOTH INDEXES WERE CLEARED (65,536 buckets) AND REBUILT FROM PEND 0 ON EVERY CALL -- once per round
+     * for the static one and twice per round for the virtual one -- although pends only APPEND within a batch
+     * and an entry is never rewritten: {@code pendN} returns to 0 in exactly one place, the top of
+     * {@link #markReachable}, which calls {@link #clearPendIndexes} first. MEASURED on SslEngineProbe
+     * (2026-11-04): 2.7 s across 5,668 virtual and 2,834 static builds, while the batch's last round held
+     * 15 pends. Indexing only the new pends in order head-inserts exactly as the rebuild did, so every chain
+     * is identical.
+     */
+    private static int psIndexed;
+    private static int pvIndexed;
+    private static int[] psSlot;
+    private static int[] pvSlot;
+
+    /** Grow a per-pend link array to hold {@code n}, KEEPING the links already indexed. */
+    private static int[] growPendLinks(int[] a, int n)
+    {
+        if (a != null && a.length >= n)
+        {
+            return a;
+        }
+        int[] b = new int[n + 64];
+        if (a != null)
+        {
+            int i = 0;
+            while (i < a.length)
+            {
+                b[i] = a[i];
+                i += 1;
+            }
+        }
+        return b;
+    }
+
+    /** Fresh bucket table: every bucket empty (-1). Allocation does not promise zeroes, nor would 0 do. */
+    private static int[] emptyBuckets()
+    {
+        int[] b = new int[PVTAB];
+        int i = 0;
+        while (i < PVTAB)
+        {
+            b[i] = -1;
+            i += 1;
+        }
+        return b;
+    }
+
+    /** Empty both pend indexes before {@code pendN} returns to 0: only the buckets their pends went into. */
+    private static void clearPendIndexes()
+    {
+        int p = 0;
+        while (p < psIndexed)
+        {
+            if (psSlot[p] >= 0)
+            {
+                psBucket[psSlot[p]] = -1;
+            }
+            p += 1;
+        }
+        p = 0;
+        while (p < pvIndexed)
+        {
+            if (pvSlot[p] >= 0)
+            {
+                pvBucket[pvSlot[p]] = -1;
+            }
+            p += 1;
+        }
+        psIndexed = 0;
+        pvIndexed = 0;
+    }
+
+    /** Index the STATIC/special pends (kind 0) added since the last call by callee class name, for {@link #resolveBlob}. */
     private static void buildStaticPendIndex()
     {
         if (psBucket == null)
         {
-            psBucket = new int[PVTAB];
+            psBucket = emptyBuckets();
+            psIndexed = 0;
         }
-        if (psNext == null || psNext.length < pendN)
+        psNext = growPendLinks(psNext, pendN);
+        psSlot = growPendLinks(psSlot, pendN);
+        while (psIndexed < pendN)
         {
-            psNext = new int[pendN + 64];
-        }
-        int i = 0;
-        while (i < PVTAB)
-        {
-            psBucket[i] = -1;
-            i += 1;
-        }
-        int p = 0;
-        while (p < pendN)
-        {
+            int p = psIndexed;
             if (pendKind[p] == 0)
             {
                 int h = utf8Hash(pendBase[p], pendClass[p]) & (PVTAB - 1);
                 psNext[p] = psBucket[h];
                 psBucket[h] = p;
+                psSlot[p] = h;
             }
             else
             {
                 psNext[p] = -1;
+                psSlot[p] = -1;
             }
-            p += 1;
+            psIndexed += 1;
         }
     }
 
-    /** Index this round's VIRTUAL pends (kind 1) by their name+descriptor hash, for {@link #matchLevel}. */
+    /** Index the VIRTUAL pends (kind 1) added since the last call by name+descriptor hash, for {@link #matchLevel}. */
     private static void buildPendIndex()
     {
         if (pvBucket == null)
         {
-            pvBucket = new int[PVTAB];
+            pvBucket = emptyBuckets();
+            pvIndexed = 0;
         }
-        if (pvNext == null || pvNext.length < pendN)
+        pvNext = growPendLinks(pvNext, pendN);
+        pvSlot = growPendLinks(pvSlot, pendN);
+        while (pvIndexed < pendN)
         {
-            pvNext = new int[pendN + 64];
-        }
-        int i = 0;
-        while (i < PVTAB)
-        {
-            pvBucket[i] = -1;
-            i += 1;
-        }
-        int p = 0;
-        while (p < pendN)
-        {
+            int p = pvIndexed;
             if (pendKind[p] == 1)
             {
                 int h = sigHash(pendBase[p], pendName[p], pendDesc[p]) & (PVTAB - 1);
                 pvNext[p] = pvBucket[h];
                 pvBucket[h] = p;
+                pvSlot[p] = h;
             }
             else
             {
                 pvNext[p] = -1;
+                pvSlot[p] = -1;
             }
-            p += 1;
+            pvIndexed += 1;
         }
     }
 
@@ -6935,26 +7058,34 @@ public final class Loader
      */
     private static void buildNameIndex()
     {
-        if (pnBucket == null)
+        // INCREMENTAL, like every other index here. It was cleared (65,536 buckets) and rebuilt from blob 0
+        // on EVERY ROUND of EVERY BATCH, although a blob's name never changes once probeAll has set it
+        // (pdNameOff is written once, behind pdProbedTo) and blobs only append within a launch. MEASURED on
+        // SslEngineProbe (2026-11-04): 6.5 s over 2,834 rounds, the largest single item in `mark`.
+        // Appending in index order head-inserts exactly as the full rebuild did, so every chain is identical.
+        // resetLoader nulls pnBucket with the blobs it indexes; a count that went BACKWARDS rebuilds too.
+        if (pnBucket == null || pnIndexed > pdCount)
         {
-            pnBucket = new int[PVTAB];
-            pnNext = new int[MAXBLOB];
+            if (pnBucket == null)
+            {
+                pnBucket = new int[PVTAB];
+                pnNext = new int[MAXBLOB];
+            }
+            int i = 0;
+            while (i < PVTAB)
+            {
+                pnBucket[i] = -1;
+                i += 1;
+            }
+            pnIndexed = 0;
         }
-        int i = 0;
-        while (i < PVTAB)
+        while (pnIndexed < pdCount)
         {
-            pnBucket[i] = -1;
-            i += 1;
+            int h = utf8Hash(pdBase[pnIndexed], pdNameOff[pnIndexed]) & (PVTAB - 1);
+            pnNext[pnIndexed] = pnBucket[h];
+            pnBucket[h] = pnIndexed;
+            pnIndexed += 1;
         }
-        i = 0;
-        while (i < pdCount)
-        {
-            int h = utf8Hash(pdBase[i], pdNameOff[i]) & (PVTAB - 1);
-            pnNext[i] = pnBucket[h];
-            pnBucket[h] = i;
-            i += 1;
-        }
-        pnIndexed = pdCount;
     }
 
     /** Register the class named at Utf8 offset {@code off} in {@code base} if it's embedded; returns its base or 0. */
