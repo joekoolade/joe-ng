@@ -4277,6 +4277,8 @@ public final class Loader
         pcAfterCp = new int[MAXPARSECACHE];
         pcN = 0;
         fldTab = new RVMField[MAXFIELD];
+        fldIndexed = 0;                                 // beside the table it indexes, as sgIndexed is
+        fldBucket = null;
         fldCount = 0;
         vtClassBase = new long[MAXVT];
         vtClassOff = new int[MAXVT];
@@ -17388,20 +17390,77 @@ public final class Loader
         Uart.putc(0x0A);
     }
 
+    /**
+     * Class+name hash index over the instance-field registry, so {@link #fldIndexOf} is a PROBE rather than a
+     * scan comparing two Utf8 strings against every instance field of every loaded class.
+     *
+     * <p>MEASURED, not guessed: in the first TLS session of SslEngineProbe (QEMU qprof, 53-176 s) 115 of 541
+     * busy samples had the compiler on the stack, and about 6 of them were the compiler itself. The rest were
+     * {@code getfield}/{@code putfield} compiles resolving a field: {@code fieldIsVolatile} ->
+     * {@code registeredFieldAccess} and {@code fieldOffsetOf} -> {@code globalFieldOffset}, each scanning all
+     * {@code fldCount} entries -- once per SUPERCLASS LEVEL for an inherited field -- on every field access
+     * compiled. Same defect and same remedy as the static registry's {@link #sgIndexOf}.
+     */
+    private static final int FLDTAB = 8192;              // power of two; chained
+    private static int[] fldBucket;                      // class+name hash -> first entry index, -1 when empty
+    private static int[] fldNext;                        // entry index -> next entry with the same hash
+    private static int fldIndexed;
+
+    private static void buildFldIndex()
+    {
+        if (fldBucket == null || fldIndexed > fldCount)   // rebuilt when resetLoader zeroes the table
+        {
+            fldBucket = new int[FLDTAB];
+            fldNext = new int[MAXFIELD];
+            int b = 0;
+            while (b < FLDTAB)
+            {
+                fldBucket[b] = -1;                       // allocArray does NOT zero its elements on this VM,
+                b += 1;                                  //   and 0 is a valid entry index -- fill explicitly
+            }
+            fldIndexed = 0;
+        }
+        while (fldIndexed < fldCount)                    // INCREMENTAL: the registry only grows
+        {
+            int hh = utf8Hash2(fldTab[fldIndexed].base, fldTab[fldIndexed].classOff,
+                               fldTab[fldIndexed].base, fldTab[fldIndexed].nameOff) & (FLDTAB - 1);
+            fldNext[fldIndexed] = fldBucket[hh];
+            fldBucket[hh] = fldIndexed;
+            fldIndexed += 1;
+        }
+    }
+
+    /** The instance-field registry entry DECLARED by class {@code clsBase+clsOff} as field
+     *  {@code nameBase+nameOff}, or -1. The predicate the scans used, so a hit is the entry they found. */
+    private static int fldIndexOf(long clsBase, int clsOff, long nameBase, int nameOff)
+    {
+        buildFldIndex();
+        int best = -1;
+        int k = fldBucket[utf8Hash2(clsBase, clsOff, nameBase, nameOff) & (FLDTAB - 1)];
+        while (k >= 0)
+        {
+            if (utf8EqAt(clsBase, clsOff, fldTab[k].base, fldTab[k].classOff)
+                    && utf8EqAt(nameBase, nameOff, fldTab[k].base, fldTab[k].nameOff))
+            {
+                if (best < 0 || k < best)
+                {
+                    best = k;                            // lowest index wins, as the scan's first match did
+                }
+            }
+            k = fldNext[k];
+        }
+        return best;
+    }
+
     private static int globalFieldOffset(int idx)
     {
         int classOff = refClassNameOff(idx);
         int nameOff = mrefNameOff(idx);
-        int i = 0;
-        while (i < fldCount)                            // class-qualified
+        int i = fldIndexOf(gbase, classOff, gbase, nameOff);   // class-qualified
+        if (i >= 0)
         {
-            if (utf8EqAt(gbase, classOff, fldTab[i].base, fldTab[i].classOff)
-                    && utf8EqAt(gbase, nameOff, fldTab[i].base, fldTab[i].nameOff))
-            {
-                fieldOffsetLog(classOff, nameOff, 16 + fldTab[i].slot * 8, 1);
-                return 16 + fldTab[i].slot * 8;
-            }
-            i += 1;
+            fieldOffsetLog(classOff, nameOff, 16 + fldTab[i].slot * 8, 1);
+            return 16 + fldTab[i].slot * 8;
         }
         // Class-qualified miss: the field is INHERITED. Resolve it by walking the ref class's SUPERCLASS chain
         // and matching a field DECLARED by each ancestor -- NOT a blind name-only match. Multiple unrelated
@@ -17411,16 +17470,11 @@ public final class Loader
         int pd = findPdByName(gbase, classOff);
         while (pd >= 0)
         {
-            int i2 = 0;
-            while (i2 < fldCount)
+            int i2 = fldIndexOf(pdBase[pd], pdNameOff[pd], gbase, nameOff);   // declared by THIS ancestor
+            if (i2 >= 0)
             {
-                if (utf8EqAt(pdBase[pd], pdNameOff[pd], fldTab[i2].base, fldTab[i2].classOff)   // declared by THIS ancestor
-                        && utf8EqAt(gbase, nameOff, fldTab[i2].base, fldTab[i2].nameOff))
-                {
-                    fieldOffsetLog(classOff, nameOff, 16 + fldTab[i2].slot * 8, 2);
-                    return 16 + fldTab[i2].slot * 8;
-                }
-                i2 += 1;
+                fieldOffsetLog(classOff, nameOff, 16 + fldTab[i2].slot * 8, 2);
+                return 16 + fldTab[i2].slot * 8;
             }
             if (pdSuperOff[pd] == 0)
             {
@@ -24634,17 +24688,8 @@ public final class Loader
             int k = sgIndexOf(clsBase, clsOff, gbase, nameOff);   // the static registry's hash index
             return k < 0 ? -1 : sgTab[k].access;
         }
-        int i = 0;                                      // instance fields: the same scan globalFieldOffset
-        while (i < fldCount)                            //   makes at this site, no index of its own
-        {
-            if (utf8EqAt(clsBase, clsOff, fldTab[i].base, fldTab[i].classOff)
-                    && utf8EqAt(gbase, nameOff, fldTab[i].base, fldTab[i].nameOff))
-            {
-                return fldTab[i].access;
-            }
-            i += 1;
-        }
-        return -1;
+        int i = fldIndexOf(clsBase, clsOff, gbase, nameOff);   // the same lookup globalFieldOffset makes
+        return i < 0 ? -1 : fldTab[i].access;
     }
 
     /** Resolve Methodref {@code idx} to its (same-class) method's bytecode; set {@code gcodeLen}. */
