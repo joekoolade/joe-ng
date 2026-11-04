@@ -81,7 +81,11 @@ public final class WlanPoll
         busSem = VMScheduler.kernelSem(1);
         net.RxQueues.active = true;
         rxTaskId = VMScheduler.spawnKernel(entry);
-        board.bcm2711.Uart.write(Magic.bytes("wifi: rx task started (interrupt-driven poll)\n"));
+        board.bcm2711.Uart.write(Magic.bytes("wifi: rx task started (interrupt-driven poll), bring-up glom="));
+        VM.printDec(Cyw43.bringupGlom);
+        board.bcm2711.Uart.write(Magic.bytes(" subframes="));
+        VM.printDec(Cyw43.bringupGlomSubs);
+        board.bcm2711.Uart.write(Magic.bytes("\n"));
         return true;
     }
 
@@ -97,6 +101,7 @@ public final class WlanPoll
     /** The RX task: sleep until the interrupt (or the watchdog), then poll the chip dry. Never returns. */
     static void rxTask()
     {
+        dispatchGlom();                                  // subframes the bring-up unpacked but did not consume
         while (true)
         {
             VMScheduler.semWaitTimeout(VM.WIFI_SEM, WATCHDOG_MS);   // the interrupt, or the watchdog
@@ -110,44 +115,22 @@ public final class WlanPoll
      */
     private static int dispatchGlom()
     {
-        long g = Cyw43.glomBuf;
-        int off = 0;
         int sent = 0;
-        int i = 0;
-        while (i < Cyw43.glomCount)
+        while (Cyw43.glomPending())
         {
-            int chunk = Cyw43.glomLens[i];
-            int start = off;
-            if (i == 0)
-            {
-                start = off + (Magic.load8(g + 7) & 0xFF);   // the first subframe follows the superframe header
-            }
-            off = off + chunk;
-            i = i + 1;
-            if (start + 12 > off)
-            {
-                continue;                                // malformed: drop this subframe
-            }
-            int hw = Magic.load32(g + start);
-            int sub = hw & 0xFFFF;
-            int nsub = (hw >> 16) & 0xFFFF;
-            if (sub < 12 || ((sub ^ nsub) & 0xFFFF) != 0xFFFF || start + sub > off || sub > net.RxQueues.FRAME)
-            {
-                continue;
-            }
             int b = net.RxQueues.allocBuf();
             if (b < 0)
             {
+                Cyw43.glomNext(0L, 0);                   // no buffer: drop this subframe
                 continue;
             }
-            long dst = net.RxQueues.bufAddr(b);
-            int k = 0;
-            while (k < sub)
+            int len = Cyw43.glomNext(net.RxQueues.bufAddr(b), net.RxQueues.FRAME);
+            if (len == 0)
             {
-                Magic.store8(dst + k, Magic.load8(g + start + k));
-                k = k + 1;
+                net.RxQueues.freeBuf(b);                 // only malformed subframes were left
+                break;
             }
-            net.RxQueues.dispatch(b, sub);
+            net.RxQueues.dispatch(b, len);
             sent = sent + 1;
         }
         return sent;

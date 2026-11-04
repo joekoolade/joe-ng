@@ -453,6 +453,9 @@ public final class Cyw43
      * semWait (no busy-polling) until the ISR ({@link #onIrq}) disables the GIC SPI and posts WIFI_SEM; we
      * then read the frame, clear the SDIOD + SDHCI interrupt status (de-asserting DAT1), and re-enable the
      * GIC SPI for the next frame.
+     *
+     * <p>A glom superframe is several frames in one transfer: its first subframe is returned in place of the
+     * descriptor, and each later call returns the next one without waiting -- they have already arrived.
      */
     public static int waitFrameIrq(long dst, int cap, int ms)
     {
@@ -466,11 +469,31 @@ public final class Cyw43
             vm.VMScheduler.kernelSleep(ms);              // as if nothing arrived: callers loop on 0
             return 0;
         }
+        if (glomPending())
+        {
+            int sub = glomNext(dst, cap);                // the rest of a superframe read earlier
+            if (sub > 0)
+            {
+                net.NetStats.rxSync(dst, sub);
+                return sub;
+            }
+        }
         if (!vm.VMScheduler.semWaitTimeout(vm.VM.WIFI_SEM, ms))
         {
             return 0;                                    // no frame within the timeout (GIC SPI still armed)
         }
         int len = readFrameOnce(dst, cap);               // the ISR posted: read the frame the chip signaled
+        if (len > 0 && isGlomDesc(dst))
+        {
+            int total = readSuperframe(dst, len);        // it follows the descriptor in the FIFO
+            len = 0;
+            if (total > 0)
+            {
+                bringupGlom = bringupGlom + 1;
+                bringupGlomSubs = bringupGlomSubs + glomCount;
+                len = glomNext(dst, cap);
+            }
+        }
         net.NetStats.rxSync(dst, len);
         int ints = bpRead32(SDIOD_CORE + SD_INTSTATUS);
         bpWrite32(SDIOD_CORE + SD_INTSTATUS, ints);      // write-1-to-clear the SDIOD interrupt status
@@ -2731,6 +2754,10 @@ public final class Cyw43
     public static long glomBuf;                          // the last superframe read
     public static int[] glomLens = new int[GLOM_SUBS];   // its descriptor lengths
     public static int glomCount;                         // how many of glomLens are valid
+    private static int glomIdx;                          // the next descriptor entry glomNext hands out
+    private static int glomOff;                          // where that entry's chunk starts in glomBuf
+    static int bringupGlom;                              // superframes waitFrameIrq unpacked (before the RX task)
+    static int bringupGlomSubs;                          // ... and their descriptor entries
 
     /** True if the frame at {@code dst} is a glom descriptor (channel 3, descriptor flag set). */
     public static boolean isGlomDesc(long dst)
@@ -2760,7 +2787,9 @@ public final class Cyw43
             total = total + sub;
             p = p + 2;
         }
-        glomCount = count;
+        glomCount = 0;                                   // nothing pending until it is read and checked
+        glomIdx = 0;
+        glomOff = 0;
         if (glomBuf == 0L)
         {
             glomBuf = vm.Heap.allocData(GLOM_MAX);
@@ -2797,7 +2826,59 @@ public final class Cyw43
             return 0;
         }
         txMax = Magic.load8(glomBuf + 9) & 0xFF;         // the superframe header carries the tx window too
+        glomCount = count;
         return total;
+    }
+
+    /** True while the superframe in {@link #glomBuf} has descriptor entries {@link #glomNext} has not handed out. */
+    public static boolean glomPending()
+    {
+        return glomIdx < glomCount;
+    }
+
+    /**
+     * Copy the next well-formed subframe of the superframe in {@link #glomBuf} to {@code dst} and return its
+     * length, or 0 when none is left. Like {@link #readFrameOnce}, a subframe longer than {@code cap} is clamped
+     * and {@code cap} returned. Malformed ones (a bad len/~len, or longer than their descriptor entry) are
+     * dropped. {@code dst} 0 drops the next well-formed one instead of copying it.
+     */
+    public static int glomNext(long dst, int cap)
+    {
+        while (glomIdx < glomCount)
+        {
+            int start = glomOff;
+            if (glomIdx == 0)
+            {
+                start = start + (Magic.load8(glomBuf + 7) & 0xFF);   // the first follows the superframe header
+            }
+            int end = glomOff + glomLens[glomIdx];
+            glomOff = end;
+            glomIdx = glomIdx + 1;
+            if (start + 12 > end)
+            {
+                continue;
+            }
+            int hw = Magic.load32(glomBuf + start);
+            int sub = hw & 0xFFFF;
+            int nsub = (hw >> 16) & 0xFFFF;
+            if (sub < 12 || ((sub ^ nsub) & 0xFFFF) != 0xFFFF || start + sub > end)
+            {
+                continue;
+            }
+            if (dst == 0L)
+            {
+                return 0;
+            }
+            int n = sub > cap ? cap : sub;
+            int k = 0;
+            while (k < n)
+            {
+                Magic.store8(dst + k, Magic.load8(glomBuf + start + k));
+                k = k + 1;
+            }
+            return n;
+        }
+        return 0;
     }
 
     /**
