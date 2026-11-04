@@ -15,12 +15,9 @@ import java.io.InputStream;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.net.URI;
-import java.nio.ByteBuffer;
 import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
 import javax.net.ssl.HttpsURLConnection;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLEngine;
 
 /**
  * An HTTPS GET with nothing but stock java.base: HttpsURLConnection over sun.security.ssl, the server's chain
@@ -31,7 +28,7 @@ import javax.net.ssl.SSLEngine;
  */
 public class HttpsDemo
 {
-    private static final int MAX_ATTEMPTS = 3;
+    private static final int MAX_ATTEMPTS = 5;
 
     public static void main(String[] args) throws Exception
     {
@@ -50,14 +47,12 @@ public class HttpsDemo
             System.out.println("https: dns " + host + " FAILED in " + (System.nanoTime() - t0) / 1000000L
                     + " ms: " + e.getMessage());
         }
-        if (!(args.length > 1 && args[1].equals("nowarm")))
-        {
-            warmClientHello(host);
-            TlsWarmup.run();
-        }
         // Retry: a failed handshake still runs our side of it to the end, so the next attempt finds the paths for
-        // THIS server's chain compiled. Pi run 20: the server closes 15 s after the SYN, and our Finished left at
-        // ~17 s -- the attempt-to-attempt times say whether what remains is first-use cost or raw speed.
+        // THIS server's chain compiled. The server closes ~15 s after the SYN, and on the Pi the first-use load
+        // and compile of the handshake path takes minutes, so the early attempts fail with a broken pipe. Pi,
+        // 2026-11-03: attempts 1 and 2 failed (468 s, 527 s) and attempt 3 connected in 2 s. An in-memory warm-up
+        // handshake before the first attempt was measured against this and LOST: it took 485 s, attempt 1 still
+        // failed, and the total was 1327 s vs 1029 s without it.
         HttpsURLConnection c = null;
         int attempt = 1;
         while (c == null)
@@ -113,24 +108,5 @@ public class HttpsDemo
         c.disconnect();
         System.out.println("https: body starts " + head);
         System.out.println("https: done, " + total + " bytes in " + (System.nanoTime() - t0) / 1000000L + " ms");
-    }
-
-    /**
-     * Build a ClientHello in memory before any socket exists, so the TLS classes it needs (context, key shares,
-     * extensions, the record layer) are loaded and compiled up front. On the metal that load takes minutes; done
-     * after the TCP connect, the real ClientHello leaves minutes after the SYN-ACK and the connection may be dead
-     * by then. Pass "nowarm" as the second argument for the old order.
-     */
-    private static void warmClientHello(String host) throws Exception
-    {
-        long t = System.nanoTime();
-        SSLEngine e = SSLContext.getDefault().createSSLEngine(host, 443);
-        e.setUseClientMode(true);
-        ByteBuffer app = ByteBuffer.allocate(0);
-        ByteBuffer net = ByteBuffer.allocate(e.getSession().getPacketBufferSize());
-        e.beginHandshake();
-        e.wrap(app, net);
-        System.out.println("https: warm ClientHello " + net.position() + " bytes built in "
-                + (System.nanoTime() - t) / 1000000L + " ms");
     }
 }
