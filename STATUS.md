@@ -4,6 +4,33 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **Loader: THREE PER-BATCH WHOLE-WORLD PASSES ARE CHEAPER (2026-11-04, PR #481, 99e45ca).**
+  - **Before:** every demand-load batch re-runs passes over the whole loaded world, so their cost grows with the world,
+    not the batch. Guest timers over one SslEngineProbe run (QEMU): 1,275 batches, load 72.6 s of 283 s -- mark 25.4
+    (of which `flagInstByName` 6.9), `refillImaps` 20.5, `patchRelocs` 19.9, phase B 5.1, phase A 1.6; inside the first
+    TLS session, 40.2 of 101 s. For scale, the host OpenJDK runs the same probe in 0.5 s (`-Xint` 23 s; first session
+    3.5 s against our 123 s).
+  - **Now:**
+    - `refillImaps` memoises each itable hole's `mostSpecificDeclarer` per imap (`instImapDecl`), keyed on the
+      interface-closure size: a closure only grows by append (`superRegOf` resolves late and `captureDirectIfaces` drops
+      unregistered interfaces), so a changed size invalidates the memo. Counted before the change: 1,777,957
+      `defaultBySig` calls, every one with a declarer, only 1,303 finding a body.
+    - `flagInstByName` probes the `pnBucket` name index for the lowest unflagged match, then scans only the unindexed
+      tail (`pnIndexed`..`pdCount`), instead of every blob.
+    - The post-batch lifecycle loop skips `clinitPendingFor` for a class already `ST_INITIALIZED`.
+  - **Equivalence:** a checker image ran old beside new on every call: **0 mismatches** (1.77M+ refill, 28,300+
+    `flagInstByName`, 2.17M+ lifecycle).
+  - **QEMU, paired concurrent A/B** (`main` 6e6ecdb vs branch): 626 -> 563, 401 -> 352, 399 -> 347 s -- **3 of 3
+    faster, -10.1% to -13.0%**. `make test`, `overlaycheck` OK; Regress 10 of 10 (AnnoDefault, DefaultFrame,
+    DefaultSpecific, IfaceObjectMethod, InvokeDefault, VirtualInvoke batched; ClinitOrder, ClinitRace, NestedClinit,
+    ClinitFail solo).
+  - **Pi (run 28, one boot):** HttpsDemo example.com `200 OK`, 577 bytes, TLS_AES_256_GCM_SHA384; attempt 1 Broken pipe
+    at 533.8 s (run 27: 454.0 s), attempt 2 connected in 1.7 s; `https: done` **555,446 ms** (run 27: 1,006,039 ms);
+    `gc: collections=16`; no traps. **This is NOT a Pi A/B:** the total halved because one attempt failed instead of
+    two, and a failed attempt's length is set by when the server drops the connection (a WPA rekey fell inside it).
+  - **Still untouched:** `patchRelocs`' failing re-lookups (~12 s ceiling) and `markReachable`'s per-round
+    65,536-bucket clears and full name rehash.
+
 - **Loader: THE INSTANCE-FIELD REGISTRY IS HASH-INDEXED (2026-11-04, PR #479, 8f419fb).**
   - **Before:** every `getfield`/`putfield` compile resolves its field twice -- `fieldIsVolatile` ->
     `registeredFieldAccess` (to fence a volatile access) and `fieldOffsetOf` -> `globalFieldOffset` (the slot) -- and
