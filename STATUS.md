@@ -4,6 +4,33 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **Loader: THE INSTANCE-FIELD REGISTRY IS HASH-INDEXED (2026-11-04, PR #479, 8f419fb).**
+  - **Before:** every `getfield`/`putfield` compile resolves its field twice -- `fieldIsVolatile` ->
+    `registeredFieldAccess` (to fence a volatile access) and `fieldOffsetOf` -> `globalFieldOffset` (the slot) -- and
+    both were linear scans of `fldTab`, every instance field of every loaded class, repeated once per superclass level
+    for an inherited field. Static fields (`sgIndexOf`) and methods (`rgBucket`) were already indexed; instance fields
+    were not.
+  - **Found by:** a qprof of SslEngineProbe's first TLS session (QEMU, 53-176 s, 541 busy samples). 115 had the
+    compiler on the stack and only ~6 were the compiler itself; the rest were these two scans.
+  - **Now:** `fldIndexOf`, a class+name chained hash index mirroring `sgIndexOf` -- incremental, reset beside the table
+    in `resetLoader`, lowest index wins so a hit is the entry the scan found. All three scans (the class-qualified and
+    super-chain tiers of `globalFieldOffset`, and `registeredFieldAccess`) go through it.
+  - **Equivalence:** a checker image ran the old scan beside the index on every lookup: **0 mismatches** in 36,864+
+    lookups over a full SslEngineProbe run.
+  - **QEMU, paired concurrent A/B** (`main` 7977196 vs branch, launch order swapped; host load ~8, hence the slow
+    absolute times): 742 -> 708, 536 -> 514, 554 -> 527 s -- **3 of 3 faster, -4.1% to -4.9%**. `make test`,
+    `overlaycheck` OK; Regress 9 of 9 (CtorRefFieldProbe, FieldPrimProbe, FieldSemanticsProbe, InheritedStaticProbe,
+    AbsentSuperProbe, SuperCallProbe, SupertypeProbe batched; FieldSlotProbe, VolatileLitmusProbe solo).
+  - **Pi (run 27, one boot):** HttpsDemo example.com `200 OK`, 577 bytes; attempts 454.0 / 520.7 s Broken pipe (run 26:
+    460.1 / 525.7 s), attempt 3 connected in 1.9 s; `https: done` **1,006,039 ms** (run 26: 1,019,750 ms, -13.7 s,
+    -1.3%); `gc: collections=17`. Smaller than QEMU's gain, and a single boot. QEMU's first-session baseline includes
+    ~10% of `ThreadedSeedGenerator` spin that the Pi (RNG200 `/dev/random`) does not have.
+  - **Measured and NOT kept** (same session, same paired A/B): a `classIndexByName` name index measured SLOWER in 3 of
+    3 pairs (unexplained); a `<clinit>`-pending set per batch, 464 vs 468 s (noise); and skipping `patchRelocs`'
+    redundant writes, 393/429 vs 394/428 s (neutral). 99.86% of those writes (2,091,928 of 2,094,866 over 1,371 passes)
+    stored the word already there, but the pass's 21.5 s is mostly unresolved sites redoing a FAILING
+    `globalBufByRef` every pass (lookup 10.2 s), not the writes.
+
 - **WiFi: THE BRING-UP RECEIVE PATH UNPACKS GLOM SUPERFRAMES (2026-11-03, PR #477, 194a5d7).**
   - **Before:** #473 unpacked glom superframes (a channel-3 descriptor, then several SDPCM frames in one F2 transfer)
     only on the RX task. `Cyw43.waitFrameIrq`, the reader for all of bring-up (scan, join, 4-way, DHCP, ARP, ping),
