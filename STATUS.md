@@ -4,6 +4,81 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **HttpsDemo: THE TLS WARM-UP WAS A NET LOSS AND IS GONE; RETRIES ONLY, MAX_ATTEMPTS 3 -> 5 (2026-11-03, PR #475,
+  5512f1a).**
+  - **Before:** before the first connect, HttpsDemo built a ClientHello in memory (`warmClientHello`) and ran
+    `demo/TlsWarmup`'s two in-memory handshakes (pinned trust, default trust), to load and compile the handshake
+    path before the server's ~15 s deadline started. Its cost had never been measured against no warm-up.
+  - **Measured on the Pi** (example.com, same code, one run each; the control was `args=example.com nowarm`):
+
+    | | warm-up (run 23) | `nowarm` control | PR #475 |
+    |---|---|---|---|
+    | warm-up | 47.2 + 238.8 + 198.8 s ~= 485 s | -- | -- |
+    | attempt 1 | Broken pipe, 830.8 s | Broken pipe, 468.3 s | Broken pipe, 460.7 s |
+    | attempt 2 | connected, 2.2 s | Broken pipe, 526.5 s | Broken pipe, 525.8 s |
+    | attempt 3 | -- | connected, 2.0 s | connected, 2.0 s |
+    | `https: done` | 1,327,437 ms | 1,028,586 ms | **1,020,400 ms (-23%)** |
+    | `gc: collections` | 22 | 17 | 17 |
+
+  - **Reading:** first use costs ~1000 s before a connect succeeds either way; the warm-up moved part of it ahead of
+    the connection and added ~300 s, and attempt 1 still failed. Without it the connect landed on attempt 3 -- the
+    LAST of the old 3 -- in both runs, so `MAX_ATTEMPTS` is 5. `TlsWarmup` had no other caller and is deleted.
+  - **QEMU:** `make build`, `make test`, `overlaycheck` OK. No QEMU probe covers HttpsDemo (no network).
+  - **Pi:** `https: 200 OK, text/html; charset=utf-8`, 577 bytes, `[main returned normally]`.
+
+- **WiFi: THE DIAGNOSTIC CODE IS OUT OF THE RX AND TCP PATHS (2026-11-03, PR #474, 4b9e70a).**
+  - **Before:** the HTTPS bring-up (#473) left its instruments in place: the WlanPoll RX heartbeat (gap / dispatch /
+    bus-wait maxima, storm sampling, poll/frame/recheck counters, RX-task SP sampling in `Sdio.command`), the Cyw43
+    DNS-failure RX dump, bad-header / oversize / glom counters, interrupt-storm instrument and TX credit counters, the
+    Tcp per-connection segment trace and `dump()` with its timing prints and `NetStats.print` at close, the Ip ARP
+    trace, the RxQueues queue/drop counters, the Supplicant frame counter and the VMNatives socket I/O trace.
+  - **Now:** all removed, 8 files, +13 / -733. The RX task is `semWaitTimeout(WIFI_SEM, WATCHDOG_MS); poll();`;
+    `Sdio` is identical to its pre-#473 source (89fdb1e) and the `sockRead0`/`sockWrite0` bodies match it again. Kept: glom, the oversize drain, the credit
+    wait (uncounted), rekeying, the RX event log, and `NetStats` -- its `ipIn` / `udpOk` / `l4Cksum` are the stack's
+    packet checks and checksum (RX validation, TCP send and verify); its counters are one increment each and no
+    longer printed.
+  - **QEMU:** `make build`, `make test`, `overlaycheck` OK; Regress `--no-make` 8 of 8 (ConnectFailProbe,
+    InetAddrProbe, NetStaticsProbe, NetIfProbe, NetLeftoversProbe, NetWwwProbe, SockOptProbe batched; SslEngineProbe
+    solo).
+  - **Pi (run 23):** HttpsDemo example.com `200 OK`, 577 bytes, rekey msg1-4 OK, no diagnostic lines in the log;
+    attempt 1 Broken pipe at 830,760 ms and attempt 2 connected in 2181 ms, matching the pre-trim runs
+    (831,243 / 832,581 ms and 2240 / 2256 ms).
+
+- **HTTPS GET ON THE PI: INTERRUPT-DRIVEN WiFi RX, A REAL TCP, REKEYING, GLOM (2026-11-03, PR #473, 6fb725c).**
+  - **Before:** WiFi frames were read synchronously by whichever consumer was waiting, so nothing drained the chip
+    or ACKed while the app was busy; `Tcp.connect` returned on the SYN-ACK without sending the handshake's final ACK
+    (NetDemo hid it: its request carried the ACK); out-of-order data was dropped; nothing answered the access point's
+    key renewals; and every frame the chip bundled into a superframe was dropped. TLS could not complete.
+  - **WiFi RX (`board/cyw43`):** `WlanPoll`, a kernel task woken by the SDIO interrupt (100 ms watchdog), reads the
+    chip dry into `net.RxQueues` pool buffers (64 x 2 KB, per-consumer queues) and dispatches each frame; cut-over
+    after DHCP/ARP/ping, bring-up stays synchronous. TX credit window. `Supplicant` answers pairwise and group key
+    renewals on the RX task (before: the AP deauthed us every renewal, reason 15). `Cyw43.readSuperframe` +
+    `WlanPoll.dispatchGlom` unpack glom superframes (per brcmfmac `brcmf_sdio_rxglom`); `readFrameOnce` drains the
+    rest of an oversize frame. Power save off (`WLC_SET_PM` 0).
+  - **TCP (`net/Tcp`):** segments processed on the RX task and ACKed on arrival; handshake ACK sent (and re-sent to a
+    retransmitted SYN-ACK); 32 KB receive ring per connection with a real window; out-of-order runs held and merged;
+    MSS 1460 option, peer MSS honoured; RFC 5961 RST / challenge ACK; `poll` and non-blocking reads; read/write return
+    negated errnos, mapped by a `SocketDispatcher` overlay; `Net.shutdown` -> new native `shutdown0`. `NetStats`
+    verifies IP header and TCP/UDP checksums on receive.
+  - **Also:** the image gets `lib/security/` (`cacerts`, `blocked.certs`, `public_suffix_list.dat`); `Loader.MAXFIELD`
+    4096 -> 16384 (`CAP EXCEEDED: MAXFIELD count=4095` on the TLS stack); the array-vs-Cloneable/Serializable type
+    check scans each registry entry once (qprof: 76% of SslEngineProbe's samples were the full rescan);
+    `Loader.BATCH_COST` false (it was committed true, against its comment). `SslEngineProbe` runs a whole TLS session
+    in the VM, the QEMU stand-in for the Pi path; marked solo (it crowds the code arena -- batch-6 `code arena OOM`).
+    Regress now stops on a VM halt (`code arena OOM`, `heap OOM`, ...) instead of waiting out its ceiling.
+  - **Pi, run by run:** 10 handshake ACK confirmed; 14 rekey completes, no deauth; 18 `glom=6` with `badHdr=0
+    oversize=0`, the dropped bundles were the receive "hole"; 19 the server's whole flight in by 3328 ms, 0
+    retransmits -- the remaining wall was first-use compile of the handshake path vs the server's ~15 s deadline;
+    21 connect retry: attempt 1 Broken pipe, **attempt 2 connected in 2256 ms, `200 OK`, 577 bytes**,
+    TLS_AES_256_GCM_SHA384, all-ECC chain (Cloudflare ECC CA 3 -> SSL.com Transit ECC R2 -> SSL.com TLS ECC Root
+    2022); 22 `Net.shutdown` clean, 200 OK again. Refuted on the way: an RX-task stall (run 15, maxGap 666 ms in
+    sem-wait), 802.11 power save (run 16, no change) and ARP (run 17, every request answered, none in the hole).
+  - **QEMU:** `make build`, `make test`, `overlaycheck` OK; full regression 202 of 202 (batch 6's OOM traced to
+    SslEngineProbe, fixed by the solo mark); demo suite `want: checked=160 mismatch=0`, `gc: collections=52`; JUnit
+    `ran 45, failures 0`.
+  - **Left open, both since closed:** the diagnostic code (#474) and the unmeasured warm-up (#475, above). Still
+    open: the bring-up receive path ignores glom.
+
 - **SIGNED JARS VERIFY: JarVerifier UN-DENIED, THE JarFile OVERLAY DELETED (2026-11-01, branch jar-verifier).**
   - **Before:** `java/util/jar/JarVerifier` was denied because it pulls the `sun/security` closure, and the JarFile
     overlay was stock plus two workarounds for that denial (a local `MAX_SIG_FILE_SIZE`, and skipping the verifier
