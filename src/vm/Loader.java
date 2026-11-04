@@ -176,6 +176,25 @@ public final class Loader
      * repairing.
      */
     private static boolean[] instImapDone;
+    /**
+     * Per-imap memo of each slot's MAXIMALLY SPECIFIC DECLARER ({@link #mostSpecificDeclarer}), -2 = not yet
+     * computed. A hole that stays a hole is re-examined on every batch, and that pass is what it cost.
+     *
+     * <p>MEASURED on SslEngineProbe (2026-11-04): {@code refillImaps} was 20.5 s of a 283 s run, 12.2 s of the
+     * first TLS session. It called {@code defaultBySig} 1,777,957 times; EVERY call found a declarer and only
+     * 1,303 then found a body -- the slot's method is abstract in its most specific declarer, so the hole is
+     * permanent, and each batch re-asked ~4.3 closure interfaces, hashing the same name and descriptor for each,
+     * to arrive at the same declarer.
+     *
+     * <p>SOUND because the declarer is a function of two things: what each interface DECLARES (its own method
+     * run and {@code ifDecl}, fixed when the interface registers) and the class's interface CLOSURE. The closure
+     * can grow -- a superclass registered after its subclass resolves {@link #superRegOf} late and brings its
+     * interfaces -- but only by appending, so its size {@link #instImapDeclN} changes whenever it does, and a
+     * changed size discards the memo. The body lookup itself ({@link #regBodyIn}) is NOT memoised: that answer
+     * really does change, which is why the hole is revisited at all.
+     */
+    private static int[][] instImapDecl;
+    private static int[] instImapDeclN;                 // the closure size instImapDecl[m] was computed for
 
     /**
      * WHY refillImaps costs what it does, counted rather than inferred. The lazy-closure change measured as a
@@ -4245,6 +4264,14 @@ public final class Loader
         instImaps = new long[MAXIMAP];
         instImapReg = new int[MAXIMAP];
         instImapDone = new boolean[MAXIMAP];
+        instImapDecl = new int[MAXIMAP][];
+        instImapDeclN = new int[MAXIMAP];
+        int dm = 0;
+        while (dm < MAXIMAP)
+        {
+            instImapDecl[dm] = null;                    // fill explicitly: see buildSgIndex
+            dm += 1;
+        }
         instImapN = 0;
         lambdaTibRoots = new long[MAXLAMBDATIB];
         lambdaTibVtCap = new int[MAXLAMBDATIB];
@@ -5707,20 +5734,64 @@ public final class Loader
         return grew;
     }
 
-    /** Flag the loaded blob named {@code name} instantiated (a VM-created type with no `new` site); true if newly. */
+    /**
+     * Flag the loaded blob named {@code name} instantiated (a VM-created type with no `new` site); true if newly.
+     *
+     * <p>PROBED THROUGH {@code pnBucket}, not scanned. {@link #computeInstantiated} asks this for eleven fixed
+     * names on EVERY ROUND of EVERY BATCH, and the scan compared each name against every blob not yet flagged
+     * -- thousands of compares per name per round, most of them for a class that is already flagged or never
+     * loads. MEASURED on SslEngineProbe (2026-11-04): `inst` was 6.9 s of a 25.4 s mark over 1,275 batches.
+     *
+     * <p>THE SAME BLOB THE SCAN FOUND: the lowest index that is unflagged and named {@code name}. The indexed
+     * half is searched for the minimum (the chain runs descending, as {@link #findPdByName} explains), and
+     * blobs added since the index was built -- all above {@code pnIndexed} -- are scanned only if it misses.
+     * Called only from the round loop, after that round's {@link #buildNameIndex}.
+     */
     private static boolean flagInstByName(byte[] name)
     {
-        int i = 0;
-        while (i < pdCount)
+        int best = -1;
+        int from = 0;
+        if (pnBucket != null)
+        {
+            int k = pnBucket[bytesHash(name) & (PVTAB - 1)];
+            while (k >= 0)
+            {
+                if ((best < 0 || k < best) && !pdInstantiated[k] && utf8IsAtBase(pdBase[k], pdNameOff[k], name))
+                {
+                    best = k;
+                }
+                k = pnNext[k];
+            }
+            from = pnIndexed;
+        }
+        int i = from;
+        while (best < 0 && i < pdCount)
         {
             if (!pdInstantiated[i] && utf8IsAtBase(pdBase[i], pdNameOff[i], name))
             {
-                pdInstantiated[i] = true;
-                return true;
+                best = i;
             }
             i += 1;
         }
-        return false;
+        if (best < 0)
+        {
+            return false;
+        }
+        pdInstantiated[best] = true;
+        return true;
+    }
+
+    /** {@link #utf8Hash} of a name given as bytes: the same FNV-1a fold, so it lands in the same bucket. */
+    private static int bytesHash(byte[] name)
+    {
+        int h = 0x811C9DC5;
+        int i = 0;
+        while (i < name.length)
+        {
+            h = (h ^ (name[i] & 0xFF)) * 0x01000193;
+            i += 1;
+        }
+        return h;
     }
 
     /** pd index of {@code pd}'s superclass, or -1 (Object / super not loaded). */
@@ -10094,6 +10165,17 @@ public final class Loader
         int lc = 0;
         while (lc < clCount)
         {
+            if (clTab[lc].state >= RVMClass.ST_INITIALIZED)
+            {
+                // ALREADY INITIALIZED: nothing below can change it -- `state` only advances, and the branches
+                // that leave a class short of INITIALIZED only bump the LOAD_LOG counters. What it cost was
+                // clinitPendingFor, a scan of every <clinit> record, for every class ever loaded, every batch:
+                // 3.9% of SslEngineProbe's first TLS session (qprof, 2026-11-04). Counted as before, minus
+                // that scan: a class only reaches INITIALIZED once its initializer has run or it has none.
+                lcOk += 1;
+                lc += 1;
+                continue;
+            }
             if (clTab[lc].state >= RVMClass.ST_INSTANTIATED
                     && lazyClinitGated(clTab[lc].base, clTab[lc].nameOff) && clinitPendingFor(lc))
             {
@@ -20641,7 +20723,22 @@ public final class Loader
             // computed regardless. refillItable already tests every slot for 0, so it can report what it saw.
             rfClos += 1;
             int n = ifaceClosureOf(reg);                // the class's full interface set (persistent registries)
+            int slots = imapSlotCount(dir);
+            int[] decl = instImapDecl[m];
+            if (decl == null || instImapDeclN[m] != n || decl.length != slots)
+            {
+                decl = new int[slots];                  // the closure grew (or first visit): see instImapDecl
+                int d = 0;
+                while (d < slots)
+                {
+                    decl[d] = -2;
+                    d += 1;
+                }
+                instImapDecl[m] = decl;
+                instImapDeclN[m] = n;
+            }
             boolean holes = false;
+            int off = 0;
             int k = 0;
             long t = Magic.load64(dir);
             while (t != 0L)                             // walk entries by their TYPE key (order-independent)
@@ -20650,10 +20747,11 @@ public final class Loader
                 if (ir >= 0)
                 {
                     long it = Magic.load64(dir + k * 16 + 8);
-                    if (refillItable(n, ir, it))        // still short after the repair: a later batch may
-                    {                                   //   compile the class that declares the default
+                    if (refillItable(n, ir, it, decl, off))   // still short after the repair: a later batch may
+                    {                                         //   compile the class that declares the default
                         holes = true;
                     }
+                    off += clTab[ir].ifmCount;
                 }
                 k += 1;
                 t = Magic.load64(dir + k * 16);
@@ -20676,7 +20774,7 @@ public final class Loader
      * twice more (once to decide whether to call at all, once to ask the question this now answers), and the
      * loop already reads every slot.
      */
-    private static boolean refillItable(int n, int ir, long it)
+    private static boolean refillItable(int n, int ir, long it, int[] decl, int off)
     {
         boolean hole = false;
         int s = 0;
@@ -20686,7 +20784,22 @@ public final class Loader
             if (Magic.load64(it + s * 8L) == 0L)
             {
                 int i = clTab[ir].ifmStart + s;
-                long b = defaultBySig(n, ifBase[i], ifNameOff[i], ifDescOff[i]);
+                int d = decl[off + s];
+                if (d == -2)
+                {
+                    d = mostSpecificDeclarer(ifClosureBuf, n, ifBase[i] + ifNameOff[i], ifBase[i] + ifDescOff[i]);
+                    decl[off + s] = d;
+                }
+                long b;
+                if (d >= 0)
+                {
+                    buildRegIndex();                    // regBodyIn probes it; incremental, as in defaultBySig
+                    b = regBodyIn(d, ifBase[i], ifNameOff[i], ifDescOff[i]);   // what defaultBySig returns here
+                }
+                else
+                {
+                    b = defaultBySig(n, ifBase[i], ifNameOff[i], ifDescOff[i]);   // no declarer: the full search
+                }
                 if (b != 0L)
                 {
                     Magic.store64(it + s * 8L, b);
@@ -20699,6 +20812,25 @@ public final class Loader
             s += 1;
         }
         return hole;
+    }
+
+    /** Itable slots in directory {@code dir}: the sum of its registered interfaces' run lengths, in walk order. */
+    private static int imapSlotCount(long dir)
+    {
+        int total = 0;
+        int k = 0;
+        long t = Magic.load64(dir);
+        while (t != 0L)
+        {
+            int ir = regOfType(t);
+            if (ir >= 0)
+            {
+                total += clTab[ir].ifmCount;
+            }
+            k += 1;
+            t = Magic.load64(dir + k * 16);
+        }
+        return total;
     }
 
     /** {@link #ifaceClosure} but for an already-registered class {@code reg}, from the PERSISTENT registries
