@@ -4,6 +4,23 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **WiFi: THE BRING-UP RECEIVE PATH UNPACKS GLOM SUPERFRAMES (2026-11-03, PR #477, 194a5d7).**
+  - **Before:** #473 unpacked glom superframes (a channel-3 descriptor, then several SDPCM frames in one F2 transfer)
+    only on the RX task. `Cyw43.waitFrameIrq`, the reader for all of bring-up (scan, join, 4-way, DHCP, ARP, ping),
+    returned the descriptor as an ordinary frame, so every frame inside the superframe was lost.
+  - **Now:** `waitFrameIrq` reads the superframe after its descriptor and returns the first subframe in its place;
+    later calls return the rest without waiting (they have arrived). The split is one cursor,
+    `Cyw43.glomPending` / `glomNext`, which `WlanPoll.dispatchGlom` uses too; a superframe that fails its checks
+    leaves nothing pending, and the RX task first dispatches subframes bring-up left unconsumed. An oversize
+    subframe is now clamped like an unbundled frame on both paths (the RX task used to drop it). The RX-task start
+    line reports the count: `wifi: rx task started (interrupt-driven poll), bring-up glom=N subframes=M`.
+  - **QEMU:** `make build`, `make test`, `overlaycheck` OK; Regress `--no-make` 8 of 8 (the seven net probes batched,
+    SslEngineProbe solo). None reaches the WiFi path -- QEMU has no WiFi.
+  - **Pi (run 26):** **`bring-up glom=3 subframes=13`** -- glom does occur during bring-up, so those 13 frames were
+    dropped before; which steps they arrived in is not measured, and bring-up completed before the change too.
+    HttpsDemo example.com `200 OK`, 577 bytes; attempts 460.1 / 525.7 s Broken pipe, attempt 3 connected in 2.0 s;
+    `https: done` 1,019,750 ms (main: 1,020,400 ms); `gc: collections=17`.
+
 - **HttpsDemo: THE TLS WARM-UP WAS A NET LOSS AND IS GONE; RETRIES ONLY, MAX_ATTEMPTS 3 -> 5 (2026-11-03, PR #475,
   5512f1a).**
   - **Before:** before the first connect, HttpsDemo built a ClientHello in memory (`warmClientHello`) and ran
@@ -76,8 +93,8 @@ Newest entries are at the top.
   - **QEMU:** `make build`, `make test`, `overlaycheck` OK; full regression 202 of 202 (batch 6's OOM traced to
     SslEngineProbe, fixed by the solo mark); demo suite `want: checked=160 mismatch=0`, `gc: collections=52`; JUnit
     `ran 45, failures 0`.
-  - **Left open, both since closed:** the diagnostic code (#474) and the unmeasured warm-up (#475, above). Still
-    open: the bring-up receive path ignores glom.
+  - **Left open, all three since closed:** the diagnostic code (#474), the unmeasured warm-up (#475) and the bring-up
+    receive path ignoring glom (#477), all above.
 
 - **SIGNED JARS VERIFY: JarVerifier UN-DENIED, THE JarFile OVERLAY DELETED (2026-11-01, branch jar-verifier).**
   - **Before:** `java/util/jar/JarVerifier` was denied because it pulls the `sun/security` closure, and the JarFile
