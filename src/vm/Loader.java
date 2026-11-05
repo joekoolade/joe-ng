@@ -4180,6 +4180,10 @@ public final class Loader
         rcBase = new long[MAXRELOC];
         rcTail = new int[MAXRELOC];
         rcStub = new long[MAXRELOC];                    // per-site unres memo; dies with the sites it indexes
+        rcGate = new int[MAXRELOC];                     // per-site lookup gate, likewise: set when each site is
+        rcGateCell = new long[MAXRELOC];                //   recorded, so not filled here
+        rcGateDl = new long[MAXRELOC];
+        rcGateRg = new long[MAXRELOC * GATE_RG];
         rcClass = new int[MAXRELOC];
         rcName = new int[MAXRELOC];
         rcDesc = new int[MAXRELOC];
@@ -12455,6 +12459,35 @@ public final class Loader
     private static int pcUnres;
     /** Registry index {@link #globalBufByRef} resolved through, or -1 when it did not use the direct tier. */
     private static int rgHitIdx;
+
+    /**
+     * A STANDING LOOKUP: per site, 1 while {@code rcGateRg}/{@code rcGateDl}/{@code rcGateCell} describe the
+     * answer {@link #globalBufByRef} last gave it through the constructor tier or a declaring-class cell, 0
+     * otherwise. Cleared when a site is recorded, as {@code rcReg} is.
+     *
+     * <p>MEASURED (SslEngineProbe, 2026-11-04): of 819,614 batch-end re-resolves, 670,117 were constructor
+     * lookups (3.6 s) and 103,456 declaring-class cell lookups (3.6 s), and 99.6% or more of both gave the
+     * answer of the pass before. Both answers are a function of the bucket chains the lookup walked -- one
+     * {@code rgBucket} chain per class level it probed, then one {@code dlBucket} chain -- plus inputs that do
+     * not change for the life of the sites: a blob's name, superclass and declared methods, and a class's
+     * lowest-index loaded blob (blobs append). Both indexes head-insert, so a chain whose head index is
+     * unchanged holds the same entries and gives the same answer. The one live input is the cell's CONTENTS
+     * (the lazy stub, then the body), and the gate re-reads the cell exactly as {@code cellStubAt} would.
+     * {@code resetLoader} discards the sites with the tables, so a gate never outlives the chains it names.
+     */
+    private static int[] rcGate;
+    private static long[] rcGateCell;                   // the cell the lookup answered from, 0 = it missed
+    private static long[] rcGateDl;                     // dlBucket index << 32 | its head at the lookup
+    private static long[] rcGateRg;                     // GATE_RG per site: rgBucket index << 32 | head, by level
+    private static final int GATE_RG = 3;               // class levels a gated lookup may have probed
+
+    /** What the last {@link #globalBufByRef} walked: valid only when {@code gwOk} (see {@code rcGate}). */
+    private static boolean gwOk;
+    private static int gwRgN;
+    private static final long[] gwRg = new long[GATE_RG];
+    private static long gwCell;
+    /** The {@code dlBucket} probe the last {@link #dlCellOf} walked, as {@code rcGateDl} records it. */
+    private static long dlLastProbe;
     private static long[] rsAddr, rsBase;               // static sites: address-load site, ref blob base,
     private static int[] rsReg, rsClass, rsName;        //   destination reg, class/name Utf8 offsets
     private static int rsCount;
@@ -12521,6 +12554,7 @@ public final class Loader
         rcTail[rcCount] = 0;
         rcReg[rcCount] = -1;                            // not yet resolved through the direct registry tier
         rcStub[rcCount] = 0L;                           // nor settled on a link stub: see rcStub
+        rcGate[rcCount] = 0;                            // nor gated on a standing lookup: see rcGate
         rcCount += 1;
     }
 
@@ -12540,6 +12574,7 @@ public final class Loader
         rcTail[rcCount] = 1;
         rcReg[rcCount] = -1;                            // see rcReg: 0 is a VALID registry index, so an unset
         rcStub[rcCount] = 0L;                           //   entry would memoise the site to rgTab[0]; see rcStub
+        rcGate[rcCount] = 0;                            //   ... and rcGate
         rcCount += 1;
     }
 
@@ -12628,6 +12663,11 @@ public final class Loader
                 pcMemo += 1;
                 target = rgTab[rcReg[i]].buf;
             }
+            else if (gateStands(i))
+            {
+                pcResolve += 1;                          // counted as the lookup it replaces: see pcUnres
+                target = rcGateCell[i] == 0L ? 0L : Magic.load64(rcGateCell[i]);
+            }
             else
             {
                 pcResolve += 1;
@@ -12636,6 +12676,7 @@ public final class Loader
                 {
                     rcReg[i] = rgHitIdx;                 // -1 for the super-chain/stub tiers: re-resolve those
                 }
+                recordGate(i);
             }
             pcLookT += Magic.readCNTPCT_EL0() - tL0;
             long tU0 = Magic.readCNTPCT_EL0();
@@ -12836,15 +12877,100 @@ public final class Loader
         pcPubT += Magic.readCNTPCT_EL0() - tC0;
     }
 
+    /**
+     * Whether site {@code i}'s standing lookup still stands: every bucket chain it was decided over has the
+     * head it had then (see {@code rcGate}). Indexes both tables first, so an entry added but not yet indexed
+     * is seen -- the lookup it replaces would index it too.
+     */
+    private static boolean gateStands(int i)
+    {
+        if (rcGate[i] == 0 || dlTab == null)
+        {
+            return false;
+        }
+        buildRegIndex();
+        buildDlIndex();
+        long dl = rcGateDl[i];
+        if (dlBucket[(int) (dl >>> 32)] != (int) dl)
+        {
+            return false;
+        }
+        int n = rcGate[i];
+        int b = i * GATE_RG;
+        int k = 0;
+        while (k < n)
+        {
+            long rg = rcGateRg[b + k];
+            if (rgBucket[(int) (rg >>> 32)] != (int) rg)
+            {
+                return false;
+            }
+            k += 1;
+        }
+        return true;
+    }
+
+    /** Keep what the {@link #globalBufByRef} just made for site {@code i} walked, if it can stand. */
+    private static void recordGate(int i)
+    {
+        if (!gwOk)
+        {
+            rcGate[i] = 0;
+            return;
+        }
+        int b = i * GATE_RG;
+        int k = 0;
+        while (k < gwRgN)
+        {
+            rcGateRg[b + k] = gwRg[k];
+            k += 1;
+        }
+        rcGateDl[i] = dlLastProbe;
+        rcGateCell[i] = gwCell;
+        rcGate[i] = gwRgN;                              // >= 1: the direct tier always probes first
+    }
+
+    /** Note an {@code rgBucket} probe for the gate; false once there are more levels than a gate holds. */
+    private static boolean gateRg(int h)
+    {
+        if (gwRgN >= GATE_RG)
+        {
+            return false;
+        }
+        gwRg[gwRgN] = ((long) h << 32) | (rgBucket[h] & 0xFFFFFFFFL);
+        gwRgN += 1;
+        return true;
+    }
+
+    /**
+     * The callable contents of the cell {@link #dlCellOf} finds, or 0 -- {@link #cellStubAt} with the cell
+     * kept for the gate, which stands only if {@code fits} (every probe so far was recorded and every
+     * level skipped was decided, not unknown).
+     */
+    private static long gatedCell(long clsBase, int clsOff, long refBase, int nameOff, int descOff, boolean fits)
+    {
+        if (dlTab == null)
+        {
+            return 0L;
+        }
+        long cell = dlCellOf(clsBase, clsOff, refBase, nameOff, refBase, descOff);
+        gwCell = cell;
+        gwOk = fits;
+        return cell == 0L ? 0L : Magic.load64(cell);
+    }
+
     /** Method buffer for a call ref given as blob base + Utf8 offsets (patchRelocs re-resolution), or 0. */
     private static long globalBufByRef(long refBase, int classOff, int nameOff, int descOff)
     {
         buildRegIndex();                                 // incremental: only entries added since last time
         rgHitIdx = -1;
+        gwOk = false;                                    // see rcGate: only the tiers below that set it stand
+        gwRgN = 0;
         // CLASS+NAME keys the index. Tier 2 wants the SAME name under an ANCESTOR class, so it re-hashes per
         // level rather than sharing this bucket -- which is the point: sharing a name-only bucket is what made
         // both tiers walk a chain one entry long per class declaring that name.
         int h = utf8Hash2(refBase, classOff, refBase, nameOff) & (RGTAB - 1);
+        boolean fits = gateRg(h);
         int i = rgBucket[h];
         while (i >= 0)
         {
@@ -12875,7 +13001,7 @@ public final class Loader
         // which resolves the actual constructor on first call.
         if (utf8IsAtBase(refBase, nameOff, Magic.bytes("<init>")))
         {
-            long ib = dlStubByRef(refBase, classOff, nameOff, descOff);
+            long ib = gatedCell(refBase, classOff, refBase, nameOff, descOff, fits);
             bufResolveLog(refBase, classOff, nameOff, descOff, ib, 3);
             return ib;
         }
@@ -12889,12 +13015,14 @@ public final class Loader
         // static's phase-A cell, or 0, which sends the site to the link-stub tier: resolveLinkTarget compiles
         // the declared body on first call. (<init> above is the same rule, special-cased before this existed.)
         int pd = findPdByName(refBase, classOff);
-        if (pd >= 0 && blobDeclares(pdBase[pd], refBase, nameOff, refBase, descOff) == 1)
+        int dec = pd >= 0 ? blobDeclares(pdBase[pd], refBase, nameOff, refBase, descOff) : -1;
+        if (dec == 1)
         {
-            long own = cellStubAt(refBase, classOff, refBase, nameOff, descOff);
+            long own = gatedCell(refBase, classOff, refBase, nameOff, descOff, fits);
             bufResolveLog(refBase, classOff, nameOff, descOff, own, 5);
             return own;
         }
+        fits = fits && dec == 0;                         // -1 (unparsed) may read 1 next pass: no gate
         while (pd >= 0 && pdSuperOff[pd] != 0)
         {
             int spd = findPdByName(pdBase[pd], pdSuperOff[pd]);
@@ -12908,7 +13036,9 @@ public final class Loader
             // every batch: MEASURED at 98% of the whole call-site loop (lookT 11,949ms of callT 12,169ms),
             // which is itself ~95% of `patch`. The wanted name is the same one tier 1 hashed, so the bucket
             // is reused and only the CLASS comparison differs -- the predicate is otherwise identical.
-            int j = rgBucket[utf8Hash2(pdBase[spd], pdNameOff[spd], refBase, nameOff) & (RGTAB - 1)];
+            int hs = utf8Hash2(pdBase[spd], pdNameOff[spd], refBase, nameOff) & (RGTAB - 1);
+            fits = fits && gateRg(hs);
+            int j = rgBucket[hs];
             while (j >= 0)
             {
                 t2Steps += 1;
@@ -12921,12 +13051,14 @@ public final class Loader
                 }
                 j = rgNext[j];
             }
-            if (blobDeclares(pdBase[spd], refBase, nameOff, refBase, descOff) == 1)
+            int sdec = blobDeclares(pdBase[spd], refBase, nameOff, refBase, descOff);
+            if (sdec == 1)
             {
-                long declared = cellStubAt(pdBase[spd], pdNameOff[spd], refBase, nameOff, descOff);
+                long declared = gatedCell(pdBase[spd], pdNameOff[spd], refBase, nameOff, descOff, fits);
                 bufResolveLog(refBase, classOff, nameOff, descOff, declared, 5);
                 return declared;                         // this ancestor declares it: never climb past it
             }
+            fits = fits && sdec == 0;
             pd = spd;
         }
         // Last tier: a METADATA-ONLY class's celled static is never eagerly compiled or registered, so both
@@ -13014,7 +13146,9 @@ public final class Loader
         // had never registered (DISPATCH ON UNREGISTERED TYPE at the next late-resolved call). A stale cell is
         // skipped, so the caller resolves as for an unloaded class and pulls it; anything ALREADY holding the
         // cell's address keeps working, because the cell itself is untouched.
-        int k = dlBucket[utf8Hash2(clsBase, clsOff, nameBase, nameOff) & (DLTAB - 1)];
+        int hd = utf8Hash2(clsBase, clsOff, nameBase, nameOff) & (DLTAB - 1);
+        int k = dlBucket[hd];
+        dlLastProbe = ((long) hd << 32) | (k & 0xFFFFFFFFL);   // for rcGate
         while (k >= 0)
         {
             dlSteps += 1;
