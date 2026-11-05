@@ -4,6 +4,40 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **Loader: patchRelocs' STANDING RE-LOOKUPS ARE GATED (2026-11-05, PR #485, b3abcb3).**
+  - **Before:** `patchRelocsFrom` re-resolves every unmemoised reloc site on every batch. Over one SslEngineProbe run
+    (QEMU) that is 819,614 `globalBufByRef` calls: 670,117 constructor lookups (3.6 s) and 103,456 declaring-class
+    cell lookups (3.6 s), and 99.6% or more of both repeat the previous pass's answer. Patch was 18.8 s of 37.4 s
+    load, lookups 10.1 s of it.
+  - **Now:** those answers depend only on the bucket chains the lookup walked -- one `rgBucket` chain per class level
+    probed, then one `dlBucket` chain -- plus inputs fixed for the life of the sites (blob names, superclasses,
+    declared methods, a class's lowest-index blob). Both indexes head-insert, so an unchanged head means the same
+    chain and the same answer. `rcGate` records those heads per site (up to 3 class levels) with the cell, and while
+    `gateStands` the site re-reads the cell -- the one live input -- instead of re-running the lookup. An unparsed
+    level (`blobDeclares` -1), the super-chain registry tier and the last-resort cell tier are never gated. The sites
+    die with the tables at `resetLoader`.
+  - **Equivalence:** a checker image ran the full lookup beside every gated answer: **0 mismatches** over 769,886
+    gated re-resolves.
+  - **QEMU:** an instrumented concurrent pair gave lookT 16.9 -> 6.9 s and patch 40.1 -> 31.1 s, with identical
+    memo/res/unres counters. **Clean wall-clock triplets were layout-dominated:** the gate image ran +8.9% to +11.0%
+    against main, while the same code plus a 792-byte never-executed method ran **-2.5% to -3.0%** (3 of 3; the
+    timestamped pair showed the slow layout slow from the first 6 s). gc=18 throughout. **Layout alone moves a QEMU
+    run by ~12%**, far more than the ~2% the A/A control showed, so a QEMU wall-clock A/B needs a padded variant
+    before it can reject a change. No static shares a page with image code, so the slow layout is not
+    self-modifying-code invalidation from statics. `make test`, `overlaycheck` OK; 31 targeted probes pass
+    (the mark-rounds 30 plus LinkTrapProbe).
+  - **Pi (same day, same server address 172.66.147.243):**
+
+    | Image | Attempt 1 | `https: done` | gc |
+    |---|---|---|---|
+    | main control (the run-29 image) | Broken pipe at 510.3 s | 528,840 ms | 17 |
+    | gate | connected in 30.1 s | **39,834 ms** | 17 |
+
+    A second gate boot (server 104.20.23.154) also connected on attempt 1, in 30.0 s. The control reproduces run 29
+    (528,740 ms). **13x on hardware, against a few percent on QEMU -- the mechanism is NOT yet measured:** the Pi pays
+    something per lookup that QEMU does not show. An HTTPS image printing the loader's patch timers, booted once on
+    each, would answer it.
+
 - **Loader: markReachable's PER-BATCH ROUND COSTS ARE INCREMENTAL (2026-11-04, PR #483, bbb55de).**
   - **Before:** `markReachable` runs once per demand-load batch (1,275 batches, 2,834 rounds on SslEngineProbe) and
     rebuilt state that only grows. Guest timers over one SslEngineProbe run (QEMU), mark 23.1 s: name index rehash
