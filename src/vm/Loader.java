@@ -3331,21 +3331,30 @@ public final class Loader
      */
     private static long frameToElement(long pc, long steTib)
     {
+        // THE BLOCK LOOKUP IS HOISTED, as in printFrameAt and for the same reason: inSameCodeBlock scans every
+        // code block, and calling it per candidate made each element O(rgCount * codeBlockN). Pi, 2026-11-05:
+        // a failed TLS handshake spent ~465 s here materialising its exceptions' stack traces (hang dump in
+        // Heap.codeBlockEndAt), long after the connection was dead. pc's block is the same for every candidate,
+        // so "buf is in pc's block" is the range test buf >= pStart; a pc in no block keeps the exact call.
+        long pEnd = Heap.codeBlockEndAt(pc);
+        long pStart = pEnd == 0L ? 0L : Heap.codeBlockStartAt(pc);
         long bestBuf = 0L;
         int bestReg = -1;
         int bestClin = -1;
         int i = 0;
         while (i < rgCount)
         {
-            if (rgTab[i].buf != 0L && rgTab[i].buf <= pc && rgTab[i].buf > bestBuf
-                    && inSameCodeBlock(rgTab[i].buf, pc)) { bestBuf = rgTab[i].buf; bestReg = i; bestClin = -1; }
+            long b = rgTab[i].buf;
+            if (b != 0L && b <= pc && b > bestBuf
+                    && (pEnd != 0L ? b >= pStart : inSameCodeBlock(b, pc))) { bestBuf = b; bestReg = i; bestClin = -1; }
             i += 1;
         }
         int c = 0;
         while (c < clinitN)
         {
-            if (clinitEntry[c] != 0L && clinitEntry[c] <= pc && clinitEntry[c] > bestBuf
-                    && inSameCodeBlock(clinitEntry[c], pc)) { bestBuf = clinitEntry[c]; bestClin = c; bestReg = -1; }
+            long b = clinitEntry[c];
+            if (b != 0L && b <= pc && b > bestBuf
+                    && (pEnd != 0L ? b >= pStart : inSameCodeBlock(b, pc))) { bestBuf = b; bestClin = c; bestReg = -1; }
             c += 1;
         }
         long clsStr = 0L;
