@@ -1504,6 +1504,10 @@ public final class Loader
         {
             return;                                     // a BAKED guard (WriterSymbols) reached before the loader
         }                                               //   tables exist: no class is registered yet to initialize
+        if (initDoneMemoHit(clsU))
+        {
+            return;
+        }
         int reg = regBySigU(clsU);
         if (INIT_GUARD_LOG)
         {
@@ -1520,6 +1524,102 @@ public final class Loader
         if (reg >= 0)
         {
             ensureClinit(reg);
+            RVMClass c = clTab[reg];
+            if (c.state >= RVMClass.ST_INITIALIZED && c.superInited && !c.initFailed)
+            {
+                initDoneMemoPut(clsU);
+            }
+        }
+    }
+
+    /**
+     * MEMO OF INIT GUARDS THAT HAVE ALREADY BEEN ANSWERED. A guard is emitted when a method compiles before the
+     * class it uses is initialized, and it stays in the code for ever: every later execution called
+     * regBySigU -- a byte-wise hash of the name and a byte-compare walk of its whole bucket chain -- only to
+     * find the class initialized. MEASURED (qprof, SslEngineProbe, QEMU 2026-11-06): in a WARM TLS session,
+     * with nothing left to load or compile, ensureInitByName -> regBySigU -> classRegAt was the largest
+     * single cost, because guards sit inside the handshake's hot loops.
+     *
+     * <p>A hit means "the class whose name Utf8 is at clsU was fully initialized", and that answer is sound
+     * because INITIALIZATION IS MONOTONE -- only a class that is initialized, whose superclass chain is done
+     * and that is not erroneous is ever entered. WHAT IS NOT MONOTONE IS THE ADDRESS: clsU points into the
+     * referring class's blob, blobs are collected by reachability, and a new blob can reuse the address for a
+     * different, UNINITIALIZED class. A stale hit would then skip an initializer -- the silent null static.
+     * So each entry carries the collection EPOCH it was made in ({@link VMGc#collections}, which advances
+     * under stop-the-world before the sweep frees anything) and is only a hit in that same epoch; memory
+     * freed by a collection is reused only after it. Key and epoch are ONE 64-bit word (epoch << 32 | clsU)
+     * so another core can never read a torn pair; an address above 4 GB is simply never memoised.
+     * {@link #resetLoader} clears the table: a new loader world re-registers classes.
+     */
+    private static final int IDMEMO = 4096;
+    private static final int IDMEMO_PROBE = 8;
+    private static long[] idMemo = new long[IDMEMO];
+
+    private static int idMemoSlot(long clsU)
+    {
+        long h = (clsU >>> 1) * 0x9E3779B97F4A7C15L;
+        return (int) (h >>> 52) & (IDMEMO - 1);
+    }
+
+    private static boolean initDoneMemoHit(long clsU)
+    {
+        if ((clsU >>> 32) != 0L)
+        {
+            return false;
+        }
+        long want = ((VMGc.collections & 0xFFFFFFFFL) << 32) | clsU;
+        int s = idMemoSlot(clsU);
+        int k = 0;
+        while (k < IDMEMO_PROBE)
+        {
+            long w = idMemo[(s + k) & (IDMEMO - 1)];
+            if (w == want)
+            {
+                return true;
+            }
+            if (w == 0L)
+            {
+                return false;
+            }
+            k += 1;
+        }
+        return false;
+    }
+
+    private static void initDoneMemoPut(long clsU)
+    {
+        if ((clsU >>> 32) != 0L)
+        {
+            return;
+        }
+        long epoch = VMGc.collections & 0xFFFFFFFFL;
+        long word = (epoch << 32) | clsU;
+        int s = idMemoSlot(clsU);
+        int k = 0;
+        while (k < IDMEMO_PROBE)
+        {
+            int i = (s + k) & (IDMEMO - 1);
+            long w = idMemo[i];
+            // An empty slot, this key from an older epoch, or ANY entry from an older epoch (dead: it can never
+            // hit again) is reused; a full run of current entries overwrites the first slot -- a lost entry only
+            // costs one more lookup.
+            if (w == 0L || (w & 0xFFFFFFFFL) == clsU || (w >>> 32) != epoch)
+            {
+                idMemo[i] = word;
+                return;
+            }
+            k += 1;
+        }
+        idMemo[s] = word;
+    }
+
+    private static void initDoneMemoClear()
+    {
+        int i = 0;
+        while (i < IDMEMO)
+        {
+            idMemo[i] = 0L;
+            i += 1;
         }
     }
 
@@ -3979,6 +4079,7 @@ public final class Loader
     private static void resetLoader()
     {
         loaderGen += 1;                                 // every registry built from here on is a new generation
+        initDoneMemoClear();                            // classes re-register: no init-guard answer carries over
         if (MIRROR_RESET_WATCH)
         {
             Uart.write(Magic.bytes("\n  LOADER RESET (Class mirrors invalidated)\n"));

@@ -1687,8 +1687,9 @@ public final class VM
      * -- sizeMethod DRY-RUN COMPILES and can demand-load, registering a class between the passes, and two
      * passes emitting different word counts overruns the buffer the first one reserved.
      *
-     * <p>Cheap after the first time: the lookup is a hash probe (classRegAt is indexed) and ensureInitFor
-     * returns at once for a class already initialized.
+     * <p>A guard stays in the code for ever, so its repeat calls are what matter: once the class is initialized
+     * they are answered from Loader's epoch-tagged memo by address. Without it each call hashed and
+     * byte-compared the name (classRegAt) -- MEASURED as the largest cost of a warm TLS session.
      */
     static void ensureInitByName(long clsU)
     {
