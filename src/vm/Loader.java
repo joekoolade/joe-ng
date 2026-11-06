@@ -4290,6 +4290,7 @@ public final class Loader
         rcBase = new long[MAXRELOC];
         rcTail = new int[MAXRELOC];
         rcStub = new long[MAXRELOC];                    // per-site unres memo; dies with the sites it indexes
+        rcDone = new long[MAXRELOC];                    // per-site target last WRITTEN: see rcDone
         rcGate = new int[MAXRELOC];                     // per-site lookup gate, likewise: set when each site is
         rcGateCell = new long[MAXRELOC];                //   recorded, so not filled here
         rcGateDl = new long[MAXRELOC];
@@ -12539,6 +12540,13 @@ public final class Loader
      * as the host. So recording a site clears this, as it does {@link #rcReg}.
      */
     private static long[] rcStub;                       //   the link stub this site settled on, 0 = not yet
+    /**
+     * The target this site's branch was last WRITTEN to, 0 = never. With the live instruction word it lets
+     * {@link #patchRelocsFrom} skip a site whose branch already says what this pass would write. Dies with the
+     * sites it indexes, like rcStub.
+     */
+    private static long[] rcDone;
+    static long pcSkipped;                              // tail visits skipped: the branch was already in place
     private static int rcCount;
     /**
      * Per-site memo: the method-registry index that resolved this site last time, or -1.
@@ -12564,6 +12572,16 @@ public final class Loader
      */
     static long pcCallT, pcStatT, pcPubT;
     static long pcLookT, pcUnresT, pcTailT;
+
+    /**
+     * The PER-SITE split of patchRelocsFrom's call loop (lookT / unresT / tailT). OFF: the loop runs once per
+     * site per batch -- ~2.1M visits on SslEngineProbe -- and six CNTPCT_EL0 reads per visit were most of the
+     * loop on QEMU, where each read is a call into the host clock. MEASURED (BATCH_COST, solo, 2026-11-06):
+     * callT 12.3 s with them, 2.1 s without; the cold TLS session 59.8 -> 52.7 s. The A72 reads the counter
+     * cheaply, so on the Pi this is a smaller effect -- but every QEMU patch figure recorded with them on was
+     * inflated by it. callT (one pair per pass) stays. Turn on to split the loop again; the line prints 0s off.
+     */
+    static final boolean PATCH_SITE_TIMERS = false;
     private static int pcMemo;
     private static int pcResolve;
     private static int pcUnres;
@@ -12664,6 +12682,7 @@ public final class Loader
         rcTail[rcCount] = 0;
         rcReg[rcCount] = -1;                            // not yet resolved through the direct registry tier
         rcStub[rcCount] = 0L;                           // nor settled on a link stub: see rcStub
+        rcDone[rcCount] = 0L;                           // nor written: see rcDone
         rcGate[rcCount] = 0;                            // nor gated on a standing lookup: see rcGate
         rcCount += 1;
     }
@@ -12684,6 +12703,7 @@ public final class Loader
         rcTail[rcCount] = 1;
         rcReg[rcCount] = -1;                            // see rcReg: 0 is a VALID registry index, so an unset
         rcStub[rcCount] = 0L;                           //   entry would memoise the site to rgTab[0]; see rcStub
+        rcDone[rcCount] = 0L;                           //   ... and rcDone
         rcGate[rcCount] = 0;                            //   ... and rcGate
         rcCount += 1;
     }
@@ -12767,7 +12787,11 @@ public final class Loader
             // lazily compiled since (rememberLazyBody) is picked up exactly as a fresh lookup would -- this
             // skips the LOOKUP, never the patch.
             long target;
-            long tL0 = Magic.readCNTPCT_EL0();
+            long tL0 = 0L;
+            if (PATCH_SITE_TIMERS)
+            {
+                tL0 = Magic.readCNTPCT_EL0();
+            }
             if (rcReg[i] >= 0)
             {
                 pcMemo += 1;
@@ -12788,8 +12812,12 @@ public final class Loader
                 }
                 recordGate(i);
             }
-            pcLookT += Magic.readCNTPCT_EL0() - tL0;
-            long tU0 = Magic.readCNTPCT_EL0();
+            long tU0 = 0L;
+            if (PATCH_SITE_TIMERS)
+            {
+                pcLookT += Magic.readCNTPCT_EL0() - tL0;
+                tU0 = Magic.readCNTPCT_EL0();
+            }
             if (target == 0L && rcStub[i] != 0L)
             {
                 // SETTLED ALREADY: this site was unresolved on an earlier batch and took a link stub, and
@@ -12855,8 +12883,12 @@ public final class Loader
                     reportTrapWired(rcBase[i], rcClass[i], rcName[i], rcDesc[i]);
                 }
             }
-            pcUnresT += Magic.readCNTPCT_EL0() - tU0;
-            long tT0 = Magic.readCNTPCT_EL0();
+            long tT0 = 0L;
+            if (PATCH_SITE_TIMERS)
+            {
+                pcUnresT += Magic.readCNTPCT_EL0() - tU0;
+                tT0 = Magic.readCNTPCT_EL0();
+            }
             if (target != 0L)
             {
                 if (target >= Heap.BASE)                       // DIAGNOSTIC: a call "resolved" into the DATA heap
@@ -12876,22 +12908,37 @@ public final class Loader
                     for (;;) { }
                 }
                 int off = (int) (d >> 2);
+                int word = rcTail[i] != 0 ? A64Enc.b(off) : A64Enc.bl(off);
+                // ALREADY WRITTEN, AND STILL THERE: skip the pin, the edge note and the store. All three are
+                // idempotent for an unchanged target -- the pin bitmap is sticky (zeroed only at init), note()
+                // overwrites the same (site, target) entry, the store rewrites the same word -- yet every batch
+                // re-walks EVERY site from 0, so they ran sites x batches times. MEASURED (BATCH_COST,
+                // SslEngineProbe, QEMU 2026-11-06): patch was 8.8 s of the cold TLS session's 16.0 s of
+                // batch work, and this tail (tailT) 5.1 s of the call loop's 14.2 s over the run. The test reads
+                // the LIVE word, not only rcDone, so a site something else rewrote is patched as before.
+                if (rcDone[i] == target && Magic.load32(rcAddr[i]) == word)
+                {
+                    pcSkipped += 1;
+                    if (PATCH_SITE_TIMERS)
+                    {
+                        pcTailT += Magic.readCNTPCT_EL0() - tT0;
+                    }
+                    i += 1;
+                    continue;
+                }
+                rcDone[i] = target;
                 Heap.pinCodeAt(target);                       // CODE->CODE edge: after this store the only
                                                               //   record of `target` is a displacement inside
                                                               //   the caller's instructions, which nothing
                                                               //   scans -- pin it or the sweep may free it
                 CodeEdges.note(rcAddr[i], target);            // ... and record the edge, so compaction can
                                                               //   find and rewrite it when `target` moves
-                if (rcTail[i] != 0)
-                {
-                    Magic.store32(rcAddr[i], A64Enc.b(off));   // lambda/method-ref thunk: tail branch, not a call
-                }
-                else
-                {
-                    Magic.store32(rcAddr[i], A64Enc.bl(off));  // rewrite bl 0 -> bl target
-                }
+                Magic.store32(rcAddr[i], word);                // bl target, or b for a lambda/method-ref thunk
             }
-            pcTailT += Magic.readCNTPCT_EL0() - tT0;
+            if (PATCH_SITE_TIMERS)
+            {
+                pcTailT += Magic.readCNTPCT_EL0() - tT0;
+            }
             i += 1;
         }
         long tB0 = Magic.readCNTPCT_EL0();
@@ -18569,6 +18616,9 @@ public final class Loader
         printDur(ticksUs(pcUnresT));
         Uart.write(Magic.bytes(" tailT="));
         printDur(ticksUs(pcTailT));
+        Uart.write(Magic.bytes(" skip="));
+        VM.printDec((int) (pcSkipped / 1000L));
+        Uart.putc(0x6B);
         // CUMULATIVE, and on the batch line rather than in a report nobody runs: this is the only number
         // that says whether the loader lock was ever actually contended. Zero across a whole boot means the
         // run never tested the lock, so a clean boot says nothing about it either way.
