@@ -4,6 +4,43 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **Loader: ANSWERED INIT GUARDS ARE MEMOISED -- a warm TLS session was mostly name lookups (2026-11-06).**
+  - **The question was refuted first.** The #487 card guessed a successful handshake builds stack traces. Counters
+    over SslEngineProbe (QEMU): 30 throws, 24 constructor-time captures (644 frames, 468 ms), **0** materialised
+    traces, and **none** inside a successful handshake -- the 24 are setup (keystore, provider and class probes)
+    and the two arms that fail on purpose.
+  - **qprof of the first session (main):** ~13 s is a `nanoTime` spin in `ThreadedSeedGenerator` -- QEMU has no
+    hardware RNG, so no `/dev/random`; the Pi seeds from RNG200 and never takes it. The rest is load ~17%,
+    runtime resolve ~17%, compile ~14%, guest code ~13%. **The WARM sessions** (TLSv1.2, right host), with nothing
+    left to load or compile, were still ~1/3 runtime resolve and ~13% type checks against ~30% guest code, and the
+    largest single path was `VM.ensureInitByName -> regBySigU -> classRegAt`.
+  - **Before:** an init guard is emitted when a method compiles before a class it uses is initialized, and stays
+    for ever. Every execution re-ran `regBySigU` -- a byte-wise hash of the name plus a byte-compare walk of the
+    whole bucket chain -- only to find the class initialized. The VM.ensureInitByName comment called it "a hash
+    probe", which was true and not cheap.
+  - **Now:** `ensureInitFor` answers from `idMemo` (4096 slots, 8-probe) before the lookup. An entry is made only
+    after `ensureClinit` leaves the class `ST_INITIALIZED`, `superInited` and not `initFailed` -- initialization is
+    monotone. **The ADDRESS is not:** `clsU` points into the referring class's blob, blobs die by reachability, and
+    a reused address must never skip a real `<clinit>`. So each entry carries `VMGc.collections` (advanced under
+    STW before the sweep frees anything) and hits only in its own epoch; key and epoch are ONE 64-bit word, so no
+    core reads a torn pair; `resetLoader` clears the table. `Heap.gcPressure` was NOT usable as the epoch -- it
+    leaves explicit collections out.
+  - **QEMU, SslEngineProbe, concurrent triplets main / pad (main + a never-executed method) / branch:**
+    503.8/450.8/392.6, 543.0/486.8/421.7, 565.7/505.1/445.3 s -- **branch -21..-22% vs main, -12..-13% vs pad,
+    3 of 3**, output IDENTICAL, gc=18. TLSv1.2 arm ~65 -> ~30 s. The branch's last arm reads +12 s in every
+    triplet and is a CONTENTION artifact: solo qprof gives it 21.2 s vs main's 27.8 s (the branch finishes first,
+    so its last arm runs beside two busy QEMUs; main's runs alone). Warm-window busy samples 113 -> 69 and
+    127 -> 84; `regBySigU` on 1 sample.
+  - **Pi, HttpsDemo example.com (one boot):** attempt 1 connected in 29,868 ms, `https: done` **39,592 ms**,
+    gc=17, 200 OK -- the same as the #487 clean image (29.9 s / 39,505 ms). **NO PI GAIN, as the profile
+    predicts:** one handshake is a COLD session, where guards were ~4%; the memo pays on code that runs again.
+  - **Next lever for the HTTPS window (cold):** `resolveUnresolvedNew` and `resolveLinkTarget` call
+    `classIndexByName` -- a LINEAR scan of every registered class -- on each execution; it is in both the cold and
+    the warm profiles.
+  - `make test`, `overlaycheck` OK; 16 targeted probes pass (ClinitOrder, ClinitRace, ChmRace, NestedClinit,
+    InheritedStatic, Lazy, LocaleInit, ClinitFail, LazyVarHandle, FirstCallRace, SpawnRace, NetStatics,
+    SystemLogger, SecurityExtra, NestedEnum, SslEngine).
+
 - **Loader: frameToElement's CODE-BLOCK LOOKUP IS HOISTED -- a failed TLS handshake cost ~465 s (2026-11-06, PR #487, 9f6a5e4).**
   - **The 13x of the patch gate card below was a THRESHOLD, not loader speed.** Pi HTTPS images printing the loader
     timers: the no-gate run's whole patch phase is **5.1 s** (lookT 4.3 s) of a 547.7 s run, the gate run's 1.4 s
