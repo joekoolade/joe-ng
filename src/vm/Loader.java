@@ -19594,20 +19594,26 @@ public final class Loader
             Uart.putc(0x0A);
             capHalt(Magic.bytes("bakestub-entry"), len);
         }
-        byte[] slash = new byte[len];
-        int i = 0;
-        while (i < len)
+        // The name is already a Utf8 run at clsU: ask the index directly, and build the byte[] copy only when
+        // the class has to be LOADED -- this runs per execution of an unmemoised site.
+        int reg = regBySigU(clsU);
+        if (reg < 0)
         {
-            slash[i] = (byte) u1(clsU + 2 + i);
-            i += 1;
+            byte[] slash = new byte[len];
+            int i = 0;
+            while (i < len)
+            {
+                slash[i] = (byte) u1(clsU + 2 + i);
+                i += 1;
+            }
+            if (loadClassIncremental(slash) == 0L)
+            {
+                lnkFailWhy = 1;                         // RECORD, do not print: see reportLinkFail
+                linkResolveLog(clsU, nameU, descU, 0L, 0);
+                return 0L;
+            }
+            reg = regBySigU(clsU);
         }
-        if (classIndexByName(slash) < 0 && loadClassIncremental(slash) == 0L)
-        {
-            lnkFailWhy = 1;                             // RECORD, do not print: see reportLinkFail
-            linkResolveLog(clsU, nameU, descU, 0L, 0);
-            return 0L;
-        }
-        int reg = classIndexByName(slash);
         if (reg >= 0 && clTab[reg].state < RVMClass.ST_INSTANTIATED)
         {
             // Loaded but not brought all the way up: its <clinit> was blocked or its structure never
@@ -25360,19 +25366,41 @@ public final class Loader
         return true;
     }
 
-    /** Loaded-class-registry index of the class named {@code want}, or -1 if it isn't loaded. */
+    /**
+     * Loaded-class-registry index of the class named {@code want}, or -1 if it isn't loaded.
+     *
+     * <p>THROUGH THE CLASS-NAME INDEX, not a scan. This was a linear walk of every registered class (~3,000 in a
+     * TLS program) with a byte compare at each, and it is on per-EXECUTION paths: resolveUnresolvedNew (a
+     * deferred `new`) and resolveLinkTarget both called it twice every time. MEASURED (qprof, SslEngineProbe,
+     * 2026-11-06): those two were the top callers of the byte-compare leaves in a warm TLS session. The hash is
+     * the FNV-1a fold {@link #utf8Hash} applies to a Utf8 run, so it lands in the bucket {@link RVMClass#nameHash}
+     * filed the class in, and the chain walk keeps the LOWEST matching index -- the entry the scan returned.
+     */
     private static int classIndexByName(byte[] want)
     {
-        int i = 0;
-        while (i < clCount)
+        if (clTab == null || clCount == 0)
         {
-            if (utf8IsAtBase(clTab[i].base, clTab[i].nameOff, want))
-            {
-                return i;
-            }
-            i += 1;
+            return -1;
         }
-        return -1;
+        buildClIndex();
+        int h = 0x811C9DC5;
+        int j = 0;
+        while (j < want.length)
+        {
+            h = (h ^ (want[j] & 0xFF)) * 0x01000193;
+            j += 1;
+        }
+        int best = -1;
+        int k = clBucket[h & (CLTAB - 1)];
+        while (k >= 0)
+        {
+            if ((best < 0 || k < best) && utf8IsAtBase(clTab[k].base, clTab[k].nameOff, want))
+            {
+                best = k;
+            }
+            k = clNext[k];
+        }
+        return best;
     }
 
     /** Loaded-class-registry index of {@code java/lang/String}, or -1 if it isn't loaded. */
@@ -29112,9 +29140,10 @@ public final class Loader
      * header. Returns the reference.
      *
      * <p>Unlike a call site there is no stub to memoize into — a `new` is a fixed instruction sequence, not a
-     * patchable branch target — so this runs per execution. That is the right trade anyway: the sites that
-     * reach here are cold by construction, and the second execution finds the class already registered, so all
-     * that repeats is a registry lookup.
+     * patchable branch target — so this runs per execution. These sites were assumed cold, and are not: a warm
+     * TLS session executes them repeatedly (qprof, SslEngineProbe, 2026-11-06). What repeats is the registry
+     * lookup, so it goes through the name index on the Utf8 at clsU, with no byte[] copy unless the class has to
+     * be loaded.
      *
      * <p>If the class still cannot be resolved (a genuinely denylisted subtree) this falls through to
      * {@link #reportUnresolvedNew}, so that diagnostic — and the guarantee that a wrong-typed object is never
@@ -29138,20 +29167,16 @@ public final class Loader
         }
         long clsU = unresBase[i] + unresOff[i];
         int len = u2(clsU);
-        byte[] slash = new byte[len];
-        int k = 0;
-        while (k < len)
-        {
-            slash[k] = (byte) u1(clsU + 2 + k);
-            k += 1;
-        }
         VM.loaderLock(VM.LOCK_NEW_RESOLVE);                                // demand-loads a class: one compiler at a time
         long tib;
         int fields;
         int reg;
         try
         {
-        if (classIndexByName(slash) < 0)
+        // The name is already a Utf8 run at clsU: ask the index directly, and build the byte[] copy only when
+        // the class has to be LOADED -- these sites are NOT cold (a warm TLS session executes them repeatedly).
+        reg = regBySigU(clsU);
+        if (reg < 0)
         {
             if (LOAD_LOG)
             {
@@ -29159,9 +29184,16 @@ public final class Loader
                 printNameAt(clsU, 0);
                 Uart.putc(0x0A);
             }
+            byte[] slash = new byte[len];
+            int k = 0;
+            while (k < len)
+            {
+                slash[k] = (byte) u1(clsU + 2 + k);
+                k += 1;
+            }
             long pulled = loadClassIncremental(slash);
+            reg = regBySigU(clsU);
         }
-        reg = classIndexByName(slash);
         tib = 0L;
         fields = 0;
         if (reg >= 0 && clTab[reg].state >= RVMClass.ST_INSTANTIATED)

@@ -4,6 +4,32 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **Loader: classIndexByName GOES THROUGH THE NAME INDEX -- HTTPS attempt 1 -15% on the Pi (2026-11-06).**
+  - **Before:** `classIndexByName(byte[])` was a linear walk of every registered class (~3,000 in a TLS program)
+    with a byte compare at each. Two of its 51 callers run per EXECUTION: `resolveUnresolvedNew` (a deferred
+    `new`) and `resolveLinkTarget`, each calling it twice and first copying the name into a fresh `byte[]`.
+    `resolveUnresolvedNew`'s comment called these sites "cold by construction"; the #489 qprof showed them as the
+    top callers of the byte-compare leaves in a WARM TLS session, and present in the cold one too.
+  - **Now:** `classIndexByName` hashes `want` with the FNV-1a fold `utf8Hash` applies (so it lands in the bucket
+    `RVMClass.nameHash` filed the class in) and walks that chain keeping the LOWEST matching index -- the entry
+    the scan returned. The two per-execution paths ask `regBySigU(clsU)` on the Utf8 they already hold and build
+    the `byte[]` only when the class must be loaded.
+  - **Equivalence:** a checker image ran the linear scan beside every indexed answer: **0 mismatches** over 40,946
+    lookups (SslEngineProbe); removed after.
+  - **QEMU, SslEngineProbe, concurrent triplets main (e0e8ba4) / pad / branch:** 343.1/337.5/302.0,
+    352.8/351.8/312.5, 361.2/362.3/322.9 s -- **branch -10.6..-12.0% vs main, -10.5..-11.2% vs pad, 3 of 3**,
+    output IDENTICAL, gc=18. First (cold) TLS session 153.3 -> 125.5, 151.5 -> 128.7, 163.0 -> 136.0 s. The
+    branch's wrong-host/reject arms read +3.5/+7.5 s in the triplets; **sequential solo boots** refute it --
+    main 187.8 s vs branch 157.9 s (-16%), faster in EVERY arm (first session 72.2 -> 60.3 s, reject 19.3 ->
+    15.2 s). The image that finishes first runs its last arms beside busy QEMUs.
+  - **Pi, HttpsDemo example.com (one boot, server 104.20.23.154):** attempt 1 connected in **25,316 ms** (#489:
+    29,868), `https: done` **34,337 ms** (#489: 39,592), gc=17, 200 OK. Unlike #489, this reaches the COLD
+    session, which is what attempt 1 is.
+  - `make test`, `overlaycheck` OK; 22 targeted probes pass (LinkTrap, Loader, IfaceObjectMethod, ReflectArray,
+    ReflectLookup, ReflectUndeny, InternalReflect, ClinitOrder, ClinitRace, ChmRace, NestedClinit,
+    InheritedStatic, Lazy, ClinitFail, FirstCallRace, SpawnRace, NetStatics, SystemLogger, NestedEnum, Trace,
+    DeepTrace, SslEngine).
+
 - **Loader: ANSWERED INIT GUARDS ARE MEMOISED -- a warm TLS session was mostly name lookups (2026-11-06).**
   - **The question was refuted first.** The #487 card guessed a successful handshake builds stack traces. Counters
     over SslEngineProbe (QEMU): 30 throws, 24 constructor-time captures (644 frames, 468 ms), **0** materialised
