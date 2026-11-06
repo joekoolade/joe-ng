@@ -4,6 +4,45 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **Loader: patchRelocs SKIPS SITES ALREADY PATCHED, and its PER-SITE TIMERS ARE OFF -- QEMU -11%, Pi unchanged
+  (2026-11-06).**
+  - **Profile first (qprof, SslEngineProbe, main 2778c7d):** with the QEMU-only RNG spin set aside, the cold TLS
+    session is load-batch 29%, compile 21%, guest 17%, alloc 10%, runtime resolve 5.5% (17% before #490). The top
+    self cost was `patchRelocsFrom`. BATCH_COST on the same probe: patch was **8.8 s of the cold session's 16.0 s
+    of batch work**, because every batch re-walks every call site from 0 (~2.1M site visits over the run).
+  - **Two costs per visit, both repeated for nothing:**
+    - the tail -- `Heap.pinCodeAt`, `CodeEdges.note` (a hash-chain find) and the store -- ran for every site on
+      every batch although all three are idempotent for an unchanged target (the pin bitmap is cleared once, at
+      init; note overwrites the same entry; the store rewrites the same word);
+    - **six `CNTPCT_EL0` reads per visit** for the lookT/unresT/tailT split. Under QEMU's TCG each read is a call
+      into the host clock, so the instrument was most of the loop.
+  - **Now:** a per-site `rcDone[]` records the target last written; a visit whose `rcDone` matches AND whose LIVE
+    instruction word is already that branch skips the tail (a site anything else rewrote is patched as before).
+    The per-site timers sit behind `PATCH_SITE_TIMERS = false`; the per-pass `callT` stays, and `skip=` joins the
+    cumulative line.
+  - **QEMU, BATCH_COST solo boots, SslEngineProbe** -- identical memo/res/unres (1,251,063 / 846,690 / 741,442):
+
+    | image | callT (run) | cold-session patch | done |
+    |---|---|---|---|
+    | main | 14.2 s | 8.8 s | 153.8 s |
+    | skip only | 12.3 s | 7.6 s | 153.3 s |
+    | timers off only | 3.6 s | 2.0 s | 145.4 s |
+    | both | 2.1 s | 1.1 s | 141.7 s |
+
+    2.09M of ~2.1M tail visits skipped. Clean sequential pair: main 167.8 s vs branch 149.5 s (-11%), first TLS
+    session 65.4 -> 52.4 s, output IDENTICAL, gc=18. **Every QEMU patch figure recorded with the per-site timers
+    on -- this file's lookT/tailT cards included -- was inflated by them.**
+  - **Pi, HttpsDemo example.com (one boot, same server 104.20.23.154 as #490):** attempt 1 connected in 25,109 ms
+    (#490: 25,316), `https: done` 34,087 ms (#490: 34,337), gc=17, 200 OK -- **within noise, as predicted**: the
+    A72 reads the counter cheaply and the Pi's patch phase was already ~1-5 s. Kept for correctness of the QEMU
+    instrument and ~10% off every QEMU run.
+  - **Next:** QEMU has now mispredicted the Pi twice in opposite directions (#489's memo, these timers). Profile the
+    cold HTTPS attempt ON THE PI -- an HttpsDemo image with BATCH_COST on -- before choosing the next lever.
+  - `make test`, `overlaycheck` OK; 25 targeted probes pass (Capture, Indy, Lambda4, LambdaAdapt, MethodRefBoxFloat,
+    MethodRefUnbox, NullDispatch, AbsentSuper, SerLambda, SuperCall, Supertype, VirtualInvoke, LinkTrap, Loader,
+    IfaceObjectMethod, ReflectLookup, ClinitOrder, ClinitRace, ChmRace, FirstCallRace, SpawnRace, NestedEnum,
+    Trace, DeepTrace, SslEngine).
+
 - **Loader: classIndexByName GOES THROUGH THE NAME INDEX -- HTTPS attempt 1 -15% on the Pi (2026-11-06).**
   - **Before:** `classIndexByName(byte[])` was a linear walk of every registered class (~3,000 in a TLS program)
     with a byte compare at each. Two of its 51 callers run per EXECUTION: `resolveUnresolvedNew` (a deferred
