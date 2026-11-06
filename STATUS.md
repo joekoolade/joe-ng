@@ -4,6 +4,42 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **Loader: frameToElement's CODE-BLOCK LOOKUP IS HOISTED -- a failed TLS handshake cost ~465 s (2026-11-06, PR #487, 9f6a5e4).**
+  - **The 13x of the patch gate card below was a THRESHOLD, not loader speed.** Pi HTTPS images printing the loader
+    timers: the no-gate run's whole patch phase is **5.1 s** (lookT 4.3 s) of a 547.7 s run, the gate run's 1.4 s
+    (lookT 0.6 s). Both reach batch 1000 within 1.7 s of each other and both show the same loader-lock contention
+    (lkWait 0 -> 12) in the handshake. What differs is the server: timestamped TCP events show it **closes about
+    15-16 s after the SYN** when the handshake is unfinished (FIN at +16.1 s and +15.0 s). The gate run finished
+    inside that window (attempt 1 at ~30 s, of which ~15 s is before the SYN); the no-gate run missed it by a few
+    seconds.
+  - **Before:** a missed window then cost ~465 s AFTER the connection was dead. With a 10 s sleep injected before
+    attempt 1's second write: FIN at +16.1 s, first EPIPE, a second EPIPE 270.8 s later, close 193.4 s after that --
+    and attempt 2 paid the same again (297.4 s + 189.4 s). A hang dump at 200 s caught main running in
+    `Heap.codeBlockEndAt`, the linear scan of every code block. `frameToElement`, which builds each
+    `StackTraceElement`, called it through `inSameCodeBlock` once per registry candidate, so each element was
+    O(rgCount x codeBlockN) -- the cost `printFrameAt` had and was already fixed for.
+  - **Now:** `frameToElement` looks up the pc's block once and tests each candidate with the range `buf >= pStart`,
+    as `printFrameAt` does; only a pc in no block keeps the per-candidate call.
+  - **Pi, delayed-handshake image, same Broken-pipe failure:**
+
+    | | before | after |
+    |---|---|---|
+    | server FIN after SYN | 16.1 s | 16.1 s |
+    | first EPIPE -> close | 464.2 s | **0.44 s** |
+    | attempt 1 failed in | 496.9 s | 33.2 s |
+    | attempt 2 | failed (window missed) | connected in 8.4 s |
+    | `https: done` | 1,017,081 ms | **57,396 ms** |
+
+    A second boot of the fixed image hit a server RST 6 ms after the ClientHello instead: close came 171 ms after
+    the error, done 56,372 ms. **Clean image** (no instrumentation): attempt 1 connected in 29.9 s, done
+    **39,505 ms**, gc=17 (gate: 39.8 s / 40.7 s) -- unchanged when nothing fails, as expected.
+  - **Still open:** attempt 1 finishes only just inside the window, so it will sometimes miss; that now costs ~15 s
+    and a retry rather than ~8 minutes. Attempt 2's handshake fitting the window after the fix (8.0 s and 8.8 s, two
+    boots) suggests the handshake also builds stack traces on its normal path -- unmeasured. The `HttpsDemo` comment
+    "a failed handshake still runs our side of it to the end" is false: attempt 1 stops at the EPIPE.
+  - `make test`, `overlaycheck` OK; 10 stack-trace probes pass (CallerSensitive, CtorChainTrace, DeepTrace,
+    StackWalker, StockException, SystemLogger, ThrowableStock, ThrowableToString, Trace, HighLocalThrow).
+
 - **Loader: patchRelocs' STANDING RE-LOOKUPS ARE GATED (2026-11-05, PR #485, b3abcb3).**
   - **Before:** `patchRelocsFrom` re-resolves every unmemoised reloc site on every batch. Over one SslEngineProbe run
     (QEMU) that is 819,614 `globalBufByRef` calls: 670,117 constructor lookups (3.6 s) and 103,456 declaring-class
@@ -36,7 +72,7 @@ Newest entries are at the top.
     A second gate boot (server 104.20.23.154) also connected on attempt 1, in 30.0 s. The control reproduces run 29
     (528,740 ms). **13x on hardware, against a few percent on QEMU -- the mechanism is NOT yet measured:** the Pi pays
     something per lookup that QEMU does not show. An HTTPS image printing the loader's patch timers, booted once on
-    each, would answer it.
+    each, would answer it. **Answered by the frameToElement card above: a threshold, not a per-lookup cost.**
 
 - **Loader: markReachable's PER-BATCH ROUND COSTS ARE INCREMENTAL (2026-11-04, PR #483, bbb55de).**
   - **Before:** `markReachable` runs once per demand-load batch (1,275 batches, 2,834 rounds on SslEngineProbe) and
