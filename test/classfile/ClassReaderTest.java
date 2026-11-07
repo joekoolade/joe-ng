@@ -37,7 +37,65 @@ public final class ClassReaderTest
         check(dir, "vm/Beta", false);        // two methods; greet() is not at slot 0
         check(dir, "vm/Greeter", true);      // an interface: abstract methods, no code
         check(dir, "board/bcm2711/Uart", false);
+        checkLinesByBci(dir);
         T.summary("class-reader");
+    }
+
+    /**
+     * linesByBci must give, at every bytecode index of every method that has a LineNumberTable, exactly what
+     * lineForBci gives -- over every class file under {@code dir}, so the real tables (unsorted entries, several
+     * entries at one start_pc, code before the first entry) are all exercised.
+     */
+    private static void checkLinesByBci(Path dir) throws Exception
+    {
+        byte[] lnt = "LineNumberTable".getBytes();
+        long indexes = 0;
+        long bad = 0;
+        int methods = 0;
+        java.util.List<Path> files;
+        try (java.util.stream.Stream<Path> w = Files.walk(dir))
+        {
+            files = w.filter(f -> f.toString().endsWith(".class")).toList();
+        }
+        for (Path f : files)
+        {
+            ClassFile cf;
+            try
+            {
+                cf = ClassFile.parse(f);
+            }
+            catch (Exception e)
+            {
+                continue;                               // not every file under out/ is one our parser reads
+            }
+            byte[] b = cf.bytes();
+            for (ClassFile.Method m : cf.methods())
+            {
+                if (m.code == null || m.codeBodyOff < 0)
+                {
+                    continue;
+                }
+                int lntOff = ClassReader.lineNumberTableOff(b, cf.cpOff(), m.codeBodyOff, lnt);
+                if (lntOff < 0)
+                {
+                    continue;
+                }
+                methods++;
+                int len = m.code.length;
+                int[] got = new int[len];
+                ClassReader.linesByBci(b, lntOff, got, len);
+                for (int bci = 0; bci < len; bci++)
+                {
+                    indexes++;
+                    if (got[bci] != ClassReader.lineForBci(b, lntOff, bci))
+                    {
+                        bad++;
+                    }
+                }
+            }
+        }
+        T.check("linesByBci covered methods (" + methods + ")", methods > 1000);
+        T.eq("linesByBci == lineForBci at every bci (" + indexes + " indexes)", 0, bad);
     }
 
     /** Parse {@code name} with both readers and assert they agree. */
