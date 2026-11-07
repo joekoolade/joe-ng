@@ -4,6 +4,34 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **Loader: a method's LINE TABLE IS BUILT IN ONE PASS -- Pi HTTPS attempt 1 -0.9 s, done -1.2 s (2026-11-07).**
+  - **Pi split re-taken on #493** (the temporary phase clock again): SYN -> end now 15.2 s (was 18.5) -- batch load
+    4.61 s, compile 4.36 s (3,025, 1.44 ms each), guest + network wait 2.15 s, `<clinit>` 1.86 s, GC 1.61 s,
+    lazyCompile's own work 0.60 s (was 3.63). Attempt 1's handshake ends 8.0 s after its SYN (was 9.5).
+  - **The compile phase, broken down** (qprof at 0.1 s, SslEngineProbe; samples whose innermost phase is the
+    compiler, 227 of 1,289): code generation (`compiler/` + `asm/`) only ~20%; `vm/Loader` leaves 41% (byte
+    compares -- `vtEntryOf` via `globalVtableSlot`/`vtableSlotOf` the named one, ~8%); `classfile/` 27%, of which
+    **`buildLineTable` -> `ClassReader.lineForBci` ~19%**; allocation ~11%.
+  - **Before:** `buildLineTable` called `lineForBci` for every bytecode index, twice (count, then emit), and each
+    call walks the method's whole LineNumberTable -- O(code length x table length). The largest such product in
+    `out/` is ~200 million.
+  - **Now:** `ClassReader.linesByBci` fills a per-bci line array in one pass over the table (the FIRST entry at a
+    start_pc wins, as lineForBci's strict `>` keeps it) and one carry-forward pass over the indexes; buildLineTable
+    reads a reused scratch array (`lnAt`, safe under the loader lock). The writer's host-side twin is unchanged.
+  - **Equivalence, in `make test` from now on:** ClassReaderTest compares linesByBci with lineForBci at every
+    bytecode index of every method with line info in `out/` -- 1,159 class files, 10,286 methods, 874,752
+    indexes, **0 mismatches**.
+  - **QEMU, clean sequential pair:** main (#493) 120.8 s vs branch 116.6 s (-3.5%), output IDENTICAL, gc=18.
+  - **Pi, HttpsDemo (one boot, same server 172.66.147.243 as #493):** attempt 1 connected in **20,353 ms** (#493:
+    21,372), `https: done` **27,230 ms** (#493: 28,547), gc=17, 200 OK. Net of DNS (2,498 vs 2,594 ms):
+    **attempt 1 -0.9 s, done -1.2 s**.
+  - **Across #489-#494, Pi HttpsDemo:** attempt 1 29.9 -> 20.4 s, done 39.5 -> 27.2 s.
+  - **Next:** the compiler's remaining loader share -- `vtEntryOf`'s byte-compare scans from
+    `globalVtableSlot`/`vtableSlotOf` -- and batch loading (~8 ms per batch).
+  - `make test` (class-reader 173 checks), `overlaycheck` OK; 19 probes pass (CtorChainTrace, DeepTrace,
+    ThrowableStock, DefaultFrame, StackWalker, StockException, SystemLogger, ThrowableToString, Trace, WideFrame,
+    CallerSensitive, HighLocalThrow, FirstCallRace, ClinitOrder, Lazy, LinkTrap, Lambda4, Indy, SslEngine).
+
 - **Loader: rememberLazyBody FINDS ITS REGISTRY ENTRY THROUGH THE INDEX -- Pi HTTPS attempt 1 -3.2 s, done -5.1 s
   (2026-11-06).**
   - **Pi split first** (temporary exclusive phase clock -- time charged to the innermost of compile / batch load /

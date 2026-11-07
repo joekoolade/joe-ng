@@ -12257,6 +12257,9 @@ public final class Loader
      * frame resolver finds the largest {@code wordOffset <= (pc-base)/4} and reads its line. Returns 0 if the
      * class was compiled without line info (no {@code -g}).
      */
+    /** buildLineTable's per-bytecode line scratch (see ClassReader.linesByBci); grown, never shrunk. */
+    private static int[] lnAt;
+
     private static long buildLineTable(int i)
     {
         if (gBcToWord == null)
@@ -12269,14 +12272,20 @@ public final class Loader
         {
             return 0L;
         }
+        int len = gBcToWord.length;
+        if (lnAt == null || lnAt.length < len)
+        {
+            lnAt = new int[len < 4096 ? 4096 : len];      // scratch, reused: compiles hold the loader lock
+        }
+        ClassReader.linesByBci(gbytes, lntOff, lnAt, len);
         int n = 0;
         int prev = -1;
         int bci = 0;
-        while (bci < gBcToWord.length)                    // pass 1: count line transitions
+        while (bci < len)                                 // pass 1: count line transitions
         {
             if (gBcToWord[bci] >= 0)
             {
-                int line = ClassReader.lineForBci(gbytes, lntOff, bci);
+                int line = lnAt[bci];
                 if (line != prev)
                 {
                     n += 1;
@@ -12298,11 +12307,11 @@ public final class Loader
         long w = tab + 4;
         prev = -1;
         bci = 0;
-        while (bci < gBcToWord.length)                    // pass 2: emit (wordOffset, line) at each transition
+        while (bci < len)                                 // pass 2: emit (wordOffset, line) at each transition
         {
             if (gBcToWord[bci] >= 0)
             {
-                int line = ClassReader.lineForBci(gbytes, lntOff, bci);
+                int line = lnAt[bci];
                 if (line != prev)
                 {
                     Magic.store32(w, gBcToWord[bci]);
