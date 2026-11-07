@@ -21167,17 +21167,24 @@ public final class Loader
         {
             return false;
         }
-        int k = 0;
-        while (k < dlN)
+        // THROUGH THE dlTab INDEX (dlBucket, keyed utf8Hash2(class name, method name)), with the scan's own
+        // identity test. compileClass asks this once per method and it walked EVERY phase-A cell to answer --
+        // methods x cells per batch. MEASURED (qprof, SslEngineProbe, QEMU 2026-11-07): the largest single leaf
+        // of batch loading, 17% of its samples. The class being compiled is the context, so gThisNameOff names
+        // the class its own cells are filed under; the answer is only whether one exists, so chain order is moot.
+        buildDlIndex();
+        boolean hit = false;
+        int k = dlBucket[utf8Hash2(gbase, gThisNameOff, gbase, nameOff) & (DLTAB - 1)];
+        while (k >= 0 && !hit)
         {
             DynLink d = dlTab[k];
             if (d.blob == gbase && d.nameOff == nameOff && d.descOff == descOff)
             {
-                return true;
+                hit = true;
             }
-            k += 1;
+            k = dlNext[k];
         }
-        return false;
+        return hit;
     }
 
 /** Allocate the shared lazy tables + trampoline if not yet done (shared by 1b and 1c). */
