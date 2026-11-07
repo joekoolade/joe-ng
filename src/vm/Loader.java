@@ -6954,9 +6954,10 @@ public final class Loader
         {
             return false;
         }
-        // Narrow ALLOW for the VarHandle-as-atomic-field-accessor shim (overlays, not the real invoke runtime):
-        // java.net.Socket uses VarHandle for its `state`/`in`/`out` fields. Allowed BEFORE the java/lang/invoke
-        // prefix deny below. Everything else in java/lang/invoke stays denied.
+        // Historical ALLOW list from when java/lang/invoke/ was denied as a prefix: VarHandle (java.net.Socket's
+        // `state`/`in`/`out` fields) and the classes below were narrowed out of it one by one. The prefix deny is
+        // GONE (the java.lang.invoke arc runs stock invoke), so for those classes this clause is now redundant;
+        // it still matters for java/lang/ClassLoader and as the record of why each one was first allowed.
         if (utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/VarHandle"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/MethodHandles"))
                 // java.lang.invoke arc, increment 0 (2026-10-26): STOCK MethodType (the prefix covers
@@ -7047,8 +7048,9 @@ public final class Loader
                 // cold part of it is closureDeferred (see securityCore).
                 // java/util/ServiceLoader is NOT denied: it is OVERLAID (guestsrc/java/util/ServiceLoader).
                 // Stock discovery goes through ClassLoader.getResources -> java/net/URL -> a protocol handler
-                // in jdk/internal/loader, which stays denied -- so there is no way to hand the stock class the
-                // jar's bytes. The overlay reads META-INF/services/* through getResourceAsStream instead. The
+                // in jdk/internal/loader, which was denied when this was written (the loader arc un-denied it
+                // since) -- so there was no way to hand the stock class the jar's bytes. The overlay reads
+                // META-INF/services/* through getResourceAsStream instead. The
                 // denial had to come out first: a denied class is trap-wired at PATCH TIME, so no link stub
                 // ever runs and the overlay would never be consulted.
                 // sun/util/ is NOT denied any more (2026-10-31). Its subpackages had been narrowed out one by one
@@ -7154,8 +7156,9 @@ public final class Loader
                 // Pattern.CIRangeU asks this class which characters fold INTO the range [1-9]. It is
                 // OVERLAID now (guestsrc), which is what the denial had to be narrowed for: a denied class
                 // is trap-wired at PATCH TIME, so no link stub runs and the overlay is never consulted.
-                // The stock class cannot simply be un-denied -- it builds its tables with multianewarray,
-                // which this JIT records metadata for but has no lowering for.
+                // It was overlaid because the stock class builds its tables with multianewarray, which the
+                // JIT could not lower at the time; it can now (VM.multiNewArray, see Grapheme above), so
+                // the overlay is no longer forced by that.
                 // The charset coders (CharsetDecoder/CharsetEncoder/CoderResult/CodingErrorAction) and
                 // sun/nio/cs/Array* are NOT denied any more: the charsets run STOCK with real coders, so
                 // InputStreamReader/OutputStreamWriter decode and encode. (Keep in sync with ReachScan.DENY.)
