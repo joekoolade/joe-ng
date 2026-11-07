@@ -32,4 +32,5 @@ final class LazyMethod
     int  isSync;     // ... 1 if ACC_SYNCHRONIZED (the implicit method monitor, JVMS 2.11.10)
     int  maxLocals;  // ... its max_locals
     long cache;      // memoised compiled buffer (0 = not yet compiled)
+    long stubLit;    // the deferral stub's target literal (0 = no patchable stub); see Loader.writeLazyStub
 }

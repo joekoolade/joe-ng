@@ -4,6 +4,40 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **Loader: a DEFERRAL STUB BRANCHES TO ITS BODY once compiled (target literal) -- 58M trampoline round trips
+  gone; QEMU -2.7%, Pi unchanged (2026-11-06).**
+  - **Found by a Pi profile** (temporary PIPROF snapshots at the first SYN and the end of an HttpsDemo run, main
+    ade8ca4): 3,830,249 `lazyCompile` calls and 19.3 s inside it; batches 12.3 s. Attempt 1's handshake ends
+    ~9.6 s after its SYN (start ~17.5 s on the boot clock, SYN 33.1 s, connected 42.7 s), ~5 s inside the
+    server's window.
+  - **Before:** the deferral stub (`movz x17, idx; movz/movk x16, tramp; br x16`) was never rewritten. Where it IS
+    the method's registered address (`LazyMethod.slot == 0`), every caller went stub -> trampoline (x0..x15 saved
+    and restored) -> lazyCompile -> `cache` hit -> branch, for the life of the VM. QEMU, SslEngineProbe:
+    **58,174,133 calls, 58,168,845 cache hits (99.99%)**, 39.0M through slot-less stubs, one Unsafe method 14.1M,
+    against 20,731 deferred methods.
+  - **Now:** `writeLazyStub` (all three stub builders share it) emits `movz x17, idx; ldr x16, [pc,#12]; br x16;
+    nop; .quad target` with the literal starting at the trampoline. `patchLazyStub` writes the body into the
+    literal at the two points the TIB slot is already patched (pin, `dsb`, one aligned 64-bit store), so a caller
+    gets exactly what the cache-hit path returned. The TARGET IS DATA: single-copy atomic, no instruction
+    rewritten, so no cross-core I-cache maintenance and none of the ARM ARM's concurrent-modification rules (MOVZ ->
+    B is outside their permitted set). A misaligned buffer keeps the old form. New `A64Enc.ldrLitX` / `A64Enc.nop`,
+    tested bit-for-bit (LDR literal +8, +12, -4; misaligned and +1 MiB rejected). `asm.A64.nop()` could not be
+    used: it pulls `A64$Sys` -- an indy `hashCode` -- into the image and the writer refuses it.
+  - **QEMU, SslEngineProbe:** lazyCompile calls **58,174,133 -> 5,286, hits -> 0**. Clean sequential pair main
+    (#491) 135.0 s vs branch 131.4 s (**-2.7%**), output IDENTICAL, gc=18 -- a trampoline round trip is ~60 ns
+    under TCG. (An earlier 149.5 vs 125.7 s comparison was host-state drift; the back-to-back pair is the result.)
+  - **Pi, HttpsDemo (one boot, same server 104.20.23.154 as #491):** attempt 1 25,220 ms (#491: 25,109),
+    `https: done` 34,228 ms (#491: 34,087), gc=17, 200 OK -- **unchanged**. So the PIPROF 19.3 s is REAL work done
+    inside lazyCompile (the compiles themselves, plus nested batch loads and initializers), not cache hits; I read
+    it as hits at first, and the measurement corrected that.
+  - **Next:** split the Pi's lazyCompile time into compile / nested load / `<clinit>` at the same SYN and end
+    snapshots, to choose between compiler speed and class loading for the cold handshake.
+  - `make test` (A64 131 checks), `overlaycheck` OK; 30 targeted probes pass (ArgGroup, AtomicRace, ChmRace,
+    ClinitRace, CtorChainTrace, DeepTrace, CslmRace, ExcMessageRace, FirstCallRace, Lazy, NativeArg,
+    LazyVarHandle, SpawnRace, StackWalker, Trace, UnsafeAccess, UnsafeAll, UnsafeAtomic, UpdaterRace, Capture,
+    Indy, Lambda4, SuperCall, VirtualInvoke, IfaceObjectMethod, LinkTrap, ClinitOrder, NestedClinit,
+    SystemLogger, SslEngine).
+
 - **Loader: patchRelocs SKIPS SITES ALREADY PATCHED, and its PER-SITE TIMERS ARE OFF -- QEMU -11%, Pi unchanged
   (2026-11-06).**
   - **Profile first (qprof, SslEngineProbe, main 2778c7d):** with the QEMU-only RNG spin set aside, the cold TLS

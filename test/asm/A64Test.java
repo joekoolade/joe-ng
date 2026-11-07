@@ -133,6 +133,12 @@ public final class A64Test
         T.throwsIAE("A64Enc.b -2^25-1 words", () -> A64Enc.b(-(1 << 25) - 1));
         T.throwsIAE("A64Enc.tbz bit 64", () -> A64Enc.tbz(1, 64, 0));
         T.eqWord("LDR x1,[sp,#32760]", 0xF97FFFE1, A64Enc.ldrx(1, 31, 32760));
+        T.eqWord("NOP (A64Enc)", 0xD503201F, A64Enc.nop());
+        T.eqWord("LDR x0,.+8 (literal)",   0x58000040, A64Enc.ldrLitX(0, 8));
+        T.eqWord("LDR x16,.+12 (literal)", 0x58000070, A64Enc.ldrLitX(16, 12));
+        T.eqWord("LDR x1,.-4 (literal)",   0x58FFFFE1, A64Enc.ldrLitX(1, -4));
+        T.throwsIAE("A64Enc.ldrLitX misaligned", () -> A64Enc.ldrLitX(16, 6));
+        T.throwsIAE("A64Enc.ldrLitX +1 MiB", () -> A64Enc.ldrLitX(16, 1 << 20));
         T.eqWord("B.EQ -2^18 words", 0x54800000, A64Enc.bcond(A64Enc.EQ, -(1 << 18)));
         T.eqWord("MOV SP,x0",     0x9100001F, A64.movToSp(0));
         T.eqWord("MOV x0,x1",     0xAA0103E0, A64.movReg(0, 1));
