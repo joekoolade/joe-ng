@@ -320,6 +320,10 @@ final class MetalSymbols implements Symbols
     {
         return Loader.isMagicOwner(methodCp);
     }
+    public int mathIntrinsicId(int methodCp)
+    {
+        return Loader.mathIntrinsicId(methodCp);
+    }
     public boolean intrinsicEmitsCall(int methodCp)
     {
         // The memory/bytes intrinsics emit no BL/BLR; the scheduler ops (spawn/sem*/sleep/newSem/report)

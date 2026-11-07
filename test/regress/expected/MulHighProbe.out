@@ -1,0 +1,5 @@
+corners 256 sweep 4000 mismatches 0
+signature 80cddd4a703f5112
+nested 149edcc6ee5a7
+MIN*MIN 4611686018427387904 unsigned 4000000000000000
+-1*-1 0 unsigned fffffffffffffffe

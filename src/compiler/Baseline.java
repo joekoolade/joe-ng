@@ -1950,6 +1950,20 @@ public final class Baseline
             lowerIntrinsic(symbols.intrinsicId(cpIndex), cb);
             return;
         }
+        // Math.multiplyHigh / unsignedMultiplyHigh: one instruction, no call and no init guard. MEASURED (Pi tick
+        // sampler, HttpsDemo, 2026-11-07): Math.multiplyHigh was the top guest method inside the P-256 generator
+        // table's <clinit> (1.13 s own time), a Java body of ~20 operations per call. Skipping the guard is not
+        // a missed active use that matters: Math is initialized at launch, and its <clinit> touches nothing but
+        // Math's own statics, which these two methods never read.
+        int mh = symbols.mathIntrinsicId(cpIndex);
+        if (mh >= 0)
+        {
+            int y = popReg();
+            int x = popReg();
+            int r = pushReg();
+            cb.emit(mh == Intrinsics.SMULH ? A64Enc.smulh(r, x, y) : A64Enc.umulh(r, x, y));
+            return;
+        }
         if (symbols.isGetCallerClass(cpIndex))
         {
             lowerGetCallerClass(cb);

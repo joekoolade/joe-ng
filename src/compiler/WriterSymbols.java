@@ -447,6 +447,23 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
     {
         return cf.memberRef(methodCp).owner().equals("magic/Magic");
     }
+    public int mathIntrinsicId(int methodCp)
+    {
+        ClassFile.MemberRef ref = cf.memberRef(methodCp);
+        if (!ref.owner().equals("java/lang/Math") || !ref.descriptor().equals("(JJ)J"))
+        {
+            return -1;
+        }
+        if (ref.name().equals("multiplyHigh"))
+        {
+            return Intrinsics.SMULH;
+        }
+        if (ref.name().equals("unsignedMultiplyHigh"))
+        {
+            return Intrinsics.UMULH;
+        }
+        return -1;
+    }
     public boolean intrinsicEmitsCall(int methodCp)
     {
         String n = cf.memberRef(methodCp).name();
