@@ -66,21 +66,31 @@ public class ServiceLoaderProbe
         List<ServiceLoader.Provider<DiscoverySelectorIdentifierParser>> pl = parsers.stream().toList();
         System.out.println("parsers count       = " + pl.size() + " (want 13)");
 
-        // ---- A PROVIDER THIS VM CANNOT LOAD IS SKIPPED, NOT FATAL. The TestExecutionListener file names two:
-        // UniqueIdTrackingListener, and OpenTestReportGeneratingListener -- which writes an XML report to a
-        // FILE and is therefore denied here (no filesystem). Stock aborts the whole service with a
-        // ServiceConfigurationError; this overlay skips the one it cannot load and REPORTS it, so the other
-        // provider still works. The count is what proves the survivor is kept rather than the file dropped.
-        System.out.println("-- expect a 'not loadable here' line next --");
+        // ---- BOTH LISTENERS LOAD AND CONSTRUCT. The TestExecutionListener file names two:
+        // UniqueIdTrackingListener, and OpenTestReportGeneratingListener, whose constructor reaches
+        // java/nio/file/Path.of. The reporting package used to be DENIED so the overlay would skip it (count 1);
+        // it is not any more, so the count is 2 and the LAST name -- the unterminated line -- must construct.
         ServiceLoader<org.junit.platform.launcher.TestExecutionListener> listeners =
                 ServiceLoader.load(org.junit.platform.launcher.TestExecutionListener.class, cl);
         java.util.List<ServiceLoader.Provider<org.junit.platform.launcher.TestExecutionListener>> ll =
                 listeners.stream().toList();
-        System.out.println("listeners count     = " + ll.size() + " (want 1 of 2; one is denied)");
-        System.out.println("listener kept       = " + (ll.size() == 1 ? ll.get(0).type().getName() : "?")
-                + " (want org.junit.platform.launcher.listeners.UniqueIdTrackingListener)");
-        System.out.println("listener constructs = " + (ll.size() == 1 && ll.get(0).get() != null ? 1 : 0)
-                + " (want 1)");
+        System.out.println("listeners count     = " + ll.size() + " (want 2)");
+        int li = 0;
+        while (li < ll.size())
+        {
+            ServiceLoader.Provider<org.junit.platform.launcher.TestExecutionListener> lp = ll.get(li);
+            System.out.println("listener[" + li + "] type     = " + lp.type().getName());
+            System.out.println("listener[" + li + "] constructs = " + (lp.get() != null ? 1 : 0) + " (want 1)");
+            li += 1;
+        }
+
+        // ---- ALL THREE ENGINES RESOLVE, vintage included (it was denied, and skipped, until 2026-11-07).
+        int ei = 0;
+        while (ei < ps.size())
+        {
+            System.out.println("engine[" + ei + "] type       = " + ps.get(ei).type().getName());
+            ei += 1;
+        }
 
         // ---- ABSENT: no provider file is an empty service, not an error.
         ServiceLoader<Runnable> none = ServiceLoader.load(Runnable.class, cl);

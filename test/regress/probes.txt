@@ -16,7 +16,7 @@
 #
 # Compiled into the image (Makefile JDKTESTS) but NOT listed, and why (2026-10-23):
 #   METAL-ONLY BY DESIGN, no host control -- ArchiveProbe, BoxCacheProbe (print addresses and image/heap),
-#   ResourceProbe, ServiceLoaderProbe (no URL support, denied providers), UsageProbe (os.name, terminal
+#   ResourceProbe, ServiceLoaderProbe (metal-only by design), UsageProbe (os.name, terminal
 #   width), SecureRandomProbe, LazyModsProbe (use magic/ or demo/).
 #   OTHER -- FirstCallRaceStress (right answer, but QEMU prints LOADER LOCK watchdog lines), EmptySentinelProbe
 #   (Set.of order is randomized per host run), JUnitApiProbe (fails an assertion on purpose), PicoDirect and

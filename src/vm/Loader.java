@@ -7063,25 +7063,11 @@ public final class Loader
                 // HTTP-proxy socket) loads, but its <clinit> reflects on sun.net.www.protocol.http.HttpURLConnection,
                 // which is denied below: new Socket(httpProxy) throws ExceptionInInitializerError naming it instead
                 // of halting at a denylist trap. java/net/SocketCleanable no longer exists in JDK 26.
-                // org/junit/platform/reporting/ writes an XML report to a FILE. Its
-                // OpenTestReportGeneratingListener is on the TestExecutionListener services path, so
-                // ServiceLoader discovers it and constructs it -- and its constructor calls
-                // java/nio/file/Path.of, which is denied because there is no filesystem under this VM. A
-                // denylist trap HALTS, so stock's "a provider that fails to construct throws
-                // ServiceConfigurationError" never gets a chance to run.
-                //
-                // Denying the package moves the failure EARLIER, to Class.forName, where it is an ordinary
-                // ClassNotFoundException that the ServiceLoader overlay can skip and REPORT. A listener that
-                // can only write files cannot work here; the choice is between saying so and halting.
-                // The VINTAGE engine (JUnit 4 support) is denied, so ServiceLoader SKIPS it by name -- the
-                // same route already used for org/junit/platform/reporting/. Its VintageTestEngine runs
-                // JUnit4VersionCheck, which does `new BigDecimal(version)`, and java.math does not work here
-                // yet (see the java.math note in CLAUDE.md: its initializers are rejected, and allowing them
-                // pulls BigInteger's PARALLEL path and ForkJoin behind it). Nothing selects a JUnit 4 test on
-                // this VM, so the engine is cost without benefit -- but this is a SCOPE decision, not a
-                // statement that vintage could not work, and it is the line to delete when java.math does.
-                || utf8HasPrefix(base, off, Magic.bytes("org/junit/vintage/"))
-                || utf8HasPrefix(base, off, Magic.bytes("org/junit/platform/reporting/"))
+                // org/junit/vintage/ and org/junit/platform/reporting/ are NOT denied any more (2026-11-07).
+                // Both were denied so the ServiceLoader overlay would skip them by name: the reporting
+                // listener's constructor called java/nio/file/Path.of when java/nio/file was denied, and the
+                // vintage engine's JUnit4VersionCheck does `new BigDecimal(version)` when java.math did not
+                // work. Both premises expired: java/nio/file runs stock over the RAMFS, and java.math works.
                 // sun/net/www/ is NOT denied any more (2026-11-01), https included. file: and jar: had been
                 // narrowed out for the class path; now the http, https, ftp, mailto and jrt handlers and the HTTP
                 // client load too, so URL.openConnection answers a real HttpURLConnection and the HTTP-proxy
