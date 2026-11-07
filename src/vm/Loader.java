@@ -5096,6 +5096,23 @@ public final class Loader
         mtBuilt = new int[MAXBLOB];                      // only the per-blob flags need clearing (1024 ints)
         pdSuperCache = new int[MAXBLOB];
         mtN = 0;
+        // THE VIRT HIT LISTS DIE WITH THE TABLE. A hit records a method-table SLOT (an index into the arrays
+        // just reset) and a PEND index (pendN restarts at 0 every batch), so both halves are per-batch facts;
+        // they were dropped only per LAUNCH (resetLoader). MEASURED on main (SslEngineProbe, QEMU 2026-11-07):
+        // of 5,227,096 hits applied, 1,142,255 named a slot outside the blob's current slice -- addReach of
+        // some other method's code -- and 53,741 more named a method whose signature no longer matched the
+        // pend; 3,995 visits had hvTo above pendN, so the list was never extended. Silent because RTA
+        // over-marking only compiles more and a missed target resolves late. Reset here: 0 of each.
+        if (hvLen != null)
+        {
+            int k = 0;
+            while (k < hvLen.length)
+            {
+                hvLen[k] = 0;
+                hvTo[k] = 0;
+                k += 1;
+            }
+        }
     }
 
     private static void markReachable()
@@ -6185,8 +6202,10 @@ public final class Loader
      *
      * <p>SO SPLIT THE WORK BY WHAT IS ACTUALLY INVARIANT. Whether method i of level b matches pend entry q
      * by name+descriptor is IMMUTABLE BY CONSTRUCTION: mtName/mtDesc are fixed by the classfile and a pend
-     * entry's name/descriptor never change once added. That half is cached here, permanently, and extended
+     * entry's name/descriptor never change once added. That half is cached here FOR THE BATCH, and extended
      * only over pend entries added since (the chains are descending, so the walk stops at the watermark).
+     * Not longer: pend indices and method-table slots are both per-batch, so {@link #resetMethodTables}
+     * empties the lists. (They used to live for the whole launch -- see the measured damage there.)
      * The path-dependent half -- the virtResolved shadow check -- still runs on EVERY visit, against every
      * cached hit. No marking is skipped; only the searching is.
      */
@@ -6301,7 +6320,7 @@ public final class Loader
                     if (utf8EqAt(pendBase[q], pendName[q], base, mtName[i])
                             && utf8EqAt(pendBase[q], pendDesc[q], base, mtDesc[i]))
                     {
-                        addHit(b, i, q);                 // a PERMANENT fact: names and descriptors never change
+                        addHit(b, i, q);                 // fixed for the batch: slot i and pend q are per-batch
                     }
                     q = pvNext[q];
                 }
