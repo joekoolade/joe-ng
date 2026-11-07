@@ -46,9 +46,8 @@ public final class ReachScan
         // java/security/ is NOT here any more: the stock JCA runs (see Loader.isDenylisted).
         // java/util/ServiceLoader is NOT here any more: it is overlaid (guestsrc), and the runtime list dropped
         // it so the overlay is consulted (see Loader.isDenylisted).
-        // JUnit's vintage engine and its file-writing reporting listener are denied at runtime so the
-        // ServiceLoader overlay skips them by name (see Loader.isDenylisted).
-        "org/junit/vintage/", "org/junit/platform/reporting/",
+        // org/junit/vintage/ and org/junit/platform/reporting/ are NOT here any more: both load (see
+        // Loader.isDenylisted).
         // sun/util/ is NOT here any more: the whole package loads (see Loader.isDenylisted).
         // java/net is loadable (M3 sockets) and nothing in it is denied; neither sun/net/ext/ nor sun/net/www/ is
         // denied any more, https included (see Loader.isDenylisted).
