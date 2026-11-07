@@ -591,7 +591,7 @@ public final class Loader
         if (pulled)
         {
             drainPendingPulls();
-            rcCount = rcMark;                           // drop the doomed body's reloc sites: patching them
+            truncateRelocs(rcMark);                     // drop the doomed body's reloc sites: patching them
             rsCount = rsMark;                           //   later would write into reused memory
         }
         lzRetried = outerRetried;
@@ -4299,6 +4299,8 @@ public final class Loader
         rcName = new int[MAXRELOC];
         rcDesc = new int[MAXRELOC];
         rcCount = 0;
+        pcListsValid = false;                           // the patch lists index these tables: rebuild
+        pcWritten = new int[MAXRELOC];
         rsAddr = new long[MAXRELOC];
         rsBase = new long[MAXRELOC];
         rsReg = new int[MAXRELOC];
@@ -12850,166 +12852,25 @@ public final class Loader
     private static void patchRelocsFrom(int rcStart, int rsStart)
     {
         long tA0 = Magic.readCNTPCT_EL0();
-        int i = rcStart;
-        while (i < rcCount)
+        pcWrittenN = 0;
+        pcPubAll = false;
+        int pubFrom = rcStart;
+        if (rcStart == 0 && pcListsValid)
         {
-            // MEMOISED: re-read the entry that answered last time. rgTab[].buf is live, so a body that was
-            // lazily compiled since (rememberLazyBody) is picked up exactly as a fresh lookup would -- this
-            // skips the LOOKUP, never the patch.
-            long target;
-            long tL0 = 0L;
-            if (PATCH_SITE_TIMERS)
+            pubFrom = patchIncremental();
+        }
+        else
+        {
+            int i = rcStart;
+            while (i < rcCount)
             {
-                tL0 = Magic.readCNTPCT_EL0();
+                patchSite(i);
+                i += 1;
             }
-            if (rcReg[i] >= 0)
+            if (rcStart == 0)
             {
-                pcMemo += 1;
-                target = rgTab[rcReg[i]].buf;
+                rebuildPatchLists();
             }
-            else if (gateStands(i))
-            {
-                pcResolve += 1;                          // counted as the lookup it replaces: see pcUnres
-                target = rcGateCell[i] == 0L ? 0L : Magic.load64(rcGateCell[i]);
-            }
-            else
-            {
-                pcResolve += 1;
-                target = globalBufByRef(rcBase[i], rcClass[i], rcName[i], rcDesc[i]);
-                if (target != 0L)
-                {
-                    rcReg[i] = rgHitIdx;                 // -1 for the super-chain/stub tiers: re-resolve those
-                }
-                recordGate(i);
-            }
-            long tU0 = 0L;
-            if (PATCH_SITE_TIMERS)
-            {
-                pcLookT += Magic.readCNTPCT_EL0() - tL0;
-                tU0 = Magic.readCNTPCT_EL0();
-            }
-            if (target == 0L && rcStub[i] != 0L)
-            {
-                // SETTLED ALREADY: this site was unresolved on an earlier batch and took a link stub, and
-                // neither half of that decision can change (see rcStub). One array read instead of sixty
-                // prefix compares plus a scan of every stub minted so far.
-                //
-                // `pcUnres` COUNTS THIS SITE TOO, and that is not bookkeeping pedantry: `memo/res/unres` is
-                // the triple every entry in this file gates identity on -- "the same sites resolved through
-                // the same tiers to the same answers". Incrementing only the new counter made `unres` read
-                // 463 against 2193 for the same work, which looks exactly like a closure that changed. A
-                // counter used as an invariant must keep meaning the same thing.
-                pcUnres += 1;
-                pcUnresMemo += 1;
-                target = rcStub[i];
-            }
-            if (target == 0L)
-            {
-                pcUnres += 1;
-                // Unresolved. Two very different causes, and they want opposite treatment:
-                //   - the callee's class is DENYLISTED (a metal-absent subtree on a cold branch) -> trap, as
-                //     before; resolving it would demand-load exactly what the denylist exists to keep out.
-                //   - the class is merely ABSENT from a closure that was computed without ever reading this
-                //     body -- the RTA-through-reflection gap -> a link stub, which resolves on first call.
-                // The trapwire site is recorded either way, so a link stub that fails to resolve still lands
-                // in denylistTrap with its index intact.
-                target = VM.denylistTrapAddr;
-                if (trapWireCount < MAXTRAPWIRE)
-                {
-                    if (logTrapWire != 0)                      // verbose per-call dump (index -> callee); off by default
-                    {
-                        Uart.write(Magic.bytes("  TRAPWIRE["));   // matched at runtime by x30 in denylistTrap
-                        VM.printDec(trapWireCount);
-                        Uart.write(Magic.bytes("] "));
-                        writeName(rcBase[i] + rcClass[i] + 2, u2(rcBase[i] + rcClass[i]));   // callee class Utf8
-                        Uart.putc(0x2E);                       // '.'
-                        writeName(rcBase[i] + rcName[i] + 2, u2(rcBase[i] + rcName[i]));     // callee method Utf8
-                        Uart.putc(0x0A);
-                    }
-                    trapWireSite[trapWireCount] = rcAddr[i];   // ALWAYS recorded: denylistTrap looks up the fired
-                    trapWireCls[trapWireCount] = rcBase[i] + rcClass[i];   // site by x30, so the table must exist
-                    trapWireMth[trapWireCount] = rcBase[i] + rcName[i];    //   even when quiet -- and now it
-                    trapWireCount += 1;                                    //   carries the NAME as well
-                }
-                pcUnresDeny += 1;
-                if (!isDenylisted(rcBase[i], rcClass[i]))
-                {
-                    long stub = linkStubFor(rcBase[i] + rcClass[i], rcBase[i] + rcName[i], rcBase[i] + rcDesc[i]);
-                    if (stub != 0L)
-                    {
-                        target = stub;
-                        rcStub[i] = stub;               // settled: the arm above answers from here on
-                    }
-                }
-                if (target == VM.denylistTrapAddr)
-                {
-                    // NAME IT HERE, where the information exists. A site left pointing at the trap reports
-                    // `TRAPWIRE index=-1` and an EMPTY callee at runtime once trapWireCount passes
-                    // MAXTRAPWIRE -- and with launchMain sharing loader state across every program, those
-                    // sites now ACCUMULATE where they used to reset per launch, so the table fills and the
-                    // name is the first thing lost. A trap that cannot say what it was calling is
-                    // unactionable; this is the same "report a checked cause" the static and link paths
-                    // already do.
-                    reportTrapWired(rcBase[i], rcClass[i], rcName[i], rcDesc[i]);
-                }
-            }
-            long tT0 = 0L;
-            if (PATCH_SITE_TIMERS)
-            {
-                pcUnresT += Magic.readCNTPCT_EL0() - tU0;
-                tT0 = Magic.readCNTPCT_EL0();
-            }
-            if (target != 0L)
-            {
-                if (target >= Heap.BASE)                       // DIAGNOSTIC: a call "resolved" into the DATA heap
-                {                                              //   (blob/object, not code) -> name the callee
-                    Uart.write(Magic.bytes("  BADPATCH "));
-                    writeName(rcBase[i] + rcClass[i] + 2, u2(rcBase[i] + rcClass[i]));
-                    Uart.putc(0x2E);
-                    writeName(rcBase[i] + rcName[i] + 2, u2(rcBase[i] + rcName[i]));
-                    Uart.write(Magic.bytes(" -> "));
-                    VM.printHex(target);
-                    Uart.putc(0x0A);
-                }
-                long d = target - rcAddr[i];                   // A64 bl reaches +-128 MiB (26-bit word offset)
-                if (d > 0x07FFFFFFL || d < -0x08000000L)
-                {
-                    VM.jitFail(Symbols.FAIL_BL_RANGE, (int) (rcAddr[i] >> 12), (int) (target >> 12));
-                    for (;;) { }
-                }
-                int off = (int) (d >> 2);
-                int word = rcTail[i] != 0 ? A64Enc.b(off) : A64Enc.bl(off);
-                // ALREADY WRITTEN, AND STILL THERE: skip the pin, the edge note and the store. All three are
-                // idempotent for an unchanged target -- the pin bitmap is sticky (zeroed only at init), note()
-                // overwrites the same (site, target) entry, the store rewrites the same word -- yet every batch
-                // re-walks EVERY site from 0, so they ran sites x batches times. MEASURED (BATCH_COST,
-                // SslEngineProbe, QEMU 2026-11-06): patch was 8.8 s of the cold TLS session's 16.0 s of
-                // batch work, and this tail (tailT) 5.1 s of the call loop's 14.2 s over the run. The test reads
-                // the LIVE word, not only rcDone, so a site something else rewrote is patched as before.
-                if (rcDone[i] == target && Magic.load32(rcAddr[i]) == word)
-                {
-                    pcSkipped += 1;
-                    if (PATCH_SITE_TIMERS)
-                    {
-                        pcTailT += Magic.readCNTPCT_EL0() - tT0;
-                    }
-                    i += 1;
-                    continue;
-                }
-                rcDone[i] = target;
-                Heap.pinCodeAt(target);                       // CODE->CODE edge: after this store the only
-                                                              //   record of `target` is a displacement inside
-                                                              //   the caller's instructions, which nothing
-                                                              //   scans -- pin it or the sweep may free it
-                CodeEdges.note(rcAddr[i], target);            // ... and record the edge, so compaction can
-                                                              //   find and rewrite it when `target` moves
-                Magic.store32(rcAddr[i], word);                // bl target, or b for a lambda/method-ref thunk
-            }
-            if (PATCH_SITE_TIMERS)
-            {
-                pcTailT += Magic.readCNTPCT_EL0() - tT0;
-            }
-            i += 1;
         }
         long tB0 = Magic.readCNTPCT_EL0();
         pcCallT += tB0 - tA0;
@@ -13060,6 +12921,11 @@ public final class Loader
         }
         long tC0 = Magic.readCNTPCT_EL0();
         pcStatT += tC0 - tB0;
+        if (pcPubAll)
+        {
+            pcWrittenN = 0;                              // the range below then covers every site
+            pubFrom = rcStart;
+        }
         // PUBLISH THE WORDS THIS ACTUALLY WROTE, not the whole arena.
         //
         // It was `publishCode(CODE_BASE, <arena pointer>)` -- cache maintenance over EVERY line of the code
@@ -13068,14 +12934,21 @@ public final class Loader
         // 12,680ms cumulative on a launcher boot, larger than everything else remaining there put together.
         //
         // The writes are exactly one instruction per call site (the `bl`/`b` above) and two per static site
-        // (the movz+movk), so the lines that need maintenance are known precisely. Two passes over the same
-        // reloc arrays -- no new table -- keep the range version's ordering exactly: every clean reaches
-        // unified memory BEFORE any invalidate is issued, and the barriers are paid ONCE rather than per
-        // site. Per-site publishCode would have been thousands of full barriers to avoid one arena walk.
+        // (the movz+movk), so the lines that need maintenance are known precisely: the call sites patchSite
+        // actually WROTE (pcWritten), every site recorded since the last walk (new code), and the static
+        // sites, which are rewritten unconditionally. An old call site that was not rewritten was published
+        // when it last was. Two passes keep the range version's ordering exactly: every clean reaches unified
+        // memory BEFORE any invalidate is issued, and the barriers are paid ONCE rather than per site.
         //
         // linkStubFor and the deferral/thunk minters publish their own buffers, so nothing else written
         // between two of these calls depends on the wide sweep this replaces.
-        int p = rcStart;
+        int w = 0;
+        while (w < pcWrittenN)
+        {
+            Heap.publishClean(rcAddr[pcWritten[w]], rcAddr[pcWritten[w]] + 4L);
+            w += 1;
+        }
+        int p = pubFrom;
         while (p < rcCount)
         {
             Heap.publishClean(rcAddr[p], rcAddr[p] + 4L);
@@ -13088,7 +12961,13 @@ public final class Loader
             q += 1;
         }
         Heap.publishMid();
-        p = rcStart;
+        w = 0;
+        while (w < pcWrittenN)
+        {
+            Heap.publishInval(rcAddr[pcWritten[w]], rcAddr[pcWritten[w]] + 4L);
+            w += 1;
+        }
+        p = pubFrom;
         while (p < rcCount)
         {
             Heap.publishInval(rcAddr[p], rcAddr[p] + 4L);
@@ -13102,6 +12981,352 @@ public final class Loader
         }
         Heap.publishEnd();
         pcPubT += Magic.readCNTPCT_EL0() - tC0;
+    }
+
+    // ---- incremental batch patch ----------------------------------------------------------------------------
+    // The batch-end patch used to re-walk EVERY call site recorded since launch, and the table grows all boot.
+    // MEASURED (Pi 4, HttpsDemo, 2026-11-07): the call loop cost 1,319ms over the run, 955ms of it after the
+    // first SYN, for 1.75M visits of which 0.27% wrote anything (QEMU SslEngineProbe: 5,949 writes in 2.19M
+    // visits). The visits split by what can change a site's answer:
+    //   - a MEMOISED site (rcReg >= 0) reads rgTab[rcReg].buf, and the only thing that moves a registry entry's
+    //     buf is rememberLazyBody repointing it from the deferral stub to the compiled body. So these are
+    //     revisited only when their entry is marked dirty there -- through a per-entry list of its sites.
+    //   - every other site (gated, re-resolved, unresolved, settled on a link stub) is still walked every
+    //     batch, in ascending order, exactly as before: a class loaded later can still resolve it, and the
+    //     #43 trap-site table is still rebuilt from it.
+    //   - sites recorded since the last walk are walked as new.
+    // The per-site code (patchSite) is unchanged; only which sites are visited is. The lists are rebuilt from a
+    // full walk whenever they cannot be trusted: first use, resetLoader, and any truncation that drops sites
+    // (a doomed body's sites may have been patched, and so linked, by a nested batch before being dropped).
+    private static final int[] pcNoInts = new int[0];
+    private static boolean pcListsValid;                 // false -> next batch patch walks everything + rebuilds
+    private static int pcSeenTo;                         // sites below this are on a list (non-memo) or linked
+    private static int[] pcNm = pcNoInts;                // non-memoised sites, ascending
+    private static int pcNmN;
+    private static int[] pcRegHead = pcNoInts;           // per registry entry: first memoised site, -1 = none
+    private static int[] pcRegNext = pcNoInts;           // per site: next memoised site of the same entry
+    private static int[] pcDirty = pcNoInts;             // registry entries repointed since the last walk
+    private static int pcDirtyN;
+    private static boolean[] pcIsDirty = new boolean[0];
+    private static int[] pcWritten = pcNoInts;           // sites written by the current patch call
+    private static int pcWrittenN;
+    private static boolean pcPubAll;                     // pcWritten overflowed: publish every site in range
+
+    /** Drop the reloc sites at and above {@code mark}; distrust the patch lists if any were actually dropped. */
+    private static void truncateRelocs(int mark)
+    {
+        if (mark < rcCount)
+        {
+            pcListsValid = false;
+        }
+        rcCount = mark;
+    }
+
+    /** rememberLazyBody moved registry entry {@code rg}'s buf: its memoised sites must be revisited. */
+    private static void markRegDirty(int rg)
+    {
+        if (!pcListsValid || rg < 0 || rg >= pcIsDirty.length || pcIsDirty[rg])
+        {
+            return;                                      // invalid lists: the next walk visits everything
+        }
+        pcIsDirty[rg] = true;
+        pcDirty[pcDirtyN] = rg;
+        pcDirtyN += 1;
+    }
+
+    private static void linkMemoSite(int i)
+    {
+        int rg = rcReg[i];
+        pcRegNext[i] = pcRegHead[rg];
+        pcRegHead[rg] = i;
+    }
+
+    /** After a FULL walk: file every site on the non-memo list or its registry entry's list. */
+    private static void rebuildPatchLists()
+    {
+        if (pcRegHead.length != MAXREG)
+        {
+            pcRegHead = new int[MAXREG];
+            pcRegNext = new int[MAXRELOC];
+            pcNm = new int[MAXRELOC];
+            pcDirty = new int[MAXREG];
+            pcIsDirty = new boolean[MAXREG];
+        }
+        int r = 0;
+        while (r < MAXREG)
+        {
+            pcRegHead[r] = -1;
+            pcIsDirty[r] = false;
+            r += 1;
+        }
+        pcDirtyN = 0;
+        pcNmN = 0;
+        int i = 0;
+        while (i < rcCount)
+        {
+            if (rcReg[i] >= 0)
+            {
+                linkMemoSite(i);
+            }
+            else
+            {
+                pcNm[pcNmN] = i;
+                pcNmN += 1;
+            }
+            i += 1;
+        }
+        pcSeenTo = rcCount;
+        pcListsValid = true;
+    }
+
+    /**
+     * The batch walk over the lists: the non-memoised sites, the new ones, and the memoised sites of every
+     * repointed registry entry. Returns the first new site, from which publishing must cover every site.
+     */
+    private static int patchIncremental()
+    {
+        int from = pcSeenTo;
+        if (from > rcCount)                              // shrunk without truncateRelocs: trust nothing
+        {
+            int i = 0;
+            while (i < rcCount)
+            {
+                patchSite(i);
+                i += 1;
+            }
+            rebuildPatchLists();
+            return 0;
+        }
+        int k = 0;
+        while (k < pcNmN)
+        {
+            patchSite(pcNm[k]);
+            k += 1;
+        }
+        int i = from;
+        while (i < rcCount)
+        {
+            patchSite(i);
+            i += 1;
+        }
+        // DRAINED, not walked once: a lookup above can lazily compile a body and so repoint an entry DURING
+        // this walk (measured: 14 times on SslEngineProbe). Popping until empty patches those sites now; the
+        // old full walk only caught a mid-walk repoint for sites at a higher index than the one in hand.
+        while (pcDirtyN > 0)
+        {
+            pcDirtyN -= 1;
+            int rg = pcDirty[pcDirtyN];
+            pcIsDirty[rg] = false;                       // cleared FIRST: a repoint during this list re-queues it
+            int j = pcRegHead[rg];
+            while (j >= 0)
+            {
+                patchSite(j);
+                j = pcRegNext[j];
+            }
+        }
+        // Re-file: a non-memo site that memoised this walk moves to its entry's list; new sites are filed.
+        int kept = 0;
+        k = 0;
+        while (k < pcNmN)
+        {
+            int s0 = pcNm[k];
+            if (rcReg[s0] >= 0)
+            {
+                linkMemoSite(s0);
+            }
+            else
+            {
+                pcNm[kept] = s0;
+                kept += 1;
+            }
+            k += 1;
+        }
+        pcNmN = kept;
+        i = from;
+        while (i < rcCount)
+        {
+            if (rcReg[i] >= 0)
+            {
+                linkMemoSite(i);
+            }
+            else
+            {
+                pcNm[pcNmN] = i;
+                pcNmN += 1;
+            }
+            i += 1;
+        }
+        pcSeenTo = rcCount;
+        return from;
+    }
+
+    /** Patch call site {@code i}: re-resolve or re-read its target, and rewrite its branch if that changed. */
+    private static void patchSite(int i)
+    {
+        // MEMOISED: re-read the entry that answered last time. rgTab[].buf is live, so a body that was
+        // lazily compiled since (rememberLazyBody) is picked up exactly as a fresh lookup would -- this
+        // skips the LOOKUP, never the patch.
+        long target;
+        long tL0 = 0L;
+        if (PATCH_SITE_TIMERS)
+        {
+            tL0 = Magic.readCNTPCT_EL0();
+        }
+        if (rcReg[i] >= 0)
+        {
+            pcMemo += 1;
+            target = rgTab[rcReg[i]].buf;
+        }
+        else if (gateStands(i))
+        {
+            pcResolve += 1;                          // counted as the lookup it replaces: see pcUnres
+            target = rcGateCell[i] == 0L ? 0L : Magic.load64(rcGateCell[i]);
+        }
+        else
+        {
+            pcResolve += 1;
+            target = globalBufByRef(rcBase[i], rcClass[i], rcName[i], rcDesc[i]);
+            if (target != 0L)
+            {
+                rcReg[i] = rgHitIdx;                 // -1 for the super-chain/stub tiers: re-resolve those
+            }
+            recordGate(i);
+        }
+        long tU0 = 0L;
+        if (PATCH_SITE_TIMERS)
+        {
+            pcLookT += Magic.readCNTPCT_EL0() - tL0;
+            tU0 = Magic.readCNTPCT_EL0();
+        }
+        if (target == 0L && rcStub[i] != 0L)
+        {
+            // SETTLED ALREADY: this site was unresolved on an earlier batch and took a link stub, and
+            // neither half of that decision can change (see rcStub). One array read instead of sixty
+            // prefix compares plus a scan of every stub minted so far.
+            //
+            // `pcUnres` COUNTS THIS SITE TOO, and that is not bookkeeping pedantry: `memo/res/unres` is
+            // the triple every entry in this file gates identity on -- "the same sites resolved through
+            // the same tiers to the same answers". Incrementing only the new counter made `unres` read
+            // 463 against 2193 for the same work, which looks exactly like a closure that changed. A
+            // counter used as an invariant must keep meaning the same thing.
+            pcUnres += 1;
+            pcUnresMemo += 1;
+            target = rcStub[i];
+        }
+        if (target == 0L)
+        {
+            pcUnres += 1;
+            // Unresolved. Two very different causes, and they want opposite treatment:
+            //   - the callee's class is DENYLISTED (a metal-absent subtree on a cold branch) -> trap, as
+            //     before; resolving it would demand-load exactly what the denylist exists to keep out.
+            //   - the class is merely ABSENT from a closure that was computed without ever reading this
+            //     body -- the RTA-through-reflection gap -> a link stub, which resolves on first call.
+            // The trapwire site is recorded either way, so a link stub that fails to resolve still lands
+            // in denylistTrap with its index intact.
+            target = VM.denylistTrapAddr;
+            if (trapWireCount < MAXTRAPWIRE)
+            {
+                if (logTrapWire != 0)                      // verbose per-call dump (index -> callee); off by default
+                {
+                    Uart.write(Magic.bytes("  TRAPWIRE["));   // matched at runtime by x30 in denylistTrap
+                    VM.printDec(trapWireCount);
+                    Uart.write(Magic.bytes("] "));
+                    writeName(rcBase[i] + rcClass[i] + 2, u2(rcBase[i] + rcClass[i]));   // callee class Utf8
+                    Uart.putc(0x2E);                       // '.'
+                    writeName(rcBase[i] + rcName[i] + 2, u2(rcBase[i] + rcName[i]));     // callee method Utf8
+                    Uart.putc(0x0A);
+                }
+                trapWireSite[trapWireCount] = rcAddr[i];   // ALWAYS recorded: denylistTrap looks up the fired
+                trapWireCls[trapWireCount] = rcBase[i] + rcClass[i];   // site by x30, so the table must exist
+                trapWireMth[trapWireCount] = rcBase[i] + rcName[i];    //   even when quiet -- and now it
+                trapWireCount += 1;                                    //   carries the NAME as well
+            }
+            pcUnresDeny += 1;
+            if (!isDenylisted(rcBase[i], rcClass[i]))
+            {
+                long stub = linkStubFor(rcBase[i] + rcClass[i], rcBase[i] + rcName[i], rcBase[i] + rcDesc[i]);
+                if (stub != 0L)
+                {
+                    target = stub;
+                    rcStub[i] = stub;               // settled: the arm above answers from here on
+                }
+            }
+            if (target == VM.denylistTrapAddr)
+            {
+                // NAME IT HERE, where the information exists. A site left pointing at the trap reports
+                // `TRAPWIRE index=-1` and an EMPTY callee at runtime once trapWireCount passes
+                // MAXTRAPWIRE -- and with launchMain sharing loader state across every program, those
+                // sites now ACCUMULATE where they used to reset per launch, so the table fills and the
+                // name is the first thing lost. A trap that cannot say what it was calling is
+                // unactionable; this is the same "report a checked cause" the static and link paths
+                // already do.
+                reportTrapWired(rcBase[i], rcClass[i], rcName[i], rcDesc[i]);
+            }
+        }
+        long tT0 = 0L;
+        if (PATCH_SITE_TIMERS)
+        {
+            pcUnresT += Magic.readCNTPCT_EL0() - tU0;
+            tT0 = Magic.readCNTPCT_EL0();
+        }
+        if (target != 0L)
+        {
+            if (target >= Heap.BASE)                       // DIAGNOSTIC: a call "resolved" into the DATA heap
+            {                                              //   (blob/object, not code) -> name the callee
+                Uart.write(Magic.bytes("  BADPATCH "));
+                writeName(rcBase[i] + rcClass[i] + 2, u2(rcBase[i] + rcClass[i]));
+                Uart.putc(0x2E);
+                writeName(rcBase[i] + rcName[i] + 2, u2(rcBase[i] + rcName[i]));
+                Uart.write(Magic.bytes(" -> "));
+                VM.printHex(target);
+                Uart.putc(0x0A);
+            }
+            long d = target - rcAddr[i];                   // A64 bl reaches +-128 MiB (26-bit word offset)
+            if (d > 0x07FFFFFFL || d < -0x08000000L)
+            {
+                VM.jitFail(Symbols.FAIL_BL_RANGE, (int) (rcAddr[i] >> 12), (int) (target >> 12));
+                for (;;) { }
+            }
+            int off = (int) (d >> 2);
+            int word = rcTail[i] != 0 ? A64Enc.b(off) : A64Enc.bl(off);
+            // ALREADY WRITTEN, AND STILL THERE: skip the pin, the edge note and the store. All three are
+            // idempotent for an unchanged target -- the pin bitmap is sticky (zeroed only at init), note()
+            // overwrites the same (site, target) entry, the store rewrites the same word -- yet every batch
+            // re-walks EVERY site from 0, so they ran sites x batches times. MEASURED (BATCH_COST,
+            // SslEngineProbe, QEMU 2026-11-06): patch was 8.8 s of the cold TLS session's 16.0 s of
+            // batch work, and this tail (tailT) 5.1 s of the call loop's 14.2 s over the run. The test reads
+            // the LIVE word, not only rcDone, so a site something else rewrote is patched as before.
+            if (rcDone[i] == target && Magic.load32(rcAddr[i]) == word)
+            {
+                pcSkipped += 1;
+                if (PATCH_SITE_TIMERS)
+                {
+                    pcTailT += Magic.readCNTPCT_EL0() - tT0;
+                }
+                return;
+            }
+            rcDone[i] = target;
+            Heap.pinCodeAt(target);                       // CODE->CODE edge: after this store the only
+                                                          //   record of `target` is a displacement inside
+                                                          //   the caller's instructions, which nothing
+                                                          //   scans -- pin it or the sweep may free it
+            CodeEdges.note(rcAddr[i], target);            // ... and record the edge, so compaction can
+                                                          //   find and rewrite it when `target` moves
+            Magic.store32(rcAddr[i], word);                // bl target, or b for a lambda/method-ref thunk
+            if (pcWrittenN < pcWritten.length)             // publish exactly the words written
+            {
+                pcWritten[pcWrittenN] = i;
+                pcWrittenN += 1;
+            }
+            else
+            {
+                pcPubAll = true;                           // an entry re-queued mid-drain can rewrite a
+            }                                              //   site twice: fall back to publishing all
+        }
+        if (PATCH_SITE_TIMERS)
+        {
+            pcTailT += Magic.readCNTPCT_EL0() - tT0;
+        }
     }
 
     /**
@@ -17394,7 +17619,7 @@ public final class Loader
         if (pulled)
         {
             drainPendingPulls();
-            rcCount = rcMark;                              // drop the doomed body's reloc sites: patching them later
+            truncateRelocs(rcMark);                        // drop the doomed body's reloc sites: patching them later
             rsCount = rsMark;                              //   would write into a buffer the sweep may have reused
         }
         lzRetried = outerRetried;
@@ -17629,7 +17854,7 @@ public final class Loader
         if (pulled)
         {
             drainPendingPulls();
-            rcCount = rcMark;                              // drop the doomed body's reloc sites: patching them
+            truncateRelocs(rcMark);                        // drop the doomed body's reloc sites: patching them
             rsCount = rsMark;                              //   later would write into reused memory
         }
         lzRetried = outerRetried;
@@ -20010,7 +20235,7 @@ public final class Loader
         if (pulled)
         {
             drainPendingPulls();
-            rcCount = rcMark;
+            truncateRelocs(rcMark);
             rsCount = rsMark;
         }
         lzRetried = outerRetried;
@@ -20344,7 +20569,7 @@ public final class Loader
             // whole reason to retry HERE rather than one level up: nothing has registered it, cached it, or
             // stored it into a TIB slot yet, so no caller can ever have run the doomed code.
             drainPendingPulls();
-            rcCount = rcMark;                           // and drop its reloc sites: patching them later would
+            truncateRelocs(rcMark);                     // and drop its reloc sites: patching them later would
             rsCount = rsMark;                           //   write into a buffer the sweep may already have reused
             lzRetried = true;                           // once only -- a class that is still missing reads null
             restoreCtxForCompile(lzTab[idx].blob, lzTab[idx].len, lzTab[idx].reg);   // the pull clobbered g*
@@ -20474,6 +20699,7 @@ public final class Loader
         if (i >= 0)
         {
             rgTab[i].buf = buf;
+            markRegDirty(i);                             // its memoised call sites now want the body
             rgTab[i].line = mLine[0];
             rgTab[i].src = mSrc[0];
             return;

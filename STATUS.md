@@ -4,6 +4,39 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **Loader: the batch-end call-site patch is INCREMENTAL -- Pi patch 1,234 -> 888 ms, attempt 1 -0.3 s
+  (2026-11-07).**
+  - **Pi split first** (temporary phase clock on main #498, HttpsDemo): SYN -> end 12.6 s (was 15.2 on #493) --
+    batch load 3.39 s incl. mark 0.61, compile 3.07 s (1.02 ms each), guest + network 2.08, `<clinit>` 1.83, GC 1.61,
+    lazyCompile 0.61. The loader's `patch` per batch TRIPLED across the run (0.53 ms before the SYN, 1.55 after).
+  - **Why:** `patchRelocs` re-walked EVERY call site recorded since launch, every batch. Pi: the call loop
+    (`callT`) 1,319 ms and the publish (`pubT`) 188 ms for 1.75M visits; QEMU SslEngineProbe: 2.19M visits wrote
+    5,949 times (0.27%). 59% of visits were MEMOISED sites (`rcReg >= 0`), whose answer only `rememberLazyBody`
+    can change (it repoints a registry entry from the deferral stub to the compiled body).
+  - **Now:** the per-site body is `patchSite(i)`, unchanged. A batch walks the non-memoised sites (ascending list,
+    every batch, as before -- late resolution, link stubs and the #43 trap table are untouched), the sites recorded
+    since the last walk, and the memoised sites of every registry entry `rememberLazyBody` repointed (per-entry
+    site lists; the dirty queue is DRAINED, so a repoint during the walk is patched in that walk). Publish covers
+    the words written plus the new sites (overflow -> publish all). Lists rebuild from a full walk on first use,
+    `resetLoader`, and any truncation that drops sites (`truncateRelocs`).
+  - **Checker (temporary, removed):** after every batch walk, every memoised site re-derived as a full walk would:
+    **1,301,438 checks, 0 stale, 0 live-word mismatches** (nothing else rewrites a call site: `CodeCompact` is off).
+    An earlier placement also checked after the lazy-compile path and found 14 stale sites -- all with their entry
+    already queued, i.e. repointed between batches, which that path has never patched.
+  - **QEMU:** output IDENTICAL in every boot; visits 2.19M -> 1.05M. Wall pairs uninformative (host load ~5).
+    **A QEMU-only `GC: STW TIMEOUT`** at ~39.5 s (collection #11) appeared on 1 of 2 clean branch boots and 3 of 4
+    checker boots, 0 of 12+ main boots: the unparked core runs `SeedGenerator`'s thread, which on QEMU spins on
+    nanoTime for ~13 s with no yield, and QEMU gives launched programs no timer ticks -- so it cannot park until its
+    next yield (249 ms late, at a `new` in that loop). Collection skipped, output identical; the change moves
+    collection #11 into the spin. The Pi has ticks: **`stw=0`** there. Inferred, not instrumented; recorded so the
+    next QEMU timeout at that point is not mistaken for this change's bug.
+  - **Pi, HttpsDemo (phase-clock builds, both on 104.20.23.154):** visits 1,748,387 -> **830,245**; `callT` 1,319 ->
+    **1,121 ms**; `pubT` 188 -> **31 ms**; `patch` 1,234 -> **888 ms**; attempt 1 17,873 -> **17,581 ms**; done
+    23,718 -> 23,329 ms; gc=17; 200 OK. The publish is most of the win -- per-site cache maintenance, which QEMU
+    does not model. The remaining 830k visits are mostly sites settled on a link stub re-checking their gate
+    (~1.35 us each): the next lever in this loop.
+  - `make test`, `overlaycheck` OK; the same 36 probes as #497 pass.
+
 - **Loader: the virt HIT LISTS LIVED A WHOLE LAUNCH over per-batch indices -- RTA marked other classes' methods
   (FIXED); + the static pass looks methods up through the method-table cache (2026-11-07).**
   - **Found while profiling the static pass.** `findMethodByRef` (a classfile walk, two Utf8 compares and a
