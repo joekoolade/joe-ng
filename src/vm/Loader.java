@@ -5096,6 +5096,23 @@ public final class Loader
         mtBuilt = new int[MAXBLOB];                      // only the per-blob flags need clearing (1024 ints)
         pdSuperCache = new int[MAXBLOB];
         mtN = 0;
+        // THE VIRT HIT LISTS DIE WITH THE TABLE. A hit records a method-table SLOT (an index into the arrays
+        // just reset) and a PEND index (pendN restarts at 0 every batch), so both halves are per-batch facts;
+        // they were dropped only per LAUNCH (resetLoader). MEASURED on main (SslEngineProbe, QEMU 2026-11-07):
+        // of 5,227,096 hits applied, 1,142,255 named a slot outside the blob's current slice -- addReach of
+        // some other method's code -- and 53,741 more named a method whose signature no longer matched the
+        // pend; 3,995 visits had hvTo above pendN, so the list was never extended. Silent because RTA
+        // over-marking only compiles more and a missed target resolves late. Reset here: 0 of each.
+        if (hvLen != null)
+        {
+            int k = 0;
+            while (k < hvLen.length)
+            {
+                hvLen[k] = 0;
+                hvTo[k] = 0;
+                k += 1;
+            }
+        }
     }
 
     private static void markReachable()
@@ -5301,7 +5318,7 @@ public final class Loader
                 if (!markSettled(b) && (pdPendTo[b] < pendN || pdPendEpoch[b] != pdCount))
                 {
                     virtFrom = pdPendEpoch[b] == pdCount ? pdPendTo[b] : 0;   // chain may have grown -> redo all
-                    grew = resolveBlob(pdBase[b], pdLen[b]) || grew;
+                    grew = resolveBlob(b, pdBase[b], pdLen[b]) || grew;
                     pdPendTo[b] = pendN;
                     pdPendEpoch[b] = pdCount;
                 }
@@ -5730,8 +5747,8 @@ public final class Loader
         pendN += 1;
     }
 
-    /** For blob {@code base}, mark every pending-ref target it defines. Returns true if any method was newly marked. */
-    private static boolean resolveBlob(long base, int len)
+    /** For pd blob {@code b} at {@code base}, mark every pending-ref target it defines. True if any method was newly marked. */
+    private static boolean resolveBlob(int b, long base, int len)
     {
         parseForMethods(base, len);
         boolean grew = false;
@@ -5745,7 +5762,7 @@ public final class Loader
         {
             if (r >= virtFrom && utf8EqAt(pendBase[r], pendClass[r], gbase, gThisNameOff))
             {
-                long code = findMethodByRef(pendBase[r], pendName[r], pendDesc[r]);
+                long code = findDeclaredCached(b, pendBase[r], pendName[r], pendDesc[r]);
                 if (code != 0L)
                 {
                     grew = addReach(code) || grew;
@@ -5760,6 +5777,37 @@ public final class Loader
             r = psNext[r];
         }
         return grew;
+    }
+
+    /**
+     * {@link #findMethodByRef} for pd blob {@code b}, through its {@link #ensureMethodTable} slice: the first
+     * method in declaration order whose name and descriptor equal the ref's and that carries Code. Same answer
+     * by construction -- the slice is the blob's method table in order, {@code mtCode} is the same
+     * {@code findCode}, and the signature hash only rejects entries whose bytes differ. MEASURED (SslEngineProbe,
+     * QEMU 2026-11-07): the parsing form was 1.6 s of the static pass over 108,227 matches, two Utf8 compares
+     * and a skipAttributes per method walked; this is 0.48 s, and a checker running both found 0 mismatches.
+     * Falls back to the parsing form when the flat arrays are full; the caller has {@code b} parsed.
+     */
+    private static long findDeclaredCached(int b, long refBase, int nameOff, int descOff)
+    {
+        if (!ensureMethodTable(b))
+        {
+            return findMethodByRef(refBase, nameOff, descOff);
+        }
+        int h = sigHash(refBase, nameOff, descOff);
+        long blob = pdBase[b];
+        int i = mtStart[b];
+        int end = i + mtLen[b];
+        while (i < end)
+        {
+            if (mtHash[i] == h && mtCode[i] != 0L
+                    && utf8EqAt(refBase, nameOff, blob, mtName[i]) && utf8EqAt(refBase, descOff, blob, mtDesc[i]))
+            {
+                return mtCode[i];
+            }
+            i += 1;
+        }
+        return 0L;
     }
 
     /** Reachability for an inherited static/special call: walk the ref class's (== current blob) super chain and
@@ -6185,8 +6233,10 @@ public final class Loader
      *
      * <p>SO SPLIT THE WORK BY WHAT IS ACTUALLY INVARIANT. Whether method i of level b matches pend entry q
      * by name+descriptor is IMMUTABLE BY CONSTRUCTION: mtName/mtDesc are fixed by the classfile and a pend
-     * entry's name/descriptor never change once added. That half is cached here, permanently, and extended
+     * entry's name/descriptor never change once added. That half is cached here FOR THE BATCH, and extended
      * only over pend entries added since (the chains are descending, so the walk stops at the watermark).
+     * Not longer: pend indices and method-table slots are both per-batch, so {@link #resetMethodTables}
+     * empties the lists. (They used to live for the whole launch -- see the measured damage there.)
      * The path-dependent half -- the virtResolved shadow check -- still runs on EVERY visit, against every
      * cached hit. No marking is skipped; only the searching is.
      */
@@ -6301,7 +6351,7 @@ public final class Loader
                     if (utf8EqAt(pendBase[q], pendName[q], base, mtName[i])
                             && utf8EqAt(pendBase[q], pendDesc[q], base, mtDesc[i]))
                     {
-                        addHit(b, i, q);                 // a PERMANENT fact: names and descriptors never change
+                        addHit(b, i, q);                 // fixed for the batch: slot i and pend q are per-batch
                     }
                     q = pvNext[q];
                 }

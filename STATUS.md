@@ -4,6 +4,36 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **Loader: the virt HIT LISTS LIVED A WHOLE LAUNCH over per-batch indices -- RTA marked other classes' methods
+  (FIXED); + the static pass looks methods up through the method-table cache (2026-11-07).**
+  - **Found while profiling the static pass.** `findMethodByRef` (a classfile walk, two Utf8 compares and a
+    skipAttributes per method) was 1.6 s of the pass's ~2.2 s over 108,227 matches (SslEngineProbe, QEMU). Routing it
+    through the `ensureMethodTable` slice `resolveVirtuals` already uses gave the same answer at every call (checker:
+    0 mismatches) -- yet the summed closure CHANGED (reach 8,767 -> 8,392). Same answers, different closure, so
+    the difference was a side effect of building method tables in a different order.
+  - **The bug, on main:** `matchLevelCached`'s per-blob hit lists record a method-table SLOT and a PEND index. The
+    table is rebuilt every batch (`resetMethodTables`) and `pendN` restarts at 0 every batch, but the lists were
+    dropped only per LAUNCH (`resetLoader`). Measured on main: of **5,227,096** hits applied, **1,142,255** named a
+    slot outside the blob's current slice -- `addReach` of some other method's code -- **53,741** named a method
+    whose signature no longer matched the pend, and **3,995** visits had `hvTo > pendN`, so the list was never
+    extended and the batch's real matches for that level were missed. Silent: RTA over-marking only compiles more,
+    and a missed target resolves late. The comment called the cached half "a PERMANENT fact"; the name/descriptor
+    match is, but the indices it was stored under are not.
+  - **Fix:** `resetMethodTables` empties the hit lists (`hvLen`/`hvTo`) with the table. Paired, with and without the
+    cached lookup: closure IDENTICAL (batches 1,322, rounds 2,873, reach 7,183, pends 54,778), all three stale
+    counts **0**, output identical to main. Against main the closure is smaller (reach 8,767 -> 7,183, pends
+    59,294 -> 54,778) with 25 more batches -- the bogus marks gone, real targets reached late instead.
+  - **Cached lookup:** `findDeclaredCached(b, ...)` -- the slice in declaration order, signature-hash filter, then
+    the same two compares and the same has-Code rule; falls back to the parsing form if the arrays are full.
+    `find` 1.63 -> 0.48 s.
+  - **QEMU wall:** two clean pairs vs main (#497) +5.9 / -3.0 s with host load ~5 and every boot slower than the
+    last -- uninformative; output IDENTICAL, gc=18.
+  - **Pi, HttpsDemo (one boot, same server 104.20.23.154 as #497):** DNS 2,225 ms; attempt 1 connected in
+    **17,734 ms** (#497: 17,785); `https: done` **23,252 ms** (#497: 23,570); **gc=16** (#497: 17); 200 OK. Speed
+    within noise; the corrected closure runs. That edge connected cleanly a second time, so the #495 resets now
+    look transient on its side.
+  - `make test`, `overlaycheck` OK; the same 36 probes as #497 pass.
+
 - **Loader: the mark's per-round blob loops START AT THE LOWEST UNSETTLED BLOB -- QEMU mark -15%; Pi within
   noise (2026-11-07).**
   - **Measured first** (temporary cumulative timers, SslEngineProbe, QEMU): the reachability mark is 38% of batch-load
