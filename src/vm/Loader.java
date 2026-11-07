@@ -20349,6 +20349,31 @@ public final class Loader
     }
 
     /**
+     * The registry entry for the method {@code blob} declares as {@code nameOff}+{@code descOff}, or -1 -- the
+     * LOWEST such index, which is the entry the linear scan this replaces returned. Through the class+name index
+     * (rgBucket): every entry of the class being compiled is filed under utf8Hash2(its name, the method name), and
+     * the compile context is restored here, so gThisNameOff names that class. MEASURED (qprof, SslEngineProbe,
+     * QEMU 2026-11-06): the scan of every registry entry, once per lazy compile, was 27 of the 40 samples of
+     * lazyCompile's OWN work -- the Pi's ~1.9 ms per call of it outside compile/load/clinit/GC.
+     */
+    private static int lazyBodyEntry(long blob, int nameOff, int descOff)
+    {
+        buildRegIndex();
+        int best = -1;
+        int i = rgBucket[utf8Hash2(blob, gThisNameOff, blob, nameOff) & (RGTAB - 1)];
+        while (i >= 0)
+        {
+            if ((best < 0 || i < best) && rgTab[i].base == blob && rgTab[i].nameOff == nameOff
+                    && rgTab[i].descOff == descOff)
+            {
+                best = i;
+            }
+            i = rgNext[i];
+        }
+        return best;
+    }
+
+    /**
      * Point the method registry at a freshly lazy-compiled body. {@link #printFrameAt} names a PC by the
      * nearest registered buffer at-or-below it, so an unregistered fresh buffer makes every frame in that
      * method report as whatever unrelated method happens to sit below it (the socket stack traced as
@@ -20363,18 +20388,13 @@ public final class Loader
         {
             nameOff = findNameByCode(lzTab[idx].code);   // deferral entries capture bytecode, not the name
         }
-        int i = 0;
-        while (i < rgCount)
+        int i = lazyBodyEntry(lzTab[idx].blob, nameOff, lzTab[idx].descOff);
+        if (i >= 0)
         {
-            if (rgTab[i].base == lzTab[idx].blob && rgTab[i].nameOff == nameOff
-                    && rgTab[i].descOff == lzTab[idx].descOff)
-            {
-                rgTab[i].buf = buf;
-                rgTab[i].line = mLine[0];
-                rgTab[i].src = mSrc[0];
-                return;
-            }
-            i += 1;
+            rgTab[i].buf = buf;
+            rgTab[i].line = mLine[0];
+            rgTab[i].src = mSrc[0];
+            return;
         }
         register(lzTab[idx].blob, gThisNameOff, nameOff, lzTab[idx].descOff, buf, mLine[0], mSrc[0],
                  accessInContext(lzTab[idx].blob, nameOff, lzTab[idx].descOff));

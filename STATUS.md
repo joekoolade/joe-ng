@@ -4,6 +4,35 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **Loader: rememberLazyBody FINDS ITS REGISTRY ENTRY THROUGH THE INDEX -- Pi HTTPS attempt 1 -3.2 s, done -5.1 s
+  (2026-11-06).**
+  - **Pi split first** (temporary exclusive phase clock -- time charged to the innermost of compile / batch load /
+    `<clinit>` / GC / lazyCompile / guest -- snapshotted at attempt 1's SYN and at the end; main bf3f8d5). SYN ->
+    end, 18.5 s: compile 4.60 s (3,024, 1.5 ms each), batch load 4.60 s (569, 8.1 ms), **lazyCompile's OWN work
+    3.63 s (1,948 calls, 1.9 ms each)**, `<clinit>` 1.88 s, GC 1.61 s, guest code plus network wait 2.18 s. The
+    VM loading and compiling code is 16.3 s of the 18.5.
+  - **qprof of that own work** (SslEngineProbe, QEMU, samples classified by innermost phase): 27 of its 40
+    samples were `rememberLazyBody` -- not the constant-pool re-parse I guessed. After every lazy compile it walked
+    the WHOLE method registry (`rgTab`, comparing base/nameOff/descOff) to find the method's entry.
+  - **Now:** `lazyBodyEntry` hashes utf8Hash2(class name, method name) into `rgBucket` -- every entry of the class
+    being compiled is filed there, and the compile context is restored, so `gThisNameOff` names that class -- and
+    walks the chain keeping the LOWEST matching index, the entry the scan returned.
+  - **Equivalence:** a checker image ran the scan beside every indexed answer: **0 mismatches** over 5,235 lookups
+    (SslEngineProbe); removed after.
+  - **QEMU, clean sequential pair:** main (#492) 128.8 s vs branch 125.2 s (-2.8%), output IDENTICAL, gc=18.
+  - **Pi, HttpsDemo (one boot, server 172.66.147.243):** attempt 1 connected in **21,372 ms** (#492: 25,220),
+    `https: done` **28,547 ms** (#492: 34,228), gc=17, 200 OK. DNS was 0.6 s faster this boot (2,594 vs 3,200
+    ms), so net of that: **attempt 1 -3.2 s, done -5.1 s**. QEMU said -2.8%: the scan reads one scattered
+    `RVMMethod` object per entry, cheap from the Mac's caches and not from the Pi's DRAM -- UNMEASURED, but the
+    same QEMU-vs-Pi gap this session has now seen in both directions.
+  - **Across this session's PRs (#489-#493), Pi HttpsDemo:** attempt 1 29.9 -> 21.4 s, done 39.5 -> 28.5 s.
+  - **Next (Pi split):** the compiler (~1.5 ms per method) and batch loading (~8 ms per batch, mark the largest
+    part) are now the two biggest VM costs after the SYN; re-take the split on this tree before choosing.
+  - `make test`, `overlaycheck` OK; 25 targeted probes pass (AccessFlags, AccessRules, CtorChainTrace,
+    CtorRefField, IfaceObjectMethod, MethodHandle, ReflectArray, ReflectLookup, ReflectUndeny, InternalReflect,
+    Trace, DeepTrace, StackWalker, SystemLogger, FirstCallRace, ChmRace, SpawnRace, ClinitOrder, ClinitRace,
+    Lazy, LinkTrap, SuperCall, Lambda4, Indy, SslEngine).
+
 - **Loader: a DEFERRAL STUB BRANCHES TO ITS BODY once compiled (target literal) -- 58M trampoline round trips
   gone; QEMU -2.7%, Pi unchanged (2026-11-06).**
   - **Found by a Pi profile** (temporary PIPROF snapshots at the first SYN and the end of an HttpsDemo run, main
