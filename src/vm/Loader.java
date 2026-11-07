@@ -30156,6 +30156,26 @@ public final class Loader
     }
 
     /** Whether the {@code *ref} at {@code idx} names owner {@code magic/Magic}. */
+    /** {@link compiler.Symbols#mathIntrinsicId} in the current compile context. */
+    static int mathIntrinsicId(int idx)
+    {
+        if (!utf8IsAtBase(gbase, ClassReader.refClassNameOff(gbytes, gcp, idx), Magic.bytes("java/lang/Math"))
+                || !utf8IsAtBase(gbase, ClassReader.refDescOff(gbytes, gcp, idx), Magic.bytes("(JJ)J")))
+        {
+            return -1;
+        }
+        int n = ClassReader.refNameOff(gbytes, gcp, idx);
+        if (utf8IsAtBase(gbase, n, Magic.bytes("multiplyHigh")))
+        {
+            return compiler.Intrinsics.SMULH;
+        }
+        if (utf8IsAtBase(gbase, n, Magic.bytes("unsignedMultiplyHigh")))
+        {
+            return compiler.Intrinsics.UMULH;
+        }
+        return -1;
+    }
+
     static boolean isMagicOwner(int idx)
     {
         long p = gbase + ClassReader.refClassNameOff(gbytes, gcp, idx);

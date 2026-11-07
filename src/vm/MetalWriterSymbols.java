@@ -286,6 +286,25 @@ final class MetalWriterSymbols implements Symbols
     {
         return utf8Is(ClassReader.refClassNameOff(classBytes, cpOff, methodCp), Magic.bytes("magic/Magic"));
     }
+    public int mathIntrinsicId(int methodCp)
+    {
+        // As compiler.WriterSymbols, so the metal writer lowers these exactly as the seed does.
+        if (!utf8Is(ClassReader.refClassNameOff(classBytes, cpOff, methodCp), Magic.bytes("java/lang/Math"))
+                || !utf8Is(ClassReader.refDescOff(classBytes, cpOff, methodCp), Magic.bytes("(JJ)J")))
+        {
+            return -1;
+        }
+        int n = ClassReader.refNameOff(classBytes, cpOff, methodCp);
+        if (utf8Is(n, Magic.bytes("multiplyHigh")))
+        {
+            return Intrinsics.SMULH;
+        }
+        if (utf8Is(n, Magic.bytes("unsignedMultiplyHigh")))
+        {
+            return Intrinsics.UMULH;
+        }
+        return -1;
+    }
     public boolean intrinsicEmitsCall(int methodCp)
     {
         int n = ClassReader.refNameOff(classBytes, cpOff, methodCp);   // gc/call0/call2 emit a BL/BLR

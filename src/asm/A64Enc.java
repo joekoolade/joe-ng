@@ -169,6 +169,16 @@ public final class A64Enc
     {
         return 0x9B00_7C00 | (rm << 16) | (rn << 5) | rd;
     }
+    /** {@code SMULH Xd, Xn, Xm} — high 64 bits of the signed 128-bit product (ARM ARM C6.2: U=0, Ra=XZR). */
+    public static int smulh(int rd, int rn, int rm)
+    {
+        return 0x9B40_7C00 | (rm << 16) | (rn << 5) | rd;
+    }
+    /** {@code UMULH Xd, Xn, Xm} — high 64 bits of the unsigned 128-bit product (as SMULH with U, bit 23, set). */
+    public static int umulh(int rd, int rn, int rm)
+    {
+        return 0x9BC0_7C00 | (rm << 16) | (rn << 5) | rd;
+    }
     /** {@code MSUB Xd, Xn, Xm, Xa} — {@code Xd = Xa - Xn*Xm} (used to synthesize irem). */
     public static int msub(int rd, int rn, int rm, int ra)
     {

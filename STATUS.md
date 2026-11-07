@@ -4,6 +4,31 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **Baseline: `Math.multiplyHigh` / `unsignedMultiplyHigh` LOWER TO `SMULH` / `UMULH` -- Pi P-256 table own time
+  1,128 -> 758 ms, attempt 1 -0.3 s (2026-11-07).**
+  - **Why:** after #500 the largest `<clinit>` left was `ECOperations$Secp256R1GeneratorMontgomeryMultiplier`, the
+    JDK precomputing P-256 generator multiples; the Pi tick sampler put `Math.multiplyHigh` at the top of its guest
+    methods (34 samples, `unsignedMultiplyHigh` 5) -- stock's ~20-operation Java body, where each method is defined
+    as exactly what one A64 instruction computes: the high 64 bits of the signed / unsigned 128-bit product.
+  - **Now:** `Symbols.mathIntrinsicId` (all three worlds: `WriterSymbols`, `MetalWriterSymbols`, `MetalSymbols` via
+    `Loader.mathIntrinsicId`) names exactly `java/lang/Math.multiplyHigh(JJ)J` / `unsignedMultiplyHigh(JJ)J`, and
+    `Baseline.lowerInvokeStatic` pops two operands, pushes one, emits the instruction -- no call, no init guard
+    (Math is initialized at launch; its `<clinit>` touches only Math's statics, which neither method reads). The
+    leaf analysis still counts the site as a call: conservative, never wrong. Encodings `A64Enc.smulh`/`umulh` from
+    the ARM ARM (`0x9B407C00` / `0x9BC07C00 | Rm<<16 | Rn<<5 | Rd`), four words tested bit for bit -- including
+    x17/x29/x30 operands -- and cross-checked against clang's arm64 assembler (a check only, not the build).
+  - **New probe `MulHighProbe`:** sign corners (MIN*MIN, -1, mixed signs), a 4,000-case sweep, nested and field
+    operands, every case checked against a 32-bit-halves reference that calls neither method; metal output equals
+    the host JVM's.
+  - **QEMU:** the P-256 table's own time 2,102 -> **1,121 ms** (-47%), output unchanged.
+  - `make test`, `overlaycheck` OK; 41 probes pass (the #500 set plus MulHigh, BigMath, SecurityStock, Mac, Digest).
+    Note for next time: `make build` does not compile probes -- `make jdktests` (or `make image`) does; a new probe
+    run with `--no-make` before that reports `ClassNotFoundException`.
+  - **Pi, HttpsDemo (profiling builds, same server 172.66.147.243 as #500):** P-256 table own **1,128 -> 758 ms**;
+    `multiplyHigh` gone from the samples; `<clinit>` 3,165 -> **2,802 ms**; attempt 1 15,756 -> **15,459 ms**; done
+    21,306 -> 21,044 ms; gc=17; 200 OK. What remains of the table is the `MontgomeryIntegerPolynomialP256`
+    `mult`/`reduce` bodies themselves -- general code quality, not another intrinsic.
+
 - **Loader + Heap: REFLECTION LOOKUPS through the registry index, and CODE-BLOCK LOOKUP without the block-table
   scan -- Pi `<clinit>` 5.02 -> 3.17 s, attempt 1 -1.8 s (2026-11-07).**
   - **Found with two new temporary Pi instruments** (patch `/tmp/bigphase-profile.patch`, not committed):

@@ -420,6 +420,16 @@ public final class A64
     {
         return A64Enc.mulReg(reg(rd), reg(rn), reg(rm));
     }
+
+    public static int smulh(int rd, int rn, int rm)
+    {
+        return A64Enc.smulh(reg(rd), reg(rn), reg(rm));
+    }
+
+    public static int umulh(int rd, int rn, int rm)
+    {
+        return A64Enc.umulh(reg(rd), reg(rn), reg(rm));
+    }
     /** {@code SDIV Xd, Xn, Xm} — signed divide (divide-by-zero yields 0, per the ARM ARM). */
     public static int sdivReg(int rd, int rn, int rm)
     {

@@ -151,6 +151,12 @@ public final class A64Test
         T.eqWord("ORR x0,x1,x2", 0xAA020020, A64.orrReg(0, 1, 2));
         T.eqWord("EOR x0,x1,x2", 0xCA020020, A64.eorReg(0, 1, 2));
         T.eqWord("MUL x0,x1,x2", 0x9B027C20, A64.mulReg(0, 1, 2));
+        // SMULH/UMULH (ARM ARM C6.2, data-processing 3-source: sf=1 op54=00 11011 U 10 Rm o0=0 Ra=11111 Rn Rd);
+        // the four words agree with clang's arm64 assembler, used only to cross-check these constants.
+        T.eqWord("SMULH x0,x1,x2", 0x9B427C20, A64.smulh(0, 1, 2));
+        T.eqWord("UMULH x0,x1,x2", 0x9BC27C20, A64.umulh(0, 1, 2));
+        T.eqWord("SMULH x3,x17,x30", 0x9B5E7E23, A64.smulh(3, 17, 30));
+        T.eqWord("UMULH x30,x29,x0", 0x9BC07FBE, A64.umulh(30, 29, 0));
         T.eqWord("MSUB x0,x1,x2,x3", 0x9B028C20, A64.msub(0, 1, 2, 3));
         T.eqWord("LSL x0,x1,x2", 0x9AC22020, A64.lslv(0, 1, 2));
         T.eqWord("LSR x0,x1,x2", 0x9AC22420, A64.lsrv(0, 1, 2));

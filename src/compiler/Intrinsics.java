@@ -116,4 +116,8 @@ public final class Intrinsics
     public static final int IC_IVAU = 78;            // invalidate I-cache line by VA to PoU -- BROADCAST to every core
     public static final int SET_PRIO = 79;           // magic.setprio(Object,int) -> VMScheduler.setPriority
     public static final int GET_PRIO = 80;           // magic.getprio(Object)     -> VMScheduler.getPriority
+
+    // java/lang/Math methods lowered to a single instruction (not magic/Magic: see Symbols.mathIntrinsicId).
+    public static final int SMULH = 84;              // Math.multiplyHigh(JJ)J         -> SMULH
+    public static final int UMULH = 85;              // Math.unsignedMultiplyHigh(JJ)J -> UMULH
 }

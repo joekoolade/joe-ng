@@ -500,6 +500,14 @@ public interface Symbols
     /** The {@link Intrinsics} id of the {@code magic/Magic} intrinsic at {@code methodCp}. */
     int intrinsicId(int methodCp);
 
+    /**
+     * {@link Intrinsics#SMULH} / {@link Intrinsics#UMULH} if the {@code invokestatic} at {@code methodCp} is
+     * exactly {@code java/lang/Math.multiplyHigh(JJ)J} / {@code unsignedMultiplyHigh(JJ)J}, else -1. Each is
+     * DEFINED as the high 64 bits of the signed / unsigned 128-bit product, which is the A64 instruction's
+     * whole contract, so the call is lowered to it rather than to stock's ~20-operation Java body.
+     */
+    int mathIntrinsicId(int methodCp);
+
     /** Whether the {@code invokespecial} at {@code methodCp} is a root-class {@code <init>} to skip. */
     boolean isSkippableInit(int methodCp);
 
