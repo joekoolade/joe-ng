@@ -4,6 +4,44 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **A WEB SERVER ON THE METAL: stock `java.net.ServerSocket` over a passive-open `net.Tcp`, and the WiFi driver's
+  512-BYTE TRANSMIT CEILING removed (2026-11-07).**
+  - **New `demo/WebServerDemo`** (`main=demo/WebServerDemo`, `net=1`, optional `args=<port> <zone>`): answers every
+    request with a welcome page and the current date and time (the SNTP wall clock), 404 for any other path, one
+    connection at a time with a 5 s read timeout. It formats the date once before listening: the first format
+    compiles the CLDR locale data (~3.4 MB of bodies, ~2.6 s on the Pi), which made curl's 10 s first request
+    time out.
+  - **`net.Tcp` passive open:** `bind`/`listen`/`accept`, states LISTEN and SYN_RCVD; a SYN to a listening port takes
+    a free slot as a child and is answered SYN-ACK, the handshake's ACK makes it CONNECTED (data on that ACK is
+    taken), `accept` hands it over (blocking, or UNAVAILABLE + `poll` POLLIN for a timed accept). A child replies
+    to its SYN's SOURCE MAC, so a LAN browser is answered directly, not via the gateway. Backlog 4; MAXCONN 4 -> 8;
+    `NetStats` gains PassiveOpens. A write is now capped at one MSS (a partial write, which NioSocketImpl loops
+    over): before, any write past ~1,990 bytes overran `sendSeg`'s 2,048-byte frame buffer.
+  - **Natives:** stock `Net.bind0`/`listen`/`accept` throw, a VM native cannot, so the `sun/nio/ch/Net` overlay gives
+    each a Java body over a VM native answering a negated errno (`bindPort0`, `listen0`, `accept0` + `remoteIp0`/
+    `remotePort0`; `accept` sets newfd and builds the peer `InetSocketAddress` in Java). `Net.localPort` answers
+    the real port (it was a blanket 0). EADDRINUSE -> `BindException`.
+  - **THE BUG THE SERVER FOUND -- `Cyw43.sendFrame` sent every frame as ONE BYTE-MODE CMD53, whose count field is 9
+    bits.** A 556-byte frame (the 484-byte page body) went out as "44 bytes" while the host clocked 556: the frame
+    never arrived and the data line stayed busy, so every later bus operation sat out `Sdio.waitClear`'s ~3.6 s
+    timeout. Signature on the Pi: curl received the HEADER (one small segment) and nothing after it; the step
+    trace showed each write and close taking 3.6 s; the hang dump (`hangdump=60`) had the RX task RUNNING in
+    `Sdio.waitClear` and the server back in `accept` -- slow, not hung. Clients never sent a frame over 512 bytes,
+    and the CLM loader already capped its chunks at 400 bytes ("keep ... under the 512-byte TX limit"). Now F2's
+    FBR block size is set to 512 at firmware boot (read back and printed, `f2 blksize=`) and a frame over 512 bytes
+    goes in BLOCK mode, padded to whole blocks, as brcmfmac does.
+  - **Host control:** the same class on the host JVM serves the page and the 404.
+  - **QEMU** (no WiFi): bind, listen, `localPort` and a blocking `accept` that waits without a trap; `make test`,
+    `overlaycheck` OK.
+  - **PI-VALIDATED (`core 166MHz`, SMP 4/4), requests from a Mac on the same LAN:** the full 484-byte page with the
+    date (`Saturday, 7 November 2026, 23:47:41 UTC`), 404 for `/favicon.ico` in 30 ms, then 6/6 sequential
+    requests 200 OK, warm totals 27-30 ms. Measured on the block-mode build with temporary step traces; the
+    committed demo drops the traces and adds the warm-up (QEMU-checked).
+  - **OPEN:** connects of exactly 1 s or 3 s (the Mac resending its SYN) and, once right after the first request,
+    four unanswered SYNs in a row -- incoming frames lost on the receive side (cf. NetDemo's intermittent
+    `bytes=0`). Sent data is still never retransmitted, so a lost reply segment stalls that page until a reload.
+    A half-open child (our SYN-ACK unanswered for ever) is never reaped and holds a backlog place.
+
 - **JUnit's VINTAGE ENGINE AND REPORTING LISTENER UN-DENIED -- JUnit 4 tests run on the metal (2026-11-07).**
   - **Why they were denied, and why that expired:** both were denied (2026-09-10) only so the `ServiceLoader`
     overlay would skip them by name. `OpenTestReportGeneratingListener`'s constructor reached `java/nio/file`,

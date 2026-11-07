@@ -2051,6 +2051,12 @@ public final class VM
         if (sockAvailableAddr == 0L) { int u = VMNatives.sockAvailable(0L); }
         if (sockShutdown0Addr == 0L) { int u = VMNatives.sockShutdown0(0L, 0L); }
         if (sockPollAddr == 0L) { int u = VMNatives.sockPoll(0L, 0L, 0L); }             // Net.poll
+        if (sockBindAddr == 0L) { int u = VMNatives.sockBind(0L, 0L); }                  // Net.bindPort0 (server)
+        if (sockListenAddr == 0L) { int u = VMNatives.sockListen(0L, 0L); }              // Net.listen0
+        if (sockAcceptAddr == 0L) { int u = VMNatives.sockAccept(0L); }                  // Net.accept0
+        if (sockRemoteIpAddr == 0L) { int u = VMNatives.sockRemoteIp(-1L); }             // Net.remoteIp0
+        if (sockRemotePortAddr == 0L) { int u = VMNatives.sockRemotePort(-1L); }         // Net.remotePort0
+        if (sockLocalPortAddr == 0L) { int u = VMNatives.sockLocalPort(0L); }            // Net.localPort
         if (sockConfigureBlockingAddr == 0L) { VMNatives.sockConfigureBlocking(0L, 0L); } // IOUtil.configureBlocking
         if (fdValAddr == 0L) { int u = VMNatives.fdVal(0L); }
         if (setFdValAddr == 0L) { VMNatives.setFdVal(0L, 0L); }
@@ -3781,6 +3787,12 @@ public final class VM
     static long sockAvailableAddr;
     static long sockShutdown0Addr;
     static long sockPollAddr;              // VMNatives.sockPoll(JJJ)I -- Net.poll
+    static long sockBindAddr;              // VMNatives.sockBind(JJ)I -- Net.bindPort0 (server sockets)
+    static long sockListenAddr;            // VMNatives.sockListen(JJ)I -- Net.listen0
+    static long sockAcceptAddr;            // VMNatives.sockAccept(J)I -- Net.accept0
+    static long sockRemoteIpAddr;          // VMNatives.sockRemoteIp(J)I -- Net.remoteIp0
+    static long sockRemotePortAddr;        // VMNatives.sockRemotePort(J)I -- Net.remotePort0
+    static long sockLocalPortAddr;         // VMNatives.sockLocalPort(J)I -- Net.localPort
     static long sockConfigureBlockingAddr; // VMNatives.sockConfigureBlocking(JJ)V -- IOUtil.configureBlocking
     static long fdValAddr;
     static long setFdValAddr;

@@ -1566,6 +1566,12 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockAvailable(J)I",  "vm/VM.sockAvailableAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockShutdown0(JJ)I",  "vm/VM.sockShutdown0Addr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockPoll(JJJ)I",     "vm/VM.sockPollAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockBind(JJ)I",      "vm/VM.sockBindAddr");      // server sockets
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockListen(JJ)I",    "vm/VM.sockListenAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockAccept(J)I",     "vm/VM.sockAcceptAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockRemoteIp(J)I",   "vm/VM.sockRemoteIpAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockRemotePort(J)I", "vm/VM.sockRemotePortAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockLocalPort(J)I",  "vm/VM.sockLocalPortAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockConfigureBlocking(JJ)V", "vm/VM.sockConfigureBlockingAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.fdVal(J)I",          "vm/VM.fdValAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.setFdVal(JJ)V",      "vm/VM.setFdValAddr");
