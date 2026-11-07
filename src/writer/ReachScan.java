@@ -44,7 +44,11 @@ public final class ReachScan
         // sun/nio/fs/ and java/nio/file/ run stock over the RAMFS (see Loader.isDenylisted).
         // jdk/internal/loader/ is NOT here any more: the stock built-in loaders run (see Loader.isDenylisted).
         // java/security/ is NOT here any more: the stock JCA runs (see Loader.isDenylisted).
-        "java/util/ServiceLoader",
+        // java/util/ServiceLoader is NOT here any more: it is overlaid (guestsrc), and the runtime list dropped
+        // it so the overlay is consulted (see Loader.isDenylisted).
+        // JUnit's vintage engine and its file-writing reporting listener are denied at runtime so the
+        // ServiceLoader overlay skips them by name (see Loader.isDenylisted).
+        "org/junit/vintage/", "org/junit/platform/reporting/",
         // sun/util/ is NOT here any more: the whole package loads (see Loader.isDenylisted).
         // java/net is loadable (M3 sockets) and nothing in it is denied; neither sun/net/ext/ nor sun/net/www/ is
         // denied any more, https included (see Loader.isDenylisted).
@@ -90,8 +94,8 @@ public final class ReachScan
             return false;
         }
         // Narrow ALLOW for the VarHandle-as-atomic-field-accessor shim (overlays): java.net.Socket uses a
-        // VarHandle for its state/in/out fields. These specific java/lang/invoke classes are allowed; the rest
-        // of java/lang/invoke stays denied.
+        // VarHandle for its state/in/out fields. These java/lang/invoke classes were allowed when the package was
+        // denied as a prefix; it is not any more (stock invoke runs), so for them this is now redundant.
         //
         // And a narrow ALLOW out of the java/text/ deny above: stock java/util/Formatter runs STOCK (5,036
         // lines, ZERO natives, pure logic -- the overlay that shadowed it is deleted), and the only denied
