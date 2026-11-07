@@ -154,22 +154,79 @@ public final class Heap
      */
     public static long codeBlockStartAt(long addr)
     {
-        long i = 0;
-        while (i < codeBlockN)
-        {
-            long e = CODE_BLOCKS + i * 16L;
-            long start = Magic.load64(e);
-            long usable = Magic.load64(e + 8L) & -8L;
-            if (start != 0L && addr >= start && addr < start + usable)
-            {
-                return start;
-            }
-            i += 1;
-        }
-        return 0L;
+        long b = codeBlockIndexOf(addr);
+        return b < 0L ? 0L : Magic.load64(CODE_BLOCKS + b * 16L);
     }
 
     public static long codeBlockEndAt(long addr)
+    {
+        long b = codeBlockIndexOf(addr);
+        if (b < 0L)
+        {
+            return 0L;
+        }
+        long e = CODE_BLOCKS + b * 16L;
+        return Magic.load64(e) + (Magic.load64(e + 8L) & -8L);
+    }
+
+    /** The registry index of the code block containing {@code addr}, as {@link #codeBlockIndexScan}; see below. */
+    static long codeBlockIndexOf(long addr)
+    {
+        long fast = codeBlockIndexFast(addr);
+        return fast != CB_UNKNOWN ? fast : codeBlockIndexScan(addr);
+    }
+
+    private static final long CB_UNKNOWN = -2L;
+    private static final long CB_WALK_MAX = 65536L;      // bytes stepped back before giving up to the scan
+
+    /**
+     * The block containing {@code addr} WITHOUT the linear scan, or {@link #CB_UNKNOWN} when it cannot say for
+     * certain. MEASURED (SslEngineProbe, QEMU 2026-11-07): the scan walked 15.6M entries for runPendingClinit's
+     * swept-initializer guard and 11.8M for ctorFrameKind (codeBlockN reaches ~36,000); on the Pi these were
+     * among the largest busy items inside <clinit> by tick sampling.
+     *
+     * <p>Two facts make it exact. Every block is carved from the code arena (bump allocation below CODE_LIMIT,
+     * or a remainder inside a freed block), so an address outside it is in no block. And blocks TILE the arena
+     * -- each starts where the previous one ends, which is what coalesceCodeFree walks -- so the block holding
+     * {@code addr} is the one with the nearest start at or below it. That start is found by stepping back
+     * through {@link #CODE_INDEX}, now kept current (noteCodeBlock inserts, compaction re-indexes), and an
+     * entry is believed only when the LIVE table says it starts there and its live extent covers {@code addr}.
+     * Anything short of that -- a map not yet built, a lost insert, a body larger than the walk -- answers
+     * UNKNOWN and the caller scans, so a stale map costs time and never an answer. Checked against the scan
+     * (temporary checker): 8,037 lookups over 30 probe boots and 990 on SslEngineProbe, every one answered
+     * here and 0 different.
+     */
+    private static long codeBlockIndexFast(long addr)
+    {
+        if (addr < CODE_BASE || addr >= CODE_LIMIT)
+        {
+            return -1L;                                 // no block lies outside the arena
+        }
+        if (!codeIndexLive)
+        {
+            return CB_UNKNOWN;
+        }
+        long a = addr & -8L;
+        long stop = addr - CB_WALK_MAX;
+        if (stop < CODE_BASE)
+        {
+            stop = CODE_BASE;
+        }
+        while (a >= stop)
+        {
+            long i = lookupCodeBlockChecked(a);
+            if (i >= 0L)
+            {
+                long sz = Magic.load64(CODE_BLOCKS + i * 16L + 8L) & -8L;
+                return addr < a + sz ? i : CB_UNKNOWN;  // nearest start found: it covers addr, or the map is stale
+            }
+            a -= 8L;
+        }
+        return CB_UNKNOWN;
+    }
+
+    /** The scan the fast path replaces: first entry whose [start, start + usable) holds {@code addr}, or -1. */
+    static long codeBlockIndexScan(long addr)
     {
         long i = 0;
         while (i < codeBlockN)
@@ -179,11 +236,11 @@ public final class Heap
             long usable = Magic.load64(e + 8L) & -8L;
             if (start != 0L && addr >= start && addr < start + usable)
             {
-                return start + usable;
+                return i;
             }
             i += 1;
         }
-        return 0L;
+        return -1L;
     }
 
     /**
@@ -1045,6 +1102,44 @@ public final class Heap
     public static long codeMergedBytes;
 
     /** Scatter every live registry entry into {@link #CODE_INDEX}, keyed by its start address. */
+    /** True once {@link #CODE_INDEX} has been fully built: before that its slots are unzeroed scratch. */
+    private static boolean codeIndexLive;
+
+    /** {@link #lookupCodeBlock}, refusing a slot value that does not name a current entry (no wild read). */
+    private static long lookupCodeBlockChecked(long addr)
+    {
+        long h = codeSlotOf(addr);
+        long v = Magic.load64(CODE_INDEX + h * 8L);
+        long probes = 0L;
+        while (v != 0L && probes < CODE_INDEX_SLOTS)
+        {
+            if (v - 1L < codeBlockN && Magic.load64(CODE_BLOCKS + (v - 1L) * 16L) == addr)
+            {
+                return v - 1L;
+            }
+            h = (h + 1L) & (CODE_INDEX_SLOTS - 1L);
+            v = Magic.load64(CODE_INDEX + h * 8L);
+            probes += 1L;
+        }
+        return -1L;
+    }
+
+    /** Add entry {@code i} (starting at {@code start}) to the live map. */
+    private static void indexOneCodeBlock(long start, long i)
+    {
+        long h = codeSlotOf(start);
+        long probes = 0L;
+        while (Magic.load64(CODE_INDEX + h * 8L) != 0L && probes < CODE_INDEX_SLOTS)
+        {
+            h = (h + 1L) & (CODE_INDEX_SLOTS - 1L);
+            probes += 1L;
+        }
+        if (probes < CODE_INDEX_SLOTS)
+        {
+            Magic.store64(CODE_INDEX + h * 8L, i + 1L);
+        }
+    }
+
     private static void indexCodeBlocks()
     {
         long z = CODE_INDEX;
@@ -1068,6 +1163,7 @@ public final class Heap
             }
             i += 1;
         }
+        codeIndexLive = true;
     }
 
     /** Hash an 8-aligned code address to a starting slot. */
@@ -1193,6 +1289,7 @@ public final class Heap
             src += 1L;
         }
         codeBlockN = dst;
+        indexCodeBlocks();                              // entries moved: the start map is re-keyed to the new slots
     }
 
     /**
@@ -1202,20 +1299,12 @@ public final class Heap
      */
     public static int codeBlockFreeAt(long addr)
     {
-        long i = 0;
-        while (i < codeBlockN)
+        long b = codeBlockIndexOf(addr);
+        if (b < 0L)
         {
-            long e = CODE_BLOCKS + i * 16L;
-            long start = Magic.load64(e);
-            long sz = Magic.load64(e + 8L);
-            long usable = sz & -8L;
-            if (start != 0L && addr >= start && addr < start + usable)
-            {
-                return (sz & CODE_FREE) != 0L ? 1 : 0;
-            }
-            i += 1;
+            return -1;
         }
-        return -1;
+        return (Magic.load64(CODE_BLOCKS + b * 16L + 8L) & CODE_FREE) != 0L ? 1 : 0;
     }
 
     /** Mark the registry entry for {@code start} free (the collector swept it). */
@@ -1238,6 +1327,10 @@ public final class Heap
         Magic.store64(CODE_BLOCKS + codeBlockN * 16L, start);
         Magic.store64(CODE_BLOCKS + codeBlockN * 16L + 8L, (long) size);
         codeBlockN += 1;
+        if (codeIndexLive)
+        {
+            indexOneCodeBlock(start, codeBlockN - 1L);    // keep the start map current for codeBlockIndexFast
+        }
     }
 
     /**
