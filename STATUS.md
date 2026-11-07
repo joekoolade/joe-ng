@@ -4,6 +4,45 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **Loader + Heap: REFLECTION LOOKUPS through the registry index, and CODE-BLOCK LOOKUP without the block-table
+  scan -- Pi `<clinit>` 5.02 -> 3.17 s, attempt 1 -1.8 s (2026-11-07).**
+  - **Found with two new temporary Pi instruments** (patch `/tmp/bigphase-profile.patch`, not committed):
+    per-`<clinit>` inclusive/own time and slowest compiles, and a TICK SAMPLER -- the interrupted pc of every 10 ms
+    timer tick per core, grouped by method (JIT through the registry, VM through the image symbol table). QEMU
+    cannot do either job: it runs `<clinit>` as fast as the Pi but compile 2.3x slower, and gives launched
+    programs no ticks. Two caveats learned: the phase tag is global (idle cores carry the busy core's phase), and
+    a tick that lands while IRQs are masked is charged to the unmask point -- so `Heap.alloc` "leaf" samples are
+    mostly GC run inside the allocation, not the allocator.
+  - **Pi before:** `<clinit>` 5.0 s, own time led by `SSLContextImpl$DefaultManagersHolder` 1,196 ms,
+    `ECOperations$Secp256R1GeneratorMontgomeryMultiplier` 1,146 ms, `AnchorCertificates` 323, `AbstractTLSContext`
+    286. Busy samples inside `<clinit>`: `ctorResolveRegistry` + `methodResolveRegistryDesc` 67 (JCA providers are
+    instantiated reflectively), `codeBlockFreeAt` + `codeBlockStartAt` 48. All linear scans: on SslEngineProbe
+    (QEMU) 685 + 867 resolves walked 9.46M + 12.95M registry entries (rgCount 17,852, separate objects), and the
+    code-block lookups walked 15.6M entries for `runPendingClinit`'s swept-initializer guard and 11.8M for
+    `ctorFrameKind` (~36,000 blocks).
+  - **Reflection (`70c11fc`):** `ctorResolveRegistry`, `methodResolveRegistry`, `methodResolveRegistryDesc` probe
+    `rgBucket` by (class name, method name) with the scan's predicate and keep the LOWEST index (chains descend).
+    The two reached unlocked now take the loader lock -- `buildRegIndex` extends the index a compiling task also
+    extends; their miss paths already took it. The six `clTab[ci].type != type` scans go through
+    `classIndexByType`, a memo believed only when `clTab[c].type == type`. Checker (removed): 0 mismatches over 685
+    constructor and 867 descriptor resolves and 4,120 memo hits (SslEngineProbe) and the 25 reflection / invoke /
+    proxy / record probes. The NAME-ONLY resolve was reached by none of them -- unverified by a checker; it is the
+    descriptor form minus one compare.
+  - **Code blocks (`9a09618`):** every block is carved from the code arena, so an address outside it is in no
+    block; and blocks TILE the arena (coalescing already walks it so), so the block holding an address is the
+    nearest start at or below it -- found by stepping back through `CODE_INDEX`, which `noteCodeBlock` now keeps
+    current and compaction re-indexes. An entry counts only when the live table says it starts there and its
+    extent covers the address; a stale map, a lost insert or a walk past 64 KB answers UNKNOWN and the old scan
+    runs. Checker (removed): 9,027 lookups over 31 boots, all answered by the fast path, 0 different.
+  - `make test`, `overlaycheck` OK; 39 probes pass (the #497 set plus Proxy, MethodHandle, CtorChainTrace); QEMU
+    output identical to main.
+  - **Pi, HttpsDemo (profiling builds, before = #499):** `<clinit>` **5,019 -> 3,165 ms**;
+    `DefaultManagersHolder` own 1,196 -> **367 ms**; `AbstractTLSContext` 286 -> **37 ms**; both lookups gone from
+    the samples; attempt 1 **17,564 -> 15,756 ms** (server 104.20.23.154 -> 172.66.147.243, but the drop matches
+    the `<clinit>` drop); done 23,282 -> 21,306 ms; gc=17; 200 OK. Compile 7.07 s, load 5.06, GC 3.27 unchanged.
+  - **Next in `<clinit>`:** the P-256 generator table (own 1,128 ms) -- `Math.multiplyHigh` is its top guest
+    method, a Java body where A64 has `SMULH`.
+
 - **Loader: the batch-end call-site patch is INCREMENTAL -- Pi patch 1,234 -> 888 ms, attempt 1 -0.3 s
   (2026-11-07).**
   - **Pi split first** (temporary phase clock on main #498, HttpsDemo): SYN -> end 12.6 s (was 15.2 on #493) --

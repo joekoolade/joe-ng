@@ -17364,11 +17364,7 @@ public final class Loader
         {
             return -1;
         }
-        int ci = 0;
-        while (ci < clCount && clTab[ci].type != type)
-        {
-            ci += 1;
-        }
+        int ci = classIndexByType(type);
         if (ci >= clCount)
         {
             return -1;
@@ -17435,64 +17431,6 @@ public final class Loader
         return -1;
     }
 
-    /** {@link #methodResolveRegistry} with the descriptor compared too. */
-    private static int methodResolveRegistryDesc(long type, long nameArr, long descArr)
-    {
-        int ci = 0;
-        while (ci < clCount && clTab[ci].type != type)
-        {
-            ci += 1;
-        }
-        if (ci >= clCount)
-        {
-            return -1;
-        }
-        int nlen = (int) Magic.load64(nameArr + 16L);
-        long nbase = nameArr + 24L;
-        int dlen = (int) Magic.load64(descArr + 16L);
-        long dbase = descArr + 24L;
-        int i = 0;
-        while (i < rgCount)
-        {
-            if (utf8EqAt(clTab[ci].base, clTab[ci].nameOff, rgTab[i].base, rgTab[i].classOff)
-                    && rawEqUtf8(nbase, nlen, rgTab[i].base, rgTab[i].nameOff)
-                    && rawEqUtf8(dbase, dlen, rgTab[i].base, rgTab[i].descOff))
-            {
-                return i;
-            }
-            i += 1;
-        }
-        return -1;
-    }
-
-    /** Method-registry index of the method named {@code nameArr} declared by the class whose Type is {@code type}
-     *  (class name + method name match), or -1 if it is not currently compiled/registered. */
-    private static int methodResolveRegistry(long type, long nameArr)
-    {
-        int ci = 0;
-        while (ci < clCount && clTab[ci].type != type)
-        {
-            ci += 1;
-        }
-        if (ci >= clCount)
-        {
-            return -1;
-        }
-        int nlen = (int) Magic.load64(nameArr + 16L);
-        long nbase = nameArr + 24L;
-        int i = 0;
-        while (i < rgCount)
-        {
-            if (utf8EqAt(clTab[ci].base, clTab[ci].nameOff, rgTab[i].base, rgTab[i].classOff)
-                    && rawEqUtf8(nbase, nlen, rgTab[i].base, rgTab[i].nameOff))
-            {
-                return i;
-            }
-            i += 1;
-        }
-        return -1;
-    }
-
     /**
      * On-demand compile: a method invoked ONLY reflectively was never RTA-reached, so it isn't compiled. Compile
      * JUST that method (its declaring class is already structure-loaded) into the code arena and register it, so
@@ -17538,11 +17476,7 @@ public final class Loader
      *  stops at the first method of that name, which for an overloaded class is a coin toss between two bodies. */
     private static int compileMethodOnDemandLocked(long type, long nameArr, long descArr)
     {
-        int ci = 0;
-        while (ci < clCount && clTab[ci].type != type)
-        {
-            ci += 1;
-        }
+        int ci = classIndexByType(type);
         // AN INTERFACE IS NOT REFUSED any more. It was, for having no TIB to reuse -- but this path compiles with
         // compileReuseTib, which never touches one (the reason compileSigOnDemand already compiles interface
         // STATICS). The refusal left every not-yet-called DEFAULT method unresolvable by reflection:
@@ -17715,21 +17649,196 @@ public final class Loader
         return r;
     }
 
+    // ---- reflection lookups through the registry index ---------------------------------------------------
+    // ctorResolveRegistry / methodResolveRegistry(Desc) walked EVERY registry entry comparing names, after a
+    // linear clTab scan for the class. MEASURED (SslEngineProbe, QEMU 2026-11-07): 685 constructor and 867
+    // method-with-descriptor resolves walked 9.46M and 12.95M entries (rgCount reaches 17,852, each a separate
+    // object); on the Pi they were the largest busy items inside <clinit> by tick sampling (JCA providers are
+    // instantiated reflectively). The registry is already hashed by (class name, method name) -- rgBucket,
+    // the key lazyBodyEntry probes -- so these probe that one chain with the scan's own predicate and keep the
+    // LOWEST matching index, which is what the scan returned (chains run descending). Checked against the
+    // scans (temporary checker): 0 mismatches over 685 constructor and 867 descriptor resolves and 4,120
+    // type-memo hits on SslEngineProbe, and over the 25 reflection/invoke/proxy/record probes; the name-only
+    // resolve was not reached by any of them -- it has the descriptor form's key and predicate minus one test.
+    private static final int CTMEMO = 4096;
+    private static int[] ctMemo;                         // type hash -> clTab index, validated on every read
+
+    /**
+     * The clTab index of the class whose Type is {@code type}, or {@code clCount} if none -- what the linear
+     * scans it replaces left in {@code ci}. A validated memo: an entry is used only if that class's type IS
+     * {@code type}, so a stale or torn slot costs a scan, never a wrong answer while each Type names one class.
+     */
+    static int classIndexByType(long type)
+    {
+        int h = (int) ((type >>> 4) ^ (type >>> 16)) & (CTMEMO - 1);
+        int[] m = ctMemo;
+        if (m != null)
+        {
+            int c = m[h];
+            if (c >= 0 && c < clCount && clTab[c].type == type)
+            {
+                return c;
+            }
+        }
+        int ci = 0;
+        while (ci < clCount && clTab[ci].type != type)
+        {
+            ci += 1;
+        }
+        if (ci < clCount)
+        {
+            if (m == null)
+            {
+                int[] fresh = new int[CTMEMO];
+                int k = 0;
+                while (k < CTMEMO)
+                {
+                    fresh[k] = -1;
+                    k += 1;
+                }
+                ctMemo = fresh;
+                m = fresh;
+            }
+            m[h] = ci;
+        }
+        return ci;
+    }
+
+    /** utf8Hash2 of (the Utf8 at {@code b1 + o1}, then the raw bytes {@code [raw, raw + rawLen)}). */
+    private static int utf8HashThenRaw(long b1, int o1, long raw, int rawLen)
+    {
+        int len = u2(b1 + o1);
+        long q = b1 + o1 + 2L;
+        int h = 0x811C9DC5;
+        int i = 0;
+        while (i < len)
+        {
+            h = (h ^ u1(q + i)) * 0x01000193;
+            i += 1;
+        }
+        i = 0;
+        while (i < rawLen)
+        {
+            h = (h ^ u1(raw + i)) * 0x01000193;
+            i += 1;
+        }
+        return h;
+    }
+
+    /** utf8Hash2 of (the Utf8 at {@code b1 + o1}, then the bytes of {@code name}). */
+    private static int utf8HashThenBytes(long b1, int o1, byte[] name)
+    {
+        int len = u2(b1 + o1);
+        long q = b1 + o1 + 2L;
+        int h = 0x811C9DC5;
+        int i = 0;
+        while (i < len)
+        {
+            h = (h ^ u1(q + i)) * 0x01000193;
+            i += 1;
+        }
+        i = 0;
+        while (i < name.length)
+        {
+            h = (h ^ (name[i] & 0xFF)) * 0x01000193;
+            i += 1;
+        }
+        return h;
+    }
+
+    /** Constructor of clTab[ci] by arity (or ctorWantDesc): registry index, or -1. Caller holds the loader lock. */
     private static int ctorResolveRegistry(int ci, int paramCount)
     {
-        int i = 0;
-        while (i < rgCount)
+        buildRegIndex();
+        int best = -1;
+        int i = rgBucket[utf8HashThenBytes(clTab[ci].base, clTab[ci].nameOff, Magic.bytes("<init>")) & (RGTAB - 1)];
+        while (i >= 0)
         {
-            if (utf8EqAt(clTab[ci].base, clTab[ci].nameOff, rgTab[i].base, rgTab[i].classOff)
+            if ((best < 0 || i < best)
+                    && utf8EqAt(clTab[ci].base, clTab[ci].nameOff, rgTab[i].base, rgTab[i].classOff)
                     && utf8IsAtBase(rgTab[i].base, rgTab[i].nameOff, Magic.bytes("<init>"))
                     && ctorMatches(rgTab[i].base, rgTab[i].descOff, paramCount))
             {
-                return i;
+                best = i;
             }
-            i += 1;
+            i = rgNext[i];
         }
-        return -1;
+        return best;
     }
+
+    /** Method-registry index of the method named {@code nameArr} declared by the class whose Type is {@code type}
+     *  (class name + method name match), or -1 if it is not currently compiled/registered. Takes the loader
+     *  lock: it is reached unlocked, and buildRegIndex extends the index a compiling task also extends. */
+    private static int methodResolveRegistry(long type, long nameArr)
+    {
+        VM.loaderLock(VM.LOCK_REFLECT);                 // buildRegIndex mutates the index a compiling task extends
+        try
+        {
+            int ci = classIndexByType(type);
+            if (ci >= clCount)
+            {
+                return -1;
+            }
+            int nlen = (int) Magic.load64(nameArr + 16L);
+            long nbase = nameArr + 24L;
+            buildRegIndex();
+            int best = -1;
+            int i = rgBucket[utf8HashThenRaw(clTab[ci].base, clTab[ci].nameOff, nbase, nlen) & (RGTAB - 1)];
+            while (i >= 0)
+            {
+                if ((best < 0 || i < best)
+                        && utf8EqAt(clTab[ci].base, clTab[ci].nameOff, rgTab[i].base, rgTab[i].classOff)
+                        && rawEqUtf8(nbase, nlen, rgTab[i].base, rgTab[i].nameOff))
+                {
+                    best = i;
+                }
+                i = rgNext[i];
+            }
+            return best;
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
+    }
+
+    /** {@link #methodResolveRegistry} with the descriptor compared too. Takes the loader lock, likewise. */
+    private static int methodResolveRegistryDesc(long type, long nameArr, long descArr)
+    {
+        VM.loaderLock(VM.LOCK_REFLECT);
+        try
+        {
+            int ci = classIndexByType(type);
+            if (ci >= clCount)
+            {
+                return -1;
+            }
+            int nlen = (int) Magic.load64(nameArr + 16L);
+            long nbase = nameArr + 24L;
+            int dlen = (int) Magic.load64(descArr + 16L);
+            long dbase = descArr + 24L;
+            buildRegIndex();
+            int best = -1;
+            int i = rgBucket[utf8HashThenRaw(clTab[ci].base, clTab[ci].nameOff, nbase, nlen) & (RGTAB - 1)];
+            while (i >= 0)
+            {
+                if ((best < 0 || i < best)
+                        && utf8EqAt(clTab[ci].base, clTab[ci].nameOff, rgTab[i].base, rgTab[i].classOff)
+                        && rawEqUtf8(nbase, nlen, rgTab[i].base, rgTab[i].nameOff)
+                        && rawEqUtf8(dbase, dlen, rgTab[i].base, rgTab[i].descOff))
+                {
+                    best = i;
+                }
+                i = rgNext[i];
+            }
+            return best;
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
+    }
+
 
     /**
      * THE COMPILE CONTEXT IS STATIC, so exactly one task may be inside the compiler at a time. {@code
@@ -17770,11 +17879,7 @@ public final class Loader
         {
             return -1;
         }
-        int ci = 0;
-        while (ci < clCount && clTab[ci].type != type)
-        {
-            ci += 1;
-        }
+        int ci = classIndexByType(type);
         if (ci >= clCount || clTab[ci].isIface)
         {
             return -1;
@@ -17879,11 +17984,7 @@ public final class Loader
         {
             return 0L;
         }
-        int ci = 0;
-        while (ci < clCount && clTab[ci].type != type)
-        {
-            ci += 1;
-        }
+        int ci = classIndexByType(type);
         if (ci >= clCount || clTab[ci].isIface)
         {
             return 0L;
