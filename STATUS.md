@@ -4,7 +4,41 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
-- **Loader: a method's LINE TABLE IS BUILT IN ONE PASS -- Pi HTTPS attempt 1 -0.9 s, done -1.2 s (2026-11-07).**
+- **Loader: vtEntryOf TESTS THE METHOD NAME BEFORE THE CLASS NAME -- small; Pi attempt 1 -1.0 s on one clean
+  boot; two boots RESET by one Cloudflare edge (2026-11-07).**
+  - **Measured first** (temporary counters, SslEngineProbe, QEMU): `vtEntryOf` -- the compiler's vtable-entry lookup
+    under `globalVtableSlot` / `vtableSlotOf`, ~8% of compile samples -- ran 109,025 times walking **4,017,803**
+    chain entries (37 per call). Its index is keyed by CLASS name, so a chain is the class's own flattened vtable,
+    and on **3,753,438** steps the full class-name compare SUCCEEDED, byte by byte, before the method name rejected
+    the entry.
+  - **Now:** name, then descriptor, then class. The three tests are pure and ANDed, so only the order of rejection
+    changes, never the answer; a method name rejects on its length or first bytes.
+  - **QEMU, clean sequential pair:** main (#494) 115.6 s vs branch 114.2 s (-1.2%, inside QEMU's noise), output
+    IDENTICAL, gc=18.
+  - **Pi, HttpsDemo, three boots of the branch image:**
+
+    | boot | server | DNS | attempt 1 | `done` |
+    |---|---|---|---|---|
+    | 1 | 104.20.23.154 | 2,281 ms | **reset** at 14,219 ms; attempt 2 connected in 5,394 ms | 26,002 ms |
+    | 2 | 104.20.23.154 | 2,283 ms | **reset** at 14,339 ms; attempt 2 connected in 5,419 ms | 26,158 ms |
+    | 3 | 172.66.147.243 | 2,901 ms | connected in **19,379 ms** (#494, same server: 20,353) | 26,391 ms (#494: 27,230) |
+
+    All three 200 OK, gc=17. The clean boot is -1.0 s on attempt 1, more than the few hundred ms the profile
+    predicts -- one boot, so read as consistent with a small gain, not as a claim.
+  - **THE RESETS ARE NOT CLEARED, only attributed.** Both came ~3 s after the SYN, mid-handshake (the SYN goes ~11 s
+    into attempt 1, after DNS), not at the server's ~15 s handshake timeout. The change cannot alter any answer and
+    nothing here touches what TLS sends, and the same image connected to the other edge. But no image since #493 has
+    reached 104.20.23.154 tonight (the #493 split image connected to it), so "this edge started resetting" and "a
+    change since #493 provokes it" both fit. DNS picks the edge, so it cannot be forced; the #487 card recorded an
+    RST 6 ms after a ClientHello from the same address on an older image. Watch the next boots that draw it.
+  - **Correction to #493 and #494:** `https: attempt 1 connected in` EXCLUDES DNS -- `connected in` = DNS + attempt
+    1 (2,901 + 19,379 ~ 22,311 above). Their cards netted the DNS difference out of attempt 1 as well; corrected in
+    place to the as-measured -3.85 s (#493) and -1.0 s (#494).
+  - `make test`, `overlaycheck` OK; 15 dispatch probes pass (VirtualInvoke, SuperCall, AbsentSuper, Supertype,
+    IfaceObjectMethod, NullDispatch, Lambda4, Indy, MethodHandle, LinkTrap, ReflectLookup, FirstCallRace,
+    ClinitOrder, Trace, SslEngine).
+
+- **Loader: a method's LINE TABLE IS BUILT IN ONE PASS -- Pi HTTPS attempt 1 -1.0 s, done -1.2 s (2026-11-07).**
   - **Pi split re-taken on #493** (the temporary phase clock again): SYN -> end now 15.2 s (was 18.5) -- batch load
     4.61 s, compile 4.36 s (3,025, 1.44 ms each), guest + network wait 2.15 s, `<clinit>` 1.86 s, GC 1.61 s,
     lazyCompile's own work 0.60 s (was 3.63). Attempt 1's handshake ends 8.0 s after its SYN (was 9.5).
@@ -23,8 +57,10 @@ Newest entries are at the top.
     indexes, **0 mismatches**.
   - **QEMU, clean sequential pair:** main (#493) 120.8 s vs branch 116.6 s (-3.5%), output IDENTICAL, gc=18.
   - **Pi, HttpsDemo (one boot, same server 172.66.147.243 as #493):** attempt 1 connected in **20,353 ms** (#493:
-    21,372), `https: done` **27,230 ms** (#493: 28,547), gc=17, 200 OK. Net of DNS (2,498 vs 2,594 ms):
-    **attempt 1 -0.9 s, done -1.2 s**.
+    21,372), `https: done` **27,230 ms** (#493: 28,547), gc=17, 200 OK. `attempt 1` EXCLUDES DNS
+    (`connected in` = DNS + attempt 1), so it needs no netting: **attempt 1 -1.0 s**; `done` includes DNS (2,498 vs
+    2,594 ms), so net of it **done -1.2 s**. (Corrected 2026-11-07: this line first netted DNS out of attempt 1
+    as well and read -0.9 s.)
   - **Across #489-#494, Pi HttpsDemo:** attempt 1 29.9 -> 20.4 s, done 39.5 -> 27.2 s.
   - **Next:** the compiler's remaining loader share -- `vtEntryOf`'s byte-compare scans from
     `globalVtableSlot`/`vtableSlotOf` -- and batch loading (~8 ms per batch).
@@ -32,7 +68,7 @@ Newest entries are at the top.
     ThrowableStock, DefaultFrame, StackWalker, StockException, SystemLogger, ThrowableToString, Trace, WideFrame,
     CallerSensitive, HighLocalThrow, FirstCallRace, ClinitOrder, Lazy, LinkTrap, Lambda4, Indy, SslEngine).
 
-- **Loader: rememberLazyBody FINDS ITS REGISTRY ENTRY THROUGH THE INDEX -- Pi HTTPS attempt 1 -3.2 s, done -5.1 s
+- **Loader: rememberLazyBody FINDS ITS REGISTRY ENTRY THROUGH THE INDEX -- Pi HTTPS attempt 1 -3.85 s, done -5.1 s
   (2026-11-06).**
   - **Pi split first** (temporary exclusive phase clock -- time charged to the innermost of compile / batch load /
     `<clinit>` / GC / lazyCompile / guest -- snapshotted at attempt 1's SYN and at the end; main bf3f8d5). SYN ->
@@ -49,8 +85,10 @@ Newest entries are at the top.
     (SslEngineProbe); removed after.
   - **QEMU, clean sequential pair:** main (#492) 128.8 s vs branch 125.2 s (-2.8%), output IDENTICAL, gc=18.
   - **Pi, HttpsDemo (one boot, server 172.66.147.243):** attempt 1 connected in **21,372 ms** (#492: 25,220),
-    `https: done` **28,547 ms** (#492: 34,228), gc=17, 200 OK. DNS was 0.6 s faster this boot (2,594 vs 3,200
-    ms), so net of that: **attempt 1 -3.2 s, done -5.1 s**. QEMU said -2.8%: the scan reads one scattered
+    `https: done` **28,547 ms** (#492: 34,228), gc=17, 200 OK. `attempt 1` EXCLUDES DNS (`connected in` =
+    DNS + attempt 1), so **attempt 1 -3.85 s** as measured; `done` includes DNS, 0.6 s faster this boot (2,594 vs
+    3,200 ms), so net of it **done -5.1 s**. (Corrected 2026-11-07: this line first netted DNS out of attempt 1 as
+    well and read -3.2 s.) QEMU said -2.8%: the scan reads one scattered
     `RVMMethod` object per entry, cheap from the Mac's caches and not from the Pi's DRAM -- UNMEASURED, but the
     same QEMU-vs-Pi gap this session has now seen in both directions.
   - **Across this session's PRs (#489-#493), Pi HttpsDemo:** attempt 1 29.9 -> 21.4 s, done 39.5 -> 28.5 s.
