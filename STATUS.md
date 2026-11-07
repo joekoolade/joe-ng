@@ -4,6 +4,27 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **Loader: phaseACelled GOES THROUGH THE dlTab INDEX -- Pi HTTPS attempt 1 -1.4 s, done -2.6 s (2026-11-07).**
+  - **Measured first** (qprof at 0.1 s on main #495, SslEngineProbe, samples re-classified by phase): batch load
+    is 13.7% of busy samples -- `markReachable` 38% of them, `loadBodies` 22%, `patchRelocs` 8.5%, `refillImaps`
+    7%, `loadStructure` 6%. The largest single LEAF is **`phaseACelled`, 17%**: `compileClass` asks it once per
+    method whether a phase-A cell exists, and it answered by scanning EVERY `dlTab` entry -- methods x cells per
+    batch. (`verifyDlTab`, another full scan at 4.5%, is the deliberate "DL WENT ZERO" check and was left alone.)
+  - **Now:** look up through the existing `dlBucket` index (keyed `utf8Hash2(class name, method name)`; the class
+    being compiled is the context, so `gThisNameOff` names the class its cells are filed under), with the scan's
+    own identity test (`blob`, `nameOff`, `descOff`). The answer is only whether one exists, so chain order is moot.
+  - **Equivalence (temporary checker, removed):** the old scan ran beside every lookup -- **14,129 checks, 0
+    mismatches**, output identical.
+  - **QEMU, clean sequential pair:** main (#495) 111.5 s vs branch 110.2 s (-1.1%), output IDENTICAL, gc=18.
+  - **Pi, HttpsDemo (one boot, same server 172.66.147.243 as #495's clean boot):** DNS 2,239 ms (#495: 2,901);
+    attempt 1 connected in **17,949 ms** (#495: 19,379, -7.4%; EXCLUDES DNS); `https: done` **23,776 ms**
+    (#495: 26,391, of which 0.66 s is the DNS difference); gc=17, 200 OK. As with #493, the Pi gains far more than
+    QEMU: `dlTab` is an array of separately allocated `DynLink`s, one scattered object per step of the old scan.
+    The 104.20.23.154 resets (#495) were not drawn this boot, so they stay unresolved.
+  - `make test`, `overlaycheck` OK; 20 probes pass (InheritedStatic, NetStatics, ClinitOrder, ClinitRace,
+    NestedClinit, ClinitFail, Lazy, LazyVarHandle, LinkTrap, FirstCallRace, ChmRace, SpawnRace, NestedEnum,
+    SystemLogger, Lambda4, Indy, VirtualInvoke, Trace, ReflectLookup, SslEngine).
+
 - **Loader: vtEntryOf TESTS THE METHOD NAME BEFORE THE CLASS NAME -- small; Pi attempt 1 -1.0 s on one clean
   boot; two boots RESET by one Cloudflare edge (2026-11-07).**
   - **Measured first** (temporary counters, SslEngineProbe, QEMU): `vtEntryOf` -- the compiler's vtable-entry lookup
