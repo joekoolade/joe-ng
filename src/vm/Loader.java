@@ -8951,9 +8951,15 @@ public final class Loader
         int i = vtBucket[utf8Hash(clsBase, clsOff) & (VTTAB - 1)];
         while (i >= 0)
         {
-            if (utf8EqAt(clsBase, clsOff, vtClassBase[i], vtClassOff[i])
-                    && utf8EqAt(nameBase, nameOff, vtNameBase[i], vtNameOff[i])
-                    && utf8EqAt(descBase, descOff, vtNameBase[i], vtDescOff[i]))
+            // NAME FIRST, CLASS LAST. The chain is this class's own entries plus hash neighbours, so the class
+            // compare SUCCEEDS -- byte by byte, over the whole name -- on almost every step, and only then did
+            // the method name reject the entry. MEASURED (SslEngineProbe, QEMU, 2026-11-07): 109,025 calls
+            // walking 4,017,803 entries, 3,753,438 of them full successful class-name compares. A method name
+            // rejects on its length or its first bytes. The three tests are pure and ANDed, so only the order
+            // of rejection changes, never the answer.
+            if (utf8EqAt(nameBase, nameOff, vtNameBase[i], vtNameOff[i])
+                    && utf8EqAt(descBase, descOff, vtNameBase[i], vtDescOff[i])
+                    && utf8EqAt(clsBase, clsOff, vtClassBase[i], vtClassOff[i]))
             {
                 return i;
             }
