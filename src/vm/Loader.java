@@ -5318,7 +5318,7 @@ public final class Loader
                 if (!markSettled(b) && (pdPendTo[b] < pendN || pdPendEpoch[b] != pdCount))
                 {
                     virtFrom = pdPendEpoch[b] == pdCount ? pdPendTo[b] : 0;   // chain may have grown -> redo all
-                    grew = resolveBlob(pdBase[b], pdLen[b]) || grew;
+                    grew = resolveBlob(b, pdBase[b], pdLen[b]) || grew;
                     pdPendTo[b] = pendN;
                     pdPendEpoch[b] = pdCount;
                 }
@@ -5747,8 +5747,8 @@ public final class Loader
         pendN += 1;
     }
 
-    /** For blob {@code base}, mark every pending-ref target it defines. Returns true if any method was newly marked. */
-    private static boolean resolveBlob(long base, int len)
+    /** For pd blob {@code b} at {@code base}, mark every pending-ref target it defines. True if any method was newly marked. */
+    private static boolean resolveBlob(int b, long base, int len)
     {
         parseForMethods(base, len);
         boolean grew = false;
@@ -5762,7 +5762,7 @@ public final class Loader
         {
             if (r >= virtFrom && utf8EqAt(pendBase[r], pendClass[r], gbase, gThisNameOff))
             {
-                long code = findMethodByRef(pendBase[r], pendName[r], pendDesc[r]);
+                long code = findDeclaredCached(b, pendBase[r], pendName[r], pendDesc[r]);
                 if (code != 0L)
                 {
                     grew = addReach(code) || grew;
@@ -5777,6 +5777,37 @@ public final class Loader
             r = psNext[r];
         }
         return grew;
+    }
+
+    /**
+     * {@link #findMethodByRef} for pd blob {@code b}, through its {@link #ensureMethodTable} slice: the first
+     * method in declaration order whose name and descriptor equal the ref's and that carries Code. Same answer
+     * by construction -- the slice is the blob's method table in order, {@code mtCode} is the same
+     * {@code findCode}, and the signature hash only rejects entries whose bytes differ. MEASURED (SslEngineProbe,
+     * QEMU 2026-11-07): the parsing form was 1.6 s of the static pass over 108,227 matches, two Utf8 compares
+     * and a skipAttributes per method walked; this is 0.48 s, and a checker running both found 0 mismatches.
+     * Falls back to the parsing form when the flat arrays are full; the caller has {@code b} parsed.
+     */
+    private static long findDeclaredCached(int b, long refBase, int nameOff, int descOff)
+    {
+        if (!ensureMethodTable(b))
+        {
+            return findMethodByRef(refBase, nameOff, descOff);
+        }
+        int h = sigHash(refBase, nameOff, descOff);
+        long blob = pdBase[b];
+        int i = mtStart[b];
+        int end = i + mtLen[b];
+        while (i < end)
+        {
+            if (mtHash[i] == h && mtCode[i] != 0L
+                    && utf8EqAt(refBase, nameOff, blob, mtName[i]) && utf8EqAt(refBase, descOff, blob, mtDesc[i]))
+            {
+                return mtCode[i];
+            }
+            i += 1;
+        }
+        return 0L;
     }
 
     /** Reachability for an inherited static/special call: walk the ref class's (== current blob) super chain and
