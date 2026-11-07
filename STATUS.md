@@ -4,6 +4,26 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **JUnit's VINTAGE ENGINE AND REPORTING LISTENER UN-DENIED -- JUnit 4 tests run on the metal (2026-11-07).**
+  - **Why they were denied, and why that expired:** both were denied (2026-09-10) only so the `ServiceLoader`
+    overlay would skip them by name. `OpenTestReportGeneratingListener`'s constructor reached `java/nio/file`,
+    then denied; `VintageTestEngine`'s `JUnit4VersionCheck` does `new BigDecimal(version)`, when java.math did not
+    work. `java/nio/file` now runs stock over the RAMFS and java.math works, so `org/junit/vintage/` and
+    `org/junit/platform/reporting/` are off `Loader.isDenylisted` and `ReachScan.DENY`. The runtime denylist is now
+    only `java/lang/foreign/` and `jdk/internal/foreign/`.
+  - **`ServiceLoaderProbe`** re-pinned: 2 listeners (was 1 plus a skip line), both CONSTRUCT, and all three engines
+    resolve; 38 `want` lines, 0 mismatches on QEMU, and the host JVM gives the same values.
+  - **New `Junit4Sample`** (JUnit 4, through the real `ConsoleLauncher`): `@Before` on a fresh instance per test,
+    `@Test(expected=ArithmeticException.class)`, `@Ignore`, and a deliberate failure. Host control: 5 found,
+    3 successful, 1 failed, 1 skipped.
+  - **QEMU:** `Junit4Sample` gives the host's exact tally; the Jupiter launcher (SleepSanity) still 2/2 with
+    Vintage now listed; the 6 junit-classpath probes (AnnoProxy, ClassResource, EngineMessage, Gvr, Loader, Url)
+    pass; `make test`, `overlaycheck` OK.
+  - **PI-VALIDATED (`core 166MHz`, SMP 4/4):** `Junit4Sample` tree and tally identical to the host -- 5 found,
+    3 successful, `deliberateFailure ✘ expected:<1> but was:<2>` with the same five-frame trace ending
+    `Junit4Sample.deliberateFailure(Junit4Sample.java:68)`, `ignored ↷ skipped on purpose`; exit status 1 (the
+    launcher's "a test failed").
+
 - **Baseline: `Math.multiplyHigh` / `unsignedMultiplyHigh` LOWER TO `SMULH` / `UMULH` -- Pi P-256 table own time
   1,128 -> 758 ms, attempt 1 -0.3 s (2026-11-07).**
   - **Why:** after #500 the largest `<clinit>` left was `ECOperations$Secp256R1GeneratorMontgomeryMultiplier`, the
