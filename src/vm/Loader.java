@@ -5042,6 +5042,18 @@ public final class Loader
 
     // Per-pass accumulators for LOAD_PROFILE, in raw CNTPCT ticks (converted only when printed).
     static int mrRounds;
+    /**
+     * The lowest UNSETTLED blob index of the current batch. Every per-round blob loop of the mark skips a settled
+     * blob ({@link #markSettled}) and does nothing else for it, and settled is monotone -- {@code pdDoneB} goes
+     * 0 -> 1 only in loadAll's phase B, after the mark, and new blobs are appended at {@code pdCount} -- so every
+     * index below this one is skipped, in every round, and those loops can start here instead. MEASURED
+     * (SslEngineProbe, QEMU 2026-11-07): 1,297 batches average ~1,888 blobs but ~21 unsettled per round, so eight
+     * loops x 2,895 rounds visited 5.38M blobs to work on 27,776; the mark dropped 8.45 -> 7.16 s with the reached
+     * and pended sets identical, and a checker found no blob below it unsettled at any round start.
+     * Loops that touch settled blobs on purpose (computeInstantiated, probeAll, the name indexes, the per-batch
+     * watermark clears) still start at 0.
+     */
+    static int mrLo;
     static long mrProbe, mrSeed, mrCollect, mrPull, mrStruct, mrInst, mrStatic, mrVirt, mrDflt;
     // The classpath-jar FETCH -- locating a class in the archive and INFLATING it -- measured where it
     // happens instead of being charged to whichever mark pass triggered it. It is a SUBSET of `pull` and
@@ -5191,6 +5203,11 @@ public final class Loader
         pendN = 0;
         instN = 0;
         mrAlloc += Magic.readCNTPCT_EL0() - ts1;
+        mrLo = 0;
+        while (mrLo < pdCount && pdDoneB[mrLo] != 0)
+        {
+            mrLo += 1;
+        }
         long ts2 = Magic.readCNTPCT_EL0();
         parseForMethods(gEntryBlob, blobLenOf(gEntryBlob));
         addReach(findMethodByBytes(gbase, gEntryName, gEntryDesc));
@@ -5238,7 +5255,7 @@ public final class Loader
             grew = seedClinits() || grew;               // runnable <clinit>s: pull the classes an initializer calls
             mrSeed += Magic.readCNTPCT_EL0() - tp;
             tp = Magic.readCNTPCT_EL0();
-            int b = 0;
+            int b = mrLo;
             while (b < pdCount)                         // collect refs of NEWLY reachable methods
             {
                 if (!markSettled(b))
@@ -5263,7 +5280,7 @@ public final class Loader
             pendPullTo = pendN;
             mrPull += Magic.readCNTPCT_EL0() - tp;
             tp = Magic.readCNTPCT_EL0();
-            b = 0;
+            b = mrLo;
             while (b < pdCount)                         // pull each loaded class's super + interfaces
             {
                 if (!markSettled(b))
@@ -5277,7 +5294,7 @@ public final class Loader
             grew = computeInstantiated() || grew;       // RTA: flag the pd blobs `new`'d by a reached method
             mrInst += Magic.readCNTPCT_EL0() - tp;
             tp = Magic.readCNTPCT_EL0();
-            b = 0;
+            b = mrLo;
             buildStaticPendIndex();
             while (b < pdCount)                         // resolve static/special targets (class-qualified, precise)
             {
@@ -5347,7 +5364,7 @@ public final class Loader
     {
         boolean grew = false;
         buildPendIndex();
-        int b = 0;
+        int b = mrLo;
         while (b < pdCount)
         {
             if (markSettled(b) || pdDfltTo[b] >= pendN)
@@ -6025,7 +6042,7 @@ public final class Loader
             virtResolved = new int[pendN + 64];
         }
         buildPendIndex();
-        int c = 0;
+        int c = mrLo;
         while (c < pdCount)
         {
             if (pdInstantiated[c] && !markSettled(c)
@@ -6637,7 +6654,7 @@ public final class Loader
     private static boolean seedNativelyReached()
     {
         boolean grew = false;
-        int b = 0;
+        int b = mrLo;
         while (b < pdCount)
         {
             if (!markSettled(b) && pdSeeded[b] == 0)
@@ -6676,7 +6693,7 @@ public final class Loader
     private static boolean seedAllNamed(byte[] name, byte[] desc)
     {
         boolean grew = false;
-        int b = 0;
+        int b = mrLo;
         while (b < pdCount)
         {
             if (!markSettled(b))
@@ -6741,7 +6758,7 @@ public final class Loader
     private static boolean seedClinits()
     {
         boolean grew = false;
-        int b = 0;
+        int b = mrLo;
         while (b < pdCount)
         {
             // Settled blobs skipped for the same reason as everywhere else: their initializer was marked and
