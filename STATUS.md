@@ -4,6 +4,32 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **Loader: the mark's per-round blob loops START AT THE LOWEST UNSETTLED BLOB -- QEMU mark -15%; Pi within
+  noise (2026-11-07).**
+  - **Measured first** (temporary cumulative timers, SslEngineProbe, QEMU): the reachability mark is 38% of batch-load
+    samples and 8.08 s of the run, over 1,297 batches and 2,895 rounds; 21% of its samples were its OWN loop bodies.
+    Eight per-round loops (collect, structural pull, static resolve, resolveVirtuals, markDefaults and the three
+    seeds) walked every blob -- ~1,888 on average -- calling `markSettled` to skip the ones an earlier batch
+    finished; ~21 per round were unsettled. 5,377,740 visits to work on 27,776.
+  - **Now:** each batch computes `mrLo`, the lowest unsettled index, and those eight loops start there. Settled is
+    monotone (`pdDoneB` goes 0 -> 1 only in loadAll's phase B, after the mark; new blobs append at `pdCount`), and
+    each loop does nothing for a settled blob, so the answer cannot change. Loops that touch settled blobs on
+    purpose (computeInstantiated, probeAll, the name indexes, the per-batch watermark clears) still start at 0.
+  - **Equivalence, paired against the same file with `mrLo` forced to 0:** a checker at every round start found
+    **0** blobs below `mrLo` unsettled; rounds 2,895, reached 8,767 and pended 59,294 (summed per batch) IDENTICAL;
+    output IDENTICAL. Mark **8.45 -> 7.16 s**.
+  - **QEMU, clean sequential pairs vs main (#496):** 113.0 vs 114.2 s, then reversed 111.8 vs 111.6 s -- a ~1.3 s
+    gain on ~112 s is inside QEMU's wall noise; output IDENTICAL, gc=18 in all four.
+  - **Pi, HttpsDemo (one boot):** server **104.20.23.154**, DNS 2,236 ms; attempt 1 connected in **17,785 ms**
+    (#496 on 172.66.147.243: 17,949); `https: done` **23,570 ms** (#496: 23,776); gc=17, 200 OK. -164 ms is the
+    predicted size and inside boot noise -- read as not a regression, not as a measured gain. **That edge connected
+    on attempt 1 with no reset**, so the #495 resets are not "104.20.23.154 resets every handshake"; still open.
+  - `make test`, `overlaycheck` OK; 36 probes pass (AnnoDefault, ChmRace, ClinitOrder, ClinitRace, DefaultFrame,
+    DefaultSpecific, Deflater, IfaceObjectMethod, Indy, Inflater, InheritedStatic, InvokeDefault, Lambda4,
+    LambdaAdapt, Lazy, NestedClinit, NestedEnum, NetStatics, ReflectArray, ReflectLookup, ReflectUndeny,
+    InternalReflect, ClinitFail, AbsentSuper, LazyVarHandle, SslEngine, SerLambda, SuperCall, Supertype,
+    VirtualInvoke, FirstCallRace, SpawnRace, SystemLogger, Trace, LinkTrap, NullDispatch).
+
 - **Loader: phaseACelled GOES THROUGH THE dlTab INDEX -- Pi HTTPS attempt 1 -1.4 s, done -2.6 s (2026-11-07).**
   - **Measured first** (qprof at 0.1 s on main #495, SslEngineProbe, samples re-classified by phase): batch load
     is 13.7% of busy samples -- `markReachable` 38% of them, `loadBodies` 22%, `patchRelocs` 8.5%, `refillImaps`
