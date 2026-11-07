@@ -12208,19 +12208,7 @@ public final class Loader
                                                         //   here reports stubIdx -1 and reads as an ordinary body
         Heap.pinCodeAt(buf);                            // the batch-path twin of buildLazyCompileStub: same stub,
                                                         //   same lifetime problem, same fix (see the note there)
-        int w = 0;
-        // x17/x16, NOT x9/x10: x0.. are the argument registers, so a stub that scratches x9/x10 destroys
-        // the 10th and 11th arguments of the very call it is standing in for. x16/x17 are the architectural
-        // intra-procedure scratch pair and are never arguments. (This is what broke demo deep10.)
-        // A 0 here bakes `br 0` into the stub, and `br` writes no x30 -- so the failure would
-        // surface as an untraceable reboot whenever this stub is finally entered. Fail now.
-        checkTramp(lazyTrampAddr, idx, 1);
-        Magic.store32(buf + w * 4L, A64Enc.movz(17, idx & 0xFFFF, 0));                           w += 1;  // x17 = idx
-        Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) (lazyTrampAddr & 0xFFFF), 0));         w += 1;  // x16 = tramp
-        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((lazyTrampAddr >> 16) & 0xFFFF), 1)); w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((lazyTrampAddr >> 32) & 0xFFFF), 2)); w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.br(16));                                              w += 1;
-        Heap.publishCode(buf, buf + w * 4L);
+        lzTab[idx].stubLit = writeLazyStub(buf, idx);
     }
 
     /** Buffer assigned to the method whose bytecode is at {@code code}. */
@@ -18831,6 +18819,70 @@ public final class Loader
         writeName(lzTab[k].blob + lzTab[k].nameOff + 2, u2(lzTab[k].blob + lzTab[k].nameOff));
     }
 
+    /**
+     * Write the deferral stub for lazy method {@code idx} into {@code buf} (32 bytes) and return the address of
+     * its TARGET LITERAL, or 0 if this stub has none:
+     * <pre>
+     *   +0   movz x17, #idx          the trampoline reads the index here
+     *   +4   ldr  x16, [pc, #12]     the literal at +16
+     *   +8   br   x16
+     *   +12  nop                     pad: keeps the literal 8-byte aligned
+     *   +16  .quad lazyTrampAddr     -> the compiled body, once there is one (see patchLazyStub)
+     * </pre>
+     * x17/x16, NOT x9/x10: x0.. are the argument registers, so a stub that scratches x9/x10 destroys the 10th
+     * and 11th arguments of the very call it stands in for (this is what broke demo deep10); x16/x17 are the
+     * architectural intra-procedure scratch pair and never arguments. A 0 trampoline would bake {@code br 0},
+     * which writes no x30 and surfaces as an untraceable reboot, so checkTramp fails first.
+     *
+     * <p>THE TARGET IS DATA, NOT AN INSTRUCTION. This stub used to be {@code movz/movk x16, tramp; br x16} and
+     * was never rewritten, so every call through it -- every caller of a method whose deferral stub IS its
+     * registered address -- went stub -> trampoline (16 registers saved and restored) -> lazyCompile -> cache
+     * hit -> branch, for the life of the VM. MEASURED (QEMU, SslEngineProbe, 2026-11-06): 58,174,133
+     * lazyCompile calls, 99.99% cache hits, against 20,731 deferred methods; on the Pi, 3.83M calls and 19.3 s
+     * inside lazyCompile over one HTTPS GET. Patching a 64-bit aligned literal is single-copy atomic, so another
+     * core sees the trampoline or the body -- both correct -- and since no instruction changes there is no
+     * cross-core I-cache maintenance and none of the ARM ARM's concurrent-modification-of-code rules apply
+     * (MOVZ -> B is not in their permitted set). A misaligned buffer keeps the old, unpatchable form.
+     */
+    private static long writeLazyStub(long buf, int idx)
+    {
+        checkTramp(lazyTrampAddr, idx, 1);
+        Magic.store32(buf, A64Enc.movz(17, idx & 0xFFFF, 0));                // x17 = idx
+        if ((buf & 7L) != 0L)
+        {
+            Magic.store32(buf + 4L, A64Enc.movz(16, (int) (lazyTrampAddr & 0xFFFF), 0));
+            Magic.store32(buf + 8L, A64Enc.movk(16, (int) ((lazyTrampAddr >> 16) & 0xFFFF), 1));
+            Magic.store32(buf + 12L, A64Enc.movk(16, (int) ((lazyTrampAddr >> 32) & 0xFFFF), 2));
+            Magic.store32(buf + 16L, A64Enc.br(16));
+            Heap.publishCode(buf, buf + 20L);
+            return 0L;
+        }
+        Magic.store32(buf + 4L, A64Enc.ldrLitX(16, 12));                    // x16 = [buf + 16]
+        Magic.store32(buf + 8L, A64Enc.br(16));
+        Magic.store32(buf + 12L, A64Enc.nop());
+        Magic.store64(buf + 16L, lazyTrampAddr);
+        Heap.publishCode(buf, buf + 24L);
+        return buf + 16L;
+    }
+
+    /**
+     * Point lazy method {@code idx}'s deferral stub straight at {@code body}, so later calls through it skip the
+     * trampoline. Called where the TIB slot / offset cell is patched, with the same body, so a caller sees what
+     * the cache-hit path of lazyCompile would have returned. The body is pinned (a CODE->CODE edge whose only
+     * holder is this literal), and the DSB orders its publication before the literal can be observed.
+     */
+    private static void patchLazyStub(int idx, long body)
+    {
+        long lit = lzTab[idx].stubLit;
+        if (lit == 0L || body == 0L)
+        {
+            return;
+        }
+        Heap.pinCodeAt(body);
+        Magic.dsb();
+        Magic.store64(lit, body);
+    }
+
     private static long buildLazyCompileStub(int idx)
     {
         long buf = Heap.allocCode(32);
@@ -18843,19 +18895,7 @@ public final class Loader
         // whatever data now lives there. So pin it. 32 bytes each, and it is the safety net that makes every
         // stale dispatch copy correct.
         Heap.pinCodeAt(buf);
-        int w = 0;
-        // x17/x16, NOT x9/x10: x0.. are the argument registers, so a stub that scratches x9/x10 destroys
-        // the 10th and 11th arguments of the very call it is standing in for. x16/x17 are the architectural
-        // intra-procedure scratch pair and are never arguments. (This is what broke demo deep10.)
-        // A 0 here bakes `br 0` into the stub, and `br` writes no x30 -- so the failure would
-        // surface as an untraceable reboot whenever this stub is finally entered. Fail now.
-        checkTramp(lazyTrampAddr, idx, 1);
-        Magic.store32(buf + w * 4L, A64Enc.movz(17, idx & 0xFFFF, 0));                           w += 1;  // x17 = idx
-        Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) (lazyTrampAddr & 0xFFFF), 0));         w += 1;  // x16 = tramp
-        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((lazyTrampAddr >> 16) & 0xFFFF), 1)); w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((lazyTrampAddr >> 32) & 0xFFFF), 2)); w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.br(16));                                              w += 1;
-        Heap.publishCode(buf, buf + w * 4L);
+        lzTab[idx].stubLit = writeLazyStub(buf, idx);
         return buf;
     }
 
@@ -20185,6 +20225,7 @@ public final class Loader
                 {
                     Magic.store64(lzTab[idx].slot, baked);
                 }
+                patchLazyStub(idx, baked);
                 return baked;
             }
         }
@@ -20269,6 +20310,7 @@ public final class Loader
         {
             Magic.store64(lzTab[idx].slot, buf);
         }
+        patchLazyStub(idx, buf);                         // ... and the deferral stub itself, for every other caller
         return buf;
     }
 
@@ -25097,16 +25139,7 @@ public final class Loader
         long buf = Heap.allocCode(32);
         noteStub(buf, idx);
         Heap.pinCodeAt(buf);
-        int w = 0;
-        // A 0 here bakes `br 0` into the stub, and `br` writes no x30 -- so the failure would
-        // surface as an untraceable reboot whenever this stub is finally entered. Fail now.
-        checkTramp(lazyTrampAddr, idx, 1);
-        Magic.store32(buf + w * 4L, A64Enc.movz(17, idx & 0xFFFF, 0));                           w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) (lazyTrampAddr & 0xFFFF), 0));         w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((lazyTrampAddr >> 16) & 0xFFFF), 1)); w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((lazyTrampAddr >> 32) & 0xFFFF), 2)); w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.br(16));                                              w += 1;
-        Heap.publishCode(buf, buf + w * 4L);
+        lzTab[idx].stubLit = writeLazyStub(buf, idx);
         gvTab[s].implBuf = buf;                         // a class implementing N interfaces that each declare
         return buf;                                     //   this method would otherwise mint N identical stubs
     }

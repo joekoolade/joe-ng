@@ -204,6 +204,24 @@ public final class A64Enc
     {
         return ldst(3, 1, rt, rn, off);
     }
+    /** {@code NOP} (HINT #0). ARM ARM C6.2.238. */
+    public static int nop()
+    {
+        return 0xD503201F;
+    }
+    /**
+     * {@code LDR Xt, <label>} — 64-bit LDR (literal): loads the doubleword at {@code pc + byteOff}. ARM ARM
+     * C6.2.167: {@code 0 1 0 1 1 0 0 0 | imm19 | Rt}, imm19 = byteOff / 4, so byteOff is a multiple of 4 within
+     * +-1 MiB.
+     */
+    public static int ldrLitX(int rt, int byteOff)
+    {
+        if ((byteOff & 3) != 0 || byteOff < -(1 << 20) || byteOff >= (1 << 20))
+        {
+            throw new IllegalArgumentException("ldr literal offset");
+        }
+        return 0x58000000 | (((byteOff >> 2) & 0x7FFFF) << 5) | (rt & 31);
+    }
     /** {@code STR Wt, [Xn, #off]} — 32-bit. */
     public static int strw(int rt, int rn, int off)
     {
