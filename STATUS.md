@@ -35,10 +35,12 @@ Newest entries are at the top.
     `overlaycheck` OK.
   - **PI-VALIDATED (`core 166MHz`, SMP 4/4), requests from a Mac on the same LAN:** the full 484-byte page with the
     date (`Saturday, 7 November 2026, 23:47:41 UTC`), 404 for `/favicon.ico` in 30 ms, then 6/6 sequential
-    requests 200 OK, warm totals 27-30 ms. Measured on the block-mode build with temporary step traces; the
-    committed demo drops the traces and adds the warm-up (QEMU-checked).
-  - **OPEN:** connects of exactly 1 s or 3 s (the Mac resending its SYN) and, once right after the first request,
-    four unanswered SYNs in a row -- incoming frames lost on the receive side (cf. NetDemo's intermittent
+    requests 200 OK, warm totals 27-30 ms (the block-mode build with temporary step traces). Then the COMMITTED
+    image (`34c49c4`, traces dropped, date warm-up): 6/6 pages 200 OK, warm totals 19-58 ms; then 4 favicon + 4
+    page requests interleaved, all answered (404 / 200) within ~15 ms of connecting. Every slow request was slow
+    in CONNECT alone (1, 3, 4, 11 s, and one 25 s timeout): the SYN loss below, not the server.
+  - **OPEN:** connects of 1, 3, 4 or 11 s (the Mac resending its SYN) and, a few times, every SYN unanswered until
+    the client gave up -- incoming frames lost on the receive side (cf. NetDemo's intermittent
     `bytes=0`). Sent data is still never retransmitted, so a lost reply segment stalls that page until a reload.
     A half-open child (our SYN-ACK unanswered for ever) is never reaped and holds a backlog place.
 
