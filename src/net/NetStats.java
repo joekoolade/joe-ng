@@ -46,6 +46,7 @@ public final class NetStats
 
     // Tcp
     public static int tcpActiveOpens;        // SYNs sent for a new connection
+    public static int tcpPassiveOpens;       // SYNs a listener answered with a SYN-ACK
     public static int tcpAttemptFails;       // connects refused or timed out
     public static int tcpEstabResets;        // established connections ended by a RST
     public static int tcpInSegs;             // segments received (checksum-valid or not)
@@ -267,6 +268,8 @@ public final class NetStats
         VM.printDec(icmpOutMsgs);
         board.bcm2711.Uart.write(Magic.bytes("\nnet: Tcp ActiveOpens="));
         VM.printDec(tcpActiveOpens);
+        board.bcm2711.Uart.write(Magic.bytes(" PassiveOpens="));
+        VM.printDec(tcpPassiveOpens);
         board.bcm2711.Uart.write(Magic.bytes(" AttemptFails="));
         VM.printDec(tcpAttemptFails);
         board.bcm2711.Uart.write(Magic.bytes(" EstabResets="));

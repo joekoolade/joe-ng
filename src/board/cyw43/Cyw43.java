@@ -44,6 +44,8 @@ public final class Cyw43
     private static final int CCCR_IOEx = 0x02;  // enable I/O functions (bit n)
     private static final int CCCR_IORx = 0x03;  // I/O function n ready (bit n)
     private static final int CCCR_IEN  = 0x04;  // interrupt enable (bit0 master, bit1 F1, bit2 F2)
+    private static final int FBR2_BLKSIZE = 0x210;   // F2's FBR: I/O block size, low byte (high byte at +1)
+    static final int F2_BLOCK = 512;                 // F2 block size (brcmfmac's SDIO_FUNC2_BLOCKSIZE)
     private static final int SDHCI_CARD_INT = 1 << 8;   // SDHCI INTERRUPT: SDIO device asserted its IRQ
     private static final int CCCR_BUS  = 0x07;  // bus interface control (bus width — set by Sdio.init)
     private static final int CCCR_CAP  = 0x08;  // card capability
@@ -292,6 +294,11 @@ public final class Cyw43
     {
         bpWrite32(0x0L, rstvec);                          // CR4 boots from address 0
         armCr4Run(ARMCR4_WRAP);                           // out of reset, CPU running
+        // F2's block size, for block-mode CMD53 writes of frames over 512 bytes (byte mode's count field is
+        // 9 bits). Never set before: every transfer was byte mode. Read back and printed -- measured, not assumed.
+        Sdio.cmd52Write(F0, FBR2_BLKSIZE, F2_BLOCK & 0xFF);
+        Sdio.cmd52Write(F0, FBR2_BLKSIZE + 1, (F2_BLOCK >> 8) & 0xFF);
+        log(Magic.bytes("f2 blksize="), Sdio.cmd52Read(F0, FBR2_BLKSIZE) | (Sdio.cmd52Read(F0, FBR2_BLKSIZE + 1) << 8));
         Sdio.cmd52Write(F0, CCCR_IOEx, (1 << F1) | (1 << F2));   // enable the WLAN data function
         int tries = 0;
         while ((Sdio.cmd52Read(F0, CCCR_IORx) & (1 << F2)) == 0 && tries < 2000)
@@ -1360,13 +1367,28 @@ public final class Cyw43
      * Put one built SDPCM frame ({@code total} bytes at {@code tx}) on the bus: wait for transmit credit, then,
      * holding the bus, stamp the next sequence number and write it. The sequence is stamped under the lock
      * because transmits come from any task once the RX task runs.
+     *
+     * <p>A frame of up to 512 bytes goes in BYTE mode; a longer one in BLOCK mode, padded to whole
+     * {@link #F2_BLOCK}-byte blocks (the dongle takes the length from the SDPCM header, as brcmfmac pads). Byte
+     * mode's count field is 9 bits: a 556-byte frame was sent as "44 bytes" while the host clocked 556, which
+     * left the data line busy -- every later bus operation then sat out a ~3.6 s timeout, and the frame itself
+     * never arrived (the first HTTP response body, 2026-11-07). The buffer must hold the padding: txDataP's is
+     * 2048 bytes, and an Ethernet frame (<= 1514 + 16) rounds up to at most 1536.
      */
     private static void sendFrame(long tx, int total)
     {
         waitCredit();
         WlanPoll.busLock();
         Magic.store8(tx + 4, txSeq & 0xFF);              // SDPCM seq
-        Sdio.cmd53Write(F2, 0, true, tx, 1, (total + 3) & ~3);
+        int len = (total + 3) & ~3;
+        if (len <= 512)
+        {
+            Sdio.cmd53Write(F2, 0, true, tx, 1, len);
+        }
+        else
+        {
+            Sdio.cmd53Write(F2, 0, true, tx, (len + F2_BLOCK - 1) / F2_BLOCK, F2_BLOCK);
+        }
         txSeq = txSeq + 1;
         WlanPoll.busUnlock();
     }

@@ -1717,6 +1717,42 @@ final class VMNatives
         return net.Tcp.shutdown(fdIndex(fdRef), (int) how);
     }
 
+    /** Net.bindPort0(fd, port) -> 0, or a negated errno (net.Tcp.bind); the Net overlay throws for it. */
+    static int sockBind(long fdRef, long port)
+    {
+        return net.Tcp.bind(fdIndex(fdRef), (int) port);
+    }
+
+    /** Net.listen0(fd, backlog) -> 0, or a negated errno (net.Tcp.listen; the backlog is the stack's own). */
+    static int sockListen(long fdRef, long backlog)
+    {
+        return net.Tcp.listen(fdIndex(fdRef));
+    }
+
+    /** Net.accept0(fd) -> the accepted connection's handle, IOStatus.UNAVAILABLE, or a negated errno. */
+    static int sockAccept(long fdRef)
+    {
+        return net.Tcp.accept(fdIndex(fdRef));
+    }
+
+    /** Net.remoteIp0(h) -> handle {@code h}'s peer as a big-endian IPv4 int (an accepted socket). */
+    static int sockRemoteIp(long h)
+    {
+        return net.Tcp.remoteIp((int) h);
+    }
+
+    /** Net.remotePort0(h) -> handle {@code h}'s peer port. */
+    static int sockRemotePort(long h)
+    {
+        return net.Tcp.remotePort((int) h);
+    }
+
+    /** Net.localPort(fd) -> the socket's local port (bound, connected, or accepted; 0 before any). */
+    static int sockLocalPort(long fdRef)
+    {
+        return net.Tcp.localPort(fdIndex(fdRef));
+    }
+
     /** Net.available(fd) -> bytes buffered for a non-blocking read. */
     static int sockAvailable(long fdRef)
     {

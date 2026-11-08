@@ -14152,7 +14152,12 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("available")))         { return VM.sockAvailableAddr; }
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("shutdown0")))         { return VM.sockShutdown0Addr; } // (FD,I)I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("poll")))              { return VM.sockPollAddr; }     // (FD,I,J)I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("localPort")))         { return VM.sockZeroAddr; }     // -> 0
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("localPort")))         { return VM.sockLocalPortAddr; } // (FD)I
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("bindPort0")))         { return VM.sockBindAddr; }     // (FD,I)I
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("listen0")))           { return VM.sockListenAddr; }   // (FD,I)I
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("accept0")))           { return VM.sockAcceptAddr; }   // (FD)I
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("remoteIp0")))         { return VM.sockRemoteIpAddr; } // (I)I
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("remotePort0")))       { return VM.sockRemotePortAddr; } // (I)I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getIntOption0")))     { return VM.sockZeroAddr; }     // -> 0 (SO_LINGER)
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("localInetAddress")))  { return VM.sockZeroAddr; }     // -> null wildcard
             // Net.<clinit> natives, answered as unix/native/libnio/ch/Net.c answers them on Linux: the <poll.h>

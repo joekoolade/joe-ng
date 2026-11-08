@@ -537,12 +537,30 @@ public class Net {
         bind0(fd, preferIPv6, EXCLUSIVE_BIND, addr, port);
     }
 
-    private static native void bind0(FileDescriptor fd, boolean preferIPv6,
-                                     boolean useExclBind, InetAddress addr,
-                                     int port)
-        throws IOException;
+    // joe-ng: bind0 and listen are stock natives that THROW; a VM native cannot, so each is a Java body over a
+    // VM native that answers a NEGATED errno (net.Tcp.bind / listen), thrown here as handleSocketError would.
+    // There is one interface, so the address is not passed on: a bound socket answers on the WiFi lease.
+    private static void bind0(FileDescriptor fd, boolean preferIPv6,
+                              boolean useExclBind, InetAddress addr,
+                              int port)
+        throws IOException
+    {
+        int n = bindPort0(fd, port);
+        if (n < 0) {
+            throw connectFailure(-n);
+        }
+    }
 
-    static native void listen(FileDescriptor fd, int backlog) throws IOException;
+    private static native int bindPort0(FileDescriptor fd, int port);
+
+    static void listen(FileDescriptor fd, int backlog) throws IOException {
+        int n = listen0(fd, backlog);
+        if (n < 0) {
+            throw connectFailure(-n);
+        }
+    }
+
+    private static native int listen0(FileDescriptor fd, int backlog);
 
     static int connect(FileDescriptor fd, InetAddress remote, int remotePort)
         throws IOException
@@ -577,6 +595,7 @@ public class Net {
             case 110: return new java.net.ConnectException("Connection timed out");
             case 101: return new SocketException("Network is unreachable");
             case 22:  return new SocketException("Invalid argument");
+            case 98:  return new java.net.BindException("Address already in use");
             case 9:   return new SocketException("Bad file descriptor");
             default:  return new SocketException("errno " + errno);
         }
@@ -595,10 +614,38 @@ public class Net {
                                        int remotePort)
         throws IOException;
 
-    public static native int accept(FileDescriptor fd,
-                                    FileDescriptor newfd,
-                                    InetSocketAddress[] isaa)
-        throws IOException;
+    // joe-ng: stock accept is a native that fills newfd and isaa[0] itself. Here the VM native answers only the
+    // accepted connection's handle (net.Tcp.accept: >= 0, IOStatus.UNAVAILABLE, or a negated errno), and this
+    // body does what Net.c does with it -- set newfd and build the peer's InetSocketAddress -- in Java, since a
+    // VM native cannot allocate guest objects or throw.
+    public static int accept(FileDescriptor fd,
+                             FileDescriptor newfd,
+                             InetSocketAddress[] isaa)
+        throws IOException
+    {
+        int h = accept0(fd);
+        if (h == IOStatus.UNAVAILABLE) {
+            return h;
+        }
+        if (h < 0) {
+            throw connectFailure(-h);
+        }
+        IOUtil.setfdVal(newfd, h);
+        int ip = remoteIp0(h);
+        byte[] a = new byte[4];
+        a[0] = (byte) (ip >>> 24);
+        a[1] = (byte) (ip >>> 16);
+        a[2] = (byte) (ip >>> 8);
+        a[3] = (byte) ip;
+        isaa[0] = new InetSocketAddress(InetAddress.getByAddress(a), remotePort0(h));
+        return 1;
+    }
+
+    private static native int accept0(FileDescriptor fd);
+
+    private static native int remoteIp0(int h);
+
+    private static native int remotePort0(int h);
 
     public static final int SHUT_RD = 0;
     public static final int SHUT_WR = 1;

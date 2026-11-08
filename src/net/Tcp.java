@@ -17,8 +17,9 @@ import vm.VM;
 import vm.VMScheduler;
 
 /**
- * A TCP client: a connection table the VM's socket layer (stock {@code java.net} over the sun.nio.ch natives)
- * drives through {@link #connect}/{@link #write}/{@link #read}/{@link #poll}/{@link #close}.
+ * A TCP client and server: a connection table the VM's socket layer (stock {@code java.net} over the sun.nio.ch
+ * natives) drives through {@link #connect}/{@link #write}/{@link #read}/{@link #poll}/{@link #close}, and on the
+ * server side {@link #bind}/{@link #listen}/{@link #accept}.
  *
  * <p><b>Receive runs in the network's receive context, not the application's.</b> Once the WiFi RX task owns
  * the chip ({@link RxQueues#active}), {@link RxQueues#dispatch} hands every TCP segment to {@link #input} on
@@ -34,19 +35,27 @@ import vm.VMScheduler;
  * <p>Before the RX task starts (no task baked, or code that runs during bring-up) the application's own wait
  * reads the chip and feeds {@link #input} itself: one receive path, two places it can run.
  *
- * <p>Scope: IPv4, one route (everything to the gateway MAC). Sent data is not retransmitted and a write is
- * one segment (increment C); connect resends the SYN until answered.
+ * <p>Passive open: a SYN to a LISTEN port takes a free slot as a child in SYN_RCVD and is answered SYN-ACK; the
+ * handshake's ACK makes it CONNECTED, and accept() hands it to the application. A child replies to the MAC its
+ * SYN came from, so a browser on the same subnet is answered directly.
+ *
+ * <p>Scope: IPv4. An active open routes everything to the gateway MAC. Sent data is not retransmitted and a
+ * write is at most one MSS-sized segment (increment C); connect resends the SYN until answered.
  */
 public final class Tcp
 {
     private Tcp() {}
 
-    private static final int MAXCONN = 4;
+    private static final int MAXCONN = 8;
     private static final int FREE = 0;
     private static final int CONNECTED = 1;
     private static final int CLOSED = 2;
     private static final int RESERVED = 3;   // alloc()'d (a socket fd exists) but not yet connected
     private static final int SYN_SENT = 4;   // connect() sent the SYN; waiting for the SYN-ACK
+    private static final int LISTEN = 5;     // listen()ing: a SYN to lport opens a child connection
+    private static final int SYN_RCVD = 6;   // a child: our SYN-ACK is out; waiting for the handshake's ACK
+
+    private static final int MAXBACKLOG = 4;         // children a listener holds that accept() has not taken
 
     private static final int RX_WAIT_MS = 200;
     private static final int RCVBUF = 32768;         // receive ring per connection (a power of two, < 65536)
@@ -60,6 +69,7 @@ public final class Tcp
      */
     public static final int EBADF = 9;
     public static final int EINVAL = 22;
+    public static final int EADDRINUSE = 98;
     public static final int EPIPE = 32;
     public static final int ECONNRESET = 104;
     public static final int ENOTCONN = 107;
@@ -94,6 +104,10 @@ public final class Tcp
 
     private static int[]  isn0  = new int[MAXCONN];   // our ISN (the SYN-ACK must acknowledge isn0 + 1)
     private static int[]  pisn  = new int[MAXCONN];   // the peer's ISN (0 until the SYN-ACK)
+
+    private static int[]  parent = new int[MAXCONN];  // a child's listener until accept() takes it, else -1
+    private static long[] rmac  = new long[MAXCONN];  // the peer's 6-byte MAC (heap buf)
+    private static int[]  useRmac = new int[MAXCONN]; // 1 = send to rmac (a child: the SYN's source MAC)
 
     private static int lock = -1;                     // one mutex over the whole table (-1: before init, no-op)
     private static long syncRx;                       // receive buffer for the pre-RX-task path
@@ -145,7 +159,14 @@ public final class Tcp
     public static int alloc()
     {
         lock();
-        int h = -1;
+        int h = allocLocked();
+        unlock();
+        return h;
+    }
+
+    /** {@link #alloc} under the table lock (the RX task takes a slot this way for a listener's child). */
+    private static int allocLocked()
+    {
         int i = 0;
         while (i < MAXCONN)
         {
@@ -155,21 +176,186 @@ public final class Tcp
                 {
                     ring[i] = Heap.allocData(RCVBUF);
                     rip[i] = Heap.allocData(4);
+                    rmac[i] = Heap.allocData(6);
                 }
                 st[i] = RESERVED;
+                lport[i] = 0;
                 rcv[i] = 0;
                 rdSeq[i] = 0;
                 finIn[i] = 0;
                 finOut[i] = 0;
                 rdShut[i] = 0;
+                parent[i] = -1;
+                useRmac[i] = 0;
                 nb[i] = 0;                               // a new socket blocks, as on a JVM
-                h = i;
-                break;
+                return i;
             }
             i = i + 1;
         }
+        return -1;
+    }
+
+    // ----- passive open (a server socket) -----
+
+    /**
+     * {@code bind(2)} for {@code Net.bind}: give the alloc()'d handle {@code h} local port {@code port} (0 picks an
+     * ephemeral one). There is one interface, so the address is not kept: a bound socket answers on our lease.
+     * Returns 0, -EADDRINUSE when another socket already holds the port, -EINVAL when {@code h} is not a fresh
+     * socket, or -EBADF.
+     */
+    public static int bind(int h, int port)
+    {
+        if (h < 0 || h >= MAXCONN || st[h] == FREE)
+        {
+            return -EBADF;
+        }
+        if (port < 0 || port > 65535)
+        {
+            return -EINVAL;
+        }
+        lock();
+        if (st[h] != RESERVED || lport[h] != 0)
+        {
+            unlock();
+            return -EINVAL;
+        }
+        int p = port;
+        if (p == 0)
+        {
+            p = Ip.ephemeralPort();
+        }
+        int i = 0;
+        while (i < MAXCONN)
+        {
+            if (i != h && st[i] != FREE && lport[i] == p && (st[i] == LISTEN || st[i] == RESERVED))
+            {
+                unlock();
+                return -EADDRINUSE;
+            }
+            i = i + 1;
+        }
+        lport[h] = p;
         unlock();
-        return h;
+        return 0;
+    }
+
+    /** {@code listen(2)} for {@code Net.listen}: a bound socket starts answering SYNs. Returns 0, -EINVAL, -EBADF. */
+    public static int listen(int h)
+    {
+        if (h < 0 || h >= MAXCONN || st[h] == FREE)
+        {
+            return -EBADF;
+        }
+        lock();
+        if (st[h] != RESERVED || lport[h] == 0)
+        {
+            unlock();
+            return -EINVAL;
+        }
+        st[h] = LISTEN;
+        unlock();
+        return 0;
+    }
+
+    /**
+     * {@code accept(2)} for {@code Net.accept}: take the oldest completed connection of listener {@code h} and
+     * return its handle. A BLOCKING listener waits with no limit; a NON-blocking one answers {@link #UNAVAILABLE}
+     * when none is ready (stock then parks in {@link #poll}, which is how {@code setSoTimeout} bounds it).
+     * -EINVAL when {@code h} is not listening, -EBADF for a bad handle.
+     */
+    public static int accept(int h)
+    {
+        if (h < 0 || h >= MAXCONN || st[h] == FREE)
+        {
+            return -EBADF;
+        }
+        boolean looked = false;
+        while (true)
+        {
+            lock();
+            if (st[h] != LISTEN)
+            {
+                unlock();
+                return -EINVAL;
+            }
+            int c = readyChild(h);
+            if (c >= 0)
+            {
+                parent[c] = -1;                          // the application owns it now
+                unlock();
+                return c;
+            }
+            if (nb[h] != 0 && looked)
+            {
+                unlock();
+                return UNAVAILABLE;
+            }
+            waiting[h] = 1;
+            unlock();
+            if (nb[h] != 0)
+            {
+                looked = true;
+                if (!RxQueues.active)
+                {
+                    waitEvent(h, 0);
+                }
+                continue;
+            }
+            waitEvent(h, RX_WAIT_MS);
+        }
+    }
+
+    /** The remote IPv4 of connection {@code h} as a big-endian int (an accepted socket's peer). */
+    public static int remoteIp(int h)
+    {
+        if (h < 0 || h >= MAXCONN || st[h] == FREE)
+        {
+            return 0;
+        }
+        return Ip.readBe32(rip[h]);
+    }
+
+    /** The remote port of connection {@code h}. */
+    public static int remotePort(int h)
+    {
+        return (h < 0 || h >= MAXCONN || st[h] == FREE) ? 0 : rport[h];
+    }
+
+    /** The local port of socket {@code h} (0 while unbound and unconnected), for {@code Net.localPort}. */
+    public static int localPort(int h)
+    {
+        return (h < 0 || h >= MAXCONN || st[h] == FREE) ? 0 : lport[h];
+    }
+
+    /** A completed child of listener {@code l} that accept() has not taken, or -1. Under the lock. */
+    private static int readyChild(int l)
+    {
+        int i = 0;
+        while (i < MAXCONN)
+        {
+            if (parent[i] == l && (st[i] == CONNECTED || st[i] == CLOSED))
+            {
+                return i;
+            }
+            i = i + 1;
+        }
+        return -1;
+    }
+
+    /** Children of listener {@code l} still held (handshaking, or done and not yet accepted). Under the lock. */
+    private static int backlog(int l)
+    {
+        int n = 0;
+        int i = 0;
+        while (i < MAXCONN)
+        {
+            if (parent[i] == l && st[i] != FREE)
+            {
+                n = n + 1;
+            }
+            i = i + 1;
+        }
+        return n;
     }
 
     /**
@@ -316,10 +502,19 @@ public final class Tcp
             unlock();
             return r;
         }
-        sendSeg(h, 0x18, buf + off, len);               // PSH|ACK
-        snd[h] = snd[h] + len;
+        int n = len;                                     // one segment per call: at most the peer's MSS (a
+        if (n > peerMss[h])                              //   partial write, which NioSocketImpl loops over;
+        {                                                //   sendSeg's frame buffer holds one MSS)
+            n = peerMss[h];
+        }
+        if (n > OUR_MSS)
+        {
+            n = OUR_MSS;
+        }
+        sendSeg(h, 0x18, buf + off, n);                 // PSH|ACK
+        snd[h] = snd[h] + n;
         unlock();
-        return len;
+        return n;
     }
 
     /**
@@ -402,7 +597,16 @@ public final class Tcp
             lock();
             int avail = readable(h);
             int ready = 0;
-            if ((events & POLLIN) != 0 && (avail > 0 || st[h] == CLOSED || rdShut[h] != 0))
+            if (st[h] == LISTEN)
+            {
+                if ((events & POLLIN) != 0 && readyChild(h) >= 0)
+                {
+                    unlock();
+                    return POLLIN;                       // accept() will not wait
+                }
+                avail = 0;
+            }
+            else if ((events & POLLIN) != 0 && (avail > 0 || st[h] == CLOSED || rdShut[h] != 0))
             {
                 ready = ready | POLLIN;
             }
@@ -415,7 +619,7 @@ public final class Tcp
                 unlock();
                 return ready;
             }
-            if (st[h] != CONNECTED)
+            if (st[h] != CONNECTED && st[h] != LISTEN)
             {
                 unlock();
                 return POLLHUP;                          // nothing this socket can still deliver
@@ -461,6 +665,20 @@ public final class Tcp
         {
             sendSeg(h, 0x11, 0L, 0);                     // FIN|ACK
             snd[h] = snd[h] + 1;
+        }
+        if (st[h] == LISTEN)
+        {
+            int i = 0;
+            while (i < MAXCONN)
+            {
+                if (parent[i] == h && st[i] != FREE)
+                {
+                    sendSeg(i, 0x14, 0L, 0);             // RST|ACK: nobody will accept it now
+                    st[i] = FREE;
+                    parent[i] = -1;
+                }
+                i = i + 1;
+            }
         }
         st[h] = FREE;
         unlock();
@@ -552,19 +770,34 @@ public final class Tcp
         }
         int sport = ((Magic.load8(tcp) & 0xFF) << 8) | (Magic.load8(tcp + 1) & 0xFF);
         int dport = ((Magic.load8(tcp + 2) & 0xFF) << 8) | (Magic.load8(tcp + 3) & 0xFF);
+        int flags = Magic.load8(tcp + 13) & 0x3F;
+        int payLen = tlen - dataOff;
         lock();
         int h = find(ip + 12, sport, dport);
         if (h < 0)
         {
-            NetStats.tcpNoConn = NetStats.tcpNoConn + 1;
+            int l = (flags & 0x17) == 0x02 ? listener(dport) : -1;   // a bare SYN to a listening port
+            if (l >= 0)
+            {
+                synArrived(l, ip, tcp, sport, dport, dataOff);
+            }
+            else
+            {
+                NetStats.tcpNoConn = NetStats.tcpNoConn + 1;
+            }
             unlock();
             return;
         }
-        int flags = Magic.load8(tcp + 13) & 0x3F;
-        int payLen = tlen - dataOff;
         if (st[h] == SYN_SENT)
         {
             synSent(h, tcp, flags, dataOff);
+        }
+        else if (st[h] == SYN_RCVD)
+        {
+            if (synRcvd(h, tcp, flags) && (payLen > 0 || (flags & 0x01) != 0))
+            {
+                established(h, tcp, flags, payLen, dataOff);   // the handshake ACK carried data or a FIN
+            }
         }
         else
         {
@@ -585,7 +818,7 @@ public final class Tcp
         while (i < MAXCONN)
         {
             int s = st[i];
-            if ((s == SYN_SENT || s == CONNECTED || s == CLOSED) && lport[i] == dport && rport[i] == sport
+            if ((s == SYN_SENT || s == SYN_RCVD || s == CONNECTED || s == CLOSED) && lport[i] == dport && rport[i] == sport
                     && Ip.eq(srcIp, rip[i]))
             {
                 return i;
@@ -593,6 +826,110 @@ public final class Tcp
             i = i + 1;
         }
         return -1;
+    }
+
+    /** The socket listening on our port {@code dport}, or -1. */
+    private static int listener(int dport)
+    {
+        int i = 0;
+        while (i < MAXCONN)
+        {
+            if (st[i] == LISTEN && lport[i] == dport)
+            {
+                return i;
+            }
+            i = i + 1;
+        }
+        return -1;
+    }
+
+    /**
+     * A SYN for listener {@code l}: open a child connection in SYN_RCVD and answer SYN-ACK. The child replies to
+     * the SYN's SOURCE MAC (the Ethernet header sits just before the IP header in both receive paths), so a peer
+     * on our own subnet is answered directly rather than through the gateway. Dropped -- the peer resends -- when
+     * the backlog is full or no slot is free.
+     */
+    private static void synArrived(int l, long ip, long tcp, int sport, int dport, int dataOff)
+    {
+        if (backlog(l) >= MAXBACKLOG)
+        {
+            NetStats.tcpAttemptFails = NetStats.tcpAttemptFails + 1;
+            return;
+        }
+        int h = allocLocked();
+        if (h < 0)
+        {
+            NetStats.tcpAttemptFails = NetStats.tcpAttemptFails + 1;
+            return;
+        }
+        Ip.copy4(ip + 12, rip[h]);
+        long eth = ip - 14;
+        int i = 0;
+        while (i < 6)
+        {
+            Magic.store8(rmac[h] + i, Magic.load8(eth + 6 + i));
+            i = i + 1;
+        }
+        useRmac[h] = 1;
+        int seq = Ip.readBe32(tcp + 4);
+        int isn = (int) Ip.nextRandom();
+        rport[h] = sport;
+        lport[h] = dport;
+        pisn[h] = seq;
+        rcv[h] = seq + 1;
+        rdSeq[h] = seq + 1;
+        isn0[h] = isn;
+        una[h] = isn;
+        finPend[h] = 0;
+        holes[h] = 0;
+        refused[h] = 0;
+        rst[h] = 0;
+        waiting[h] = 0;
+        peerMss[h] = mssOption(tcp, dataOff);
+        parent[h] = l;
+        st[h] = SYN_RCVD;
+        snd[h] = isn;
+        sendSeg(h, 0x12, 0L, 0);                         // SYN|ACK (with our MSS)
+        snd[h] = isn + 1;
+        NetStats.tcpPassiveOpens = NetStats.tcpPassiveOpens + 1;
+    }
+
+    /**
+     * A segment for a child whose SYN-ACK is out. The ACK of our SYN completes it (true: the caller then takes
+     * any data it carries); a resent SYN gets the SYN-ACK again; a RST frees it.
+     */
+    private static boolean synRcvd(int h, long tcp, int flags)
+    {
+        if ((flags & 0x04) != 0)
+        {
+            st[h] = FREE;
+            parent[h] = -1;
+            return false;
+        }
+        if ((flags & 0x02) != 0)
+        {
+            if (Ip.readBe32(tcp + 4) == pisn[h])         // our SYN-ACK was lost: send it again
+            {
+                snd[h] = isn0[h];
+                sendSeg(h, 0x12, 0L, 0);
+                snd[h] = isn0[h] + 1;
+                NetStats.tcpRetransSegs = NetStats.tcpRetransSegs + 1;
+            }
+            return false;
+        }
+        if ((flags & 0x10) != 0 && Ip.readBe32(tcp + 8) == isn0[h] + 1)
+        {
+            una[h] = isn0[h] + 1;
+            st[h] = CONNECTED;
+            int l = parent[h];
+            if (l >= 0 && waiting[l] != 0 && lock >= 0)
+            {
+                waiting[l] = 0;
+                VMScheduler.kernelPost(connSem[l]);      // a waiting accept()
+            }
+            return true;
+        }
+        return false;
     }
 
     /** A segment for a connection whose SYN is out: the SYN-ACK completes it, a RST refuses it. */
@@ -964,9 +1301,10 @@ public final class Tcp
     {
         long buf = Heap.allocData(2048);
         int i = 0;
+        long dmac = useRmac[h] != 0 ? rmac[h] : Ip.gwMac;
         while (i < 6)
         {
-            Magic.store8(buf + i, Magic.load8(Ip.gwMac + i));
+            Magic.store8(buf + i, Magic.load8(dmac + i));
             Magic.store8(buf + 6 + i, Magic.load8(Ip.ourMac + i));
             i = i + 1;
         }
