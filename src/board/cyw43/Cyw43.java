@@ -1518,9 +1518,9 @@ public final class Cyw43
     private static int txqHead = 0;
     private static int txqCount = 0;
     private static long txqSince;                        // CNTPCT when the current head became the head
-    static int txQueued = 0;                             // frames that waited in the queue
-    static int txForced = 0;                             // frames sent past the window after TXQ_FORCE_MS
-    static int txDropped = 0;                            // frames dropped because the queue was full
+    public static int txQueued = 0;                      // frames that waited in the queue
+    public static int txForced = 0;                      // frames sent past the window after TXQ_FORCE_MS
+    public static int txDropped = 0;                            // frames dropped because the queue was full
 
     /**
      * Send what the queue holds, oldest first, while the firmware allows it. The caller holds the bus; the RX

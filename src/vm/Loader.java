@@ -14319,6 +14319,12 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("defineClass0")))      { return VM.defineClassAddr; }   // (String,byte[],II)Class
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("lookup0")))           { return VM.forNameNoInitAddr; } // (byte[])Class
         }
+        // The VM's run-time counters (VMStats), read by the web server's statistics pages.
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalStats")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fill0")))             { return VM.statsFillAddr; }       // (I,long[])J
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("taskThread0")))       { return VM.statsTaskThreadAddr; } // (I)Thread
+        }
         // System.exit -> Runtime.exit -> Shutdown.exit -> beforeHalt(); runHooks(); halt(status) -> halt0.
         // Both ends are NATIVE, so the class loaded fine and the calls resolved nowhere -- reported as
         // `LINK FAILED: java/lang/Shutdown.beforeHalt()V -- class OK but no body`, then a denylist trap.

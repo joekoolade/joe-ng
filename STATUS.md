@@ -4,6 +4,44 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **WEB SERVER STATISTICS PAGES; SDIO WRITES PAST 1024 BYTES FIXED (2026-11-09).**
+  - **The feature:** WebServerDemo's front page links to `/memory`, `/gc`, `/locks`, `/threads` and `/net`, each
+    read from the VM when requested. Guest code reads them through `jdk.internal.misc.MetalStats`.
+    - It has two natives. `fill0(group, long[])` maps to `vm.VMStats.fill`, which writes one group's counters in
+      a fixed order; MetalStats names the columns in the same order. `taskThread0(t)` returns a task's Thread.
+    - The calls are word reads with no lock and no allocation.
+    - New counters, each one increment where it happens:
+      - GC pause (total, last, longest), timed from `gcCollect` entry until the world restarts
+      - collections skipped because the world would not stop
+      - monitor acquisitions, and how many were contended
+      - context switches (a pick that moves a core to a different task)
+  - **The bug it exposed (real since #504):** `Sdio.pioWrite` waited for BUFFER WRITE READY before each
+    512-byte block but never cleared that latched status, so every wait after the first passed at once.
+    - The controller holds two blocks, so frames up to 1024 bytes arrived whole. That covered everything sent
+      until the stats pages.
+    - In a third block, the words went to a full buffer and were lost, and the chip sent the frame's first block
+      in their place.
+    - MEASURED (Mac tcpdump -vv): a 1460-byte segment's payload ended in a copy of its own Ethernet and IP
+      headers, with `cksum 0xa2d4 (incorrect -> 0xc849)`. The Mac dropped it, our TCP never retransmits, and
+      the page hung (60 s for the first request, never for the others).
+    - Fix: clear WRITE_RDY after each wait, as Linux's `sdhci_transfer_pio` does.
+    - `pioRead` has the same shape. It is left alone: large-frame and glom receive have worked throughout.
+  - **Two instrument corrections, found on the Pi:**
+    - `Heap.codePeak` is an ADDRESS, not a size. It read 78 MB against a 32 MB arena.
+    - `VMGc.codeLive` can count a block twice (reachable, then young or pinned again). It read 12.5 MB against
+      an 11.2 MB bump pointer. The page reports `codeUsed` instead.
+    - `codePeak` is sampled on one growth path only. It read 96 bytes below the bump pointer, so the page
+      reports the larger of the two. That last change is host-tested only.
+  - **Also found:** a Thread the VM wraps itself has a null name (the overlay's `getName` returns the field;
+    stock always names a thread). `/threads` threw an NPE until the page handled it. The overlay is not changed.
+  - **Pi-validated:** all six pages returned 200 in 19-122 ms (`/nope` 404), with 0 bad checksums over 5
+    full-size segments.
+    - `/threads`: 5 tasks (the server's thread on core 0, the WiFi RX task blocked on semaphore 4, three idle
+      loops), 376 context switches.
+    - `/gc` at ~34 s: 11 collections, 1.55 s total pause, longest 209 ms.
+    - `/locks`: 8,335 monitor acquisitions, 0 contended, 0 class-loader lock waits.
+  - `make test` and overlaycheck: OK (0 new gaps).
+
 - **WIFI TRANSMIT ORDER FIXED -- the "lost SYNs" were SYN-ACKs held in the chip; TCP gets a TIME_WAIT
   (2026-11-08).**
   - **The symptom (#504's OPEN item):** connects of 1-7 s, the Mac resending its SYN; closes where the Mac resent

@@ -26,10 +26,13 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Enumeration;
+import jdk.internal.misc.MetalStats;
 
 /**
- * A web server on bare metal: stock {@code java.net.ServerSocket} over net.Tcp's passive open. Every page is a
- * welcome message with the current date and time (the wall clock SNTP set at WiFi bring-up). Launched from
+ * A web server on bare metal: stock {@code java.net.ServerSocket} over net.Tcp's passive open. The front page is
+ * a welcome message with the current date and time (the wall clock SNTP set at WiFi bring-up), linking to the
+ * VM's live statistics: {@code /memory}, {@code /gc}, {@code /locks}, {@code /threads} and {@code /net}, each
+ * read from the VM's own counters ({@code jdk.internal.misc.MetalStats}) when the page is asked for. Launched from
  * /etc/init with {@code net=1}; {@code args=} may give the port (default 80) and a zone id (default UTC), e.g.
  * {@code args=80 America/Chicago}.
  *
@@ -98,17 +101,41 @@ public class WebServerDemo
             path = parts[1];
         }
         String now = ZonedDateTime.now(zone).format(WHEN);
-        String status;
-        String body;
-        if (path.equals("/") || path.startsWith("/?") || path.equals("/index.html"))
+        int q = path.indexOf('?');
+        if (q >= 0)
         {
-            status = "200 OK";
+            path = path.substring(0, q);
+        }
+        String status = "200 OK";
+        String body;
+        if (path.equals("/") || path.equals("/index.html"))
+        {
             body = page(now, n);
+        }
+        else if (path.equals("/memory"))
+        {
+            body = statsPage("Memory", now, MetalStats.MEMORY);
+        }
+        else if (path.equals("/gc"))
+        {
+            body = statsPage("Garbage collector", now, MetalStats.GC);
+        }
+        else if (path.equals("/locks"))
+        {
+            body = statsPage("Locks", now, MetalStats.LOCKS);
+        }
+        else if (path.equals("/threads"))
+        {
+            body = threadsPage(now);
+        }
+        else if (path.equals("/net"))
+        {
+            body = statsPage("Network", now, MetalStats.NET);
         }
         else
         {
             status = "404 Not Found";
-            body = "<!doctype html><title>Not found</title><h1>404</h1><p>No page at " + escape(path) + "</p>\n";
+            body = head("Not found") + "<h1>404</h1><p>No page at " + escape(path) + "</p>\n" + FOOT;
         }
         byte[] b = body.getBytes(StandardCharsets.UTF_8);
         String head = "HTTP/1.0 " + status + "\r\n"
@@ -124,18 +151,173 @@ public class WebServerDemo
         out.flush();
     }
 
-    private static String page(String now, int n)
+    private static final String FOOT = "</body></html>\n";
+
+    /** The document head, the style and the link bar every page shares. */
+    private static String head(String title)
     {
         return "<!doctype html>\n"
-                + "<html><head><meta charset=\"utf-8\"><title>joe-ng</title>"
+                + "<html><head><meta charset=\"utf-8\"><title>" + escape(title) + " - joe-ng</title>"
                 + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-                + "<style>body{font-family:system-ui,sans-serif;margin:3em auto;max-width:36em;padding:0 1em}"
-                + "p.t{font-size:1.4em}</style></head>\n"
-                + "<body><h1>Welcome to joe-ng!</h1>\n"
+                + "<style>body{font-family:system-ui,sans-serif;margin:3em auto;max-width:44em;padding:0 1em}"
+                + "p.t{font-size:1.4em}nav a{margin-right:1em}"
+                + "table{border-collapse:collapse}td,th{padding:.2em .8em;border-bottom:1px solid #ddd;text-align:left}"
+                + "td.n{text-align:right;font-variant-numeric:tabular-nums}</style></head>\n"
+                + "<body><nav><a href=\"/\">home</a><a href=\"/memory\">memory</a><a href=\"/gc\">gc</a>"
+                + "<a href=\"/locks\">locks</a><a href=\"/threads\">threads</a><a href=\"/net\">network</a></nav>\n";
+    }
+
+    private static String page(String now, int n)
+    {
+        return head("Welcome")
+                + "<h1>Welcome to joe-ng!</h1>\n"
                 + "<p>This page is served by a Java VM running bare-metal on a Raspberry Pi 4.</p>\n"
                 + "<p class=\"t\">" + escape(now) + "</p>\n"
+                + "<p>Live VM statistics: <a href=\"/memory\">memory usage</a>, <a href=\"/gc\">garbage collection</a>, "
+                + "<a href=\"/locks\">lock statistics</a>, <a href=\"/threads\">threads</a> and "
+                + "<a href=\"/net\">network</a>.</p>\n"
                 + "<p><small>request #" + n + "</small></p>\n"
-                + "</body></html>\n";
+                + FOOT;
+    }
+
+    /** A name/value table of one MetalStats group, read now. */
+    private static String statsPage(String title, String now, int group)
+    {
+        long[] v = MetalStats.read(group);
+        String[] names = MetalStats.names(group);
+        StringBuilder sb = new StringBuilder();
+        sb.append(head(title)).append("<h1>").append(escape(title)).append("</h1>\n");
+        sb.append("<p><small>").append(escape(now)).append("</small></p>\n<table>\n");
+        int i = 0;
+        while (i < names.length)
+        {
+            sb.append("<tr><td>").append(escape(names[i])).append("</td><td class=\"n\">")
+                    .append(grouped(v[i])).append("</td></tr>\n");
+            i = i + 1;
+        }
+        sb.append("</table>\n").append(FOOT);
+        return sb.toString();
+    }
+
+    /** The scheduler's summary, then one row per task: its Thread's name where it has one. */
+    private static String threadsPage(String now)
+    {
+        StringBuilder sb = new StringBuilder();
+        sb.append(head("Threads")).append("<h1>Threads</h1>\n");
+        sb.append("<p><small>").append(escape(now)).append("</small></p>\n<table>\n");
+        long[] v = MetalStats.read(MetalStats.THREADS);
+        String[] names = MetalStats.THREADS_NAMES;
+        int i = 0;
+        while (i < names.length)
+        {
+            sb.append("<tr><td>").append(escape(names[i])).append("</td><td class=\"n\">")
+                    .append(grouped(v[i])).append("</td></tr>\n");
+            i = i + 1;
+        }
+        sb.append("</table>\n<h2>Tasks</h2>\n<table>\n");
+        sb.append("<tr><th>task</th><th>name</th><th>state</th><th>priority</th><th>core</th><th>daemon</th></tr>\n");
+        int count = (int) v[0];
+        int t = 0;
+        while (t < count)
+        {
+            long[] r = MetalStats.task(t);
+            if (r != null && r[MetalStats.TASK_STATE] != 0)
+            {
+                sb.append("<tr><td class=\"n\">").append(t).append("</td><td>").append(escape(taskName(t, r)))
+                        .append("</td><td>").append(stateName(r)).append("</td><td class=\"n\">")
+                        .append(priority(r)).append("</td><td class=\"n\">")
+                        .append(r[MetalStats.TASK_ON_CORE] < 0 ? "" : String.valueOf(r[MetalStats.TASK_ON_CORE]))
+                        .append("</td><td>").append(daemon(t)).append("</td></tr>\n");
+            }
+            t = t + 1;
+        }
+        sb.append("</table>\n").append(FOOT);
+        return sb.toString();
+    }
+
+    private static String taskName(int t, long[] r)
+    {
+        Thread th = MetalStats.taskThread(t);
+        if (th != null)
+        {
+            String name = th.getName();                  // null for a Thread the VM wrapped itself (task 0's)
+            return name != null ? name : "(unnamed Thread)";
+        }
+        if (r[MetalStats.TASK_IDLE] != 0)
+        {
+            return "(idle, core " + r[MetalStats.TASK_AFFINITY] + ")";
+        }
+        if (t == 0)
+        {
+            return "(boot)";
+        }
+        return "(kernel task)";
+    }
+
+    private static String stateName(long[] r)
+    {
+        if (r[MetalStats.TASK_DONE] != 0)
+        {
+            return "terminated";
+        }
+        int s = (int) r[MetalStats.TASK_STATE];
+        String name = s >= 0 && s < MetalStats.STATE_NAMES.length ? MetalStats.STATE_NAMES[s] : "state " + s;
+        if (s == 3)
+        {
+            long w = r[MetalStats.TASK_WAIT_ON];
+            if (w == -1)
+            {
+                name = "waiting (Object.wait)";
+            }
+            else if (w == -2)
+            {
+                name = "blocked on a monitor";
+            }
+            else if (w == -3)
+            {
+                name = "parked";
+            }
+            else if (w >= 0)
+            {
+                name = "blocked on semaphore " + w;
+            }
+        }
+        return name;
+    }
+
+    private static String priority(long[] r)
+    {
+        long p = r[MetalStats.TASK_PRIO];
+        long base = r[MetalStats.TASK_BASE_PRIO];
+        return p == base ? String.valueOf(p) : p + " (base " + base + ")";
+    }
+
+    private static String daemon(int t)
+    {
+        Thread th = MetalStats.taskThread(t);
+        if (th == null)
+        {
+            return "";
+        }
+        return th.isDaemon() ? "yes" : "no";
+    }
+
+    /** {@code v} with thousands separators. */
+    private static String grouped(long v)
+    {
+        String d = Long.toString(Math.abs(v));
+        StringBuilder sb = new StringBuilder();
+        int i = 0;
+        while (i < d.length())
+        {
+            if (i > 0 && (d.length() - i) % 3 == 0)
+            {
+                sb.append(',');
+            }
+            sb.append(d.charAt(i));
+            i = i + 1;
+        }
+        return v < 0 ? "-" + sb : sb.toString();
     }
 
     /**
