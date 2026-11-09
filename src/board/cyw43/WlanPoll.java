@@ -98,6 +98,12 @@ public final class WlanPoll
         return rxTaskId >= 0 && VMScheduler.kernelTaskId() == rxTaskId;
     }
 
+    /** True once the RX task runs: from then on it, not the sender, moves the transmit window. */
+    static boolean running()
+    {
+        return rxTaskId >= 0;
+    }
+
     /** The RX task: sleep until the interrupt (or the watchdog), then poll the chip dry. Never returns. */
     static void rxTask()
     {
@@ -157,6 +163,8 @@ public final class WlanPoll
                 len = Cyw43.readFrameOnce(dst, net.RxQueues.FRAME);
                 if (len == 0)
                 {
+                    Cyw43.flushTxLocked();               // drained and cleared: NOW send what waits (brcmfmac's
+                                                         //   DPC order; see Cyw43.sendFrame)
                     board.bcm2711.Gic.enableSpi(board.bcm2711.Bcm2711.SDIO_SPI);   // re-arm: done
                     busUnlock();
                     net.RxQueues.freeBuf(b);
