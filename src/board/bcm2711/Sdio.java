@@ -285,15 +285,33 @@ public final class Sdio
         return true;
     }
 
+    /**
+     * Read the data phase one block at a time, each only after the controller says the block has arrived.
+     *
+     * <p>BUFFER READ READY is latched like its write twin (see {@link #pioWrite}), so it is cleared after each
+     * wait and the next block waits for it to be raised AGAIN, as Linux's sdhci_transfer_pio does. Left set, a
+     * multi-block read would drain block 2 before it had arrived. No caller issues one today -- the WiFi driver
+     * reads in single CMD53s of at most 512 bytes, and {@link #command} clears the status before each -- so this
+     * changes nothing measured; it keeps the multi-block path from repeating the write path's bug when one does.
+     *
+     * <p>A block is {@code (blkSize + 3) / 4} WORDS, not {@code blkSize / 4}: a byte-mode read whose length is not a
+     * multiple of 4 (222 bytes = 56 words) would otherwise wait again at word 55 for a READ_RDY that, once cleared,
+     * never comes. On the Pi that lost the ioctl answers ({@code (no ctrl resp)}) and the WiFi join timed out.
+     */
     private static boolean pioRead(long dst, int blocks, int blkSize)
     {
-        int total = (blocks > 1 ? blocks : 1) * ((blkSize + 3) / 4);   // words
+        int perBlock = (blkSize + 3) / 4;                               // words, a byte-mode tail rounded up
+        int total = (blocks > 1 ? blocks : 1) * perBlock;
         int i = 0;
         while (i < total)
         {
-            if ((i % (blkSize / 4)) == 0 && !waitSet(base + INTERRUPT, INT_READ_RDY | INT_ERR))
+            if ((i % perBlock) == 0)
             {
-                return false;
+                if (!waitSet(base + INTERRUPT, INT_READ_RDY | INT_ERR))
+                {
+                    return false;
+                }
+                Magic.store32(base + INTERRUPT, INT_READ_RDY);      // re-arm: the next block waits for its data
             }
             Magic.store32(dst + i * 4L, Magic.load32(base + DATA));
             i = i + 1;
@@ -315,11 +333,12 @@ public final class Sdio
      */
     private static boolean pioWrite(long src, int blocks, int blkSize)
     {
-        int total = (blocks > 1 ? blocks : 1) * ((blkSize + 3) / 4);
+        int perBlock = (blkSize + 3) / 4;                               // words, a byte-mode tail rounded up
+        int total = (blocks > 1 ? blocks : 1) * perBlock;
         int i = 0;
         while (i < total)
         {
-            if ((i % (blkSize / 4)) == 0)
+            if ((i % perBlock) == 0)
             {
                 if (!waitSet(base + INTERRUPT, INT_WRITE_RDY | INT_ERR))
                 {
