@@ -44,6 +44,7 @@ final class VMGc
     static void gcCollect(long scanFrom)
     {
         lastScanFrom = scanFrom;
+        long gcT0 = Magic.readCNTPCT_EL0();           // the pause /gc reports: entry to the world restarting
         long daif = Magic.readDaif();                 // no preemption mid-collection: a switched-in task
         Magic.disableIrq();                           //   would allocate into the half-swept heap
         if (!stopTheWorld())                          // ... and no MUTATION on another core, for the same reason
@@ -53,6 +54,7 @@ final class VMGc
             // Pi it was a dispatch branching to a HEAP address (`unclaimed pc=0x0C01FE50`). The allocator
             // retries once and then halts with a loud "heap OOM", which is a strictly better failure than a
             // corrupted heap. This is what the comment above stopTheWorld always claimed happened.
+            VMStats.gcSkipped = VMStats.gcSkipped + 1L;
             if ((daif & 0x80L) == 0L)
             {
                 Magic.enableIrq();
@@ -302,6 +304,7 @@ final class VMGc
             Uart.write(Magic.bytes("]\n"));
         }
         startTheWorld();                              // the heap is consistent again: let the other cores run
+        VMStats.gcPause(Magic.readCNTPCT_EL0() - gcT0);
         if ((daif & 0x80L) == 0L)
         {
             Magic.enableIrq();                        // restore: only unmask if the caller had IRQs on

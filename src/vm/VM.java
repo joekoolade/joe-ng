@@ -2102,6 +2102,8 @@ public final class VM
         if (methodExceptionNameAddr == 0L) { long u = VMNatives.methodExceptionName(-1L, 0L); } // Executable.exceptionName0
         if (methodParamMetaAddr == 0L) { long u = VMNatives.methodParamMeta(-1L, 0L); } // Executable.paramMeta0
         if (methodParamNameAddr == 0L) { long u = VMNatives.methodParamName(-1L, 0L); } // Executable.paramName0
+        if (statsFillAddr == 0L) { long u = VMStats.fill(-1L, 0L); }                  // MetalStats.fill0
+        if (statsTaskThreadAddr == 0L) { long u = VMStats.taskThread(-1L); }          // MetalStats.taskThread0
         if (methodParamAnnoRowAddr == 0L) { long u = VMNatives.methodParamAnnoRow(-1L, 0L); } // Executable.paramAnnoRow0
         if (annoDefaultInstanceAddr == 0L) { long u = VMNatives.annoDefaultInstance(0L); } // Method.annoDefaults0
         if (fieldSignatureAddr == 0L) { long u = VMNatives.fieldSignature(0L, 0L); } // Field.signature0
@@ -3838,6 +3840,8 @@ public final class VM
     static long methodExceptionNameAddr; // VMNatives.methodExceptionName(JJ)J — Executable.exceptionName0(int, long)
     static long methodParamMetaAddr;   // VMNatives.methodParamMeta(JJ)J — Executable.paramMeta0(int, long)
     static long methodParamNameAddr;   // VMNatives.methodParamName(JJ)J — Executable.paramName0(int, long)
+    static long statsFillAddr;         // VMStats.fill(JJ)J — MetalStats.fill0(int, long[])
+    static long statsTaskThreadAddr;   // VMStats.taskThread(J)J — MetalStats.taskThread0(int)
     static long methodParamAnnoRowAddr; // VMNatives.methodParamAnnoRow(JJ)J — Executable.paramAnnoRow0(int, long)
     static long annoDefaultInstanceAddr; // VMNatives.annoDefaultInstance(J)J — Method.annoDefaults0(Class)
     static long fieldSignatureAddr;    // VMNatives.fieldSignature(JJ)J — Field.signature0(Class,byte[])

@@ -848,6 +848,10 @@ public final class VMScheduler
             }
             if (best >= 0)
             {
+                if (best != cur)
+                {
+                    VMStats.ctxSwitches = VMStats.ctxSwitches + 1L;
+                }
                 taskState[best] = TASK_RUNNING;            // claimed by THIS core until it yields back
                 markLeaving(core, cur, best);
                 coreTask[core] = best;
@@ -863,6 +867,10 @@ public final class VMScheduler
         if (taskState[fall] == TASK_READY)
         {
             taskState[fall] = TASK_RUNNING;
+        }
+        if (fall != cur)
+        {
+            VMStats.ctxSwitches = VMStats.ctxSwitches + 1L;
         }
         markLeaving(core, cur, fall);
         coreTask[core] = fall;
@@ -1428,6 +1436,11 @@ public final class VMScheduler
         long daif = schedLock();
         int me = curTask();
         int s = monSlotOf(obj);
+        VMStats.monEnters = VMStats.monEnters + 1L;
+        if (s >= 0 && monOwner[s] != me)
+        {
+            VMStats.monContended = VMStats.monContended + 1L;
+        }
         while (s >= 0 && monOwner[s] != me)                // held by another task: block until it is released
         {
             taskMonWait[me] = obj;

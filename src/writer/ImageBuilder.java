@@ -1615,6 +1615,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodExceptionName(JJ)J", "vm/VM.methodExceptionNameAddr"); // Executable.exceptionName0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodParamMeta(JJ)J", "vm/VM.methodParamMetaAddr"); // Executable.paramMeta0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodParamName(JJ)J", "vm/VM.methodParamNameAddr"); // Executable.paramName0
+        stashHelper(image, staticWord, wordOffset, "vm/VMStats.fill(JJ)J", "vm/VM.statsFillAddr"); // MetalStats.fill0
+        stashHelper(image, staticWord, wordOffset, "vm/VMStats.taskThread(J)J", "vm/VM.statsTaskThreadAddr"); // MetalStats.taskThread0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodParamAnnoRow(JJ)J", "vm/VM.methodParamAnnoRowAddr"); // Executable.paramAnnoRow0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.annoDefaultInstance(J)J", "vm/VM.annoDefaultInstanceAddr"); // Method.annoDefaults0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.fieldSignature(JJ)J", "vm/VM.fieldSignatureAddr"); // Field.signature0

@@ -303,15 +303,29 @@ public final class Sdio
         return ok;
     }
 
+    /**
+     * Write the data phase one block at a time, each only after the controller says it has room for it.
+     *
+     * <p>BUFFER WRITE READY is a latched interrupt status: it stays set until written back. So it is cleared
+     * after each wait, and the next block waits for it to be raised AGAIN (as Linux's sdhci_transfer_pio does).
+     * Left set, every wait after the first passed at once. The controller buffers two blocks, so a frame of up
+     * to 1024 bytes still arrived whole. A third block's words went to a full buffer and were lost, and the chip
+     * transmitted the frame's FIRST block again in their place. MEASURED on the Pi: a 1460-byte TCP segment went
+     * out with its tail replaced by its own headers and a wrong checksum.
+     */
     private static boolean pioWrite(long src, int blocks, int blkSize)
     {
         int total = (blocks > 1 ? blocks : 1) * ((blkSize + 3) / 4);
         int i = 0;
         while (i < total)
         {
-            if ((i % (blkSize / 4)) == 0 && !waitSet(base + INTERRUPT, INT_WRITE_RDY | INT_ERR))
+            if ((i % (blkSize / 4)) == 0)
             {
-                return false;
+                if (!waitSet(base + INTERRUPT, INT_WRITE_RDY | INT_ERR))
+                {
+                    return false;
+                }
+                Magic.store32(base + INTERRUPT, INT_WRITE_RDY);     // re-arm: the next block waits for room
             }
             Magic.store32(base + DATA, Magic.load32(src + i * 4L));
             i = i + 1;
