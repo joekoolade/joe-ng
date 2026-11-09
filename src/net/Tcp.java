@@ -56,6 +56,8 @@ public final class Tcp
     private static final int SYN_RCVD = 6;   // a child: our SYN-ACK is out; waiting for the handshake's ACK
 
     private static final int MAXBACKLOG = 4;         // children a listener holds that accept() has not taken
+    private static final int SYN_RCVD_MS = 3000;     // a child whose handshake has not completed by then is reaped
+    private static final int CLOSE_MS = 2000;        // a closed socket keeps its slot this long (TIME_WAIT, or a FIN exchange still open)
 
     private static final int RX_WAIT_MS = 200;
     private static final int RCVBUF = 32768;         // receive ring per connection (a power of two, < 65536)
@@ -108,6 +110,9 @@ public final class Tcp
     private static int[]  parent = new int[MAXCONN];  // a child's listener until accept() takes it, else -1
     private static long[] rmac  = new long[MAXCONN];  // the peer's 6-byte MAC (heap buf)
     private static int[]  useRmac = new int[MAXCONN]; // 1 = send to rmac (a child: the SYN's source MAC)
+    private static long[] synAt = new long[MAXCONN];  // CNTPCT when a child's SYN arrived (for reaping)
+    private static int[] orphan = new int[MAXCONN];    // 1: the socket is closed; the stack finishes its FIN exchange
+    private static long[] closeAt = new long[MAXCONN]; // CNTPCT when an orphan's socket was closed
 
     private static int lock = -1;                     // one mutex over the whole table (-1: before init, no-op)
     private static long syncRx;                       // receive buffer for the pre-RX-task path
@@ -167,11 +172,18 @@ public final class Tcp
     /** {@link #alloc} under the table lock (the RX task takes a slot this way for a listener's child). */
     private static int allocLocked()
     {
+        long now = Magic.readCNTPCT_EL0();
+        long limit = Magic.readCNTFRQ_EL0() * CLOSE_MS / 1000L;
         int i = 0;
         while (i < MAXCONN)
         {
+            if (st[i] != FREE && orphan[i] != 0 && now - closeAt[i] > limit)
+            {
+                st[i] = FREE;                            // a closed socket past its linger: reclaim it
+            }
             if (st[i] == FREE)
             {
+                orphan[i] = 0;
                 if (ring[i] == 0L)
                 {
                     ring[i] = Heap.allocData(RCVBUF);
@@ -191,6 +203,21 @@ public final class Tcp
                 return i;
             }
             i = i + 1;
+        }
+        int old = -1;                                    // the table is full: recycle the oldest closed socket
+        i = 0;                                           //   whose FIN exchange is done (a TIME_WAIT slot), as a
+        while (i < MAXCONN)                              //   full TIME_WAIT table does, rather than refuse a peer
+        {
+            if (st[i] != FREE && orphan[i] != 0 && closeDone(i) && (old < 0 || closeAt[i] - closeAt[old] < 0))
+            {
+                old = i;
+            }
+            i = i + 1;
+        }
+        if (old >= 0)
+        {
+            st[old] = FREE;
+            return allocLocked();
         }
         return -1;
     }
@@ -665,6 +692,20 @@ public final class Tcp
         {
             sendSeg(h, 0x11, 0L, 0);                     // FIN|ACK
             snd[h] = snd[h] + 1;
+            finOut[h] = 1;
+        }
+        // Keep the slot for CLOSE_MS, even when the FIN exchange is already complete -- the TIME_WAIT of RFC 9293
+        // 3.6, shortened: the peer may not have our ACK of its FIN yet and will resend the FIN, which a CLOSED
+        // slot answers with that ACK again (established()). Freed on the spot, the resent FIN found no connection
+        // and drew a RST: measured 2026-11-08 on 14-33 of every ~80 connections, each one an ACK handed to the
+        // chip at the FIN's arrival that reached the peer only ~230 ms later (0 with the linger). allocLocked
+        // reclaims the slot.
+        if ((st[h] == CONNECTED || st[h] == CLOSED) && rst[h] == 0)
+        {
+            orphan[h] = 1;
+            closeAt[h] = Magic.readCNTPCT_EL0();
+            unlock();
+            return;
         }
         if (st[h] == LISTEN)
         {
@@ -682,6 +723,12 @@ public final class Tcp
         }
         st[h] = FREE;
         unlock();
+    }
+
+    /** True when both FINs are exchanged: the peer's is in and ours is acknowledged. */
+    private static boolean closeDone(int h)
+    {
+        return finIn[h] != 0 && una[h] == snd[h];
     }
 
     /**
@@ -784,6 +831,10 @@ public final class Tcp
             else
             {
                 NetStats.tcpNoConn = NetStats.tcpNoConn + 1;
+                if ((flags & 0x04) == 0)
+                {
+                    resetFor(ip, tcp, flags, payLen, sport, dport);
+                }
             }
             unlock();
             return;
@@ -802,6 +853,13 @@ public final class Tcp
         else
         {
             established(h, tcp, flags, payLen, dataOff);
+        }
+        if (orphan[h] != 0 && rst[h] != 0)
+        {
+            orphan[h] = 0;                               // a closed socket was reset: nothing left to answer (one
+            st[h] = FREE;                                //   whose FIN exchange is done stays: see close())
+            unlock();
+            return;
         }
         if (waiting[h] != 0 && lock >= 0)
         {
@@ -851,6 +909,7 @@ public final class Tcp
      */
     private static void synArrived(int l, long ip, long tcp, int sport, int dport, int dataOff)
     {
+        reapHalfOpen(l);
         if (backlog(l) >= MAXBACKLOG)
         {
             NetStats.tcpAttemptFails = NetStats.tcpAttemptFails + 1;
@@ -887,11 +946,69 @@ public final class Tcp
         waiting[h] = 0;
         peerMss[h] = mssOption(tcp, dataOff);
         parent[h] = l;
+        synAt[h] = Magic.readCNTPCT_EL0();
         st[h] = SYN_RCVD;
         snd[h] = isn;
         sendSeg(h, 0x12, 0L, 0);                         // SYN|ACK (with our MSS)
         snd[h] = isn + 1;
         NetStats.tcpPassiveOpens = NetStats.tcpPassiveOpens + 1;
+    }
+
+    /**
+     * Free listener {@code l}'s children still in SYN_RCVD {@link #SYN_RCVD_MS} after their SYN. Without this a
+     * handshake that never completes -- the peer gave up, and its RST to our SYN-ACK was lost -- held a backlog
+     * place for ever, and four of them made the listener drop every SYN after (Pi, 2026-11-08: ARP still
+     * answered, no SYN-ACK for ten minutes). Each freed child is sent a RST, in case the peer is still there.
+     */
+    private static void reapHalfOpen(int l)
+    {
+        long limit = Magic.readCNTFRQ_EL0() * SYN_RCVD_MS / 1000L;
+        long now = Magic.readCNTPCT_EL0();
+        int i = 0;
+        while (i < MAXCONN)
+        {
+            if (parent[i] == l && st[i] == SYN_RCVD && now - synAt[i] > limit)
+            {
+                snd[i] = isn0[i] + 1;
+                sendSeg(i, 0x14, 0L, 0);                 // RST|ACK
+                st[i] = FREE;
+                parent[i] = -1;
+                NetStats.tcpAttemptFails = NetStats.tcpAttemptFails + 1;
+            }
+            i = i + 1;
+        }
+    }
+
+    /**
+     * Answer a segment that belongs to no connection with a RST (RFC 9293 3.10.7.1, the CLOSED state): a SYN to a
+     * port nothing listens on is refused at once, and a FIN for a connection already freed is told so -- the peer
+     * had resent it for seconds and then reset, after every request the web server answered. With an ACK the
+     * RST takes its sequence from that ACK; without one it is RST|ACK acknowledging the segment.
+     */
+    private static void resetFor(long ip, long tcp, int flags, int payLen, int sport, int dport)
+    {
+        int seq = 0;
+        int ack = 0;
+        int rflags = 0x04;
+        if ((flags & 0x10) != 0)
+        {
+            seq = Ip.readBe32(tcp + 8);
+        }
+        else
+        {
+            int len = payLen;
+            if ((flags & 0x02) != 0)
+            {
+                len = len + 1;
+            }
+            if ((flags & 0x01) != 0)
+            {
+                len = len + 1;
+            }
+            ack = Ip.readBe32(tcp + 4) + len;
+            rflags = 0x14;
+        }
+        sendRaw(ip - 14 + 6, ip + 12, dport, sport, seq, ack, rflags, 0, 0L, 0);
     }
 
     /**
@@ -1299,9 +1416,23 @@ public final class Tcp
      */
     private static void sendSeg(int h, int flags, long payload, int payLen)
     {
+        int win = window(h);
+        lastWin[h] = win;
+        long dmac = useRmac[h] != 0 ? rmac[h] : Ip.gwMac;
+        sendRaw(dmac, rip[h], lport[h], rport[h], snd[h], (flags & 0x10) != 0 ? rcv[h] : 0, flags, win, payload,
+                payLen);
+    }
+
+    /**
+     * Build an Ethernet/IP/TCP segment from {@code lport} to {@code rport} at {@code dstIp} (a 4-byte buffer) via
+     * {@code dmac} (6 bytes) and send it. A SYN carries our MSS option. No connection slot is needed, so a RST can
+     * answer a segment that has none.
+     */
+    private static void sendRaw(long dmac, long dstIp, int lp, int rp, int seq, int ack, int flags, int win,
+            long payload, int payLen)
+    {
         long buf = Heap.allocData(2048);
         int i = 0;
-        long dmac = useRmac[h] != 0 ? rmac[h] : Ip.gwMac;
         while (i < 6)
         {
             Magic.store8(buf + i, Magic.load8(dmac + i));
@@ -1313,11 +1444,10 @@ public final class Tcp
         long ip = buf + 14;
         long tcp = buf + 34;
         int hdr = (flags & 0x02) != 0 ? 24 : 20;         // a SYN carries the 4-byte MSS option
-        int win = window(h);
-        Ip.be16(tcp + 0, lport[h]);
-        Ip.be16(tcp + 2, rport[h]);
-        Ip.be32(tcp + 4, snd[h]);
-        Ip.be32(tcp + 8, (flags & 0x10) != 0 ? rcv[h] : 0);
+        Ip.be16(tcp + 0, lp);
+        Ip.be16(tcp + 2, rp);
+        Ip.be32(tcp + 4, seq);
+        Ip.be32(tcp + 8, ack);
         Magic.store8(tcp + 12, (hdr / 4) << 4);          // data offset
         Magic.store8(tcp + 13, flags);
         Ip.be16(tcp + 14, win);
@@ -1336,7 +1466,7 @@ public final class Tcp
             i = i + 1;
         }
         int tcpLen = hdr + payLen;
-        Ip.be16(tcp + 16, NetStats.l4Cksum(6, tcp, tcpLen, Ip.ourIp, rip[h]));
+        Ip.be16(tcp + 16, NetStats.l4Cksum(6, tcp, tcpLen, Ip.ourIp, dstIp));
         Magic.store8(ip + 0, 0x45);
         Magic.store8(ip + 1, 0);
         Ip.be16(ip + 2, 20 + tcpLen);
@@ -1346,9 +1476,8 @@ public final class Tcp
         Magic.store8(ip + 9, 6);                         // protocol = TCP
         Ip.be16(ip + 10, 0);
         Ip.copy4(Ip.ourIp, ip + 12);
-        Ip.copy4(rip[h], ip + 16);
+        Ip.copy4(dstIp, ip + 16);
         Ip.be16(ip + 10, Ip.cksum(ip, 20));
-        lastWin[h] = win;
         Ip.send(buf, 14 + 20 + tcpLen);
     }
 }

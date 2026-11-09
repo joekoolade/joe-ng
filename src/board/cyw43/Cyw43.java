@@ -314,7 +314,55 @@ public final class Cyw43
             return;
         }
         board.bcm2711.Uart.write(Magic.bytes("wifi: FIRMWARE UP (F2 ready)\n"));
+        requestHtClock();
+        setF2Watermarks();
         readFirstFrame();                                // M1c-1: dump the firmware's first SDPCM frame
+    }
+
+    /**
+     * Request the HT (high-throughput) backplane clock and keep it. Until 2026-11-08 the host only ever
+     * requested ALP -- {@link #HT_AVAIL_REQ} was defined and never written -- while brcmfmac holds HT
+     * ({@code brcmf_sdio_htclk}, {@code CLK_AVAIL}) for every pass of its DPC, the loop that moves frames in both
+     * directions. This driver never sleeps the bus, so the request stands for the life of the link. The 43455
+     * here is not save/restore capable (PMU chipcontrol 3 bit 2 read 0 on the Pi, 2026-11-08), so this HT path
+     * -- not sr_init + KSO -- is the one brcmfmac takes for it. Linux parity: it did not by itself fix the held
+     * frames (the transmit ORDER did -- see sendFrame). Read back and printed.
+     */
+    private static void requestHtClock()
+    {
+        Sdio.cmd52Write(F1, CHIPCLKCSR, HT_AVAIL_REQ);
+        int tries = 0;
+        while ((Sdio.cmd52Read(F1, CHIPCLKCSR) & HT_AVAIL) == 0 && tries < 50)
+        {
+            tries = tries + 1;
+            VM.delayMs(1);
+        }
+        log(Magic.bytes("HT clock csr="), Sdio.cmd52Read(F1, CHIPCLKCSR));
+    }
+
+    // SDIO device FIFO watermarks (brcmfmac sdio.h / sdio.c, the 43455 case of brcmf_sdio_firmware_callback).
+    private static final int SBSDIO_WATERMARK = 0x10008;        // F2 watermark: the device's TX path (to the host)
+    private static final int SBSDIO_DEVICE_CTL = 0x10009;
+    private static final int SBSDIO_DEVCTL_F2WM_ENAB = 0x10;
+    private static final int SBSDIO_FUNC1_MESBUSYCTRL = 0x1001D; // the device's RX path (from the host)
+    private static final int CY_43455_F2_WATERMARK = 0x60;       // in 4-byte words
+    private static final int CY_43455_MESBUSYCTRL = 0x50 | 0x80; // MES watermark | SBSDIO_MESBUSYCTRL_ENAB
+
+    /**
+     * Program the 43455's SDIO FIFO watermarks exactly as Linux brcmfmac does right after F2 comes up: the F2
+     * watermark (with F2WM_ENAB in the device control register) and the MES busy control for the other
+     * direction. This driver had never written any of the three, leaving them at their reset values. Linux
+     * parity: like the HT request it did not by itself fix the held frames (see sendFrame). Read back and printed.
+     */
+    private static void setF2Watermarks()
+    {
+        Sdio.cmd52Write(F1, SBSDIO_WATERMARK, CY_43455_F2_WATERMARK);
+        int devctl = Sdio.cmd52Read(F1, SBSDIO_DEVICE_CTL);
+        Sdio.cmd52Write(F1, SBSDIO_DEVICE_CTL, devctl | SBSDIO_DEVCTL_F2WM_ENAB);
+        Sdio.cmd52Write(F1, SBSDIO_FUNC1_MESBUSYCTRL, CY_43455_MESBUSYCTRL);
+        log(Magic.bytes("f2 watermark="), Sdio.cmd52Read(F1, SBSDIO_WATERMARK));
+        log(Magic.bytes("devctl="), Sdio.cmd52Read(F1, SBSDIO_DEVICE_CTL));
+        log(Magic.bytes("mesbusyctrl="), Sdio.cmd52Read(F1, SBSDIO_FUNC1_MESBUSYCTRL));
     }
 
     /**
@@ -437,6 +485,11 @@ public final class Cyw43
     private static final int SD_FRAMEINT = 1 << 6;        // an F2 frame is ready (RX)
     private static final int SD_MAILBOXINT = 1 << 7;
     private static final int SD_FCCHANGE = 1 << 5;
+    private static final int SD_FCSTATE = 1 << 4;         // device-level flow control: no data while set
+    private static final long SD_TOSBMAILBOX = 0x40L;
+    private static final long SD_TOHOSTMAILBOXDATA = 0x4CL;
+    private static final int SMB_INT_ACK = 1 << 1;
+    private static final int HMB_DATA_FC = 0x0004;
 
     /** Per-attempt block for {@link #waitFrameIrq}: how long a single RX wait sleeps before returning 0 so its
      *  caller can re-check its own (longer) outer deadline / resend a request. Small enough that a periodic
@@ -503,7 +556,8 @@ public final class Cyw43
         }
         net.NetStats.rxSync(dst, len);
         int ints = bpRead32(SDIOD_CORE + SD_INTSTATUS);
-        bpWrite32(SDIOD_CORE + SD_INTSTATUS, ints);      // write-1-to-clear the SDIOD interrupt status
+        serviceInts(ints);                               // mailbox ACK + flow control, before the status is cleared
+        bpWrite32(SDIOD_CORE + SD_INTSTATUS, ints & ~SD_FCSTATE);   // write-1-to-clear (FC_STATE is a level)
         Sdio.clearCardInt();                             // clear the SDHCI card-int status (de-assert DAT1)
         board.bcm2711.Gic.enableSpi(board.bcm2711.Bcm2711.SDIO_SPI);   // re-arm the SPI the ISR disabled
         return len;
@@ -1364,9 +1418,74 @@ public final class Cyw43
     }
 
     /**
-     * Put one built SDPCM frame ({@code total} bytes at {@code tx}) on the bus: wait for transmit credit, then,
-     * holding the bus, stamp the next sequence number and write it. The sequence is stamped under the lock
-     * because transmits come from any task once the RX task runs.
+     * Put one built SDPCM frame ({@code total} bytes at {@code tx}) on the bus. Every caller hands over a buffer of
+     * its own (fresh from {@code Heap.allocData}), so a frame that cannot go yet is QUEUED by address, not copied.
+     *
+     * <p>The firmware takes a frame only inside its transmit window ({@link #haveCredit}) and, for a data frame,
+     * only while the flow-control mask in its last SDPCM header leaves that frame's precedence open. Before the
+     * RX task runs, nobody reads the frames that move the window, so bring-up keeps the old rule: wait up to
+     * 20 ms, then send. Once it runs, a frame that may not go is queued and the RX task sends it the moment a
+     * received header opens the window ({@link #flushTxLocked}), as brcmfmac's DPC does from its txq. Until
+     * 2026-11-08 the driver sent past the window after 20 ms, and the RX task (which reads the frames that open
+     * it) sent at once. That was suspected of a transmit stall -- a lone last frame reaching the peer 230 ms or
+     * more late -- and REFUTED: the stall persisted with the queue in place and it held no frame; the frame
+     * reaches the chip whole and on time (the hold is past the bus, still open). The queue stays because it is
+     * what the protocol requires, not because it fixed that.
+     *
+     * <p>A task other than the RX task still waits (up to 20 ms) for the window first, which keeps a writer from
+     * filling the queue. The RX task never waits and never writes here: what it sends (the stack answers a
+     * segment on the task that read it -- a SYN-ACK, the ACK of a FIN, a RST) is QUEUED, and goes on the bus only
+     * when its poll has drained the chip to an empty read and cleared the interrupt status (WlanPoll.poll) --
+     * brcmfmac's DPC order: readframes, clear, then sendfromq. Written straight after the frame read instead,
+     * the chip took the frame whole (WFRAMEBC 0) and held it until a later bus event: measured 2026-11-08,
+     * 17-35 of ~65 connects took 1-7 s (every SYN-ACK of a connection reaching the peer in one burst), and
+     * delaying the write ~3 ms (a UART print before the SYN-ACK) took that to 0 of 82.
+     */
+    private static void sendFrame(long tx, int total)
+    {
+        if (!WlanPoll.running())
+        {
+            waitCredit(tx);
+            WlanPoll.busLock();
+            writeFrameLocked(tx, total);
+            WlanPoll.busUnlock();
+            return;
+        }
+        boolean rxTask = WlanPoll.onRxTask();
+        if (!rxTask)
+        {
+            waitCredit(tx);
+        }
+        WlanPoll.busLock();
+        if (!rxTask)
+        {
+            flushTxLocked();                             // what is queued goes first: frames keep their order
+        }
+        if (!rxTask && txqCount == 0 && maySend(tx))
+        {
+            writeFrameLocked(tx, total);
+        }
+        else if (txqCount < TXQ)
+        {
+            int k = (txqHead + txqCount) & (TXQ - 1);
+            txqBuf[k] = tx;
+            txqLen[k] = total;
+            if (txqCount == 0)
+            {
+                txqSince = Magic.readCNTPCT_EL0();
+            }
+            txqCount = txqCount + 1;
+            txQueued = txQueued + 1;
+        }
+        else
+        {
+            txDropped = txDropped + 1;                   // a full queue: drop, as a full brcmfmac txq does
+        }
+        WlanPoll.busUnlock();
+    }
+
+    /**
+     * Write one frame on F2, stamping the next SDPCM sequence number. The caller holds the bus.
      *
      * <p>A frame of up to 512 bytes goes in BYTE mode; a longer one in BLOCK mode, padded to whole
      * {@link #F2_BLOCK}-byte blocks (the dongle takes the length from the SDPCM header, as brcmfmac pads). Byte
@@ -1375,10 +1494,8 @@ public final class Cyw43
      * never arrived (the first HTTP response body, 2026-11-07). The buffer must hold the padding: txDataP's is
      * 2048 bytes, and an Ethernet frame (<= 1514 + 16) rounds up to at most 1536.
      */
-    private static void sendFrame(long tx, int total)
+    private static void writeFrameLocked(long tx, int total)
     {
-        waitCredit();
-        WlanPoll.busLock();
         Magic.store8(tx + 4, txSeq & 0xFF);              // SDPCM seq
         int len = (total + 3) & ~3;
         if (len <= 512)
@@ -1390,7 +1507,62 @@ public final class Cyw43
             Sdio.cmd53Write(F2, 0, true, tx, (len + F2_BLOCK - 1) / F2_BLOCK, F2_BLOCK);
         }
         txSeq = txSeq + 1;
-        WlanPoll.busUnlock();
+    }
+
+    // The transmit queue: frames that were not allowed on the bus yet, oldest first. Touched only under the bus
+    // lock. TXQ is a power of two.
+    private static final int TXQ = 64;
+    private static final int TXQ_FORCE_MS = 250;         // a frame held this long is sent anyway (see flushTxLocked)
+    private static long[] txqBuf = new long[TXQ];
+    private static int[] txqLen = new int[TXQ];
+    private static int txqHead = 0;
+    private static int txqCount = 0;
+    private static long txqSince;                        // CNTPCT when the current head became the head
+    static int txQueued = 0;                             // frames that waited in the queue
+    static int txForced = 0;                             // frames sent past the window after TXQ_FORCE_MS
+    static int txDropped = 0;                            // frames dropped because the queue was full
+
+    /**
+     * Send what the queue holds, oldest first, while the firmware allows it. The caller holds the bus; the RX
+     * task calls this after every frame it reads (each header carries the window and the flow-control mask)
+     * and when the chip is empty, which with the 100 ms watchdog bounds how long a frame can wait.
+     *
+     * <p>The window arrives in frame headers and flow control in interrupts (see {@link #clearFrameInts}), both
+     * of which wake the RX task, so a blocked queue drains on an interrupt. A head frame still blocked after
+     * {@link #TXQ_FORCE_MS} is sent anyway, printed and counted in {@link #txForced}: a backstop against a
+     * signal we do not decode stranding the queue for ever, and the printed line says which one it was.
+     */
+    static void flushTxLocked()
+    {
+        while (txqCount > 0)
+        {
+            long tx = txqBuf[txqHead];
+            if (!maySend(tx))
+            {
+                long held = Magic.readCNTPCT_EL0() - txqSince;
+                if (held < Magic.readCNTFRQ_EL0() * TXQ_FORCE_MS / 1000L)
+                {
+                    return;
+                }
+                txForced = txForced + 1;
+                board.bcm2711.Uart.write(Magic.bytes("wifi: tx forced past the window seq="));
+                VM.printDec(txSeq & 0xFF);
+                board.bcm2711.Uart.write(Magic.bytes(" max="));
+                VM.printDec(txMax);
+                board.bcm2711.Uart.write(Magic.bytes(" fc=0x"));
+                VM.printHex(txFc);
+                if (txFcState)
+                {
+                    board.bcm2711.Uart.write(Magic.bytes(" FC_STATE"));
+                }
+                board.bcm2711.Uart.putc(0x0A);
+            }
+            writeFrameLocked(tx, txqLen[txqHead]);
+            txqBuf[txqHead] = 0L;
+            txqHead = (txqHead + 1) & (TXQ - 1);
+            txqCount = txqCount - 1;
+            txqSince = Magic.readCNTPCT_EL0();
+        }
     }
 
     static long ourIp;                                   // our leased IP (4 bytes)
@@ -2740,6 +2912,7 @@ public final class Cyw43
             done = done + n;
         }
         txMax = Magic.load8(dst + 9) & 0xFF;             // SDPCM sw header: the firmware's tx window (max seq)
+        txFc = Magic.load8(dst + 8) & 0xFF;              // SDPCM sw header: the flow-control mask
         if (rest > 0)
         {
             // An oversize frame must be read to its end: what is left in the F2 FIFO would otherwise be parsed
@@ -2848,6 +3021,7 @@ public final class Cyw43
             return 0;
         }
         txMax = Magic.load8(glomBuf + 9) & 0xFF;         // the superframe header carries the tx window too
+        txFc = Magic.load8(glomBuf + 8) & 0xFF;          //   and the flow-control mask
         glomCount = count;
         return total;
     }
@@ -2918,25 +3092,84 @@ public final class Cyw43
     }
 
     /**
-     * Wait up to 20 ms for transmit credit. Once the RX task runs it reads the frames that move the window, so
-     * yielding is enough; before that nobody reads, and the wait just runs out -- the old behaviour.
+     * The firmware's flow-control mask from the last SDPCM header: bit {@code p} set means "stop sending
+     * precedence {@code p}". brcmfmac keeps it in {@code bus->flowcontrol} and dequeues only the precedences it
+     * leaves open. Seen on the Pi as 0xFF for ~12 ms around a group rekey.
      */
-    private static void waitCredit()
+    private static int txFc = 0;
+
+    /** Device-level flow control from {@code I_HMB_FC_STATE}: while true no data frame goes (see clearFrameInts). */
+    private static boolean txFcState = false;
+
+    /**
+     * Act on the transmit-side bits of an SDIOD interrupt status word before it is cleared: a mailbox post is
+     * read and ACKed ({@link #hostMail}), and a flow-control change takes the new {@code I_HMB_FC_STATE}. Both
+     * the bring-up wait ({@link #waitFrameIrq}) and the RX task ({@link #clearFrameInts}) clear the status, so
+     * both must do this first: a bit cleared unread is a mail never ACKed -- the firmware-ready mail at
+     * bring-up was exactly that until 2026-11-08.
+     */
+    private static void serviceInts(int ints)
     {
-        if (haveCredit())
+        if ((ints & SD_MAILBOXINT) != 0)
         {
-            return;
+            hostMail();
         }
-        if (WlanPoll.onRxTask())                         // the RX task reads the frames that open the window:
-        {                                                //   waiting here only stalls them. Send.
+        if ((ints & SD_FCCHANGE) != 0)
+        {
+            txFcState = (ints & SD_FCSTATE) != 0;
+        }
+    }
+
+    /** Read the firmware's mailbox word, ACK it, and take the flow-control mask it may carry. Bus held. */
+    private static void hostMail()
+    {
+        int data = bpRead32(SDIOD_CORE + SD_TOHOSTMAILBOXDATA);
+        bpWrite32(SDIOD_CORE + SD_TOSBMAILBOX, SMB_INT_ACK);
+        if ((data & HMB_DATA_FC) != 0)
+        {
+            txFc = (data >>> 24) & 0xFF;
+        }
+    }
+
+    /**
+     * True when frame {@code tx} may go on the bus now: inside the window, and -- for a data frame (channel 2)
+     * -- with its precedence not flow-controlled. A control frame (channel 0) needs only credit, as in brcmfmac.
+     */
+    private static boolean maySend(long tx)
+    {
+        if (!haveCredit())
+        {
+            return false;
+        }
+        if ((Magic.load8(tx + 5) & 0x0F) != 2)
+        {
+            return true;
+        }
+        if (txFcState)
+        {
+            return false;
+        }
+        int prio = Magic.load8(tx + 13) & 0x07;          // BDC priority (802.1D)
+        int prec = (prio == 0 || prio == 3) ? (prio ^ 2) : prio;   // brcmf_sdio_prio2prec
+        return ((txFc >> prec) & 1) == 0;
+    }
+
+    /**
+     * Wait up to 20 ms until frame {@code tx} may be sent. Once the RX task runs it reads the frames that move
+     * the window, so yielding is enough; before that nobody reads, and the wait just runs out.
+     */
+    private static void waitCredit(long tx)
+    {
+        if (maySend(tx))
+        {
             return;
         }
         long endT = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() / 50L;
-        while (!haveCredit())
+        while (!maySend(tx))
         {
             if (Magic.readCNTPCT_EL0() >= endT)
             {
-                return;                                  // ran out: send anyway (the old behaviour)
+                return;
             }
             if (net.RxQueues.active)
             {
@@ -2945,12 +3178,23 @@ public final class Cyw43
         }
     }
 
-
-    /** Clear the SDIOD frame-interrupt status and the SDHCI card interrupt (de-asserting DAT1). */
+    /**
+     * Service and clear the SDIOD interrupt status, then the SDHCI card interrupt (de-asserting DAT1). Transmit
+     * is interrupt-driven too, and its two signals were being cleared unread:
+     * <ul>
+     * <li>{@code I_HMB_FC_CHANGE} (bit 5): the device-level flow control {@code I_HMB_FC_STATE} (bit 4) changed.
+     *     While it is set no data frame may go (brcmfmac's {@code fcstate}).</li>
+     * <li>{@code I_HMB_HOST_INT} (bit 7): the firmware posted {@code tohostmailboxdata}. It must be ACKed with
+     *     {@code SMB_INT_ACK} in {@code tosbmailbox}; {@code HMB_DATA_FC} in it carries the per-precedence
+     *     flow-control mask in bits 24..31 ({@code brcmf_sdio_hostmail}).</li>
+     * </ul>
+     * The RX task calls this when the chip is empty, and drains the transmit queue right after.
+     */
     static void clearFrameInts()
     {
         int ints = bpRead32(SDIOD_CORE + SD_INTSTATUS);
-        bpWrite32(SDIOD_CORE + SD_INTSTATUS, ints);      // write-1-to-clear
+        serviceInts(ints);
+        bpWrite32(SDIOD_CORE + SD_INTSTATUS, ints & ~SD_FCSTATE);   // write-1-to-clear (FC_STATE is a level)
         Sdio.maskCardInt();                              // CARD_INT is not write-1-to-clear (Pi run 6: it stayed
         Sdio.clearCardInt();                             //   0x100 with SD_INTSTATUS and CCCR INT_PENDING both 0);
         Sdio.unmaskCardInt();                            //   toggling its Status Enable is what drops it (SDHCI)

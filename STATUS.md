@@ -4,6 +4,44 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **WIFI TRANSMIT ORDER FIXED -- the "lost SYNs" were SYN-ACKs held in the chip; TCP gets a TIME_WAIT
+  (2026-11-08).**
+  - **The symptom (#504's OPEN item):** connects of 1-7 s, the Mac resending its SYN; closes where the Mac resent
+    its FIN and the Pi answered RST. Measured with a Mac capture plus a curl every 5 s for 10 min, aligned to Pi
+    serial timestamps.
+  - **It was never receive.** The Pi accepted every SYN copy and wrote a SYN-ACK for each, and the Mac got them all
+    at once, up to 15 s later (64403: 7 SYNs over 7 s, 7 SYN-ACKs together at +15 s). A write ring showed the ACK
+    of a FIN handed to the chip in the same ms the FIN arrived, with WFRAMEBC 0 (the write complete) -- and
+    reaching the Mac ~230 ms later.
+  - **Cause: write ORDER.** The stack answers a segment on the RX task that read it, so a SYN-ACK / FIN-ACK / RST
+    went on F2 microseconds after the frame read, before the poll drained the chip and cleared the interrupt
+    status. The chip took such a frame and held it until a later bus event. brcmfmac's DPC never writes there:
+    readframes, clear, THEN sendfromq. Now the RX task's sends are QUEUED (`Cyw43.sendFrame`) and flushed only at
+    the end of `WlanPoll.poll` -- drained, cleared -- and the per-frame mid-drain flushes are gone.
+  - **How it was found:** a ~3 ms UART print before the SYN-ACK (a diagnostic) made the bug vanish -- 17 of 71
+    slow without it, 0 of 82 with it -- which is why several diagnostic images looked fixed. Refuted on the way,
+    each by a Pi run: transmit credit/flow control (0 frames ever queued), `ampdu_tx=0`, save/restore init (the
+    43455 is NOT SR capable: PMU chipcontrol 3 bit 2 = 0, read the way `brcmf_chip_sr_capable` does), Mac
+    power save (a 100 ms ping kept it awake), a lost RX interrupt, `roam_off=1`, `bus:rxglom=0`, the bring-up
+    mailbox ACK, a WFRAMEBC read after each write. An evening control run separated the trim from the WiFi
+    environment.
+  - **Also in, Linux parity (none fixed the hold alone):** a TX queue honouring the credit window AND the
+    flow-control mask (header `flow`, `I_HMB_FC_STATE`, `HMB_DATA_FC`), with a 250 ms force-send backstop that
+    prints `wifi: tx forced past the window`; mailbox posts read and ACKed (`SMB_INT_ACK`) and FC changes taken
+    before the status is cleared, in bring-up and the RX task (the firmware-ready mail was never ACKed); the HT
+    clock requested after FIRMWARE UP; the 43455's F2 watermark 0x60 + F2WM_ENAB and MESBUSYCTRL 0xD0.
+  - **`net.Tcp`:** a closed socket keeps its slot 2 s (`CLOSE_MS`, a short TIME_WAIT) so a resent FIN is re-ACKed,
+    not reset -- freed at once, it drew a RST on 14-33 of every ~80 connections; a full table recycles the oldest
+    finished slot. A child still in SYN_RCVD 3 s after its SYN is reaped with a RST (four of them used to block
+    the listener for good). A segment for no connection is answered RST (`resetFor` over a slot-free `sendRaw`).
+  - **PI-VALIDATED (the committed code, 2026-11-08, evening):** 83/83 requests after the server listened, 0 over
+    0.5 s, slowest connect 83 ms; 0 resent FINs, FIN->ACK median 4.6 ms, max 8 ms; RSTs only in the first 6 s
+    (port not yet listening). Before (same probe, same evening): 17-35 of ~65 connects 1-7 s. Bring-up clean
+    (one `eapol msg2 sent`, no `(no ctrl resp)`). `make test` + overlaycheck OK.
+  - **OPEN:** sent data is still never retransmitted. A task other than the RX task still writes directly; that
+    path never showed a hold (its writes do not follow a frame read immediately), but brcmfmac routes all TX
+    through the DPC.
+
 - **A WEB SERVER ON THE METAL: stock `java.net.ServerSocket` over a passive-open `net.Tcp`, and the WiFi driver's
   512-BYTE TRANSMIT CEILING removed (2026-11-07).**
   - **New `demo/WebServerDemo`** (`main=demo/WebServerDemo`, `net=1`, optional `args=<port> <zone>`): answers every
