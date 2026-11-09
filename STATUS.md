@@ -4,6 +4,22 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **SDIO READ PATH: READ_RDY RE-ARMED PER BLOCK; BLOCK WORD COUNT ROUNDED UP (2026-11-09).**
+  - **The change:** `Sdio.pioRead` now clears BUFFER READ READY after each per-block wait, like `pioWrite` (#506).
+    No caller issues a multi-block read today: the WiFi driver reads single CMD53s of at most 512 bytes, and
+    `command()` clears the status before each. This guards the multi-block path rather than fixing a live bug.
+  - **What the first Pi run caught:** both loops counted a block as `blkSize / 4` words, rounded down. A byte-mode
+    transfer whose length is not a multiple of 4 (222 bytes = 56 words) therefore waited a SECOND time, at word 55.
+    The old read passed because READ_RDY stayed latched. Once cleared, no second block raises it, so the read
+    timed out. MEASURED: the scan finished, then every ioctl answer was lost (`(no ctrl resp)`) and
+    `wifi: join timeout`.
+    - Fix: a block is `(blkSize + 3) / 4` words, in `pioRead` AND `pioWrite`. The write side had the same
+      miscount and passed, apparently because WRITE_RDY comes back on its own while the buffer has room.
+  - **PI-VALIDATED (WebServerDemo):** clean bring-up and join. All six pages returned 200 in 18-113 ms. Then 33
+    requests carrying a 6 KB header (full-size received frames) returned 200, slowest 113 ms. The `/net` page
+    showed 0 Ip InHdrErrors, Tcp InErrs, InCsumErrors and RetransSegs, and 0 WiFi tx forced or dropped.
+    `make test` + overlaycheck OK.
+
 - **WEB SERVER STATISTICS PAGES; SDIO WRITES PAST 1024 BYTES FIXED (2026-11-09).**
   - **The feature:** WebServerDemo's front page links to `/memory`, `/gc`, `/locks`, `/threads` and `/net`, each
     read from the VM when requested. Guest code reads them through `jdk.internal.misc.MetalStats`.
@@ -25,7 +41,8 @@ Newest entries are at the top.
       headers, with `cksum 0xa2d4 (incorrect -> 0xc849)`. The Mac dropped it, our TCP never retransmits, and
       the page hung (60 s for the first request, never for the others).
     - Fix: clear WRITE_RDY after each wait, as Linux's `sdhci_transfer_pio` does.
-    - `pioRead` has the same shape. It is left alone: large-frame and glom receive have worked throughout.
+    - `pioRead` has the same shape. It is left alone here: large-frame and glom receive have worked throughout
+      (re-armed in the next card).
   - **Two instrument corrections, found on the Pi:**
     - `Heap.codePeak` is an ADDRESS, not a size. It read 78 MB against a 32 MB arena.
     - `VMGc.codeLive` can count a block twice (reachable, then young or pinned again). It read 12.5 MB against
