@@ -39,7 +39,9 @@ seed JVM *and* ship compiled copies inside the image.
 
 ## Try it
 
-Needs a JDK (17+), `make`, and `qemu-system-aarch64` for the emulator path.
+Needs JDK 26, `make`, and `qemu-system-aarch64` for the emulator path. The build
+bakes the seed JDK's own `java.base` into the image, and the `guestsrc/` overlays are
+taken from JDK 26 source; the two must be the same feature release.
 
 ```sh
 make test    # build + run the test suite (158 bit-for-bit and behavioural checks)
