@@ -4,6 +4,11 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **README: HOW TO BUILD AND RUN THE WEB SERVER (2026-11-10).** Documentation only. A new README section takes
+  `demo/WebServerDemo` from `wifi.conf` and `/etc/init` through `scripts/sdcard.sh` to the `web: open http://...`
+  line, and lists the five statistics pages. The URL format, `args=` (port, zone), DHCP and SNTP were checked
+  against the code. No VM change, so no boot.
+
 - **SDIO READ PATH: READ_RDY RE-ARMED PER BLOCK; BLOCK WORD COUNT ROUNDED UP (2026-11-09).**
   - **The change:** `Sdio.pioRead` now clears BUFFER READ READY after each per-block wait, like `pioWrite` (#506).
     No caller issues a multi-block read today: the WiFi driver reads single CMD53s of at most 512 bytes, and

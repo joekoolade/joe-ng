@@ -50,6 +50,87 @@ For real hardware, `scripts/sdcard.sh` assembles a bootable FAT32 payload and
 [`scripts/flash.md`](scripts/flash.md) covers the wiring (GPIO14/15, 115200 8N1)
 and troubleshooting.
 
+## Run the web server on a Pi 4
+
+`demo/WebServerDemo` is a small HTTP server written against stock
+`java.net.ServerSocket`, running over joe-ng's own WiFi driver and TCP/IP stack.
+Its front page shows the date and time, which comes from SNTP at WiFi bring-up.
+It links to live VM statistics pages, each read from the VM's counters when the
+page is requested:
+
+| Page | Shows |
+| --- | --- |
+| `/memory` | heap and code arena |
+| `/gc` | collections, pauses, sweeps |
+| `/locks` | monitors and semaphores |
+| `/threads` | every task, its state and priority |
+| `/net` | IP/TCP/UDP counters and WiFi transmit stats |
+
+It needs a Pi 4 (the onboard CYW43455 WiFi), an SD card with a FAT32 boot
+partition, and a WPA2-PSK or open network. A USB-TTL serial adapter is optional,
+but it's how you learn the board's address.
+
+1. **Give it your network.** Copy the example and fill in your SSID and password.
+   `ramfs/etc/wifi.conf` is gitignored, so it is never committed.
+
+   ```sh
+   cp ramfs/etc/wifi.conf.example ramfs/etc/wifi.conf
+   $EDITOR ramfs/etc/wifi.conf      # ssid=...  psk=...
+   ```
+
+2. **Make it the program the image launches.** `ramfs/etc/init` names the main
+   class. `net=1` brings up WiFi, DHCP and SNTP before `main` runs.
+
+   ```sh
+   printf 'main=demo/WebServerDemo\nnet=1\n' > ramfs/etc/init
+   ```
+
+   An optional `args=` line sets the port (default 80) and the time zone
+   (default UTC). For example, `args=8080 America/Chicago`.
+
+3. **Build and write the card.** `scripts/sdcard.sh` runs `make image`, fetches
+   the Pi's GPU firmware (`start4.elf`, `fixup4.dat`) into `sdcard/`, then, on
+   macOS, copies the boot files to `/Volumes/bootfs`, verifies them byte for
+   byte, and ejects the card. On other systems, copy `kernel8.img`, `config.txt`,
+   `start4.elf`, `fixup4.dat` and `armstub/*.bin` from `sdcard/` onto the boot
+   partition yourself.
+
+   ```sh
+   scripts/sdcard.sh
+   ```
+
+4. **Boot it and find the address.** On the serial console (115200 8N1), the
+   server reports when it's ready:
+
+   ```
+   wifi: bring-up
+   ...
+   web: listening on port 80
+   web: open http://192.168.1.247/
+   web: waiting for connections
+   ```
+
+   Then browse to that address, or:
+
+   ```sh
+   curl http://192.168.1.247/
+   curl http://192.168.1.247/threads
+   ```
+
+   Without serial, look up the board's DHCP lease in your router's client list.
+   Each request is logged on the console as it is served.
+
+The server answers one connection at a time and closes each one
+(`Connection: close`). An accepted socket has a read timeout, so a browser's
+speculative connection that never sends a request can't stall it.
+
+If the serial log shows `wifi: join timeout`, check the SSID and password in
+`wifi.conf`. `web: no network interface yet` means the join failed before the
+server started.
+
+To go back to the default program, restore `ramfs/etc/init`, for example with
+`git checkout ramfs/etc/init`.
+
 ## What it prints, and why each line is there
 
 This is the feature run — every line is a milestone proving itself on the metal,
