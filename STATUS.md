@@ -4,6 +4,12 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **README: JDK 26 REQUIRED (2026-11-10).** Documentation only. "Try it" said a JDK 17+ was enough, but the
+  build bakes the seed JDK's own `java.base` and the `guestsrc/` overlays come from JDK 26 source, so the seed must
+  be the same feature release. The same change removes the README's stale self-hosting claims (intro, diagram,
+  M5 row and paragraph): the seed JVM has been permanent since 2026-08-28, and M5's shared pipeline is done. No VM
+  change, so no boot.
+
 - **README: HOW TO BUILD AND RUN THE WEB SERVER (2026-11-10).** Documentation only. A new README section takes
   `demo/WebServerDemo` from `wifi.conf` and `/etc/init` through `scripts/sdcard.sh` to the `web: open http://...`
   line, and lists the five statistics pages. The URL format, `args=` (port, zone), DHCP and SNTP were checked

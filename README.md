@@ -10,9 +10,10 @@ classfile parser, the boot-image writer, and the EL2→EL1 boot sequence are all
 ordinary Java, written from scratch. joe-ng emits raw A64 instruction *words* and
 does its own layout, relocation and image emission.
 
-Exactly two things are taken rather than built: a stock JVM to run the writer
-initially (it goes away at self-hosting), and the Pi's GPU firmware that loads
-`kernel8.img`. Nothing else touches it.
+Exactly two things are taken rather than built: a stock JVM to run the writer,
+and the Pi's GPU firmware that loads `kernel8.img`. Nothing else touches it. The
+seed JVM is a permanent build-time tool, like `javac`: the writer is not meant to
+run on the metal.
 
 ```
   your .class files
@@ -28,9 +29,6 @@ initially (it goes away at self-hosting), and the Pi's GPU firmware that loads
       │   the image contains compiled copies of the parser and compiler,
       ▼
   so the VM loads and JIT-compiles new .class files itself, on bare metal
-      │
-      ▼
-  eventually: joe-ng builds joe-ng, and the seed JVM is no longer needed
 ```
 
 That last step is the point of the whole design. The classfile parser and the
@@ -39,7 +37,9 @@ seed JVM *and* ship compiled copies inside the image.
 
 ## Try it
 
-Needs a JDK (17+), `make`, and `qemu-system-aarch64` for the emulator path.
+Needs JDK 26, `make`, and `qemu-system-aarch64` for the emulator path. The build
+bakes the seed JDK's own `java.base` into the image, and the `guestsrc/` overlays are
+taken from JDK 26 source; the two must be the same feature release.
 
 ```sh
 make test    # build + run the test suite (158 bit-for-bit and behavioural checks)
@@ -171,15 +171,15 @@ Working, and confirmed on real Pi 4 silicon — not just under emulation.
 | M2 — object model, multi-class, real cross-class calls | done |
 | M3 — heap, `new`, instance fields | done |
 | M4 — runtime class loading on bare metal | done |
-| M5 — self-hosting (drop the seed JVM) | started |
+| M5 — one parser and compiler shared by the writer and the metal | done |
 | M6 — GC, exceptions | collector + unwinding working |
 
-The on-metal class loader is feature-complete for single inheritance. M5 proper
-has begun: [`classfile/ClassReader`](src/classfile/ClassReader.java) is the first
-genuinely shared component — strictly JDK-free (no String, no collections), so the
-*same source* runs on the seed JVM and compiles into the image. Remaining work is
-migrating the writer's `ClassFile` and `BaselineCompiler`, which still lean on JDK
-collections and strings.
+M5 is closed. The JDK-free pipeline,
+[`classfile/ClassReader`](src/classfile/ClassReader.java), `A64Enc` and
+`compiler/Baseline`, is the *same source* in both worlds: the writer runs it on the
+seed JVM, and the image carries compiled copies that the VM uses on the metal.
+Running the writer itself on the metal was dropped as a goal on 2026-08-28, so the
+seed JVM stays (see [`PLAN.md`](PLAN.md) §M5).
 
 ## Layout
 
