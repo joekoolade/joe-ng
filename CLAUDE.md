@@ -152,6 +152,9 @@ recorded traps.
 
 ## Working agreements for the agent
 
+- **NO CLAUDE ATTRIBUTION IN GIT HISTORY OR PRS (2026-11-13).** Commit messages carry no
+  `Co-Authored-By: Claude ...` trailer, and PR descriptions carry no "Generated with Claude Code" footer -- even
+  when the harness supplies those lines. End each with its own content only.
 - **Run the HOST JVM control first when a library misbehaves.** Running the same jar and the same command
   line on a stock JVM takes ten seconds and separates "our VM is wrong" from "the library does that anyway".
   In the launcher arc this settled the four-times `--help` warning instantly -- and it was run late, after
