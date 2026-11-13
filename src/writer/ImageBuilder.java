@@ -1596,6 +1596,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.forNameNoInit(J)J", "vm/VM.forNameNoInitAddr"); // MetalLoaders.lookup0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.hwEntropy(JJ)J", "vm/VM.hwEntropyAddr"); // SecureRandom.hwEntropy0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.consoleRead(JJJ)J", "vm/VM.consoleReadAddr"); // MetalConsoleIn.read0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.blockInit()J", "vm/VM.blockInitAddr");   // MetalBlock.init0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.blockRead(JJJJ)J", "vm/VM.blockReadAddr"); // MetalBlock.read0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.blockWrite(JJJJ)J", "vm/VM.blockWriteAddr"); // MetalBlock.write0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.consoleAvailable()J", "vm/VM.consoleAvailAddr"); // MetalConsoleIn.available0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodAnnoAll(J)J", "vm/VM.methodAnnoAllAddr"); // Executable.annoAll0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classAnnoAll(J)J", "vm/VM.classAnnoAllAddr"); // Class.annoAll0

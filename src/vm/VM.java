@@ -2085,6 +2085,9 @@ public final class VM
         if (assignableAddr == 0L) { long u = VMNatives.assignable(0L, 0L); }    // Class.assignable0 (interfaces too)
         if (hwEntropyAddr == 0L) { long u = VMNatives.hwEntropy(0L, 0L); } // MetalRamfs.hwEntropy0
         if (consoleReadAddr == 0L) { long u = VMNatives.consoleRead(0L, 0L, 0L); } // MetalConsoleIn.read0
+        if (blockInitAddr == 0L) { long u = VMNatives.blockInit(); }                    // MetalBlock.init0
+        if (blockReadAddr == 0L) { long u = VMNatives.blockRead(0L, 0L, 0L, 0L); }      // MetalBlock.read0
+        if (blockWriteAddr == 0L) { long u = VMNatives.blockWrite(0L, 0L, 0L, 0L); }    // MetalBlock.write0
         if (consoleAvailAddr == 0L) { long u = VMNatives.consoleAvailable(); }     // MetalConsoleIn.available0
         if (forNameNoInitAddr == 0L) { long u = VMNatives.forNameNoInit(0L); }  // MetalLoaders.lookup0 (no <clinit>)
         if (methodAnnoAllAddr == 0L) { long u = VMNatives.methodAnnoAll(-1L); } // Executable.annoAll0
@@ -3846,6 +3849,9 @@ public final class VM
     static long assignableAddr;        // VMNatives.assignable(JJ)J — Class.assignable0(J,J)
     static long hwEntropyAddr;         // VMNatives.hwEntropy(JJ)J — MetalRamfs.hwEntropy0(byte[],int)
     static long consoleReadAddr;       // VMNatives.consoleRead(JJJ)J — MetalConsoleIn.read0(byte[],int,int)
+    static long blockInitAddr;         // VMNatives.blockInit()J — MetalBlock.init0()
+    static long blockReadAddr;         // VMNatives.blockRead(JJJJ)J — MetalBlock.read0(long,byte[],int,int)
+    static long blockWriteAddr;        // VMNatives.blockWrite(JJJJ)J — MetalBlock.write0(long,byte[],int,int)
     static long consoleAvailAddr;      // VMNatives.consoleAvailable()J — MetalConsoleIn.available0()
     static long forNameNoInitAddr;     // VMNatives.forNameNoInit(J)J — MetalLoaders.lookup0(byte[]), no <clinit>
     static long methodAnnoAllAddr;     // VMNatives.methodAnnoAll(J)J — Executable.annoAll0(int)

@@ -14,11 +14,11 @@ package board.bcm2711;
 import magic.Magic;
 
 /**
- * A minimal EMMC2 (Arasan SDHCI) SD-card block driver — the storage half of the
- * self-hosting fixpoint (PLAN.md §M5.5d): once the metal writer has reproduced
- * its own {@code kernel8.img} in a heap buffer, this driver is how it writes it
- * back to the card the firmware booted from. This slice brings the controller up
- * and reads a single 512-byte block by polled PIO (no interrupts, no DMA).
+ * The microSD card's block driver over EMMC2 (SDHCI), polled PIO (no interrupts, no DMA). It began as the
+ * storage half of the retired self-hosting fixpoint (PLAN.md §M5.5d); it is now the block device under the
+ * guest's {@code /boot} mount ({@code jdk.internal.misc.MetalBlock}). {@link #init} identifies the card at
+ * 400 kHz, then switches to a 4-bit bus at 25 MHz; {@link #readBlocks}/{@link #writeBlocks} move runs of
+ * 512-byte blocks with CMD18/CMD25 (auto-CMD12).
  *
  * <p>Written as ordinary Java compiled to A64 by our own baseline compiler, like
  * every other driver here — MMIO is plain {@link Magic#load32}/{@link Magic#store32}.
@@ -39,9 +39,19 @@ public final class Emmc
     private static final long EMMC_BASE  = 0xFE30_0000L;
     private static long base;
 
-    /** Controller base with a card inserted, or 0 if none found. */
+    /**
+     * Controller base with a card inserted, or 0 if none found. ON HARDWARE IT IS ALWAYS EMMC2: the legacy
+     * controller at 0xFE300000 is the WiFi chip's SDIO bus ({@code Sdio.base}), and {@link #init} begins with a
+     * full controller reset -- falling back to it would cut the WiFi off mid-run. The firmware booted from the
+     * microSD card, so EMMC2 has one even if its card-detect bit does not say so. QEMU (no measured core
+     * clock) puts the card on the legacy controller, so only there is the fallback allowed.
+     */
     private static long detectBase()
     {
+        if (Uart.coreHz > 10_000_000)
+        {
+            return EMMC2_BASE;
+        }
         if ((Magic.load32(EMMC2_BASE + STATUS) & (1 << 16)) != 0)
         {
             return EMMC2_BASE;
@@ -62,6 +72,12 @@ public final class Emmc
     private static final int IX_CHK   = 1 << 20;
     private static final int IS_DATA  = 1 << 21;
     private static final int DAT_READ = 1 << 4;    // TM_DAT_DIR: 1 = card -> host
+    private static final int BLKCNT_EN = 1 << 1;   // TM_BLKCNT_EN: BLKSIZECNT's count bounds the transfer
+    private static final int AUTO_CMD12 = 1 << 2;  // TM_AUTO_CMD_EN = 01: controller sends CMD12 at the end
+    private static final int MULTI_BLK = 1 << 5;   // TM_MULTI_BLOCK
+
+    /** Largest run one CMD18/CMD25 moves; longer requests are split (BLKSIZECNT's count is 16 bits). */
+    private static final int MAX_RUN = 1024;
 
     // INTERRUPT (present-state / status) bits we poll.
     private static final int INT_CMD_DONE  = 1;        // command complete
@@ -76,6 +92,11 @@ public final class Emmc
 
     private static long rca;      // the card's relative address (from CMD3), shifted for CMD7/select
     private static boolean sdhc;  // true if a high-capacity card (block-addressed)
+    private static int baseHz;    // the controller's base clock (measured), for the SD clock divider
+    /** The SD clock {@link #init} settled on, in Hz (0 = still at the identification clock). */
+    public static int busHz;
+    /** Data-transfer errors seen (each one also resets the DAT line). */
+    public static int dataErrors;
 
     /**
      * Bring the controller and card up: reset, identification clock, then the
@@ -88,6 +109,16 @@ public final class Emmc
         if (base == 0L)
         {
             return -1;                                      // no card in either controller
+        }
+        busHz = 0;
+        baseHz = 0;
+        if (Uart.coreHz > 10_000_000)
+        {
+            baseHz = Mailbox.measuredClockHz(base == EMMC2_BASE ? Bcm2711.CLOCK_ID_EMMC2 : Bcm2711.CLOCK_ID_EMMC);
+        }
+        if (baseHz < 1_000_000)
+        {
+            baseHz = 100_000_000;                           // QEMU / no answer: the old assumption
         }
         // Full software reset of the host controller (CONTROL1 SRST_HC = bit24).
         Magic.store32(base + CONTROL0, 0);
@@ -169,7 +200,147 @@ public final class Emmc
         {
             return -13;
         }
+        // Data transfer mode: a 4-bit bus (ACMD6, then the host's CONTROL0 bit1) at 25 MHz, the SD default
+        // speed every card supports. The identification clock (400 kHz, 1 bit) moves ~50 KB/s -- a 39 MB
+        // kernel would take a quarter of an hour.
+        if (!command(55 << 24 | RSP_48 | CRC_CHK | IX_CHK, rca))   // CMD55 APP_CMD (selected card)
+        {
+            return -14;
+        }
+        if (!command(6 << 24 | RSP_48 | CRC_CHK | IX_CHK, 2))      // ACMD6 SET_BUS_WIDTH = 4 bits
+        {
+            return -15;
+        }
+        or32(base + CONTROL0, 1 << 1);                             // HCTL_DWIDTH: host on 4 bits too
+        if (!setClock(25_000_000))
+        {
+            return -16;
+        }
         return 0;
+    }
+
+    /** Switch the SD clock to (at most) {@code hz}: stop it, load the divider, wait stable, start it. */
+    private static boolean setClock(int hz)
+    {
+        int c1 = Magic.load32(base + CONTROL1);
+        Magic.store32(base + CONTROL1, c1 & ~(1 << 2));            // CLK_EN off while it changes
+        c1 = (c1 & ~((0xFF << 8) | (0x3 << 6)) & ~(1 << 2)) | clockDiv(hz);
+        Magic.store32(base + CONTROL1, c1);
+        if (!waitSet(base + CONTROL1, 1 << 1))                     // CLK_STABLE
+        {
+            return false;
+        }
+        or32(base + CONTROL1, 1 << 2);                             // CLK_EN
+        busHz = baseHz / (2 * divOf(hz));
+        return true;
+    }
+
+    /**
+     * Read {@code n} consecutive 512-byte blocks from {@code lba} into memory at {@code dst} (word aligned).
+     * CMD18 with auto-CMD12, split into runs of at most {@link #MAX_RUN}. False on any error.
+     */
+    public static boolean readBlocks(long lba, long dst, int n)
+    {
+        while (n > 0)
+        {
+            int run = n < MAX_RUN ? n : MAX_RUN;
+            if (!transfer(lba, dst, run, false))
+            {
+                return false;
+            }
+            lba += run;
+            dst += run * 512L;
+            n -= run;
+        }
+        return true;
+    }
+
+    /** Write {@code n} consecutive 512-byte blocks to {@code lba} from memory at {@code src}. CMD25. */
+    public static boolean writeBlocks(long lba, long src, int n)
+    {
+        while (n > 0)
+        {
+            int run = n < MAX_RUN ? n : MAX_RUN;
+            if (!transfer(lba, src, run, true))
+            {
+                return false;
+            }
+            lba += run;
+            src += run * 512L;
+            n -= run;
+        }
+        return true;
+    }
+
+    /**
+     * One multi-block transfer. Each block waits for its own ready flag and then CLEARS it: the flag is a
+     * latched status, so without the clear every wait after the first passes at once and the PIO loop runs
+     * ahead of the FIFO (the SDIO write bug of #506, on the other controller).
+     */
+    private static boolean transfer(long lba, long mem, int n, boolean write)
+    {
+        if (!waitClear(base + STATUS, SR_DAT_INHIBIT))
+        {
+            return dataFail();
+        }
+        Magic.store32(base + BLKSIZECNT, (n << 16) | 512);
+        long arg = sdhc ? lba : lba * 512L;
+        int cmd = write ? (25 << 24) : (18 << 24 | DAT_READ);
+        if (!command(cmd | RSP_48 | CRC_CHK | IX_CHK | IS_DATA | MULTI_BLK | BLKCNT_EN | AUTO_CMD12, arg))
+        {
+            return dataFail();
+        }
+        int ready = write ? INT_WRITE_RDY : INT_READ_RDY;
+        int b = 0;
+        while (b < n)
+        {
+            if (!waitData(ready))
+            {
+                return dataFail();
+            }
+            Magic.store32(base + INTERRUPT, ready);                // re-arm for the next block
+            long p = mem + b * 512L;
+            int i = 0;
+            while (i < 128)
+            {
+                if (write)
+                {
+                    Magic.store32(base + DATA, Magic.load32(p + i * 4L));
+                }
+                else
+                {
+                    Magic.store32(p + i * 4L, Magic.load32(base + DATA));
+                }
+                i += 1;
+            }
+            b += 1;
+        }
+        if (!waitData(INT_DATA_DONE))                              // last block programmed + CMD12 sent
+        {
+            return dataFail();
+        }
+        Magic.store32(base + INTERRUPT, INT_DATA_DONE | INT_WRITE_RDY | INT_READ_RDY);
+        return true;
+    }
+
+    /** Wait for {@code mask} or an error flag; false on error or timeout. */
+    private static boolean waitData(int mask)
+    {
+        if (!waitSet(base + INTERRUPT, mask | INT_ERR))
+        {
+            return false;
+        }
+        return (Magic.load32(base + INTERRUPT) & INT_ERR) == 0;
+    }
+
+    /** A data transfer failed: count it, reset the CMD and DAT lines (SRST_CMD bit25, SRST_DATA bit26). */
+    private static boolean dataFail()
+    {
+        dataErrors += 1;
+        or32(base + CONTROL1, (1 << 25) | (1 << 26));
+        waitClear(base + CONTROL1, (1 << 25) | (1 << 26));
+        Magic.store32(base + INTERRUPT, 0xFFFFFFFF);
+        return false;
     }
 
     /**
@@ -256,21 +427,26 @@ public final class Emmc
     }
 
     /**
-     * SDHCI v3 clock divider for {@code targetHz} from the EMMC base clock. The
-     * SD clock is base/(2*div); CONTROL1 packs div low-8 at [15:8] and high-2 at
-     * [7:6]. The base clock is unknown here, so assume ~100 MHz (Pi 4 default) —
-     * exactness only matters for signal integrity, and the card tolerates a
-     * conservative identification clock.
+     * SDHCI v3 clock divider for {@code targetHz} from the controller's base clock
+     * ({@link #baseHz}: measured over the mailbox on hardware, 100 MHz assumed on
+     * QEMU). The SD clock is base/(2*div); CONTROL1 packs div low-8 at [15:8] and
+     * high-2 at [7:6].
      */
     private static int clockDiv(int targetHz)
     {
-        int base = 100000000;
+        int div = divOf(targetHz);
+        return ((div & 0xFF) << 8) | ((div >> 8 & 0x3) << 6);
+    }
+
+    /** The smallest N >= 1 with base/(2N) <= {@code targetHz}. */
+    private static int divOf(int targetHz)
+    {
         int div = 1;
-        while (base / (2 * div) > targetHz && div < 1023)
+        while (baseHz / (2 * div) > targetHz && div < 1023)
         {
             div += 1;
         }
-        return ((div & 0xFF) << 8) | ((div >> 8 & 0x3) << 6);
+        return div;
     }
 
     private static void or32(long reg, int bits)

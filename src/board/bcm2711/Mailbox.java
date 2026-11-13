@@ -102,6 +102,19 @@ public final class Mailbox
         return w[1];
     }
 
+    /** The MEASURED rate of clock {@code clockId} in Hz; 0 if the firmware does not answer. */
+    public static int measuredClockHz(int clockId)
+    {
+        int[] w = new int[2];
+        w[0] = clockId;
+        w[1] = 0;
+        if (!tag(Bcm2711.TAG_GET_CLOCK_RATE_MEASURED, w))
+        {
+            return 0;
+        }
+        return w[1];
+    }
+
     /** The (requested, not measured) rate of clock {@code clockId} in Hz; 0 if unavailable. Used to compute
      *  the SDIO clock divider from the EMMC clock ({@link Bcm2711#CLOCK_ID_EMMC}). */
     public static int getClockRate(int clockId)
