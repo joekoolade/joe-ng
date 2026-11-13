@@ -845,7 +845,15 @@ class UnixNativeDispatcher {
      */
     static int flistxattr(int filedes, long listAddress, int size) throws UnixException
     {
-        throw new UnsupportedOperationException("joe-ng: UnixNativeDispatcher.flistxattr is not implemented");
+        // joe-ng: flistxattr(fd, list, size, 0) answers the byte length of the NUL-separated name list
+        // (UnixNativeDispatcher.c). No file in MetalRamfs -- memory or the /boot card -- carries an extended
+        // attribute, so an open descriptor's list is empty: 0. Reached by copyFile's copyNonPosixAttributes, which
+        // a move between /boot and the rest of the tree runs.
+        if (!jdk.internal.misc.MetalRamfs.isOpen(filedes))
+        {
+            throw new UnixException(EBADF);
+        }
+        return 0;
     }
 
     /**
@@ -933,6 +941,10 @@ class UnixNativeDispatcher {
                 return EROFS;
             case -jdk.internal.misc.MetalRamfs.IO:
                 return EIO;
+            case -jdk.internal.misc.MetalRamfs.XDEV:
+                return UnixConstants.EXDEV;
+            case -jdk.internal.misc.MetalRamfs.NOSPC:
+                return UnixConstants.ENOSPC;
             default:
                 throw new InternalError("joe-ng: MetalRamfs code " + code);
         }

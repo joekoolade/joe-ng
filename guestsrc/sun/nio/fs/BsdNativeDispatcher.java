@@ -116,6 +116,10 @@ class BsdNativeDispatcher extends UnixNativeDispatcher {
         {
             throw new UnixException(UnixConstants.ENOTDIR);
         }
+        if (r == -jdk.internal.misc.MetalRamfs.XDEV)
+        {
+            throw new UnixException(UnixConstants.EXDEV);   // onto the /boot card: copyFile falls back to a copy
+        }
         if (r < 0)
         {
             throw new UnixException(UnixConstants.ENOENT);

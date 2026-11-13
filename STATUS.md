@@ -4,6 +4,55 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **`/boot` IS WRITABLE: FAT32 WRITES ON THE SD CARD THROUGH STOCK java.io AND java.nio (2026-11-13).**
+  Increment 3 of the boot-update arc, on increment 2's read-only mount (#514).
+  - **`MetalFat32` writes** (guest Java): cluster allocation that takes `prev + 1` when it is free, so a growing
+    file stays contiguous and goes out as multi-block runs; both FAT copies, through a 32-sector cached window that
+    writes only its changed sectors; FSInfo's free count kept EXACT (mount count, minus each allocation, plus each
+    free) with its next-free hint, written after the FAT. Create with an exact 8.3 name plus NT case bits where the
+    name allows it, else a long name plus a generated `BASIS~N` short name checked against every short name in the
+    directory. Directories grow by zeroed clusters; mkdir writes `.` and `..`. Write, overwrite, a zero gap past the
+    end, truncate both ways, unlink, rmdir, rename (with `..` rewritten when a directory changes parent), mtime.
+  - **Write order is data, then FAT, then the directory entry**, so a power loss leaves at worst lost clusters or a
+    chain longer than its file (`fsck` repairs both), never an entry pointing at free clusters. Shrinking is the
+    other way round: the entry lets go first.
+  - **A replacing rename switches the TARGET's short entry to the source's clusters in ONE sector write**, then
+    deletes the source's slots, then frees the old chain: the target name is never missing. It keeps the target's
+    on-disk spelling, as Linux's vfat does. **Only `rename(2)` gets this: `Files.move(ATOMIC_MOVE)` or
+    `File.renameTo`.** `Files.move(REPLACE_EXISTING)` alone DELETES the target first and renames into the gap
+    (`UnixFileSystem.move`), so `/boot/commit` (increment 4) must use ATOMIC_MOVE.
+  - **`MetalRamfs`:** every change under `/boot` writes through before the call returns; a card node never holds a
+    heap copy. A file unlinked (or replaced) while open keeps its clusters until its last close. FAT has no modes,
+    owners or hard links: chmod, chown and link there are PERM, as Linux's vfat answers. New codes `XDEV` (a rename
+    or link between `/boot` and memory, and clonefile onto `/boot`, so java.nio's move and copy fall back to
+    copying) and `NOSPC`. `ROFS` remains for `/boot` with no card.
+  - **`UnixNativeDispatcher.flistxattr` implemented** (0 for an open fd: nothing in the tree has an extended
+    attribute; EBADF otherwise). A move across devices reaches it through `copyNonPosixAttributes`; it was a stub.
+  - **Test demo `demo/BootWriteDemo`**, all under `/boot/wt` (removed first if a previous run left it): a
+    fragmented free list; one file grown and shrunk through 14 sizes across sector and cluster edges plus a
+    mid-file overwrite and a zero gap; 10 MB in 64 KB writes; ATOMIC_MOVE over a smaller and a larger file,
+    `File.renameTo`, and the REPLACE_EXISTING delete-then-rename; 300 long names (past one cluster); colliding
+    `~N` names, exact 8.3 names in each case, `.hidden`, non-ASCII; unlink and reuse; a directory moved to another
+    parent; a file unlinked while open; moves and copies between `/tmp` and `/boot`; refused link; set mtime. Then
+    a sha256 line per file and a manifest digest. `root=<dir>` runs the same shapes on the host.
+  - **Host control** (macOS's own FAT driver on a copy of the image): PASS, 337 files. It differs only where
+    macOS does: it keeps the NEW spelling on a replacing rename, takes `:` in names, and adds `._` files.
+  - **QEMU, four runs, all PASS, 0 failures:** a fresh copy of increment 2's 128 MiB image (512-byte clusters),
+    the same image again (removing the first run's 497-file tree), and a 512 MiB image with 4 KB clusters. After
+    every run on the Mac: **`fsck_msdos -n` clean with no warnings**; every file's SHA-256 and size on the host =
+    the VM's line (337/337; macOS returns `été café.txt` decomposed, so the compare is NFC); the files already on
+    the image are byte-identical (150/150 and 2/2). Both geometries give the same manifest, `af45b038...`.
+    10 MB written at 575-859 KB/s on QEMU's emulated SD.
+  - **PI-VALIDATED** (the real 512 MiB boot partition, 1,438 files beside `wt/`):
+    - `wt: PASS`, 0 failures, `[main returned normally]`; **manifest `af45b038...` over 337 files = both QEMU
+      geometries'**. Shapes 29.2 s. **10 MB written at 1,637 KB/s**, read back (with SHA-256) in 4.0 s.
+    - On the Mac afterwards: **`fsck_msdos -n` (via `diskutil verifyVolume`) clean, exit 0, no warnings**; all
+      337 `wt/` files' SHA-256 and size = the VM's lines; the card's own 436 files unchanged except `kernel8.img`
+      (the copied image) -- the five files over 4 MiB checked against a pre-run backup.
+    - The write rate is far under the raw multi-block 11.6 MB/s: each 64 KB write also rewrites the FAT window,
+      FSInfo and the directory entry as single sectors. Measure again with increment 4's 39 MB upload.
+  - `make test` + overlaycheck OK; file probes 8/8 (FileProbe, NioAttr/File/Read/Write, ZipFile, ZipNames, JarVerify).
+
 - **`/boot` = THE SD CARD'S FAT32 BOOT PARTITION, READ-ONLY, THROUGH STOCK java.io AND java.nio (2026-11-13).**
   Increment 2 of the boot-update arc, on PR #513's block device.
   - **`jdk.internal.misc.MetalFat32`** (guest Java, not an overlay): finds the MBR's first FAT32 partition (type
