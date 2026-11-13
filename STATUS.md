@@ -35,6 +35,17 @@ Newest entries are at the top.
       `lines=4`. Without the flag: `lines=0` at once.
     - `make test` + overlaycheck OK; Regress solo 6/6 (UnsafeAll, ChmRace, SpawnRace, FirstCallRace, AtomicRace,
       Trace).
+  - **PI-VALIDATED ON MAIN (`5c81946`, the normal image: `demo/NetDemo example.com`, `net=1`):**
+    - Full WiFi bring-up: WPA2 join, DHCP 192.168.1.247, gateway ping, SNTP (clock was 133 s behind), 4 of 4
+      cores scheduling. `HTTP/1.1 200 OK`, `bytes=892`, the expected idle-read timeout, then
+      `[main returned normally]`.
+    - The console output was whole and in order throughout: no garbled, lost or interleaved bytes, including the
+      HTTP body printed while scheduling and the WiFi receive interrupts were live. The post-main lines (gc
+      summary) reached the wire, so the end-of-boot flush works.
+    - **Watch:** one `(no ctrl resp)` right after `eapol msg4 sent`; the next poll discarded a stale reply
+      (`skip id=0x18`) and keys were installed. It has appeared on earlier bring-ups too (the 2026-11-08 card
+      notes a run WITHOUT it), so one occurrence is not a regression signal. But this change does move print
+      timing during bring-up: if it becomes routine, or a join fails after it, look here first.
 
 - **README: JDK 26 REQUIRED (2026-11-10).** Documentation only. "Try it" said a JDK 17+ was enough, but the
   build bakes the seed JDK's own `java.base` and the `guestsrc/` overlays come from JDK 26 source, so the seed must
