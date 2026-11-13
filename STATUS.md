@@ -4,6 +4,41 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **SD CARD AS A SAFE, FAST BLOCK DEVICE FOR GUEST JAVA (2026-11-13, PR #513).** Increment 1 of the boot-update
+  arc: the web server will write the boot files to the card's FAT32 partition, mounted at `/boot`.
+  - **Before:** `board/bcm2711/Emmc` did polled single-block CMD17/CMD24 at the 400 kHz identification clock on a
+    1-bit bus (about 50 KB/s). On hardware, `detectBase` could fall back to `0xFE300000`, which is the WiFi chip's
+    SDIO controller (`Sdio.base`); its init would reset it under a running WiFi stack.
+  - **The driver:**
+    - `detectBase` always returns EMMC2 (`0xFE340000`) when `Uart.coreHz > 10 MHz`, i.e. on hardware. The
+      `0xFE300000` fallback is now QEMU-only, where the SD card really sits there.
+    - After CMD16: ACMD6 (4-bit bus) + `CONTROL0` bit 1, then a 25 MHz clock with the divider computed from the
+      MEASURED EMMC2 base clock (`Mailbox.measuredClockHz(CLOCK_ID_EMMC2 = 12)`, 100 MHz fallback).
+    - Multi-block `readBlocks`/`writeBlocks(lba, mem, n)`: CMD18/CMD25 with `BLKCNT_EN`, `AUTO_CMD12` and
+      `MULTI_BLK`, in runs of at most 1024 blocks. Each block clears its `READ_RDY`/`WRITE_RDY` after the wait,
+      the lesson of the #506/#507 SDIO bugs. A data error resets the CMD and DAT lines and counts in
+      `Emmc.dataErrors`.
+  - **Guest API:** new `jdk.internal.misc.MetalBlock` (not an overlay): `open()`, `read`/`write(lba, byte[], off,
+    nSectors)`, throwing `IOException`. Natives `blockInit`/`blockRead`/`blockWrite` in `VMNatives`, wired through
+    the usual three places (`Loader` native table, `VM` address statics + dead calls, `ImageBuilder.stashHelper`).
+  - **Test demo:** `demo/BlockDemo` prints the MBR, partition 1 and the FAT32 BPB; reads sectors 0..4095 one at a
+    time and as one multi-block read (timing, byte compare, SHA-256). `args=write <lba>` runs a
+    save/pattern/restore write test (QEMU only); `args=net` resolves a hostname after the card init.
+  - **QEMU** (`-drive if=sd`, a 64 MiB FAT32 image made with `hdiutil` + `newfs_msdos -F 32`):
+    - MBR, partition and BPB match the image; single and multi-block reads agree, and the SHA-256 equals the
+      host's `dd | shasum`.
+    - The write test wrote, verified and restored 16 sectors; the image file was byte-identical afterwards.
+    - `make test` + overlaycheck OK; Regress solo 2/2 (UnsafeAll, SpawnRace).
+  - **PI-VALIDATED** (BlockDemo, `args=net`, `net=1`, read-only):
+    - MBR `55aa`; partition 1 type `0x0C`, start 16384, 1,048,576 sectors; BPB 512 B/sector, 1 sector/cluster,
+      32 reserved, 2 FATs, 8066 sectors/FAT, root cluster 2, `FAT32`.
+    - **Single-sector 1,067 KB/s; multi-block 11,636 KB/s** (93% of the 12.5 MB/s a 4-bit 25 MHz bus allows),
+      `same bytes: true`. SHA-256 of sectors 0..4095 `4005c7b0...7b68bd5e`.
+    - **WiFi survived the EMMC2 init:** `example.com = 104.20.23.154` resolved after it; then
+      `[main returned normally]`, `gc: collections=8`.
+    - The usual single `(no ctrl resp)` after `eapol msg4 sent` appeared during bring-up (before BlockDemo ran)
+      and recovered, as recorded under PR #510.
+
 - **MINI-UART INTERRUPT-DRIVEN (TX + RX); `System.in` OVER THE CONSOLE BEHIND `stdin=uart` (2026-11-13, PR #510).**
   - **Before:** `Uart.putc` spun on the TX FIFO and nothing read RX. The old interrupt-driven `vm/Console` was dead
     code (its shell was removed in `8fb297c`), so the AUX interrupt (SPI 125) was never enabled.

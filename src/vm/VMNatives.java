@@ -1191,6 +1191,34 @@ final class VMNatives
         return Console.readCooked(arr + ObjectModel.ARRAY_BASE_OFFSET + (int) off, (int) len);
     }
 
+    /** {@code MetalBlock.init0()} native: bring the microSD card up (EMMC2 on hardware); 0 or a negative step. */
+    static long blockInit()
+    {
+        return board.bcm2711.Emmc.init();
+    }
+
+    /** {@code MetalBlock.read0(long,byte[],int,int)} native: bounds and alignment checked by the guest. 0 = ok. */
+    static long blockRead(long lba, long arr, long off, long n)
+    {
+        if (arr == 0L || n <= 0L)
+        {
+            return n == 0L ? 0L : -1L;
+        }
+        long dst = arr + ObjectModel.ARRAY_BASE_OFFSET + off;
+        return board.bcm2711.Emmc.readBlocks(lba, dst, (int) n) ? 0L : -1L;
+    }
+
+    /** {@code MetalBlock.write0(long,byte[],int,int)} native: as {@link #blockRead}, the other way. */
+    static long blockWrite(long lba, long arr, long off, long n)
+    {
+        if (arr == 0L || n <= 0L)
+        {
+            return n == 0L ? 0L : -1L;
+        }
+        long src = arr + ObjectModel.ARRAY_BASE_OFFSET + off;
+        return board.bcm2711.Emmc.writeBlocks(lba, src, (int) n) ? 0L : -1L;
+    }
+
     /** {@code MetalConsoleIn.available0()} native: bytes of the current console line not yet read. */
     static long consoleAvailable()
     {

@@ -14036,6 +14036,12 @@ public final class Loader
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("initNative")))        { return VM.noopNativeAddr; }  // ()V
         }
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalBlock")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("init0")))             { return VM.blockInitAddr; }  // ()I
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("read0")))             { return VM.blockReadAddr; }  // (J[BII)I
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("write0")))            { return VM.blockWriteAddr; } // (J[BII)I
+        }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalConsoleIn")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("read0")))             { return VM.consoleReadAddr; }  // ([BII)I

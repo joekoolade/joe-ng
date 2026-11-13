@@ -55,6 +55,7 @@ public final class Bcm2711
     public static final int  TAG_SET_GPIO_STATE = 0x0003_8041;   // drive a firmware GPIO-expander pin (128+n)
     public static final int  CLOCK_ID_CORE = 4;           // the clock feeding the mini-UART
     public static final int  CLOCK_ID_EMMC = 1;           // the clock feeding the SD/SDIO (EMMC) controller
+    public static final int  CLOCK_ID_EMMC2 = 12;         // the clock feeding EMMC2, the microSD slot's controller
     public static final int  EXPANDER_GPIO_BASE = 128;    // firmware GPIO-expander pins start here
 
     // ----- GPIO ------------------------------------------------------------
