@@ -11,8 +11,8 @@ exception-level setup — are Java. No C, no external assembler, no linker, no
 GRUB, no third-party toolchain. Raw hardware access is done through a self-written
 VM-magic layer (unboxed `Address`/`Word`/`Offset`, privileged-op intrinsics).
 
-Learning from first principles: read the ARM manuals and BCM2711 docs and the
-*ideas* behind Jikes RVM / JOE freely, but write every line yourself.
+Read the ARM manuals and BCM2711 docs and the
+*ideas* behind Jikes RVM / JOE freely and use other code if appropriate otherwise write it ourselves.
 
 ---
 
