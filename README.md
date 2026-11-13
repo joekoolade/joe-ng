@@ -211,13 +211,6 @@ test/             homegrown harness — no third-party test framework
     without an itable, rather than passing by luck.
 - [`SOURCES.md`](SOURCES.md) — the references consulted (ARM ARM, BCM2711 docs).
 
-## A note on the code
-
-This is a from-first-principles learning project. Every encoding is checked
-bit-for-bit against the ARM Architecture Reference Manual before it is relied on,
-because a mis-lowered store corrupts memory invisibly. Jikes RVM and JOE were
-referenced for *concepts* only; every line here was written for this project.
-
 ## Licence
 
 [Eclipse Public License 2.0](LICENSE) — the same licence as Jikes RVM and
