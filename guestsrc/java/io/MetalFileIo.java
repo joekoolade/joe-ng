@@ -24,8 +24,8 @@ import magic.Magic;
  * {@code path (reason)} for an open, and an IOException with the errno's text otherwise.
  *
  * <p>The console, where the C would read or write the process's own descriptors: fds 1 and 2 write to the UART,
- * as {@code System.out}/{@code err} do; fd 0 reads as an empty stream, as {@code System.in} does -- the board has no
- * input console.
+ * as {@code System.out}/{@code err} do; fd 0 reads the serial console's line discipline when {@code /etc/init}
+ * says {@code stdin=uart}, and is an empty stream otherwise -- exactly as {@code System.in} is.
  */
 final class MetalFileIo
 {
@@ -100,7 +100,7 @@ final class MetalFileIo
         int fd = fd(fdo);
         if (fd == 0)
         {
-            return -1;                                 // no input console: an empty stream, as System.in is
+            return jdk.internal.misc.MetalConsoleIn.readConsole(b, off, len);   // -1 unless stdin=uart
         }
         int n = check(MetalRamfs.readArray(fd, b, off, len));
         return n == 0 ? -1 : n;

@@ -70,7 +70,8 @@ final class ScratchMap
         add(Heap.CODE_PIN_BITMAP, Heap.CODE_PIN_END);       // code pin bitmap (ditto)
         add(VM.SEC_STUB, VM.PT_BASE);                       // secondary boot stub
         add(VM.PT_BASE, VM.LOCK_ADDR);                      // page tables (1 L1 + 4 L2)
-        add(VM.LOCK_ADDR, VM.PC_VBAR);                      // shared HW-spinlock word
+        add(VM.LOCK_ADDR, Uart.TX_RING);                    // spinlock words (LOCK_ADDR, SCHED/HANG/UART/RING)
+        add(Uart.TX_RING, Uart.RING_END);                   // mini-UART TX + RX rings
         add(VM.PC_VBAR, VM.CORE_FLAGS);                     // secondaries' IRQ vectors
         add(VM.CORE_FLAGS, board.bcm2711.Bcm2711.MBOX_BUFFER);
         add(board.bcm2711.Bcm2711.MBOX_BUFFER, Loader.STUB_TAB);

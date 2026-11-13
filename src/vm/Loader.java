@@ -3095,6 +3095,11 @@ public final class Loader
         // System.in's empty-stream seed needs this class present; nothing else guarantees it, and a program
         // that touches System.in would otherwise find null (see seedSystemIn). Tiny, and loaded once.
         pullClass(Magic.bytes("java/io/ByteArrayInputStream"));
+        // ... or, under /etc/init stdin=uart, the console stream (Console.stdinOn; same seed, other class).
+        if (Console.stdinOn != 0)
+        {
+            pullClass(Magic.bytes("jdk/internal/misc/MetalConsoleIn"));
+        }
         // seedSystemProps needs Properties the same way, and without it NOTHING is seeded: System.props stays
         // null, System.getProperty answers nothing, and picocli's `Ansi.isWindows()` --
         // `System.getProperty("os.name").toLowerCase()` -- NPEs INSIDE the library. That is the console
@@ -11710,6 +11715,19 @@ public final class Loader
         {
             return;                                     // unknown slot, or a live stream already there
         }
+        if (Console.stdinOn != 0)
+        {
+            int ci = classIndexByName(Magic.bytes("jdk/internal/misc/MetalConsoleIn"));
+            if (ci >= 0)                                // field-free: the TIB is the whole object
+            {
+                long cobj = Heap.alloc(16 + clTab[ci].fieldCount * 8);
+                Magic.store64(cobj + 0L, clTab[ci].tib);
+                Magic.store64(inSlot, cobj);
+                setStdGen(STD_IN);
+                return;
+            }
+            Uart.write(Magic.bytes("\n  stdin=uart: MetalConsoleIn not loaded, System.in stays empty\n"));
+        }
         int bi = classIndexByName(Magic.bytes("java/io/ByteArrayInputStream"));
         if (bi < 0)
         {
@@ -14017,6 +14035,11 @@ public final class Loader
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/io/ObjectStreamClass")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("initNative")))        { return VM.noopNativeAddr; }  // ()V
+        }
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalConsoleIn")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("read0")))             { return VM.consoleReadAddr; }  // ([BII)I
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("available0")))        { return VM.consoleAvailAddr; } // ()I
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalRamfs")))
         {
