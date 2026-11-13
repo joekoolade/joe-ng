@@ -1177,6 +1177,26 @@ final class VMNatives
      *         when the FIFO ran dry. The caller must treat both as a failure rather than pad: partial
      *         entropy stretched to a full seed is a weak seed that looks exactly like a strong one.
      */
+    /**
+     * {@code MetalConsoleIn.read0(byte[],int,int)} native: a canonical-mode console read into
+     * {@code arr[off..off+len)} (bounds checked by the guest). The count, or -1 at end-of-file -- always -1
+     * unless {@code /etc/init} said {@code stdin=uart}.
+     */
+    static long consoleRead(long arr, long off, long len)
+    {
+        if (arr == 0L || len <= 0L)
+        {
+            return 0L;
+        }
+        return Console.readCooked(arr + ObjectModel.ARRAY_BASE_OFFSET + (int) off, (int) len);
+    }
+
+    /** {@code MetalConsoleIn.available0()} native: bytes of the current console line not yet read. */
+    static long consoleAvailable()
+    {
+        return Console.cookedAvailable();
+    }
+
     static long hwEntropy(long arr, long len)
     {
         if (arr == 0L || len <= 0L)
@@ -1817,6 +1837,7 @@ final class VMNatives
         Uart.write(Magic.bytes("\n[exit status=0x"));
         VM.printHex(status & 0xFFFFFFFFL);
         Uart.write(Magic.bytes("]\n"));
+        Uart.flush();                                      // the program is over: send what is still queued
         while (true)
         {
             Magic.wfe();

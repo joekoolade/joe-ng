@@ -58,6 +58,10 @@ Find the adapter's device, then:
 
 Exit `screen` with `Ctrl-A` then `k` (macOS) / `Ctrl-A Ctrl-\` .
 
+The console is also the program's keyboard when `ramfs/etc/init` has `stdin=uart`: `System.in` then reads what
+you type, line by line, as at a terminal (echo, Backspace, Enter ends the line, Ctrl-D on an empty line is
+end-of-file). Without it `System.in` is empty. Try it with `main=demo/StdinDemo`.
+
 ## 5. Power on
 
 Insert the SD card, plug in power. Within a second or two you should see:

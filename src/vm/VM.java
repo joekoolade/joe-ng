@@ -268,6 +268,7 @@ public final class VM
         installFaultVectors();             // turn a CPU fault into a printed report, not a silent hang
         initClasses();                     // run static initializers (writer-generated body)
         run();
+        Uart.flush();                      // the last lines may still be queued for the TX interrupt
 
         while (true)
         {
@@ -345,6 +346,10 @@ public final class VM
             ticks = ticks + 1L;
             Magic.writeCNTP_TVAL_EL0(timerReload);         // re-arm (deasserts the level line until it counts down)
         }
+        else if (id == Bcm2711.AUX_SPI)                    // mini-UART: level-triggered, so it must be serviced
+        {                                                  //   here too or it re-fires for ever
+            Uart.onIrq();
+        }
         Gic.end(id);                                       // GICC_EOIR: drop priority so the next one can fire
     }
 
@@ -411,6 +416,7 @@ public final class VM
     /** Stop the periodic tick: disable the timer and re-mask IRQs (leaves the GIC/vectors installed). */
     static void stopTimerTick()
     {
+        Uart.flush();                                      // IRQs go off for a while: send what is queued now
         Magic.writeCNTP_CTL_EL0(0);                        // disable the timer
         Magic.disableIrq();                                // mask IRQ + FIQ at EL1
     }
@@ -2078,6 +2084,8 @@ public final class VM
         if (forNameAddr == 0L) { long u = VMNatives.forName(0L); }              // Class.forName0() native (reflection M1)
         if (assignableAddr == 0L) { long u = VMNatives.assignable(0L, 0L); }    // Class.assignable0 (interfaces too)
         if (hwEntropyAddr == 0L) { long u = VMNatives.hwEntropy(0L, 0L); } // MetalRamfs.hwEntropy0
+        if (consoleReadAddr == 0L) { long u = VMNatives.consoleRead(0L, 0L, 0L); } // MetalConsoleIn.read0
+        if (consoleAvailAddr == 0L) { long u = VMNatives.consoleAvailable(); }     // MetalConsoleIn.available0
         if (forNameNoInitAddr == 0L) { long u = VMNatives.forNameNoInit(0L); }  // MetalLoaders.lookup0 (no <clinit>)
         if (methodAnnoAllAddr == 0L) { long u = VMNatives.methodAnnoAll(-1L); } // Executable.annoAll0
         if (recordHashAddr == 0L) { long u = recordHash(0L); }                   // record hashCode
@@ -2132,6 +2140,7 @@ public final class VM
         VMScheduler.spawn(taskRAddr);                                  // task 4 (UART reader: blocks on UART_SEM)
 
         Gic.init(Gic.PPI_CNTPNS);
+        Uart.enableInterrupts();                           // the console goes interrupt-driven (SPI 125)
         timerReload = Magic.readCNTFRQ_EL0() / 100L;       // ~10 ms scheduling quantum
         Magic.writeCNTP_TVAL_EL0(timerReload);
         Magic.writeCNTP_CTL_EL0(1);
@@ -2152,6 +2161,7 @@ public final class VM
         installSchedVectors();
         allocTaskTables();                                  // task 0 = the WiFi boot flow
         Gic.init(Gic.PPI_CNTPNS);
+        Uart.enableInterrupts();                            // the console goes interrupt-driven (SPI 125)
         timerReload = Magic.readCNTFRQ_EL0() / 100L;        // ~10 ms tick (deadline wakes for semWaitTimeout)
         Magic.writeCNTP_TVAL_EL0(timerReload);
         Magic.writeCNTP_CTL_EL0(1);
@@ -2286,6 +2296,7 @@ public final class VM
         byte[] argsLine = heapBytes(al, alen);              // raw space-separated args; argv built after loadAll
         openClasspath(conf, flen);                          // classpath=<jar>: classes the image lacks come from it
         armHangDump(conf, flen);                            // hangdump=<secs>: report every task after that long
+        armStdin(conf, flen);                               // stdin=uart: System.in reads the serial console
         Uart.write(Magic.bytes("launch "));
         Uart.write(mainClass);
         Uart.putc(0x0A);
@@ -2328,6 +2339,24 @@ public final class VM
     }
 
     /** {@code hangdump=<secs>} (decimal) arms {@link #hangDumpAt}; absent or 0 leaves it off. */
+    /**
+     * {@code stdin=uart} in {@code /etc/init}: {@code System.in} (and fd 0) read the serial console through
+     * {@link Console}'s line discipline. Off by default, because a program that reads System.in to the end
+     * would then wait for a person at the console instead of seeing end-of-file -- the regression probes and
+     * JUnit runs boot with no one typing.
+     */
+    private static void armStdin(long conf, int flen)
+    {
+        long v = Heap.allocData(16);
+        int n = manifestValue(conf, flen, Magic.bytes("stdin"), v, 8);
+        if (n == 4 && Magic.load8(v) == 0x75 && Magic.load8(v + 1L) == 0x61 && Magic.load8(v + 2L) == 0x72
+                && Magic.load8(v + 3L) == 0x74)            // "uart"
+        {
+            Console.stdinOn = 1;
+            Uart.write(Magic.bytes("stdin: uart\n"));
+        }
+    }
+
     private static void armHangDump(long conf, int flen)
     {
         long v = Heap.allocData(16);
@@ -3816,6 +3845,8 @@ public final class VM
     static long forNameAddr;           // VM.forName(J)J — Class.forName0(byte[]) native (reflection arc M1)
     static long assignableAddr;        // VMNatives.assignable(JJ)J — Class.assignable0(J,J)
     static long hwEntropyAddr;         // VMNatives.hwEntropy(JJ)J — MetalRamfs.hwEntropy0(byte[],int)
+    static long consoleReadAddr;       // VMNatives.consoleRead(JJJ)J — MetalConsoleIn.read0(byte[],int,int)
+    static long consoleAvailAddr;      // VMNatives.consoleAvailable()J — MetalConsoleIn.available0()
     static long forNameNoInitAddr;     // VMNatives.forNameNoInit(J)J — MetalLoaders.lookup0(byte[]), no <clinit>
     static long methodAnnoAllAddr;     // VMNatives.methodAnnoAll(J)J — Executable.annoAll0(int)
     static long recordHashAddr;        // VM.recordHash(J)J — a record's synthesised hashCode

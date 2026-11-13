@@ -880,8 +880,9 @@ public final class VMScheduler
 
     /**
      * IRQ path (called by the IRQ context-switch stub): acknowledge the interrupt and act on it, then
-     * pick the next task. Handles the periodic timer (PPI 30) and the mini-UART RX (SPI 125): the UART
-     * ISR drains received bytes into the ring buffer and posts UART_SEM to wake the blocked reader.
+     * pick the next task. Handles the periodic timer (PPI 30) and the mini-UART (SPI 125): the UART ISR
+     * moves received bytes into the RX ring (posting {@link Console#RX_SEM} to wake a blocked reader) and
+     * queued bytes into the TX FIFO.
      */
     static long schedule(long curSp)
     {
@@ -893,9 +894,9 @@ public final class VMScheduler
             Gic.end(id);
             return pickNext(curSp);
         }
-        if (id == Bcm2711.AUX_SPI)                         // mini-UART (shared RX/TX) -> the Console device
+        if (id == Bcm2711.AUX_SPI)                         // mini-UART (shared RX/TX) -> the driver's rings
         {
-            if (Console.onIrq())                           // drains RX+TX; true if RX bytes arrived
+            if (Uart.onIrq())                              // drains RX+TX; true if RX bytes arrived
             {
                 semPostRaw(Console.RX_SEM);                // wake a blocked reader (ISR-safe post)
             }
