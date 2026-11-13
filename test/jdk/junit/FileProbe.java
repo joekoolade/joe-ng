@@ -20,12 +20,13 @@ import java.util.Arrays;
  * mutators -- mkdir/mkdirs, createNewFile, renameTo, setLastModified, setExecutable, setReadOnly, delete -- on
  * scratch paths, so the baked files are left as they were. The argument is the tree's root: empty on the metal
  * (the image's tree), and on a host a FRESH WRITABLE copy of {@code ramfs/} with an empty {@code tmp/}, as the VM
- * has. Paths are printed relative to the root; no file's contents are printed except the first line of
- * /data/sample.txt. Nothing prints a write-permission answer after a chmod: the VM's user is root, a host's is not.
+ * has, plus an empty {@code boot/} (the VM's {@code /boot} card mount, empty without a card). Paths are printed
+ * relative to the root; no file's contents are printed except the first line of /data/sample.txt. Nothing
+ * prints a write-permission answer after a chmod: the VM's user is root, a host's is not.
  *
  * <p>The host control, on macOS:
  * <pre>
- *   rm -rf /private/tmp/fpw &amp;&amp; mkdir -p /private/tmp/fpw/tmp
+ *   rm -rf /private/tmp/fpw &amp;&amp; mkdir -p /private/tmp/fpw/tmp /private/tmp/fpw/boot
  *   cp -R ramfs/etc ramfs/data ramfs/lib ramfs/conf ramfs/plugins /private/tmp/fpw/
  *   java -cp out FileProbe /private/tmp/fpw
  * </pre>

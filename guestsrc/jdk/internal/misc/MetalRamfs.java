@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 import magic.Magic;
 
 /**
@@ -32,6 +33,12 @@ import magic.Magic;
  * asks the same place. Paths are absolute and normalized by the caller ({@link #normalize}); there are no symbolic
  * links. A failing call returns a NEGATIVE error code ({@link #NOENT} ...), which each caller maps to its own
  * errno table. One lock guards the tree and the descriptor tables.
+ *
+ * <p>{@code /boot} is the microSD card's FAT32 boot partition ({@link MetalFat32}), READ-ONLY for now: its
+ * directories are read from the card in one pass the first time a path under {@code /boot} is resolved, become
+ * nodes of this same tree (names compared case-insensitively, as FAT does), and file contents are read from the
+ * card on demand. Without a card, or with one that will not mount, {@code /boot} is an empty directory and
+ * {@link #bootError} says why. Any change under {@code /boot} is ROFS.
  *
  * <p>Decisions where the image says nothing: baked files are mode 0644 and directories 0755 (what a checkout
  * gives them under the usual umask), owned 0/0 with every time 0; {@code /tmp} is 01777; new files and
@@ -75,6 +82,8 @@ public final class MetalRamfs
     public static final int PERM = 8;
     public static final int BUSY = 9;
     public static final int FBIG = 10;
+    public static final int ROFS = 11;
+    public static final int IO = 12;
 
     // ---- open flags --------------------------------------------------------------------------------------------
     public static final int O_READ = 1;
@@ -120,6 +129,11 @@ public final class MetalRamfs
     private static final Map<Long, String[]> DIRS = new HashMap<>();
     private static final Map<Long, int[]> DIR_POS = new HashMap<>();
     private static long nextDir = 1L;
+
+    /** The card's boot partition once mounted, and why it is not when that failed. */
+    private static MetalFat32 bootFs;
+    private static String bootError;
+    private static final String BOOT = "/boot";
 
     // ---- the tree ----------------------------------------------------------------------------------------------
 
@@ -171,6 +185,13 @@ public final class MetalRamfs
             r.kids.put("tmp", newNode(true, 01777, 0L));
         }
         addEntropyDevices(r);
+        if (!r.kids.containsKey("boot"))
+        {
+            MetalFsNode b = newNode(true, 0755, 0L);
+            b.mount = true;
+            b.mountPending = true;
+            r.kids.put("boot", b);
+        }
         root = r;
         return r;
     }
@@ -237,13 +258,110 @@ public final class MetalRamfs
             {
                 return null;
             }
-            n = n.kids.get(c);
+            n = kid(n, c);
             if (n == null)
             {
                 return null;
             }
         }
+        mountIfPending(n);
         return n;
+    }
+
+    /** Entry {@code name} of directory {@code d}, reading the card first if {@code d} is the unread mount. */
+    private static MetalFsNode kid(MetalFsNode d, String name)
+    {
+        mountIfPending(d);
+        return d.kids.get(name);
+    }
+
+    // ---- /boot: the card's FAT32 boot partition ----------------------------------------------------------------
+
+    /** Read the whole boot partition's directory tree into {@code m}'s entries, once. Callers hold {@code LOCK}. */
+    private static void mountIfPending(MetalFsNode m)
+    {
+        if (!m.mountPending)
+        {
+            return;
+        }
+        m.mountPending = false;
+        TreeMap<String, MetalFsNode> kids = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+        try
+        {
+            MetalFat32 fs = MetalFat32.mount();
+            fill(fs, fs.root(), kids, 0);
+            bootFs = fs;
+            m.kids = kids;
+        }
+        catch (java.io.IOException | RuntimeException e)
+        {
+            bootError = e.toString();
+            m.kids = new TreeMap<>();
+        }
+    }
+
+    private static void fill(MetalFat32 fs, MetalFat32.Entry d, TreeMap<String, MetalFsNode> into, int depth)
+            throws java.io.IOException
+    {
+        if (depth > 16)
+        {
+            throw new java.io.IOException("FAT32: directories nested deeper than 16");
+        }
+        for (MetalFat32.Entry e : fs.list(d))
+        {
+            MetalFsNode n = newNode(e.dir, e.dir ? 0755 : 0644, e.mtimeNanos);
+            n.fat = e;
+            if (e.dir)
+            {
+                n.kids = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+                fill(fs, e, n.kids, depth + 1);
+            }
+            else
+            {
+                n.size = e.size;
+            }
+            into.put(e.name, n);
+        }
+    }
+
+    /** Why {@code /boot} is empty -- the mount's failure -- or null if it mounted (or was never touched). */
+    public static String bootError()
+    {
+        synchronized (LOCK)
+        {
+            return bootError;
+        }
+    }
+
+    /** True for {@code /boot} and every path under it: the read-only card. */
+    private static boolean onBoot(String p)
+    {
+        return p.equals(BOOT) || p.startsWith(BOOT + "/");
+    }
+
+    /**
+     * {@code n} bytes of a file's content from {@code pos} into {@code b[off..]}, wherever it lives -- the heap, the
+     * image, or the card; {@code pos + n} is within the size. 0, or IO if the card read failed.
+     */
+    private static int content(MetalFsNode node, long pos, byte[] b, int off, int n)
+    {
+        if (node.data == null && node.fat != null)
+        {
+            try
+            {
+                int got = bootFs.read(node.fat, pos, b, off, n);
+                return got == n ? 0 : -IO;
+            }
+            catch (java.io.IOException e)
+            {
+                return -IO;
+            }
+        }
+        for (int k = 0; k < n; k++)
+        {
+            b[off + k] = (byte) node.byteAt(pos + k);
+        }
+        return 0;
     }
 
     /** Why {@code p} does not resolve: NOTDIR if a file stands where a directory must, else NOENT. */
@@ -257,7 +375,7 @@ public final class MetalRamfs
             {
                 return -NOTDIR;
             }
-            n = n.kids.get(parts[k]);
+            n = kid(n, parts[k]);
             if (n == null)
             {
                 return -NOENT;
@@ -401,6 +519,10 @@ public final class MetalRamfs
         long sum = 0L;
         for (MetalFsNode k : d.kids.values())
         {
+            if (k.mount)
+            {
+                continue;                                // the card is not the in-memory tree's space
+            }
             if (k.dir)
             {
                 sum += used(k, seen);
@@ -420,6 +542,10 @@ public final class MetalRamfs
     {
         synchronized (LOCK)
         {
+            if (onBoot(p))
+            {
+                return -ROFS;
+            }
             if (lookup(p) != null)
             {
                 return -EXIST;
@@ -441,6 +567,10 @@ public final class MetalRamfs
     {
         synchronized (LOCK)
         {
+            if (onBoot(p))
+            {
+                return -ROFS;
+            }
             MetalFsNode n = lookup(p);
             if (n == null)
             {
@@ -470,6 +600,10 @@ public final class MetalRamfs
     {
         synchronized (LOCK)
         {
+            if (onBoot(p))
+            {
+                return -ROFS;
+            }
             MetalFsNode n = lookup(p);
             if (n == null)
             {
@@ -493,6 +627,10 @@ public final class MetalRamfs
     {
         synchronized (LOCK)
         {
+            if (onBoot(from) || onBoot(to))
+            {
+                return -ROFS;
+            }
             MetalFsNode n = lookup(from);
             if (n == null)
             {
@@ -551,6 +689,10 @@ public final class MetalRamfs
     {
         synchronized (LOCK)
         {
+            if (onBoot(existing) || onBoot(newName))
+            {
+                return -ROFS;
+            }
             MetalFsNode n = lookup(existing);
             if (n == null)
             {
@@ -583,6 +725,10 @@ public final class MetalRamfs
     {
         synchronized (LOCK)
         {
+            if (onBoot(dst))
+            {
+                return -ROFS;
+            }
             MetalFsNode n = lookup(src);
             if (n == null)
             {
@@ -608,6 +754,18 @@ public final class MetalRamfs
     {
         MetalFsNode c = n.copy(nextIno);
         nextIno += 1L;
+        if (!n.dir && n.data == null && n.fat != null)
+        {
+            byte[] d = new byte[(int) n.size];
+            if (content(n, 0L, d, 0, d.length) == 0)
+            {
+                c.data = d;
+            }
+            else
+            {
+                c.size = 0L;                             // the card failed: an empty copy, never a wrong one
+            }
+        }
         if (n.dir)
         {
             for (Map.Entry<String, MetalFsNode> k : n.kids.entrySet())
@@ -623,6 +781,10 @@ public final class MetalRamfs
     {
         synchronized (LOCK)
         {
+            if (onBoot(p))
+            {
+                return -ROFS;
+            }
             MetalFsNode n = lookup(p);
             if (n == null)
             {
@@ -639,6 +801,10 @@ public final class MetalRamfs
     {
         synchronized (LOCK)
         {
+            if (onBoot(p))
+            {
+                return -ROFS;
+            }
             MetalFsNode n = lookup(p);
             if (n == null)
             {
@@ -654,6 +820,10 @@ public final class MetalRamfs
     {
         synchronized (LOCK)
         {
+            if (onBoot(p))
+            {
+                return -ROFS;
+            }
             MetalFsNode n = lookup(p);
             if (n == null)
             {
@@ -737,6 +907,10 @@ public final class MetalRamfs
         synchronized (LOCK)
         {
             boolean write = (flags & O_WRITE) != 0;
+            if (onBoot(p) && (write || (flags & (O_CREAT | O_TRUNC)) != 0))
+            {
+                return -ROFS;
+            }
             MetalFsNode n = lookup(p);
             if (n == null)
             {
@@ -923,7 +1097,20 @@ public final class MetalRamfs
                 return 0;
             }
             int n = (int) Math.min((long) len, node.size - pos);
-            if (node.data != null)
+            if (node.data == null && node.fat != null)
+            {
+                byte[] got = new byte[n];
+                int r = content(node, pos, got, 0, n);
+                if (r < 0)
+                {
+                    return r;
+                }
+                for (int k = 0; k < n; k++)
+                {
+                    u.putByte(addr + k, got[k]);
+                }
+            }
+            else if (node.data != null)
             {
                 byte[] d = node.data;
                 for (int k = 0; k < n; k++)
@@ -1039,9 +1226,10 @@ public final class MetalRamfs
                 return 0;
             }
             int n = (int) Math.min((long) len, node.size - f.pos);
-            for (int k = 0; k < n; k++)
+            int r = content(node, f.pos, b, off, n);
+            if (r < 0)
             {
-                b[off + k] = (byte) node.byteAt(f.pos + k);
+                return r;
             }
             f.pos += n;
             return n;
@@ -1124,6 +1312,10 @@ public final class MetalRamfs
         synchronized (LOCK)
         {
             Fd f = FDS.get(fd);
+            if (f != null && f.node.fat != null)
+            {
+                return -ROFS;
+            }
             if (f == null)
             {
                 return -BADF;
@@ -1140,6 +1332,10 @@ public final class MetalRamfs
         synchronized (LOCK)
         {
             Fd f = FDS.get(fd);
+            if (f != null && f.node.fat != null)
+            {
+                return -ROFS;
+            }
             if (f == null)
             {
                 return -BADF;
@@ -1155,6 +1351,10 @@ public final class MetalRamfs
         synchronized (LOCK)
         {
             Fd f = FDS.get(fd);
+            if (f != null && f.node.fat != null)
+            {
+                return -ROFS;
+            }
             if (f == null)
             {
                 return -BADF;
@@ -1199,9 +1399,10 @@ public final class MetalRamfs
                 return -FBIG;
             }
             byte[] tmp = new byte[(int) n];
-            for (int k = 0; k < (int) n; k++)
+            int r = content(s.node, s.pos, tmp, 0, (int) n);
+            if (r < 0)
             {
-                tmp[k] = (byte) s.node.byteAt(s.pos + k);
+                return r;
             }
             if (end > d.node.size)
             {
@@ -1246,6 +1447,10 @@ public final class MetalRamfs
                 return "Resource busy";
             case -FBIG:
                 return "File too large";
+            case -ROFS:
+                return "Read-only file system";
+            case -IO:
+                return "Input/output error";
             default:
                 return "Unknown error: " + code;
         }

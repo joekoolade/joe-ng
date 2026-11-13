@@ -895,12 +895,14 @@ class UnixNativeDispatcher {
     // ---- joe-ng: the natives above are Java over the VM's in-memory tree (jdk.internal.misc.MetalRamfs), their
     // semantics read from unix/native/libnio/fs/UnixNativeDispatcher.c. A failing call's code becomes the errno
     // the C would see; a native that is not implemented THROWS naming itself. Errno values are the baked
-    // UnixConstants (the macOS table); the few it does not carry (EPERM, EBADF, EBUSY, EFBIG) have the same
-    // number on every Unix.
+    // UnixConstants (the macOS table); the few it does not carry (EPERM, EIO, EBADF, EBUSY, EFBIG, EROFS) have
+    // the same number on every Unix.
     private static final int EPERM = 1;
     private static final int EBADF = 9;
     private static final int EBUSY = 16;
     private static final int EFBIG = 27;
+    private static final int EIO = 5;
+    private static final int EROFS = 30;
 
     /** The errno for MetalRamfs code {@code code} (negative). */
     private static int errno(int code)
@@ -927,6 +929,10 @@ class UnixNativeDispatcher {
                 return EBUSY;
             case -jdk.internal.misc.MetalRamfs.FBIG:
                 return EFBIG;
+            case -jdk.internal.misc.MetalRamfs.ROFS:
+                return EROFS;
+            case -jdk.internal.misc.MetalRamfs.IO:
+                return EIO;
             default:
                 throw new InternalError("joe-ng: MetalRamfs code " + code);
         }

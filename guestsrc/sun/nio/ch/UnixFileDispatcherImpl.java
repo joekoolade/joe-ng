@@ -349,6 +349,10 @@ class UnixFileDispatcherImpl extends FileDispatcher {
         {
             m = "File too large";
         }
+        else if (r == -jdk.internal.misc.MetalRamfs.IO || r == -jdk.internal.misc.MetalRamfs.ROFS)
+        {
+            m = jdk.internal.misc.MetalRamfs.strerror(r);
+        }
         else
         {
             throw new InternalError("joe-ng: MetalRamfs code " + r);

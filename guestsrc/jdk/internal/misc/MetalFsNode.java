@@ -36,6 +36,9 @@ final class MetalFsNode
     byte[] data;                                         // the content once written; capacity may exceed size
     long size;
     TreeMap<String, MetalFsNode> kids;                   // a directory's entries
+    MetalFat32.Entry fat;                                // on the card's boot partition: what it is there
+    boolean mount;                                       // the /boot mount point itself
+    boolean mountPending;                                // ... not yet read from the card
 
     MetalFsNode(boolean dir, long ino, int mode, long time)
     {
@@ -52,12 +55,16 @@ final class MetalFsNode
         }
     }
 
-    /** The byte at {@code pos}, which is below {@code size}. */
+    /** The byte at {@code pos}, which is below {@code size}. Not for a card file: MetalRamfs reads those in bulk. */
     int byteAt(long pos)
     {
         if (data != null)
         {
             return data[(int) pos] & 0xFF;
+        }
+        if (fat != null)
+        {
+            throw new IllegalStateException("joe-ng: byteAt on /boot file " + fat.name);
         }
         return Magic.load8(Magic.load64(baked + 16L) + pos) & 0xFF;
     }
