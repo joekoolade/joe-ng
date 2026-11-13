@@ -4,6 +4,43 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **`/boot` = THE SD CARD'S FAT32 BOOT PARTITION, READ-ONLY, THROUGH STOCK java.io AND java.nio (2026-11-13).**
+  Increment 2 of the boot-update arc, on PR #513's block device.
+  - **`jdk.internal.misc.MetalFat32`** (guest Java, not an overlay): finds the MBR's first FAT32 partition (type
+    0x0B/0x0C, or a card with no partition table), checks the BPB (512-byte sectors, FAT32 only), follows cluster
+    chains through a cached 8-sector FAT window, and reads directories with VFAT long names (sequence and checksum
+    checked; a broken LFN falls back to the 8.3 name) and the NT lower-case bits macOS writes. File reads walk the
+    chain from a per-file cursor and turn contiguous clusters into one multi-block read of up to 64 KiB.
+  - **`MetalRamfs`** mounts it at `/boot`: the first lookup under `/boot` reads the partition's whole directory tree
+    into ordinary `MetalFsNode`s (names compared case-insensitively, as FAT does); contents come from the card on
+    demand, so every by-path and by-fd call (stat, list, opendir, open, read, pread, copyData, clone) works
+    unchanged. No card, or a card that will not mount: `/boot` is an empty directory and
+    `MetalRamfs.bootError()` says why. `usedBytes` leaves the card out.
+  - **Read-only:** every change under `/boot` -- create, write, truncate, mkdir, rmdir, unlink, rename or link in
+    or out, chmod/chown/times -- is a new code `ROFS` (EROFS, "Read-only file system"); a failed card read is a new
+    `IO` (EIO). Both are mapped in `UnixNativeDispatcher`, `UnixFileDispatcherImpl` and `BsdFileSystem`.
+  - **Test demo `demo/BootFsDemo`:** a `<sha256> <size> <path>` line per file (files over 4 MiB get `-` unless
+    `all`, except `kernel8.img`), sorted by path and hashed into a MANIFEST digest plus a CONTENT digest that leaves
+    out macOS's `.Spotlight-V100`, `.fseventsd` and `.Trashes`; then a `kernel8.img` read rate, a case-insensitive
+    lookup, java.nio reads, and a refused write and delete.
+  - **QEMU** (a 128 MiB FAT32 image made with `hdiutil`, 150 files: LFN names with spaces, a 120-file directory
+    past one cluster, two nested subdirectories, an empty file, a deliberately FRAGMENTED 2.5 MB file, a 39 MB
+    `kernel8.img`): all 150 SHA-256s and the manifest match the host's; the image file was byte-identical
+    afterwards. No card: `/boot` empty with `SD card init failed (step -1)` in 332 ms.
+  - **PI-VALIDATED** (the real 512 MiB boot partition, 1,438 files in 20 directories):
+    - Mount + list 631 ms. **CONTENT digest `f714bbb7...` over 436 files = the Mac's**, and all 61 top-level
+      lines match line for line; `kernel8.img` 39,304,032 bytes `ba8ec6b9...` = the copied image.
+    - **`FileInputStream` read of `kernel8.img`: 9,274 KB/s** (80% of the raw multi-block rate; QEMU 1.7 MB/s).
+    - Case-insensitive lookup, java.nio `readAllLines`/`Files.list`, write and delete refused with
+      `Read-only file system`; `[main returned normally]`.
+    - **Trap recorded:** the first Pi MANIFEST did not match a host digest taken before the eject. Every
+      difference was in macOS's Spotlight index, which macOS rewrites while the card is mounted (a file vanished
+      during the host's own hashing); the 436 real files were unchanged. Compare a card against the CONTENT digest,
+      or turn indexing off (`mdutil -i off`).
+  - `make test` + overlaycheck OK. File probes 10/11 in batch: FileProbe's `list /` now shows `boot` (expected
+    output and host recipe updated; host == metal); ZipFileProbe differed only beside JarVerifyProbe in a batch
+    (its jars in the shared `/tmp`) and passes solo.
+
 - **SD CARD AS A SAFE, FAST BLOCK DEVICE FOR GUEST JAVA (2026-11-13, PR #513).** Increment 1 of the boot-update
   arc: the web server will write the boot files to the card's FAT32 partition, mounted at `/boot`.
   - **Before:** `board/bcm2711/Emmc` did polled single-block CMD17/CMD24 at the 400 kHz identification clock on a

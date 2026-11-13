@@ -205,6 +205,10 @@ class BsdFileSystem extends UnixFileSystem {
         {
             throw new UnixException(27);               // EFBIG, the same number on every Unix
         }
+        if (r == -jdk.internal.misc.MetalRamfs.IO)
+        {
+            throw new UnixException(5);                // EIO: a /boot card read failed
+        }
         if (r < 0)
         {
             throw new UnixException(9);                // EBADF

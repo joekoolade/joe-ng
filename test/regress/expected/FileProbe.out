@@ -7,7 +7,7 @@
 /data/missing.txt: exists=false file=false dir=false read=false write=false hidden=false
 /dat: exists=false file=false dir=false read=false write=false hidden=false
 /data/sample.txt/x: exists=false file=false dir=false read=false write=false hidden=false
-list / [conf, data, etc, lib, plugins, tmp]
+list / [boot, conf, data, etc, lib, plugins, tmp]
 list /data [nums.txt, prog.lisp, sample.txt]
 list of a file null
 list of nothing null
