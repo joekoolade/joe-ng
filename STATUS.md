@@ -4,6 +4,38 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **MINI-UART INTERRUPT-DRIVEN (TX + RX); `System.in` OVER THE CONSOLE BEHIND `stdin=uart` (2026-11-13, PR #510).**
+  - **Before:** `Uart.putc` spun on the TX FIFO and nothing read RX. The old interrupt-driven `vm/Console` was dead
+    code (its shell was removed in `8fb297c`), so the AUX interrupt (SPI 125) was never enabled.
+  - **The driver:** `Uart` owns a 4 KiB TX ring and a 1 KiB RX ring in fixed scratch (`0x0302_1000..0x0302_2400`,
+    registered in `ScratchMap`) and an ISR, `onIrq`, dispatched from `VMScheduler.schedule`.
+    `startScheduler`/`startWifiScheduler` call `enableInterrupts`.
+    - Before that, output is polled byte for byte as it always was.
+    - After it, a writer with IRQs on queues and returns, draining the ring itself only when the ring is full.
+    - A writer with IRQs MASKED (a fault report, an ISR) drains the whole ring synchronously, so ordering never
+      waits on an interrupt that may not come.
+    - Flushed in `stopTimerTick`, `Shutdown.halt0` and at the end of boot.
+  - **Latent bug fixed:** `UART_LOCK` was the same word as `HANG_LOCK` (`0x0302_0080`), so a hang dump on SMP,
+    which prints, would spin on itself. `UART_LOCK` moved to `0x0302_00C0`.
+  - **`System.in`:** with `/etc/init stdin=uart`, `Loader.seedSystemIn` installs `jdk.internal.misc.MetalConsoleIn`
+    (natives `consoleRead`/`consoleAvailable`) over a tty-style line mode in `vm.Console`: echo, Backspace/DEL,
+    CR/LF/CRLF -> one `\n`, Ctrl-D on an empty line = EOF. fd 0 follows the same flag. Off by default, because
+    probes and JUnit boot with nobody typing and would otherwise block instead of seeing EOF.
+  - **QEMU raspi4b never raises SPI 125 (or the timer PPI) to this image.** MEASURED: `GICD_ISPENDR` stays 0 with
+    the line enabled, group 1 and IRQs unmasked; `ticks=0`. So a blocked reader waits at most 10 ms
+    (`semWaitTimeout`) and re-polls the FIFO; on QEMU that loop is what reads. A missed interrupt costs latency,
+    never a hang.
+  - **PI-VALIDATED** (`demo/StdinDemo` + `stdin=uart`, SMP on, plus a temporary IRQ-count instrument):
+    - AUX interrupts 0 -> 33 (TX, during a 100 ms wait after a 170-byte line) -> 100 (after a typed line) -> 396
+      at the end; `dropped=0`.
+    - Mid-run state: `ier=0x3` (TX on while queued), `ispend3` showed the line pending, `ticks=40`.
+    - A 46-character typed line came back exactly. StdinDemo read three lines and `quit`, then
+      `[main returned normally]`.
+    - QEMU, the same demo with input fed on stdin: CRLF folded, a DEL edit gave `abc`, an empty line, Ctrl-D ->
+      `lines=4`. Without the flag: `lines=0` at once.
+    - `make test` + overlaycheck OK; Regress solo 6/6 (UnsafeAll, ChmRace, SpawnRace, FirstCallRace, AtomicRace,
+      Trace).
+
 - **README: JDK 26 REQUIRED (2026-11-10).** Documentation only. "Try it" said a JDK 17+ was enough, but the
   build bakes the seed JDK's own `java.base` and the `guestsrc/` overlays come from JDK 26 source, so the seed must
   be the same feature release. The same change removes the README's stale self-hosting claims (intro, diagram,
