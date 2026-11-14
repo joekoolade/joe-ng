@@ -4,6 +4,32 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **RUN A `.jar` OR `.class` FROM THE WEB SERVER: UPLOADED, OR DOWNLOADED BY THE BOARD (2026-11-14).** Pi-validated.
+  `PUT /run/<file>.jar|.class` (the body is the program), `POST /run?url=<http(s) url>` (the board fetches it), both
+  with `args=` and `main=` and the boot token; the reply is what the program printed to `System.out`/`System.err` plus
+  a status line (200 ran -- returned or threw, 422 refused before main, 502 download failed). `GET /run` is a page
+  that does either from a browser and shows the output and this boot's runs. `demo/RunProgram` (the run path),
+  `demo/RunPage` (endpoints + page); `BootUpdate.authorized` is shared.
+  - **One namespace decides the design.** The VM resolves a reference by NAME, not through the defining loader, so
+    every class of a jar is defined before main runs, supertypes first (parsed from each classfile header). A jar
+    whose classes refer to each other in both directions works that way (`runsrc/jar/hello`: Main <-> Util, its
+    own interface, a capturing lambda). A name defines once per boot: the same bytes re-run the loaded classes
+    (statics kept), changed bytes under a loaded name are REFUSED rather than silently running the old class.
+  - **The host control caught my bug first:** I looked the main class up with `Class.forName` through the system
+    loader -- right on our one-namespace VM, wrong on a hosted JVM (the system loader cannot see a class another
+    loader defined). The classes `defineClass` returns are kept instead.
+  - **Pi** (build 65498aa1e6674eb2, pushed with push.sh): the jar downloaded from the Mac over HTTP, 5 classes
+    defined in 1478 ms (first use of the jar/define path), ran 28 ms; a class upload 15 ms; re-run, `main=`, a
+    throwing main (trace in the reply), a changed class 422, no token 401, the page's run history. The first
+    download timed out: the Mac's firewall held python's incoming connection until its dialog was answered.
+  - **Probe:** `demo/RunProbe` (solo, gate `RunProbe PASS`; programs from `/run/`, built from `runsrc/` by `make
+    runprogs`), QEMU PASS through `scripts/Regress.java`, which now maps a packaged probe name to one file name (it
+    hung: `demo/RunProbe.solo.metal` named a directory, the exception left a pool thread alive) and builds
+    `runprogs`. `RunProgram` prints a throwing main's trace WITHOUT `Exception in thread "main"` -- that line is the
+    VM's for a program that died, and Regress stops the boot on it (it did, mid-probe). `make test`, overlaycheck
+    0 new.
+  - **Open:** `System.exit` from a run halts the board (`Shutdown.halt0`); the server is busy until main returns.
+
 - **LATE ACKS ARE COLLECTOR PAUSES, NOT THE TRANSMIT QUEUE (2026-11-14).** Measurement only; a fix was built, measured
   and dropped. `/net` gains the transmit queue's summed and longest wait, flushes, waits >= 100 ms, and how many of
   those spanned a collection.

@@ -156,9 +156,9 @@ public final class Regress
         byte[] initBefore = Files.exists(init) ? Files.readAllBytes(init) : null;
         if (doMake)
         {
-            log("make build jdktests plugins");
+            log("make build jdktests plugins runprogs");
         }
-        if (doMake && run(List.of("make", "build", "jdktests", "plugins"), runDir.resolve("make.log")) != 0)
+        if (doMake && run(List.of("make", "build", "jdktests", "plugins", "runprogs"), runDir.resolve("make.log")) != 0)
         {
             die("make failed; see " + runDir.resolve("make.log"));
         }
@@ -358,7 +358,7 @@ public final class Regress
     /** Build the job's image, boot it, and judge every probe in it. */
     private static Map<String, String> runJob(Job job) throws Exception
     {
-        String tag = job.tag() + (job.batch() ? "" : "-solo");
+        String tag = fileName(job.tag()) + (job.batch() ? "" : "-solo");
         Map<String, String> out = new LinkedHashMap<>();
         Probe first = job.probes().get(0);
         StringBuilder init = new StringBuilder();
@@ -511,7 +511,7 @@ public final class Regress
                 // ISO-8859-1, the charset the log was read in: the bytes go back out as the board printed them. The
                 // default (UTF-8) re-encoded each byte of a non-ASCII character, so a .metal file differed from its
                 // expected file under `diff` while the comparison below -- both sides ISO-8859-1 -- was IDENTICAL.
-                Files.write(runDir.resolve(p.name() + (job.batch() ? ".batch" : ".solo") + ".metal"), got,
+                Files.write(runDir.resolve(fileName(p.name()) + (job.batch() ? ".batch" : ".solo") + ".metal"), got,
                             StandardCharsets.ISO_8859_1);
                 if (p.gate() != null)
                 {
@@ -532,6 +532,12 @@ public final class Regress
         long ok = out.values().stream().filter(s -> s.equals("IDENTICAL")).count();
         log(report + " " + ok + "/" + job.probes().size() + " ok");
         return out;
+    }
+
+    /** A probe name as one file name: a packaged probe ({@code demo/RunProbe}) would otherwise name a directory. */
+    private static String fileName(String probe)
+    {
+        return probe.replace('/', '.');
     }
 
     private static Path expectedOf(Probe p)
