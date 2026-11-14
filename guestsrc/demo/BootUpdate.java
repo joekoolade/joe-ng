@@ -69,6 +69,14 @@ final class BootUpdate
     /** {@code GET /boot/sha256/<name>}: one top-level boot-partition file's SHA-256, read from the card. */
     private static final String SHA_PATH = "/boot/sha256/";
 
+    /**
+     * {@code GET /boot/buildid/<name>}: the build id in a boot-partition file's 32-byte trailer, without reading the
+     * rest -- what push.sh compares for {@code kernel8.img}, where a SHA-256 of 39 MB takes ~23 s on the Pi. The id is
+     * itself a SHA-256 of the image ({@code writer.BuildRuntimeImage}). 404 for no such file, 422 for a file with no
+     * trailer.
+     */
+    private static final String BUILDID_PATH = "/boot/buildid/";
+
     /** The largest body accepted. A kernel is ~40 MB. */
     private static final long MAX_BODY = 128L * 1024 * 1024;
 
@@ -95,6 +103,11 @@ final class BootUpdate
         if (p.startsWith(SHA_PATH) && m.equals("GET"))
         {
             hash(p.substring(SHA_PATH.length()), out);
+            return NONE;
+        }
+        if (p.startsWith(BUILDID_PATH) && m.equals("GET"))
+        {
+            buildIdOf(p.substring(BUILDID_PATH.length()), out);
             return NONE;
         }
         boolean upload = p.startsWith(BOOT) && m.equals("PUT");
@@ -242,6 +255,23 @@ final class BootUpdate
     }
 
     /** Answer the SHA-256 of {@code /boot/<name>}; no token, as it changes nothing. */
+    private static void buildIdOf(String name, OutputStream out) throws IOException
+    {
+        File f = new File(BOOT + name);
+        if (name.isEmpty() || name.indexOf('/') >= 0 || name.startsWith(".") || !f.isFile())
+        {
+            Http.text(out, "404 Not Found", "no file /boot/" + name);
+            return;
+        }
+        String id = MetalBoard.buildIdOf(f.getPath());
+        if (id == null)
+        {
+            Http.text(out, "422 Unprocessable Content", "/boot/" + name + " has no build-id trailer");
+            return;
+        }
+        Http.text(out, "200 OK", id);
+    }
+
     private static void hash(String name, OutputStream out) throws IOException
     {
         File f = new File(BOOT + name);

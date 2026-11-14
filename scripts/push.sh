@@ -1,21 +1,24 @@
 #!/usr/bin/env sh
 # Update a running Pi's boot files over the network, with a trial boot before anything live changes.
 #
-# Usage: scripts/push.sh [-n] [-k] [-f] [-i image] [-e init] [-t secs] <pi-host>
+# Usage: scripts/push.sh [-n] [-k] [-f] [-V] [-i image] [-e init] [-t secs] <pi-host>
 #   -n        dry run: build, compare with the card, say what would be pushed, push nothing
 #   -k        the kernel only (not config.txt, the firmware or the armstubs)
 #   -f        push an image even if it lacks this checkout's boot token or the web server
+#   -V        compare and verify kernel8.img by its full SHA-256 too (~23 s each on the Pi), not only its build id
 #   -i image  push this kernel8.img instead of building one
 #   -e init   the /etc/init baked into the built image (default scripts/push-init: the web server, WiFi on)
 #   -t secs   how long to wait for the trial boot to answer (default 120)
 #
 # The steps, against guestsrc/demo/BootUpdate's endpoints:
 #   1. build out/push-kernel8.img (make image IMAGE_INIT=...), read its build id from the 32-byte trailer
-#   2. ask the Pi for the SHA-256 of each boot file on its card; files that already match are not sent
+#   2. ask the Pi which boot files on its card already match -- kernel8.img by the build id in its trailer (itself a
+#      SHA-256 of the image), the small files by SHA-256 -- and send only the others
 #   3. POST /boot/discard (an earlier push's leftovers), then PUT each changed file as <name>.new with X-Sha256
 #   4. POST /reboot?tryboot=1: the firmware boots the staged files ONCE, from tryboot.txt
 #   5. wait for the Pi to go down, then for GET /version to answer
-#   6. POST /boot/commit, which the Pi refuses unless it is running the staged kernel; then re-hash the live files
+#   6. POST /boot/commit, which the Pi refuses unless it is running the staged kernel; then check the live files the
+#      same way as step 2 (the staged copies were already verified by SHA-256 when they were read back on upload)
 #
 # Nothing live changes before step 6. If the trial never answers, a power cycle boots the old files.
 # The token is ramfs/etc/boot.token (baked into the image the Pi runs), or $JOE_BOOT_TOKEN.
@@ -23,25 +26,27 @@ set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DRY=0
+VERIFY=0
 KERNEL_ONLY=0
 FORCE=0
 IMAGE=""
 INIT="$ROOT/scripts/push-init"
 WAIT=120
-while getopts nkfi:e:t: o; do
+while getopts nkfVi:e:t: o; do
     case $o in
         n) DRY=1 ;;
+        V) VERIFY=1 ;;
         k) KERNEL_ONLY=1 ;;
         f) FORCE=1 ;;
         i) IMAGE=$OPTARG ;;
         e) INIT=$OPTARG ;;
         t) WAIT=$OPTARG ;;
-        *) sed -n '2,10p' "$0" >&2; exit 2 ;;
+        *) sed -n '2,11p' "$0" >&2; exit 2 ;;
     esac
 done
 shift $((OPTIND - 1))
 if [ $# -ne 1 ]; then
-    sed -n '2,10p' "$0" >&2
+    sed -n '2,11p' "$0" >&2
     exit 2
 fi
 PI=$1
@@ -60,6 +65,23 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
 sha() { shasum -a 256 "$1" | awk '{print $1}'; }
+
+# Does the card's /boot/<name> hold the bytes of <path> (whose SHA-256 is <mine>)? kernel8.img is answered by its
+# trailer's build id unless -V; a Pi without /boot/buildid (an older image) answers 404, and the SHA-256 decides.
+card_has()
+{
+    name=$1
+    mine=$3
+    if [ "$name" = kernel8.img ] && [ $VERIFY -eq 0 ]; then
+        id=$(curl -sS --max-time 20 -w ' %{http_code}' "$URL/boot/buildid/$name" 2>/dev/null | tr -d '\r\n' || true)
+        case "$id" in
+            *" 200") [ "${id% 200}" = "$NEW" ]; return ;;
+            *" 422") return 1 ;;
+        esac
+    fi
+    theirs=$(curl -sS --max-time 120 "$URL/boot/sha256/$name" 2>/dev/null | tr -d '\r\n' || true)
+    [ "$theirs" = "$mine" ]
+}
 now() { date +%s; }
 
 # One request. Sets CODE to the HTTP status (000 when there was no answer) and BODY to the reply. Not called inside
@@ -129,8 +151,7 @@ fi
 : > "$TMP/push"
 while read -r name path; do
     mine=$(sha "$path")
-    theirs=$(curl -sS --max-time 120 "$URL/boot/sha256/$name" 2>/dev/null | tr -d '\r\n' || true)
-    if [ "$theirs" = "$mine" ]; then
+    if card_has "$name" "$path" "$mine" < /dev/null; then
         echo "  same     $name"
     else
         echo "  CHANGED  $name"
@@ -232,11 +253,10 @@ fi
 echo "$BODY" | sed 's/^/  /'
 bad=0
 while read -r name path mine; do
-    theirs=$(curl -sS --max-time 120 "$URL/boot/sha256/$name" 2>/dev/null | tr -d '\r\n' || true)
-    if [ "$theirs" = "$mine" ]; then
+    if card_has "$name" "$path" "$mine" < /dev/null; then
         echo "  live OK  $name"
     else
-        echo "  live DIFFERS $name: card $theirs, pushed $mine" >&2
+        echo "  live DIFFERS $name (pushed sha256 $mine, build $NEW)" >&2
         bad=1
     fi
 done < "$TMP/push"

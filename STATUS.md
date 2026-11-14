@@ -4,6 +4,14 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **`push.sh` COMPARES THE KERNEL BY BUILD ID: ~45 s OFF EVERY PUSH (2026-11-14).** `GET /boot/buildid/<name>`
+  answers the id in a file's 32-byte trailer (404 no file, 422 no trailer) without reading the rest, and push.sh
+  uses it for `kernel8.img` -- before sending, and to check the live file after the commit -- where it used to ask
+  for a SHA-256 of 39 MB (~13-23 s on the Pi, twice per push). The id is itself a SHA-256 of the image; the staged
+  copy was already verified by SHA-256 on read-back. `-V` restores the full hash; a Pi without the endpoint answers
+  404 and push.sh falls back to the hash. Pi: comparing the whole card 2.8 s (13.1 s with `-V`, kernel only); a
+  push from an older image (hash fallback) and back committed `da50afb2af6563a5`. `BootUpdateProbe` +4 checks, PASS.
+
 - **RECEIVE AND COLLECTOR COUNTERS ON `/net` AND `/gc`; WHAT LIMITS A BOOT UPLOAD NOW (2026-11-14).** Measurements
   only; two attempted fixes were measured and dropped.
   - **`/net`** gains the RX task's busy time (and of it SDIO reads and `Tcp.input`), and the application's reads,

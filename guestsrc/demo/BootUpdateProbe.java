@@ -79,6 +79,10 @@ public class BootUpdateProbe
         expect("sha256 endpoint", call("GET /boot/sha256/config.txt.new", null, null), "200", sha(cfg));
         expect("sha256 missing", call("GET /boot/sha256/nope.bin", null, null), "404", null);
         expect("sha256 traversal", call("GET /boot/sha256/../etc/motd", null, null), "404", null);
+        expect("buildid staged", call("GET /boot/buildid/kernel8.img.new", null, null), "200", "0123456789abcdef");
+        expect("buildid no trailer", call("GET /boot/buildid/config.txt.new", null, null), "422", null);
+        expect("buildid missing", call("GET /boot/buildid/nope.img", null, null), "404", null);
+        expect("buildid traversal", call("GET /boot/buildid/../etc/motd", null, null), "404", null);
 
         byte[] k = kernel(3_000_000, id);
         String kr = call("PUT /boot/kernel8.img.new", headers(token, sha(k), k.length, true), k);
