@@ -52,7 +52,12 @@ public final class BootImageWriter
     /** Write the raw image bytes to {@code path}. */
     public void writeImage(Path path) throws IOException
     {
-        byte[] bytes = code.toBytes();
+        writeImage(path, code.toBytes());
+    }
+
+    /** Write {@code bytes} -- this image's words, possibly stamped and with a trailer -- to {@code path}. */
+    public void writeImage(Path path, byte[] bytes) throws IOException
+    {
         long end = code.base() + bytes.length;
         if (end > IMAGE_CEILING)
         {

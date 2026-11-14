@@ -57,7 +57,70 @@ public final class BuildRuntimeImage
         ClassRegistry registry = populateRegistry(classesDir);
 
         ImageBuilder ib = new ImageBuilder(registry);
-        return buildImage(ib, registry);
+        CodeBuffer cb = buildImage(ib, registry);
+        buildIdWord = ib.buildIdWord;
+        return cb;
+    }
+
+    /** Word offset of {@code vm/VM.buildId} in the image {@link #build} made last; -1 if nothing reads it. */
+    private static int buildIdWord = -1;
+
+    /** The trailer's first 16 bytes; the build id's 16 lowercase hex digits follow. */
+    static final String TRAILER_MAGIC = "joe-ng build id\n";
+
+    /** Bytes the trailer adds at the end of {@code kernel8.img}. */
+    static final int TRAILER_BYTES = 32;
+
+    /**
+     * Stamp the build id and append its trailer. The id is the first 8 bytes of the SHA-256 of {@code image} as
+     * built -- the {@code vm/VM.buildId} cell still zero, no trailer -- so it names the code, the baked objects
+     * and the RAMFS together, and is reproducible from the file: zero the cell, drop the trailer, hash.
+     *
+     * <p>The id is written twice. The static cell is how the RUNNING VM knows its own id; the trailer
+     * ({@link #TRAILER_MAGIC} plus 16 hex digits, the last 32 bytes of the file) is how anything else reads it
+     * WITHOUT booting the image -- the web server reading a staged {@code kernel8.new}, or {@code push.sh}
+     * reading the image it is about to send ({@code tail -c 16}). The image has no header (byte 0 is the first
+     * instruction), so the end of the file is the one offset fixed across builds.
+     */
+    static byte[] stampBuildId(byte[] image) throws IOException
+    {
+        java.security.MessageDigest md;
+        try
+        {
+            md = java.security.MessageDigest.getInstance("SHA-256");
+        }
+        catch (java.security.NoSuchAlgorithmException e)
+        {
+            throw new IOException(e);
+        }
+        byte[] h = md.digest(image);
+        long id = 0L;
+        int i = 0;
+        while (i < 8)
+        {
+            id = (id << 8) | (h[i] & 0xFFL);
+            i = i + 1;
+        }
+        if (buildIdWord >= 0)
+        {
+            int at = buildIdWord * 4;
+            int b = 0;
+            while (b < 8)
+            {
+                image[at + b] = (byte) (id >>> (8 * b));             // little-endian, as the VM reads a long
+                b = b + 1;
+            }
+        }
+        else
+        {
+            System.out.println("  build id: no reader of vm/VM.buildId -- the cell is absent, trailer only");
+        }
+        String hex = String.format("%016x", id);
+        byte[] out = java.util.Arrays.copyOf(image, image.length + TRAILER_BYTES);
+        byte[] t = (TRAILER_MAGIC + hex).getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        System.arraycopy(t, 0, out, image.length, TRAILER_BYTES);
+        System.out.println("build id " + hex);
+        return out;
     }
 
     /**
@@ -368,7 +431,7 @@ public final class BuildRuntimeImage
 
         CodeBuffer code = build(classesDir);
         BootImageWriter writer = new BootImageWriter(code);
-        writer.writeImage(out);
+        writer.writeImage(out, stampBuildId(code.toBytes()));
 
         System.out.printf("wrote %s (%s + reachable methods, %d bytes)%n",
                           out.toAbsolutePath(), ENTRY, code.wordCount() * 4);

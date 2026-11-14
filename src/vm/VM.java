@@ -2085,6 +2085,9 @@ public final class VM
         if (assignableAddr == 0L) { long u = VMNatives.assignable(0L, 0L); }    // Class.assignable0 (interfaces too)
         if (hwEntropyAddr == 0L) { long u = VMNatives.hwEntropy(0L, 0L); } // MetalRamfs.hwEntropy0
         if (consoleReadAddr == 0L) { long u = VMNatives.consoleRead(0L, 0L, 0L); } // MetalConsoleIn.read0
+        if (boardBuildIdAddr == 0L) { long u = VMNatives.boardBuildId(); }              // MetalBoard.buildId0
+        if (boardRebootFlagsAddr == 0L) { long u = VMNatives.boardSetRebootFlags(0L); } // MetalBoard.setRebootFlags0
+        if (boardRebootAddr == 0L) { VMNatives.boardReboot(); }                         // MetalBoard.reboot0
         if (blockInitAddr == 0L) { long u = VMNatives.blockInit(); }                    // MetalBlock.init0
         if (blockReadAddr == 0L) { long u = VMNatives.blockRead(0L, 0L, 0L, 0L); }      // MetalBlock.read0
         if (blockWriteAddr == 0L) { long u = VMNatives.blockWrite(0L, 0L, 0L, 0L); }    // MetalBlock.write0
@@ -3019,6 +3022,24 @@ public final class VM
     }
 
     /** Print {@code v} as {@code 0x} + 16 hex digits over the UART. */
+    /**
+     * {@code build <16 hex>}: the image's build id, the same digits as the trailer {@code BuildRuntimeImage}
+     * appends to {@code kernel8.img} and {@code /version} answers. Zero means the writer found no reader of
+     * {@link #buildId} and left the cell unstamped.
+     */
+    static void printBuildId()
+    {
+        Uart.write(Magic.bytes("build "));
+        int shift = 60;
+        while (shift >= 0)
+        {
+            int nib = (int) ((buildId >> shift) & 0xFL);
+            Uart.putc(nib < 10 ? 0x30 + nib : 0x61 + nib - 10);   // 0-9, a-f
+            shift -= 4;
+        }
+        Uart.putc(0x0A);
+    }
+
     public static void printHex(long v)
     {
         Uart.putc(0x30);                                   // '0'
@@ -3849,6 +3870,14 @@ public final class VM
     static long assignableAddr;        // VMNatives.assignable(JJ)J — Class.assignable0(J,J)
     static long hwEntropyAddr;         // VMNatives.hwEntropy(JJ)J — MetalRamfs.hwEntropy0(byte[],int)
     static long consoleReadAddr;       // VMNatives.consoleRead(JJJ)J — MetalConsoleIn.read0(byte[],int,int)
+    /**
+     * The image's build id: the first 8 bytes of the SHA-256 of {@code kernel8.img} with this cell zero and no
+     * trailer, stamped in by {@code BuildRuntimeImage} after the hash. Read by {@code MetalBoard.buildId0}.
+     */
+    static long buildId;
+    static long boardBuildIdAddr;      // VMNatives.boardBuildId()J — MetalBoard.buildId0()
+    static long boardRebootFlagsAddr;  // VMNatives.boardSetRebootFlags(J)J — MetalBoard.setRebootFlags0(int)
+    static long boardRebootAddr;       // VMNatives.boardReboot()V — MetalBoard.reboot0()
     static long blockInitAddr;         // VMNatives.blockInit()J — MetalBlock.init0()
     static long blockReadAddr;         // VMNatives.blockRead(JJJJ)J — MetalBlock.read0(long,byte[],int,int)
     static long blockWriteAddr;        // VMNatives.blockWrite(JJJJ)J — MetalBlock.write0(long,byte[],int,int)
@@ -4361,6 +4390,7 @@ public final class VM
         Uart.write(Magic.bytes("core "));                 // the clock we calibrated the baud to
         printDec(Uart.coreHz / 1000000);                  // MHz (0 = mailbox gave no answer)
         Uart.write(Magic.bytes("MHz\n"));
+        printBuildId();
 
         // Enable the identity-mapped MMU now -- after the mailbox (the one DMA path) has run with the MMU
         // off, and before anything that needs cacheable/coherent RAM (SMP + the HW spinlock). RAM becomes

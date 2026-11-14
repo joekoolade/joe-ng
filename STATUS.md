@@ -4,6 +4,40 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **BOOT FILES OVER THE NETWORK: BUILD ID, UPLOAD, TRYBOOT AND COMMIT ENDPOINTS (2026-11-13).**
+  Increment 4 of the boot-update arc, on increment 3's writable `/boot` (#515).
+  - **Build id.** `BuildRuntimeImage` hashes the finished image (SHA-256, first 8 bytes, 16 hex digits) with the
+    `vm/VM.buildId` cell still zero, then stamps the id twice: into that cell (the running VM's own id; boot prints
+    `build <hex>`) and into a 32-byte TRAILER at the end of `kernel8.img` (`joe-ng build id\n` + the hex). The image
+    has no header -- byte 0 is the first instruction -- so the end of the file is the one offset fixed across builds;
+    the trailer is how a staged `kernel8.img.new` is identified without booting it (`tail -c 16` on the host).
+    Reproducible: zero the cell, drop the trailer, hash -- checked on the built image.
+  - **`jdk.internal.misc.MetalBoard`** (not an overlay): `buildId()`, `buildIdOf(path)` (reads a trailer),
+    `setTryboot()` (firmware SET_REBOOT_FLAGS `0x00038064` = 1, one-shot: the next boot reads `tryboot.txt`) and
+    `reboot()` (drains the UART ring, then the PM watchdog). Natives wired in the usual three places.
+  - **`demo/Http`**: request head, headers, a body stream bounded by Content-Length (bytes read with the head come
+    first), `Expect: 100-continue`. **`demo/BootUpdate`**, dispatched from WebServerDemo:
+    - `GET /version`; `PUT /boot/<name>.new` -- ONLY staged names (`kernel8.img`, `config.txt`, `start4.elf`,
+      `fixup4.dat`, `armstub8*.bin`, plus `.new`), so nothing live is writable directly. Body written in 64 KB
+      writes, READ BACK from the card and its SHA-256 answered; a disagreeing `X-Sha256` or a short body deletes it.
+    - `POST /reboot[?tryboot=1]`: writes `tryboot.txt` -- the staged config, else the live one, with `kernel=`,
+      `armstub=`, `start_file=`, `fixup_file=` pointed at the staged files (appended under `[all]` if absent) --
+      sets the flag, answers, closes, then resets.
+    - `POST /boot/commit`: `Files.move(ATOMIC_MOVE)` of each staged file over its live one, armstubs first and
+      `config.txt` LAST, then deletes `tryboot.txt`. REFUSED (409) while a staged kernel's trailer id is not the
+      running build -- commit happens on the trial boot. `POST /boot/discard` deletes the staged files.
+    - Every state change needs `X-Boot-Token` = `/etc/boot.token` (gitignored, `ramfs/etc/boot.token`); compared
+      with `MessageDigest.isEqual`; no token baked = 403.
+  - **QEMU has no NIC**, so `demo/BootUpdateProbe` feeds request BYTES through the same `Http.read` and
+    `BootUpdate.handle` against a copy of the test card image: tokens, names, missing length, short body, SHA
+    mismatch, 100-continue, commit refused for another build, `tryboot.txt` contents, commit, discard -- **PASS**;
+    host `fsck_msdos -n` clean and the committed files' hashes equal the probe's.
+  - **Pi, over WiFi from the Mac (build `bb5139a390701075`):** `/version` right; no/wrong token 401; live name
+    400; **a 39,342,456-byte `kernel8.img.new` PUT -> 200 with the card's read-back SHA-256 equal to the Mac's
+    `shasum` and its trailer id read back**, 74.5 s end to end (~528 KB/s, read-back included); a wrong `X-Sha256`
+    -> 400 and deleted (the card's hash = the file's); discard; commit with nothing staged 409. NOT yet run on the
+    Pi: the tryboot reset itself (increments 5-6).
+
 - **`/boot` IS WRITABLE: FAT32 WRITES ON THE SD CARD THROUGH STOCK java.io AND java.nio (2026-11-13).**
   Increment 3 of the boot-update arc, on increment 2's read-only mount (#514).
   - **`MetalFat32` writes** (guest Java): cluster allocation that takes `prev + 1` when it is free, so a growing

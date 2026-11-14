@@ -11,7 +11,6 @@
  */
 package demo;
 
-import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Inet4Address;
 import java.net.InetAddress;
@@ -20,12 +19,12 @@ import java.net.NetworkInterface;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
-import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Enumeration;
+import jdk.internal.misc.MetalBoard;
 import jdk.internal.misc.MetalStats;
 
 /**
@@ -38,6 +37,9 @@ import jdk.internal.misc.MetalStats;
  *
  * <p>One connection at a time, each answered and closed ({@code Connection: close}). An accepted socket has a read
  * timeout, so a browser's speculative connection that never sends a request cannot hold the server up.
+ *
+ * <p>It also takes the Pi's boot files over the network -- {@code /version}, {@code PUT /boot/<name>.new},
+ * {@code /reboot}, {@code /boot/commit}, {@code /boot/discard} -- see {@link BootUpdate}.
  */
 public class WebServerDemo
 {
@@ -68,9 +70,10 @@ public class WebServerDemo
         {
             Socket s = server.accept();
             served = served + 1;
+            int after = BootUpdate.NONE;
             try
             {
-                serve(s, zone, served);
+                after = serve(s, zone, served);
             }
             catch (Exception e)
             {
@@ -80,32 +83,38 @@ public class WebServerDemo
             {
                 s.close();
             }
+            if (after == BootUpdate.REBOOT)
+            {
+                Thread.sleep(500);                       // let the reply and the FIN leave before the reset
+                MetalBoard.reboot();
+            }
         }
     }
 
-    /** Read one request's head, log its first line, and answer it. */
-    private static void serve(Socket s, ZoneId zone, int n) throws Exception
+    /** Read one request, log its first line, and answer it; what to do once the connection is closed. */
+    private static int serve(Socket s, ZoneId zone, int n) throws Exception
     {
         s.setSoTimeout(5000);
-        String line = readHead(s.getInputStream());
-        if (line == null)
+        Http.Request req = Http.read(s.getInputStream());
+        if (req == null)
         {
             System.out.println("web: #" + n + " " + s.getInetAddress().getHostAddress() + " sent no request");
-            return;
+            return BootUpdate.NONE;
         }
-        System.out.println("web: #" + n + " " + s.getInetAddress().getHostAddress() + " " + line);
-        String path = "/";
-        String[] parts = line.split(" ");
-        if (parts.length >= 2)
+        System.out.println("web: #" + n + " " + s.getInetAddress().getHostAddress() + " " + req.line);
+        OutputStream out = s.getOutputStream();
+        if (!req.complete)
         {
-            path = parts[1];
+            Http.text(out, "431 Request Header Fields Too Large", "the request head did not end");
+            return BootUpdate.NONE;
         }
+        int boot = BootUpdate.handle(req, out);
+        if (boot >= 0)
+        {
+            return boot;
+        }
+        String path = req.path;
         String now = ZonedDateTime.now(zone).format(WHEN);
-        int q = path.indexOf('?');
-        if (q >= 0)
-        {
-            path = path.substring(0, q);
-        }
         String status = "200 OK";
         String body;
         if (path.equals("/") || path.equals("/index.html"))
@@ -137,18 +146,8 @@ public class WebServerDemo
             status = "404 Not Found";
             body = head("Not found") + "<h1>404</h1><p>No page at " + escape(path) + "</p>\n" + FOOT;
         }
-        byte[] b = body.getBytes(StandardCharsets.UTF_8);
-        String head = "HTTP/1.0 " + status + "\r\n"
-                + "Content-Type: text/html; charset=utf-8\r\n"
-                + "Content-Length: " + b.length + "\r\n"
-                + "Cache-Control: no-store\r\n"
-                + "Connection: close\r\n"
-                + "Server: joe-ng\r\n"
-                + "\r\n";
-        OutputStream out = s.getOutputStream();
-        out.write(head.getBytes(StandardCharsets.US_ASCII));
-        out.write(b);
-        out.flush();
+        Http.respond(out, status, "text/html; charset=utf-8", body.getBytes(StandardCharsets.UTF_8));
+        return BootUpdate.NONE;
     }
 
     private static final String FOOT = "</body></html>\n";
@@ -318,38 +317,6 @@ public class WebServerDemo
             i = i + 1;
         }
         return v < 0 ? "-" + sb : sb.toString();
-    }
-
-    /**
-     * The request line, after reading the head up to its blank line (or what arrived before the peer stopped
-     * sending); null when nothing arrived before the read timeout or the peer closed.
-     */
-    private static String readHead(InputStream in) throws Exception
-    {
-        StringBuilder sb = new StringBuilder();
-        byte[] buf = new byte[1024];
-        try
-        {
-            while (sb.length() < 8192 && sb.indexOf("\r\n\r\n") < 0)
-            {
-                int r = in.read(buf);
-                if (r < 0)
-                {
-                    break;
-                }
-                sb.append(new String(buf, 0, r, StandardCharsets.ISO_8859_1));
-            }
-        }
-        catch (SocketTimeoutException e)
-        {
-            // what arrived is all there will be
-        }
-        if (sb.length() == 0)
-        {
-            return null;
-        }
-        int eol = sb.indexOf("\r\n");
-        return eol < 0 ? sb.toString() : sb.substring(0, eol);
     }
 
     private static String escape(String s)
