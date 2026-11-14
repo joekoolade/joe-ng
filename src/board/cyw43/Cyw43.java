@@ -444,7 +444,10 @@ public final class Cyw43
         board.bcm2711.Uart.write(Magic.bytes("wifi: ver = "));
         dumpAscii(rx + doff + 16, 180);                  // value = after sdpcm(doff) + bcdc(16)
 
-        scanOnly();                                      // M2: bring the interface up + escan + dump results
+        readMac();                                       // now, while the firmware is idle: read after link-up
+                                                         // it could miss its 1.5 s window, and the 4-way then
+                                                         // ran on a zero MAC (wrong MIC, no msg3, no network)
+        bringUp();                                       // CLM, events, WLC_UP, then join
     }
 
     private static int reqId = 1;                        // BCDC request id (echoed in the response)
@@ -452,15 +455,8 @@ public final class Cyw43
     private static final int WLC_DOWN = 3;               // ioctl: bring the interface down
     private static final int WLC_GET_BSSID = 23;         // ioctl: the associated BSSID
     private static final int WLC_SET_KEY = 45;           // ioctl: install a key (wsec_key)
-    private static final int WLC_SCAN = 50;              // ioctl: start a scan
-    private static final int WLC_SCAN_RESULTS = 51;      // ioctl: read the scan result list (GET)
     private static final int WLC_SET_VAR = 263;          // ioctl: set a named iovar
 
-    /**
-     * M2 (scan-only): bring the interface up, run a synchronous scan (WLC_SCAN, wait, WLC_SCAN_RESULTS), and
-     * dump the result buffer's ASCII so the visible SSIDs show up — no event_msgs / escan dependency, just
-     * the proven GET path. Proves the radio hears networks before we attempt a join.
-     */
     static int irqCount;                                 // SDIO card interrupts serviced (IRQ-driven RX)
 
     /**
@@ -563,113 +559,19 @@ public final class Cyw43
         return len;
     }
 
-    static void scanOnly()
-    {
-        board.bcm2711.Uart.write(Magic.bytes("wifi: scan...\n"));
-        clmLoad();                                       // regulatory/PHY data — the radio needs it to scan
-        enableEvents();                                  // turn on E_ESCAN_RESULT so results are pushed to us
-        readCtrl(sendBcdc(WLC_UP, 0L, 0, true));         // bring the interface up
-        VM.delayMs(100);
-
-        // This is fullmac firmware: scan via the escan iovar, results arrive as E_ESCAN_RESULT events (not
-        // WLC_SCAN_RESULTS, which it rejects). escan params = 8-byte header + wl_scan_params_t (broadcast).
-        long es = Heap.allocData(256);
-        int np = putStr(es, Magic.bytes("escan"));       // "escan\0"
-        long pp = es + np;
-        Magic.store32(pp + 0, 1);                        // version = ESCAN_REQ_VERSION
-        store16(pp + 4, 1);                              // action = WL_SCAN_ACTION_START
-        store16(pp + 6, 0x1234);                         // sync_id
-        int b = 0;
-        while (b < 6)
-        {
-            Magic.store8(pp + 44 + b, 0xFF);             // bssid = broadcast
-            b = b + 1;
-        }
-        Magic.store8(pp + 50, 2);                        // bss_type = DOT11_BSSTYPE_ANY
-        Magic.store8(pp + 51, 0);                        // scan_type = active
-        Magic.store32(pp + 52, -1);                      // nprobes
-        Magic.store32(pp + 56, -1);                      // active_time
-        Magic.store32(pp + 60, -1);                      // passive_time
-        Magic.store32(pp + 64, -1);                      // home_time
-        Magic.store32(pp + 68, 0);                       // channel_num = 0 (all)
-        readCtrl(sendBcdc(WLC_SET_VAR, es, np + 72, true));   // escan ack (0 = scan started)
-
-        // Read event frames (channel 1) for ~6 s and dump their ASCII — each escan result carries a
-        // bss_info whose SSID shows up as a readable run. Control-channel (0) frames are acks, skip them.
-        long rx = Heap.allocData(2048);
-        long endT = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * 6L;
-        int events = 0;
-        while (Magic.readCNTPCT_EL0() < endT && events < 80)
-        {
-            int len = waitFrameIrq(rx, 2048, RX_WAIT_MS);
-            if (len == 0)
-            {
-                VM.delayMs(2);
-                continue;
-            }
-            int ch = Magic.load8(rx + 5) & 0x0F;
-            if (ch == 0)
-            {
-                continue;                                // an ioctl ack, not an event
-            }
-            parseEvent(rx, len);
-            events = events + 1;
-        }
-        board.bcm2711.Uart.write(Magic.bytes("wifi: scan done\n"));
-        join();                                          // M2/M5: associate (open or WPA2) per wifi.conf
-    }
-
     /**
-     * Parse a firmware event frame and, for an escan result, print the AP's SSID. Layout: locate the BRCM
-     * event ethertype 0x886C (this skips the leading BDC header/padding), then event_msg = ethertype(2) +
-     * bcmeth_hdr(10) later; its fields are BIG-ENDIAN. event_type (69 = E_ESCAN_RESULT) at +4. The escan
-     * result follows the 48-byte event_msg: brcmf_escan_result {buflen,version,sync_id,bss_count} then
-     * bss_info {version,length,BSSID,beacon,capability,SSID_len@18,SSID@19}.
+     * Bring the interface up and join: load the CLM (regulatory/PHY data the radio needs before it can
+     * associate), turn on the join-phase events, WLC_UP, then {@link #join}. The firmware scans for the SSID
+     * itself on WLC_SET_SSID, so no listing scan runs first (one used to: ~6 s of escan results printed as
+     * {@code SSID:} lines at every boot, which nothing used).
      */
-    private static void parseEvent(long rx, int len)
+    static void bringUp()
     {
-        int eth = -1;
-        int i = 12;
-        while (i < 64 && i < len - 2)                    // find 0x886C after the SDPCM/BDC headers
-        {
-            if ((Magic.load8(rx + i) & 0xFF) == 0x88 && (Magic.load8(rx + i + 1) & 0xFF) == 0x6C)
-            {
-                eth = i;
-                break;
-            }
-            i = i + 1;
-        }
-        if (eth < 0)
-        {
-            return;                                      // not a BRCM event frame
-        }
-        long em = rx + eth + 2 + 10;                     // event_msg = after ethertype(2) + bcmeth_hdr(10)
-        int et = beU32(em + 4);                          // event_type (big-endian)
-        if (et != 69)
-        {
-            return;                                      // not E_ESCAN_RESULT
-        }
-        long esr = em + 48;                              // escan result after the 48-byte event_msg
-        int bssCount = (Magic.load8(esr + 10) & 0xFF) | ((Magic.load8(esr + 11) & 0xFF) << 8);
-        if (bssCount == 0)
-        {
-            return;                                      // scan-progress / completion, no AP
-        }
-        long bss = esr + 12;
-        int ssidLen = Magic.load8(bss + 18) & 0xFF;
-        if (ssidLen == 0 || ssidLen > 32)
-        {
-            return;
-        }
-        board.bcm2711.Uart.write(Magic.bytes("  SSID: "));
-        int k = 0;
-        while (k < ssidLen)
-        {
-            int c = Magic.load8(bss + 19 + k) & 0xFF;
-            board.bcm2711.Uart.putc((c >= 0x20 && c < 0x7F) ? c : 0x2E);
-            k = k + 1;
-        }
-        board.bcm2711.Uart.putc(0x0A);
+        clmLoad();
+        enableEvents();
+        readCtrl(sendBcdc(WLC_UP, 0L, 0, true));
+        VM.delayMs(100);
+        join();
     }
 
     /** Read a big-endian u32 (firmware event_msg fields are network-order). */
@@ -740,27 +642,99 @@ public final class Cyw43
             Magic.store8(ss + 4 + i, Magic.load8(ssid + i));
             i = i + 1;
         }
-        readCtrl(sendBcdc(WLC_SET_SSID, ss, 36, true));
-
-        boolean linked = waitLink();
-        board.bcm2711.Uart.write(linked ? Magic.bytes("wifi: JOINED\n") : Magic.bytes("wifi: join timeout\n"));
-        if (!linked)
+        long joinT = Magic.readCNTPCT_EL0();
+        boolean ok = false;
+        while (!ok && wpaAttempts < JOIN_ATTEMPTS)
+        {
+            if (wpaAttempts > 0)
+            {
+                board.bcm2711.Uart.write(Magic.bytes("wifi: join again\n"));
+                readCtrl(sendBcdc(WLC_DISASSOC, 0L, 0, true));
+                VM.delayMs(1000);
+            }
+            wpaAttempts = wpaAttempts + 1;
+            heldLen = 0;                                 // a kept frame belongs to the attempt that read it
+            ok = associate(ss);
+        }
+        if (!ok)
         {
             return;
         }
-        readMac();                                       // MUST precede fourWay: the PTK/MIC and msg2's source
-                                                         // address both use ourMac (was 0 → wrong MIC → no msg3)
-        if (staPskLen > 0 && !WPA2_OFFLOAD && !fourWay())   // host 4-way (skipped when the firmware runs it)
-        {
-            board.bcm2711.Uart.write(Magic.bytes("wifi: 4-way failed\n"));
-            return;
-        }
+        wpaJoinMs = (int) ((Magic.readCNTPCT_EL0() - joinT) * 1000L / Magic.readCNTFRQ_EL0());
+        board.bcm2711.Uart.write(Magic.bytes("wifi: join "));
+        VM.printDec(wpaJoinMs);
+        board.bcm2711.Uart.write(Magic.bytes(" ms, eapol msg1 x"));
+        VM.printDec(wpaMsg1);
+        board.bcm2711.Uart.write(Magic.bytes(", msg2 x"));
+        VM.printDec(wpaMsg2);
+        board.bcm2711.Uart.write(Magic.bytes(", kept from the join wait "));
+        VM.printDec(wpaHeld);
+        board.bcm2711.Uart.write(Magic.bytes(", attempts "));
+        VM.printDec(wpaAttempts);
+        board.bcm2711.Uart.putc(0x0A);
         if (staPskLen > 0 && WPA2_OFFLOAD)
         {
             board.bcm2711.Uart.write(Magic.bytes("wifi: offload link up (fw ran the 4-way)\n"));
         }
         VM.delayMs(500);
         dhcp();
+    }
+
+    private static final int WLC_DISASSOC = 52;          // ioctl: leave the BSS
+    private static final int JOIN_ATTEMPTS = 3;
+    public static int wpaAttempts;                       // associations tried at boot (1 = the first one held)
+
+    /**
+     * One association: WLC_SET_SSID, wait for link-up, then (WPA2) the host 4-way. False if the link never came
+     * up or the handshake failed; {@link #join} then leaves the BSS and tries again.
+     */
+    private static boolean associate(long ss)
+    {
+        readCtrl(sendBcdc(WLC_SET_SSID, ss, 36, true));
+        boolean linked = waitLink();
+        board.bcm2711.Uart.write(linked ? Magic.bytes("wifi: JOINED\n") : Magic.bytes("wifi: join timeout\n"));
+        if (!linked)
+        {
+            return false;
+        }
+        if (staPskLen == 0 || WPA2_OFFLOAD)
+        {
+            return true;
+        }
+        if (!macKnown())
+        {
+            readMac();                                   // the boot-time read failed: once more, before fourWay
+            if (!macKnown())
+            {
+                board.bcm2711.Uart.write(Magic.bytes("wifi: no mac, cannot key\n"));
+                return false;
+            }
+        }
+        if (!fourWay())
+        {
+            board.bcm2711.Uart.write(Magic.bytes("wifi: 4-way failed\n"));
+            return false;
+        }
+        return true;
+    }
+
+    /** True once {@link #readMac} has stored a MAC that is not all zero (the PTK and msg2 are built on it). */
+    private static boolean macKnown()
+    {
+        if (ourMac == 0L)
+        {
+            return false;
+        }
+        int i = 0;
+        while (i < 6)
+        {
+            if (Magic.load8(ourMac + i) != 0)
+            {
+                return true;
+            }
+            i = i + 1;
+        }
+        return false;
     }
 
     static long staSsid;                                 // SSID bytes (PBKDF2 salt)
@@ -855,6 +829,7 @@ public final class Cyw43
             return false;
         }
         board.bcm2711.Uart.write(Magic.bytes("wifi: eapol msg1\n"));
+        wpaMsg1 = wpaMsg1 + 1;
 
         byte[] aNonce = heapBytes(m1 + 17, 32);
         int keyLen = ((Magic.load8(m1 + 7) & 0xFF) << 8) | (Magic.load8(m1 + 8) & 0xFF);
@@ -876,18 +851,11 @@ public final class Cyw43
         byte[] tk = slice(ptk, 32, 16);
         board.bcm2711.Uart.write(Magic.bytes("wifi: ptk derived\n"));
 
-        // msg2 key data = the STA's RSN IE; use the firmware's advertised IE (wpaie) if it provides one, else
-        // the standard WPA2-PSK-CCMP IE.
-        byte[] rsnie = rsnIe();                          // same IE we set as `wpaie` at association
-        byte[] ie = rsnie;
-        int ieLen = rsnie.length;
-        byte[] fwie = new byte[64];
-        int fwLen = iovarGet(Magic.bytes("wpaie"), fwie);
-        if (fwLen >= 4 && (fwie[0] & 0xFF) == 0x30)
-        {
-            ie = fwie;
-            ieLen = fwLen;
-        }
+        // msg2 key data: the RSN IE we set as `wpaie`, which the association request carried. It is not read
+        // back from the firmware: right after link-up the firmware can leave ioctls unanswered for ~7 s (Pi,
+        // 2026-11-14), so that read cost 4 s, came back empty, and this same IE then keyed the link.
+        byte[] ie = rsnIe();
+        int ieLen = ie.length;
 
         // Send msg2 and wait for msg3. A frame with no MIC bit is a (re)transmitted msg1 — re-derive the PTK
         // from its ANonce/replay and resend msg2. A frame with the MIC bit is msg3.
@@ -896,6 +864,7 @@ public final class Cyw43
         while (tries < 6 && m3 == 0L)
         {
             sendEapol(aa, 0x010a, replay, keyLen, sNonce, ie, ieLen, kck);
+            wpaMsg2 = wpaMsg2 + 1;
             board.bcm2711.Uart.write(Magic.bytes("wifi: eapol msg2 sent\n"));
             long f = recvEapol(apMac);
             if (f == 0L)
@@ -906,6 +875,7 @@ public final class Cyw43
             int ki = ((Magic.load8(f + 5) & 0xFF) << 8) | (Magic.load8(f + 6) & 0xFF);
             if ((ki & 0x100) == 0)                       // no MIC → another msg1: re-derive and resend msg2
             {
+                wpaMsg1 = wpaMsg1 + 1;
                 aNonce = heapBytes(f + 17, 32);
                 replay = heapBytes(f + 9, 8);
                 derivePtk(pmk, aa, heapBytes(ourMac, 6), aNonce, sNonce, ptk);
@@ -970,27 +940,34 @@ public final class Cyw43
         return true;
     }
 
-    /** Wait (~8 s) for an EAPOL frame (ethertype 0x888E) from the AP; fills {@code apMac} (source), returns
-     *  the EAPOL-Key body's heap offset, or 0 on timeout. */
+    /**
+     * Wait (~8 s) for an EAPOL frame (ethertype 0x888E) from the AP; fills {@code apMac} (source), returns
+     * the EAPOL-Key body's heap offset, or 0 on timeout. A frame {@link #holdIfEapol} kept is taken first.
+     */
     private static long recvEapol(byte[] apMac)
     {
         long freq = Magic.readCNTFRQ_EL0();
         long endT = Magic.readCNTPCT_EL0() + freq * 8L;
         while (Magic.readCNTPCT_EL0() < endT)
         {
-            int len = waitFrameIrq(rxbuf, 2048, RX_WAIT_MS);
+            int len;
+            if (heldLen > 0)
+            {
+                len = heldLen;
+                copyBytes(heldEapol, rxbuf, len);
+                heldLen = 0;
+            }
+            else
+            {
+                len = waitFrameIrq(rxbuf, 2048, RX_WAIT_MS);
+            }
             if (len == 0)
             {
                 VM.delayMs(2);
                 continue;
             }
-            if ((Magic.load8(rxbuf + 5) & 0x0F) == 0)
-            {
-                continue;
-            }
-            long eth = rxbuf + (Magic.load8(rxbuf + 7) & 0xFF);
-            eth = eth + 4 + (Magic.load8(eth + 3) & 0xFF) * 4;
-            if (((Magic.load8(eth + 12) & 0xFF) << 8 | (Magic.load8(eth + 13) & 0xFF)) != 0x888E)
+            long eth = eapolEth(rxbuf);
+            if (eth == 0L)
             {
                 continue;
             }
@@ -1004,6 +981,61 @@ public final class Cyw43
         }
         return 0L;
     }
+
+    /** The Ethernet header of a received frame if it carries EAPOL (ethertype 0x888E), else 0. */
+    private static long eapolEth(long frame)
+    {
+        if ((Magic.load8(frame + 5) & 0x0F) == 0)
+        {
+            return 0L;                                   // an ioctl ack
+        }
+        long eth = frame + (Magic.load8(frame + 7) & 0xFF);
+        eth = eth + 4 + (Magic.load8(eth + 3) & 0xFF) * 4;   // past the BDC header and its data offset
+        if (((Magic.load8(eth + 12) & 0xFF) << 8 | (Magic.load8(eth + 13) & 0xFF)) != 0x888E)
+        {
+            return 0L;
+        }
+        return eth;
+    }
+
+    private static long heldEapol;                       // an EAPOL frame read before fourWay was listening
+    private static int heldLen;                          // its length; 0 = none held
+
+    /**
+     * Keep {@code frame} for {@link #recvEapol} if it is EAPOL. The AP sends msg1 the moment it has
+     * associated us, which can be before or beside the E_LINK event {@link #waitLink} is reading for; a
+     * reader that dropped it left the handshake waiting ~1 s for the AP to send msg1 again -- or, if the
+     * retry was lost too, failed the join. The newest frame wins: a resent msg1 carries the current ANonce.
+     */
+    private static void holdIfEapol(long frame, int len)
+    {
+        if (eapolEth(frame) == 0L || len <= 0 || len > 2048)
+        {
+            return;
+        }
+        if (heldEapol == 0L)
+        {
+            heldEapol = Heap.allocData(2048);
+        }
+        copyBytes(frame, heldEapol, len);
+        heldLen = len;
+        wpaHeld = wpaHeld + 1;
+    }
+
+    private static void copyBytes(long src, long dst, int len)
+    {
+        int i = 0;
+        while (i < len)
+        {
+            Magic.store8(dst + i, Magic.load8(src + i));
+            i = i + 1;
+        }
+    }
+
+    public static int wpaMsg1;                           // boot 4-way: EAPOL msg1 frames received (1 = no resend)
+    public static int wpaMsg2;                           // ... msg2 frames sent
+    public static int wpaHeld;                           // ... EAPOL frames kept from the join wait / an ioctl wait
+    public static int wpaJoinMs;                         // ... WLC_SET_SSID to keys installed, in ms
 
     /** Build + send an EAPOL-Key frame; computes the MIC over the frame (MIC field zeroed) with KCK when the
      *  key-info MIC bit is set. */
@@ -1212,6 +1244,7 @@ public final class Cyw43
             {
                 continue;                                // ioctl ack
             }
+            holdIfEapol(rx, len);                        // msg1 can come before E_LINK: keep it for fourWay
             linked = parseJoinEvent(rx, len);
         }
         return linked;
@@ -1220,11 +1253,17 @@ public final class Cyw43
     /** GET a named iovar into {@code out}; returns the number of bytes the firmware returned (0 on failure). */
     private static int iovarGet(byte[] name, byte[] out)
     {
+        return iovarGet(name, out, 1500);
+    }
+
+    /** {@link #iovarGet}, waiting up to {@code ms} for the reply. */
+    private static int iovarGet(byte[] name, byte[] out, int ms)
+    {
         long g = Heap.allocData(256);
         int p = putStr(g, name);
         int id = sendBcdc(WLC_GET_VAR, g, p + 128, false);
         long rx = Heap.allocData(512);
-        int len = recvCtrl(rx, 512, id);
+        int len = recvCtrl(rx, 512, id, ms);
         if (len == 0)
         {
             return 0;
@@ -2668,8 +2707,8 @@ public final class Cyw43
 
     /**
      * Enable just the events we act on (a targeted {@code event_msgs} bitmask, not all-ones) so the join
-     * trace isn't buried under RSSI/probe/misc event spam. GET first to learn the mask length. Bits: scan
-     * result + the association-lifecycle events (set_ssid/join/auth/deauth/assoc/disassoc/link/psk_sup).
+     * trace isn't buried under RSSI/probe/misc event spam. GET first to learn the mask length. Bits: the
+     * association-lifecycle events (set_ssid/join/auth/deauth/assoc/disassoc/link/psk_sup).
      */
     static void enableEvents()
     {
@@ -2702,7 +2741,6 @@ public final class Cyw43
         setEvt(m, 12);                                   // E_DISASSOC_IND
         setEvt(m, 16);                                   // E_LINK
         setEvt(m, 46);                                   // E_PSK_SUP (for WPA later)
-        setEvt(m, 69);                                   // E_ESCAN_RESULT (scan)
         readCtrl(sendBcdc(WLC_SET_VAR, s, q + mlen, true));
     }
 
@@ -2728,7 +2766,7 @@ public final class Cyw43
 
     /**
      * Download the CLM blob (regulatory + PHY calibration) the firmware needs before it can scan/join —
-     * without it {@code WLC_SCAN} returns BCME_NOTUP. Sent as the chunked {@code clmload} iovar: each chunk
+     * without it a scan returns BCME_NOTUP. Sent as the chunked {@code clmload} iovar: each chunk
      * is a 12-byte brcmf_dload_data header {flag, dload_type=CLM, len, crc=0} + data, with DL_BEGIN on the
      * first chunk and DL_END on the last (flag also carries the handler version in bits 12+).
      */
@@ -2846,7 +2884,13 @@ public final class Cyw43
      */
     static int recvCtrl(long dst, int cap, int wantId)
     {
-        long endT = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * 3L / 2L;   // ~1.5 s (was 600 * 2 ms poll)
+        return recvCtrl(dst, cap, wantId, 1500);         // ~1.5 s (was 600 * 2 ms poll)
+    }
+
+    /** {@link #recvCtrl}, waiting up to {@code ms}. */
+    static int recvCtrl(long dst, int cap, int wantId, int ms)
+    {
+        long endT = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * ms / 1000L;
         while (Magic.readCNTPCT_EL0() < endT)
         {
             int len = rxFrame(net.RxQueues.Q_CTRL, dst, cap);
@@ -2857,6 +2901,10 @@ public final class Cyw43
             int ch = Magic.load8(dst + 5) & 0x0F;
             if (ch != 0)                                 // event (1) / data (2) — not an ioctl ack
             {
+                if (!net.RxQueues.active)
+                {
+                    holdIfEapol(dst, len);               // bring-up: this task is the only reader
+                }
                 log(Magic.bytes("  (skip ch="), ch);
                 continue;
             }
