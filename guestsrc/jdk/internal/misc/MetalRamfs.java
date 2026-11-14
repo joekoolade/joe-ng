@@ -34,11 +34,15 @@ import magic.Magic;
  * links. A failing call returns a NEGATIVE error code ({@link #NOENT} ...), which each caller maps to its own
  * errno table. One lock guards the tree and the descriptor tables.
  *
- * <p>{@code /boot} is the microSD card's FAT32 boot partition ({@link MetalFat32}), READ-ONLY for now: its
- * directories are read from the card in one pass the first time a path under {@code /boot} is resolved, become
- * nodes of this same tree (names compared case-insensitively, as FAT does), and file contents are read from the
- * card on demand. Without a card, or with one that will not mount, {@code /boot} is an empty directory and
- * {@link #bootError} says why. Any change under {@code /boot} is ROFS.
+ * <p>{@code /boot} is the microSD card's FAT32 boot partition ({@link MetalFat32}): its directories are read from
+ * the card in one pass the first time a path under {@code /boot} is resolved and become nodes of this same tree
+ * (names compared case-insensitively, as FAT does); file contents are read from the card on demand, and every
+ * change -- create, write, truncate, mkdir, rmdir, unlink, rename, times -- is written THROUGH to the card before
+ * the call returns, so the node is never ahead of the card. FAT has no owners, modes or hard links: chmod, chown
+ * and link there are PERM, as Linux's vfat answers. A rename or link between {@code /boot} and the rest of the tree
+ * is XDEV, which java.nio's move and copy answer by copying. An unlinked card file still open keeps its clusters
+ * until its last close. Without a card, or with one that will not mount, {@code /boot} is an empty directory,
+ * {@link #bootError} says why, and any change under it is ROFS.
  *
  * <p>Decisions where the image says nothing: baked files are mode 0644 and directories 0755 (what a checkout
  * gives them under the usual umask), owned 0/0 with every time 0; {@code /tmp} is 01777; new files and
@@ -84,6 +88,8 @@ public final class MetalRamfs
     public static final int FBIG = 10;
     public static final int ROFS = 11;
     public static final int IO = 12;
+    public static final int XDEV = 13;
+    public static final int NOSPC = 14;
 
     // ---- open flags --------------------------------------------------------------------------------------------
     public static final int O_READ = 1;
@@ -364,6 +370,109 @@ public final class MetalRamfs
         return 0;
     }
 
+    /** The card directory behind directory node {@code d}: the partition's root for the mount point. */
+    private static MetalFat32.Entry fatDir(MetalFsNode d)
+    {
+        return d.mount ? bootFs.root() : d.fat;
+    }
+
+    /** The code for a failed card change: NOSPC when it is full, INVAL for a name FAT cannot hold, else IO. */
+    private static int cardError(java.io.IOException e)
+    {
+        if (e instanceof MetalFat32.NoSpace)
+        {
+            return -NOSPC;
+        }
+        if (e instanceof MetalFat32.BadName)
+        {
+            return -INVAL;
+        }
+        return -IO;
+    }
+
+    /**
+     * A new card file or directory {@code name} in {@code parent} (the mount point or a card directory), written to
+     * the card and entered in the tree: the node, or an Integer code.
+     */
+    private static Object bootCreate(MetalFsNode parent, String name, boolean dir)
+    {
+        if (bootFs == null)
+        {
+            return Integer.valueOf(-ROFS);
+        }
+        long t = now();
+        MetalFat32.Entry e;
+        try
+        {
+            e = bootFs.create(fatDir(parent), name, dir, t);
+        }
+        catch (java.io.IOException x)
+        {
+            return Integer.valueOf(cardError(x));
+        }
+        MetalFsNode n = newNode(dir, dir ? 0755 : 0644, t);
+        n.fat = e;
+        if (dir)
+        {
+            n.kids = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+        }
+        parent.kids.put(e.name, n);
+        touch(parent);
+        return n;
+    }
+
+    /** Write {@code b[off..off+len)} into card file {@code node} at {@code pos}: {@code len} or a negative code. */
+    private static int cardWrite(MetalFsNode node, long pos, byte[] b, int off, int len)
+    {
+        long t = now();
+        try
+        {
+            bootFs.write(node.fat, pos, b, off, len, t);
+        }
+        catch (java.io.IOException x)
+        {
+            node.size = node.fat.size;
+            return cardError(x);
+        }
+        node.size = node.fat.size;
+        node.mtime = t;
+        node.ctime = t;
+        return len;
+    }
+
+    /** True if some descriptor is open on {@code n}. */
+    private static boolean isOpenNode(MetalFsNode n)
+    {
+        for (Fd f : FDS.values())
+        {
+            if (f.node == n)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Free a card node's clusters once it has no name and no descriptor. A failure only leaks clusters, which
+     * {@code fsck} reclaims; nothing on the card points at them.
+     */
+    private static void releaseIfUnused(MetalFsNode n)
+    {
+        if (n.fat == null || n.fat.entryLba >= 0L || isOpenNode(n))
+        {
+            return;
+        }
+        try
+        {
+            bootFs.release(n.fat);
+        }
+        catch (java.io.IOException e)
+        {
+            bootError = "release of " + n.fat.name + ": " + e;
+        }
+    }
+
     /** Why {@code p} does not resolve: NOTDIR if a file stands where a directory must, else NOENT. */
     private static int missing(String p)
     {
@@ -542,10 +651,6 @@ public final class MetalRamfs
     {
         synchronized (LOCK)
         {
-            if (onBoot(p))
-            {
-                return -ROFS;
-            }
             if (lookup(p) != null)
             {
                 return -EXIST;
@@ -556,6 +661,11 @@ public final class MetalRamfs
                 return (Integer) d;
             }
             MetalFsNode parent = (MetalFsNode) d;
+            if (onBoot(p))
+            {
+                Object made = bootCreate(parent, leaf(p), true);
+                return made instanceof Integer ? (Integer) made : 0;
+            }
             parent.kids.put(leaf(p), newNode(true, mode & ~UMASK & 07777, now()));
             touch(parent);
             return 0;
@@ -567,10 +677,6 @@ public final class MetalRamfs
     {
         synchronized (LOCK)
         {
-            if (onBoot(p))
-            {
-                return -ROFS;
-            }
             MetalFsNode n = lookup(p);
             if (n == null)
             {
@@ -580,13 +686,25 @@ public final class MetalRamfs
             {
                 return -NOTDIR;
             }
-            if (p.equals("/"))
+            if (p.equals("/") || n.mount)
             {
                 return -BUSY;
             }
             if (!n.kids.isEmpty())
             {
                 return -NOTEMPTY;
+            }
+            if (n.fat != null)
+            {
+                try
+                {
+                    bootFs.unlink(n.fat);
+                }
+                catch (java.io.IOException x)
+                {
+                    return cardError(x);
+                }
+                releaseIfUnused(n);
             }
             MetalFsNode parent = lookup(parentPath(p));
             parent.kids.remove(leaf(p));
@@ -600,10 +718,6 @@ public final class MetalRamfs
     {
         synchronized (LOCK)
         {
-            if (onBoot(p))
-            {
-                return -ROFS;
-            }
             MetalFsNode n = lookup(p);
             if (n == null)
             {
@@ -613,11 +727,23 @@ public final class MetalRamfs
             {
                 return -PERM;
             }
+            if (n.fat != null)
+            {
+                try
+                {
+                    bootFs.unlink(n.fat);
+                }
+                catch (java.io.IOException x)
+                {
+                    return cardError(x);
+                }
+            }
             MetalFsNode parent = lookup(parentPath(p));
             parent.kids.remove(leaf(p));
             n.nlink -= 1;
             n.ctime = now();
             touch(parent);
+            releaseIfUnused(n);
             return 0;
         }
     }
@@ -627,18 +753,19 @@ public final class MetalRamfs
     {
         synchronized (LOCK)
         {
-            if (onBoot(from) || onBoot(to))
-            {
-                return -ROFS;
-            }
             MetalFsNode n = lookup(from);
             if (n == null)
             {
                 return missing(from);
             }
-            if (from.equals("/") || to.equals("/"))
+            if (from.equals("/") || to.equals("/") || n.mount)
             {
                 return -BUSY;
+            }
+            boolean card = onBoot(from);
+            if (card != onBoot(to))
+            {
+                return -XDEV;                            // between the card and memory: the caller copies
             }
             Object d = parentFor(to);
             if (d instanceof Integer)
@@ -668,18 +795,41 @@ public final class MetalRamfs
                 {
                     return -NOTEMPTY;
                 }
-                if (!target.dir)
+                if (target.mount)
                 {
-                    target.nlink -= 1;
+                    return -BUSY;
                 }
             }
             MetalFsNode oldParent = lookup(parentPath(from));
             MetalFsNode newParent = (MetalFsNode) d;
+            if (card)
+            {
+                if (bootFs == null)
+                {
+                    return -ROFS;
+                }
+                try
+                {
+                    bootFs.rename(n.fat, fatDir(newParent), leaf(to), target == null ? null : target.fat);
+                }
+                catch (java.io.IOException x)
+                {
+                    return cardError(x);
+                }
+            }
+            if (target != null && !target.dir)
+            {
+                target.nlink -= 1;
+            }
             oldParent.kids.remove(leaf(from));
-            newParent.kids.put(leaf(to), n);
+            newParent.kids.put(card ? n.fat.name : leaf(to), n);
             touch(oldParent);
             touch(newParent);
             n.ctime = now();
+            if (target != null)
+            {
+                releaseIfUnused(target);
+            }
             return 0;
         }
     }
@@ -689,9 +839,13 @@ public final class MetalRamfs
     {
         synchronized (LOCK)
         {
-            if (onBoot(existing) || onBoot(newName))
+            if (onBoot(existing) != onBoot(newName))
             {
-                return -ROFS;
+                return -XDEV;
+            }
+            if (onBoot(existing))
+            {
+                return lookup(existing) == null ? missing(existing) : -PERM;   // FAT has no hard links
             }
             MetalFsNode n = lookup(existing);
             if (n == null)
@@ -727,7 +881,7 @@ public final class MetalRamfs
         {
             if (onBoot(dst))
             {
-                return -ROFS;
+                return -XDEV;                            // clonefile's "not this filesystem": the caller copies
             }
             MetalFsNode n = lookup(src);
             if (n == null)
@@ -781,14 +935,14 @@ public final class MetalRamfs
     {
         synchronized (LOCK)
         {
-            if (onBoot(p))
-            {
-                return -ROFS;
-            }
             MetalFsNode n = lookup(p);
             if (n == null)
             {
                 return missing(p);
+            }
+            if (n.fat != null)
+            {
+                return -PERM;                            // FAT keeps no modes
             }
             n.mode = mode & 07777;
             n.ctime = now();
@@ -801,14 +955,14 @@ public final class MetalRamfs
     {
         synchronized (LOCK)
         {
-            if (onBoot(p))
-            {
-                return -ROFS;
-            }
             MetalFsNode n = lookup(p);
             if (n == null)
             {
                 return missing(p);
+            }
+            if (n.fat != null)
+            {
+                return -PERM;                            // FAT keeps no owners
             }
             setOwner(n, uid, gid);
             return 0;
@@ -820,20 +974,39 @@ public final class MetalRamfs
     {
         synchronized (LOCK)
         {
-            if (onBoot(p))
-            {
-                return -ROFS;
-            }
             MetalFsNode n = lookup(p);
             if (n == null)
             {
                 return missing(p);
+            }
+            int r = cardTime(n, mtime);
+            if (r < 0)
+            {
+                return r;
             }
             n.atime = atime;
             n.mtime = mtime;
             n.ctime = now();
             return 0;
         }
+    }
+
+    /** A card node's modified time onto the card (FAT keeps no access time): 0 or a negative code. */
+    private static int cardTime(MetalFsNode n, long mtime)
+    {
+        if (n.fat == null)
+        {
+            return 0;
+        }
+        try
+        {
+            bootFs.setTime(n.fat, mtime);
+        }
+        catch (java.io.IOException x)
+        {
+            return cardError(x);
+        }
+        return 0;
     }
 
     private static void setOwner(MetalFsNode n, int uid, int gid)
@@ -907,10 +1080,6 @@ public final class MetalRamfs
         synchronized (LOCK)
         {
             boolean write = (flags & O_WRITE) != 0;
-            if (onBoot(p) && (write || (flags & (O_CREAT | O_TRUNC)) != 0))
-            {
-                return -ROFS;
-            }
             MetalFsNode n = lookup(p);
             if (n == null)
             {
@@ -924,9 +1093,21 @@ public final class MetalRamfs
                     return (Integer) d;
                 }
                 MetalFsNode parent = (MetalFsNode) d;
-                n = newNode(false, mode & ~UMASK & 07777, now());
-                parent.kids.put(leaf(p), n);
-                touch(parent);
+                if (onBoot(p))
+                {
+                    Object made = bootCreate(parent, leaf(p), false);
+                    if (made instanceof Integer)
+                    {
+                        return (Integer) made;
+                    }
+                    n = (MetalFsNode) made;
+                }
+                else
+                {
+                    n = newNode(false, mode & ~UMASK & 07777, now());
+                    parent.kids.put(leaf(p), n);
+                    touch(parent);
+                }
             }
             else
             {
@@ -940,8 +1121,11 @@ public final class MetalRamfs
                 }
                 if (write && (flags & O_TRUNC) != 0 && n.size != 0L)
                 {
-                    n.setSize(0L);
-                    touch(n);
+                    int r = setSize(n, 0L);
+                    if (r < 0)
+                    {
+                        return r;
+                    }
                 }
             }
             Fd f = new Fd();
@@ -962,7 +1146,13 @@ public final class MetalRamfs
     {
         synchronized (LOCK)
         {
-            return FDS.remove(fd) != null;
+            Fd f = FDS.remove(fd);
+            if (f == null)
+            {
+                return false;
+            }
+            releaseIfUnused(f.node);
+            return true;
         }
     }
 
@@ -1180,6 +1370,16 @@ public final class MetalRamfs
                 return pos < 0L ? -INVAL : -FBIG;
             }
             MetalFsNode node = f.node;
+            Unsafe u = Unsafe.getUnsafe();
+            if (node.fat != null)
+            {
+                byte[] tmp = new byte[len];
+                for (int k = 0; k < len; k++)
+                {
+                    tmp[k] = u.getByte(addr + k);
+                }
+                return cardWrite(node, pos, tmp, 0, len);
+            }
             if (end > node.size)
             {
                 node.setSize(end);
@@ -1188,7 +1388,6 @@ public final class MetalRamfs
             {
                 node.ensureCapacity((int) node.size);
             }
-            Unsafe u = Unsafe.getUnsafe();
             byte[] d = node.data;
             for (int k = 0; k < len; k++)
             {
@@ -1267,6 +1466,15 @@ public final class MetalRamfs
                 return -FBIG;
             }
             MetalFsNode node = f.node;
+            if (node.fat != null)
+            {
+                int r = cardWrite(node, f.pos, b, off, len);
+                if (r > 0)
+                {
+                    f.pos = end;
+                }
+                return r;
+            }
             if (end > node.size)
             {
                 node.setSize(end);
@@ -1300,10 +1508,33 @@ public final class MetalRamfs
             {
                 return -FBIG;
             }
-            f.node.setSize(size);
-            touch(f.node);
+            return setSize(f.node, size);
+        }
+    }
+
+    /** A file's new length, in memory or on the card; 0 or a negative code. */
+    private static int setSize(MetalFsNode n, long size)
+    {
+        if (n.fat != null)
+        {
+            long t = now();
+            try
+            {
+                bootFs.truncate(n.fat, size, t);
+            }
+            catch (java.io.IOException x)
+            {
+                n.size = n.fat.size;
+                return cardError(x);
+            }
+            n.size = n.fat.size;
+            n.mtime = t;
+            n.ctime = t;
             return 0;
         }
+        n.setSize(size);
+        touch(n);
+        return 0;
     }
 
     /** fchmod(): 0 or BADF. */
@@ -1312,13 +1543,13 @@ public final class MetalRamfs
         synchronized (LOCK)
         {
             Fd f = FDS.get(fd);
-            if (f != null && f.node.fat != null)
-            {
-                return -ROFS;
-            }
             if (f == null)
             {
                 return -BADF;
+            }
+            if (f.node.fat != null)
+            {
+                return -PERM;
             }
             f.node.mode = mode & 07777;
             f.node.ctime = now();
@@ -1332,13 +1563,13 @@ public final class MetalRamfs
         synchronized (LOCK)
         {
             Fd f = FDS.get(fd);
-            if (f != null && f.node.fat != null)
-            {
-                return -ROFS;
-            }
             if (f == null)
             {
                 return -BADF;
+            }
+            if (f.node.fat != null)
+            {
+                return -PERM;
             }
             setOwner(f.node, uid, gid);
             return 0;
@@ -1351,13 +1582,14 @@ public final class MetalRamfs
         synchronized (LOCK)
         {
             Fd f = FDS.get(fd);
-            if (f != null && f.node.fat != null)
-            {
-                return -ROFS;
-            }
             if (f == null)
             {
                 return -BADF;
+            }
+            int r = cardTime(f.node, mtime);
+            if (r < 0)
+            {
+                return r;
             }
             f.node.atime = atime;
             f.node.mtime = mtime;
@@ -1404,15 +1636,26 @@ public final class MetalRamfs
             {
                 return r;
             }
-            if (end > d.node.size)
+            if (d.node.fat != null)
             {
-                d.node.setSize(end);
+                int w = cardWrite(d.node, d.pos, tmp, 0, (int) n);
+                if (w < 0)
+                {
+                    return w;
+                }
             }
             else
             {
-                d.node.ensureCapacity((int) d.node.size);
+                if (end > d.node.size)
+                {
+                    d.node.setSize(end);
+                }
+                else
+                {
+                    d.node.ensureCapacity((int) d.node.size);
+                }
+                System.arraycopy(tmp, 0, d.node.data, (int) d.pos, (int) n);
             }
-            System.arraycopy(tmp, 0, d.node.data, (int) d.pos, (int) n);
             s.pos += n;
             d.pos = end;
             touch(d.node);
@@ -1451,6 +1694,10 @@ public final class MetalRamfs
                 return "Read-only file system";
             case -IO:
                 return "Input/output error";
+            case -XDEV:
+                return "Cross-device link";
+            case -NOSPC:
+                return "No space left on device";
             default:
                 return "Unknown error: " + code;
         }

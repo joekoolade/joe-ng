@@ -207,7 +207,11 @@ class BsdFileSystem extends UnixFileSystem {
         }
         if (r == -jdk.internal.misc.MetalRamfs.IO)
         {
-            throw new UnixException(5);                // EIO: a /boot card read failed
+            throw new UnixException(5);                // EIO: a /boot card transfer failed
+        }
+        if (r == -jdk.internal.misc.MetalRamfs.NOSPC)
+        {
+            throw new UnixException(UnixConstants.ENOSPC);
         }
         if (r < 0)
         {
