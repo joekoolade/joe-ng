@@ -104,6 +104,23 @@ and `M` from `java.lang.Math.max` loaded out of the JDK's `java.base`. The last
 line is the newest and most demanding, so if silicon stops before `*M`, note the
 last character: it pinpoints how far the metacircular loader got.
 
+## 6. Later updates over the network (no card swap)
+
+Once the Pi runs an image with the web server (`main=demo/WebServerDemo`, `net=1`) and a boot token, the card can be
+updated from the Mac while it sits in the Pi:
+
+```
+openssl rand -hex 16 > ramfs/etc/boot.token         # once; gitignored, baked into every image built after it
+IMAGE_INIT=scripts/push-init scripts/sdcard.sh      # once more by card: the web server, and that token
+scripts/push.sh <pi-ip>                             # from then on
+```
+
+`push.sh` builds `out/push-kernel8.img` with `scripts/push-init` as `/etc/init`, sends only the boot files whose
+SHA-256 differs from the card's (as `<name>.new`), trial-boots them once through the firmware's `tryboot.txt`, waits
+for `/version` to answer the new build id, and only then commits. If the trial never answers, a **power cycle**
+boots the untouched old files. `-n` shows what would be sent; `-k` sends the kernel only; `-i <img>` pushes an image
+built elsewhere. The same steps are buttons on `http://<pi-ip>/boot`.
+
 ## Troubleshooting
 
 - **Nothing at all.** Re-seat the SD card and check the FAT32 files are at the

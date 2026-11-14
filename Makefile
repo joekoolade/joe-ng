@@ -18,6 +18,8 @@ JAVAC   ?= javac
 JAVA    ?= java
 OUT     := out
 IMG     := kernel8.img
+# `make image IMAGE_INIT=<file>` bakes <file> as /etc/init in place of ramfs/etc/init (scripts/push.sh does).
+IMAGE_INIT ?=
 # Host tools + host-side unit tests. JDK test programs under test/jdk are GUEST programs (compiled against the
 # java.base overlay by the `jdktests` target), not host code, so exclude them here; test/realjdk is guest code
 # too (compiled by `jdktests` against the real java.base).
@@ -286,7 +288,7 @@ junitjar: $(JUNIT_JAR)
 	@mkdir -p ramfs/lib && cp $(JUNIT_JAR) ramfs/lib/junit.jar && ls -l ramfs/lib/junit.jar
 
 image: build jdktests realjdktests plugins appjar junitjar
-	$(JAVA) --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.util=ALL-UNNAMED -cp $(OUT) writer.BuildRuntimeImage $(OUT) $(IMG)
+	$(JAVA) --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.util=ALL-UNNAMED -cp $(OUT) writer.BuildRuntimeImage $(OUT) $(IMG) $(if $(IMAGE_INIT),--init $(IMAGE_INIT))
 	@ls -l $(IMG)
 
 qemu: image
