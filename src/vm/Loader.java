@@ -14036,6 +14036,12 @@ public final class Loader
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("initNative")))        { return VM.noopNativeAddr; }  // ()V
         }
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalBoard")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("buildId0")))          { return VM.boardBuildIdAddr; }     // ()J
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("setRebootFlags0")))   { return VM.boardRebootFlagsAddr; } // (I)I
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("reboot0")))           { return VM.boardRebootAddr; }      // ()V
+        }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalBlock")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("init0")))             { return VM.blockInitAddr; }  // ()I

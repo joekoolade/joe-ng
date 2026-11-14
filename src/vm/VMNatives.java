@@ -1191,6 +1191,31 @@ final class VMNatives
         return Console.readCooked(arr + ObjectModel.ARRAY_BASE_OFFSET + (int) off, (int) len);
     }
 
+    /** {@code MetalBoard.buildId0()} native: the build id the writer stamped into {@link VM#buildId}. */
+    static long boardBuildId()
+    {
+        return VM.buildId;
+    }
+
+    /**
+     * {@code MetalBoard.setRebootFlags0(int)} native: firmware property SET_REBOOT_FLAGS ({@code 0x00038064}).
+     * Value 1 makes the NEXT boot a tryboot -- the firmware reads {@code tryboot.txt} instead of
+     * {@code config.txt} -- and the flag is one-shot. 0 = the firmware answered, -1 = it did not.
+     */
+    static long boardSetRebootFlags(long flags)
+    {
+        int[] w = new int[1];
+        w[0] = (int) flags;
+        return board.bcm2711.Mailbox.tag(board.bcm2711.Bcm2711.TAG_SET_REBOOT_FLAGS, w) ? 0L : -1L;
+    }
+
+    /** {@code MetalBoard.reboot0()} native: drain the console, then the PM watchdog reset. Never returns. */
+    static void boardReboot()
+    {
+        Uart.flush();
+        board.bcm2711.Reset.reboot();
+    }
+
     /** {@code MetalBlock.init0()} native: bring the microSD card up (EMMC2 on hardware); 0 or a negative step. */
     static long blockInit()
     {

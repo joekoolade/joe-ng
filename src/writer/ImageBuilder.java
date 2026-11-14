@@ -1596,6 +1596,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.forNameNoInit(J)J", "vm/VM.forNameNoInitAddr"); // MetalLoaders.lookup0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.hwEntropy(JJ)J", "vm/VM.hwEntropyAddr"); // SecureRandom.hwEntropy0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.consoleRead(JJJ)J", "vm/VM.consoleReadAddr"); // MetalConsoleIn.read0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.boardBuildId()J", "vm/VM.boardBuildIdAddr"); // MetalBoard
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.boardSetRebootFlags(J)J", "vm/VM.boardRebootFlagsAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.boardReboot()V", "vm/VM.boardRebootAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.blockInit()J", "vm/VM.blockInitAddr");   // MetalBlock.init0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.blockRead(JJJJ)J", "vm/VM.blockReadAddr"); // MetalBlock.read0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.blockWrite(JJJJ)J", "vm/VM.blockWriteAddr"); // MetalBlock.write0
@@ -1766,6 +1769,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             writeStringObject(image, strWord.get(s), s, addr(tibWord.get("[B")));
         }
 
+        buildIdWord = staticWord.get("vm/VM.buildId");             // stamped after the hash (BuildRuntimeImage)
         CodeBuffer cb = new CodeBuffer();                           // base = LOAD_ADDRESS
         for (int w : image)
         {
@@ -2408,6 +2412,13 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     }
 
     /** Stash a compiled method's address into a VM static field, if both exist. */
+    /**
+     * Word offset of the {@code vm/VM.buildId} static cell in the image built last, or -1 if no code reads it.
+     * {@link BuildRuntimeImage} hashes the image with the cell still zero and then writes the id into it, so the
+     * running VM can answer its own build id without knowing where its image ends.
+     */
+    public int buildIdWord = -1;
+
     private static void stashHelper(int[] image, StrIntTable staticWord,
                                     StrIntTable wordOffset, String methodKey, String field)
     {

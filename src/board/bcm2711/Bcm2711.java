@@ -52,6 +52,7 @@ public final class Bcm2711
      */
     public static final int  TAG_GET_CLOCK_RATE_MEASURED = 0x0003_0047;
     public static final int  TAG_GET_CLOCK_RATE = 0x0003_0002;   // requested (not measured) rate
+    public static final int  TAG_SET_REBOOT_FLAGS = 0x0003_8064; // 1 = next boot reads tryboot.txt (one-shot)
     public static final int  TAG_SET_GPIO_STATE = 0x0003_8041;   // drive a firmware GPIO-expander pin (128+n)
     public static final int  CLOCK_ID_CORE = 4;           // the clock feeding the mini-UART
     public static final int  CLOCK_ID_EMMC = 1;           // the clock feeding the SD/SDIO (EMMC) controller

@@ -32,3 +32,6 @@ joe-ng.code-workspace
 
 # Generated from the JDK tree's java.security template by `make` (see JAVA_SECURITY in the Makefile).
 ramfs/conf/
+
+# The shared secret the web server checks on boot-file uploads (X-Boot-Token); local-only.
+ramfs/etc/boot.token
