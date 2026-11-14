@@ -141,6 +141,10 @@ public class WebServerDemo
         {
             body = statsPage("Network", now, MetalStats.NET);
         }
+        else if (path.equals("/boot") || path.equals("/boot/"))
+        {
+            body = BootPage.render(now, zone);
+        }
         else
         {
             status = "404 Not Found";
@@ -150,10 +154,10 @@ public class WebServerDemo
         return BootUpdate.NONE;
     }
 
-    private static final String FOOT = "</body></html>\n";
+    static final String FOOT = "</body></html>\n";
 
     /** The document head, the style and the link bar every page shares. */
-    private static String head(String title)
+    static String head(String title)
     {
         return "<!doctype html>\n"
                 + "<html><head><meta charset=\"utf-8\"><title>" + escape(title) + " - joe-ng</title>"
@@ -163,7 +167,8 @@ public class WebServerDemo
                 + "table{border-collapse:collapse}td,th{padding:.2em .8em;border-bottom:1px solid #ddd;text-align:left}"
                 + "td.n{text-align:right;font-variant-numeric:tabular-nums}</style></head>\n"
                 + "<body><nav><a href=\"/\">home</a><a href=\"/memory\">memory</a><a href=\"/gc\">gc</a>"
-                + "<a href=\"/locks\">locks</a><a href=\"/threads\">threads</a><a href=\"/net\">network</a></nav>\n";
+                + "<a href=\"/locks\">locks</a><a href=\"/threads\">threads</a><a href=\"/net\">network</a>"
+                + "<a href=\"/boot\">boot</a></nav>\n";
     }
 
     private static String page(String now, int n)
@@ -175,6 +180,8 @@ public class WebServerDemo
                 + "<p>Live VM statistics: <a href=\"/memory\">memory usage</a>, <a href=\"/gc\">garbage collection</a>, "
                 + "<a href=\"/locks\">lock statistics</a>, <a href=\"/threads\">threads</a> and "
                 + "<a href=\"/net\">network</a>.</p>\n"
+                + "<p>The SD card's <a href=\"/boot\">boot files</a>: upload a new kernel, trial-boot it, "
+                + "commit it.</p>\n"
                 + "<p><small>request #" + n + "</small></p>\n"
                 + FOOT;
     }
@@ -302,7 +309,7 @@ public class WebServerDemo
     }
 
     /** {@code v} with thousands separators. */
-    private static String grouped(long v)
+    static String grouped(long v)
     {
         String d = Long.toString(Math.abs(v));
         StringBuilder sb = new StringBuilder();
@@ -319,7 +326,7 @@ public class WebServerDemo
         return v < 0 ? "-" + sb : sb.toString();
     }
 
-    private static String escape(String s)
+    static String escape(String s)
     {
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
     }

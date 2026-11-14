@@ -40,6 +40,7 @@ import jdk.internal.misc.MetalBoard;
  * <li>{@code POST /boot/commit}: on the trial boot, rename each staged file over its live one, the config last,
  *     and delete {@code tryboot.txt}. Refused while a staged kernel is not the one running.</li>
  * <li>{@code POST /boot/discard}: delete the staged files and {@code tryboot.txt}.</li>
+ * <li>{@code GET /boot/sha256/<name>}: a file's SHA-256, for the {@link BootPage} table.</li>
  * </ul>
  *
  * <p>Nothing live changes before commit, so a staged kernel that never comes up costs a power cycle: the flag is
@@ -58,13 +59,16 @@ final class BootUpdate
     static final int REBOOT = 1;
 
     /** The boot files besides the armstubs, in commit order: the config is renamed LAST. */
-    private static final String[] LIVE = { "kernel8.img", "start4.elf", "fixup4.dat", "config.txt" };
+    static final String[] LIVE = { "kernel8.img", "start4.elf", "fixup4.dat", "config.txt" };
 
-    private static final String STAGED = ".new";
+    static final String STAGED = ".new";
 
     private static final String BOOT = "/boot/";
 
-    private static final String TRYBOOT = "/boot/tryboot.txt";
+    static final String TRYBOOT = "/boot/tryboot.txt";
+
+    /** {@code GET /boot/sha256/<name>}: one top-level boot-partition file's SHA-256, read from the card. */
+    private static final String SHA_PATH = "/boot/sha256/";
 
     /** The largest body accepted. A kernel is ~40 MB. */
     private static final long MAX_BODY = 128L * 1024 * 1024;
@@ -87,6 +91,11 @@ final class BootUpdate
         if (p.equals("/version") && m.equals("GET"))
         {
             Http.text(out, "200 OK", MetalBoard.buildId());
+            return NONE;
+        }
+        if (p.startsWith(SHA_PATH) && m.equals("GET"))
+        {
+            hash(p.substring(SHA_PATH.length()), out);
             return NONE;
         }
         boolean upload = p.startsWith(BOOT) && m.equals("PUT");
@@ -118,8 +127,23 @@ final class BootUpdate
         }
         if (req.queryHas("tryboot", "1"))
         {
-            String cfg = writeTryboot();
-            MetalBoard.setTryboot();
+            if (stagedLive().isEmpty())
+            {
+                Http.text(out, "409 Conflict", "nothing is staged");
+                return NONE;
+            }
+            String cfg;
+            try
+            {
+                cfg = writeTryboot();
+                MetalBoard.setTryboot();
+            }
+            catch (IOException e)
+            {
+                System.out.println("boot: trial boot failed: " + e);
+                Http.text(out, "500 Internal Server Error", "trial boot not started: " + e.getMessage());
+                return NONE;
+            }
             System.out.println("boot: tryboot.txt written, flag set; resetting");
             Http.text(out, "200 OK", "trial boot\n" + cfg);
         }
@@ -174,7 +198,7 @@ final class BootUpdate
     }
 
     /** The live boot file {@code name} may be staged over, or null when it is not a boot file. */
-    private static String liveName(String staged)
+    static String liveName(String staged)
     {
         if (!staged.endsWith(STAGED))
         {
@@ -196,7 +220,7 @@ final class BootUpdate
     }
 
     /** {@code armstub8<letters, digits, '-' or '_'>.bin}: scripts/sdcard.sh's armstub/*.bin. */
-    private static boolean isArmstub(String n)
+    static boolean isArmstub(String n)
     {
         if (!n.startsWith("armstub8") || !n.endsWith(".bin") || n.length() > 64)
         {
@@ -216,6 +240,22 @@ final class BootUpdate
             i = i + 1;
         }
         return true;
+    }
+
+    /** Answer the SHA-256 of {@code /boot/<name>}; no token, as it changes nothing. */
+    private static void hash(String name, OutputStream out) throws IOException
+    {
+        File f = new File(BOOT + name);
+        if (name.isEmpty() || name.indexOf('/') >= 0 || name.startsWith(".") || !f.isFile())
+        {
+            Http.text(out, "404 Not Found", "no file /boot/" + name);
+            return;
+        }
+        long t0 = System.currentTimeMillis();
+        String sha = sha256(f.getPath());
+        System.out.println("boot: sha256 " + name + " " + f.length() + " bytes in " + (System.currentTimeMillis() - t0)
+                + " ms");
+        Http.text(out, "200 OK", sha);
     }
 
     /** Stream the body to {@code /boot/<name>.new}, read it back, and answer its SHA-256. */
@@ -361,7 +401,7 @@ final class BootUpdate
     }
 
     /** The live names whose staged twin exists, in commit order (armstubs first, the config last). */
-    private static List<String> stagedLive()
+    static List<String> stagedLive()
     {
         List<String> names = new ArrayList<>();
         String[] all = new File("/boot").list();

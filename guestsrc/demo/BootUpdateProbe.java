@@ -71,12 +71,23 @@ public class BootUpdateProbe
                 "build 0123456789abcdef");
         expect("commit refused", call("POST /boot/commit", headers(token, null, 0, false), new byte[0]),
                 "409", "trial-boot it first");
+        String pg = BootPage.render("now", java.time.ZoneId.of("UTC"));
+        check("page: not yet trial-booted", pg.contains("Staged, not yet trial-booted"));
+        check("page: commit disabled", pg.contains("<button id=\"commit\" disabled>"));
+        check("page: staged kernel id", pg.contains("<code>0123456789abcdef</code>"));
+        check("page: staged row", pg.contains("<b>kernel8.img.new</b></td><td>staged</td>"));
+        expect("sha256 endpoint", call("GET /boot/sha256/config.txt.new", null, null), "200", sha(cfg));
+        expect("sha256 missing", call("GET /boot/sha256/nope.bin", null, null), "404", null);
+        expect("sha256 traversal", call("GET /boot/sha256/../etc/motd", null, null), "404", null);
 
         byte[] k = kernel(3_000_000, id);
         String kr = call("PUT /boot/kernel8.img.new", headers(token, sha(k), k.length, true), k);
         expect("kernel 100-continue", kr, "100 Continue", null);
         expect("kernel", kr.substring(kr.indexOf("\r\n\r\n") + 4), "200", "build " + id);
 
+        String pg2 = BootPage.render("now", java.time.ZoneId.of("UTC"));
+        check("page: on trial", pg2.contains("This boot IS the staged kernel"));
+        check("page: commit enabled", pg2.contains("<button id=\"commit\">"));
         String tb = call("POST /reboot?tryboot=1", headers(token, null, 0, false), new byte[0]);
         expect("tryboot", tb, "200", "kernel=kernel8.img.new");
         String t = Files.readString(Path.of("/boot/tryboot.txt"));
@@ -99,6 +110,13 @@ public class BootUpdateProbe
         expect("discard", call("POST /boot/discard", headers(token, null, 0, false), new byte[0]), "200",
                 "deleted start4.elf.new");
         check("discarded", !new File("/boot/start4.elf.new").exists());
+        expect("trial with nothing staged", call("POST /reboot?tryboot=1", headers(token, null, 0, false),
+                new byte[0]), "409", "nothing is staged");
+        String pg3 = BootPage.render("now", java.time.ZoneId.of("UTC"));
+        check("page: nothing staged", pg3.contains("Nothing is staged"));
+        check("page: trial disabled", pg3.contains("<button id=\"trial\" disabled>"));
+        check("page: lists boot file", pg3.contains("<b>kernel8.img</b></td><td>boot file</td>"));
+        check("page: armstub target", pg3.contains("<option>armstub8-joe.bin</option>"));
         expect("nothing to commit", call("POST /boot/commit", headers(token, null, 0, false), new byte[0]),
                 "409", "nothing is staged");
 

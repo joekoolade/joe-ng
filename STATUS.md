@@ -4,6 +4,27 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **THE `/boot` PAGE, AND TRYBOOT ON THE PI: A KERNEL PUSHED, TRIAL-BOOTED AND COMMITTED OVER WIFI (2026-11-13).**
+  Increment 4b of the boot-update arc, on increment 4's endpoints (#516).
+  - **`demo/BootPage` at `GET /boot`** (linked from the nav bar and the front page): running build id, the staged
+    kernel's trailer id, the staged files, `tryboot.txt` present or not, and one sentence saying what the buttons
+    will do next; an upload box (token field kept in sessionStorage, file picker, target = the boot files plus the
+    armstubs on the card) that PUTs `<target>.new` by XMLHttpRequest with progress and shows the SHA-256 the Pi read
+    back -- the page is plain `http://`, where browsers withhold `crypto.subtle`, so it sends no `X-Sha256`;
+    **Trial boot / Commit / Discard / Reboot**, each enabled only when it applies (Commit only on the trial boot, or
+    with no kernel staged), polling `/version` (4 s timeout per try) after a reset and reloading when it answers;
+    and the boot partition's top level with role, size, mtime and an on-demand sha256 button per file.
+  - **`GET /boot/sha256/<name>`** (read-only, no token). **`POST /reboot?tryboot=1` with nothing staged answers 409**
+    -- it used to drop the connection on the IOException.
+  - **QEMU:** `demo/BootUpdateProbe` also renders the page in each state (not yet trial-booted, on trial, nothing
+    staged) and checks the sha256 endpoint (match, missing, `../`): 47 checks, **PASS**; fsck clean. The page's
+    script passes `node --check`.
+  - **PI: TRYBOOT WORKS ON THIS BOARD.** From the Mac, against the running increment-4 image (`bb5139a390701075`):
+    the 4b image (39,355,272 bytes) PUT as `kernel8.img.new` in 78 s (~503 KB/s), card read-back SHA-256 = the Mac's;
+    `POST /reboot?tryboot=1` -> **29 s later `/version` answered the NEW build `ff2b5cd885cb2ed5`** (the firmware
+    read `tryboot.txt`); the page said "This boot IS the staged kernel" with Commit enabled; `POST /boot/commit` ->
+    `committed kernel8.img`, `tryboot.txt` gone, the card's `kernel8.img` = the pushed image.
+
 - **BOOT FILES OVER THE NETWORK: BUILD ID, UPLOAD, TRYBOOT AND COMMIT ENDPOINTS (2026-11-13).**
   Increment 4 of the boot-update arc, on increment 3's writable `/boot` (#515).
   - **Build id.** `BuildRuntimeImage` hashes the finished image (SHA-256, first 8 bytes, 16 hex digits) with the
