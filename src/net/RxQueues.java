@@ -314,7 +314,9 @@ public final class RxQueues
         {
             NetStats.ipInDelivers = NetStats.ipInDelivers + 1;
             NetStats.tcpInSegs = NetStats.tcpInSegs + 1;
+            long t0 = Magic.readCNTPCT_EL0();
             Tcp.input(ip, total);
+            NetStats.rxTcpTicks = NetStats.rxTcpTicks + (Magic.readCNTPCT_EL0() - t0);
             freeBuf(b);
             return;
         }

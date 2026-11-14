@@ -70,6 +70,20 @@ public final class NetStats
     public static int tcpWinUpdates;         // pure window updates sent after the application read
     public static int tcpSynAckRetrans;      // retransmitted SYN-ACKs re-ACKed (our handshake ACK was lost)
 
+    // Where receive time goes, in generic-timer ticks (shown in ms): the RX task, and the application's reads.
+    public static long rxBusyTicks;          // the RX task between wakeups: polling the chip dry
+    public static long rxSdioTicks;          // ... of which reading frames over SDIO
+    public static long rxTcpTicks;           // ... of which Tcp.input (checksum, ring copy, ACK)
+    public static int tcpAppReads;           // Tcp.read calls that returned data
+    public static long tcpAppWaitTicks;      // ... time readers spent waiting for data (in read or poll)
+    public static long tcpAppCopyTicks;      // ... time copying out of the receive ring
+
+    /** {@code ticks} of the generic timer in ms. */
+    public static long ms(long ticks)
+    {
+        return ticks * 1000L / Magic.readCNTFRQ_EL0();
+    }
+
     // Udp
     public static int udpInDatagrams;        // datagrams delivered to a bound port
     public static int udpNoPorts;            // datagrams for a port nobody bound

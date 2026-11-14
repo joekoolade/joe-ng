@@ -41,6 +41,15 @@ final class VMGc
     /** SP at the last collection -- the stack bottom compaction would have to work from. */
     static long lastScanFrom;
 
+    /**
+     * The last collection's phases, in generic-timer ticks, for /gc: stopping the world, the root scan (which
+     * includes cores 1-3's arenas, scanned whole as roots up to their bump pointers), the trace, the sweep.
+     */
+    static long phaseStopTicks;
+    static long phaseRootTicks;
+    static long phaseTraceTicks;
+    static long phaseSweepTicks;
+
     static void gcCollect(long scanFrom)
     {
         lastScanFrom = scanFrom;
@@ -61,6 +70,8 @@ final class VMGc
             }
             return;
         }
+        long tStopped = Magic.readCNTPCT_EL0();
+        phaseStopTicks = tStopped - gcT0;             // the last collection's phases, for /gc
         probes = 0L;                                  // precision metrics for this collection (gcLog)
         nomap = 0L;
         markSp = MARK_STACK;                          // the trace worklist starts empty
@@ -180,6 +191,8 @@ final class VMGc
             sc += 1;
         }
         rootProbes = probes;                          // split the metric: everything above is ROOT scanning
+        long tRoots = Magic.readCNTPCT_EL0();
+        phaseRootTicks = tRoots - tStopped;
         drainMarkStack();                             // trace: scan each newly marked block exactly ONCE
         codeOnly = markCodeRoots();                   // ... then the addresses only compiled code holds
         drainMarkStack();
@@ -207,6 +220,8 @@ final class VMGc
         }
                                                       // (counted AFTER the ordinary trace, so the count is
                                                       //  exactly "what nothing else kept alive")
+        long tTraced = Magic.readCNTPCT_EL0();
+        phaseTraceTicks = tTraced - tRoots;
         collections = collections + 1L;
         Heap.allocSinceGc = 0L;                        // ANY collection resets the volume trigger, or a
         Heap.servedSinceGc = 0L;                       //   (and Runtime.freeMemory's since-collection count)
@@ -303,6 +318,7 @@ final class VMGc
             printHex(stoppedAt);                       // non-zero = the size walk hit a corrupt status
             Uart.write(Magic.bytes("]\n"));
         }
+        phaseSweepTicks = Magic.readCNTPCT_EL0() - tTraced;
         startTheWorld();                              // the heap is consistent again: let the other cores run
         VMStats.gcPause(Magic.readCNTPCT_EL0() - gcT0);
         if ((daif & 0x80L) == 0L)

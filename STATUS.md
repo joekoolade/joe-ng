@@ -4,6 +4,28 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **RECEIVE AND COLLECTOR COUNTERS ON `/net` AND `/gc`; WHAT LIMITS A BOOT UPLOAD NOW (2026-11-14).** Measurements
+  only; two attempted fixes were measured and dropped.
+  - **`/net`** gains the RX task's busy time (and of it SDIO reads and `Tcp.input`), and the application's reads,
+    wait and copy time (`Tcp.read` and `Tcp.poll`). **`/gc`** gains the last collection's phases (stopping the
+    world, root scan, trace, sweep), its root words, and cores 1-3's arena use.
+  - **A 39 MB PUT (22.4 s):** the reader WAITED 18.2 s and copied for 0.8 s; the RX task was busy 11.1 s (SDIO 5.9,
+    TCP input 2.2); 27,036 segments in, one ACK each; 919 window updates. Neither side saturated.
+  - **A 64 KiB receive window (advertised <= 65535) did not help** -- 23.1 s vs 22.4 s, window updates 919 -> 230 --
+    so the window is not the limit. Reverted.
+  - **Collector pauses are.** About 4 collections per upload (the 16 MB volume trigger), each 0.5-2.4 s, and they
+    GROW over a session: cores 1-3's arenas are never collected and are scanned whole as roots, and they grew
+    ~12.7 MB per upload (core 1-3 total 11 -> 71 MB over five uploads), taking the root scan 92 -> 972 ms. The
+    trace is a steady ~413 ms for ~60 MB live (41.5 MB of it in the large-object region, not yet explained). A
+    long pause can outlast the socket read timeout: one push failed `507 ... Read timed out`, which likely explains
+    the 17.5 s PUT recorded in the entry below.
+  - **Collecting cores 1-3's arenas was built and DROPPED.** A second block-start bitmap at `0x1E00_0000`, marking
+    and per-core sweeps onto each core's own free lists, no whole-arena root scan: `make test` and the probe
+    regression **203/203** on QEMU, but **the Pi trial boot never answered, twice** -- no serial was available to
+    say why. QEMU gives launched programs no timer ticks, so threads there barely run preemptively on cores 1-3:
+    the regression does not exercise what the Pi does. Suspect a reference the whole-arena root scan was silently
+    covering (an address held where the trace cannot see it). Reverted at the user's call.
+
 - **BOOT UPLOADS 2.5x FASTER: THE STAGES OVERLAP, AND TWO COMPILER FAST PATHS (2026-11-14).** A 39 MB kernel PUT
   on the Pi: **~70 s -> 26-34 s**.
   - **Measured first** (the PUT reply carries a `timing` line now; push.sh prints it): network ~19 s, card write

@@ -568,7 +568,10 @@ public final class Tcp
             int avail = readable(h);
             if (avail > 0)
             {
+                long c0 = Magic.readCNTPCT_EL0();
                 int n = copyOut(h, buf + off, avail < len ? avail : len);
+                NetStats.tcpAppCopyTicks = NetStats.tcpAppCopyTicks + (Magic.readCNTPCT_EL0() - c0);
+                NetStats.tcpAppReads = NetStats.tcpAppReads + 1;
                 unlock();
                 return n;
             }
@@ -599,7 +602,9 @@ public final class Tcp
                 }
                 continue;
             }
+            long w0 = Magic.readCNTPCT_EL0();
             waitEvent(h, RX_WAIT_MS);
+            NetStats.tcpAppWaitTicks = NetStats.tcpAppWaitTicks + (Magic.readCNTPCT_EL0() - w0);
         }
     }
 
@@ -667,7 +672,9 @@ public final class Tcp
             }
             waiting[h] = 1;
             unlock();
+            long w0 = Magic.readCNTPCT_EL0();
             waitEvent(h, waitMs);
+            NetStats.tcpAppWaitTicks = NetStats.tcpAppWaitTicks + (Magic.readCNTPCT_EL0() - w0);
         }
     }
 
