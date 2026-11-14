@@ -280,6 +280,21 @@ appjar: guest
 	  jar --create --date=$(JARDATE) --file ramfs/lib/app.jar --main-class app.Main -C $(JARCLASSES) . && \
 	  ls -l ramfs/lib/app.jar; fi
 
+# Programs the web server's /run page runs (demo/RunProgram, probed by demo/RunProbe): a jar whose classes refer
+# to each other in both directions, and a lone default-package class file. Like app.jar they are compiled
+# OUTSIDE the classDir with the plain seed JDK and staged into the RAMFS at /run/, so on the metal they exist only
+# as bytes a program hands to defineClass -- the same bytes an upload or a download delivers.
+RUNSRC := $(shell find runsrc -name '*.java' 2>/dev/null)
+RUNCLASSES := $(OUT)/../.runprogs
+.PHONY: runprogs
+runprogs:
+	@if [ -n "$(RUNSRC)" ]; then \
+	  rm -rf $(RUNCLASSES) && mkdir -p $(RUNCLASSES)/jar $(RUNCLASSES)/single ramfs/run && \
+	  $(JAVAC) -d $(RUNCLASSES)/jar $(shell find runsrc/jar -name '*.java' 2>/dev/null) && \
+	  $(JAVAC) -d $(RUNCLASSES)/single $(shell find runsrc/single -name '*.java' 2>/dev/null) && \
+	  jar --create --date=$(JARDATE) --file ramfs/run/hello.jar --main-class hello.Main -C $(RUNCLASSES)/jar . && \
+	  cp $(RUNCLASSES)/single/Hello.class ramfs/run/Hello.class; fi
+
 # The JUnit API + engine, staged into the RAMFS so the guest can load it at RUNTIME. Deliberately a COPY of
 # the host jar rather than anything compiled into the image: on the metal these classes exist only inside the
 # archive, exactly like app.jar, and /etc/init's `classpath=` is what makes them loadable.
@@ -287,7 +302,7 @@ appjar: guest
 junitjar: $(JUNIT_JAR)
 	@mkdir -p ramfs/lib && cp $(JUNIT_JAR) ramfs/lib/junit.jar && ls -l ramfs/lib/junit.jar
 
-image: build jdktests realjdktests plugins appjar junitjar
+image: build jdktests realjdktests plugins appjar runprogs junitjar
 	$(JAVA) --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.util=ALL-UNNAMED -cp $(OUT) writer.BuildRuntimeImage $(OUT) $(IMG) $(if $(IMAGE_INIT),--init $(IMAGE_INIT))
 	@ls -l $(IMG)
 
@@ -295,4 +310,4 @@ qemu: image
 	sh scripts/qemu-check.sh $(IMG)
 
 clean:
-	rm -rf $(OUT) $(IMG) $(JARCLASSES)
+	rm -rf $(OUT) $(IMG) $(JARCLASSES) $(RUNCLASSES)

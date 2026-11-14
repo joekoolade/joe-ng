@@ -35,3 +35,7 @@ ramfs/conf/
 
 # The shared secret the web server checks on boot-file uploads (X-Boot-Token); local-only.
 ramfs/etc/boot.token
+
+# The /run page's sample programs (built from runsrc/ at image time)
+ramfs/run/
+.runprogs/

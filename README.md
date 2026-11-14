@@ -66,6 +66,7 @@ page is requested:
 | `/threads` | every task, its state and priority |
 | `/net` | IP/TCP/UDP counters and WiFi transmit stats |
 | `/boot` | the SD card's boot files; upload, trial-boot and commit new ones (below) |
+| `/run` | run a `.jar` or `.class`, uploaded or downloaded by the board, and show its output (below) |
 
 It needs a Pi 4 (the onboard CYW43455 WiFi), an SD card with a FAT32 boot
 partition, and a WPA2-PSK or open network. A USB-TTL serial adapter is optional,
@@ -158,6 +159,37 @@ cycle boots the old files.
 `push.sh -n` shows what would be sent without sending it. The same steps are
 buttons on `http://<pi>/boot`, for uploading a file from a browser.
 [`scripts/flash.md`](scripts/flash.md) has the details.
+
+### Run a program from the network
+
+The web server runs a `.jar` (its `Main-Class`) or a single `.class` in the
+running VM, and answers with what the program printed to `System.out` and
+`System.err`. Like boot updates, this needs the token. You can do it from the
+`http://<pi>/run` page, which shows the output and this boot's runs, or with curl:
+
+```sh
+TOK="X-Boot-Token: $(cat ramfs/etc/boot.token)"
+# upload: the request body is the program
+curl -T app.jar -H "$TOK" "http://192.168.1.247/run/app.jar?args=one+two"
+curl -T Hello.class -H "$TOK" "http://192.168.1.247/run/Hello.class"
+# download: the board fetches it over http or https
+python3 -m http.server 8000 &
+curl -X POST -H "$TOK" "http://192.168.1.247/run?url=http://192.168.1.162:8000/app.jar"
+```
+
+`main=<class>` in the query runs a class other than the manifest's. The reply
+is 200 when `main` ran (the last line says whether it returned or threw), 422
+when the program was refused before `main`, and 502 when the download failed.
+
+Limits:
+
+- The VM has one class namespace, so each class name loads once per boot.
+  Sending the same file again runs it again, and its statics keep their
+  values. A changed class under the same name is refused: rename the classes
+  or reboot.
+- The server handles one request at a time, so it is busy until `main`
+  returns.
+- `System.exit` halts the board, just as it ends a hosted JVM.
 
 To go back to the default program, restore `ramfs/etc/init`, for example with
 `git checkout ramfs/etc/init`.

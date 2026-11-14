@@ -118,7 +118,7 @@ final class BootUpdate
         {
             return -1;
         }
-        if (!authorized(req, out))
+        if (!authorized(req, out, "boot updates"))
         {
             return NONE;
         }
@@ -167,20 +167,24 @@ final class BootUpdate
         return REBOOT;
     }
 
-    /** True when the request's token matches; otherwise answers 403 (no token baked) or 401 and returns false. */
-    private static boolean authorized(Http.Request req, OutputStream out) throws IOException
+    /**
+     * True when the request's {@code X-Boot-Token} matches {@code /etc/boot.token}; otherwise answers 403 (no token
+     * baked) or 401 and returns false. {@code what} names the disabled feature in the 403. Shared by every endpoint
+     * that changes the board: the boot files here, running a program in {@link RunPage}.
+     */
+    static boolean authorized(Http.Request req, OutputStream out, String what) throws IOException
     {
         byte[] want = token();
         if (want == null)
         {
-            Http.text(out, "403 Forbidden", "boot updates are disabled: this image has no /etc/boot.token");
+            Http.text(out, "403 Forbidden", what + " are disabled: this image has no /etc/boot.token");
             return false;
         }
         String got = req.header("x-boot-token");
         byte[] g = got == null ? new byte[0] : got.getBytes(StandardCharsets.UTF_8);
         if (!MessageDigest.isEqual(want, g))
         {
-            System.out.println("boot: bad token");
+            System.out.println("web: bad token for " + req.path);
             Http.text(out, "401 Unauthorized", "bad or missing X-Boot-Token");
             return false;
         }

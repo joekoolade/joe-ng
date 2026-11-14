@@ -13,6 +13,13 @@ the item leaves this list; new findings that are not fixed on the spot come here
   `WLC_SET_SSID` (after `WLC_UP`) left that ioctl unanswered and no join event for 15 s. Not the tx credit window
   (txSeq 19, txMax 59 measured). Nothing reads there now; unexplained.
 
+## Web server
+
+- **`System.exit` from a `/run` program halts the board (2026-11-14).** `Shutdown.halt0` spins in `wfe`, so the web
+  server is gone until a power cycle. Making it end only the run means a VM change to `halt0` during a run, and
+  stock `Shutdown` stays in its "hooks ran" state afterwards (later `addShutdownHook` throws) -- decide that first.
+  Also: the server is single-threaded, so it is busy until a run's main returns.
+
 ## Collector
 
 - **Cores 1-3's arenas are never collected (2026-11-14).** They are root-scanned whole: pauses grow from 0.5 to

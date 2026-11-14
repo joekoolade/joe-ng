@@ -39,7 +39,8 @@ import jdk.internal.misc.MetalStats;
  * timeout, so a browser's speculative connection that never sends a request cannot hold the server up.
  *
  * <p>It also takes the Pi's boot files over the network -- {@code /version}, {@code PUT /boot/<name>.new},
- * {@code /reboot}, {@code /boot/commit}, {@code /boot/discard} -- see {@link BootUpdate}.
+ * {@code /reboot}, {@code /boot/commit}, {@code /boot/discard} -- see {@link BootUpdate} -- and runs a {@code .jar}
+ * or {@code .class} uploaded to it or downloaded by it, at {@code /run} -- see {@link RunPage}.
  */
 public class WebServerDemo
 {
@@ -115,6 +116,10 @@ public class WebServerDemo
         }
         String path = req.path;
         String now = ZonedDateTime.now(zone).format(WHEN);
+        if (RunPage.handle(req, out, zone, now))
+        {
+            return BootUpdate.NONE;
+        }
         String status = "200 OK";
         String body;
         if (path.equals("/") || path.equals("/index.html"))
@@ -168,7 +173,7 @@ public class WebServerDemo
                 + "td.n{text-align:right;font-variant-numeric:tabular-nums}</style></head>\n"
                 + "<body><nav><a href=\"/\">home</a><a href=\"/memory\">memory</a><a href=\"/gc\">gc</a>"
                 + "<a href=\"/locks\">locks</a><a href=\"/threads\">threads</a><a href=\"/net\">network</a>"
-                + "<a href=\"/boot\">boot</a></nav>\n";
+                + "<a href=\"/boot\">boot</a><a href=\"/run\">run</a></nav>\n";
     }
 
     private static String page(String now, int n)
@@ -182,6 +187,8 @@ public class WebServerDemo
                 + "<a href=\"/net\">network</a>.</p>\n"
                 + "<p>The SD card's <a href=\"/boot\">boot files</a>: upload a new kernel, trial-boot it, "
                 + "commit it.</p>\n"
+                + "<p><a href=\"/run\">Run a program</a>: upload a <code>.jar</code> or <code>.class</code>, or have "
+                + "the board download one, and see what it prints.</p>\n"
                 + "<p><small>request #" + n + "</small></p>\n"
                 + FOOT;
     }

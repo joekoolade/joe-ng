@@ -225,3 +225,4 @@ WideIincProbe
 WrapProbe
 ZipFileProbe
 ZipNamesProbe
+demo/RunProbe            solo gate=RunProbe PASS     # defines classes once per boot; prints timings; metal-only (/run/, /etc/boot.token)
