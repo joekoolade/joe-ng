@@ -4,6 +4,25 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **WIFI JOIN: THE KEY EXCHANGE NO LONGER FAILS AT BOOT; NO SCAN LISTING (2026-11-14).** Pi: **9 of 9 boots joined
+  on the first association**, one msg1 and one msg2 each, join 2.7-4.2 s (`/net` "WiFi join" rows).
+  - **The failure, from serial:** `readMac()` ran right after link-up with a 1.5 s ioctl timeout. On some boots the
+    firmware leaves ioctls unanswered there (up to ~7 s measured), so it printed `no mac` and the 4-way ran on an
+    ALL-ZERO MAC: a wrong PTK and MIC, six msg2s, `no eapol msg3`, `4-way failed` -- and nothing retried, so the
+    board stayed off the network until a reboot.
+  - **Fixes:** the MAC is read right after the firmware's `ver` ioctl, while it is idle, and `associate` refuses to
+    key on a zero MAC. EAPOL frames read by a non-EAPOL wait (`waitLink`, `recvCtrl` before the RX task) are KEPT
+    for `fourWay` (`holdIfEapol`) instead of dropped -- the AP's msg1 can come before or beside `E_LINK`; earlier
+    builds kept 2-4 frames on about half of boots. msg2 carries the IE we set as `wpaie` instead of reading it
+    back: on a slow boot that read waited 4 s, got nothing, and the fallback IE keyed the link (joins 8-10 s ->
+    ~4 s). A failed association is left (`WLC_DISASSOC`) and retried, up to 3 attempts; none was needed yet.
+  - **The boot scan and its `SSID:` listing are gone** (~6 s of escan per boot that nothing used); the firmware
+    scans for the SSID itself on `WLC_SET_SSID`. CLM load, event mask and `WLC_UP` stay.
+  - **Unexplained:** a first try that read the MAC and `wpaie` just before `WLC_SET_SSID` (after `WLC_UP`) went
+    silent from that ioctl on (no reply, no join event for 15 s). Not the tx credit window -- measured txSeq 19,
+    txMax 59 at the join. Neither read happens there now. Still open: on slow boots both `WLC_SET_KEY`s time out at
+    1.5 s, though the keys take effect. Not run: `make test`, the probe regression (QEMU has no WiFi).
+
 - **`push.sh` COMPARES THE KERNEL BY BUILD ID: ~45 s OFF EVERY PUSH (2026-11-14).** `GET /boot/buildid/<name>`
   answers the id in a file's 32-byte trailer (404 no file, 422 no trailer) without reading the rest, and push.sh
   uses it for `kernel8.img` -- before sending, and to check the live file after the commit -- where it used to ask

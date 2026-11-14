@@ -328,6 +328,11 @@ final class VMStats
         i = put(arr, len, i, board.cyw43.Cyw43.txQueued);                  // ... frames that waited to send
         i = put(arr, len, i, board.cyw43.Cyw43.txForced);                  // ... sent past the credit window
         i = put(arr, len, i, board.cyw43.Cyw43.txDropped);                 // ... dropped, queue full
+        i = put(arr, len, i, board.cyw43.Cyw43.wpaJoinMs);                 // boot join: SET_SSID to keys, ms
+        i = put(arr, len, i, board.cyw43.Cyw43.wpaMsg1);                   // ... EAPOL msg1s received
+        i = put(arr, len, i, board.cyw43.Cyw43.wpaMsg2);                   // ... msg2s sent
+        i = put(arr, len, i, board.cyw43.Cyw43.wpaHeld);                   // ... EAPOL kept from a non-EAPOL wait
+        i = put(arr, len, i, board.cyw43.Cyw43.wpaAttempts);               // ... associations tried
         return (long) i;
     }
 }
