@@ -4,6 +4,30 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **BOOT UPLOADS 2.5x FASTER: THE STAGES OVERLAP, AND TWO COMPILER FAST PATHS (2026-11-14).** A 39 MB kernel PUT
+  on the Pi: **~70 s -> 26-34 s**.
+  - **Measured first** (the PUT reply carries a `timing` line now; push.sh prints it): network ~19 s, card write
+    ~23 s, card read-back 5 s, **SHA-256 26 s** -- one after another.
+  - **`checkcast` exact-type fast path** (`Baseline.checkCast`, metal JIT only): null, or an object whose own Type
+    IS the target, holds without calling `VM.castOk`. **Inline cache at late virtual sites**
+    (`Baseline.trampolineCall`, `Symbols.virtualSiteMemo`, `Loader.siteMemoAddr`): the site tests its write-once
+    per-site memo (first receiver Type, body) itself and calls the body directly; a miss takes the trampoline as
+    before. Found by `demo/ShaSpeedProbe` + qprof: a byte-array-view VarHandle `get` (16 per SHA-256 block, through
+    `ByteArrayAccess`) spent ~27% in castOk/instanceOf/typeAssignable and ~37% in the trampoline and
+    virtualResolve, though the memo answered every call. QEMU, 8 MB: VarHandle word reads **1839 -> 1149 -> 621
+    ms**; stock SHA-256 4428 -> 3506 ms (the rest is the digest's own arithmetic, ~90% JIT code). **Pi: SHA-256 of
+    the kernel 26.0 -> 18.5 s.** Regression **203/203** (SecurityStockProbe differed only in a batch, by the known
+    `GC: STW TIMEOUT` line from SeedGenerator's thread; identical alone).
+  - **`demo/StagedUpload`**: the connection's thread reads the body into 1 MB pieces (a pool of 6); a writer thread
+    writes each piece and reads it straight back from the card (`MetalFat32` caches no data, so the digest is
+    still of bytes the CARD returned); a hasher thread digests them. 1 MB pieces also cut the per-write FAT, FSInfo
+    and directory-entry rewrites from ~600 rounds to ~40: **card write 23 -> 12-16 s**. Pi, three PUTs: 33.9, 26.0,
+    27.3 s, card SHA-256 = the Mac's each time; the network (23-32 s) is now the stage that sets the pace.
+    `BootUpdateProbe` PASS on QEMU, fsck clean.
+  - **Not explained:** one PUT, the first after push.sh committed the fix image, ended at 17.5 s with no timing line;
+    curl ran with `-s`, so its status and error were lost. Not reproduced in nine PUTs since, including straight
+    after a reboot and straight after an 18 s hash.
+
 - **A BROKEN KERNEL PUSHED OVER THE NETWORK IS NEVER COMMITTED, AND A POWER CYCLE BRINGS BACK THE OLD ONE
   (2026-11-14).** Increment 6 of the boot-update arc: the end-to-end failure case, on the Pi.
   - The kernel: `out/push-kernel8.img` with word 0 replaced by `b .` (`0x14000000`), so every core spins at the

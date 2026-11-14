@@ -475,6 +475,26 @@ public interface Symbols
     void virtualSite(CodeBuffer cb, int methodCp);
 
     /**
+     * Whether {@link #virtualSiteMemo} can be used: the metal JIT keeps a write-once per-site memo of the first
+     * receiver Type a late virtual site resolved for and the body it resolved to. The writers have no late
+     * sites ({@link #virtualSite} fails there), so they answer false.
+     */
+    default boolean hasVirtualSiteMemos()
+    {
+        return false;
+    }
+
+    /**
+     * Load into {@code reg} the ADDRESS of the late virtual site {@code methodCp}'s memo word: the first receiver
+     * Type ({@code body} false) or the body it resolved to ({@code body} true). Fixed width. Only called when
+     * {@link #hasVirtualSiteMemos} is true.
+     */
+    default void virtualSiteMemo(CodeBuffer cb, int reg, int methodCp, boolean body)
+    {
+        throw new IllegalStateException("no virtual site memos");
+    }
+
+    /**
      * Load helper {@code helper}'s entry address into {@code reg}. Unlike {@link #callHelper} this does not
      * branch: the dispatch guard uses it to SUBSTITUTE a resolve trampoline for a null slot, so the call
      * site's own {@code blr} does the calling.

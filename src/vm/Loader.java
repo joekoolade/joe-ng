@@ -15417,6 +15417,18 @@ public final class Loader
         vsMemoIdx = -1;
     }
 
+    /**
+     * The address of site {@code idx}'s memo word -- {@code vsSiteType[idx]}, or {@code vsSiteBuf[idx]} when
+     * {@code body} -- for the INLINE CACHE a compiled late-virtual call site reads (Baseline.lateVirtualCall).
+     * The arrays are allocated once, before the first site index is handed out, and never reallocated; the
+     * collector does not move objects; so the address is good for the life of the image.
+     */
+    static long siteMemoAddr(int idx, boolean body)
+    {
+        long[] a = body ? vsSiteBuf : vsSiteType;
+        return Magic.addrOf(a) + (long) ObjectModel.ARRAY_BASE_OFFSET + (long) idx * 8L;
+    }
+
     /** Publish a site's first resolution, once: body, then a barrier, then the Type a lock-free reader keys on. */
     private static void publishSiteMemo(int idx, long type, long buf)
     {
