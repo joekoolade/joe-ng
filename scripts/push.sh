@@ -173,6 +173,7 @@ while read -r name path mine; do
     else
         echo "ok"
     fi
+    echo "$BODY" | sed -n 's/^timing /      pi: /p'
 done < "$TMP/push"
 
 # ---- 4. trial boot ------------------------------------------------------------------------------------------

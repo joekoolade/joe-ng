@@ -13,7 +13,6 @@ package demo;
 
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -73,7 +72,7 @@ final class BootUpdate
     /** The largest body accepted. A kernel is ~40 MB. */
     private static final long MAX_BODY = 128L * 1024 * 1024;
 
-    /** Bytes gathered before each write to the card: every write rewrites FAT and directory sectors. */
+    /** Bytes per read when hashing a file on the card ({@link #sha256}). */
     private static final int CHUNK = 64 * 1024;
 
     private static byte[] token;
@@ -291,11 +290,10 @@ final class BootUpdate
             out.flush();
         }
         String path = BOOT + name;
-        long t0 = System.currentTimeMillis();
-        long got;
+        StagedUpload.Result r;
         try
         {
-            got = receive(req.body(), path);
+            r = StagedUpload.run(req.body(), path, len);
         }
         catch (IOException e)
         {
@@ -304,18 +302,16 @@ final class BootUpdate
             Http.text(out, "507 Insufficient Storage", "writing " + name + " failed: " + e.getMessage());
             return;
         }
-        long t1 = System.currentTimeMillis();
-        if (got != len)
+        if (r.bytes != len)
         {
             new File(path).delete();
-            System.out.println("boot: PUT " + name + " short: " + got + " of " + len + " bytes");
-            Http.text(out, "400 Bad Request", "body ended after " + got + " of " + len + " bytes; deleted");
+            System.out.println("boot: PUT " + name + " short: " + r.bytes + " of " + len + " bytes");
+            Http.text(out, "400 Bad Request", "body ended after " + r.bytes + " of " + len + " bytes; deleted");
             return;
         }
-        String sha = sha256(path);
-        long t2 = System.currentTimeMillis();
-        System.out.println("boot: PUT " + name + " " + len + " bytes, received+written in " + (t1 - t0)
-                + " ms, read back in " + (t2 - t1) + " ms, sha256 " + sha);
+        String sha = r.sha256;
+        String timing = r.timing;
+        System.out.println("boot: PUT " + name + " " + len + " bytes, " + timing + ", sha256 " + sha);
         String want = req.header("x-sha256");
         if (want != null && !want.trim().equalsIgnoreCase(sha))
         {
@@ -324,46 +320,12 @@ final class BootUpdate
                     + "; deleted");
             return;
         }
-        String reply = "sha256 " + sha + "\nbytes " + len;
+        String reply = "sha256 " + sha + "\nbytes " + len + "\ntiming " + timing;
         if (name.equals("kernel8.img" + STAGED))
         {
             reply = reply + "\nbuild " + MetalBoard.buildIdOf(path);
         }
         Http.text(out, "200 OK", reply);
-    }
-
-    /** Copy {@code body} to {@code path} in {@link #CHUNK}-byte writes; the number of bytes copied. */
-    private static long receive(InputStream body, String path) throws IOException
-    {
-        byte[] buf = new byte[CHUNK];
-        long total = 0L;
-        try (FileOutputStream f = new FileOutputStream(path))
-        {
-            while (true)
-            {
-                int n = 0;
-                while (n < buf.length)
-                {
-                    int r = body.read(buf, n, buf.length - n);
-                    if (r < 0)
-                    {
-                        break;
-                    }
-                    n = n + r;
-                }
-                if (n == 0)
-                {
-                    break;
-                }
-                f.write(buf, 0, n);
-                total = total + n;
-                if (n < buf.length)
-                {
-                    break;
-                }
-            }
-        }
-        return total;
     }
 
     /** SHA-256 of the file at {@code path}, read back from the card, as lowercase hex. */
