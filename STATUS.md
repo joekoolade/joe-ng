@@ -4,6 +4,19 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **A BROKEN KERNEL PUSHED OVER THE NETWORK IS NEVER COMMITTED, AND A POWER CYCLE BRINGS BACK THE OLD ONE
+  (2026-11-14).** Increment 6 of the boot-update arc: the end-to-end failure case, on the Pi.
+  - The kernel: `out/push-kernel8.img` with word 0 replaced by `b .` (`0x14000000`), so every core spins at the
+    entry and prints nothing, and its trailer id replaced by `deadbeefdeadbeef`. Without that second change the
+    trailer would name the RUNNING build, and the commit gate (running id == staged id) could not tell them apart.
+  - `scripts/push.sh -k -i <it>` against `b0dd03912d1c094c`: PUT 79 s, trial boot started, **"trial image did not
+    come up in 120 s -- power-cycle to boot the old files"**, exit 1, no commit.
+  - **After a power cycle:** `/version` answered `b0dd03912d1c094c` (the firmware read `config.txt`; the tryboot flag
+    is one-shot); the live `kernel8.img` SHA-256 = the good image's; `kernel8.img.new` and `tryboot.txt` still on the
+    card; `/boot` said "Staged, not yet trial-booted" with Commit disabled; **`POST /boot/commit` -> 409** "running
+    build b0dd03912d1c094c, but the staged kernel is build deadbeefdeadbeef"; `POST /boot/discard` deleted both, and
+    `push.sh -n` then found nothing to push.
+
 - **`scripts/push.sh`: ONE COMMAND FROM BUILD TO A COMMITTED KERNEL ON THE PI (2026-11-14).** Increment 5 of the
   boot-update arc, on 4b's `/boot/sha256` (#517).
   - Builds `out/push-kernel8.img` (`make image IMAGE_INIT=scripts/push-init` -- `make image` takes `IMAGE_INIT=`
