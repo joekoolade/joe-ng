@@ -100,6 +100,9 @@ public final class MetalStats
         "Udp InDatagrams", "Udp NoPorts", "Udp InErrors", "Udp InCsumErrors", "Udp RcvbufErrors",
         "Udp OutDatagrams",
         "WiFi firmware events", "WiFi tx queued", "WiFi tx forced past window", "WiFi tx dropped",
+        "WiFi tx queue wait ms", "WiFi tx queue wait max us", "WiFi tx flushes",
+        "WiFi tx waits >= 100 ms",
+        "WiFi tx waits >= 100 ms across a collection",
         "WiFi join ms", "WiFi join EAPOL msg1 received", "WiFi join EAPOL msg2 sent",
         "WiFi join EAPOL kept from the link wait", "WiFi join attempts",
     };

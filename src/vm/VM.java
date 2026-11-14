@@ -34,6 +34,12 @@ import objectmodel.ObjectModel;
  */
 public final class VM
 {
+    /** Collections run so far (for counters outside {@code vm}, e.g. what a network wait spanned). */
+    public static long gcCollections()
+    {
+        return VMGc.collections;
+    }
+
     private VM() {}
 
     /**

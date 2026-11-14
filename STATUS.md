@@ -4,6 +4,22 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **LATE ACKS ARE COLLECTOR PAUSES, NOT THE TRANSMIT QUEUE (2026-11-14).** Measurement only; a fix was built, measured
+  and dropped. `/net` gains the transmit queue's summed and longest wait, flushes, waits >= 100 ms, and how many of
+  those spanned a collection.
+  - **The hypothesis:** the RX task sends its queued ACKs only when the chip is empty (WlanPoll.poll), so a long
+    burst could hold them past the sender's retransmit timeout -- the `DupData` segments.
+  - **Measured on the Pi, 39 MB PUTs:** ~27,000 ACKs queued per upload, average wait **~0.7-1.9 ms**, ~5-7 per flush.
+    Waits of 100-650 ms did happen (0-22 per upload), with `DupData` 1-49 and no out-of-order segment -- so the
+    sender's retransmits were spurious, caused by late ACKs, not loss.
+  - **Flushing every 8 frames mid-poll (brcmfmac's DPC pass order) changed nothing:** only ~50 polls per upload ever
+    read 8 frames before the chip emptied, and PUT times were within noise (control 24.5 / 25.4 s, fix 23.4 / 23.6 /
+    28.2 s). Dropped.
+  - **Every long wait spanned a collection: 36 of 36** over four uploads. The stop-the-world pause stops the RX task;
+    the late ACKs belong to the collector item in `BACKLOG.md` (cores 1-3's arenas), which also caused another
+    `507 ... Read timed out` PUT in this session. Even a run with no long wait (5.7 ms max, `DupData` 3) was only
+    ~1 s faster, so late ACKs are not what holds an upload near 1.6 MB/s either.
+
 - **WIFI JOIN: THE KEY EXCHANGE NO LONGER FAILS AT BOOT; NO SCAN LISTING (2026-11-14).** Pi: **9 of 9 boots joined
   on the first association**, one msg1 and one msg2 each, join 2.7-4.2 s (`/net` "WiFi join" rows).
   - **The failure, from serial:** `readMac()` ran right after link-up with a 1.5 s ioctl timeout. On some boots the
