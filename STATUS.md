@@ -4,6 +4,24 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **`scripts/push.sh`: ONE COMMAND FROM BUILD TO A COMMITTED KERNEL ON THE PI (2026-11-14).** Increment 5 of the
+  boot-update arc, on 4b's `/boot/sha256` (#517).
+  - Builds `out/push-kernel8.img` (`make image IMAGE_INIT=scripts/push-init` -- `make image` takes `IMAGE_INIT=`
+    now; so does sdcard.sh, through the environment) and reads its build id from the trailer. Asks the Pi for the
+    SHA-256 of each boot file sdcard.sh would copy and sends only the ones that differ, after a `POST /boot/discard`
+    of any earlier leftovers. Then `POST /reboot?tryboot=1`; waits for the Pi to go DOWN (an answer before the reset
+    is the old image, and the id cannot tell the two apart when no kernel was sent); waits up to 120 s for
+    `/version`; refuses to commit if a pushed kernel's id is not the one answering (the firmware ignored the trial
+    flag); `POST /boot/commit`; re-hashes every pushed file on the card.
+  - **Refuses before sending 40 MB** an image without a build-id trailer, without this checkout's token, or without
+    `main=demo/WebServerDemo` -- each would come up unable to commit or to take the next push (`-f` overrides the
+    last two). `-n` dry run, `-k` kernel only, `-i` a prebuilt image.
+  - **PI:** from `ff2b5cd885cb2ed5` (4b): kernel PUT 74 s (519 KB/s), config/firmware/armstubs all "same" and not
+    sent, trial up after 35 s on **`b0dd03912d1c094c`**, committed, live SHA-256 = pushed; **2:42 wall clock** with
+    the image prebuilt (the dry run's build + compare took 46 s). The build is reproducible: a rebuild gave the
+    same id. A re-run says "nothing to push". The NetDemo image is refused (no web server); with `-f` and a wrong
+    token the first request, the discard, answers 401 and nothing is staged.
+
 - **THE `/boot` PAGE, AND TRYBOOT ON THE PI: A KERNEL PUSHED, TRIAL-BOOTED AND COMMITTED OVER WIFI (2026-11-13).**
   Increment 4b of the boot-update arc, on increment 4's endpoints (#516).
   - **`demo/BootPage` at `GET /boot`** (linked from the nav bar and the front page): running build id, the staged
