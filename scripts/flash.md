@@ -115,8 +115,9 @@ IMAGE_INIT=scripts/push-init scripts/sdcard.sh      # once more by card: the web
 scripts/push.sh <pi-ip>                             # from then on
 ```
 
-`push.sh` builds `out/push-kernel8.img` with `scripts/push-init` as `/etc/init`, sends only the boot files whose
-SHA-256 differs from the card's (as `<name>.new`), trial-boots them once through the firmware's `tryboot.txt`, waits
+`push.sh` builds `out/push-kernel8.img` with `scripts/push-init` as `/etc/init`, sends only the boot files that
+differ from the card's (`kernel8.img` by the build id in its trailer, the rest by SHA-256; `-V` hashes the kernel
+too), as `<name>.new`, trial-boots them once through the firmware's `tryboot.txt`, waits
 for `/version` to answer the new build id, and only then commits. If the trial never answers, a **power cycle**
 boots the untouched old files. `-n` shows what would be sent; `-k` sends the kernel only; `-i <img>` pushes an image
 built elsewhere. The same steps are buttons on `http://<pi-ip>/boot`.
