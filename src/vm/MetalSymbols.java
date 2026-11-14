@@ -308,6 +308,16 @@ final class MetalSymbols implements Symbols
         cb.emit(A64Enc.movk(17, (idx >> 16) & 0xFFFF, 1));       // fixed width: sizing must not depend on idx
     }
 
+    public boolean hasVirtualSiteMemos()
+    {
+        return true;
+    }
+
+    public void virtualSiteMemo(CodeBuffer cb, int reg, int methodCp, boolean body)
+    {
+        emitAddr(cb, reg, Loader.siteMemoAddr(Loader.virtualSiteIndex(methodCp), body));
+    }
+
     public int vtableSlot(int methodCp)
     {
         return Loader.vtableSlotOf(methodCp);

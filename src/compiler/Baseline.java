@@ -1711,7 +1711,26 @@ public final class Baseline
         cb.emit(A64Enc.movReg(0, opSlot(sp - 1)));               // x0 = objref
         cb.emit(A64Enc.movReg(1, t));                            // x1 = target Type
         spillLive(cb);                                           // preserve the operand stack across the call
+        // EXACT-TYPE FAST PATH: null, or an object whose own Type IS the target, holds without the call. That is
+        // most casts in a hot loop -- a VarHandle accessor casts `(byte[]) ba` and its handle on every access,
+        // and MEASURED (ShaSpeedProbe on QEMU, qprof) castOk/instanceOf/typeAssignable were ~27% of a
+        // byte-array-view VarHandle get. Emitted AFTER the spill and joining BEFORE the reload, so both paths
+        // leave the operand stack in the same state; only the helper call is skipped. A raw array (TIB word <=
+        // MAX_RAW_ARRAY_TIB, no Type) and every other answer still go to castOk.
+        int fNull = cb.emit(A64Enc.cbz(0, 0));                   // null casts to anything
+        cb.emit(A64Enc.ldrx(16, 0, ObjectModel.TIB_OFFSET));     // x16 = TIB
+        cb.emit(A64Enc.cmpImm(16, ObjectModel.MAX_RAW_ARRAY_TIB));
+        int fRaw = cb.emit(A64Enc.bcond(A64Enc.LS, 0));          // a raw array: no Type to compare
+        cb.emit(A64Enc.ldrx(16, 16, 0));                         // x16 = TIB -> Type
+        cb.emit(A64Enc.cmpReg(16, 1));
+        int fMiss = cb.emit(A64Enc.bcond(A64Enc.NE, 0));         // not the exact Type: ask castOk
+        cb.set(fNull, A64Enc.cbz(0, cb.wordCount() - fNull));
+        cb.emit(A64Enc.movz(0, 1, 0));                           // x0 = 1: holds
+        int fDone = cb.emit(A64Enc.b(0));
+        cb.set(fRaw, A64Enc.bcond(A64Enc.LS, cb.wordCount() - fRaw));
+        cb.set(fMiss, A64Enc.bcond(A64Enc.NE, cb.wordCount() - fMiss));
         symbols.callHelper(cb, Symbols.CAST_OK);                 // x0 = 1 (holds) / 0 (throw)
+        cb.set(fDone, A64Enc.b(cb.wordCount() - fDone));
         reloadLive(cb);
         // The objref's register is resolved HERE, on the path both outcomes share: in a deep method opSlot can
         // emit a reload and mark the slot resident, and doing that inside the throw block would leave the
@@ -2118,7 +2137,7 @@ public final class Baseline
             // the site index in x17 BEFORE emitCall -- arg marshalling writes x0..x15 and leaves x17 alone --
             // and let the trampoline resolve against the receiver it finds in x0 and tail-branch.
             symbols.virtualSite(cb, cpIndex);
-            trampolineCall(cb, cpIndex, pos, true, Symbols.VIRTUAL_RESOLVE);
+            trampolineCall(cb, cpIndex, pos, true, Symbols.VIRTUAL_RESOLVE, symbols.hasVirtualSiteMemos());
             return;
         }
         int nargs = paramCount(cpIndex) + 1;    // receiver + params
@@ -3197,6 +3216,24 @@ public final class Baseline
      */
     private void trampolineCall(CodeBuffer cb, int cpIndex, int pos, boolean hasReceiver, int helper)
     {
+        trampolineCall(cb, cpIndex, pos, hasReceiver, helper, false);
+    }
+
+    /**
+     * As above; with {@code inlineCache}, a late VIRTUAL site first tests its own write-once memo (see
+     * {@link Symbols#virtualSiteMemo}) right here: when the receiver's Type is the one the site first resolved
+     * for, it calls the memoised body directly and the trampoline is never entered.
+     *
+     * <p>MEASURED (ShaSpeedProbe on QEMU, qprof): a byte-array-view VarHandle {@code get} is a late virtual
+     * site, and the memo already answered every call -- but only after the trampoline saved x0..x15 and LR and
+     * went through VMNatives.virtualResolve -> Loader.virtualResolve -> siteMemoHit -> receiverAddress, ~38% of
+     * the access. The hit costs ten instructions here. A miss (a second receiver Type, a site not yet resolved,
+     * a raw-array receiver) takes the trampoline exactly as before; x17 is reloaded with the site index first,
+     * because the probe used it.
+     */
+    private void trampolineCall(CodeBuffer cb, int cpIndex, int pos, boolean hasReceiver, int helper,
+            boolean inlineCache)
+    {
         int nargs = paramCount(cpIndex) + (hasReceiver ? 1 : 0);
         if (nargs > MAX_ARG_REGS && !deepStack)
         {
@@ -3227,7 +3264,33 @@ public final class Baseline
             }
             spillLive(cb);
         }
-        symbols.callHelper(cb, helper);
+        if (inlineCache)
+        {
+            // x0 is the receiver, null-checked above. Writer order is body, barrier, Type (publishSiteMemo),
+            // so a reader that matches the Type and then reads the body after a barrier sees that body.
+            cb.emit(A64Enc.ldrx(16, 0, ObjectModel.TIB_OFFSET));        // x16 = TIB
+            cb.emit(A64Enc.cmpImm(16, ObjectModel.MAX_RAW_ARRAY_TIB));
+            int cRaw = cb.emit(A64Enc.bcond(A64Enc.LS, 0));            // a raw array: no Type
+            cb.emit(A64Enc.ldrx(16, 16, 0));                           // x16 = receiver Type
+            symbols.virtualSiteMemo(cb, 17, cpIndex, false);           // x17 = &memo Type
+            cb.emit(A64Enc.ldrx(17, 17, 0));
+            cb.emit(A64Enc.cmpReg(16, 17));                            // 0 (unresolved) never matches a Type
+            int cMiss = cb.emit(A64Enc.bcond(A64Enc.NE, 0));
+            cb.emit(A64Enc.dmbIsh());                                  // the Type was read before the body
+            symbols.virtualSiteMemo(cb, 16, cpIndex, true);            // x16 = &memo body
+            cb.emit(A64Enc.ldrx(16, 16, 0));
+            cb.emit(A64Enc.blr(16));                                   // the call the trampoline would tail-branch to
+            int cDone = cb.emit(A64Enc.b(0));
+            cb.set(cRaw, A64Enc.bcond(A64Enc.LS, cb.wordCount() - cRaw));
+            cb.set(cMiss, A64Enc.bcond(A64Enc.NE, cb.wordCount() - cMiss));
+            symbols.virtualSite(cb, cpIndex);                          // x17 = the site index again
+            symbols.callHelper(cb, helper);
+            cb.set(cDone, A64Enc.b(cb.wordCount() - cDone));
+        }
+        else
+        {
+            symbols.callHelper(cb, helper);
+        }
         reloadLive(cb);
         if (returnsValue(cpIndex))
         {
