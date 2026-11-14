@@ -165,6 +165,17 @@ final class VMStats
         i = put(arr, len, i, VMGc.probes);                                 // words examined by the last one
         i = put(arr, len, i, gcSkipped);                                   // skipped: the world would not stop
         i = put(arr, len, i, VMGc.liveBytes);                              // live after the last one
+        i = put(arr, len, i, ticksToUs(VMGc.phaseStopTicks));              // last: stopping the world, us
+        i = put(arr, len, i, ticksToUs(VMGc.phaseRootTicks));              // ... root scan, us
+        i = put(arr, len, i, ticksToUs(VMGc.phaseTraceTicks));             // ... trace, us
+        i = put(arr, len, i, ticksToUs(VMGc.phaseSweepTicks));             // ... sweep, us
+        i = put(arr, len, i, VMGc.rootProbes);                             // ... root words examined
+        int c = 1;
+        while (c < 4)
+        {
+            i = put(arr, len, i, Magic.load64(Heap.PTR_CELL + c * 8L) - Heap.arenaBase(c));   // core c's arena use
+            c += 1;
+        }
         return (long) i;
     }
 
@@ -301,6 +312,12 @@ final class VMStats
         i = put(arr, len, i, NetStats.tcpRstIgnored);
         i = put(arr, len, i, NetStats.tcpWinUpdates);
         i = put(arr, len, i, NetStats.tcpSynAckRetrans);
+        i = put(arr, len, i, NetStats.ms(NetStats.rxBusyTicks));
+        i = put(arr, len, i, NetStats.ms(NetStats.rxSdioTicks));
+        i = put(arr, len, i, NetStats.ms(NetStats.rxTcpTicks));
+        i = put(arr, len, i, NetStats.tcpAppReads);
+        i = put(arr, len, i, NetStats.ms(NetStats.tcpAppWaitTicks));
+        i = put(arr, len, i, NetStats.ms(NetStats.tcpAppCopyTicks));
         i = put(arr, len, i, NetStats.udpInDatagrams);
         i = put(arr, len, i, NetStats.udpNoPorts);
         i = put(arr, len, i, NetStats.udpInErrors);

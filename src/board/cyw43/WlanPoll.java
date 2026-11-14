@@ -111,7 +111,9 @@ public final class WlanPoll
         while (true)
         {
             VMScheduler.semWaitTimeout(VM.WIFI_SEM, WATCHDOG_MS);   // the interrupt, or the watchdog
+            long t0 = Magic.readCNTPCT_EL0();
             poll();
+            net.NetStats.rxBusyTicks = net.NetStats.rxBusyTicks + (Magic.readCNTPCT_EL0() - t0);
         }
     }
 
@@ -156,7 +158,9 @@ public final class WlanPoll
             }
             long dst = net.RxQueues.bufAddr(b);
             busLock();
+            long s0 = Magic.readCNTPCT_EL0();
             int len = Cyw43.readFrameOnce(dst, net.RxQueues.FRAME);
+            net.NetStats.rxSdioTicks = net.NetStats.rxSdioTicks + (Magic.readCNTPCT_EL0() - s0);
             if (len == 0)
             {
                 Cyw43.clearFrameInts();                  // chip empty: clear SDIOD + SDHCI status
@@ -173,7 +177,9 @@ public final class WlanPoll
             }
             if (Cyw43.isGlomDesc(dst))
             {
+                long g0 = Magic.readCNTPCT_EL0();
                 int total = Cyw43.readSuperframe(dst, len);   // still under the bus lock: it follows in the FIFO
+                net.NetStats.rxSdioTicks = net.NetStats.rxSdioTicks + (Magic.readCNTPCT_EL0() - g0);
                 busUnlock();
                 net.RxQueues.freeBuf(b);
                 if (total > 0)

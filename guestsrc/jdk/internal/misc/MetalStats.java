@@ -56,6 +56,14 @@ public final class MetalStats
         "words examined by the last collection",
         "skipped: the world would not stop",
         "live after the last collection (bytes)",
+        "last collection: stopping the world (us)",
+        "last collection: root scan (us)",
+        "last collection: trace (us)",
+        "last collection: sweep (us)",
+        "last collection: root words examined",
+        "core 1 arena in use, never collected (bytes)",
+        "core 2 arena in use, never collected (bytes)",
+        "core 3 arena in use, never collected (bytes)",
     };
 
     public static final String[] LOCKS_NAMES = {
@@ -87,6 +95,8 @@ public final class MetalStats
         "TcpExt OfoQueue", "TcpExt OfoDrop", "TcpExt OfoMerge", "TcpExt DupData", "TcpExt PartialDup",
         "TcpExt WndDrop", "TcpExt DupAcksOut", "TcpExt ChallengeAcks", "TcpExt RstIgnored", "TcpExt WinUpdates",
         "TcpExt SynAckRetrans",
+        "Rx task busy ms", "Rx task SDIO read ms", "Rx task TCP input ms",
+        "Tcp app reads", "Tcp app read wait ms", "Tcp app read copy ms",
         "Udp InDatagrams", "Udp NoPorts", "Udp InErrors", "Udp InCsumErrors", "Udp RcvbufErrors",
         "Udp OutDatagrams",
         "WiFi firmware events", "WiFi tx queued", "WiFi tx forced past window", "WiFi tx dropped",
