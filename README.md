@@ -65,6 +65,7 @@ page is requested:
 | `/locks` | monitors and semaphores |
 | `/threads` | every task, its state and priority |
 | `/net` | IP/TCP/UDP counters and WiFi transmit stats |
+| `/boot` | the SD card's boot files; upload, trial-boot and commit new ones (below) |
 
 It needs a Pi 4 (the onboard CYW43455 WiFi), an SD card with a FAT32 boot
 partition, and a WPA2-PSK or open network. A USB-TTL serial adapter is optional,
@@ -127,6 +128,36 @@ speculative connection that never sends a request can't stall it.
 If the serial log shows `wifi: join timeout`, check the SSID and password in
 `wifi.conf`. `web: no network interface yet` means the join failed before the
 server started.
+
+### Update the card over the network
+
+Once the Pi is running the web server, it can write its own boot files, so the
+card stays in the board. Updates need a shared token, which is baked into the
+image. Create it before the build in step 3, so the first card already carries
+it:
+
+```sh
+openssl rand -hex 16 > ramfs/etc/boot.token   # gitignored
+```
+
+Without the token, the `/boot` page is read-only and every change is refused.
+
+From then on, one command builds an image and makes it live:
+
+```sh
+scripts/push.sh 192.168.1.247
+```
+
+It sends only the boot files whose SHA-256 differs from the card's, as
+`<name>.new`. Then it reboots the Pi into them once, using the firmware's
+`tryboot.txt`. Only when the new image answers `/version` with its own build id
+does it commit: each file is renamed over the old one, and `config.txt` goes
+last. If the new image never comes up, nothing live has changed, and a power
+cycle boots the old files.
+
+`push.sh -n` shows what would be sent without sending it. The same steps are
+buttons on `http://<pi>/boot`, for uploading a file from a browser.
+[`scripts/flash.md`](scripts/flash.md) has the details.
 
 To go back to the default program, restore `ramfs/etc/init`, for example with
 `git checkout ramfs/etc/init`.
