@@ -328,6 +328,11 @@ final class VMStats
         i = put(arr, len, i, board.cyw43.Cyw43.txQueued);                  // ... frames that waited to send
         i = put(arr, len, i, board.cyw43.Cyw43.txForced);                  // ... sent past the credit window
         i = put(arr, len, i, board.cyw43.Cyw43.txDropped);                 // ... dropped, queue full
+        i = put(arr, len, i, NetStats.ms(board.cyw43.Cyw43.txqWaitTicks)); // ... summed queue wait, ms
+        i = put(arr, len, i, NetStats.ms(board.cyw43.Cyw43.txqWaitMax * 1000L));   // ... longest wait, us
+        i = put(arr, len, i, board.cyw43.Cyw43.txqFlushes);                // ... flushes that sent something
+        i = put(arr, len, i, board.cyw43.Cyw43.txqWaitsOver100);           // ... frames that waited >= 100 ms
+        i = put(arr, len, i, board.cyw43.Cyw43.txqLongAcrossGc);           // ... long waits spanning a GC
         i = put(arr, len, i, board.cyw43.Cyw43.wpaJoinMs);                 // boot join: SET_SSID to keys, ms
         i = put(arr, len, i, board.cyw43.Cyw43.wpaMsg1);                   // ... EAPOL msg1s received
         i = put(arr, len, i, board.cyw43.Cyw43.wpaMsg2);                   // ... msg2s sent

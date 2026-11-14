@@ -1509,6 +1509,8 @@ public final class Cyw43
             int k = (txqHead + txqCount) & (TXQ - 1);
             txqBuf[k] = tx;
             txqLen[k] = total;
+            txqAt[k] = Magic.readCNTPCT_EL0();
+            txqGc[k] = vm.VM.gcCollections();
             if (txqCount == 0)
             {
                 txqSince = Magic.readCNTPCT_EL0();
@@ -1554,6 +1556,13 @@ public final class Cyw43
     private static final int TXQ_FORCE_MS = 250;         // a frame held this long is sent anyway (see flushTxLocked)
     private static long[] txqBuf = new long[TXQ];
     private static int[] txqLen = new int[TXQ];
+    private static long[] txqAt = new long[TXQ];         // CNTPCT when each frame was queued
+    private static long[] txqGc = new long[TXQ];         // ... and the collection count then
+    public static int txqLongAcrossGc;                   // MEASUREMENT: waits >= 100 ms that spanned a collection
+    public static long txqWaitTicks;                     // MEASUREMENT: summed queue time of the frames sent
+    public static long txqWaitMax;                       // ... the longest one
+    public static int txqFlushes;                        // ... flushes that sent at least one frame
+    public static int txqWaitsOver100;                   // ... frames that waited 100 ms or more
     private static int txqHead = 0;
     private static int txqCount = 0;
     private static long txqSince;                        // CNTPCT when the current head became the head
@@ -1573,6 +1582,10 @@ public final class Cyw43
      */
     static void flushTxLocked()
     {
+        if (txqCount > 0)
+        {
+            txqFlushes = txqFlushes + 1;
+        }
         while (txqCount > 0)
         {
             long tx = txqBuf[txqHead];
@@ -1597,6 +1610,20 @@ public final class Cyw43
                 board.bcm2711.Uart.putc(0x0A);
             }
             writeFrameLocked(tx, txqLen[txqHead]);
+            long w = Magic.readCNTPCT_EL0() - txqAt[txqHead];
+            txqWaitTicks = txqWaitTicks + w;
+            if (w > txqWaitMax)
+            {
+                txqWaitMax = w;
+            }
+            if (w >= Magic.readCNTFRQ_EL0() / 10L)
+            {
+                txqWaitsOver100 = txqWaitsOver100 + 1;
+                if (vm.VM.gcCollections() != txqGc[txqHead])
+                {
+                    txqLongAcrossGc = txqLongAcrossGc + 1;
+                }
+            }
             txqBuf[txqHead] = 0L;
             txqHead = (txqHead + 1) & (TXQ - 1);
             txqCount = txqCount - 1;
