@@ -281,7 +281,9 @@ appjar: guest
 	  ls -l ramfs/lib/app.jar; fi
 
 # Programs the web server's /run page runs (demo/RunProgram, probed by demo/RunProbe): a jar whose classes refer
-# to each other in both directions, and a lone default-package class file. Like app.jar they are compiled
+# to each other in both directions, a lone default-package class file, and bench.jar -- the stop-poll cost
+# benchmark, whose bench/PollLoops is MADE from guestsrc/demo/PollLoops.java by changing only its package line,
+# so the polled copy and the image's unpolled one are the same bytecode. Like app.jar they are compiled
 # OUTSIDE the classDir with the plain seed JDK and staged into the RAMFS at /run/, so on the metal they exist only
 # as bytes a program hands to defineClass -- the same bytes an upload or a download delivers.
 RUNSRC := $(shell find runsrc -name '*.java' 2>/dev/null)
@@ -293,7 +295,11 @@ runprogs:
 	  $(JAVAC) -d $(RUNCLASSES)/jar $(shell find runsrc/jar -name '*.java' 2>/dev/null) && \
 	  $(JAVAC) -d $(RUNCLASSES)/single $(shell find runsrc/single -name '*.java' 2>/dev/null) && \
 	  jar --create --date=$(JARDATE) --file ramfs/run/hello.jar --main-class hello.Main -C $(RUNCLASSES)/jar . && \
-	  cp $(RUNCLASSES)/single/Hello.class ramfs/run/Hello.class; fi
+	  cp $(RUNCLASSES)/single/Hello.class ramfs/run/Hello.class && \
+	  mkdir -p $(RUNCLASSES)/bench-src/bench $(RUNCLASSES)/bench && \
+	  sed 's/^package demo;/package bench;/' guestsrc/demo/PollLoops.java > $(RUNCLASSES)/bench-src/bench/PollLoops.java && \
+	  $(JAVAC) -d $(RUNCLASSES)/bench $(shell find runsrc/bench -name '*.java' 2>/dev/null) $(RUNCLASSES)/bench-src/bench/PollLoops.java && \
+	  jar --create --date=$(JARDATE) --file ramfs/run/bench.jar --main-class bench.Main -C $(RUNCLASSES)/bench .; fi
 
 # The JUnit API + engine, staged into the RAMFS so the guest can load it at RUNTIME. Deliberately a COPY of
 # the host jar rather than anything compiled into the image: on the metal these classes exist only inside the

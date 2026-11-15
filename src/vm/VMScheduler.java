@@ -488,6 +488,12 @@ public final class VMScheduler
         Magic.store32(s + w * 4L, A64Enc.msr(A64Enc.HCR_EL2, 3));     w += 1;   // HCR_EL2.RW = 1
         Magic.store32(s + w * 4L, A64Enc.movz(3, 0x33FF, 0));         w += 1;
         Magic.store32(s + w * 4L, A64Enc.msr(A64Enc.CPTR_EL2, 3));    w += 1;   // don't trap FP to EL2
+        // ... NOR to EL1: CPACR_EL1.FPEN = 0b11, as the boot core sets it (EmitBoot, VM.boot). Its reset value traps
+        // FP/SIMD at EL1, and without this every FP instruction a thread ran on cores 1-3 raised an InternalError
+        // (TRAP ec=0x07) -- latent while nothing doing FP math ran there; a /run benchmark's first double divide on
+        // a secondary found it (2026-11-14). QEMU does not trap, so only the Pi shows it.
+        Magic.store32(s + w * 4L, A64Enc.movz(3, 0x0030, 1));         w += 1;   // x3 = 0x30_0000
+        Magic.store32(s + w * 4L, A64Enc.msr(A64Enc.CPACR_EL1, 3));   w += 1;   // CPACR_EL1.FPEN = 0b11
         Magic.store32(s + w * 4L, A64Enc.movz(3, 0x03C5, 0));         w += 1;
         Magic.store32(s + w * 4L, A64Enc.msr(A64Enc.SPSR_EL2, 3));    w += 1;   // target = EL1h, DAIF masked
         Magic.store32(s + w * 4L, A64Enc.movz(3, lo, 0));             w += 1;

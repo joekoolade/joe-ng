@@ -21,6 +21,8 @@ package hello;
  * <li>{@code catch}: catches Throwable around its inner loop and goes round again: still stops.</li>
  * <li>{@code threads}: three more threads spin beside main: every one is stopped.</li>
  * <li>{@code jdk}: each pass calls into the JDK (StringBuilder): the program's own loop still polls.</li>
+ * <li>{@code monitor}: enters {@code Spin.class}'s monitor, which a caller can hold: blocked there no interrupt or
+ *     poll reaches it, so a stop stays PENDING until the caller lets go.</li>
  * </ul>
  * A second argument {@code yield} makes every pass call {@code Thread.yield()}: QEMU gives a launched program no
  * timer ticks, so there a loop that never yields keeps its core for good and nothing else would run to stop it.
@@ -109,6 +111,13 @@ public class Spin
                 t.start();
             }
             spin();
+        }
+        else if (mode.equals("monitor"))
+        {
+            synchronized (Spin.class)
+            {
+                System.out.println("spin: monitor entered");
+            }
         }
         else if (mode.equals("jdk"))
         {

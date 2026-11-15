@@ -4,6 +4,31 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **WHAT A STOP POLL COSTS -- AND TWO BUGS MEASURING IT FOUND (2026-11-14).** Pi-validated (build 77e01b3f49127c4b).
+  - **The benchmark:** `runsrc/bench` (`bench.jar`, upload it to `/run`). `bench/PollLoops` is MADE from
+    `guestsrc/demo/PollLoops.java` by the Makefile, changing only the package line (javap: identical bytecode), so
+    the image's copy compiles without polls and the run's copy with them; four loop shapes, alternating, min of 5
+    over 20M passes. `bench.Block` waits in `accept` so a stop on it stays PENDING.
+  - **Pi, no stop pending** (1.5 GHz, 0.667 ns a cycle): count 4.003 -> 4.669 ns (+1 cycle, +17%), array 6.688 ->
+    8.025 (+2 cycles, +20%), calls ~9.8-10.0 -> 10.27 (+5%), nested 4.795 -> 5.481 (+1 cycle, +14%); identical to
+    the picosecond over four runs. **Stop pending elsewhere** (every poll calls `VM.stopPoll`): ~28-38 cycles per
+    pass (count +18.7 ns at 1.5 GHz). During those runs the board's clock fell ~2.5x (the unpolled count went 4.0 ->
+    10.0 ns and stayed there), likely throttling after minutes of spinning -- so the pending figures are in cycles
+    against each run's own unpolled loop; at the lower clock the no-pending deltas were again 1 and 2 cycles.
+  - **Bug 1, latent since SMP: cores 1-3 trapped every FP instruction.** The secondary stub cleared CPTR_EL2 but
+    never set `CPACR_EL1.FPEN`, whose reset traps FP/SIMD at EL1: the benchmark's first `double` divide on a
+    secondary was `java.lang.InternalError` (2 of 2 runs; never on QEMU, which does not trap). Nothing doing FP math
+    had run off core 0 before. The stub now sets it (`VMScheduler`, 2 instructions); 3 of 3 clean after.
+  - **Bug 2, from #527: a polled LEAF method lost its return address once a stop was pending.** A leaf saves no LR;
+    the poll's helper call clobbered x30 the first time it ran, and `ret` went back into the loop -- the poll's
+    `cbz` then "threw" a stale register: serial showed `bench/PollLoops.count -> captureTrace` NPE on
+    `x9=0x0000B5E6205BE9D0`, then a NESTED FAULT and a halted board (power-cycled). Same trap as synchronized methods,
+    same fix: a method with stop polls is never a leaf (`Baseline`, loop headers found before the frame layout). #527's
+    stop tests missed it because every loop they stopped had a call in a `finally`. RunProbe's new `pending` arm (a
+    run blocked on a monitor the probe holds, stopped, while the benchmark's leaf loops run) hung its boot to the
+    15-minute ceiling without the fix -- the control -- and passes with it.
+  - `make test`, overlaycheck 0 new, RunProbe + ExitProbe, seven thread probes.
+
 - **THE IMAGE NO LONGER BAKES macOS `.DS_Store` FILES (2026-11-14).** `BuildRuntimeImage.embedRamfs` skips them
   (`isHostClutter`): Finder writes one into any folder it shows, and the one it left in `ramfs/` reached FileProbe's
   root listing in the last full regression. With a `.DS_Store` put back in `ramfs/`, FileProbe passes and the image

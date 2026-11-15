@@ -80,6 +80,8 @@ public class RunProbe
         exits(jar);
         threads(jar);
         stops(jar);
+        pending(jar);
+        bench();
         http(jar, cls);
         System.out.println(failures == 0 ? "RunProbe PASS" : "RunProbe FAIL " + failures);
     }
@@ -196,6 +198,65 @@ public class RunProbe
         check("nothing left to stop", RunProgram.stop(r, 0L).contains("no live thread"));
         r = RunProgram.run("hello.jar", jar, null, new String[] { "after", "stops" });
         check("a run after the stops", r.status == RunProgram.OK && r.output.contains("args 2 after,stops"));
+    }
+
+    /**
+     * A stop PENDING on one run while another runs: every poll then calls into the VM. The benchmark's loops are
+     * LEAF methods (no calls), so this is where a poll's call clobbering an unsaved x30 showed -- they never
+     * returned (the Pi went silent). The pending stop is a run blocked entering a monitor this probe holds, which no
+     * interrupt or poll reaches.
+     */
+    private static void pending(byte[] jar) throws Exception
+    {
+        Object lock = Class.forName("hello.Spin");
+        java.util.concurrent.CountDownLatch held = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        Thread holder = new Thread(() ->
+        {
+            synchronized (lock)
+            {
+                held.countDown();
+                try
+                {
+                    release.await();
+                }
+                catch (InterruptedException e)
+                {
+                    return;
+                }
+            }
+        }, "monitor-holder");
+        holder.start();
+        held.await();
+        RunProgram.Result blocked = spin(jar, "monitor");
+        String what = RunProgram.stop(blocked, 200L);
+        System.out.println("pending: " + what);
+        check("pending: the blocked run survives its stop", what.contains("still alive") && !blocked.done());
+
+        byte[] b = Files.readAllBytes(Path.of("/run/bench.jar"));
+        RunProgram.Result r = RunProgram.start("bench.jar", b, null, new String[] { "20000", "1" });
+        boolean finished = r.await(60000L);
+        show("bench while a stop is pending", r);
+        check("pending: leaf loops still return", finished && r.status == RunProgram.OK);
+        check("pending: same results both ways", finished && !r.output.contains("DIFFER")
+                && r.output.contains("nested "));
+
+        release.countDown();
+        holder.join(5000L);
+        check("pending: the blocked run ends once let go", blocked.await(10000L)
+                && blocked.status == RunProgram.STOPPED && blocked.text().contains("spin: monitor entered"));
+    }
+
+    /** The stop-poll cost benchmark runs, and its polled and unpolled loops compute the same results (no timing). */
+    private static void bench() throws Exception
+    {
+        byte[] b = Files.readAllBytes(Path.of("/run/bench.jar"));
+        RunProgram.Result r = RunProgram.run("bench.jar", b, null, new String[] { "20000", "1" });
+        show("bench", r);
+        check("bench ran", r.status == RunProgram.OK);
+        check("bench: all four shapes", r.output.contains("count ") && r.output.contains("array ")
+                && r.output.contains("calls ") && r.output.contains("nested "));
+        check("bench: same results both ways", !r.output.contains("DIFFER"));
     }
 
     /** Start {@code hello.Spin <mode> yield} and wait until it has said it started. */
