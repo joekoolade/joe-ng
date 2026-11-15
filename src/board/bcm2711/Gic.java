@@ -33,6 +33,7 @@ public final class Gic
     private static final long GICC = 0xFF84_2000L;   // CPU interface (base + 0x2000)
 
     private static final long GICD_CTLR       = GICD + 0x000;
+    private static final long GICD_TYPER      = GICD + 0x004;   // bit 10: SecurityExtn
     private static final long GICD_IGROUPR    = GICD + 0x080;   // 1 bit/INTID: 0 = group0, 1 = group1
     private static final long GICD_ISENABLER  = GICD + 0x100;   // 1 bit/INTID: write 1 to enable forwarding
     private static final long GICD_ICENABLER  = GICD + 0x180;   // 1 bit/INTID: write 1 to disable forwarding
@@ -47,6 +48,25 @@ public final class Gic
     /** Non-secure EL1 physical timer (CNTP_EL0). BCM2711 Figure 7. */
     public static final int PPI_CNTPNS = 30;
 
+    /**
+     * The group an interrupt must be in for {@code CTLR = 1} to forward it. With the Security Extensions -- the Pi's
+     * GIC-400, after the armstub -- we see the NON-SECURE view, where bit 0 of GICD_CTLR/GICC_CTLR is EnableGrp1,
+     * so the interrupt goes in group 1. WITHOUT them -- QEMU's raspi4b model (GICD_TYPER.SecurityExtn = 0) -- the
+     * same bit 0 is EnableGrp0, so a group-1 interrupt was enabled, pending and never forwarded: MEASURED
+     * (demo/TickProbe, 2026-11-15) ISPENDR0 bit 30 set with GICD_CTLR = GICC_CTLR = 1, and no tick ever taken.
+     * That one fault was QEMU's "no timer ticks for a launched program", "no timer PPI to a secondary" and "never
+     * raises SPI 125". There the interrupt stays in group 0, which signals as IRQ (FIQEn is 0).
+     */
+    private static void setGroup(int intid)
+    {
+        if (((Magic.load32(GICD_TYPER) >> 10) & 1) == 0)
+        {
+            return;                                                  // no Security Extensions: group 0
+        }
+        int gr = (int) Magic.load32(word(GICD_IGROUPR, intid));
+        Magic.store32(word(GICD_IGROUPR, intid), gr | bit(intid));   // group 1 (non-secure)
+    }
+
     private static long word(long base, int intid)  { return base + (intid / 32) * 4; }
     private static int  bit(int intid)              { return 1 << (intid % 32); }
 
@@ -57,8 +77,7 @@ public final class Gic
      */
     public static void init(int intid)
     {
-        int gr = (int) Magic.load32(word(GICD_IGROUPR, intid));
-        Magic.store32(word(GICD_IGROUPR, intid), gr | bit(intid));   // group 1 (non-secure)
+        setGroup(intid);
         Magic.store32(GICD_IPRIORITYR + (intid / 4) * 4, 0);         // priority 0 (highest) for this word
         Magic.store32(word(GICD_ISENABLER, intid), bit(intid));      // forwarding enable
         Magic.store32(GICD_CTLR, 1);                                 // NS view: bit0 = EnableGrp1
@@ -72,8 +91,7 @@ public final class Gic
      */
     public static void initSpi(int intid)
     {
-        int gr = (int) Magic.load32(word(GICD_IGROUPR, intid));
-        Magic.store32(word(GICD_IGROUPR, intid), gr | bit(intid));   // group 1 (non-secure)
+        setGroup(intid);
         Magic.store32(GICD_IPRIORITYR + (intid / 4) * 4, 0);         // priority 0 (highest) for this word
         long taddr = GICD_ITARGETSR + (intid / 4) * 4;               // route to CPU 0 (byte = 0x01)
         int shift = (intid % 4) * 8;
