@@ -11,6 +11,7 @@
  */
 package board.bcm2711;
 
+import magic.Address;
 import magic.Magic;
 
 /**
@@ -102,7 +103,7 @@ public final class Rng
         state = UNUSABLE;
         try
         {
-            int ctrl = Magic.load32(CTRL);
+            int ctrl = Address.fromLong(CTRL).loadInt();
             if ((ctrl & RBGEN_MASK) == 0)
             {
                 // Deliberately NOT enabled here -- see the class note on why this driver never writes.
@@ -158,9 +159,9 @@ public final class Rng
         int spins = 0;
         while (spins < SPIN)
         {
-            if ((Magic.load32(FIFO_COUNT) & 0xFF) != 0)
+            if ((Address.fromLong(FIFO_COUNT).loadInt() & 0xFF) != 0)
             {
-                return Magic.load32(FIFO_DATA);
+                return Address.fromLong(FIFO_DATA).loadInt();
             }
             spins = spins + 1;
         }
@@ -183,6 +184,7 @@ public final class Rng
         {
             return 0;
         }
+        Address d = Address.fromLong(dst);
         int done = 0;
         try
         {
@@ -197,7 +199,7 @@ public final class Rng
                 int k = 0;
                 while (k < 4 && done < len)
                 {
-                    Magic.store8(dst + done, (w >>> (8 * k)) & 0xFF);
+                    d.plus(done).store((byte) ((w >>> (8 * k)) & 0xFF));
                     done = done + 1;
                     k = k + 1;
                 }

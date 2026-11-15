@@ -11,6 +11,7 @@
  */
 package board.bcm2711;
 
+import magic.Address;
 import magic.Magic;
 
 /**
@@ -52,11 +53,11 @@ public final class Emmc
         {
             return EMMC2_BASE;
         }
-        if ((Magic.load32(EMMC2_BASE + STATUS) & (1 << 16)) != 0)
+        if ((Address.fromLong(EMMC2_BASE + STATUS).loadInt() & (1 << 16)) != 0)
         {
             return EMMC2_BASE;
         }
-        if ((Magic.load32(EMMC_BASE + STATUS) & (1 << 16)) != 0)
+        if ((Address.fromLong(EMMC_BASE + STATUS).loadInt() & (1 << 16)) != 0)
         {
             return EMMC_BASE;
         }
@@ -121,9 +122,9 @@ public final class Emmc
             baseHz = 100_000_000;                           // QEMU / no answer: the old assumption
         }
         // Full software reset of the host controller (CONTROL1 SRST_HC = bit24).
-        Magic.store32(base + CONTROL0, 0);
-        or32(base + CONTROL1, 1 << 24);
-        if (!waitClear(base + CONTROL1, 1 << 24))
+        reg(CONTROL0).store(0);
+        or32(reg(CONTROL1), 1 << 24);
+        if (!waitClear(reg(CONTROL1), 1 << 24))
         {
             return -2;
         }
@@ -131,19 +132,19 @@ public final class Emmc
         int c1 = (1 << 0)                    // CLK_INTLEN (internal clock enable)
                | clockDiv(400000)            // frequency select
                | (11 << 16);                 // DATA_TOUNIT (timeout ~ TMCLK * 2^24)
-        Magic.store32(base + CONTROL1, c1);
-        if (!waitSet(base + CONTROL1, 1 << 1))             // CLK_STABLE
+        reg(CONTROL1).store(c1);
+        if (!waitSet(reg(CONTROL1), 1 << 1))             // CLK_STABLE
         {
             return -3;
         }
-        or32(base + CONTROL1, 1 << 2);                     // CLK_EN (SD clock on)
+        or32(reg(CONTROL1), 1 << 2);                     // CLK_EN (SD clock on)
         // SD bus power on at 3.3V (CONTROL0 [11:9] voltage, [8] power). The Pi firmware normally
         // owns power, but a generic SDHCI (QEMU) gates command response on it.
-        or32(base + CONTROL0, (0x7 << 9) | (1 << 8));
+        or32(reg(CONTROL0), (0x7 << 9) | (1 << 8));
         // Route all events to the INTERRUPT status register; we poll it.
-        Magic.store32(base + IRPT_EN, 0xFFFFFFFF);
-        Magic.store32(base + IRPT_MASK, 0xFFFFFFFF);
-        Magic.store32(base + INTERRUPT, 0xFFFFFFFF);       // clear any stale flags
+        reg(IRPT_EN).store(0xFFFFFFFF);
+        reg(IRPT_MASK).store(0xFFFFFFFF);
+        reg(INTERRUPT).store(0xFFFFFFFF);       // clear any stale flags
 
         if (!command(0 << 24 | RSP_NONE, 0))               // CMD0 GO_IDLE_STATE
         {
@@ -153,7 +154,7 @@ public final class Emmc
         {
             return -5;
         }
-        if ((Magic.load32(base + RESP0) & 0xFFF) != 0x1AA)         // echoes VHS + check pattern
+        if ((reg(RESP0).loadInt() & 0xFFF) != 0x1AA)         // echoes VHS + check pattern
         {
             return -6;
         }
@@ -170,7 +171,7 @@ public final class Emmc
             {
                 return -8;
             }
-            resp = Magic.load32(base + RESP0) & 0xFFFFFFFFL;
+            resp = reg(RESP0).loadInt() & 0xFFFFFFFFL;
             if ((resp & 0x80000000L) != 0)                          // bit31: power-up done
             {
                 break;
@@ -191,7 +192,7 @@ public final class Emmc
         {
             return -11;
         }
-        rca = Magic.load32(base + RESP0) & 0xFFFF0000L;            // top 16 bits are the RCA
+        rca = reg(RESP0).loadInt() & 0xFFFF0000L;            // top 16 bits are the RCA
         if (!command(7 << 24 | RSP_48B | CRC_CHK | IX_CHK, rca))   // CMD7 SELECT_CARD
         {
             return -12;
@@ -211,7 +212,7 @@ public final class Emmc
         {
             return -15;
         }
-        or32(base + CONTROL0, 1 << 1);                             // HCTL_DWIDTH: host on 4 bits too
+        or32(reg(CONTROL0), 1 << 1);                             // HCTL_DWIDTH: host on 4 bits too
         if (!setClock(25_000_000))
         {
             return -16;
@@ -222,15 +223,15 @@ public final class Emmc
     /** Switch the SD clock to (at most) {@code hz}: stop it, load the divider, wait stable, start it. */
     private static boolean setClock(int hz)
     {
-        int c1 = Magic.load32(base + CONTROL1);
-        Magic.store32(base + CONTROL1, c1 & ~(1 << 2));            // CLK_EN off while it changes
+        int c1 = reg(CONTROL1).loadInt();
+        reg(CONTROL1).store(c1 & ~(1 << 2));            // CLK_EN off while it changes
         c1 = (c1 & ~((0xFF << 8) | (0x3 << 6)) & ~(1 << 2)) | clockDiv(hz);
-        Magic.store32(base + CONTROL1, c1);
-        if (!waitSet(base + CONTROL1, 1 << 1))                     // CLK_STABLE
+        reg(CONTROL1).store(c1);
+        if (!waitSet(reg(CONTROL1), 1 << 1))                     // CLK_STABLE
         {
             return false;
         }
-        or32(base + CONTROL1, 1 << 2);                             // CLK_EN
+        or32(reg(CONTROL1), 1 << 2);                             // CLK_EN
         busHz = baseHz / (2 * divOf(hz));
         return true;
     }
@@ -241,15 +242,16 @@ public final class Emmc
      */
     public static boolean readBlocks(long lba, long dst, int n)
     {
+        Address p = Address.fromLong(dst);
         while (n > 0)
         {
             int run = n < MAX_RUN ? n : MAX_RUN;
-            if (!transfer(lba, dst, run, false))
+            if (!transfer(lba, p, run, false))
             {
                 return false;
             }
             lba += run;
-            dst += run * 512L;
+            p = p.plus(run * 512L);
             n -= run;
         }
         return true;
@@ -258,15 +260,16 @@ public final class Emmc
     /** Write {@code n} consecutive 512-byte blocks to {@code lba} from memory at {@code src}. CMD25. */
     public static boolean writeBlocks(long lba, long src, int n)
     {
+        Address p = Address.fromLong(src);
         while (n > 0)
         {
             int run = n < MAX_RUN ? n : MAX_RUN;
-            if (!transfer(lba, src, run, true))
+            if (!transfer(lba, p, run, true))
             {
                 return false;
             }
             lba += run;
-            src += run * 512L;
+            p = p.plus(run * 512L);
             n -= run;
         }
         return true;
@@ -277,13 +280,13 @@ public final class Emmc
      * latched status, so without the clear every wait after the first passes at once and the PIO loop runs
      * ahead of the FIFO (the SDIO write bug of #506, on the other controller).
      */
-    private static boolean transfer(long lba, long mem, int n, boolean write)
+    private static boolean transfer(long lba, Address mem, int n, boolean write)
     {
-        if (!waitClear(base + STATUS, SR_DAT_INHIBIT))
+        if (!waitClear(reg(STATUS), SR_DAT_INHIBIT))
         {
             return dataFail();
         }
-        Magic.store32(base + BLKSIZECNT, (n << 16) | 512);
+        reg(BLKSIZECNT).store((n << 16) | 512);
         long arg = sdhc ? lba : lba * 512L;
         int cmd = write ? (25 << 24) : (18 << 24 | DAT_READ);
         if (!command(cmd | RSP_48 | CRC_CHK | IX_CHK | IS_DATA | MULTI_BLK | BLKCNT_EN | AUTO_CMD12, arg))
@@ -291,6 +294,7 @@ public final class Emmc
             return dataFail();
         }
         int ready = write ? INT_WRITE_RDY : INT_READ_RDY;
+        Address data = reg(DATA);
         int b = 0;
         while (b < n)
         {
@@ -298,18 +302,18 @@ public final class Emmc
             {
                 return dataFail();
             }
-            Magic.store32(base + INTERRUPT, ready);                // re-arm for the next block
-            long p = mem + b * 512L;
+            reg(INTERRUPT).store(ready);                // re-arm for the next block
+            Address p = mem.plus(b * 512L);
             int i = 0;
             while (i < 128)
             {
                 if (write)
                 {
-                    Magic.store32(base + DATA, Magic.load32(p + i * 4L));
+                    data.store(p.plus(i * 4L).loadInt());
                 }
                 else
                 {
-                    Magic.store32(p + i * 4L, Magic.load32(base + DATA));
+                    p.plus(i * 4L).store(data.loadInt());
                 }
                 i += 1;
             }
@@ -319,27 +323,27 @@ public final class Emmc
         {
             return dataFail();
         }
-        Magic.store32(base + INTERRUPT, INT_DATA_DONE | INT_WRITE_RDY | INT_READ_RDY);
+        reg(INTERRUPT).store(INT_DATA_DONE | INT_WRITE_RDY | INT_READ_RDY);
         return true;
     }
 
     /** Wait for {@code mask} or an error flag; false on error or timeout. */
     private static boolean waitData(int mask)
     {
-        if (!waitSet(base + INTERRUPT, mask | INT_ERR))
+        if (!waitSet(reg(INTERRUPT), mask | INT_ERR))
         {
             return false;
         }
-        return (Magic.load32(base + INTERRUPT) & INT_ERR) == 0;
+        return (reg(INTERRUPT).loadInt() & INT_ERR) == 0;
     }
 
     /** A data transfer failed: count it, reset the CMD and DAT lines (SRST_CMD bit25, SRST_DATA bit26). */
     private static boolean dataFail()
     {
         dataErrors += 1;
-        or32(base + CONTROL1, (1 << 25) | (1 << 26));
-        waitClear(base + CONTROL1, (1 << 25) | (1 << 26));
-        Magic.store32(base + INTERRUPT, 0xFFFFFFFF);
+        or32(reg(CONTROL1), (1 << 25) | (1 << 26));
+        waitClear(reg(CONTROL1), (1 << 25) | (1 << 26));
+        reg(INTERRUPT).store(0xFFFFFFFF);
         return false;
     }
 
@@ -349,27 +353,29 @@ public final class Emmc
      */
     public static boolean readBlock(long lba, long dst)
     {
-        if (!waitClear(base + STATUS, SR_DAT_INHIBIT))
+        if (!waitClear(reg(STATUS), SR_DAT_INHIBIT))
         {
             return false;
         }
-        Magic.store32(base + BLKSIZECNT, (1 << 16) | 512);   // one block of 512 bytes
+        reg(BLKSIZECNT).store((1 << 16) | 512);   // one block of 512 bytes
         long arg = sdhc ? lba : lba * 512L;                        // SDHC = block index; SDSC = byte offset
         if (!command(17 << 24 | RSP_48 | CRC_CHK | IX_CHK | IS_DATA | DAT_READ, arg))   // CMD17
         {
             return false;
         }
-        if (!waitSet(base + INTERRUPT, INT_READ_RDY))        // FIFO ready
+        if (!waitSet(reg(INTERRUPT), INT_READ_RDY))        // FIFO ready
         {
             return false;
         }
+        Address p = Address.fromLong(dst);
+        Address data = reg(DATA);
         int i = 0;
         while (i < 128)                                            // 128 words = 512 bytes, PIO
         {
-            Magic.store32(dst + i * 4L, Magic.load32(base + DATA));
+            p.plus(i * 4L).store(data.loadInt());
             i += 1;
         }
-        Magic.store32(base + INTERRUPT, INT_READ_RDY | INT_DATA_DONE);   // ack
+        reg(INTERRUPT).store(INT_READ_RDY | INT_DATA_DONE);   // ack
         return true;
     }
 
@@ -379,50 +385,52 @@ public final class Emmc
      */
     public static boolean writeBlock(long lba, long src)
     {
-        if (!waitClear(base + STATUS, SR_DAT_INHIBIT))
+        if (!waitClear(reg(STATUS), SR_DAT_INHIBIT))
         {
             return false;
         }
-        Magic.store32(base + BLKSIZECNT, (1 << 16) | 512);         // one block of 512 bytes
+        reg(BLKSIZECNT).store((1 << 16) | 512);         // one block of 512 bytes
         long arg = sdhc ? lba : lba * 512L;
         if (!command(24 << 24 | RSP_48 | CRC_CHK | IX_CHK | IS_DATA, arg))   // CMD24 (DAT_DIR=write)
         {
             return false;
         }
-        if (!waitSet(base + INTERRUPT, INT_WRITE_RDY))             // FIFO ready to accept data
+        if (!waitSet(reg(INTERRUPT), INT_WRITE_RDY))             // FIFO ready to accept data
         {
             return false;
         }
+        Address p = Address.fromLong(src);
+        Address data = reg(DATA);
         int i = 0;
         while (i < 128)                                            // 128 words = 512 bytes, PIO
         {
-            Magic.store32(base + DATA, Magic.load32(src + i * 4L));
+            data.store(p.plus(i * 4L).loadInt());
             i += 1;
         }
-        if (!waitSet(base + INTERRUPT, INT_DATA_DONE))             // transfer complete (card programmed)
+        if (!waitSet(reg(INTERRUPT), INT_DATA_DONE))             // transfer complete (card programmed)
         {
             return false;
         }
-        Magic.store32(base + INTERRUPT, INT_WRITE_RDY | INT_DATA_DONE);   // ack
+        reg(INTERRUPT).store(INT_WRITE_RDY | INT_DATA_DONE);   // ack
         return true;
     }
 
     /** Issue a command with argument {@code arg}; wait for completion. False on error/timeout. */
     private static boolean command(int cmdtm, long arg)
     {
-        if (!waitClear(base + STATUS, SR_CMD_INHIBIT))       // CMD line free
+        if (!waitClear(reg(STATUS), SR_CMD_INHIBIT))       // CMD line free
         {
             return false;
         }
-        Magic.store32(base + INTERRUPT, 0xFFFFFFFF);         // clear prior flags
-        Magic.store32(base + ARG1, (int) arg);
-        Magic.store32(base + CMDTM, cmdtm);
-        if (!waitSet(base + INTERRUPT, INT_CMD_DONE | INT_ERR))
+        reg(INTERRUPT).store(0xFFFFFFFF);         // clear prior flags
+        reg(ARG1).store((int) arg);
+        reg(CMDTM).store(cmdtm);
+        if (!waitSet(reg(INTERRUPT), INT_CMD_DONE | INT_ERR))
         {
             return false;
         }
-        int flags = Magic.load32(base + INTERRUPT);
-        Magic.store32(base + INTERRUPT, INT_CMD_DONE);       // ack command-done
+        int flags = reg(INTERRUPT).loadInt();
+        reg(INTERRUPT).store(INT_CMD_DONE);       // ack command-done
         return (flags & INT_ERR) == 0;
     }
 
@@ -449,16 +457,22 @@ public final class Emmc
         return div;
     }
 
-    private static void or32(long reg, int bits)
+    /** The controller register at {@code off} from the current base. */
+    private static Address reg(long off)
     {
-        Magic.store32(reg, Magic.load32(reg) | bits);
+        return Address.fromLong(base + off);
+    }
+
+    private static void or32(Address reg, int bits)
+    {
+        reg.store(reg.loadInt() | bits);
     }
 
     /** Spin until every bit in {@code mask} is set at {@code reg} (bounded); false on timeout. */
-    private static boolean waitSet(long reg, int mask)
+    private static boolean waitSet(Address reg, int mask)
     {
         int n = 0;
-        while ((Magic.load32(reg) & mask) == 0)
+        while ((reg.loadInt() & mask) == 0)
         {
             n += 1;
             if (n > 5000000)
@@ -470,10 +484,10 @@ public final class Emmc
     }
 
     /** Spin until every bit in {@code mask} is clear at {@code reg} (bounded); false on timeout. */
-    private static boolean waitClear(long reg, int mask)
+    private static boolean waitClear(Address reg, int mask)
     {
         int n = 0;
-        while ((Magic.load32(reg) & mask) != 0)
+        while ((reg.loadInt() & mask) != 0)
         {
             n += 1;
             if (n > 5000000)

@@ -4,6 +4,22 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 3: THE BOARD DRIVERS EXCEPT CYW43 (2026-11-15).** Pi-validated (build d771265e0b4ae4fe).
+  `Emmc`, `Sdio`, `Uart`, `Gic`, `Mailbox`, `Gpio`, `Reset`, `Rng`, `Fat32`, `Supplicant` (171 sites): no
+  `Magic.load*`/`store*` left, no non-private signature changed. `Cyw43` (340 sites) is increment 4.
+  - **The rule here was the opposite trap from before: MMIO WIDTH.** These are 32-bit device registers (90 `store32`,
+    6 `store8`, no 64-bit stores); a register write must stay `store(int)` -- an int-valued expression, `(int)`-cast
+    where it lives in a long -- never `store(long)`, a different bus access. Checked independently per file in the
+    compiled classes: every `store32` is `store(I)`, every `store8` `store(B)`, every `load32` `loadInt`.
+  - `Emmc`/`Sdio` route register accesses through a private `reg(off)` (base is a field: `detectBase` picks EMMC2 or
+    EMMC); the PIO copy loops compute the DATA register once, so the hot path has no extra call.
+  - **Measured:** `make test`; full regression **208/208**. Pi: the trial boot itself (UART from the first
+    instructions, the mailbox clock query, the WiFi join over SDIO, the commit's renames on the card); every page;
+    a `/run`; the live kernel's SHA-256 = the pushed image; a staged `config.txt.new` and a staged **39 MB**
+    `kernel8.img.new` -- in over the converted SDIO RX path, written and read back through the converted EMMC2 driver,
+    SHA-256-verified -- in 26.5 s (earlier builds 26-34 s), then discarded. The FIRST push attempt failed `507 ...
+    Read timed out` on the OLD image receiving it (the BACKLOG collector-pause item); the retry committed.
+
 - **UNBOXED TYPES, INCREMENT 2: THE SCHEDULER, THE UNWINDER, AND THE CODE-ARENA TOOLS (2026-11-15).** Pi-validated
   (build 0dc269b46cd1528e). `VMScheduler`, `VMUnwind`, `CodeEdges`, `CodeCompact`: no `Magic.load*`/`store*` left,
   internals only (no non-private signature changed). Converted by three subagents under increment 1's rules plus:

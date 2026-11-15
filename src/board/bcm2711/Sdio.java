@@ -11,7 +11,7 @@
  */
 package board.bcm2711;
 
-import magic.Magic;
+import magic.Address;
 import vm.VM;
 
 /**
@@ -83,23 +83,23 @@ public final class Sdio
             baseClockHz = 100000000;                     // fallback if the mailbox is unhelpful
         }
 
-        Magic.store32(base + CONTROL0, 0);
-        or32(base + CONTROL1, 1 << 24);                  // SRST_HC: full host-controller reset
-        if (!waitClear(base + CONTROL1, 1 << 24))
+        reg(CONTROL0).store(0);
+        or32(reg(CONTROL1), 1 << 24);                  // SRST_HC: full host-controller reset
+        if (!waitClear(reg(CONTROL1), 1 << 24))
         {
             return -2;
         }
         int c1 = (1 << 0) | clockDiv(400000) | (11 << 16);   // internal clock + ~400 kHz ID clock + timeout
-        Magic.store32(base + CONTROL1, c1);
-        if (!waitSet(base + CONTROL1, 1 << 1))               // CLK_STABLE
+        reg(CONTROL1).store(c1);
+        if (!waitSet(reg(CONTROL1), 1 << 1))               // CLK_STABLE
         {
             return -3;
         }
-        or32(base + CONTROL1, 1 << 2);                       // CLK_EN: SD clock on
-        or32(base + CONTROL0, (0x7 << 9) | (1 << 8));        // bus power 3.3V
-        Magic.store32(base + IRPT_EN, 0xFFFFFFFF);
-        Magic.store32(base + IRPT_MASK, 0xFFFFFFFF);
-        Magic.store32(base + INTERRUPT, 0xFFFFFFFF);
+        or32(reg(CONTROL1), 1 << 2);                       // CLK_EN: SD clock on
+        or32(reg(CONTROL0), (0x7 << 9) | (1 << 8));        // bus power 3.3V
+        reg(IRPT_EN).store(0xFFFFFFFF);
+        reg(IRPT_MASK).store(0xFFFFFFFF);
+        reg(INTERRUPT).store(0xFFFFFFFF);
 
         if (!command(0 << 24 | RSP_NONE, 0))                 // CMD0 GO_IDLE (harmless reset to a known state)
         {
@@ -111,7 +111,7 @@ public final class Sdio
         {
             return -5;
         }
-        int ocr = Magic.load32(base + RESP0) & 0x00FFFFFF;   // voltage window bits
+        int ocr = reg(RESP0).loadInt() & 0x00FFFFFF;   // voltage window bits
         int tries = 0;
         while (true)
         {
@@ -119,7 +119,7 @@ public final class Sdio
             {
                 return -6;
             }
-            if ((Magic.load32(base + RESP0) & 0x80000000) != 0)   // bit31: IO ready
+            if ((reg(RESP0).loadInt() & 0x80000000) != 0)   // bit31: IO ready
             {
                 break;
             }
@@ -134,7 +134,7 @@ public final class Sdio
         {
             return -8;
         }
-        rca = Magic.load32(base + RESP0) & 0xFFFF0000L;          // top 16 bits are the RCA
+        rca = reg(RESP0).loadInt() & 0xFFFF0000L;          // top 16 bits are the RCA
         if (!command(7 << 24 | RSP_48B | CRC_CHK | IX_CHK, rca)) // CMD7 SELECT_CARD
         {
             return -9;
@@ -142,20 +142,20 @@ public final class Sdio
         // 4-bit bus width: CCCR Bus Interface Control (F0 reg 0x07) low 2 bits = 0b10, then host HCTL_DWIDTH.
         int bic = cmd52Read(0, 0x07);
         cmd52Write(0, 0x07, (bic & ~0x3) | 0x2);
-        or32(base + CONTROL0, 1 << 1);                          // HCTL_DWIDTH (4-bit)
+        or32(reg(CONTROL0), 1 << 1);                          // HCTL_DWIDTH (4-bit)
         return 0;
     }
 
     /** CONTROL1 (clock/reset control) — for diagnostics after {@link #setClock}. */
     public static int control1()
     {
-        return Magic.load32(base + CONTROL1);
+        return reg(CONTROL1).loadInt();
     }
 
     /** SDHCI INTERRUPT (normal status) register — bit 8 is the SDIO Card Interrupt (device has data). */
     public static int interrupt()
     {
-        return Magic.load32(base + INTERRUPT);
+        return reg(INTERRUPT).loadInt();
     }
 
     private static final int INT_CARD = 1 << 8;          // SDIO card interrupt (device has data)
@@ -167,8 +167,8 @@ public final class Sdio
      */
     public static void enableCardInt()
     {
-        Magic.store32(base + IRPT_MASK, Magic.load32(base + IRPT_MASK) | INT_CARD);
-        Magic.store32(base + IRPT_EN, INT_CARD);
+        reg(IRPT_MASK).store(reg(IRPT_MASK).loadInt() | INT_CARD);
+        reg(IRPT_EN).store(INT_CARD);
     }
 
     /**
@@ -178,29 +178,29 @@ public final class Sdio
      */
     public static void maskCardInt()
     {
-        Magic.store32(base + IRPT_MASK, Magic.load32(base + IRPT_MASK) & ~INT_CARD);
+        reg(IRPT_MASK).store(reg(IRPT_MASK).loadInt() & ~INT_CARD);
     }
 
     /** Re-arm the card interrupt after servicing it (set the Status Enable bit again). */
     public static void unmaskCardInt()
     {
-        Magic.store32(base + IRPT_MASK, Magic.load32(base + IRPT_MASK) | INT_CARD);
+        reg(IRPT_MASK).store(reg(IRPT_MASK).loadInt() | INT_CARD);
     }
 
     /** Write-1-to-clear the card-interrupt status bit in the SDHCI INTERRUPT register. */
     public static void clearCardInt()
     {
-        Magic.store32(base + INTERRUPT, INT_CARD);
+        reg(INTERRUPT).store(INT_CARD);
     }
 
     /** Raise the SDIO clock to {@code hz} (call after enumeration; e.g. 25-50 MHz once F2 is stable). */
     public static void setClock(int hz)
     {
-        and32(base + CONTROL1, ~(1 << 2));                      // CLK_EN off while changing
-        int c1 = (Magic.load32(base + CONTROL1) & ~0xFFC0) | clockDiv(hz);
-        Magic.store32(base + CONTROL1, c1);
-        waitSet(base + CONTROL1, 1 << 1);                       // CLK_STABLE
-        or32(base + CONTROL1, 1 << 2);                          // CLK_EN on
+        and32(reg(CONTROL1), ~(1 << 2));                      // CLK_EN off while changing
+        int c1 = (reg(CONTROL1).loadInt() & ~0xFFC0) | clockDiv(hz);
+        reg(CONTROL1).store(c1);
+        waitSet(reg(CONTROL1), 1 << 1);                       // CLK_STABLE
+        or32(reg(CONTROL1), 1 << 2);                          // CLK_EN on
     }
 
     // ----- CMD52 IO_RW_DIRECT (single-byte control register access) --------------------------------------
@@ -214,7 +214,7 @@ public final class Sdio
         {
             return -1;
         }
-        return Magic.load32(base + RESP0) & 0xFF;
+        return reg(RESP0).loadInt() & 0xFF;
     }
 
     /** Write one byte {@code data} to {@code func} register {@code addr}; false on error. */
@@ -241,7 +241,7 @@ public final class Sdio
         {
             return false;
         }
-        return pioRead(dst, blocks, blkSize);
+        return pioRead(Address.fromLong(dst), blocks, blkSize);
     }
 
     /** Write {@code blocks}×{@code blkSize} bytes from heap buffer {@code src} to {@code func}/{@code addr}. */
@@ -258,7 +258,7 @@ public final class Sdio
         {
             return false;
         }
-        return pioWrite(src, blocks, blkSize);
+        return pioWrite(Address.fromLong(src), blocks, blkSize);
     }
 
     /** Build a CMD53 argument. In byte mode ({@code blocks==1} via a non-block caller) count = byte count;
@@ -276,12 +276,12 @@ public final class Sdio
 
     private static boolean prepData(int blocks, int blkSize)
     {
-        if (!waitClear(base + STATUS, SR_DAT_INHIBIT))
+        if (!waitClear(reg(STATUS), SR_DAT_INHIBIT))
         {
             return false;
         }
         int n = blocks > 1 ? blocks : 1;
-        Magic.store32(base + BLKSIZECNT, (n << 16) | (blkSize & 0xFFF));
+        reg(BLKSIZECNT).store((n << 16) | (blkSize & 0xFFF));
         return true;
     }
 
@@ -298,26 +298,27 @@ public final class Sdio
      * multiple of 4 (222 bytes = 56 words) would otherwise wait again at word 55 for a READ_RDY that, once cleared,
      * never comes. On the Pi that lost the ioctl answers ({@code (no ctrl resp)}) and the WiFi join timed out.
      */
-    private static boolean pioRead(long dst, int blocks, int blkSize)
+    private static boolean pioRead(Address dst, int blocks, int blkSize)
     {
         int perBlock = (blkSize + 3) / 4;                               // words, a byte-mode tail rounded up
         int total = (blocks > 1 ? blocks : 1) * perBlock;
+        Address data = reg(DATA);
         int i = 0;
         while (i < total)
         {
             if ((i % perBlock) == 0)
             {
-                if (!waitSet(base + INTERRUPT, INT_READ_RDY | INT_ERR))
+                if (!waitSet(reg(INTERRUPT), INT_READ_RDY | INT_ERR))
                 {
                     return false;
                 }
-                Magic.store32(base + INTERRUPT, INT_READ_RDY);      // re-arm: the next block waits for its data
+                reg(INTERRUPT).store(INT_READ_RDY);      // re-arm: the next block waits for its data
             }
-            Magic.store32(dst + i * 4L, Magic.load32(base + DATA));
+            dst.plus(i * 4L).store(data.loadInt());
             i = i + 1;
         }
-        boolean ok = waitSet(base + INTERRUPT, INT_DATA_DONE);
-        Magic.store32(base + INTERRUPT, INT_READ_RDY | INT_DATA_DONE);
+        boolean ok = waitSet(reg(INTERRUPT), INT_DATA_DONE);
+        reg(INTERRUPT).store(INT_READ_RDY | INT_DATA_DONE);
         return ok;
     }
 
@@ -331,45 +332,46 @@ public final class Sdio
      * transmitted the frame's FIRST block again in their place. MEASURED on the Pi: a 1460-byte TCP segment went
      * out with its tail replaced by its own headers and a wrong checksum.
      */
-    private static boolean pioWrite(long src, int blocks, int blkSize)
+    private static boolean pioWrite(Address src, int blocks, int blkSize)
     {
         int perBlock = (blkSize + 3) / 4;                               // words, a byte-mode tail rounded up
         int total = (blocks > 1 ? blocks : 1) * perBlock;
+        Address data = reg(DATA);
         int i = 0;
         while (i < total)
         {
             if ((i % perBlock) == 0)
             {
-                if (!waitSet(base + INTERRUPT, INT_WRITE_RDY | INT_ERR))
+                if (!waitSet(reg(INTERRUPT), INT_WRITE_RDY | INT_ERR))
                 {
                     return false;
                 }
-                Magic.store32(base + INTERRUPT, INT_WRITE_RDY);     // re-arm: the next block waits for room
+                reg(INTERRUPT).store(INT_WRITE_RDY);     // re-arm: the next block waits for room
             }
-            Magic.store32(base + DATA, Magic.load32(src + i * 4L));
+            data.store(src.plus(i * 4L).loadInt());
             i = i + 1;
         }
-        boolean ok = waitSet(base + INTERRUPT, INT_DATA_DONE);
-        Magic.store32(base + INTERRUPT, INT_WRITE_RDY | INT_DATA_DONE);
+        boolean ok = waitSet(reg(INTERRUPT), INT_DATA_DONE);
+        reg(INTERRUPT).store(INT_WRITE_RDY | INT_DATA_DONE);
         return ok;
     }
 
     /** Issue a command with argument {@code arg}; wait for completion. False on error/timeout. */
     private static boolean command(int cmdtm, long arg)
     {
-        if (!waitClear(base + STATUS, SR_CMD_INHIBIT))
+        if (!waitClear(reg(STATUS), SR_CMD_INHIBIT))
         {
             return false;
         }
-        Magic.store32(base + INTERRUPT, 0xFFFFFFFF);
-        Magic.store32(base + ARG1, (int) arg);
-        Magic.store32(base + CMDTM, cmdtm);
-        if (!waitSet(base + INTERRUPT, INT_CMD_DONE | INT_ERR))
+        reg(INTERRUPT).store(0xFFFFFFFF);
+        reg(ARG1).store((int) arg);
+        reg(CMDTM).store(cmdtm);
+        if (!waitSet(reg(INTERRUPT), INT_CMD_DONE | INT_ERR))
         {
             return false;
         }
-        int flags = Magic.load32(base + INTERRUPT);
-        Magic.store32(base + INTERRUPT, INT_CMD_DONE);
+        int flags = reg(INTERRUPT).loadInt();
+        reg(INTERRUPT).store(INT_CMD_DONE);
         return (flags & INT_ERR) == 0;
     }
 
@@ -384,20 +386,26 @@ public final class Sdio
         return ((div & 0xFF) << 8) | ((div >> 8 & 0x3) << 6);
     }
 
-    private static void or32(long reg, int bits)
+    /** The controller register at {@code off} from the current base. */
+    private static Address reg(long off)
     {
-        Magic.store32(reg, Magic.load32(reg) | bits);
+        return Address.fromLong(base + off);
     }
 
-    private static void and32(long reg, int bits)
+    private static void or32(Address reg, int bits)
     {
-        Magic.store32(reg, Magic.load32(reg) & bits);
+        reg.store(reg.loadInt() | bits);
     }
 
-    private static boolean waitSet(long reg, int mask)
+    private static void and32(Address reg, int bits)
+    {
+        reg.store(reg.loadInt() & bits);
+    }
+
+    private static boolean waitSet(Address reg, int mask)
     {
         int n = 0;
-        while ((Magic.load32(reg) & mask) == 0)
+        while ((reg.loadInt() & mask) == 0)
         {
             n = n + 1;
             if (n > 5000000)
@@ -408,10 +416,10 @@ public final class Sdio
         return true;
     }
 
-    private static boolean waitClear(long reg, int mask)
+    private static boolean waitClear(Address reg, int mask)
     {
         int n = 0;
-        while ((Magic.load32(reg) & mask) != 0)
+        while ((reg.loadInt() & mask) != 0)
         {
             n = n + 1;
             if (n > 5000000)

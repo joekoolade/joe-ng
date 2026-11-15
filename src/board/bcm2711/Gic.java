@@ -11,6 +11,7 @@
  */
 package board.bcm2711;
 
+import magic.Address;
 import magic.Magic;
 
 /**
@@ -59,16 +60,23 @@ public final class Gic
      */
     private static void setGroup(int intid)
     {
-        if (((Magic.load32(GICD_TYPER) >> 10) & 1) == 0)
+        if (((Address.fromLong(GICD_TYPER).loadInt() >> 10) & 1) == 0)
         {
             return;                                                  // no Security Extensions: group 0
         }
-        int gr = (int) Magic.load32(word(GICD_IGROUPR, intid));
-        Magic.store32(word(GICD_IGROUPR, intid), gr | bit(intid));   // group 1 (non-secure)
+        int gr = (int) word(GICD_IGROUPR, intid).loadInt();
+        word(GICD_IGROUPR, intid).store(gr | bit(intid));   // group 1 (non-secure)
     }
 
-    private static long word(long base, int intid)  { return base + (intid / 32) * 4; }
-    private static int  bit(int intid)              { return 1 << (intid % 32); }
+    private static Address word(long base, int intid)
+    {
+        return Address.fromLong(base).plus((intid / 32) * 4);
+    }
+
+    private static int bit(int intid)
+    {
+        return 1 << (intid % 32);
+    }
 
     /**
      * Enable {@code intid} as a non-secure group-1 interrupt and bring up the CPU interface. Setting
@@ -78,11 +86,11 @@ public final class Gic
     public static void init(int intid)
     {
         setGroup(intid);
-        Magic.store32(GICD_IPRIORITYR + (intid / 4) * 4, 0);         // priority 0 (highest) for this word
-        Magic.store32(word(GICD_ISENABLER, intid), bit(intid));      // forwarding enable
-        Magic.store32(GICD_CTLR, 1);                                 // NS view: bit0 = EnableGrp1
-        Magic.store32(GICC_PMR, 0xFF);                               // unmask every priority level
-        Magic.store32(GICC_CTLR, 1);                                 // NS view: bit0 = EnableGrp1
+        Address.fromLong(GICD_IPRIORITYR).plus((intid / 4) * 4).store(0);   // priority 0 (highest) for this word
+        word(GICD_ISENABLER, intid).store(bit(intid));              // forwarding enable
+        Address.fromLong(GICD_CTLR).store(1);                        // NS view: bit0 = EnableGrp1
+        Address.fromLong(GICC_PMR).store(0xFF);                      // unmask every priority level
+        Address.fromLong(GICC_CTLR).store(1);                        // NS view: bit0 = EnableGrp1
     }
 
     /**
@@ -92,40 +100,40 @@ public final class Gic
     public static void initSpi(int intid)
     {
         setGroup(intid);
-        Magic.store32(GICD_IPRIORITYR + (intid / 4) * 4, 0);         // priority 0 (highest) for this word
-        long taddr = GICD_ITARGETSR + (intid / 4) * 4;               // route to CPU 0 (byte = 0x01)
+        Address.fromLong(GICD_IPRIORITYR).plus((intid / 4) * 4).store(0);   // priority 0 (highest) for this word
+        Address taddr = Address.fromLong(GICD_ITARGETSR).plus((intid / 4) * 4);   // route to CPU 0 (byte = 0x01)
         int shift = (intid % 4) * 8;
-        int cur = (int) Magic.load32(taddr);
-        Magic.store32(taddr, (cur & ~(0xFF << shift)) | (0x01 << shift));
-        Magic.store32(word(GICD_ISENABLER, intid), bit(intid));      // forwarding enable
-        Magic.store32(GICD_CTLR, 1);                                 // NS view: bit0 = EnableGrp1
-        Magic.store32(GICC_PMR, 0xFF);                               // unmask every priority level
-        Magic.store32(GICC_CTLR, 1);                                 // NS view: bit0 = EnableGrp1
+        int cur = (int) taddr.loadInt();
+        taddr.store((cur & ~(0xFF << shift)) | (0x01 << shift));
+        word(GICD_ISENABLER, intid).store(bit(intid));              // forwarding enable
+        Address.fromLong(GICD_CTLR).store(1);                        // NS view: bit0 = EnableGrp1
+        Address.fromLong(GICC_PMR).store(0xFF);                      // unmask every priority level
+        Address.fromLong(GICC_CTLR).store(1);                        // NS view: bit0 = EnableGrp1
     }
 
     /** Acknowledge the pending group-1 interrupt; returns its INTID (0x3FF = spurious). */
     public static int acknowledge()
     {
-        return Magic.load32(GICC_IAR) & 0x3FF;
+        return Address.fromLong(GICC_IAR).loadInt() & 0x3FF;
     }
 
     /** Signal end-of-interrupt for {@code intid} (the value returned by {@link #acknowledge}). */
     public static void end(int intid)
     {
-        Magic.store32(GICC_EOIR, intid);
+        Address.fromLong(GICC_EOIR).store(intid);
     }
 
     /** Stop forwarding {@code intid} to any CPU (GICD_ICENABLER). Used by an ISR to prevent a level interrupt
      *  re-firing until the handler task has serviced and re-enabled it. */
     public static void disableSpi(int intid)
     {
-        Magic.store32(word(GICD_ICENABLER, intid), bit(intid));
+        word(GICD_ICENABLER, intid).store(bit(intid));
     }
 
     /** Resume forwarding {@code intid} (GICD_ISENABLER) after servicing. */
     public static void enableSpi(int intid)
     {
-        Magic.store32(word(GICD_ISENABLER, intid), bit(intid));
+        word(GICD_ISENABLER, intid).store(bit(intid));
     }
 
 }
