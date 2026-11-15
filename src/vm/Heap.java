@@ -162,7 +162,7 @@ public final class Heap
     public static long codeBlockStartAt(long addr)
     {
         long b = codeBlockIndexOf(addr);
-        return b < 0L ? 0L : Magic.load64(CODE_BLOCKS + b * 16L);
+        return b < 0L ? 0L : Address.fromLong(CODE_BLOCKS + b * 16L).loadLong();
     }
 
     public static long codeBlockEndAt(long addr)
@@ -172,8 +172,8 @@ public final class Heap
         {
             return 0L;
         }
-        long e = CODE_BLOCKS + b * 16L;
-        return Magic.load64(e) + (Magic.load64(e + 8L) & -8L);
+        Address e = Address.fromLong(CODE_BLOCKS + b * 16L);
+        return e.loadLong() + (e.plus(8).loadLong() & -8L);
     }
 
     /** The registry index of the code block containing {@code addr}, as {@link #codeBlockIndexScan}; see below. */
@@ -205,7 +205,9 @@ public final class Heap
      */
     private static long codeBlockIndexFast(long addr)
     {
-        if (addr < CODE_BASE || addr >= CODE_LIMIT)
+        Address ad = Address.fromLong(addr);
+        Address codeBase = Address.fromLong(CODE_BASE);
+        if (ad.LT(codeBase) || ad.GE(Address.fromLong(CODE_LIMIT)))
         {
             return -1L;                                 // no block lies outside the arena
         }
@@ -213,21 +215,21 @@ public final class Heap
         {
             return CB_UNKNOWN;
         }
-        long a = addr & -8L;
-        long stop = addr - CB_WALK_MAX;
-        if (stop < CODE_BASE)
+        Address a = Address.fromLong(addr & -8L);
+        Address stop = ad.minus(CB_WALK_MAX);
+        if (stop.LT(codeBase))
         {
-            stop = CODE_BASE;
+            stop = codeBase;
         }
-        while (a >= stop)
+        while (a.GE(stop))
         {
             long i = lookupCodeBlockChecked(a);
             if (i >= 0L)
             {
-                long sz = Magic.load64(CODE_BLOCKS + i * 16L + 8L) & -8L;
-                return addr < a + sz ? i : CB_UNKNOWN;  // nearest start found: it covers addr, or the map is stale
+                long sz = Address.fromLong(CODE_BLOCKS + i * 16L + 8L).loadLong() & -8L;
+                return ad.LT(a.plus(sz)) ? i : CB_UNKNOWN;  // nearest start found: it covers addr, or the map is stale
             }
-            a -= 8L;
+            a = a.minus(8);
         }
         return CB_UNKNOWN;
     }
@@ -235,13 +237,14 @@ public final class Heap
     /** The scan the fast path replaces: first entry whose [start, start + usable) holds {@code addr}, or -1. */
     static long codeBlockIndexScan(long addr)
     {
+        Address ad = Address.fromLong(addr);
         long i = 0;
         while (i < codeBlockN)
         {
-            long e = CODE_BLOCKS + i * 16L;
-            long start = Magic.load64(e);
-            long usable = Magic.load64(e + 8L) & -8L;
-            if (start != 0L && addr >= start && addr < start + usable)
+            Address e = Address.fromLong(CODE_BLOCKS + i * 16L);
+            Address start = e.loadAddress();
+            long usable = e.plus(8).loadLong() & -8L;
+            if (!start.isZero() && ad.GE(start) && ad.LT(start.plus(usable)))
             {
                 return i;
             }
@@ -284,13 +287,14 @@ public final class Heap
     /** Mark the code at {@code addr} as branched-to directly, so the sweep must keep it. */
     public static void pinCodeAt(long addr)
     {
-        if (addr < CODE_BASE || addr >= CODE_LIMIT)
+        Address ad = Address.fromLong(addr);
+        if (ad.LT(Address.fromLong(CODE_BASE)) || ad.GE(Address.fromLong(CODE_LIMIT)))
         {
             return;
         }
         long bit = (addr - CODE_BASE) >> 3;
-        long w = CODE_PIN_BITMAP + ((bit >> 6) << 3);
-        Magic.store64(w, Magic.load64(w) | (1L << (int) (bit & 63L)));
+        Address w = Address.fromLong(CODE_PIN_BITMAP + ((bit >> 6) << 3));
+        w.store(w.loadLong() | (1L << (int) (bit & 63L)));
     }
 
     /** 1 if any address in {@code [start,start+size)} has been pinned. */
@@ -300,7 +304,7 @@ public final class Heap
         long bEnd = b + (size >> 3);
         while (b < bEnd)
         {
-            if ((Magic.load64(CODE_PIN_BITMAP + ((b >> 6) << 3)) & (1L << (int) (b & 63L))) != 0L)
+            if ((Address.fromLong(CODE_PIN_BITMAP + ((b >> 6) << 3)).loadLong() & (1L << (int) (b & 63L))) != 0L)
             {
                 return 1;
             }
@@ -360,37 +364,40 @@ public final class Heap
         int c = 0;
         while (c < 4)
         {
-            Magic.store64(PTR_CELL + c * 8L, arenaBase(c));
-            Magic.store64(FREE_CELL + c * 8L, 0L);
+            Address.fromLong(PTR_CELL + c * 8L).store(arenaBase(c));
+            Address.fromLong(FREE_CELL + c * 8L).store(0L);
             clearSizeLists(c);
             c += 1;
         }
-        Magic.store64(CODE_PTR_CELL, CODE_BASE);
-        Magic.store64(LARGE_PTR_CELL, LARGE_BASE);
-        Magic.store64(LARGE_FREE_CELL, 0L);
-        Magic.store64(STOP_CELL, 0L);
-        long pz = CODE_PIN_BITMAP;
-        while (pz < CODE_PIN_END)
+        Address.fromLong(CODE_PTR_CELL).store(CODE_BASE);
+        Address.fromLong(LARGE_PTR_CELL).store(LARGE_BASE);
+        Address.fromLong(LARGE_FREE_CELL).store(0L);
+        Address.fromLong(STOP_CELL).store(0L);
+        Address pz = Address.fromLong(CODE_PIN_BITMAP);
+        Address pzEnd = Address.fromLong(CODE_PIN_END);
+        while (pz.LT(pzEnd))
         {
-            Magic.store64(pz, 0L);                     // the pin bitmap persists across collections, so it
-            pz += 8L;                                  //   is cleared exactly once, here
+            pz.store(0L);                              // the pin bitmap persists across collections, so it
+            pz = pz.plus(8);                           //   is cleared exactly once, here
         }
         // STATS is raw scratch that noteRequest read-modify-writes, and nothing ever initialised it. QEMU
         // hands out zeroed RAM so it looked right there; the Pi's DRAM comes up ALL-ONES, so every bucket
         // started at -1 and each count read one low, with an untouched bucket printing `16=-1`. Invisible
         // until #149: STUB_TAB used to overlay these exact words, so the corruption masked the omission.
         // Covers both histograms (STATS, STATS+128) and LARGE_RING (STATS+256, 8 entries x 32 bytes).
-        long gz = GROWTH_TAB;
-        while (gz < GROWTH_TAB + GROWTH_BUCKETS * 8L)
+        Address gz = Address.fromLong(GROWTH_TAB);
+        Address gzEnd = Address.fromLong(GROWTH_TAB + GROWTH_BUCKETS * 8L);
+        while (gz.LT(gzEnd))
         {
-            Magic.store64(gz, 0L);
-            gz += 8L;
+            gz.store(0L);
+            gz = gz.plus(8);
         }
-        long sz = STATS;
-        while (sz < STATS + 640L)
+        Address sz = Address.fromLong(STATS);
+        Address szEnd = Address.fromLong(STATS + 640L);
+        while (sz.LT(szEnd))
         {
-            Magic.store64(sz, 0L);
-            sz += 8L;
+            sz.store(0L);
+            sz = sz.plus(8);
         }
     }
 
@@ -477,7 +484,7 @@ public final class Heap
         long buf;
         try
         {
-            buf = allocCodeLocked(size);
+            buf = allocCodeLocked(size).toLong();
         }
         finally
         {
@@ -487,30 +494,31 @@ public final class Heap
     }
 
     /** {@link #allocCode}'s body, run under the loader lock (which the JIT paths already hold). */
-    private static long allocCodeLocked(int size)
+    private static Address allocCodeLocked(int size)
     {
         int aligned = (size + 7) & -8;
         codeAllocCalls = codeAllocCalls + 1L;
         codeAllocSinceSweep = codeAllocSinceSweep + (long) aligned;
-        long cp = Magic.load64(CODE_PTR_CELL);
+        Address codePtr = Address.fromLong(CODE_PTR_CELL);
+        long cp = codePtr.loadLong();
         if (cp > codePeak)
         {
             codePeak = cp;                             // the arena's real high-water, sampled where it grows
         }
         noteRequest(STATS, (long) aligned);            // what sizes the JIT actually asks for
-        long bb = CODE_BYTES + bucketOf((long) aligned) * 8L;
-        Magic.store64(bb, Magic.load64(bb) + (long) aligned);   // ... and how many BYTES each class costs
+        Address bb = Address.fromLong(CODE_BYTES + bucketOf((long) aligned) * 8L);
+        bb.store(bb.loadLong() + (long) aligned);      // ... and how many BYTES each class costs
 
-        long reused = 0L;
+        Address reused = Address.zero();
         if ((long) aligned <= codeFitBound)            // else no free block can fit: skip the walk entirely
         {
             reused = takeFreeCode(aligned);            // a swept method's buffer, before growing the arena
-            if (reused == 0L)
+            if (reused.isZero())
             {
                 codeFitBound = scanFreeMax;            // ran to the end, so this is the EXACT maximum
             }
         }
-        if (reused != 0L)
+        if (!reused.isZero())
         {
             codeReuseCount = codeReuseCount + 1L;
             return reused;
@@ -519,8 +527,8 @@ public final class Heap
         codeBumpBytes = codeBumpBytes + (long) aligned; //   total this is fragmentation, not real demand.
         noteBumpCause((long) aligned, 1);               // ... and this says WHICH of the two it was
         noteGrowthAge();                                // ... and HOW LONG since a sweep -- see codeAllocSinceSweep
-        long p = Magic.load64(CODE_PTR_CELL);
-        if (p + aligned > CODE_LIMIT)
+        Address p = codePtr.loadAddress();
+        if (p.plus(aligned).GT(Address.fromLong(CODE_LIMIT)))
         {
             board.bcm2711.Uart.write(Magic.bytes("code arena OOM\n"));
             while (true)
@@ -529,10 +537,10 @@ public final class Heap
                                                         //   now that batches no longer rewind the arena
             }
         }
-        Magic.store64(CODE_PTR_CELL, p + aligned);
+        codePtr.store(p.plus(aligned));
         noteCodeBlock(p, aligned);
-        Magic.store64(CODE_BLOCKS + (codeBlockN - 1) * 16L + 8L,
-                      Magic.load64(CODE_BLOCKS + (codeBlockN - 1) * 16L + 8L) | CODE_YOUNG);
+        Address last = Address.fromLong(CODE_BLOCKS + (codeBlockN - 1) * 16L + 8L);
+        last.store(last.loadLong() | CODE_YOUNG);
         return p;
     }
 
@@ -584,7 +592,7 @@ public final class Heap
      * method satisfying a 200-byte one wastes the difference, and the arena fills with buffers far larger
      * than what occupies them.
      */
-    private static long takeFreeCode(int aligned)
+    private static Address takeFreeCode(int aligned)
     {
         scanFreeBytes = 0L;                            // a scan that runs to the end has surveyed the whole
         scanFreeMax = 0L;                              //   list, which is exactly when the classification runs
@@ -592,8 +600,8 @@ public final class Heap
         while (i < codeBlockN)
         {
             codeScanSteps = codeScanSteps + 1L;
-            long e = CODE_BLOCKS + i * 16L;
-            long sz = Magic.load64(e + 8L);
+            Address e = Address.fromLong(CODE_BLOCKS + i * 16L);
+            long sz = e.plus(8).loadLong();
             if ((sz & CODE_FREE) != 0L)
             {
                 long usable = sz & -8L;
@@ -604,24 +612,24 @@ public final class Heap
                 }
                 if (usable >= (long) aligned)
                 {
-                    long start = Magic.load64(e);
+                    Address start = e.loadAddress();
                     long rest = usable - (long) aligned;
-                    Magic.store64(e + 8L, (long) aligned | CODE_YOUNG);   // allocated, exact size
+                    e.plus(8).store((long) aligned | CODE_YOUNG);   // allocated, exact size
                     if (rest >= 64L)                                // a remainder too small to hold any
                     {                                               //   method is left inside the block
-                        noteCodeBlock(start + (long) aligned, (int) rest);
-                        Magic.store64(CODE_BLOCKS + (codeBlockN - 1) * 16L + 8L, rest | CODE_FREE);
+                        noteCodeBlock(start.plus(aligned), (int) rest);
+                        Address.fromLong(CODE_BLOCKS + (codeBlockN - 1) * 16L + 8L).store(rest | CODE_FREE);
                     }
                     else
                     {
-                        Magic.store64(e + 8L, usable | CODE_YOUNG);   // keep the slack with the allocation
+                        e.plus(8).store(usable | CODE_YOUNG);   // keep the slack with the allocation
                     }
                     return start;
                 }
             }
             i += 1;
         }
-        return 0L;
+        return Address.zero();
     }
 
     // ----- allocation-shape measurement -----------------------------------------------------------------
@@ -694,7 +702,8 @@ public final class Heap
             v = v >> 2;
             b += 1L;
         }
-        Magic.store64(GROWTH_TAB + b * 8L, Magic.load64(GROWTH_TAB + b * 8L) + 1L);
+        Address g = Address.fromLong(GROWTH_TAB + b * 8L);
+        g.store(g.loadLong() + 1L);
         if (codeAllocSinceSweep > 0x100000L)
         {
             lateGrowthSeen = 1L;
@@ -709,7 +718,7 @@ public final class Heap
         while (b < GROWTH_BUCKETS)
         {
             board.bcm2711.Uart.putc(0x20);
-            VM.printDec((int) Magic.load64(GROWTH_TAB + b * 8L));
+            VM.printDec((int) Address.fromLong(GROWTH_TAB + b * 8L).loadLong());
             b += 1L;
         }
         board.bcm2711.Uart.putc(0x0A);
@@ -717,7 +726,7 @@ public final class Heap
         long cb = 0L;
         while (cb < 16L)
         {
-            long v = Magic.load64(CODE_BYTES + cb * 8L);
+            long v = Address.fromLong(CODE_BYTES + cb * 8L).loadLong();
             if (v != 0L)
             {
                 board.bcm2711.Uart.putc(0x20);
@@ -812,19 +821,19 @@ public final class Heap
         long hops = 0;
         while (hops < ADJ_HOPS)
         {
-            long f = head;
+            Address f = Address.fromLong(head);
             long grew = 0;
-            while (f != 0L)
+            while (!f.isZero())
             {
-                if (f == start + len)                       // the block immediately after this run is free
+                if (f.EQ(Address.fromLong(start + len)))    // the block immediately after this run is free
                 {
-                    len = len + Magic.load64(f + ObjectModel.STATUS_OFFSET);
+                    len = len + f.plus(ObjectModel.STATUS_OFFSET).loadLong();
                     grew = 1;
-                    f = 0L;
+                    f = Address.zero();
                 }
                 else
                 {
-                    f = Magic.load64(f);
+                    f = f.loadAddress();
                 }
             }
             if (grew == 0)
@@ -880,11 +889,11 @@ public final class Heap
             worstSize = size;
             worstTop = top;
         }
-        long e = LARGE_RING + (largeRingN & 7L) * 32L;
-        Magic.store64(e, size);
-        Magic.store64(e + 8L, scanFreeBytes);
-        Magic.store64(e + 16L, scanFreeMax);
-        Magic.store64(e + 24L, top);
+        Address e = Address.fromLong(LARGE_RING + (largeRingN & 7L) * 32L);
+        e.store(size);
+        e.plus(8).store(scanFreeBytes);
+        e.plus(16).store(scanFreeMax);
+        e.plus(24).store(top);
         largeRingN = largeRingN + 1L;
     }
 
@@ -916,15 +925,15 @@ public final class Heap
         long i = 0;
         while (i < 8L && i < largeRingN)
         {
-            long e = LARGE_RING + ((largeRingN - 1L - i) & 7L) * 32L;
+            Address e = Address.fromLong(LARGE_RING + ((largeRingN - 1L - i) & 7L) * 32L);
             board.bcm2711.Uart.write(Magic.bytes("    req="));
-            VM.printHex(Magic.load64(e));
+            VM.printHex(e.loadLong());
             board.bcm2711.Uart.write(Magic.bytes(" free="));
-            VM.printHex(Magic.load64(e + 8L));
+            VM.printHex(e.plus(8).loadLong());
             board.bcm2711.Uart.write(Magic.bytes(" max="));
-            VM.printHex(Magic.load64(e + 16L));
+            VM.printHex(e.plus(16).loadLong());
             board.bcm2711.Uart.write(Magic.bytes(" top="));
-            VM.printHex(Magic.load64(e + 24L));
+            VM.printHex(e.plus(24).loadLong());
             board.bcm2711.Uart.putc(0x0A);
             i += 1L;
         }
@@ -946,8 +955,8 @@ public final class Heap
     /** Count one request of {@code size} in the histogram at {@code base}. */
     private static void noteRequest(long base, long size)
     {
-        long slot = base + bucketOf(size) * 8L;
-        Magic.store64(slot, Magic.load64(slot) + 1L);
+        Address slot = Address.fromLong(base + bucketOf(size) * 8L);
+        slot.store(slot.loadLong() + 1L);
     }
 
     /** Classify a bump-path allocation against what the free list held when the scan failed. */
@@ -987,7 +996,7 @@ public final class Heap
         long b = 0;
         while (b < 16L)
         {
-            long n = Magic.load64(base + b * 8L);
+            long n = Address.fromLong(base + b * 8L).loadLong();
             if (n != 0L)
             {
                 board.bcm2711.Uart.putc(0x20);
@@ -1085,7 +1094,7 @@ public final class Heap
         long i = 0;
         while (i < codeBlockN)
         {
-            long sz = Magic.load64(CODE_BLOCKS + i * 16L + 8L);
+            long sz = Address.fromLong(CODE_BLOCKS + i * 16L + 8L).loadLong();
             if ((sz & CODE_FREE) != 0L)
             {
                 long usable = sz & -8L;
@@ -1125,19 +1134,19 @@ public final class Heap
     private static boolean codeIndexLive;
 
     /** {@link #lookupCodeBlock}, refusing a slot value that does not name a current entry (no wild read). */
-    private static long lookupCodeBlockChecked(long addr)
+    private static long lookupCodeBlockChecked(Address addr)
     {
-        long h = codeSlotOf(addr);
-        long v = Magic.load64(CODE_INDEX + h * 8L);
+        long h = codeSlotOf(addr.toLong());
+        long v = Address.fromLong(CODE_INDEX + h * 8L).loadLong();
         long probes = 0L;
         while (v != 0L && probes < CODE_INDEX_SLOTS)
         {
-            if (v - 1L < codeBlockN && Magic.load64(CODE_BLOCKS + (v - 1L) * 16L) == addr)
+            if (v - 1L < codeBlockN && Address.fromLong(CODE_BLOCKS + (v - 1L) * 16L).loadAddress().EQ(addr))
             {
                 return v - 1L;
             }
             h = (h + 1L) & (CODE_INDEX_SLOTS - 1L);
-            v = Magic.load64(CODE_INDEX + h * 8L);
+            v = Address.fromLong(CODE_INDEX + h * 8L).loadLong();
             probes += 1L;
         }
         return -1L;
@@ -1148,37 +1157,38 @@ public final class Heap
     {
         long h = codeSlotOf(start);
         long probes = 0L;
-        while (Magic.load64(CODE_INDEX + h * 8L) != 0L && probes < CODE_INDEX_SLOTS)
+        while (Address.fromLong(CODE_INDEX + h * 8L).loadLong() != 0L && probes < CODE_INDEX_SLOTS)
         {
             h = (h + 1L) & (CODE_INDEX_SLOTS - 1L);
             probes += 1L;
         }
         if (probes < CODE_INDEX_SLOTS)
         {
-            Magic.store64(CODE_INDEX + h * 8L, i + 1L);
+            Address.fromLong(CODE_INDEX + h * 8L).store(i + 1L);
         }
     }
 
     private static void indexCodeBlocks()
     {
-        long z = CODE_INDEX;
-        while (z < CODE_INDEX + CODE_INDEX_SLOTS * 8L)
+        Address z = Address.fromLong(CODE_INDEX);
+        Address zEnd = Address.fromLong(CODE_INDEX + CODE_INDEX_SLOTS * 8L);
+        while (z.LT(zEnd))
         {
-            Magic.store64(z, 0L);
-            z += 8L;
+            z.store(0L);
+            z = z.plus(8);
         }
         long i = 0;
         while (i < codeBlockN)
         {
-            long start = Magic.load64(CODE_BLOCKS + i * 16L);
+            long start = Address.fromLong(CODE_BLOCKS + i * 16L).loadLong();
             if (start != 0L)
             {
                 long h = codeSlotOf(start);
-                while (Magic.load64(CODE_INDEX + h * 8L) != 0L)   // linear probe; the table is half empty
+                while (Address.fromLong(CODE_INDEX + h * 8L).loadLong() != 0L)   // linear probe; the table is half empty
                 {
                     h = (h + 1L) & (CODE_INDEX_SLOTS - 1L);
                 }
-                Magic.store64(CODE_INDEX + h * 8L, i + 1L);       // +1 so that 0 can mean "empty"
+                Address.fromLong(CODE_INDEX + h * 8L).store(i + 1L);       // +1 so that 0 can mean "empty"
             }
             i += 1;
         }
@@ -1195,18 +1205,18 @@ public final class Heap
     }
 
     /** The registry index of the block starting at {@code addr}, or -1 if the map has no such block. */
-    private static long lookupCodeBlock(long addr)
+    private static long lookupCodeBlock(Address addr)
     {
-        long h = codeSlotOf(addr);
-        long v = Magic.load64(CODE_INDEX + h * 8L);
+        long h = codeSlotOf(addr.toLong());
+        long v = Address.fromLong(CODE_INDEX + h * 8L).loadLong();
         while (v != 0L)
         {
-            if (Magic.load64(CODE_BLOCKS + (v - 1L) * 16L) == addr)
+            if (Address.fromLong(CODE_BLOCKS + (v - 1L) * 16L).loadAddress().EQ(addr))
             {
                 return v - 1L;
             }
             h = (h + 1L) & (CODE_INDEX_SLOTS - 1L);
-            v = Magic.load64(CODE_INDEX + h * 8L);
+            v = Address.fromLong(CODE_INDEX + h * 8L).loadLong();
         }
         return -1L;
     }
@@ -1220,7 +1230,7 @@ public final class Heap
     /** Registry index of the block STARTING at {@code start}, or -1. Needs {@link #indexBlocksForWalk} first. */
     static long blockIndexAt(long start)
     {
-        return lookupCodeBlock(start);
+        return lookupCodeBlock(Address.fromLong(start));
     }
 
     /**
@@ -1244,10 +1254,10 @@ public final class Heap
             return;
         }
         indexCodeBlocks();
-        long cursor = CODE_BASE;
-        long end = Magic.load64(CODE_PTR_CELL);
+        Address cursor = Address.fromLong(CODE_BASE);
+        Address end = Address.fromLong(CODE_PTR_CELL).loadAddress();
         long runIdx = -1L;                                 // entry that will absorb the current free run
-        while (cursor < end)
+        while (cursor.LT(end))
         {
             long i = lookupCodeBlock(cursor);
             if (i < 0L)
@@ -1256,7 +1266,7 @@ public final class Heap
                 runIdx = -1L;                              // an unknown block ends any run in progress
                 break;
             }
-            long sz = Magic.load64(CODE_BLOCKS + i * 16L + 8L);
+            long sz = Address.fromLong(CODE_BLOCKS + i * 16L + 8L).loadLong();
             long usable = sz & -8L;
             if ((sz & CODE_FREE) != 0L && runIdx >= 0L)
             {
@@ -1270,7 +1280,7 @@ public final class Heap
             {
                 runIdx = -1L;                              // a live method ends it
             }
-            cursor += usable;
+            cursor = cursor.plus(usable);
         }
         compactCodeRegistry();
         codeAllocSinceSweep = 0L;                      // the sweep+merge just ran: the clock restarts here
@@ -1279,11 +1289,12 @@ public final class Heap
     /** Fold block {@code i} of {@code usable} bytes into the run headed by {@code head}, and kill its entry. */
     private static void mergeInto(long head, long i, long usable)
     {
-        long e = CODE_BLOCKS + head * 16L;
-        Magic.store64(e + 8L, ((Magic.load64(e + 8L) & -8L) + usable) | CODE_FREE);
+        Address e = Address.fromLong(CODE_BLOCKS + head * 16L);
+        e.plus(8).store(((e.plus(8).loadLong() & -8L) + usable) | CODE_FREE);
         codeFitBound = CODE_FIT_UNKNOWN;               // coalescing makes a BIGGER free block than either
-        Magic.store64(CODE_BLOCKS + i * 16L, 0L);          // dead entry: compaction drops it
-        Magic.store64(CODE_BLOCKS + i * 16L + 8L, 0L);
+        Address dead = Address.fromLong(CODE_BLOCKS + i * 16L);
+        dead.store(0L);                                    // dead entry: compaction drops it
+        dead.plus(8).store(0L);
         codeMergedBlocks = codeMergedBlocks + 1L;
         codeMergedBytes = codeMergedBytes + usable;
     }
@@ -1295,13 +1306,15 @@ public final class Heap
         long src = 0;
         while (src < codeBlockN)
         {
-            long start = Magic.load64(CODE_BLOCKS + src * 16L);
+            Address s = Address.fromLong(CODE_BLOCKS + src * 16L);
+            long start = s.loadLong();
             if (start != 0L)
             {
                 if (dst != src)
                 {
-                    Magic.store64(CODE_BLOCKS + dst * 16L, start);
-                    Magic.store64(CODE_BLOCKS + dst * 16L + 8L, Magic.load64(CODE_BLOCKS + src * 16L + 8L));
+                    Address d = Address.fromLong(CODE_BLOCKS + dst * 16L);
+                    d.store(start);
+                    d.plus(8).store(s.plus(8).loadLong());
                 }
                 dst += 1L;
             }
@@ -1323,32 +1336,33 @@ public final class Heap
         {
             return -1;
         }
-        return (Magic.load64(CODE_BLOCKS + b * 16L + 8L) & CODE_FREE) != 0L ? 1 : 0;
+        return (Address.fromLong(CODE_BLOCKS + b * 16L + 8L).loadLong() & CODE_FREE) != 0L ? 1 : 0;
     }
 
     /** Mark the registry entry for {@code start} free (the collector swept it). */
     public static void freeCodeBlock(long i)
     {
-        long e = CODE_BLOCKS + i * 16L;
-        long sz = Magic.load64(e + 8L);
-        Magic.store64(e + 8L, sz | CODE_FREE);
+        Address e = Address.fromLong(CODE_BLOCKS + i * 16L);
+        long sz = e.plus(8).loadLong();
+        e.plus(8).store(sz | CODE_FREE);
         codeFitBound = CODE_FIT_UNKNOWN;               // freeing can RAISE the maximum: re-derive on next alloc
-        CodeEdges.pruneRange(Magic.load64(e), Magic.load64(e) + (sz & -8L));   // edges FROM this block die here:
-    }                                                                          //   the one moment the range is exact
+        CodeEdges.pruneRange(e.loadLong(), e.loadLong() + (sz & -8L));   // edges FROM this block die here:
+    }                                                                    //   the one moment the range is exact
 
-    private static void noteCodeBlock(long start, int size)
+    private static void noteCodeBlock(Address start, int size)
     {
-        if (CODE_BLOCKS + codeBlockN * 16L >= CODE_BLOCKS_END)
+        Address e = Address.fromLong(CODE_BLOCKS + codeBlockN * 16L);
+        if (e.GE(Address.fromLong(CODE_BLOCKS_END)))
         {
             codeBlockOverflow = 1;
             return;
         }
-        Magic.store64(CODE_BLOCKS + codeBlockN * 16L, start);
-        Magic.store64(CODE_BLOCKS + codeBlockN * 16L + 8L, (long) size);
+        e.store(start);
+        e.plus(8).store((long) size);
         codeBlockN += 1;
         if (codeIndexLive)
         {
-            indexOneCodeBlock(start, codeBlockN - 1L);    // keep the start map current for codeBlockIndexFast
+            indexOneCodeBlock(start.toLong(), codeBlockN - 1L);    // keep the start map current for codeBlockIndexFast
         }
     }
 
@@ -1392,22 +1406,24 @@ public final class Heap
     /** Clean the D-cache lines covering {@code [start, end)} to PoU. NO barrier: see {@link #publishMid}. */
     public static void publishClean(long start, long end)
     {
-        long a = start & ~63L;                 // Cortex-A72 cache line = 64 bytes
-        while (a < end)
+        Address a = Address.fromLong(start & ~63L);   // Cortex-A72 cache line = 64 bytes
+        Address e = Address.fromLong(end);
+        while (a.LT(e))
         {
-            Magic.dcCVAU(a);                   // clean the D-cache line to PoU (broadcast)
-            a += 64L;
+            Magic.dcCVAU(a.toLong());          // clean the D-cache line to PoU (broadcast)
+            a = a.plus(64);
         }
     }
 
     /** Drop the I-cache lines covering {@code [start, end)} on EVERY core. NO barrier. */
     public static void publishInval(long start, long end)
     {
-        long a = start & ~63L;
-        while (a < end)
+        Address a = Address.fromLong(start & ~63L);
+        Address e = Address.fromLong(end);
+        while (a.LT(e))
         {
-            Magic.icIVAU(a);                   // drop that line from EVERY core's I-cache
-            a += 64L;
+            Magic.icIVAU(a.toLong());          // drop that line from EVERY core's I-cache
+            a = a.plus(64);
         }
     }
 

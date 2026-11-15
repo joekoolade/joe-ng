@@ -11,6 +11,7 @@
  */
 package vm;
 
+import magic.Address;
 import magic.Magic;
 import board.bcm2711.Uart;
 import objectmodel.ObjectModel;
@@ -102,13 +103,15 @@ final class VMGc
         {
             recheckStaleSlots();                      // ... before this collection changes anything
         }
-        long cz = CODE_BITMAP;                        // clear the code-reachability bitmap for this pass
-        while (cz < CODE_BITMAP_END)
+        Address cz = Address.fromLong(CODE_BITMAP);   // clear the code-reachability bitmap for this pass
+        Address czEnd = Address.fromLong(CODE_BITMAP_END);
+        while (cz.LT(czEnd))
         {
-            Magic.store64(cz, 0L);
-            cz += 8L;
+            cz.store(0L);
+            cz = cz.plus(8);
         }
-        buildBlockBitmap(Magic.load64(Heap.PTR_CELL));     // pre-pass: exact block bases for the probes
+        // pre-pass: exact block bases for the probes
+        buildBlockBitmap(Address.fromLong(Heap.PTR_CELL).loadAddress());
         long stackTop = STACK_TOP;                    // boot task: SP runs down from the image stack top
         int me = curTask();
         if (taskStackBase != null && me != 0)
@@ -129,7 +132,7 @@ final class VMGc
                 idleGc = idleGc + 1;
             }
         }
-        markRange(scanFrom, stackTop);
+        markRange(Address.fromLong(scanFrom), Address.fromLong(stackTop));
         // THE BOOT TASK'S STACK IS A ROOT EVEN WHEN ANOTHER TASK IS COLLECTING. A spawned task's stack is a
         // HEAP OBJECT (taskStackBase, "keeps the stack GC-reachable"), so the trace reaches it; task 0's is
         // the IMAGE stack and is a heap object for nobody. Scanned only when task 0 happened to be the one
@@ -141,7 +144,7 @@ final class VMGc
             long bootSp = taskSp != null ? taskSp[0] : 0L;
             if (bootSp != 0L && bootSp < STACK_TOP)
             {
-                markRange(bootSp, STACK_TOP);
+                markRange(Address.fromLong(bootSp), Address.fromLong(STACK_TOP));
             }
         }
         // AND EVERY OTHER CORE'S IDLE STACK, for exactly the reason above it. Those are fixed SEC-band
@@ -172,7 +175,7 @@ final class VMGc
                     // idleRoots=N/M so a skip is VISIBLE rather than silent.
                     if (sp < top && sp > top - 0x100000L)
                     {
-                        if (markRange(sp, top))
+                        if (markRange(Address.fromLong(sp), Address.fromLong(top)))
                         {
                             idleMarked = idleMarked + 1;   // ... and did the range actually RETAIN anything
                         }
@@ -182,12 +185,12 @@ final class VMGc
                 ic += 1;
             }
         }
-        markRange(staticsStart, staticsEnd);
+        markRange(Address.fromLong(staticsStart), Address.fromLong(staticsEnd));
         staticsScans = staticsScans + 1L;             // did the root scan for statics actually run this pass?
         int sc = 1;                                   // secondary cores' arenas are ROOT RANGES (never
         while (sc < 4)                                //   collected, but their tasks hold refs into core 0's
         {                                             //   heap — e.g. spawned Runnable receivers)
-            markRange(Heap.arenaBase(sc), Magic.load64(Heap.PTR_CELL + sc * 8L));
+            markRange(Address.fromLong(Heap.arenaBase(sc)), Address.fromLong(Heap.PTR_CELL + sc * 8L).loadAddress());
             sc += 1;
         }
         rootProbes = probes;                          // split the metric: everything above is ROOT scanning
@@ -211,8 +214,9 @@ final class VMGc
             // Off by default: each pass rescans the stack, the statics and the JIT tables per collection,
             // which roughly doubles a suite run. Turn on to investigate a fault that lands in swept code.
             Loader.verifyCells();
-            findStaleCodeHolders(Heap.BASE, Magic.load64(Heap.PTR_CELL));
-            findStaleCodeHolders(Heap.LARGE_BASE, Magic.load64(Heap.LARGE_PTR_CELL));
+            findStaleCodeHolders(Address.fromLong(Heap.BASE), Address.fromLong(Heap.PTR_CELL).loadAddress());
+            findStaleCodeHolders(Address.fromLong(Heap.LARGE_BASE),
+                                 Address.fromLong(Heap.LARGE_PTR_CELL).loadAddress());
             findStaleCodeInRaw(scanFrom, stackTop, 1L);                     // the stack (the CURRENT task's)
             findStaleCodeInRaw(staticsStart, staticsEnd, 2L);               // image statics
             findStaleCodeInRaw(VM.jitFrameTable, VM.jitFrameTable + VM.jitFrameCount * 24L, 3L);
@@ -232,21 +236,22 @@ final class VMGc
         long walked = 0L;
         long markedN = 0L;
         long freedN = 0L;
-        long o = Heap.BASE;
-        long stop = liveEndOf(Magic.load64(Heap.PTR_CELL));   // everything above the highest survivor is
-        trimmed = Magic.load64(Heap.PTR_CELL) - stop;         //   garbage in one contiguous run: give it
+        Address o = Address.fromLong(Heap.BASE);
+        Address ptrCell = Address.fromLong(Heap.PTR_CELL);
+        Address stop = liveEndOf(ptrCell.loadAddress());      // everything above the highest survivor is
+        trimmed = ptrCell.loadLong() - stop.toLong();         //   garbage in one contiguous run: give it
         reclaimed = reclaimed + trimmed;                      //   back by lowering the bump pointer, not
-        Magic.store64(Heap.PTR_CELL, stop);                   //   by threading it onto the free list
+        ptrCell.store(stop);                                  //   by threading it onto the free list
         long stoppedAt = 0L;
-        long runStart = 0L;                            // a run of adjacent dead blocks, merged when it ends
+        Address runStart = Address.zero();             // a run of adjacent dead blocks, merged when it ends
         long runSize = 0L;
-        while (o < stop)
+        while (o.LT(stop))
         {
-            long st = Magic.load64(o + 8L);
+            long st = o.plus(8).loadLong();
             long size = st & -8L;
-            if (size == 0L || o + size > stop || o + size <= o)
+            if (size == 0L || o.plus(size).GT(stop) || o.plus(size).LE(o))
             {
-                stoppedAt = o;                         // corrupt / out-of-bounds: stop
+                stoppedAt = o.toLong();                // corrupt / out-of-bounds: stop
                 o = stop;
             }
             else
@@ -256,13 +261,13 @@ final class VMGc
                 {
                     if (runSize != 0L)                     // a survivor ends the run of dead blocks
                     {
-                        Heap.addFree(runStart, runSize);
-                        runStart = 0L;
+                        Heap.addFree(runStart.toLong(), runSize);
+                        runStart = Address.zero();
                         runSize = 0L;
                     }
                     markedN = markedN + 1L;
                     liveBytes = liveBytes + size;   // what SURVIVED: the number that says whether a high heap
-                    Magic.store64(o + 8L, size);    //   water mark is retention or just uncollected garbage
+                    o.plus(8).store(size);          //   water mark is retention or just uncollected garbage
                 }
                 else
                 {
@@ -274,12 +279,12 @@ final class VMGc
                     }                                      //   small to serve anything, since the sweep
                     runSize = runSize + size;              //   rebuilt the list one dead block at a time.
                 }
-                o = o + size;
+                o = o.plus(size);
             }
         }
         if (runSize != 0L)                             // the heap ended on dead blocks
         {
-            Heap.addFree(runStart, runSize);
+            Heap.addFree(runStart.toLong(), runSize);
         }
         sweepLargeRegion();
         if (gcLog != 0)
@@ -457,33 +462,35 @@ final class VMGc
      * pointer to a TIB whose slot 0 is the Type. Only arrays are precise in this increment — a scalar
      * object's per-field reference map lands in the next one, so scalars stay conservative.
      */
-    private static boolean scanBlock(long o, long size)
+    private static boolean scanBlock(Address o, long size)
     {
-        long tibw = Magic.load64(o + ObjectModel.TIB_OFFSET);
+        long tibw = o.plus(ObjectModel.TIB_OFFSET).loadLong();
         if (tibw != 0L && tibw <= (long) ObjectModel.MAX_RAW_ARRAY_TIB)
         {
             return scanArray(o, size, tibw);           // raw array: the header word IS the element size
         }
         if (tibw >= META_LOW && tibw < META_HIGH && (tibw & 7L) == 0L)
         {
-            long type = Magic.load64(tibw + ObjectModel.TIB_TYPE_SLOT * ObjectModel.WORD);
+            Address tib = Address.fromLong(tibw);
+            long type = tib.plus(ObjectModel.TIB_TYPE_SLOT * ObjectModel.WORD).loadLong();
             if (type >= META_LOW && type < META_HIGH && (type & 7L) == 0L)
             {
-                long isz = Magic.load64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET);
+                Address t = Address.fromLong(type);
+                long isz = t.plus(ObjectModel.TYPE_INSTANCE_SIZE_OFFSET).loadLong();
                 if ((isz & ObjectModel.ARRAY_TYPE_TAG_MASK) == ObjectModel.ARRAY_TYPE_TAG)
                 {
                     return scanArray(o, size, isz & 0xFFFFL);   // typed array: element size in the tag
                 }
-                long map = Magic.load64(type + ObjectModel.TYPE_REFMAP_OFFSET);
+                long map = t.plus(ObjectModel.TYPE_REFMAP_OFFSET).loadLong();
                 if ((map & 1L) != 0L)                           // bit 0 = the class's map was computed
                 {
                     return scanMapped(o, size, map,
-                                      Magic.load64(type + ObjectModel.TYPE_REFMAP_OFFSET + 8L));
+                                      t.plus(ObjectModel.TYPE_REFMAP_OFFSET + 8).loadLong());
                 }
             }
         }
         nomap = nomap + 1L;                                        // the remaining conservative surface
-        return markRange(o + ObjectModel.HEADER_SIZE, o + size);   // unmapped scalar / untyped block
+        return markRange(o.plus(ObjectModel.HEADER_SIZE), o.plus(size));   // unmapped scalar / untyped block
     }
 
     /**
@@ -494,19 +501,19 @@ final class VMGc
      * Type's element-Type slot is 0 both for a primitive element and for a reference element the loader
      * could not resolve — sound over precise until that distinction is verified.
      */
-    private static boolean scanArray(long o, long size, long elemSize)
+    private static boolean scanArray(Address o, long size, long elemSize)
     {
         if (elemSize < (long) ObjectModel.WORD)
         {
             return false;
         }
-        long end = o + ObjectModel.ARRAY_BASE_OFFSET
-                 + Magic.load64(o + ObjectModel.ARRAY_LENGTH_OFFSET) * (long) ObjectModel.WORD;
-        if (end > o + size || end < o)
+        Address end = o.plus(ObjectModel.ARRAY_BASE_OFFSET)
+                 .plus(o.plus(ObjectModel.ARRAY_LENGTH_OFFSET).loadLong() * (long) ObjectModel.WORD);
+        if (end.GT(o.plus(size)) || end.LT(o))
         {
-            end = o + size;                            // a garbled length word: trust the block size instead
+            end = o.plus(size);                        // a garbled length word: trust the block size instead
         }
-        return markRange(o + ObjectModel.ARRAY_BASE_OFFSET, end);
+        return markRange(o.plus(ObjectModel.ARRAY_BASE_OFFSET), end);
     }
 
     /**
@@ -520,7 +527,7 @@ final class VMGc
      * {@code w-16} probe is kept because a mapped {@code long} field routinely holds an {@link
      * Heap#allocData} PAYLOAD address whose block base sits one header earlier.
      */
-    private static boolean scanMapped(long o, long size, long w0, long w1)
+    private static boolean scanMapped(Address o, long size, long w0, long w1)
     {
         boolean any = false;
         long slots = (size - (long) ObjectModel.HEADER_SIZE) >> 3;
@@ -531,7 +538,7 @@ final class VMGc
             if ((bit & 1L) != 0L)
             {
                 probes = probes + 1L;
-                long w = Magic.load64(o + (long) ObjectModel.HEADER_SIZE + i * 8L);
+                long w = o.plus(ObjectModel.HEADER_SIZE).plus(i * 8L).loadLong();
                 if (tryMark(w))
                 {
                     any = true;
@@ -559,11 +566,11 @@ final class VMGc
     private static long markCodeRoots()
     {
         long found = 0L;
-        long p = Loader.CODE_ROOTS;
-        long end = Loader.CODE_ROOTS + Loader.codeRootN * Loader.CODE_ROOT_ENTRY;
-        while (p < end)
+        Address p = Address.fromLong(Loader.CODE_ROOTS);
+        Address end = p.plus(Loader.codeRootN * Loader.CODE_ROOT_ENTRY);
+        while (p.LT(end))
         {
-            long w = Magic.load64(p);                  // {addr, owner}: the owner is for sweeping, not marking
+            long w = p.loadLong();                     // {addr, owner}: the owner is for sweeping, not marking
             if (tryMark(w))
             {
                 found = found + 1L;
@@ -572,7 +579,7 @@ final class VMGc
             {
                 found = found + 1L;
             }
-            p = p + Loader.CODE_ROOT_ENTRY;
+            p = p.plus(Loader.CODE_ROOT_ENTRY);
         }
         return found;
     }
@@ -587,23 +594,23 @@ final class VMGc
      * <p>Returns {@code top} unchanged if the walk meets a corrupt size — trimming on a walk that could not
      * be completed would hand back memory that is still live. The guard mirrors the sweep's own.
      */
-    private static long liveEndOf(long top)
+    private static Address liveEndOf(Address top)
     {
-        long end = Heap.BASE;
-        long o = Heap.BASE;
-        while (o < top)
+        Address end = Address.fromLong(Heap.BASE);
+        Address o = Address.fromLong(Heap.BASE);
+        while (o.LT(top))
         {
-            long st = Magic.load64(o + 8L);
+            long st = o.plus(8).loadLong();
             long size = st & -8L;
-            if (size == 0L || o + size > top || o + size <= o)
+            if (size == 0L || o.plus(size).GT(top) || o.plus(size).LE(o))
             {
                 return top;                            // corrupt: no trim, and the sweep reports stopAt
             }
             if ((st & 1L) != 0L)
             {
-                end = o + size;
+                end = o.plus(size);
             }
-            o = o + size;
+            o = o.plus(size);
         }
         return end;
     }
@@ -669,14 +676,14 @@ final class VMGc
      * three rounds, each live {@code Object[]} registry table was probed three times.
      */
     /** Re-scan every marked block in {@code [from,to)} — the overflow path's half of the same fix. */
-    private static void scanMarkedIn(long from, long to)
+    private static void scanMarkedIn(Address from, Address to)
     {
-        long o = from;
-        while (o < to)
+        Address o = from;
+        while (o.LT(to))
         {
-            long st = Magic.load64(o + 8L);
+            long st = o.plus(8).loadLong();
             long size = st & -8L;
-            if (size == 0L || o + size > to || o + size <= o)
+            if (size == 0L || o.plus(size).GT(to) || o.plus(size).LE(o))
             {
                 o = to;         // corrupt / out-of-bounds: stop the walk instead of dereferencing garbage
             }
@@ -686,7 +693,7 @@ final class VMGc
                 {
                     boolean ignored = scanBlock(o, size);
                 }
-                o = o + size;
+                o = o.plus(size);
             }
         }
     }
@@ -699,28 +706,29 @@ final class VMGc
      */
     private static void markCodeInRange(long from, long to)
     {
-        long p = from & -8L;
-        while (p < to)
+        Address p = Address.fromLong(from & -8L);
+        Address end = Address.fromLong(to);
+        while (p.LT(end))
         {
-            long w = Magic.load64(p);
+            long w = p.loadLong();
             if (w >= Heap.CODE_BASE && w < Heap.CODE_LIMIT && (w & 3L) == 0L)
             {
                 long bit = (w - Heap.CODE_BASE) >> 3;
-                long cw = CODE_BITMAP + ((bit >> 6) << 3);
-                Magic.store64(cw, Magic.load64(cw) | (1L << (int) (bit & 63L)));
+                Address cw = Address.fromLong(CODE_BITMAP + ((bit >> 6) << 3));
+                cw.store(cw.loadLong() | (1L << (int) (bit & 63L)));
             }
-            p += 8L;
+            p = p.plus(8);
         }
     }
 
     /** One past the last byte of whichever region {@code o} lives in. */
-    private static long regionTopOf(long o)
+    private static Address regionTopOf(Address o)
     {
-        if (o >= Heap.LARGE_BASE)
+        if (o.GE(Address.fromLong(Heap.LARGE_BASE)))
         {
-            return Magic.load64(Heap.LARGE_PTR_CELL);
+            return Address.fromLong(Heap.LARGE_PTR_CELL).loadAddress();
         }
-        return Magic.load64(Heap.PTR_CELL);
+        return Address.fromLong(Heap.PTR_CELL).loadAddress();
     }
 
     private static void drainMarkStack()
@@ -728,13 +736,13 @@ final class VMGc
         while (markSp > MARK_STACK)
         {
             markSp = markSp - 8L;
-            long o = Magic.load64(markSp);
-            long size = Magic.load64(o + 8L) & -8L;
+            Address o = Address.fromLong(markSp).loadAddress();   // pushed by tryMark: a verified block base
+            long size = o.plus(8).loadLong() & -8L;
             // Bound by the region the object is IN. This guard used to read Heap.PTR_CELL unconditionally,
             // which is the SMALL region's top: once large objects lived above it, every one of them was
             // marked and then silently never scanned, so anything reachable only through a large object was
             // collected while live. That is a whole-heap correctness bug hiding behind a sanity check.
-            if (size != 0L && o + size <= regionTopOf(o) && o + size > o)
+            if (size != 0L && o.plus(size).LE(regionTopOf(o)) && o.plus(size).GT(o))
             {                                          // same guard the heap walk uses: never scan past a
                 boolean ignored = scanBlock(o, size);  //   corrupt size. Pushes are the real output here;
             }                                          //   the returned flag only matters to the fallback.
@@ -754,8 +762,8 @@ final class VMGc
         {
             markOverflow = 0;                          // a pass that never overflows has closed the set
             markSp = MARK_STACK;
-            scanMarkedIn(Heap.BASE, Magic.load64(Heap.PTR_CELL));
-            scanMarkedIn(Heap.LARGE_BASE, Magic.load64(Heap.LARGE_PTR_CELL));
+            scanMarkedIn(Address.fromLong(Heap.BASE), Address.fromLong(Heap.PTR_CELL).loadAddress());
+            scanMarkedIn(Address.fromLong(Heap.LARGE_BASE), Address.fromLong(Heap.LARGE_PTR_CELL).loadAddress());
             drainMarkStack();                          // anything this pass queued, scanned before re-walking
             if (markOverflow == 0)
             {
@@ -798,16 +806,16 @@ final class VMGc
     }
 
     /** Mark every heap object pointed to by an 8-aligned word in [lo,hi). Returns true if any newly marked. */
-    private static boolean markRange(long lo, long hi)
+    private static boolean markRange(Address lo, Address hi)
     {
         boolean any = false;
-        if (hi > lo)
+        if (hi.GT(lo))
         {
-            probes = probes + ((hi - lo) >> 3);
+            probes = probes + ((hi.toLong() - lo.toLong()) >> 3);
         }
-        while (lo < hi)
+        while (lo.LT(hi))
         {
-            long w = Magic.load64(lo);
+            long w = lo.loadLong();
             if (tryMark(w))
             {
                 any = true;
@@ -816,7 +824,7 @@ final class VMGc
             {                                          //   header past its block base: probe that base too
                 any = true;
             }
-            lo = lo + 8L;
+            lo = lo.plus(8);
         }
         return any;
     }
@@ -830,26 +838,30 @@ final class VMGc
     {
         if (w >= Heap.CODE_BASE && w < Heap.CODE_LIMIT)
         {
-            long bit = (w - Heap.CODE_BASE) >> 3;       // a pointer INTO the code arena: record the hit so
-            long cw = CODE_BITMAP + ((bit >> 6) << 3);  //   the sweep can tell which compiled methods are
-            Magic.store64(cw, Magic.load64(cw) | (1L << (int) (bit & 63L)));   // still reachable
-            return false;                               // code is not a heap block; nothing to mark or trace
+            // A pointer INTO the code arena: record the hit so the sweep can tell which compiled methods are
+            // still reachable.
+            long bit = (w - Heap.CODE_BASE) >> 3;
+            Address cw = Address.fromLong(CODE_BITMAP + ((bit >> 6) << 3));
+            cw.store(cw.loadLong() | (1L << (int) (bit & 63L)));
+            return false;                              // code is not a heap block; nothing to mark or trace
         }
         // A heap pointer is now either the small region below the large base, or the large region above it.
         // Getting this wrong in the permissive direction only over-retains; getting it wrong in the strict
         // direction sweeps live objects, so the large region MUST be included the moment anything is
         // allocated there.
-        int inSmall = w >= Heap.BASE && w < Magic.load64(Heap.PTR_CELL) ? 1 : 0;
-        int inLarge = w >= Heap.LARGE_BASE && w < Magic.load64(Heap.LARGE_PTR_CELL) ? 1 : 0;
+        int inSmall = w >= Heap.BASE && w < Address.fromLong(Heap.PTR_CELL).loadLong() ? 1 : 0;
+        int inLarge = w >= Heap.LARGE_BASE && w < Address.fromLong(Heap.LARGE_PTR_CELL).loadLong() ? 1 : 0;
         if ((inSmall != 0 || inLarge != 0) && (w & 7L) == 0L && isBlockBase(w))
         {
-            long st = Magic.load64(w + 8L);
+            Address block = Address.fromLong(w);       // validated: in a heap region, aligned, a block base
+            long st = block.plus(8).loadLong();
             // GUARD: the block bitmap said this address is a block base. Verify it before writing to it --
             // setting a mark bit on a word that is NOT a block turns data into data+1, which is exactly the
             // "blob 0x1" the loader reports much later, with nothing left to say where it came from. Check
             // here, where the address and its caller are still in hand.
             long sz = st & -8L;
-            long regionTop = inLarge != 0 ? Magic.load64(Heap.LARGE_PTR_CELL) : Magic.load64(Heap.PTR_CELL);
+            long regionTop = inLarge != 0 ? Address.fromLong(Heap.LARGE_PTR_CELL).loadLong()
+                                          : Address.fromLong(Heap.PTR_CELL).loadLong();
             if (sz < 16L || w + sz > regionTop)
             {
                 if (falseBaseSeen == 0)
@@ -864,7 +876,7 @@ final class VMGc
                     Uart.write(Magic.bytes(" top="));
                     printHex(regionTop);
                     Uart.write(Magic.bytes(" largeTop="));
-                    printHex(Magic.load64(Heap.LARGE_PTR_CELL));
+                    printHex(Address.fromLong(Heap.LARGE_PTR_CELL).loadLong());
                     Uart.putc(0x0A);
                     Uart.write(Magic.bytes("  marked from "));
                     Loader.printFrameAt(Magic.readLR());   // which scan handed us this word
@@ -874,10 +886,10 @@ final class VMGc
             }
             if ((st & 1L) == 0L)
             {
-                Magic.store64(w + 8L, st + 1L);        // set mark bit
+                block.plus(8).store(st + 1L);          // set mark bit
                 if (markSp < MARK_STACK_END)           // ... and queue it for scanning exactly once
                 {
-                    Magic.store64(markSp, w);
+                    Address.fromLong(markSp).store(block);
                     markSp = markSp + 8L;
                 }
                 else
@@ -965,7 +977,7 @@ final class VMGc
         // zeroed, anything else means the space was reused and the fault is not what it looks like. The
         // block's CURRENT state and pin bit say whether the collector could have taken it at all.
         Uart.write(Magic.bytes("  insn at pc = "));
-        printHex(Magic.load64(pc) & 0xFFFFFFFFL);
+        printHex(Address.fromLong(pc).loadLong() & 0xFFFFFFFFL);
         Uart.write(Magic.bytes("  pinned="));
         printHex((long) Heap.codePinnedIn(pc & -8L, 8L));
         Uart.write(Magic.bytes("  block now "));
@@ -985,8 +997,9 @@ final class VMGc
         long i = 0;
         while (i < sweptLogN)
         {
-            long start = Magic.load64(SWEPT_LOG + i * 32L);
-            long end = Magic.load64(SWEPT_LOG + i * 32L + 8L);
+            Address e = Address.fromLong(SWEPT_LOG + i * 32L);
+            long start = e.loadLong();
+            long end = e.plus(8).loadLong();
             if (pc >= start && pc < end)
             {
                 Uart.write(Magic.bytes("  PC IS IN SWEPT CODE: buffer "));
@@ -994,10 +1007,10 @@ final class VMGc
                 Uart.putc(0x2D);
                 printHex(end);
                 Uart.write(Magic.bytes(" freed at collection "));
-                VM.printDec((int) Magic.load64(SWEPT_LOG + i * 32L + 16L));
+                VM.printDec((int) e.plus(16).loadLong());
                 Uart.write(Magic.bytes(" of "));
                 VM.printDec((int) collections);
-                long sidx = Magic.load64(SWEPT_LOG + i * 32L + 24L);
+                long sidx = e.plus(24).loadLong();
                 if (sidx >= 0L)
                 {
                     Uart.write(Magic.bytes("\n  it was the deferral stub for "));
@@ -1019,7 +1032,8 @@ final class VMGc
         long i = 0;
         while (i < freedN2)
         {
-            if (w >= Magic.load64(FREED_RANGES + i * 16L) && w < Magic.load64(FREED_RANGES + i * 16L + 8L))
+            Address r = Address.fromLong(FREED_RANGES + i * 16L);
+            if (w >= r.loadLong() && w < r.plus(8).loadLong())
             {
                 return 1;
             }
@@ -1041,10 +1055,11 @@ final class VMGc
      */
     private static void findStaleCodeInRaw(long from, long to, long tag)
     {
-        long p = from & -8L;
-        while (p < to && freedN2 > 0L)
+        Address p = Address.fromLong(from & -8L);
+        Address end = Address.fromLong(to);
+        while (p.LT(end) && freedN2 > 0L)
         {
-            long w = Magic.load64(p);
+            long w = p.loadLong();
             if (w >= Heap.CODE_BASE && w < Heap.CODE_LIMIT && inFreedRange(w) != 0
                     && w != zeroLo && w != zeroHi)
             {
@@ -1055,7 +1070,7 @@ final class VMGc
                 Uart.write(Magic.bytes("\nSTALE CODE PTR in raw region tag="));
                 printHex(tag);
                 Uart.write(Magic.bytes(" at="));
-                printHex(p);
+                printHex(p.toLong());
                 Uart.write(Magic.bytes(" target="));
                 printHex(w);
                 Uart.write(Magic.bytes(" stub="));
@@ -1064,45 +1079,46 @@ final class VMGc
                 rawStaleSeen = rawStaleSeen + 1L;      // report and CONTINUE: halting here hides whether the
                 if (staleTabN < 64L)                   //   fix downstream actually works. Remember the slot
                 {                                      //   so the NEXT collection can ask whether it is
-                    Magic.store64(STALE_TAB + staleTabN * 16L, p);        // still there.
-                    Magic.store64(STALE_TAB + staleTabN * 16L + 8L, w);
+                    Address s = Address.fromLong(STALE_TAB + staleTabN * 16L);   // still there.
+                    s.store(p);
+                    s.plus(8).store(w);
                     staleTabN = staleTabN + 1L;
                 }
                 return;
             }
-            p += 8L;
+            p = p.plus(8);
         }
     }
 
-    private static void findStaleCodeHolders(long from, long to)
+    private static void findStaleCodeHolders(Address from, Address to)
     {
-        long o = from;
-        while (o < to && freedN2 > 0L)
+        Address o = from;
+        while (o.LT(to) && freedN2 > 0L)
         {
-            long st = Magic.load64(o + 8L);
+            long st = o.plus(8).loadLong();
             long size = st & -8L;
-            if (size == 0L || o + size > to || o + size <= o)
+            if (size == 0L || o.plus(size).GT(to) || o.plus(size).LE(o))
             {
                 o = to;
             }
             else if ((st & 1L) == 0L)
             {
-                o = o + size;                          // dead holder: a dead cell pointing at dead code is
+                o = o.plus(size);                      // dead holder: a dead cell pointing at dead code is
             }                                          //   exactly what reclamation is supposed to produce
             else
             {
-                long z = o + 16L;
-                while (z < o + size)
+                Address z = o.plus(16);
+                while (z.LT(o.plus(size)))
                 {
-                    long w = Magic.load64(z);
+                    long w = z.loadLong();
                     if (w >= Heap.CODE_BASE && w < Heap.CODE_LIMIT && inFreedRange(w) != 0)
                     {
                         Uart.write(Magic.bytes("\nSTALE CODE PTR holder="));
-                        printHex(o);
+                        printHex(o.toLong());
                         Uart.write(Magic.bytes(" at+"));
-                        printHex(z - o);
+                        printHex(z.toLong() - o.toLong());
                         Uart.write(Magic.bytes(" tib="));
-                        printHex(Magic.load64(o));
+                        printHex(o.loadLong());
                         Uart.write(Magic.bytes(" size="));
                         printHex(size);
                         Uart.write(Magic.bytes(" target="));
@@ -1112,9 +1128,9 @@ final class VMGc
                         Uart.putc(0x0A);
                         while (true) { Magic.wfe(); }
                     }
-                    z += 8L;
+                    z = z.plus(8);
                 }
-                o = o + size;
+                o = o.plus(size);
             }
         }
     }
@@ -1140,9 +1156,10 @@ final class VMGc
         long i = 0;
         while (i < staleTabN)
         {
-            long slot = Magic.load64(STALE_TAB + i * 16L);
-            long was = Magic.load64(STALE_TAB + i * 16L + 8L);
-            if (Magic.load64(slot) == was)
+            Address s = Address.fromLong(STALE_TAB + i * 16L);
+            long slot = s.loadLong();
+            long was = s.plus(8).loadLong();
+            if (Address.fromLong(slot).loadLong() == was)
             {
                 stalePersisted = stalePersisted + 1L;  // still pointing at code the collector freed
                 if (stalePersisted <= 4L)              // name the first few: which slot, and what it was
@@ -1194,9 +1211,9 @@ final class VMGc
         long i = 0;
         while (i < Heap.codeBlockN)
         {
-            long e = Heap.CODE_BLOCKS + i * 16L;
-            long start = Magic.load64(e);
-            long sz = Magic.load64(e + 8L);            // status word: size plus the FREE/YOUNG flags
+            Address e = Address.fromLong(Heap.CODE_BLOCKS + i * 16L);
+            long start = e.loadLong();
+            long sz = e.plus(8).loadLong();            // status word: size plus the FREE/YOUNG flags
             long size = sz & -8L;                      // ... and the size alone, which is what every
             if ((sz & Heap.CODE_FREE) != 0L)           //   length calculation below must use
             {
@@ -1209,7 +1226,8 @@ final class VMGc
             int hit = 0;
             while (b < bEnd)
             {
-                if ((Magic.load64(CODE_BITMAP + ((b >> 6) << 3)) & (1L << (int) (b & 63L))) != 0L)
+                long bw = Address.fromLong(CODE_BITMAP + ((b >> 6) << 3)).loadLong();
+                if ((bw & (1L << (int) (b & 63L))) != 0L)
                 {
                     codeLive = codeLive + size;
                     hit = 1;
@@ -1225,7 +1243,7 @@ final class VMGc
                 // Allocated since the last collection: its address may still be in flight, held only in a
                 // register or a half-built structure. Keep it this pass and clear the flag, so the next
                 // collection judges it on reachability like anything else.
-                Magic.store64(e + 8L, sz & ~Heap.CODE_YOUNG);
+                e.plus(8).store(sz & ~Heap.CODE_YOUNG);
                 codeLive = codeLive + size;
                 hit = 1;
             }
@@ -1242,16 +1260,18 @@ final class VMGc
                 // under the batch rewind.
                 if (SWEPT_LOG + sweptLogN * 32L + 32L <= SWEPT_LOG_END)
                 {
-                    Magic.store64(SWEPT_LOG + sweptLogN * 32L, start);
-                    Magic.store64(SWEPT_LOG + sweptLogN * 32L + 8L, start + size);
-                    Magic.store64(SWEPT_LOG + sweptLogN * 32L + 16L, collections);
-                    Magic.store64(SWEPT_LOG + sweptLogN * 32L + 24L, Loader.stubIdxAt(start));
+                    Address log = Address.fromLong(SWEPT_LOG + sweptLogN * 32L);
+                    log.store(start);
+                    log.plus(8).store(start + size);
+                    log.plus(16).store(collections);
+                    log.plus(24).store(Loader.stubIdxAt(start));
                     sweptLogN = sweptLogN + 1L;         // ... and WHICH stub, if it is one
                 }
                 if (freedN2 < 32L)                     // remember this sweep's freed ranges, so the probe
                 {                                      //   below can ask who still points into one
-                    Magic.store64(FREED_RANGES + freedN2 * 16L, start);
-                    Magic.store64(FREED_RANGES + freedN2 * 16L + 8L, start + size);
+                    Address r = Address.fromLong(FREED_RANGES + freedN2 * 16L);
+                    r.store(start);
+                    r.plus(8).store(start + size);
                     freedN2 = freedN2 + 1L;
                 }
                 VM.dropJitTablesIn(start, start + size);
@@ -1296,12 +1316,13 @@ final class VMGc
      */
     private static void zeroBuffer(long start, long size)
     {
-        long z = start;
+        Address z = Address.fromLong(start);
         long end = start + size;
-        while (z < end)
+        Address zEnd = Address.fromLong(end);
+        while (z.LT(zEnd))
         {
-            Magic.store64(z, 0L);
-            z += 8L;
+            z.store(0L);
+            z = z.plus(8);
         }
         if (zeroHi == 0L || start < zeroLo)
         {
@@ -1329,17 +1350,17 @@ final class VMGc
 
     /** Pre-pass: walk the heap by status sizes (sound — every allocation carries an intact header) and
      *  record each block base in the bitmap, so conservative probes can be verified exactly. */
-    private static void buildBlockBitmap(long stop)
+    private static void buildBlockBitmap(Address stop)
     {
-        long z = MARK_BITMAP;
-        long zEnd = MARK_BITMAP + 0x30_0000L;
-        while (z < zEnd)
+        Address z = Address.fromLong(MARK_BITMAP);
+        Address zEnd = z.plus(0x30_0000);
+        while (z.LT(zEnd))
         {
-            Magic.store64(z, 0L);
-            z += 8L;
+            z.store(0L);
+            z = z.plus(8);
         }
-        markBlockBases(Heap.BASE, stop);
-        markBlockBases(Heap.LARGE_BASE, Magic.load64(Heap.LARGE_PTR_CELL));
+        markBlockBases(Address.fromLong(Heap.BASE), stop);
+        markBlockBases(Address.fromLong(Heap.LARGE_BASE), Address.fromLong(Heap.LARGE_PTR_CELL).loadAddress());
     }
 
     /**
@@ -1352,15 +1373,15 @@ final class VMGc
     private static void sweepLargeRegion()
     {
         long liveBefore = liveBytes;                   // the small sweep has already added its own
-        long o = Heap.LARGE_BASE;
-        long top = Magic.load64(Heap.LARGE_PTR_CELL);
-        long runStart = 0L;
+        Address o = Address.fromLong(Heap.LARGE_BASE);
+        Address top = Address.fromLong(Heap.LARGE_PTR_CELL).loadAddress();
+        Address runStart = Address.zero();
         long runSize = 0L;
-        while (o < top)
+        while (o.LT(top))
         {
-            long st = Magic.load64(o + 8L);
+            long st = o.plus(8).loadLong();
             long size = st & -8L;
-            if (size == 0L || o + size > top || o + size <= o)
+            if (size == 0L || o.plus(size).GT(top) || o.plus(size).LE(o))
             {
                 o = top;                               // corrupt: stop, as the small sweep does
             }
@@ -1370,12 +1391,12 @@ final class VMGc
                 {
                     if (runSize != 0L)
                     {
-                        Heap.addFreeLarge(runStart, runSize);
-                        runStart = 0L;
+                        Heap.addFreeLarge(runStart.toLong(), runSize);
+                        runStart = Address.zero();
                         runSize = 0L;
                     }
                     liveBytes = liveBytes + size;
-                    Magic.store64(o + 8L, size);       // clear the mark
+                    o.plus(8).store(size);             // clear the mark
                 }
                 else
                 {
@@ -1386,7 +1407,7 @@ final class VMGc
                     }
                     runSize = runSize + size;
                 }
-                o = o + size;
+                o = o.plus(size);
             }
         }
         if (runSize != 0L)
@@ -1401,7 +1422,7 @@ final class VMGc
             // methods are scattered by construction. This region is a different shape -- a handful of large
             // objects rather than thousands of small ones -- so the trim is measured here rather than
             // assumed: largeTrimmed says what it actually returns.
-            Magic.store64(Heap.LARGE_PTR_CELL, runStart);
+            Address.fromLong(Heap.LARGE_PTR_CELL).store(runStart);
             largeTrimmed = largeTrimmed + runSize;
         }
         largeLive = liveBytes - liveBefore;            // this region's live set alone
@@ -1413,23 +1434,23 @@ final class VMGc
 
     /** Record the base of every block in {@code [from,to)}. Both regions are walkable the same way: every
      *  block, allocated or free, carries its size in its status word. */
-    private static void markBlockBases(long from, long to)
+    private static void markBlockBases(Address from, Address to)
     {
-        long o = from;
-        while (o < to)
+        Address o = from;
+        while (o.LT(to))
         {
-            long st = Magic.load64(o + 8L);
+            long st = o.plus(8).loadLong();
             long size = st & -8L;
-            if (size == 0L || o + size > to || o + size <= o)
+            if (size == 0L || o.plus(size).GT(to) || o.plus(size).LE(o))
             {
                 o = to;                                // corrupt: stop (matches the sweep's guard)
             }
             else
             {
-                long idx = (o - Heap.BASE) >> 3;
-                long w = MARK_BITMAP + ((idx >> 6) << 3);
-                Magic.store64(w, Magic.load64(w) | (1L << (int) (idx & 63L)));
-                o += size;
+                long idx = (o.toLong() - Heap.BASE) >> 3;
+                Address w = Address.fromLong(MARK_BITMAP + ((idx >> 6) << 3));
+                w.store(w.loadLong() | (1L << (int) (idx & 63L)));
+                o = o.plus(size);
             }
         }
     }
@@ -1437,6 +1458,6 @@ final class VMGc
     private static boolean isBlockBase(long w)
     {
         long idx = (w - Heap.BASE) >> 3;
-        long word = MARK_BITMAP + ((idx >> 6) << 3);
-        return (Magic.load64(word) & (1L << (int) (idx & 63L))) != 0L;
+        Address word = Address.fromLong(MARK_BITMAP + ((idx >> 6) << 3));
+        return (word.loadLong() & (1L << (int) (idx & 63L))) != 0L;
     }}

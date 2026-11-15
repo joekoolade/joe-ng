@@ -25,6 +25,15 @@ the item leaves this list; new findings that are not fixed on the spot come here
 
 ## Collector
 
+- **NEXT: a stop-the-world times out on QEMU whenever a collection lands in a busy loop (2026-11-15).**
+  SecurityStockProbe now fails ALONE every time (was batch-only): `GC: STW TIMEOUT -- unparked core N task 4 ...
+  (collection SKIPPED)`, the task being SeedGenerator's thread, whose entropy loop spins without a switch point --
+  and QEMU gives launched programs no timer ticks, so that core never reaches the scheduler to park. The probe's own
+  output is unchanged. Bisected: `db6b8cf` (#529) 11 collections, 0 timeouts, passes; `69ef9bc` (#530, unboxed
+  increment 0) 12 collections, 1 timeout, fails -- the extra collection is what lands in the loop. WHY increment 0
+  adds a collection is not measured (a guess: the allocator's changed register allocation moves what the
+  conservative stack scan retains). Fix the timeout itself: a collection must be able to stop a core running a loop.
+
 - **Cores 1-3's arenas are never collected (2026-11-14).** They are root-scanned whole: pauses grow from 0.5 to
   2.4 s over a session (root scan 92 -> 972 ms), they grow ~12.7 MB per boot upload, and they halt with "heap OOM"
   at 64 MB. A long pause can outlast a socket read timeout (`507 ... Read timed out`). The biggest remaining

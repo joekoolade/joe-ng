@@ -4,6 +4,28 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 1: THE REST OF `Heap` AND THE COLLECTOR `VMGc` (2026-11-15).** Pi-validated (build
+  ce64bafd034e6890). Internals only: no public or package-private signature changed (the APIs switch with their
+  callers, so no temporary wrappers at ~330 call sites). Neither file has a `Magic.load*`/`store*` left.
+  - **`Heap`:** the code arena (`allocCodeLocked`, `takeFreeCode`), the block registry and its index, the pin
+    bitmap, `init`, publish loops, statistics. Kept `long`, with reasons: registry indices and index-slot values
+    (negative sentinels, signed compares), `codeSlotOf` (hash arithmetic), values handed to other files' long APIs.
+  - **`VMGc`:** heap walks, mark stack, block bitmap, sweep, `markRange`, `scanBlock` once the TIB/Type pass their
+    checks. Kept `long`: every word that MIGHT be a pointer until validated (roots, ref-mapped fields, candidates),
+    `tryMark`'s size/region check (a garbage size near 2^63 orders differently signed and unsigned), fault pcs in
+    `reportSweptPc`, all bitmap bit arithmetic.
+  - **Comparisons that became unsigned** are interval tests whose both ends are heap addresses below 2^63, where
+    signed and unsigned order agree -- the same values are accepted.
+  - **Checked independently, not from the conversion reports:** javap of both classes -- every `Address.store` is
+    `store(J)` or `store(Address)` (Heap 49 + 13, VMGc 17 + 4), so no 64-bit store narrowed to 32. Code size:
+    Heap 4795 -> 4674 words, VMGc 4287 -> 4102 (`markRange` 77 -> 65, `scanMarkedIn` 98 -> 82, `drainMarkStack`
+    87 -> 77, `liveEndOf` 107 -> 86).
+  - **Measured:** `make test`; full regression **206/207** -- SecurityStockProbe fails alone on `main` as well
+    (2 of 2), bisected to #530 (BACKLOG, "NEXT"). Pi: every page, three `/run`s, the stop-poll benchmark (same
+    figures), a forced stop of four threads, the 39 MB SHA-256 equal to the Mac's. The same sequence's `/gc`: 13
+    collections, longest pause 285 ms, against 12 and 238 ms on increment 0 -- one boot each after a WiFi push, not
+    a comparison that can separate noise from change.
+
 - **UNBOXED TYPES, INCREMENT 0: `magic.Address/Word/Offset/Extent`, THEIR LOWERING, AND THE ALLOCATOR ON THEM
   (2026-11-15).** Pi-validated (build 6eb7216dc58ae842). Arc plan: memory `unboxed-types-arc`; one PR per subsystem
   follows, guestsrc included.
