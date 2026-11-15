@@ -33,17 +33,21 @@ import java.util.List;
  * <li>{@code PUT /run/<file>.jar} or {@code PUT /run/<file>.class}: the body is the program, sent by the browser
  *     or e.g. {@code curl -T Hello.class -H "X-Boot-Token: ..." "http://<pi>/run/Hello.class?args=a+b"}.</li>
  * <li>{@code POST /run?url=<http(s) url>}: the board downloads the program itself, then runs it.</li>
+ * <li>{@code GET /run/<n>}: run n's output so far (no token: the page shows the same).</li>
  * <li>{@code GET /run}: a page to do either from a browser, with the last run's output and this boot's runs.</li>
  * </ul>
  *
- * <p>Both runs take {@code args=} (space-separated, URL-encoded) and {@code main=} (a class to run instead of the
- * jar's {@code Main-Class}) in the query, and answer {@code text/plain}: everything the program printed to
- * {@code System.out} and {@code System.err}, then a status line. 200 when {@code main} ran (returned, threw, or
- * called {@code System.exit}, which ends the run and not the board),
- * 422 when the program was refused before {@code main}, 502 when a download failed. Running a program is full
- * control of the board, so both need the {@code X-Boot-Token} the boot-file endpoints take.
+ * <p>Both runs take {@code args=} (space-separated, URL-encoded), {@code main=} (a class to run instead of the
+ * jar's {@code Main-Class}) and {@code wait=} (seconds to wait for {@code main}, default {@value #WAIT_DEFAULT_S},
+ * at most {@value #WAIT_MAX_S}) in the query, and answer {@code text/plain}: everything the program printed to
+ * {@code System.out} and {@code System.err}, then a status line. 200 when {@code main} finished (returned, threw,
+ * or called {@code System.exit}, which ends the run and not the board); 202 when it is still running after the
+ * wait -- it goes on, on its own thread, and {@code GET /run/<n>} has its output -- 422 when the program was refused
+ * before {@code main}, 502 when a download failed. Running a program is full control of the board, so both need
+ * the {@code X-Boot-Token} the boot-file endpoints take.
  *
- * <p>The server answers one connection at a time, so it is busy until {@code main} returns.
+ * <p>The server answers one connection at a time, but not for longer than the wait: a run that is still going no
+ * longer holds it.
  */
 final class RunPage
 {
@@ -59,7 +63,12 @@ final class RunPage
     /** Connect and read timeouts for a download. */
     private static final int DOWNLOAD_TIMEOUT_MS = 30_000;
 
-    /** How many runs the page lists. */
+    /** Seconds a run request waits for main when it gives no {@code wait=}, and the most it may ask for. */
+    static final int WAIT_DEFAULT_S = 30;
+
+    static final int WAIT_MAX_S = 600;
+
+    /** How many runs the page lists, and {@code GET /run/<n>} can still answer. */
     private static final int HISTORY = 20;
 
     private static final DateTimeFormatter WHEN = DateTimeFormatter.ofPattern("HH:mm:ss");
@@ -95,6 +104,11 @@ final class RunPage
         if ((p.equals(RUN) || p.equals(RUN + "/")) && m.equals("GET"))
         {
             Http.respond(out, "200 OK", "text/html; charset=utf-8", render(now).getBytes(StandardCharsets.UTF_8));
+            return true;
+        }
+        if (p.startsWith(RUN + "/") && m.equals("GET"))
+        {
+            show(p.substring(RUN.length() + 1), out);
             return true;
         }
         boolean upload = p.startsWith(RUN + "/") && m.equals("PUT");
@@ -144,12 +158,86 @@ final class RunPage
         {
             name = name + (looksLikeJar(program) ? ".jar" : ".class");
         }
+        long waitMs = waitMs(param(req, "wait"));
+        if (waitMs < 0L)
+        {
+            Http.text(out, "400 Bad Request", "wait= is seconds, 0 to " + WAIT_MAX_S);
+            return true;
+        }
         System.out.println("run: " + name + ", " + program.length + " bytes");
-        RunProgram.Result r = RunProgram.run(name, program, main, split(args));
+        RunProgram.Result r = RunProgram.start(name, program, main, split(args));
         record(new Run(WHEN.format(ZonedDateTime.now(zone)), name, args, r));
-        String status = r.status == RunProgram.REFUSED ? "422 Unprocessable Content" : "200 OK";
-        Http.respond(out, status, "text/plain; charset=utf-8", r.output.getBytes(StandardCharsets.UTF_8));
+        boolean finished = waitMs == 0L ? r.done() : r.await(waitMs);
+        answer(r, finished, out);
         return true;
+    }
+
+    /** {@code wait=} in milliseconds: the default when blank, -1 when it is not a number of seconds in range. */
+    static long waitMs(String wait)
+    {
+        if (wait.isEmpty())
+        {
+            return WAIT_DEFAULT_S * 1000L;
+        }
+        try
+        {
+            double s = Double.parseDouble(wait);
+            if (!(s >= 0.0) || s > WAIT_MAX_S)
+            {
+                return -1L;
+            }
+            return (long) (s * 1000.0);
+        }
+        catch (NumberFormatException e)
+        {
+            return -1L;
+        }
+    }
+
+    /** {@code GET /run/<n>}: that run's output so far, 200 once main has finished and 202 while it runs. */
+    private static void show(String n, OutputStream out) throws IOException
+    {
+        RunProgram.Result r = null;
+        try
+        {
+            int id = Integer.parseInt(n);
+            for (Run run : RUNS)
+            {
+                if (run.result.id == id)
+                {
+                    r = run.result;
+                }
+            }
+        }
+        catch (NumberFormatException e)
+        {
+            r = null;
+        }
+        if (r == null)
+        {
+            Http.text(out, "404 Not Found", "no run " + n + " (this boot's last " + HISTORY + " runs are kept)");
+            return;
+        }
+        answer(r, r.done(), out);
+    }
+
+    /** The run's output: all of it once main has finished, else what it printed so far and how to follow it. */
+    private static void answer(RunProgram.Result r, boolean finished, OutputStream out) throws IOException
+    {
+        String status;
+        String body;
+        if (finished)
+        {
+            status = r.status == RunProgram.REFUSED ? "422 Unprocessable Content" : "200 OK";
+            body = r.text();                        // live: a thread main left running may print after the report
+        }
+        else
+        {
+            status = "202 Accepted";
+            body = r.text() + "\n[run #" + r.id + " still running after " + r.elapsedMs() / 1000L
+                    + " s: GET /run/" + r.id + " for its output]\n";
+        }
+        Http.respond(out, status, "text/plain; charset=utf-8", body.getBytes(StandardCharsets.UTF_8));
     }
 
     /** A query parameter, URL-decoded; "" when absent. */
@@ -261,6 +349,10 @@ final class RunPage
 
     private static String statusText(RunProgram.Result r)
     {
+        if (r.status == RunProgram.RUNNING)
+        {
+            return "running";
+        }
         if (r.status == RunProgram.OK)
         {
             return "returned";
@@ -297,21 +389,24 @@ final class RunPage
         }
         else
         {
-            sb.append(WebServerDemo.escape(last.when + " " + last.what + " " + last.args + ": "
-                    + statusText(last.result))).append("</p>\n");
-            sb.append("<pre id=\"out\">").append(WebServerDemo.escape(last.result.output)).append("</pre>\n");
+            sb.append(WebServerDemo.escape("#" + last.result.id + " " + last.when + " " + last.what + " " + last.args
+                    + ": " + statusText(last.result))).append("</p>\n");
+            sb.append("<pre id=\"out\"").append(last.result.done() ? "" : " data-running=\"" + last.result.id + "\"")
+                    .append(">").append(WebServerDemo.escape(last.result.text())).append("</pre>\n");
         }
         sb.append("<h2>This boot's runs</h2>\n<table>\n");
-        sb.append("<tr><th>time</th><th>program</th><th>main class</th><th>args</th><th>result</th>")
+        sb.append("<tr><th>run</th><th>time</th><th>program</th><th>main class</th><th>args</th><th>result</th>")
                 .append("<th>define ms</th><th>run ms</th></tr>\n");
         for (Run r : RUNS)
         {
-            sb.append("<tr><td>").append(r.when).append("</td><td>").append(WebServerDemo.escape(r.what))
+            sb.append("<tr><td><a href=\"/run/").append(r.result.id).append("\">#").append(r.result.id)
+                    .append("</a></td><td>").append(r.when).append("</td><td>").append(WebServerDemo.escape(r.what))
                     .append("</td><td>").append(r.result.mainClass == null ? "" : WebServerDemo.escape(r.result.mainClass))
                     .append("</td><td>").append(WebServerDemo.escape(r.args))
                     .append("</td><td>").append(statusText(r.result))
                     .append("</td><td class=\"n\">").append(r.result.defineMs)
-                    .append("</td><td class=\"n\">").append(r.result.runMs).append("</td></tr>\n");
+                    .append("</td><td class=\"n\">").append(r.result.done() ? r.result.runMs : r.result.elapsedMs())
+                    .append("</td></tr>\n");
         }
         sb.append("</table>\n");
         sb.append("<style>pre{background:#f4f4f4;padding:.6em;white-space:pre-wrap;overflow-wrap:anywhere}</style>\n");
@@ -322,7 +417,9 @@ final class RunPage
 
     /**
      * The page's behaviour: the upload (XMLHttpRequest, for its progress) and the download request, each showing
-     * the reply -- the program's output -- in place. The token shares sessionStorage with the /boot page.
+     * the reply -- the program's output -- in place. They wait 5 s for main; a run still going after that (202) is
+     * followed through {@code GET /run/<n>} once a second until it finishes, as is one the page was loaded during.
+     * The token shares sessionStorage with the /boot page.
      */
     private static final String SCRIPT = """
             const $ = id => document.getElementById(id);
@@ -332,13 +429,27 @@ final class RunPage
             function query(extra) {
               let q = 'args=' + encodeURIComponent($('args').value);
               if ($('main').value.trim()) q += '&main=' + encodeURIComponent($('main').value.trim());
-              return q + extra;
+              return q + '&wait=5' + extra;
+            }
+            const secs = t0 => Math.round((Date.now() - t0) / 100) / 10;
+            function follow(id, what, t0) {
+              setTimeout(() => {
+                fetch('/run/' + id, { cache: 'no-store' })
+                  .then(r => r.text().then(t => {
+                    $('out').textContent = t;
+                    if (r.status === 202) { st(what + ': still running, ' + secs(t0) + ' s'); follow(id, what, t0); }
+                    else st(what + ': ' + r.status + ' ' + r.statusText + ' after ' + secs(t0) + ' s');
+                  }))
+                  .catch(() => follow(id, what, t0));
+              }, 1000);
             }
             function shown(x, what, t0) {
-              const s = Math.round((Date.now() - t0) / 100) / 10;
-              st(what + ': ' + x.status + ' ' + x.statusText + ' after ' + s + ' s');
               $('out').textContent = x.responseText;
+              const m = x.status === 202 ? /run #(\\d+) still running/.exec(x.responseText) : null;
+              if (m) { st(what + ': still running, ' + secs(t0) + ' s'); follow(m[1], what, t0); }
+              else st(what + ': ' + x.status + ' ' + x.statusText + ' after ' + secs(t0) + ' s');
             }
+            if ($('out').dataset.running) follow($('out').dataset.running, 'run #' + $('out').dataset.running, Date.now());
             function busy(on) { $('up').disabled = on; $('get').disabled = on; }
             $('up').onclick = () => {
               const f = $('file').files[0];

@@ -4,6 +4,28 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **`/run` PROGRAMS RUN ON THEIR OWN THREAD; THE SERVER NO LONGER WAITS FOR THEM (2026-11-14).** Pi-validated (build
+  fca19e81ed258126).
+  - **What:** `RunProgram.start` defines the classes on the request thread (so a refusal is still answered at once)
+    and starts main on a thread named "main". The request waits up to `wait=` seconds (default 30, max 600): 200 when
+    main finished, else **202** with the output so far and `GET /run/<n>`, which answers 202 with the live output
+    until main finishes, then 200. The page asks with `wait=5` and follows a 202 once a second (also a run still
+    going when the page is loaded); history rows link `/run/<n>`.
+  - **Output by thread, not by swapping `System.out`.** One routing `System.out`/`System.err`, installed on the first
+    run, appends each write to the run of the WRITING thread (an `InheritableThreadLocal`, so a program's own threads
+    count, after main returned too) and passes every byte to the console. Swapping the global stream per run -- what
+    the one-at-a-time version did -- would have captured the server's own prints and mixed two runs. Class
+    definition holds a lock, as two runs can now define at once.
+  - **A line printed after main returned** was first missing from the finished reply: it served the snapshot taken
+    when main ended. It serves the live text now (the late line follows the report line).
+  - **Measured:** QEMU -- RunProbe's new arms: a run still going after 200 ms, a second run finishing while the
+    first runs, each with only its own lines and none of the caller's, output after main returned, the 202 ->
+    `GET /run/<n>` -> 200 flow, `wait=` refusal, 404s, page link; ExitProbe; `make test`, overlaycheck 0 new. Pi --
+    a 20 s run answered 202 after 1 s while `/`, `/memory`, `/threads` answered in ~30 ms; two runs at once (x 8 s,
+    y 3 s) kept their output apart; a 10-minute run left running while the server went on; an ordinary run 200 in
+    28 ms; the late line in `GET /run/1`. Not exercised: the page's JavaScript following a 202 (no browser here).
+  - **Open:** a run cannot be stopped (BACKLOG).
+
 - **`System.exit` IN A `/run` PROGRAM ENDS THE RUN, NOT THE BOARD; INHERITABLE THREAD-LOCALS IN EVERY `Thread` CONSTRUCTOR
   (2026-11-14).** Pi-validated (build 4fc9e7261b976e89).
   - **Where:** `java/lang/Shutdown` is an overlay now, verbatim JDK 26 plus one call at the top of `exit` and of

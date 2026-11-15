@@ -177,10 +177,20 @@ python3 -m http.server 8000 &
 curl -X POST -H "$TOK" "http://192.168.1.247/run?url=http://192.168.1.162:8000/app.jar"
 ```
 
-`main=<class>` in the query runs a class other than the manifest's. The reply
-is 200 when `main` ran (the last line says whether it returned, threw or
-called `System.exit`), 422
-when the program was refused before `main`, and 502 when the download failed.
+`main=<class>` in the query runs a class other than the manifest's. `main`
+runs on a thread of its own, and the request waits for it for up to `wait=`
+seconds (default 30, at most 600). The reply is 200 when `main` finished in
+that time (the last line says whether it returned, threw or called
+`System.exit`), 422 when the program was refused before `main`, and 502 when
+the download failed. A program still running after the wait gets 202 with its
+output so far, and goes on; `GET /run/<n>` answers its output until it is done
+(the page follows it for you):
+
+```sh
+curl -T app.jar -H "$TOK" "http://192.168.1.247/run/app.jar?wait=1"
+# [run #3 still running after 1 s: GET /run/3 for its output]
+curl http://192.168.1.247/run/3
+```
 
 Limits:
 
@@ -188,8 +198,8 @@ Limits:
   Sending the same file again runs it again, and its statics keep their
   values. A changed class under the same name is refused: rename the classes
   or reboot.
-- The server handles one request at a time, so it is busy until `main`
-  returns.
+- A run cannot be stopped: one that never returns keeps its thread until the
+  next reboot (the server goes on answering).
 - `System.exit` (and `Runtime.halt`) ends the run, not the board: the reply
   ends with `[System.exit(N) called by thread "main"; ...]`. The program's
   shutdown hooks do not run. If a thread other than `main` exits, only that
