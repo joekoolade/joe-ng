@@ -30284,6 +30284,19 @@ public final class Loader
         return -1;
     }
 
+    /** The {@link compiler.Unboxed} kind of the {@code *ref} at {@code idx}'s owner -- NONE unless magic.Address etc. */
+    static int unboxedKind(int idx)
+    {
+        return compiler.Unboxed.ownerKind(new Utf8At(gbase, ClassReader.refClassNameOff(gbytes, gcp, idx)));
+    }
+
+    /** The {@link compiler.Intrinsics} id of the unboxed-type method at {@code idx}, or -1. */
+    static int unboxedOp(int idx)
+    {
+        return compiler.Unboxed.op(unboxedKind(idx), new Utf8At(gbase, ClassReader.refNameOff(gbytes, gcp, idx)),
+                new Utf8At(gbase, ClassReader.refDescOff(gbytes, gcp, idx)));
+    }
+
     static boolean isMagicOwner(int idx)
     {
         long p = gbase + ClassReader.refClassNameOff(gbytes, gcp, idx);

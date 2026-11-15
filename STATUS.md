@@ -4,6 +4,38 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 0: `magic.Address/Word/Offset/Extent`, THEIR LOWERING, AND THE ALLOCATOR ON THEM
+  (2026-11-15).** Pi-validated (build 6eb7216dc58ae842). Arc plan: memory `unboxed-types-arc`; one PR per subsystem
+  follows, guestsrc included.
+  - **The types** follow Jikes RVM's `org.vmmagic.unboxed` by name (our own code), 135 public methods, plus
+    joe-ng's `loadUnsignedByte` (= `Magic.load8`), `plus/minus(long)`, `attempt(long,long)` (= `cas64`) and
+    `fromObject`/`toObject` (= `addrOf`/`fromAddr`). Host bodies throw, like `Magic`'s.
+  - **One classifier for both worlds:** `compiler.Unboxed` maps owner + name + descriptor shape to an
+    `Intrinsics` id (FNV-1a name hashes: it runs on the metal, where a String switch is not available); the seed
+    writer (`WriterSymbols`) and the metal JIT (`MetalSymbols` -> `Loader.unboxedOp`, via `vm/Utf8At`) both call
+    it. Loads/stores without an Offset reuse `Magic`'s LOAD/STORE ids, so they are the same instructions. Baseline:
+    `lowerUnboxed` (a `UB_` id block from 100), `invokevirtual` checks intrinsics FIRST (no receiver null check --
+    `Address.zero().isZero()` is true), and an unboxed method is not a call in the leaf decision. The retired
+    metal writer (`MetalWriterSymbols`, SelfBuild only) does not know them.
+  - **A compare straight into an `if` is FUSED** into CMP + B.cond (or CBZ/CBNZ for `isZero`): 2 instructions where
+    the long `a < b` it replaces is 6 (lcmp's lowering) -- converted code is smaller, not just equal.
+  - **No GC change needed:** `Loader.mayHoldPointer` already treats `long` fields as possible pointers (the VM kept
+    raw addresses in longs), the tracer validates every candidate (code range, heap range, alignment, block-start
+    bitmap), and a field typed `Lmagic/Address;` gets the same treatment. Arrays of the types are not used.
+  - **Pilot: the data allocator** (`Heap.alloc`/`allocLocked`, size-class and first-fit free lists, `zeroPayload`,
+    the large region, `allocArray`), internals only -- the public `long` API stays until callers convert. The
+    cells (`PTR_CELL`...) stay `static final long`: `Heap.init` runs before any VM `<clinit>`, so a `static final
+    Address` would still be 0 there. Watch converted stores: `addr.store(intValue)` is the 32-bit overload where
+    `Magic.store64(addr, intValue)` widened -- every 64-bit store of an int has an explicit `(long)`. Heap compiles
+    4848 -> 4795 words (`allocLocked` 621 -> 594, `zeroPayload` 49 -> 38; `addFreeLarge` 27 -> 34, two new locals).
+  - **Measured:** `compiler.UnboxedTest` (in `make test`, 45 checks): every public method classifies; each long/
+    unboxed pair in `UnboxedFixture` compiles to the same code apart from LOCAL-REGISTER ALLOCATION (a long
+    parameter takes two JVM slots, an Address one, so the long version saves more callee-saved registers -- the
+    test normalizes exactly that away); the fused branches have no CSET. `demo/UnboxedProbe` (solo, gated): 46
+    checks of every operation on the metal JIT. Full regression **207/207**. Pi: every web page, three `/run`s, the
+    stop-poll benchmark (same figures as before to the picosecond), a forced stop of four threads, and a SHA-256 of
+    the 39 MB `kernel8.img` read through the new allocator equal to the Mac's.
+
 - **WHAT A STOP POLL COSTS -- AND TWO BUGS MEASURING IT FOUND (2026-11-14).** Pi-validated (build 77e01b3f49127c4b).
   - **The benchmark:** `runsrc/bench` (`bench.jar`, upload it to `/run`). `bench/PollLoops` is MADE from
     `guestsrc/demo/PollLoops.java` by the Makefile, changing only the package line (javap: identical bytecode), so

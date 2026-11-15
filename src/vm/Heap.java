@@ -11,6 +11,7 @@
  */
 package vm;
 
+import magic.Address;
 import magic.Magic;
 import objectmodel.ObjectModel;
 
@@ -398,7 +399,7 @@ public final class Heap
      * multiple by construction, so it can serve any later large request that fits it exactly. Freeing and
      * coalescing are the sweep's job ({@code VMGc} walks this region like the small one).
      */
-    private static long allocLarge(long size)
+    private static Address allocLarge(long size)
     {
         long want = (size + PAGE - 1L) & -PAGE;
         if (volumeTrigger())                               // LARGE allocations are most of the volume, so
@@ -408,37 +409,46 @@ public final class Heap
             Magic.gc();                                    //   collections and the high-water UNCHANGED
         }
         allocSinceGc = allocSinceGc + want;
-        long prev = 0L;
-        long f = Magic.load64(LARGE_FREE_CELL);
-        while (f != 0L)
+        Address head = Address.fromLong(LARGE_FREE_CELL);
+        Address prev = Address.zero();
+        Address f = head.loadAddress();
+        while (!f.isZero())
         {
-            long fsize = Magic.load64(f + ObjectModel.STATUS_OFFSET);
+            long fsize = f.plus(ObjectModel.STATUS_OFFSET).loadLong();
             if (fsize >= want)
             {
-                long next = Magic.load64(f);
-                if (prev == 0L) { Magic.store64(LARGE_FREE_CELL, next); }
-                else { Magic.store64(prev, next); }
+                Address next = f.loadAddress();
+                if (prev.isZero())
+                {
+                    head.store(next);
+                }
+                else
+                {
+                    prev.store(next);
+                }
                 long rest = fsize - want;
                 if (rest >= PAGE)                          // the remainder is a whole number of pages, so it
                 {                                          //   stays on the same lattice as every request
-                    Magic.store64(f + ObjectModel.STATUS_OFFSET, want);
-                    addFreeLarge(f + want, rest);
+                    f.plus(ObjectModel.STATUS_OFFSET).store(want);
+                    addFreeLarge(f.plus(want).toLong(), rest);
                 }
                 largeReuse = largeReuse + 1L;
-                servedSinceGc = servedSinceGc + Magic.load64(f + ObjectModel.STATUS_OFFSET);
-                zeroPayload(f, (int) Magic.load64(f + ObjectModel.STATUS_OFFSET));
+                long served = f.plus(ObjectModel.STATUS_OFFSET).loadLong();
+                servedSinceGc = servedSinceGc + served;
+                zeroPayload(f, (int) served);
                 return f;
             }
             prev = f;
-            f = Magic.load64(f);
+            f = f.loadAddress();
         }
-        long p = Magic.load64(LARGE_PTR_CELL);
-        if (p + want > LARGE_LIMIT)
+        Address ptr = Address.fromLong(LARGE_PTR_CELL);
+        Address p = ptr.loadAddress();
+        if (p.plus(want).GT(Address.fromLong(LARGE_LIMIT)))
         {
-            return 0L;                                     // caller collects and retries
+            return Address.zero();                         // caller collects and retries
         }
-        Magic.store64(LARGE_PTR_CELL, p + want);
-        Magic.store64(p + ObjectModel.STATUS_OFFSET, want);
+        ptr.store(p.plus(want));
+        p.plus(ObjectModel.STATUS_OFFSET).store(want);
         largeBump = largeBump + 1L;
         servedSinceGc = servedSinceGc + want;
         zeroPayload(p, (int) want);
@@ -448,9 +458,11 @@ public final class Heap
     /** Push a run onto the large region's free list. */
     public static void addFreeLarge(long addr, long size)
     {
-        Magic.store64(addr, Magic.load64(LARGE_FREE_CELL));
-        Magic.store64(addr + ObjectModel.STATUS_OFFSET, size);
-        Magic.store64(LARGE_FREE_CELL, addr);
+        Address a = Address.fromLong(addr);
+        Address head = Address.fromLong(LARGE_FREE_CELL);
+        a.store(head.loadAddress());
+        a.plus(ObjectModel.STATUS_OFFSET).store(size);
+        head.store(a);
     }
 
     /**
@@ -1422,15 +1434,15 @@ public final class Heap
         // Save/restore the I-bit so a caller that already masked (e.g. the collector) stays masked.
         long daif = Magic.readDaif();
         Magic.disableIrq();
-        long p = allocLocked(size);
+        Address p = allocLocked(size);
         if ((daif & 0x80L) == 0L)
         {
             Magic.enableIrq();
         }
-        return p;
+        return p.toLong();
     }
 
-    private static long allocLocked(int size)
+    private static Address allocLocked(int size)
     {
         int aligned = (size + 7) & -8;
         if (aligned < ObjectModel.HEADER_SIZE)
@@ -1445,15 +1457,15 @@ public final class Heap
         int core = (int) (Magic.readMPIDR() & 3L);          // this core's arena (low 2 bits of MPIDR)
         if (core == 0 && (long) aligned >= LARGE_REQ)
         {
-            long big = allocLarge((long) aligned);
-            if (big != 0L)
+            Address big = allocLarge((long) aligned);
+            if (!big.isZero())
             {
                 return big;
             }
             gcPressure += 1;                                // an allocation-pressure collection like any
             Magic.gc();                                     //   other: count it, or the churn demo reports
             big = allocLarge((long) aligned);               //   "collections=0" while collecting elevenfold
-            if (big != 0L)
+            if (!big.isZero())
             {
                 return big;
             }
@@ -1463,8 +1475,8 @@ public final class Heap
                 Magic.wfe();
             }
         }
-        long freeCell = FREE_CELL + core * 8L;
-        long ptrCell = PTR_CELL + core * 8L;
+        Address freeCell = Address.fromLong(FREE_CELL + core * 8L);
+        Address ptrCell = Address.fromLong(PTR_CELL + core * 8L);
         int attempt = 0;
         while (attempt < 2)
         {
@@ -1474,46 +1486,46 @@ public final class Heap
                 gcPressure += 1;                            // BEFORE serving, never after: a block handed
                 Magic.gc();                                 //   out and then collected in the same call is
             }                                               //   live only in a register the sweep may not
-            long prev = 0L;                                 //   scan -- the caller would get freed memory
+            Address prev = Address.zero();                  //   scan -- the caller would get freed memory
 
             if (aligned <= SMALL_MAX)
             {
-                long sized = takeSized(core, aligned);
-                if (sized != 0L)
+                Address sized = takeSized(core, aligned);
+                if (!sized.isZero())
                 {
                     lastFromFreeList = 1;
                     zeroPayload(sized, aligned);
                     if (core == 0)
                     {
-                        servedSinceGc = servedSinceGc + Magic.load64(sized + ObjectModel.STATUS_OFFSET);
+                        servedSinceGc = servedSinceGc + sized.plus(ObjectModel.STATUS_OFFSET).loadLong();
                     }
                     return sized;
                 }
             }
-            long f = Magic.load64(freeCell);
+            Address f = freeCell.loadAddress();
             scanFreeBytes = 0L;
             scanFreeMax = 0L;
             scanFreeBlocks = 0L;
-            while (f != 0L)                                 // first fit in this core's free list
+            while (!f.isZero())                             // first fit in this core's free list
             {
-                long fsize = Magic.load64(f + ObjectModel.STATUS_OFFSET);
+                long fsize = f.plus(ObjectModel.STATUS_OFFSET).loadLong();
                 scanFreeBytes = scanFreeBytes + fsize;
                 scanFreeBlocks = scanFreeBlocks + 1L;
                 if (fsize > scanFreeMax)
                 {
                     scanFreeMax = fsize;
-                    scanFreeMaxAddr = f;
+                    scanFreeMaxAddr = f.toLong();
                 }
                 if (fsize >= aligned)
                 {
-                    long next = Magic.load64(f);
-                    if (prev == 0L)
+                    Address next = f.loadAddress();
+                    if (prev.isZero())
                     {
-                        Magic.store64(freeCell, next);
+                        freeCell.store(next);
                     }
                     else
                     {
-                        Magic.store64(prev, next);
+                        prev.store(next);
                     }
                     lastFromFreeList = 1;
                     zeroPayload(f, aligned);                // Java requires 0/default fields+elements
@@ -1527,33 +1539,33 @@ public final class Heap
                     long rest = fsize - (long) aligned;
                     if (rest >= (long) ObjectModel.HEADER_SIZE)
                     {
-                        Magic.store64(f + ObjectModel.STATUS_OFFSET, (long) aligned);   // this block's size
-                        addFree(f + (long) aligned, rest);                              // ... and the rest
+                        f.plus(ObjectModel.STATUS_OFFSET).store((long) aligned);       // this block's size
+                        addFree(f.plus(aligned).toLong(), rest);                        // ... and the rest
                     }
                     if (core == 0)
                     {
-                        servedSinceGc = servedSinceGc + Magic.load64(f + ObjectModel.STATUS_OFFSET);
+                        servedSinceGc = servedSinceGc + f.plus(ObjectModel.STATUS_OFFSET).loadLong();
                     }
                     return f;                               // status holds the size actually handed out
                 }
                 prev = f;
-                f = Magic.load64(f);
+                f = f.loadAddress();
             }
-            scanFreeBytes = scanFreeBytes + Magic.load64(SIZE_BYTES + core * 8L);   // the general list was walked;
-            long p = Magic.load64(ptrCell);                                         //   the sized lists are counted
-            if (p + aligned <= arenaLimit(core))
+            scanFreeBytes = scanFreeBytes + Address.fromLong(SIZE_BYTES + core * 8L).loadLong();   // the general
+            Address p = ptrCell.loadAddress();                                     //   list was walked; the sized
+            if (p.plus(aligned).LE(Address.fromLong(arenaLimit(core))))           //   lists are counted
             {
                 noteBumpCause((long) aligned, 0);            // shortage, or space of the wrong shape?
                 if ((long) aligned >= LARGE_REQ)             // and if it was large, snapshot the moment: the
                 {                                            //   cumulative totals cannot separate healthy
-                    noteLargeFail((long) aligned, p);        //   re-bumping after a trim from real waste
+                    noteLargeFail((long) aligned, p.toLong());   //   re-bumping after a trim from real waste
                     if (scanFreeBytes >= (long) aligned && adjSamples < ADJ_MAX)
                     {
-                        noteAdjacency((long) aligned, Magic.load64(freeCell));
+                        noteAdjacency((long) aligned, freeCell.loadLong());
                     }
                 }
-                Magic.store64(ptrCell, p + aligned);
-                Magic.store64(p + ObjectModel.STATUS_OFFSET, aligned);   // record size for the GC
+                ptrCell.store(p.plus(aligned));
+                p.plus(ObjectModel.STATUS_OFFSET).store((long) aligned);   // record size for the GC
                 lastFromFreeList = 0;
                 zeroPayload(p, aligned);
                 allocSinceGc = allocSinceGc + (long) aligned;
@@ -1584,18 +1596,18 @@ public final class Heap
      * with garbage; without this, uninitialized-but-assumed-zero fields (e.g. a compiler's
      * counter) hold junk and code that ran on QEMU (whose RAM starts zeroed) hangs on metal.
      */
-    private static void zeroPayload(long base, int aligned)
+    private static void zeroPayload(Address base, int aligned)
     {
-        Magic.store64(base + ObjectModel.TIB_OFFSET, 0L);   // Also zero offset 0 (the TIB slot). A RAW allocation
+        base.plus(ObjectModel.TIB_OFFSET).store(0L);        // Also zero offset 0 (the TIB slot). A RAW allocation
         // (TIB / itableDir / imap / a code buffer) that reads offset 0 before its caller sets it would otherwise get
         // garbage on a warm reboot (RAM isn't cleared on a guest-triggered reset) -> intermittent wild branches.
         // Offset 8 is STATUS (deterministically the block size, set by alloc), so it needs no zeroing.
-        long z = base + ObjectModel.HEADER_SIZE;
-        long end = base + aligned;
-        while (z < end)
+        Address z = base.plus(ObjectModel.HEADER_SIZE);
+        Address end = base.plus(aligned);
+        while (z.LT(end))
         {
-            Magic.store64(z, 0L);
-            z += 8L;
+            z.store(0L);
+            z = z.plus(8);
         }
     }
 
@@ -1655,42 +1667,42 @@ public final class Heap
                 Magic.wfe();
             }
         }
-        long p = alloc((int) bytes);
+        Address p = Address.fromLong(alloc((int) bytes));
         // The array's TIB slot holds its element size (1/2/4/8) — small, so it's distinguishable from an
         // object's TIB (a heap pointer), and it lets a generic System.arraycopy compute byte offsets. The
         // conservative GC never derefs this slot (it scans from +16), so a non-pointer here is safe.
-        Magic.store64(p + ObjectModel.TIB_OFFSET, elemSize);
-        Magic.store64(p + ObjectModel.ARRAY_LENGTH_OFFSET, length);
-        return p;
+        p.plus(ObjectModel.TIB_OFFSET).store((long) elemSize);
+        p.plus(ObjectModel.ARRAY_LENGTH_OFFSET).store((long) length);
+        return p.toLong();
     }
 
     /** Reset the current core's free list (start of a sweep — the GC runs on the collecting core). */
     static void resetFreeList()
     {
         int core = (int) (Magic.readMPIDR() & 3L);
-        Magic.store64(FREE_CELL + core * 8L, 0L);
+        Address.fromLong(FREE_CELL + core * 8L).store(0L);
         clearSizeLists(core);
-        Magic.store64(LARGE_FREE_CELL, 0L);            // the large sweep rebuilds this list too, and old
+        Address.fromLong(LARGE_FREE_CELL).store(0L);   // the large sweep rebuilds this list too, and old
     }                                                  //   entries are re-walked as dead blocks anyway
 
     /** Empty core {@code core}'s free lists -- the general one and every exact-size one. */
     public static void clearCoreFreeLists(int core)
     {
-        Magic.store64(FREE_CELL + core * 8L, 0L);
+        Address.fromLong(FREE_CELL + core * 8L).store(0L);
         clearSizeLists(core);
     }
 
     /** Empty core {@code core}'s exact-size lists and zero their byte total. */
     private static void clearSizeLists(int core)
     {
-        long h = SIZE_HEADS + (long) core * SIZE_CLASSES * 8L;
+        Address h = Address.fromLong(SIZE_HEADS + (long) core * SIZE_CLASSES * 8L);
         int k = 0;
         while (k < SIZE_CLASSES)
         {
-            Magic.store64(h + k * 8L, 0L);
+            h.plus(k * 8).store(0L);
             k += 1;
         }
-        Magic.store64(SIZE_BYTES + core * 8L, 0L);
+        Address.fromLong(SIZE_BYTES + core * 8L).store(0L);
     }
 
     /**
@@ -1699,46 +1711,47 @@ public final class Heap
      * goes back on the list its size names -- or handed out whole when the rest could not be a block (8 bytes
      * over), as the first-fit list did. The status word holds the size actually handed out.
      */
-    private static long takeSized(int core, int aligned)
+    private static Address takeSized(int core, int aligned)
     {
-        long heads = SIZE_HEADS + (long) core * SIZE_CLASSES * 8L;
+        Address heads = Address.fromLong(SIZE_HEADS + (long) core * SIZE_CLASSES * 8L);
         int k = aligned >> 3;
         while (k < SIZE_CLASSES)
         {
-            long cell = heads + k * 8L;
-            long f = Magic.load64(cell);
-            if (f != 0L)
+            Address cell = heads.plus(k * 8);
+            Address f = cell.loadAddress();
+            if (!f.isZero())
             {
                 long size = (long) k * 8L;
-                Magic.store64(cell, Magic.load64(f));                  // pop
-                long bytes = SIZE_BYTES + core * 8L;
-                Magic.store64(bytes, Magic.load64(bytes) - size);
+                cell.store(f.loadAddress());                                  // pop
+                Address bytes = Address.fromLong(SIZE_BYTES + core * 8L);
+                bytes.store(bytes.loadLong() - size);
                 long rest = size - (long) aligned;
                 if (rest >= (long) ObjectModel.HEADER_SIZE)
                 {
-                    Magic.store64(f + ObjectModel.STATUS_OFFSET, (long) aligned);
-                    addFree(f + (long) aligned, rest);
+                    f.plus(ObjectModel.STATUS_OFFSET).store((long) aligned);
+                    addFree(f.plus(aligned).toLong(), rest);
                 }
                 return f;
             }
             k += 1;
         }
-        return 0L;
+        return Address.zero();
     }
 
     /** Add a reclaimed block to the current core's free list: its exact-size list when small, else the general one. */
     static void addFree(long addr, long size)
     {
         int core = (int) (Magic.readMPIDR() & 3L);
-        long freeCell = FREE_CELL + core * 8L;
+        Address a = Address.fromLong(addr);
+        Address freeCell = Address.fromLong(FREE_CELL + core * 8L);
         if (size >= (long) ObjectModel.HEADER_SIZE && size <= (long) SMALL_MAX && (size & 7L) == 0L)
         {
-            freeCell = SIZE_HEADS + ((long) core * SIZE_CLASSES + (size >> 3)) * 8L;
-            long bytes = SIZE_BYTES + core * 8L;
-            Magic.store64(bytes, Magic.load64(bytes) + size);
+            freeCell = Address.fromLong(SIZE_HEADS + ((long) core * SIZE_CLASSES + (size >> 3)) * 8L);
+            Address bytes = Address.fromLong(SIZE_BYTES + core * 8L);
+            bytes.store(bytes.loadLong() + size);
         }
-        Magic.store64(addr, Magic.load64(freeCell));             // next
-        Magic.store64(addr + ObjectModel.STATUS_OFFSET, size);   // size
-        Magic.store64(freeCell, addr);
+        a.store(freeCell.loadAddress());                      // next
+        a.plus(ObjectModel.STATUS_OFFSET).store(size);        // size
+        freeCell.store(a);
     }
 }
