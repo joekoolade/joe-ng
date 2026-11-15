@@ -32,6 +32,7 @@ import java.util.jar.Attributes;
 import java.util.jar.JarEntry;
 import java.util.jar.JarInputStream;
 import java.util.jar.Manifest;
+import jdk.internal.misc.MetalRunExit;
 
 /**
  * Run a program handed over as bytes -- a {@code .jar} or a single {@code .class} -- in this VM, and capture what it
@@ -48,7 +49,10 @@ import java.util.jar.Manifest;
  *
  * <p>{@code System.out} and {@code System.err} are teed into one buffer while {@code main} runs, and still reach the
  * serial console. A thread the program starts keeps running after {@code main} returns; what it prints then goes to
- * the console only. {@code System.exit} halts the board, as it halts a hosted JVM.
+ * the console only.
+ *
+ * <p>{@code System.exit} and {@code Runtime.halt} end the run, not the board ({@code jdk.internal.misc.MetalRunExit}):
+ * the thread that calls them is unwound, and the run reports the status. The program's shutdown hooks are not run.
  */
 final class RunProgram
 {
@@ -68,6 +72,9 @@ final class RunProgram
     /** Status: the program could not be loaded (bad bytes, no main, a name clash); main never ran. */
     static final int REFUSED = 2;
 
+    /** Status: a thread of the program called {@code System.exit} or {@code Runtime.halt} while main ran. */
+    static final int EXITED = 3;
+
     /** SHA-256 of each class's bytes, by binary name, for every class a run defined this boot. */
     private static final Map<String, String> DEFINED = new HashMap<>();
 
@@ -78,8 +85,15 @@ final class RunProgram
     /** What one run did. */
     static final class Result
     {
-        /** {@link #OK}, {@link #THREW} or {@link #REFUSED}. */
+        /** {@link #OK}, {@link #THREW}, {@link #REFUSED} or {@link #EXITED}. */
         int status;
+
+        /** For {@link #EXITED}: what was called ("System.exit" or "Runtime.halt"), its status, and by which thread. */
+        String exitHow;
+
+        int exitStatus;
+
+        String exitThread;
 
         /** The class whose main ran (or would have), or null when none was found. */
         String mainClass;
@@ -130,6 +144,7 @@ final class RunProgram
                     + (r.defined == 0 ? " (classes already loaded)" : " (" + r.defined + " classes defined)"));
             long t1 = System.nanoTime();
             cap.start();
+            MetalRunExit.Run run = MetalRunExit.begin();     // System.exit in the program ends it, not the board
             try
             {
                 m.invoke(null, (Object) args);
@@ -137,19 +152,30 @@ final class RunProgram
             }
             catch (InvocationTargetException e)
             {
-                r.status = THREW;
-                // The trace alone: "Exception in thread "main"" is the VM's own line for a program that DIED,
-                // and the probe harness stops a boot on it. This main threw into us, and the server goes on.
-                e.getCause().printStackTrace();
+                if (!(e.getCause() instanceof MetalRunExit.Exit))
+                {
+                    r.status = THREW;
+                    // The trace alone: "Exception in thread "main"" is the VM's own line for a program that DIED,
+                    // and the probe harness stops a boot on it. This main threw into us, and the server goes on.
+                    e.getCause().printStackTrace();
+                }
             }
             finally
             {
+                MetalRunExit.end();
                 cap.stop();
                 r.runMs = (System.nanoTime() - t1) / 1_000_000L;
             }
+            if (run.exited())
+            {
+                r.status = EXITED;
+                r.exitHow = run.how();
+                r.exitStatus = run.status();
+                r.exitThread = run.thread();
+            }
             report.println();
-            report.println("[" + (r.status == OK ? "main returned" : "main threw") + "; defined " + r.defined
-                    + " classes in " + r.defineMs + " ms, ran " + r.runMs + " ms]");
+            report.println("[" + ending(r) + "; defined " + r.defined + " classes in " + r.defineMs + " ms, ran "
+                    + r.runMs + " ms]");
         }
         catch (Refused e)
         {
@@ -164,6 +190,16 @@ final class RunProgram
         System.out.println("run: " + (r.mainClass == null ? fileName : r.mainClass) + " status " + r.status);
         r.output = cap.text();
         return r;
+    }
+
+    /** How main ended, for the report line. */
+    static String ending(Result r)
+    {
+        if (r.status == EXITED)
+        {
+            return r.exitHow + "(" + r.exitStatus + ") called by thread \"" + r.exitThread + "\"";
+        }
+        return r.status == OK ? "main returned" : "main threw";
     }
 
     /** A program's classes (binary name -> classfile), its other entries, and the class to run. */

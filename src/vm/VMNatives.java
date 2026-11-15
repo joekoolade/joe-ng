@@ -1887,7 +1887,7 @@ final class VMNatives
     {
         // Masked to 32 bits: the status is an int and arrives sign-extended, so an unmasked print renders
         // exit(-1) as 0xFFFFFFFFFFFFFFFF -- technically the register, but not the value the program passed.
-        Uart.write(Magic.bytes("\n[exit status=0x"));
+        Uart.write(Magic.bytes("\n[exit status="));          // printHex writes the 0x itself
         VM.printHex(status & 0xFFFFFFFFL);
         Uart.write(Magic.bytes("]\n"));
         Uart.flush();                                      // the program is over: send what is still queued

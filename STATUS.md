@@ -4,6 +4,34 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **`System.exit` IN A `/run` PROGRAM ENDS THE RUN, NOT THE BOARD; INHERITABLE THREAD-LOCALS IN EVERY `Thread` CONSTRUCTOR
+  (2026-11-14).** Pi-validated (build 4fc9e7261b976e89).
+  - **Where:** `java/lang/Shutdown` is an overlay now, verbatim JDK 26 plus one call at the top of `exit` and of
+    `halt` (`jdk.internal.misc.MetalRunExit.checkExit/checkHalt`). A thread marked as a run's (an
+    `InheritableThreadLocal`, so the threads it starts carry it) records the status and leaves by
+    `MetalRunExit.Exit`, an `Error` without a trace. It has to be there, FIRST: past it, `runHooks` runs every
+    hook and sets `VM.shutdown()`, after which a nonzero exit halts at once and `addShutdownHook` throws for the
+    rest of the boot. A program's own hooks therefore do not run. An unmarked thread (the server, an /etc/init
+    program) exits as before: `demo/ExitProbe` runs its hook and halts `[exit status=0x0000000000000007]`.
+  - **The exit report** is `[System.exit(3) called by thread "main"; ...]` or `Runtime.halt(4)`; the page says
+    `exit N`. Another thread's exit ends that thread only (silently, as on a hosted JVM -- `Thread.metalThreadEntry`
+    does not hand `Exit` to the uncaught handler); main carries on and the run reports the exit.
+  - **A real VM bug on the way:** the Thread overlay's `Thread()`, `Thread(Runnable)` and `Thread(Runnable, String)`
+    set their fields directly and never copied the creator's inheritable thread-locals, so a child read null from
+    every `InheritableThreadLocal`. Found because the `thread` arm halted the board with status 5. They delegate to
+    the full constructor now; `Thread(ThreadGroup, Runnable)` and `Thread(ThreadGroup, String)` were missing
+    entirely and are added (overlaycheck could not see them: nothing in the image or jars calls them).
+    `ItlInheritProbe` covers every constructor, `childValue`, and a grandchild, against the host.
+  - **Also:** `shutdownHalt0` printed `[exit status=0x0x...]` (printHex writes its own `0x`); Regress ends a solo
+    boot on `[exit status=`.
+  - **Measured:** QEMU -- RunProbe (exit, halt, a `catch (Exception)` around exit, another thread's exit, hooks
+    still register after an exit, a run after them), ExitProbe, ItlInheritProbe, CarrierLocal, Executor, SpawnRace,
+    ScopedValue: 7/7; `make test`, overlaycheck 0 new. Pi -- the same exits over `PUT /run`, then a normal run.
+  - **Full regression 205/206 (11m27s):** FileProbe differed because the RAMFS root now lists `run` (the sample
+    programs); its host recipe copies `ramfs/run` too and the regenerated host output equals the metal's (rerun:
+    pass). SecurityStockProbe differed only in a batch, by the known SeedGenerator `GC: STW TIMEOUT` line; identical
+    alone.
+
 - **RUN A `.jar` OR `.class` FROM THE WEB SERVER: UPLOADED, OR DOWNLOADED BY THE BOARD (2026-11-14).** Pi-validated.
   `PUT /run/<file>.jar|.class` (the body is the program), `POST /run?url=<http(s) url>` (the board fetches it), both
   with `args=` and `main=` and the boot token; the reply is what the program printed to `System.out`/`System.err` plus

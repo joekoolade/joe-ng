@@ -1,0 +1,11 @@
+Thread(): parent VALUE null
+Thread(Runnable): parent VALUE null
+Thread(Runnable, String): parent VALUE null
+Thread(String) subclass: parent VALUE null
+Thread(ThreadGroup, Runnable): parent VALUE null
+Thread(ThreadGroup, Runnable, String): parent VALUE null
+Thread(ThreadGroup, Runnable, String, long): parent VALUE null
+Thread(..., inheritThreadLocals=true): parent VALUE null
+Thread(..., inheritThreadLocals=false): null null null
+grandchild sees: child's own VALUE null
+parent still sees: parent

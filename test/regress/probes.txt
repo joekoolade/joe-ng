@@ -106,6 +106,7 @@ InvokeDefaultProbe
 InvokeSemanticsProbe
 IoStreamProbe
 JavaTimeProbe
+ItlInheritProbe
 JlaProbe
 Lambda4Probe
 LambdaAdaptProbe
@@ -226,3 +227,4 @@ WrapProbe
 ZipFileProbe
 ZipNamesProbe
 demo/RunProbe            solo gate=RunProbe PASS     # defines classes once per boot; prints timings; metal-only (/run/, /etc/boot.token)
+demo/ExitProbe           solo gate=[exit status=0x0000000000000007]     # an ordinary exit: hook, then halt; ends the boot

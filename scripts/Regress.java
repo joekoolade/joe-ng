@@ -60,7 +60,7 @@ public final class Regress
     private static final String HALTED = "|code arena OOM|heap OOM|large region OOM|MONITOR TABLE FULL";
 
     /** A solo run is over: the program returned, or the VM stopped it. */
-    private static final Pattern SOLO_END = Pattern.compile("\\[main returned normally\\]|^Exception in thread"
+    private static final Pattern SOLO_END = Pattern.compile("\\[main returned normally\\]|\\[exit status=|^Exception in thread"
             + "|DENYLIST TRAP|^ *FAULT|BOOT RE-ENTERED|LINK FAILED|JIT unsupported|TAIL TARGET IS 0|Halting\\."
             + "|LAZY INDEX OUT OF RANGE|CAP EXCEEDED" + HALTED);
 

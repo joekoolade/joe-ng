@@ -38,7 +38,7 @@ public class RunProbe
         show("jar", r);
         check("jar ran", r.status == RunProgram.OK);
         check("jar main class", "hello.Main".equals(r.mainClass));
-        check("jar defined 5", r.defined == 5);
+        check("jar defined 6", r.defined == 6);
         check("jar greeting", r.output.contains("hello from an uploaded jar"));
         check("jar args", r.output.contains("args 2 a,b"));
         check("jar interface + lambda", r.output.contains("square 3 area 9 scaled 36"));
@@ -77,8 +77,51 @@ public class RunProbe
         check("throw output before", r.output.contains("boom is about to throw"));
         check("throw trace captured", r.output.contains("IllegalStateException: thrown in Util: from Boom.main"));
 
+        exits(jar);
         http(jar, cls);
         System.out.println(failures == 0 ? "RunProbe PASS" : "RunProbe FAIL " + failures);
+    }
+
+    /** System.exit and Runtime.halt end the run, not the board: every arm after the first proves the VM is still up. */
+    private static void exits(byte[] jar)
+    {
+        RunProgram.Result r = RunProgram.run("hello.jar", jar, "hello.Quit", new String[] { "exit" });
+        show("exit", r);
+        check("exit status", r.status == RunProgram.EXITED && r.exitStatus == 3 && "main".equals(r.exitThread));
+        check("exit stops main", r.output.contains("quit: exit") && !r.output.contains("still running"));
+        check("exit report", r.output.contains("[System.exit(3) called by thread \"main\""));
+
+        r = RunProgram.run("hello.jar", jar, "hello.Quit", new String[] { "halt" });
+        show("halt", r);
+        check("halt status", r.status == RunProgram.EXITED && r.exitStatus == 4 && "Runtime.halt".equals(r.exitHow));
+        check("halt report", r.output.contains("[Runtime.halt(4) called by thread \"main\""));
+        check("halt stops main", !r.output.contains("still running"));
+
+        r = RunProgram.run("hello.jar", jar, "hello.Quit", new String[] { "catch" });
+        show("catch", r);
+        check("catch (Exception) does not stop an exit", r.status == RunProgram.EXITED && r.exitStatus == 6
+                && !r.output.contains("caught the exit") && !r.output.contains("still running"));
+
+        r = RunProgram.run("hello.jar", jar, "hello.Quit", new String[] { "thread" });
+        show("thread", r);
+        check("thread exit recorded", r.status == RunProgram.EXITED && r.exitStatus == 5
+                && "quitter".equals(r.exitThread));
+        check("thread exit leaves main running", r.output.contains("main carries on"));
+        check("thread exit is quiet", !r.output.contains("Exception in thread"));
+
+        r = RunProgram.run("hello.jar", jar, "hello.Quit", new String[] { "hook" });
+        show("hook", r);
+        check("hook: exit 0", r.status == RunProgram.EXITED && r.exitStatus == 0);
+        check("hook not run", r.output.contains("hook registered") && !r.output.contains("hook ran"));
+
+        r = RunProgram.run("hello.jar", jar, "hello.Quit", new String[] { "hook" });
+        show("hook again", r);
+        check("hooks still register after an exit", r.output.contains("hook registered") && r.exitStatus == 0
+                && r.status == RunProgram.EXITED);
+
+        r = RunProgram.run("hello.jar", jar, null, new String[] { "after" });
+        show("after the exits", r);
+        check("a run after the exits", r.status == RunProgram.OK && r.output.contains("args 1 after"));
     }
 
     private static void http(byte[] jar, byte[] cls) throws Exception

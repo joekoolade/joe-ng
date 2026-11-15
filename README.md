@@ -178,7 +178,8 @@ curl -X POST -H "$TOK" "http://192.168.1.247/run?url=http://192.168.1.162:8000/a
 ```
 
 `main=<class>` in the query runs a class other than the manifest's. The reply
-is 200 when `main` ran (the last line says whether it returned or threw), 422
+is 200 when `main` ran (the last line says whether it returned, threw or
+called `System.exit`), 422
 when the program was refused before `main`, and 502 when the download failed.
 
 Limits:
@@ -189,7 +190,10 @@ Limits:
   or reboot.
 - The server handles one request at a time, so it is busy until `main`
   returns.
-- `System.exit` halts the board, just as it ends a hosted JVM.
+- `System.exit` (and `Runtime.halt`) ends the run, not the board: the reply
+  ends with `[System.exit(N) called by thread "main"; ...]`. The program's
+  shutdown hooks do not run. If a thread other than `main` exits, only that
+  thread ends and `main` carries on.
 
 To go back to the default program, restore `ramfs/etc/init`, for example with
 `git checkout ramfs/etc/init`.
