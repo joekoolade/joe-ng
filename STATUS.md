@@ -4,6 +4,25 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **QEMU GETS TIMER TICKS: ONE GIC FAULT WAS ALL OF "QEMU IS COOPERATIVE" (2026-11-15).** The STW timeout that made
+  SecurityStockProbe fail alone (bisected to #530's extra collection landing in SeedGenerator's busy loop) is fixed at
+  its root.
+  - **Measured with `demo/TickProbe`** (busy-spins 500 ms, reads the VM's tick count and the GIC from inside the
+    guest): QEMU 0 ticks; `GICD_TYPER.SecurityExtn = 0`; the timer PPI 30 in group 1, enabled AND PENDING
+    (`ISPENDR0` bit 30), with `GICD_CTLR = GICC_CTLR = 1`. Without the Security Extensions bit 0 of those registers
+    is EnableGrp0 -- the Pi's GIC-400 shows us the non-secure view, where bit 0 is EnableGrp1 -- so every group-1
+    interrupt on QEMU was enabled, pending and never forwarded. That was "QEMU gives launched programs no timer
+    ticks", "QEMU delivers no timer PPI to a secondary" and very likely "QEMU never raises SPI 125" (not checked).
+  - **Fix:** `Gic.setGroup` leaves an interrupt in group 0 when `GICD_TYPER.SecurityExtn` is 0 (group 0 signals as
+    IRQ, FIQEn being 0); with the extensions it sets group 1 as before.
+  - **Measured after:** QEMU ~160 ticks per 500 ms spin (four cores); SecurityStockProbe alone 2/2 with no timeouts and
+    11 collections again; **full regression 208/208 with QEMU now PREEMPTIVE** (TickProbe added, gated). Pi (build
+    266a9a760ba79ffd): `SecurityExtn = 1` -- the unchanged path -- 200 ticks per 500 ms (4 cores x 50), pages and
+    `/run` normal.
+  - **What this changes:** QEMU now preempts on the timer like the Pi, on all four cores. Tick-driven instruments
+    (hang dump by timer, STW parking, priority preemption) fire there, and a QEMU pass of a spinning program is no
+    longer weaker evidence than it looks. The earlier notes saying otherwise are stale.
+
 - **UNBOXED TYPES, INCREMENT 1: THE REST OF `Heap` AND THE COLLECTOR `VMGc` (2026-11-15).** Pi-validated (build
   ce64bafd034e6890). Internals only: no public or package-private signature changed (the APIs switch with their
   callers, so no temporary wrappers at ~330 call sites). Neither file has a `Magic.load*`/`store*` left.
