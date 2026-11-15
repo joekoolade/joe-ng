@@ -290,8 +290,14 @@ public final class BuildRuntimeImage
         return ib.build(ENTRY);
     }
 
-    /** M3: bake the repo's {@code ramfs/} tree into the image's read-only file table, each file keyed
-     *  by its absolute path (e.g. {@code ramfs/etc/motd} -> {@code "/etc/motd"}). */
+    /**
+     * M3: bake the repo's {@code ramfs/} tree into the image's read-only file table, each file keyed by its absolute
+     * path (e.g. {@code ramfs/etc/motd} -> {@code "/etc/motd"}).
+     *
+     * <p>macOS's {@code .DS_Store} files are left out ({@link #isHostClutter}): Finder writes one into any folder it
+     * shows, so the image's tree used to change with whatever the Mac had browsed -- FileProbe's root listing gained
+     * a {@code .DS_Store} that way (2026-11-14), a regression failure the code never caused.
+     */
     private static void embedRamfs(ImageBuilder ib) throws IOException
     {
         Path root = Path.of("ramfs");
@@ -304,6 +310,10 @@ public final class BuildRuntimeImage
         {
             for (Path p : (Iterable<Path>) paths.filter(Files::isRegularFile).sorted()::iterator)
             {
+                if (isHostClutter(p))
+                {
+                    continue;
+                }
                 String name = "/" + root.relativize(p).toString().replace(File.separatorChar, '/');
                 if (initOverride != null && name.equals("/etc/init"))
                 {
@@ -320,6 +330,13 @@ public final class BuildRuntimeImage
         {
             ib.addFile("/etc/init", initOverride);
         }
+    }
+
+    /** A file the host's desktop left in {@code ramfs/}, not one the image is meant to carry: {@code .DS_Store}. */
+    static boolean isHostClutter(Path p)
+    {
+        Path f = p.getFileName();
+        return f != null && f.toString().equals(".DS_Store");
     }
 
     /** Register every {@code .class} under {@code dir}, keyed by its internal name. */
