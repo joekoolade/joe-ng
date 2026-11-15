@@ -4,6 +4,24 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 5: THE NETWORK STACK AND THE SMALL VM FILES (2026-11-15).** Pi-validated (build
+  69229bb3cc9e10a5). `src/net` (`Ip`, `NetStats`, `RxQueues`, `Sntp`, `Tcp`: 136 byte accesses), `VMNatives` (73),
+  `VMConcat`, `ArrayCopy`, `JarFs`, `VMStats`, `Console`: no `Magic.load*`/`store*` left (`Utf8At`'s three byte
+  loads deliberately kept); no signature changed (`VMNatives` methods are bound as natives by name+descriptor).
+  - **Checked independently:** in every file the compiled widths equal the original counts, width for width; my
+    script over all 69 hoisted `Address` locals finds none read after its source is reassigned. `ArrayCopy` keeps its
+    count loops (only the element address changed); its one sign change is the copy-direction test, now unsigned
+    between two heap addresses.
+  - **Code size, by name+descriptor:** ArrayCopy 1519 -> 1523, VMNatives and VMStats unchanged, the net stack a little
+    larger (Ip 931 -> 983, Tcp 7472 -> 7492, NetStats 1331 -> 1368): each hoisted Address local takes a callee-saved
+    register, so more are saved. The first measurement here paired methods by NAME and reported Ip 720 -> 983 --
+    overloads compared different methods. The same tool produced increments 0 and 1's figures, CORRECTED in their
+    cards (Heap was unchanged by increment 0; increment 1 was Heap -71 / VMGc -81 words, not -121 / -185).
+  - **Measured:** `make test`; full regression **208/208**. Pi: committed first try; every page; `/run`s; the stop-poll
+    benchmark (same figures); a forced stop of four threads; the live kernel SHA-256; a staged 39 MB upload
+    SHA-256-verified in 25.4 s; a download-and-run from the Mac; `/net`: 27,297 packets in, 0 IP header errors, 0 TCP
+    errors, 0 checksum errors, 0 retransmits.
+
 - **UNBOXED TYPES, INCREMENT 4: THE WIFI DRIVER `Cyw43` (2026-11-15).** Pi-validated (build b5b724edd3dd643a).
   `src/board/cyw43/Cyw43.java` (3547 lines, 340 sites -- SDIO bus protocol, firmware download, WPA2 join, RX path,
   ARP/IP/UDP/TCP/DNS/DHCP frame building and parsing): no `Magic.load*`/`store*` left, no signature changed (private
@@ -86,8 +104,9 @@ Newest entries are at the top.
     signed and unsigned order agree -- the same values are accepted.
   - **Checked independently, not from the conversion reports:** javap of both classes -- every `Address.store` is
     `store(J)` or `store(Address)` (Heap 49 + 13, VMGc 17 + 4), so no 64-bit store narrowed to 32. Code size:
-    Heap 4795 -> 4674 words, VMGc 4287 -> 4102 (`markRange` 77 -> 65, `scanMarkedIn` 98 -> 82, `drainMarkStack`
-    87 -> 77, `liveEndOf` 107 -> 86).
+    Heap 4090 -> 4019 words, VMGc 3192 -> 3111. CORRECTED 2026-11-15: this card first said 4795 -> 4674 and
+    4287 -> 4102 with per-method figures, from a tool that paired methods by NAME (an overloaded name compared
+    different methods); re-measured by name+descriptor at the commit and its parent.
   - **Measured:** `make test`; full regression **206/207** -- SecurityStockProbe fails alone on `main` as well
     (2 of 2), bisected to #530 (BACKLOG, "NEXT"). Pi: every page, three `/run`s, the stop-poll benchmark (same
     figures), a forced stop of four threads, the 39 MB SHA-256 equal to the Mac's. The same sequence's `/gc`: 13
@@ -117,7 +136,9 @@ Newest entries are at the top.
     cells (`PTR_CELL`...) stay `static final long`: `Heap.init` runs before any VM `<clinit>`, so a `static final
     Address` would still be 0 there. Watch converted stores: `addr.store(intValue)` is the 32-bit overload where
     `Magic.store64(addr, intValue)` widened -- every 64-bit store of an int has an explicit `(long)`. Heap compiles
-    4848 -> 4795 words (`allocLocked` 621 -> 594, `zeroPayload` 49 -> 38; `addFreeLarge` 27 -> 34, two new locals).
+    3778 -> 3779 words: unchanged. CORRECTED 2026-11-15: this card first said 4848 -> 4795 with per-method figures;
+    the comparison tool paired methods by NAME, so an overloaded name compared different methods. Re-measured by
+    name+descriptor at the commit and its parent.
   - **Measured:** `compiler.UnboxedTest` (in `make test`, 45 checks): every public method classifies; each long/
     unboxed pair in `UnboxedFixture` compiles to the same code apart from LOCAL-REGISTER ALLOCATION (a long
     parameter takes two JVM slots, an Address one, so the long version saves more callee-saved registers -- the

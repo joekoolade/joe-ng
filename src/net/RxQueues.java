@@ -11,6 +11,7 @@
  */
 package net;
 
+import magic.Address;
 import magic.Magic;
 import vm.Heap;
 import vm.VMScheduler;
@@ -226,10 +227,12 @@ public final class RxQueues
         unlock();
         int n = len < cap ? len : cap;
         long src = bufAddr(b);
+        Address srcA = Address.fromLong(src);
+        Address dstA = Address.fromLong(dst);
         int i = 0;
         while (i < n)
         {
-            Magic.store8(dst + i, Magic.load8(src + i));
+            dstA.plus(i).store((byte) srcA.plus(i).loadUnsignedByte());
             i = i + 1;
         }
         freeBuf(b);
@@ -266,7 +269,8 @@ public final class RxQueues
     public static void dispatch(int b, int len)
     {
         long rx = bufAddr(b);
-        int ch = Magic.load8(rx + 5) & 0x0F;
+        Address rxA = Address.fromLong(rx);
+        int ch = rxA.plus(5).loadUnsignedByte() & 0x0F;
         if (ch == 0)
         {
             enqueue(Q_CTRL, b, len);
@@ -281,9 +285,10 @@ public final class RxQueues
             freeBuf(b);
             return;
         }
-        long eth = rx + (Magic.load8(rx + 7) & 0xFF);    // SDPCM data offset
-        eth = eth + 4 + (Magic.load8(eth + 3) & 0xFF) * 4;   // skip the BDC header
-        int et = (Magic.load8(eth + 12) & 0xFF) << 8 | (Magic.load8(eth + 13) & 0xFF);
+        long eth = rx + (rxA.plus(7).loadUnsignedByte() & 0xFF);    // SDPCM data offset
+        eth = eth + 4 + (Address.fromLong(eth).plus(3).loadUnsignedByte() & 0xFF) * 4;   // skip the BDC header
+        Address ethA = Address.fromLong(eth);
+        int et = (ethA.plus(12).loadUnsignedByte() & 0xFF) << 8 | (ethA.plus(13).loadUnsignedByte() & 0xFF);
         if (et == 0x0806)
         {
             Ip.answerArp(eth);
@@ -307,9 +312,10 @@ public final class RxQueues
             freeBuf(b);
             return;
         }
-        int ihl = (Magic.load8(ip) & 0x0F) * 4;
-        int total = (Magic.load8(ip + 2) & 0xFF) << 8 | (Magic.load8(ip + 3) & 0xFF);
-        int proto = Magic.load8(ip + 9) & 0xFF;
+        Address ipA = Address.fromLong(ip);
+        int ihl = (ipA.loadUnsignedByte() & 0x0F) * 4;
+        int total = (ipA.plus(2).loadUnsignedByte() & 0xFF) << 8 | (ipA.plus(3).loadUnsignedByte() & 0xFF);
+        int proto = ipA.plus(9).loadUnsignedByte() & 0xFF;
         if (proto == 6)
         {
             NetStats.ipInDelivers = NetStats.ipInDelivers + 1;
@@ -340,7 +346,8 @@ public final class RxQueues
             freeBuf(b);
             return;
         }
-        int dport = (Magic.load8(udp + 2) & 0xFF) << 8 | (Magic.load8(udp + 3) & 0xFF);
+        Address udpA = Address.fromLong(udp);
+        int dport = (udpA.plus(2).loadUnsignedByte() & 0xFF) << 8 | (udpA.plus(3).loadUnsignedByte() & 0xFF);
         int q = find(KIND_UDP, dport);
         if (q < 0)
         {

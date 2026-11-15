@@ -12,6 +12,7 @@
 package vm;
 
 import board.bcm2711.Uart;
+import magic.Address;
 import magic.Magic;
 import objectmodel.ObjectModel;
 import static vm.VM.*;   // strBytes (the string-ref -> byte[] accessor stays in VM, shared with the natives)
@@ -41,9 +42,10 @@ final class VMConcat
     {
         long buf = Heap.allocArray(64, 1);
         long sb = Heap.alloc(40);
-        Magic.store64(sb + 16L, buf);
-        Magic.store64(sb + 24L, 0L);
-        Magic.store64(sb + 32L, 0L);
+        Address sbA = Address.fromLong(sb);
+        sbA.plus(16).store(buf);
+        sbA.plus(24).store(0L);
+        sbA.plus(32).store(0L);
         return sb;
     }
 
@@ -51,13 +53,15 @@ final class VMConcat
     static long scGrow(long sb, long buf, long count, long cap)
     {
         long nbuf = Heap.allocArray((int) (cap * 2L), 1);
+        Address nbufA = Address.fromLong(nbuf);
+        Address bufA = Address.fromLong(buf);
         long i = 0L;
         while (i < count * 2L)
         {
-            Magic.store8(nbuf + 24L + i, (byte) Magic.load8(buf + 24L + i));
+            nbufA.plus(24L + i).store((byte) bufA.plus(24L + i).loadUnsignedByte());
             i = i + 1L;
         }
-        Magic.store64(sb + 16L, nbuf);
+        Address.fromLong(sb).plus(16).store(nbuf);
         return nbuf;
     }
 
@@ -171,19 +175,21 @@ final class VMConcat
     static void scChar(long sb, int c)
     {
         int unit = c & 0xFFFF;
-        long buf = Magic.load64(sb + 16L);
-        long count = Magic.load64(sb + 24L);
-        long cap = Magic.load64(buf + 16L);                // byte[] length (ARRAY_LENGTH_OFFSET)
+        Address sbA = Address.fromLong(sb);
+        long buf = sbA.plus(16).loadLong();
+        long count = sbA.plus(24).loadLong();
+        long cap = Address.fromLong(buf).plus(16).loadLong();   // byte[] length (ARRAY_LENGTH_OFFSET)
         if (count * 2L + 2L > cap)
         {
             buf = scGrow(sb, buf, count, cap);
         }
-        Magic.store8(buf + 24L + count * 2L, (byte) unit);         // ARRAY_BASE_OFFSET = 24; LO byte first
-        Magic.store8(buf + 24L + count * 2L + 1L, (byte) (unit >> 8));
-        Magic.store64(sb + 24L, count + 1L);
-        if (unit > Magic.load64(sb + 32L))
+        Address at = Address.fromLong(buf).plus(24L + count * 2L);
+        at.store((byte) unit);                                   // ARRAY_BASE_OFFSET = 24; LO byte first
+        at.plus(1).store((byte) (unit >> 8));
+        sbA.plus(24).store(count + 1L);
+        if (unit > sbA.plus(32).loadLong())
         {
-            Magic.store64(sb + 32L, unit);
+            sbA.plus(32).store((long) unit);
         }
     }
 
@@ -231,26 +237,29 @@ final class VMConcat
      */
     static long scEnd(long sb)
     {
-        long buf = Magic.load64(sb + 16L);
-        long count = Magic.load64(sb + 24L);
-        int coder = Magic.load64(sb + 32L) < 256L ? 0 : 1;
+        Address sbA = Address.fromLong(sb);
+        Address bufA = sbA.plus(16).loadAddress();
+        long count = sbA.plus(24).loadLong();
+        int coder = sbA.plus(32).loadLong() < 256L ? 0 : 1;
         long nbytes = coder == 0 ? count : count * 2L;
         long out = Heap.allocArray((int) nbytes, 1);
+        Address outA = Address.fromLong(out);
         if (byteArrayTibCache != 0L)
         {
-            Magic.store64(out, byteArrayTibCache);
+            outA.store(byteArrayTibCache);
         }
         long i = 0L;
         while (i < nbytes)
         {
             long from = coder == 0 ? i * 2L : i;           // LATIN1 keeps each unit's low byte
-            Magic.store8(out + 24L + i, (byte) Magic.load8(buf + 24L + from));
+            outA.plus(24L + i).store((byte) bufA.plus(24L + from).loadUnsignedByte());
             i = i + 1L;
         }
         long str = Heap.alloc(Loader.stringSize());
-        Magic.store64(str, Loader.stringTib());            // TIB_OFFSET = 0
-        Magic.store64(str + 16L, out);                     // value
-        Magic.store64(str + 24L, coder);                   // coder: 0 = LATIN1, 1 = UTF16
+        Address strA = Address.fromLong(str);
+        strA.store(Loader.stringTib());                    // TIB_OFFSET = 0
+        strA.plus(16).store(out);                          // value
+        strA.plus(24).store((long) coder);                 // coder: 0 = LATIN1, 1 = UTF16
         return str;
     }
 
@@ -314,21 +323,24 @@ final class VMConcat
             appendNull(sb);                                // a String with no value array: say so, never read +16
             return;
         }
-        long len = Magic.load64(arr + 16L);
-        int coder = arr == str ? 0 : (int) Magic.load64(str + 24L);   // a raw byte[] carrier has no coder: LATIN1
+        Address arrA = Address.fromLong(arr);
+        long len = arrA.plus(16).loadLong();
+        // a raw byte[] carrier has no coder: LATIN1
+        int coder = arr == str ? 0 : (int) Address.fromLong(str).plus(24).loadLong();
         long i = 0L;
         if (coder == 0)
         {
             while (i < len)
             {
-                scChar(sb, Magic.load8(arr + 24L + i));
+                scChar(sb, arrA.plus(24L + i).loadUnsignedByte());
                 i = i + 1L;
             }
             return;
         }
         while (i + 1L < len)
         {
-            scChar(sb, Magic.load8(arr + 24L + i) | (Magic.load8(arr + 24L + i + 1L) << 8));   // LO byte first
+            Address at = arrA.plus(24L + i);
+            scChar(sb, at.loadUnsignedByte() | (at.plus(1).loadUnsignedByte() << 8));   // LO byte first
             i = i + 2L;
         }
     }

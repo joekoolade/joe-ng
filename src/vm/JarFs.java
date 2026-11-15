@@ -12,6 +12,7 @@
 package vm;
 
 import board.bcm2711.Uart;
+import magic.Address;
 import magic.Magic;
 import zip.ZipDir;
 
@@ -106,13 +107,14 @@ public final class JarFs
         {
             return false;
         }
-        long src = Magic.load64(e + 16L);
-        int len = (int) Magic.load64(e + 24L);
+        Address eA = Address.fromLong(e);
+        Address src = eA.plus(16).loadAddress();
+        int len = (int) eA.plus(24).loadLong();
         byte[] raw = new byte[len];
         int i = 0;
         while (i < len)
         {
-            raw[i] = (byte) Magic.load8(src + i);
+            raw[i] = (byte) src.plus(i).loadUnsignedByte();
             i += 1;
         }
         ZipDir opened = new ZipDir();
@@ -164,10 +166,11 @@ public final class JarFs
         {
             return false;
         }
+        Address nameA = Address.fromLong(namePtr);
         int k = 0;
         while (k < len)
         {
-            key[k] = (byte) Magic.load8(namePtr + k);
+            key[k] = (byte) nameA.plus(k).loadUnsignedByte();
             k += 1;
         }
         return dir.find(key, len) >= 0;
@@ -189,10 +192,11 @@ public final class JarFs
         {
             return null;
         }
+        Address nameA = Address.fromLong(namePtr);
         int k = 0;
         while (k < len)
         {
-            key[k] = (byte) Magic.load8(namePtr + k);
+            key[k] = (byte) nameA.plus(k).loadUnsignedByte();
             k += 1;
         }
         int idx = dir.find(key, len);
@@ -216,10 +220,11 @@ public final class JarFs
         {
             return -1;
         }
+        Address nameA = Address.fromLong(namePtr);
         int k = 0;
         while (k < len)
         {
-            key[k] = (byte) Magic.load8(namePtr + k);
+            key[k] = (byte) nameA.plus(k).loadUnsignedByte();
             k += 1;
         }
         key[len] = (byte) '.';
@@ -241,6 +246,7 @@ public final class JarFs
     /** Record a lookup's outcome; the slot index for a hit, -1 for a miss (or a full cache). */
     private static int remember(long namePtr, int len, byte[] data)
     {
+        Address nameA = Address.fromLong(namePtr);
         if (cacheCount >= MAXCACHE)
         {
             // "keep answering, just without memory" is what the comment here USED TO SAY, and it is not what
@@ -256,7 +262,7 @@ public final class JarFs
                 int w = 0;
                 while (w < len)
                 {
-                    Uart.putc((int) Magic.load8(namePtr + w));
+                    Uart.putc(nameA.plus(w).loadUnsignedByte());
                     w += 1;
                 }
                 Uart.putc(0x0A);
@@ -264,10 +270,11 @@ public final class JarFs
             return -1;
         }
         long nameBlob = Heap.allocData(len);
+        Address nameBlobA = Address.fromLong(nameBlob);
         int k = 0;
         while (k < len)
         {
-            Magic.store8(nameBlob + k, Magic.load8(namePtr + k));
+            nameBlobA.plus(k).store((byte) nameA.plus(k).loadUnsignedByte());
             k += 1;
         }
         long blob = 0L;
@@ -276,10 +283,11 @@ public final class JarFs
         {
             blobLen = data.length;
             blob = Heap.allocData(blobLen);
+            Address blobA = Address.fromLong(blob);
             k = 0;
             while (k < blobLen)
             {
-                Magic.store8(blob + k, data[k]);
+                blobA.plus(k).store(data[k]);
                 k += 1;
             }
         }
@@ -293,10 +301,12 @@ public final class JarFs
 
     private static boolean sameName(long a, long b, int len)
     {
+        Address aA = Address.fromLong(a);
+        Address bA = Address.fromLong(b);
         int i = 0;
         while (i < len)
         {
-            if (Magic.load8(a + i) != Magic.load8(b + i))
+            if (aA.plus(i).loadUnsignedByte() != bA.plus(i).loadUnsignedByte())
             {
                 return false;
             }

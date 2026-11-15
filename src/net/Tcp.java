@@ -11,6 +11,7 @@
  */
 package net;
 
+import magic.Address;
 import magic.Magic;
 import vm.Heap;
 import vm.VM;
@@ -407,10 +408,11 @@ public final class Tcp
         }
         int isn = (int) Ip.nextRandom();                // a fresh initial sequence number
         lock();
-        Magic.store8(rip[h] + 0, (ipBe >> 24) & 0xFF);
-        Magic.store8(rip[h] + 1, (ipBe >> 16) & 0xFF);
-        Magic.store8(rip[h] + 2, (ipBe >> 8) & 0xFF);
-        Magic.store8(rip[h] + 3, ipBe & 0xFF);
+        Address ripA = Address.fromLong(rip[h]);
+        ripA.plus(0).store((byte) ((ipBe >> 24) & 0xFF));
+        ripA.plus(1).store((byte) ((ipBe >> 16) & 0xFF));
+        ripA.plus(2).store((byte) ((ipBe >> 8) & 0xFF));
+        ripA.plus(3).store((byte) (ipBe & 0xFF));
         rport[h] = port;
         lport[h] = Ip.ephemeralPort();                  // a fresh ephemeral port per connection
         snd[h] = isn;
@@ -802,15 +804,16 @@ public final class Tcp
      */
     public static void input(long ip, int ipTotal)
     {
-        int ihl = (Magic.load8(ip) & 0x0F) * 4;
+        int ihl = (Address.fromLong(ip).loadUnsignedByte() & 0x0F) * 4;
         long tcp = ip + ihl;
+        Address tcpA = Address.fromLong(tcp);
         int tlen = ipTotal - ihl;
         if (tlen < 20)
         {
             NetStats.tcpInErrs = NetStats.tcpInErrs + 1;
             return;
         }
-        int dataOff = ((Magic.load8(tcp + 12) >> 4) & 0x0F) * 4;
+        int dataOff = ((tcpA.plus(12).loadUnsignedByte() >> 4) & 0x0F) * 4;
         if (dataOff < 20 || dataOff > tlen)
         {
             NetStats.tcpInErrs = NetStats.tcpInErrs + 1;
@@ -822,9 +825,9 @@ public final class Tcp
             NetStats.tcpInCsumErrors = NetStats.tcpInCsumErrors + 1;
             return;
         }
-        int sport = ((Magic.load8(tcp) & 0xFF) << 8) | (Magic.load8(tcp + 1) & 0xFF);
-        int dport = ((Magic.load8(tcp + 2) & 0xFF) << 8) | (Magic.load8(tcp + 3) & 0xFF);
-        int flags = Magic.load8(tcp + 13) & 0x3F;
+        int sport = ((tcpA.loadUnsignedByte() & 0xFF) << 8) | (tcpA.plus(1).loadUnsignedByte() & 0xFF);
+        int dport = ((tcpA.plus(2).loadUnsignedByte() & 0xFF) << 8) | (tcpA.plus(3).loadUnsignedByte() & 0xFF);
+        int flags = tcpA.plus(13).loadUnsignedByte() & 0x3F;
         int payLen = tlen - dataOff;
         lock();
         int h = find(ip + 12, sport, dport);
@@ -930,10 +933,12 @@ public final class Tcp
         }
         Ip.copy4(ip + 12, rip[h]);
         long eth = ip - 14;
+        Address ethA = Address.fromLong(eth);
+        Address rmacA = Address.fromLong(rmac[h]);
         int i = 0;
         while (i < 6)
         {
-            Magic.store8(rmac[h] + i, Magic.load8(eth + 6 + i));
+            rmacA.plus(i).store((byte) ethA.plus(6 + i).loadUnsignedByte());
             i = i + 1;
         }
         useRmac[h] = 1;
@@ -1093,10 +1098,11 @@ public final class Tcp
     /** The MSS option in a SYN-ACK's options ({@code tcp+20 .. tcp+dataOff}), or 536 (RFC 9293) without one. */
     private static int mssOption(long tcp, int dataOff)
     {
+        Address tcpA = Address.fromLong(tcp);
         int p = 20;
         while (p < dataOff)
         {
-            int kind = Magic.load8(tcp + p) & 0xFF;
+            int kind = tcpA.plus(p).loadUnsignedByte() & 0xFF;
             if (kind == 0)
             {
                 break;                                   // end of options
@@ -1110,14 +1116,14 @@ public final class Tcp
             {
                 break;
             }
-            int olen = Magic.load8(tcp + p + 1) & 0xFF;
+            int olen = tcpA.plus(p + 1).loadUnsignedByte() & 0xFF;
             if (olen < 2)
             {
                 break;                                   // malformed: stop
             }
             if (kind == 2 && olen == 4 && p + 4 <= dataOff)
             {
-                return ((Magic.load8(tcp + p + 2) & 0xFF) << 8) | (Magic.load8(tcp + p + 3) & 0xFF);
+                return ((tcpA.plus(p + 2).loadUnsignedByte() & 0xFF) << 8) | (tcpA.plus(p + 3).loadUnsignedByte() & 0xFF);
             }
             p = p + olen;
         }
@@ -1267,11 +1273,13 @@ public final class Tcp
     private static void copyIn(int h, int seq, long src, int n)
     {
         long r = ring[h];
+        Address rA = Address.fromLong(r);
+        Address srcA = Address.fromLong(src);
         int idx = seq - (pisn[h] + 1);
         int i = 0;
         while (i < n)
         {
-            Magic.store8(r + ((idx + i) & RCVMASK), Magic.load8(src + i));
+            rA.plus((idx + i) & RCVMASK).store((byte) srcA.plus(i).loadUnsignedByte());
             i = i + 1;
         }
     }
@@ -1280,11 +1288,13 @@ public final class Tcp
     private static int copyOut(int h, long dst, int n)
     {
         long r = ring[h];
+        Address rA = Address.fromLong(r);
+        Address dstA = Address.fromLong(dst);
         int idx = rdSeq[h] - (pisn[h] + 1);
         int i = 0;
         while (i < n)
         {
-            Magic.store8(dst + i, Magic.load8(r + ((idx + i) & RCVMASK)));
+            dstA.plus(i).store((byte) rA.plus((idx + i) & RCVMASK).loadUnsignedByte());
             i = i + 1;
         }
         rdSeq[h] = rdSeq[h] + n;
@@ -1409,7 +1419,7 @@ public final class Tcp
             syncRx = Heap.allocData(2048);
         }
         long ip = Ip.recvIp(syncRx, 2048, ms);
-        if (ip != 0L && (Magic.load8(ip + 9) & 0xFF) == 6)
+        if (ip != 0L && (Address.fromLong(ip).plus(9).loadUnsignedByte() & 0xFF) == 6)
         {
             input(ip, Ip.lastIpTotal);
         }
@@ -1439,48 +1449,53 @@ public final class Tcp
             long payload, int payLen)
     {
         long buf = Heap.allocData(2048);
+        Address bufA = Address.fromLong(buf);
+        Address dmacA = Address.fromLong(dmac);
         int i = 0;
         while (i < 6)
         {
-            Magic.store8(buf + i, Magic.load8(dmac + i));
-            Magic.store8(buf + 6 + i, Magic.load8(Ip.ourMac + i));
+            bufA.plus(i).store((byte) dmacA.plus(i).loadUnsignedByte());
+            bufA.plus(6 + i).store((byte) Address.fromLong(Ip.ourMac).plus(i).loadUnsignedByte());
             i = i + 1;
         }
-        Magic.store8(buf + 12, 0x08);
-        Magic.store8(buf + 13, 0x00);
+        bufA.plus(12).store((byte) 0x08);
+        bufA.plus(13).store((byte) 0x00);
         long ip = buf + 14;
         long tcp = buf + 34;
+        Address ipA = Address.fromLong(ip);
+        Address tcpA = Address.fromLong(tcp);
+        Address payloadA = Address.fromLong(payload);
         int hdr = (flags & 0x02) != 0 ? 24 : 20;         // a SYN carries the 4-byte MSS option
         Ip.be16(tcp + 0, lp);
         Ip.be16(tcp + 2, rp);
         Ip.be32(tcp + 4, seq);
         Ip.be32(tcp + 8, ack);
-        Magic.store8(tcp + 12, (hdr / 4) << 4);          // data offset
-        Magic.store8(tcp + 13, flags);
+        tcpA.plus(12).store((byte) ((hdr / 4) << 4));          // data offset
+        tcpA.plus(13).store((byte) flags);
         Ip.be16(tcp + 14, win);
         Ip.be16(tcp + 16, 0);                            // checksum (filled below)
         Ip.be16(tcp + 18, 0);                            // urgent pointer
         if (hdr == 24)
         {
-            Magic.store8(tcp + 20, 2);                   // kind = MSS
-            Magic.store8(tcp + 21, 4);
+            tcpA.plus(20).store((byte) 2);                   // kind = MSS
+            tcpA.plus(21).store((byte) 4);
             Ip.be16(tcp + 22, OUR_MSS);
         }
         i = 0;
         while (i < payLen)
         {
-            Magic.store8(tcp + hdr + i, Magic.load8(payload + i));
+            tcpA.plus(hdr + i).store((byte) payloadA.plus(i).loadUnsignedByte());
             i = i + 1;
         }
         int tcpLen = hdr + payLen;
         Ip.be16(tcp + 16, NetStats.l4Cksum(6, tcp, tcpLen, Ip.ourIp, dstIp));
-        Magic.store8(ip + 0, 0x45);
-        Magic.store8(ip + 1, 0);
+        ipA.plus(0).store((byte) 0x45);
+        ipA.plus(1).store((byte) 0);
         Ip.be16(ip + 2, 20 + tcpLen);
         Ip.be16(ip + 4, 0);
         Ip.be16(ip + 6, 0x4000);                         // don't fragment
-        Magic.store8(ip + 8, 64);
-        Magic.store8(ip + 9, 6);                         // protocol = TCP
+        ipA.plus(8).store((byte) 64);
+        ipA.plus(9).store((byte) 6);                         // protocol = TCP
         Ip.be16(ip + 10, 0);
         Ip.copy4(Ip.ourIp, ip + 12);
         Ip.copy4(dstIp, ip + 16);

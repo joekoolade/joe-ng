@@ -11,6 +11,7 @@
  */
 package net;
 
+import magic.Address;
 import magic.Magic;
 import vm.VM;
 
@@ -101,9 +102,10 @@ public final class NetStats
     public static boolean ipIn(long ip, int avail)
     {
         ipInReceives = ipInReceives + 1;
-        int vihl = Magic.load8(ip) & 0xFF;
+        Address ipA = Address.fromLong(ip);
+        int vihl = ipA.loadUnsignedByte() & 0xFF;
         int ihl = (vihl & 0x0F) * 4;
-        int total = ((Magic.load8(ip + 2) & 0xFF) << 8) | (Magic.load8(ip + 3) & 0xFF);
+        int total = ((ipA.plus(2).loadUnsignedByte() & 0xFF) << 8) | (ipA.plus(3).loadUnsignedByte() & 0xFF);
         if ((vihl >> 4) != 4 || ihl < 20 || total < ihl || total > avail)
         {
             ipInHdrErrors = ipInHdrErrors + 1;
@@ -114,13 +116,13 @@ public final class NetStats
             ipInHdrErrors = ipInHdrErrors + 1;
             return false;
         }
-        int frag = ((Magic.load8(ip + 6) & 0xFF) << 8) | (Magic.load8(ip + 7) & 0xFF);
+        int frag = ((ipA.plus(6).loadUnsignedByte() & 0xFF) << 8) | (ipA.plus(7).loadUnsignedByte() & 0xFF);
         if ((frag & 0x3FFF) != 0)                        // MF set or a nonzero offset
         {
             ipReasmFails = ipReasmFails + 1;
             return false;
         }
-        if (Ip.ourIp != 0L && !Ip.eq(ip + 16, Ip.ourIp) && (Magic.load8(ip + 19) & 0xFF) != 0xFF)
+        if (Ip.ourIp != 0L && !Ip.eq(ip + 16, Ip.ourIp) && (ipA.plus(19).loadUnsignedByte() & 0xFF) != 0xFF)
         {
             ipInAddrErrors = ipInAddrErrors + 1;
             return false;
@@ -135,13 +137,15 @@ public final class NetStats
      */
     public static void rxSync(long rx, int len)
     {
-        if (len < 12 || (Magic.load8(rx + 5) & 0x0F) != 2)
+        Address rxA = Address.fromLong(rx);
+        if (len < 12 || (rxA.plus(5).loadUnsignedByte() & 0x0F) != 2)
         {
             return;                                      // no frame, or not the data channel
         }
-        long eth = rx + (Magic.load8(rx + 7) & 0xFF);
-        eth = eth + 4 + (Magic.load8(eth + 3) & 0xFF) * 4;
-        if (((Magic.load8(eth + 12) & 0xFF) << 8 | (Magic.load8(eth + 13) & 0xFF)) != 0x0800)
+        long eth = rx + (rxA.plus(7).loadUnsignedByte() & 0xFF);
+        eth = eth + 4 + (Address.fromLong(eth).plus(3).loadUnsignedByte() & 0xFF) * 4;
+        Address ethA = Address.fromLong(eth);
+        if (((ethA.plus(12).loadUnsignedByte() & 0xFF) << 8 | (ethA.plus(13).loadUnsignedByte() & 0xFF)) != 0x0800)
         {
             return;
         }
@@ -151,7 +155,7 @@ public final class NetStats
             return;
         }
         ipInDelivers = ipInDelivers + 1;
-        int proto = Magic.load8(ip + 9) & 0xFF;
+        int proto = Address.fromLong(ip).plus(9).loadUnsignedByte() & 0xFF;
         if (proto == 6)
         {
             tcpInSegs = tcpInSegs + 1;
@@ -177,13 +181,14 @@ public final class NetStats
      */
     public static boolean udpOk(long ip, long udp, int len)
     {
-        int ulen = ((Magic.load8(udp + 4) & 0xFF) << 8) | (Magic.load8(udp + 5) & 0xFF);
+        Address udpA = Address.fromLong(udp);
+        int ulen = ((udpA.plus(4).loadUnsignedByte() & 0xFF) << 8) | (udpA.plus(5).loadUnsignedByte() & 0xFF);
         if (len < 8 || ulen < 8 || ulen > len)
         {
             udpInErrors = udpInErrors + 1;
             return false;
         }
-        int ck = ((Magic.load8(udp + 6) & 0xFF) << 8) | (Magic.load8(udp + 7) & 0xFF);
+        int ck = ((udpA.plus(6).loadUnsignedByte() & 0xFF) << 8) | (udpA.plus(7).loadUnsignedByte() & 0xFF);
         if (ck != 0 && l4Cksum(17, udp, ulen, ip + 12, ip + 16) != 0)
         {
             udpInErrors = udpInErrors + 1;
@@ -201,22 +206,25 @@ public final class NetStats
      */
     public static int l4Cksum(int proto, long seg, int len, long srcIp, long dstIp)
     {
+        Address srcA = Address.fromLong(srcIp);
+        Address dstA = Address.fromLong(dstIp);
+        Address segA = Address.fromLong(seg);
         int sum = 0;
-        sum = sum + (((Magic.load8(srcIp) & 0xFF) << 8) | (Magic.load8(srcIp + 1) & 0xFF));
-        sum = sum + (((Magic.load8(srcIp + 2) & 0xFF) << 8) | (Magic.load8(srcIp + 3) & 0xFF));
-        sum = sum + (((Magic.load8(dstIp) & 0xFF) << 8) | (Magic.load8(dstIp + 1) & 0xFF));
-        sum = sum + (((Magic.load8(dstIp + 2) & 0xFF) << 8) | (Magic.load8(dstIp + 3) & 0xFF));
+        sum = sum + (((srcA.loadUnsignedByte() & 0xFF) << 8) | (srcA.plus(1).loadUnsignedByte() & 0xFF));
+        sum = sum + (((srcA.plus(2).loadUnsignedByte() & 0xFF) << 8) | (srcA.plus(3).loadUnsignedByte() & 0xFF));
+        sum = sum + (((dstA.loadUnsignedByte() & 0xFF) << 8) | (dstA.plus(1).loadUnsignedByte() & 0xFF));
+        sum = sum + (((dstA.plus(2).loadUnsignedByte() & 0xFF) << 8) | (dstA.plus(3).loadUnsignedByte() & 0xFF));
         sum = sum + proto;                               // zero byte + protocol
         sum = sum + len;
         int i = 0;
         while (i + 1 < len)
         {
-            sum = sum + (((Magic.load8(seg + i) & 0xFF) << 8) | (Magic.load8(seg + i + 1) & 0xFF));
+            sum = sum + (((segA.plus(i).loadUnsignedByte() & 0xFF) << 8) | (segA.plus(i + 1).loadUnsignedByte() & 0xFF));
             i = i + 2;
         }
         if (i < len)
         {
-            sum = sum + ((Magic.load8(seg + i) & 0xFF) << 8);   // odd trailing byte
+            sum = sum + ((segA.plus(i).loadUnsignedByte() & 0xFF) << 8);   // odd trailing byte
         }
         while ((sum >> 16) != 0)
         {
@@ -232,17 +240,18 @@ public final class NetStats
         {
             return;
         }
-        int et = ((Magic.load8(frame + 12) & 0xFF) << 8) | (Magic.load8(frame + 13) & 0xFF);
+        Address frameA = Address.fromLong(frame);
+        int et = ((frameA.plus(12).loadUnsignedByte() & 0xFF) << 8) | (frameA.plus(13).loadUnsignedByte() & 0xFF);
         if (et != 0x0800)
         {
             return;
         }
         ipOutRequests = ipOutRequests + 1;
-        int proto = Magic.load8(frame + 14 + 9) & 0xFF;
+        int proto = frameA.plus(14 + 9).loadUnsignedByte() & 0xFF;
         if (proto == 6)
         {
             tcpOutSegs = tcpOutSegs + 1;
-            if ((Magic.load8(frame + 14 + ((Magic.load8(frame + 14) & 0x0F) * 4) + 13) & 0x04) != 0)
+            if ((frameA.plus(14 + ((frameA.plus(14).loadUnsignedByte() & 0x0F) * 4) + 13).loadUnsignedByte() & 0x04) != 0)
             {
                 tcpOutRsts = tcpOutRsts + 1;
             }

@@ -13,6 +13,7 @@ package vm;
 
 import board.bcm2711.Uart;
 import board.bcm2711.Rng;
+import magic.Address;
 import magic.Magic;
 import objectmodel.ObjectModel;
 import static vm.VM.*;   // strBytes/printStr/heapBytes helpers + fileDir/fileCount/taskThreadObj/curTask fields
@@ -210,7 +211,7 @@ final class VMNatives
         {
             return 0L;
         }
-        return Magic.load64(ref + REFERENT_OFFSET);
+        return Address.fromLong(ref + REFERENT_OFFSET).loadLong();
     }
 
     static long refRefersTo0(long ref, long o)
@@ -219,7 +220,7 @@ final class VMNatives
         {
             return 0L;
         }
-        return Magic.load64(ref + REFERENT_OFFSET) == o ? 1L : 0L;
+        return Address.fromLong(ref + REFERENT_OFFSET).loadLong() == o ? 1L : 0L;
     }
 
     static void refClear0(long ref)
@@ -228,7 +229,7 @@ final class VMNatives
         {
             return;
         }
-        Magic.store64(ref + REFERENT_OFFSET, 0L);
+        Address.fromLong(ref + REFERENT_OFFSET).store(0L);
     }
 
     /** {@code System.setOut0(PrintStream)} native: redirect the stream JUnit captures test output through. */
@@ -257,12 +258,12 @@ final class VMNatives
     /** Element size (bytes) of an array: a raw array keeps it in @0; a typed array keeps it in its array Type's tag. */
     static long elemSize(long arr)
     {
-        long tib = Magic.load64(arr + 0L);
+        long tib = Address.fromLong(arr + 0L).loadLong();
         if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
         {
             return tib;                                    // raw array: @0 is the element size
         }
-        return Magic.load64(Magic.load64(tib)) & 0xFFFFL;  // typed: arr@0=TIB, TIB[0]=Type, Type[0]=tag|elemSize
+        return Address.fromLong(tib).loadAddress().loadLong() & 0xFFFFL;  // typed: arr@0=TIB, TIB[0]=Type, Type[0]=tag|elemSize
     }
 
     /** {@code java/lang/System.arraycopy(src, srcPos, dst, dstPos, len)}, the most-used java.base native: see {@link ArrayCopy}. */
@@ -291,13 +292,13 @@ final class VMNatives
         {
             return 0L;                                     // boot-time force-compile passes 0; no-op
         }
-        long size = Magic.load64(ref + 8L) & -8L;          // block size from the status word
+        long size = Address.fromLong(ref + 8L).loadLong() & -8L;          // block size from the status word
         long copy = Heap.alloc((int) size);
-        Magic.store64(copy, Magic.load64(ref));            // same TIB (raw elem size or typed array TIB)
+        Address.fromLong(copy).store(Address.fromLong(ref).loadLong());            // same TIB (raw elem size or typed array TIB)
         long i = 16L;
         while (i < size)
         {
-            Magic.store64(copy + i, Magic.load64(ref + i));
+            Address.fromLong(copy + i).store(Address.fromLong(ref + i).loadLong());
             i += 8L;
         }
         return copy;
@@ -317,7 +318,7 @@ final class VMNatives
         {
             return 0L;                                     // boot force-compile passes 0; guest checks negative first
         }
-        long compType = componentMirror > 0x1000L ? Magic.load64(componentMirror + 16L) : 0L;
+        long compType = componentMirror > 0x1000L ? Address.fromLong(componentMirror + 16L).loadLong() : 0L;
         return Loader.newArrayOfComponent(compType, (int) length);
     }
 
@@ -332,7 +333,7 @@ final class VMNatives
         {
             return 0L;
         }
-        long type = Magic.load64(mirror + 16L);            // mirror -> Type (@16)
+        long type = Address.fromLong(mirror + 16L).loadLong();            // mirror -> Type (@16)
         if (type == 0L)
         {
             return 0L;
@@ -351,7 +352,7 @@ final class VMNatives
         {
             return 0L;                                     // boot-time force-compile passes 0; no-op
         }
-        return Loader.isArrayType(Magic.load64(mirror + 16L)) ? 1L : 0L;
+        return Loader.isArrayType(Address.fromLong(mirror + 16L).loadLong()) ? 1L : 0L;
     }
 
     /**
@@ -392,7 +393,7 @@ final class VMNatives
         {
             return 0L;                                     // boot force-compile passes 0
         }
-        return Loader.classFileCopy(Magic.load64(mirror + 16L));
+        return Loader.classFileCopy(Address.fromLong(mirror + 16L).loadLong());
     }
 
     /** {@code Throwable.stackTrace0(Throwable)} native: its inline backtrace as a StackTraceElement[]. */
@@ -442,9 +443,9 @@ final class VMNatives
         {
             return 0L;
         }
-        long type = Magic.load64(mirror + 16L);
+        long type = Address.fromLong(mirror + 16L).loadLong();
         long fnBase = nameArr + 24L;                    // byte[] payload
-        int fnLen = (int) Magic.load64(nameArr + 16L);  // byte[] length
+        int fnLen = (int) Address.fromLong(nameArr + 16L).loadLong();  // byte[] length
         return Loader.staticCellFor(type, fnBase, fnLen);
     }
 
@@ -545,7 +546,7 @@ final class VMNatives
             {
                 return 0L;                                     // boot-time force-compile passes 0; no-op
             }
-            int n = (int) Magic.load64(descArr + 16L);         // byte[] length @16
+            int n = (int) Address.fromLong(descArr + 16L).loadLong();         // byte[] length @16
             return Loader.methodAnnoPresent((int) rgIndex, descArr, n) ? 1L : 0L;
         }
         finally
@@ -568,7 +569,7 @@ final class VMNatives
             {
                 return 0L;                                     // boot-time force-compile passes 0; no-op
             }
-            int n = (int) Magic.load64(descArr + 16L);         // byte[] length @16
+            int n = (int) Address.fromLong(descArr + 16L).loadLong();         // byte[] length @16
             return Loader.methodAnnotation((int) rgIndex, descArr, n);
         }
         finally
@@ -685,7 +686,7 @@ final class VMNatives
         int c = 1;
         while (c < 4)
         {
-            used = used + (Magic.load64(Heap.PTR_CELL + (long) c * 8L) - Heap.arenaBase(c));
+            used = used + (Address.fromLong(Heap.PTR_CELL + (long) c * 8L).loadLong() - Heap.arenaBase(c));
             c += 1;
         }
         return heapReservation() - used;
@@ -728,7 +729,7 @@ final class VMNatives
             {
                 return 0L;
             }
-            int n = (int) Magic.load64(descArr + 16L);
+            int n = (int) Address.fromLong(descArr + 16L).loadLong();
             return Loader.fieldAnnotation(mirror, nameArr, descArr, n);
         }
         finally
@@ -1099,7 +1100,7 @@ final class VMNatives
             {
                 return 0L;
             }
-            int n = (int) Magic.load64(descArr + 16L);
+            int n = (int) Address.fromLong(descArr + 16L).loadLong();
             return Loader.classAnnotation(mirror, descArr, n);
         }
         finally
@@ -1127,7 +1128,7 @@ final class VMNatives
         {
             return 0L;
         }
-        return Loader.isPrimitiveType(Magic.load64(mirror + 16L)) ? 1L : 0L;
+        return Loader.isPrimitiveType(Address.fromLong(mirror + 16L).loadLong()) ? 1L : 0L;
     }
 
     /**
@@ -1140,7 +1141,7 @@ final class VMNatives
         {
             return 0L;                                     // boot-time force-compile passes 0; no-op
         }
-        return Loader.classNameString(Magic.load64(mirror + 16L));
+        return Loader.classNameString(Address.fromLong(mirror + 16L).loadLong());
     }
 
     /**
@@ -1256,7 +1257,7 @@ final class VMNatives
         {
             return 0L;
         }
-        long cap = Magic.load64(arr + ObjectModel.ARRAY_LENGTH_OFFSET);
+        long cap = Address.fromLong(arr + ObjectModel.ARRAY_LENGTH_OFFSET).loadLong();
         long n = len < cap ? len : cap;
         return Rng.fill(arr + ObjectModel.ARRAY_BASE_OFFSET, (int) n);
     }
@@ -1314,7 +1315,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes: a nested class's InnerClasses entry
         try                                  // is read from its blob -- see the class doc
         {
-            return (long) Loader.classModifiersOf(Magic.load64(mirror + 16L));
+            return (long) Loader.classModifiersOf(Address.fromLong(mirror + 16L).loadLong());
         }
         finally
         {
@@ -1329,7 +1330,7 @@ final class VMNatives
         {
             return -1;                                     // boot force-compile passes 0
         }
-        return Loader.methodResolve(Magic.load64(mirrorRef + 16L), nameArrRef);
+        return Loader.methodResolve(Address.fromLong(mirrorRef + 16L).loadLong(), nameArrRef);
     }
 
     /** Reflection: {@code Method.methodResolveDesc0(Class,byte[],byte[])} -> registry index of the method with
@@ -1340,7 +1341,7 @@ final class VMNatives
         {
             return -1;                                     // boot force-compile passes 0
         }
-        return Loader.methodResolveDesc(Magic.load64(mirrorRef + 16L), nameArrRef, descArrRef);
+        return Loader.methodResolveDesc(Address.fromLong(mirrorRef + 16L).loadLong(), nameArrRef, descArrRef);
     }
 
     /** Reflection: {@code Method.exact0(Class,byte[],byte[])} -> registry index of the method that class itself
@@ -1351,7 +1352,7 @@ final class VMNatives
         {
             return -1;                                     // boot force-compile passes 0
         }
-        return Loader.methodResolveExact(Magic.load64(mirrorRef + 16L), nameArrRef, descArrRef);
+        return Loader.methodResolveExact(Address.fromLong(mirrorRef + 16L).loadLong(), nameArrRef, descArrRef);
     }
 
     /** {@code MethodHandleNatives.declared0(Class,byte[],byte[])} -> see {@code Loader.mhDeclaredIndex}. */
@@ -1361,7 +1362,7 @@ final class VMNatives
         {
             return -1;                                     // boot force-compile passes 0
         }
-        return Loader.mhDeclaredIndex(Magic.load64(mirrorRef + 16L), nameArrRef, descArrRef);
+        return Loader.mhDeclaredIndex(Address.fromLong(mirrorRef + 16L).loadLong(), nameArrRef, descArrRef);
     }
 
     /** Reflection: {@code Method.itableTarget0(Object,int)} -> the receiver's itable answer for that method, or 0. */
@@ -1400,7 +1401,7 @@ final class VMNatives
         {
             return -1;                                     // boot force-compile passes 0
         }
-        return Loader.constructorResolveDesc(Magic.load64(mirrorRef + 16L), descArrRef);
+        return Loader.constructorResolveDesc(Address.fromLong(mirrorRef + 16L).loadLong(), descArrRef);
     }
 
     /** Reflection: {@code Constructor.ctorResolve0(Class,int)} -> registry index of the <init> with that arity, or -1. */
@@ -1410,7 +1411,7 @@ final class VMNatives
         {
             return -1;                                     // boot force-compile passes 0
         }
-        return Loader.constructorResolve(Magic.load64(mirrorRef + 16L), (int) paramCount);
+        return Loader.constructorResolve(Address.fromLong(mirrorRef + 16L).loadLong(), (int) paramCount);
     }
 
     /** Reflection: {@code Constructor.allocInstance0(Class)} -> a fresh zeroed instance (TIB set), or 0. */
@@ -1420,7 +1421,7 @@ final class VMNatives
         {
             return 0L;                                     // boot force-compile passes 0
         }
-        return Loader.allocInstance(Magic.load64(mirrorRef + 16L));
+        return Loader.allocInstance(Address.fromLong(mirrorRef + 16L).loadLong());
     }
 
     /**
@@ -1435,7 +1436,7 @@ final class VMNatives
         {
             return 0L;                                     // boot force-compile passes 0
         }
-        Loader.ensureInitOfType(Magic.load64(mirrorRef + 16L));
+        Loader.ensureInitOfType(Address.fromLong(mirrorRef + 16L).loadLong());
         return 0L;
     }
 
@@ -1447,7 +1448,7 @@ final class VMNatives
         {
             return 0L;                                     // boot force-compile passes 0
         }
-        return Loader.typeNeedsInit(Magic.load64(mirrorRef + 16L)) ? 1L : 0L;
+        return Loader.typeNeedsInit(Address.fromLong(mirrorRef + 16L).loadLong()) ? 1L : 0L;
     }
 
     /**
@@ -1460,7 +1461,7 @@ final class VMNatives
         {
             return 0L;
         }
-        long st = Magic.load64(Magic.load64(mirror + 16L) + 8L);
+        long st = Address.fromLong(mirror + 16L).loadAddress().plus(8L).loadLong();
         return st == 0L ? 0L : Loader.classMirror(st);
     }
 
@@ -1502,15 +1503,15 @@ final class VMNatives
         {
             return 0;
         }
-        int hlen = (int) Magic.load64(hostArrRef + 16L);   // guest byte[] length
+        int hlen = (int) Address.fromLong(hostArrRef + 16L).loadLong();   // guest byte[] length
         byte[] host = heapBytes(hostArrRef + 24L, hlen);
         long ipOut = Heap.allocData(4);
         if (!board.cyw43.Cyw43.dnsResolve(host, ipOut))
         {
             return 0;
         }
-        return ((Magic.load8(ipOut) & 0xFF) << 24) | ((Magic.load8(ipOut + 1) & 0xFF) << 16)
-                | ((Magic.load8(ipOut + 2) & 0xFF) << 8) | (Magic.load8(ipOut + 3) & 0xFF);
+        return ((Address.fromLong(ipOut).loadUnsignedByte() & 0xFF) << 24) | ((Address.fromLong(ipOut + 1).loadUnsignedByte() & 0xFF) << 16)
+                | ((Address.fromLong(ipOut + 2).loadUnsignedByte() & 0xFF) << 8) | (Address.fromLong(ipOut + 3).loadUnsignedByte() & 0xFF);
     }
 
     /**
@@ -1539,7 +1540,7 @@ final class VMNatives
             int i = 0;
             while (i < 6)
             {
-                mac = (mac << 8) | (Magic.load8(net.Ip.ourMac + i) & 0xFFL);
+                mac = (mac << 8) | (Address.fromLong(net.Ip.ourMac + i).loadUnsignedByte() & 0xFFL);
                 i += 1;
             }
             return mac;
@@ -1550,14 +1551,14 @@ final class VMNatives
     /** Four bytes at {@code a}, big-endian, as an int (sign-extended into the long the caller narrows). */
     private static long beInt(long a)
     {
-        return ((Magic.load8(a) & 0xFF) << 24) | ((Magic.load8(a + 1) & 0xFF) << 16)
-                | ((Magic.load8(a + 2) & 0xFF) << 8) | (Magic.load8(a + 3) & 0xFF);
+        return ((Address.fromLong(a).loadUnsignedByte() & 0xFF) << 24) | ((Address.fromLong(a + 1).loadUnsignedByte() & 0xFF) << 16)
+                | ((Address.fromLong(a + 2).loadUnsignedByte() & 0xFF) << 8) | (Address.fromLong(a + 3).loadUnsignedByte() & 0xFF);
     }
 
     /** The net.Tcp handle stored in a FileDescriptor's fd field (offset 16 = first instance field). */
     private static int fdIndex(long fdRef)
     {
-        return (int) Magic.load64(fdRef + 16L);
+        return (int) Address.fromLong(fdRef + 16L).loadLong();
     }
 
     /** VarHandle overlay: byte offset of instance field named by the guest {@code byte[]} within {@code obj}'s
@@ -1568,9 +1569,9 @@ final class VMNatives
         {
             return -1L;
         }
-        int fnLen = (int) Magic.load64(fnameArrRef + 16L);   // guest byte[] length
+        int fnLen = (int) Address.fromLong(fnameArrRef + 16L).loadLong();   // guest byte[] length
         long fnBase = fnameArrRef + 24L;                     // guest byte[] data
-        long tib = Magic.load64(objRef);                     // obj header TIB
+        long tib = Address.fromLong(objRef).loadLong();                     // obj header TIB
         return Loader.vhFieldOffset(fnBase, fnLen, tib);
     }
 
@@ -1587,8 +1588,8 @@ final class VMNatives
         {
             return -1L;
         }
-        long typeAddr = Magic.load64(mirrorRef + 16L);       // Class.typeAddr
-        int fnLen = (int) Magic.load64(nameArrRef + 16L);    // guest byte[] length
+        long typeAddr = Address.fromLong(mirrorRef + 16L).loadLong();       // Class.typeAddr
+        int fnLen = (int) Address.fromLong(nameArrRef + 16L).loadLong();    // guest byte[] length
         long fnBase = nameArrRef + 24L;                      // guest byte[] data
         return Loader.fieldOffsetOfType(typeAddr, fnBase, fnLen);
     }
@@ -1631,21 +1632,21 @@ final class VMNatives
         {
             return 0L;
         }
-        long tib = Magic.load64(ref + ObjectModel.TIB_OFFSET);
+        long tib = Address.fromLong(ref + ObjectModel.TIB_OFFSET).loadLong();
         if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
         {
             return tib == 0L ? 0L : 1L;                       // raw array: the TIB slot IS the element size
         }
-        long type = Magic.load64(tib);
+        long type = Address.fromLong(tib).loadLong();
         if (type == 0L)
         {
             return 0L;
         }
-        if ((Magic.load64(type) & ObjectModel.ARRAY_TYPE_TAG_MASK) != ObjectModel.ARRAY_TYPE_TAG)
+        if ((Address.fromLong(type).loadLong() & ObjectModel.ARRAY_TYPE_TAG_MASK) != ObjectModel.ARRAY_TYPE_TAG)
         {
             return 0L;
         }
-        return Magic.load64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET) == 0L ? 1L : 2L;
+        return Address.fromLong(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong() == 0L ? 1L : 2L;
     }
 
     /**
@@ -1662,8 +1663,8 @@ final class VMNatives
         {
             return 0L;
         }
-        long typeAddr = Magic.load64(mirrorRef + 16L);       // Class.typeAddr
-        int fnLen = (int) Magic.load64(nameArrRef + 16L);
+        long typeAddr = Address.fromLong(mirrorRef + 16L).loadLong();       // Class.typeAddr
+        int fnLen = (int) Address.fromLong(nameArrRef + 16L).loadLong();
         long fnBase = nameArrRef + 24L;
         return Loader.staticSlotOfType(typeAddr, fnBase, fnLen);
     }
@@ -1678,8 +1679,8 @@ final class VMNatives
             {
                 return -1;
             }
-            long typeAddr = Magic.load64(mirrorRef + 16L);       // Class.typeAddr
-            int fnLen = (int) Magic.load64(nameArrRef + 16L);
+            long typeAddr = Address.fromLong(mirrorRef + 16L).loadLong();       // Class.typeAddr
+            int fnLen = (int) Address.fromLong(nameArrRef + 16L).loadLong();
             long fnBase = nameArrRef + 24L;
             return Loader.fieldMods(typeAddr, fnBase, fnLen);
         }
@@ -1699,8 +1700,8 @@ final class VMNatives
             {
                 return -1;
             }
-            long typeAddr = Magic.load64(mirrorRef + 16L);
-            int fnLen = (int) Magic.load64(nameArrRef + 16L);
+            long typeAddr = Address.fromLong(mirrorRef + 16L).loadLong();
+            int fnLen = (int) Address.fromLong(nameArrRef + 16L).loadLong();
             long fnBase = nameArrRef + 24L;
             return Loader.fieldTypeChar(typeAddr, fnBase, fnLen);
         }
@@ -1740,13 +1741,13 @@ final class VMNatives
         {
             return -net.Tcp.EINVAL;
         }
-        long holder = Magic.load64(inetRef + holderOff);
+        long holder = Address.fromLong(inetRef + holderOff).loadLong();
         long addrOff = fieldOffsetNamed(holder, Magic.bytes("address"));
         if (addrOff < 0L)
         {
             return -net.Tcp.EINVAL;
         }
-        int ipBe = (int) Magic.load64(holder + addrOff); // InetAddressHolder.address: big-endian IPv4
+        int ipBe = (int) Address.fromLong(holder + addrOff).loadLong(); // InetAddressHolder.address: big-endian IPv4
         return net.Tcp.connect(fdIndex(fdRef), ipBe, (int) port);
     }
 
@@ -1757,10 +1758,10 @@ final class VMNatives
         int i = 0;
         while (i < name.length)
         {
-            Magic.store8(raw + i, name[i]);
+            Address.fromLong(raw + i).store(name[i]);
             i += 1;
         }
-        return Loader.vhFieldOffset(raw, name.length, Magic.load64(obj));
+        return Loader.vhFieldOffset(raw, name.length, Address.fromLong(obj).loadLong());
     }
 
     /**
@@ -1852,13 +1853,13 @@ final class VMNatives
     /** IOUtil.fdVal(fd) -> the fd int (the net.Tcp handle). */
     static int fdVal(long fdRef)
     {
-        return (int) Magic.load64(fdRef + 16L);
+        return (int) Address.fromLong(fdRef + 16L).loadLong();
     }
 
     /** IOUtil.setfdVal(fd, value). */
     static void setFdVal(long fdRef, long value)
     {
-        Magic.store64(fdRef + 16L, value);
+        Address.fromLong(fdRef + 16L).store(value);
     }
 
     /** Shared no-op for the void socket natives (UnixDispatcher.init/preClose0, IOUtil.initIDs,
@@ -2023,10 +2024,10 @@ final class VMNatives
             return;                                        // the boot-time force-compile calls this with 0; no-op
         }
         Uart.putc(0x0A);
-        long tib = Magic.load64(self);
+        long tib = Address.fromLong(self).loadLong();
         if (tib > 0x1000L)
         {
-            Loader.printClassName(Magic.load64(tib));      // TIB[0] = Type -> the exception's class name
+            Loader.printClassName(Address.fromLong(tib).loadLong());      // TIB[0] = Type -> the exception's class name
         }
         long msg = Loader.throwableMessage(self);          // Throwable.detailMessage, by name
         if (msg > 0x1000L)
@@ -2036,12 +2037,12 @@ final class VMNatives
         }
         Uart.putc(0x0A);
         long deep = Loader.throwableBacktrace(self);       // every frame, when there were more than eight
-        int n = deep != 0L ? Magic.load32(deep + ObjectModel.ARRAY_LENGTH_OFFSET) : 8;
+        int n = deep != 0L ? Address.fromLong(deep + ObjectModel.ARRAY_LENGTH_OFFSET).loadInt() : 8;
         int i = 0;
         while (i < n)
         {
-            long fpc = deep != 0L ? Magic.load64(deep + ObjectModel.ARRAY_BASE_OFFSET + i * 8L)
-                                  : Magic.load64(self + 16L + i * 8L);
+            long fpc = deep != 0L ? Address.fromLong(deep + ObjectModel.ARRAY_BASE_OFFSET + i * 8L).loadLong()
+                                  : Address.fromLong(self + 16L + i * 8L).loadLong();
             if (fpc == 0L)
             {
                 break;

@@ -12,6 +12,7 @@
 package vm;
 
 import board.bcm2711.Uart;
+import magic.Address;
 import magic.Magic;
 
 /**
@@ -106,10 +107,11 @@ public final class Console
         {
             n = len;
         }
+        Address dstA = Address.fromLong(dst);
         int i = 0;
         while (i < n)
         {
-            Magic.store8(dst + i, line[linePos + i]);
+            dstA.plus(i).store(line[linePos + i]);
             i += 1;
         }
         linePos += n;
