@@ -83,23 +83,36 @@ public class Thread implements Runnable, MetalThreadEntry
     /** The highest priority a thread may have. */
     public static final int MAX_PRIORITY = 10;
 
+    // Every public constructor goes through the full one, so each inherits the creator's InheritableThreadLocals as
+    // stock's do. These three used to set their fields directly and skip that copy: a child made with
+    // new Thread(Runnable) read null from every InheritableThreadLocal (test/jdk/junit/ItlInheritProbe).
+
     /** No-arg ctor: a Thread subclass overrides run() (its own body is the task); there is no separate target. */
     public Thread()
     {
-        inheritContextClassLoader();
+        this(null, null, null, 0L, true);
     }
 
     public Thread(Runnable r)
     {
-        target = r;
-        inheritContextClassLoader();
+        this(null, r, null, 0L, true);
     }
 
     public Thread(Runnable r, String threadName)
     {
-        target = r;
-        name = threadName;
-        inheritContextClassLoader();
+        this(null, r, threadName, 0L, true);
+    }
+
+    /** Stock's (group, task) form; the group is ignored, as in the full constructor. */
+    public Thread(ThreadGroup group, Runnable r)
+    {
+        this(group, r, null, 0L, true);
+    }
+
+    /** Stock's (group, name) form, for a subclass that supplies {@code run()}. */
+    public Thread(ThreadGroup group, String threadName)
+    {
+        this(group, null, threadName, 0L, true);
     }
 
     /**
@@ -234,6 +247,11 @@ public class Thread implements Runnable, MetalThreadEntry
         try
         {
             run();
+        }
+        catch (jdk.internal.misc.MetalRunExit.Exit e)
+        {
+            // The thread called System.exit inside a program run by another (MetalRunExit): it is over, which is
+            // what exit means, and not a fault -- a hosted JVM prints nothing for a thread that exits.
         }
         catch (Throwable e)
         {

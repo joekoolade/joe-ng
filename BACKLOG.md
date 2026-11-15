@@ -15,10 +15,11 @@ the item leaves this list; new findings that are not fixed on the spot come here
 
 ## Web server
 
-- **`System.exit` from a `/run` program halts the board (2026-11-14).** `Shutdown.halt0` spins in `wfe`, so the web
-  server is gone until a power cycle. Making it end only the run means a VM change to `halt0` during a run, and
-  stock `Shutdown` stays in its "hooks ran" state afterwards (later `addShutdownHook` throws) -- decide that first.
-  Also: the server is single-threaded, so it is busy until a run's main returns.
+- **The server is single-threaded (2026-11-14):** it is busy until a `/run` program's main returns, and a program
+  that never returns holds it for good. A run on its own thread with a deadline would free it, but a thread cannot
+  be stopped safely, so the program would go on running beside the next one.
+- **A `/run` thread other than main that calls `System.exit` ends only itself (2026-11-14):** main carries on to its
+  own end; the run reports the exit. There is no safe way to stop main from another thread.
 
 ## Collector
 

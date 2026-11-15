@@ -38,7 +38,8 @@ import java.util.List;
  *
  * <p>Both runs take {@code args=} (space-separated, URL-encoded) and {@code main=} (a class to run instead of the
  * jar's {@code Main-Class}) in the query, and answer {@code text/plain}: everything the program printed to
- * {@code System.out} and {@code System.err}, then a status line. 200 when {@code main} ran (returned or threw),
+ * {@code System.out} and {@code System.err}, then a status line. 200 when {@code main} ran (returned, threw, or
+ * called {@code System.exit}, which ends the run and not the board),
  * 422 when the program was refused before {@code main}, 502 when a download failed. Running a program is full
  * control of the board, so both need the {@code X-Boot-Token} the boot-file endpoints take.
  *
@@ -263,6 +264,10 @@ final class RunPage
         if (r.status == RunProgram.OK)
         {
             return "returned";
+        }
+        if (r.status == RunProgram.EXITED)
+        {
+            return "exit " + r.exitStatus;
         }
         return r.status == RunProgram.THREW ? "threw" : "not run";
     }

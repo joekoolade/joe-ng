@@ -27,7 +27,7 @@ import java.util.Arrays;
  * <p>The host control, on macOS:
  * <pre>
  *   rm -rf /private/tmp/fpw &amp;&amp; mkdir -p /private/tmp/fpw/tmp /private/tmp/fpw/boot
- *   cp -R ramfs/etc ramfs/data ramfs/lib ramfs/conf ramfs/plugins /private/tmp/fpw/
+ *   cp -R ramfs/etc ramfs/data ramfs/lib ramfs/conf ramfs/plugins ramfs/run /private/tmp/fpw/
  *   java -cp out FileProbe /private/tmp/fpw
  * </pre>
  * (the root must not pass through a symlink such as {@code /tmp}, or the canonical paths differ).
