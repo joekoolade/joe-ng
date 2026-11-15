@@ -4,6 +4,11 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **THE IMAGE NO LONGER BAKES macOS `.DS_Store` FILES (2026-11-14).** `BuildRuntimeImage.embedRamfs` skips them
+  (`isHostClutter`): Finder writes one into any folder it shows, and the one it left in `ramfs/` reached FileProbe's
+  root listing in the last full regression. With a `.DS_Store` put back in `ramfs/`, FileProbe passes and the image
+  holds no `.DS_Store` file entry (the one string left is `BootWriteDemo`'s own filter constant). `make test` passes.
+
 - **A `/run` PROGRAM CAN BE STOPPED: INTERRUPT, THEN A THROW AT ITS OWN LOOP HEADERS (2026-11-14).** Pi-validated
   (build 5d11ad63364fc070).
   - **`POST /run/<n>/stop?grace=<s>`** (token; the page has a Stop button): `RunProgram.stop` interrupts every
