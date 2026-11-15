@@ -20,6 +20,7 @@ import board.bcm2711.Reset;
 import board.bcm2711.Uart;
 import classfile.ClassReader;
 import compiler.Baseline;
+import magic.Address;
 import magic.Magic;
 import objectmodel.ObjectModel;
 
@@ -102,7 +103,7 @@ public final class VM
             Uart.write(Magic.bytes("    caller (saved LR at [sp]): "));
             if (sp0 >= 0x1000L)
             {
-                long up = Magic.load64(sp0);
+                long up = Address.fromLong(sp0).loadLong();
                 printHex(up);
                 Uart.putc(0x20);
                 Loader.reportMethodAt(up);
@@ -124,7 +125,7 @@ public final class VM
                     while (cw < up)
                     {
                         Uart.write(Magic.bytes(" 0x"));
-                        printHex(Magic.load32(cw) & 0xFFFFFFFFL);
+                        printHex(Address.fromLong(cw).loadInt() & 0xFFFFFFFFL);
                         cw += 4L;
                     }
                     Uart.putc(0x0A);
@@ -162,13 +163,13 @@ public final class VM
             Uart.write(Magic.bytes("\n    call site x30-4=0x"));
             printHex(src - 4L);
             Uart.write(Magic.bytes(" insn=0x"));
-            printHex(Magic.load32(src - 4L) & 0xFFFFFFFFL);
+            printHex(Address.fromLong(src).minus(4L).loadInt() & 0xFFFFFFFFL);
             Uart.write(Magic.bytes("\n    preceding: "));
             long w = src - 96L;
             while (w < src)
             {
                 Uart.write(Magic.bytes(" 0x"));
-                printHex(Magic.load32(w) & 0xFFFFFFFFL);
+                printHex(Address.fromLong(w).loadInt() & 0xFFFFFFFFL);
                 w += 4L;
             }
             // AND WHAT FOLLOWS. A hand-emitted thunk is identifiable by its shape: a lambda/method-ref
@@ -185,7 +186,7 @@ public final class VM
             long stop = src - 520L;
             while (p2 > stop)
             {
-                long insn = Magic.load32(p2) & 0xFFFFFFFFL;
+                long insn = Address.fromLong(p2).loadInt() & 0xFFFFFFFFL;
                 // MASKS MUST NOT KEEP THE VARIABLE FIELDS. The first cut of this scan kept `hw` in the movk
                 // mask and `Rn` in the ldr mask, so BOTH silently never matched and the scan reported only
                 // movz -- which read as "x16 is only ever set by an immediate", a conclusion the instrument
@@ -220,7 +221,7 @@ public final class VM
             long q = src - 8L;
             while (q > src - 520L)
             {
-                long i2 = Magic.load32(q) & 0xFFFFFFFFL;
+                long i2 = Address.fromLong(q).loadInt() & 0xFFFFFFFFL;
                 if (cbzAt == 0L && (i2 & 0xFF00001FL) == 0xB4000010L)     // cbz x16, <off>
                 {
                     cbzAt = q;
@@ -245,14 +246,14 @@ public final class VM
                 Uart.write(Magic.bytes("   slot load at -"));
                 VM.printDec((int) ((src - ldrAt) / 4L));
                 Uart.write(Magic.bytes(" slot#"));
-                VM.printDec((int) (((Magic.load32(ldrAt) >> 10) & 0xFFFL)));
+                VM.printDec((int) (((Address.fromLong(ldrAt).loadInt() >> 10) & 0xFFFL)));
             }
             Uart.write(Magic.bytes("\n    following:  "));
             w = src;
             while (w < src + 32L)
             {
                 Uart.write(Magic.bytes(" 0x"));
-                printHex(Magic.load32(w) & 0xFFFFFFFFL);
+                printHex(Address.fromLong(w).loadInt() & 0xFFFFFFFFL);
                 w += 4L;
             }
 
@@ -322,12 +323,12 @@ public final class VM
             long entry = table + i * 0x80L;                // 16 entries, 0x80 bytes apart
             if (i == 0 || i == 4)                          // synchronous exception (Current EL SP0 / SPx): the sync
             {                                              // faults (data/instruction abort) -> a Java exception.
-                Magic.store32(entry, A64Enc.movFromSp(0)); // mov x0, sp (the faulting SP -- raw, no frame here)
-                Magic.store32(entry + 4L, A64Enc.bl((int) ((throwFromFaultAddr - (entry + 4L)) / 4L)));  // throwFromFault(sp)
+                Address.fromLong(entry).store(A64Enc.movFromSp(0)); // mov x0, sp (the faulting SP -- raw, no frame here)
+                Address.fromLong(entry).plus(4L).store(A64Enc.bl((int) ((throwFromFaultAddr - (entry + 4L)) / 4L)));  // throwFromFault(sp)
             }
             else
             {
-                Magic.store32(entry, A64Enc.b((int) ((reportFaultAddr - entry) / 4L)));   // IRQ/FIQ/SError -> report+halt
+                Address.fromLong(entry).store(A64Enc.b((int) ((reportFaultAddr - entry) / 4L)));   // IRQ/FIQ/SError -> report+halt
             }
             i += 1;
         }
@@ -375,37 +376,38 @@ public final class VM
         // raw+8 (the size header) when raw is only 8-aligned, and the stub's first instruction would
         // clobber it -- leaving a heap block the GC sweep reads as a bogus size and walks off of.
         long stub = (raw + (long) ObjectModel.HEADER_SIZE + 0xFL) & ~0xFL;
+        Address stubAt = Address.fromLong(stub);              // 32-bit instruction-word stores below
         int w = 0;
-        Magic.store32(stub + w * 4L, A64Enc.subImm(31, 31, 256));
+        stubAt.plus(w * 4L).store(A64Enc.subImm(31, 31, 256));
         w += 1;
         int r = 0;
         while (r <= 30)
         {
-            Magic.store32(stub + w * 4L, A64Enc.strx(r, 31, r * 8));
+            stubAt.plus(w * 4L).store(A64Enc.strx(r, 31, r * 8));
             w += 1;
             r += 1;
         }
         long blAddr = stub + w * 4L;
-        Magic.store32(blAddr, A64Enc.bl((int) ((irqHandlerAddr - blAddr) / 4L)));
+        Address.fromLong(blAddr).store(A64Enc.bl((int) ((irqHandlerAddr - blAddr) / 4L)));
         w += 1;
         r = 0;
         while (r <= 30)
         {
-            Magic.store32(stub + w * 4L, A64Enc.ldrx(r, 31, r * 8));
+            stubAt.plus(w * 4L).store(A64Enc.ldrx(r, 31, r * 8));
             w += 1;
             r += 1;
         }
-        Magic.store32(stub + w * 4L, A64Enc.addImm(31, 31, 256));
+        stubAt.plus(w * 4L).store(A64Enc.addImm(31, 31, 256));
         w += 1;
-        Magic.store32(stub + w * 4L, A64Enc.eret());
+        stubAt.plus(w * 4L).store(A64Enc.eret());
         w += 1;
         Heap.publishCode(stub, stub + w * 4L);
         // Route both the IRQ (entry 5, +0x280) and FIQ (entry 6, +0x300) vectors of "Current EL with
         // SPx" to the stub -- QEMU's single-security-state GICv2 may signal group-0 as FIQ.
         long e5 = vbarBase + 5L * 0x80L;
-        Magic.store32(e5, A64Enc.b((int) ((stub - e5) / 4L)));
+        Address.fromLong(e5).store(A64Enc.b((int) ((stub - e5) / 4L)));
         long e6 = vbarBase + 6L * 0x80L;
-        Magic.store32(e6, A64Enc.b((int) ((stub - e6) / 4L)));
+        Address.fromLong(e6).store(A64Enc.b((int) ((stub - e6) / 4L)));
         Heap.publishCode(e5, e6 + 4L);
         Magic.isb();
 
@@ -997,7 +999,7 @@ public final class VM
         }
         // The scheduler's lock word is raw scratch RAM, not a Java field: nothing zeroed it, and spinLock
         // spins while it is non-zero. Leave it and the first schedLock() on hardware never returns.
-        Magic.store32(SCHED_LOCK, 0);                       // 0 = free
+        Address.fromLong(SCHED_LOCK).store(0);                       // 0 = free
         taskState[0] = TASK_READY;
         taskCore[0] = 0;                                    // the boot flow never leaves core 0
         taskCount = 1;
@@ -1286,16 +1288,16 @@ public final class VM
         // A byte[] is itself; a java/lang/String yields its value field (@16). A byte[]'s header @0 is either a
         // small raw element size (VM-internal buffers) or a pointer to an array TIB whose Type is tagged; a
         // String's @0 is a class TIB (Type not tagged).
-        long tib = Magic.load64(ref + 0L);
+        long tib = Address.fromLong(ref).loadLong();
         if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
         {
             return ref;                                 // raw byte[] (element size in @0)
         }
-        if ((Magic.load64(Magic.load64(tib)) & ObjectModel.ARRAY_TYPE_TAG_MASK) == ObjectModel.ARRAY_TYPE_TAG)
+        if ((Address.fromLong(tib).loadAddress().loadLong() & ObjectModel.ARRAY_TYPE_TAG_MASK) == ObjectModel.ARRAY_TYPE_TAG)
         {
             return ref;                                 // typed byte[] (TIB[0]=array Type, Type[0] tagged)
         }
-        return Magic.load64(ref + 16L);                 // a String object -> value field
+        return Address.fromLong(ref).plus(16L).loadLong();                 // a String object -> value field
     }
 
     /**
@@ -1321,13 +1323,13 @@ public final class VM
      */
     static boolean isStringLike(long ref)
     {
-        long tib = Magic.load64(ref + 0L);
+        long tib = Address.fromLong(ref).loadLong();
         if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
         {
             return true;                                // raw byte[] (element size in @0)
         }
-        long type = Magic.load64(tib);                  // TIB[0] = Type
-        if ((Magic.load64(type) & ObjectModel.ARRAY_TYPE_TAG_MASK) == ObjectModel.ARRAY_TYPE_TAG)
+        long type = Address.fromLong(tib).loadLong();                  // TIB[0] = Type
+        if ((Address.fromLong(type).loadLong() & ObjectModel.ARRAY_TYPE_TAG_MASK) == ObjectModel.ARRAY_TYPE_TAG)
         {
             return true;                                // a typed array
         }
@@ -1385,7 +1387,7 @@ public final class VM
         if (v >= Heap.BASE && v < Heap.managedTop() && (v & 7L) == 0L)
         {
             Uart.write(Magic.bytes(" field0="));
-            printHex(Magic.load64(v + 16L));
+            printHex(Address.fromLong(v).plus(16L).loadLong());
         }
         Uart.putc((byte) 0x0A);
     }
@@ -1403,7 +1405,7 @@ public final class VM
         if (v >= Heap.BASE && v < Heap.managedTop() && (v & 7L) == 0L)
         {
             Uart.write(Magic.bytes(" field0="));
-            printHex(Magic.load64(v + 16L));
+            printHex(Address.fromLong(v).plus(16L).loadLong());
         }
         Uart.putc((byte) 0x0A);
     }
@@ -1516,7 +1518,7 @@ public final class VM
             }
             t += 1;
         }
-        Magic.store64(Heap.STOP_CELL, n);
+        Address.fromLong(Heap.STOP_CELL).store(n);
         Magic.dsb();
     }
 
@@ -1548,7 +1550,7 @@ public final class VM
         {
             return 1;
         }
-        if (Magic.load64(ref) <= ObjectModel.MAX_RAW_ARRAY_TIB && isArrayType(targetType))
+        if (Address.fromLong(ref).loadLong() <= ObjectModel.MAX_RAW_ARRAY_TIB && isArrayType(targetType))
         {
             return 1;      // a RAW array (no Type node) cast to an array class: trust the verifier, as checkCast does
         }
@@ -1803,12 +1805,12 @@ public final class VM
         {
             return 1;                                      // null stores are always allowed
         }
-        long tib = Magic.load64(array);
+        long tib = Address.fromLong(array).loadLong();
         if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
         {
             return 1;                                      // untyped/raw array (no element Type to check against)
         }
-        long elemType = Magic.load64(Magic.load64(tib) + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET);
+        long elemType = Address.fromLong(tib).loadAddress().plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong();
         if (elemType == 0L)
         {
             return 1;                                      // primitive-element array (shouldn't reach aastore) / unknown
@@ -1850,11 +1852,11 @@ public final class VM
     static void printStr(long ref)
     {
         long arr = strBytes(ref);
-        long len = Magic.load64(arr + 16L);
+        long len = Address.fromLong(arr).plus(16L).loadLong();
         long i = 0L;
         while (i < len)
         {
-            Uart.putc((byte) Magic.load8(arr + 24L + i));
+            Uart.putc((byte) Address.fromLong(arr).plus(24L + i).loadUnsignedByte());
             i = i + 1L;
         }
     }
@@ -1883,42 +1885,43 @@ public final class VM
             int q = 0;
             while (q < 4)
             {
-                Magic.store64(coreLeavingAddr + q * 8L, 0L);
+                Address.fromLong(coreLeavingAddr).plus(q * 8L).store(0L);
                 q += 1;
             }
         }
         long raw = Heap.allocCode(0x400);
         long stub = (raw + (long) ObjectModel.HEADER_SIZE + 0xFL) & ~0xFL;   // 16-byte-aligned code start
+        Address stubAt = Address.fromLong(stub);              // 32-bit instruction-word stores below
         int w = 0;
-        Magic.store32(stub + w * 4L, A64Enc.subImm(31, 31, (int) SCHED_FRAME)); w += 1;   // sub sp, #272
+        stubAt.plus(w * 4L).store(A64Enc.subImm(31, 31, (int) SCHED_FRAME)); w += 1;   // sub sp, #272
         int r = 0;
         while (r <= 30)                                    // save x0..x30
         {
-            Magic.store32(stub + w * 4L, A64Enc.strx(r, 31, r * 8)); w += 1;
+            stubAt.plus(w * 4L).store(A64Enc.strx(r, 31, r * 8)); w += 1;
             r += 1;
         }
-        Magic.store32(stub + w * 4L, A64Enc.mrs(9, A64Enc.ELR_EL1));   w += 1;
-        Magic.store32(stub + w * 4L, A64Enc.strx(9, 31, 248));         w += 1;   // save ELR_EL1
-        Magic.store32(stub + w * 4L, A64Enc.mrs(9, A64Enc.SPSR_EL1));  w += 1;
-        Magic.store32(stub + w * 4L, A64Enc.strx(9, 31, 256));         w += 1;   // save SPSR_EL1
+        stubAt.plus(w * 4L).store(A64Enc.mrs(9, A64Enc.ELR_EL1));   w += 1;
+        stubAt.plus(w * 4L).store(A64Enc.strx(9, 31, 248));         w += 1;   // save ELR_EL1
+        stubAt.plus(w * 4L).store(A64Enc.mrs(9, A64Enc.SPSR_EL1));  w += 1;
+        stubAt.plus(w * 4L).store(A64Enc.strx(9, 31, 256));         w += 1;   // save SPSR_EL1
         if (svcCheck)
         {
-            Magic.store32(stub + w * 4L, A64Enc.mrs(9, A64Enc.ESR_EL1)); w += 1;
-            Magic.store32(stub + w * 4L, A64Enc.lsrImm(9, 9, 26));       w += 1; // x9 = ESR.EC
-            Magic.store32(stub + w * 4L, A64Enc.cmpImm(9, 0x15));        w += 1; // SVC from AArch64?
-            Magic.store32(stub + w * 4L, A64Enc.bcond(0, 3));           w += 1;  // b.eq +3: SVC -> skip the 2-insn fault path
+            stubAt.plus(w * 4L).store(A64Enc.mrs(9, A64Enc.ESR_EL1)); w += 1;
+            stubAt.plus(w * 4L).store(A64Enc.lsrImm(9, 9, 26));       w += 1; // x9 = ESR.EC
+            stubAt.plus(w * 4L).store(A64Enc.cmpImm(9, 0x15));        w += 1; // SVC from AArch64?
+            stubAt.plus(w * 4L).store(A64Enc.bcond(0, 3));           w += 1;  // b.eq +3: SVC -> skip the 2-insn fault path
             // else (a real fault): hand it to throwFromFault(faultingSp) -> a Java exception at the faulting PC.
             // The stub already did `sub sp, #SCHED_FRAME` + saved the regs, so undo that to recover the faulting SP.
             long faultAt = stub + w * 4L;
-            Magic.store32(faultAt, A64Enc.addImm(0, 31, (int) SCHED_FRAME));   w += 1;   // x0 = faulting SP
+            Address.fromLong(faultAt).store(A64Enc.addImm(0, 31, (int) SCHED_FRAME));   w += 1;   // x0 = faulting SP
             long blFault = stub + w * 4L;
-            Magic.store32(blFault, A64Enc.bl((int) ((throwFromFaultAddr - blFault) / 4L))); w += 1;   // throwFromFault(sp)
+            Address.fromLong(blFault).store(A64Enc.bl((int) ((throwFromFaultAddr - blFault) / 4L))); w += 1;   // throwFromFault(sp)
         }
-        Magic.store32(stub + w * 4L, A64Enc.movFromSp(0));            w += 1;    // mov x0, sp (curSp)
+        stubAt.plus(w * 4L).store(A64Enc.movFromSp(0));            w += 1;    // mov x0, sp (curSp)
         long blAddr = stub + w * 4L;
-        Magic.store32(blAddr, A64Enc.bl((int) ((pickAddr - blAddr) / 4L)));      // x0 = pick(x0)
+        Address.fromLong(blAddr).store(A64Enc.bl((int) ((pickAddr - blAddr) / 4L)));      // x0 = pick(x0)
         w += 1;
-        Magic.store32(stub + w * 4L, A64Enc.movToSp(0));             w += 1;    // mov sp, x0 (next task)
+        stubAt.plus(w * 4L).store(A64Enc.movToSp(0));             w += 1;    // mov sp, x0 (next task)
         // OFF THE OLD STACK NOW -- only now may another core claim the task this core just left. pickNext
         // released SCHED_LOCK while this core was still ON that task's stack: schedUnlock's call pushed a frame
         // below its saved SP, and the pick/yield epilogues read their frames back from there. A second core
@@ -1928,26 +1931,26 @@ public final class VM
         // in Baseline.compileBody). So pickNext marks the task LEAVING (coreLeaving[core] = task+1), claimable
         // refuses it, and the mark is cleared HERE -- after a barrier, so every load and store this core made
         // to the old stack is complete before another core can see the task free. x9/x10 are restored below.
-        Magic.store32(stub + w * 4L, A64Enc.mrs(9, A64Enc.MPIDR_EL1)); w += 1;
-        Magic.store32(stub + w * 4L, A64Enc.andLowBits(9, 9, 2));     w += 1;    // x9 = core id (Aff0, 0..3)
-        Magic.store32(stub + w * 4L, A64Enc.movz(10, (int) (coreLeavingAddr & 0xFFFF), 0));         w += 1;
-        Magic.store32(stub + w * 4L, A64Enc.movk(10, (int) ((coreLeavingAddr >> 16) & 0xFFFF), 1)); w += 1;
-        Magic.store32(stub + w * 4L, A64Enc.movk(10, (int) ((coreLeavingAddr >> 32) & 0xFFFF), 2)); w += 1;
-        Magic.store32(stub + w * 4L, A64Enc.addRegLsl(10, 10, 9, 3)); w += 1;    // x10 = &coreLeaving[core]
-        Magic.store32(stub + w * 4L, A64Enc.dmbIsh());                w += 1;
-        Magic.store32(stub + w * 4L, A64Enc.strx(31, 10, 0));         w += 1;    // coreLeaving[core] = 0 (xzr)
-        Magic.store32(stub + w * 4L, A64Enc.ldrx(9, 31, 248));       w += 1;
-        Magic.store32(stub + w * 4L, A64Enc.msr(A64Enc.ELR_EL1, 9)); w += 1;    // restore ELR_EL1
-        Magic.store32(stub + w * 4L, A64Enc.ldrx(9, 31, 256));       w += 1;
-        Magic.store32(stub + w * 4L, A64Enc.msr(A64Enc.SPSR_EL1, 9)); w += 1;   // restore SPSR_EL1
+        stubAt.plus(w * 4L).store(A64Enc.mrs(9, A64Enc.MPIDR_EL1)); w += 1;
+        stubAt.plus(w * 4L).store(A64Enc.andLowBits(9, 9, 2));     w += 1;    // x9 = core id (Aff0, 0..3)
+        stubAt.plus(w * 4L).store(A64Enc.movz(10, (int) (coreLeavingAddr & 0xFFFF), 0));         w += 1;
+        stubAt.plus(w * 4L).store(A64Enc.movk(10, (int) ((coreLeavingAddr >> 16) & 0xFFFF), 1)); w += 1;
+        stubAt.plus(w * 4L).store(A64Enc.movk(10, (int) ((coreLeavingAddr >> 32) & 0xFFFF), 2)); w += 1;
+        stubAt.plus(w * 4L).store(A64Enc.addRegLsl(10, 10, 9, 3)); w += 1;    // x10 = &coreLeaving[core]
+        stubAt.plus(w * 4L).store(A64Enc.dmbIsh());                w += 1;
+        stubAt.plus(w * 4L).store(A64Enc.strx(31, 10, 0));         w += 1;    // coreLeaving[core] = 0 (xzr)
+        stubAt.plus(w * 4L).store(A64Enc.ldrx(9, 31, 248));       w += 1;
+        stubAt.plus(w * 4L).store(A64Enc.msr(A64Enc.ELR_EL1, 9)); w += 1;    // restore ELR_EL1
+        stubAt.plus(w * 4L).store(A64Enc.ldrx(9, 31, 256));       w += 1;
+        stubAt.plus(w * 4L).store(A64Enc.msr(A64Enc.SPSR_EL1, 9)); w += 1;   // restore SPSR_EL1
         r = 0;
         while (r <= 30)                                    // restore x0..x30 (x9 last)
         {
-            Magic.store32(stub + w * 4L, A64Enc.ldrx(r, 31, r * 8)); w += 1;
+            stubAt.plus(w * 4L).store(A64Enc.ldrx(r, 31, r * 8)); w += 1;
             r += 1;
         }
-        Magic.store32(stub + w * 4L, A64Enc.addImm(31, 31, (int) SCHED_FRAME)); w += 1;   // add sp, #272
-        Magic.store32(stub + w * 4L, A64Enc.eret());                w += 1;
+        stubAt.plus(w * 4L).store(A64Enc.addImm(31, 31, (int) SCHED_FRAME)); w += 1;   // add sp, #272
+        stubAt.plus(w * 4L).store(A64Enc.eret());                w += 1;
         Heap.publishCode(stub, stub + w * 4L);
         return stub;
     }
@@ -1967,11 +1970,11 @@ public final class VM
         long irqStub = buildSwitchStub(scheduleAddr, false);
         long svcStub = buildSwitchStub(yieldPickAddr, true);
         long e4 = vbarBase + 4L * 0x80L;                   // synchronous (Current EL, SPx) -> SVC/yield
-        Magic.store32(e4, A64Enc.b((int) ((svcStub - e4) / 4L)));
+        Address.fromLong(e4).store(A64Enc.b((int) ((svcStub - e4) / 4L)));
         long e5 = vbarBase + 5L * 0x80L;                   // IRQ (Current EL, SPx)
-        Magic.store32(e5, A64Enc.b((int) ((irqStub - e5) / 4L)));
+        Address.fromLong(e5).store(A64Enc.b((int) ((irqStub - e5) / 4L)));
         long e6 = vbarBase + 6L * 0x80L;                   // FIQ
-        Magic.store32(e6, A64Enc.b((int) ((irqStub - e6) / 4L)));
+        Address.fromLong(e6).store(A64Enc.b((int) ((irqStub - e6) / 4L)));
         Heap.publishCode(e4, e6 + 4L);
         Magic.isb();
     }
@@ -2272,11 +2275,11 @@ public final class VM
         while (i < (int) fileCount)
         {
             long e = fileDir + i * 32L;
-            if (Magic.load64(e + 8L) == (long) len)
+            if (Address.fromLong(e).plus(8L).loadLong() == (long) len)
             {
-                long na = Magic.load64(e);
+                long na = Address.fromLong(e).loadLong();
                 int k = 0;
-                while (k < len && (Magic.load8(na + k) & 0xFF) == (path[k] & 0xFF))
+                while (k < len && (Address.fromLong(na).plus(k).loadUnsignedByte() & 0xFF) == (path[k] & 0xFF))
                 {
                     k += 1;
                 }
@@ -2299,29 +2302,29 @@ public final class VM
         {
             int k = 0;
             int j = i;
-            while (k < key.length && j < flen && (Magic.load8(conf + j) & 0xFF) == (key[k] & 0xFF))
+            while (k < key.length && j < flen && (Address.fromLong(conf).plus(j).loadUnsignedByte() & 0xFF) == (key[k] & 0xFF))
             {
                 k += 1;
                 j += 1;
             }
-            if (k == key.length && j < flen && (Magic.load8(conf + j) & 0xFF) == 0x3D)   // "key="
+            if (k == key.length && j < flen && (Address.fromLong(conf).plus(j).loadUnsignedByte() & 0xFF) == 0x3D)   // "key="
             {
                 j += 1;
                 int n = 0;
                 while (j < flen && n < max)
                 {
-                    int c = Magic.load8(conf + j) & 0xFF;
+                    int c = Address.fromLong(conf).plus(j).loadUnsignedByte() & 0xFF;
                     if (c == 0x0A || c == 0x0D || c == 0)
                     {
                         break;
                     }
-                    Magic.store8(dst + n, c);
+                    Address.fromLong(dst).plus(n).store((byte) c);
                     n += 1;
                     j += 1;
                 }
                 return n;
             }
-            while (i < flen && (Magic.load8(conf + i) & 0xFF) != 0x0A)   // skip to the next line
+            while (i < flen && (Address.fromLong(conf).plus(i).loadUnsignedByte() & 0xFF) != 0x0A)   // skip to the next line
             {
                 i += 1;
             }
@@ -2337,7 +2340,7 @@ public final class VM
         int i = 0;
         while (i < len)
         {
-            b[i] = (byte) Magic.load8(addr + i);
+            b[i] = (byte) Address.fromLong(addr).plus(i).loadUnsignedByte();
             i += 1;
         }
         return b;
@@ -2356,8 +2359,8 @@ public final class VM
         {
             return false;
         }
-        long conf = Magic.load64(e + 16L);
-        int flen = (int) Magic.load64(e + 24L);
+        long conf = Address.fromLong(e).plus(16L).loadLong();
+        int flen = (int) Address.fromLong(e).plus(24L).loadLong();
         // Every value buffer is sized by the FILE, which bounds any line in it. They were fixed at 120 / 250
         // bytes and manifestValue stops at its max without a word, so a long line was cut SILENTLY: a
         // 279-byte `args=` of JUnit classes arrived as "... CloseWrappedSt" (CANNOT LOAD), and the class after
@@ -2427,8 +2430,8 @@ public final class VM
     {
         long v = Heap.allocData(16);
         int n = manifestValue(conf, flen, Magic.bytes("stdin"), v, 8);
-        if (n == 4 && Magic.load8(v) == 0x75 && Magic.load8(v + 1L) == 0x61 && Magic.load8(v + 2L) == 0x72
-                && Magic.load8(v + 3L) == 0x74)            // "uart"
+        if (n == 4 && Address.fromLong(v).loadUnsignedByte() == 0x75 && Address.fromLong(v).plus(1L).loadUnsignedByte() == 0x61 && Address.fromLong(v).plus(2L).loadUnsignedByte() == 0x72
+                && Address.fromLong(v).plus(3L).loadUnsignedByte() == 0x74)            // "uart"
         {
             Console.stdinOn = 1;
             Uart.write(Magic.bytes("stdin: uart\n"));
@@ -2443,7 +2446,7 @@ public final class VM
         int i = 0;
         while (i < n)
         {
-            int c = Magic.load8(v + i) & 0xFF;
+            int c = Address.fromLong(v).plus(i).loadUnsignedByte() & 0xFF;
             if (c < 0x30 || c > 0x39)
             {
                 break;
@@ -2455,7 +2458,7 @@ public final class VM
         {
             return;
         }
-        Magic.store32(HANG_LOCK, 0);                       // raw scratch RAM: free before any core can take it
+        Address.fromLong(HANG_LOCK).store(0);                       // raw scratch RAM: free before any core can take it
         hangDumpCores = 0;
         Magic.dsb();
         hangDumpAt = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * secs;
@@ -2473,11 +2476,11 @@ public final class VM
         {
             return false;
         }
-        long conf = Magic.load64(e + 16L);
-        int flen = (int) Magic.load64(e + 24L);
+        long conf = Address.fromLong(e).plus(16L).loadLong();
+        int flen = (int) Address.fromLong(e).plus(24L).loadLong();
         long v = Heap.allocData(16);
         int n = manifestValue(conf, flen, Magic.bytes("net"), v, 8);
-        return n >= 1 && (Magic.load8(v) & 0xFF) == 0x31;   // "1"
+        return n >= 1 && (Address.fromLong(v).loadUnsignedByte() & 0xFF) == 0x31;   // "1"
     }
 
     /**
@@ -2497,8 +2500,8 @@ public final class VM
         {
             return false;                                  // no manifest: the demo suite runs its own SMP phases
         }
-        long conf = Magic.load64(e + 16L);
-        int flen = (int) Magic.load64(e + 24L);
+        long conf = Address.fromLong(e).plus(16L).loadLong();
+        int flen = (int) Address.fromLong(e).plus(24L).loadLong();
         long v = Heap.allocData(256);
         // ... and neither does an EMPTY manifest, which is exactly how the no-manifest suite image is built:
         // the file exists, so fileFind succeeds, and only `smp=` was ever consulted. That handed cores 1-3 to
@@ -2510,7 +2513,7 @@ public final class VM
             return false;
         }
         int n = manifestValue(conf, flen, Magic.bytes("smp"), v, 8);
-        return n < 1 || (Magic.load8(v) & 0xFF) != 0x30;    // absent = on; "0" = off
+        return n < 1 || (Address.fromLong(v).loadUnsignedByte() & 0xFF) != 0x30;    // absent = on; "0" = off
     }
 
 
@@ -2570,12 +2573,12 @@ public final class VM
         printHex(rcv);
         if (rcv > 0x1000L && rcv < 0x40000000L)                // plausible heap object: dump TIB and Type
         {
-            long tib = Magic.load64(rcv);
+            long tib = Address.fromLong(rcv).loadLong();
             Uart.write(Magic.bytes(" tib="));
             printHex(tib);
             if (tib > 0x1000L && tib < 0x40000000L)
             {
-                long type = Magic.load64(tib);                 // TIB[0] = Type
+                long type = Address.fromLong(tib).loadLong();                 // TIB[0] = Type
                 Uart.write(Magic.bytes(" type="));
                 printHex(type);
                 Loader.reportClassOfType(type);
@@ -2644,7 +2647,7 @@ public final class VM
             }
             exc = newInternalError();
         }
-        if (exc <= 0x1000L || Magic.load64(exc) == 0L)                  // exception class not loaded (TIB 0): can't
+        if (exc <= 0x1000L || Address.fromLong(exc).loadLong() == 0L)                  // exception class not loaded (TIB 0): can't
         {                                                              // throw without re-faulting inside unwind ->
             reportFaultStack(elr, sp);                                 // ... but say WHERE first: the leaf alone
             reportFault();                                             // print the raw fault + halt (never returns)
@@ -2687,12 +2690,12 @@ public final class VM
     {
         long[] s = new long[8];
         long b = Magic.addrOf(s) + 24L;                    // array elements (header 16 + length 8)
-        Magic.store64(b, str);
+        Address.fromLong(b).store(str);
         long n = Magic.callN(stringLengthAddr, b);
         for (int i = 0; i < (int) n; i++)
         {
-            Magic.store64(b, str);
-            Magic.store64(b + 8L, i);
+            Address.fromLong(b).store(str);
+            Address.fromLong(b).plus(8L).store((long) i);
             Uart.putc((int) Magic.callN(stringCharAtAddr, b));
         }
     }
@@ -2728,7 +2731,7 @@ public final class VM
             }
         }
         long e = bakeStubTable + (long) idx * 32L;
-        long memo = Magic.load64(e + 24L);
+        long memo = Address.fromLong(e).plus(24L).loadLong();
         if (memo != 0L)
         {
             return memo;
@@ -2737,8 +2740,8 @@ public final class VM
         long buf;
         try
         {
-            buf = Loader.resolveBakeStub(Magic.load64(e), Magic.load64(e + 8L), Magic.load64(e + 16L));
-            Magic.store64(e + 24L, buf);
+            buf = Loader.resolveBakeStub(Address.fromLong(e).loadLong(), Address.fromLong(e).plus(8L).loadLong(), Address.fromLong(e).plus(16L).loadLong());
+            Address.fromLong(e).plus(24L).store(buf);
         }
         finally
         {
@@ -2773,7 +2776,7 @@ public final class VM
         faultRegs[base + 33] = loaderOwner;             //   in the parser while another task owns it is a lock bug
         faultRegs[base + 34] = Loader.gbaseForReport();
         long save = sp - SCHED_FRAME;
-        if (Magic.load64(save + 248L) != elr)
+        if (Address.fromLong(save).plus(248L).loadLong() != elr)
         {
             faultRegs[base + 31] = 0L;
             return;
@@ -2781,7 +2784,7 @@ public final class VM
         int r = 0;
         while (r <= 30)
         {
-            faultRegs[base + r] = Magic.load64(save + r * 8L);
+            faultRegs[base + r] = Address.fromLong(save).plus(r * 8L).loadLong();
             r += 1;
         }
         faultRegs[base + 31] = 1L;
@@ -2989,7 +2992,7 @@ public final class VM
             {
                 break;                                         // top of the JIT/image stack
             }
-            cpc = Magic.load64(csp) - 4L;                      // caller's return address (the call site)
+            cpc = Address.fromLong(csp).loadLong() - 4L;                      // caller's return address (the call site)
             csp += fs;
             depth += 1;
         }
@@ -3046,7 +3049,7 @@ public final class VM
         int i = 0;
         while (i < 128 && shown < 12)
         {
-            long w = Magic.load64(p);
+            long w = Address.fromLong(p).loadLong();
             if (Loader.plausibleCode(w) || (w >= 0x80000L && w < Heap.IMAGE_CEILING))
             {
                 Uart.write(Magic.bytes("  [sp+"));
@@ -3086,7 +3089,7 @@ public final class VM
                 Uart.write(Magic.bytes("  <frameless: caller unknown>"));
                 break;                                     // a leaf keeps its return address in x30, which the
             }                                              //   sync vector's own bl has already overwritten
-            cpc = Magic.load64(csp) - 4L;                  // caller's return address = the call site
+            cpc = Address.fromLong(csp).loadLong() - 4L;                  // caller's return address = the call site
             csp += fs;
             depth += 1;
         }
@@ -3171,19 +3174,19 @@ public final class VM
         {
             return 0;    // null is never an instance
         }
-        long tib = Magic.load64(ref);                  // header→TIB (@0)
+        long tib = Address.fromLong(ref).loadLong();                  // header→TIB (@0)
         if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
         {
             return 0;    // a raw array (element size in @0, no Type): not an instance of any class/interface type
         }
-        long type = Magic.load64(tib);                 // TIB→Type (@0); for a typed array, the array Type
+        long type = Address.fromLong(tib).loadLong();                 // TIB→Type (@0); for a typed array, the array Type
         return typeAssignable(type, targetType) ? 1 : 0;
     }
 
     /** True if an array Type (its instanceSize slot carries the tag). */
     private static boolean isArrayType(long type)
     {
-        return (Magic.load64(type) & ObjectModel.ARRAY_TYPE_TAG_MASK) == ObjectModel.ARRAY_TYPE_TAG;
+        return (Address.fromLong(type).loadLong() & ObjectModel.ARRAY_TYPE_TAG_MASK) == ObjectModel.ARRAY_TYPE_TAG;
     }
 
     /**
@@ -3226,8 +3229,8 @@ public final class VM
     {
         if (type != targetType && targetType != 0L && isArrayType(type) && isArrayType(targetType))
         {
-            long elemType = Magic.load64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET);
-            long elemTarget = Magic.load64(targetType + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET);
+            long elemType = Address.fromLong(type).plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong();
+            long elemTarget = Address.fromLong(targetType).plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong();
             if (elemType != 0L && elemTarget != 0L)    // both reference-element arrays: covariant on the element
             {
                 if (typeAssignable(elemType, elemTarget))
@@ -3267,16 +3270,16 @@ public final class VM
         // handled by the walk below; a Type without a display (lambda, self-build) also falls back.
         if (targetType != 0L)
         {
-            long tDisp = Magic.load64(targetType + ObjectModel.TYPE_DISPLAY_OFFSET);
-            long disp = Magic.load64(type + ObjectModel.TYPE_DISPLAY_OFFSET);
+            long tDisp = Address.fromLong(targetType).plus(ObjectModel.TYPE_DISPLAY_OFFSET).loadLong();
+            long disp = Address.fromLong(type).plus(ObjectModel.TYPE_DISPLAY_OFFSET).loadLong();
             if (tDisp != 0L && disp != 0L)
             {
-                long tDepth = Magic.load64(targetType + ObjectModel.TYPE_DEPTH_OFFSET);
-                if (Magic.load64(type + ObjectModel.TYPE_DEPTH_OFFSET) < tDepth)
+                long tDepth = Address.fromLong(targetType).plus(ObjectModel.TYPE_DEPTH_OFFSET).loadLong();
+                if (Address.fromLong(type).plus(ObjectModel.TYPE_DEPTH_OFFSET).loadLong() < tDepth)
                 {
                     return false;
                 }
-                return Magic.load64(disp + tDepth * 8L) == targetType;
+                return Address.fromLong(disp).plus(tDepth * 8L).loadLong() == targetType;
             }
             // O(1) interface fast path: a NUMBERED interface target (depth -1, ID 1..127) against a
             // receiver with a COMPUTED doesImplement bitmap is one bit test. Unnumbered interfaces
@@ -3293,18 +3296,18 @@ public final class VM
             {
                 return true;
             }
-            if (tDisp == 0L && Magic.load64(targetType + ObjectModel.TYPE_DEPTH_OFFSET) == -1L
-                    && Magic.load64(type + ObjectModel.TYPE_DEPTH_OFFSET) != -1L)
+            if (tDisp == 0L && Address.fromLong(targetType).plus(ObjectModel.TYPE_DEPTH_OFFSET).loadLong() == -1L
+                    && Address.fromLong(type).plus(ObjectModel.TYPE_DEPTH_OFFSET).loadLong() != -1L)
             {
-                long id = Magic.load64(targetType + ObjectModel.TYPE_IMPLEMENTS_OFFSET);
-                long b0 = Magic.load64(type + ObjectModel.TYPE_IMPLEMENTS_OFFSET);
+                long id = Address.fromLong(targetType).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).loadLong();
+                long b0 = Address.fromLong(type).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).loadLong();
                 if (id > 0L && id < 128L && (b0 & 1L) != 0L)
                 {
                     if (id < 64L)
                     {
                         return ((b0 >>> (int) id) & 1L) != 0L;
                     }
-                    long b1 = Magic.load64(type + ObjectModel.TYPE_IMPLEMENTS_OFFSET + 8L);
+                    long b1 = Address.fromLong(type).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET + 8L).loadLong();
                     return ((b1 >>> (int) (id - 64L)) & 1L) != 0L;
                 }
             }
@@ -3315,11 +3318,11 @@ public final class VM
             {
                 return true;
             }
-            long dir = Magic.load64(type + ObjectModel.TYPE_ITABLE_DIR_OFFSET);
+            long dir = Address.fromLong(type).plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).loadLong();
             if (dir != 0L)
             {
                 long entry = dir;
-                long iface = Magic.load64(entry + ObjectModel.ITABLE_ENTRY_IFACE_OFFSET);
+                long iface = Address.fromLong(entry).plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadLong();
                 while (iface != 0L)                    // 0 interfaceType terminates the directory
                 {
                     if (iface == targetType)
@@ -3327,10 +3330,10 @@ public final class VM
                         return true;
                     }
                     entry += ObjectModel.ITABLE_ENTRY_SIZE;
-                    iface = Magic.load64(entry + ObjectModel.ITABLE_ENTRY_IFACE_OFFSET);
+                    iface = Address.fromLong(entry).plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadLong();
                 }
             }
-            type = Magic.load64(type + ObjectModel.TYPE_SUPER_OFFSET);
+            type = Address.fromLong(type).plus(ObjectModel.TYPE_SUPER_OFFSET).loadLong();
         }
         return false;
     }
@@ -3346,7 +3349,7 @@ public final class VM
         }
         if (ref != 0L && instanceOf(ref, targetType) == 0)
         {
-            if (Magic.load64(ref) <= ObjectModel.MAX_RAW_ARRAY_TIB && isArrayType(targetType))
+            if (Address.fromLong(ref).loadLong() <= ObjectModel.MAX_RAW_ARRAY_TIB && isArrayType(targetType))
             {
                 // A RAW array (writer/boot alloc: element size in @0, no Type node) cast to an array class:
                 // there is no Type to walk, so trust the verifier-proved cast — the mirror of instanceOf's
@@ -3465,13 +3468,13 @@ public final class VM
             return;
         }
         long e = jitFrameTable + jitFrameCount * 24L;
-        Magic.store64(e, codeStart);
-        Magic.store64(e + 8L, codeEnd);
-        Magic.store64(e + 16L, frameSize);
+        Address.fromLong(e).store(codeStart);
+        Address.fromLong(e).plus(8L).store(codeEnd);
+        Address.fromLong(e).plus(16L).store(frameSize);
         long le = jitLocalTable + jitLocalCount * 24L;               // same pc-range, parallel table (tableValueIn reads it)
-        Magic.store64(le, codeStart);
-        Magic.store64(le + 8L, codeEnd);
-        Magic.store64(le + 16L, regLocals);
+        Address.fromLong(le).store(codeStart);
+        Address.fromLong(le).plus(8L).store(codeEnd);
+        Address.fromLong(le).plus(16L).store(regLocals);
         jitFrameCount = jitFrameCount + 1L;
         jitLocalCount = jitLocalCount + 1L;
     }
@@ -3556,8 +3559,8 @@ public final class VM
         while (i < count)
         {
             long src = table + i * entryBytes;
-            long start = Magic.load64(src);
-            long end = Magic.load64(src + 8L);         // every one of these tables is {codeStart, codeEnd, ...}
+            long start = Address.fromLong(src).loadLong();
+            long end = Address.fromLong(src).plus(8L).loadLong();         // every one of these tables is {codeStart, codeEnd, ...}
             // Drop an entry whose RANGE OVERLAPS the swept block, not merely one that STARTS inside it. Filtering
             // on start alone let an entry whose end reached into freed code survive; it then answered for pcs
             // belonging to whatever was compiled there next, handing the unwinder a wrong frame size. The bound
@@ -3568,7 +3571,7 @@ public final class VM
                 long b = 0L;
                 while (b < entryBytes)
                 {
-                    Magic.store64(dst + b, Magic.load64(src + b));
+                    Address.fromLong(dst).plus(b).store(Address.fromLong(src).plus(b).loadLong());
                     b += 8L;
                 }
                 kept += 1L;
@@ -3590,13 +3593,13 @@ public final class VM
         while (i < count)
         {
             long src = table + i * entryBytes;
-            if (Magic.load64(src) < codeMark)
+            if (Address.fromLong(src).loadLong() < codeMark)
             {
                 long dst = table + kept * entryBytes;
                 long b = 0L;
                 while (b < entryBytes)
                 {
-                    Magic.store64(dst + b, Magic.load64(src + b));
+                    Address.fromLong(dst).plus(b).store(Address.fromLong(src).plus(b).loadLong());
                     b += 8L;
                 }
                 kept += 1L;
@@ -3628,10 +3631,10 @@ public final class VM
             return;
         }
         long e = jitHandlerTable + jitHandlerCount * 32L;
-        Magic.store64(e, machStart);
-        Magic.store64(e + 8L, machEnd);
-        Magic.store64(e + 16L, handler);
-        Magic.store64(e + 24L, catchType);
+        Address.fromLong(e).store(machStart);
+        Address.fromLong(e).plus(8L).store(machEnd);
+        Address.fromLong(e).plus(16L).store(handler);
+        Address.fromLong(e).plus(24L).store(catchType);
         jitHandlerCount = jitHandlerCount + 1L;
     }
 
@@ -3681,9 +3684,9 @@ public final class VM
         while (i < count)
         {
             long e = table + i * 24L;
-            if (pc >= Magic.load64(e) && pc < Magic.load64(e + 8L))
+            if (pc >= Address.fromLong(e).loadLong() && pc < Address.fromLong(e).plus(8L).loadLong())
             {
-                return Magic.load64(e + 16L);
+                return Address.fromLong(e).plus(16L).loadLong();
             }
             i = i + 1L;
         }
@@ -4188,11 +4191,11 @@ public final class VM
         byte[] ch = new byte[4];
         long[] slots = new long[8];
         long argBase = Magic.addrOf(slots) + 24L;         // array elements (header 16 + length 8)
-        Magic.store64(argBase,       Magic.addrOf(u16));  // value
-        Magic.store64(argBase + 8L,  0L);                 // srcBegin
-        Magic.store64(argBase + 16L, 4L);                 // srcEnd
-        Magic.store64(argBase + 24L, Magic.addrOf(ch));   // dst
-        Magic.store64(argBase + 32L, 0L);                 // dstBegin
+        Address.fromLong(argBase).store(Magic.addrOf(u16));  // value
+        Address.fromLong(argBase).plus(8L).store(0L);                 // srcBegin
+        Address.fromLong(argBase).plus(16L).store(4L);                 // srcEnd
+        Address.fromLong(argBase).plus(24L).store(Magic.addrOf(ch));   // dst
+        Address.fromLong(argBase).plus(32L).store(0L);                 // dstBegin
         Magic.callN(utf16GetBytesAddr, argBase);
         Uart.write(ch);
         boolean snapOk = ch[0] == 'J' && ch[1] == 'O' && ch[2] == 'E' && ch[3] == '!';
@@ -4206,10 +4209,10 @@ public final class VM
         // baked ARRAY was read, not just a primitive slot.
         Uart.write(Magic.bytes("  Integer.formatUnsignedInt(0xCAFE)="));
         byte[] hex = new byte[4];
-        Magic.store64(argBase,       0xCAFEL);            // val
-        Magic.store64(argBase + 8L,  4L);                 // shift (hex)
-        Magic.store64(argBase + 16L, Magic.addrOf(hex));  // buf
-        Magic.store64(argBase + 24L, 4L);                 // len
+        Address.fromLong(argBase).store(0xCAFEL);            // val
+        Address.fromLong(argBase).plus(8L).store(4L);                 // shift (hex)
+        Address.fromLong(argBase).plus(16L).store(Magic.addrOf(hex));  // buf
+        Address.fromLong(argBase).plus(24L).store(4L);                 // len
         Magic.callN(formatUnsignedIntAddr, argBase);
         Uart.write(hex);
         boolean objOk = hex[0] == 'c' && hex[1] == 'a' && hex[2] == 'f' && hex[3] == 'e';
@@ -4223,9 +4226,9 @@ public final class VM
         // the object to stock Integer.intValue(), a baked getfield accessor called directly. '*'
         // proves array elements point at real baked objects whose fields hold the seed's values.
         Uart.write(Magic.bytes("  IntegerCache.cache[170].intValue()="));
-        long cacheArr = Magic.load64(integerCacheSlotAddr);   // the static slot -> baked Integer[]
-        long obj170 = cacheArr == 0 ? 0 : Magic.load64(cacheArr + 24L + 170L * 8L);  // elements at +24
-        Magic.store64(argBase, obj170);                   // receiver
+        long cacheArr = Address.fromLong(integerCacheSlotAddr).loadLong();   // the static slot -> baked Integer[]
+        long obj170 = cacheArr == 0 ? 0 : Address.fromLong(cacheArr).plus(24L + 170L * 8L).loadLong();  // elements at +24
+        Address.fromLong(argBase).store(obj170);                   // receiver
         long iv = obj170 == 0 ? 0 : Magic.callN(integerIntValueAddr, argBase);
         Uart.putc((int) iv);                              // '*'
         boolean scalarOk = cacheArr != 0 && obj170 != 0 && iv == 42;
@@ -4238,15 +4241,15 @@ public final class VM
         // allocates a fresh Integer on the METAL heap -- whose TIB must equal the baked object's TIB,
         // i.e. image-baked and runtime-allocated objects share one real class.
         Uart.write(Magic.bytes("  Integer.valueOf(42)==cache[170], valueOf(200).intValue()="));
-        Magic.store64(argBase, 42L);
+        Address.fromLong(argBase).store(42L);
         long va = Magic.callN(integerValueOfAddr, argBase);
-        Magic.store64(argBase, 200L);
+        Address.fromLong(argBase).store(200L);
         long vc = Magic.callN(integerValueOfAddr, argBase);
-        Magic.store64(argBase, vc);
+        Address.fromLong(argBase).store(vc);
         long vv = Magic.callN(integerIntValueAddr, argBase);
         printDec((int) vv);                               // 200
         boolean vOk = va != 0 && va == obj170 && vv == 200
-                   && Magic.load64(va) != 0 && Magic.load64(va) == Magic.load64(vc);
+                   && Address.fromLong(va).loadLong() != 0 && Address.fromLong(va).loadLong() == Address.fromLong(vc).loadLong();
         Uart.write(vOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (valueOf not baked?)\n"));
 
         // REAL VTABLES: stock Integer.equals runs `instanceof Integer` (a Type walk over the baked
@@ -4256,20 +4259,20 @@ public final class VM
         // because every baked scalar's class now joins the TIB layout (stub-safe vtable pull);
         // Long.equals dispatches longValue() through it.
         Uart.write(Magic.bytes("  Integer.equals(42,42|43)="));
-        Magic.store64(argBase, obj170);                   // receiver: baked Integer 42
-        Magic.store64(argBase + 8L, va);                  // arg: valueOf(42) -> the same baked object
+        Address.fromLong(argBase).store(obj170);                   // receiver: baked Integer 42
+        Address.fromLong(argBase).plus(8L).store(va);                  // arg: valueOf(42) -> the same baked object
         long eqSame = Magic.callN(integerEqualsAddr, argBase);
-        long obj171 = cacheArr == 0 ? 0 : Magic.load64(cacheArr + 24L + 171L * 8L);
-        Magic.store64(argBase + 8L, obj171);              // arg: baked Integer 43
+        long obj171 = cacheArr == 0 ? 0 : Address.fromLong(cacheArr).plus(24L + 171L * 8L).loadLong();
+        Address.fromLong(argBase).plus(8L).store(obj171);              // arg: baked Integer 43
         long eqDiff = Magic.callN(integerEqualsAddr, argBase);
         printDec((int) eqSame);
         Uart.putc(',');
         printDec((int) eqDiff);
         Uart.write(Magic.bytes("  Long.equals(42L,42L)="));
-        long lCacheArr = Magic.load64(longCacheSlotAddr); // the static slot -> baked Long[]
-        long lobj170 = lCacheArr == 0 ? 0 : Magic.load64(lCacheArr + 24L + 170L * 8L);
-        Magic.store64(argBase, lobj170);                  // receiver: baked Long 42
-        Magic.store64(argBase + 8L, lobj170);             // arg: the same baked Long
+        long lCacheArr = Address.fromLong(longCacheSlotAddr).loadLong(); // the static slot -> baked Long[]
+        long lobj170 = lCacheArr == 0 ? 0 : Address.fromLong(lCacheArr).plus(24L + 170L * 8L).loadLong();
+        Address.fromLong(argBase).store(lobj170);                  // receiver: baked Long 42
+        Address.fromLong(argBase).plus(8L).store(lobj170);             // arg: the same baked Long
         long leq = lobj170 == 0 ? 0 : Magic.callN(longEqualsAddr, argBase);
         printDec((int) leq);
         boolean vtOk = eqSame == 1 && eqDiff == 0 && lobj170 != 0 && leq == 1;
@@ -4281,17 +4284,17 @@ public final class VM
         // length() and charAt() (virtual targets coder()/isLatin1() rooted; COMPACT_STRINGS
         // snapshotted from the auto-deferred String.<clinit>) read the chars back on the metal.
         Uart.write(Magic.bytes("  String.valueOf(true)="));
-        Magic.store64(argBase, 1L);
+        Address.fromLong(argBase).store(1L);
         long strTrue = Magic.callN(stringValueOfBoolAddr, argBase);
-        Magic.store64(argBase, strTrue);
+        Address.fromLong(argBase).store(strTrue);
         long strLen = Magic.callN(stringLengthAddr, argBase);
         for (int sp = 0; sp < (int) strLen; sp++)
         {
-            Magic.store64(argBase, strTrue);
-            Magic.store64(argBase + 8L, sp);
+            Address.fromLong(argBase).store(strTrue);
+            Address.fromLong(argBase).plus(8L).store((long) sp);
             Uart.putc((int) Magic.callN(stringCharAtAddr, argBase));
         }
-        Magic.store64(argBase, 0L);
+        Address.fromLong(argBase).store(0L);
         long strFalse = Magic.callN(stringValueOfBoolAddr, argBase);
         boolean strOk = strTrue != 0 && strLen == 4 && strFalse != 0 && strFalse != strTrue;
         Uart.write(strOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (baked strings?)\n"));
@@ -4302,26 +4305,26 @@ public final class VM
         // the private String(byte[],byte) constructor -- and String.equals compares content: two
         // DISTINCT heap Strings from the same value are equal, different values are not.
         Uart.write(Magic.bytes("  Integer.toString(-2026)="));
-        Magic.store64(argBase, -2026L);
+        Address.fromLong(argBase).store(-2026L);
         long tsNeg = Magic.callN(integerToStringAddr, argBase);
         printJavaString(tsNeg);
         Uart.write(Magic.bytes(" Long.toString(1<<40)="));
-        Magic.store64(argBase, 1L << 40);
+        Address.fromLong(argBase).store(1L << 40);
         long tsLong = Magic.callN(longToStringAddr, argBase);
         printJavaString(tsLong);
         Uart.write(Magic.bytes(" toHex(0xBEEF)="));
-        Magic.store64(argBase, 0xBEEFL);
+        Address.fromLong(argBase).store(0xBEEFL);
         long tsHex = Magic.callN(integerToHexStringAddr, argBase);
         printJavaString(tsHex);
-        Magic.store64(argBase, 42L);
+        Address.fromLong(argBase).store(42L);
         long s42a = Magic.callN(integerToStringAddr, argBase);
-        Magic.store64(argBase, 42L);
+        Address.fromLong(argBase).store(42L);
         long s42b = Magic.callN(integerToStringAddr, argBase);
-        Magic.store64(argBase, s42a);
-        Magic.store64(argBase + 8L, s42b);
+        Address.fromLong(argBase).store(s42a);
+        Address.fromLong(argBase).plus(8L).store(s42b);
         long seq = Magic.callN(stringEqualsAddr, argBase);
-        Magic.store64(argBase, s42a);
-        Magic.store64(argBase + 8L, tsHex);
+        Address.fromLong(argBase).store(s42a);
+        Address.fromLong(argBase).plus(8L).store(tsHex);
         long sne = Magic.callN(stringEqualsAddr, argBase);
         Uart.write(Magic.bytes(" equals="));
         printDec((int) seq);
@@ -4553,7 +4556,7 @@ public final class VM
         // that RAM is cacheable/coherent). The lock guarantees no job is taken twice; the per-core tally
         // printed after shows the 24 jobs were shared across the four A72s.
         Uart.write(Magic.bytes("smp jobs (digit = core that ran it): "));
-        Magic.store64(CORE_FLAGS + 0L, 1L);                // GO
+        Address.fromLong(CORE_FLAGS).store(1L);                        // GO
         Magic.dsb();
         VMScheduler.smpWork(0);                                        // the primary is core 0
         // let stragglers on the other cores finish the last few jobs before we move on
@@ -4568,7 +4571,7 @@ public final class VM
             Uart.putc((byte) 0x63);                        // 'c'
             Uart.putc((byte) (0x30 + jc));
             Uart.putc((byte) 0x3D);                        // '='
-            printDec((int) Magic.load64(CORE_FLAGS + 0x40L + jc * 8L));
+            printDec((int) Address.fromLong(CORE_FLAGS).plus(0x40L + jc * 8L).loadLong());
             Uart.putc((byte) 0x20);
             jc = jc + 1;
         }
@@ -5028,10 +5031,10 @@ public final class VM
         {
             long mid = (lo + hi) >> 1;
             long e = classDir + mid * 32L;
-            int cmp = nameCompare(Magic.load64(e), Magic.load64(e + 8L), nameAddr, nameLen);
+            int cmp = nameCompare(Address.fromLong(e).loadLong(), Address.fromLong(e).plus(8L).loadLong(), nameAddr, nameLen);
             if (cmp == 0)
             {
-                return Magic.load64(e + 16L);          // bytesAddr
+                return Address.fromLong(e).plus(16L).loadLong();          // bytesAddr
             }
             if (cmp < 0)
             {
@@ -5052,7 +5055,7 @@ public final class VM
         long i = 0L;
         while (i < n)
         {
-            int d = (Magic.load8(aAddr + i) & 0xFF) - (Magic.load8(bAddr + i) & 0xFF);
+            int d = (Address.fromLong(aAddr).plus(i).loadUnsignedByte() & 0xFF) - (Address.fromLong(bAddr).plus(i).loadUnsignedByte() & 0xFF);
             if (d != 0)
             {
                 return d;
@@ -5082,9 +5085,9 @@ public final class VM
         while (i < classCount)
         {
             long e = classDir + i * 32L;
-            if (Magic.load64(e + 8L) == len && bytesEqual(Magic.load64(e), namePtr, len))
+            if (Address.fromLong(e).plus(8L).loadLong() == len && bytesEqual(Address.fromLong(e).loadLong(), namePtr, len))
             {
-                return Magic.load64(e + 24L);
+                return Address.fromLong(e).plus(24L).loadLong();
             }
             i = i + 1L;
         }
@@ -5097,7 +5100,7 @@ public final class VM
         long i = 0L;
         while (i < len)
         {
-            if (Magic.load8(a + i) != Magic.load8(b + i))
+            if (Address.fromLong(a).plus(i).loadUnsignedByte() != Address.fromLong(b).plus(i).loadUnsignedByte())
             {
                 return false;
             }
@@ -5117,9 +5120,9 @@ public final class VM
         // its end — the "just past" negative check can't collide with a NEIGHBORING method that happens
         // to share the same frame size (probing the FIRST entry did, and the answer flipped with layout).
         long e = jitFrameTable + (jitFrameCount - 1L) * 24L;
-        long start = Magic.load64(e);
-        long end = Magic.load64(e + 8L);
-        long size = Magic.load64(e + 16L);
+        long start = Address.fromLong(e).loadLong();
+        long end = Address.fromLong(e).plus(8L).loadLong();
+        long size = Address.fromLong(e).plus(16L).loadLong();
         return frameSizeAt(start) == size                  // inside -> its frame size
                && frameSizeAt(end) != size;                // just past the end -> not this frame
     }
