@@ -38,7 +38,7 @@ public class RunProbe
         show("jar", r);
         check("jar ran", r.status == RunProgram.OK);
         check("jar main class", "hello.Main".equals(r.mainClass));
-        check("jar defined 6", r.defined == 6);
+        check("jar defined 7", r.defined == 7);
         check("jar greeting", r.output.contains("hello from an uploaded jar"));
         check("jar args", r.output.contains("args 2 a,b"));
         check("jar interface + lambda", r.output.contains("square 3 area 9 scaled 36"));
@@ -78,6 +78,7 @@ public class RunProbe
         check("throw trace captured", r.output.contains("IllegalStateException: thrown in Util: from Boom.main"));
 
         exits(jar);
+        threads(jar);
         http(jar, cls);
         System.out.println(failures == 0 ? "RunProbe PASS" : "RunProbe FAIL " + failures);
     }
@@ -124,6 +125,28 @@ public class RunProbe
         check("a run after the exits", r.status == RunProgram.OK && r.output.contains("args 1 after"));
     }
 
+    /** main on its own thread: a caller that stops waiting, two runs at once, and output routed by thread. */
+    private static void threads(byte[] jar) throws Exception
+    {
+        RunProgram.Result a = RunProgram.start("hello.jar", jar, "hello.Slow", new String[] { "a", "1500" });
+        check("a still running after 200 ms", !a.await(200L) && a.status == RunProgram.RUNNING);
+        System.out.println("probe: printing while run a runs");
+        RunProgram.Result b = RunProgram.start("hello.jar", jar, "hello.Slow", new String[] { "b", "300" });
+        check("b finishes while a runs", b.await(0L) && b.status == RunProgram.OK && !a.done());
+        show("b", b);
+        check("b's output", b.output.contains("slow b start on thread main") && b.output.contains("slow b end"));
+        check("b has none of a's output", !b.output.contains("slow a"));
+        check("a finishes", a.await(0L) && a.status == RunProgram.OK);
+        show("a", a);
+        check("a's output", a.output.contains("slow a start") && a.output.contains("slow a end"));
+        check("a has none of b's output", !a.output.contains("slow b"));
+        check("a has none of the caller's output", !a.output.contains("probe: printing"));
+        Thread.sleep(1500L);
+        check("output after main returned", a.text().contains("slow a late, from a thread main left running")
+                && b.text().contains("slow b late"));
+        check("ids", b.id == a.id + 1);
+    }
+
     private static void http(byte[] jar, byte[] cls) throws Exception
     {
         String token = Files.readString(Path.of("/etc/boot.token")).trim();
@@ -146,9 +169,32 @@ public class RunProbe
         expect("post ftp", call("POST /run?url=ftp%3A%2F%2Fh%2Fa.jar", tok + "Content-Length: 0\r\n", null), "502",
                 "only http and https");
         expect("other path", call("GET /nope", null, null), "(not handled)", null);
+        expect("bad wait", call("PUT /run/hello.jar?wait=soon", tok + "Content-Length: " + jar.length + "\r\n", jar),
+                "400", "wait=");
+        String slow = call("PUT /run/hello.jar?main=hello.Slow&args=h+1500&wait=0.2",
+                tok + "Content-Length: " + jar.length + "\r\n", jar);
+        expect("still running", slow, "202", "still running after");
+        int at = slow.indexOf("GET /run/");
+        String id = at < 0 ? "0" : slow.substring(at + 9, slow.indexOf(' ', at + 9)).trim();
+        expect("follow, running", call("GET /run/" + id, null, null), "202", "slow h start");
+        String done = call("GET /run/" + id, null, null);
+        int tries = 0;
+        while (done.startsWith("HTTP/1.0 202") && tries < 100)
+        {
+            Thread.sleep(200L);
+            done = call("GET /run/" + id, null, null);
+            tries = tries + 1;
+        }
+        expect("follow, finished", done, "200", "[main returned");
+        check("follow has the whole output", done.contains("slow h start") && done.contains("slow h end"));
+        Thread.sleep(1500L);
+        expect("follow, after main", call("GET /run/" + id, null, null), "200", "slow h late");
+        expect("no such run", call("GET /run/99999", null, null), "404", "no run 99999");
+        expect("not a run number", call("GET /run/abc", null, null), "404", null);
         String page = call("GET /run", null, null);
         expect("page", page, "200", "<h1>Run a program</h1>");
-        check("page shows the last run's output", page.contains("not run: not a class file (no CAFEBABE)"));
+        check("page shows the last run's output", page.contains("slow h end") && !page.contains("data-running"));
+        check("page links the run", page.contains("<a href=\"/run/" + id + "\">#" + id + "</a>"));
         check("page history", page.contains("<td>Hello.class</td><td>Hello</td><td>one two</td><td>returned</td>"));
     }
 

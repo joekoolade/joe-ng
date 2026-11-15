@@ -15,9 +15,9 @@ the item leaves this list; new findings that are not fixed on the spot come here
 
 ## Web server
 
-- **The server is single-threaded (2026-11-14):** it is busy until a `/run` program's main returns, and a program
-  that never returns holds it for good. A run on its own thread with a deadline would free it, but a thread cannot
-  be stopped safely, so the program would go on running beside the next one.
+- **A `/run` program cannot be stopped (2026-11-14):** main runs on its own thread now, so the server is free after
+  `wait=`, but a run that never returns keeps its thread (and whatever it holds) until a reboot. Thread.stop is gone
+  from the JDK; an interrupt is the only polite signal, and a program can ignore it.
 - **A `/run` thread other than main that calls `System.exit` ends only itself (2026-11-14):** main carries on to its
   own end; the run reports the exit. There is no safe way to stop main from another thread.
 
