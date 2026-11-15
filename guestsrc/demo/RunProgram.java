@@ -56,6 +56,10 @@ import jdk.internal.misc.MetalRunExit;
  *
  * <p>{@code System.exit} and {@code Runtime.halt} end the run, not the board ({@code jdk.internal.misc.MetalRunExit}):
  * the thread that calls them is unwound, and the run reports the status. The program's shutdown hooks are not run.
+ *
+ * <p>A run can be STOPPED ({@link #stop}): its threads are interrupted, then after a grace period each one still
+ * alive throws {@code MetalRunExit.Stopped} at its next loop header. The program's classes are defined with
+ * {@code MetalRunExit.defining} on, which is what gives their loops that poll.
  */
 final class RunProgram
 {
@@ -80,6 +84,12 @@ final class RunProgram
 
     /** Status: main has not finished yet. */
     static final int RUNNING = 4;
+
+    /** Status: the run was stopped from outside ({@link #stop}) before main finished. */
+    static final int STOPPED = 5;
+
+    /** How long {@link #stop} waits for a forced run's threads to reach a poll and end. */
+    static final long FORCE_WAIT_MS = 5000L;
 
     /** SHA-256 of each class's bytes, by binary name, for every class a run defined this boot. */
     private static final Map<String, String> DEFINED = new HashMap<>();
@@ -128,6 +138,15 @@ final class RunProgram
 
         /** When main started, for the elapsed time of a run still going. */
         long startedNanos;
+
+        /** The run's MetalRunExit mark, set by its main thread as it starts; null until then. */
+        volatile MetalRunExit.Run mark;
+
+        /** For {@link #STOPPED}: true when the stop had to be forced (an interrupt was not enough). */
+        boolean forced;
+
+        /** For {@link #STOPPED}: true when main's thread kept catching the stop and was ended at a poll. */
+        boolean killed;
 
         /** Everything the run printed, then its report line; set when main finishes ({@link #text} meanwhile). */
         String output;
@@ -219,6 +238,13 @@ final class RunProgram
         /** Record the end: the report line, then wake whoever waits. */
         private void finish(int status, String report)
         {
+            synchronized (this)
+            {
+                if (done)
+                {
+                    return;
+                }
+            }
             keep(report);
             output = text();
             synchronized (this)
@@ -267,7 +293,15 @@ final class RunProgram
             Class<?> main;
             synchronized (DEFINE_LOCK)
             {
-                main = define(p, r);
+                MetalRunExit.defining(true);                // these classes' loops poll for a stop
+                try
+                {
+                    main = define(p, r);
+                }
+                finally
+                {
+                    MetalRunExit.defining(false);
+                }
             }
             r.defineMs = (System.nanoTime() - t0) / 1_000_000L;
             Method m = mainMethod(main);
@@ -306,6 +340,7 @@ final class RunProgram
     {
         PRINTS_FOR.set(r);                                  // before main starts a thread, so the thread inherits it
         MetalRunExit.Run mark = MetalRunExit.begin();       // System.exit in the program ends it, not the board
+        r.mark = mark;
         int status = OK;
         try
         {
@@ -313,7 +348,7 @@ final class RunProgram
         }
         catch (InvocationTargetException e)
         {
-            if (!(e.getCause() instanceof MetalRunExit.Exit))
+            if (!(e.getCause() instanceof MetalRunExit.End))
             {
                 status = THREW;
                 // The trace alone: "Exception in thread "main"" is the VM's own line for a program that DIED,
@@ -341,6 +376,11 @@ final class RunProgram
             r.exitStatus = mark.status();
             r.exitThread = mark.thread();
         }
+        else if (mark.stopRequested())
+        {
+            status = STOPPED;                               // however main ended, it was because of the stop
+            r.forced = mark.forced();
+        }
         r.status = status;
         String report = "\n[" + ending(r) + "; defined " + r.defined + " classes in " + r.defineMs + " ms, ran "
                 + r.runMs + " ms]\n";
@@ -359,7 +399,97 @@ final class RunProgram
         {
             return "main still running";
         }
+        if (r.status == STOPPED)
+        {
+            if (r.killed)
+            {
+                return "stopped (killed: it kept catching the stop)";
+            }
+            return r.forced ? "stopped (forced)" : "stopped (interrupted)";
+        }
         return r.status == OK ? "main returned" : "main threw";
+    }
+
+    /**
+     * Stop run {@code r}: interrupt every thread of it, wait up to {@code graceMs} for them all to end, then force
+     * the ones still alive (each throws at its next loop header) and wait up to {@link #FORCE_WAIT_MS} more. Returns
+     * one line saying what happened. Blocks the caller for at most the two waits.
+     */
+    static String stop(Result r, long graceMs)
+    {
+        MetalRunExit.Run m = r.mark;
+        long until = System.nanoTime() + 1_000_000_000L;
+        while (m == null && !r.done() && System.nanoTime() < until)
+        {
+            Thread.yield();                                 // main's thread is just starting: let it run
+            m = r.mark;
+        }
+        if (m == null)
+        {
+            return "run #" + r.id + " has no thread to stop";
+        }
+        int live = m.liveThreads().size();
+        if (live == 0)
+        {
+            return "run #" + r.id + " has no live thread";
+        }
+        long t0 = System.nanoTime();
+        int interrupted = m.interrupt();
+        System.out.println("run #" + r.id + ": stop: interrupted " + interrupted + " thread(s)");
+        boolean ended = awaitThreads(m, graceMs);
+        String how = "interrupted " + interrupted + " thread(s)";
+        if (!ended)
+        {
+            int forced = m.force();
+            System.out.println("run #" + r.id + ": stop: forced " + forced + " thread(s) after " + graceMs + " ms");
+            how = how + "; " + forced + " still running after " + graceMs + " ms, forced";
+            ended = awaitThreads(m, FORCE_WAIT_MS);
+        }
+        r.await(1000L);                                     // main's thread records the end just after it dies
+        long ms = (System.nanoTime() - t0) / 1_000_000L;
+        if (ended && !r.done())
+        {
+            // main's thread is gone without recording an end: it kept catching its stop error, and its poll ended
+            // the task (vm.VM.stopPoll). Record the end for it.
+            r.runMs = r.elapsedMs();
+            r.status = STOPPED;
+            r.forced = true;
+            r.killed = true;
+            System.out.println("run #" + r.id + ": " + r.mainClass + " " + ending(r));
+            r.finish(STOPPED, "\n[" + ending(r) + "; defined " + r.defined + " classes in " + r.defineMs
+                    + " ms, ran " + r.runMs + " ms]\n");
+        }
+        int left = m.liveThreads().size();
+        return "run #" + r.id + ": " + how + (ended ? "; ended in " + ms + " ms"
+                : "; " + left + " thread(s) still alive after " + ms + " ms (blocked outside the program's own code)");
+    }
+
+    /** Wait up to {@code ms} for every thread of the run to end; true when they all have. */
+    private static boolean awaitThreads(MetalRunExit.Run m, long ms)
+    {
+        long end = System.nanoTime() + ms * 1_000_000L;
+        while (true)
+        {
+            List<Thread> live = m.liveThreads();
+            if (live.isEmpty())
+            {
+                return true;
+            }
+            long left = (end - System.nanoTime()) / 1_000_000L;
+            if (left <= 0L)
+            {
+                return false;
+            }
+            try
+            {
+                live.get(0).join(Math.min(left, 100L));
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
     }
 
     /** Put the routing System.out and System.err in place, once. */

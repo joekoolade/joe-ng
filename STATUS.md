@@ -4,6 +4,42 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **A `/run` PROGRAM CAN BE STOPPED: INTERRUPT, THEN A THROW AT ITS OWN LOOP HEADERS (2026-11-14).** Pi-validated
+  (build 5d11ad63364fc070).
+  - **`POST /run/<n>/stop?grace=<s>`** (token; the page has a Stop button): `RunProgram.stop` interrupts every
+    thread of the run, waits `grace` (default 2 s) for them to end, then FORCES the ones still alive, and waits up
+    to 5 s more. The reply is the output with the stop's own line; 409 when nothing is running.
+  - **Where a forced stop lands -- stop POLLS, not the timer tick.** A tick lands anywhere, including inside an
+    allocation's bump sequence or between a monitor CAS and its bookkeeping, and unwinding from there leaves a half
+    object or a monitor held for ever (why `Thread.stop` is gone). So Baseline emits a poll at every LOOP HEADER
+    (target of a backward branch, empty operand stack) -- only for classes defined while `MetalRunExit.defining` is
+    on, i.e. a run's (`Loader.compilingStoppable`, by classfile blob). The poll loads `Heap.STOP_CELL` (count of
+    tasks with a stop pending) and only when nonzero calls `VM.stopPoll` (new helper `Symbols.STOP_POLL`), which
+    answers this task's pending error or 0; a nonzero answer is thrown through `throwStored` -- an ordinary
+    call-site throw at a bytecode boundary, so handlers run and monitors are released as for any exception.
+  - **The error** is `MetalRunExit.Stopped`, an `Error` without a trace, set per task by `VMNatives.runStop`
+    (`MetalRunExit.stop0`); a run's threads are known because every thread joins its run as it starts
+    (`Thread.metalThreadEntry` -> `MetalRunExit.threadStarted`). `Exit` and `Stopped` share `MetalRunExit.End`,
+    which `metalThreadEntry` treats as a thread ending, not a fault.
+  - **A program that catches it** (`catch (Throwable)` around a loop whose header is inside the try) would catch it
+    for ever, as old `ThreadDeath` could be. So a task still polling 2 s after its first delivery is ENDED at the
+    poll (`VM.stopPoll` -> `taskExit`; serial says `run stop: task N kept catching its stop`) -- still a bytecode
+    boundary with no VM lock held; monitors its frames hold stay held, the price only such a program pays. The
+    stopper then records the run's end itself (`stopped (killed: ...)`).
+  - **Measured.** QEMU (RunProbe `stops`; every loop there also calls `Thread.yield`, as QEMU gives launched
+    programs no timer ticks): a monitor-holding spin with a finally -- forced in ~300 ms, finally ran, monitor free
+    afterwards; sleep and an interrupt-checking loop -- interrupt alone; four spinning threads -- all forced, every
+    finally ran; a JDK call per pass -- forced; catch-Throwable -- caught 4364 times, killed ~3.3 s in; HTTP stop,
+    401, bad grace 400, 409 again, 404; page row `stopped (forced)`. ExitProbe, seven thread probes, `make test`,
+    overlaycheck 0 new. Pi, loops with NO calls: spin / threads / jdk forced 2 s after the interrupt with every
+    finally; catch-Throwable caught 338 times and was killed 5 s into the stop; `/` and `/threads` answered in
+    11-119 ms while each spun; a run afterwards normal.
+  - **Full regression 205/206 (10m51s):** FileProbe's root listing had a `.DS_Store` Finder had left in `ramfs/`
+    (baked into the RAMFS); removed, FileProbe passes. SecurityStockProbe differed only in a batch (the known
+    SeedGenerator `GC: STW TIMEOUT` line), identical alone.
+  - **Not measured:** the polls' cost to a run's loop when no stop is pending; the Stop button in a browser.
+  - **Open:** a thread blocked in a JDK call that ignores interrupts stops only when it returns (BACKLOG).
+
 - **`/run` PROGRAMS RUN ON THEIR OWN THREAD; THE SERVER NO LONGER WAITS FOR THEM (2026-11-14).** Pi-validated (build
   fca19e81ed258126).
   - **What:** `RunProgram.start` defines the classes on the request thread (so a refusal is still answered at once)

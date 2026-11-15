@@ -244,14 +244,16 @@ public class Thread implements Runnable, MetalThreadEntry
      */
     public final void metalThreadEntry()
     {
+        jdk.internal.misc.MetalRunExit.threadStarted();     // a /run program's thread joins its run
         try
         {
             run();
         }
-        catch (jdk.internal.misc.MetalRunExit.Exit e)
+        catch (jdk.internal.misc.MetalRunExit.End e)
         {
-            // The thread called System.exit inside a program run by another (MetalRunExit): it is over, which is
-            // what exit means, and not a fault -- a hosted JVM prints nothing for a thread that exits.
+            // The thread called System.exit inside a program run by another, or that program was stopped
+            // (MetalRunExit): it is over, which is what exit and stop mean, and not a fault -- a hosted JVM prints
+            // nothing for a thread that exits.
         }
         catch (Throwable e)
         {

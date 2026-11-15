@@ -731,6 +731,10 @@ final class MetalSymbols implements Symbols
         {
             return VM.newArithAddr;
         }
+        if (helper == Symbols.STOP_POLL)
+        {
+            return VM.stopPollAddr;
+        }
         if (helper == Symbols.NEW_ASE)
         {
             return VM.newAseAddr;
@@ -776,6 +780,16 @@ final class MetalSymbols implements Symbols
 
     /** The on-metal JIT records throw-site backtraces so printStackTrace() has frames for any throw. */
     @Override
+    public boolean stopPolls()
+    {
+        return Loader.compilingStoppable();
+    }
+
+    public long stopCellAddr()
+    {
+        return Heap.STOP_CELL;
+    }
+
     public boolean captureTraces()
     {
         return true;

@@ -136,6 +136,8 @@ public interface Symbols
     int INDY_INVOKE = 65;       // vm/Loader.indyTramp() -> VMNatives.indyResolve(JJ)J
     // ldc of a MethodType, MethodHandle or dynamic constant: x0 = the dynamic site -> its value (object or bits).
     int LDC_CONST = 66;         // vm/VMNatives.ldcConst(J)J
+    // A stoppable program's loop-header poll (Baseline.emitStopPoll): this task's pending stop error, or 0.
+    int STOP_POLL = 67;         // vm/VM.stopPoll()J
 
     /**
      * The largest value a code address's top byte (bits 31..24) can take, for the dispatch-target guard.
@@ -376,6 +378,24 @@ public interface Symbols
     default boolean implicitChecks()
     {
         return false;
+    }
+
+    /**
+     * Whether the method being compiled belongs to a program that can be STOPPED (a {@code /run} program: its
+     * classes came from {@code defineClass} while the runner marked them). Then every loop header polls
+     * {@link #stopCellAddr} and, when a stop is pending anywhere, asks {@link #STOP_POLL} whether it is this
+     * thread's -- a call site the unwinder handles like any other, at a bytecode boundary with an empty operand
+     * stack. Metal JIT only; default off.
+     */
+    default boolean stopPolls()
+    {
+        return false;
+    }
+
+    /** The word that is nonzero while any task has a stop pending ({@code vm/Heap.STOP_CELL}); 0 = none. */
+    default long stopCellAddr()
+    {
+        return 0L;
     }
 
     // ----- fatal compiler diagnostics -----
