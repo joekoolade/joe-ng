@@ -11,6 +11,7 @@
  */
 package board.bcm2711;
 
+import magic.Address;
 import magic.Magic;
 
 /**
@@ -38,9 +39,9 @@ public final class Reset
     /** Reset the SoC; never returns (the firmware reloads {@code kernel8.img} and reboots). */
     public static void reboot()
     {
-        Magic.store32(PM_WDOG, PM_PASSWORD | 10);            // ~10 watchdog ticks, then bite
-        int r = Magic.load32(PM_RSTC) & PM_RSTC_WRCFG_CLR;
-        Magic.store32(PM_RSTC, PM_PASSWORD | r | PM_RSTC_FULL_RESET);
+        Address.fromLong(PM_WDOG).store(PM_PASSWORD | 10);            // ~10 watchdog ticks, then bite
+        int r = Address.fromLong(PM_RSTC).loadInt() & PM_RSTC_WRCFG_CLR;
+        Address.fromLong(PM_RSTC).store(PM_PASSWORD | r | PM_RSTC_FULL_RESET);
         while (true)
         {
             Magic.wfe();                                     // wait for the watchdog to fire

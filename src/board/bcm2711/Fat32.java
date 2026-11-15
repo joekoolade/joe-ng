@@ -11,6 +11,7 @@
  */
 package board.bcm2711;
 
+import magic.Address;
 import magic.Magic;
 import vm.Heap;
 
@@ -53,7 +54,7 @@ public final class Fat32
         {
             return false;
         }
-        int type = Magic.load8(mbr + 446 + 4);                 // partition 1: type byte
+        int type = Address.fromLong(mbr).plus(446 + 4).loadUnsignedByte();   // partition 1: type byte
         if (type != 0x0B && type != 0x0C)
         {
             return false;                                      // not a FAT32 partition
@@ -68,9 +69,9 @@ public final class Fat32
         {
             return false;                                      // we assume 512-byte sectors
         }
-        secPerClus = Magic.load8(bpb + 13);
+        secPerClus = Address.fromLong(bpb).plus(13).loadUnsignedByte();
         int reserved = u16(bpb, 14);
-        int numFats = Magic.load8(bpb + 16);
+        int numFats = Address.fromLong(bpb).plus(16).loadUnsignedByte();
         long secPerFat = u32(bpb, 36);
         rootCluster = u32(bpb, 44);
         fatStart = partStart + reserved;
@@ -98,13 +99,14 @@ public final class Fat32
                 int off = 0;
                 while (off < 512)
                 {
-                    int first = Magic.load8(fatBuf + off);
+                    Address ent = Address.fromLong(fatBuf).plus(off);
+                    int first = ent.loadUnsignedByte();
                     if (first == 0)
                     {
                         return false;                          // end of directory: not found
                     }
-                    int attr = Magic.load8(fatBuf + off + 11);
-                    if (first != 0xE5 && attr != 0x0F && isKernel8Img(fatBuf + off))
+                    int attr = ent.plus(11).loadUnsignedByte();
+                    if (first != 0xE5 && attr != 0x0F && isKernel8Img(ent))
                     {
                         kernCluster = ((long) u16(fatBuf, off + 20) << 16) | u16(fatBuf, off + 26);
                         kernSize = u32(fatBuf, off + 28);
@@ -200,13 +202,13 @@ public final class Fat32
     }
 
     /** Whether the 11-byte 8.3 name at {@code p} is {@code "KERNEL8 IMG"}. */
-    private static boolean isKernel8Img(long p)
+    private static boolean isKernel8Img(Address p)
     {
         byte[] want = Magic.bytes("KERNEL8 IMG");
         int i = 0;
         while (i < 11)
         {
-            if (Magic.load8(p + i) != (want[i] & 0xFF))
+            if (p.plus(i).loadUnsignedByte() != (want[i] & 0xFF))
             {
                 return false;
             }
@@ -217,14 +219,16 @@ public final class Fat32
 
     private static int u16(long buf, int off)
     {
-        return Magic.load8(buf + off) | (Magic.load8(buf + off + 1) << 8);
+        Address p = Address.fromLong(buf).plus(off);
+        return p.loadUnsignedByte() | (p.plus(1).loadUnsignedByte() << 8);
     }
 
     private static long u32(long buf, int off)
     {
-        return (Magic.load8(buf + off) & 0xFFL)
-             | ((Magic.load8(buf + off + 1) & 0xFFL) << 8)
-             | ((Magic.load8(buf + off + 2) & 0xFFL) << 16)
-             | ((Magic.load8(buf + off + 3) & 0xFFL) << 24);
+        Address p = Address.fromLong(buf).plus(off);
+        return (p.loadUnsignedByte() & 0xFFL)
+             | ((p.plus(1).loadUnsignedByte() & 0xFFL) << 8)
+             | ((p.plus(2).loadUnsignedByte() & 0xFFL) << 16)
+             | ((p.plus(3).loadUnsignedByte() & 0xFFL) << 24);
     }
 }

@@ -11,6 +11,7 @@
  */
 package board.bcm2711;
 
+import magic.Address;
 import magic.Magic;
 
 /**
@@ -34,11 +35,11 @@ public final class Gpio
      */
     public static void setAlt(int pin, int alt)
     {
-        long reg = Bcm2711.GPIO_BASE + (long) (pin / 10) * 4L;   // 10 pins per register, 3 bits per pin
+        Address reg = Address.fromLong(Bcm2711.GPIO_BASE).plus((long) (pin / 10) * 4L);   // 10 pins per register, 3 bits per pin
         int shift = (pin % 10) * 3;
-        int v = Magic.load32(reg);
+        int v = reg.loadInt();
         v = (v & ~(0b111 << shift)) | ((alt & 0b111) << shift);
-        Magic.store32(reg, v);
+        reg.store(v);
     }
 
     /**
@@ -47,10 +48,10 @@ public final class Gpio
      */
     public static void setPull(int pin, int pull)
     {
-        long reg = Bcm2711.GPIO_PUP_PDN_CNTRL_REG0 + (long) (pin / 16) * 4L;   // 16 pins per register, 2 bits per pin
+        Address reg = Address.fromLong(Bcm2711.GPIO_PUP_PDN_CNTRL_REG0).plus((long) (pin / 16) * 4L);   // 16 pins per register, 2 bits per pin
         int shift = (pin % 16) * 2;
-        int v = Magic.load32(reg);
+        int v = reg.loadInt();
         v = (v & ~(0b11 << shift)) | ((pull & 0b11) << shift);
-        Magic.store32(reg, v);
+        reg.store(v);
     }
 }

@@ -11,6 +11,7 @@
  */
 package board.bcm2711;
 
+import magic.Address;
 import magic.Magic;
 
 /**
@@ -53,27 +54,28 @@ public final class Mailbox
     public static boolean tag(int id, int[] words)
     {
         long b = Bcm2711.MBOX_BUFFER;
+        Address buf = Address.fromLong(b);
         int nwords = words.length;
         int total = (6 + nwords) * 4;                    // hdr(2) + tag hdr(3) + value(nwords) + end(1)
-        Magic.store32(b, total);
-        Magic.store32(b + 4, 0);                         // 0 = request
-        Magic.store32(b + 8, id);
-        Magic.store32(b + 12, nwords * 4);               // value buffer size in bytes
-        Magic.store32(b + 16, 0);                        // request code
+        buf.store(total);
+        buf.plus(4).store(0);                            // 0 = request
+        buf.plus(8).store(id);
+        buf.plus(12).store(nwords * 4);                  // value buffer size in bytes
+        buf.plus(16).store(0);                           // request code
         int i = 0;
         while (i < nwords)
         {
-            Magic.store32(b + 20 + i * 4, words[i]);
+            buf.plus(20 + i * 4).store(words[i]);
             i = i + 1;
         }
-        Magic.store32(b + 20 + nwords * 4, 0);           // end tag
+        buf.plus(20 + nwords * 4).store(0);              // end tag
         cleanBuffer(b, total);                           // push the request out to the point of coherence
         if (!waitWritable())
         {
             return false;
         }
         // The VC wants a bus address (uncached alias) with the channel in the low 4 bits.
-        Magic.store32(Bcm2711.MBOX_WRITE,
+        Address.fromLong(Bcm2711.MBOX_WRITE).store(
                       (int) (b | Bcm2711.MBOX_BUS_ALIAS) | Bcm2711.MBOX_CH_PROP);
         if (!waitResponse())
         {
@@ -83,7 +85,7 @@ public final class Mailbox
         i = 0;
         while (i < nwords)
         {
-            words[i] = Magic.load32(b + 20 + i * 4);
+            words[i] = buf.plus(20 + i * 4).loadInt();
             i = i + 1;
         }
         return true;
@@ -170,7 +172,7 @@ public final class Mailbox
     private static boolean waitWritable()
     {
         int spins = 0;
-        while ((Magic.load32(Bcm2711.MBOX_STATUS) & Bcm2711.MBOX_FULL) != 0)
+        while ((Address.fromLong(Bcm2711.MBOX_STATUS).loadInt() & Bcm2711.MBOX_FULL) != 0)
         {
             spins = spins + 1;
             if (spins > SPIN_LIMIT)
@@ -187,9 +189,9 @@ public final class Mailbox
         int spins = 0;
         while (spins <= SPIN_LIMIT)
         {
-            if ((Magic.load32(Bcm2711.MBOX_STATUS) & Bcm2711.MBOX_EMPTY) == 0)
+            if ((Address.fromLong(Bcm2711.MBOX_STATUS).loadInt() & Bcm2711.MBOX_EMPTY) == 0)
             {
-                if ((Magic.load32(Bcm2711.MBOX_READ) & 0xF) == Bcm2711.MBOX_CH_PROP)
+                if ((Address.fromLong(Bcm2711.MBOX_READ).loadInt() & 0xF) == Bcm2711.MBOX_CH_PROP)
                 {
                     return true;                         // our channel answered
                 }

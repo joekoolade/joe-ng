@@ -11,6 +11,7 @@
  */
 package board.bcm2711;
 
+import magic.Address;
 import magic.Magic;
 
 /**
@@ -28,16 +29,16 @@ public final class Uart
     /** Bring up the mini-UART: GPIO14/15 → ALT5, 8-bit, clear FIFOs, enable tx/rx. */
     public static void init()
     {
-        Magic.store32(Bcm2711.AUX_ENABLES, 1);
-        Magic.store32(Bcm2711.AUX_MU_CNTL_REG, 0);
-        Magic.store32(Bcm2711.AUX_MU_IER_REG, 0);
-        Magic.store32(Bcm2711.AUX_MU_LCR_REG, 3);
-        Magic.store32(Bcm2711.AUX_MU_MCR_REG, 0);
-        Magic.store32(Bcm2711.AUX_MU_IIR_REG, 0xC6);
-        Magic.store32(Bcm2711.AUX_MU_BAUD_REG, baudDivisor());
-        Magic.store32(Bcm2711.GPFSEL1, (Bcm2711.ALT5 << 12) | (Bcm2711.ALT5 << 15));
-        Magic.store32(Bcm2711.GPIO_PUP_PDN_CNTRL_REG0, 0);
-        Magic.store32(Bcm2711.AUX_MU_CNTL_REG, 3);
+        Address.fromLong(Bcm2711.AUX_ENABLES).store(1);
+        Address.fromLong(Bcm2711.AUX_MU_CNTL_REG).store(0);
+        Address.fromLong(Bcm2711.AUX_MU_IER_REG).store(0);
+        Address.fromLong(Bcm2711.AUX_MU_LCR_REG).store(3);
+        Address.fromLong(Bcm2711.AUX_MU_MCR_REG).store(0);
+        Address.fromLong(Bcm2711.AUX_MU_IIR_REG).store(0xC6);
+        Address.fromLong(Bcm2711.AUX_MU_BAUD_REG).store(baudDivisor());
+        Address.fromLong(Bcm2711.GPFSEL1).store((Bcm2711.ALT5 << 12) | (Bcm2711.ALT5 << 15));
+        Address.fromLong(Bcm2711.GPIO_PUP_PDN_CNTRL_REG0).store(0);
+        Address.fromLong(Bcm2711.AUX_MU_CNTL_REG).store(3);
     }
 
     /**
@@ -89,7 +90,7 @@ public final class Uart
         pump();                                          // whatever the FIFO takes now, oldest first
         if (txHead == txTail && txReady())
         {
-            Magic.store8(Bcm2711.AUX_MU_IO_REG, c);      // idle line: no reason to queue
+            Address.fromLong(Bcm2711.AUX_MU_IO_REG).store((byte) c);   // idle line: no reason to queue
         }
         else
         {
@@ -97,7 +98,7 @@ public final class Uart
             {
                 pump();
             }
-            Magic.store8(TX_RING + txHead, c);
+            Address.fromLong(TX_RING).plus(txHead).store((byte) c);
             txHead = (txHead + 1) & TX_MASK;
         }
         if ((daif & 0x80L) != 0L)
@@ -116,7 +117,7 @@ public final class Uart
         while (!txReady())
         {
         }
-        Magic.store8(Bcm2711.AUX_MU_IO_REG, c);
+        Address.fromLong(Bcm2711.AUX_MU_IO_REG).store((byte) c);
     }
 
     // ----- interrupt-driven TX/RX -----------------------------------------------------------------
@@ -167,9 +168,9 @@ public final class Uart
         rxTail = 0;
         rxDropped = 0;
         irqCount = 0;
-        Magic.store32(RING_LOCK, 0);                     // raw scratch: nothing else zeroes it
+        Address.fromLong(RING_LOCK).store(0);            // raw scratch: nothing else zeroes it
         ier = Bcm2711.IER_RX_ENABLE;
-        Magic.store32(Bcm2711.AUX_MU_IER_REG, ier);
+        Address.fromLong(Bcm2711.AUX_MU_IER_REG).store(ier);
         Gic.initSpi(Bcm2711.AUX_SPI);
         irqLive = 1;
         if ((daif & 0x80L) == 0L)
@@ -213,7 +214,7 @@ public final class Uart
     {
         if (irqLive == 0)
         {
-            return (Magic.load32(Bcm2711.AUX_MU_LSR_REG) & (1 << Bcm2711.LSR_RX_READY)) != 0;
+            return (Address.fromLong(Bcm2711.AUX_MU_LSR_REG).loadInt() & (1 << Bcm2711.LSR_RX_READY)) != 0;
         }
         return rxHead != rxTail;
     }
@@ -227,18 +228,18 @@ public final class Uart
     {
         if (irqLive == 0)
         {
-            if ((Magic.load32(Bcm2711.AUX_MU_LSR_REG) & (1 << Bcm2711.LSR_RX_READY)) == 0)
+            if ((Address.fromLong(Bcm2711.AUX_MU_LSR_REG).loadInt() & (1 << Bcm2711.LSR_RX_READY)) == 0)
             {
                 return -1;
             }
-            return Magic.load32(Bcm2711.AUX_MU_IO_REG) & 0xFF;
+            return Address.fromLong(Bcm2711.AUX_MU_IO_REG).loadInt() & 0xFF;
         }
         long daif = ringLock();
         pullRx();
         int b = -1;
         if (rxHead != rxTail)
         {
-            b = Magic.load8(RX_RING + rxTail) & 0xFF;
+            b = Address.fromLong(RX_RING).plus(rxTail).loadUnsignedByte() & 0xFF;
             rxTail = (rxTail + 1) & RX_MASK;
         }
         ringUnlock(daif);
@@ -254,7 +255,7 @@ public final class Uart
     /** LSR bit5: the TX FIFO can take a byte. */
     private static boolean txReady()
     {
-        return (Magic.load32(Bcm2711.AUX_MU_LSR_REG) & (1 << Bcm2711.LSR_TX_EMPTY)) != 0;
+        return (Address.fromLong(Bcm2711.AUX_MU_LSR_REG).loadInt() & (1 << Bcm2711.LSR_TX_EMPTY)) != 0;
     }
 
     /** Move queued bytes into the TX FIFO while it has room. Ring lock held. */
@@ -262,7 +263,7 @@ public final class Uart
     {
         while (txTail != txHead && txReady())
         {
-            Magic.store8(Bcm2711.AUX_MU_IO_REG, Magic.load8(TX_RING + txTail));
+            Address.fromLong(Bcm2711.AUX_MU_IO_REG).store((byte) Address.fromLong(TX_RING).plus(txTail).loadUnsignedByte());
             txTail = (txTail + 1) & TX_MASK;
         }
     }
@@ -280,9 +281,9 @@ public final class Uart
     private static boolean pullRx()
     {
         boolean got = false;
-        while ((Magic.load32(Bcm2711.AUX_MU_LSR_REG) & (1 << Bcm2711.LSR_RX_READY)) != 0)
+        while ((Address.fromLong(Bcm2711.AUX_MU_LSR_REG).loadInt() & (1 << Bcm2711.LSR_RX_READY)) != 0)
         {
-            int b = Magic.load32(Bcm2711.AUX_MU_IO_REG) & 0xFF;     // read even when full: clears the source
+            int b = Address.fromLong(Bcm2711.AUX_MU_IO_REG).loadInt() & 0xFF;     // read even when full: clears the source
             int next = (rxHead + 1) & RX_MASK;
             if (next == rxTail)
             {
@@ -290,7 +291,7 @@ public final class Uart
             }
             else
             {
-                Magic.store8(RX_RING + rxHead, b);
+                Address.fromLong(RX_RING).plus(rxHead).store((byte) b);
                 rxHead = next;
                 got = true;
             }
@@ -309,7 +310,7 @@ public final class Uart
         if (want != ier)
         {
             ier = want;
-            Magic.store32(Bcm2711.AUX_MU_IER_REG, want);
+            Address.fromLong(Bcm2711.AUX_MU_IER_REG).store(want);
         }
     }
 
@@ -358,8 +359,8 @@ public final class Uart
     /** Free the lock words (raw scratch RAM -- nothing else zeroes them) and arm or disarm cross-core locking. */
     public static void armLock(int on)
     {
-        Magic.store32(UART_LOCK, 0);
-        Magic.store32(RING_LOCK, 0);
+        Address.fromLong(UART_LOCK).store(0);
+        Address.fromLong(RING_LOCK).store(0);
         lockOwner = -1;
         lockDepth = 0;
         lockArmed = on;

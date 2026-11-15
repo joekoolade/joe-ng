@@ -11,6 +11,7 @@
  */
 package board.cyw43;
 
+import magic.Address;
 import magic.Magic;
 import vm.VM;
 
@@ -86,17 +87,18 @@ public final class Supplicant
             return;
         }
         long body = eth + 14;
-        if ((Magic.load8(body + 1) & 0xFF) != 3)        // not EAPOL-Key
+        Address b = Address.fromLong(body);
+        if ((b.plus(1).loadUnsignedByte() & 0xFF) != 3)        // not EAPOL-Key
         {
             return;
         }
-        int eapLen = ((Magic.load8(body + 2) & 0xFF) << 8) | (Magic.load8(body + 3) & 0xFF);
+        int eapLen = ((b.plus(2).loadUnsignedByte() & 0xFF) << 8) | (b.plus(3).loadUnsignedByte() & 0xFF);
         if (eapLen < 95 || 4 + eapLen > len - 14)
         {
             reject(Magic.bytes("wifi: rekey short frame\n"));
             return;
         }
-        int ki = ((Magic.load8(body + 5) & 0xFF) << 8) | (Magic.load8(body + 6) & 0xFF);
+        int ki = ((b.plus(5).loadUnsignedByte() & 0xFF) << 8) | (b.plus(6).loadUnsignedByte() & 0xFF);
         byte[] aa = Cyw43.heapBytes(eth + 6, 6);         // the AP's MAC (Ethernet source)
         if ((ki & KI_ACK) == 0)
         {
@@ -122,7 +124,8 @@ public final class Supplicant
         byte[] aNonce = Cyw43.heapBytes(body + 17, 32);
         byte[] r = Cyw43.heapBytes(body + 9, 8);
         pendReplay = r;
-        pendKeyLen = ((Magic.load8(body + 7) & 0xFF) << 8) | (Magic.load8(body + 8) & 0xFF);
+        Address b = Address.fromLong(body);
+        pendKeyLen = ((b.plus(7).loadUnsignedByte() & 0xFF) << 8) | (b.plus(8).loadUnsignedByte() & 0xFF);
         if (sNonce == null)
         {
             sNonce = new byte[32];
@@ -235,7 +238,8 @@ public final class Supplicant
     /** AES-unwrap the key data with {@code ek} and pull out the GTK KDE; its key id, or -1. */
     private static int unwrapGtk(long body, byte[] ek, byte[] gtk)
     {
-        int kdLen = ((Magic.load8(body + 97) & 0xFF) << 8) | (Magic.load8(body + 98) & 0xFF);
+        Address b = Address.fromLong(body);
+        int kdLen = ((b.plus(97).loadUnsignedByte() & 0xFF) << 8) | (b.plus(98).loadUnsignedByte() & 0xFF);
         if (kdLen < 16 || (kdLen & 7) != 0)
         {
             return -1;
