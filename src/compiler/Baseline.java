@@ -2885,6 +2885,78 @@ public final class Baseline
         }
     }
 
+    /** The bytecode positions that a BACKWARD branch targets -- every loop's header -- for {@link #emitStopPoll}. */
+    private boolean[] loopHeaders;
+
+    /** Mark each target of a backward goto/goto_w/if* branch; switches are left out (javac loops never use them). */
+    private static boolean[] loopHeaders(byte[] code)
+    {
+        boolean[] h = new boolean[code.length];
+        int pos = 0;
+        while (pos < code.length)
+        {
+            int op = code[pos] & 0xFF;
+            int target = -1;
+            if ((op >= 0x99 && op <= 0xA7) || op == 0xC6 || op == 0xC7)
+            {
+                target = pos + s2(code, pos + 1);          // if<cond>, if_icmp*, if_acmp*, goto, ifnull, ifnonnull
+            }
+            else if (op == 0xC8)
+            {
+                target = pos + s4(code, pos + 1);          // goto_w
+            }
+            if (target >= 0 && target <= pos && target < code.length)
+            {
+                h[target] = true;
+            }
+            int len = (op == 0xC8 || op == 0xC9) ? 5 : opLen(op, code, pos);
+            pos += len < 1 ? 1 : len;
+        }
+        return h;
+    }
+
+    /**
+     * A STOPPABLE program's poll, at a loop header with an empty operand stack: if the stop word is nonzero (a stop
+     * is pending for SOME task), ask {@link Symbols#STOP_POLL} for this task's stop error and throw it when there is
+     * one. A {@code while (true) {}} makes no calls and holds no lock, so this is the only place it can be stopped;
+     * here the throw is an ordinary call-site throw, at a bytecode boundary -- never mid-allocation or mid-monitor,
+     * which is where a timer tick could land -- and the program's handlers and monitors unwind normally.
+     *
+     * <p>Costs a load and a never-taken branch per iteration while no stop is pending. Like {@link #throwImplicit},
+     * the helper block leaves the compiler's operand model as it found it for the code that follows.
+     */
+    private void emitStopPoll(CodeBuffer cb, int pos)
+    {
+        cb.emitAll(A64Enc.loadImm64(16, symbols.stopCellAddr()));
+        cb.emit(A64Enc.ldrx(16, 16, 0));
+        int over = cb.emit(A64Enc.cbz(16, 0));                  // no stop pending anywhere: straight on
+        int savedSp = sp;
+        int[] holds = null;                                     // own copy, not savedHolds: not re-entrant
+        if (deepStack)
+        {
+            holds = new int[OP_MAX];
+            for (int i = 0; i < OP_MAX; i++)
+            {
+                holds[i] = regHolds[i];
+            }
+        }
+        int start = cb.wordCount();
+        emitCall(cb, 0, true, false, SYM_HELPER, Symbols.STOP_POLL);   // -> this task's stop error, or 0
+        int r = opSlot(sp - 1);
+        int keep = cb.emit(A64Enc.cbz(r, 0));                   // not this task: carry on
+        throwStored(cb, pos, start);                            // handler search + unwind -- never falls through
+        cb.set(keep, A64Enc.cbz(r, cb.wordCount() - keep));
+        sp = savedSp;
+        if (holds != null)
+        {
+            for (int i = 0; i < OP_MAX; i++)
+            {
+                regHolds[i] = holds[i];
+            }
+        }
+        cb.set(over, A64Enc.cbz(16, cb.wordCount() - over));
+    }
+
     /** Throw ArithmeticException if the divisor {@code divReg} is zero (AArch64 SDIV/UDIV return 0, don't trap). */
     private void divisorCheck(CodeBuffer cb, int divReg, int pos)
     {
@@ -4792,6 +4864,8 @@ public final class Baseline
         emitSyncEnter(cb, isStatic);         // ACC_SYNCHRONIZED: after the prologue (slot 0 = this), before bci 0
 
         farBranches = code.length > FAR_BRANCH_BYTECODE;
+        loopHeaders = symbols.implicitChecks() && symbols.stopPolls() && symbols.stopCellAddr() != 0L
+                ? loopHeaders(code) : null;
         int[] bcToWord = new int[code.length];
         // Drive sp from the control-flow pre-pass at EVERY reachable bytecode, not just at branch targets
         // recorded so far. A loop header reached linearly before its back-edge is compiled would otherwise carry
@@ -4850,6 +4924,10 @@ public final class Baseline
                     }
                 }
                 sp = bcDepth[pos];    // merge point: adopt the branch-edge depth
+            }
+            if (loopHeaders != null && loopHeaders[pos] && sp == 0)
+            {
+                emitStopPoll(cb, pos);             // a stoppable program: see emitStopPoll
             }
             int op = code[pos] & 0xFF;
             curPos = pos;                          // so wide-sensitive lowerings (dup2/pop2) can read wideTop[pc]

@@ -38,7 +38,7 @@ public class RunProbe
         show("jar", r);
         check("jar ran", r.status == RunProgram.OK);
         check("jar main class", "hello.Main".equals(r.mainClass));
-        check("jar defined 7", r.defined == 7);
+        check("jar defined 8", r.defined == 8);
         check("jar greeting", r.output.contains("hello from an uploaded jar"));
         check("jar args", r.output.contains("args 2 a,b"));
         check("jar interface + lambda", r.output.contains("square 3 area 9 scaled 36"));
@@ -79,6 +79,7 @@ public class RunProbe
 
         exits(jar);
         threads(jar);
+        stops(jar);
         http(jar, cls);
         System.out.println(failures == 0 ? "RunProbe PASS" : "RunProbe FAIL " + failures);
     }
@@ -147,6 +148,85 @@ public class RunProbe
         check("ids", b.id == a.id + 1);
     }
 
+    /**
+     * Stopping a run, each way a program can resist it. On QEMU the loops yield (no timer ticks there), which
+     * changes nothing about what stops them: they ignore interrupts, so the stop must be forced.
+     */
+    private static void stops(byte[] jar) throws Exception
+    {
+        RunProgram.Result r = spin(jar, "spin");
+        String what = RunProgram.stop(r, 300L);
+        show("stop spin: " + what, r);
+        check("spin: stopped, forced", r.done() && r.status == RunProgram.STOPPED && r.forced && !r.killed);
+        check("spin: its finally ran", r.output.contains("spin: finally ran"));
+        check("spin: report", r.output.contains("[stopped (forced);"));
+        check("spin: its monitor is free", lockFree(Class.forName("hello.Spin")));
+
+        r = spin(jar, "sleep");
+        what = RunProgram.stop(r, 3000L);
+        show("stop sleep: " + what, r);
+        check("sleep: stopped by the interrupt alone", r.status == RunProgram.STOPPED && !r.forced
+                && r.output.contains("spin: sleep interrupted"));
+
+        r = spin(jar, "polite");
+        what = RunProgram.stop(r, 3000L);
+        show("stop polite: " + what, r);
+        check("polite: ended on the interrupt", r.status == RunProgram.STOPPED && !r.forced
+                && r.output.contains("polite, saw the interrupt"));
+
+        r = spin(jar, "threads");
+        what = RunProgram.stop(r, 300L);
+        show("stop threads: " + what, r);
+        check("threads: all stopped", r.status == RunProgram.STOPPED && r.forced && r.mark.liveThreads().isEmpty());
+        check("threads: every finally ran", r.text().contains("thread 0 finally") && r.text().contains("thread 1 finally")
+                && r.text().contains("thread 2 finally") && r.text().contains("spin: finally ran"));
+
+        r = spin(jar, "jdk");
+        what = RunProgram.stop(r, 300L);
+        show("stop jdk: " + what, r);
+        check("jdk: stopped", r.status == RunProgram.STOPPED && r.forced);
+
+        r = spin(jar, "catch");
+        what = RunProgram.stop(r, 300L);
+        show("stop catch: " + what, r);
+        check("catch: it caught the stop", r.text().contains("caught jdk.internal.misc.MetalRunExit$Stopped"));
+        check("catch: ended anyway", r.done() && r.status == RunProgram.STOPPED && r.killed
+                && r.mark.liveThreads().isEmpty());
+
+        check("nothing left to stop", RunProgram.stop(r, 0L).contains("no live thread"));
+        r = RunProgram.run("hello.jar", jar, null, new String[] { "after", "stops" });
+        check("a run after the stops", r.status == RunProgram.OK && r.output.contains("args 2 after,stops"));
+    }
+
+    /** Start {@code hello.Spin <mode> yield} and wait until it has said it started. */
+    private static RunProgram.Result spin(byte[] jar, String mode) throws Exception
+    {
+        RunProgram.Result r = RunProgram.start("hello.jar", jar, "hello.Spin", new String[] { mode, "yield" });
+        int i = 0;
+        while (!r.text().contains("spin: " + mode + " started") && i < 100)
+        {
+            Thread.sleep(50L);
+            i = i + 1;
+        }
+        return r;
+    }
+
+    /** Whether another thread can take {@code lock}'s monitor within two seconds. */
+    private static boolean lockFree(Object lock) throws Exception
+    {
+        boolean[] got = new boolean[1];
+        Thread t = new Thread(() ->
+        {
+            synchronized (lock)
+            {
+                got[0] = true;
+            }
+        }, "lock-probe");
+        t.start();
+        t.join(2000L);
+        return got[0];
+    }
+
     private static void http(byte[] jar, byte[] cls) throws Exception
     {
         String token = Files.readString(Path.of("/etc/boot.token")).trim();
@@ -189,11 +269,25 @@ public class RunProbe
         check("follow has the whole output", done.contains("slow h start") && done.contains("slow h end"));
         Thread.sleep(1500L);
         expect("follow, after main", call("GET /run/" + id, null, null), "200", "slow h late");
+        String spun = call("PUT /run/hello.jar?main=hello.Spin&args=spin+yield&wait=0.3",
+                tok + "Content-Length: " + jar.length + "\r\n", jar);
+        expect("spin running", spun, "202", "still running");
+        int sat = spun.indexOf("GET /run/");
+        String sid = sat < 0 ? "0" : spun.substring(sat + 9, spun.indexOf(' ', sat + 9)).trim();
+        expect("stop, no token", call("POST /run/" + sid + "/stop", "Content-Length: 0\r\n", null), "401", null);
+        expect("stop, bad grace", call("POST /run/" + sid + "/stop?grace=x", tok + "Content-Length: 0\r\n", null),
+                "400", "grace=");
+        expect("stop", call("POST /run/" + sid + "/stop?grace=0.2", tok + "Content-Length: 0\r\n", null), "200",
+                "stopped (forced)");
+        expect("stop again", call("POST /run/" + sid + "/stop", tok + "Content-Length: 0\r\n", null), "409",
+                "nothing running");
+        expect("stop, no such run", call("POST /run/99999/stop", tok + "Content-Length: 0\r\n", null), "404", null);
         expect("no such run", call("GET /run/99999", null, null), "404", "no run 99999");
         expect("not a run number", call("GET /run/abc", null, null), "404", null);
         String page = call("GET /run", null, null);
         expect("page", page, "200", "<h1>Run a program</h1>");
-        check("page shows the last run's output", page.contains("slow h end") && !page.contains("data-running"));
+        check("page shows the last run's output", page.contains("spin: finally ran") && !page.contains("data-running"));
+        check("page: a stopped run", page.contains("<td>stopped (forced)</td>"));
         check("page links the run", page.contains("<a href=\"/run/" + id + "\">#" + id + "</a>"));
         check("page history", page.contains("<td>Hello.class</td><td>Hello</td><td>one two</td><td>returned</td>"));
     }

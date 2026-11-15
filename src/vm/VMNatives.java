@@ -1868,6 +1868,50 @@ final class VMNatives
     }
 
     /**
+     * {@code jdk.internal.misc.MetalRunExit.stop0(Thread, Throwable)}: give the task running {@code threadObj} the
+     * error {@code exc} to throw at its next stop poll (a loop header in a stoppable program's code -- see
+     * Baseline.emitStopPoll). 1 when the thread has a live task, 0 when it has none (never started, or done). The
+     * guest interrupts the thread as well, so one blocked in sleep/wait/join comes back to its own code.
+     */
+    static long runStop(long threadObj, long exc)
+    {
+        if (threadObj == 0L || exc == 0L || taskThreadObj == null)
+        {
+            return 0L;
+        }
+        long daif = VMScheduler.schedLock();
+        long found = 0L;
+        int t = 0;
+        while (t < taskCount)
+        {
+            if (taskThreadObj[t] == threadObj && taskDone[t] == 0)
+            {
+                if (taskStopExc[t] == 0L)
+                {
+                    taskStopFirst[t] = 0L;             // the kill clock starts at its first poll from now
+                }
+                taskStopExc[t] = exc;
+                found = 1L;
+            }
+            t += 1;
+        }
+        recountStops();
+        VMScheduler.schedUnlock(daif);
+        return found;
+    }
+
+    /**
+     * {@code jdk.internal.misc.MetalRunExit.defining0(boolean)}: while on, classes THIS task defines from bytes are a
+     * stoppable program's ({@link Loader#defineFromBytes} records their blobs, and their methods compile with stop
+     * polls). The runner turns it on around defining a program's classes, under its define lock.
+     */
+    static long runDefining(long on)
+    {
+        Loader.stoppableDefiner = on != 0L ? curTask() : -1;
+        return 0L;
+    }
+
+    /**
      * {@code java.lang.Shutdown.beforeHalt()} native: a JVM TI notification that the VM is about to halt.
      * There is nothing beneath this VM to notify, so a genuine no-op is the whole implementation -- not a stub
      * standing in for something missing. Without it {@code System.exit} trapped: the class loads, the method

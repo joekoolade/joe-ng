@@ -543,6 +543,12 @@ public final class VM
     static long[] taskWaitObj;              // for a BLOCKED object-monitor waiter: the object it Object.wait()s on (0 = none)
     static int[]  taskDone;                 // 1 once a task ran VMScheduler.taskExit() (its run() returned) — Thread.join() polls this
     static long[] taskThreadObj;            // M4: the guest java/lang/Thread of each task (0 until known/lazily wrapped)
+    // The error a STOPPED task throws at its next stop poll (VMNatives.runStop), 0 for none. Held by the guest's
+    // MetalRunExit.Run too, so the object stays reachable; the count of nonzero entries is Heap.STOP_CELL.
+    static long[] taskStopExc;
+    // When this task's poll FIRST handed it its stop error (counter ticks), 0 before. A task still polling
+    // STOP_KILL_MS later keeps catching the error, and the poll ends the task where it stands (stopPoll).
+    static long[] taskStopFirst;
     static int[]  taskInterrupted;          // Thread.interrupt() flag per task (1 = interrupted; sleep/join observe it)
     static int[]  taskPermit;               // LockSupport permit per task (1 = a pending unpark; park consumes it)
     static long[] taskMonWait;              // for a task BLOCKED on monitorenter: the object it is trying to lock (0 = none)
@@ -938,6 +944,8 @@ public final class VM
         taskSp = new long[MAX_TASKS];
         taskStackBase = new long[MAX_TASKS];
         taskThreadObj = new long[MAX_TASKS];
+        taskStopExc = new long[MAX_TASKS];
+        taskStopFirst = new long[MAX_TASKS];
         taskState = new int[MAX_TASKS];
         taskWake = new long[MAX_TASKS];
         taskWaitOn = new int[MAX_TASKS];
@@ -1455,6 +1463,61 @@ public final class VM
     static long newArith()
     {
         return Loader.newArith();
+    }
+
+    /**
+     * {@link compiler.Symbols#STOP_POLL}: a stoppable program's loop header asks this, only while
+     * {@link Heap#STOP_CELL} says some task has a stop pending. The error this task is to throw, or 0.
+     */
+    static long stopPoll()
+    {
+        if (taskStopExc == null)
+        {
+            return 0L;
+        }
+        int t = curTask();
+        long exc = taskStopExc[t];
+        if (exc == 0L)
+        {
+            return 0L;
+        }
+        long now = Magic.readCNTPCT_EL0();
+        if (taskStopFirst[t] == 0L)
+        {
+            taskStopFirst[t] = now;
+        }
+        else if (now - taskStopFirst[t] > Magic.readCNTFRQ_EL0() * STOP_KILL_MS / 1000L)
+        {
+            // Handed its stop error STOP_KILL_MS ago and still polling: it catches the error and goes round
+            // again. End the task here -- a poll is a bytecode boundary in the program's own code, holding no VM
+            // lock -- as a returned thread ends. Monitors its frames hold stay held: the price of a program that
+            // refuses a stop, and only such a program pays it.
+            Uart.write(Magic.bytes("\nrun stop: task "));
+            printDec(t);
+            Uart.write(Magic.bytes(" kept catching its stop; ended at a poll\n"));
+            VMScheduler.taskExit();
+        }
+        return exc;
+    }
+
+    /** How long a task may keep catching its stop error before its poll ends it ({@link #stopPoll}). */
+    static final long STOP_KILL_MS = 2000L;
+
+    /** Recount the tasks with a stop pending into {@link Heap#STOP_CELL}. Under the scheduler lock. */
+    static void recountStops()
+    {
+        long n = 0L;
+        int t = 0;
+        while (t < MAX_TASKS)
+        {
+            if (taskStopExc[t] != 0L)
+            {
+                n += 1L;
+            }
+            t += 1;
+        }
+        Magic.store64(Heap.STOP_CELL, n);
+        Magic.dsb();
     }
 
     /** Allocate a {@code java/lang/ClassCastException} — the JIT calls this on a failed {@code checkcast},
@@ -2012,6 +2075,9 @@ public final class VM
         if (newUnresolvedAddr == 0L) { long u = newUnresolved(-1L); } // `new` the loader cannot resolve early
         if (ctorRefInit0 == 0L) { ctorRefInit(-1L); }                 // a constructor reference's <clinit> (JVMS 5.5)
         if (newArithAddr == 0L) { long u = newArith(); }
+        if (stopPollAddr == 0L) { long u = stopPoll(); }
+        if (runStopAddr == 0L) { long u = VMNatives.runStop(0L, 0L); }                // MetalRunExit.stop0
+        if (runDefiningAddr == 0L) { long u = VMNatives.runDefining(0L); }            // MetalRunExit.defining0
         if (newNaseAddr == 0L) { long u = newNase(0L); }                // NegativeArraySizeException (newarray < 0)
         if (dremAddr == 0L) { double u = drem(1.0, 1.0); }            // frem/drem
         if (multiNewArrayAddr == 0L) { long u = multiNewArray(0L, 0, 0, 0, 0, 0); }   // multianewarray
@@ -3820,6 +3886,9 @@ public final class VM
     static long newAioobeAddr;         // VM.newAioobe()J — a java/lang/ArrayIndexOutOfBoundsException
     static long newAioobeIndexAddr;    // VM.newAioobeIndex(JJ)J — ... with stock's index/length message
     static long newArithAddr;          // VM.newArith()J  — a java/lang/ArithmeticException (divide by zero)
+    static long stopPollAddr;          // VM.stopPoll()J  — a stoppable program's loop-header poll (Symbols.STOP_POLL)
+    static long runStopAddr;           // VMNatives.runStop(JJ)J — MetalRunExit.stop0(Thread, Throwable)
+    static long runDefiningAddr;       // VMNatives.runDefining(J)J — MetalRunExit.defining0(boolean)
     static long newAseAddr;            // VM.newAse(J)J   — a java/lang/ArrayStoreException (aastore mismatch)
     static long newNaseAddr;           // VM.newNase(J)J   — a java/lang/NegativeArraySizeException (newarray < 0)
     static long dremAddr;              // VM.drem(DD)D    — frem/drem (AArch64 has no remainder instruction)

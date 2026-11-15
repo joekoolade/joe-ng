@@ -122,6 +122,12 @@ public final class Heap
     public static final long LARGE_PTR_CELL  = 0x03FF_0208L;
     public static final long LARGE_FREE_CELL = 0x03FF_0210L;
     /**
+     * How many tasks have a stop pending ({@link VM#taskStopExc}); 0 almost always. A stoppable program's loop
+     * headers load it inline (Baseline.emitStopPoll) and call into the VM only while it is nonzero, so it is a
+     * fixed cell the compiled code can name, beside the allocator's.
+     */
+    public static final long STOP_CELL = 0x03FF_0218L;
+    /**
      * One bit per 8 bytes of the code arena, marking buffers that another buffer branches to DIRECTLY.
      *
      * <p>The collector learns that code is reachable by seeing a code address in a heap or stack word
@@ -361,6 +367,7 @@ public final class Heap
         Magic.store64(CODE_PTR_CELL, CODE_BASE);
         Magic.store64(LARGE_PTR_CELL, LARGE_BASE);
         Magic.store64(LARGE_FREE_CELL, 0L);
+        Magic.store64(STOP_CELL, 0L);
         long pz = CODE_PIN_BITMAP;
         while (pz < CODE_PIN_END)
         {

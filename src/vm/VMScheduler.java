@@ -1905,6 +1905,8 @@ public final class VMScheduler
         taskWaitOn[id] = 0;
         taskWaitObj[id] = 0L;
         taskThreadObj[id] = threadObj;                     // currentThread() of the new task, before it can run
+        taskStopExc[id] = 0L;                              // a recycled slot inherits no stop
+        taskStopFirst[id] = 0L;
         taskInterrupted[id] = 0;
         taskPermit[id] = 0;
         taskMonWait[id] = 0L;
@@ -2008,6 +2010,11 @@ public final class VMScheduler
         long daif = schedLock();
         int me = curTask();
         taskDone[me] = 1;                                  // Thread.join() waiters observe this
+        if (taskStopExc[me] != 0L)
+        {
+            taskStopExc[me] = 0L;                          // a stopped thread is gone: its polls are over
+            recountStops();
+        }
         taskState[me] = TASK_BLOCKED;
         taskWaitOn[me] = 3;                                // the dead park semaphore (never posted)
         schedUnlock(daif);

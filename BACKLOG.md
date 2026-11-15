@@ -15,9 +15,10 @@ the item leaves this list; new findings that are not fixed on the spot come here
 
 ## Web server
 
-- **A `/run` program cannot be stopped (2026-11-14):** main runs on its own thread now, so the server is free after
-  `wait=`, but a run that never returns keeps its thread (and whatever it holds) until a reboot. Thread.stop is gone
-  from the JDK; an interrupt is the only polite signal, and a program can ignore it.
+- **A `/run` stop cannot reach a thread blocked in a JDK call that ignores interrupts (2026-11-14):** the forced
+  stage acts at the program's own loop headers (Baseline stop polls), so a thread parked in, say, a socket read
+  stops only when the call returns. Also unmeasured: what the polls cost a loop when no stop is pending (a load and
+  a not-taken branch per iteration, in run classes only).
 - **A `/run` thread other than main that calls `System.exit` ends only itself (2026-11-14):** main carries on to its
   own end; the run reports the exit. There is no safe way to stop main from another thread.
 

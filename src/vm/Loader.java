@@ -4696,6 +4696,57 @@ public final class Loader
         gRootBlob = blobBytes;
     }
 
+    /** The task whose {@link #defineFromBytes} classes are a stoppable program's, or -1 (VMNatives.runDefining). */
+    static int stoppableDefiner = -1;
+
+    /** The classfile blobs of stoppable programs' classes, and their lengths ({@link #compilingStoppable}). */
+    private static long[] stoppableBase = new long[64];
+
+    private static int[] stoppableLen = new int[64];
+
+    private static int stoppableCount;
+
+    private static void addStoppableBlob(long blob, int len)
+    {
+        if (stoppableCount == stoppableBase.length)
+        {
+            long[] nb = new long[stoppableCount * 2];
+            int[] nl = new int[stoppableCount * 2];
+            int i = 0;
+            while (i < stoppableCount)
+            {
+                nb[i] = stoppableBase[i];
+                nl[i] = stoppableLen[i];
+                i += 1;
+            }
+            stoppableBase = nb;
+            stoppableLen = nl;
+        }
+        stoppableBase[stoppableCount] = blob;
+        stoppableLen[stoppableCount] = len;
+        stoppableCount += 1;
+    }
+
+    /**
+     * Whether the method being compiled belongs to a stoppable program: its class's methods table
+     * ({@code gMethodsStart}) lies inside a blob {@link #defineFromBytes} recorded for one. Asked by MetalSymbols
+     * for every compile, so it is a short scan over just those blobs.
+     */
+    static boolean compilingStoppable()
+    {
+        long at = gMethodsStart;
+        int i = 0;
+        while (i < stoppableCount)
+        {
+            if (at >= stoppableBase[i] && at < stoppableBase[i] + stoppableLen[i])
+            {
+                return true;
+            }
+            i += 1;
+        }
+        return false;
+    }
+
     /**
      * Give a blob's own virtual methods DEFERRAL STUBS even where reachability analysis prunes them, so its
      * vtable has no holes — without marking them reachable, which is the part that matters.
@@ -8115,6 +8166,10 @@ public final class Loader
             i += 1;
         }
         addBlob(blob, len);
+        if (stoppableDefiner >= 0 && stoppableDefiner == VM.curTask())
+        {
+            addStoppableBlob(blob, len);                // a /run program's class: its loops poll for a stop
+        }
         pullIndyIfaces(blob);                           // as loadClassIncremental: a lambda's interface is named
                                                         //   in no CONSTANT_Class, so nothing else pulls it
         rootBlob(blob);                                 // EVERY method is a root: nothing loaded calls into a
@@ -14359,6 +14414,12 @@ public final class Loader
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fill0")))             { return VM.statsFillAddr; }       // (I,long[])J
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("taskThread0")))       { return VM.statsTaskThreadAddr; } // (I)Thread
+        }
+        // A /run program's stop (jdk.internal.misc.MetalRunExit): mark a thread's task, and the defining phase.
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalRunExit")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("stop0")))             { return VM.runStopAddr; }      // (Thread,Throwable)I
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("defining0")))         { return VM.runDefiningAddr; }  // (Z)V
         }
         // System.exit -> Runtime.exit -> Shutdown.exit -> beforeHalt(); runHooks(); halt(status) -> halt0.
         // Both ends are NATIVE, so the class loaded fine and the calls resolved nowhere -- reported as

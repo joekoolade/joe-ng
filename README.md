@@ -192,14 +192,28 @@ curl -T app.jar -H "$TOK" "http://192.168.1.247/run/app.jar?wait=1"
 curl http://192.168.1.247/run/3
 ```
 
+A run can be stopped, with the page's Stop button or:
+
+```sh
+curl -X POST -H "$TOK" "http://192.168.1.247/run/3/stop?grace=2"
+```
+
+Its threads are interrupted first, so a program waiting in `sleep`, `wait`
+or `join` can finish on its own. After `grace` seconds (default 2), every
+thread still running throws an error at the next loop header of the
+program's own code, so its `finally` blocks run and its locks are released.
+A program that catches that error and carries on is ended at that loop
+header 2 s later.
+
 Limits:
 
 - The VM has one class namespace, so each class name loads once per boot.
   Sending the same file again runs it again, and its statics keep their
   values. A changed class under the same name is refused: rename the classes
   or reboot.
-- A run cannot be stopped: one that never returns keeps its thread until the
-  next reboot (the server goes on answering).
+- A stop reaches a thread at the loops of the program's own classes. A thread
+  blocked inside a JDK call that ignores interrupts (some I/O) stops only
+  when that call returns.
 - `System.exit` (and `Runtime.halt`) ends the run, not the board: the reply
   ends with `[System.exit(N) called by thread "main"; ...]`. The program's
   shutdown hooks do not run. If a thread other than `main` exits, only that

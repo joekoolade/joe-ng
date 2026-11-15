@@ -34,6 +34,8 @@ import java.util.List;
  *     or e.g. {@code curl -T Hello.class -H "X-Boot-Token: ..." "http://<pi>/run/Hello.class?args=a+b"}.</li>
  * <li>{@code POST /run?url=<http(s) url>}: the board downloads the program itself, then runs it.</li>
  * <li>{@code GET /run/<n>}: run n's output so far (no token: the page shows the same).</li>
+ * <li>{@code POST /run/<n>/stop?grace=<s>}: stop run n -- interrupt its threads, then after {@code grace} seconds
+ *     (default {@value #GRACE_DEFAULT_S}) force the ones still running ({@link RunProgram#stop}).</li>
  * <li>{@code GET /run}: a page to do either from a browser, with the last run's output and this boot's runs.</li>
  * </ul>
  *
@@ -67,6 +69,11 @@ final class RunPage
     static final int WAIT_DEFAULT_S = 30;
 
     static final int WAIT_MAX_S = 600;
+
+    /** Seconds a stop waits after the interrupt before it forces, by default and at most. */
+    static final int GRACE_DEFAULT_S = 2;
+
+    static final int GRACE_MAX_S = 30;
 
     /** How many runs the page lists, and {@code GET /run/<n>} can still answer. */
     private static final int HISTORY = 20;
@@ -113,12 +120,18 @@ final class RunPage
         }
         boolean upload = p.startsWith(RUN + "/") && m.equals("PUT");
         boolean fetch = p.equals(RUN) && m.equals("POST");
-        if (!upload && !fetch)
+        boolean stop = p.startsWith(RUN + "/") && p.endsWith("/stop") && m.equals("POST");
+        if (!upload && !fetch && !stop)
         {
             return false;
         }
         if (!BootUpdate.authorized(req, out, "programs from the network"))
         {
+            return true;
+        }
+        if (stop)
+        {
+            stop(p.substring(RUN.length() + 1, p.length() - "/stop".length()), param(req, "grace"), out);
             return true;
         }
         String args = param(req, "args");
@@ -194,10 +207,9 @@ final class RunPage
         }
     }
 
-    /** {@code GET /run/<n>}: that run's output so far, 200 once main has finished and 202 while it runs. */
-    private static void show(String n, OutputStream out) throws IOException
+    /** The run numbered {@code n} among this boot's last {@link #HISTORY}, or null. */
+    private static RunProgram.Result find(String n)
     {
-        RunProgram.Result r = null;
         try
         {
             int id = Integer.parseInt(n);
@@ -205,14 +217,62 @@ final class RunPage
             {
                 if (run.result.id == id)
                 {
-                    r = run.result;
+                    return run.result;
                 }
             }
         }
         catch (NumberFormatException e)
         {
-            r = null;
+            return null;
         }
+        return null;
+    }
+
+    /**
+     * {@code POST /run/<n>/stop}: stop it, then answer as {@code GET /run/<n>} does with one more line saying what the
+     * stop did. 409 when the run has nothing left running.
+     */
+    private static void stop(String n, String grace, OutputStream out) throws IOException
+    {
+        RunProgram.Result r = find(n);
+        if (r == null)
+        {
+            Http.text(out, "404 Not Found", "no run " + n + " (this boot's last " + HISTORY + " runs are kept)");
+            return;
+        }
+        long graceMs = GRACE_DEFAULT_S * 1000L;
+        if (!grace.isEmpty())
+        {
+            try
+            {
+                double g = Double.parseDouble(grace);
+                if (!(g >= 0.0) || g > GRACE_MAX_S)
+                {
+                    throw new NumberFormatException(grace);
+                }
+                graceMs = (long) (g * 1000.0);
+            }
+            catch (NumberFormatException e)
+            {
+                Http.text(out, "400 Bad Request", "grace= is seconds, 0 to " + GRACE_MAX_S);
+                return;
+            }
+        }
+        if (r.mark != null && r.mark.liveThreads().isEmpty())
+        {
+            Http.text(out, "409 Conflict", "run #" + r.id + " has nothing running");
+            return;
+        }
+        String what = RunProgram.stop(r, graceMs);
+        String status = r.done() ? "200 OK" : "202 Accepted";
+        String body = r.text() + "\n[" + what + "]\n";
+        Http.respond(out, status, "text/plain; charset=utf-8", body.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /** {@code GET /run/<n>}: that run's output so far, 200 once main has finished and 202 while it runs. */
+    private static void show(String n, OutputStream out) throws IOException
+    {
+        RunProgram.Result r = find(n);
         if (r == null)
         {
             Http.text(out, "404 Not Found", "no run " + n + " (this boot's last " + HISTORY + " runs are kept)");
@@ -361,6 +421,10 @@ final class RunPage
         {
             return "exit " + r.exitStatus;
         }
+        if (r.status == RunProgram.STOPPED)
+        {
+            return r.forced ? "stopped (forced)" : "stopped";
+        }
         return r.status == RunProgram.THREW ? "threw" : "not run";
     }
 
@@ -381,7 +445,7 @@ final class RunPage
                 .append("<button id=\"up\">Upload and run</button></p>\n");
         sb.append("<h2>Download</h2>\n<p><input id=\"url\" size=\"50\" ")
                 .append("placeholder=\"http://host:8000/app.jar\"> <button id=\"get\">Download and run</button></p>\n");
-        sb.append("<h2>Output</h2>\n<p id=\"st\">");
+        sb.append("<h2>Output</h2>\n<p><button id=\"stop\" disabled>Stop</button></p>\n<p id=\"st\">");
         Run last = RUNS.isEmpty() ? null : RUNS.get(0);
         if (last == null)
         {
@@ -432,17 +496,33 @@ final class RunPage
               return q + '&wait=5' + extra;
             }
             const secs = t0 => Math.round((Date.now() - t0) / 100) / 10;
+            let running = null;
+            function stoppable(id) { running = id; $('stop').disabled = id === null; }
             function follow(id, what, t0) {
+              stoppable(id);
               setTimeout(() => {
                 fetch('/run/' + id, { cache: 'no-store' })
                   .then(r => r.text().then(t => {
                     $('out').textContent = t;
                     if (r.status === 202) { st(what + ': still running, ' + secs(t0) + ' s'); follow(id, what, t0); }
-                    else st(what + ': ' + r.status + ' ' + r.statusText + ' after ' + secs(t0) + ' s');
+                    else { stoppable(null); st(what + ': ' + r.status + ' ' + r.statusText + ' after ' + secs(t0) + ' s'); }
                   }))
                   .catch(() => follow(id, what, t0));
               }, 1000);
             }
+            $('stop').onclick = () => {
+              if (running === null) return;
+              const id = running;
+              stoppable(null);
+              st('Stopping run #' + id + '...');
+              fetch('/run/' + id + '/stop', { method: 'POST', headers: { 'X-Boot-Token': $('tok').value } })
+                .then(r => r.text().then(t => {
+                  $('out').textContent = t;
+                  st('run #' + id + ': ' + r.status + ' ' + r.statusText);
+                  if (r.status === 202) follow(id, 'run #' + id, Date.now());
+                }))
+                .catch(e => st('Stop failed: ' + e));
+            };
             function shown(x, what, t0) {
               $('out').textContent = x.responseText;
               const m = x.status === 202 ? /run #(\\d+) still running/.exec(x.responseText) : null;
