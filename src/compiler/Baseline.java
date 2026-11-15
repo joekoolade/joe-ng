@@ -2888,6 +2888,18 @@ public final class Baseline
     /** The bytecode positions that a BACKWARD branch targets -- every loop's header -- for {@link #emitStopPoll}. */
     private boolean[] loopHeaders;
 
+    private static boolean anyTrue(boolean[] b)
+    {
+        for (int i = 0; i < b.length; i++)
+        {
+            if (b[i])
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** Mark each target of a backward goto/goto_w/if* branch; switches are left out (javac loops never use them). */
     private static boolean[] loopHeaders(byte[] code)
     {
@@ -4808,7 +4820,17 @@ public final class Baseline
         // the monitor calls. Getting this wrong is not a missed optimisation -- a leaf saves no LR and gets
         // NO operand spill area (spillWords = 0), so emitSyncExit's spillLive would write outside the frame
         // and the helper's return would come back to a clobbered x30.
-        this.nonLeaf = isNonLeaf(code) || this.isSync;
+        // Stop polls are the same trap: emitStopPoll adds a helper CALL the bytecode does not show, so a method that
+        // gets one is no leaf either. As a leaf it saved no LR, and while no stop was pending the call never ran --
+        // so it measured fine; the first time a stop was pending ANYWHERE, every polled leaf loop's helper call
+        // overwrote x30 and its `ret` jumped back into its own body (the Pi went silent, 2026-11-14).
+        loopHeaders = !isEntry && symbols.implicitChecks() && symbols.stopPolls() && symbols.stopCellAddr() != 0L
+                ? loopHeaders(code) : null;
+        if (loopHeaders != null && !anyTrue(loopHeaders))
+        {
+            loopHeaders = null;                  // no loop: no poll, and the method may stay a leaf
+        }
+        this.nonLeaf = isNonLeaf(code) || this.isSync || loopHeaders != null;
         this.saveLR = !isEntry && nonLeaf;
         // Locals live in callee-saved x19..x28; a method needing more keeps the
         // overflow in the frame (see localMem). Slots 0..LOC_MAX-1 stay in registers.
@@ -4864,8 +4886,6 @@ public final class Baseline
         emitSyncEnter(cb, isStatic);         // ACC_SYNCHRONIZED: after the prologue (slot 0 = this), before bci 0
 
         farBranches = code.length > FAR_BRANCH_BYTECODE;
-        loopHeaders = symbols.implicitChecks() && symbols.stopPolls() && symbols.stopCellAddr() != 0L
-                ? loopHeaders(code) : null;
         int[] bcToWord = new int[code.length];
         // Drive sp from the control-flow pre-pass at EVERY reachable bytecode, not just at branch targets
         // recorded so far. A loop header reached linearly before its back-edge is compiled would otherwise carry

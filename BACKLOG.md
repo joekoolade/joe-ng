@@ -17,8 +17,9 @@ the item leaves this list; new findings that are not fixed on the spot come here
 
 - **A `/run` stop cannot reach a thread blocked in a JDK call that ignores interrupts (2026-11-14):** the forced
   stage acts at the program's own loop headers (Baseline stop polls), so a thread parked in, say, a socket read
-  stops only when the call returns. Also unmeasured: what the polls cost a loop when no stop is pending (a load and
-  a not-taken branch per iteration, in run classes only).
+  stops only when the call returns. While such a stop is PENDING, every poll in every run calls into the VM (~30-38
+  cycles per loop pass on the Pi, against 1-2 with none pending): a per-task flag the poll could read inline would
+  remove that, if a run left blocked like this ever matters.
 - **A `/run` thread other than main that calls `System.exit` ends only itself (2026-11-14):** main carries on to its
   own end; the run reports the exit. There is no safe way to stop main from another thread.
 
