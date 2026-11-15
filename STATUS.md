@@ -4,6 +4,19 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 6: `VM.java` (2026-11-15).** Pi-validated (build 9338e3ee1ece22af). Boot, the fault
+  vectors and fault-to-exception path, the generated IRQ/timer and switch stubs, the type/cast checks, the RAMFS
+  directory and `/etc/init` readers, the JIT frame/handler tables: all 204 sites on `Address`, none left; no
+  signature changed, private ones included (ImageBuilder stashes many VM helpers by descriptor).
+  - **Checked independently:** compiled widths = original counts (51 `store(J)`, 46 `store(I)` -- most of them
+    MACHINE-INSTRUCTION words written into vectors and stubs -- 1 `store(B)`, 79 `loadLong` + 2 `loadAddress`, 7
+    `loadInt`, 18 `loadUnsignedByte`). Two `(long)` casts kept int loop counters from picking the 32-bit store
+    overload. Two hoisted locals (the stub cursors), their source never reassigned. Code size (name+descriptor)
+    17445 -> 17431 words.
+  - **Measured:** `make test`; full regression **208/208**. Pi: committed first try; every page; `/run`s; a throwing
+    main's trace; the stop-poll benchmark (same figures); a forced stop of four threads; the kernel SHA-256; a staged
+    39 MB upload SHA-256-verified in 28.6 s; `/net` 0 IP header errors, 0 TCP errors, 1 retransmit.
+
 - **UNBOXED TYPES, INCREMENT 5: THE NETWORK STACK AND THE SMALL VM FILES (2026-11-15).** Pi-validated (build
   69229bb3cc9e10a5). `src/net` (`Ip`, `NetStats`, `RxQueues`, `Sntp`, `Tcp`: 136 byte accesses), `VMNatives` (73),
   `VMConcat`, `ArrayCopy`, `JarFs`, `VMStats`, `Console`: no `Magic.load*`/`store*` left (`Utf8At`'s three byte
