@@ -19,6 +19,7 @@ import compiler.Intrinsics;
 import compiler.Symbols;
 import objectmodel.ObjectModel;
 import zip.ZipDir;
+import magic.Address;
 import magic.Magic;
 
 /**
@@ -326,7 +327,7 @@ public final class Loader
 
     private static int u1(long p)
     {
-        return Magic.load8(p) & 0xFF;
+        return Address.fromLong(p).loadUnsignedByte() & 0xFF;
     }
 
     /**
@@ -371,7 +372,7 @@ public final class Loader
         {
             if (dlTab[k] != null && dlTab[k].cell != 0L)
             {
-                long target = Magic.load64(dlTab[k].cell);
+                long target = Address.fromLong(dlTab[k].cell).loadLong();
                 if (target >= Heap.CODE_BASE && target < Heap.CODE_LIMIT
                         && Heap.codeBlockFreeAt(target) == 1)
                 {
@@ -1742,7 +1743,7 @@ public final class Loader
             Uart.write(Magic.bytes(" ["));
             VM.printDec(k);
             Uart.write(Magic.bytes("]="));
-            VM.printHex(Magic.load64(clTab[reg].statics + k * 8L));
+            VM.printHex(Address.fromLong(clTab[reg].statics).plus(k * 8L).loadLong());
             k += 1;
         }
         Uart.putc(0x0A);
@@ -2014,7 +2015,7 @@ public final class Loader
         thrCauseOff = throwableFieldOff(thrCauseOff, Magic.bytes("cause"));
         if (thrCauseOff > 0L)
         {
-            Magic.store64(e + thrCauseOff, Magic.addrOf(t));
+            Address.fromLong(e).plus(thrCauseOff).store(Magic.addrOf(t));
         }
         return (Error) Magic.fromAddr(e);
     }
@@ -2810,7 +2811,7 @@ public final class Loader
                     && utf8IsAtBase(d.blob, d.nameOff, name)
                     && utf8IsAtBase(d.blob, d.descOff, desc))
             {
-                return Magic.load64(d.cell);
+                return Address.fromLong(d.cell).loadLong();
             }
             k += 1;
         }
@@ -2860,7 +2861,7 @@ public final class Loader
             int f = 0;
             while (f < 3)                                   // classUtf8, nameUtf8, descUtf8 -- not the memo,
             {                                               //   which is written at runtime by design
-                long u = Magic.load64(e + f * 8L);
+                long u = Address.fromLong(e).plus(f * 8L).loadLong();
                 h = (h * 31L) + u;                          // the POINTER too: one boot clobbered a pointer
                 if (u != 0L)                                //   while its neighbours in the entry survived
                 {
@@ -2920,7 +2921,7 @@ public final class Loader
             int f = 0;
             while (f < 3)
             {
-                long u = Magic.load64(e + f * 8L);
+                long u = Address.fromLong(e).plus(f * 8L).loadLong();
                 boolean ok = u != 0L;
                 if (ok)
                 {
@@ -3248,7 +3249,7 @@ public final class Loader
                 tok[k] = line[start + k];
                 k += 1;
             }
-            Magic.store64(argv + 24L + idx * 8L, guestString(tok));
+            Address.fromLong(argv).plus(24L).plus(idx * 8L).store(guestString(tok));
             idx += 1;
         }
         return argv;
@@ -3262,7 +3263,7 @@ public final class Loader
         int i = 0;
         while (i < name.length)
         {
-            Magic.store8(scratch + i, name[i]);
+            Address.fromLong(scratch).plus(i).store(name[i]);
             i += 1;
         }
         long bytes = VM.dirBytes(scratch, name.length);
@@ -3289,7 +3290,7 @@ public final class Loader
         Uart.write(Magic.bytes("code arena: mark="));
         VM.printHex(codeHeapMark);
         Uart.write(Magic.bytes(" cur="));
-        VM.printHex(Magic.load64(Heap.CODE_PTR_CELL));
+        VM.printHex(Address.fromLong(Heap.CODE_PTR_CELL).loadLong());
         Uart.write(Magic.bytes(" peak="));
         VM.printHex(Heap.codePeak);
         Uart.write(Magic.bytes(" zeroBound="));
@@ -3305,17 +3306,17 @@ public final class Loader
         long bt = byteArrayTib();                        // type value as [B so String.getBytes()'s `checkcast [B`
         if (bt != 0L)                                    // resolves (else it spins forever -- e.g. println(arg))
         {
-            Magic.store64(arr + ObjectModel.TIB_OFFSET, bt);
+            Address.fromLong(arr).plus(ObjectModel.TIB_OFFSET).store(bt);
         }
         int i = 0;
         while (i < ascii.length)
         {
-            Magic.store8(arr + 24L + i, ascii[i]);
+            Address.fromLong(arr).plus(24L).plus(i).store(ascii[i]);
             i += 1;
         }
         long obj = Heap.alloc(stringSize());
-        Magic.store64(obj + 0L, stringTib());           // wrap it as a guest java/lang/String
-        Magic.store64(obj + 16L, arr);                  // value field (offset 16); coder@24 stays 0 = LATIN1
+        Address.fromLong(obj).store(stringTib());           // wrap it as a guest java/lang/String
+        Address.fromLong(obj).plus(16L).store(arr);                  // value field (offset 16); coder@24 stays 0 = LATIN1
         return obj;
     }
 
@@ -3338,12 +3339,12 @@ public final class Loader
         long bt = byteArrayTib();
         if (bt != 0L)
         {
-            Magic.store64(arr + ObjectModel.TIB_OFFSET, bt);
+            Address.fromLong(arr).plus(ObjectModel.TIB_OFFSET).store(bt);
         }
         int i = 0;
         while (i < src.length)
         {
-            Magic.store8(arr + 24L + i, src[i]);
+            Address.fromLong(arr).plus(24L).plus(i).store(src[i]);
             i += 1;
         }
         return arr;
@@ -3361,12 +3362,12 @@ public final class Loader
     static long utf8Blob(byte[] s)
     {
         long p = Heap.allocData(s.length + 2);
-        Magic.store8(p, (byte) ((s.length >> 8) & 0xFF));
-        Magic.store8(p + 1L, (byte) (s.length & 0xFF));
+        Address.fromLong(p).store((byte) ((s.length >> 8) & 0xFF));
+        Address.fromLong(p).plus(1L).store((byte) (s.length & 0xFF));
         int i = 0;
         while (i < s.length)
         {
-            Magic.store8(p + 2L + i, s[i]);
+            Address.fromLong(p).plus(2L).plus(i).store(s[i]);
             i += 1;
         }
         return p;
@@ -3384,17 +3385,17 @@ public final class Loader
         long bt = byteArrayTib();
         if (bt != 0L)
         {
-            Magic.store64(arr + ObjectModel.TIB_OFFSET, bt);
+            Address.fromLong(arr).plus(ObjectModel.TIB_OFFSET).store(bt);
         }
         int i = 0;
         while (i < len)
         {
-            Magic.store8(arr + 24L + i, (byte) u1(base + off + 2L + i));
+            Address.fromLong(arr).plus(24L).plus(i).store((byte) u1(base + off + 2L + i));
             i += 1;
         }
         long obj = Heap.alloc(stringSize());
-        Magic.store64(obj + 0L, stringTib());
-        Magic.store64(obj + 16L, arr);
+        Address.fromLong(obj).store(stringTib());
+        Address.fromLong(obj).plus(16L).store(arr);
         return obj;
     }
 
@@ -3488,12 +3489,12 @@ public final class Loader
             while (k < n)
             {
                 long e = tab + k * 40L;
-                long start = Magic.load64(e);
-                if (pc >= start && pc < Magic.load64(e + 8L))
+                long start = Address.fromLong(e).loadLong();
+                if (pc >= start && pc < Address.fromLong(e).plus(8L).loadLong())
                 {
                     // The symbol is "owner/Class.method", combined: split it at the LAST '.' (a method name
                     // has none) so the class is a class and the method a method, as on a JVM.
-                    long sym = Magic.load64(e + 16L);
+                    long sym = Address.fromLong(e).plus(16L).loadLong();
                     int symLen = u2(sym);
                     int dot = symLen - 1;
                     while (dot > 0 && u1(sym + 2L + dot) != 0x2E)
@@ -3509,8 +3510,8 @@ public final class Loader
                     {
                         methStr = guestStringUtf8(sym, 0);
                     }
-                    fileStr = guestStringUtf8(Magic.load64(e + 24L), 0);
-                    line = lineAtOffset(Magic.load64(e + 32L), (int) ((pc - start) >> 2));
+                    fileStr = guestStringUtf8(Address.fromLong(e).plus(24L).loadLong(), 0);
+                    line = lineAtOffset(Address.fromLong(e).plus(32L).loadLong(), (int) ((pc - start) >> 2));
                     k = n;
                 }
                 else
@@ -3554,11 +3555,11 @@ public final class Loader
             steFieldsTib = steTib;
         }
         long ste = Heap.alloc((int) steSize);
-        Magic.store64(ste + 0L, steTib);
-        Magic.store64(ste + steClassOff, clsStr);
-        Magic.store64(ste + steMethodOff, methStr);
-        Magic.store64(ste + steFileOff, fileStr);
-        Magic.store64(ste + steLineOff, line);
+        Address.fromLong(ste).store(steTib);
+        Address.fromLong(ste).plus(steClassOff).store(clsStr);
+        Address.fromLong(ste).plus(steMethodOff).store(methStr);
+        Address.fromLong(ste).plus(steFileOff).store(fileStr);
+        Address.fromLong(ste).plus(steLineOff).store(line);
         return ste;
     }
 
@@ -3588,7 +3589,7 @@ public final class Loader
         long bt = byteArrayTib();
         if (bt != 0L)
         {
-            Magic.store64(arr + ObjectModel.TIB_OFFSET, bt);
+            Address.fromLong(arr).plus(ObjectModel.TIB_OFFSET).store(bt);
         }
         int i = 0;
         while (i < len)
@@ -3598,12 +3599,12 @@ public final class Loader
             {
                 b = 0x2E;
             }
-            Magic.store8(arr + 24L + i, (byte) b);
+            Address.fromLong(arr).plus(24L).plus(i).store((byte) b);
             i += 1;
         }
         long obj = Heap.alloc(stringSize());
-        Magic.store64(obj + 0L, stringTib());
-        Magic.store64(obj + 16L, arr);
+        Address.fromLong(obj).store(stringTib());
+        Address.fromLong(obj).plus(16L).store(arr);
         return obj;
     }
 
@@ -3627,7 +3628,7 @@ public final class Loader
             }
             if (arr != 0L)
             {
-                Magic.store64(arr + 24L + n * 8L, frameToElement(cpc, steTib));
+                Address.fromLong(arr).plus(24L).plus(n * 8L).store(frameToElement(cpc, steTib));
             }
             n += 1;
             long cfs = VM.frameSizeAt(cpc);
@@ -3641,7 +3642,7 @@ public final class Loader
                 }
                 break;                                     // top of the resolvable stack
             }
-            cpc = Magic.load64(csp) - 4L;                  // caller's return address (the call site)
+            cpc = Address.fromLong(csp).loadLong() - 4L;                  // caller's return address (the call site)
             csp += cfs;
             first = false;
             if (VM.isLaunchFrame(cpc))
@@ -3675,11 +3676,11 @@ public final class Loader
         int n = 0;
         if (deep != 0L)
         {
-            n = Magic.load32(deep + ObjectModel.ARRAY_LENGTH_OFFSET);
+            n = Address.fromLong(deep).plus(ObjectModel.ARRAY_LENGTH_OFFSET).loadInt();
         }
         else
         {
-            while (n < 8 && Magic.load64(exc + 16L + (long) n * 8L) != 0L)
+            while (n < 8 && Address.fromLong(exc).plus(16L).plus((long) n * 8L).loadLong() != 0L)
             {
                 n += 1;
             }
@@ -3687,14 +3688,14 @@ public final class Loader
         long arr = Heap.allocArray(n, 8);
         if (tib != 0L)
         {
-            Magic.store64(arr + ObjectModel.TIB_OFFSET, refArrayTib(Magic.load64(tib)));
+            Address.fromLong(arr).plus(ObjectModel.TIB_OFFSET).store(refArrayTib(Address.fromLong(tib).loadLong()));
         }
         int i = 0;
         while (i < n)
         {
-            long fpc = deep != 0L ? Magic.load64(deep + ObjectModel.ARRAY_BASE_OFFSET + (long) i * 8L)
-                                  : Magic.load64(exc + 16L + (long) i * 8L);
-            Magic.store64(arr + 24L + (long) i * 8L, frameToElement(fpc, tib));
+            long fpc = deep != 0L ? Address.fromLong(deep).plus(ObjectModel.ARRAY_BASE_OFFSET).plus((long) i * 8L).loadLong()
+                                  : Address.fromLong(exc).plus(16L).plus((long) i * 8L).loadLong();
+            Address.fromLong(arr).plus(24L).plus((long) i * 8L).store(frameToElement(fpc, tib));
             i += 1;
         }
         return arr;
@@ -3727,7 +3728,7 @@ public final class Loader
     static long throwableBacktrace(long exc)
     {
         long off = throwableBacktraceOff();
-        long bt = off > 0L ? Magic.load64(exc + off) : 0L;
+        long bt = off > 0L ? Address.fromLong(exc).plus(off).loadLong() : 0L;
         return bt == exc ? 0L : bt;
     }
 
@@ -3740,7 +3741,7 @@ public final class Loader
     static boolean awaitsThrowTrace(long exc)
     {
         long off = throwableBacktraceOff();
-        return off > 0L && Magic.load64(exc + off) == exc && Magic.load64(exc + 16L) == 0L;
+        return off > 0L && Address.fromLong(exc).plus(off).loadLong() == exc && Address.fromLong(exc).plus(16L).loadLong() == 0L;
     }
 
     /**
@@ -3758,12 +3759,12 @@ public final class Loader
         }
         if (n == 0)
         {
-            Magic.store64(exc + off, exc);
+            Address.fromLong(exc).plus(off).store(exc);
             return 0L;
         }
         long arr = Heap.allocArray(n, 8);
-        Magic.store64(arr + ObjectModel.TIB_OFFSET, primArrayTib(11));   // long[]
-        Magic.store64(exc + off, arr);
+        Address.fromLong(arr).plus(ObjectModel.TIB_OFFSET).store(primArrayTib(11));   // long[]
+        Address.fromLong(exc).plus(off).store(arr);
         return arr;
     }
 
@@ -3777,7 +3778,7 @@ public final class Loader
         {
             // Give the array the [LStackTraceElement; TIB (element Type = TIB[0]) so a `checkcast
             // [LStackTraceElement;` on a Map.Entry.getValue() result passes instead of walking a null Type.
-            Magic.store64(arr + ObjectModel.TIB_OFFSET, refArrayTib(Magic.load64(tib)));
+            Address.fromLong(arr).plus(ObjectModel.TIB_OFFSET).store(refArrayTib(Address.fromLong(tib).loadLong()));
         }
         traceWalk(pc, sp, savedX30, arr, tib);             // pass 2: fill
         return arr;
@@ -3916,12 +3917,12 @@ public final class Loader
         while (i < codeRootN)
         {
             long src = CODE_ROOTS + i * CODE_ROOT_ENTRY;
-            long owner = Magic.load64(src + 8L);
+            long owner = Address.fromLong(src).plus(8L).loadLong();
             if (owner < lo || owner >= hi)
             {
                 long dst = CODE_ROOTS + kept * CODE_ROOT_ENTRY;
-                Magic.store64(dst, Magic.load64(src));
-                Magic.store64(dst + 8L, owner);
+                Address.fromLong(dst).store(Address.fromLong(src).loadLong());
+                Address.fromLong(dst).plus(8L).store(owner);
                 kept += 1;
             }
             i += 1;
@@ -4000,8 +4001,8 @@ public final class Loader
             }
             return;
         }
-        Magic.store64(CODE_ROOTS + codeRootN * CODE_ROOT_ENTRY, addr);
-        Magic.store64(CODE_ROOTS + codeRootN * CODE_ROOT_ENTRY + 8L, codeRootOwner);
+        Address.fromLong(CODE_ROOTS).plus(codeRootN * CODE_ROOT_ENTRY).store(addr);
+        Address.fromLong(CODE_ROOTS).plus(codeRootN * CODE_ROOT_ENTRY).plus(8L).store(codeRootOwner);
         codeRootN += 1;
     }
 
@@ -4099,20 +4100,20 @@ public final class Loader
         {
             if (demandHeapMark == 0L)
             {
-                demandHeapMark = Magic.load64(Heap.PTR_CELL);   // watermark: heap level after the philosophers demo
+                demandHeapMark = Address.fromLong(Heap.PTR_CELL).loadLong();   // watermark: heap level after the philosophers demo
                 // Code-arena watermark, captured at the same moment: everything below it (the boot-time
                 // vector table + scheduler switch stubs, the original run-trampoline, the pre-mark demos'
                 // code) is permanent; everything a later batch compiles above it dies with the batch --
                 // the demand model already assumes nothing but the image survives across batches (the data
                 // rewind kills a batch's objects), so its code is dead too. Pre-zero a span above the mark
                 // for the same cold-DRAM reason as the data heap.
-                codeHeapMark = Magic.load64(Heap.CODE_PTR_CELL);
+                codeHeapMark = Address.fromLong(Heap.CODE_PTR_CELL).loadLong();
                 long cz = codeHeapMark;
                 long czEnd = codeHeapMark + CODE_ZERO_SPAN;
                 if (czEnd > Heap.CODE_LIMIT) { czEnd = Heap.CODE_LIMIT; }
                 while (cz < czEnd)
                 {
-                    Magic.store64(cz, 0L);
+                    Address.fromLong(cz).store(0L);
                     cz += 8L;
                 }
                 codeHeapHigh = czEnd;
@@ -4139,15 +4140,15 @@ public final class Loader
                                                         // 0's was one contiguous range.
                 while (z0 < zEnd)
                 {
-                    Magic.store64(z0, 0L);
+                    Address.fromLong(z0).store(0L);
                     z0 += 8L;
                 }
                 demandHeapHigh = zEnd;                           // record it so the else-branch keeps it re-zeroed
             }
             else
             {
-                long usedData = Magic.load64(Heap.PTR_CELL) - demandHeapMark;   // this batch's footprint, before
-                long usedCode = Magic.load64(Heap.CODE_PTR_CELL) - codeHeapMark;//   anything is reclaimed
+                long usedData = Address.fromLong(Heap.PTR_CELL).loadLong() - demandHeapMark;   // this batch's footprint, before
+                long usedCode = Address.fromLong(Heap.CODE_PTR_CELL).loadLong() - codeHeapMark;//   anything is reclaimed
                 batchN += 1;
                 batchDataTotal += usedData;
                 batchCodeTotal += usedCode;
@@ -4170,7 +4171,7 @@ public final class Loader
                         Uart.putc(0x0A);
                     }
                 }
-                long oldPtr = Magic.load64(Heap.PTR_CELL);      // ZERO all heap ever used above the mark, so a reused
+                long oldPtr = Address.fromLong(Heap.PTR_CELL).loadLong();      // ZERO all heap ever used above the mark, so a reused
                 if (oldPtr > demandHeapHigh)                     // block never carries a PRIOR batch's code bytes: an
                 {                                                // uninitialized/OOB slot then reads 0 (a caught blr 0)
                     demandHeapHigh = oldPtr;                     // instead of stale code -> a layout-dependent wild branch.
@@ -4180,10 +4181,10 @@ public final class Loader
                     long z = demandHeapMark;                     // batch) so a bigger batch's OOB reads land on 0 too.
                     while (z < demandHeapHigh)
                     {
-                        Magic.store64(z, 0L);
+                        Address.fromLong(z).store(0L);
                         z += 8L;
                     }
-                    Magic.store64(Heap.PTR_CELL, demandHeapMark);   // reclaim the previous demo's dead code + objects
+                    Address.fromLong(Heap.PTR_CELL).store(demandHeapMark);   // reclaim the previous demo's dead code + objects
                     Heap.clearCoreFreeLists(0);                     // core 0's free-list entries are above it again
                 }
                 // Code-arena rewind (same batch-death model): zero every code byte the previous batches wrote
@@ -4193,7 +4194,7 @@ public final class Loader
                 // compiled methods die with its registries exactly like its heap objects.
                 if (RECLAIM_CODE_BY_GC == false)
                 {
-                    long ocPtr = Magic.load64(Heap.CODE_PTR_CELL);
+                    long ocPtr = Address.fromLong(Heap.CODE_PTR_CELL).loadLong();
                     if (ocPtr > codeHeapHigh)
                     {
                         codeHeapHigh = ocPtr;
@@ -4201,11 +4202,11 @@ public final class Loader
                     long cz = codeHeapMark;
                     while (cz < codeHeapHigh)
                     {
-                        Magic.store64(cz, 0L);
+                        Address.fromLong(cz).store(0L);
                         cz += 8L;
                     }
                     Heap.publishCode(codeHeapMark, codeHeapHigh);   // drop stale I-cache lines over dead code
-                    Magic.store64(Heap.CODE_PTR_CELL, codeHeapMark);
+                    Address.fromLong(Heap.CODE_PTR_CELL).store(codeHeapMark);
                     codeRootN = 0;                                  // the code those roots belonged to is gone
                 }
                 if (RECLAIM_CODE_BY_GC == false)
@@ -4522,7 +4523,7 @@ public final class Loader
             if (LIFETIME_TRACE != false)
             {
                 Uart.write(Magic.bytes("  reclaim-by-gc: top="));
-                VM.printHex(Magic.load64(Heap.PTR_CELL) - demandHeapMark);   // heap grown above the watermark
+                VM.printHex(Address.fromLong(Heap.PTR_CELL).loadLong() - demandHeapMark);   // heap grown above the watermark
                 Uart.write(Magic.bytes(" freedThisPass="));
                 VM.printHex(VM.reclaimed);
                 Uart.write(Magic.bytes(" live="));      // the survivors -- if this stays small, the heap's
@@ -4532,7 +4533,7 @@ public final class Loader
                 Uart.write(Magic.bytes(" codeRoots="));
                 VM.printHex(Loader.codeRootN);
                 Uart.write(Magic.bytes(" codeArena="));  // how much of the arena is actually in use
-                VM.printHex(Magic.load64(Heap.CODE_PTR_CELL) - codeHeapMark);
+                VM.printHex(Address.fromLong(Heap.CODE_PTR_CELL).loadLong() - codeHeapMark);
                 Uart.write(Magic.bytes(" codeLive="));  // reachable compiled code / total ever compiled:
                 VM.printHex(VMGc.codeLive);             //   the ratio that decides whether reclaiming code
                 Uart.putc(0x2F);                        //   is worth building at all
@@ -4570,7 +4571,7 @@ public final class Loader
                 Uart.write(Magic.bytes(" ovf="));
                 VM.printDec((int) VMGc.overflows);
                 Uart.write(Magic.bytes(" largeTop="));    // the large region: how far it has grown, and
-                VM.printHex(Magic.load64(Heap.LARGE_PTR_CELL) - Heap.LARGE_BASE);
+                VM.printHex(Address.fromLong(Heap.LARGE_PTR_CELL).loadLong() - Heap.LARGE_BASE);
                 Uart.write(Magic.bytes(" reuse="));       //   whether requests are finding blocks there
                 VM.printDec((int) Heap.largeReuse);
                 Uart.putc(0x2F);
@@ -7473,8 +7474,8 @@ public final class Loader
         long arr = Heap.allocArray(len, 1);
         writeClassName(type, arr + 24L, 0);
         long obj = Heap.alloc(stringSize());
-        Magic.store64(obj + 0L, stringTib());
-        Magic.store64(obj + 16L, arr);                  // value byte[]; coder@24 stays 0 = LATIN1
+        Address.fromLong(obj).store(stringTib());
+        Address.fromLong(obj).plus(16L).store(arr);                  // value byte[]; coder@24 stays 0 = LATIN1
         return obj;
     }
 
@@ -7535,7 +7536,7 @@ public final class Loader
         int i = 0;
         while (i < lambdaTibRootN)
         {
-            if (lambdaTibRoots[i] != 0L && Magic.load64(lambdaTibRoots[i]) == type)
+            if (lambdaTibRoots[i] != 0L && Address.fromLong(lambdaTibRoots[i]).loadLong() == type)
             {
                 return i;
             }
@@ -7594,10 +7595,10 @@ public final class Loader
         if (primTypeCache[idx] == 0L)
         {
             long type = Heap.allocData(ObjectModel.TYPE_SIZE);
-            Magic.store64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET,
+            Address.fromLong(type).plus(ObjectModel.TYPE_INSTANCE_SIZE_OFFSET).store(
                     ObjectModel.PRIM_TYPE_TAG | (long) descChar);
-            Magic.store64(type + ObjectModel.TYPE_SUPER_OFFSET, 0L);         // no super: instanceof stops here
-            Magic.store64(type + ObjectModel.TYPE_ITABLE_DIR_OFFSET, 0L);
+            Address.fromLong(type).plus(ObjectModel.TYPE_SUPER_OFFSET).store(0L);         // no super: instanceof stops here
+            Address.fromLong(type).plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).store(0L);
             primTypeCache[idx] = type;
         }
         return primTypeCache[idx];
@@ -7617,7 +7618,7 @@ public final class Loader
         {
             return false;
         }
-        long instSize = Magic.load64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET);
+        long instSize = Address.fromLong(type).plus(ObjectModel.TYPE_INSTANCE_SIZE_OFFSET).loadLong();
         return (instSize & ObjectModel.ARRAY_TYPE_TAG_MASK) == ObjectModel.PRIM_TYPE_TAG;
     }
 
@@ -7628,7 +7629,7 @@ public final class Loader
         {
             return 0;
         }
-        return (int) (Magic.load64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET) & 0xFFL);
+        return (int) (Address.fromLong(type).plus(ObjectModel.TYPE_INSTANCE_SIZE_OFFSET).loadLong() & 0xFFL);
     }
 
     /**
@@ -7673,7 +7674,7 @@ public final class Loader
             return;                                     // the wrapper is not registered yet -- retry next batch
         }
         long m = primitiveMirror(descChar);
-        Magic.store64(slot, m);
+        Address.fromLong(slot).store(m);
         if (m != 0L)                                    // ... and so is a mirror the Type table cannot yet build
         {
             sdPrimMask |= 1 << bit;
@@ -7687,7 +7688,7 @@ public final class Loader
         {
             return false;
         }
-        long instSize = Magic.load64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET);
+        long instSize = Address.fromLong(type).plus(ObjectModel.TYPE_INSTANCE_SIZE_OFFSET).loadLong();
         return (instSize & ObjectModel.ARRAY_TYPE_TAG_MASK) == ObjectModel.ARRAY_TYPE_TAG;
     }
 
@@ -7705,7 +7706,7 @@ public final class Loader
         while (atype < 12)
         {
             long tib = primArrTib[atype];
-            if (tib != 0L && Magic.load64(tib) == type)
+            if (tib != 0L && Address.fromLong(tib).loadLong() == type)
             {
                 return primDescChar(atype);
             }
@@ -7734,7 +7735,7 @@ public final class Loader
         {
             return 0L;
         }
-        long el = Magic.load64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET);
+        long el = Address.fromLong(type).plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong();
         if (el != 0L)
         {
             return classMirror(el);                      // a REFERENCE array: the element Type is right there
@@ -7763,14 +7764,14 @@ public final class Loader
             if (atype >= 0)
             {
                 long arr = Heap.allocArray(length, arrayElemSizeOfAtype(atype));
-                Magic.store64(arr, primArrayTib(atype));  // the SAME interned TIB `new int[]` uses
+                Address.fromLong(arr).store(primArrayTib(atype));  // the SAME interned TIB `new int[]` uses
                 return arr;
             }
         }
         long arr = Heap.allocArray(length, ObjectModel.WORD);
         if (compType != 0L)
         {
-            Magic.store64(arr, refArrayTib(compType));    // typed [L<component>;, interned per element
+            Address.fromLong(arr).store(refArrayTib(compType));    // typed [L<component>;, interned per element
         }
         return arr;                                       // else a raw untyped array: still fills and returns
     }
@@ -7784,7 +7785,7 @@ public final class Loader
         }
         if (isArrayType(type))
         {
-            long el = Magic.load64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET);
+            long el = Address.fromLong(type).plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong();
             if (el == 0L)
             {
                 return primElemCharOf(type) == 0 ? 0 : 2;        // "[I"; 0 = a ref array whose element is unresolved
@@ -7822,7 +7823,7 @@ public final class Loader
             return 0L;
         }
         long i = rel / ObjectModel.TYPE_SIZE;
-        return i < VM.bakedTypeCount ? Magic.load64(VM.bakedTypeNames + i * 8L) : 0L;
+        return i < VM.bakedTypeCount ? Address.fromLong(VM.bakedTypeNames).plus(i * 8L).loadLong() : 0L;
     }
 
     /** {@code "$$Lambda/0x"} + 16 hex digits -- the length {@link #writeSynthName} writes. */
@@ -7852,7 +7853,7 @@ public final class Loader
             while (h < len)
             {
                 int c = u1(src + 2L + h);
-                Magic.store8(dst + pos + h, (byte) (c == 0x2F ? 0x2E : c));   // '/' -> '.'
+                Address.fromLong(dst).plus(pos).plus(h).store((byte) (c == 0x2F ? 0x2E : c));   // '/' -> '.'
                 h += 1;
             }
             pos += len;
@@ -7861,7 +7862,7 @@ public final class Loader
         int k = 0;
         while (k < pre.length)
         {
-            Magic.store8(dst + pos + k, pre[k]);
+            Address.fromLong(dst).plus(pos).plus(k).store(pre[k]);
             k += 1;
         }
         pos += pre.length;
@@ -7869,7 +7870,7 @@ public final class Loader
         while (d >= 0)
         {
             int nib = (int) ((type >>> (d * 4)) & 0xFL);
-            Magic.store8(dst + pos, (byte) (nib < 10 ? 0x30 + nib : 0x61 + nib - 10));
+            Address.fromLong(dst).plus(pos).store((byte) (nib < 10 ? 0x30 + nib : 0x61 + nib - 10));
             pos += 1;
             d -= 1;
         }
@@ -7901,7 +7902,7 @@ public final class Loader
         int k = 0;
         while (k < nm.length)
         {
-            Magic.store8(dst + pos + k, nm[k]);
+            Address.fromLong(dst).plus(pos).plus(k).store(nm[k]);
             k += 1;
         }
         return pos + nm.length;
@@ -7927,9 +7928,9 @@ public final class Loader
         }
         if (isArrayType(type))
         {
-            Magic.store8(dst + pos, (byte) 0x5B);                // '['
+            Address.fromLong(dst).plus(pos).store((byte) 0x5B);                // '['
             pos += 1;
-            long el = Magic.load64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET);
+            long el = Address.fromLong(type).plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong();
             if (el == 0L)
             {
                 // A PRIMITIVE array names itself by descriptor char. An element of 0 that matches no
@@ -7937,16 +7938,16 @@ public final class Loader
                 // NUL that `primElemCharOf` returns, which rendered as `class [` in a ClassCastException and
                 // told the reader nothing. A message with an embedded NUL is worse than a short one.
                 int pc = primElemCharOf(type);
-                Magic.store8(dst + pos, (byte) (pc != 0 ? pc : 0x3F));   // '?'
+                Address.fromLong(dst).plus(pos).store((byte) (pc != 0 ? pc : 0x3F));   // '?'
                 return pos + 1;
             }
             if (isArrayType(el))
             {
                 return writeClassName(el, dst, pos);             // nested: "[[I"
             }
-            Magic.store8(dst + pos, (byte) 0x4C);                // 'L'
+            Address.fromLong(dst).plus(pos).store((byte) 0x4C);                // 'L'
             pos = writeClassName(el, dst, pos + 1);
-            Magic.store8(dst + pos, (byte) 0x3B);                // ';'
+            Address.fromLong(dst).plus(pos).store((byte) 0x3B);                // ';'
             return pos + 1;
         }
         int i = 0;
@@ -7960,7 +7961,7 @@ public final class Loader
                 while (k < len)
                 {
                     int c = u1(src + k);
-                    Magic.store8(dst + pos + k, (byte) (c == 0x2F ? 0x2E : c));   // '/' -> '.'
+                    Address.fromLong(dst).plus(pos).plus(k).store((byte) (c == 0x2F ? 0x2E : c));   // '/' -> '.'
                     k += 1;
                 }
                 return pos + len;
@@ -7975,7 +7976,7 @@ public final class Loader
             while (k < len)
             {
                 int c = u1(baked + 2L + k);
-                Magic.store8(dst + pos + k, (byte) (c == 0x2F ? 0x2E : c));   // '/' -> '.'
+                Address.fromLong(dst).plus(pos).plus(k).store((byte) (c == 0x2F ? 0x2E : c));   // '/' -> '.'
                 k += 1;
             }
             return pos + len;
@@ -8005,7 +8006,7 @@ public final class Loader
         {
             return 0L;                                  // boot force-compile guard passes 0
         }
-        int len = (int) Magic.load64(nameArr + 16L);    // byte[] length @16
+        int len = (int) Address.fromLong(nameArr).plus(16L).loadLong();    // byte[] length @16
         long src = nameArr + 24L;                        // byte[] elements @24
         byte[] slash = new byte[len];
         int i = 0;
@@ -8111,7 +8112,7 @@ public final class Loader
             return 0L;                                  // 'V', an unknown char, or trailing bytes
         }
         long tib = arrayTibOfDesc(utf8Blob(desc), 0);
-        return tib <= ObjectModel.MAX_RAW_ARRAY_TIB ? 0L : classMirror(Magic.load64(tib));
+        return tib <= ObjectModel.MAX_RAW_ARRAY_TIB ? 0L : classMirror(Address.fromLong(tib).loadLong());
     }
 
     /**
@@ -8162,7 +8163,7 @@ public final class Loader
         int i = 0;
         while (i < len)
         {
-            Magic.store8(blob + i, (byte) Magic.load8(srcAddr + i));
+            Address.fromLong(blob).plus(i).store((byte) Address.fromLong(srcAddr).plus(i).loadUnsignedByte());
             i += 1;
         }
         addBlob(blob, len);
@@ -8198,7 +8199,7 @@ public final class Loader
             return 0L;
         }
         long obj = Heap.alloc(16 + clTab[i].fieldCount * 8);
-        Magic.store64(obj + 0L, clTab[i].tib);
+        Address.fromLong(obj).store(clTab[i].tib);
         return obj;
     }
 
@@ -8353,18 +8354,18 @@ public final class Loader
         while (i < n)
         {
             long e = tab + i * 40L;                              // 5 longs per entry
-            long start = Magic.load64(e);
-            if (addr >= start && addr < Magic.load64(e + 8L))
+            long start = Address.fromLong(e).loadLong();
+            if (addr >= start && addr < Address.fromLong(e).plus(8L).loadLong())
             {
-                long nameAddr = Magic.load64(e + 16L);
-                long srcAddr = Magic.load64(e + 24L);
+                long nameAddr = Address.fromLong(e).plus(16L).loadLong();
+                long srcAddr = Address.fromLong(e).plus(24L).loadLong();
                 writeName(nameAddr + 2, u2(nameAddr));           // "owner/Class.method"
                 int srcLen = u2(srcAddr);
                 if (srcLen > 0)
                 {
                     Uart.putc(0x28);                             // '('
                     writeName(srcAddr + 2, srcLen);              // SourceFile filename
-                    int line = lineAtOffset(Magic.load64(e + 32L), (int) ((addr - start) >> 2));
+                    int line = lineAtOffset(Address.fromLong(e).plus(32L).loadLong(), (int) ((addr - start) >> 2));
                     if (line >= 0)
                     {
                         Uart.putc(0x3A);                         // ':'
@@ -8401,8 +8402,8 @@ public final class Loader
         long w = up - 60L;
         while (w <= up - 4L)
         {
-            if ((Magic.load32(w) & 0xFFFFFFFFL) == 0xD63F0200L                    // blr x16
-                    && (Magic.load32(w - 4L) & 0xFFFFFFFFL) == 0xF9400230L)       // ldr x16,[x17]
+            if ((Address.fromLong(w).loadInt() & 0xFFFFFFFFL) == 0xD63F0200L                    // blr x16
+                    && (Address.fromLong(w).minus(4L).loadInt() & 0xFFFFFFFFL) == 0xF9400230L)       // ldr x16,[x17]
             {
                 Uart.write(Magic.bytes("      call at up-0x"));
                 VM.printHex(up - w);
@@ -8411,7 +8412,7 @@ public final class Loader
                 Uart.write(Magic.bytes(" -> "));
                 if (cellImmAt(w - 8L) != 0L)
                 {
-                    printFrameAt(Magic.load64(cellImmAt(w - 8L)));
+                    printFrameAt(Address.fromLong(cellImmAt(w - 8L)).loadLong());
                 }
                 Uart.putc(0x0A);
             }
@@ -8426,7 +8427,7 @@ public final class Loader
         int k = 0;
         while (k < 3)
         {
-            long insn = Magic.load32(at - (long) (k * 4)) & 0xFFFFFFFFL;
+            long insn = Address.fromLong(at).minus((long) (k * 4)).loadInt() & 0xFFFFFFFFL;
             if ((insn & 0x1FL) != 17L
                     || (((insn >> 23) & 0x1FFL) != 0x1A5L && ((insn >> 23) & 0x1FFL) != 0x1E5L))
             {
@@ -8518,19 +8519,30 @@ public final class Loader
         // find; the stub is just a frame, a call, and the dispatch.
         long buf = Heap.allocCode(96);
         int w = 0;
-        Magic.store32(buf + w * 4L, A64Enc.subImm(31, 31, 16));     w += 1;  // frame: the receiver must survive
-        Magic.store32(buf + w * 4L, A64Enc.strx(0, 31, 0));         w += 1;  //   the resolve call
+        Address.fromLong(buf).plus(w * 4L).store(A64Enc.subImm(31, 31, 16)); // frame: the receiver must survive
+        w += 1;
+        Address.fromLong(buf).plus(w * 4L).store(A64Enc.strx(0, 31, 0)); //   the resolve call
+        w += 1;
         long rr = VM.runResolveAddr;
-        Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) (rr & 0xFFFFL), 0));         w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((rr >>> 16) & 0xFFFFL), 1)); w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.blr(16));                w += 1;  // resolveRun(recv) -> run() buffer
-        Magic.store32(buf + w * 4L, A64Enc.movReg(16, 0));          w += 1;  // x16 = the resolved buffer
-        Magic.store32(buf + w * 4L, A64Enc.ldrx(0, 31, 0));         w += 1;  // x0 = the receiver again
-        Magic.store32(buf + w * 4L, A64Enc.blr(16));                w += 1;  // run() with x0 = receiver
+        Address.fromLong(buf).plus(w * 4L).store(A64Enc.movz(16, (int) (rr & 0xFFFFL), 0));
+        w += 1;
+        Address.fromLong(buf).plus(w * 4L).store(A64Enc.movk(16, (int) ((rr >>> 16) & 0xFFFFL), 1));
+        w += 1;
+        Address.fromLong(buf).plus(w * 4L).store(A64Enc.blr(16)); // resolveRun(recv) -> run() buffer
+        w += 1;
+        Address.fromLong(buf).plus(w * 4L).store(A64Enc.movReg(16, 0)); // x16 = the resolved buffer
+        w += 1;
+        Address.fromLong(buf).plus(w * 4L).store(A64Enc.ldrx(0, 31, 0)); // x0 = the receiver again
+        w += 1;
+        Address.fromLong(buf).plus(w * 4L).store(A64Enc.blr(16)); // run() with x0 = receiver
+        w += 1;
         long te = VM.taskExitAddr;
-        Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) (te & 0xFFFFL), 0));         w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((te >>> 16) & 0xFFFFL), 1)); w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.blr(16));                w += 1;  // taskExit() — never returns
+        Address.fromLong(buf).plus(w * 4L).store(A64Enc.movz(16, (int) (te & 0xFFFFL), 0));
+        w += 1;
+        Address.fromLong(buf).plus(w * 4L).store(A64Enc.movk(16, (int) ((te >>> 16) & 0xFFFFL), 1));
+        w += 1;
+        Address.fromLong(buf).plus(w * 4L).store(A64Enc.blr(16)); // taskExit() — never returns
+        w += 1;
         Heap.publishCode(buf, buf + w * 4L);
         VM.runTrampAddr = buf;
     }
@@ -8572,10 +8584,10 @@ public final class Loader
         if (buf == 0L || !plausibleCode(buf))
         {
             Uart.write(Magic.bytes("\n  RUNTRAMP: no run()V for "));
-            long tib = Magic.load64(recv);
+            long tib = Address.fromLong(recv).loadLong();
             if (tib > 0x1000L)
             {
-                reportClassOfType(Magic.load64(tib));
+                reportClassOfType(Address.fromLong(tib).loadLong());
             }
             Uart.write(Magic.bytes(" (buf="));
             VM.printHex(buf);
@@ -8616,17 +8628,17 @@ public final class Loader
         {
             return 0L;
         }
-        long tib = Magic.load64(recv);
+        long tib = Address.fromLong(recv).loadLong();
         if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
         {
             return 0L;
         }
-        long type = Magic.load64(tib);
+        long type = Address.fromLong(tib).loadLong();
         if (type <= 0x1000L)
         {
             return 0L;
         }
-        long dir = Magic.load64(type + ObjectModel.TYPE_ITABLE_DIR_OFFSET);
+        long dir = Address.fromLong(type).plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).loadLong();
         if (dir <= 0x1000L)
         {
             return 0L;
@@ -8634,20 +8646,20 @@ public final class Loader
         int n = 0;
         while (n < MAXIFACEFALLBACK)
         {
-            long ent = Magic.load64(dir + n * (long) ObjectModel.ITABLE_ENTRY_SIZE);
+            long ent = Address.fromLong(dir).plus(n * (long) ObjectModel.ITABLE_ENTRY_SIZE).loadLong();
             if (ent == 0L)
             {
                 return 0L;                              // the sentinel: STOP (the old scan ran past it)
             }
             if (ent == want)
             {
-                long it = Magic.load64(dir + n * (long) ObjectModel.ITABLE_ENTRY_SIZE
-                        + ObjectModel.ITABLE_ENTRY_TABLE_OFFSET);
+                long it = Address.fromLong(dir).plus(n * (long) ObjectModel.ITABLE_ENTRY_SIZE)
+                        .plus(ObjectModel.ITABLE_ENTRY_TABLE_OFFSET).loadLong();
                 if (it <= 0x1000L)
                 {
                     return 0L;
                 }
-                return Magic.load64(it + slot * 8L);
+                return Address.fromLong(it).plus(slot * 8L).loadLong();
             }
             n += 1;
         }
@@ -8857,7 +8869,7 @@ public final class Loader
         int i = 0;
         while (i < len)
         {
-            b[i] = (byte) Magic.load8(addr + i);
+            b[i] = (byte) Address.fromLong(addr).plus(i).loadUnsignedByte();
             i += 1;
         }
         return b;
@@ -8941,7 +8953,7 @@ public final class Loader
         int z = 0;
         while (z < slot)
         {
-            Magic.store64(gStatics + z * 8, 0L);    // statics default to 0
+            Address.fromLong(gStatics).plus(z * 8).store(0L);    // statics default to 0
             z += 1;
         }
         gp = p;
@@ -9475,7 +9487,7 @@ public final class Loader
         if (unresStaticCell == 0L)
         {
             unresStaticCell = Heap.allocData(8);
-            Magic.store64(unresStaticCell, 0L);         // allocData does NOT zero
+            Address.fromLong(unresStaticCell).store(0L);         // allocData does NOT zero
         }
         return unresStaticCell;
     }
@@ -9504,7 +9516,7 @@ public final class Loader
         {
             return;
         }
-        long v = Magic.load64(unresStaticCell);
+        long v = Address.fromLong(unresStaticCell).loadLong();
         if (v == 0L)
         {
             return;
@@ -9514,7 +9526,7 @@ public final class Loader
         Uart.write(Magic.bytes(" -- that field reads null for ever; batch "));
         VM.printDec(cumBatches);
         Uart.putc(0x0A);
-        Magic.store64(unresStaticCell, 0L);             // re-arm: a second loss is a second report
+        Address.fromLong(unresStaticCell).store(0L);             // re-arm: a second loss is a second report
     }
 
     /**
@@ -10231,7 +10243,7 @@ public final class Loader
         int i = 0;
         while (i < name.length)
         {
-            Magic.store8(scratch + i, name[i]);
+            Address.fromLong(scratch).plus(i).store(name[i]);
             i += 1;
         }
         long bytes = VM.dirBytes(scratch, name.length);
@@ -10836,12 +10848,12 @@ public final class Loader
             capHalt(Magic.bytes("MAXINDYNAME"), indyNameUsed);
         }
         int off = indyNameUsed;
-        Magic.store8(indyNameBuf + off, (byte) (len >> 8));
-        Magic.store8(indyNameBuf + off + 1, (byte) len);
+        Address.fromLong(indyNameBuf).plus(off).store((byte) (len >> 8));
+        Address.fromLong(indyNameBuf).plus(off).plus(1).store((byte) len);
         int k = 0;
         while (k < len)
         {
-            Magic.store8(indyNameBuf + off + 2 + k, (byte) u1(raw + k));
+            Address.fromLong(indyNameBuf).plus(off).plus(2).plus(k).store((byte) u1(raw + k));
             k += 1;
         }
         indyNameUsed = off + 2 + len;
@@ -10943,18 +10955,18 @@ public final class Loader
             else
             {
                 gType = Heap.allocData(ObjectModel.TYPE_SIZE);
-                Magic.store64(gType + 0, 0L);           // instanceSize (not instantiated)
-                Magic.store64(gType + 8, 0L);           // superType
-                Magic.store64(gType + 16, 0L);          // no itableDir
-                Magic.store64(gType + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET, 0L);
-                Magic.store64(gType + ObjectModel.TYPE_DEPTH_OFFSET, -1L);   // interface: never in a chain
-                Magic.store64(gType + ObjectModel.TYPE_DISPLAY_OFFSET, 0L);
+                Address.fromLong(gType).store(0L);           // instanceSize (not instantiated)
+                Address.fromLong(gType).plus(8).store(0L);           // superType
+                Address.fromLong(gType).plus(16).store(0L);          // no itableDir
+                Address.fromLong(gType).plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).store(0L);
+                Address.fromLong(gType).plus(ObjectModel.TYPE_DEPTH_OFFSET).store(-1L);   // interface: never in a chain
+                Address.fromLong(gType).plus(ObjectModel.TYPE_DISPLAY_OFFSET).store(0L);
                 // O(1) interface checks: number this interface from the shared counter (the writer
                 // used 1..N-1; IDs >= 128 stay 0 = unnumbered -> those targets keep the dir walk).
                 long nid = VM.ifaceIdNext;
-                Magic.store64(gType + ObjectModel.TYPE_IMPLEMENTS_OFFSET,
+                Address.fromLong(gType).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).store(
                               nid > 0L && nid < 128L ? nid : 0L);
-                Magic.store64(gType + ObjectModel.TYPE_IMPLEMENTS_OFFSET + 8L, 0L);
+                Address.fromLong(gType).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).store(0L);
                 if (nid > 0L && nid < 128L)
                 {
                     VM.ifaceIdNext = nid + 1L;
@@ -11075,7 +11087,7 @@ public final class Loader
             long cs = staticSlotByName(Magic.bytes("COMPACT_STRINGS"));
             if (cs != 0L)
             {
-                Magic.store64(cs, 1L);                  // LATIN1 world: stock getstatic COMPACT_STRINGS -> true
+                Address.fromLong(cs).store(1L);                  // LATIN1 world: stock getstatic COMPACT_STRINGS -> true
             }
             return;
         }
@@ -11087,7 +11099,7 @@ public final class Loader
             long lo = staticSlotByName(Magic.bytes("LO_BYTE_SHIFT"));
             if (lo != 0L)
             {
-                Magic.store64(lo, 8L);
+                Address.fromLong(lo).store(8L);
             }
             return;
         }
@@ -11104,10 +11116,10 @@ public final class Loader
         int i = 0;
         while (i < 36)
         {
-            Magic.store8(tab + 24L + i, (byte) (i < 10 ? 0x30 + i : 0x61 + i - 10));
+            Address.fromLong(tab).plus(24L).plus(i).store((byte) (i < 10 ? 0x30 + i : 0x61 + i - 10));
             i += 1;
         }
-        Magic.store64(slot, tab);
+        Address.fromLong(slot).store(tab);
     }
 
     /** Address of the current class's static field named {@code name}, or 0 if it has none. */
@@ -11193,7 +11205,7 @@ public final class Loader
             reportPropsGap(Magic.bytes("java/lang/System.props has no static cell"));
             return;
         }
-        if (Magic.load64(slot) != 0L)
+        if (Address.fromLong(slot).loadLong() != 0L)
         {
             return;                                     // already seeded: not a failure, say nothing
         }
@@ -11216,7 +11228,7 @@ public final class Loader
             return;                                     // no runnable <init>: leaving props null is honest
         }
         Magic.call2(rgTab[ctor].buf, obj, 0L);          // receiver in x0; a no-arg ctor reads nothing else
-        Magic.store64(slot, obj);
+        Address.fromLong(slot).store(obj);
         seedStandardProps(obj, pi);
         seedLineSeparator();
     }
@@ -11260,7 +11272,7 @@ public final class Loader
             reportPropsGap(Magic.bytes("jdk/internal/misc/VM.initLevel has no static cell (isBooted stays false)"));
             return;
         }
-        Magic.store64(slot, 4L);
+        Address.fromLong(slot).store(4L);
     }
 
     /**
@@ -11299,7 +11311,7 @@ public final class Loader
             reportPropsGap(Magic.bytes("jdk/internal/misc/VM.savedProps has no static cell (getSavedProperty throws)"));
             return;
         }
-        if (Magic.load64(slot) != 0L)
+        if (Address.fromLong(slot).loadLong() != 0L)
         {
             return;
         }
@@ -11318,7 +11330,7 @@ public final class Loader
         }
         Magic.call2(rgTab[ctor].buf, obj, 0L);
         seedStandardProps(obj, pi);
-        Magic.store64(slot, obj);
+        Address.fromLong(slot).store(obj);
     }
 
     /**
@@ -11350,9 +11362,9 @@ public final class Loader
     private static void seedLineSeparator()
     {
         long slot = staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("lineSeparator"));
-        if (slot != 0L && Magic.load64(slot) == 0L)
+        if (slot != 0L && Address.fromLong(slot).loadLong() == 0L)
         {
-            Magic.store64(slot, guestString(Magic.bytes("\n")));   // Uart.putc makes this CRLF for the console
+            Address.fromLong(slot).store(guestString(Magic.bytes("\n")));   // Uart.putc makes this CRLF for the console
         }
     }
 
@@ -11629,12 +11641,12 @@ public final class Loader
         }
         if (needOut)
         {
-            Magic.store64(outSlot, Magic.call0(buf));
+            Address.fromLong(outSlot).store(Magic.call0(buf));
             setStdGen(STD_OUT);
         }
         if (needErr)
         {
-            Magic.store64(errSlot, Magic.call0(buf));
+            Address.fromLong(errSlot).store(Magic.call0(buf));
             setStdGen(STD_ERR);
         }
     }
@@ -11656,7 +11668,7 @@ public final class Loader
         long slot = staticSlotOf(Magic.bytes("java/lang/System"), name);
         if (slot != 0L)
         {
-            Magic.store64(slot, ref);
+            Address.fromLong(slot).store(ref);
             // A stream the PROGRAM installed is current: the seed must not replace it this generation.
             if (name[0] == 'o')
             {
@@ -11760,7 +11772,7 @@ public final class Loader
         {
             return false;                               // no cell: nothing can be seeded
         }
-        return Magic.load64(slot) == 0L || stdGen(which) != loaderGen;
+        return Address.fromLong(slot).loadLong() == 0L || stdGen(which) != loaderGen;
     }
 
     static void seedSystemIn()
@@ -11776,8 +11788,8 @@ public final class Loader
             if (ci >= 0)                                // field-free: the TIB is the whole object
             {
                 long cobj = Heap.alloc(16 + clTab[ci].fieldCount * 8);
-                Magic.store64(cobj + 0L, clTab[ci].tib);
-                Magic.store64(inSlot, cobj);
+                Address.fromLong(cobj).store(clTab[ci].tib);
+                Address.fromLong(inSlot).store(cobj);
                 setStdGen(STD_IN);
                 return;
             }
@@ -11796,11 +11808,11 @@ public final class Loader
             return;
         }
         long obj = Heap.alloc(16 + clTab[bi].fieldCount * 8);
-        Magic.store64(obj + 0L, clTab[bi].tib);
-        Magic.store64(obj + bufOff, Heap.allocArray(0, 1));   // empty byte[]; never read (count == 0)
-        Magic.store64(obj + posOff, 0L);
-        Magic.store64(obj + cntOff, 0L);
-        Magic.store64(inSlot, obj);
+        Address.fromLong(obj).store(clTab[bi].tib);
+        Address.fromLong(obj).plus(bufOff).store(Heap.allocArray(0, 1));   // empty byte[]; never read (count == 0)
+        Address.fromLong(obj).plus(posOff).store(0L);
+        Address.fromLong(obj).plus(cntOff).store(0L);
+        Address.fromLong(inSlot).store(obj);
         setStdGen(STD_IN);
     }
 
@@ -11874,11 +11886,11 @@ public final class Loader
             return;
         }
         long slot = staticSlotOf(Magic.bytes("jdk/internal/misc/VM"), Magic.bytes("lock"));
-        if (slot != 0L && Magic.load64(slot) == 0L)
+        if (slot != 0L && Address.fromLong(slot).loadLong() == 0L)
         {
             long inst = Heap.alloc(16);                          // header only: a monitor needs no fields
-            Magic.store64(inst + 0L, clTab[oi].tib);
-            Magic.store64(slot, inst);
+            Address.fromLong(inst).store(clTab[oi].tib);
+            Address.fromLong(slot).store(inst);
             sdVmLock = true;
         }
     }
@@ -11898,8 +11910,8 @@ public final class Loader
         if (slot != 0L)
         {
             long inst = Heap.alloc(16 + clTab[mi].fieldCount * 8);   // field-free -> header only
-            Magic.store64(inst + 0L, clTab[mi].tib);                 // TIB (itable dir for the console() dispatch)
-            Magic.store64(slot, inst);
+            Address.fromLong(inst).store(clTab[mi].tib);                 // TIB (itable dir for the console() dispatch)
+            Address.fromLong(slot).store(inst);
             sdJio = true;
         }
     }
@@ -11919,8 +11931,8 @@ public final class Loader
         if (slot != 0L)
         {
             long inst = Heap.alloc(16 + clTab[mi].fieldCount * 8);   // field-free -> header only
-            Magic.store64(inst + 0L, clTab[mi].tib);                 // TIB (itable dir for getEnumConstantsShared dispatch)
-            Magic.store64(slot, inst);
+            Address.fromLong(inst).store(clTab[mi].tib);                 // TIB (itable dir for getEnumConstantsShared dispatch)
+            Address.fromLong(slot).store(inst);
             sdJla = true;
         }
     }
@@ -12249,7 +12261,7 @@ public final class Loader
         int k = 0;
         while (k < words.length)
         {
-            Magic.store32(out, words[k]);
+            Address.fromLong(out).store(words[k]);
             out += 4;
             k += 1;
         }
@@ -12440,7 +12452,7 @@ public final class Loader
             Uart.putc(0x0A);
         }
         long tab = Heap.allocCode(4 + n * 8);
-        Magic.store32(tab, n);
+        Address.fromLong(tab).store(n);
         long w = tab + 4;
         prev = -1;
         bci = 0;
@@ -12451,8 +12463,8 @@ public final class Loader
                 int line = lnAt[bci];
                 if (line != prev)
                 {
-                    Magic.store32(w, gBcToWord[bci]);
-                    Magic.store32(w + 4, line);
+                    Address.fromLong(w).store(gBcToWord[bci]);
+                    Address.fromLong(w).plus(4).store(line);
                     w += 8;
                     prev = line;
                 }
@@ -12469,18 +12481,18 @@ public final class Loader
         {
             return -1;
         }
-        int n = Magic.load32(tab);
+        int n = Address.fromLong(tab).loadInt();
         long w = tab + 4;
         int best = -1;
         int bestOff = -1;
         int i = 0;
         while (i < n)
         {
-            int off = Magic.load32(w);
+            int off = Address.fromLong(w).loadInt();
             if (off <= wordOff && off > bestOff)
             {
                 bestOff = off;
-                best = Magic.load32(w + 4);
+                best = Address.fromLong(w).plus(4).loadInt();
             }
             w += 8;
             i += 1;
@@ -12977,8 +12989,8 @@ public final class Loader
                 VM.printHex(addr);
                 Uart.putc(0x0A);
             }
-            Magic.store32(rsAddr[j], A64Enc.movz(rsReg[j], (int) (addr & 0xFFFFL), 0));   // rewrite the movz+movk
-            Magic.store32(rsAddr[j] + 4L, A64Enc.movk(rsReg[j], (int) ((addr >>> 16) & 0xFFFFL), 1));
+            Address.fromLong(rsAddr[j]).store(A64Enc.movz(rsReg[j], (int) (addr & 0xFFFFL), 0));   // rewrite the movz+movk
+            Address.fromLong(rsAddr[j]).plus(4L).store(A64Enc.movk(rsReg[j], (int) ((addr >>> 16) & 0xFFFFL), 1));
             j += 1;
         }
         long tC0 = Magic.readCNTPCT_EL0();
@@ -13242,7 +13254,7 @@ public final class Loader
         else if (gateStands(i))
         {
             pcResolve += 1;                          // counted as the lookup it replaces: see pcUnres
-            target = rcGateCell[i] == 0L ? 0L : Magic.load64(rcGateCell[i]);
+            target = rcGateCell[i] == 0L ? 0L : Address.fromLong(rcGateCell[i]).loadLong();
         }
         else
         {
@@ -13358,7 +13370,7 @@ public final class Loader
             // SslEngineProbe, QEMU 2026-11-06): patch was 8.8 s of the cold TLS session's 16.0 s of
             // batch work, and this tail (tailT) 5.1 s of the call loop's 14.2 s over the run. The test reads
             // the LIVE word, not only rcDone, so a site something else rewrote is patched as before.
-            if (rcDone[i] == target && Magic.load32(rcAddr[i]) == word)
+            if (rcDone[i] == target && Address.fromLong(rcAddr[i]).loadInt() == word)
             {
                 pcSkipped += 1;
                 if (PATCH_SITE_TIMERS)
@@ -13374,7 +13386,7 @@ public final class Loader
                                                           //   scans -- pin it or the sweep may free it
             CodeEdges.note(rcAddr[i], target);            // ... and record the edge, so compaction can
                                                           //   find and rewrite it when `target` moves
-            Magic.store32(rcAddr[i], word);                // bl target, or b for a lambda/method-ref thunk
+            Address.fromLong(rcAddr[i]).store(word);                // bl target, or b for a lambda/method-ref thunk
             if (pcWrittenN < pcWritten.length)             // publish exactly the words written
             {
                 pcWritten[pcWrittenN] = i;
@@ -13470,7 +13482,7 @@ public final class Loader
         long cell = dlCellOf(clsBase, clsOff, refBase, nameOff, refBase, descOff);
         gwCell = cell;
         gwOk = fits;
-        return cell == 0L ? 0L : Magic.load64(cell);
+        return cell == 0L ? 0L : Address.fromLong(cell).loadLong();
     }
 
     /** Method buffer for a call ref given as blob base + Utf8 offsets (patchRelocs re-resolution), or 0. */
@@ -13739,7 +13751,7 @@ public final class Loader
             return 0L;
         }
         long cell = dlCellOf(clsBase, clsOff, refBase, nameOff, refBase, descOff);
-        return cell == 0L ? 0L : Magic.load64(cell);
+        return cell == 0L ? 0L : Address.fromLong(cell).loadLong();
     }
 
     private static long dlStubByRef(long refBase, int classOff, int nameOff, int descOff)
@@ -13749,7 +13761,7 @@ public final class Loader
             return 0L;
         }
         long cell = dlCellOf(refBase, classOff, refBase, nameOff, refBase, descOff);
-        return cell == 0L ? 0L : Magic.load64(cell);
+        return cell == 0L ? 0L : Address.fromLong(cell).loadLong();
     }
 
     /**
@@ -14548,14 +14560,14 @@ public final class Loader
 
     private static long resolveViaItableDir(long type, long nameOff, long descOff)
     {
-        long dir = Magic.load64(type + ObjectModel.TYPE_ITABLE_DIR_OFFSET);
+        long dir = Address.fromLong(type).plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).loadLong();
         if (dir == 0L)
         {
             return 0L;
         }
         int decl = -2;                                  // the maximally specific declarer, found on first need
         long entry = dir;
-        long iface = Magic.load64(entry + ObjectModel.ITABLE_ENTRY_IFACE_OFFSET);
+        long iface = Address.fromLong(entry).plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadLong();
         while (iface != 0L)                             // 0 interfaceType terminates the directory
         {
             int ir = classRegByType(iface);
@@ -14573,10 +14585,10 @@ public final class Loader
                 int slot = ifmSlotAbs(ir, nameOff, descOff);
                 if (slot >= 0)
                 {
-                    long itable = Magic.load64(entry + ObjectModel.ITABLE_ENTRY_TABLE_OFFSET);
+                    long itable = Address.fromLong(entry).plus(ObjectModel.ITABLE_ENTRY_TABLE_OFFSET).loadLong();
                     if (itable != 0L)
                     {
-                        long hit = Magic.load64(itable + slot * 8L);
+                        long hit = Address.fromLong(itable).plus(slot * 8L).loadLong();
                         if (hit != 0L)
                         {
                             return hit;
@@ -14632,7 +14644,7 @@ public final class Loader
                 }
             }
             entry += ObjectModel.ITABLE_ENTRY_SIZE;
-            iface = Magic.load64(entry + ObjectModel.ITABLE_ENTRY_IFACE_OFFSET);
+            iface = Address.fromLong(entry).plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadLong();
         }
         return 0L;
     }
@@ -14646,13 +14658,13 @@ public final class Loader
         int[] regs = new int[MAXIFACEFALLBACK];
         int n = 0;
         long entry = dir;
-        long iface = Magic.load64(entry + ObjectModel.ITABLE_ENTRY_IFACE_OFFSET);
+        long iface = Address.fromLong(entry).plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadLong();
         while (iface != 0L && n < regs.length)
         {
             regs[n] = classRegByType(iface);
             n += 1;
             entry += ObjectModel.ITABLE_ENTRY_SIZE;
-            iface = Magic.load64(entry + ObjectModel.ITABLE_ENTRY_IFACE_OFFSET);
+            iface = Address.fromLong(entry).plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadLong();
         }
         return mostSpecificDeclarer(regs, n, nameU, descU);
     }
@@ -14679,7 +14691,7 @@ public final class Loader
             Uart.write(Magic.bytes("  NOT A MANAGED HEAP ADDRESS (not an object)\n"));
             return;
         }
-        long tib = Magic.load64(recv);
+        long tib = Address.fromLong(recv).loadLong();
         Uart.write(Magic.bytes(" tib=0x"));
         VM.printHex(tib);
         if (tib == 0L)
@@ -14701,7 +14713,7 @@ public final class Loader
             // report existed to produce.
             Uart.putc(0x0A);
         }
-        long type = Magic.load64(tib);
+        long type = Address.fromLong(tib).loadLong();
         Uart.write(Magic.bytes(" type=0x"));
         VM.printHex(type);
         // The WHOLE prefix: one zero slot is a clobbered or pruned entry, all-zero is a clobbered or unbuilt TIB,
@@ -14713,7 +14725,7 @@ public final class Loader
         while (vi < 9)
         {
             Uart.write(Magic.bytes(" 0x"));
-            VM.printHex(Magic.load64(tib + 8L + (long) (vi * 8)));
+            VM.printHex(Address.fromLong(tib).plus(8L).plus((long) (vi * 8)).loadLong());
             vi += 1;
         }
         Uart.write(Magic.bytes("  synthesised(lambda/anno TIB)="));
