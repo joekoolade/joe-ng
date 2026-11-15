@@ -15,6 +15,7 @@ import asm.A64Enc;
 import board.bcm2711.Bcm2711;
 import board.bcm2711.Gic;
 import board.bcm2711.Uart;
+import magic.Address;
 import magic.Magic;
 import static vm.VM.*;   // shared state stays in VM: the *Addr helper statics, the task/monitor/semaphore tables,
                          // TASK_* constants, MAX_TASKS/NUM_SEM/MAX_MON, WIFI_SEM, SCHED_FRAME, the SMP/pc fields,
@@ -110,17 +111,17 @@ public final class VMScheduler
     {
         long stk = Heap.alloc(0x8000);
         long top = (stk + 0x8000L) & ~0xFL;                // 16-byte aligned; grows down
-        long frame = top - SCHED_FRAME;
+        Address frame = Address.fromLong(top - SCHED_FRAME);
         int r = 0;
         while (r <= 30)
         {
-            Magic.store64(frame + r * 8L, 0L);
+            frame.plus(r * 8L).store(0L);
             r += 1;
         }
-        Magic.store64(frame + 0L, (long) id);              // x0 = id (this task's char index)
-        Magic.store64(frame + 248L, pcTask1Addr);          // ELR_EL1 = pcTask1 entry
-        Magic.store64(frame + 256L, 0x5L);                 // SPSR_EL1 = EL1h, IRQs on
-        return frame;
+        frame.store((long) id);                            // x0 = id (this task's char index)
+        frame.plus(248L).store(pcTask1Addr);               // ELR_EL1 = pcTask1 entry
+        frame.plus(256L).store(0x5L);                      // SPSR_EL1 = EL1h, IRQs on
+        return frame.toLong();
     }
 
     /** Build the secondaries' shared per-core context-switch stub + vector + task-1 frames (primary, once). */
@@ -137,9 +138,9 @@ public final class VMScheduler
         int i = 0;                                          // vector table: entry 5 (IRQ) -> switch stub, else -> fault
         while (i < 16)
         {
-            long entry = PC_VBAR + i * 0x80L;
+            Address entry = Address.fromLong(PC_VBAR + i * 0x80L);
             long target = (i == 5) ? stub : reportFaultAddr;
-            Magic.store32(entry, A64Enc.b((int) ((target - entry) / 4L)));
+            entry.store(A64Enc.b((int) ((target - entry.toLong()) / 4L)));   // a 32-bit instruction word
             i += 1;
         }
         Heap.publishCode(PC_VBAR, PC_VBAR + 0x800L);
@@ -164,8 +165,8 @@ public final class VMScheduler
         int i = 0;
         while (i < 4)
         {
-            long l2 = PT_BASE + (i + 1) * 0x1000L;
-            Magic.store64(PT_BASE + i * 8L, l2 | 3L);      // L1 table descriptor -> L2 table
+            Address l2 = Address.fromLong(PT_BASE + (i + 1) * 0x1000L);
+            Address.fromLong(PT_BASE).plus(i * 8L).store(l2.toLong() | 3L);   // L1 table descriptor -> L2 table
             int j = 0;
             while (j < 512)
             {
@@ -179,7 +180,7 @@ public final class VMScheduler
                 {
                     desc = a | 0x701L;                     // block | AF | SH=inner | AttrIdx=0 (Normal WB)
                 }
-                Magic.store64(l2 + j * 8L, desc);
+                l2.plus(j * 8L).store(desc);
                 j = j + 1;
             }
             i = i + 1;
@@ -226,11 +227,11 @@ public final class VMScheduler
     static void secondaryMain(int core)
     {
         enableMmuThisCore();                               // caches on: coherent with the primary + the lock
-        Magic.store64(CORE_FLAGS + core * 8L, core);       // report in (the primary counts these)
+        Address.fromLong(CORE_FLAGS).plus(core * 8L).store((long) core);   // report in (the primary counts these)
         Magic.dsb();
         if (smpDemo != 0)                                  // the demo-suite boot runs the two SMP set pieces first
         {
-            while (Magic.load64(CORE_FLAGS) == 0L)         // wait for the primary's GO (slot 0)
+            while (Address.fromLong(CORE_FLAGS).loadLong() == 0L)   // wait for the primary's GO (slot 0)
             {
             }
             smpWork(core);                                 // pull jobs from the shared queue under the lock
@@ -330,7 +331,7 @@ public final class VMScheduler
             return;
         }
         smpStop = 0;
-        Magic.store32(SCHED_LOCK, 0);                      // free before anyone can take it (raw scratch RAM)
+        Address.fromLong(SCHED_LOCK).store(0);             // free before anyone can take it (raw scratch RAM)
         Uart.armLock(1);                                   // more than one core can print now: lock reports
         Magic.dsb();
         smpSched = 1;                                      // the table is shared now: take the lock around it
@@ -440,8 +441,9 @@ public final class VMScheduler
             smpJob = n + 1;
             Magic.spinUnlock(LOCK_ADDR);                   // release BEFORE the slow UART write, so the lock's
                                                            // cache line is free and other cores get a turn
-            long cnt = CORE_FLAGS + 0x40L + core * 8L;     // this core's own job count (no contention)
-            Magic.store64(cnt, Magic.load64(cnt) + 1L);
+            // this core's own job count (no contention)
+            Address cnt = Address.fromLong(CORE_FLAGS + 0x40L + core * 8L);
+            cnt.store(cnt.loadLong() + 1L);
             Uart.putc((byte) (0x30 + core));               // core id: interleaves like the concurrent demo
         }
     }
@@ -449,16 +451,17 @@ public final class VMScheduler
     static void bringUpSecondaries()
     {
         if (secondaryMainAddr == 0L) { secondaryMain(0); } // dead call: compile + stash secondaryMain
-        Magic.store32(LOCK_ADDR, 0);                       // HW spinlock word = free (cacheable RAM, MMU on)
+        Address.fromLong(LOCK_ADDR).store(0);              // HW spinlock word = free (cacheable RAM, MMU on)
         smpJob = 0;
-        Magic.store64(CORE_FLAGS + 0L, 0L);                // GO = 0 (released after we report cores up)
-        Magic.store64(CORE_FLAGS + 8L, 0L);                // clear the report flags for cores 1..3
-        Magic.store64(CORE_FLAGS + 16L, 0L);
-        Magic.store64(CORE_FLAGS + 24L, 0L);
-        Magic.store64(CORE_FLAGS + 0x40L, 0L);             // clear per-core job counts (0x40 + core*8)
-        Magic.store64(CORE_FLAGS + 0x48L, 0L);
-        Magic.store64(CORE_FLAGS + 0x50L, 0L);
-        Magic.store64(CORE_FLAGS + 0x58L, 0L);
+        Address flags = Address.fromLong(CORE_FLAGS);
+        flags.store(0L);                                   // GO = 0 (released after we report cores up)
+        flags.plus(8L).store(0L);                          // clear the report flags for cores 1..3
+        flags.plus(16L).store(0L);
+        flags.plus(24L).store(0L);
+        flags.plus(0x40L).store(0L);                       // clear per-core job counts (0x40 + core*8)
+        flags.plus(0x48L).store(0L);
+        flags.plus(0x50L).store(0L);
+        flags.plus(0x58L).store(0L);
 
         if (!SMP_ENABLED)                                  // leave cores 1-3 parked: single-core heap for reclaim
         {
@@ -473,40 +476,41 @@ public final class VMScheduler
         int lo = (int) (secondaryMainAddr & 0xFFFFL);
         int mid = (int) ((secondaryMainAddr >>> 16) & 0xFFFFL);
         int hi = (int) ((secondaryMainAddr >>> 32) & 0xFFFFL);
+        Address stub = Address.fromLong(s);                // 32-bit instruction-word stores below
         int w = 0;
-        Magic.store32(s + w * 4L, A64Enc.mrs(0, A64Enc.MPIDR_EL1));      w += 1;
-        Magic.store32(s + w * 4L, A64Enc.movz(9, 3, 0));                w += 1;   // x9 = 3
-        Magic.store32(s + w * 4L, A64Enc.andReg(0, 0, 9));             w += 1;   // x0 = core id
-        Magic.store32(s + w * 4L, A64Enc.lslImm(1, 0, 20));           w += 1;   // x1 = core * 1MiB
-        Magic.store32(s + w * 4L, A64Enc.movz(2, SEC_STACK_HI, 1));    w += 1;   // x2 = 0x0200_0000
-        Magic.store32(s + w * 4L, A64Enc.addReg(2, 2, 1));           w += 1;   // x2 = per-core stack top
-        Magic.store32(s + w * 4L, A64Enc.msr(A64Enc.SP_EL1, 2));      w += 1;   // SP_EL1 = stack top
-        Magic.store32(s + w * 4L, A64Enc.movz(3, 0x0800, 0));         w += 1;
-        Magic.store32(s + w * 4L, A64Enc.movk(3, 0x30D0, 1));         w += 1;   // x3 = 0x30D0_0800
-        Magic.store32(s + w * 4L, A64Enc.msr(A64Enc.SCTLR_EL1, 3));   w += 1;   // EL1 SCTLR (MMU off, RES1)
-        Magic.store32(s + w * 4L, A64Enc.movz(3, 0x8000, 1));         w += 1;
-        Magic.store32(s + w * 4L, A64Enc.msr(A64Enc.HCR_EL2, 3));     w += 1;   // HCR_EL2.RW = 1
-        Magic.store32(s + w * 4L, A64Enc.movz(3, 0x33FF, 0));         w += 1;
-        Magic.store32(s + w * 4L, A64Enc.msr(A64Enc.CPTR_EL2, 3));    w += 1;   // don't trap FP to EL2
+        stub.plus(w * 4L).store(A64Enc.mrs(0, A64Enc.MPIDR_EL1));      w += 1;
+        stub.plus(w * 4L).store(A64Enc.movz(9, 3, 0));                w += 1;   // x9 = 3
+        stub.plus(w * 4L).store(A64Enc.andReg(0, 0, 9));             w += 1;   // x0 = core id
+        stub.plus(w * 4L).store(A64Enc.lslImm(1, 0, 20));           w += 1;   // x1 = core * 1MiB
+        stub.plus(w * 4L).store(A64Enc.movz(2, SEC_STACK_HI, 1));    w += 1;   // x2 = 0x0200_0000
+        stub.plus(w * 4L).store(A64Enc.addReg(2, 2, 1));           w += 1;   // x2 = per-core stack top
+        stub.plus(w * 4L).store(A64Enc.msr(A64Enc.SP_EL1, 2));      w += 1;   // SP_EL1 = stack top
+        stub.plus(w * 4L).store(A64Enc.movz(3, 0x0800, 0));         w += 1;
+        stub.plus(w * 4L).store(A64Enc.movk(3, 0x30D0, 1));         w += 1;   // x3 = 0x30D0_0800
+        stub.plus(w * 4L).store(A64Enc.msr(A64Enc.SCTLR_EL1, 3));   w += 1;   // EL1 SCTLR (MMU off, RES1)
+        stub.plus(w * 4L).store(A64Enc.movz(3, 0x8000, 1));         w += 1;
+        stub.plus(w * 4L).store(A64Enc.msr(A64Enc.HCR_EL2, 3));     w += 1;   // HCR_EL2.RW = 1
+        stub.plus(w * 4L).store(A64Enc.movz(3, 0x33FF, 0));         w += 1;
+        stub.plus(w * 4L).store(A64Enc.msr(A64Enc.CPTR_EL2, 3));    w += 1;   // don't trap FP to EL2
         // ... NOR to EL1: CPACR_EL1.FPEN = 0b11, as the boot core sets it (EmitBoot, VM.boot). Its reset value traps
         // FP/SIMD at EL1, and without this every FP instruction a thread ran on cores 1-3 raised an InternalError
         // (TRAP ec=0x07) -- latent while nothing doing FP math ran there; a /run benchmark's first double divide on
         // a secondary found it (2026-11-14). QEMU does not trap, so only the Pi shows it.
-        Magic.store32(s + w * 4L, A64Enc.movz(3, 0x0030, 1));         w += 1;   // x3 = 0x30_0000
-        Magic.store32(s + w * 4L, A64Enc.msr(A64Enc.CPACR_EL1, 3));   w += 1;   // CPACR_EL1.FPEN = 0b11
-        Magic.store32(s + w * 4L, A64Enc.movz(3, 0x03C5, 0));         w += 1;
-        Magic.store32(s + w * 4L, A64Enc.msr(A64Enc.SPSR_EL2, 3));    w += 1;   // target = EL1h, DAIF masked
-        Magic.store32(s + w * 4L, A64Enc.movz(3, lo, 0));             w += 1;
-        Magic.store32(s + w * 4L, A64Enc.movk(3, mid, 1));            w += 1;
-        Magic.store32(s + w * 4L, A64Enc.movk(3, hi, 2));            w += 1;   // x3 = &secondaryMain
-        Magic.store32(s + w * 4L, A64Enc.msr(A64Enc.ELR_EL2, 3));     w += 1;
-        Magic.store32(s + w * 4L, A64Enc.eret());                   w += 1;   // -> secondaryMain(core) at EL1
+        stub.plus(w * 4L).store(A64Enc.movz(3, 0x0030, 1));         w += 1;   // x3 = 0x30_0000
+        stub.plus(w * 4L).store(A64Enc.msr(A64Enc.CPACR_EL1, 3));   w += 1;   // CPACR_EL1.FPEN = 0b11
+        stub.plus(w * 4L).store(A64Enc.movz(3, 0x03C5, 0));         w += 1;
+        stub.plus(w * 4L).store(A64Enc.msr(A64Enc.SPSR_EL2, 3));    w += 1;   // target = EL1h, DAIF masked
+        stub.plus(w * 4L).store(A64Enc.movz(3, lo, 0));             w += 1;
+        stub.plus(w * 4L).store(A64Enc.movk(3, mid, 1));            w += 1;
+        stub.plus(w * 4L).store(A64Enc.movk(3, hi, 2));            w += 1;   // x3 = &secondaryMain
+        stub.plus(w * 4L).store(A64Enc.msr(A64Enc.ELR_EL2, 3));     w += 1;
+        stub.plus(w * 4L).store(A64Enc.eret());                   w += 1;   // -> secondaryMain(core) at EL1
         Heap.publishCode(s, s + w * 4L);
         cleanToPoC(s, s + w * 4L);                         // secondaries fetch the stub uncached (MMU off) ...
 
-        Magic.store64(0x00E0L, s);                         // spin_cpu1 -> stub
-        Magic.store64(0x00E8L, s);                         // spin_cpu2 -> stub
-        Magic.store64(0x00F0L, s);                         // spin_cpu3 -> stub
+        Address.fromLong(0x00E0L).store(stub);             // spin_cpu1 -> stub
+        Address.fromLong(0x00E8L).store(stub);             // spin_cpu2 -> stub
+        Address.fromLong(0x00F0L).store(stub);             // spin_cpu3 -> stub
         cleanToPoC(0x00C0L, 0x0100L);                      // ... and read the spin slots uncached: push both to PoC
         Magic.sev();                                       // wake the WFE-parked cores
 
@@ -515,9 +519,9 @@ public final class VMScheduler
         while (up < 3 && Magic.readCNTPCT_EL0() < deadline)
         {
             up = 0;
-            if (Magic.load64(CORE_FLAGS + 8L) != 0L)  { up = up + 1; }
-            if (Magic.load64(CORE_FLAGS + 16L) != 0L) { up = up + 1; }
-            if (Magic.load64(CORE_FLAGS + 24L) != 0L) { up = up + 1; }
+            if (flags.plus(8L).loadLong() != 0L)  { up = up + 1; }
+            if (flags.plus(16L).loadLong() != 0L) { up = up + 1; }
+            if (flags.plus(24L).loadLong() != 0L) { up = up + 1; }
         }
         Uart.write(Magic.bytes("SMP: "));
         printDec(up + 1);                                  // + the primary
@@ -706,7 +710,8 @@ public final class VMScheduler
             {
                 return false;                              // another core has not switched off it yet
             }
-            if (c != core && coreLeavingAddr != 0L && Magic.load64(coreLeavingAddr + c * 8L) == (long) (t + 1))
+            if (c != core && coreLeavingAddr != 0L
+                && Address.fromLong(coreLeavingAddr).plus(c * 8L).loadLong() == (long) (t + 1))
             {
                 return false;                              // ... or has, but is still ON its stack (see markLeaving)
             }
@@ -726,7 +731,7 @@ public final class VMScheduler
     {
         if (coreLeavingAddr != 0L && from != to)
         {
-            Magic.store64(coreLeavingAddr + core * 8L, (long) (from + 1));
+            Address.fromLong(coreLeavingAddr).plus(core * 8L).store((long) (from + 1));
         }
     }
 
@@ -1027,9 +1032,10 @@ public final class VMScheduler
      */
     private static void hangDumpStack(long frame)
     {
-        long cpc = Magic.load64(frame + 248L);
-        long csp = frame + SCHED_FRAME;
-        long lr = Magic.load64(frame + 240L);
+        Address f = Address.fromLong(frame);
+        long cpc = f.plus(248L).loadLong();
+        Address csp = f.plus(SCHED_FRAME);
+        long lr = f.plus(240L).loadLong();
         int depth = 0;
         while (depth < 12 && cpc > 0x1000L)
         {
@@ -1048,8 +1054,8 @@ public final class VMScheduler
                 depth += 1;
                 continue;
             }
-            cpc = Magic.load64(csp) - 4L;
-            csp += fs;
+            cpc = csp.loadLong() - 4L;
+            csp = csp.plus(fs);
             lr = 0L;                                       // x30 is only the FIRST frame's: stale past it
             depth += 1;
         }
@@ -1712,9 +1718,10 @@ public final class VMScheduler
         {                                                  // getStackTrace() on a finished thread returns length 0)
             return Loader.buildTrace(0L, 0L, 0L);
         }
-        long elr = Magic.load64(taskSp[tid] + 248L);       // saved ELR: the yielded PC (inside taskYield)
+        Address frame = Address.fromLong(taskSp[tid]);
+        long elr = frame.plus(248L).loadLong();            // saved ELR: the yielded PC (inside taskYield)
         long ssp = taskSp[tid] + SCHED_FRAME;              // SP at the yield
-        long x30 = Magic.load64(taskSp[tid] + 240L);       // saved x30: caller-of-taskYield (steps over the leaf)
+        long x30 = frame.plus(240L).loadLong();            // saved x30: caller-of-taskYield (steps over the leaf)
         return Loader.buildTrace(elr, ssp, x30);
     }
 
@@ -1739,7 +1746,7 @@ public final class VMScheduler
         {
             if (taskThreadObj[i] != 0L && taskDone[i] == 0)
             {
-                Magic.store64(arr + 24L + j * 8L, taskThreadObj[i]);
+                Address.fromLong(arr).plus(24L + j * 8L).store(taskThreadObj[i]);
                 j += 1;
             }
             i += 1;
@@ -1841,7 +1848,7 @@ public final class VMScheduler
             {
                 return true;
             }
-            if (coreLeavingAddr != 0L && Magic.load64(coreLeavingAddr + c * 8L) == (long) (t + 1))
+            if (coreLeavingAddr != 0L && Address.fromLong(coreLeavingAddr).plus(c * 8L).loadLong() == (long) (t + 1))
             {
                 return true;
             }
@@ -1896,17 +1903,17 @@ public final class VMScheduler
             taskStackBase[id] = stk;                       // object base: keeps the stack GC-reachable
         }
         long top = (stk + 0x8000L) & ~0xFL;                // 16-byte aligned top; stack grows down
-        long frame = top - SCHED_FRAME;                    // synthetic initial context frame
+        Address frame = Address.fromLong(top - SCHED_FRAME);   // synthetic initial context frame
         int r = 0;
         while (r <= 30)
         {
-            Magic.store64(frame + r * 8L, 0L);             // x0..x30 = 0
+            frame.plus(r * 8L).store(0L);                  // x0..x30 = 0
             r += 1;
         }
-        Magic.store64(frame + 0L, arg0);                   // x0 = the receiver (0 for a plain spawn)
-        Magic.store64(frame + 248L, entry);                // ELR_EL1 = task entry PC
-        Magic.store64(frame + 256L, 0x5L);                 // SPSR_EL1 = EL1h (M=0b0101), DAIF clear -> IRQs on
-        taskSp[id] = frame;
+        frame.store(arg0);                                 // x0 = the receiver (0 for a plain spawn)
+        frame.plus(248L).store(entry);                     // ELR_EL1 = task entry PC
+        frame.plus(256L).store(0x5L);                      // SPSR_EL1 = EL1h (M=0b0101), DAIF clear -> IRQs on
+        taskSp[id] = frame.toLong();
         taskWake[id] = 0L;                                 // reset per-task state (matters when recycling a slot)
         taskWaitOn[id] = 0;
         taskWaitObj[id] = 0L;

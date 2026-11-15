@@ -11,6 +11,7 @@
  */
 package vm;
 
+import magic.Address;
 import magic.Magic;
 import board.bcm2711.Uart;
 import static vm.VM.*;   // exception-table state + shared helpers stay in VM: handlerTable/Count, jitHandler*,
@@ -73,7 +74,7 @@ final class VMUnwind
             if (fs != 0L)
             {
                 Uart.write(Magic.bytes("      <- "));
-                Loader.printFrameAt(Magic.load64(sp) - 4L);
+                Loader.printFrameAt(Address.fromLong(sp).loadLong() - 4L);
             }
         }
         traceStopPc = 0L;
@@ -81,7 +82,7 @@ final class VMUnwind
         int n = throwFrames(exc, pc, sp, 0L);                  // pass 1: the inline slots, and the true depth
         if (n < 8)
         {
-            Magic.store64(exc + 16L + n * 8L, 0L);             // 0-terminate the backtrace
+            Address.fromLong(exc).plus(16L + n * 8L).store(0L);   // 0-terminate the backtrace
         }
         if (n > 8)
         {
@@ -110,11 +111,11 @@ final class VMUnwind
         {
             if (arr != 0L)
             {
-                Magic.store64(arr + 24L + n * 8L, cpc);
+                Address.fromLong(arr).plus(24L + n * 8L).store(cpc);
             }
             else if (n < 8)
             {
-                Magic.store64(exc + 16L + n * 8L, cpc);
+                Address.fromLong(exc).plus(16L + n * 8L).store(cpc);
             }
             n += 1;
             long cfs = frameSizeAt(cpc);
@@ -125,11 +126,11 @@ final class VMUnwind
                 if (arr == 0L)
                 {
                     traceStopPc = cpc;
-                    traceStopWord = Magic.load64(csp);
+                    traceStopWord = Address.fromLong(csp).loadLong();
                 }
                 break;
             }
-            cpc = Magic.load64(csp) - 4L;                      // caller's return address (the call site)
+            cpc = Address.fromLong(csp).loadLong() - 4L;       // caller's return address (the call site)
             csp += cfs;
             if (VM.isLaunchFrame(cpc))
             {
@@ -162,7 +163,7 @@ final class VMUnwind
         int n = keptFrames(exc, cpc, csp, 0L);                 // pass 1: the inline slots, and the true depth
         if (n < 8)
         {
-            Magic.store64(exc + 16L + n * 8L, 0L);             // 0-terminate (an empty trace stays all-zero)
+            Address.fromLong(exc).plus(16L + n * 8L).store(0L);   // 0-terminate (an empty trace stays all-zero)
         }
         if (n > 8)
         {
@@ -210,11 +211,11 @@ final class VMUnwind
             {
                 if (arr != 0L)
                 {
-                    Magic.store64(arr + 24L + n * 8L, cpc);
+                    Address.fromLong(arr).plus(24L + n * 8L).store(cpc);
                 }
                 else if (n < 8)
                 {
-                    Magic.store64(exc + 16L + n * 8L, cpc);
+                    Address.fromLong(exc).plus(16L + n * 8L).store(cpc);
                 }
                 n += 1;
             }
@@ -223,7 +224,7 @@ final class VMUnwind
             {
                 break;                                         // top of the resolvable stack
             }
-            cpc = Magic.load64(csp) - 4L;                      // caller's return address (the call site)
+            cpc = Address.fromLong(csp).loadLong() - 4L;       // caller's return address (the call site)
             csp += cfs;
             if (VM.isLaunchFrame(cpc))
             {
@@ -247,13 +248,13 @@ final class VMUnwind
         // budget is spent long before anything interesting happens. This fires only on the broken case.
         if (exc > 0x1000L && !badThrowReported)
         {
-            long t = Magic.load64(exc);
+            long t = Address.fromLong(exc).loadLong();
             long thrType = Loader.throwableTypeAddr();
             if (t > 0x1000L && thrType != 0L && VM.instanceOf(exc, thrType) == 0)
             {
                 badThrowReported = true;
                 Uart.write(Magic.bytes("\n  BAD THROW: not a Throwable -- "));
-                Loader.printClassName(Magic.load64(t));
+                Loader.printClassName(Address.fromLong(t).loadLong());
                 Uart.write(Magic.bytes(" at pc="));
                 printHex(pc);
                 Uart.write(Magic.bytes("\n    thrown by "));
@@ -268,8 +269,11 @@ final class VMUnwind
             printHex(exc);
             if (exc > 0x1000L && exc < 0x40000000L)
             {
-                long tib = Magic.load64(exc);
-                if (tib > 0x1000L && tib < 0x40000000L) { Loader.reportClassOfType(Magic.load64(tib)); }
+                long tib = Address.fromLong(exc).loadLong();
+                if (tib > 0x1000L && tib < 0x40000000L)
+                {
+                    Loader.reportClassOfType(Address.fromLong(tib).loadLong());
+                }
             }
             Uart.write(Magic.bytes(" at 0x"));
             printHex(pc);
@@ -282,7 +286,7 @@ final class VMUnwind
         // value reaching athrow is a bug either way; the report names the throwing method while its pc is
         // still in hand, instead of the walk running to the top and printing UNWIND LOST with the evidence
         // already gone.
-        long etib = exc > 0x1000L ? Magic.load64(exc) : 0L;
+        long etib = exc > 0x1000L ? Address.fromLong(exc).loadLong() : 0L;
         if (exc <= 0x1000L || etib <= 0x1000L || etib >= 0x40000000L)
         {
             Uart.write(Magic.bytes("\nBAD THROW exc="));
@@ -292,9 +296,9 @@ final class VMUnwind
             if (exc > 0x1000L)
             {
                 Uart.write(Magic.bytes(" status="));
-                printHex(Magic.load64(exc + 8L));      // size | mark: is this a heap block at all?
+                printHex(Address.fromLong(exc).plus(8L).loadLong());   // size | mark: is this a heap block at all?
                 Uart.write(Magic.bytes(" inHeap="));
-                printHex(exc >= Heap.BASE && exc < Magic.load64(Heap.PTR_CELL) ? 1L : 0L);
+                printHex(exc >= Heap.BASE && exc < Address.fromLong(Heap.PTR_CELL).loadLong() ? 1L : 0L);
             }
             Uart.write(Magic.bytes(" thrownAt="));
             printHex(pc);
@@ -316,22 +320,23 @@ final class VMUnwind
         {
             unwindLocBufs = Heap.allocData(MAX_TASKS * 16 * 8);   // 16 callee-saved local slots per task
         }
-        long unwindLocBuf = unwindLocBufs + (long) curTask() * 16L * 8L;   // this task's own, never another's
+        // this task's own, never another's
+        Address unwindLocBuf = Address.fromLong(unwindLocBufs).plus((long) curTask() * 16L * 8L);
         // Seed with the register snapshot AT THE THROW: this method's OWN prologue saved the throwing frame's
         // x19..x28 (10 slots) at [our_sp + 8 + k*8]. That captures every handler local a shallow-regLocals callee
         // preserved but never re-saved (its value flowed through untouched into our prologue's save). Slots that
         // an intervening frame DID save get overwritten below as we pop that frame.
-        long mysp = Magic.readSP();
+        Address mysp = Address.fromLong(Magic.readSP());
         long ls = 0L;
         while (ls < 16L)
         {
             if (ls < 10L)
             {
-                Magic.store64(unwindLocBuf + ls * 8L, Magic.load64(mysp + 8L + ls * 8L));
+                unwindLocBuf.plus(ls * 8L).store(mysp.plus(8L + ls * 8L).loadLong());
             }
             else
             {
-                Magic.store64(unwindLocBuf + ls * 8L, 0L);
+                unwindLocBuf.plus(ls * 8L).store(0L);
             }
             ls += 1L;
         }
@@ -345,7 +350,7 @@ final class VMUnwind
                 Uart.write(Magic.bytes(" nrl="));
                 printHex(jitRegLocalsAt(pc));
                 Uart.write(Magic.bytes(" buf0="));
-                printHex(Magic.load64(unwindLocBuf));
+                printHex(unwindLocBuf.loadLong());
                 // addJitFrame writes the frame and local tables in LOCKSTEP and both compaction sites treat
                 // them together, so these counts must be equal. If they are not, the tables have desynced and
                 // a pc can be in one and absent from the other -- which is exactly what the -1s above show.
@@ -364,7 +369,7 @@ final class VMUnwind
                                                                            //   (incl. one inside the handler) is FRESH,
                                                                            //   not a nested unwind fault
                 long hrl = jitRegLocalsAt(pc);                             // -1 = unknown; resume ignores it,
-                Magic.resume(h, sp, exc, hrl < 0L ? 0L : hrl, unwindLocBuf);  //   but never pass it a negative
+                Magic.resume(h, sp, exc, hrl < 0L ? 0L : hrl, unwindLocBuf.toLong());  //   but never pass it a negative
             }
             long fs = frameSizeAt(pc);
             if (fs == 0L)
@@ -373,7 +378,7 @@ final class VMUnwind
                 // Throwable here is an EXPECTED uncaught exception (e.g. a JDK test throwing to signal failure) --
                 // report it like a JVM ("Exception in thread \"main\" <class>: <message>"), not a VM error. Only
                 // an absent/invalid exception object means a real frame-table gap (overflowed/unregistered method).
-                long xt = Magic.load64(exc);
+                long xt = Address.fromLong(exc).loadLong();
                 // IS IT ACTUALLY A THROWABLE? Everything below reads Throwable's LAYOUT off this object -- the
                 // backtrace at +16..+72 and detailMessage after it -- so on any other object those are unrelated
                 // instance fields, and the "stack trace" is FABRICATED from whatever they hold. That is not
@@ -386,7 +391,7 @@ final class VMUnwind
                 if (xt > 0x1000L && !isThrowable)
                 {
                     Uart.write(Magic.bytes("\nUNWIND: THROWN OBJECT IS NOT A THROWABLE -- "));
-                    Loader.printClassName(Magic.load64(xt));
+                    Loader.printClassName(Address.fromLong(xt).loadLong());
                     Uart.write(Magic.bytes(" at "));
                     printHex(exc);
                     Uart.write(Magic.bytes("\n  (no backtrace decoded: this object has no Throwable layout,"));
@@ -412,7 +417,7 @@ final class VMUnwind
                         Uart.write(Magic.bytes(" +"));
                         printDec(wi * 8);
                         Uart.putc(0x3D);
-                        printHex(Magic.load64(exc + wi * 8L));
+                        printHex(Address.fromLong(exc).plus(wi * 8L).loadLong());
                         wi += 1;
                     }
                     Uart.putc(0x0A);
@@ -428,7 +433,7 @@ final class VMUnwind
                 if (xt > 0x1000L)
                 {
                     Uart.write(Magic.bytes("\nException in thread \"main\" "));
-                    Loader.printClassName(Magic.load64(xt));
+                    Loader.printClassName(Address.fromLong(xt).loadLong());
                     long msg = Loader.throwableMessage(exc);     // Throwable.detailMessage, by name
                     if (msg > 0x1000L)
                     {
@@ -449,7 +454,7 @@ final class VMUnwind
                 int fi = 0;
                 while (fi < 8)
                 {
-                    long fpc = Magic.load64(exc + 16L + fi * 8L);
+                    long fpc = Address.fromLong(exc).plus(16L + fi * 8L).loadLong();
                     if (fpc == 0L)
                     {
                         break;
@@ -514,22 +519,22 @@ final class VMUnwind
                 long i = 0L;
                 while (i < jitFrameCount)
                 {
-                    long fe = jitFrameTable + i * 24L;
-                    if (pc >= Magic.load64(fe) && pc < Magic.load64(fe + 8L))
+                    Address fe = Address.fromLong(jitFrameTable).plus(i * 24L);
+                    if (pc >= fe.loadLong() && pc < fe.plus(8L).loadLong())
                     {
-                        long le = jitLocalTable + i * 24L;
+                        Address le = Address.fromLong(jitLocalTable).plus(i * 24L);
                         Uart.write(Magic.bytes("  UNW MISS idx="));
                         printHex(i);
                         Uart.write(Magic.bytes(" frame[lo="));
-                        printHex(Magic.load64(fe));
+                        printHex(fe.loadLong());
                         Uart.write(Magic.bytes(" hi="));
-                        printHex(Magic.load64(fe + 8L));
+                        printHex(fe.plus(8L).loadLong());
                         Uart.write(Magic.bytes("] local[lo="));
-                        printHex(Magic.load64(le));
+                        printHex(le.loadLong());
                         Uart.write(Magic.bytes(" hi="));
-                        printHex(Magic.load64(le + 8L));
+                        printHex(le.plus(8L).loadLong());
                         Uart.write(Magic.bytes(" val="));
-                        printHex(Magic.load64(le + 16L));
+                        printHex(le.plus(16L).loadLong());
                         Uart.write(Magic.bytes("] tabs[frame="));
                         printHex(jitFrameTable);
                         Uart.write(Magic.bytes(" local="));
@@ -559,20 +564,20 @@ final class VMUnwind
                 Uart.write(Magic.bytes(" nrl="));
                 printHex(nrl);
                 Uart.write(Magic.bytes(" lr@0="));
-                printHex(Magic.load64(sp));
+                printHex(Address.fromLong(sp).loadLong());
                 Uart.write(Magic.bytes(" x19@8="));
-                printHex(Magic.load64(sp + 8L));
+                printHex(Address.fromLong(sp).plus(8L).loadLong());
                 Uart.write(Magic.bytes(" x20@16="));
-                printHex(Magic.load64(sp + 16L));
+                printHex(Address.fromLong(sp).plus(16L).loadLong());
                 Uart.putc((byte) 0x0A);
             }
             long k2 = 0L;
             while (k2 < nrl && k2 < 16L)
             {
-                Magic.store64(unwindLocBuf + k2 * 8L, Magic.load64(sp + 8L + k2 * 8L));
+                unwindLocBuf.plus(k2 * 8L).store(Address.fromLong(sp).plus(8L + k2 * 8L).loadLong());
                 k2 += 1L;
             }
-            pc = Magic.load64(sp) - 4L;             // the call site (return address - one instruction)
+            pc = Address.fromLong(sp).loadLong() - 4L;   // the call site (return address - one instruction)
             sp = sp + fs;                           // pop this frame
             // A SYNCHRONIZED METHOD whose frame just went away must drop its implicit monitor, or an
             // exception leaving it leaks the lock for the rest of the boot -- trading a missing lock for a
@@ -598,13 +603,13 @@ final class VMUnwind
         long i = 0L;
         while (i < count)
         {
-            long e = table + i * 32L;
-            if (pc >= Magic.load64(e) && pc < Magic.load64(e + 8L))
+            Address e = Address.fromLong(table).plus(i * 32L);
+            if (pc >= e.loadLong() && pc < e.plus(8L).loadLong())
             {
-                long catchType = Magic.load64(e + 24L);
+                long catchType = e.plus(24L).loadLong();
                 if (catchType == 0L)
                 {
-                    return Magic.load64(e + 16L);       // catch-all: a finally, or catch_type 0
+                    return e.plus(16L).loadLong();      // catch-all: a finally, or catch_type 0
                 }
                 if ((catchType & CATCH_BY_NAME) != 0L)
                 {
@@ -614,7 +619,7 @@ final class VMUnwind
                 }
                 if (catchType != 0L && instanceOf(exc, catchType) != 0)
                 {
-                    return Magic.load64(e + 16L);
+                    return e.plus(16L).loadLong();
                 }
             }
             i = i + 1L;
