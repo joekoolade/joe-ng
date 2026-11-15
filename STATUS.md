@@ -4,6 +4,20 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 8: `Loader.java`, PART 2 OF 3 (2026-11-15).** Pi-validated (build cd88dc7e6ceb1f3b).
+  The methods from `ifmSlotFind` through `annoDefaultInstance` (anchored by name -- increment 7 moved the line
+  numbers; 200 sites) use `Address`, none left on `Magic`, no signature changed. Many of the 78 `store32` write the
+  instruction words of generated thunks, stubs and trampolines; their `store(...); w += 1;` lines are split to one
+  statement per line, as increment 7 did in `buildRunTramp`. One `(long)` cast kept the TYPE_INSTANCE_SIZE store
+  (`16 + gifCount * 8`, an int) from picking the 32-bit overload.
+  - **Checked independently against main's compiled class:** each `Magic` kind dropped by exactly the matching-width
+    `Address` calls added (store64 -39 / `store(J)` +39, store32 -78 / `store(I)` +78, store8 -4 / `store(B)` +4,
+    load64 -78 / `loadLong` +78, load8 -1 / `loadUnsignedByte` +1). No dead-code sites, no hoisted locals. Code size
+    123829 -> 123815 words.
+  - **Measured:** `make test`; full regression **208/208**. Pi: committed first try; every page; `/run`s; a throwing
+    main's trace; the stop-poll benchmark (same figures); a forced stop of four threads; the kernel SHA-256; a staged
+    39 MB upload SHA-256-verified in 22.1 s; `/net` 0 IP header errors, 0 TCP errors, 4 retransmits (WiFi).
+
 - **UNBOXED TYPES, INCREMENT 7: `Loader.java`, PART 1 OF 3 (2026-11-15).** Pi-validated (build 9ea81b18ae019ec0).
   The methods starting on lines 1-15000 (80 methods, 206 sites: trace/backtrace building, class-name and array-type
   helpers, `defineFromBytes`, the run trampoline, structure loading, system-property/stream seeding, `emitMethod`
