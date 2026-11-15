@@ -12,6 +12,7 @@
 package net;
 
 import board.bcm2711.Uart;
+import magic.Address;
 import magic.Magic;
 import vm.Heap;
 import vm.VM;
@@ -103,7 +104,7 @@ public final class Sntp
             {
                 continue;
             }
-            if ((Magic.load8(ip + 9) & 0xFF) != 17 || !Ip.eq(ip + 12, serverIp))
+            if ((Address.fromLong(ip).plus(9).loadUnsignedByte() & 0xFF) != 17 || !Ip.eq(ip + 12, serverIp))
             {
                 continue;                                // not UDP, or not from the server
             }
@@ -113,9 +114,10 @@ public final class Sntp
                 continue;
             }
             long m = udp + 8;
-            int b0 = Magic.load8(m) & 0xFF;
+            Address mA = Address.fromLong(m);
+            int b0 = mA.loadUnsignedByte() & 0xFF;
             int vn = (b0 >> 3) & 7;
-            if ((b0 & 7) != 4 || vn < 3 || vn > 4 || (Magic.load8(m + 1) & 0xFF) == 0)
+            if ((b0 & 7) != 4 || vn < 3 || vn > 4 || (mA.plus(1).loadUnsignedByte() & 0xFF) == 0)
             {
                 continue;                                // not a server reply, or a kiss-o'-death
             }
@@ -143,37 +145,40 @@ public final class Sntp
      */
     private static int build(long buf, long serverIp, int localPort, int stampHi, int stampLo)
     {
+        Address bufA = Address.fromLong(buf);
         int i = 0;
         while (i < 6)
         {
-            Magic.store8(buf + i, Magic.load8(Ip.gwMac + i));       // off-subnet: to the gateway
-            Magic.store8(buf + 6 + i, Magic.load8(Ip.ourMac + i));
+            bufA.plus(i).store((byte) Address.fromLong(Ip.gwMac).plus(i).loadUnsignedByte());       // off-subnet: to the gateway
+            bufA.plus(6 + i).store((byte) Address.fromLong(Ip.ourMac).plus(i).loadUnsignedByte());
             i = i + 1;
         }
         Ip.be16(buf + 12, 0x0800);
         long ip = buf + 14;
         long udp = buf + 34;
         long m = buf + 42;
+        Address ipA = Address.fromLong(ip);
+        Address mA = Address.fromLong(m);
         i = 0;
         while (i < 48)
         {
-            Magic.store8(m + i, 0);
+            mA.plus(i).store((byte) 0);
             i = i + 1;
         }
-        Magic.store8(m, 0x23);                           // LI 0, version 4, mode 3 (client)
+        mA.store((byte) 0x23);                           // LI 0, version 4, mode 3 (client)
         Ip.be32(m + 40, stampHi);                        // transmit timestamp, echoed as the reply's originate
         Ip.be32(m + 44, stampLo);
         Ip.be16(udp + 0, localPort);
         Ip.be16(udp + 2, NTP_PORT);
         Ip.be16(udp + 4, 8 + 48);
         Ip.be16(udp + 6, 0);                             // no UDP checksum (allowed over IPv4)
-        Magic.store8(ip + 0, 0x45);
-        Magic.store8(ip + 1, 0);
+        ipA.plus(0).store((byte) 0x45);
+        ipA.plus(1).store((byte) 0);
         Ip.be16(ip + 2, 20 + 8 + 48);
         Ip.be16(ip + 4, 0);
         Ip.be16(ip + 6, 0);
-        Magic.store8(ip + 8, 64);
-        Magic.store8(ip + 9, 17);                        // UDP
+        ipA.plus(8).store((byte) 64);
+        ipA.plus(9).store((byte) 17);                        // UDP
         Ip.be16(ip + 10, 0);
         Ip.copy4(Ip.ourIp, ip + 12);
         Ip.copy4(serverIp, ip + 16);
@@ -183,7 +188,8 @@ public final class Sntp
 
     private static int be16(long addr)
     {
-        return ((Magic.load8(addr) & 0xFF) << 8) | (Magic.load8(addr + 1) & 0xFF);
+        Address a = Address.fromLong(addr);
+        return ((a.loadUnsignedByte() & 0xFF) << 8) | (a.plus(1).loadUnsignedByte() & 0xFF);
     }
 
     /** {@code ms} since the epoch as {@code yyyy-mm-dd hh:mm:ss} (UTC), by the days-from-civil inverse. */
@@ -236,10 +242,11 @@ public final class Sntp
 
     private static void printIp(long addr)
     {
+        Address a = Address.fromLong(addr);
         int i = 0;
         while (i < 4)
         {
-            printDec(Magic.load8(addr + i) & 0xFF);
+            printDec(a.plus(i).loadUnsignedByte() & 0xFF);
             if (i < 3)
             {
                 Uart.putc(0x2E);

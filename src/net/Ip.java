@@ -11,6 +11,7 @@
  */
 package net;
 
+import magic.Address;
 import magic.Magic;
 import vm.Heap;
 
@@ -79,13 +80,15 @@ public final class Ip
         {
             return 0L;
         }
-        if ((Magic.load8(rx + 5) & 0x0F) == 0)          // SDPCM control channel, not data
+        Address rxA = Address.fromLong(rx);
+        if ((rxA.plus(5).loadUnsignedByte() & 0x0F) == 0)          // SDPCM control channel, not data
         {
             return 0L;
         }
-        long eth = rx + (Magic.load8(rx + 7) & 0xFF);   // SDPCM data offset
-        eth = eth + 4 + (Magic.load8(eth + 3) & 0xFF) * 4;   // skip the 4-byte BDC header
-        int et = (Magic.load8(eth + 12) & 0xFF) << 8 | (Magic.load8(eth + 13) & 0xFF);
+        long eth = rx + (rxA.plus(7).loadUnsignedByte() & 0xFF);   // SDPCM data offset
+        eth = eth + 4 + (Address.fromLong(eth).plus(3).loadUnsignedByte() & 0xFF) * 4;   // skip the 4-byte BDC header
+        Address ethA = Address.fromLong(eth);
+        int et = (ethA.plus(12).loadUnsignedByte() & 0xFF) << 8 | (ethA.plus(13).loadUnsignedByte() & 0xFF);
         if (et == 0x0806)
         {
             answerArp(eth);
@@ -96,8 +99,9 @@ public final class Ip
             return 0L;                                   // not IPv4
         }
         long ip = eth + 14;
-        lastIhl = (Magic.load8(ip) & 0x0F) * 4;
-        lastIpTotal = ((Magic.load8(ip + 2) & 0xFF) << 8) | (Magic.load8(ip + 3) & 0xFF);
+        Address ipA = Address.fromLong(ip);
+        lastIhl = (ipA.loadUnsignedByte() & 0x0F) * 4;
+        lastIpTotal = ((ipA.plus(2).loadUnsignedByte() & 0xFF) << 8) | (ipA.plus(3).loadUnsignedByte() & 0xFF);
         return ip;
     }
 
@@ -110,7 +114,8 @@ public final class Ip
     public static void answerArp(long eth)
     {
         long arp = eth + 14;
-        if ((((Magic.load8(arp + 6) & 0xFF) << 8) | (Magic.load8(arp + 7) & 0xFF)) != 1)
+        Address arpA = Address.fromLong(arp);
+        if ((((arpA.plus(6).loadUnsignedByte() & 0xFF) << 8) | (arpA.plus(7).loadUnsignedByte() & 0xFF)) != 1)
         {
             return;                                      // not a request
         }
@@ -119,25 +124,27 @@ public final class Ip
             return;                                      // not asking for us
         }
         long buf = Heap.allocData(64);
+        Address bufA = Address.fromLong(buf);
         int i = 0;
         while (i < 6)
         {
-            Magic.store8(buf + i, Magic.load8(arp + 8 + i));              // to the requester's MAC
-            Magic.store8(buf + 6 + i, Magic.load8(ourMac + i));
+            bufA.plus(i).store((byte) arpA.plus(8 + i).loadUnsignedByte());              // to the requester's MAC
+            bufA.plus(6 + i).store((byte) Address.fromLong(ourMac).plus(i).loadUnsignedByte());
             i = i + 1;
         }
         be16(buf + 12, 0x0806);
         long r = buf + 14;
+        Address rA = Address.fromLong(r);
         be16(r + 0, 1);                                  // hardware type = Ethernet
         be16(r + 2, 0x0800);                             // protocol type = IPv4
-        Magic.store8(r + 4, 6);
-        Magic.store8(r + 5, 4);
+        rA.plus(4).store((byte) 6);
+        rA.plus(5).store((byte) 4);
         be16(r + 6, 2);                                  // opcode = reply
         i = 0;
         while (i < 6)
         {
-            Magic.store8(r + 8 + i, Magic.load8(ourMac + i));             // sender = us
-            Magic.store8(r + 18 + i, Magic.load8(arp + 8 + i));           // target = the requester
+            rA.plus(8 + i).store((byte) Address.fromLong(ourMac).plus(i).loadUnsignedByte());             // sender = us
+            rA.plus(18 + i).store((byte) arpA.plus(8 + i).loadUnsignedByte());           // target = the requester
             i = i + 1;
         }
         copy4(ourIp, r + 14);
@@ -145,7 +152,7 @@ public final class Ip
         i = 42;
         while (i < 60)
         {
-            Magic.store8(buf + i, 0);                    // pad to the 60-byte Ethernet minimum
+            bufA.plus(i).store((byte) 0);                    // pad to the 60-byte Ethernet minimum
             i = i + 1;
         }
         send(buf, 60);
@@ -154,11 +161,12 @@ public final class Ip
     /** One's-complement IPv4 header checksum over {@code len} bytes at {@code addr}. */
     public static int cksum(long addr, int len)
     {
+        Address a = Address.fromLong(addr);
         int sum = 0;
         int i = 0;
         while (i < len)
         {
-            sum = sum + (((Magic.load8(addr + i) & 0xFF) << 8) | (Magic.load8(addr + i + 1) & 0xFF));
+            sum = sum + (((a.plus(i).loadUnsignedByte() & 0xFF) << 8) | (a.plus(i + 1).loadUnsignedByte() & 0xFF));
             i = i + 2;
         }
         while ((sum >> 16) != 0)
@@ -171,33 +179,38 @@ public final class Ip
     /** Store a 16-bit big-endian (network-order) value. */
     public static void be16(long addr, int v)
     {
-        Magic.store8(addr, (v >> 8) & 0xFF);
-        Magic.store8(addr + 1, v & 0xFF);
+        Address a = Address.fromLong(addr);
+        a.store((byte) ((v >> 8) & 0xFF));
+        a.plus(1).store((byte) (v & 0xFF));
     }
 
     /** Store a 32-bit big-endian value. */
     public static void be32(long addr, int v)
     {
-        Magic.store8(addr, (v >> 24) & 0xFF);
-        Magic.store8(addr + 1, (v >> 16) & 0xFF);
-        Magic.store8(addr + 2, (v >> 8) & 0xFF);
-        Magic.store8(addr + 3, v & 0xFF);
+        Address a = Address.fromLong(addr);
+        a.store((byte) ((v >> 24) & 0xFF));
+        a.plus(1).store((byte) ((v >> 16) & 0xFF));
+        a.plus(2).store((byte) ((v >> 8) & 0xFF));
+        a.plus(3).store((byte) (v & 0xFF));
     }
 
     /** Read a 32-bit big-endian value. */
     public static int readBe32(long addr)
     {
-        return ((Magic.load8(addr) & 0xFF) << 24) | ((Magic.load8(addr + 1) & 0xFF) << 16)
-                | ((Magic.load8(addr + 2) & 0xFF) << 8) | (Magic.load8(addr + 3) & 0xFF);
+        Address a = Address.fromLong(addr);
+        return ((a.loadUnsignedByte() & 0xFF) << 24) | ((a.plus(1).loadUnsignedByte() & 0xFF) << 16)
+                | ((a.plus(2).loadUnsignedByte() & 0xFF) << 8) | (a.plus(3).loadUnsignedByte() & 0xFF);
     }
 
     /** Compare two 4-byte IPv4 addresses. */
     public static boolean eq(long a, long b)
     {
+        Address aA = Address.fromLong(a);
+        Address bA = Address.fromLong(b);
         int i = 0;
         while (i < 4)
         {
-            if ((Magic.load8(a + i) & 0xFF) != (Magic.load8(b + i) & 0xFF))
+            if ((aA.plus(i).loadUnsignedByte() & 0xFF) != (bA.plus(i).loadUnsignedByte() & 0xFF))
             {
                 return false;
             }
@@ -209,10 +222,12 @@ public final class Ip
     /** Copy 4 bytes (an IPv4 address). */
     public static void copy4(long src, long dst)
     {
+        Address srcA = Address.fromLong(src);
+        Address dstA = Address.fromLong(dst);
         int i = 0;
         while (i < 4)
         {
-            Magic.store8(dst + i, Magic.load8(src + i));
+            dstA.plus(i).store((byte) srcA.plus(i).loadUnsignedByte());
             i = i + 1;
         }
     }

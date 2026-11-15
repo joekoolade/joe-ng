@@ -11,6 +11,7 @@
  */
 package vm;
 
+import magic.Address;
 import magic.Magic;
 import objectmodel.ObjectModel;
 
@@ -51,7 +52,7 @@ final class ArrayCopy
     /** What {@code arr} is: not an array, a primitive array, a reference array, or a raw (untyped) array. */
     private static int kindOf(long arr)
     {
-        long tib = Magic.load64(arr + ObjectModel.TIB_OFFSET);
+        long tib = Address.fromLong(arr).plus(ObjectModel.TIB_OFFSET).loadLong();
         if (tib > 0L && tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
         {
             return RAW;
@@ -60,12 +61,12 @@ final class ArrayCopy
         {
             return NOT_ARRAY;
         }
-        long type = Magic.load64(tib);
+        long type = Address.fromLong(tib).loadLong();
         if (!Loader.isArrayType(type))
         {
             return NOT_ARRAY;
         }
-        if (Magic.load64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET) != 0L)
+        if (Address.fromLong(type).plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong() != 0L)
         {
             return REF;
         }
@@ -74,20 +75,20 @@ final class ArrayCopy
 
     private static long typeOf(long obj)
     {
-        long tib = Magic.load64(obj + ObjectModel.TIB_OFFSET);
-        return tib > ObjectModel.MAX_RAW_ARRAY_TIB ? Magic.load64(tib) : 0L;
+        long tib = Address.fromLong(obj).plus(ObjectModel.TIB_OFFSET).loadLong();
+        return tib > ObjectModel.MAX_RAW_ARRAY_TIB ? Address.fromLong(tib).loadLong() : 0L;
     }
 
     /** A reference array's element Type, or 0 if it is raw or the element never resolved. */
     private static long elemTypeOf(long arr)
     {
         long type = typeOf(arr);
-        return type == 0L ? 0L : Magic.load64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET);
+        return type == 0L ? 0L : Address.fromLong(type).plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong();
     }
 
     private static int lengthOf(long arr)
     {
-        return (int) Magic.load64(arr + ObjectModel.ARRAY_LENGTH_OFFSET);
+        return (int) Address.fromLong(arr).plus(ObjectModel.ARRAY_LENGTH_OFFSET).loadLong();
     }
 
     /** The name HotSpot prints for an array's element in a bounds message: "int", or "object array". */
@@ -211,10 +212,12 @@ final class ArrayCopy
      */
     private static void copyChecked(long from, long to, int len, long stype, long bound)
     {
+        Address fromA = Address.fromLong(from);
+        Address toA = Address.fromLong(to);
         long i = 0L;
         while (i < (long) len)
         {
-            long v = Magic.load64(from + i * 8L);
+            long v = fromA.plus(i * 8L).loadLong();
             if (v != 0L && VM.instanceOf(v, bound) == 0)
             {
                 byte[] s = Loader.typeNameBytes(stype);
@@ -227,7 +230,7 @@ final class ArrayCopy
                 throwAse(cat(cat(Magic.bytes("arraycopy: element type mismatch: can not cast one of the elements of "),
                         s, Magic.bytes("[] to the type of the destination array, ")), b, new byte[0]));
             }
-            Magic.store64(to + i * 8L, v);
+            toA.plus(i * 8L).store(v);
             i += 1L;
         }
     }
@@ -239,12 +242,14 @@ final class ArrayCopy
     private static void move(long from, long to, long n, long es)
     {
         long step = es == 8L || es == 4L ? es : 1L;
-        if (to <= from)
+        Address fromA = Address.fromLong(from);
+        Address toA = Address.fromLong(to);
+        if (toA.LE(fromA))
         {
             long i = 0L;
             while (i < n)
             {
-                moveOne(from + i, to + i, step);
+                moveOne(fromA.plus(i), toA.plus(i), step);
                 i += step;
             }
         }
@@ -254,24 +259,24 @@ final class ArrayCopy
             while (i > 0L)
             {
                 i -= step;
-                moveOne(from + i, to + i, step);
+                moveOne(fromA.plus(i), toA.plus(i), step);
             }
         }
     }
 
-    private static void moveOne(long from, long to, long step)
+    private static void moveOne(Address from, Address to, long step)
     {
         if (step == 8L)
         {
-            Magic.store64(to, Magic.load64(from));
+            to.store(from.loadLong());
         }
         else if (step == 4L)
         {
-            Magic.store32(to, Magic.load32(from));
+            to.store(from.loadInt());
         }
         else
         {
-            Magic.store8(to, (byte) Magic.load8(from));
+            to.store((byte) from.loadUnsignedByte());
         }
     }
 

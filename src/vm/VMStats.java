@@ -11,6 +11,7 @@
  */
 package vm;
 
+import magic.Address;
 import magic.Magic;
 import net.NetStats;
 import objectmodel.ObjectModel;
@@ -76,7 +77,7 @@ final class VMStats
         {
             return -1L;
         }
-        long len = Magic.load64(arr + ObjectModel.ARRAY_LENGTH_OFFSET);
+        long len = Address.fromLong(arr).plus(ObjectModel.ARRAY_LENGTH_OFFSET).loadLong();
         int g = (int) group;
         if (g == GROUP_MEMORY)
         {
@@ -110,7 +111,7 @@ final class VMStats
     {
         if ((long) i < len)
         {
-            Magic.store64(arr + ObjectModel.ARRAY_BASE_OFFSET + (long) i * 8L, v);
+            Address.fromLong(arr).plus(ObjectModel.ARRAY_BASE_OFFSET + (long) i * 8L).store(v);
         }
         return i + 1;
     }
@@ -125,7 +126,7 @@ final class VMStats
         i = put(arr, len, i, Heap.LARGE_LIMIT - Heap.BASE);                // core 0's collected arena
         i = put(arr, len, i, VMGc.largeLive);                              // ... live in its large region
         i = put(arr, len, i, Heap.CODE_LIMIT - Heap.CODE_BASE);            // code arena size
-        i = put(arr, len, i, Magic.load64(Heap.CODE_PTR_CELL) - Heap.CODE_BASE); // ... bump pointer now
+        i = put(arr, len, i, Address.fromLong(Heap.CODE_PTR_CELL).loadLong() - Heap.CODE_BASE); // ... bump pointer now
         i = put(arr, len, i, VMGc.codeUsed);                               // ... in use at the last collection
         i = put(arr, len, i, peakCode());                                  // ... bump pointer's peak
         i = put(arr, len, i, ticksToUs(Magic.readCNTPCT_EL0()) / 1000L);   // uptime, ms
@@ -141,7 +142,7 @@ final class VMStats
      */
     private static long peakCode()
     {
-        long now = Magic.load64(Heap.CODE_PTR_CELL);
+        long now = Address.fromLong(Heap.CODE_PTR_CELL).loadLong();
         long peak = Heap.codePeak;
         if (now > peak)
         {
@@ -173,7 +174,7 @@ final class VMStats
         int c = 1;
         while (c < 4)
         {
-            i = put(arr, len, i, Magic.load64(Heap.PTR_CELL + c * 8L) - Heap.arenaBase(c));   // core c's arena use
+            i = put(arr, len, i, Address.fromLong(Heap.PTR_CELL + c * 8L).loadLong() - Heap.arenaBase(c));   // core c's arena use
             c += 1;
         }
         return (long) i;
