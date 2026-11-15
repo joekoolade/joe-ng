@@ -4,6 +4,21 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 7: `Loader.java`, PART 1 OF 3 (2026-11-15).** Pi-validated (build 9ea81b18ae019ec0).
+  The methods starting on lines 1-15000 (80 methods, 206 sites: trace/backtrace building, class-name and array-type
+  helpers, `defineFromBytes`, the run trampoline, structure loading, system-property/stream seeding, `emitMethod`
+  and line tables, reloc patching, itable-directory resolution) use `Address`; none in range left on `Magic`; no
+  signature changed. Lines 15001-22500 and the rest are increments 8 and 9.
+  - **Checked independently:** in the compiled class each `Magic` kind dropped by exactly the matching-width
+    `Address` calls added (store64 -73 = 73 `store(J)`, store32 -18 = 18 `store(I)`, store8 -24 = 24 `store(B)`, load64
+    -71 = 71 `loadLong`, load32 -8 = 8 `loadInt`, load8 -3 = 3 `loadUnsignedByte`). Nine more converted sites sit
+    behind constant-false branches (javac emits nothing) -- read by hand: `store(0L)`, stores of `long` watermarks,
+    `loadLong()`. No hoisted locals. Code size (name+descriptor) 123884 -> 123829 words. `buildRunTramp`'s
+    two-statement lines split to one statement per line.
+  - **Measured:** `make test`; full regression **208/208**. Pi: committed first try; every page; `/run`s; a throwing
+    main's trace; the stop-poll benchmark (same figures); a forced stop of four threads; the kernel SHA-256; a staged
+    39 MB upload SHA-256-verified in 22.4 s; `/net` 0 IP header errors, 0 TCP errors, 0 retransmits.
+
 - **UNBOXED TYPES, INCREMENT 6: `VM.java` (2026-11-15).** Pi-validated (build 9338e3ee1ece22af). Boot, the fault
   vectors and fault-to-exception path, the generated IRQ/timer and switch stubs, the type/cast checks, the RAMFS
   directory and `/etc/init` readers, the JIT frame/handler tables: all 204 sites on `Address`, none left; no
