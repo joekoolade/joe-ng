@@ -12,6 +12,7 @@
 package board.cyw43;
 
 import board.bcm2711.Sdio;
+import magic.Address;
 import magic.Magic;
 import vm.Heap;
 import vm.VM;
@@ -188,15 +189,15 @@ public final class Cyw43
             board.bcm2711.Uart.write(Magic.bytes("  fw NOT FOUND in ramfs\n"));
             return 0;
         }
-        long src = Magic.load64(e + 16L);                // firmware bytes (baked into the image)
-        long len = Magic.load64(e + 24L);
+        long src = Address.fromLong(e).plus(16L).loadLong();                // firmware bytes (baked into the image)
+        long len = Address.fromLong(e).plus(24L).loadLong();
         log(Magic.bytes("fw bytes="), (int) len);
 
         // The bus is still at the ~400 kHz ID clock; raise it so a 609 KB upload isn't glacial.
         Sdio.setClock(25000000);
         log(Magic.bytes("sdio clk ctl="), Sdio.control1());
 
-        int first = Magic.load32(src);                   // the ARM reset vector (first word)
+        int first = Address.fromLong(src).loadInt();                   // the ARM reset vector (first word)
         if (!bpWrite(RAMBASE, src, len))
         {
             board.bcm2711.Uart.write(Magic.bytes("  fw upload FAILED\n"));
@@ -221,8 +222,8 @@ public final class Cyw43
             board.bcm2711.Uart.write(Magic.bytes("  nvram NOT FOUND\n"));
             return false;
         }
-        long src = Magic.load64(e + 16L);
-        int srcLen = (int) Magic.load64(e + 24L);
+        long src = Address.fromLong(e).plus(16L).loadLong();
+        int srcLen = (int) Address.fromLong(e).plus(24L).loadLong();
         long buf = Heap.allocData(8192);
         int varsz = processNvram(src, srcLen, buf);
         long addr = RAMBASE + (long) ramsize - (long) varsz;
@@ -246,40 +247,42 @@ public final class Cyw43
      *  {@code dst}, pad to a 4-byte boundary. Returns the padded length (varsz). */
     private static int processNvram(long src, int srcLen, long dst)
     {
+        Address srcA = Address.fromLong(src);
+        Address dstA = Address.fromLong(dst);
         int di = 0;
         int i = 0;
         while (i < srcLen)
         {
             int ls = i;
-            while (i < srcLen && (Magic.load8(src + i) & 0xFF) != 0x0A)   // to end of line
+            while (i < srcLen && (srcA.plus(i).loadUnsignedByte() & 0xFF) != 0x0A)   // to end of line
             {
                 i = i + 1;
             }
             int le = i;
             if (i < srcLen) { i = i + 1; }                               // skip '\n'
-            if (le > ls && (Magic.load8(src + le - 1) & 0xFF) == 0x0D) { le = le - 1; }   // trim '\r'
+            if (le > ls && (srcA.plus(le - 1).loadUnsignedByte() & 0xFF) == 0x0D) { le = le - 1; }   // trim '\r'
             int cs = ls;
-            while (cs < le && ((Magic.load8(src + cs) & 0xFF) == 0x20 || (Magic.load8(src + cs) & 0xFF) == 0x09))
+            while (cs < le && ((srcA.plus(cs).loadUnsignedByte() & 0xFF) == 0x20 || (srcA.plus(cs).loadUnsignedByte() & 0xFF) == 0x09))
             {
                 cs = cs + 1;                                             // skip leading whitespace
             }
-            if (cs >= le || (Magic.load8(src + cs) & 0xFF) == 0x23)      // blank or '#' comment
+            if (cs >= le || (srcA.plus(cs).loadUnsignedByte() & 0xFF) == 0x23)      // blank or '#' comment
             {
                 continue;
             }
             int j = cs;
             while (j < le)
             {
-                Magic.store8(dst + di, Magic.load8(src + j));
+                dstA.plus(di).store((byte) srcA.plus(j).loadUnsignedByte());
                 di = di + 1;
                 j = j + 1;
             }
-            Magic.store8(dst + di, 0);                                   // NUL terminate each entry
+            dstA.plus(di).store((byte) 0);                                   // NUL terminate each entry
             di = di + 1;
         }
         while ((di & 3) != 0)                                           // pad to 4 bytes
         {
-            Magic.store8(dst + di, 0);
+            dstA.plus(di).store((byte) 0);
             di = di + 1;
         }
         return di;
@@ -381,9 +384,10 @@ public final class Cyw43
             board.bcm2711.Uart.write(Magic.bytes("  F2 first frame TIMEOUT\n"));
             return;
         }
-        int hw = Magic.load32(rb);                       // [len:16][~len:16]
-        int sw = Magic.load32(rb + 4);                   // seq(8) | channel+flags(8) | nextlen(8) | dataoff(8)
-        int sw2 = Magic.load32(rb + 8);                  // flow(8) | maxseq(8) | reserved(16)
+        Address rbA = Address.fromLong(rb);
+        int hw = rbA.loadInt();                       // [len:16][~len:16]
+        int sw = rbA.plus(4).loadInt();                   // seq(8) | channel+flags(8) | nextlen(8) | dataoff(8)
+        int sw2 = rbA.plus(8).loadInt();                  // flow(8) | maxseq(8) | reserved(16)
         int len = hw & 0xFFFF;
         int nlen = (hw >> 16) & 0xFFFF;
         log(Magic.bytes("rx hw="), hw);
@@ -407,20 +411,21 @@ public final class Cyw43
     static void verIoctl()
     {
         long tx = Heap.allocData(512);                   // zeroed
+        Address txA = Address.fromLong(tx);
         int dataLen = 192;                               // response buffer for the version string
-        Magic.store8(tx + 28, 0x76);                     // "ver\0" (BCDC data, right after the 16-byte BCDC hdr)
-        Magic.store8(tx + 29, 0x65);
-        Magic.store8(tx + 30, 0x72);
-        Magic.store8(tx + 31, 0);
-        Magic.store32(tx + 12, WLC_GET_VAR);             // BCDC cmd
-        Magic.store32(tx + 16, dataLen);                 // BCDC len (buffer size the fw fills)
-        Magic.store32(tx + 20, 1 << 16);                 // BCDC flags: id=1 (high 16), GET (no SET bit)
-        Magic.store32(tx + 24, 0);                       // BCDC status
+        txA.plus(28).store((byte) 0x76);                     // "ver\0" (BCDC data, right after the 16-byte BCDC hdr)
+        txA.plus(29).store((byte) 0x65);
+        txA.plus(30).store((byte) 0x72);
+        txA.plus(31).store((byte) 0);
+        txA.plus(12).store(WLC_GET_VAR);             // BCDC cmd
+        txA.plus(16).store(dataLen);                 // BCDC len (buffer size the fw fills)
+        txA.plus(20).store(1 << 16);                 // BCDC flags: id=1 (high 16), GET (no SET bit)
+        txA.plus(24).store(0);                       // BCDC status
         int frameLen = 12 + 16 + dataLen;                // 220
-        Magic.store8(tx + 4, txSeq & 0xFF);              // SDPCM sw: seq
-        Magic.store8(tx + 5, 0);                         //   channel 0 = control
-        Magic.store8(tx + 6, 0);                         //   nextlen
-        Magic.store8(tx + 7, 12);                        //   dataoffset = 12 (payload after the 12-byte hdr)
+        txA.plus(4).store((byte) (txSeq & 0xFF));              // SDPCM sw: seq
+        txA.plus(5).store((byte) 0);                         //   channel 0 = control
+        txA.plus(6).store((byte) 0);                         //   nextlen
+        txA.plus(7).store((byte) 12);                        //   dataoffset = 12 (payload after the 12-byte hdr)
         store16(tx + 0, frameLen);                       // SDPCM hw: len
         store16(tx + 2, ~frameLen);                      //   ~len
         if (!Sdio.cmd53Write(F2, 0, true, tx, 1, (frameLen + 3) & ~3))
@@ -438,7 +443,7 @@ public final class Cyw43
             board.bcm2711.Uart.write(Magic.bytes("  no ioctl response\n"));
             return;
         }
-        int doff = Magic.load8(rx + 7) & 0xFF;           // response data offset
+        int doff = Address.fromLong(rx).plus(7).loadUnsignedByte() & 0xFF;           // response data offset
         log(Magic.bytes("resp len="), rlen);
         log(Magic.bytes("resp doff="), doff);
         board.bcm2711.Uart.write(Magic.bytes("wifi: ver = "));
@@ -577,8 +582,9 @@ public final class Cyw43
     /** Read a big-endian u32 (firmware event_msg fields are network-order). */
     private static int beU32(long addr)
     {
-        return ((Magic.load8(addr) & 0xFF) << 24) | ((Magic.load8(addr + 1) & 0xFF) << 16)
-                | ((Magic.load8(addr + 2) & 0xFF) << 8) | (Magic.load8(addr + 3) & 0xFF);
+        Address a = Address.fromLong(addr);
+        return ((a.loadUnsignedByte() & 0xFF) << 24) | ((a.plus(1).loadUnsignedByte() & 0xFF) << 16)
+                | ((a.plus(2).loadUnsignedByte() & 0xFF) << 8) | (a.plus(3).loadUnsignedByte() & 0xFF);
     }
 
     private static final int WLC_SET_INFRA    = 20;      // 1 = infrastructure (BSS), not IBSS
@@ -602,8 +608,8 @@ public final class Cyw43
             board.bcm2711.Uart.write(Magic.bytes("  no /etc/wifi.conf\n"));
             return;
         }
-        long conf = Magic.load64(e + 16L);
-        int flen = (int) Magic.load64(e + 24L);
+        long conf = Address.fromLong(e).plus(16L).loadLong();
+        int flen = (int) Address.fromLong(e).plus(24L).loadLong();
         long ssid = Heap.allocData(48);
         int sl = confValue(conf, flen, Magic.bytes("ssid"), ssid);
         long psk = Heap.allocData(72);
@@ -635,11 +641,11 @@ public final class Cyw43
         }
 
         long ss = Heap.allocData(48);                    // wlc_ssid_t: len (u32) + SSID[32]
-        Magic.store32(ss, sl);
+        Address.fromLong(ss).store(sl);
         int i = 0;
         while (i < sl)
         {
-            Magic.store8(ss + 4 + i, Magic.load8(ssid + i));
+            Address.fromLong(ss).plus(4 + i).store((byte) Address.fromLong(ssid).plus(i).loadUnsignedByte());
             i = i + 1;
         }
         long joinT = Magic.readCNTPCT_EL0();
@@ -728,7 +734,7 @@ public final class Cyw43
         int i = 0;
         while (i < 6)
         {
-            if (Magic.load8(ourMac + i) != 0)
+            if (Address.fromLong(ourMac).plus(i).loadUnsignedByte() != 0)
             {
                 return true;
             }
@@ -799,11 +805,11 @@ public final class Cyw43
     private static void setPmk(byte[] pmk)
     {
         long b = Heap.allocData(140);                    // allocData zeroes; struct is 132 bytes
-        Magic.store32(b, 32);                            // key_len = 32 (LE u16) | flags = 0 (LE u16)
+        Address.fromLong(b).store(32);                            // key_len = 32 (LE u16) | flags = 0 (LE u16)
         int i = 0;
         while (i < 32)
         {
-            Magic.store8(b + 4 + i, pmk[i] & 0xFF);
+            Address.fromLong(b).plus(4 + i).store((byte) (pmk[i] & 0xFF));
             i = i + 1;
         }
         readCtrl(sendBcdc(WLC_SET_WSEC_PMK, b, 132, true));
@@ -832,7 +838,7 @@ public final class Cyw43
         wpaMsg1 = wpaMsg1 + 1;
 
         byte[] aNonce = heapBytes(m1 + 17, 32);
-        int keyLen = ((Magic.load8(m1 + 7) & 0xFF) << 8) | (Magic.load8(m1 + 8) & 0xFF);
+        int keyLen = ((Address.fromLong(m1).plus(7).loadUnsignedByte() & 0xFF) << 8) | (Address.fromLong(m1).plus(8).loadUnsignedByte() & 0xFF);
         byte[] replay = heapBytes(m1 + 9, 8);            // echo msg1's replay counter in msg2
 
         // AA = msg1's Ethernet source = the AP's BSSID (verified against a monitor capture: for this
@@ -872,7 +878,7 @@ public final class Cyw43
                 tries = tries + 1;
                 continue;
             }
-            int ki = ((Magic.load8(f + 5) & 0xFF) << 8) | (Magic.load8(f + 6) & 0xFF);
+            int ki = ((Address.fromLong(f).plus(5).loadUnsignedByte() & 0xFF) << 8) | (Address.fromLong(f).plus(6).loadUnsignedByte() & 0xFF);
             if ((ki & 0x100) == 0)                       // no MIC → another msg1: re-derive and resend msg2
             {
                 wpaMsg1 = wpaMsg1 + 1;
@@ -892,7 +898,7 @@ public final class Cyw43
             board.bcm2711.Uart.write(Magic.bytes("wifi: no eapol msg3\n"));
             return false;
         }
-        int eapLen3 = ((Magic.load8(m3 + 2) & 0xFF) << 8) | (Magic.load8(m3 + 3) & 0xFF);
+        int eapLen3 = ((Address.fromLong(m3).plus(2).loadUnsignedByte() & 0xFF) << 8) | (Address.fromLong(m3).plus(3).loadUnsignedByte() & 0xFF);
         byte[] frame3 = heapBytes(m3, 4 + eapLen3);
         byte[] rxMic = slice(frame3, 81, 16);
         int j = 0;
@@ -910,7 +916,7 @@ public final class Cyw43
         }
         board.bcm2711.Uart.write(Magic.bytes("wifi: msg3 MIC ok\n"));
 
-        int kdLen = ((Magic.load8(m3 + 97) & 0xFF) << 8) | (Magic.load8(m3 + 98) & 0xFF);
+        int kdLen = ((Address.fromLong(m3).plus(97).loadUnsignedByte() & 0xFF) << 8) | (Address.fromLong(m3).plus(98).loadUnsignedByte() & 0xFF);
         byte[] wrapped = heapBytes(m3 + 99, kdLen);
         byte[] kd = new byte[kdLen - 8];
         if (!crypto.KeyWrap.unwrap(kek, wrapped, kdLen, kd))
@@ -974,7 +980,7 @@ public final class Cyw43
             int i = 0;
             while (i < 6)
             {
-                apMac[i] = (byte) Magic.load8(eth + 6 + i);
+                apMac[i] = (byte) Address.fromLong(eth).plus(6 + i).loadUnsignedByte();
                 i = i + 1;
             }
             return eth + 14;
@@ -985,13 +991,13 @@ public final class Cyw43
     /** The Ethernet header of a received frame if it carries EAPOL (ethertype 0x888E), else 0. */
     private static long eapolEth(long frame)
     {
-        if ((Magic.load8(frame + 5) & 0x0F) == 0)
+        if ((Address.fromLong(frame).plus(5).loadUnsignedByte() & 0x0F) == 0)
         {
             return 0L;                                   // an ioctl ack
         }
-        long eth = frame + (Magic.load8(frame + 7) & 0xFF);
-        eth = eth + 4 + (Magic.load8(eth + 3) & 0xFF) * 4;   // past the BDC header and its data offset
-        if (((Magic.load8(eth + 12) & 0xFF) << 8 | (Magic.load8(eth + 13) & 0xFF)) != 0x888E)
+        long eth = frame + (Address.fromLong(frame).plus(7).loadUnsignedByte() & 0xFF);
+        eth = eth + 4 + (Address.fromLong(eth).plus(3).loadUnsignedByte() & 0xFF) * 4;   // past the BDC header and its data offset
+        if (((Address.fromLong(eth).plus(12).loadUnsignedByte() & 0xFF) << 8 | (Address.fromLong(eth).plus(13).loadUnsignedByte() & 0xFF)) != 0x888E)
         {
             return 0L;
         }
@@ -1027,7 +1033,7 @@ public final class Cyw43
         int i = 0;
         while (i < len)
         {
-            Magic.store8(dst + i, Magic.load8(src + i));
+            Address.fromLong(dst).plus(i).store((byte) Address.fromLong(src).plus(i).loadUnsignedByte());
             i = i + 1;
         }
     }
@@ -1081,7 +1087,7 @@ public final class Cyw43
         int i = 0;
         while (i < total)
         {
-            Magic.store8(buf + i, f[i] & 0xFF);
+            Address.fromLong(buf).plus(i).store((byte) (f[i] & 0xFF));
             i = i + 1;
         }
         txDataP(buf, total, 0);                          // EAPOL at BDC priority 0 (AC_BE) -- brcmfmac classifies
@@ -1125,20 +1131,21 @@ public final class Cyw43
     static void installKey(int index, byte[] key, int keyLen, byte[] ea, boolean pairwise)
     {
         long b = Heap.allocData(200);                    // zeroed
-        Magic.store32(b + 0, index);
-        Magic.store32(b + 4, keyLen);
+        Address bA = Address.fromLong(b);
+        bA.store(index);
+        bA.plus(4).store(keyLen);
         int i = 0;
         while (i < keyLen)
         {
-            Magic.store8(b + 8 + i, key[i] & 0xFF);
+            bA.plus(8 + i).store((byte) (key[i] & 0xFF));
             i = i + 1;
         }
-        Magic.store32(b + 112, 4);                       // algo = CRYPTO_ALGO_AES_CCM
-        Magic.store32(b + 116, pairwise ? 2 : 0);        // flags = WSEC_PRIMARY_KEY for the pairwise key
+        bA.plus(112).store(4);                       // algo = CRYPTO_ALGO_AES_CCM
+        bA.plus(116).store(pairwise ? 2 : 0);        // flags = WSEC_PRIMARY_KEY for the pairwise key
         i = 0;
         while (i < 6)
         {
-            Magic.store8(b + 156 + i, ea[i] & 0xFF);     // ea = peer MAC (pairwise) / zero (group)
+            bA.plus(156 + i).store((byte) (ea[i] & 0xFF));     // ea = peer MAC (pairwise) / zero (group)
             i = i + 1;
         }
         int id = sendBcdc(WLC_SET_KEY, b, 164, true);
@@ -1194,7 +1201,7 @@ public final class Cyw43
         int i = 0;
         while (i < len)
         {
-            b[i] = (byte) Magic.load8(addr + i);
+            b[i] = (byte) Address.fromLong(addr).plus(i).loadUnsignedByte();
             i = i + 1;
         }
         return b;
@@ -1240,7 +1247,7 @@ public final class Cyw43
                 VM.delayMs(2);
                 continue;
             }
-            if ((Magic.load8(rx + 5) & 0x0F) == 0)
+            if ((Address.fromLong(rx).plus(5).loadUnsignedByte() & 0x0F) == 0)
             {
                 continue;                                // ioctl ack
             }
@@ -1268,8 +1275,8 @@ public final class Cyw43
         {
             return 0;
         }
-        int doff = Magic.load8(rx + 7) & 0xFF;
-        int dlen = Magic.load32(rx + doff + 4);          // BCDC len = returned data length
+        int doff = Address.fromLong(rx).plus(7).loadUnsignedByte() & 0xFF;
+        int dlen = Address.fromLong(rx).plus(doff + 4).loadInt();          // BCDC len = returned data length
         if (dlen < 0 || dlen > out.length)
         {
             dlen = out.length;
@@ -1278,7 +1285,7 @@ public final class Cyw43
         int i = 0;
         while (i < dlen)
         {
-            out[i] = (byte) Magic.load8(data + i);
+            out[i] = (byte) Address.fromLong(data).plus(i).loadUnsignedByte();
             i = i + 1;
         }
         return dlen;
@@ -1290,9 +1297,9 @@ public final class Cyw43
     {
         long b = Heap.allocData(64);
         int p = putBytes(b, 0, name);
-        Magic.store8(b + p, 0);                          // NUL after the iovar name
+        Address.fromLong(b).plus(p).store((byte) 0);                          // NUL after the iovar name
         p = p + 1;
-        Magic.store32(b + p, value);
+        Address.fromLong(b).plus(p).store(value);
         p = p + 4;
         readCtrl(sendBcdc(WLC_SET_VAR, b, p, true));
     }
@@ -1302,12 +1309,12 @@ public final class Cyw43
     {
         long b = Heap.allocData(256);
         int p = putBytes(b, 0, name);
-        Magic.store8(b + p, 0);                          // NUL after the iovar name
+        Address.fromLong(b).plus(p).store((byte) 0);                          // NUL after the iovar name
         p = p + 1;
         int i = 0;
         while (i < len)
         {
-            Magic.store8(b + p + i, data[i]);
+            Address.fromLong(b).plus(p + i).store((byte) data[i]);
             i = i + 1;
         }
         p = p + len;
@@ -1336,13 +1343,14 @@ public final class Cyw43
     private static void bsscfgInt(byte[] name, int value)
     {
         long b = Heap.allocData(64);
+        Address bA = Address.fromLong(b);
         int p = putBytes(b, 0, Magic.bytes("bsscfg:"));
         p = putBytes(b, p, name);
-        Magic.store8(b + p, 0);                          // NUL after the iovar name
+        bA.plus(p).store((byte) 0);                          // NUL after the iovar name
         p = p + 1;
-        Magic.store32(b + p, 0);                         // bsscfg index 0
+        bA.plus(p).store(0);                         // bsscfg index 0
         p = p + 4;
-        Magic.store32(b + p, value);
+        bA.plus(p).store(value);
         p = p + 4;
         readCtrl(sendBcdc(WLC_SET_VAR, b, p, true));
     }
@@ -1351,34 +1359,35 @@ public final class Cyw43
      *  its length, or 0 if the key is absent. */
     private static int confValue(long conf, int flen, byte[] key, long dst)
     {
+        Address confA = Address.fromLong(conf);
         int i = 0;
         while (i < flen)
         {
             int k = 0;
             int j = i;
-            while (k < key.length && j < flen && (Magic.load8(conf + j) & 0xFF) == (key[k] & 0xFF))
+            while (k < key.length && j < flen && (confA.plus(j).loadUnsignedByte() & 0xFF) == (key[k] & 0xFF))
             {
                 k = k + 1;
                 j = j + 1;
             }
-            if (k == key.length && j < flen && (Magic.load8(conf + j) & 0xFF) == 0x3D)   // "key="
+            if (k == key.length && j < flen && (confA.plus(j).loadUnsignedByte() & 0xFF) == 0x3D)   // "key="
             {
                 j = j + 1;
                 int n = 0;
                 while (j < flen && n < 63)
                 {
-                    int c = Magic.load8(conf + j) & 0xFF;
+                    int c = confA.plus(j).loadUnsignedByte() & 0xFF;
                     if (c == 0x0A || c == 0x0D || c == 0)
                     {
                         break;
                     }
-                    Magic.store8(dst + n, c);
+                    Address.fromLong(dst).plus(n).store((byte) c);
                     n = n + 1;
                     j = j + 1;
                 }
                 return n;
             }
-            while (i < flen && (Magic.load8(conf + i) & 0xFF) != 0x0A)   // skip to the next line
+            while (i < flen && (confA.plus(i).loadUnsignedByte() & 0xFF) != 0x0A)   // skip to the next line
             {
                 i = i + 1;
             }
@@ -1403,19 +1412,19 @@ public final class Cyw43
             board.bcm2711.Uart.write(Magic.bytes("  no mac\n"));
             return;
         }
-        int doff = Magic.load8(rx + 7) & 0xFF;
+        int doff = Address.fromLong(rx).plus(7).loadUnsignedByte() & 0xFF;
         long m = rx + doff + 16;
         int i = 0;
         while (i < 6)
         {
-            Magic.store8(ourMac + i, Magic.load8(m + i));
+            Address.fromLong(ourMac).plus(i).store((byte) Address.fromLong(m).plus(i).loadUnsignedByte());
             i = i + 1;
         }
         board.bcm2711.Uart.write(Magic.bytes("wifi: mac "));
         i = 0;
         while (i < 6)
         {
-            printHex2(Magic.load8(ourMac + i) & 0xFF);
+            printHex2(Address.fromLong(ourMac).plus(i).loadUnsignedByte() & 0xFF);
             if (i < 5)
             {
                 board.bcm2711.Uart.putc(0x3A);           // ':'
@@ -1436,17 +1445,18 @@ public final class Cyw43
     static void txDataP(long frame, int flen, int prio)
     {
         long tx = Heap.allocData(2048);
-        Magic.store8(tx + 5, 2);                         // channel 2 = data
-        Magic.store8(tx + 6, 0);
-        Magic.store8(tx + 7, 12);                        // dataoffset
-        Magic.store8(tx + 12, 0x20);                     // BDC flags = proto ver (2) << 4
-        Magic.store8(tx + 13, prio);                     // priority
-        Magic.store8(tx + 14, 0);                        // flags2 (interface 0)
-        Magic.store8(tx + 15, 0);                        // data_offset = 0 words
+        Address txA = Address.fromLong(tx);
+        txA.plus(5).store((byte) 2);                         // channel 2 = data
+        txA.plus(6).store((byte) 0);
+        txA.plus(7).store((byte) 12);                        // dataoffset
+        txA.plus(12).store((byte) 0x20);                     // BDC flags = proto ver (2) << 4
+        txA.plus(13).store((byte) prio);                     // priority
+        txA.plus(14).store((byte) 0);                        // flags2 (interface 0)
+        txA.plus(15).store((byte) 0);                        // data_offset = 0 words
         int i = 0;
         while (i < flen)
         {
-            Magic.store8(tx + 16 + i, Magic.load8(frame + i));
+            txA.plus(16 + i).store((byte) Address.fromLong(frame).plus(i).loadUnsignedByte());
             i = i + 1;
         }
         int total = 12 + 4 + flen;
@@ -1537,7 +1547,7 @@ public final class Cyw43
      */
     private static void writeFrameLocked(long tx, int total)
     {
-        Magic.store8(tx + 4, txSeq & 0xFF);              // SDPCM seq
+        Address.fromLong(tx).plus(4).store((byte) (txSeq & 0xFF));              // SDPCM seq
         int len = (total + 3) & ~3;
         if (len <= 512)
         {
@@ -1725,7 +1735,7 @@ public final class Cyw43
         int i = 0;
         while (i < 6)
         {
-            printHex2(Magic.load8(gwMac + i) & 0xFF);
+            printHex2(Address.fromLong(gwMac).plus(i).loadUnsignedByte() & 0xFF);
             if (i < 5)
             {
                 board.bcm2711.Uart.putc(0x3A);
@@ -1828,18 +1838,20 @@ public final class Cyw43
         {
             return 0L;
         }
-        if ((Magic.load8(rx + 5) & 0x0F) == 0)
+        if ((Address.fromLong(rx).plus(5).loadUnsignedByte() & 0x0F) == 0)
         {
             return 0L;
         }
-        long eth = rx + (Magic.load8(rx + 7) & 0xFF);
-        eth = eth + 4 + (Magic.load8(eth + 3) & 0xFF) * 4;
-        if (((Magic.load8(eth + 12) & 0xFF) << 8 | (Magic.load8(eth + 13) & 0xFF)) != 0x0800)
+        long eth = rx + (Address.fromLong(rx).plus(7).loadUnsignedByte() & 0xFF);
+        eth = eth + 4 + (Address.fromLong(eth).plus(3).loadUnsignedByte() & 0xFF) * 4;
+        Address ethA = Address.fromLong(eth);
+        if (((ethA.plus(12).loadUnsignedByte() & 0xFF) << 8 | (ethA.plus(13).loadUnsignedByte() & 0xFF)) != 0x0800)
         {
             return 0L;
         }
         long ip = eth + 14;
-        if ((Magic.load8(ip + 9) & 0xFF) != 6)
+        Address ipA = Address.fromLong(ip);
+        if ((ipA.plus(9).loadUnsignedByte() & 0xFF) != 6)
         {
             return 0L;                                   // not TCP
         }
@@ -1847,10 +1859,11 @@ public final class Cyw43
         {
             return 0L;
         }
-        lastIhl = (Magic.load8(ip) & 0x0F) * 4;
-        lastIpTotal = (Magic.load8(ip + 2) & 0xFF) << 8 | (Magic.load8(ip + 3) & 0xFF);
+        lastIhl = (ipA.loadUnsignedByte() & 0x0F) * 4;
+        lastIpTotal = (ipA.plus(2).loadUnsignedByte() & 0xFF) << 8 | (ipA.plus(3).loadUnsignedByte() & 0xFF);
         long tcp = ip + lastIhl;
-        if (((Magic.load8(tcp + 2) & 0xFF) << 8 | (Magic.load8(tcp + 3) & 0xFF)) != sport)
+        Address tcpA = Address.fromLong(tcp);
+        if (((tcpA.plus(2).loadUnsignedByte() & 0xFF) << 8 | (tcpA.plus(3).loadUnsignedByte() & 0xFF)) != sport)
         {
             return 0L;                                   // not our connection
         }
@@ -1862,41 +1875,44 @@ public final class Cyw43
             long payload, int plen)
     {
         long buf = Heap.allocData(2048);
+        Address bufA = Address.fromLong(buf);
         int i = 0;
         while (i < 6)
         {
-            Magic.store8(buf + i, Magic.load8(gwMac + i));
-            Magic.store8(buf + 6 + i, Magic.load8(ourMac + i));
+            bufA.plus(i).store((byte) Address.fromLong(gwMac).plus(i).loadUnsignedByte());
+            bufA.plus(6 + i).store((byte) Address.fromLong(ourMac).plus(i).loadUnsignedByte());
             i = i + 1;
         }
-        Magic.store8(buf + 12, 0x08);
-        Magic.store8(buf + 13, 0x00);
+        bufA.plus(12).store((byte) 0x08);
+        bufA.plus(13).store((byte) 0x00);
         long ip = buf + 14;
         long tcp = buf + 34;
+        Address ipA = Address.fromLong(ip);
+        Address tcpA = Address.fromLong(tcp);
         be16(tcp + 0, sport);
         be16(tcp + 2, dport);
         be32(tcp + 4, seq);
         be32(tcp + 8, ack);
-        Magic.store8(tcp + 12, 0x50);                    // data offset = 5 (20-byte header)
-        Magic.store8(tcp + 13, flags);
+        tcpA.plus(12).store((byte) 0x50);                    // data offset = 5 (20-byte header)
+        tcpA.plus(13).store((byte) flags);
         be16(tcp + 14, 64240);                           // window
         be16(tcp + 16, 0);                               // checksum (fill below)
         be16(tcp + 18, 0);                               // urgent pointer
         i = 0;
         while (i < plen)
         {
-            Magic.store8(tcp + 20 + i, Magic.load8(payload + i));
+            tcpA.plus(20 + i).store((byte) Address.fromLong(payload).plus(i).loadUnsignedByte());
             i = i + 1;
         }
         int tcpLen = 20 + plen;
         be16(tcp + 16, tcpCksum(tcp, tcpLen, ourIp, serverIp));
-        Magic.store8(ip + 0, 0x45);
-        Magic.store8(ip + 1, 0);
+        ipA.store((byte) 0x45);
+        ipA.plus(1).store((byte) 0);
         be16(ip + 2, 20 + tcpLen);
         be16(ip + 4, 0);
         be16(ip + 6, 0x4000);                            // don't fragment
-        Magic.store8(ip + 8, 64);
-        Magic.store8(ip + 9, 6);                         // protocol = TCP
+        ipA.plus(8).store((byte) 64);
+        ipA.plus(9).store((byte) 6);                         // protocol = TCP
         be16(ip + 10, 0);
         copy4(ourIp, ip + 12);
         copy4(serverIp, ip + 16);
@@ -1907,22 +1923,25 @@ public final class Cyw43
     /** TCP checksum: one's complement over the IPv4 pseudo-header + the TCP segment (checksum field must be 0). */
     private static int tcpCksum(long tcp, int tcpLen, long srcIp, long dstIp)
     {
+        Address srcIpA = Address.fromLong(srcIp);
+        Address dstIpA = Address.fromLong(dstIp);
+        Address tcpA = Address.fromLong(tcp);
         int sum = 0;
-        sum = sum + ((Magic.load8(srcIp) & 0xFF) << 8 | (Magic.load8(srcIp + 1) & 0xFF));
-        sum = sum + ((Magic.load8(srcIp + 2) & 0xFF) << 8 | (Magic.load8(srcIp + 3) & 0xFF));
-        sum = sum + ((Magic.load8(dstIp) & 0xFF) << 8 | (Magic.load8(dstIp + 1) & 0xFF));
-        sum = sum + ((Magic.load8(dstIp + 2) & 0xFF) << 8 | (Magic.load8(dstIp + 3) & 0xFF));
+        sum = sum + ((srcIpA.loadUnsignedByte() & 0xFF) << 8 | (srcIpA.plus(1).loadUnsignedByte() & 0xFF));
+        sum = sum + ((srcIpA.plus(2).loadUnsignedByte() & 0xFF) << 8 | (srcIpA.plus(3).loadUnsignedByte() & 0xFF));
+        sum = sum + ((dstIpA.loadUnsignedByte() & 0xFF) << 8 | (dstIpA.plus(1).loadUnsignedByte() & 0xFF));
+        sum = sum + ((dstIpA.plus(2).loadUnsignedByte() & 0xFF) << 8 | (dstIpA.plus(3).loadUnsignedByte() & 0xFF));
         sum = sum + 6;                                   // zero byte + protocol
         sum = sum + tcpLen;
         int i = 0;
         while (i + 1 < tcpLen)
         {
-            sum = sum + ((Magic.load8(tcp + i) & 0xFF) << 8 | (Magic.load8(tcp + i + 1) & 0xFF));
+            sum = sum + ((tcpA.plus(i).loadUnsignedByte() & 0xFF) << 8 | (tcpA.plus(i + 1).loadUnsignedByte() & 0xFF));
             i = i + 2;
         }
         if (i < tcpLen)
         {
-            sum = sum + ((Magic.load8(tcp + i) & 0xFF) << 8);   // odd trailing byte
+            sum = sum + ((tcpA.plus(i).loadUnsignedByte() & 0xFF) << 8);   // odd trailing byte
         }
         while ((sum >> 16) != 0)
         {
@@ -1943,10 +1962,11 @@ public final class Cyw43
     /** Copy {@code s} into {@code buf} at offset {@code p}; returns the new offset. */
     private static int putBytes(long buf, int p, byte[] s)
     {
+        Address bufA = Address.fromLong(buf);
         int i = 0;
         while (i < s.length)
         {
-            Magic.store8(buf + p, s[i] & 0xFF);
+            bufA.plus(p).store((byte) (s[i] & 0xFF));
             p = p + 1;
             i = i + 1;
         }
@@ -1959,7 +1979,7 @@ public final class Cyw43
         int i = 0;
         while (i < len)
         {
-            int c = Magic.load8(addr + i) & 0xFF;
+            int c = Address.fromLong(addr).plus(i).loadUnsignedByte() & 0xFF;
             if (c == 0x0A || c == 0x0D || c == 0x09 || (c >= 0x20 && c < 0x7F))
             {
                 board.bcm2711.Uart.putc(c);
@@ -1975,17 +1995,19 @@ public final class Cyw43
     /** Store a 32-bit big-endian value. */
     private static void be32(long addr, int v)
     {
-        Magic.store8(addr, (v >> 24) & 0xFF);
-        Magic.store8(addr + 1, (v >> 16) & 0xFF);
-        Magic.store8(addr + 2, (v >> 8) & 0xFF);
-        Magic.store8(addr + 3, v & 0xFF);
+        Address a = Address.fromLong(addr);
+        a.store((byte) ((v >> 24) & 0xFF));
+        a.plus(1).store((byte) ((v >> 16) & 0xFF));
+        a.plus(2).store((byte) ((v >> 8) & 0xFF));
+        a.plus(3).store((byte) (v & 0xFF));
     }
 
     /** Read a 32-bit big-endian value. */
     private static int readBe32(long addr)
     {
-        return ((Magic.load8(addr) & 0xFF) << 24) | ((Magic.load8(addr + 1) & 0xFF) << 16)
-                | ((Magic.load8(addr + 2) & 0xFF) << 8) | (Magic.load8(addr + 3) & 0xFF);
+        Address a = Address.fromLong(addr);
+        return ((a.loadUnsignedByte() & 0xFF) << 24) | ((a.plus(1).loadUnsignedByte() & 0xFF) << 16)
+                | ((a.plus(2).loadUnsignedByte() & 0xFF) << 8) | (a.plus(3).loadUnsignedByte() & 0xFF);
     }
 
     /**
@@ -2030,14 +2052,14 @@ public final class Cyw43
             {
                 continue;
             }
-            if ((Magic.load8(rx + 5) & 0x0F) == 0)
+            if ((Address.fromLong(rx).plus(5).loadUnsignedByte() & 0x0F) == 0)
             {
                 continue;
             }
             frames = frames + 1;
-            long eth = rx + (Magic.load8(rx + 7) & 0xFF);
-            eth = eth + 4 + (Magic.load8(eth + 3) & 0xFF) * 4;
-            int et = (Magic.load8(eth + 12) & 0xFF) << 8 | (Magic.load8(eth + 13) & 0xFF);
+            long eth = rx + (Address.fromLong(rx).plus(7).loadUnsignedByte() & 0xFF);
+            eth = eth + 4 + (Address.fromLong(eth).plus(3).loadUnsignedByte() & 0xFF) * 4;
+            int et = (Address.fromLong(eth).plus(12).loadUnsignedByte() & 0xFF) << 8 | (Address.fromLong(eth).plus(13).loadUnsignedByte() & 0xFF);
             if (et == 0x0806)
             {
                 net.Ip.answerArp(eth);                   // a stale gateway re-verifies us mid-query
@@ -2049,28 +2071,30 @@ public final class Cyw43
             }
             ipv4 = ipv4 + 1;
             long ip = eth + 14;
-            if ((Magic.load8(ip + 9) & 0xFF) != 17 || !net.Ip.eq(ip + 12, dnsIp))
+            if ((Address.fromLong(ip).plus(9).loadUnsignedByte() & 0xFF) != 17 || !net.Ip.eq(ip + 12, dnsIp))
             {
                 continue;                                // not UDP, or not from our DNS server
             }
             fromDns = fromDns + 1;
-            long udp = ip + (Magic.load8(ip) & 0x0F) * 4;
-            if (((Magic.load8(udp) & 0xFF) << 8 | (Magic.load8(udp + 1) & 0xFF)) != 53)
+            long udp = ip + (Address.fromLong(ip).loadUnsignedByte() & 0x0F) * 4;
+            Address udpA = Address.fromLong(udp);
+            if (((udpA.loadUnsignedByte() & 0xFF) << 8 | (udpA.plus(1).loadUnsignedByte() & 0xFF)) != 53)
             {
                 continue;                                // not from the DNS port
             }
-            if (((Magic.load8(udp + 2) & 0xFF) << 8 | (Magic.load8(udp + 3) & 0xFF)) != localPort)
+            if (((udpA.plus(2).loadUnsignedByte() & 0xFF) << 8 | (udpA.plus(3).loadUnsignedByte() & 0xFF)) != localPort)
             {
                 continue;                                // not to this lookup's port
             }
             toUs = toUs + 1;
             long d = udp + 8;
-            if (((Magic.load8(d) & 0xFF) << 8 | (Magic.load8(d + 1) & 0xFF)) != id)
+            Address dA = Address.fromLong(d);
+            if (((dA.loadUnsignedByte() & 0xFF) << 8 | (dA.plus(1).loadUnsignedByte() & 0xFF)) != id)
             {
                 continue;                                // id mismatch
             }
             idOk = idOk + 1;
-            int ancount = (Magic.load8(d + 6) & 0xFF) << 8 | (Magic.load8(d + 7) & 0xFF);
+            int ancount = (dA.plus(6).loadUnsignedByte() & 0xFF) << 8 | (dA.plus(7).loadUnsignedByte() & 0xFF);
             if (ancount < 1)
             {
                 continue;
@@ -2080,8 +2104,9 @@ public final class Cyw43
             while (a < ancount)
             {
                 rr = skipName(rr);                       // answer name (often a compression pointer)
-                int type = (Magic.load8(rr) & 0xFF) << 8 | (Magic.load8(rr + 1) & 0xFF);
-                int rdlen = (Magic.load8(rr + 8) & 0xFF) << 8 | (Magic.load8(rr + 9) & 0xFF);
+                Address rrA = Address.fromLong(rr);
+                int type = (rrA.loadUnsignedByte() & 0xFF) << 8 | (rrA.plus(1).loadUnsignedByte() & 0xFF);
+                int rdlen = (rrA.plus(8).loadUnsignedByte() & 0xFF) << 8 | (rrA.plus(9).loadUnsignedByte() & 0xFF);
                 if (type == 1 && rdlen == 4)             // A record
                 {
                     copy4(rr + 10, ipOut);
@@ -2121,18 +2146,20 @@ public final class Cyw43
      */
     private static int buildDnsQuery(long buf, byte[] host, int localPort, int id)
     {
+        Address bufA = Address.fromLong(buf);
         int i = 0;
         while (i < 6)
         {
-            Magic.store8(buf + i, Magic.load8(gwMac + i));       // dst = gateway (route off-subnet)
-            Magic.store8(buf + 6 + i, Magic.load8(ourMac + i));
+            bufA.plus(i).store((byte) Address.fromLong(gwMac).plus(i).loadUnsignedByte());       // dst = gateway (route off-subnet)
+            bufA.plus(6 + i).store((byte) Address.fromLong(ourMac).plus(i).loadUnsignedByte());
             i = i + 1;
         }
-        Magic.store8(buf + 12, 0x08);
-        Magic.store8(buf + 13, 0x00);
+        bufA.plus(12).store((byte) 0x08);
+        bufA.plus(13).store((byte) 0x00);
         long ip = buf + 14;
         long udp = buf + 34;
         long d = buf + 42;
+        Address ipA = Address.fromLong(ip);
         be16(d + 0, id);                                 // id
         be16(d + 2, 0x0100);                             // flags: recursion desired
         be16(d + 4, 1);                                  // qdcount
@@ -2147,13 +2174,13 @@ public final class Cyw43
         be16(udp + 2, 53);                               // dst port = DNS
         be16(udp + 4, 8 + dnsLen);
         be16(udp + 6, 0);                                // no UDP checksum
-        Magic.store8(ip + 0, 0x45);
-        Magic.store8(ip + 1, 0);
+        ipA.store((byte) 0x45);
+        ipA.plus(1).store((byte) 0);
         be16(ip + 2, 20 + 8 + dnsLen);
         be16(ip + 4, 0);
         be16(ip + 6, 0);
-        Magic.store8(ip + 8, 64);
-        Magic.store8(ip + 9, 17);
+        ipA.plus(8).store((byte) 64);
+        ipA.plus(9).store((byte) 17);
         be16(ip + 10, 0);
         copy4(ourIp, ip + 12);
         copy4(dnsIp, ip + 16);
@@ -2173,18 +2200,18 @@ public final class Cyw43
             int seg = 0;
             while (hp < host.length && (host[hp] & 0xFF) != 0x2E)   // until '.' or end
             {
-                Magic.store8(dst + p, host[hp] & 0xFF);
+                Address.fromLong(dst).plus(p).store((byte) (host[hp] & 0xFF));
                 p = p + 1;
                 hp = hp + 1;
                 seg = seg + 1;
             }
-            Magic.store8(lenPos, seg);
+            Address.fromLong(lenPos).store((byte) seg);
             if (hp < host.length && (host[hp] & 0xFF) == 0x2E)
             {
                 hp = hp + 1;                             // skip the dot
             }
         }
-        Magic.store8(dst + p, 0);                        // root label
+        Address.fromLong(dst).plus(p).store((byte) 0);                        // root label
         p = p + 1;
         return p;
     }
@@ -2194,7 +2221,7 @@ public final class Cyw43
     {
         while (true)
         {
-            int b = Magic.load8(q) & 0xFF;
+            int b = Address.fromLong(q).loadUnsignedByte() & 0xFF;
             if (b == 0)
             {
                 return q + 1;
@@ -2230,20 +2257,21 @@ public final class Cyw43
             {
                 continue;                                // no delay — drain the FIFO as fast as possible
             }
-            if ((Magic.load8(rx + 5) & 0x0F) == 0)
+            if ((Address.fromLong(rx).plus(5).loadUnsignedByte() & 0x0F) == 0)
             {
                 continue;
             }
-            long eth = rx + (Magic.load8(rx + 7) & 0xFF);
-            eth = eth + 4 + (Magic.load8(eth + 3) & 0xFF) * 4;   // skip BDC
-            int et = (Magic.load8(eth + 12) & 0xFF) << 8 | (Magic.load8(eth + 13) & 0xFF);
-            if ((Magic.load8(eth) & 0xFF) != 0xFF)       // DIAG: print only UNICAST frames (skip the bcast flood)
+            long eth = rx + (Address.fromLong(rx).plus(7).loadUnsignedByte() & 0xFF);
+            eth = eth + 4 + (Address.fromLong(eth).plus(3).loadUnsignedByte() & 0xFF) * 4;   // skip BDC
+            Address ethA = Address.fromLong(eth);
+            int et = (ethA.plus(12).loadUnsignedByte() & 0xFF) << 8 | (ethA.plus(13).loadUnsignedByte() & 0xFF);
+            if ((ethA.loadUnsignedByte() & 0xFF) != 0xFF)       // DIAG: print only UNICAST frames (skip the bcast flood)
             {
                 board.bcm2711.Uart.write(Magic.bytes("  uni et="));
                 VM.printHex(et);
                 board.bcm2711.Uart.write(Magic.bytes(" dst="));
-                printHex2(Magic.load8(eth) & 0xFF);
-                printHex2(Magic.load8(eth + 5) & 0xFF);
+                printHex2(ethA.loadUnsignedByte() & 0xFF);
+                printHex2(ethA.plus(5).loadUnsignedByte() & 0xFF);
                 board.bcm2711.Uart.putc(0x0A);
             }
             if (et != 0x0806)
@@ -2251,7 +2279,8 @@ public final class Cyw43
                 continue;                                // not ARP
             }
             long arp = eth + 14;
-            if (((Magic.load8(arp + 6) & 0xFF) << 8 | (Magic.load8(arp + 7) & 0xFF)) != 2)
+            Address arpA = Address.fromLong(arp);
+            if (((arpA.plus(6).loadUnsignedByte() & 0xFF) << 8 | (arpA.plus(7).loadUnsignedByte() & 0xFF)) != 2)
             {
                 continue;                                // not a reply
             }
@@ -2260,7 +2289,7 @@ public final class Cyw43
                 int i = 0;
                 while (i < 6)
                 {
-                    Magic.store8(macOut + i, Magic.load8(arp + 8 + i));   // sender hardware addr
+                    Address.fromLong(macOut).plus(i).store((byte) arpA.plus(8 + i).loadUnsignedByte());   // sender hardware addr
                     i = i + 1;
                 }
                 return true;
@@ -2272,25 +2301,27 @@ public final class Cyw43
     /** Build an ARP request (who-has {@code targetIp}) into {@code buf}, padded to 60 bytes; returns 60. */
     private static int buildArp(long buf, long targetIp)
     {
+        Address bufA = Address.fromLong(buf);
         int i = 0;
         while (i < 6)
         {
-            Magic.store8(buf + i, 0xFF);                 // dst = broadcast
-            Magic.store8(buf + 6 + i, Magic.load8(ourMac + i));
+            bufA.plus(i).store((byte) 0xFF);                 // dst = broadcast
+            bufA.plus(6 + i).store((byte) Address.fromLong(ourMac).plus(i).loadUnsignedByte());
             i = i + 1;
         }
-        Magic.store8(buf + 12, 0x08);                    // ethertype 0x0806 = ARP
-        Magic.store8(buf + 13, 0x06);
+        bufA.plus(12).store((byte) 0x08);                    // ethertype 0x0806 = ARP
+        bufA.plus(13).store((byte) 0x06);
         long a = buf + 14;
+        Address arpA = Address.fromLong(a);
         be16(a + 0, 1);                                  // htype = ethernet
         be16(a + 2, 0x0800);                             // ptype = IPv4
-        Magic.store8(a + 4, 6);                          // hlen
-        Magic.store8(a + 5, 4);                          // plen
+        arpA.plus(4).store((byte) 6);                          // hlen
+        arpA.plus(5).store((byte) 4);                          // plen
         be16(a + 6, 1);                                  // oper = request
         i = 0;
         while (i < 6)
         {
-            Magic.store8(a + 8 + i, Magic.load8(ourMac + i));   // sender hardware addr
+            arpA.plus(8 + i).store((byte) Address.fromLong(ourMac).plus(i).loadUnsignedByte());   // sender hardware addr
             i = i + 1;
         }
         copy4(ourIp, a + 14);                            // sender protocol addr
@@ -2313,23 +2344,23 @@ public final class Cyw43
                 VM.delayMs(2);
                 continue;
             }
-            if ((Magic.load8(rx + 5) & 0x0F) == 0)
+            if ((Address.fromLong(rx).plus(5).loadUnsignedByte() & 0x0F) == 0)
             {
                 continue;
             }
-            long eth = rx + (Magic.load8(rx + 7) & 0xFF);
-            eth = eth + 4 + (Magic.load8(eth + 3) & 0xFF) * 4;
-            if (((Magic.load8(eth + 12) & 0xFF) << 8 | (Magic.load8(eth + 13) & 0xFF)) != 0x0800)
+            long eth = rx + (Address.fromLong(rx).plus(7).loadUnsignedByte() & 0xFF);
+            eth = eth + 4 + (Address.fromLong(eth).plus(3).loadUnsignedByte() & 0xFF) * 4;
+            if (((Address.fromLong(eth).plus(12).loadUnsignedByte() & 0xFF) << 8 | (Address.fromLong(eth).plus(13).loadUnsignedByte() & 0xFF)) != 0x0800)
             {
                 continue;
             }
             long ip = eth + 14;
-            if ((Magic.load8(ip + 9) & 0xFF) != 1)
+            if ((Address.fromLong(ip).plus(9).loadUnsignedByte() & 0xFF) != 1)
             {
                 continue;                                // not ICMP
             }
-            long icmp = ip + (Magic.load8(ip) & 0x0F) * 4;
-            if ((Magic.load8(icmp) & 0xFF) != 0)
+            long icmp = ip + (Address.fromLong(ip).loadUnsignedByte() & 0x0F) * 4;
+            if ((Address.fromLong(icmp).loadUnsignedByte() & 0xFF) != 0)
             {
                 continue;                                // not echo reply
             }
@@ -2344,31 +2375,34 @@ public final class Cyw43
     /** Build an ICMP echo request (32-byte payload) into {@code buf}; returns the total frame length. */
     private static int buildPing(long buf, long targetIp, long targetMac)
     {
+        Address bufA = Address.fromLong(buf);
         int i = 0;
         while (i < 6)
         {
-            Magic.store8(buf + i, Magic.load8(targetMac + i));   // dst = gateway
-            Magic.store8(buf + 6 + i, Magic.load8(ourMac + i));
+            bufA.plus(i).store((byte) Address.fromLong(targetMac).plus(i).loadUnsignedByte());   // dst = gateway
+            bufA.plus(6 + i).store((byte) Address.fromLong(ourMac).plus(i).loadUnsignedByte());
             i = i + 1;
         }
-        Magic.store8(buf + 12, 0x08);                    // ethertype 0x0800
-        Magic.store8(buf + 13, 0x00);
+        bufA.plus(12).store((byte) 0x08);                    // ethertype 0x0800
+        bufA.plus(13).store((byte) 0x00);
         long ip = buf + 14;
         long icmp = buf + 34;
-        Magic.store8(icmp + 0, 8);                       // type = echo request
-        Magic.store8(icmp + 1, 0);                       // code
+        Address ipA = Address.fromLong(ip);
+        Address icmpA = Address.fromLong(icmp);
+        icmpA.store((byte) 8);                       // type = echo request
+        icmpA.plus(1).store((byte) 0);                       // code
         be16(icmp + 2, 0);                               // checksum (fill below)
         be16(icmp + 4, 0x1234);                          // id
         be16(icmp + 6, 1);                               // seq
         int icmpLen = 8 + 32;                            // header + 32 zero payload bytes
         be16(icmp + 2, ipCksum(icmp, icmpLen));          // ICMP checksum over the whole message
-        Magic.store8(ip + 0, 0x45);
-        Magic.store8(ip + 1, 0);
+        ipA.store((byte) 0x45);
+        ipA.plus(1).store((byte) 0);
         be16(ip + 2, 20 + icmpLen);
         be16(ip + 4, 0);
         be16(ip + 6, 0);
-        Magic.store8(ip + 8, 64);                        // TTL
-        Magic.store8(ip + 9, 1);                         // protocol = ICMP
+        ipA.plus(8).store((byte) 64);                        // TTL
+        ipA.plus(9).store((byte) 1);                         // protocol = ICMP
         be16(ip + 10, 0);
         copy4(ourIp, ip + 12);
         copy4(targetIp, ip + 16);
@@ -2382,7 +2416,7 @@ public final class Cyw43
         int i = 0;
         while (i < 4)
         {
-            if ((Magic.load8(a + i) & 0xFF) != (Magic.load8(b + i) & 0xFF))
+            if ((Address.fromLong(a).plus(i).loadUnsignedByte() & 0xFF) != (Address.fromLong(b).plus(i).loadUnsignedByte() & 0xFF))
             {
                 return false;
             }
@@ -2398,79 +2432,83 @@ public final class Cyw43
      */
     private static int buildDhcp(long buf, int msgType, long reqIp, long serverId)
     {
+        Address bufA = Address.fromLong(buf);
         int i = 0;
         while (i < 6)
         {
-            Magic.store8(buf + i, 0xFF);                 // dst = broadcast
-            Magic.store8(buf + 6 + i, Magic.load8(ourMac + i));   // src = ourMac
+            bufA.plus(i).store((byte) 0xFF);                 // dst = broadcast
+            bufA.plus(6 + i).store((byte) Address.fromLong(ourMac).plus(i).loadUnsignedByte());   // src = ourMac
             i = i + 1;
         }
-        Magic.store8(buf + 12, 0x08);                    // ethertype 0x0800
-        Magic.store8(buf + 13, 0x00);
+        bufA.plus(12).store((byte) 0x08);                    // ethertype 0x0800
+        bufA.plus(13).store((byte) 0x00);
         long ip = buf + 14;
         long udp = buf + 34;
         long bootp = buf + 42;
-        Magic.store8(bootp + 0, 1);                      // op = BOOTREQUEST
-        Magic.store8(bootp + 1, 1);                      // htype
-        Magic.store8(bootp + 2, 6);                      // hlen
-        Magic.store32(bootp + 4, 0x3903F326);            // xid
+        Address bootpA = Address.fromLong(bootp);
+        Address ipA = Address.fromLong(ip);
+        bootpA.store((byte) 1);                      // op = BOOTREQUEST
+        bootpA.plus(1).store((byte) 1);                      // htype
+        bootpA.plus(2).store((byte) 6);                      // hlen
+        bootpA.plus(4).store(0x3903F326);            // xid
         be16(bootp + 10, 0x8000);                        // broadcast flag
         i = 0;
         while (i < 6)
         {
-            Magic.store8(bootp + 28 + i, Magic.load8(ourMac + i));   // chaddr
+            bootpA.plus(28 + i).store((byte) Address.fromLong(ourMac).plus(i).loadUnsignedByte());   // chaddr
             i = i + 1;
         }
-        Magic.store8(bootp + 236, 0x63);                 // magic cookie
-        Magic.store8(bootp + 237, 0x82);
-        Magic.store8(bootp + 238, 0x53);
-        Magic.store8(bootp + 239, 0x63);
+        bootpA.plus(236).store((byte) 0x63);                 // magic cookie
+        bootpA.plus(237).store((byte) 0x82);
+        bootpA.plus(238).store((byte) 0x53);
+        bootpA.plus(239).store((byte) 0x63);
         long opt = bootp + 240;
         int p = 0;
-        Magic.store8(opt + p, 53);                       // DHCP message type
-        Magic.store8(opt + p + 1, 1);
-        Magic.store8(opt + p + 2, msgType);
+        Address optA = Address.fromLong(opt);
+        optA.plus(p).store((byte) 53);                       // DHCP message type
+        optA.plus(p + 1).store((byte) 1);
+        optA.plus(p + 2).store((byte) msgType);
         p = p + 3;
         if (reqIp != 0L)
         {
-            Magic.store8(opt + p, 50);                   // requested IP address
-            Magic.store8(opt + p + 1, 4);
+            optA.plus(p).store((byte) 50);                   // requested IP address
+            optA.plus(p + 1).store((byte) 4);
             copy4(reqIp, opt + p + 2);
             p = p + 6;
         }
         if (serverId != 0L)
         {
-            Magic.store8(opt + p, 54);                   // server identifier
-            Magic.store8(opt + p + 1, 4);
+            optA.plus(p).store((byte) 54);                   // server identifier
+            optA.plus(p + 1).store((byte) 4);
             copy4(serverId, opt + p + 2);
             p = p + 6;
         }
-        Magic.store8(opt + p, 55);                       // parameter request list
-        Magic.store8(opt + p + 1, 4);
-        Magic.store8(opt + p + 2, 1);                    //   subnet
-        Magic.store8(opt + p + 3, 3);                    //   router
-        Magic.store8(opt + p + 4, 6);                    //   DNS
-        Magic.store8(opt + p + 5, 15);                   //   domain
+        optA.plus(p).store((byte) 55);                       // parameter request list
+        optA.plus(p + 1).store((byte) 4);
+        optA.plus(p + 2).store((byte) 1);                    //   subnet
+        optA.plus(p + 3).store((byte) 3);                    //   router
+        optA.plus(p + 4).store((byte) 6);                    //   DNS
+        optA.plus(p + 5).store((byte) 15);                   //   domain
         p = p + 6;
-        Magic.store8(opt + p, 255);                      // end
+        optA.plus(p).store((byte) 255);                      // end
         p = p + 1;
         int dhcpLen = 240 + p;
         be16(udp + 0, 68);                               // UDP src port
         be16(udp + 2, 67);                               // UDP dst port
         be16(udp + 4, 8 + dhcpLen);
         be16(udp + 6, 0);                                // no UDP checksum
-        Magic.store8(ip + 0, 0x45);                      // IPv4, IHL=5
-        Magic.store8(ip + 1, 0);
+        ipA.store((byte) 0x45);                      // IPv4, IHL=5
+        ipA.plus(1).store((byte) 0);
         be16(ip + 2, 20 + 8 + dhcpLen);
         be16(ip + 4, 0);
         be16(ip + 6, 0);
-        Magic.store8(ip + 8, 64);                        // TTL
-        Magic.store8(ip + 9, 17);                        // UDP
+        ipA.plus(8).store((byte) 64);                        // TTL
+        ipA.plus(9).store((byte) 17);                        // UDP
         be16(ip + 10, 0);
         i = 0;
         while (i < 4)
         {
-            Magic.store8(ip + 16 + i, 0xFF);             // dst = 255.255.255.255
+            ipA.plus(16 + i).store((byte) 0xFF);             // dst = 255.255.255.255
             i = i + 1;
         }
         be16(ip + 10, ipCksum(ip, 20));
@@ -2494,25 +2532,25 @@ public final class Cyw43
                 VM.delayMs(2);
                 continue;
             }
-            if ((Magic.load8(rx + 5) & 0x0F) == 0)
+            if ((Address.fromLong(rx).plus(5).loadUnsignedByte() & 0x0F) == 0)
             {
                 continue;                                // ioctl ack
             }
-            int doff = Magic.load8(rx + 7) & 0xFF;
+            int doff = Address.fromLong(rx).plus(7).loadUnsignedByte() & 0xFF;
             long bdc = rx + doff;
-            long eth = bdc + 4 + (Magic.load8(bdc + 3) & 0xFF) * 4;
-            int ethertype = ((Magic.load8(eth + 12) & 0xFF) << 8) | (Magic.load8(eth + 13) & 0xFF);
+            long eth = bdc + 4 + (Address.fromLong(bdc).plus(3).loadUnsignedByte() & 0xFF) * 4;
+            int ethertype = ((Address.fromLong(eth).plus(12).loadUnsignedByte() & 0xFF) << 8) | (Address.fromLong(eth).plus(13).loadUnsignedByte() & 0xFF);
             if (ethertype != 0x0800)
             {
                 continue;
             }
             long ip = eth + 14;
-            if ((Magic.load8(ip + 9) & 0xFF) != 17)
+            if ((Address.fromLong(ip).plus(9).loadUnsignedByte() & 0xFF) != 17)
             {
                 continue;
             }
-            long udp = ip + (Magic.load8(ip) & 0x0F) * 4;
-            int dport = ((Magic.load8(udp + 2) & 0xFF) << 8) | (Magic.load8(udp + 3) & 0xFF);
+            long udp = ip + (Address.fromLong(ip).loadUnsignedByte() & 0x0F) * 4;
+            int dport = ((Address.fromLong(udp).plus(2).loadUnsignedByte() & 0xFF) << 8) | (Address.fromLong(udp).plus(3).loadUnsignedByte() & 0xFF);
             if (dport != 68)
             {
                 continue;
@@ -2540,7 +2578,7 @@ public final class Cyw43
         long o = opt;
         while (o < end)
         {
-            int c = Magic.load8(o) & 0xFF;
+            int c = Address.fromLong(o).loadUnsignedByte() & 0xFF;
             if (c == 255)
             {
                 return -1;
@@ -2550,10 +2588,10 @@ public final class Cyw43
                 o = o + 1;
                 continue;
             }
-            int l = Magic.load8(o + 1) & 0xFF;
+            int l = Address.fromLong(o).plus(1).loadUnsignedByte() & 0xFF;
             if (c == code)
             {
-                return Magic.load8(o + 2) & 0xFF;
+                return Address.fromLong(o).plus(2).loadUnsignedByte() & 0xFF;
             }
             o = o + 2 + l;
         }
@@ -2570,7 +2608,7 @@ public final class Cyw43
         long o = opt;
         while (o < end)
         {
-            int c = Magic.load8(o) & 0xFF;
+            int c = Address.fromLong(o).loadUnsignedByte() & 0xFF;
             if (c == 255)
             {
                 return;
@@ -2580,13 +2618,13 @@ public final class Cyw43
                 o = o + 1;
                 continue;
             }
-            int l = Magic.load8(o + 1) & 0xFF;
+            int l = Address.fromLong(o).plus(1).loadUnsignedByte() & 0xFF;
             if (c == code)
             {
                 int i = 0;
                 while (i < 4 && i < l)
                 {
-                    Magic.store8(dst + i, Magic.load8(o + 2 + i));
+                    Address.fromLong(dst).plus(i).store((byte) Address.fromLong(o).plus(2 + i).loadUnsignedByte());
                     i = i + 1;
                 }
                 return;
@@ -2601,7 +2639,7 @@ public final class Cyw43
         int i = 0;
         while (i < 4)
         {
-            Magic.store8(dst + i, Magic.load8(src + i));
+            Address.fromLong(dst).plus(i).store((byte) Address.fromLong(src).plus(i).loadUnsignedByte());
             i = i + 1;
         }
     }
@@ -2613,7 +2651,7 @@ public final class Cyw43
         int i = 0;
         while (i < len)
         {
-            sum = sum + (((Magic.load8(addr + i) & 0xFF) << 8) | (Magic.load8(addr + i + 1) & 0xFF));
+            sum = sum + (((Address.fromLong(addr).plus(i).loadUnsignedByte() & 0xFF) << 8) | (Address.fromLong(addr).plus(i + 1).loadUnsignedByte() & 0xFF));
             i = i + 2;
         }
         while ((sum >> 16) != 0)
@@ -2626,8 +2664,8 @@ public final class Cyw43
     /** Store a 16-bit big-endian (network-order) value. */
     private static void be16(long addr, int v)
     {
-        Magic.store8(addr, (v >> 8) & 0xFF);
-        Magic.store8(addr + 1, v & 0xFF);
+        Address.fromLong(addr).store((byte) ((v >> 8) & 0xFF));
+        Address.fromLong(addr).plus(1).store((byte) (v & 0xFF));
     }
 
     /** Print a dotted-quad IPv4 address (4 bytes at addr). */
@@ -2636,7 +2674,7 @@ public final class Cyw43
         int i = 0;
         while (i < 4)
         {
-            VM.printDec(Magic.load8(addr + i) & 0xFF);
+            VM.printDec(Address.fromLong(addr).plus(i).loadUnsignedByte() & 0xFF);
             if (i < 3)
             {
                 board.bcm2711.Uart.putc(0x2E);           // '.'
@@ -2661,7 +2699,7 @@ public final class Cyw43
     private static void setInt(int cmd, int val)
     {
         long b = Heap.allocData(16);
-        Magic.store32(b, val);
+        Address.fromLong(b).store(val);
         readCtrl(sendBcdc(cmd, b, 4, true));
     }
 
@@ -2669,10 +2707,11 @@ public final class Cyw43
      *  trailing CR/LF); returns its length (<=32). */
     private static int parseSsid(long src, int flen, long dst)
     {
+        Address srcA = Address.fromLong(src);
         int start = 0;
-        if (flen >= 5 && (Magic.load8(src) & 0xFF) == 0x73 && (Magic.load8(src + 1) & 0xFF) == 0x73
-                && (Magic.load8(src + 2) & 0xFF) == 0x69 && (Magic.load8(src + 3) & 0xFF) == 0x64
-                && (Magic.load8(src + 4) & 0xFF) == 0x3D)                 // "ssid="
+        if (flen >= 5 && (srcA.loadUnsignedByte() & 0xFF) == 0x73 && (srcA.plus(1).loadUnsignedByte() & 0xFF) == 0x73
+                && (srcA.plus(2).loadUnsignedByte() & 0xFF) == 0x69 && (srcA.plus(3).loadUnsignedByte() & 0xFF) == 0x64
+                && (srcA.plus(4).loadUnsignedByte() & 0xFF) == 0x3D)                 // "ssid="
         {
             start = 5;
         }
@@ -2680,12 +2719,12 @@ public final class Cyw43
         int i = start;
         while (i < flen && n < 32)
         {
-            int c = Magic.load8(src + i) & 0xFF;
+            int c = srcA.plus(i).loadUnsignedByte() & 0xFF;
             if (c == 0x0A || c == 0x0D || c == 0)
             {
                 break;
             }
-            Magic.store8(dst + n, c);
+            Address.fromLong(dst).plus(n).store((byte) c);
             n = n + 1;
             i = i + 1;
         }
@@ -2698,7 +2737,7 @@ public final class Cyw43
         int i = 12;
         while (i < 64 && i < len - 2)
         {
-            if ((Magic.load8(rx + i) & 0xFF) == 0x88 && (Magic.load8(rx + i + 1) & 0xFF) == 0x6C)
+            if ((Address.fromLong(rx).plus(i).loadUnsignedByte() & 0xFF) == 0x88 && (Address.fromLong(rx).plus(i + 1).loadUnsignedByte() & 0xFF) == 0x6C)
             {
                 return i;
             }
@@ -2719,7 +2758,7 @@ public final class Cyw43
             return false;
         }
         long em = rx + eth + 12;                         // event_msg = ethertype(2) + bcmeth_hdr(10)
-        int flags = ((Magic.load8(em + 2) & 0xFF) << 8) | (Magic.load8(em + 3) & 0xFF);
+        int flags = ((Address.fromLong(em).plus(2).loadUnsignedByte() & 0xFF) << 8) | (Address.fromLong(em).plus(3).loadUnsignedByte() & 0xFF);
         int et = beU32(em + 4);
         int status = beU32(em + 8);
         board.bcm2711.Uart.write(Magic.bytes("  event "));   // print EVERY join-phase event to trace the flow
@@ -2747,8 +2786,8 @@ public final class Cyw43
         int mlen = 16;                                   // fallback
         if (len > 0)
         {
-            int doff = Magic.load8(rx + 7) & 0xFF;
-            int returned = Magic.load32(rx + doff + 4);  // BCDC len = mask length the fw uses
+            int doff = Address.fromLong(rx).plus(7).loadUnsignedByte() & 0xFF;
+            int returned = Address.fromLong(rx).plus(doff + 4).loadInt();  // BCDC len = mask length the fw uses
             if (returned > 0 && returned <= 64)
             {
                 mlen = returned;
@@ -2775,7 +2814,7 @@ public final class Cyw43
     private static void setEvt(long mask, int ev)
     {
         long b = mask + (ev >> 3);
-        Magic.store8(b, (Magic.load8(b) & 0xFF) | (1 << (ev & 7)));
+        Address.fromLong(b).store((byte) ((Address.fromLong(b).loadUnsignedByte() & 0xFF) | (1 << (ev & 7))));
     }
 
     /** Print {@code len} bytes at {@code addr} as printable ASCII (non-printable -> '.'), not NUL-terminated. */
@@ -2784,7 +2823,7 @@ public final class Cyw43
         int i = 0;
         while (i < len)
         {
-            int c = Magic.load8(addr + i) & 0xFF;
+            int c = Address.fromLong(addr).plus(i).loadUnsignedByte() & 0xFF;
             board.bcm2711.Uart.putc((c >= 0x20 && c < 0x7F) ? c : 0x2E);
             i = i + 1;
         }
@@ -2805,8 +2844,8 @@ public final class Cyw43
             board.bcm2711.Uart.write(Magic.bytes("  clm NOT FOUND\n"));
             return;
         }
-        long src = Magic.load64(e + 16L);
-        int total = (int) Magic.load64(e + 24L);
+        long src = Address.fromLong(e).plus(16L).loadLong();
+        int total = (int) Address.fromLong(e).plus(24L).loadLong();
         log(Magic.bytes("clm bytes="), total);
         int off = 0;
         while (off < total)
@@ -2826,15 +2865,16 @@ public final class Cyw43
                 flag = flag | 0x4;                       // DL_END
             }
             long buf = Heap.allocData(512);
+            Address bufA = Address.fromLong(buf);
             int p = putStr(buf, Magic.bytes("clmload")); // "clmload\0"
             store16(buf + p, flag);
             store16(buf + p + 2, 2);                     // dload_type = DL_TYPE_CLM
-            Magic.store32(buf + p + 4, n);               // chunk len
-            Magic.store32(buf + p + 8, 0);               // crc unused
+            bufA.plus(p + 4).store(n);               // chunk len
+            bufA.plus(p + 8).store(0);               // crc unused
             int i = 0;
             while (i < n)
             {
-                Magic.store8(buf + p + 12 + i, Magic.load8(src + off + i));
+                bufA.plus(p + 12 + i).store((byte) Address.fromLong(src).plus(off + i).loadUnsignedByte());
                 i = i + 1;
             }
             readCtrl(sendBcdc(WLC_SET_VAR, buf, p + 12 + n, true));
@@ -2848,20 +2888,21 @@ public final class Cyw43
     static int sendBcdc(int cmd, long dataAddr, int dataLen, boolean isSet)
     {
         long tx = Heap.allocData(1024);
+        Address txA = Address.fromLong(tx);
         int i = 0;
         while (i < dataLen)
         {
-            Magic.store8(tx + 28 + i, Magic.load8(dataAddr + i));
+            txA.plus(28 + i).store((byte) Address.fromLong(dataAddr).plus(i).loadUnsignedByte());
             i = i + 1;
         }
-        Magic.store32(tx + 12, cmd);
-        Magic.store32(tx + 16, dataLen);
-        Magic.store32(tx + 20, (reqId << 16) | (isSet ? 0x02 : 0));   // flags: id | SET
-        Magic.store32(tx + 24, 0);
+        txA.plus(12).store(cmd);
+        txA.plus(16).store(dataLen);
+        txA.plus(20).store((reqId << 16) | (isSet ? 0x02 : 0));   // flags: id | SET
+        txA.plus(24).store(0);
         int frameLen = 12 + 16 + dataLen;
-        Magic.store8(tx + 5, 0);                         // control channel
-        Magic.store8(tx + 6, 0);
-        Magic.store8(tx + 7, 12);
+        txA.plus(5).store((byte) 0);                         // control channel
+        txA.plus(6).store((byte) 0);
+        txA.plus(7).store((byte) 12);
         store16(tx + 0, frameLen);
         store16(tx + 2, ~frameLen);
         sendFrame(tx, frameLen);
@@ -2899,8 +2940,8 @@ public final class Cyw43
             board.bcm2711.Uart.write(Magic.bytes("  (no ctrl resp)\n"));
             return;
         }
-        int doff = Magic.load8(rx + 7) & 0xFF;
-        log(Magic.bytes("ctrl status="), Magic.load32(rx + doff + 12));
+        int doff = Address.fromLong(rx).plus(7).loadUnsignedByte() & 0xFF;
+        log(Magic.bytes("ctrl status="), Address.fromLong(rx).plus(doff + 12).loadInt());
     }
 
     /**
@@ -2917,6 +2958,7 @@ public final class Cyw43
     /** {@link #recvCtrl}, waiting up to {@code ms}. */
     static int recvCtrl(long dst, int cap, int wantId, int ms)
     {
+        Address dstA = Address.fromLong(dst);
         long endT = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * ms / 1000L;
         while (Magic.readCNTPCT_EL0() < endT)
         {
@@ -2925,7 +2967,7 @@ public final class Cyw43
             {
                 continue;
             }
-            int ch = Magic.load8(dst + 5) & 0x0F;
+            int ch = dstA.plus(5).loadUnsignedByte() & 0x0F;
             if (ch != 0)                                 // event (1) / data (2) — not an ioctl ack
             {
                 if (!net.RxQueues.active)
@@ -2935,8 +2977,8 @@ public final class Cyw43
                 log(Magic.bytes("  (skip ch="), ch);
                 continue;
             }
-            int doff = Magic.load8(dst + 7) & 0xFF;
-            int id = (Magic.load32(dst + doff + 8) >> 16) & 0xFFFF;   // BCDC flags: id in bits 16..31
+            int doff = dstA.plus(7).loadUnsignedByte() & 0xFF;
+            int id = (dstA.plus(doff + 8).loadInt() >> 16) & 0xFFFF;   // BCDC flags: id in bits 16..31
             if (wantId != 0 && id != wantId)
             {
                 log(Magic.bytes("  (skip id="), id);
@@ -2958,7 +3000,7 @@ public final class Cyw43
         {
             return 0;
         }
-        int hw = Magic.load32(dst);
+        int hw = Address.fromLong(dst).loadInt();
         int len = hw & 0xFFFF;
         int nlen = (hw >> 16) & 0xFFFF;
         if (len < 12 || ((len ^ nlen) & 0xFFFF) != 0xFFFF)
@@ -2986,8 +3028,8 @@ public final class Cyw43
             }
             done = done + n;
         }
-        txMax = Magic.load8(dst + 9) & 0xFF;             // SDPCM sw header: the firmware's tx window (max seq)
-        txFc = Magic.load8(dst + 8) & 0xFF;              // SDPCM sw header: the flow-control mask
+        txMax = Address.fromLong(dst).plus(9).loadUnsignedByte() & 0xFF;             // SDPCM sw header: the firmware's tx window (max seq)
+        txFc = Address.fromLong(dst).plus(8).loadUnsignedByte() & 0xFF;              // SDPCM sw header: the flow-control mask
         if (rest > 0)
         {
             // An oversize frame must be read to its end: what is left in the F2 FIFO would otherwise be parsed
@@ -3032,7 +3074,7 @@ public final class Cyw43
     /** True if the frame at {@code dst} is a glom descriptor (channel 3, descriptor flag set). */
     public static boolean isGlomDesc(long dst)
     {
-        return (Magic.load8(dst + 5) & 0x8F) == 0x83;
+        return (Address.fromLong(dst).plus(5).loadUnsignedByte() & 0x8F) == 0x83;
     }
 
     /**
@@ -3042,13 +3084,14 @@ public final class Cyw43
      */
     public static int readSuperframe(long desc, int len)
     {
-        int doff = Magic.load8(desc + 7) & 0xFF;
+        Address descA = Address.fromLong(desc);
+        int doff = descA.plus(7).loadUnsignedByte() & 0xFF;
         int total = 0;
         int count = 0;
         int p = doff;
         while (p + 2 <= len)
         {
-            int sub = (Magic.load8(desc + p) & 0xFF) | (Magic.load8(desc + p + 1) & 0xFF) << 8;
+            int sub = (descA.plus(p).loadUnsignedByte() & 0xFF) | (descA.plus(p + 1).loadUnsignedByte() & 0xFF) << 8;
             if (count < GLOM_SUBS)
             {
                 glomLens[count] = sub;
@@ -3088,15 +3131,16 @@ public final class Cyw43
         {
             return 0;
         }
-        int hw = Magic.load32(glomBuf);
+        Address glom = Address.fromLong(glomBuf);
+        int hw = glom.loadInt();
         int hlen = hw & 0xFFFF;
         int nlen = (hw >> 16) & 0xFFFF;
-        if (hlen < 12 || ((hlen ^ nlen) & 0xFFFF) != 0xFFFF || (Magic.load8(glomBuf + 5) & 0x8F) != 0x03)
+        if (hlen < 12 || ((hlen ^ nlen) & 0xFFFF) != 0xFFFF || (glom.plus(5).loadUnsignedByte() & 0x8F) != 0x03)
         {
             return 0;
         }
-        txMax = Magic.load8(glomBuf + 9) & 0xFF;         // the superframe header carries the tx window too
-        txFc = Magic.load8(glomBuf + 8) & 0xFF;          //   and the flow-control mask
+        txMax = glom.plus(9).loadUnsignedByte() & 0xFF;         // the superframe header carries the tx window too
+        txFc = glom.plus(8).loadUnsignedByte() & 0xFF;          //   and the flow-control mask
         glomCount = count;
         return total;
     }
@@ -3120,7 +3164,7 @@ public final class Cyw43
             int start = glomOff;
             if (glomIdx == 0)
             {
-                start = start + (Magic.load8(glomBuf + 7) & 0xFF);   // the first follows the superframe header
+                start = start + (Address.fromLong(glomBuf).plus(7).loadUnsignedByte() & 0xFF);   // the first follows the superframe header
             }
             int end = glomOff + glomLens[glomIdx];
             glomOff = end;
@@ -3129,7 +3173,7 @@ public final class Cyw43
             {
                 continue;
             }
-            int hw = Magic.load32(glomBuf + start);
+            int hw = Address.fromLong(glomBuf).plus(start).loadInt();
             int sub = hw & 0xFFFF;
             int nsub = (hw >> 16) & 0xFFFF;
             if (sub < 12 || ((sub ^ nsub) & 0xFFFF) != 0xFFFF || start + sub > end)
@@ -3144,7 +3188,7 @@ public final class Cyw43
             int k = 0;
             while (k < n)
             {
-                Magic.store8(dst + k, Magic.load8(glomBuf + start + k));
+                Address.fromLong(dst).plus(k).store((byte) Address.fromLong(glomBuf).plus(start + k).loadUnsignedByte());
                 k = k + 1;
             }
             return n;
@@ -3216,7 +3260,7 @@ public final class Cyw43
         {
             return false;
         }
-        if ((Magic.load8(tx + 5) & 0x0F) != 2)
+        if ((Address.fromLong(tx).plus(5).loadUnsignedByte() & 0x0F) != 2)
         {
             return true;
         }
@@ -3224,7 +3268,7 @@ public final class Cyw43
         {
             return false;
         }
-        int prio = Magic.load8(tx + 13) & 0x07;          // BDC priority (802.1D)
+        int prio = Address.fromLong(tx).plus(13).loadUnsignedByte() & 0x07;          // BDC priority (802.1D)
         int prec = (prio == 0 || prio == 3) ? (prio ^ 2) : prio;   // brcmf_sdio_prio2prec
         return ((txFc >> prec) & 1) == 0;
     }
@@ -3281,18 +3325,18 @@ public final class Cyw43
         int i = 0;
         while (i < s.length)
         {
-            Magic.store8(dst + i, s[i]);
+            Address.fromLong(dst).plus(i).store((byte) s[i]);
             i = i + 1;
         }
-        Magic.store8(dst + s.length, 0);
+        Address.fromLong(dst).plus(s.length).store((byte) 0);
         return s.length + 1;
     }
 
     /** Store a 16-bit little-endian value (no Magic.store16). */
     private static void store16(long addr, int v)
     {
-        Magic.store8(addr, v & 0xFF);
-        Magic.store8(addr + 1, (v >> 8) & 0xFF);
+        Address.fromLong(addr).store((byte) (v & 0xFF));
+        Address.fromLong(addr).plus(1).store((byte) ((v >> 8) & 0xFF));
     }
 
     /** Print up to {@code len} printable bytes at {@code addr} (NUL-terminated) to the UART. */
@@ -3301,7 +3345,7 @@ public final class Cyw43
         int i = 0;
         while (i < len)
         {
-            int c = Magic.load8(addr + i) & 0xFF;
+            int c = Address.fromLong(addr).plus(i).loadUnsignedByte() & 0xFF;
             if (c == 0)
             {
                 break;
@@ -3346,7 +3390,7 @@ public final class Cyw43
         long off = 0;
         while (off < n)
         {
-            if (!bpWrite32(bpAddr + off, Magic.load32(src + off)))   // proven 4-byte path (setWindow cached)
+            if (!bpWrite32(bpAddr + off, Address.fromLong(src).plus(off).loadInt()))   // proven 4-byte path (setWindow cached)
             {
                 board.bcm2711.Uart.write(Magic.bytes("  bpWrite fail @off="));
                 VM.printHex(off);
@@ -3488,7 +3532,7 @@ public final class Cyw43
         {
             return 0;
         }
-        return Magic.load32(buf);
+        return Address.fromLong(buf).loadInt();
     }
 
     /** Write a 32-bit word at backplane address {@code addr}. */
@@ -3496,7 +3540,7 @@ public final class Cyw43
     {
         setWindow(addr);
         int off = (int) (addr & SB_WIN_MASK) | SB_ACCESS_4B;
-        Magic.store32(buf, value);
+        Address.fromLong(buf).store(value);
         return Sdio.cmd53Write(F1, off, true, buf, 1, 4);
     }
 
@@ -3526,7 +3570,7 @@ public final class Cyw43
             return;
         }
         long em = rx + eth + 12;
-        int flags = ((Magic.load8(em + 2) & 0xFF) << 8) | (Magic.load8(em + 3) & 0xFF);
+        int flags = ((Address.fromLong(em).plus(2).loadUnsignedByte() & 0xFF) << 8) | (Address.fromLong(em).plus(3).loadUnsignedByte() & 0xFF);
         int et = beU32(em + 4);
         if (et != 5 && et != 6 && et != 11 && et != 12 && et != 16)
         {

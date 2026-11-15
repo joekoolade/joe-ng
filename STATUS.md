@@ -4,6 +4,22 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 4: THE WIFI DRIVER `Cyw43` (2026-11-15).** Pi-validated (build b5b724edd3dd643a).
+  `src/board/cyw43/Cyw43.java` (3547 lines, 340 sites -- SDIO bus protocol, firmware download, WPA2 join, RX path,
+  ARP/IP/UDP/TCP/DNS/DHCP frame building and parsing): no `Magic.load*`/`store*` left, no signature changed (private
+  ones included -- buffers stay `long`, so no comparison became unsigned). One subagent (one file cannot be split).
+  - **Widths, checked in the compiled class:** 173 `load8` -> `loadUnsignedByte`, 13 `load32` -> `loadInt`, 8
+    `load64` -> `loadLong`, 124 `store8` -> `store(B)`, 22 `store32` -> `store(I)` -- nothing wider. Byte-by-byte
+    endian assembly and every mask kept as written.
+  - **Hoisted base pointers** (43 `Address xA = Address.fromLong(x)` locals): checked by script for a later
+    reassignment of `x` in scope -- one hit, `rrA` in the DNS answer loop, reassigned only after its last use and
+    re-declared each iteration; none is read stale. Offsets summed before `plus` are small non-negative ints.
+  - **Measured:** `make test`; full regression **208/208**. Pi: the push committed first try (the trial boot is the
+    WiFi join, DHCP and the first HTTP answer over the converted driver); every page; `/run`; the live kernel's
+    SHA-256 = the pushed image; a staged 39 MB upload over the converted RX path, SHA-256-verified, in **22.9 s**
+    (earlier builds 26-34 s); a `/run` download from an HTTP server on the Mac (the TCP client path); `/net` after it
+    all: 27,445 IP packets in, 0 header errors, 0 TCP errors, 0 checksum errors, 0 retransmits.
+
 - **UNBOXED TYPES, INCREMENT 3: THE BOARD DRIVERS EXCEPT CYW43 (2026-11-15).** Pi-validated (build d771265e0b4ae4fe).
   `Emmc`, `Sdio`, `Uart`, `Gic`, `Mailbox`, `Gpio`, `Reset`, `Rng`, `Fat32`, `Supplicant` (171 sites): no
   `Magic.load*`/`store*` left, no non-private signature changed. `Cyw43` (340 sites) is increment 4.
