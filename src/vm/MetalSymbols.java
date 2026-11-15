@@ -328,7 +328,7 @@ final class MetalSymbols implements Symbols
     }
     public boolean isIntrinsicCall(int methodCp)
     {
-        return Loader.isMagicOwner(methodCp);
+        return Loader.isMagicOwner(methodCp) || Loader.unboxedKind(methodCp) != compiler.Unboxed.NONE;
     }
     public int mathIntrinsicId(int methodCp)
     {
@@ -345,6 +345,10 @@ final class MetalSymbols implements Symbols
         // area, which is where lowerIntrinsic's spill must write. Latent rather than live: `magicId` maps
         // callN for guest code, and nothing under guestsrc/ or demo/ calls it today (MEASURED, not assumed).
         // gc/call0/call2 are deliberately absent because `magicId` does not map them at all in this world.
+        if (Loader.unboxedKind(methodCp) != compiler.Unboxed.NONE)
+        {
+            return false;                               // magic.Address etc.: instructions only, never a call
+        }
         int id = Loader.magicId(methodCp);
         return id == Intrinsics.CALL_N
             || id == Intrinsics.SPAWN || id == Intrinsics.SEM_WAIT || id == Intrinsics.SEM_POST
@@ -360,7 +364,8 @@ final class MetalSymbols implements Symbols
     }
     public int intrinsicId(int methodCp)
     {
-        int id = Loader.magicId(methodCp);
+        int id = Loader.unboxedKind(methodCp) != compiler.Unboxed.NONE ? Loader.unboxedOp(methodCp)
+                : Loader.magicId(methodCp);
         if (id < 0)
         {
             fail(Symbols.FAIL_INTRINSIC_ID, methodCp, 0);   // an unrecognised magic op: halt

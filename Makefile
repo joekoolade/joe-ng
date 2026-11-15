@@ -141,6 +141,7 @@ test: build
 	$(JAVA) -cp $(OUT) classfile.ClassReaderTest $(OUT)
 	$(JAVA) -cp $(OUT) classfile.RefMapTest $(OUT)
 	$(JAVA) --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.util=ALL-UNNAMED -cp $(OUT) compiler.CompilerTest $(OUT)
+	$(JAVA) -cp $(OUT) compiler.UnboxedTest $(OUT)
 	$(JAVA) -cp $(OUT) hosttest.CryptoTest
 	$(JAVA) -cp $(OUT) hosttest.ZipTest
 	$(JAVA) -cp $(OUT) overlay.OverlayCheck --baseline test/overlay/known-gaps.txt

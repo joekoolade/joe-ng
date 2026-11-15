@@ -1,0 +1,305 @@
+/*
+ * Copyright (c) 2026 Joseph Kulig.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0/
+ *
+ * SPDX-License-Identifier: EPL-2.0
+ *
+ * Created: 2026-11-15
+ */
+package compiler;
+
+import asm.A64;
+import asm.A64Enc;
+import asm.CodeBuffer;
+import classfile.ClassFile;
+import harness.T;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.nio.file.Path;
+
+/**
+ * The unboxed types ({@code magic.Address}, {@code Word}, {@code Offset}, {@code Extent}) on the host:
+ * <ul>
+ * <li>every public method of the four classes classifies ({@link Unboxed#op} is never -1) -- a method with no
+ *     lowering would otherwise compile as a call to a body that throws;</li>
+ * <li>the name hashes in {@link Unboxed} are right (spot-checked by classifying names to their expected ops);</li>
+ * <li>each pair in {@link UnboxedFixture} compiles to the same code with longs and with unboxed types, apart from
+ *     LOCAL-REGISTER ALLOCATION: a {@code long} parameter takes two JVM local slots and an {@code Address} one, so
+ *     the long version keeps its locals in more callee-saved registers and saves more of them. {@link #normal}
+ *     removes exactly that -- the frame adjust and the x19..x28 spills/fills -- and numbers x19..x28 by first use;
+ *     every other word must match;</li>
+ * <li>the ops with no long twin compile to the words written here (normalized the same way).</li>
+ * </ul>
+ */
+public final class UnboxedTest
+{
+    private UnboxedTest()
+    {
+    }
+
+    public static void main(String[] args) throws Exception
+    {
+        Path out = Path.of(args.length > 0 ? args[0] : "out");
+        classifiesAll();
+        spotChecks();
+        ClassFile fx = ClassFile.parse(out.resolve("compiler/UnboxedFixture.class"));
+        same(fx, "loadLong", "(J)J", "loadAddr", "(Lmagic/Address;)J");
+        same(fx, "storeLong", "(JJ)V", "storeAddr", "(Lmagic/Address;J)V");
+        same(fx, "load32Long", "(J)I", "load32Addr", "(Lmagic/Address;)I");
+        same(fx, "store32Long", "(JI)V", "store32Addr", "(Lmagic/Address;I)V");
+        same(fx, "load8Long", "(J)I", "load8Addr", "(Lmagic/Address;)I");
+        same(fx, "fieldLong", "(J)J", "fieldAddr", "(Lmagic/Address;)J");
+        same(fx, "indexLong", "(JJ)J", "indexAddr", "(Lmagic/Address;Lmagic/Offset;)J");
+        same(fx, "indexLong", "(JJ)J", "indexOffAddr", "(Lmagic/Address;Lmagic/Offset;)J");
+        same(fx, "casLong", "(JJJ)Z", "casAddr", "(Lmagic/Address;Lmagic/Word;Lmagic/Word;)Z");
+        same(fx, "maskLong", "(JJ)J", "maskWord", "(Lmagic/Word;Lmagic/Word;)Lmagic/Word;");
+        same(fx, "diffLong", "(JJ)J", "diffAddr", "(Lmagic/Address;Lmagic/Address;)Lmagic/Offset;");
+        same(fx, "objLong", "(J)Ljava/lang/Object;", "objAddr", "(Lmagic/Address;)Ljava/lang/Object;");
+        same(fx, "nopLong", "(J)J", "nopAddr", "(J)J");
+
+        // x9 is operand slot 0, x10 slot 1, x11 slot 2; locals live in x19.. (after normal(): in first-use order).
+        // Every method below moves its arguments into locals first (x0 -> x19, x1 -> x20, ...) and returns in x0.
+        int[] in1 = { A64Enc.movReg(19, 0), A64Enc.movReg(9, 19) };
+        int[] in2 = { A64Enc.movReg(19, 0), A64Enc.movReg(20, 1), A64Enc.movReg(9, 19), A64Enc.movReg(10, 20) };
+        int[] ret = { A64Enc.movReg(0, 9), A64.ret() };
+        T.eqWords("isZero", cat(in1, new int[] { A64Enc.cmpImm(9, 0), A64Enc.cset(9, A64Enc.EQ) }, ret),
+                normal(compile(fx, "isZero", "(Lmagic/Address;)Z")));
+        T.eqWords("LT (unsigned)", cat(in2, new int[] { A64Enc.cmpReg(9, 10), A64Enc.cset(9, A64Enc.LO) }, ret),
+                normal(compile(fx, "lessThan", "(Lmagic/Address;Lmagic/Address;)Z")));
+        T.eqWords("sLT (signed)", cat(in2, new int[] { A64Enc.cmpReg(9, 10), A64Enc.cset(9, A64Enc.LT) }, ret),
+                normal(compile(fx, "signedLess", "(Lmagic/Offset;Lmagic/Offset;)Z")));
+        T.eqWords("zero", new int[] { A64Enc.movz(9, 0, 0), A64Enc.movReg(0, 9), A64.ret() },
+                normal(compile(fx, "zero", "()Lmagic/Address;")));
+        T.eqWords("loadShort(Offset)", cat(in2, new int[] { A64Enc.addReg(9, 9, 10), A64Enc.ldrsh(9, 9, 0) }, ret),
+                normal(compile(fx, "loadShortOff", "(Lmagic/Address;Lmagic/Offset;)I")));
+        T.eqWords("store(byte, Offset)", new int[] { A64Enc.movReg(19, 0), A64Enc.movReg(20, 1), A64Enc.movReg(21, 2),
+            A64Enc.movReg(9, 19), A64Enc.movReg(10, 20), A64Enc.movReg(11, 21), A64Enc.addReg(16, 9, 11),
+            A64Enc.strb(10, 16, 0), A64.ret() },
+                normal(compile(fx, "storeByteOff", "(Lmagic/Address;BLmagic/Offset;)V")));
+        fused(fx);
+        T.summary("unboxed");
+    }
+
+    /** Every public method of the four types maps to a lowering. */
+    private static void classifiesAll()
+    {
+        String[] types = { "Address", "Word", "Offset", "Extent" };
+        int n = 0;
+        int missing = 0;
+        for (String t : types)
+        {
+            Class<?> c;
+            try
+            {
+                c = Class.forName("magic." + t);
+            }
+            catch (ClassNotFoundException e)
+            {
+                throw new AssertionError(e);
+            }
+            int kind = Unboxed.ownerKind(utf8("magic/" + t));
+            T.check("owner kind of magic/" + t, kind != Unboxed.NONE);
+            for (Method m : c.getDeclaredMethods())
+            {
+                if (!Modifier.isPublic(m.getModifiers()))
+                {
+                    continue;
+                }
+                n = n + 1;
+                int op = Unboxed.op(kind, utf8(m.getName()), utf8(descriptor(m)));
+                if (op < 0)
+                {
+                    missing = missing + 1;
+                    System.out.println("  NO LOWERING: magic." + t + "." + m.getName() + descriptor(m));
+                }
+            }
+        }
+        System.out.println("  " + n + " public methods classified");
+        T.eq("public methods without a lowering", 0, missing);
+        T.check("not an unboxed owner", Unboxed.ownerKind(utf8("magic/Magic")) == Unboxed.NONE);
+    }
+
+    /** Names to their expected ops: a wrong hash constant shows here. */
+    private static void spotChecks()
+    {
+        int a = Unboxed.ADDRESS;
+        T.eq("plus", Intrinsics.UB_ADD, Unboxed.op(a, utf8("plus"), utf8("(I)Lmagic/Address;")));
+        T.eq("minus", Intrinsics.UB_SUB, Unboxed.op(a, utf8("minus"), utf8("(J)Lmagic/Address;")));
+        T.eq("diff", Intrinsics.UB_SUB, Unboxed.op(a, utf8("diff"), utf8("(Lmagic/Address;)Lmagic/Offset;")));
+        T.eq("loadLong()", Intrinsics.LOAD64, Unboxed.op(a, utf8("loadLong"), utf8("()J")));
+        T.eq("loadLong(Offset)", Intrinsics.UB_LD64_OFF,
+                Unboxed.op(a, utf8("loadLong"), utf8("(Lmagic/Offset;)J")));
+        T.eq("store(int)", Intrinsics.STORE32, Unboxed.op(a, utf8("store"), utf8("(I)V")));
+        T.eq("store(Word,Offset)", Intrinsics.UB_ST64_OFF,
+                Unboxed.op(a, utf8("store"), utf8("(Lmagic/Word;Lmagic/Offset;)V")));
+        T.eq("store(char)", Intrinsics.UB_ST16, Unboxed.op(a, utf8("store"), utf8("(C)V")));
+        T.eq("LT", Intrinsics.UB_LO, Unboxed.op(a, utf8("LT"), utf8("(Lmagic/Address;)Z")));
+        T.eq("sGE", Intrinsics.UB_SGE, Unboxed.op(Unboxed.OFFSET, utf8("sGE"), utf8("(Lmagic/Offset;)Z")));
+        T.eq("Offset.max", Intrinsics.UB_SMAX, Unboxed.op(Unboxed.OFFSET, utf8("max"), utf8("()Lmagic/Offset;")));
+        T.eq("Word.max", Intrinsics.UB_MAX, Unboxed.op(Unboxed.WORD, utf8("max"), utf8("()Lmagic/Word;")));
+        T.eq("rsha", Intrinsics.UB_ASR, Unboxed.op(Unboxed.WORD, utf8("rsha"), utf8("(I)Lmagic/Word;")));
+        T.eq("fromIntZeroExtend", Intrinsics.UB_ZEXT32,
+                Unboxed.op(a, utf8("fromIntZeroExtend"), utf8("(I)Lmagic/Address;")));
+        T.eq("an unknown name", -1, Unboxed.op(a, utf8("prefetch"), utf8("()V")));
+    }
+
+    /**
+     * A comparison feeding an if compiles to CMP + B.cond (no CSET), and an isZero test to a CBZ/CBNZ: what the long
+     * code compiles to. Printed beside the long version, whose lcmp lowering differs, for the record.
+     */
+    private static void fused(ClassFile fx)
+    {
+        int[] lt = normal(compile(fx, "branchAddr", "(Lmagic/Address;Lmagic/Address;)I"));
+        int[] z = normal(compile(fx, "branchZeroAddr", "(Lmagic/Address;)I"));
+        T.check("LT + if: no CSET", count(lt, 0x9A9F07E0, 0xFFFF0FE0) == 0);
+        T.check("LT + if: one CMP", count(lt, A64Enc.cmpReg(0, 0), 0xFFE0FC1F) == 1);
+        T.check("LT + if: one B.cond", count(lt, 0x54000000, 0xFF000010) == 1);
+        T.check("isZero + if: no CMP, no CSET", count(z, A64Enc.cmpImm(0, 0), 0xFFC003FF) == 0
+                && count(z, 0x9A9F07E0, 0xFFFF0FE0) == 0);
+        T.check("isZero + if: a CBZ/CBNZ", count(z, 0xB4000000, 0xFE000000) == 1);
+        System.out.println("  branch, long:    " + hex(normal(compile(fx, "branchLong", "(JJ)I"))));
+        System.out.println("  branch, Address: " + hex(lt));
+        System.out.println("  isZero, long:    " + hex(normal(compile(fx, "branchZeroLong", "(J)I"))));
+        System.out.println("  isZero, Address: " + hex(z));
+    }
+
+    private static int count(int[] w, int pattern, int mask)
+    {
+        int n = 0;
+        for (int x : w)
+        {
+            if ((x & mask) == (pattern & mask))
+            {
+                n = n + 1;
+            }
+        }
+        return n;
+    }
+
+    private static String hex(int[] w)
+    {
+        StringBuilder sb = new StringBuilder();
+        for (int x : w)
+        {
+            sb.append(String.format("%08x ", x));
+        }
+        return sb.toString().trim();
+    }
+
+    private static void same(ClassFile fx, String l, String ld, String u, String ud)
+    {
+        int[] want = normal(compile(fx, l, ld));
+        int[] got = normal(compile(fx, u, ud));
+        T.eqWords(u + " == " + l, want, got);
+    }
+
+    /**
+     * The words without what local-register allocation alone decides: {@code sub/add sp, sp, #n}, the
+     * {@code str/ldr x19..x28, [sp, #k]} that save and restore callee-saved registers, and the numbering of x19..x28
+     * in register moves (renumbered by first use). The fixtures touch locals only through moves, so nothing else
+     * changes -- and anything else that differs is a real difference.
+     */
+    private static int[] normal(int[] w)
+    {
+        int[] map = new int[32];
+        int next = 19;
+        int[] out = new int[w.length];
+        int n = 0;
+        for (int x : w)
+        {
+            if ((x & 0xFF8003FF) == 0xD10003FF || (x & 0xFF8003FF) == 0x910003FF)
+            {
+                continue;                               // sub/add sp, sp, #imm
+            }
+            int rt = x & 31;
+            if (((x & 0xFFC003E0) == 0xF90003E0 || (x & 0xFFC003E0) == 0xF94003E0) && rt >= 19 && rt <= 28)
+            {
+                continue;                               // str/ldr x19..x28, [sp, #imm]
+            }
+            if ((x & 0xFFE0FFE0) == 0xAA0003E0)         // mov xd, xm (orr xd, xzr, xm)
+            {
+                int rd = x & 31;
+                int rm = (x >> 16) & 31;
+                if (rd >= 19 && rd <= 28)
+                {
+                    if (map[rd] == 0)
+                    {
+                        map[rd] = next;
+                        next = next + 1;
+                    }
+                    rd = map[rd];
+                }
+                if (rm >= 19 && rm <= 28)
+                {
+                    if (map[rm] == 0)
+                    {
+                        map[rm] = next;
+                        next = next + 1;
+                    }
+                    rm = map[rm];
+                }
+                x = (x & ~0x001F001F) | (rm << 16) | rd;
+            }
+            out[n] = x;
+            n = n + 1;
+        }
+        int[] r = new int[n];
+        System.arraycopy(out, 0, r, 0, n);
+        return r;
+    }
+
+    private static int[] cat(int[]... parts)
+    {
+        int n = 0;
+        for (int[] p : parts)
+        {
+            n = n + p.length;
+        }
+        int[] r = new int[n];
+        int k = 0;
+        for (int[] p : parts)
+        {
+            System.arraycopy(p, 0, r, k, p.length);
+            k = k + p.length;
+        }
+        return r;
+    }
+
+    private static int[] compile(ClassFile cf, String method, String desc)
+    {
+        CodeBuffer cb = new CodeBuffer();
+        new BaselineCompiler(cf).compile(cf.method(method, desc), cb);
+        return cb.toWords();
+    }
+
+    private static String descriptor(Method m)
+    {
+        StringBuilder sb = new StringBuilder("(");
+        for (Class<?> p : m.getParameterTypes())
+        {
+            sb.append(p.descriptorString());
+        }
+        return sb.append(')').append(m.getReturnType().descriptorString()).toString();
+    }
+
+    private static Unboxed.Utf8 utf8(String s)
+    {
+        return new Unboxed.Utf8()
+        {
+            @Override
+            public int length()
+            {
+                return s.length();
+            }
+
+            @Override
+            public int byteAt(int i)
+            {
+                return s.charAt(i);
+            }
+        };
+    }
+}

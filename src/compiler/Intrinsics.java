@@ -120,4 +120,51 @@ public final class Intrinsics
     // java/lang/Math methods lowered to a single instruction (not magic/Magic: see Symbols.mathIntrinsicId).
     public static final int SMULH = 84;              // Math.multiplyHigh(JJ)J         -> SMULH
     public static final int UMULH = 85;              // Math.unsignedMultiplyHigh(JJ)J -> UMULH
+
+    // The unboxed types (magic.Address/Word/Offset/Extent), classified by compiler.Unboxed. Loads and stores without
+    // an Offset reuse LOAD8/LOAD32/LOAD64/STORE8/STORE32/STORE64 above; attempt reuses CAS64; fromObject/toObject
+    // reuse ADDR_OF/FROM_ADDR. A block of its own from 100, so it can grow without colliding.
+    public static final int UB_MOVE = 100;           // reinterpret: the value is already the 64-bit word
+    public static final int UB_ZEXT32 = 101;         // fromIntZeroExtend: UXTW
+    public static final int UB_SXTW = 102;           // toInt: the low 32 bits as a canonical (sign-extended) int
+    public static final int UB_ZERO = 103;
+    public static final int UB_ONE = 104;
+    public static final int UB_MAX = 105;            // all ones
+    public static final int UB_SMAX = 106;           // Offset.max: 0x7FFF_FFFF_FFFF_FFFF
+    public static final int UB_IS_ZERO = 107;
+    public static final int UB_IS_MAX = 108;
+    public static final int UB_IS_SMAX = 109;
+    public static final int UB_ADD = 110;
+    public static final int UB_SUB = 111;
+    public static final int UB_AND = 112;
+    public static final int UB_OR = 113;
+    public static final int UB_XOR = 114;
+    public static final int UB_NOT = 115;
+    public static final int UB_LSL = 116;
+    public static final int UB_LSR = 117;
+    public static final int UB_ASR = 118;
+    public static final int UB_EQ = 119;
+    public static final int UB_NE = 120;
+    public static final int UB_LO = 121;             // unsigned <
+    public static final int UB_LS = 122;             // unsigned <=
+    public static final int UB_HI = 123;             // unsigned >
+    public static final int UB_HS = 124;             // unsigned >=
+    public static final int UB_SLT = 125;            // signed (Offset)
+    public static final int UB_SLE = 126;
+    public static final int UB_SGT = 127;
+    public static final int UB_SGE = 128;
+    public static final int UB_LD8S = 129;           // loadByte: LDRSB
+    public static final int UB_LD16U = 130;          // loadChar: LDRH
+    public static final int UB_LD16S = 131;          // loadShort: LDRSH
+    public static final int UB_ST16 = 132;           // store(char|short): STRH
+    public static final int UB_LD8S_OFF = 133;       // the same, at address + Offset
+    public static final int UB_LD8U_OFF = 134;
+    public static final int UB_LD16U_OFF = 135;
+    public static final int UB_LD16S_OFF = 136;
+    public static final int UB_LD32_OFF = 137;
+    public static final int UB_LD64_OFF = 138;
+    public static final int UB_ST8_OFF = 139;
+    public static final int UB_ST16_OFF = 140;
+    public static final int UB_ST32_OFF = 141;
+    public static final int UB_ST64_OFF = 142;
 }

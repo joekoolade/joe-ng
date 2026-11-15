@@ -445,7 +445,31 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
     }
     public boolean isIntrinsicCall(int methodCp)
     {
-        return cf.memberRef(methodCp).owner().equals("magic/Magic");
+        String owner = cf.memberRef(methodCp).owner();
+        return owner.equals("magic/Magic") || Unboxed.ownerKind(new StringUtf8(owner)) != Unboxed.NONE;
+    }
+
+    /** A host String as {@link Unboxed.Utf8} (class and member names are ASCII). */
+    private static final class StringUtf8 implements Unboxed.Utf8
+    {
+        private final String s;
+
+        StringUtf8(String s)
+        {
+            this.s = s;
+        }
+
+        @Override
+        public int length()
+        {
+            return s.length();
+        }
+
+        @Override
+        public int byteAt(int i)
+        {
+            return s.charAt(i);
+        }
     }
     public int mathIntrinsicId(int methodCp)
     {
@@ -466,12 +490,27 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
     }
     public boolean intrinsicEmitsCall(int methodCp)
     {
+        if (Unboxed.ownerKind(new StringUtf8(cf.memberRef(methodCp).owner())) != Unboxed.NONE)
+        {
+            return false;                               // magic.Address etc.: instructions only, never a call
+        }
         String n = cf.memberRef(methodCp).name();
         return n.equals("gc") || n.equals("call0") || n.equals("call2") || n.equals("callN");
     }
     public int intrinsicId(int methodCp)
     {
         ClassFile.MemberRef ref = cf.memberRef(methodCp);
+        int kind = Unboxed.ownerKind(new StringUtf8(ref.owner()));
+        if (kind != Unboxed.NONE)
+        {
+            int op = Unboxed.op(kind, new StringUtf8(ref.name()), new StringUtf8(ref.descriptor()));
+            if (op < 0)
+            {
+                throw new UnsupportedOperationException("no lowering for " + ref.owner() + "." + ref.name()
+                        + ref.descriptor());
+            }
+            return op;
+        }
         String key = ref.name() + ref.descriptor();
         return switch (key)
         {

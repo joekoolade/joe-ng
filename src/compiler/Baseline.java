@@ -848,6 +848,11 @@ public final class Baseline
         }
         else if (op == 0xB6)
         {
+            int fused = fuseUnboxedCompare(cb, code, pos);
+            if (fused > 0)
+            {
+                return fused;                               // the compare and the ifeq/ifne after it, as one branch
+            }
             lowerInvokeVirtual(u2(code, pos + 1), cb, pos);
             return 3;
         }
@@ -2072,6 +2077,11 @@ public final class Baseline
     /** Virtual dispatch through the receiver's TIB vtable. Uses x16 (scratch) for the target. */
     private void lowerInvokeVirtual(int cpIndex, CodeBuffer cb, int pos)
     {
+        if (symbols.isIntrinsicCall(cpIndex))
+        {
+            lowerIntrinsic(symbols.intrinsicId(cpIndex), cb);  // an unboxed type's method: no null check, no call
+            return;
+        }
         if (symbols.isMhSigPoly(cpIndex))                       // MethodHandle.invokeExact/invoke/invokeBasic
         {
             lowerMhCall(cb, cpIndex, pos, true);
@@ -2885,6 +2895,298 @@ public final class Baseline
         }
     }
 
+    /**
+     * A method of an unboxed type ({@code magic.Address/Word/Offset/Extent}, classified by {@link Unboxed}) whose
+     * id is in the {@code UB_} block: instructions on the operand registers, with the same operand order as the
+     * bytecode -- the receiver (or first argument) is deepest. No call, no allocation, no null check.
+     */
+    private void lowerUnboxed(int id, CodeBuffer cb)
+    {
+        if (id == Intrinsics.UB_MOVE || id == Intrinsics.UB_ZEXT32 || id == Intrinsics.UB_SXTW)
+        {
+            int a = popReg();
+            int d = pushReg();
+            if (id == Intrinsics.UB_ZEXT32)
+            {
+                cb.emit(A64Enc.uxtw(d, a));
+            }
+            else if (id == Intrinsics.UB_SXTW)
+            {
+                cb.emit(A64Enc.sxtw(d, a));
+            }
+            else if (d != a)
+            {
+                cb.emit(A64Enc.movReg(d, a));       // reinterpret in place (pop/push land on the same slot)
+            }
+        }
+        else if (id == Intrinsics.UB_ZERO || id == Intrinsics.UB_ONE || id == Intrinsics.UB_MAX || id == Intrinsics.UB_SMAX)
+        {
+            int d = pushReg();
+            if (id == Intrinsics.UB_ZERO)
+            {
+                cb.emit(A64Enc.movz(d, 0, 0));
+            }
+            else if (id == Intrinsics.UB_ONE)
+            {
+                cb.emit(A64Enc.movz(d, 1, 0));
+            }
+            else if (id == Intrinsics.UB_MAX)
+            {
+                cb.emit(A64Enc.movn(d, 0, 0));       // ~0
+            }
+            else
+            {
+                cb.emit(A64Enc.movn(d, 0x8000, 3));  // ~(0x8000 << 48) = 0x7FFF_FFFF_FFFF_FFFF
+            }
+        }
+        else if (id == Intrinsics.UB_IS_ZERO)
+        {
+            int a = popReg();
+            int r = pushReg();
+            cb.emit(A64Enc.cmpImm(a, 0));
+            cb.emit(A64Enc.cset(r, A64Enc.EQ));
+        }
+        else if (id == Intrinsics.UB_IS_MAX || id == Intrinsics.UB_IS_SMAX)
+        {
+            int a = popReg();
+            int r = pushReg();
+            cb.emit(id == Intrinsics.UB_IS_MAX ? A64Enc.movn(16, 0, 0) : A64Enc.movn(16, 0x8000, 3));
+            cb.emit(A64Enc.cmpReg(a, 16));
+            cb.emit(A64Enc.cset(r, A64Enc.EQ));
+        }
+        else if (id == Intrinsics.UB_ADD)
+        {
+            binop(cb, BIN_ADD);
+        }
+        else if (id == Intrinsics.UB_SUB)
+        {
+            binop(cb, BIN_SUB);
+        }
+        else if (id == Intrinsics.UB_AND)
+        {
+            binop(cb, BIN_AND);
+        }
+        else if (id == Intrinsics.UB_OR)
+        {
+            binop(cb, BIN_OR);
+        }
+        else if (id == Intrinsics.UB_XOR)
+        {
+            binop(cb, BIN_XOR);
+        }
+        else if (id == Intrinsics.UB_LSL)
+        {
+            binop(cb, BIN_SHL);
+        }
+        else if (id == Intrinsics.UB_LSR)
+        {
+            binop(cb, BIN_LSR);
+        }
+        else if (id == Intrinsics.UB_ASR)
+        {
+            binop(cb, BIN_ASR);
+        }
+        else if (id == Intrinsics.UB_NOT)
+        {
+            int a = popReg();
+            int r = pushReg();
+            cb.emit(A64Enc.movn(16, 0, 0));
+            cb.emit(A64Enc.eorReg(r, a, 16));
+        }
+        else if (id >= Intrinsics.UB_EQ && id <= Intrinsics.UB_SGE)
+        {
+            int b = popReg();
+            int a = popReg();
+            int r = pushReg();
+            cb.emit(A64Enc.cmpReg(a, b));
+            cb.emit(A64Enc.cset(r, unboxedCond(id)));
+        }
+        else if (id == Intrinsics.UB_LD8S || id == Intrinsics.UB_LD16U || id == Intrinsics.UB_LD16S)
+        {
+            int a = popReg();
+            int r = pushReg();
+            cb.emit(id == Intrinsics.UB_LD8S ? A64Enc.ldrsb(r, a, 0)
+                    : id == Intrinsics.UB_LD16U ? A64Enc.ldrh(r, a, 0) : A64Enc.ldrsh(r, a, 0));
+        }
+        else if (id == Intrinsics.UB_ST16)
+        {
+            int v = popReg();
+            int a = popReg();
+            cb.emit(A64Enc.strh(v, a, 0));
+        }
+        else if (id >= Intrinsics.UB_LD8S_OFF && id <= Intrinsics.UB_LD64_OFF)
+        {
+            int o = popReg();
+            int a = popReg();
+            int r = pushReg();                          // a's slot: the sum, then the value, in one register
+            cb.emit(A64Enc.addReg(r, a, o));
+            cb.emit(id == Intrinsics.UB_LD8S_OFF ? A64Enc.ldrsb(r, r, 0)
+                    : id == Intrinsics.UB_LD8U_OFF ? A64Enc.ldrb(r, r, 0)
+                    : id == Intrinsics.UB_LD16U_OFF ? A64Enc.ldrh(r, r, 0)
+                    : id == Intrinsics.UB_LD16S_OFF ? A64Enc.ldrsh(r, r, 0)
+                    : id == Intrinsics.UB_LD32_OFF ? A64Enc.ldrsw(r, r, 0)
+                    : A64Enc.ldrx(r, r, 0));
+        }
+        else
+        {
+            int o = popReg();                           // the _OFF stores: (address, value, offset)
+            int v = popReg();
+            int a = popReg();
+            cb.emit(A64Enc.addReg(16, a, o));
+            cb.emit(id == Intrinsics.UB_ST8_OFF ? A64Enc.strb(v, 16, 0)
+                    : id == Intrinsics.UB_ST16_OFF ? A64Enc.strh(v, 16, 0)
+                    : id == Intrinsics.UB_ST32_OFF ? A64Enc.strw(v, 16, 0)
+                    : A64Enc.strx(v, 16, 0));
+        }
+    }
+
+    /**
+     * An unboxed comparison ({@code a.LT(b)}, {@code o.sGE(p)}, {@code a.isZero()}, ...) whose boolean goes straight
+     * into an {@code ifeq}/{@code ifne}: one compare and one conditional branch, as the {@code long} code it
+     * replaces compiles to -- not a {@code CSET} into a register and a second branch on that. Returns the bytes
+     * consumed (both instructions), or 0 to compile them separately: when the {@code if} is itself a branch target
+     * or an exception-range boundary, it must keep its own code address.
+     */
+    private int fuseUnboxedCompare(CodeBuffer cb, byte[] code, int pos)
+    {
+        int cp = u2(code, pos + 1);
+        if (pos + 5 >= code.length || fusionBlocked == null || !symbols.isIntrinsicCall(cp))
+        {
+            return 0;
+        }
+        int next = code[pos + 3] & 0xFF;
+        if ((next != 0x99 && next != 0x9A) || fusionBlocked[pos + 3])
+        {
+            return 0;
+        }
+        int id = symbols.intrinsicId(cp);
+        boolean zero = id == Intrinsics.UB_IS_ZERO;
+        if (!zero && (id < Intrinsics.UB_EQ || id > Intrinsics.UB_SGE))
+        {
+            return 0;
+        }
+        boolean jumpIfTrue = next == 0x9A;                  // ifne: taken when the comparison holds
+        int target = pos + 3 + s2(code, pos + 4);
+        if (zero)
+        {
+            int v = popReg();
+            syncOut(cb);
+            condBranch(cb, target, jumpIfTrue ? FIX_CBZ : FIX_CBNZ, v);
+        }
+        else
+        {
+            int b = popReg();
+            int a = popReg();
+            cb.emit(A64Enc.cmpReg(a, b));
+            syncOut(cb);
+            int c = unboxedCond(id);
+            condBranch(cb, target, FIX_BCOND, jumpIfTrue ? c : c ^ 1);   // A64 inverts a condition by its low bit
+        }
+        recordDepth(target);
+        return 6;
+    }
+
+    /** Bytecode positions that must keep their own code address: branch targets and exception-table pcs. */
+    private boolean[] fusionBlocked;
+
+    private boolean[] fusionBlocked(byte[] code)
+    {
+        boolean[] b = new boolean[code.length + 1];
+        int pos = 0;
+        while (pos < code.length)
+        {
+            int op = code[pos] & 0xFF;
+            if ((op >= 0x99 && op <= 0xA8) || op == 0xC6 || op == 0xC7)
+            {
+                mark(b, pos + s2(code, pos + 1));            // if*, goto, jsr, ifnull, ifnonnull
+            }
+            else if (op == 0xC8 || op == 0xC9)
+            {
+                mark(b, pos + s4(code, pos + 1));            // goto_w, jsr_w
+            }
+            else if (op == 0xAA)
+            {
+                int p = pos + 1 + ((4 - ((pos + 1) & 3)) & 3);
+                mark(b, pos + s4(code, p));
+                int low = s4(code, p + 4);
+                int high = s4(code, p + 8);
+                for (int k = 0; k <= high - low; k++)
+                {
+                    mark(b, pos + s4(code, p + 12 + k * 4));
+                }
+            }
+            else if (op == 0xAB)
+            {
+                int p = pos + 1 + ((4 - ((pos + 1) & 3)) & 3);
+                mark(b, pos + s4(code, p));
+                int n = s4(code, p + 4);
+                for (int k = 0; k < n; k++)
+                {
+                    mark(b, pos + s4(code, p + 8 + k * 8 + 4));
+                }
+            }
+            int len = (op == 0xC8 || op == 0xC9) ? 5 : opLen(op, code, pos);
+            pos += len < 1 ? 1 : len;
+        }
+        for (int k = 0; k < exCount; k++)
+        {
+            mark(b, exStartPc[k]);
+            mark(b, exEndPc[k]);
+            mark(b, exHandlerPc[k]);
+        }
+        return b;
+    }
+
+    private static void mark(boolean[] b, int pc)
+    {
+        if (pc >= 0 && pc < b.length)
+        {
+            b[pc] = true;
+        }
+    }
+
+    /** The condition a UB_ comparison sets its result on. */
+    private static int unboxedCond(int id)
+    {
+        if (id == Intrinsics.UB_EQ)
+        {
+            return A64Enc.EQ;
+        }
+        if (id == Intrinsics.UB_NE)
+        {
+            return A64Enc.NE;
+        }
+        if (id == Intrinsics.UB_LO)
+        {
+            return A64Enc.LO;
+        }
+        if (id == Intrinsics.UB_LS)
+        {
+            return A64Enc.LS;
+        }
+        if (id == Intrinsics.UB_HI)
+        {
+            return A64Enc.HI;
+        }
+        if (id == Intrinsics.UB_HS)
+        {
+            return A64Enc.HS;
+        }
+        if (id == Intrinsics.UB_SLT)
+        {
+            return A64Enc.LT;
+        }
+        if (id == Intrinsics.UB_SLE)
+        {
+            return A64Enc.LE;
+        }
+        if (id == Intrinsics.UB_SGT)
+        {
+            return A64Enc.GT;
+        }
+        return A64Enc.GE;                               // UB_SGE
+    }
+
     /** The bytecode positions that a BACKWARD branch targets -- every loop's header -- for {@link #emitStopPoll}. */
     private boolean[] loopHeaders;
 
@@ -3614,6 +3916,11 @@ public final class Baseline
      */
     private void lowerIntrinsic(int id, CodeBuffer cb)
     {
+        if (id >= Intrinsics.UB_MOVE && id <= Intrinsics.UB_ST64_OFF)
+        {
+            lowerUnboxed(id, cb);
+            return;
+        }
         if (id == Intrinsics.WFE)
         {
             cb.emit(A64Enc.wfe());
@@ -4108,6 +4415,11 @@ public final class Baseline
         while (pos < code.length)
         {
             int op = code[pos] & 0xFF;
+            if (op == 0xB6 && symbols.isIntrinsicCall(u2(code, pos + 1)) && !symbols.intrinsicEmitsCall(u2(code, pos + 1)))
+            {
+                pos += opLen(op, code, pos);            // an unboxed type's method: instructions, not a call
+                continue;
+            }
             if (op == 0xBB || op == 0xBC || op == 0xBD || op == 0xB6 || op == 0xB9 || op == 0xBA || op == 0xBF || op == 0xC0 || op == 0xC1)
             {
                 return true;    // new/newarray/anewarray/invokevirtual/invoke{interface,dynamic}/athrow/checkcast/instanceof
@@ -4886,6 +5198,7 @@ public final class Baseline
         emitSyncEnter(cb, isStatic);         // ACC_SYNCHRONIZED: after the prologue (slot 0 = this), before bci 0
 
         farBranches = code.length > FAR_BRANCH_BYTECODE;
+        fusionBlocked = fusionBlocked(code);
         int[] bcToWord = new int[code.length];
         // Drive sp from the control-flow pre-pass at EVERY reachable bytecode, not just at branch targets
         // recorded so far. A loop header reached linearly before its back-edge is compiled would otherwise carry
