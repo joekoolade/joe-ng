@@ -4,6 +4,23 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 9: `Loader.java`, PART 3 OF 3 -- THE LOADER HAS NO `Magic` LOAD OR STORE LEFT
+  (2026-11-15).** Pi-validated (build 8a2357fa3284cd8f). The methods from `methodParamName` to the end of the file (252
+  sites: reflection/mirror helpers, Class[]/Annotation[] builders, proxy and lambda itable/TIB/thunk builders incl.
+  their generated instruction words, annotation and Throwable field stores, array Type/TIB creation, the display and
+  implements bitmaps, the class mirror constructor, the pc->symbol lookup, literal-string interning, string
+  hash/equals). No signature changed.
+  - **Three more int-valued 64-bit stores** -- a String's `coder`, a lambda Type's instance size (`16 + nc * 8`), a
+    literal string's coder -- got `(long)` casts; without them each would have picked the 32-bit `store(int)`. That
+    makes four across the Loader increments, every one found by the per-kind width check.
+  - **Checked independently against increment 8's compiled class:** every `Magic` kind dropped to 0 and the
+    matching-width `Address` calls rose by the same amounts (store64 108 / `store(J)`, store32 34 / `store(I)`, store8
+    10 / `store(B)`, load64 96 / `loadLong`, load8 4 / `loadUnsignedByte`). No dead-code sites, no hoisted locals.
+    Code size 123815 -> 123818 words.
+  - **Measured:** `make test`; full regression **208/208**. Pi: committed first try; every page; `/run`s; a throwing
+    main's trace; the stop-poll benchmark (same figures); a forced stop of four threads; the kernel SHA-256; a staged
+    39 MB upload SHA-256-verified in 24.0 s; `/net` 0 IP header errors, 0 TCP errors, 0 retransmits.
+
 - **UNBOXED TYPES, INCREMENT 8: `Loader.java`, PART 2 OF 3 (2026-11-15).** Pi-validated (build cd88dc7e6ceb1f3b).
   The methods from `ifmSlotFind` through `annoDefaultInstance` (anchored by name -- increment 7 moved the line
   numbers; 200 sites) use `Address`, none left on `Magic`, no signature changed. Many of the 78 `store32` write the
