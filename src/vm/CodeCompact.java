@@ -11,6 +11,7 @@
  */
 package vm;
 
+import magic.Address;
 import magic.Magic;
 import board.bcm2711.Uart;
 
@@ -156,7 +157,7 @@ final class CodeCompact
         bytesLive = 0L;
         bytesFree = 0L;
         maxDelta = 0L;
-        arenaTop = Magic.load64(Heap.CODE_PTR_CELL);
+        arenaTop = Address.fromLong(Heap.CODE_PTR_CELL).loadLong();
         long cursor = Heap.CODE_BASE;
         long dst = Heap.CODE_BASE;
         while (cursor < arenaTop)
@@ -167,7 +168,7 @@ final class CodeCompact
                 planOk = 0L;                             // unmapped address, or more blocks than the table holds
                 break;
             }
-            long usable = Magic.load64(Heap.CODE_BLOCKS + i * 16L + 8L);
+            long usable = Address.fromLong(Heap.CODE_BLOCKS + i * 16L + 8L).loadLong();
             dst = record(cursor, usable, dst);
             cursor += usable & -8L;
         }
@@ -182,17 +183,17 @@ final class CodeCompact
     private static long record(long start, long sz, long dst)
     {
         long usable = sz & -8L;
-        long e = PLAN_TAB + planN * 16L;
-        Magic.store64(e, start);
+        Address e = Address.fromLong(PLAN_TAB + planN * 16L);
+        e.store(start);
         if ((sz & Heap.CODE_FREE) != 0L)
         {
-            Magic.store64(e + 8L, 0L);
+            e.plus(8).store(0L);
             blocksFree += 1L;
             bytesFree += usable;
             planN += 1L;
             return dst;
         }
-        Magic.store64(e + 8L, LIVE);                     // marked live; assign() fills the real destination
+        e.plus(8).store(LIVE);                           // marked live; assign() fills the real destination
         if (dst != start)
         {
             blocksMoved += 1L;
@@ -219,7 +220,7 @@ final class CodeCompact
         while (lo + 1L < hi)                             // greatest k with start[k] <= addr
         {
             long mid = (lo + hi) >> 1;
-            if (Magic.load64(PLAN_TAB + mid * 16L) <= addr)
+            if (Address.fromLong(PLAN_TAB + mid * 16L).loadLong() <= addr)
             {
                 lo = mid;
             }
@@ -232,13 +233,13 @@ final class CodeCompact
         {
             return 0L;
         }
-        long start = Magic.load64(PLAN_TAB + lo * 16L);
-        long end = lo + 1L < planN ? Magic.load64(PLAN_TAB + (lo + 1L) * 16L) : arenaTop;
+        long start = Address.fromLong(PLAN_TAB + lo * 16L).loadLong();
+        long end = lo + 1L < planN ? Address.fromLong(PLAN_TAB + (lo + 1L) * 16L).loadLong() : arenaTop;
         if (addr < start || addr >= end)
         {
             return 0L;
         }
-        long nb = Magic.load64(PLAN_TAB + lo * 16L + 8L);
+        long nb = Address.fromLong(PLAN_TAB + lo * 16L + 8L).loadLong();
         if (nb == 0L)
         {
             return 0L;                                   // free block: nothing lives here
@@ -275,19 +276,20 @@ final class CodeCompact
         long i = 0L;
         while (i < planN)                                // registry: a block's start is now its destination
         {
-            long nb = Magic.load64(PLAN_TAB + i * 16L + 8L);
+            Address e = Address.fromLong(PLAN_TAB + i * 16L);
+            long nb = e.plus(8).loadLong();
             if (nb != 0L && nb != IMMOVABLE)
             {
-                long k = Heap.blockIndexAt(Magic.load64(PLAN_TAB + i * 16L));
+                long k = Heap.blockIndexAt(e.loadLong());
                 if (k >= 0L)
                 {
-                    Magic.store64(Heap.CODE_BLOCKS + k * 16L, nb);
+                    Address.fromLong(Heap.CODE_BLOCKS + k * 16L).store(nb);
                 }
                 Heap.pinCodeAt(nb);                      // re-pin at the new address (stale bits are safe)
             }
             i += 1L;
         }
-        Magic.store64(Heap.CODE_PTR_CELL, arenaTop - safeRecovered);
+        Address.fromLong(Heap.CODE_PTR_CELL).store(arenaTop - safeRecovered);
         Heap.publishCode(Heap.CODE_BASE, arenaTop);
         verifyAfter();
         if (verifyFailed != 0L)
@@ -308,17 +310,20 @@ final class CodeCompact
         long i = 0L;
         while (i < planN)
         {
-            long e = PLAN_TAB + i * 16L;
-            long start = Magic.load64(e);
-            long nb = Magic.load64(e + 8L);
-            long end = i + 1L < planN ? Magic.load64(PLAN_TAB + (i + 1L) * 16L) : arenaTop;
+            Address e = Address.fromLong(PLAN_TAB + i * 16L);
+            long start = e.loadLong();
+            long nb = e.plus(8).loadLong();
+            long end = i + 1L < planN ? e.plus(16).loadLong() : arenaTop;
             if (nb != 0L && nb != IMMOVABLE && nb != start)
             {
-                long p = 0L;
-                while (start + p < end)
+                Address from = Address.fromLong(start);
+                Address to = Address.fromLong(nb);
+                Address limit = Address.fromLong(end);
+                while (from.LT(limit))
                 {
-                    Magic.store64(nb + p, Magic.load64(start + p));
-                    p += 8L;
+                    to.store(from.loadLong());
+                    from = from.plus(8);
+                    to = to.plus(8);
                 }
             }
             i += 1L;
@@ -333,8 +338,9 @@ final class CodeCompact
         while (i < CodeEdges.n)
         {
             long e = CodeEdges.TAB + i * 16L;
-            long site = Magic.load64(e);
-            long want = Magic.load64(e + 8L);
+            Address ea = Address.fromLong(e);
+            long site = ea.loadLong();
+            long want = ea.plus(8).loadLong();
             if (site != 0L && want != 0L)
             {
                 rewrite(newAddrOf(site), newAddrOf(want), e);
@@ -350,26 +356,28 @@ final class CodeCompact
         {
             return;
         }
-        int w = Magic.load32(ns);
+        Address site = Address.fromLong(ns);
+        int w = site.loadInt();
         int op = w >>> 26;
         int off = (int) ((nt - ns) >> 2);
         if (op == 0x25)
         {
-            Magic.store32(ns, asm.A64Enc.bl(off));
+            site.store(asm.A64Enc.bl(off));
         }
         else if (op == 0x05)
         {
-            Magic.store32(ns, asm.A64Enc.b(off));
+            site.store(asm.A64Enc.b(off));
         }
-        Magic.store64(e, ns);
-        Magic.store64(e + 8L, nt);
+        Address entry = Address.fromLong(e);
+        entry.store(ns);
+        entry.plus(8).store(nt);
         edgesPatched += 1L;
     }
 
     /** Target of the bl/b at {@code a}, or 0 if that word is not one. Mirrors {@code CodeEdges.decodeTarget}. */
     private static long branchTargetAt(long a)
     {
-        int w = Magic.load32(a);
+        int w = Address.fromLong(a).loadInt();
         int op = w >>> 26;
         if (op != 0x25 && op != 0x05)
         {
@@ -390,8 +398,9 @@ final class CodeCompact
         long i = 0L;
         while (i < CodeEdges.n)
         {
-            long site = Magic.load64(CodeEdges.TAB + i * 16L);
-            long want = Magic.load64(CodeEdges.TAB + i * 16L + 8L);
+            Address e = Address.fromLong(CodeEdges.TAB + i * 16L);
+            long site = e.loadLong();
+            long want = e.plus(8).loadLong();
             if (site != 0L && want != 0L && branchTargetAt(site) != want)
             {
                 verifyFailed += 1L;
@@ -424,8 +433,8 @@ final class CodeCompact
         refsDead = 0L;
         refsEntry = 0L;
         refsInterior = 0L;
-        scanRange(Heap.BASE, Magic.load64(Heap.PTR_CELL));            // data heap: TIBs, cells, itables
-        scanRange(Heap.LARGE_BASE, Magic.load64(Heap.LARGE_PTR_CELL));// large-object region
+        scanRange(Heap.BASE, Address.fromLong(Heap.PTR_CELL).loadLong());              // data heap: TIBs, cells, itables
+        scanRange(Heap.LARGE_BASE, Address.fromLong(Heap.LARGE_PTR_CELL).loadLong());  // large-object region
         scanRange(VM.staticsStart, VM.staticsEnd);                    // image statics
         scanRange(VMGc.lastScanFrom, VM.STACK_TOP);                   // stack: return addresses
         scanRange(Heap.JIT_TABLES, Heap.JIT_TABLES + 0x50000L);       // JIT frame/handler/local tables
@@ -491,11 +500,11 @@ final class CodeCompact
         long k = 0L;
         while (k < Loader.stubTabN)                      // STUB_TAB rows: {buf, idx} at a 16-byte stride
         {
-            long e = Loader.STUB_TAB + k * 16L;
-            long na = newAddrOf(Magic.load64(e));
+            Address e = Address.fromLong(Loader.STUB_TAB + k * 16L);
+            long na = newAddrOf(e.loadLong());
             if (na != 0L)
             {
-                Magic.store64(e, na);
+                e.store(na);
             }
             k += 1L;
         }
@@ -506,10 +515,11 @@ final class CodeCompact
             long cell = Loader.lazyCellAt(i);
             if (cell != 0L)
             {
-                long na = newAddrOf(Magic.load64(cell));
+                Address ca = Address.fromLong(cell);
+                long na = newAddrOf(ca.loadLong());
                 if (na != 0L)
                 {
-                    Magic.store64(cell, na);
+                    ca.store(na);
                 }
             }
             i += 1;
@@ -581,12 +591,13 @@ final class CodeCompact
             refsNoBlock += 1L;                           // inside no registered block
             return;
         }
-        if (Magic.load64(PLAN_TAB + k * 16L + 8L) == 0L)
+        Address e = Address.fromLong(PLAN_TAB + k * 16L);
+        if (e.plus(8).loadLong() == 0L)
         {
             refsDead += 1L;                              // inside a block the sweep freed
             return;
         }
-        if (Magic.load64(PLAN_TAB + k * 16L) == w)
+        if (e.loadLong() == w)
         {
             refsEntry += 1L;
         }
@@ -610,15 +621,16 @@ final class CodeCompact
         {
             return;
         }
-        long p = lo;
-        while (p < hi)
+        Address p = Address.fromLong(lo);
+        Address end = Address.fromLong(hi);
+        while (p.LT(end))
         {
-            long w = Magic.load64(p);
+            long w = p.loadLong();
             if (w >= Heap.CODE_BASE && w < Heap.CODE_LIMIT)
             {
-                classify(p, w);
+                classify(p.toLong(), w);
             }
-            p += 8L;
+            p = p.plus(8);
         }
     }
 
@@ -630,11 +642,11 @@ final class CodeCompact
         {
             return;
         }
-        long e = PLAN_TAB + k * 16L;
-        long nb = Magic.load64(e + 8L);
+        Address e = Address.fromLong(PLAN_TAB + k * 16L);
+        long nb = e.plus(8).loadLong();
         if (nb == LIVE)                                  // live and not yet pinned
         {
-            Magic.store64(e + 8L, IMMOVABLE);
+            e.plus(8).store(IMMOVABLE);
             immovable += 1L;
         }
     }
@@ -651,7 +663,7 @@ final class CodeCompact
         while (lo + 1L < hi)
         {
             long mid = (lo + hi) >> 1;
-            if (Magic.load64(PLAN_TAB + mid * 16L) <= addr)
+            if (Address.fromLong(PLAN_TAB + mid * 16L).loadLong() <= addr)
             {
                 lo = mid;
             }
@@ -660,8 +672,8 @@ final class CodeCompact
                 hi = mid;
             }
         }
-        long start = Magic.load64(PLAN_TAB + lo * 16L);
-        long end = lo + 1L < planN ? Magic.load64(PLAN_TAB + (lo + 1L) * 16L) : arenaTop;
+        long start = Address.fromLong(PLAN_TAB + lo * 16L).loadLong();
+        long end = lo + 1L < planN ? Address.fromLong(PLAN_TAB + (lo + 1L) * 16L).loadLong() : arenaTop;
         return addr >= start && addr < end ? lo : -1L;
     }
 
@@ -677,17 +689,17 @@ final class CodeCompact
         long i = 0L;
         while (i < planN)
         {
-            long e = PLAN_TAB + i * 16L;
-            long start = Magic.load64(e);
-            long end = i + 1L < planN ? Magic.load64(PLAN_TAB + (i + 1L) * 16L) : arenaTop;
-            long nb = Magic.load64(e + 8L);
+            Address e = Address.fromLong(PLAN_TAB + i * 16L);
+            long start = e.loadLong();
+            long end = i + 1L < planN ? e.plus(16).loadLong() : arenaTop;
+            long nb = e.plus(8).loadLong();
             if (nb == IMMOVABLE)
             {
                 dst = end;                               // pinned: anchors the cursor past itself
             }
             else if (nb == LIVE)
             {
-                Magic.store64(e + 8L, dst);
+                e.plus(8).store(dst);
                 if (dst != start)
                 {
                     movable += 1L;
@@ -707,8 +719,9 @@ final class CodeCompact
         long i = 0L;
         while (i < CodeEdges.n)
         {
-            long site = Magic.load64(CodeEdges.TAB + i * 16L);
-            long want = Magic.load64(CodeEdges.TAB + i * 16L + 8L);
+            Address e = Address.fromLong(CodeEdges.TAB + i * 16L);
+            long site = e.loadLong();
+            long want = e.plus(8).loadLong();
             if (site != 0L && want != 0L)
             {
                 if (newAddrOf(site) != 0L && newAddrOf(want) != 0L)
@@ -736,10 +749,11 @@ final class CodeCompact
         {
             return;
         }
-        long p = lo;
-        while (p < hi)
+        Address p = Address.fromLong(lo);
+        Address end = Address.fromLong(hi);
+        while (p.LT(end))
         {
-            long w = Magic.load64(p);
+            long w = p.loadLong();
             if (w >= Heap.CODE_BASE && w < Heap.CODE_LIMIT)
             {
                 long nw = newAddrOf(w);
@@ -748,7 +762,7 @@ final class CodeCompact
                     stackRefs += 1L;
                 }
             }
-            p += 8L;
+            p = p.plus(8);
         }
     }
 

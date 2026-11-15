@@ -4,6 +4,23 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 2: THE SCHEDULER, THE UNWINDER, AND THE CODE-ARENA TOOLS (2026-11-15).** Pi-validated
+  (build 0dc269b46cd1528e). `VMScheduler`, `VMUnwind`, `CodeEdges`, `CodeCompact`: no `Magic.load*`/`store*` left,
+  internals only (no non-private signature changed). Converted by three subagents under increment 1's rules plus:
+  per-task tables stay `long[]`; a saved frame's VALUES (x0..x30, ELR, SPSR) are data and stay `long`; every pc/sp/word
+  a walk reads that may be garbage keeps its signed plausibility checks until validated; instruction-word decoding
+  stays int/long.
+  - **Checked independently:** store widths in the compiled classes match the sources exactly -- VMScheduler's 26
+    `store32` (the secondary boot stub, two lock clears, a vector `b`) are 26 `store(I)`, its 25 `store64` are 22
+    `store(J)` + 3 `store(Address)`; CodeCompact's 2 `store32` (rewritten branch words) are `store(I)`; the rest
+    64-bit. `VMUnwind.unwind` seeds the handler's locals from its OWN prologue's x19..x28 saves, which Baseline makes
+    only for a method with >= 10 local slots: it has 24 (26 before). Code size: scheduler 7544 -> 7546 words, the other
+    three within a word; `pickNext` (no memory access) untouched.
+  - **Measured:** `make test`; full regression **208/208** -- the first with QEMU preempting (#532), so the converted
+    switch path ran under real timer switches before the Pi. Pi: every page, three `/run`s, a throwing main's trace
+    through the converted unwinder, the stop-poll benchmark (same figures), a forced stop of four spinning threads
+    with every `finally` run, the 39 MB SHA-256 equal to the Mac's.
+
 - **QEMU GETS TIMER TICKS: ONE GIC FAULT WAS ALL OF "QEMU IS COOPERATIVE" (2026-11-15).** The STW timeout that made
   SecurityStockProbe fail alone (bisected to #530's extra collection landing in SeedGenerator's busy loop) is fixed at
   its root.

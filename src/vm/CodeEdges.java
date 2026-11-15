@@ -11,6 +11,7 @@
  */
 package vm;
 
+import magic.Address;
 import magic.Magic;
 import board.bcm2711.Uart;
 
@@ -129,7 +130,7 @@ final class CodeEdges
         long at = findSite(site);
         if (at >= 0L)
         {
-            Magic.store64(at + 8L, t);                   // supersede: last patch wins, 0 = retired
+            Address.fromLong(at).plus(8).store(t);       // supersede: last patch wins, 0 = retired
             return;
         }
         if (t == 0L)
@@ -141,8 +142,9 @@ final class CodeEdges
             dropped += 1;
             return;
         }
-        Magic.store64(TAB + n * 16L, site);
-        Magic.store64(TAB + n * 16L + 8L, t);
+        Address ne = Address.fromLong(TAB + n * 16L);
+        ne.store(site);
+        ne.plus(8).store(t);
         if (edgBucket == null)                           // findSite above always builds it, but note() can be
         {                                                //   reached with site == 0 short-circuited
             buildIndex();
@@ -171,12 +173,12 @@ final class CodeEdges
         long i = 0;
         while (i < n)
         {
-            long e = TAB + i * 16L;
-            long site = Magic.load64(e);
+            Address e = Address.fromLong(TAB + i * 16L);
+            long site = e.loadLong();
             if (site >= lo && site < hi)
             {
-                Magic.store64(e, 0L);                    // site 0 = dead slot; verify and findSite skip it
-                Magic.store64(e + 8L, 0L);
+                e.store(0L);                             // site 0 = dead slot; verify and findSite skip it
+                e.plus(8).store(0L);
                 prunedCount += 1;
             }
             i += 1;
@@ -235,7 +237,7 @@ final class CodeEdges
         long i = 0;
         while (i < n)                                    // fold in entries recorded before the index existed
         {
-            long site = Magic.load64(TAB + i * 16L);
+            long site = Address.fromLong(TAB + i * 16L).loadLong();
             if (site != 0L)
             {
                 int h = bucketOf(site);
@@ -260,7 +262,7 @@ final class CodeEdges
         while (k >= 0)
         {
             long e = TAB + k * 16L;
-            if (Magic.load64(e) == site)                 // a retired slot reads 0 here and simply misses
+            if (Address.fromLong(e).loadLong() == site)                 // a retired slot reads 0 here and simply misses
             {
                 return e;
             }
@@ -276,7 +278,7 @@ final class CodeEdges
      */
     private static long decodeTarget(long site)
     {
-        int w = Magic.load32(site);
+        int w = Address.fromLong(site).loadInt();
         int op = w >>> 26;
         if (op != 0x25 && op != 0x05)
         {
@@ -306,8 +308,9 @@ final class CodeEdges
         long i = 0;
         while (i < n)
         {
-            long site = Magic.load64(TAB + i * 16L);
-            long want = Magic.load64(TAB + i * 16L + 8L);
+            Address e = Address.fromLong(TAB + i * 16L);
+            long site = e.loadLong();
+            long want = e.plus(8).loadLong();
             long got = site == 0L ? 0L : decodeTarget(site);
             if (site == 0L)
             {
