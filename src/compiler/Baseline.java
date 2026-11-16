@@ -787,12 +787,12 @@ public final class Baseline
         }
         else if (op == 0xA5)
         {
-            branchCmp(cb, code, pos, A64Enc.EQ);            // if_acmpeq — reference compare (addresses <4GB, eq/ne exact)
+            branchCmpRef(cb, code, pos, A64Enc.EQ);         // if_acmpeq — the full 64-bit reference
             return 3;
         }
         else if (op == 0xA6)
         {
-            branchCmp(cb, code, pos, A64Enc.NE);            // if_acmpne
+            branchCmpRef(cb, code, pos, A64Enc.NE);         // if_acmpne
             return 3;
         }
         else if (op == 0xC4)
@@ -1877,7 +1877,25 @@ public final class Baseline
         int b = popReg();
         int a = popReg();
         cb.emit(A64Enc.sxtw(a, a));                          // canonicalize both (overflowed ints); harmless for
-        cb.emit(A64Enc.sxtw(b, b));                          // canonical ints, equality-preserving for if_acmp refs
+        cb.emit(A64Enc.sxtw(b, b));                          // canonical ints
+        cb.emit(A64Enc.cmpReg(a, b));
+        int target = pos + s2(code, pos + 1);
+        syncOut(cb);
+        condBranch(cb, target, FIX_BCOND, cond);
+        recordDepth(target);
+    }
+
+    /**
+     * {@code if_acmpeq}/{@code if_acmpne}: compare the WHOLE 64-bit register. This used to share
+     * {@link #branchCmp}, whose SXTWs reduce both operands to their low 32 bits -- exact for heap references on a
+     * 4 GB board, but an unboxed {@code Address == Address} compiles to this same bytecode, and two addresses
+     * that differ only above bit 31 compared EQUAL. A reference is always a full 64-bit value (ifnull's CBZ has
+     * always read it whole), so there is nothing to canonicalise.
+     */
+    private void branchCmpRef(CodeBuffer cb, byte[] code, int pos, int cond)
+    {
+        int b = popReg();
+        int a = popReg();
         cb.emit(A64Enc.cmpReg(a, b));
         int target = pos + s2(code, pos + 1);
         syncOut(cb);

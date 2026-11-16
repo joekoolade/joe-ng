@@ -272,4 +272,39 @@ final class UnboxedFixture
         }
         return 2;
     }
+
+    /** if_acmp on two Addresses: must compare all 64 bits (no SXTW). */
+    @SuppressWarnings("ReferenceEquality")
+    static int refEqAddr(Address a, Address b)
+    {
+        if (a == b)
+        {
+            return 1;
+        }
+        return 2;
+    }
+
+    static int refEqObj(Object a, Object b)
+    {
+        if (a != b)
+        {
+            return 1;
+        }
+        return 2;
+    }
+
+    /** if_icmp keeps its SXTWs: an overflowed int is not sign-extended in its register. */
+    static int intCmp(int a, int b)
+    {
+        if (a == b)
+        {
+            return 1;
+        }
+        return 2;
+    }
+
+    static Address sext(int i)
+    {
+        return Address.fromIntSignExtend(i);
+    }
 }

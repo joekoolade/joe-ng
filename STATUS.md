@@ -4,6 +4,28 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 18: `if_acmp` compares all 64 bits; `fromIntSignExtend` sign-extends (2026-11-16).**
+  Pi-validated (build 78ea4c1816052db0). Closes the hazard increment 17 found.
+  - **`if_acmpeq`/`if_acmpne` get their own `Baseline.branchCmpRef`:** a plain 64-bit `CMP` + `B.cond`. They used to
+    share `branchCmp` with `if_icmp*`, whose two `SXTW`s reduce both operands to their low 32 bits -- exact for this
+    board's heap references, wrong for an unboxed `Address == Address` (which javac compiles to the same bytecode), where
+    two addresses differing only above bit 31 compared EQUAL. A reference is always a whole 64-bit value (`ifnull`'s
+    `CBZ` has always read it whole), so nothing needs canonicalising. `if_icmp*` keep their SXTWs (an overflowed int is
+    not sign-extended in its register). `a.EQ(b)` stays the preferred spelling; `==` is now merely correct too.
+  - **`fromIntSignExtend` was a plain move (`UB_MOVE`)**, so an int that had overflowed carried its junk upper bits
+    into the Address. It is `UB_SXTW` now (the same instruction as `toInt`). No production caller; the probe has one.
+  - **Tests:** `UnboxedTest` 61 checks (+5): `Address == Address` and `Object != Object` compile with no SXTW and one
+    CMP; `int == int` keeps both SXTWs; `fromIntSignExtend` is one SXTW. `AddressFieldProbe` 36 checks (+5): `==`/`!=`
+    on addresses differing only above bit 31, equal words, `EQ` agreement, exact object references, and
+    `fromIntSignExtend` of `MAX_VALUE + 1`. **Negative control, run:** with the old SXTWs put back in `branchCmpRef`,
+    the probe FAILS exactly `== differs above bit 31` (36 checks, 1 failure); restored, it passes.
+  - **Size:** baked image -648 bytes from the compiler change alone (measured with main's probe, 39,512,840 ->
+    39,512,192); two instructions fewer per `if_acmp` site, and most code compiles at run time, where the same saving
+    applies. No `helper-stash MISS`.
+  - **Validation:** `make test` + overlaycheck; full regression **209/209**; Pi: AddressFieldProbe 36/0 via `/run`,
+    every page 200, hello x2, the Boom stack trace, the bench (+16.7% poll cost, as before), a forced stop, the SHA-256
+    check, a staged 39 MB PUT + discard, `/net` InHdrErrors 0 / InErrs 0. (The first push attempt timed out writing
+    `kernel8.img.new` -- the known intermittent; the retry committed.)
 - **UNBOXED TYPES, INCREMENT 17: Loader's class-file base pointers, WITH their tables; a new comparison rule; and
   `Address == Address` is a 32-bit compare (2026-11-16).** Pi-validated (build 1d365081214910f5).
   - **Retyped together** (increment 15 showed they cannot move apart): fields `gbase`, `gp`, `gMethodsStart`,

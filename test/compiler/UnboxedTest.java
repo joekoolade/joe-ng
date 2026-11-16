@@ -135,6 +135,8 @@ public final class UnboxedTest
         T.eq("plus", Intrinsics.UB_ADD, Unboxed.op(a, utf8("plus"), utf8("(I)Lmagic/Address;")));
         T.eq("minus", Intrinsics.UB_SUB, Unboxed.op(a, utf8("minus"), utf8("(J)Lmagic/Address;")));
         T.eq("diff", Intrinsics.UB_SUB, Unboxed.op(a, utf8("diff"), utf8("(Lmagic/Address;)Lmagic/Offset;")));
+        T.eq("fromIntSignExtend", Intrinsics.UB_SXTW,
+                Unboxed.op(a, utf8("fromIntSignExtend"), utf8("(I)Lmagic/Address;")));
         T.eq("loadLong()", Intrinsics.LOAD64, Unboxed.op(a, utf8("loadLong"), utf8("()J")));
         T.eq("loadLong(Offset)", Intrinsics.UB_LD64_OFF,
                 Unboxed.op(a, utf8("loadLong"), utf8("(Lmagic/Offset;)J")));
@@ -174,6 +176,17 @@ public final class UnboxedTest
         T.check("isZero + if: no CMP, no CSET", count(z, A64Enc.cmpImm(0, 0), 0xFFC003FF) == 0
                 && count(z, 0x9A9F07E0, 0xFFFF0FE0) == 0);
         T.check("isZero + if: a CBZ/CBNZ", count(z, 0xB4000000, 0xFE000000) == 1);
+        int sxtw = A64Enc.sxtw(0, 0);
+        int[] ra = normal(compile(fx, "refEqAddr", "(Lmagic/Address;Lmagic/Address;)I"));
+        int[] ro = normal(compile(fx, "refEqObj", "(Ljava/lang/Object;Ljava/lang/Object;)I"));
+        int[] ic = normal(compile(fx, "intCmp", "(II)I"));
+        T.check("Address == Address: no SXTW (all 64 bits)", count(ra, sxtw, 0xFFFFFC00) == 0
+                && count(ra, A64Enc.cmpReg(0, 0), 0xFFE0FC1F) == 1);
+        T.check("Object != Object: no SXTW", count(ro, sxtw, 0xFFFFFC00) == 0
+                && count(ro, A64Enc.cmpReg(0, 0), 0xFFE0FC1F) == 1);
+        T.check("int == int: both SXTWs kept", count(ic, sxtw, 0xFFFFFC00) == 2);
+        T.check("fromIntSignExtend: one SXTW", count(normal(compile(fx, "sext", "(I)Lmagic/Address;")), sxtw,
+                0xFFFFFC00) == 1);
         System.out.println("  branch, long:    " + hex(normal(compile(fx, "branchLong", "(JJ)I"))));
         System.out.println("  branch, Address: " + hex(lt));
         System.out.println("  isZero, long:    " + hex(normal(compile(fx, "branchZeroLong", "(J)I"))));

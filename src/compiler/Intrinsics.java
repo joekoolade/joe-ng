@@ -126,7 +126,7 @@ public final class Intrinsics
     // reuse ADDR_OF/FROM_ADDR. A block of its own from 100, so it can grow without colliding.
     public static final int UB_MOVE = 100;           // reinterpret: the value is already the 64-bit word
     public static final int UB_ZEXT32 = 101;         // fromIntZeroExtend: UXTW
-    public static final int UB_SXTW = 102;           // toInt: the low 32 bits as a canonical (sign-extended) int
+    public static final int UB_SXTW = 102;           // toInt, fromIntSignExtend: SXTW (canonical low 32 bits)
     public static final int UB_ZERO = 103;
     public static final int UB_ONE = 104;
     public static final int UB_MAX = 105;            // all ones
