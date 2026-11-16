@@ -59,6 +59,18 @@ public final class UnboxedTest
         same(fx, "diffLong", "(JJ)J", "diffAddr", "(Lmagic/Address;Lmagic/Address;)Lmagic/Offset;");
         same(fx, "objLong", "(J)Ljava/lang/Object;", "objAddr", "(Lmagic/Address;)Ljava/lang/Object;");
         same(fx, "nopLong", "(J)J", "nopAddr", "(J)J");
+        // ObjectReference is moves and compares: the same words as the long / Address code it replaces.
+        same(fx, "refFieldLong", "(Ljava/lang/Object;)J", "refFieldRef", "(Ljava/lang/Object;)J");
+        same(fx, "loadLong", "(J)J", "loadRefAddr", "(Lmagic/Address;)J");
+        same(fx, "storeLong", "(JJ)V", "storeRefAddr", "(Lmagic/Address;Lmagic/ObjectReference;)V");
+        same(fx, "objAddr", "(Lmagic/Address;)Ljava/lang/Object;", "objRef", "(Lmagic/ObjectReference;)Ljava/lang/Object;");
+        same(fx, "nopLong", "(J)J", "refLong", "(J)J");
+        same(fx, "isZero", "(Lmagic/Address;)Z", "isNullRef", "(Lmagic/ObjectReference;)Z");
+        same(fx, "eqAddr", "(Lmagic/Address;Lmagic/Address;)Z", "eqRef",
+                "(Lmagic/ObjectReference;Lmagic/ObjectReference;)Z");
+        same(fx, "neAddr", "(Lmagic/Address;Lmagic/Address;)Z", "neRef",
+                "(Lmagic/ObjectReference;Lmagic/ObjectReference;)Z");
+        same(fx, "zero", "()Lmagic/Address;", "nullRef", "()Lmagic/ObjectReference;");
         // AddressArray IS a long[]: each op compiles to exactly its array bytecode's words.
         // (create allocates through a helper, which this harness cannot compile: AddressFieldProbe covers it on metal.)
         same(fx, "getLong", "([JI)J", "getAddr", "(Lmagic/AddressArray;I)J");
@@ -92,7 +104,7 @@ public final class UnboxedTest
     /** Every public method of the four types maps to a lowering. */
     private static void classifiesAll()
     {
-        String[] types = { "Address", "Word", "Offset", "Extent", "AddressArray" };
+        String[] types = { "Address", "Word", "Offset", "Extent", "AddressArray", "ObjectReference" };
         int n = 0;
         int missing = 0;
         for (String t : types)
@@ -160,6 +172,31 @@ public final class UnboxedTest
         T.eq("AddressArray.length", Intrinsics.AA_LENGTH, Unboxed.op(aa, utf8("length"), utf8("()I")));
         T.eq("AddressArray: an Address name is not an array op", -1,
                 Unboxed.op(aa, utf8("plus"), utf8("(I)Lmagic/Address;")));
+        int r = Unboxed.OBJECT_REFERENCE;
+        T.eq("ObjectReference owner", r, Unboxed.ownerKind(utf8("magic/ObjectReference")));
+        T.eq("ObjectReference.isNull", Intrinsics.UB_IS_ZERO, Unboxed.op(r, utf8("isNull"), utf8("()Z")));
+        T.eq("ObjectReference.nullReference", Intrinsics.UB_ZERO,
+                Unboxed.op(r, utf8("nullReference"), utf8("()Lmagic/ObjectReference;")));
+        T.eq("ObjectReference.fromObject", Intrinsics.ADDR_OF,
+                Unboxed.op(r, utf8("fromObject"), utf8("(Ljava/lang/Object;)Lmagic/ObjectReference;")));
+        T.eq("ObjectReference.toObject", Intrinsics.FROM_ADDR,
+                Unboxed.op(r, utf8("toObject"), utf8("()Ljava/lang/Object;")));
+        T.eq("ObjectReference.toAddress", Intrinsics.UB_MOVE,
+                Unboxed.op(r, utf8("toAddress"), utf8("()Lmagic/Address;")));
+        T.eq("Address.toObjectReference", Intrinsics.UB_MOVE,
+                Unboxed.op(a, utf8("toObjectReference"), utf8("()Lmagic/ObjectReference;")));
+        T.eq("Address.loadObjectReference()", Intrinsics.LOAD64,
+                Unboxed.op(a, utf8("loadObjectReference"), utf8("()Lmagic/ObjectReference;")));
+        T.eq("Address.loadObjectReference(Offset)", Intrinsics.UB_LD64_OFF,
+                Unboxed.op(a, utf8("loadObjectReference"), utf8("(Lmagic/Offset;)Lmagic/ObjectReference;")));
+        T.eq("Address.store(ObjectReference)", Intrinsics.STORE64,
+                Unboxed.op(a, utf8("store"), utf8("(Lmagic/ObjectReference;)V")));
+        // No arithmetic, ordering, loads -- and no inherited equals/hashCode: those must fail the compile.
+        T.eq("ObjectReference: no plus", -1, Unboxed.op(r, utf8("plus"), utf8("(I)Lmagic/ObjectReference;")));
+        T.eq("ObjectReference: no LT", -1, Unboxed.op(r, utf8("LT"), utf8("(Lmagic/ObjectReference;)Z")));
+        T.eq("ObjectReference: no loadLong", -1, Unboxed.op(r, utf8("loadLong"), utf8("()J")));
+        T.eq("ObjectReference: no equals", -1, Unboxed.op(r, utf8("equals"), utf8("(Ljava/lang/Object;)Z")));
+        T.eq("ObjectReference: no hashCode", -1, Unboxed.op(r, utf8("hashCode"), utf8("()I")));
     }
 
     /**

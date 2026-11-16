@@ -13,6 +13,7 @@ package demo;
 
 import magic.Address;
 import magic.AddressArray;
+import magic.ObjectReference;
 import magic.Word;
 
 /**
@@ -29,6 +30,15 @@ import magic.Word;
  * throws exactly what the array bytecode would. The throwing accessors sit in methods whose ONLY operation is the
  * access: with implicit checks on, that throw path is a BL, so such a method must be non-leaf (save LR) or its
  * caller's catch is skipped -- the trap recorded for divideDeep and the guarded-static `getstatic; areturn`.
+ *
+ * <p>And {@link ObjectReference}: a field of it is an {@code L} field too, but it holds an object's START, which the
+ * tracer accepts as a reference -- so unlike an Address it MUST keep its object alive. Each ObjectReference field
+ * below is the only reference to a fresh object across collections with churn between them; a block the collector
+ * freed and reused would show as wrong contents or a wrong class. CANNOT FAIL YET (measured 2026-11-16): a negative
+ * control -- a long[6] held only as two int statics, allocated in a frame already popped -- was still NOT freed
+ * after the same collections (word 0 still its TIB, not a free-list link), because a launched program's arena on
+ * cores 1-3 is never collected (BACKLOG, "Collector") and roots are conservative. The checks stay so that they
+ * start to bite when that is fixed; until then keep-alive rests on the mechanism (an L field, mayHoldPointer).
  */
 public class AddressFieldProbe
 {
@@ -41,6 +51,10 @@ public class AddressFieldProbe
     private static Word sWord;
 
     private static AddressArray sTable;   // the ONLY reference to its array across the collections
+
+    private static ObjectReference sRef;  // the ONLY reference to its long[] across the collections
+
+    private static ObjectReference sRefUnset;
 
     private static int failures;
 
@@ -57,6 +71,8 @@ public class AddressFieldProbe
     private Address iUnset;
 
     private Word iWord;
+
+    private ObjectReference iRef;       // the ONLY reference to its long[] across the collections
 
     private long after;
 
@@ -105,6 +121,7 @@ public class AddressFieldProbe
 
         arrays(mem);
         compares(mem);
+        references(p);
 
         System.out.println("AddressFieldProbe " + checks + " checks, " + failures + " failures");
         System.out.println(failures == 0 ? "AddressFieldProbe PASS" : "AddressFieldProbe FAIL");
@@ -182,6 +199,79 @@ public class AddressFieldProbe
         int big = Integer.MAX_VALUE;
         int wrapped = big + bump();             // overflows to MIN_VALUE in a 64-bit register
         check("fromIntSignExtend of an overflowed int", Address.fromIntSignExtend(wrapped).toLong() == -2147483648L);
+    }
+
+    /** ObjectReference: null, identity, keep-alive across collections, compares, loads and stores of references. */
+    private static void references(AddressFieldProbe p)
+    {
+        check("unset ObjectReference is null", sRefUnset.isNull() && sRefUnset.toLong() == 0L);
+        check("nullReference is null", ObjectReference.nullReference().isNull()
+                && ObjectReference.nullReference().toObject() == null);
+        long[] held = new long[6];
+        long[] held2 = new long[6];
+        for (int i = 0; i < 6; i++)
+        {
+            held[i] = 0x0BE0_0000_0000L + i;
+            held2[i] = 0x0BE1_0000_0000L + i;
+        }
+        ObjectReference r = ObjectReference.fromObject(held);
+        check("fromObject is the object's address", r.toLong() == Address.fromObject(held).toLong()
+                && r.toAddress().EQ(Address.fromObject(held)));
+        check("toObject round trip", r.toObject() == held && r.toAddress().toObjectReference().toObject() == held);
+        check("fromLong round trip", ObjectReference.fromLong(r.toLong()).EQ(r));
+        check("not null", !r.isNull());
+        check("field read through the reference", r.toAddress().plus(24L + 8L * 5).loadLong() == 0x0BE0_0000_0005L);
+        sRef = r;
+        p.iRef = ObjectReference.fromObject(held2);
+        held = null;
+        held2 = null;
+        r = null;
+        int sum = 0;
+        for (int round = 0; round < 4; round++)
+        {
+            sum = sum + churn(round + 10);
+            System.gc();
+        }
+        check("ObjectReference churned", sum > 0);
+        check("static ObjectReference keeps its object", keptAlive(sRef, 0x0BE0_0000_0000L));
+        check("instance ObjectReference keeps its object", keptAlive(p.iRef, 0x0BE1_0000_0000L));
+        check("EQ / NE", sRef.EQ(sRef) && sRef.NE(p.iRef) && !sRef.EQ(p.iRef));
+        ObjectReference lo = ObjectReference.fromLong(0x0000_0000_FE20_0000L);
+        ObjectReference hi = ObjectReference.fromLong(0x0000_0001_FE20_0000L);
+        check("EQ is all 64 bits", lo.NE(hi) && !lo.EQ(hi));
+
+        Object[] slots = new Object[2];
+        slots[0] = sRef.toObject();
+        Address slot0 = ObjectReference.fromObject(slots).toAddress().plus(24);
+        check("loadObjectReference reads a reference element", slot0.loadObjectReference().EQ(sRef)
+                && slot0.loadObjectReference().toObject() == slots[0]);
+        slot0.plus(8).store(p.iRef);
+        check("store(ObjectReference) writes a reference element", slots[1] == p.iRef.toObject());
+        sRef = ObjectReference.nullReference();
+        check("a field set to null reads null", sRef.isNull());
+    }
+
+    /** The reference still names a live long[] holding base, base+1, ... base+5 (not a freed, reused block). */
+    private static boolean keptAlive(ObjectReference ref, long base)
+    {
+        Object o = ref.toObject();
+        if (!(o instanceof long[]))
+        {
+            return false;
+        }
+        long[] a = (long[]) o;
+        if (a.length != 6)
+        {
+            return false;
+        }
+        for (int i = 0; i < 6; i++)
+        {
+            if (a[i] != base + i)
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static int bump()

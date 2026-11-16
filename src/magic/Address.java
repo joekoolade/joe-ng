@@ -94,6 +94,12 @@ public final class Address
         throw intrinsic();
     }
 
+    /** The object reference at this address -- the inverse of {@link ObjectReference#toAddress}. */
+    public ObjectReference toObjectReference()
+    {
+        throw intrinsic();
+    }
+
     /** Whether this is the address 0. */
     public boolean isZero()
     {
@@ -280,6 +286,18 @@ public final class Address
         throw intrinsic();
     }
 
+    /** The object reference stored at this address (a reference field or element: 64 bits). */
+    public ObjectReference loadObjectReference()
+    {
+        throw intrinsic();
+    }
+
+    /** The object reference stored at this address plus {@code offset}. */
+    public ObjectReference loadObjectReference(Offset offset)
+    {
+        throw intrinsic();
+    }
+
     /** The word stored at this address. */
     public Word loadWord()
     {
@@ -372,6 +390,18 @@ public final class Address
 
     /** Store {@code value} at this address plus {@code offset}. */
     public void store(Address value, Offset offset)
+    {
+        throw intrinsic();
+    }
+
+    /** Store the reference {@code value} at this address (64 bits; no write barrier -- the collector has none). */
+    public void store(ObjectReference value)
+    {
+        throw intrinsic();
+    }
+
+    /** Store the reference {@code value} at this address plus {@code offset}. */
+    public void store(ObjectReference value, Offset offset)
     {
         throw intrinsic();
     }

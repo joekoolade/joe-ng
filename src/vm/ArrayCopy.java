@@ -13,6 +13,7 @@ package vm;
 
 import magic.Address;
 import magic.Magic;
+import magic.ObjectReference;
 import objectmodel.ObjectModel;
 
 /**
@@ -37,6 +38,9 @@ import objectmodel.ObjectModel;
  *
  * <p>A RAW array (its TIB slot holds only the element size, no Type) cannot be named or kind-checked, so only
  * its bounds are checked, and a raw array is refused only against an array of another element SIZE.
+ *
+ * <p>The arrays are {@link ObjectReference}s and the element ranges {@link Address}es; a Type stays the Loader's
+ * {@code long} id. The native's {@code long} arguments become references once, in {@code VMNatives.arraycopy}.
  */
 final class ArrayCopy
 {
@@ -50,18 +54,18 @@ final class ArrayCopy
     private static final int RAW = 3;
 
     /** What {@code arr} is: not an array, a primitive array, a reference array, or a raw (untyped) array. */
-    private static int kindOf(long arr)
+    private static int kindOf(ObjectReference arr)
     {
-        long tib = Address.fromLong(arr).plus(ObjectModel.TIB_OFFSET).loadLong();
-        if (tib > 0L && tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
+        Address tib = arr.toAddress().plus(ObjectModel.TIB_OFFSET).loadAddress();
+        if (tib.toLong() > 0L && tib.toLong() <= ObjectModel.MAX_RAW_ARRAY_TIB)
         {
             return RAW;
         }
-        if (tib == 0L)
+        if (tib.isZero())
         {
             return NOT_ARRAY;
         }
-        long type = Address.fromLong(tib).loadLong();
+        long type = tib.loadLong();
         if (!Loader.isArrayType(type))
         {
             return NOT_ARRAY;
@@ -73,26 +77,26 @@ final class ArrayCopy
         return Loader.primArrayElemChar(type) != 0 ? PRIM : REF;   // no element and no primitive: unresolved ref
     }
 
-    private static long typeOf(long obj)
+    private static long typeOf(ObjectReference obj)
     {
-        long tib = Address.fromLong(obj).plus(ObjectModel.TIB_OFFSET).loadLong();
-        return tib > ObjectModel.MAX_RAW_ARRAY_TIB ? Address.fromLong(tib).loadLong() : 0L;
+        Address tib = obj.toAddress().plus(ObjectModel.TIB_OFFSET).loadAddress();
+        return tib.toLong() > ObjectModel.MAX_RAW_ARRAY_TIB ? tib.loadLong() : 0L;
     }
 
     /** A reference array's element Type, or 0 if it is raw or the element never resolved. */
-    private static long elemTypeOf(long arr)
+    private static long elemTypeOf(ObjectReference arr)
     {
         long type = typeOf(arr);
         return type == 0L ? 0L : Address.fromLong(type).plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong();
     }
 
-    private static int lengthOf(long arr)
+    private static int lengthOf(ObjectReference arr)
     {
-        return (int) Address.fromLong(arr).plus(ObjectModel.ARRAY_LENGTH_OFFSET).loadLong();
+        return (int) arr.toAddress().plus(ObjectModel.ARRAY_LENGTH_OFFSET).loadLong();
     }
 
     /** The name HotSpot prints for an array's element in a bounds message: "int", or "object array". */
-    private static byte[] kindName(long arr, int kind)
+    private static byte[] kindName(ObjectReference arr, int kind)
     {
         if (kind == PRIM)
         {
@@ -101,9 +105,9 @@ final class ArrayCopy
         return Magic.bytes("object array");
     }
 
-    static void arraycopy(long src, int srcPos, long dst, int dstPos, int len)
+    static void arraycopy(ObjectReference src, int srcPos, ObjectReference dst, int dstPos, int len)
     {
-        if (src == 0L || dst == 0L)
+        if (src.isNull() || dst.isNull())
         {
             throw (NullPointerException) Magic.fromAddr(Loader.newExcWithMessage(
                     Magic.bytes("java/lang/NullPointerException"), null));
@@ -116,10 +120,10 @@ final class ArrayCopy
         {
             return;
         }
-        long es = VMNatives.elemSize(src);
-        long from = src + (long) ObjectModel.ARRAY_BASE_OFFSET + (long) srcPos * es;
-        long to = dst + (long) ObjectModel.ARRAY_BASE_OFFSET + (long) dstPos * es;
-        if (sk == REF && dk == REF && src != dst)
+        long es = VMNatives.elemSize(src.toLong());
+        Address from = src.toAddress().plus((long) ObjectModel.ARRAY_BASE_OFFSET + (long) srcPos * es);
+        Address to = dst.toAddress().plus((long) ObjectModel.ARRAY_BASE_OFFSET + (long) dstPos * es);
+        if (sk == REF && dk == REF && src.NE(dst))
         {
             long bound = elemTypeOf(dst);
             long stype = elemTypeOf(src);
@@ -133,7 +137,7 @@ final class ArrayCopy
     }
 
     /** The ArrayStoreException checks that need no element: what each side IS. */
-    private static void checkKinds(long src, int sk, long dst, int dk)
+    private static void checkKinds(ObjectReference src, int sk, ObjectReference dst, int dk)
     {
         if (sk == NOT_ARRAY)
         {
@@ -147,7 +151,7 @@ final class ArrayCopy
         }
         if (sk == RAW || dk == RAW)
         {
-            if (VMNatives.elemSize(src) != VMNatives.elemSize(dst))
+            if (VMNatives.elemSize(src.toLong()) != VMNatives.elemSize(dst.toLong()))
             {
                 throwAse(Magic.bytes("arraycopy: type mismatch"));
             }
@@ -171,7 +175,8 @@ final class ArrayCopy
     }
 
     /** Negative positions and length, then the unsigned end of each range against its array's length. */
-    private static void checkBounds(long src, int sk, int srcPos, long dst, int dk, int dstPos, int len)
+    private static void checkBounds(ObjectReference src, int sk, int srcPos, ObjectReference dst, int dk, int dstPos,
+            int len)
     {
         int sl = lengthOf(src);
         int dl = lengthOf(dst);
@@ -200,7 +205,7 @@ final class ArrayCopy
     }
 
     /** " out of bounds for int[2]". */
-    private static byte[] outOf(long arr, int kind, int length)
+    private static byte[] outOf(ObjectReference arr, int kind, int length)
     {
         return cat(cat(Magic.bytes(" out of bounds for "), kindName(arr, kind), Magic.bytes("[")), dec(length),
                 Magic.bytes("]"));
@@ -210,15 +215,13 @@ final class ArrayCopy
      * The element-by-element copy between reference arrays of unrelated element types: each non-null element must
      * be an instance of the destination's element type, and the ones before the first that is not stay copied.
      */
-    private static void copyChecked(long from, long to, int len, long stype, long bound)
+    private static void copyChecked(Address from, Address to, int len, long stype, long bound)
     {
-        Address fromA = Address.fromLong(from);
-        Address toA = Address.fromLong(to);
         long i = 0L;
         while (i < (long) len)
         {
-            long v = fromA.plus(i * 8L).loadLong();
-            if (v != 0L && VM.instanceOf(v, bound) == 0)
+            ObjectReference v = from.plus(i * 8L).loadObjectReference();
+            if (!v.isNull() && VM.instanceOf(v.toLong(), bound) == 0)
             {
                 byte[] s = Loader.typeNameBytes(stype);
                 byte[] b = Loader.typeNameBytes(bound);
@@ -230,7 +233,7 @@ final class ArrayCopy
                 throwAse(cat(cat(Magic.bytes("arraycopy: element type mismatch: can not cast one of the elements of "),
                         s, Magic.bytes("[] to the type of the destination array, ")), b, new byte[0]));
             }
-            toA.plus(i * 8L).store(v);
+            to.plus(i * 8L).store(v);
             i += 1L;
         }
     }
@@ -239,17 +242,15 @@ final class ArrayCopy
      * Copy {@code n} bytes, overlap-safe like {@code memmove}, a whole element at a time where the element is a
      * word or an int so no reference or long is ever half-written.
      */
-    private static void move(long from, long to, long n, long es)
+    private static void move(Address from, Address to, long n, long es)
     {
         long step = es == 8L || es == 4L ? es : 1L;
-        Address fromA = Address.fromLong(from);
-        Address toA = Address.fromLong(to);
-        if (toA.LE(fromA))
+        if (to.LE(from))
         {
             long i = 0L;
             while (i < n)
             {
-                moveOne(fromA.plus(i), toA.plus(i), step);
+                moveOne(from.plus(i), to.plus(i), step);
                 i += step;
             }
         }
@@ -259,7 +260,7 @@ final class ArrayCopy
             while (i > 0L)
             {
                 i -= step;
-                moveOne(fromA.plus(i), toA.plus(i), step);
+                moveOne(from.plus(i), to.plus(i), step);
             }
         }
     }

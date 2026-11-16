@@ -13,7 +13,7 @@ package compiler;
 
 /**
  * Which {@link Intrinsics} id a method of an UNBOXED type -- {@code magic.Address}, {@code magic.Word},
- * {@code magic.Offset}, {@code magic.Extent} -- lowers to. ONE copy of the rules, called by every world's
+ * {@code magic.Offset}, {@code magic.Extent}, {@code magic.ObjectReference} -- lowers to. ONE copy of the rules, called by every world's
  * {@link Symbols} (the seed writer and the metal JIT each hand over their own view of the owner, name and
  * descriptor), so the two can never map a method differently.
  *
@@ -24,7 +24,7 @@ package compiler;
  * machine code as the {@code Magic.load*}/{@code store*} it replaces.
  *
  * <p>Names are matched by FNV-1a hash -- this class runs on the metal too, where a String switch is not available.
- * {@code UnboxedTest} recomputes every constant and checks that every public method of the four types classifies.
+ * {@code UnboxedTest} recomputes every constant and checks that every public method of the types classifies.
  */
 public final class Unboxed
 {
@@ -54,11 +54,15 @@ public final class Unboxed
     /** {@code magic/AddressArray}: a {@code long[]} at run time; its ops are the array bytecodes' lowerings. */
     public static final int ADDRESS_ARRAY = 5;
 
+    /** {@code magic/ObjectReference}: an object's address as a raw word; its ops are moves and compares. */
+    public static final int OBJECT_REFERENCE = 6;
+
     private static final long O_ADDRESS = 7816296518595377735L; // "magic/Address"
     private static final long O_WORD = 2502753236447134729L;  // "magic/Word"
     private static final long O_OFFSET = -5453143413838101434L; // "magic/Offset"
     private static final long O_EXTENT = -5385282434997603451L; // "magic/Extent"
     private static final long O_ADDRESS_ARRAY = -2760638129083984252L; // "magic/AddressArray"
+    private static final long O_OBJECT_REFERENCE = -5959478901542360285L; // "magic/ObjectReference"
     private static final long N_CREATE = -626457835795418115L; // "create"
     private static final long N_GET = -3106811833996379657L;  // "get"
     private static final long N_SET = -9062501282150740445L;  // "set"
@@ -77,6 +81,9 @@ public final class Unboxed
     private static final long N_TO_ADDRESS = 3340780673232283588L; // "toAddress"
     private static final long N_TO_OFFSET = -4944248131659823137L; // "toOffset"
     private static final long N_TO_EXTENT = -4864762652956595076L; // "toExtent"
+    private static final long N_TO_OBJECT_REFERENCE = -1624544305862165288L; // "toObjectReference"
+    private static final long N_NULL_REFERENCE = 87203128043989017L; // "nullReference"
+    private static final long N_IS_NULL = 2193725045587114196L; // "isNull"
     private static final long N_IS_ZERO = -3454911920138359469L; // "isZero"
     private static final long N_IS_MAX = -6807841772394724727L; // "isMax"
     private static final long N_PLUS = -6503099946484209483L; // "plus"
@@ -107,6 +114,7 @@ public final class Unboxed
     private static final long N_LOAD_LONG = 4361257629773139175L; // "loadLong"
     private static final long N_LOAD_ADDRESS = -2245672408505575529L; // "loadAddress"
     private static final long N_LOAD_WORD = 3647669981763934105L; // "loadWord"
+    private static final long N_LOAD_OBJECT_REFERENCE = 4613837479075637683L; // "loadObjectReference"
     private static final long N_STORE = 4967000543033605518L; // "store"
     private static final long N_ATTEMPT = 7198468255150783982L; // "attempt"
 
@@ -147,6 +155,10 @@ public final class Unboxed
         {
             return ADDRESS_ARRAY;
         }
+        if (h == O_OBJECT_REFERENCE)
+        {
+            return OBJECT_REFERENCE;
+        }
         return NONE;
     }
 
@@ -163,8 +175,12 @@ public final class Unboxed
         {
             return arrayOp(h, params);
         }
+        if (kind == OBJECT_REFERENCE)
+        {
+            return referenceOp(h);
+        }
         if (h == N_FROM_LONG || h == N_TO_LONG || h == N_TO_WORD || h == N_TO_ADDRESS || h == N_TO_OFFSET
-                || h == N_TO_EXTENT)
+                || h == N_TO_EXTENT || h == N_TO_OBJECT_REFERENCE)
         {
             return Intrinsics.UB_MOVE;
         }
@@ -265,6 +281,44 @@ public final class Unboxed
         return -1;
     }
 
+    /**
+     * {@code magic/ObjectReference}'s methods, or -1. Its own table, not the shared rules: a reference has no
+     * arithmetic, no ordering and no loads -- field access goes through {@code toAddress()} -- so an inherited
+     * {@code equals}/{@code hashCode} or anything else not listed here fails the compile instead of lowering.
+     */
+    private static int referenceOp(long h)
+    {
+        if (h == N_FROM_LONG || h == N_TO_LONG || h == N_TO_ADDRESS)
+        {
+            return Intrinsics.UB_MOVE;
+        }
+        if (h == N_FROM_OBJECT)
+        {
+            return Intrinsics.ADDR_OF;
+        }
+        if (h == N_TO_OBJECT)
+        {
+            return Intrinsics.FROM_ADDR;
+        }
+        if (h == N_NULL_REFERENCE)
+        {
+            return Intrinsics.UB_ZERO;
+        }
+        if (h == N_IS_NULL)
+        {
+            return Intrinsics.UB_IS_ZERO;
+        }
+        if (h == N_EQ)
+        {
+            return Intrinsics.UB_EQ;
+        }
+        if (h == N_NE)
+        {
+            return Intrinsics.UB_NE;
+        }
+        return -1;
+    }
+
     /** {@code magic/AddressArray}'s four methods, or -1. */
     private static int arrayOp(long h, int params)
     {
@@ -356,7 +410,7 @@ public final class Unboxed
         {
             return off ? Intrinsics.UB_LD32_OFF : Intrinsics.LOAD32;
         }
-        if (h == N_LOAD_LONG || h == N_LOAD_ADDRESS || h == N_LOAD_WORD)
+        if (h == N_LOAD_LONG || h == N_LOAD_ADDRESS || h == N_LOAD_WORD || h == N_LOAD_OBJECT_REFERENCE)
         {
             return off ? Intrinsics.UB_LD64_OFF : Intrinsics.LOAD64;
         }

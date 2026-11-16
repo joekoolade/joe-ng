@@ -15,6 +15,7 @@ import board.bcm2711.Uart;
 import board.bcm2711.Rng;
 import magic.Address;
 import magic.Magic;
+import magic.ObjectReference;
 import objectmodel.ObjectModel;
 import static vm.VM.*;   // strBytes/printStr/heapBytes helpers + fileDir/fileCount/taskThreadObj/curTask fields
 
@@ -266,10 +267,14 @@ final class VMNatives
         return Address.fromLong(tib).loadAddress().loadLong() & 0xFFFFL;  // typed: arr@0=TIB, TIB[0]=Type, Type[0]=tag|elemSize
     }
 
-    /** {@code java/lang/System.arraycopy(src, srcPos, dst, dstPos, len)}, the most-used java.base native: see {@link ArrayCopy}. */
+    /**
+     * {@code java/lang/System.arraycopy(src, srcPos, dst, dstPos, len)}, the most-used java.base native: see
+     * {@link ArrayCopy} (the checks, stock's messages, then the copy). The native keeps its {@code long} descriptor;
+     * the references become ObjectReferences here, once.
+     */
     static void arraycopy(long src, int srcPos, long dst, int dstPos, int len)
     {
-        ArrayCopy.arraycopy(src, srcPos, dst, dstPos, len);   // the checks, stock's messages, then the copy
+        ArrayCopy.arraycopy(ObjectReference.fromLong(src), srcPos, ObjectReference.fromLong(dst), dstPos, len);
     }
 
     /**
