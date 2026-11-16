@@ -12,6 +12,7 @@
 package compiler;
 
 import magic.Address;
+import magic.AddressArray;
 import magic.Magic;
 import magic.Offset;
 import magic.Word;
@@ -150,6 +151,56 @@ final class UnboxedFixture
     static long nopAddr(long a)
     {
         return Address.fromLong(a).toWord().toAddress().toLong();
+    }
+
+    static long getLong(long[] a, int i)
+    {
+        return a[i];
+    }
+
+    static long getAddr(AddressArray a, int i)
+    {
+        return a.get(i).toLong();
+    }
+
+    static void setLong(long[] a, int i, long v)
+    {
+        a[i] = v;
+    }
+
+    static void setAddr(AddressArray a, int i, Address v)
+    {
+        a.set(i, v);
+    }
+
+    static int lenLong(long[] a)
+    {
+        return a.length;
+    }
+
+    static int lenAddr(AddressArray a)
+    {
+        return a.length();
+    }
+
+    static long sumLong(long[] a)
+    {
+        long s = 0L;
+        for (int i = 0; i < a.length; i++)
+        {
+            s = s + a[i];
+        }
+        return s;
+    }
+
+    static long sumAddr(AddressArray a)
+    {
+        long s = 0L;
+        for (int i = 0; i < a.length(); i++)
+        {
+            s = s + a.get(i).toLong();
+        }
+        return s;
     }
 
     // ---- no long twin: the test states the expected words ----
