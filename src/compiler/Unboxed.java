@@ -164,9 +164,13 @@ public final class Unboxed
             return arrayOp(h, params);
         }
         if (h == N_FROM_LONG || h == N_TO_LONG || h == N_TO_WORD || h == N_TO_ADDRESS || h == N_TO_OFFSET
-                || h == N_TO_EXTENT || h == N_FROM_INT_SIGN_EXTEND)
+                || h == N_TO_EXTENT)
         {
             return Intrinsics.UB_MOVE;
+        }
+        if (h == N_FROM_INT_SIGN_EXTEND)
+        {
+            return Intrinsics.UB_SXTW;              // an overflowed int is not sign-extended in its register
         }
         if (h == N_FROM_OBJECT)
         {

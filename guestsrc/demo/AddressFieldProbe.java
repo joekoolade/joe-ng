@@ -104,6 +104,7 @@ public class AddressFieldProbe
         check("store through field", mem[1] == 42L);
 
         arrays(mem);
+        compares(mem);
 
         System.out.println("AddressFieldProbe " + checks + " checks, " + failures + " failures");
         System.out.println(failures == 0 ? "AddressFieldProbe PASS" : "AddressFieldProbe FAIL");
@@ -159,6 +160,50 @@ public class AddressFieldProbe
         check("length of null throws NPE", lengthThrowsNpe(null));
         check("negative create throws", createThrowsNase(-1));
         check("in-bounds accessor returns", at(sTable, 2).toLong() == 0xFE20_0000L);
+    }
+
+    /**
+     * {@code Address == Address} compiles to if_acmp. Two addresses that differ only above bit 31 must compare
+     * unequal (the lowering once SXTW'd both operands, a low-32-bit compare), and real references still compare
+     * exactly. fromIntSignExtend of an int that overflowed must sign-extend it.
+     */
+    @SuppressWarnings("ReferenceEquality")
+    private static void compares(long[] mem)
+    {
+        Address lo = Address.fromLong(0x0000_0000_FE20_0000L);
+        Address hi = Address.fromLong(0x0000_0001_FE20_0000L);
+        Address lo2 = Address.fromLong(0xFE20_0000L);
+        check("== differs above bit 31", !same(lo, hi) && differ(lo, hi));
+        check("== same word", same(lo, lo2) && !differ(lo, lo2));
+        check("EQ agrees with ==", lo.EQ(lo2) && lo.NE(hi));
+        Object a = mem;
+        Object b = new long[4];
+        check("object refs compare exactly", sameObj(a, mem) && !sameObj(a, b));
+        int big = Integer.MAX_VALUE;
+        int wrapped = big + bump();             // overflows to MIN_VALUE in a 64-bit register
+        check("fromIntSignExtend of an overflowed int", Address.fromIntSignExtend(wrapped).toLong() == -2147483648L);
+    }
+
+    private static int bump()
+    {
+        return 1;
+    }
+
+    @SuppressWarnings("ReferenceEquality")
+    private static boolean same(Address x, Address y)
+    {
+        return x == y;
+    }
+
+    @SuppressWarnings("ReferenceEquality")
+    private static boolean differ(Address x, Address y)
+    {
+        return x != y;
+    }
+
+    private static boolean sameObj(Object x, Object y)
+    {
+        return x == y;
     }
 
     /** Only the access: a leaf unless its throw path is counted as a call. */
