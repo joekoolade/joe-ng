@@ -4,6 +4,45 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 17: Loader's class-file base pointers, WITH their tables; a new comparison rule; and
+  `Address == Address` is a 32-bit compare (2026-11-16).** Pi-validated (build 1d365081214910f5).
+  - **Retyped together** (increment 15 showed they cannot move apart): fields `gbase`, `gp`, `gMethodsStart`,
+    `gBsmOff`, `gAttrBase`, `indyNameBuf`, `objectClone{Cls,Name,Desc}`; holder fields `RVMClass.base`,
+    `RVMMethod.base`/`src`, `RVMField.base`, `VtSlot.base`, `LazyMethod.blob`, `DynLink.blob`; ~35 tables to
+    `AddressArray` (`pcBase`, `pdBase`, `dpBase`, `vtClassBase`/`vtNameBase`, `ifBase`/`ifDecl`, `clinitBase`,
+    `vsName`/`vsDesc`/`vsCls`, `lkClsU`/`lkNameU`/`lkDescU`, `mnCls`/`mnName`/`mnDesc`, `unresBase`, `annoPend*`,
+    `mSrc`...); ~125 `(base, off)` helpers (`utf8IsAtBase`, `utf8EqAt`, `utf8HasPrefix`, `isName`, `findMethod*`,
+    `findCode`, `classRegAt`, `rawEqUtf8`, `dlCellOf`, `parseConstPool`, the anno/attribute walkers...); `Utf8At`
+    (its 3 `Magic.load8` -> `loadUnsignedByte`, the last Magic byte loads in src/vm). `printNameAt(long, int)` deleted;
+    `u4(Address)` added; `u1`/`u2`/`u4(long)` kept (~60 bytecode `code + pc` reads).
+  - **Static initializers:** `vm/Loader.<clinit>` never runs on the host (not snapshotted; nothing host-side touches
+    Loader), so field initializers `= AddressArray.create(...)` are safe -- the image build would fail loudly if not.
+  - **Left long:** `gEntryBlob`/`gRootBlob`/`gStubBlob` and `addBlob`/`load2`/`probeStatic` (fed from the long
+    `VM.*Bytes` statics); memo/dedupe keys (`idMemo`, `igName`, `unres*Seen`, `lnkFailSeen` -- hoisted `long key`);
+    bytecode/code addresses (`mCode`, `reachCode`, `lzTab.code`; `findCode` returns long); descriptor-named entry points.
+  - **THE COMPARISON RULE CHANGED.** Under "every comparison stays long via `.toLong()`" the retype SAVED NOTHING: 129
+    `fromLong` wraps removed came back as ~92 `x.toLong() == 0L` and ~20 two-sided equality compares (Loader 817 ->
+    821). The rule is now: `x.isZero()` / `!x.isZero()`, `a.EQ(b)` / `a.NE(b)` for Address-vs-Address equality (exact
+    64-bit CMP; `isZero` + `if` fuses to one CBZ); ORDERING compares stay long (`Address.LT` etc are UNSIGNED, the long
+    originals signed); mixed long-vs-Address compares stay as they are. Result: Loader `fromLong`/`toLong` 615/202 ->
+    **486/186** (sum 817 -> 672, -18%); all changed files 1038 -> 891 (-14%). 103 `isZero`, 20 `EQ`, 3 `NE`.
+  - **HAZARD FOUND -- `Address == Address` compiles SILENTLY and compares only the LOW 32 BITS.** With both sides
+    Address, javac accepts `a == b` as a REFERENCE compare (`if_acmp`), and Baseline lowers `if_acmpeq/ne` through
+    `branchCmp`, which SXTWs both operands ("addresses <4GB" -- correct for this board's references, wrong for an
+    arbitrary Address). The first retype produced 18 of them (`clinitBase.get(i) == clTab[reg].base`, `decl == gbase`,
+    `baseA == baseB`...), found by listing the source line of every `if_acmp` (`javap -c -l`). All are `EQ`/`NE` now.
+    **Verified: nothing merged has one** -- every `if_acmp` in HEAD's src/ (12) and guestsrc/ (13) is a real object or
+    Class compare. **Any future retype must rerun that scan** (and the `ifnull`/`ifnonnull` count: Loader 155 = HEAD).
+    Making `if_acmp` a full 64-bit compare would close the class for good; a separate, regression-wide change.
+  - **Width check, 10 changed classes vs HEAD:** identical 64/32/8 load/store mix (15 `loadLong` -> `loadAddress` in
+    Loader, 3 in VM, all 64-bit). **Code size (whole class):** Loader **-2,031 words** (123,553 -> 121,522, -1.6%:
+    `isZero`+`if` is one CBZ where a long compare was LCMP code); Utf8At -3; the rest unchanged. Image build: no
+    `helper-stash MISS`, no snapshot/clinit failure.
+  - **Measured:** `make test`; overlaycheck 0 new; full regression **209/209**. Pi: committed first try;
+    `AddressFieldProbe` through `/run` 31/0; every page; `/run`s; a throwing main's stack trace; the stop-poll
+    benchmark (same figures); a forced stop of four threads; the kernel SHA-256; a staged 39 MB upload
+    SHA-256-verified in 25.1 s; `/net` 0 IP header errors, 0 TCP errors.
+
 - **UNBOXED TYPES, INCREMENT 16: `AddressArray`, and Address-typed FIELDS proven (2026-11-16).** Pi-validated
   (build 8aac4d9f0fcaa85c). The prerequisite increment 15 named.
   - **Fields needed no new mechanism, and it is now MEASURED, not inferred:** an `Lmagic/Address;` field is a plain

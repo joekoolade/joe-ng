@@ -225,12 +225,12 @@ final class MetalSymbols implements Symbols
 
     public boolean needsInitGuard(int refCp)
     {
-        return Loader.initGuardNeeded(Loader.initTargetNameAddr(refCp).toLong());   // the SAME class initGuard emits
+        return Loader.initGuardNeeded(Loader.initTargetNameAddr(refCp));   // the SAME class initGuard emits
     }
 
     public boolean needsInitGuardClass(int classCp)
     {
-        return Loader.initGuardNeeded(Loader.classNameAddr(classCp).toLong());
+        return Loader.initGuardNeeded(Loader.classNameAddr(classCp));
     }
 
     /** x0 = the class-name Utf8 address, then the helper. Shared so the two seams cannot drift apart. */

@@ -11,7 +11,7 @@
  */
 package vm;
 
-import magic.Magic;
+import magic.Address;
 
 /**
  * A CONSTANT_Utf8 entry in loaded classfile bytes, seen through {@link compiler.Unboxed.Utf8}: {@code base + off}
@@ -20,22 +20,22 @@ import magic.Magic;
  */
 final class Utf8At implements compiler.Unboxed.Utf8
 {
-    private final long at;
+    private final Address at;
 
-    Utf8At(long base, int off)
+    Utf8At(Address base, int off)
     {
-        this.at = base + off;
+        this.at = base.plus(off);
     }
 
     @Override
     public int length()
     {
-        return ((Magic.load8(at) & 0xFF) << 8) | (Magic.load8(at + 1L) & 0xFF);
+        return ((at.loadUnsignedByte() & 0xFF) << 8) | (at.plus(1L).loadUnsignedByte() & 0xFF);
     }
 
     @Override
     public int byteAt(int i)
     {
-        return Magic.load8(at + 2L + i) & 0xFF;
+        return at.plus(2L + i).loadUnsignedByte() & 0xFF;
     }
 }

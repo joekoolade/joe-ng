@@ -11,6 +11,8 @@
  */
 package vm;
 
+import magic.Address;
+
 /**
  * M8 Stage 3 (reified loader): one field in the loader's field registries. Reifies BOTH the static-field
  * registry ({@code sg*}: base/classOff/nameOff/addr -- so cross-class getstatic/putstatic resolves to the
@@ -20,7 +22,7 @@ package vm;
  */
 final class RVMField
 {
-    long base;      // declaring class blob base (holds its Utf8 strings)
+    Address base;    // declaring class blob base (holds its Utf8 strings)
     int  classOff;  // class name Utf8 offset (in base)
     int  nameOff;   // field name Utf8 offset (in base)
     long addr;      // the field's static-slot address

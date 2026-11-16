@@ -11,6 +11,8 @@
  */
 package vm;
 
+import magic.Address;
+
 /**
  * M8 Stage 3 (reified loader): one deferred/lazily-compiled method -- everything {@code Loader.lazyCompile}
  * needs to compile it on first call, plus the offset cell / TIB slot to patch and the memoised buffer.
@@ -20,7 +22,7 @@ package vm;
  */
 final class LazyMethod
 {
-    long blob;       // class blob base (holds Utf8 strings)
+    Address blob;     // class blob base (holds Utf8 strings)
     int  len;        // blob length (for parseConstPool on context restore)
     int  reg;        // class registry index (clStatics/clTib/clType restore)
     int  nameOff;    // method name Utf8 offset (0 => compile from captured code, not re-find)

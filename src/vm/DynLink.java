@@ -11,6 +11,8 @@
  */
 package vm;
 
+import magic.Address;
+
 /**
  * M8 Stage 3 (reified loader, first step): one entry of the phase-A dynamic-linking table -- a method's
  * offset cell keyed by its class+name+descriptor. Replaces the five parallel {@code dl*} static arrays in
@@ -20,7 +22,7 @@ package vm;
  */
 final class DynLink
 {
-    long blob;      // the method's class blob base (holds its Utf8 strings)
+    Address blob;    // the method's class blob base (holds its Utf8 strings)
     int  classOff;  // class name Utf8 offset (in blob)
     int  nameOff;   // method name Utf8 offset (in blob)
     int  descOff;   // descriptor Utf8 offset (in blob)
