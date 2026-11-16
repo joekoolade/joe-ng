@@ -70,7 +70,7 @@ final class VMUnwind
             // exceptions as ordinary control flow by the dozen.
             Uart.write(Magic.bytes("  NPE at "));
             Loader.printFrameAt(pc);
-            long fs = frameSizeAt(pc);
+            long fs = frameSizeAt(Address.fromLong(pc));
             if (fs != 0L)
             {
                 Uart.write(Magic.bytes("      <- "));
@@ -118,7 +118,7 @@ final class VMUnwind
                 Address.fromLong(exc).plus(16L + n * 8L).store(cpc);
             }
             n += 1;
-            long cfs = frameSizeAt(cpc);
+            long cfs = frameSizeAt(Address.fromLong(cpc));
             if (cfs == 0L)
             {
                 // Top of the JIT/image stack -- OR a pc no frame table claims. Record both so the printer can
@@ -132,7 +132,7 @@ final class VMUnwind
             }
             cpc = Address.fromLong(csp).loadLong() - 4L;       // caller's return address (the call site)
             csp += cfs;
-            if (VM.isLaunchFrame(cpc))
+            if (VM.isLaunchFrame(Address.fromLong(cpc)))
             {
                 break;                                         // below main(): the VM's launch frames, not the program's
             }
@@ -159,7 +159,7 @@ final class VMUnwind
             return;                                            // boot force-compile passes 0
         }
         long cpc = lr - 4L;
-        long csp = mysp + frameSizeAt(VM.fillTraceAddr);       // the caller's SP: ours plus our own frame
+        long csp = mysp + frameSizeAt(Address.fromLong(VM.fillTraceAddr));       // the caller's SP: ours plus our own frame
         int n = keptFrames(exc, cpc, csp, 0L);                 // pass 1: the inline slots, and the true depth
         if (n < 8)
         {
@@ -219,14 +219,14 @@ final class VMUnwind
                 }
                 n += 1;
             }
-            long cfs = frameSizeAt(cpc);
+            long cfs = frameSizeAt(Address.fromLong(cpc));
             if (cfs == 0L)
             {
                 break;                                         // top of the resolvable stack
             }
             cpc = Address.fromLong(csp).loadLong() - 4L;       // caller's return address (the call site)
             csp += cfs;
-            if (VM.isLaunchFrame(cpc))
+            if (VM.isLaunchFrame(Address.fromLong(cpc)))
             {
                 break;                                         // below main(): the VM's launch frames
             }
@@ -348,7 +348,7 @@ final class VMUnwind
                 Uart.write(Magic.bytes("  UNW handler pc="));
                 printHex(pc);
                 Uart.write(Magic.bytes(" nrl="));
-                printHex(jitRegLocalsAt(pc));
+                printHex(jitRegLocalsAt(Address.fromLong(pc)));
                 Uart.write(Magic.bytes(" buf0="));
                 printHex(unwindLocBuf.loadLong());
                 // addJitFrame writes the frame and local tables in LOCKSTEP and both compaction sites treat
@@ -368,10 +368,10 @@ final class VMUnwind
                 faultDepth = 0;                                            // fault resolved by a handler: a later fault
                                                                            //   (incl. one inside the handler) is FRESH,
                                                                            //   not a nested unwind fault
-                long hrl = jitRegLocalsAt(pc);                             // -1 = unknown; resume ignores it,
+                long hrl = jitRegLocalsAt(Address.fromLong(pc));                             // -1 = unknown; resume ignores it,
                 Magic.resume(h, sp, exc, hrl < 0L ? 0L : hrl, unwindLocBuf.toLong());  //   but never pass it a negative
             }
-            long fs = frameSizeAt(pc);
+            long fs = frameSizeAt(Address.fromLong(pc));
             if (fs == 0L)
             {
                 // No frame entry for this pc: the exception reached the TOP uncaught (past main/boot). A valid
@@ -509,7 +509,7 @@ final class VMUnwind
             // -1 = no local entry covers this pc (today: every IMAGE frame, since the image lookup is off);
             // 0 = the frame genuinely saved no callee-saved register. Both mean "copy nothing", but they are
             // no longer the same answer, so a future gap can be reported instead of silently skipped.
-            long nrl = jitRegLocalsAt(pc);
+            long nrl = jitRegLocalsAt(Address.fromLong(pc));
             if (Loader.UNWIND_DUMP && nrl < 0L && pc >= Heap.CODE_BASE)
             {
                 // A JIT pc the FRAME table covers but the LOCAL table does not, though addJitFrame writes
@@ -584,7 +584,7 @@ final class VMUnwind
             // permanent deadlock, which is strictly worse than the bug ACC_SYNCHRONIZED support fixes.
             // STRICTLY below the new sp, so a handler INSIDE a synchronized method keeps its own monitor:
             // its frame is not popped, and its normal return still pairs with monExitSync.
-            VM.monUnwindSync(sp);
+            VM.monUnwindSync(Address.fromLong(sp));
         }
     }
 

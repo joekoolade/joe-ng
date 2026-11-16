@@ -3259,14 +3259,14 @@ public final class Loader
      *  register them ({@link #addBlob}) and return the bytes address, or 0 if the class is not embedded. */
     private static long pullClass(byte[] name)
     {
-        long scratch = Heap.allocData(name.length + 8).toLong();
+        Address scratch = Heap.allocData(name.length + 8);
         int i = 0;
         while (i < name.length)
         {
-            Address.fromLong(scratch).plus(i).store(name[i]);
+            scratch.plus(i).store(name[i]);
             i += 1;
         }
-        long bytes = VM.dirBytes(scratch, name.length);
+        long bytes = VM.dirBytes(scratch, name.length).toLong();
         if (bytes == 0L)
         {
             return 0L;
@@ -3631,7 +3631,7 @@ public final class Loader
                 Address.fromLong(arr).plus(24L).plus(n * 8L).store(frameToElement(cpc, steTib));
             }
             n += 1;
-            long cfs = VM.frameSizeAt(cpc);
+            long cfs = VM.frameSizeAt(Address.fromLong(cpc));
             if (cfs == 0L)
             {
                 if (first && savedX30 > 0x1000L)
@@ -3645,7 +3645,7 @@ public final class Loader
             cpc = Address.fromLong(csp).loadLong() - 4L;                  // caller's return address (the call site)
             csp += cfs;
             first = false;
-            if (VM.isLaunchFrame(cpc))
+            if (VM.isLaunchFrame(Address.fromLong(cpc)))
             {
                 break;                                     // below main(): end the trace at main, as on a JVM
             }
@@ -4211,7 +4211,7 @@ public final class Loader
                 }
                 if (RECLAIM_CODE_BY_GC == false)
                 {
-                    VM.dropJitTablesAbove(codeHeapMark);        // frame/handler entries for the dead code would
+                    VM.dropJitTablesAbove(Address.fromLong(codeHeapMark));        // frame/handler entries for the dead code would
                 }                                               //   ALIAS the next batch's reused addresses
                 // Under code reclamation this drop must NOT happen: the entries above the mark no longer all
                 // belong to dead code, and a surviving method stripped of its frame size / catch handlers is
@@ -7335,7 +7335,7 @@ public final class Loader
             return 0L;
         }
         long tf = Magic.readCNTPCT_EL0();              // the FETCH: a jar miss inflates the whole classfile here
-        long bytes = VM.dirBytes(namePtr, len);
+        long bytes = VM.dirBytes(Address.fromLong(namePtr), len).toLong();
         mrFetch += Magic.readCNTPCT_EL0() - tf;
         if (bytes == 0L || alreadyBlob(bytes))
         {
@@ -7344,13 +7344,13 @@ public final class Loader
         if (!LOAD_TRACE)
         {
             tf = Magic.readCNTPCT_EL0();
-            int dlen = (int) VM.dirLen(namePtr, len);
+            int dlen = (int) VM.dirLen(Address.fromLong(namePtr), len);
             mrFetch += Magic.readCNTPCT_EL0() - tf;
             addBlob(bytes, dlen);
             return bytes;
         }
         long t0 = Magic.readCNTPCT_EL0();
-        addBlob(bytes, (int) VM.dirLen(namePtr, len));
+        addBlob(bytes, (int) VM.dirLen(Address.fromLong(namePtr), len));
         long us = elapsedUs(t0);
         Uart.write(Magic.bytes("  load "));
         writeName(namePtr, len);
@@ -9174,7 +9174,7 @@ public final class Loader
     {
         return nameOff != 0
                 && classRegByName(nameOff) < 0
-                && VM.dirBytes(gbase + nameOff + 2L, u2(gbase + nameOff)) == 0L
+                && VM.dirBytes(Address.fromLong(gbase + nameOff + 2L), u2(gbase + nameOff)).toLong() == 0L
                 && !isDenylisted(gbase, nameOff);
     }
 
@@ -9632,7 +9632,7 @@ public final class Loader
         // answers "not loaded", which is the question we are already asking with regBySigU. The first cut of
         // this instrument used it and reported "absent from the classDir" for a class the image plainly
         // carries. An instrument that conflates two tables is worse than none: it fabricates a cause.
-        boolean inDir = VM.dirBytes(clsU + 2L, u2(clsU)) != 0L;
+        boolean inDir = VM.dirBytes(Address.fromLong(clsU + 2L), u2(clsU)).toLong() != 0L;
         if (registered)
         {
             // The pull worked and the class is live, so the hole is in static REGISTRATION, not in loading:
@@ -10246,7 +10246,7 @@ public final class Loader
             scratch.plus(i).store(name[i]);
             i += 1;
         }
-        long bytes = VM.dirBytes(scratch.toLong(), name.length);
+        long bytes = VM.dirBytes(scratch, name.length).toLong();
         if (bytes == 0L)
         {
             return false;
@@ -12268,7 +12268,7 @@ public final class Loader
         mEnd[i] = out;                                  // the MEASURED extent of this body, for publishEmitted
         if (gFrameSize > 0)                             // let VM.unwind pop this JIT'd frame
         {
-            VM.addJitFrame(mBuf[i], out, gFrameSize, gRegLocals);
+            VM.addJitFrame(Address.fromLong(mBuf[i]), Address.fromLong(out), gFrameSize, gRegLocals);
         }
         int h = 0;                                      // register try/catch ranges: a throw in another JIT'd
         while (h < gHN)                                 // method can unwind into this method's catch (cross-method)
@@ -12290,7 +12290,7 @@ public final class Loader
                     ct = VM.CATCH_BY_NAME | (gbase + gcp[u2(gbase + gcp[gHCatchCp[h]])]);
                 }
             }
-            VM.addJitHandler(ms, me, hh, ct);
+            VM.addJitHandler(Address.fromLong(ms), Address.fromLong(me), Address.fromLong(hh), ct);
             h += 1;
         }
     }
@@ -16782,7 +16782,7 @@ public final class Loader
         {
             return 0L;
         }
-        return guestBytes(VM.heapBytes(base, classFileLength(base)));
+        return guestBytes(VM.heapBytes(Address.fromLong(base), classFileLength(base)));
     }
 
     /** The length of the class file at {@code base}, by walking its structure (JVMS 4.1). */
@@ -17033,7 +17033,7 @@ public final class Loader
             Uart.write(Magic.bytes("\n  MH LINK: no MethodHandleNatives linker\n"));
             return 0L;
         }
-        long desc = guestString(VM.heapBytes(descU + 2L, u2(descU)));
+        long desc = guestString(VM.heapBytes(Address.fromLong(descU + 2L), u2(descU)));
         return Magic.call2(m.buf, mh, desc);            // may throw WrongMethodTypeException: unwinds to the site
     }
 
@@ -18405,7 +18405,7 @@ public final class Loader
         {
             return false;
         }
-        return VM.dirBytes(base + off + 2, u2(base + off)) != 0L;
+        return VM.dirBytes(Address.fromLong(base + off + 2), u2(base + off)).toLong() != 0L;
     }
 
     /**
@@ -19688,8 +19688,8 @@ public final class Loader
         }
         buf.plus(w * 4L).store(A64Enc.ldrx(STUB_LR, STUB_SP, STUB_LR_OFF)); // (see registerTrampFrames)
         w += 1;
-        long lo = buf.toLong() + 4L;
-        long hi = buf.toLong() + w * 4L;
+        Address lo = buf.plus(4L);
+        Address hi = buf.plus(w * 4L);
         buf.plus(w * 4L).store(A64Enc.addImm(STUB_SP, STUB_SP, STUB_FRAME)); // add sp,sp,#144
         w += 1;
         buf.plus(w * 4L).store(A64Enc.br(16)); // tail-call the resolved method
@@ -20728,19 +20728,19 @@ public final class Loader
     {
         if (lazyTrampAddr != 0L)
         {
-            VM.addJitFrame(lazyTrampLo, lazyTrampHi, STUB_FRAME, 0L);
+            VM.addJitFrame(Address.fromLong(lazyTrampLo), Address.fromLong(lazyTrampHi), STUB_FRAME, 0L);
         }
         if (virtualTrampAddr != 0L)
         {
-            VM.addJitFrame(virtualTrampLo, virtualTrampHi, STUB_FRAME, 0L);
+            VM.addJitFrame(Address.fromLong(virtualTrampLo), Address.fromLong(virtualTrampHi), STUB_FRAME, 0L);
         }
         if (mhTrampAddr != 0L)
         {
-            VM.addJitFrame(mhTrampLo, mhTrampHi, STUB_FRAME, 0L);
+            VM.addJitFrame(Address.fromLong(mhTrampLo), Address.fromLong(mhTrampHi), STUB_FRAME, 0L);
         }
         if (indyTrampAddr != 0L)
         {
-            VM.addJitFrame(indyTrampLo, indyTrampHi, STUB_FRAME, 0L);
+            VM.addJitFrame(Address.fromLong(indyTrampLo), Address.fromLong(indyTrampHi), STUB_FRAME, 0L);
         }
     }
 
@@ -24592,7 +24592,7 @@ public final class Loader
         w = emitAt(t, w, A64Enc.addImm(STUB_SP, STUB_SP, PROXY_FRAME));
         w = emitAt(t, w, A64Enc.ret());
         Heap.publishCode(Address.fromLong(t), Address.fromLong(t + w * 4L));
-        VM.addJitFrame(t + 4L, thi, PROXY_FRAME, 0L);  // live from just after the `sub sp`
+        VM.addJitFrame(Address.fromLong(t + 4L), Address.fromLong(thi), PROXY_FRAME, 0L);  // live from just after the `sub sp`
         return t;
     }
 
@@ -27343,7 +27343,7 @@ public final class Loader
         long thi = thunk + w * 4L;                                      // at the `add sp`: the frame dies here
         w = emitAt(thunk, w, A64Enc.addImm(STUB_SP, STUB_SP, BOX_FRAME));
         w = emitAt(thunk, w, A64Enc.ret());
-        VM.addJitFrame(thunk + 4L, thi, BOX_FRAME, 0L);                 // live from just after the `sub sp`
+        VM.addJitFrame(Address.fromLong(thunk + 4L), Address.fromLong(thi), BOX_FRAME, 0L);                 // live from just after the `sub sp`
         return w;
     }
 
@@ -27438,7 +27438,7 @@ public final class Loader
         long ifaceType = lambdaIfaceType(idx);
         long ifaceU = ifaceType == 0L ? lambdaIfaceNameU(idx) : 0L;
         if (ifaceType == 0L && ifaceU != 0L && lzCompiling && !lzRetried
-                && VM.dirBytes(ifaceU + 2L, u2(ifaceU)) != 0L && notePullNeeded(ifaceU))
+                && VM.dirBytes(Address.fromLong(ifaceU + 2L), u2(ifaceU)).toLong() != 0L && notePullNeeded(ifaceU))
         {
             // A LATE compile met a lambda whose interface is in the classDir but not loaded -- a deferred
             // package (closureDeferred), which the batch pull loop skips by design. Note it for the pull-and-
@@ -27733,8 +27733,8 @@ public final class Loader
             w += 1;
             thunk.plus(w * 4L).store(A64Enc.ldrx(STUB_LR, STUB_SP, STUB_LR_OFF)); // restore LR
             w += 1;
-            long tlo = thunk.toLong() + 4L;                                                               // after `sub sp`
-            long thi = thunk.toLong() + w * 4L;                                                           // at `add sp`
+            Address tlo = thunk.plus(4L);                                                               // after `sub sp`
+            Address thi = thunk.plus(w * 4L);                                                           // at `add sp`
             thunk.plus(w * 4L).store(A64Enc.addImm(31, 31, frame)); // add sp, #frame
             w += 1;
             thunk.plus(w * 4L).store(A64Enc.ret());

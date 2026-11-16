@@ -1274,7 +1274,7 @@ final class VMGc
                     r.plus(8).store(start + size);
                     freedN2 = freedN2 + 1L;
                 }
-                VM.dropJitTablesIn(start, start + size);
+                VM.dropJitTablesIn(Address.fromLong(start), Address.fromLong(start + size));
                 Loader.dropCodeRootsIn(start, start + size);   // its baked-in addresses die with it
                 zeroBuffer(start, size);                       // stale instructions are worse than zeros
                 Heap.freeCodeBlock(i);

@@ -134,7 +134,7 @@ public final class VMScheduler
         pcCur = new int[4];
         pcReload = Magic.readCNTFRQ_EL0() / 100L;          // ~10 ms
 
-        long stub = buildSwitchStub(pcScheduleAddr, false);   // shared context-switch stub (reused from M7)
+        long stub = buildSwitchStub(Address.fromLong(pcScheduleAddr), false).toLong();   // shared context-switch stub (reused from M7)
         int i = 0;                                          // vector table: entry 5 (IRQ) -> switch stub, else -> fault
         while (i < 16)
         {
@@ -1041,7 +1041,7 @@ public final class VMScheduler
         {
             Uart.write(Magic.bytes("\n      at "));
             Loader.printFrameAt(cpc);
-            long fs = frameSizeAt(cpc);
+            long fs = frameSizeAt(Address.fromLong(cpc));
             if (fs == 0L)
             {
                 if (lr == 0L)
