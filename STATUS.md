@@ -4,6 +4,35 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 13: `Loader`'s code/pc API (2026-11-15).** Pi-validated (build 0edde9b24478750b). 33
+  `Loader` methods whose `long` is a code or pc address take or return `Address`:
+  - pc/code lookups and reporting: `printFrameAt`, `reportMethodAt`, `plausibleCode`, `printImageFrameAt`,
+    `printNearestBelow`, `inSameCodeBlock`, `reportCallCells`, `cellImmAt`, `frameToElement`, `checkClinitEntry`,
+    `stubIdxAt`;
+  - stubs and trampolines: `noteStub`, `writeLazyStub` ("no literal" = `Address.zero()`), `buildLazyCompileStub`,
+    `buildLinkStub`, `checkTramp`, `emitTailGuard`, `virtualTramp`, `mhTramp`, `indyTramp`, `buildSaveAreaTramp`;
+  - thunk emission: `emitAt`, `emitTrampAddr`, `emitBoxPrologue`, `emitBoxReturn`, `emitUnboxArgs`,
+    `emitThunkTargetGuard`, `finishLambdaClass`, `lambdaItableFor`, `emitMov48` (its value stays long: object ref OR
+    helper address), `proxyThunk`.
+  - **Not changed:** the 4 descriptor-named Loader methods (`lazyCompile(I)J`, `resolveLinkStub(I)J`, `resolveRun(J)J`,
+    `launchMain`); object refs, ids, indices, sizes; `buildTrace`/`traceWalk` (reassigned walk values, a raw saved X30);
+    `badRead` (its caller passes a 0/1 flag); `noteCodeRoot` (may be an object ref); the JIT-helper-adjacent
+    `resolveUnresolvedNew`/`classMirrorAtPc`/`ctorFrameKind`/`describeRecv`.
+  - **Callers:** Loader internal (about 20 `thunk.toLong()` gone), VM 19 sites, VMUnwind 10, VMGc 5, VMNatives 1,
+    VMScheduler 1, MetalSymbols 3 (its long Symbols API takes `.toLong()`); every comparison stays long.
+  - **Width check, 7 changed classes vs HEAD:** identical 64/32/8 mix (4 `store(long)` became `store(Address)`, 2
+    `loadLong` became `loadAddress`, all 64-bit). Image build: no `helper-stash MISS`.
+  - **Code size (whole class):** Loader 70 words smaller; no other class changed.
+  - **Note:** `plausibleCode` tests arbitrary stack words, so semantically its input is a `Word`, not an `Address`.
+  - **Measured:** `make test`; overlaycheck 0 new; full regression **208/208**. Pi: committed first try; every page;
+    `/run`s; a throwing main's stack trace (frame printing and unwinding go through these lookups); the stop-poll
+    benchmark (same figures); a forced stop of four threads; the kernel SHA-256; a staged 39 MB upload SHA-256-verified
+    in 22.3 s; `/net` 0 IP header errors, 0 TCP errors, 0 retransmits.
+  - **Next (Loader follow-ups):** utf8/name addresses (`clsU`/`nameU`/`descU`, `putUtf8`, `utf8Blob*`, the name
+    printers); class-file base pointers (`base`+offset through `u1`/`u2`/`u4`, `parseConstPool`, `findMethod`...); the
+    code-root/reloc recorders and `buildTrace`; code buffers held in long fields/tables (`mBuf[]`, `rgTab.buf`,
+    `lzTab.stubLit`, `lkStub`, `*TrampAddr` -- field retyping).
+
 - **UNBOXED TYPES, INCREMENT 12: `VM`'s address-typed API (2026-11-15).** Pi-validated (build c54da7c9bfd47bae). 26
   `VM` methods whose `long` is a MEMORY ADDRESS take or return `Address`:
   - fault/unwind: `stashFaultRegs`, `reportNestedFault` (elr, far), `reportWildBranch`, `reportFaultStack`,

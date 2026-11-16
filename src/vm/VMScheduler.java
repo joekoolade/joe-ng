@@ -1040,7 +1040,7 @@ public final class VMScheduler
         while (depth < 12 && cpc > 0x1000L)
         {
             Uart.write(Magic.bytes("\n      at "));
-            Loader.printFrameAt(cpc);
+            Loader.printFrameAt(Address.fromLong(cpc));
             long fs = frameSizeAt(Address.fromLong(cpc));
             if (fs == 0L)
             {

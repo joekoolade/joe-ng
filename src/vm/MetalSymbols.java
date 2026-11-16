@@ -515,15 +515,15 @@ final class MetalSymbols implements Symbols
     {
         if (helper == Symbols.VIRTUAL_RESOLVE)
         {
-            return Loader.virtualTramp();               // built on first use, like the link trampoline
+            return Loader.virtualTramp().toLong();      // built on first use, like the link trampoline
         }
         if (helper == Symbols.MH_INVOKE)
         {
-            return Loader.mhTramp();                    // the same, for MethodHandle signature-polymorphic calls
+            return Loader.mhTramp().toLong();           // the same, for MethodHandle signature-polymorphic calls
         }
         if (helper == Symbols.INDY_INVOKE)
         {
-            return Loader.indyTramp();                  // ... and for invokedynamic the JIT does not lower itself
+            return Loader.indyTramp().toLong();         // ... and for invokedynamic the JIT does not lower itself
         }
         if (helper == Symbols.LDC_CONST)
         {

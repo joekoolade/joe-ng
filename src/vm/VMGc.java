@@ -879,7 +879,7 @@ final class VMGc
                     printHex(Address.fromLong(Heap.LARGE_PTR_CELL).loadLong());
                     Uart.putc(0x0A);
                     Uart.write(Magic.bytes("  marked from "));
-                    Loader.printFrameAt(Magic.readLR());   // which scan handed us this word
+                    Loader.printFrameAt(Address.fromLong(Magic.readLR())); // which scan handed us this word
                     Uart.putc(0x0A);
                 }
                 return false;                          // refuse to mark it: not a block
@@ -1074,7 +1074,7 @@ final class VMGc
                 Uart.write(Magic.bytes(" target="));
                 printHex(w);
                 Uart.write(Magic.bytes(" stub="));
-                printHex(Loader.stubIdxAt(w));
+                printHex(Loader.stubIdxAt(Address.fromLong(w)));
                 Uart.putc(0x0A);
                 rawStaleSeen = rawStaleSeen + 1L;      // report and CONTINUE: halting here hides whether the
                 if (staleTabN < 64L)                   //   fix downstream actually works. Remember the slot
@@ -1124,7 +1124,7 @@ final class VMGc
                         Uart.write(Magic.bytes(" target="));
                         printHex(w);
                         Uart.write(Magic.bytes("\n  freed method: "));
-                        Loader.printFrameAt(w);
+                        Loader.printFrameAt(Address.fromLong(w));
                         Uart.putc(0x0A);
                         while (true) { Magic.wfe(); }
                     }
@@ -1171,7 +1171,7 @@ final class VMGc
                     Uart.write(Magic.bytes(" nowFree="));
                     printHex((long) Heap.codeBlockFreeAt(Address.fromLong(was)));
                     Uart.write(Magic.bytes(" stubIdx="));
-                    printHex(Loader.stubIdxAt(was));
+                    printHex(Loader.stubIdxAt(Address.fromLong(was)));
                     Uart.putc(0x0A);
                     reportSweptPc(was);                // ... and which buffer it was, from the swept log
                 }
@@ -1264,7 +1264,7 @@ final class VMGc
                     log.store(start);
                     log.plus(8).store(start + size);
                     log.plus(16).store(collections);
-                    log.plus(24).store(Loader.stubIdxAt(start));
+                    log.plus(24).store(Loader.stubIdxAt(Address.fromLong(start)));
                     sweptLogN = sweptLogN + 1L;         // ... and WHICH stub, if it is one
                 }
                 if (freedN2 < 32L)                     // remember this sweep's freed ranges, so the probe

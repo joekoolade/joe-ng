@@ -94,7 +94,7 @@ public final class VM
             Uart.write(Magic.bytes("\n*** BOOT RE-ENTERED at EL1: wild branch to the image entry (not a reset). x30=0x"));
             printHex(src);
             Uart.write(Magic.bytes("\n    branch source: "));
-            Loader.reportMethodAt(src);
+            Loader.reportMethodAt(Address.fromLong(src));
             Loader.reportReceiverAt(recv);
             Uart.write(Magic.bytes("    x19 (callee-saved copy of the receiver): 0x"));
             printHex(recvSaved);
@@ -106,13 +106,13 @@ public final class VM
                 long up = Address.fromLong(sp0).loadLong();
                 printHex(up);
                 Uart.putc(0x20);
-                Loader.reportMethodAt(up);
+                Loader.reportMethodAt(Address.fromLong(up));
 
                 // ... and the SOURCE LINE. A "+0xNNNN" offset cannot say WHICH call site it is when a method
                 // holds several of the same shape (LispDemo.main makes FOUR String.valueOf(Object) calls),
                 // and the line table the printStackTrace walker already reads answers that in one boot.
                 Uart.write(Magic.bytes("\n    caller frame: "));
-                Loader.printFrameAt(up);
+                Loader.printFrameAt(Address.fromLong(up));
                 Uart.putc(0x0A);
 
                 // AND THE CALLER'S OWN CODE. The line names the STATEMENT; only the words that marshal x0
@@ -133,7 +133,7 @@ public final class VM
                     // ... and WHERE each of those two calls actually went. The cell is the only handle:
                     // the source names `run`, the cell says which body the site was bound to.
                     Uart.write(Magic.bytes("    call targets:\n"));
-                    Loader.reportCallCells(up);
+                    Loader.reportCallCells(Address.fromLong(up));
                 }
             }
             else
@@ -2561,13 +2561,13 @@ public final class VM
         printHex(lr);
         Uart.putc(0x0A);
         Uart.write(Magic.bytes("  at elr: "));                 // the faulting instruction's own method: the
-        Loader.printFrameAt(elr);                              //   image symbol table names writer-compiled
+        Loader.printFrameAt(Address.fromLong(elr));            //   image symbol table names writer-compiled
         Uart.putc(0x0A);                                       //   code, which reportMethodAt (JIT-only) cannot
         Uart.write(Magic.bytes("  at lr:  "));                 //   -- without this a fault inside the loader
-        Loader.printFrameAt(lr);                               //   reads as "(no registered method)" and the
+        Loader.printFrameAt(Address.fromLong(lr));                               //   reads as "(no registered method)" and the
         Uart.putc(0x0A);                                       //   only clue is a raw address
         Uart.write(Magic.bytes("  faulting method (lr): "));   // #43: name the demand-compiled method at lr
-        Loader.reportMethodAt(lr);
+        Loader.reportMethodAt(Address.fromLong(lr));
         Uart.putc(0x0A);
         Uart.write(Magic.bytes("  receiver x0="));             // #43: the wild-branch receiver + its TIB/Type
         printHex(rcv);
@@ -2621,7 +2621,7 @@ public final class VM
         long exc = 0L;
         if (ec == 0x24L || ec == 0x25L || ec == 0x20L || ec == 0x21L)   // data / instruction abort = address trap
         {
-            if ((ec == 0x20L || ec == 0x21L) && !Loader.plausibleCode(elr))
+            if ((ec == 0x20L || ec == 0x21L) && !Loader.plausibleCode(Address.fromLong(elr)))
             {
                 reportWildBranch(Address.fromLong(sp));        // executing at a non-code address: say who branched there
             }
@@ -2642,7 +2642,7 @@ public final class VM
                 // the sweep zeroed". Report it HERE: once this becomes a Java exception and unwinds, the
                 // block state and swept-log history are no longer meaningful.
                 VMGc.reportSweptPc(elr);
-                Loader.printFrameAt(elr);
+                Loader.printFrameAt(Address.fromLong(elr));
                 Uart.putc(0x0A);
             }
             exc = newInternalError();
@@ -2826,7 +2826,7 @@ public final class VM
             r += 1;
         }
         Uart.write(Magic.bytes("\n    x30 in: "));
-        Loader.printFrameAt(faultRegs[c * 40 + 30] - 4L);
+        Loader.printFrameAt(Address.fromLong(faultRegs[c * 40 + 30] - 4L));
     }
 
     /** A second CPU fault fired while {@link #throwFromFault} was still turning the FIRST one into a Java
@@ -2845,9 +2845,9 @@ public final class VM
         Uart.write(Magic.bytes(" far="));
         printHex(fault0Far);
         Uart.write(Magic.bytes("\n    at "));
-        Loader.reportMethodAt(fault0Elr);
+        Loader.reportMethodAt(Address.fromLong(fault0Elr));
         Uart.write(Magic.bytes("\n    elr in: "));                // names IMAGE code, which reportMethodAt cannot
-        Loader.printFrameAt(fault0Elr);
+        Loader.printFrameAt(Address.fromLong(fault0Elr));
         printFaultRegs(fault0Core);
         Uart.write(Magic.bytes("\n  nested:   core="));
         int me = (int) (Magic.readMPIDR() & 3L);
@@ -2859,9 +2859,9 @@ public final class VM
         Uart.write(Magic.bytes(" far="));
         printHex(far.toLong());
         Uart.write(Magic.bytes("\n    at "));
-        Loader.reportMethodAt(elr.toLong());
+        Loader.reportMethodAt(elr);
         Uart.write(Magic.bytes("\n    elr in: "));
-        Loader.printFrameAt(elr.toLong());
+        Loader.printFrameAt(elr);
         Uart.write(Magic.bytes("\n    task="));                // the NESTED fault's own task: a different task
         printDec(curTask());                                   //   on the same core means the first was preempted
         Uart.write(Magic.bytes(" loaderOwner="));
@@ -2925,7 +2925,7 @@ public final class VM
         Uart.write(Magic.bytes("\n    call site (where the branch would have returned): 0x"));
         printHex(lr);
         Uart.write(Magic.bytes("\n    at "));
-        Loader.printFrameAt(lr);
+        Loader.printFrameAt(Address.fromLong(lr));
         Uart.write(Magic.bytes("\n    Halting. Without this check the branch erases its own provenance. ***\n"));
         while (true)
         {
@@ -2986,7 +2986,7 @@ public final class VM
         while (depth < 12 && cpc > 0x1000L)
         {
             Uart.write(Magic.bytes("\n    at "));
-            Loader.printFrameAt(cpc);
+            Loader.printFrameAt(Address.fromLong(cpc));
             long fs = frameSizeAt(Address.fromLong(cpc));
             if (fs == 0L)
             {
@@ -3050,12 +3050,12 @@ public final class VM
         while (i < 128 && shown < 12)
         {
             long w = Address.fromLong(p).loadLong();
-            if (Loader.plausibleCode(w) || (w >= 0x80000L && w < Heap.IMAGE_CEILING))
+            if (Loader.plausibleCode(Address.fromLong(w)) || (w >= 0x80000L && w < Heap.IMAGE_CEILING))
             {
                 Uart.write(Magic.bytes("  [sp+"));
                 printDec(i * 8);
                 Uart.write(Magic.bytes("] "));
-                Loader.printFrameAt(w - 4L);        // a saved LR points PAST the call: name the call site
+                Loader.printFrameAt(Address.fromLong(w - 4L)); // a saved LR points PAST the call: name the call site
                 Uart.putc(0x0A);
                 shown += 1;
             }
@@ -3082,7 +3082,7 @@ public final class VM
         while (depth < 12 && cpc > 0x1000L)
         {
             Uart.write(Magic.bytes("\n    at "));
-            Loader.printFrameAt(cpc);
+            Loader.printFrameAt(Address.fromLong(cpc));
             long fs = frameSizeAt(Address.fromLong(cpc));
             if (fs == 0L)
             {
