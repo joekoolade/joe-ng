@@ -22639,7 +22639,7 @@ public final class Loader
         {
             return 0L;
         }
-        int ci = classRegByType(Magic.load64(mirror + 16L));
+        int ci = classRegByType(Address.fromLong(mirror).plus(16L).loadLong());
         if (ci < 0)
         {
             return 0L;
@@ -22650,7 +22650,7 @@ public final class Loader
         p += 2L + u2(p) * 2L;                           // past the interfaces list
         int fcount = u2(p);
         p += 2;
-        int nlen = (int) Magic.load64(nameArr + 16L);   // byte[] length @16
+        int nlen = (int) Address.fromLong(nameArr).plus(16L).loadLong();   // byte[] length @16
         long nbase = nameArr + 24L;
         int f = 0;
         while (f < fcount)
@@ -22685,7 +22685,7 @@ public final class Loader
         {
             return 0L;
         }
-        int reg = regOfType(Magic.load64(mirror + 16L));
+        int reg = regOfType(Address.fromLong(mirror).plus(16L).loadLong());
         if (reg < 0)
         {
             return 0L;
@@ -22727,7 +22727,7 @@ public final class Loader
         {
             return 0L;
         }
-        int reg = regOfType(Magic.load64(mirror + 16L));
+        int reg = regOfType(Address.fromLong(mirror).plus(16L).loadLong());
         if (reg < 0)
         {
             return 0L;
@@ -22754,7 +22754,7 @@ public final class Loader
         {
             return 0L;
         }
-        int reg = regOfType(Magic.load64(mirror + 16L));
+        int reg = regOfType(Address.fromLong(mirror).plus(16L).loadLong());
         if (reg < 0)
         {
             return 0L;
@@ -22792,7 +22792,7 @@ public final class Loader
         {
             return 0L;
         }
-        int reg = regOfType(Magic.load64(mirror + 16L));
+        int reg = regOfType(Address.fromLong(mirror).plus(16L).loadLong());
         if (reg < 0)
         {
             return 0L;
@@ -22825,7 +22825,7 @@ public final class Loader
         {
             return 0L;
         }
-        int reg = regOfType(Magic.load64(mirror + 16L));
+        int reg = regOfType(Address.fromLong(mirror).plus(16L).loadLong());
         if (reg < 0)
         {
             return 0L;
@@ -22943,7 +22943,7 @@ public final class Loader
         {
             return 0L;
         }
-        int reg = regOfType(Magic.load64(mirror + 16L));
+        int reg = regOfType(Address.fromLong(mirror).plus(16L).loadLong());
         if (reg < 0)
         {
             return 0L;
@@ -23025,7 +23025,7 @@ public final class Loader
         {
             return 0L;
         }
-        int ci = classRegByType(Magic.load64(mirror + 16L));
+        int ci = classRegByType(Address.fromLong(mirror).plus(16L).loadLong());
         if (ci < 0)
         {
             return 0L;
@@ -23036,7 +23036,7 @@ public final class Loader
         p += 2L + u2(p) * 2L;                           // past the interfaces list
         int fcount = u2(p);
         p += 2;
-        int nlen = (int) Magic.load64(nameArr + 16L);
+        int nlen = (int) Address.fromLong(nameArr).plus(16L).loadLong();
         long nbase = nameArr + 24L;
         long lp = 0L;
         int f = 0;
@@ -23067,7 +23067,7 @@ public final class Loader
         {
             return 0L;
         }
-        int ci = classRegByType(Magic.load64(mirror + 16L));
+        int ci = classRegByType(Address.fromLong(mirror).plus(16L).loadLong());
         if (ci < 0)
         {
             return 0L;
@@ -23078,7 +23078,7 @@ public final class Loader
         p += 2L + u2(p) * 2L;                           // past the interfaces list
         int fcount = u2(p);
         p += 2;
-        int nlen = (int) Magic.load64(nameArr + 16L);   // byte[] length @16
+        int nlen = (int) Address.fromLong(nameArr).plus(16L).loadLong();   // byte[] length @16
         long nbase = nameArr + 24L;
         int f = 0;
         while (f < fcount)
@@ -23112,7 +23112,7 @@ public final class Loader
         {
             return 0L;
         }
-        int ci = classRegByType(Magic.load64(mirror + 16L));
+        int ci = classRegByType(Address.fromLong(mirror).plus(16L).loadLong());
         if (ci < 0)
         {
             return 0L;
@@ -23123,7 +23123,7 @@ public final class Loader
         p += 2L + u2(p) * 2L;                           // past the interfaces list
         int fcount = u2(p);
         p += 2;
-        int nlen = (int) Magic.load64(nameArr + 16L);
+        int nlen = (int) Address.fromLong(nameArr).plus(16L).loadLong();
         long nbase = nameArr + 24L;
         long descU = 0L;
         int f = 0;
@@ -23168,7 +23168,7 @@ public final class Loader
         long at = refArrayTib(classMirrorTypeAddr());
         if (at != 0L)
         {
-            Magic.store64(arr + ObjectModel.TIB_OFFSET, at);
+            Address.fromLong(arr).plus(ObjectModel.TIB_OFFSET).store(at);
         }
         int i = 1;                                      // past '('
         int k = 0;
@@ -23195,7 +23195,7 @@ public final class Loader
                 mirror = start == i ? primitiveMirror(u1(d + i)) : primArrayMirror(u1(d + i), i - start);
                 i += 1;
             }
-            Magic.store64(arr + 24L + k * 8L, mirror);
+            Address.fromLong(arr).plus(24L).plus(k * 8L).store(mirror);
             k += 1;
         }
         return arr;
@@ -23252,7 +23252,7 @@ public final class Loader
         {
             return 0L;
         }
-        long type = Magic.load64(elemMirror + 16L);
+        long type = Address.fromLong(elemMirror).plus(16L).loadLong();
         int k = 0;
         while (k < dims)
         {
@@ -23261,7 +23261,7 @@ public final class Loader
             {
                 return 0L;
             }
-            type = Magic.load64(tib);
+            type = Address.fromLong(tib).loadLong();
             k += 1;
         }
         return classMirror(type);
@@ -23275,7 +23275,7 @@ public final class Loader
         {
             return 0L;
         }
-        long type = Magic.load64(tib);
+        long type = Address.fromLong(tib).loadLong();
         int k = 1;
         while (k < dims)
         {
@@ -23284,7 +23284,7 @@ public final class Loader
             {
                 return 0L;
             }
-            type = Magic.load64(tib);
+            type = Address.fromLong(tib).loadLong();
             k += 1;
         }
         return classMirror(type);
@@ -23347,7 +23347,7 @@ public final class Loader
         {
             return 0L;
         }
-        int reg = regOfType(Magic.load64(mirror + 16L));
+        int reg = regOfType(Address.fromLong(mirror).plus(16L).loadLong());
         if (reg < 0)
         {
             return 0L;
@@ -23407,14 +23407,14 @@ public final class Loader
         {
             return 0L;
         }
-        int reg = regOfType(Magic.load64(mirror + 16L));
+        int reg = regOfType(Address.fromLong(mirror).plus(16L).loadLong());
         int n = reg >= 0 ? clIfaceRegN[reg] : 0;
         long arr = Heap.allocArray(n, 8);
-        Magic.store64(arr + ObjectModel.TIB_OFFSET, refArrayTib(elemType));
+        Address.fromLong(arr).plus(ObjectModel.TIB_OFFSET).store(refArrayTib(elemType));
         int i = 0;
         while (i < n)
         {
-            Magic.store64(arr + ObjectModel.ARRAY_BASE_OFFSET + i * 8L,
+            Address.fromLong(arr).plus(ObjectModel.ARRAY_BASE_OFFSET).plus(i * 8L).store(
                     classMirror(clTab[clIfaceReg[reg * MAX_DIRECT_IF + i]].type));
             i += 1;
         }
@@ -23447,7 +23447,7 @@ public final class Loader
         {
             return 0L;
         }
-        int reg = regOfType(Magic.load64(mirror + 16L));
+        int reg = regOfType(Address.fromLong(mirror).plus(16L).loadLong());
         if (reg < 0)
         {
             return emptyAnnoArray();
@@ -23549,11 +23549,11 @@ public final class Loader
             k += 1;
         }
         long arr = Heap.allocArray(built, 8);
-        Magic.store64(arr + ObjectModel.TIB_OFFSET, refArrayTib(annotationTypeAddr()));
+        Address.fromLong(arr).plus(ObjectModel.TIB_OFFSET).store(refArrayTib(annotationTypeAddr()));
         int j = 0;
         while (j < built)
         {
-            Magic.store64(arr + ObjectModel.ARRAY_BASE_OFFSET + j * 8L, objs[j]);
+            Address.fromLong(arr).plus(ObjectModel.ARRAY_BASE_OFFSET).plus(j * 8L).store(objs[j]);
             j += 1;
         }
         return arr;
@@ -23592,7 +23592,7 @@ public final class Loader
         {
             return 0L;                                  // boot force-compile guard passes 0; allocates nothing
         }
-        int reg = regOfType(Magic.load64(mirror + 16L));
+        int reg = regOfType(Address.fromLong(mirror).plus(16L).loadLong());
         if (reg < 0)
         {
             return emptyClassArray();
@@ -23650,11 +23650,11 @@ public final class Loader
             k += 1;
         }
         long arr = Heap.allocArray(built, 8);
-        Magic.store64(arr + ObjectModel.TIB_OFFSET, refArrayTib(classMirrorTypeAddr()));
+        Address.fromLong(arr).plus(ObjectModel.TIB_OFFSET).store(refArrayTib(classMirrorTypeAddr()));
         int j = 0;
         while (j < built)
         {
-            Magic.store64(arr + ObjectModel.ARRAY_BASE_OFFSET + j * 8L, mirrors[j]);
+            Address.fromLong(arr).plus(ObjectModel.ARRAY_BASE_OFFSET).plus(j * 8L).store(mirrors[j]);
             j += 1;
         }
         return arr;
@@ -23762,12 +23762,12 @@ public final class Loader
         {
             return -1;
         }
-        long tib = Magic.load64(obj + 0L);
+        long tib = Address.fromLong(obj).plus(0L).loadLong();
         if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
         {
             return -1;                                  // raw array: no Type node to key on
         }
-        return regOfType(Magic.load64(tib));            // TIB[0] = Type
+        return regOfType(Address.fromLong(tib).loadLong());            // TIB[0] = Type
     }
 
     /** {@code fldTab} index of the {@code want}-th instance field DECLARED by class {@code reg}, or -1. */
@@ -23822,10 +23822,10 @@ public final class Loader
         }
         long[] slots = new long[2];                     // fresh per call: a component's own equals/hashCode
         long argBase = Magic.addrOf(slots) + 24L;       // may re-enter this for a nested record
-        Magic.store64(argBase, obj);
+        Address.fromLong(argBase).store(obj);
         if (argc > 1)
         {
-            Magic.store64(argBase + 8L, arg1);
+            Address.fromLong(argBase).plus(8L).store(arg1);
         }
         return Magic.callN(code, argBase);
     }
@@ -23861,7 +23861,7 @@ public final class Loader
         }
         long[] slots = new long[2];                     // fresh per call: the callee may re-enter this
         long argBase = Magic.addrOf(slots) + 24L;
-        Magic.store64(argBase, obj);
+        Address.fromLong(argBase).store(obj);
         return Magic.callN(code, argBase);
     }
 
@@ -23897,7 +23897,7 @@ public final class Loader
         while (i < n)
         {
             int j = recordComponent(reg, i);
-            long v = Magic.load64(obj + 16L + fldTab[j].slot * 8L);
+            long v = Address.fromLong(obj).plus(16L).plus(fldTab[j].slot * 8L).loadLong();
             h = h * 31 + componentHash(v, u1(fldTab[j].base + fldTab[j].descOff + 2L));
             i += 1;
         }
@@ -23927,8 +23927,8 @@ public final class Loader
         {
             int j = recordComponent(ra, i);
             long off = 16L + fldTab[j].slot * 8L;
-            long va = Magic.load64(a + off);
-            long vb = Magic.load64(b + off);
+            long va = Address.fromLong(a).plus(off).loadLong();
+            long vb = Address.fromLong(b).plus(off).loadLong();
             int tc = u1(fldTab[j].base + fldTab[j].descOff + 2L);
             if (tc == 'L' || tc == '[')
             {
@@ -24118,8 +24118,8 @@ public final class Loader
         {
             return putAscii(out, p, Magic.bytes("?"));
         }
-        int nbytes = (int) Magic.load64(arr + 16L);
-        int coder = arr == str ? 0 : (int) Magic.load64(str + 24L);
+        int nbytes = (int) Address.fromLong(arr).plus(16L).loadLong();
+        int coder = arr == str ? 0 : (int) Address.fromLong(str).plus(24L).loadLong();
         if (coder == 0)
         {
             int i = 0;
@@ -24226,7 +24226,7 @@ public final class Loader
             int j = recordComponent(reg, k);
             p = putUtf8(out, p, fldTab[j].base + fldTab[j].nameOff);
             p = putAscii(out, p, Magic.bytes("="));
-            p = putComponent(out, p, Magic.load64(obj + 16L + fldTab[j].slot * 8L),
+            p = putComponent(out, p, Address.fromLong(obj).plus(16L).plus(fldTab[j].slot * 8L).loadLong(),
                     u1(fldTab[j].base + fldTab[j].descOff + 2L));
             k += 1;
         }
@@ -24262,26 +24262,26 @@ public final class Loader
         long bt = byteArrayTib();
         if (bt != 0L)
         {
-            Magic.store64(arr + ObjectModel.TIB_OFFSET, bt);   // type it as [B so `checkcast [B` resolves
+            Address.fromLong(arr).plus(ObjectModel.TIB_OFFSET).store(bt);   // type it as [B so `checkcast [B` resolves
         }
         i = 0;
         while (i < n)
         {
             if (coder == 0)
             {
-                Magic.store8(arr + 24L + i, src[i]);
+                Address.fromLong(arr).plus(24L).plus(i).store((byte) src[i]);
             }
             else
             {
-                Magic.store8(arr + 24L + (i << 1), src[i] & 0xFF);
-                Magic.store8(arr + 24L + (i << 1) + 1, (src[i] >> 8) & 0xFF);
+                Address.fromLong(arr).plus(24L).plus(i << 1).store((byte) (src[i] & 0xFF));
+                Address.fromLong(arr).plus(24L).plus(i << 1).plus(1).store((byte) ((src[i] >> 8) & 0xFF));
             }
             i += 1;
         }
         long obj = Heap.alloc(stringSize());
-        Magic.store64(obj + 0L, stringTib());
-        Magic.store64(obj + 16L, arr);
-        Magic.store64(obj + 24L, coder);
+        Address.fromLong(obj).plus(0L).store(stringTib());
+        Address.fromLong(obj).plus(16L).store(arr);
+        Address.fromLong(obj).plus(24L).store((long) coder);
         return obj;
     }
 
@@ -24289,7 +24289,7 @@ public final class Loader
     private static long emptyClassArray()
     {
         long arr = Heap.allocArray(0, 8);
-        Magic.store64(arr + ObjectModel.TIB_OFFSET, refArrayTib(classMirrorTypeAddr()));
+        Address.fromLong(arr).plus(ObjectModel.TIB_OFFSET).store(refArrayTib(classMirrorTypeAddr()));
         return arr;
     }
 
@@ -24297,7 +24297,7 @@ public final class Loader
     private static long emptyAnnoArray()
     {
         long arr = Heap.allocArray(0, 8);
-        Magic.store64(arr + ObjectModel.TIB_OFFSET, refArrayTib(annotationTypeAddr()));
+        Address.fromLong(arr).plus(ObjectModel.TIB_OFFSET).store(refArrayTib(annotationTypeAddr()));
         return arr;
     }
 
@@ -24627,7 +24627,7 @@ public final class Loader
             }
             if (thunk != 0L)
             {
-                Magic.store64(proxyTibs[i] + 8L + (long) k * 8L, thunk);
+                Address.fromLong(proxyTibs[i]).plus(8L).plus((long) k * 8L).store(thunk);
             }
             k += 1;
         }
@@ -24679,14 +24679,14 @@ public final class Loader
             Uart.write(Magic.bytes("\n  PROXY TABLE FULL: no more proxy classes (MAXPROXY)\n"));
             return 0L;
         }
-        int ni = (int) Magic.load64(ifacesArr + 16L);
-        int nm = (int) Magic.load64(methodsArr + 16L);
+        int ni = (int) Address.fromLong(ifacesArr).plus(16L).loadLong();
+        int nm = (int) Address.fromLong(methodsArr).plus(16L).loadLong();
         long dir = Heap.allocData((ni + 1) * 16);
         int e = 0;
         while (e < ni)
         {
-            long mirror = Magic.load64(ifacesArr + 24L + e * 8L);
-            long ity = mirror == 0L ? 0L : Magic.load64(mirror + 16L);
+            long mirror = Address.fromLong(ifacesArr).plus(24L).plus(e * 8L).loadLong();
+            long ity = mirror == 0L ? 0L : Address.fromLong(mirror).plus(16L).loadLong();
             int ir = classRegByType(ity);
             int cn = ir >= 0 ? clTab[ir].ifmCount : 0;
             long cit = Heap.allocData(cn > 0 ? cn * 8 : 8);
@@ -24698,31 +24698,31 @@ public final class Loader
                 int j = 0;
                 while (j < nm && thunk == 0L)
                 {
-                    long nb = Magic.load64(namesArr + 24L + j * 8L);
-                    long db = Magic.load64(descsArr + 24L + j * 8L);
-                    if (rawEqUtf8(nb + 24L, (int) Magic.load64(nb + 16L), ifBase[m], ifNameOff[m])
-                            && rawEqUtf8(db + 24L, (int) Magic.load64(db + 16L), ifBase[m], ifDescOff[m]))
+                    long nb = Address.fromLong(namesArr).plus(24L).plus(j * 8L).loadLong();
+                    long db = Address.fromLong(descsArr).plus(24L).plus(j * 8L).loadLong();
+                    if (rawEqUtf8(nb + 24L, (int) Address.fromLong(nb).plus(16L).loadLong(), ifBase[m], ifNameOff[m])
+                            && rawEqUtf8(db + 24L, (int) Address.fromLong(db).plus(16L).loadLong(), ifBase[m], ifDescOff[m]))
                     {
-                        thunk = proxyThunk(Magic.load64(methodsArr + 24L + j * 8L), helper);
+                        thunk = proxyThunk(Address.fromLong(methodsArr).plus(24L).plus(j * 8L).loadLong(), helper);
                     }
                     j += 1;
                 }
-                Magic.store64(cit + z * 8L, thunk);
+                Address.fromLong(cit).plus(z * 8L).store(thunk);
                 z += 1;
             }
-            Magic.store64(dir + e * 16L, ity);
-            Magic.store64(dir + e * 16L + 8L, cit);
+            Address.fromLong(dir).plus(e * 16L).store(ity);
+            Address.fromLong(dir).plus(e * 16L).plus(8L).store(cit);
             e += 1;
         }
-        Magic.store64(dir + ni * 16L, 0L);              // sentinel: interfaceType 0 ends the directory
-        Magic.store64(dir + ni * 16L + 8L, 0L);
+        Address.fromLong(dir).plus(ni * 16L).store(0L);              // sentinel: interfaceType 0 ends the directory
+        Address.fromLong(dir).plus(ni * 16L).plus(8L).store(0L);
         long type = Heap.allocData(ObjectModel.TYPE_SIZE);
-        Magic.store64(type + 0L, (long) (16 + clTab[pr].fieldCount * 8));   // Proxy's instance: header + h
-        Magic.store64(type + ObjectModel.TYPE_SUPER_OFFSET, clTab[pr].type);
-        Magic.store64(type + ObjectModel.TYPE_ITABLE_DIR_OFFSET, dir);
+        Address.fromLong(type).plus(0L).store((long) (16 + clTab[pr].fieldCount * 8));   // Proxy's instance: header + h
+        Address.fromLong(type).plus(ObjectModel.TYPE_SUPER_OFFSET).store(clTab[pr].type);
+        Address.fromLong(type).plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).store(dir);
         int onv = objectVtableCount();
         long tib = Heap.allocData(8 + onv * 8);
-        Magic.store64(tib + 0L, type);
+        Address.fromLong(tib).plus(0L).store(type);
         fillObjectVtable(tib);
         int i = proxyN;
         proxyTypes[i] = type;
@@ -24730,7 +24730,7 @@ public final class Loader
         int k = 0;
         while (k < 3)
         {
-            proxyObjThunks[i * 3 + k] = proxyThunk(Magic.load64(objArr + 24L + k * 8L), helper);
+            proxyObjThunks[i * 3 + k] = proxyThunk(Address.fromLong(objArr).plus(24L).plus(k * 8L).loadLong(), helper);
             k += 1;
         }
         proxyN += 1;
@@ -24754,14 +24754,14 @@ public final class Loader
         {
             return 0L;
         }
-        long type = Magic.load64(mirror + 16L);
+        long type = Address.fromLong(mirror).plus(16L).loadLong();
         int i = 0;
         while (i < proxyN)
         {
             if (proxyTypes[i] == type)
             {
-                long obj = Heap.alloc((int) Magic.load64(type));
-                Magic.store64(obj + ObjectModel.TIB_OFFSET, proxyTibs[i]);
+                long obj = Heap.alloc((int) Address.fromLong(type).loadLong());
+                Address.fromLong(obj).plus(ObjectModel.TIB_OFFSET).store(proxyTibs[i]);
                 return obj;
             }
             i += 1;
@@ -24855,7 +24855,7 @@ public final class Loader
             long buf = annoContractBufFor(vtNameBase[st + k], vtNameOff[st + k], vtDescOff[st + k]);
             if (buf != 0L)
             {
-                Magic.store64(tib + 8L + (long) k * 8L, buf);
+                Address.fromLong(tib).plus(8L).plus((long) k * 8L).store(buf);
             }
             k += 1;
         }
@@ -24864,10 +24864,10 @@ public final class Loader
             return;
         }
         long e = dir;
-        while (Magic.load64(e) != 0L)
+        while (Address.fromLong(e).loadLong() != 0L)
         {
-            int r = classRegByType(Magic.load64(e));
-            long it = Magic.load64(e + 8L);
+            int r = classRegByType(Address.fromLong(e).loadLong());
+            long it = Address.fromLong(e).plus(8L).loadLong();
             if (r >= 0 && it != 0L && utf8IsAtBase(clTab[r].base, clTab[r].nameOff, Magic.bytes("java/lang/annotation/Annotation")))
             {
                 int z = 0;
@@ -24877,7 +24877,7 @@ public final class Loader
                     long buf = annoContractBufFor(ifBase[m], ifNameOff[m], ifDescOff[m]);
                     if (buf != 0L)
                     {
-                        Magic.store64(it + z * 8L, buf);
+                        Address.fromLong(it).plus(z * 8L).store(buf);
                     }
                     z += 1;
                 }
@@ -24953,11 +24953,11 @@ public final class Loader
             {
                 thunk = Heap.allocCode(8);
                 Heap.pinCodeAt(thunk);                  // only the itable names it; no `bl` displacement does
-                Magic.store32(thunk + 0L, A64Enc.ldrx(0, 0, 16 + (own ? s : n) * 8));
-                Magic.store32(thunk + 4L, A64Enc.ret());
+                Address.fromLong(thunk).plus(0L).store(A64Enc.ldrx(0, 0, 16 + (own ? s : n) * 8));
+                Address.fromLong(thunk).plus(4L).store(A64Enc.ret());
                 Heap.publishCode(thunk, thunk + 8L);    // another core may run it: maintenance is BY ADDRESS
             }
-            Magic.store64(it + s * 8L, thunk);
+            Address.fromLong(it).plus(s * 8L).store(thunk);
             s += 1;
         }
         // THE DIRECTORY MUST CARRY THE INTERFACE'S CLOSURE, NOT JUST THE INTERFACE. Every `@interface Foo`
@@ -24971,8 +24971,8 @@ public final class Loader
         // rather than branching into whatever a short table would have run off into.
         int closN = ifaceClosureOf(ifaceReg);
         long dir = Heap.allocData((closN + 2) * 16);
-        Magic.store64(dir + 0L, ifaceType);
-        Magic.store64(dir + 8L, it);
+        Address.fromLong(dir).plus(0L).store(ifaceType);
+        Address.fromLong(dir).plus(8L).store(it);
         int e = 1;
         int ci = 0;
         while (ci < closN)
@@ -24993,35 +24993,35 @@ public final class Loader
                 {
                     long at = Heap.allocCode(8);
                     Heap.pinCodeAt(at);
-                    Magic.store32(at + 0L, A64Enc.ldrx(0, 0, 16 + n * 8));
-                    Magic.store32(at + 4L, A64Enc.ret());
+                    Address.fromLong(at).plus(0L).store(A64Enc.ldrx(0, 0, 16 + n * 8));
+                    Address.fromLong(at).plus(4L).store(A64Enc.ret());
                     Heap.publishCode(at, at + 8L);
-                    Magic.store64(cit + z * 8L, at);
+                    Address.fromLong(cit).plus(z * 8L).store(at);
                 }
                 else
                 {
-                    Magic.store64(cit + z * 8L, 0L);
+                    Address.fromLong(cit).plus(z * 8L).store(0L);
                 }
                 z += 1;
             }
-            Magic.store64(dir + e * 16L + 0L, clTab[cr].type);
-            Magic.store64(dir + e * 16L + 8L, cit);
+            Address.fromLong(dir).plus(e * 16L).plus(0L).store(clTab[cr].type);
+            Address.fromLong(dir).plus(e * 16L).plus(8L).store(cit);
             e += 1;
             ci += 1;
         }
-        Magic.store64(dir + e * 16L + 0L, 0L);          // sentinel: interfaceType 0 ends the directory
-        Magic.store64(dir + e * 16L + 8L, 0L);
+        Address.fromLong(dir).plus(e * 16L).plus(0L).store(0L);          // sentinel: interfaceType 0 ends the directory
+        Address.fromLong(dir).plus(e * 16L).plus(8L).store(0L);
         long type = Heap.allocData(ObjectModel.TYPE_SIZE);
-        Magic.store64(type + 0L, (long) (16 + n * 8));
-        Magic.store64(type + ObjectModel.TYPE_SUPER_OFFSET, objectTypeAddr());   // NOT 0 -- see finishLambdaClass
-        Magic.store64(type + 16L, dir);
+        Address.fromLong(type).plus(0L).store((long) (16 + n * 8));
+        Address.fromLong(type).plus(ObjectModel.TYPE_SUPER_OFFSET).store(objectTypeAddr());   // NOT 0 -- see finishLambdaClass
+        Address.fromLong(type).plus(16L).store(dir);
         // TIB { Type, Object's vtable } -- see finishLambdaClass. An annotation instance is synthesised the
         // same way and has the same gap: unregistered, itable-only, so equals/hashCode/toString on one had
         // nowhere to resolve. It also has to be the same SHAPE as a lambda TIB, because both live in
         // lambdaTibRoots and refillSynthTibVtables walks that one array.
         int onv2 = objectVtableCount();
         long tib = Heap.allocData(8 + onv2 * 8);
-        Magic.store64(tib + 0L, type);
+        Address.fromLong(tib).plus(0L).store(type);
         fillObjectVtable(tib);
         patchAnnoContract(tib, onv2, dir);
         annoTibKey[annoTibN] = ifaceType;
@@ -25068,8 +25068,8 @@ public final class Loader
         // Annotation.annotationType() answers. Keeping it IN THE INSTANCE is what lets that method reuse the
         // same two-instruction thunk shape as every element accessor -- see annoTibFor.
         long obj = Heap.alloc(16 + (n + 1) * 8);
-        Magic.store64(obj + ObjectModel.TIB_OFFSET, tib);
-        Magic.store64(obj + 16L + n * 8L, classMirror(clTab[ifaceReg].type));
+        Address.fromLong(obj).plus(ObjectModel.TIB_OFFSET).store(tib);
+        Address.fromLong(obj).plus(16L).plus(n * 8L).store(classMirror(clTab[ifaceReg].type));
         int start = clTab[ifaceReg].ifmStart;
         int pendMark = annoPendN;                       // a NESTED build drains only what it adds past here
         int pairs = u2(pairsPos);
@@ -25088,7 +25088,7 @@ public final class Loader
                     annoPendSlot = s;                   // a 'c'/'e' value notes ITS slot, not a global one
                     annoArrayTib = annoArrayTibFor(ifBase[start + s], ifDescOff[start + s]);
                     annoArrayPrim = annoArrayPrimFor(ifBase[start + s], ifDescOff[start + s]);
-                    Magic.store64(obj + 16L + s * 8L, annoElementValue(base, p + 2L));
+                    Address.fromLong(obj).plus(16L).plus(s * 8L).store(annoElementValue(base, p + 2L));
                     annoPendSlot = -1;
                     annoArrayTib = 0L;
                     annoArrayPrim = 0;
@@ -25180,7 +25180,7 @@ public final class Loader
                         annoPendSlot = slot;
                         annoArrayTib = defArrayTib[slot];   // computed BEFORE this parse: see applyAnnoDefaults
                         annoArrayPrim = defArrayPrim[slot];
-                        Magic.store64(obj + 16L + slot * 8L, annoElementValue(ibase, q));
+                        Address.fromLong(obj).plus(16L).plus(slot * 8L).store(annoElementValue(ibase, q));
                         annoPendSlot = -1;
                         annoArrayTib = 0L;
                         annoArrayPrim = 0;
@@ -25238,7 +25238,7 @@ public final class Loader
             long at = annoArrayTib != 0L ? annoArrayTib : refArrayTib(objectTypeAddr());
             if (at != 0L)
             {
-                Magic.store64(arr + ObjectModel.TIB_OFFSET, at);
+                Address.fromLong(arr).plus(ObjectModel.TIB_OFFSET).store(at);
             }
             long q = p + 3L;
             int i = 0;
@@ -25250,7 +25250,7 @@ public final class Loader
                 // note (what this did before) left a Class[] element reading null for ever -- picocli's
                 // @Option(converter = ...) is exactly that shape.
                 annoPendElem = i;
-                Magic.store64(arr + 24L + i * 8L, annoElementValue(base, q));
+                Address.fromLong(arr).plus(24L).plus(i * 8L).store(annoElementValue(base, q));
                 q = skipElementValue(q);
                 i += 1;
             }
@@ -25282,7 +25282,7 @@ public final class Loader
         int atype = atypeForDescChar(annoArrayPrim);
         int esz = arrayElemSizeOfAtype(atype);
         long arr = Heap.allocArray(count, esz);
-        Magic.store64(arr + ObjectModel.TIB_OFFSET, primArrayTib(atype));
+        Address.fromLong(arr).plus(ObjectModel.TIB_OFFSET).store(primArrayTib(atype));
         long q = p + 3L;
         int i = 0;
         while (i < count)
@@ -25291,20 +25291,20 @@ public final class Loader
             long at = arr + ObjectModel.ARRAY_BASE_OFFSET + (long) i * esz;
             if (esz == 1)
             {
-                Magic.store8(at, (int) v);
+                Address.fromLong(at).store((byte) v);
             }
             else if (esz == 2)
             {
-                Magic.store8(at, (int) v);
-                Magic.store8(at + 1L, (int) (v >>> 8));
+                Address.fromLong(at).store((byte) v);
+                Address.fromLong(at).plus(1L).store((byte) (v >>> 8));
             }
             else if (esz == 4)
             {
-                Magic.store32(at, (int) v);
+                Address.fromLong(at).store((int) v);
             }
             else
             {
-                Magic.store64(at, v);
+                Address.fromLong(at).store(v);
             }
             q = skipElementValue(q);
             i += 1;
@@ -25475,7 +25475,7 @@ public final class Loader
             {
                 if (eidx[i] < 0)
                 {
-                    Magic.store64(obj + 16L + eat[i] * 8L, v);
+                    Address.fromLong(obj).plus(16L).plus(eat[i] * 8L).store(v);
                 }
                 else
                 {
@@ -25483,16 +25483,16 @@ public final class Loader
                     // after the walks, and resolving a Class here can demand-load and collect. The array is
                     // reachable from the object's value slot, so going via the slot keeps it alive; a stashed
                     // address would not.
-                    long arr = Magic.load64(obj + 16L + eat[i] * 8L);
+                    long arr = Address.fromLong(obj).plus(16L).plus(eat[i] * 8L).loadLong();
                     // BOUNDS-CHECK BEFORE STORING. A raw store at a COMPUTED offset: if the slot does not hold
                     // the array this entry was recorded against, or the index is stale, it writes into the
                     // middle of whatever object is there. Not the cause of the corruption this change was once
                     // blamed for -- that was the code arena overlapping the image -- but unchecked computed
                     // stores were three separate defects in one day, so this one does not ship unchecked.
                     // A miss means the pending record is wrong, so it is skipped, not clamped.
-                    if (arr != 0L && eidx[i] < (int) Magic.load64(arr + 16L))
+                    if (arr != 0L && eidx[i] < (int) Address.fromLong(arr).plus(16L).loadLong())
                     {
-                        Magic.store64(arr + 24L + eidx[i] * 8L, v);
+                        Address.fromLong(arr).plus(24L).plus(eidx[i] * 8L).store(v);
                     }
                 }
             }
@@ -25577,7 +25577,7 @@ public final class Loader
             k += 1;
         }
         long slot = staticSlotOf(cls, fname);
-        return slot == 0L ? 0L : Magic.load64(slot);
+        return slot == 0L ? 0L : Address.fromLong(slot).loadLong();
     }
 
     /** A {@code java/lang/String} object for the Utf8 at {@code off} in {@code base} (no cp-index cache). */
@@ -25588,12 +25588,12 @@ public final class Loader
         long bt = byteArrayTib();
         if (bt != 0L)
         {
-            Magic.store64(bytes + ObjectModel.TIB_OFFSET, bt);
+            Address.fromLong(bytes).plus(ObjectModel.TIB_OFFSET).store(bt);
         }
         int i = 0;
         while (i < len)
         {
-            Magic.store8(bytes + 24 + i, u1(base + off + 2 + i));
+            Address.fromLong(bytes).plus(24).plus(i).store((byte) u1(base + off + 2 + i));
             i += 1;
         }
         long tib = stringTib();
@@ -25602,8 +25602,8 @@ public final class Loader
             return bytes;
         }
         long obj = Heap.alloc(stringSize());
-        Magic.store64(obj + 0L, tib);
-        Magic.store64(obj + 16L, bytes);
+        Address.fromLong(obj).plus(0L).store(tib);
+        Address.fromLong(obj).plus(16L).store(bytes);
         return obj;
     }
 
@@ -25679,7 +25679,7 @@ public final class Loader
         int k = 0;
         while (k < n)
         {
-            if (u1(base + off + 2 + k) != (Magic.load8(arr + 24L + k) & 0xFF))
+            if (u1(base + off + 2 + k) != (Address.fromLong(arr).plus(24L).plus(k).loadUnsignedByte() & 0xFF))
             {
                 return false;
             }
@@ -26126,7 +26126,7 @@ public final class Loader
         {
             return false;
         }
-        return Magic.load64(exc + 0L) == clTab[i].tib;
+        return Address.fromLong(exc).plus(0L).loadLong() == clTab[i].tib;
     }
 
     /** Allocate a mini {@code java/lang/NullPointerException} (TIB set, field-free) — the JIT's null-check helper. */
@@ -26260,8 +26260,8 @@ public final class Loader
     /** {@code obj}'s Type, or 0 for a RAW array, whose TIB slot holds a small tag rather than a Type pointer. */
     private static long typeOfObject(long obj)
     {
-        long tib = Magic.load64(obj);
-        return tib > ObjectModel.MAX_RAW_ARRAY_TIB ? Magic.load64(tib) : 0L;
+        long tib = Address.fromLong(obj).loadLong();
+        return tib > ObjectModel.MAX_RAW_ARRAY_TIB ? Address.fromLong(tib).loadLong() : 0L;
     }
 
     /**
@@ -26386,7 +26386,7 @@ public final class Loader
         long tib = arrayTibOfDescN(desc, off, n);
         if (tib != 0L)
         {
-            Magic.store64(arr + ObjectModel.TIB_OFFSET, tib);   // else leave the raw element size, as tagArray does
+            Address.fromLong(arr).plus(ObjectModel.TIB_OFFSET).store(tib);   // else leave the raw element size, as tagArray does
         }
         if (level + 1 < dims)
         {
@@ -26394,7 +26394,7 @@ public final class Loader
             while (k < cnt)
             {
                 long sub = multiLevel(desc, off + 1, n - 1, dims, level + 1, c0, c1, c2, c3);
-                Magic.store64(arr + ObjectModel.ARRAY_BASE_OFFSET + (long) k * ObjectModel.WORD, sub);
+                Address.fromLong(arr).plus(ObjectModel.ARRAY_BASE_OFFSET).plus((long) k * ObjectModel.WORD).store(sub);
                 k += 1;
             }
         }
@@ -26417,7 +26417,7 @@ public final class Loader
         long e = newExc(Magic.bytes("java/lang/ClassCastException"));
         if (e != 0L && ref != 0L && targetType != 0L)
         {
-            long tib = Magic.load64(ref);
+            long tib = Address.fromLong(ref).loadLong();
             setThrowableMessage(e, guestString(castFailureMessage(tib, typeOfObject(ref), targetType)));
         }
         return e;
@@ -26486,7 +26486,7 @@ public final class Loader
         // and `buildLambdaTib` could not resolve its functional interface. Reporting both as "nothing" is
         // what made the two indistinguishable in the log.
         p = putUtf8Bytes(out, p, Magic.bytes("<synthesised, implements"));
-        long dir = Magic.load64(type + 16L);
+        long dir = Address.fromLong(type).plus(16L).loadLong();
         if (dir == 0L)
         {
             return putUtf8Bytes(out, p, Magic.bytes(" -- NO itable directory (not a lambda; an interface or bare Type)>"));
@@ -26494,7 +26494,7 @@ public final class Loader
         int n = 0;
         while (dir != 0L && n < 8)
         {
-            long ifType = Magic.load64(dir + n * 16L);
+            long ifType = Address.fromLong(dir).plus(n * 16L).loadLong();
             if (ifType == 0L)
             {
                 break;                                   // sentinel ends the directory
@@ -26582,7 +26582,7 @@ public final class Loader
         }
         long tib = i >= 0 ? clTab[i].tib : 0L;
         long obj = Heap.alloc(i >= 0 ? (16 + clTab[i].fieldCount * 8) : 16);
-        Magic.store64(obj + 0L, tib);
+        Address.fromLong(obj).plus(0L).store(tib);
         if (i >= 0)
         {
             initVmThrowable(obj);
@@ -26628,11 +26628,11 @@ public final class Loader
         long btOff = throwableBacktraceOff();
         if (btOff > 0L)
         {
-            Magic.store64(exc + btOff, exc);
+            Address.fromLong(exc).plus(btOff).store(exc);
         }
         if (thrCauseOff > 0L)
         {
-            Magic.store64(exc + thrCauseOff, exc);
+            Address.fromLong(exc).plus(thrCauseOff).store(exc);
         }
         if (thrUnassignedSlot == 0L)
         {
@@ -26644,11 +26644,11 @@ public final class Loader
         }
         if (thrStackTraceOff > 0L && thrUnassignedSlot != 0L)
         {
-            Magic.store64(exc + thrStackTraceOff, Magic.load64(thrUnassignedSlot));
+            Address.fromLong(exc).plus(thrStackTraceOff).store(Address.fromLong(thrUnassignedSlot).loadLong());
         }
         if (thrSuppressedOff > 0L && thrSentinelSlot != 0L)
         {
-            Magic.store64(exc + thrSuppressedOff, Magic.load64(thrSentinelSlot));
+            Address.fromLong(exc).plus(thrSuppressedOff).store(Address.fromLong(thrSentinelSlot).loadLong());
         }
     }
 
@@ -26656,7 +26656,7 @@ public final class Loader
     static long throwableMessage(long exc)
     {
         thrMessageOff = throwableFieldOff(thrMessageOff, Magic.bytes("detailMessage"));
-        return thrMessageOff > 0L ? Magic.load64(exc + thrMessageOff) : 0L;
+        return thrMessageOff > 0L ? Address.fromLong(exc).plus(thrMessageOff).loadLong() : 0L;
     }
 
     /** Store the guest String {@code msg} as {@code exc}'s {@code Throwable.detailMessage}. */
@@ -26665,7 +26665,7 @@ public final class Loader
         thrMessageOff = throwableFieldOff(thrMessageOff, Magic.bytes("detailMessage"));
         if (thrMessageOff > 0L)
         {
-            Magic.store64(exc + thrMessageOff, msg);
+            Address.fromLong(exc).plus(thrMessageOff).store(msg);
         }
     }
 
@@ -27304,7 +27304,7 @@ public final class Loader
     /** Emit one instruction word at word index {@code w}; returns the next index. */
     private static int emitAt(long thunk, int w, int word)
     {
-        Magic.store32(thunk + w * 4L, word);
+        Address.fromLong(thunk).plus(w * 4L).store(word);
         return w + 1;
     }
 
@@ -27337,7 +27337,7 @@ public final class Loader
     {
         w = emitAt(thunk, w, A64Enc.movz(1, retKind, 0));               // x1 = the descriptor kind char
         long at = thunk + w * 4L;
-        Magic.store32(at, A64Enc.bl((int) ((VM.boxPrimAddr - at) / 4L)));
+        Address.fromLong(at).store(A64Enc.bl((int) ((VM.boxPrimAddr - at) / 4L)));
         w += 1;
         w = emitAt(thunk, w, A64Enc.ldrx(STUB_LR, STUB_SP, STUB_LR_OFF));
         long thi = thunk + w * 4L;                                      // at the `add sp`: the frame dies here
@@ -27510,7 +27510,7 @@ public final class Loader
                 int j = 0;
                 while (j < ia)
                 {
-                    Magic.store32(thunk + w * 4L, A64Enc.movReg(j, 1 + j));    // x(j) = samArg[j] (x0 = receiver)
+                    Address.fromLong(thunk).plus(w * 4L).store(A64Enc.movReg(j, 1 + j));    // x(j) = samArg[j] (x0 = receiver)
                     w += 1;
                     j += 1;
                 }
@@ -27536,14 +27536,14 @@ public final class Loader
                 int j = ia - 1;
                 while (j >= 0)
                 {
-                    Magic.store32(thunk + w * 4L, A64Enc.movReg(nc + j, 1 + j));   // x(nc+j) = samArg[j]
+                    Address.fromLong(thunk).plus(w * 4L).store(A64Enc.movReg(nc + j, 1 + j));   // x(nc+j) = samArg[j]
                     w += 1;
                     j -= 1;
                 }
                 int c = nc - 1;
                 while (c >= 0)
                 {
-                    Magic.store32(thunk + w * 4L, A64Enc.ldrx(c, 0, 16 + c * 8));  // xC = obj.field[c] (x0 last)
+                    Address.fromLong(thunk).plus(w * 4L).store(A64Enc.ldrx(c, 0, 16 + c * 8));  // xC = obj.field[c] (x0 last)
                     w += 1;
                     c -= 1;
                 }
@@ -27633,12 +27633,15 @@ public final class Loader
             long initBuf = lambdaImplBuf(idx);                               // its <init> buffer (cross-class ok)
             w = emitUnboxArgs(thunk, w, idx, 0, 0, 1, false);   // Foo(int) from a Function<Integer,Foo>: BEFORE the frame
             int frame = ((2 + ia + 1) & ~1) * 8;                            // LR + obj + ia args, 16-byte aligned
-            Magic.store32(thunk + w * 4L, A64Enc.subImm(31, 31, frame));                 w += 1;  // sub sp, #frame
-            Magic.store32(thunk + w * 4L, A64Enc.strx(STUB_LR, STUB_SP, STUB_LR_OFF));                       w += 1;  // str x30,[sp] (LR)
+            Address.fromLong(thunk).plus(w * 4L).store(A64Enc.subImm(31, 31, frame)); // sub sp, #frame
+            w += 1;
+            Address.fromLong(thunk).plus(w * 4L).store(A64Enc.strx(STUB_LR, STUB_SP, STUB_LR_OFF)); // str x30,[sp] (LR)
+            w += 1;
             int k = 0;
             while (k < ia)
             {
-                Magic.store32(thunk + w * 4L, A64Enc.strx(1 + k, 31, 16 + k * 8));       w += 1;  // save ctor arg k
+                Address.fromLong(thunk).plus(w * 4L).store(A64Enc.strx(1 + k, 31, 16 + k * 8)); // save ctor arg k
+                w += 1;
                 k += 1;
             }
             // JVMS 5.5: CREATING AN INSTANCE IS AN ACTIVE USE, so the class initializes BEFORE the object
@@ -27681,21 +27684,30 @@ public final class Loader
             }
             else
             {
-                Magic.store32(thunk + w * 4L, A64Enc.movz(0, cr, 0));                    w += 1;  // x0 = class registry index
+                Address.fromLong(thunk).plus(w * 4L).store(A64Enc.movz(0, cr, 0)); // x0 = class registry index
+                w += 1;
                 long h0 = thunk + w * 4L;
-                Magic.store32(h0, A64Enc.bl((int) ((initAddr - h0) / 4L)));              w += 1;  // run <clinit> if it has not run
+                Address.fromLong(h0).store(A64Enc.bl((int) ((initAddr - h0) / 4L))); // run <clinit> if it has not run
+                w += 1;
             }
-            Magic.store32(thunk + w * 4L, A64Enc.movz(0, size, 0));                      w += 1;  // x0 = instance size
+            Address.fromLong(thunk).plus(w * 4L).store(A64Enc.movz(0, size, 0)); // x0 = instance size
+            w += 1;
             long h1 = thunk + w * 4L;
-            Magic.store32(h1, A64Enc.bl((int) ((VM.heapAlloc - h1) / 4L)));              w += 1;  // x0 = Heap.alloc(size)
-            Magic.store32(thunk + w * 4L, A64Enc.movz(1, (int) (ctib & 0xFFFFL), 0));                w += 1;
-            Magic.store32(thunk + w * 4L, A64Enc.movk(1, (int) ((ctib >>> 16) & 0xFFFFL), 1));        w += 1;  // x1 = the class TIB
-            Magic.store32(thunk + w * 4L, A64Enc.strx(1, 0, 0));                         w += 1;  // obj.tib = TIB
-            Magic.store32(thunk + w * 4L, A64Enc.strx(0, 31, 8));                        w += 1;  // save obj at [sp+8]
+            Address.fromLong(h1).store(A64Enc.bl((int) ((VM.heapAlloc - h1) / 4L))); // x0 = Heap.alloc(size)
+            w += 1;
+            Address.fromLong(thunk).plus(w * 4L).store(A64Enc.movz(1, (int) (ctib & 0xFFFFL), 0));
+            w += 1;
+            Address.fromLong(thunk).plus(w * 4L).store(A64Enc.movk(1, (int) ((ctib >>> 16) & 0xFFFFL), 1)); // x1 = the class TIB
+            w += 1;
+            Address.fromLong(thunk).plus(w * 4L).store(A64Enc.strx(1, 0, 0)); // obj.tib = TIB
+            w += 1;
+            Address.fromLong(thunk).plus(w * 4L).store(A64Enc.strx(0, 31, 8)); // save obj at [sp+8]
+            w += 1;
             k = 0;
             while (k < ia)
             {
-                Magic.store32(thunk + w * 4L, A64Enc.ldrx(1 + k, 31, 16 + k * 8));       w += 1;  // restore ctor arg k
+                Address.fromLong(thunk).plus(w * 4L).store(A64Enc.ldrx(1 + k, 31, 16 + k * 8)); // restore ctor arg k
+                w += 1;
                 k += 1;
             }
             long h2 = thunk + w * 4L;
@@ -27705,7 +27717,7 @@ public final class Loader
                 // the displacement inside the thunk is the ONLY record of initBuf, and nothing scans encodings.
                 Heap.pinCodeAt(initBuf);
                 CodeEdges.note(h2, initBuf);
-                Magic.store32(h2, A64Enc.bl((int) ((initBuf - h2) / 4L)));                        // <init>(obj, args)
+                Address.fromLong(h2).store(A64Enc.bl((int) ((initBuf - h2) / 4L)));                        // <init>(obj, args)
             }
             else
             {
@@ -27713,16 +27725,20 @@ public final class Loader
                 // `bl 0` and record a call site so patchRelocs rewrites it to the real <init> — same late-binding
                 // the normal lambda-body path (recordTailReloc) uses. Without this the `bl` with initBuf==0
                 // overflows imm26 and wild-branches (a constructor method-ref, Box::new, would jump to junk).
-                Magic.store32(h2, A64Enc.bl(0));
+                Address.fromLong(h2).store(A64Enc.bl(0));
                 recordCallReloc(h2, lambdaImplMref(idx));
             }
             w += 1;
-            Magic.store32(thunk + w * 4L, A64Enc.ldrx(0, 31, 8));                        w += 1;  // x0 = obj (return)
-            Magic.store32(thunk + w * 4L, A64Enc.ldrx(STUB_LR, STUB_SP, STUB_LR_OFF));                       w += 1;  // restore LR
+            Address.fromLong(thunk).plus(w * 4L).store(A64Enc.ldrx(0, 31, 8)); // x0 = obj (return)
+            w += 1;
+            Address.fromLong(thunk).plus(w * 4L).store(A64Enc.ldrx(STUB_LR, STUB_SP, STUB_LR_OFF)); // restore LR
+            w += 1;
             long tlo = thunk + 4L;                                                               // after `sub sp`
             long thi = thunk + w * 4L;                                                           // at `add sp`
-            Magic.store32(thunk + w * 4L, A64Enc.addImm(31, 31, frame));                 w += 1;  // add sp, #frame
-            Magic.store32(thunk + w * 4L, A64Enc.ret());                                 w += 1;
+            Address.fromLong(thunk).plus(w * 4L).store(A64Enc.addImm(31, 31, frame)); // add sp, #frame
+            w += 1;
+            Address.fromLong(thunk).plus(w * 4L).store(A64Enc.ret());
+            w += 1;
             Heap.publishCode(thunk, thunk + w * 4L);
             VM.addJitFrame(tlo, thi, frame, 0L);        // it calls <init>; an exception from there unwinds through here
             return finishLambdaClass(thunk, ifaceType, idx, nc);
@@ -27737,7 +27753,7 @@ public final class Loader
             int j = ia - 1;
             while (j >= 0)
             {
-                Magic.store32(thunk + w * 4L, A64Enc.movReg(nc + j, 1 + j));   // x(nc+j) = samArg[j]
+                Address.fromLong(thunk).plus(w * 4L).store(A64Enc.movReg(nc + j, 1 + j));   // x(nc+j) = samArg[j]
                 w += 1;
                 j -= 1;
             }
@@ -27747,7 +27763,7 @@ public final class Loader
             int j = 0;
             while (j < ia)
             {
-                Magic.store32(thunk + w * 4L, A64Enc.movReg(j, 1 + j));        // x(j) = samArg[j]
+                Address.fromLong(thunk).plus(w * 4L).store(A64Enc.movReg(j, 1 + j));        // x(j) = samArg[j]
                 w += 1;
                 j += 1;
             }
@@ -27755,7 +27771,7 @@ public final class Loader
         int c = nc - 1;
         while (c >= 0)
         {
-            Magic.store32(thunk + w * 4L, A64Enc.ldrx(c, 0, 16 + c * 8));   // xC = obj.field[c] (x0 last)
+            Address.fromLong(thunk).plus(w * 4L).store(A64Enc.ldrx(c, 0, 16 + c * 8));   // xC = obj.field[c] (x0 last)
             w += 1;
             c -= 1;
         }
@@ -27766,7 +27782,7 @@ public final class Loader
             Heap.pinCodeAt(implBuf);
             CodeEdges.note(bAt, implBuf);                                        // as above: a tail branch is
             // Boxing makes this a CALL, not a tail branch: the boxer runs after the referent returns.
-            Magic.store32(bAt, boxRet
+            Address.fromLong(bAt).store(boxRet
                     ? A64Enc.bl((int) ((implBuf - bAt) / 4L))
                     : A64Enc.b((int) ((implBuf - bAt) / 4L)));              //   still a code->code edge
         }
@@ -27774,14 +27790,14 @@ public final class Loader
         {
             // As below, but the site is a call, so it takes the CALL reloc: patchRelocs must leave the
             // boxing epilogue after it reachable rather than turning the site into a tail branch.
-            Magic.store32(bAt, A64Enc.bl(0));
+            Address.fromLong(bAt).store(A64Enc.bl(0));
             recordCallReloc(bAt, lambdaImplMref(idx));
         }
         else
         {
             // A method ref whose cross-class impl isn't registered yet: emit `b 0` and record a tail reloc so
             // patchRelocs rewrites it once every class is compiled (same late-binding as a normal bl call site).
-            Magic.store32(bAt, A64Enc.b(0));
+            Address.fromLong(bAt).store(A64Enc.b(0));
             recordTailReloc(bAt, lambdaImplMref(idx));
         }
         w += 1;
@@ -27985,14 +28001,14 @@ public final class Loader
         }
         int extra = serReg >= 0 ? 1 : 0;
         long dir = Heap.allocData((n + 2 + extra) * 16);
-        Magic.store64(dir + 0L, ifaceType);              // the functional interface itself
-        Magic.store64(dir + 8L, lambdaItableFor(fnReg, samName, samDesc, thunk));
+        Address.fromLong(dir).plus(0L).store(ifaceType);              // the functional interface itself
+        Address.fromLong(dir).plus(8L).store(lambdaItableFor(fnReg, samName, samDesc, thunk));
         int e = 1;
         int di = 0;
         while (di < n)
         {
-            Magic.store64(dir + e * 16L + 0L, clTab[ifClosureBuf[di]].type);
-            Magic.store64(dir + e * 16L + 8L, lambdaItableFor(ifClosureBuf[di], samName, samDesc, thunk));
+            Address.fromLong(dir).plus(e * 16L).plus(0L).store(clTab[ifClosureBuf[di]].type);
+            Address.fromLong(dir).plus(e * 16L).plus(8L).store(lambdaItableFor(ifClosureBuf[di], samName, samDesc, thunk));
             e += 1;
             di += 1;
         }
@@ -28000,12 +28016,12 @@ public final class Loader
         {
             // Serializable declares no method, so its itable is a one-word block nothing can index: the
             // directory entry exists to be FOUND by the type test, not to be dispatched through.
-            Magic.store64(dir + e * 16L + 0L, clTab[serReg].type);
-            Magic.store64(dir + e * 16L + 8L, lambdaItableFor(serReg, samName, samDesc, thunk));
+            Address.fromLong(dir).plus(e * 16L).plus(0L).store(clTab[serReg].type);
+            Address.fromLong(dir).plus(e * 16L).plus(8L).store(lambdaItableFor(serReg, samName, samDesc, thunk));
             e += 1;
         }
-        Magic.store64(dir + e * 16L + 0L, 0L);           // sentinel: interfaceType 0 ends the directory
-        Magic.store64(dir + e * 16L + 8L, 0L);
+        Address.fromLong(dir).plus(e * 16L).plus(0L).store(0L);           // sentinel: interfaceType 0 ends the directory
+        Address.fromLong(dir).plus(e * 16L).plus(8L).store(0L);
         // Type { instanceSize, superType=Object, itableDir } -- no depth/display (a lambda is
         // only ever type-checked through its interface dir, so the walk fallback covers it).
         //
@@ -28015,14 +28031,14 @@ public final class Loader
         // path -- it is EVERY varargs call taking a lambda, e.g. Arguments.of((Executable) () -> ...) in the
         // stock BasicGZIPInputStreamTest, whose argument array is an Object[].
         long type = Heap.allocData(ObjectModel.TYPE_SIZE);
-        Magic.store64(type + 0L, 16 + nc * 8);
-        Magic.store64(type + ObjectModel.TYPE_SUPER_OFFSET, objectTypeAddr());
-        Magic.store64(type + 16L, dir);
-        Magic.store64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET, 0L);
-        Magic.store64(type + ObjectModel.TYPE_DEPTH_OFFSET, 0L);
-        Magic.store64(type + ObjectModel.TYPE_DISPLAY_OFFSET, 0L);
-        Magic.store64(type + ObjectModel.TYPE_IMPLEMENTS_OFFSET, 0L);
-        Magic.store64(type + ObjectModel.TYPE_IMPLEMENTS_OFFSET + 8L, 0L);
+        Address.fromLong(type).plus(0L).store((long) (16 + nc * 8));
+        Address.fromLong(type).plus(ObjectModel.TYPE_SUPER_OFFSET).store(objectTypeAddr());
+        Address.fromLong(type).plus(16L).store(dir);
+        Address.fromLong(type).plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).store(0L);
+        Address.fromLong(type).plus(ObjectModel.TYPE_DEPTH_OFFSET).store(0L);
+        Address.fromLong(type).plus(ObjectModel.TYPE_DISPLAY_OFFSET).store(0L);
+        Address.fromLong(type).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).store(0L);
+        Address.fromLong(type).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).store(0L);
         buildImplBitmap(type);                           // a lambda's dir interfaces ARE numbered
         // TIB { Type, Object's vtable }. The lambda declares no virtual method of its OWN -- its SAM is
         // reached through the itable directory above -- but it is still an ordinary object, and
@@ -28038,7 +28054,7 @@ public final class Loader
         // LambdaMetafactory specifies the identity of a captured function object as unpredictable.
         int onv = objectVtableCount();
         long tib = Heap.allocData(8 + onv * 8);
-        Magic.store64(tib + 0L, type);
+        Address.fromLong(tib).plus(0L).store(type);
         fillObjectVtable(tib);                           // may copy zeros if Object is not compiled yet;
                                                          //   refillSynthTibVtables repairs that at loadAll's end
         if (lambdaTibRoots != null && lambdaTibRootN < lambdaTibRoots.length)
@@ -28062,7 +28078,7 @@ public final class Loader
         if (ir < 0)
         {
             long one = Heap.allocData(8);
-            Magic.store64(one, thunk);
+            Address.fromLong(one).store(thunk);
             return one;
         }
         int count = clTab[ir].ifmCount;
@@ -28070,11 +28086,11 @@ public final class Loader
         int s = 0;
         while (s < count)
         {
-            Magic.store64(it + s * 8L, 0L);
+            Address.fromLong(it).plus(s * 8L).store(0L);
             s += 1;
         }
         int slot = ifmSlotIn(ir, gbase, samName, samDesc);
-        Magic.store64(it + (slot >= 0 ? slot : 0) * 8L, thunk);
+        Address.fromLong(it).plus((slot >= 0 ? slot : 0) * 8L).store(thunk);
         return it;
     }
 
@@ -28155,7 +28171,7 @@ public final class Loader
         if (u1(gbase + nameOff + 2) == 0x5B)            // '[' : an array class ("[B", "[Ljava/...;", "[[I")
         {
             long tib = arrayTibOfDesc(gbase, nameOff);
-            return tib == 0L ? 0L : Magic.load64(tib);  // the array Type (checkcast/instanceof target)
+            return tib == 0L ? 0L : Address.fromLong(tib).loadLong();  // the array Type (checkcast/instanceof target)
         }
         if (utf8EqAt(gbase, nameOff, gbase, gThisNameOff))
         {
@@ -28243,14 +28259,14 @@ public final class Loader
     {
         long type = Heap.allocData(ObjectModel.ARRAY_TYPE_SIZE);
         long objType = objectTypeAddr();
-        Magic.store64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET, ObjectModel.ARRAY_TYPE_TAG | (long) elemSize);
-        Magic.store64(type + ObjectModel.TYPE_SUPER_OFFSET, objType);            // arr instanceof Object
-        Magic.store64(type + ObjectModel.TYPE_ITABLE_DIR_OFFSET, 0L);            // Cloneable/Serializable: later
-        Magic.store64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET, elementType);
-        Magic.store64(type + ObjectModel.TYPE_DEPTH_OFFSET, 0L);
-        Magic.store64(type + ObjectModel.TYPE_DISPLAY_OFFSET, 0L);
-        Magic.store64(type + ObjectModel.TYPE_IMPLEMENTS_OFFSET, 1L);   // empty-but-computed bitmap
-        Magic.store64(type + ObjectModel.TYPE_IMPLEMENTS_OFFSET + 8L, 0L);
+        Address.fromLong(type).plus(ObjectModel.TYPE_INSTANCE_SIZE_OFFSET).store(ObjectModel.ARRAY_TYPE_TAG | (long) elemSize);
+        Address.fromLong(type).plus(ObjectModel.TYPE_SUPER_OFFSET).store(objType);            // arr instanceof Object
+        Address.fromLong(type).plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).store(0L);            // Cloneable/Serializable: later
+        Address.fromLong(type).plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).store(elementType);
+        Address.fromLong(type).plus(ObjectModel.TYPE_DEPTH_OFFSET).store(0L);
+        Address.fromLong(type).plus(ObjectModel.TYPE_DISPLAY_OFFSET).store(0L);
+        Address.fromLong(type).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).store(1L);   // empty-but-computed bitmap
+        Address.fromLong(type).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).store(0L);
         buildDisplay(type, objType);                     // depth 1, display [Object, self]
         // The array TIB carries java/lang/Object's vtable so an invokevirtual on an array works. An array's static
         // type is Object at a dispatch site (e.g. Arrays.deepEquals0's `e1.equals(e2)`, or `element.toString()` in
@@ -28258,7 +28274,7 @@ public final class Loader
         // Without the vtable the dispatch read past a 1-word TIB and BLR'd garbage (a wild branch to the image entry).
         int nv = objectVtableCount();
         long tib = Heap.allocData(8 + nv * 8);
-        Magic.store64(tib + ObjectModel.TIB_TYPE_SLOT * 8, type);                // TIB[0] = Type
+        Address.fromLong(tib).plus(ObjectModel.TIB_TYPE_SLOT * 8).store(type);                // TIB[0] = Type
         fillObjectVtable(tib);                                                   // TIB[1..] = Object's vtable slots
         return tib;
     }
@@ -28295,13 +28311,13 @@ public final class Loader
         int k = 0;
         while (k < n)
         {
-            long want = Magic.load64(clTab[oi].tib + 8L + (long) k * 8L);
+            long want = Address.fromLong(clTab[oi].tib).plus(8L).plus((long) k * 8L).loadLong();
             sySlots += 1;
-            if (Magic.load64(tib + 8L + (long) k * 8L) != want)
+            if (Address.fromLong(tib).plus(8L).plus((long) k * 8L).loadLong() != want)
             {
                 syChanged += 1;                          // the write that was actually NECESSARY. This read
             }                                            //   is the evidence the latch below rests on: it
-            Magic.store64(tib + 8L + (long) k * 8L, want);//   must stay ~= the first-fill count, never grow
+            Address.fromLong(tib).plus(8L).plus((long) k * 8L).store(want);//   must stay ~= the first-fill count, never grow
             k += 1;
         }
         return n >= cap;                                 // COMPLETE, not merely attempted -- see lambdaTibFilled
@@ -28351,7 +28367,7 @@ public final class Loader
         int k = 0;
         while (k < nv)
         {
-            Magic.store64(tib + 8L + (long) k * 8L, Magic.load64(clTab[oi].tib + 8L + (long) k * 8L));
+            Address.fromLong(tib).plus(8L).plus((long) k * 8L).store(Address.fromLong(clTab[oi].tib).plus(8L).plus((long) k * 8L).loadLong());
             k += 1;
         }
     }
@@ -28423,7 +28439,7 @@ public final class Loader
             // arrays and loader arrays carry the same Type node, and instanceof/checkcast targets
             // resolve to it on both sides. Metal-built only if the image predates the table.
             long tab = VM.primArrayTibs;
-            long baked = tab == 0L || atype < 4 ? 0L : Magic.load64(tab + (long) (atype - 4) * 8L);
+            long baked = tab == 0L || atype < 4 ? 0L : Address.fromLong(tab).plus((long) (atype - 4) * 8L).loadLong();
             if (baked != 0L)
             {
                 primArrTib[atype] = baked;
@@ -28454,23 +28470,23 @@ public final class Loader
         long sd = 0L;
         if (superType != 0L)
         {
-            sd = Magic.load64(superType + ObjectModel.TYPE_DISPLAY_OFFSET);
+            sd = Address.fromLong(superType).plus(ObjectModel.TYPE_DISPLAY_OFFSET).loadLong();
             if (sd == 0L)
             {
                 return;                                  // super has no display: stay on the walk
             }
-            d = Magic.load64(superType + ObjectModel.TYPE_DEPTH_OFFSET) + 1L;
+            d = Address.fromLong(superType).plus(ObjectModel.TYPE_DEPTH_OFFSET).loadLong() + 1L;
         }
         long disp = Heap.allocData(((int) d + 1) * 8);
         long i = 0L;
         while (i < d)
         {
-            Magic.store64(disp + i * 8L, Magic.load64(sd + i * 8L));
+            Address.fromLong(disp).plus(i * 8L).store(Address.fromLong(sd).plus(i * 8L).loadLong());
             i += 1;
         }
-        Magic.store64(disp + d * 8L, type);
-        Magic.store64(type + ObjectModel.TYPE_DEPTH_OFFSET, d);
-        Magic.store64(type + ObjectModel.TYPE_DISPLAY_OFFSET, disp);
+        Address.fromLong(disp).plus(d * 8L).store(type);
+        Address.fromLong(type).plus(ObjectModel.TYPE_DEPTH_OFFSET).store(d);
+        Address.fromLong(type).plus(ObjectModel.TYPE_DISPLAY_OFFSET).store(disp);
     }
 
     /** O(1) interface checks: (re)build {@code type}'s doesImplement bitmap = the super's bitmap |
@@ -28482,30 +28498,30 @@ public final class Loader
     {
         long b0 = 1L;                                    // bit 0 = computed marker
         long b1 = 0L;
-        long superType = Magic.load64(type + ObjectModel.TYPE_SUPER_OFFSET);
+        long superType = Address.fromLong(type).plus(ObjectModel.TYPE_SUPER_OFFSET).loadLong();
         if (superType != 0L)
         {
-            long sb0 = Magic.load64(superType + ObjectModel.TYPE_IMPLEMENTS_OFFSET);
+            long sb0 = Address.fromLong(superType).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).loadLong();
             if ((sb0 & 1L) == 0L)
             {
                 return;                                  // super uncomputed: stay on the walk
             }
             b0 |= sb0;
-            b1 |= Magic.load64(superType + ObjectModel.TYPE_IMPLEMENTS_OFFSET + 8L);
+            b1 |= Address.fromLong(superType).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).loadLong();
         }
-        long own0 = Magic.load64(type + ObjectModel.TYPE_IMPLEMENTS_OFFSET);
+        long own0 = Address.fromLong(type).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).loadLong();
         if ((own0 & 1L) != 0L)                           // adopted node: keep the writer's bits
         {
             b0 |= own0;
-            b1 |= Magic.load64(type + ObjectModel.TYPE_IMPLEMENTS_OFFSET + 8L);
+            b1 |= Address.fromLong(type).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).loadLong();
         }
-        long e = Magic.load64(type + ObjectModel.TYPE_ITABLE_DIR_OFFSET);
+        long e = Address.fromLong(type).plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).loadLong();
         if (e != 0L)
         {
-            long iface = Magic.load64(e + ObjectModel.ITABLE_ENTRY_IFACE_OFFSET);
+            long iface = Address.fromLong(e).plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadLong();
             while (iface != 0L)
             {
-                long id = Magic.load64(iface + ObjectModel.TYPE_IMPLEMENTS_OFFSET);
+                long id = Address.fromLong(iface).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).loadLong();
                 if (id > 0L && id < 64L)
                 {
                     b0 |= 1L << (int) id;
@@ -28515,11 +28531,11 @@ public final class Loader
                     b1 |= 1L << (int) (id - 64L);
                 }
                 e += ObjectModel.ITABLE_ENTRY_SIZE;
-                iface = Magic.load64(e + ObjectModel.ITABLE_ENTRY_IFACE_OFFSET);
+                iface = Address.fromLong(e).plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadLong();
             }
         }
-        Magic.store64(type + ObjectModel.TYPE_IMPLEMENTS_OFFSET, b0);
-        Magic.store64(type + ObjectModel.TYPE_IMPLEMENTS_OFFSET + 8L, b1);
+        Address.fromLong(type).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).store(b0);
+        Address.fromLong(type).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).store(b1);
     }
 
     /** JVMS descriptor char for a newarray atype (4..11). */
@@ -28591,7 +28607,7 @@ public final class Loader
         if (c == 0x5B)                                  // '[': nested -- element desc is this minus one '['
         {
             long elTib = arrayTibOfDescN(base, off + 1, n - 1);
-            return refArrayTib(elTib == 0L ? 0L : Magic.load64(elTib));
+            return refArrayTib(elTib == 0L ? 0L : Address.fromLong(elTib).loadLong());
         }
         return refArrayTib(elementTypeOfArrayDescN(base, off, n));   // "[L<class>;"
     }
@@ -28660,9 +28676,9 @@ public final class Loader
             long k = 0;
             while (k < n)
             {
-                if (Magic.load64(tab + k * 16L) == elementType)
+                if (Address.fromLong(tab).plus(k * 16L).loadLong() == elementType)
                 {
-                    tib = Magic.load64(tab + k * 16L + 8L);
+                    tib = Address.fromLong(tab).plus(k * 16L).plus(8L).loadLong();
                     adopted = true;
                     int r = regOfType(elementType);
                     if (r >= 0)
@@ -28866,8 +28882,8 @@ public final class Loader
         {
             reportMirrorNoTib(type);                        // a TIB-0 mirror is a WILD DISPATCH, not an identity
         }
-        Magic.store64(obj + 0L, ctib);                      // TIB (0 -> a bare identity object; see the report)
-        Magic.store64(obj + 16L, type);                     // the VM Type this Class mirrors
+        Address.fromLong(obj).plus(0L).store(ctib);                      // TIB (0 -> a bare identity object; see the report)
+        Address.fromLong(obj).plus(16L).store(type);                     // the VM Type this Class mirrors
         if (mirN < mirType.length)
         {
             mirType[mirN] = type;
@@ -29235,9 +29251,9 @@ public final class Loader
         while (k < VM.imageSymCount)
         {
             long e = tab + k * 40L;
-            if (pc >= Magic.load64(e) && pc < Magic.load64(e + 8L))
+            if (pc >= Address.fromLong(e).loadLong() && pc < Address.fromLong(e).plus(8L).loadLong())
             {
-                long sym = Magic.load64(e + 16L);              // "owner/Class.method", length-prefixed
+                long sym = Address.fromLong(e).plus(16L).loadLong();              // "owner/Class.method", length-prefixed
                 int symLen = u2(sym);
                 int dot = symLen - 1;
                 while (dot > 0 && u1(sym + 2L + dot) != 0x2E)
@@ -29347,12 +29363,12 @@ public final class Loader
         {
             return 0L;
         }
-        long tib = Magic.load64(obj + 0L);
+        long tib = Address.fromLong(obj).plus(0L).loadLong();
         if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
         {
             return 0L;                                      // a raw array (no Type) — no mirror
         }
-        return classMirror(Magic.load64(tib));              // TIB[0] = Type (class Type or array Type)
+        return classMirror(Address.fromLong(tib).loadLong());              // TIB[0] = Type (class Type or array Type)
     }
 
     /**
@@ -29410,7 +29426,7 @@ public final class Loader
             Uart.write(Magic.bytes(" -- NOT a managed heap reference\n"));
             return;
         }
-        long tib = Magic.load64(ref);
+        long tib = Address.fromLong(ref).loadLong();
         Uart.write(Magic.bytes(" tib="));
         VM.printHex(tib);
         if (tib == 0L)
@@ -29418,7 +29434,7 @@ public final class Loader
             Uart.write(Magic.bytes(" -- NULL TIB (object never got one)\n"));
             return;
         }
-        long type = Magic.load64(tib);
+        long type = Address.fromLong(tib).loadLong();
         Uart.write(Magic.bytes(" type="));
         VM.printHex(type);
         Uart.write(Magic.bytes(" class="));
@@ -29432,11 +29448,11 @@ public final class Loader
             Uart.write(Magic.bytes("<unregistered Type>"));
         }
         Uart.write(Magic.bytes("\n    status="));
-        VM.printHex(Magic.load64(ref + 8L));
+        VM.printHex(Address.fromLong(ref).plus(8L).loadLong());
         Uart.write(Magic.bytes(" slot0(+16)="));
-        VM.printHex(Magic.load64(ref + 16L));
+        VM.printHex(Address.fromLong(ref).plus(16L).loadLong());
         Uart.write(Magic.bytes(" slot1(+24)="));
-        VM.printHex(Magic.load64(ref + 24L));
+        VM.printHex(Address.fromLong(ref).plus(24L).loadLong());
         Uart.putc((byte) 0x0A);
     }
 
@@ -29928,7 +29944,7 @@ public final class Loader
         // `<init>` ahead of `clinit-lazy` for the same class.
         ensureClinit(reg);
         long obj = Heap.alloc(16 + fields * 8);
-        Magic.store64(obj + ObjectModel.TIB_OFFSET, tib);
+        Address.fromLong(obj).plus(ObjectModel.TIB_OFFSET).store(tib);
         return obj;
     }
 
@@ -30113,7 +30129,7 @@ public final class Loader
         long bt = byteArrayTib();
         if (bt != 0L)
         {
-            Magic.store64(arr + ObjectModel.TIB_OFFSET, bt);   // type it as [B so `checkcast [B` on String.value resolves
+            Address.fromLong(arr).plus(ObjectModel.TIB_OFFSET).store(bt);   // type it as [B so `checkcast [B` on String.value resolves
         }
         i = 0;
         int k = 0;                                      // pass 2: store the decoded characters
@@ -30122,12 +30138,12 @@ public final class Loader
             decodeUtf8At(src, i, len);
             if (lastLiteralCoder == 0)
             {
-                Magic.store8(arr + 24 + k, decCh);      // ARRAY_BASE_OFFSET = 24
+                Address.fromLong(arr).plus(24).plus(k).store((byte) decCh);      // ARRAY_BASE_OFFSET = 24
             }
             else
             {
-                Magic.store8(arr + 24 + (k << 1), decCh & 0xFF);            // LO first (HI_BYTE_SHIFT = 0)
-                Magic.store8(arr + 24 + (k << 1) + 1, (decCh >> 8) & 0xFF);
+                Address.fromLong(arr).plus(24).plus(k << 1).store((byte) (decCh & 0xFF));            // LO first (HI_BYTE_SHIFT = 0)
+                Address.fromLong(arr).plus(24).plus(k << 1).plus(1).store((byte) ((decCh >> 8) & 0xFF));
             }
             i = decNext;
             k += 1;
@@ -30161,9 +30177,9 @@ public final class Loader
         else
         {
             long obj = Heap.alloc(stringSize());
-            Magic.store64(obj + 0L, tib);               // TIB
-            Magic.store64(obj + 16L, bytes);            // value field (offset 16)
-            Magic.store64(obj + 24L, lastLiteralCoder); // coder (offset 24): 0 LATIN1, 1 UTF16
+            Address.fromLong(obj).plus(0L).store(tib);               // TIB
+            Address.fromLong(obj).plus(16L).store(bytes);            // value field (offset 16)
+            Address.fromLong(obj).plus(24L).store((long) lastLiteralCoder); // coder (offset 24): 0 LATIN1, 1 UTF16
             long canon = poolLookup(obj);               // the same literal in ANOTHER class is the SAME object
             if (canon != 0L)
             {
@@ -30212,13 +30228,13 @@ public final class Loader
     /** FNV-1a over a String's coder and value bytes. */
     private static int poolHash(long str)
     {
-        long val = Magic.load64(str + 16L);
-        int len = (int) Magic.load64(val + 16L);
-        int h = 0x811C9DC5 ^ (int) Magic.load64(str + 24L);
+        long val = Address.fromLong(str).plus(16L).loadLong();
+        int len = (int) Address.fromLong(val).plus(16L).loadLong();
+        int h = 0x811C9DC5 ^ (int) Address.fromLong(str).plus(24L).loadLong();
         int i = 0;
         while (i < len)
         {
-            h = (h ^ (Magic.load8(val + 24L + i) & 0xFF)) * 0x01000193;
+            h = (h ^ (Address.fromLong(val).plus(24L).plus(i).loadUnsignedByte() & 0xFF)) * 0x01000193;
             i += 1;
         }
         return h & 0x7FFFFFFF;
@@ -30227,21 +30243,21 @@ public final class Loader
     /** Whether two Strings have the same coder and the same value bytes. */
     private static boolean poolSame(long a, long b)
     {
-        if (Magic.load64(a + 24L) != Magic.load64(b + 24L))
+        if (Address.fromLong(a).plus(24L).loadLong() != Address.fromLong(b).plus(24L).loadLong())
         {
             return false;
         }
-        long va = Magic.load64(a + 16L);
-        long vb = Magic.load64(b + 16L);
-        int len = (int) Magic.load64(va + 16L);
-        if (len != (int) Magic.load64(vb + 16L))
+        long va = Address.fromLong(a).plus(16L).loadLong();
+        long vb = Address.fromLong(b).plus(16L).loadLong();
+        int len = (int) Address.fromLong(va).plus(16L).loadLong();
+        if (len != (int) Address.fromLong(vb).plus(16L).loadLong())
         {
             return false;
         }
         int i = 0;
         while (i < len)
         {
-            if (Magic.load8(va + 24L + i) != Magic.load8(vb + 24L + i))
+            if (Address.fromLong(va).plus(24L).plus(i).loadUnsignedByte() != Address.fromLong(vb).plus(24L).plus(i).loadUnsignedByte())
             {
                 return false;
             }
