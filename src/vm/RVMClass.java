@@ -11,6 +11,8 @@
  */
 package vm;
 
+import magic.Address;
+
 /**
  * M8 Stage 3 (reified loader): one loaded class -- its TIB, {@code Type} node, static block, field/vtable
  * counts, superclass link and modifiers. Reifies the eleven scalar per-class {@code cl*} static arrays in
@@ -20,7 +22,7 @@ package vm;
  */
 final class RVMClass
 {
-    long    base;        // class blob base (holds Utf8 strings)
+    Address base;        // class blob base (holds Utf8 strings)
     int     nameOff;     // this class's own name Utf8 offset (in base)
     int     nameHash;    // FNV-1a of that name, folded ONCE at registration. Immutable by construction: `base`
                          //   and `nameOff` are written here and never re-pointed. It exists because the method

@@ -2740,7 +2740,7 @@ public final class VM
         long buf;
         try
         {
-            buf = Loader.resolveBakeStub(Address.fromLong(e).loadLong(), Address.fromLong(e).plus(8L).loadLong(), Address.fromLong(e).plus(16L).loadLong());
+            buf = Loader.resolveBakeStub(Address.fromLong(e).loadAddress(), Address.fromLong(e).plus(8L).loadAddress(), Address.fromLong(e).plus(16L).loadAddress());
             Address.fromLong(e).plus(24L).store(buf);
         }
         finally

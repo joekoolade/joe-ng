@@ -11,6 +11,8 @@
  */
 package vm;
 
+import magic.Address;
+
 /**
  * M8 Stage 3 (reified loader): one slot of the class currently being built's flattened vtable -- its method
  * name/descriptor (in some blob) plus either an inherited compiled buffer or this class's own bytecode.
@@ -20,7 +22,7 @@ package vm;
  */
 final class VtSlot
 {
-    long base;      // blob holding this slot's name/descriptor
+    Address base;    // blob holding this slot's name/descriptor
     int  name;      // method name Utf8 offset (in base)
     int  desc;      // descriptor Utf8 offset (in base)
     long implBuf;   // inherited impl buffer (0 => this class's own)
