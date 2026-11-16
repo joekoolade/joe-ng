@@ -1522,7 +1522,7 @@ final class VMNatives
      */
     static long netifState(long key)
     {
-        if (net.Ip.ourIp == 0L)
+        if (net.Ip.ourIp.isZero())
         {
             return 0L;
         }
@@ -1532,15 +1532,15 @@ final class VMNatives
         }
         if (key == 1L)
         {
-            return net.Ip.netMask == 0L ? 0L : beInt(net.Ip.netMask);
+            return net.Ip.netMask.isZero() ? 0L : beInt(net.Ip.netMask);
         }
-        if (key == 2L && net.Ip.ourMac != 0L)
+        if (key == 2L && !net.Ip.ourMac.isZero())
         {
             long mac = 0L;
             int i = 0;
             while (i < 6)
             {
-                mac = (mac << 8) | (Address.fromLong(net.Ip.ourMac + i).loadUnsignedByte() & 0xFFL);
+                mac = (mac << 8) | (net.Ip.ourMac.plus(i).loadUnsignedByte() & 0xFFL);
                 i += 1;
             }
             return mac;
@@ -1549,10 +1549,10 @@ final class VMNatives
     }
 
     /** Four bytes at {@code a}, big-endian, as an int (sign-extended into the long the caller narrows). */
-    private static long beInt(long a)
+    private static long beInt(Address a)
     {
-        return ((Address.fromLong(a).loadUnsignedByte() & 0xFF) << 24) | ((Address.fromLong(a + 1).loadUnsignedByte() & 0xFF) << 16)
-                | ((Address.fromLong(a + 2).loadUnsignedByte() & 0xFF) << 8) | (Address.fromLong(a + 3).loadUnsignedByte() & 0xFF);
+        return ((a.loadUnsignedByte() & 0xFF) << 24) | ((a.plus(1).loadUnsignedByte() & 0xFF) << 16)
+                | ((a.plus(2).loadUnsignedByte() & 0xFF) << 8) | (a.plus(3).loadUnsignedByte() & 0xFF);
     }
 
     /** The net.Tcp handle stored in a FileDescriptor's fd field (offset 16 = first instance field). */
@@ -1770,13 +1770,13 @@ final class VMNatives
      */
     static int sockRead0(long fdRef, long address, long len)
     {
-        return net.Tcp.read(fdIndex(fdRef), address, 0, (int) len);
+        return net.Tcp.read(fdIndex(fdRef), Address.fromLong(address), 0, (int) len);
     }
 
     /** SocketDispatcher.write0(fd, address, len) -> bytes written from {@code address}, or a negated errno. */
     static int sockWrite0(long fdRef, long address, long len)
     {
-        return net.Tcp.write(fdIndex(fdRef), address, 0, (int) len);
+        return net.Tcp.write(fdIndex(fdRef), Address.fromLong(address), 0, (int) len);
     }
 
     /** UnixDispatcher.close0(fd). */

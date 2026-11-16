@@ -50,7 +50,7 @@ public final class RxQueues
     /** true once the RX task owns the chip: every receive must go through a queue. */
     public static boolean active;
 
-    private static long pool;                            // POOL * FRAME bytes
+    private static Address pool;                         // POOL * FRAME bytes
     private static int[] freeList;                       // free buffer indices (a stack)
     private static int freeTop;
     private static int lockSem = -1;                     // mutex over the pool and every queue's ring
@@ -66,7 +66,7 @@ public final class RxQueues
     /** Allocate the pool, the queue table and their semaphores, and bind the control queue. Call once. */
     public static void init()
     {
-        pool = Heap.allocData(POOL * FRAME).toLong();
+        pool = Heap.allocData(POOL * FRAME);
         freeList = new int[POOL];
         int i = 0;
         while (i < POOL)
@@ -126,9 +126,9 @@ public final class RxQueues
     }
 
     /** The address of buffer {@code b}. */
-    public static long bufAddr(int b)
+    public static Address bufAddr(int b)
     {
-        return pool + (long) b * FRAME;
+        return pool.plus((long) b * FRAME);
     }
 
     /** Bind a queue for UDP datagrams to local port {@code port}; its index, or -1 if the table is full. */
@@ -207,7 +207,7 @@ public final class RxQueues
      * Wait up to {@code ms} for the next frame on queue {@code q} and copy it (at most {@code cap} bytes) to
      * {@code dst}, raw SDPCM framing included, as the chip delivered it. Returns its length, or 0 on timeout.
      */
-    public static int recv(int q, long dst, int cap, long ms)
+    public static int recv(int q, Address dst, int cap, long ms)
     {
         if (!VMScheduler.semWaitTimeout(qSem[q], ms))
         {
@@ -226,13 +226,11 @@ public final class RxQueues
         qCount[q] = qCount[q] - 1;
         unlock();
         int n = len < cap ? len : cap;
-        long src = bufAddr(b);
-        Address srcA = Address.fromLong(src);
-        Address dstA = Address.fromLong(dst);
+        Address src = bufAddr(b);
         int i = 0;
         while (i < n)
         {
-            dstA.plus(i).store((byte) srcA.plus(i).loadUnsignedByte());
+            dst.plus(i).store((byte) src.plus(i).loadUnsignedByte());
             i = i + 1;
         }
         freeBuf(b);
@@ -268,9 +266,8 @@ public final class RxQueues
      */
     public static void dispatch(int b, int len)
     {
-        long rx = bufAddr(b);
-        Address rxA = Address.fromLong(rx);
-        int ch = rxA.plus(5).loadUnsignedByte() & 0x0F;
+        Address rx = bufAddr(b);
+        int ch = rx.plus(5).loadUnsignedByte() & 0x0F;
         if (ch == 0)
         {
             enqueue(Q_CTRL, b, len);
@@ -280,15 +277,14 @@ public final class RxQueues
         {
             if (ch == 1)
             {
-                board.cyw43.Cyw43.logRxEvent(rxA, len);
+                board.cyw43.Cyw43.logRxEvent(rx, len);
             }
             freeBuf(b);
             return;
         }
-        long eth = rx + (rxA.plus(7).loadUnsignedByte() & 0xFF);    // SDPCM data offset
-        eth = eth + 4 + (Address.fromLong(eth).plus(3).loadUnsignedByte() & 0xFF) * 4;   // skip the BDC header
-        Address ethA = Address.fromLong(eth);
-        int et = (ethA.plus(12).loadUnsignedByte() & 0xFF) << 8 | (ethA.plus(13).loadUnsignedByte() & 0xFF);
+        Address eth = rx.plus(rx.plus(7).loadUnsignedByte() & 0xFF);    // SDPCM data offset
+        eth = eth.plus(4 + (eth.plus(3).loadUnsignedByte() & 0xFF) * 4);   // skip the BDC header
+        int et = (eth.plus(12).loadUnsignedByte() & 0xFF) << 8 | (eth.plus(13).loadUnsignedByte() & 0xFF);
         if (et == 0x0806)
         {
             Ip.answerArp(eth);
@@ -299,23 +295,22 @@ public final class RxQueues
         {
             if (et == 0x888E)
             {
-                board.cyw43.Supplicant.input(eth, len - (int) (eth - rx));
+                board.cyw43.Supplicant.input(eth, len - eth.diff(rx).toInt());
                 freeBuf(b);                              // answered here: a re-handshake must be, or the AP
                 return;                                  //   deauths us (reason 15, Pi run 13)
             }
             freeBuf(b);
             return;
         }
-        long ip = eth + 14;
-        if (!NetStats.ipIn(ip, len - (int) (ip - rx)))
+        Address ip = eth.plus(14);
+        if (!NetStats.ipIn(ip, len - ip.diff(rx).toInt()))
         {
             freeBuf(b);
             return;
         }
-        Address ipA = Address.fromLong(ip);
-        int ihl = (ipA.loadUnsignedByte() & 0x0F) * 4;
-        int total = (ipA.plus(2).loadUnsignedByte() & 0xFF) << 8 | (ipA.plus(3).loadUnsignedByte() & 0xFF);
-        int proto = ipA.plus(9).loadUnsignedByte() & 0xFF;
+        int ihl = (ip.loadUnsignedByte() & 0x0F) * 4;
+        int total = (ip.plus(2).loadUnsignedByte() & 0xFF) << 8 | (ip.plus(3).loadUnsignedByte() & 0xFF);
+        int proto = ip.plus(9).loadUnsignedByte() & 0xFF;
         if (proto == 6)
         {
             NetStats.ipInDelivers = NetStats.ipInDelivers + 1;
@@ -340,14 +335,13 @@ public final class RxQueues
             return;
         }
         NetStats.ipInDelivers = NetStats.ipInDelivers + 1;
-        long udp = ip + ihl;
+        Address udp = ip.plus(ihl);
         if (!NetStats.udpOk(ip, udp, total - ihl))
         {
             freeBuf(b);
             return;
         }
-        Address udpA = Address.fromLong(udp);
-        int dport = (udpA.plus(2).loadUnsignedByte() & 0xFF) << 8 | (udpA.plus(3).loadUnsignedByte() & 0xFF);
+        int dport = (udp.plus(2).loadUnsignedByte() & 0xFF) << 8 | (udp.plus(3).loadUnsignedByte() & 0xFF);
         int q = find(KIND_UDP, dport);
         if (q < 0)
         {

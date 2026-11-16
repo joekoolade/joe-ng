@@ -30,19 +30,19 @@ public final class Ip
     private Ip() {}
 
     // Interface config, published by the driver bring-up (board.cyw43.Cyw43, after DHCP + ARP).
-    public static long ourMac;      // heap addr of our 6-byte station MAC
-    public static long ourIp;       // heap addr of our 4-byte leased IP
-    public static long netMask;     // heap addr of the lease's 4-byte subnet mask (java.net.NetworkInterface)
-    public static long gwMac;       // heap addr of the gateway's 6-byte MAC (all off-subnet traffic routes here)
+    public static Address ourMac;   // heap addr of our 6-byte station MAC
+    public static Address ourIp;    // heap addr of our 4-byte leased IP
+    public static Address netMask;  // heap addr of the lease's 4-byte subnet mask (java.net.NetworkInterface)
+    public static Address gwMac;    // heap addr of the gateway's 6-byte MAC (all off-subnet traffic routes here)
 
     // Scratch describing the last IPv4 frame recvIp() accepted.
     public static int lastIhl;      // IP header length (bytes)
     public static int lastIpTotal;  // IP total length (bytes)
 
     /** Send a fully-built 802.3 Ethernet frame over the WiFi data path. */
-    public static void send(long frame, int len)
+    public static void send(Address frame, int len)
     {
-        board.cyw43.Cyw43.txData(Address.fromLong(frame), len);
+        board.cyw43.Cyw43.txData(frame, len);
     }
 
     /**
@@ -51,7 +51,7 @@ public final class Ip
      * #lastIpTotal}. Mirrors the driver's parse: skip the SDPCM data-offset + 4-byte BDC header to the 802.3
      * frame, require ethertype 0x0800.
      */
-    public static long recvIp(long rx, int cap, int ms)
+    public static Address recvIp(Address rx, int cap, int ms)
     {
         return recvIp(-1, rx, cap, ms);
     }
@@ -60,7 +60,7 @@ public final class Ip
      * {@link #recvIp}, reading from the RX queue {@code q} (net.RxQueues) once the WiFi RX task owns the chip;
      * {@code q < 0} with the task running means no queue is bound, and nothing can arrive.
      */
-    public static long recvIp(int q, long rx, int cap, int ms)
+    public static Address recvIp(int q, Address rx, int cap, int ms)
     {
         int len;
         if (RxQueues.active)
@@ -68,40 +68,37 @@ public final class Ip
             if (q < 0)
             {
                 vm.VMScheduler.kernelSleep(ms);
-                return 0L;
+                return Address.zero();
             }
             len = RxQueues.recv(q, rx, cap, ms);
         }
         else
         {
-            len = board.cyw43.Cyw43.waitFrameIrq(Address.fromLong(rx), cap, ms);
+            len = board.cyw43.Cyw43.waitFrameIrq(rx, cap, ms);
         }
         if (len == 0)
         {
-            return 0L;
+            return Address.zero();
         }
-        Address rxA = Address.fromLong(rx);
-        if ((rxA.plus(5).loadUnsignedByte() & 0x0F) == 0)          // SDPCM control channel, not data
+        if ((rx.plus(5).loadUnsignedByte() & 0x0F) == 0)          // SDPCM control channel, not data
         {
-            return 0L;
+            return Address.zero();
         }
-        long eth = rx + (rxA.plus(7).loadUnsignedByte() & 0xFF);   // SDPCM data offset
-        eth = eth + 4 + (Address.fromLong(eth).plus(3).loadUnsignedByte() & 0xFF) * 4;   // skip the 4-byte BDC header
-        Address ethA = Address.fromLong(eth);
-        int et = (ethA.plus(12).loadUnsignedByte() & 0xFF) << 8 | (ethA.plus(13).loadUnsignedByte() & 0xFF);
+        Address eth = rx.plus(rx.plus(7).loadUnsignedByte() & 0xFF);   // SDPCM data offset
+        eth = eth.plus(4 + (eth.plus(3).loadUnsignedByte() & 0xFF) * 4);   // skip the 4-byte BDC header
+        int et = (eth.plus(12).loadUnsignedByte() & 0xFF) << 8 | (eth.plus(13).loadUnsignedByte() & 0xFF);
         if (et == 0x0806)
         {
             answerArp(eth);
-            return 0L;
+            return Address.zero();
         }
         if (et != 0x0800)
         {
-            return 0L;                                   // not IPv4
+            return Address.zero();                       // not IPv4
         }
-        long ip = eth + 14;
-        Address ipA = Address.fromLong(ip);
-        lastIhl = (ipA.loadUnsignedByte() & 0x0F) * 4;
-        lastIpTotal = ((ipA.plus(2).loadUnsignedByte() & 0xFF) << 8) | (ipA.plus(3).loadUnsignedByte() & 0xFF);
+        Address ip = eth.plus(14);
+        lastIhl = (ip.loadUnsignedByte() & 0x0F) * 4;
+        lastIpTotal = ((ip.plus(2).loadUnsignedByte() & 0xFF) << 8) | (ip.plus(3).loadUnsignedByte() & 0xFF);
         return ip;
     }
 
@@ -111,57 +108,53 @@ public final class Ip
      * and every later IPv4 frame for it is dropped at the router. Public because every receive loop must call
      * it, not only this one: the driver's DNS resolver has its own loop.
      */
-    public static void answerArp(long eth)
+    public static void answerArp(Address eth)
     {
-        long arp = eth + 14;
-        Address arpA = Address.fromLong(arp);
-        if ((((arpA.plus(6).loadUnsignedByte() & 0xFF) << 8) | (arpA.plus(7).loadUnsignedByte() & 0xFF)) != 1)
+        Address arp = eth.plus(14);
+        if ((((arp.plus(6).loadUnsignedByte() & 0xFF) << 8) | (arp.plus(7).loadUnsignedByte() & 0xFF)) != 1)
         {
             return;                                      // not a request
         }
-        if (!eq(arp + 24, ourIp))
+        if (!eq(arp.plus(24), ourIp))
         {
             return;                                      // not asking for us
         }
-        long buf = Heap.allocData(64).toLong();
-        Address bufA = Address.fromLong(buf);
+        Address buf = Heap.allocData(64);
         int i = 0;
         while (i < 6)
         {
-            bufA.plus(i).store((byte) arpA.plus(8 + i).loadUnsignedByte());              // to the requester's MAC
-            bufA.plus(6 + i).store((byte) Address.fromLong(ourMac).plus(i).loadUnsignedByte());
+            buf.plus(i).store((byte) arp.plus(8 + i).loadUnsignedByte());                // to the requester's MAC
+            buf.plus(6 + i).store((byte) ourMac.plus(i).loadUnsignedByte());
             i = i + 1;
         }
-        be16(buf + 12, 0x0806);
-        long r = buf + 14;
-        Address rA = Address.fromLong(r);
-        be16(r + 0, 1);                                  // hardware type = Ethernet
-        be16(r + 2, 0x0800);                             // protocol type = IPv4
-        rA.plus(4).store((byte) 6);
-        rA.plus(5).store((byte) 4);
-        be16(r + 6, 2);                                  // opcode = reply
+        be16(buf.plus(12), 0x0806);
+        Address r = buf.plus(14);
+        be16(r.plus(0), 1);                              // hardware type = Ethernet
+        be16(r.plus(2), 0x0800);                         // protocol type = IPv4
+        r.plus(4).store((byte) 6);
+        r.plus(5).store((byte) 4);
+        be16(r.plus(6), 2);                              // opcode = reply
         i = 0;
         while (i < 6)
         {
-            rA.plus(8 + i).store((byte) Address.fromLong(ourMac).plus(i).loadUnsignedByte());             // sender = us
-            rA.plus(18 + i).store((byte) arpA.plus(8 + i).loadUnsignedByte());           // target = the requester
+            r.plus(8 + i).store((byte) ourMac.plus(i).loadUnsignedByte());                                // sender = us
+            r.plus(18 + i).store((byte) arp.plus(8 + i).loadUnsignedByte());             // target = the requester
             i = i + 1;
         }
-        copy4(ourIp, r + 14);
-        copy4(arp + 14, r + 24);
+        copy4(ourIp, r.plus(14));
+        copy4(arp.plus(14), r.plus(24));
         i = 42;
         while (i < 60)
         {
-            bufA.plus(i).store((byte) 0);                    // pad to the 60-byte Ethernet minimum
+            buf.plus(i).store((byte) 0);                     // pad to the 60-byte Ethernet minimum
             i = i + 1;
         }
         send(buf, 60);
     }
 
     /** One's-complement IPv4 header checksum over {@code len} bytes at {@code addr}. */
-    public static int cksum(long addr, int len)
+    public static int cksum(Address a, int len)
     {
-        Address a = Address.fromLong(addr);
         int sum = 0;
         int i = 0;
         while (i < len)
@@ -177,17 +170,15 @@ public final class Ip
     }
 
     /** Store a 16-bit big-endian (network-order) value. */
-    public static void be16(long addr, int v)
+    public static void be16(Address a, int v)
     {
-        Address a = Address.fromLong(addr);
         a.store((byte) ((v >> 8) & 0xFF));
         a.plus(1).store((byte) (v & 0xFF));
     }
 
     /** Store a 32-bit big-endian value. */
-    public static void be32(long addr, int v)
+    public static void be32(Address a, int v)
     {
-        Address a = Address.fromLong(addr);
         a.store((byte) ((v >> 24) & 0xFF));
         a.plus(1).store((byte) ((v >> 16) & 0xFF));
         a.plus(2).store((byte) ((v >> 8) & 0xFF));
@@ -195,22 +186,19 @@ public final class Ip
     }
 
     /** Read a 32-bit big-endian value. */
-    public static int readBe32(long addr)
+    public static int readBe32(Address a)
     {
-        Address a = Address.fromLong(addr);
         return ((a.loadUnsignedByte() & 0xFF) << 24) | ((a.plus(1).loadUnsignedByte() & 0xFF) << 16)
                 | ((a.plus(2).loadUnsignedByte() & 0xFF) << 8) | (a.plus(3).loadUnsignedByte() & 0xFF);
     }
 
     /** Compare two 4-byte IPv4 addresses. */
-    public static boolean eq(long a, long b)
+    public static boolean eq(Address a, Address b)
     {
-        Address aA = Address.fromLong(a);
-        Address bA = Address.fromLong(b);
         int i = 0;
         while (i < 4)
         {
-            if ((aA.plus(i).loadUnsignedByte() & 0xFF) != (bA.plus(i).loadUnsignedByte() & 0xFF))
+            if ((a.plus(i).loadUnsignedByte() & 0xFF) != (b.plus(i).loadUnsignedByte() & 0xFF))
             {
                 return false;
             }
@@ -220,14 +208,12 @@ public final class Ip
     }
 
     /** Copy 4 bytes (an IPv4 address). */
-    public static void copy4(long src, long dst)
+    public static void copy4(Address src, Address dst)
     {
-        Address srcA = Address.fromLong(src);
-        Address dstA = Address.fromLong(dst);
         int i = 0;
         while (i < 4)
         {
-            dstA.plus(i).store((byte) srcA.plus(i).loadUnsignedByte());
+            dst.plus(i).store((byte) src.plus(i).loadUnsignedByte());
             i = i + 1;
         }
     }
