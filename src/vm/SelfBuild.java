@@ -2871,7 +2871,7 @@ final class SelfBuild
         {
             long base = codeBuf + gmWordOff[m] * 4L;
             long end = base + gmSize[m] * 4L;
-            addJitFrame(base, end, gmFrameSize[m], 0);     // metal-writer path: no pre-try local restore (0)
+            addJitFrame(Address.fromLong(base), Address.fromLong(end), gmFrameSize[m], 0);     // metal-writer path: no pre-try local restore (0)
             setClassContext(gmClsIdx[m]);                  // resolve catch-type cp in this method's class
             int h = 0;
             while (h < gmHN[m])
@@ -2880,7 +2880,7 @@ final class SelfBuild
                 long me = base + gmHEnd[m][h] * 4L;
                 long hh = base + gmHandler[m][h] * 4L;
                 long ct = typeAddrOfClassCp(gmHCatch[m][h]);
-                addJitHandler(ms, me, hh, ct);
+                addJitHandler(Address.fromLong(ms), Address.fromLong(me), Address.fromLong(hh), ct);
                 h += 1;
             }
             m += 1;
@@ -3939,7 +3939,7 @@ final class SelfBuild
             long nameAddr = Magic.load64(e);
             long nameLen = Magic.load64(e + 8L);
             long bytesAddr = Magic.load64(e + 16L);
-            if (findClass(nameAddr, nameLen) != bytesAddr)
+            if (findClass(Address.fromLong(nameAddr), nameLen).toLong() != bytesAddr)
             {
                 return false;                              // name did not resolve to its own bytes
             }

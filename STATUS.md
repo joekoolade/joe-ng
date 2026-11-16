@@ -4,6 +4,36 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 12: `VM`'s address-typed API (2026-11-15).** Pi-validated (build c54da7c9bfd47bae). 26
+  `VM` methods whose `long` is a MEMORY ADDRESS take or return `Address`:
+  - fault/unwind: `stashFaultRegs`, `reportNestedFault` (elr, far), `reportWildBranch`, `reportFaultStack`,
+    `isLaunchFrame`, `frameSizeAt`, `jitRegLocalsAt`, `tableValueIn`, `monUnwindSync`;
+  - JIT tables: `addJitFrame`, `addJitHandler` (code range and handler), `dropJitTablesAbove`, `dropJitTablesIn`,
+    `compactTable`, `compactTableOutside`;
+  - code stub: `buildSwitchStub`;
+  - RAMFS/manifest: `fileFind` (not found = `Address.zero()`), `manifestValue`, `heapBytes`, `openClasspath`,
+    `armStdin`, `armHangDump`;
+  - names: `findClass` (absent = `Address.zero()`), `nameCompare`, `dirBytes`, `dirLen`, `bytesEqual`.
+  - **Deliberately NOT changed:** the 37 `VM` methods named by descriptor string (WriterSymbols, ImageBuilder,
+    SelfBuild) -- the compiled-code ABI; their address-bearing ones (`throwFromFault(sp)`, `monEnterSync(.., sp)`,
+    `badTailTarget`, `ensureInitByName`, `bakeResolve`, the `watch*` sites) need coordinated descriptor changes and are a
+    later increment. OBJECT REFERENCES (`strBytes`, `printJavaString`, `record*`, `getClassOf`...) and TYPE IDS
+    (`instanceOf`, `castOk`, `checkCast`, `addJitHandler`'s `catchType`, which can also carry `CATCH_BY_NAME | utf8`)
+    stay long: in Jikes those are `ObjectReference`, not `Address`.
+  - **Callers** (Loader 26 sites, VMUnwind 11, Cyw43, JarFs, SelfBuild, VMScheduler, VMGc, VMNatives): Address locals
+    where loaded/stored through; VMUnwind's pc/sp/cpc are reassigned walk variables and stay long. Every comparison is
+    still a long comparison via `.toLong()`, the zero sentinels included.
+  - **Width check, 9 changed classes vs HEAD:** identical 64/32/8 load/store mix per class (7 `loadLong` became
+    `loadAddress`, 7 `store(long)` became `store(Address)`, all 64-bit). An image build prints no `helper-stash MISS`.
+  - **Code size (whole class, now including retyped methods):** never larger; 146 words smaller (VM -125, JarFs -10,
+    Loader -7, Cyw43 -4).
+  - **Measured:** `make test`; overlaycheck 0 new; full regression **208/208**. Pi: committed first try; every page;
+    `/run`s; a throwing main with its full stack trace (unwinding goes through `frameSizeAt`/`isLaunchFrame`); the
+    stop-poll benchmark (same figures); a forced stop of four threads; the kernel SHA-256; a staged 39 MB upload
+    SHA-256-verified in 24.8 s; `/net` 0 IP header errors, 0 TCP errors, 2 retransmits.
+  - **Next:** Loader's address-typed API (printFrameAt, reportMethodAt, plausibleCode...), then VMNatives/JarFs/VMGc/
+    VMUnwind and the drivers, then the descriptor-named helpers.
+
 - **UNBOXED TYPES, INCREMENT 11: `Heap`'s public API (2026-11-15).** Pi-validated (build 2251bf61e2bdb96a). First step
   of the public-signature phase (user's choice: convert ALL public APIs, not stop at the load/store boundary).
   `alloc`, `allocData`, `allocArray`, `allocCode`, `managedTop`, `arenaBase`, `arenaLimit`, `codeBlockStartAt`,
@@ -19,8 +49,11 @@ Newest entries are at the top.
   - **Width check, all 21 changed classes vs HEAD:** store and load mixes identical per class (64/32/8, counting
     `store(Address)`/`loadAddress` as 64). One store moved from `store(long)` to `store(Address)` with no javac error
     (`Heap.allocArray(0, 1)` stored into a buffer) -- 64-bit either way, which the check confirms.
-  - **Code size:** never larger; 161 words smaller in total (Loader -101, Cyw43 -25, VMConcat -10, VMNatives -10, VM -8),
-    where callers stopped converting back and forth.
+  - **Code size:** never larger; **238** words smaller in total (Loader -101, Heap -77, Cyw43 -25, VMConcat -10,
+    VMNatives -10, VM -8), where callers stopped converting back and forth. *(Corrected in increment 12: this first said
+    161, because the size tool paired methods by name AND descriptor, so every method whose signature changed -- the 21
+    retyped Heap methods, the point of the increment -- dropped out of the total. It now also prints whole-class
+    totals.)*
   - **Measured:** `make test`; overlaycheck 0 new; full regression **208/208**. Pi: committed first try; every page;
     `/run`s; a throwing main; the stop-poll benchmark (same figures); a forced stop of four threads; the kernel SHA-256;
     a staged 39 MB upload SHA-256-verified in 23.5 s; `/net` 0 IP header errors, 0 TCP errors, 1 retransmit.

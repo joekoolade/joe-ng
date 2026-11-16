@@ -102,12 +102,11 @@ public final class JarFs
 
     public static boolean open(byte[] path)
     {
-        long e = VM.fileFind(path);
-        if (e == 0L)
+        Address eA = VM.fileFind(path);
+        if (eA.toLong() == 0L)
         {
             return false;
         }
-        Address eA = Address.fromLong(e);
         Address src = eA.plus(16).loadAddress();
         int len = (int) eA.plus(24).loadLong();
         byte[] raw = new byte[len];

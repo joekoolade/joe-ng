@@ -1504,7 +1504,7 @@ final class VMNatives
             return 0;
         }
         int hlen = (int) Address.fromLong(hostArrRef + 16L).loadLong();   // guest byte[] length
-        byte[] host = heapBytes(hostArrRef + 24L, hlen);
+        byte[] host = heapBytes(Address.fromLong(hostArrRef + 24L), hlen);
         Address ipOut = Heap.allocData(4);
         if (!board.cyw43.Cyw43.dnsResolve(host, ipOut.toLong()))
         {

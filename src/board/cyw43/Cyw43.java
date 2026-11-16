@@ -183,14 +183,14 @@ public final class Cyw43
     /** Upload the firmware; returns the ARM reset vector (fw[0]) on success, 0 on failure. */
     static int uploadFirmware()
     {
-        long e = VM.fileFind(Magic.bytes("/lib/firmware/brcm/brcmfmac43455-sdio.bin"));
-        if (e == 0L)
+        Address e = VM.fileFind(Magic.bytes("/lib/firmware/brcm/brcmfmac43455-sdio.bin"));
+        if (e.toLong() == 0L)
         {
             board.bcm2711.Uart.write(Magic.bytes("  fw NOT FOUND in ramfs\n"));
             return 0;
         }
-        long src = Address.fromLong(e).plus(16L).loadLong();                // firmware bytes (baked into the image)
-        long len = Address.fromLong(e).plus(24L).loadLong();
+        long src = e.plus(16L).loadLong();                // firmware bytes (baked into the image)
+        long len = e.plus(24L).loadLong();
         log(Magic.bytes("fw bytes="), (int) len);
 
         // The bus is still at the ~400 kHz ID clock; raise it so a 609 KB upload isn't glacial.
@@ -216,14 +216,14 @@ public final class Cyw43
      */
     static boolean uploadNvram(int ramsize)
     {
-        long e = VM.fileFind(Magic.bytes("/lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.txt"));
-        if (e == 0L)
+        Address e = VM.fileFind(Magic.bytes("/lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.txt"));
+        if (e.toLong() == 0L)
         {
             board.bcm2711.Uart.write(Magic.bytes("  nvram NOT FOUND\n"));
             return false;
         }
-        long src = Address.fromLong(e).plus(16L).loadLong();
-        int srcLen = (int) Address.fromLong(e).plus(24L).loadLong();
+        long src = e.plus(16L).loadLong();
+        int srcLen = (int) e.plus(24L).loadLong();
         long buf = Heap.allocData(8192).toLong();
         int varsz = processNvram(src, srcLen, buf);
         long addr = RAMBASE + (long) ramsize - (long) varsz;
@@ -601,14 +601,14 @@ public final class Cyw43
      */
     static void join()
     {
-        long e = VM.fileFind(Magic.bytes("/etc/wifi.conf"));
-        if (e == 0L)
+        Address e = VM.fileFind(Magic.bytes("/etc/wifi.conf"));
+        if (e.toLong() == 0L)
         {
             board.bcm2711.Uart.write(Magic.bytes("  no /etc/wifi.conf\n"));
             return;
         }
-        long conf = Address.fromLong(e).plus(16L).loadLong();
-        int flen = (int) Address.fromLong(e).plus(24L).loadLong();
+        long conf = e.plus(16L).loadLong();
+        int flen = (int) e.plus(24L).loadLong();
         long ssid = Heap.allocData(48).toLong();
         int sl = confValue(conf, flen, Magic.bytes("ssid"), ssid);
         long psk = Heap.allocData(72).toLong();
@@ -2836,14 +2836,14 @@ public final class Cyw43
      */
     static void clmLoad()
     {
-        long e = VM.fileFind(Magic.bytes("/lib/firmware/brcm/brcmfmac43455-sdio.clm_blob"));
-        if (e == 0L)
+        Address e = VM.fileFind(Magic.bytes("/lib/firmware/brcm/brcmfmac43455-sdio.clm_blob"));
+        if (e.toLong() == 0L)
         {
             board.bcm2711.Uart.write(Magic.bytes("  clm NOT FOUND\n"));
             return;
         }
-        long src = Address.fromLong(e).plus(16L).loadLong();
-        int total = (int) Address.fromLong(e).plus(24L).loadLong();
+        long src = e.plus(16L).loadLong();
+        int total = (int) e.plus(24L).loadLong();
         log(Magic.bytes("clm bytes="), total);
         int off = 0;
         while (off < total)

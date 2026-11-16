@@ -1724,7 +1724,7 @@ public final class VM
      * walks. STRICTLY below {@code newSp}: a record AT {@code newSp} belongs to the frame the walk is about
      * to resume into (a handler inside a synchronized method), which must keep its monitor.
      */
-    static void monUnwindSync(long newSp)
+    static void monUnwindSync(Address newSp)
     {
         if (syncDepth == null)
         {
@@ -1734,7 +1734,7 @@ public final class VM
         while (syncDepth[t] > 0)
         {
             int d = syncDepth[t] - 1;
-            if (syncSp[t * MAX_SYNC_DEPTH + d] >= newSp)
+            if (syncSp[t * MAX_SYNC_DEPTH + d] >= newSp.toLong())
             {
                 return;                                 // this frame is still live
             }
@@ -1868,7 +1868,7 @@ public final class VM
      * this is an SVC (EC=0x15), branches to {@link #reportFault} -- so the shared EL1 synchronous vector
      * still reports real faults. Returns the stub's entry address.
      */
-    static long buildSwitchStub(long pickAddr, boolean svcCheck)
+    static Address buildSwitchStub(Address pickAddr, boolean svcCheck)
     {
         // The stub is referenced ONLY by the raw EL1 vector table (e4/e5/e6), which the conservative GC never
         // scans and the demand-load heap reclaim rewinds -- so a data-heap stub gets freed/zeroed out from under
@@ -1919,7 +1919,7 @@ public final class VM
         }
         stubAt.plus(w * 4L).store(A64Enc.movFromSp(0));            w += 1;    // mov x0, sp (curSp)
         long blAddr = stub + w * 4L;
-        Address.fromLong(blAddr).store(A64Enc.bl((int) ((pickAddr - blAddr) / 4L)));      // x0 = pick(x0)
+        Address.fromLong(blAddr).store(A64Enc.bl((int) ((pickAddr.toLong() - blAddr) / 4L)));      // x0 = pick(x0)
         w += 1;
         stubAt.plus(w * 4L).store(A64Enc.movToSp(0));             w += 1;    // mov sp, x0 (next task)
         // OFF THE OLD STACK NOW -- only now may another core claim the task this core just left. pickNext
@@ -1952,7 +1952,7 @@ public final class VM
         stubAt.plus(w * 4L).store(A64Enc.addImm(31, 31, (int) SCHED_FRAME)); w += 1;   // add sp, #272
         stubAt.plus(w * 4L).store(A64Enc.eret());                w += 1;
         Heap.publishCode(Address.fromLong(stub), Address.fromLong(stub + w * 4L));
-        return stub;
+        return Address.fromLong(stub);
     }
 
     /**
@@ -1967,8 +1967,8 @@ public final class VM
      */
     static void installSchedVectors()
     {
-        long irqStub = buildSwitchStub(scheduleAddr, false);
-        long svcStub = buildSwitchStub(yieldPickAddr, true);
+        long irqStub = buildSwitchStub(Address.fromLong(scheduleAddr), false).toLong();
+        long svcStub = buildSwitchStub(Address.fromLong(yieldPickAddr), true).toLong();
         long e4 = vbarBase + 4L * 0x80L;                   // synchronous (Current EL, SPx) -> SVC/yield
         Address.fromLong(e4).store(A64Enc.b((int) ((svcStub - e4) / 4L)));
         long e5 = vbarBase + 5L * 0x80L;                   // IRQ (Current EL, SPx)
@@ -2264,22 +2264,22 @@ public final class VM
 
     /** Find a RAMFS file by a raw path {@code byte[]} (for VM/driver code with no guest String); returns the
      *  directory entry addr {nameAddr, nameLen@8, bytesAddr@16, bytesLen@24}, or 0. */
-    public static long fileFind(byte[] path)
+    public static Address fileFind(byte[] path)
     {
         if (fileDir == 0L)
         {
-            return 0L;
+            return Address.zero();
         }
         int len = path.length;
         int i = 0;
         while (i < (int) fileCount)
         {
-            long e = fileDir + i * 32L;
-            if (Address.fromLong(e).plus(8L).loadLong() == (long) len)
+            Address e = Address.fromLong(fileDir + i * 32L);
+            if (e.plus(8L).loadLong() == (long) len)
             {
-                long na = Address.fromLong(e).loadLong();
+                Address na = e.loadAddress();
                 int k = 0;
-                while (k < len && (Address.fromLong(na).plus(k).loadUnsignedByte() & 0xFF) == (path[k] & 0xFF))
+                while (k < len && (na.plus(k).loadUnsignedByte() & 0xFF) == (path[k] & 0xFF))
                 {
                     k += 1;
                 }
@@ -2290,41 +2290,41 @@ public final class VM
             }
             i += 1;
         }
-        return 0L;
+        return Address.zero();
     }
 
     /** Manifest parser (like Cyw43's wifi.conf reader): find a {@code key=value} line in {@code conf} (length
      *  {@code flen}) and copy the value (to CR/LF/NUL/end) into {@code dst}; returns its length (0 if absent). */
-    static int manifestValue(long conf, int flen, byte[] key, long dst, int max)
+    static int manifestValue(Address conf, int flen, byte[] key, Address dst, int max)
     {
         int i = 0;
         while (i < flen)
         {
             int k = 0;
             int j = i;
-            while (k < key.length && j < flen && (Address.fromLong(conf).plus(j).loadUnsignedByte() & 0xFF) == (key[k] & 0xFF))
+            while (k < key.length && j < flen && (conf.plus(j).loadUnsignedByte() & 0xFF) == (key[k] & 0xFF))
             {
                 k += 1;
                 j += 1;
             }
-            if (k == key.length && j < flen && (Address.fromLong(conf).plus(j).loadUnsignedByte() & 0xFF) == 0x3D)   // "key="
+            if (k == key.length && j < flen && (conf.plus(j).loadUnsignedByte() & 0xFF) == 0x3D)   // "key="
             {
                 j += 1;
                 int n = 0;
                 while (j < flen && n < max)
                 {
-                    int c = Address.fromLong(conf).plus(j).loadUnsignedByte() & 0xFF;
+                    int c = conf.plus(j).loadUnsignedByte() & 0xFF;
                     if (c == 0x0A || c == 0x0D || c == 0)
                     {
                         break;
                     }
-                    Address.fromLong(dst).plus(n).store((byte) c);
+                    dst.plus(n).store((byte) c);
                     n += 1;
                     j += 1;
                 }
                 return n;
             }
-            while (i < flen && (Address.fromLong(conf).plus(i).loadUnsignedByte() & 0xFF) != 0x0A)   // skip to the next line
+            while (i < flen && (conf.plus(i).loadUnsignedByte() & 0xFF) != 0x0A)   // skip to the next line
             {
                 i += 1;
             }
@@ -2334,13 +2334,13 @@ public final class VM
     }
 
     /** Copy {@code len} bytes from a raw heap address into a fresh {@code byte[]}. */
-    static byte[] heapBytes(long addr, int len)
+    static byte[] heapBytes(Address addr, int len)
     {
         byte[] b = new byte[len];
         int i = 0;
         while (i < len)
         {
-            b[i] = (byte) Address.fromLong(addr).plus(i).loadUnsignedByte();
+            b[i] = (byte) addr.plus(i).loadUnsignedByte();
             i += 1;
         }
         return b;
@@ -2354,25 +2354,25 @@ public final class VM
      */
     static boolean launchInit()
     {
-        long e = fileFind(Magic.bytes("/etc/init"));
-        if (e == 0L)
+        Address e = fileFind(Magic.bytes("/etc/init"));
+        if (e.toLong() == 0L)
         {
             return false;
         }
-        long conf = Address.fromLong(e).plus(16L).loadLong();
-        int flen = (int) Address.fromLong(e).plus(24L).loadLong();
+        Address conf = e.plus(16L).loadAddress();
+        int flen = (int) e.plus(24L).loadLong();
         // Every value buffer is sized by the FILE, which bounds any line in it. They were fixed at 120 / 250
         // bytes and manifestValue stops at its max without a word, so a long line was cut SILENTLY: a
         // 279-byte `args=` of JUnit classes arrived as "... CloseWrappedSt" (CANNOT LOAD), and the class after
         // it never ran.
-        long nm = Heap.allocData(flen + 8).toLong();
+        Address nm = Heap.allocData(flen + 8);
         int nl = manifestValue(conf, flen, Magic.bytes("main"), nm, flen);
         if (nl == 0)
         {
             return false;
         }
         byte[] mainClass = heapBytes(nm, nl);
-        long al = Heap.allocData(flen + 8).toLong();
+        Address al = Heap.allocData(flen + 8);
         int alen = manifestValue(conf, flen, Magic.bytes("args"), al, flen);
         byte[] argsLine = heapBytes(al, alen);              // raw space-separated args; argv built after loadAll
         openClasspath(conf, flen);                          // classpath=<jar>: classes the image lacks come from it
@@ -2395,9 +2395,9 @@ public final class VM
      * writer-baked directory lacks is looked for in the jar ({@link VM#dirBytes}), so a program can ship as an
      * ordinary jar on the RAMFS instead of being embedded in the image.
      */
-    private static void openClasspath(long conf, int flen)
+    private static void openClasspath(Address conf, int flen)
     {
-        long cp = Heap.allocData(flen + 8).toLong();
+        Address cp = Heap.allocData(flen + 8);
         int n = manifestValue(conf, flen, Magic.bytes("classpath"), cp, flen);
         if (n == 0)
         {
@@ -2426,10 +2426,10 @@ public final class VM
      * would then wait for a person at the console instead of seeing end-of-file -- the regression probes and
      * JUnit runs boot with no one typing.
      */
-    private static void armStdin(long conf, int flen)
+    private static void armStdin(Address conf, int flen)
     {
         Address v = Heap.allocData(16);
-        int n = manifestValue(conf, flen, Magic.bytes("stdin"), v.toLong(), 8);
+        int n = manifestValue(conf, flen, Magic.bytes("stdin"), v, 8);
         if (n == 4 && v.loadUnsignedByte() == 0x75 && v.plus(1L).loadUnsignedByte() == 0x61 && v.plus(2L).loadUnsignedByte() == 0x72
                 && v.plus(3L).loadUnsignedByte() == 0x74)            // "uart"
         {
@@ -2438,10 +2438,10 @@ public final class VM
         }
     }
 
-    private static void armHangDump(long conf, int flen)
+    private static void armHangDump(Address conf, int flen)
     {
         Address v = Heap.allocData(16);
-        int n = manifestValue(conf, flen, Magic.bytes("hangdump"), v.toLong(), 8);
+        int n = manifestValue(conf, flen, Magic.bytes("hangdump"), v, 8);
         long secs = 0L;
         int i = 0;
         while (i < n)
@@ -2471,15 +2471,15 @@ public final class VM
      *  interface up (join + DHCP) before launching, so the program's java.net finds an established link. */
     static boolean manifestNet()
     {
-        long e = fileFind(Magic.bytes("/etc/init"));
-        if (e == 0L)
+        Address e = fileFind(Magic.bytes("/etc/init"));
+        if (e.toLong() == 0L)
         {
             return false;
         }
-        long conf = Address.fromLong(e).plus(16L).loadLong();
-        int flen = (int) Address.fromLong(e).plus(24L).loadLong();
+        Address conf = e.plus(16L).loadAddress();
+        int flen = (int) e.plus(24L).loadLong();
         Address v = Heap.allocData(16);
-        int n = manifestValue(conf, flen, Magic.bytes("net"), v.toLong(), 8);
+        int n = manifestValue(conf, flen, Magic.bytes("net"), v, 8);
         return n >= 1 && (v.loadUnsignedByte() & 0xFF) == 0x31;   // "1"
     }
 
@@ -2495,14 +2495,14 @@ public final class VM
         {
             return false;
         }
-        long e = fileFind(Magic.bytes("/etc/init"));
-        if (e == 0L)
+        Address e = fileFind(Magic.bytes("/etc/init"));
+        if (e.toLong() == 0L)
         {
             return false;                                  // no manifest: the demo suite runs its own SMP phases
         }
-        long conf = Address.fromLong(e).plus(16L).loadLong();
-        int flen = (int) Address.fromLong(e).plus(24L).loadLong();
-        long v = Heap.allocData(256).toLong();
+        Address conf = e.plus(16L).loadAddress();
+        int flen = (int) e.plus(24L).loadLong();
+        Address v = Heap.allocData(256);
         // ... and neither does an EMPTY manifest, which is exactly how the no-manifest suite image is built:
         // the file exists, so fileFind succeeds, and only `smp=` was ever consulted. That handed cores 1-3 to
         // the LAUNCH path before `smpDemo` was set, so they skipped smpWork/pcCoreMain entirely (jobs/core
@@ -2513,7 +2513,7 @@ public final class VM
             return false;
         }
         int n = manifestValue(conf, flen, Magic.bytes("smp"), v, 8);
-        return n < 1 || (Address.fromLong(v).loadUnsignedByte() & 0xFF) != 0x30;    // absent = on; "0" = off
+        return n < 1 || (v.loadUnsignedByte() & 0xFF) != 0x30;    // absent = on; "0" = off
     }
 
 
@@ -2607,10 +2607,10 @@ public final class VM
     {
         long esr = Magic.readESR_EL1();
         long elr = Magic.readELR_EL1();
-        stashFaultRegs(sp, elr);
+        stashFaultRegs(Address.fromLong(sp), Address.fromLong(elr));
         if (faultDepth != 0)                                            // a fault DURING the unwind of a prior fault:
         {                                                              // turning THIS one into an exception + unwinding
-            reportNestedFault(esr, elr, Magic.readFAR_EL1());          // would re-fault forever (the silent reboot loop
+            reportNestedFault(esr, Address.fromLong(elr), Address.fromLong(Magic.readFAR_EL1()));          // would re-fault forever (the silent reboot loop
         }                                                              // seen on QEMU) -- report both faults + halt.
         faultDepth = 1;                                                // cleared in unwind once a handler is resumed
         fault0Core = (int) (Magic.readMPIDR() & 3L);
@@ -2623,7 +2623,7 @@ public final class VM
         {
             if ((ec == 0x20L || ec == 0x21L) && !Loader.plausibleCode(elr))
             {
-                reportWildBranch(sp);        // executing at a non-code address: say who branched there
+                reportWildBranch(Address.fromLong(sp));        // executing at a non-code address: say who branched there
             }
             exc = newNpe();
         }
@@ -2649,7 +2649,7 @@ public final class VM
         }
         if (exc <= 0x1000L || Address.fromLong(exc).loadLong() == 0L)                  // exception class not loaded (TIB 0): can't
         {                                                              // throw without re-faulting inside unwind ->
-            reportFaultStack(elr, sp);                                 // ... but say WHERE first: the leaf alone
+            reportFaultStack(Address.fromLong(elr), Address.fromLong(sp));                                 // ... but say WHERE first: the leaf alone
             reportFault();                                             // print the raw fault + halt (never returns)
         }
         Magic.enableIrq();                                             // resumed via branch, not ERET: re-unmask IRQs
@@ -2760,9 +2760,9 @@ public final class VM
      * words are whatever was below the stack, and printing them as registers would report a state never
      * measured. Off-cost: 31 loads per fault, printed only by {@link #reportNestedFault}.
      */
-    static void stashFaultRegs(long sp, long elr)
+    static void stashFaultRegs(Address sp, Address elr)
     {
-        if (faultRegs == null || sp == 0L)
+        if (faultRegs == null || sp.toLong() == 0L)
         {
             return;
         }
@@ -2775,8 +2775,8 @@ public final class VM
         faultRegs[base + 32] = curTask();               // WHICH task, and whether it held the loader lock: a fault
         faultRegs[base + 33] = loaderOwner;             //   in the parser while another task owns it is a lock bug
         faultRegs[base + 34] = Loader.gbaseForReport();
-        long save = sp - SCHED_FRAME;
-        if (Address.fromLong(save).plus(248L).loadLong() != elr)
+        Address save = sp.minus(SCHED_FRAME);
+        if (save.plus(248L).loadLong() != elr.toLong())
         {
             faultRegs[base + 31] = 0L;
             return;
@@ -2784,7 +2784,7 @@ public final class VM
         int r = 0;
         while (r <= 30)
         {
-            faultRegs[base + r] = Address.fromLong(save).plus(r * 8L).loadLong();
+            faultRegs[base + r] = save.plus(r * 8L).loadLong();
             r += 1;
         }
         faultRegs[base + 31] = 1L;
@@ -2833,7 +2833,7 @@ public final class VM
      *  exception (the unwind itself re-faulted -- a bad frame-table entry, a wild handler PC, an unmapped
      *  address). Continuing would loop the fault vector forever and the board silently resets. Report BOTH
      *  faults (the original is the real bug; the nested one shows where the unwind broke) and halt. */
-    static void reportNestedFault(long esr, long elr, long far)
+    static void reportNestedFault(long esr, Address elr, Address far)
     {
         Uart.lock();                                       // halts at the end: hold the console for the whole report
         Uart.write(Magic.bytes("\nNESTED FAULT (unwind re-faulted; halting to avoid a reboot loop)\n  original: core="));
@@ -2855,13 +2855,13 @@ public final class VM
         Uart.write(Magic.bytes(" esr="));
         printHex(esr);
         Uart.write(Magic.bytes(" elr="));
-        printHex(elr);
+        printHex(elr.toLong());
         Uart.write(Magic.bytes(" far="));
-        printHex(far);
+        printHex(far.toLong());
         Uart.write(Magic.bytes("\n    at "));
-        Loader.reportMethodAt(elr);
+        Loader.reportMethodAt(elr.toLong());
         Uart.write(Magic.bytes("\n    elr in: "));
-        Loader.printFrameAt(elr);
+        Loader.printFrameAt(elr.toLong());
         Uart.write(Magic.bytes("\n    task="));                // the NESTED fault's own task: a different task
         printDec(curTask());                                   //   on the same core means the first was preempted
         Uart.write(Magic.bytes(" loaderOwner="));
@@ -2981,13 +2981,13 @@ public final class VM
         // caller -- was right; the rest were unrelated methods laid out nearby). Recover the caller's SP as
         // denylistTrap's SP + its own frame size, then walk saved LRs like captureTrace/VM.unwind.
         long cpc = lr - 4L;                                    // the denied bl site in the caller
-        long csp = mysp + frameSizeAt(denylistTrapAddr);       // caller's SP (denylistTrap's SP + its frame)
+        long csp = mysp + frameSizeAt(Address.fromLong(denylistTrapAddr));       // caller's SP (denylistTrap's SP + its frame)
         int depth = 0;
         while (depth < 12 && cpc > 0x1000L)
         {
             Uart.write(Magic.bytes("\n    at "));
             Loader.printFrameAt(cpc);
-            long fs = frameSizeAt(cpc);
+            long fs = frameSizeAt(Address.fromLong(cpc));
             if (fs == 0L)
             {
                 break;                                         // top of the JIT/image stack
@@ -3041,10 +3041,10 @@ public final class VM
      * premise the collector's root scan already runs on) and name every word that lands inside a registered
      * body. The `blr` that did this is one of them, and its method is the place to look.
      */
-    static void reportWildBranch(long sp)
+    static void reportWildBranch(Address sp)
     {
         Uart.write(Magic.bytes("\nWILD BRANCH: pc is not code. Conservative scan of the faulting stack:\n"));
-        long p = sp;
+        long p = sp.toLong();
         int shown = 0;
         int i = 0;
         while (i < 128 && shown < 12)
@@ -3068,22 +3068,22 @@ public final class VM
         }
     }
 
-    static void reportFaultStack(long pc, long sp)
+    static void reportFaultStack(Address pc, Address sp)
     {
-        if (pc >= Heap.CODE_BASE && pc < Heap.CODE_LIMIT)
+        if (pc.toLong() >= Heap.CODE_BASE && pc.toLong() < Heap.CODE_LIMIT)
         {
-            VMGc.reportSweptPc(pc);                        // did the collector free the buffer we are in?
+            VMGc.reportSweptPc(pc.toLong());                        // did the collector free the buffer we are in?
         }
         Uart.write(Magic.bytes("\n  loader was compiling: "));
         Loader.printCurrentClass();
-        long cpc = pc;
-        long csp = sp;
+        long cpc = pc.toLong();
+        long csp = sp.toLong();
         int depth = 0;
         while (depth < 12 && cpc > 0x1000L)
         {
             Uart.write(Magic.bytes("\n    at "));
             Loader.printFrameAt(cpc);
-            long fs = frameSizeAt(cpc);
+            long fs = frameSizeAt(Address.fromLong(cpc));
             if (fs == 0L)
             {
                 Uart.write(Magic.bytes("  <frameless: caller unknown>"));
@@ -3379,9 +3379,9 @@ public final class VM
     static long launchMainEnd;
 
     /** Whether {@code pc} is a return address into {@code Loader.launchMain}, i.e. the frame below main(). */
-    static boolean isLaunchFrame(long pc)
+    static boolean isLaunchFrame(Address pc)
     {
-        return pc >= launchMainStart && pc < launchMainEnd;
+        return pc.toLong() >= launchMainStart && pc.toLong() < launchMainEnd;
     }
 
     // A second frame table for methods JIT-compiled at runtime: their code isn't in
@@ -3459,7 +3459,7 @@ public final class VM
 
     /** Record a JIT'd method's machine-PC range, frame size, and callee-saved local count, so unwind can pop it
      *  and restore its handler's pre-try locals (x19..x(19+regLocals-1), saved at [SP+8..]). */
-    static void addJitFrame(long codeStart, long codeEnd, long frameSize, long regLocals)
+    static void addJitFrame(Address codeStart, Address codeEnd, long frameSize, long regLocals)
     {
         ensureJitTables();
         if (jitFrameCount >= JIT_FRAME_MAX)
@@ -3467,14 +3467,14 @@ public final class VM
             reportJitTableFull(Magic.bytes("frame"), jitFrameCount);
             return;
         }
-        long e = jitFrameTable + jitFrameCount * 24L;
-        Address.fromLong(e).store(codeStart);
-        Address.fromLong(e).plus(8L).store(codeEnd);
-        Address.fromLong(e).plus(16L).store(frameSize);
-        long le = jitLocalTable + jitLocalCount * 24L;               // same pc-range, parallel table (tableValueIn reads it)
-        Address.fromLong(le).store(codeStart);
-        Address.fromLong(le).plus(8L).store(codeEnd);
-        Address.fromLong(le).plus(16L).store(regLocals);
+        Address e = Address.fromLong(jitFrameTable + jitFrameCount * 24L);
+        e.store(codeStart);
+        e.plus(8L).store(codeEnd);
+        e.plus(16L).store(frameSize);
+        Address le = Address.fromLong(jitLocalTable + jitLocalCount * 24L);               // same pc-range, parallel table (tableValueIn reads it)
+        le.store(codeStart);
+        le.plus(8L).store(codeEnd);
+        le.plus(16L).store(regLocals);
         jitFrameCount = jitFrameCount + 1L;
         jitLocalCount = jitLocalCount + 1L;
     }
@@ -3493,7 +3493,7 @@ public final class VM
      */
     // Returns -1 when NO entry covers the pc, which is different from 0 ("this frame saved nothing"): the
     // caller must not copy saved registers in either case, but only the -1 case is a gap worth reporting.
-    static long jitRegLocalsAt(long pc)
+    static long jitRegLocalsAt(Address pc)
     {
         // IMAGE FIRST, THEN JIT -- and the first attempt at this was REVERTED, for a reason that turned out
         // to be a different bug entirely. Enabling it fixed the picocli `factory` NPE (X21 CLOBBERED 2 -> 0)
@@ -3508,12 +3508,12 @@ public final class VM
         // the image table first is only sound if a MISS is distinguishable from an entry whose value is 0 --
         // a leaf image method that saved nothing is exactly that -- or the JIT table would be consulted for
         // pcs the image table had already answered.
-        long rl = tableValueIn(localTable, localCount, pc);          // image methods; -1 = no entry here
+        long rl = tableValueIn(Address.fromLong(localTable), localCount, pc);          // image methods; -1 = no entry here
         if (rl >= 0L)
         {
             return rl;
         }
-        return tableValueIn(jitLocalTable, jitLocalCount, pc);       // runtime JIT'd methods; -1 = UNKNOWN
+        return tableValueIn(Address.fromLong(jitLocalTable), jitLocalCount, pc);       // runtime JIT'd methods; -1 = UNKNOWN
     }
     static final int JIT_FRAME_MAX = 16384;    // one BATCH's framed methods must fit (compacted at each
                                                //   rewind); 512 overflowed on the ~170-class Lisp closure and
@@ -3526,11 +3526,11 @@ public final class VM
      * PC; they also filled the fixed tables across batches (the jitUnwindReady probe regressed to 'n').
      * Entries below the mark (pre-reclaim permanent code) are kept.
      */
-    static void dropJitTablesAbove(long codeMark)
+    static void dropJitTablesAbove(Address codeMark)
     {
-        jitFrameCount = compactTable(jitFrameTable, jitFrameCount, 24L, codeMark);
-        jitLocalCount = compactTable(jitLocalTable, jitLocalCount, 24L, codeMark);
-        jitHandlerCount = compactTable(jitHandlerTable, jitHandlerCount, 32L, codeMark);
+        jitFrameCount = compactTable(Address.fromLong(jitFrameTable), jitFrameCount, 24L, codeMark);
+        jitLocalCount = compactTable(Address.fromLong(jitLocalTable), jitLocalCount, 24L, codeMark);
+        jitHandlerCount = compactTable(Address.fromLong(jitHandlerTable), jitHandlerCount, 32L, codeMark);
     }
 
     /**
@@ -3540,17 +3540,17 @@ public final class VM
      * a method that no longer exists. The batch rewind avoided this by dropping everything above the code
      * mark at once; reclaiming individual methods needs the same hygiene per range.
      */
-    static void dropJitTablesIn(long lo, long hi)
+    static void dropJitTablesIn(Address lo, Address hi)
     {
-        jitFrameCount = compactTableOutside(jitFrameTable, jitFrameCount, 24L, lo, hi);
-        jitLocalCount = compactTableOutside(jitLocalTable, jitLocalCount, 24L, lo, hi);
-        jitHandlerCount = compactTableOutside(jitHandlerTable, jitHandlerCount, 32L, lo, hi);
+        jitFrameCount = compactTableOutside(Address.fromLong(jitFrameTable), jitFrameCount, 24L, lo, hi);
+        jitLocalCount = compactTableOutside(Address.fromLong(jitLocalTable), jitLocalCount, 24L, lo, hi);
+        jitHandlerCount = compactTableOutside(Address.fromLong(jitHandlerTable), jitHandlerCount, 32L, lo, hi);
     }
 
     /** Keep only entries whose code RANGE falls outside {@code [lo,hi)}; the kept count. */
-    private static long compactTableOutside(long table, long count, long entryBytes, long lo, long hi)
+    private static long compactTableOutside(Address table, long count, long entryBytes, Address lo, Address hi)
     {
-        if (table == 0L)
+        if (table.toLong() == 0L)
         {
             return 0L;
         }
@@ -3558,20 +3558,20 @@ public final class VM
         long i = 0L;
         while (i < count)
         {
-            long src = table + i * entryBytes;
-            long start = Address.fromLong(src).loadLong();
-            long end = Address.fromLong(src).plus(8L).loadLong();         // every one of these tables is {codeStart, codeEnd, ...}
+            Address src = table.plus(i * entryBytes);
+            long start = src.loadLong();
+            long end = src.plus(8L).loadLong();         // every one of these tables is {codeStart, codeEnd, ...}
             // Drop an entry whose RANGE OVERLAPS the swept block, not merely one that STARTS inside it. Filtering
             // on start alone let an entry whose end reached into freed code survive; it then answered for pcs
             // belonging to whatever was compiled there next, handing the unwinder a wrong frame size. The bound
             // is exclusive at both ends, so an entry that merely ABUTS the freed block (end == lo) is kept.
-            if (end <= lo || start >= hi)
+            if (end <= lo.toLong() || start >= hi.toLong())
             {
-                long dst = table + kept * entryBytes;
+                Address dst = table.plus(kept * entryBytes);
                 long b = 0L;
                 while (b < entryBytes)
                 {
-                    Address.fromLong(dst).plus(b).store(Address.fromLong(src).plus(b).loadLong());
+                    dst.plus(b).store(src.plus(b).loadLong());
                     b += 8L;
                 }
                 kept += 1L;
@@ -3582,9 +3582,9 @@ public final class VM
     }
 
     /** Keep only entries whose first word (code start) is below {@code codeMark}; the kept count. */
-    private static long compactTable(long table, long count, long entryBytes, long codeMark)
+    private static long compactTable(Address table, long count, long entryBytes, Address codeMark)
     {
-        if (table == 0L)
+        if (table.toLong() == 0L)
         {
             return 0L;
         }
@@ -3592,14 +3592,14 @@ public final class VM
         long i = 0L;
         while (i < count)
         {
-            long src = table + i * entryBytes;
-            if (Address.fromLong(src).loadLong() < codeMark)
+            Address src = table.plus(i * entryBytes);
+            if (src.loadLong() < codeMark.toLong())
             {
-                long dst = table + kept * entryBytes;
+                Address dst = table.plus(kept * entryBytes);
                 long b = 0L;
                 while (b < entryBytes)
                 {
-                    Address.fromLong(dst).plus(b).store(Address.fromLong(src).plus(b).loadLong());
+                    dst.plus(b).store(src.plus(b).loadLong());
                     b += 8L;
                 }
                 kept += 1L;
@@ -3622,7 +3622,7 @@ public final class VM
     static final long JIT_TABLES_BYTES = JIT_FRAME_MAX * 48L + JIT_HANDLER_MAX * 32L;
 
     /** Record a JIT'd method's try/catch range so a cross-method unwind can resume into it. */
-    static void addJitHandler(long machStart, long machEnd, long handler, long catchType)
+    static void addJitHandler(Address machStart, Address machEnd, Address handler, long catchType)
     {
         ensureJitTables();
         if (jitHandlerCount >= JIT_HANDLER_MAX)
@@ -3630,11 +3630,11 @@ public final class VM
             reportJitTableFull(Magic.bytes("handler"), jitHandlerCount);
             return;
         }
-        long e = jitHandlerTable + jitHandlerCount * 32L;
-        Address.fromLong(e).store(machStart);
-        Address.fromLong(e).plus(8L).store(machEnd);
-        Address.fromLong(e).plus(16L).store(handler);
-        Address.fromLong(e).plus(24L).store(catchType);
+        Address e = Address.fromLong(jitHandlerTable + jitHandlerCount * 32L);
+        e.store(machStart);
+        e.plus(8L).store(machEnd);
+        e.plus(16L).store(handler);
+        e.plus(24L).store(catchType);
         jitHandlerCount = jitHandlerCount + 1L;
     }
 
@@ -3651,14 +3651,14 @@ public final class VM
 
 
     /** Frame size covering machine PC {@code pc}, from either table (0 = none). Package-visible for the self-check. */
-    static long frameSizeAt(long pc)
+    static long frameSizeAt(Address pc)
     {
-        long fs = tableValueIn(frameTable, frameCount, pc);       // image methods
+        long fs = tableValueIn(Address.fromLong(frameTable), frameCount, pc);       // image methods
         if (fs >= 0L)
         {
             return fs;
         }
-        fs = tableValueIn(jitFrameTable, jitFrameCount, pc);      // runtime JIT'd methods
+        fs = tableValueIn(Address.fromLong(jitFrameTable), jitFrameCount, pc);      // runtime JIT'd methods
         // 0 = NO FRAME is this method's long-standing contract -- VMUnwind reads it as "the exception reached
         // the top uncaught". Preserved deliberately: a frame entry is only ever added with frameSize > 0, so
         // for THIS table absent and zero cannot be confused anyway.
@@ -3678,15 +3678,15 @@ public final class VM
      * way -- letting a DEEPER frame's saved register win for the handler. A caller that cannot tell those
      * apart cannot report the gap, which is how it stayed invisible.
      */
-    private static long tableValueIn(long table, long count, long pc)
+    private static long tableValueIn(Address table, long count, Address pc)
     {
         long i = 0L;
         while (i < count)
         {
-            long e = table + i * 24L;
-            if (pc >= Address.fromLong(e).loadLong() && pc < Address.fromLong(e).plus(8L).loadLong())
+            Address e = table.plus(i * 24L);
+            if (pc.toLong() >= e.loadLong() && pc.toLong() < e.plus(8L).loadLong())
             {
-                return Address.fromLong(e).plus(16L).loadLong();
+                return e.plus(16L).loadLong();
             }
             i = i + 1L;
         }
@@ -5023,18 +5023,18 @@ public final class VM
     /** Scan the class table for the name at [nameAddr,nameLen); return its class bytes address, or 0. */
     /** Locate a class's raw bytes by name via BINARY SEARCH over the name-sorted directory (entries are 32B
      *  {nameAddr, nameLen, bytesAddr, bytesLen}). The whole stock java.base is embedded, so this must scale. */
-    static long findClass(long nameAddr, long nameLen)   // package-private: also used by SelfBuild.classTableReady
+    static Address findClass(Address nameAddr, long nameLen)   // package-private: also used by SelfBuild.classTableReady
     {
         long lo = 0L;
         long hi = classCount - 1L;
         while (lo <= hi)
         {
             long mid = (lo + hi) >> 1;
-            long e = classDir + mid * 32L;
-            int cmp = nameCompare(Address.fromLong(e).loadLong(), Address.fromLong(e).plus(8L).loadLong(), nameAddr, nameLen);
+            Address e = Address.fromLong(classDir + mid * 32L);
+            int cmp = nameCompare(e.loadAddress(), e.plus(8L).loadLong(), nameAddr, nameLen);
             if (cmp == 0)
             {
-                return Address.fromLong(e).plus(16L).loadLong();          // bytesAddr
+                return e.plus(16L).loadAddress();          // bytesAddr
             }
             if (cmp < 0)
             {
@@ -5045,17 +5045,17 @@ public final class VM
                 hi = mid - 1L;
             }
         }
-        return 0L;
+        return Address.zero();
     }
 
     /** Byte-lexicographic compare of class name {@code a} vs {@code b} (ASCII; matches the host String sort). */
-    private static int nameCompare(long aAddr, long aLen, long bAddr, long bLen)
+    private static int nameCompare(Address aAddr, long aLen, Address bAddr, long bLen)
     {
         long n = aLen < bLen ? aLen : bLen;
         long i = 0L;
         while (i < n)
         {
-            int d = (Address.fromLong(aAddr).plus(i).loadUnsignedByte() & 0xFF) - (Address.fromLong(bAddr).plus(i).loadUnsignedByte() & 0xFF);
+            int d = (aAddr.plus(i).loadUnsignedByte() & 0xFF) - (bAddr.plus(i).loadUnsignedByte() & 0xFF);
             if (d != 0)
             {
                 return d;
@@ -5068,39 +5068,39 @@ public final class VM
     /** Class-directory lookup for the on-metal {@link Loader}: bytes address for [namePtr,len), or 0. The
      *  writer-baked directory answers first; a class it doesn't hold falls through to the classpath jar
      *  ({@code /etc/init}'s {@code classpath=}), so jar classes resolve everywhere embedded ones do. */
-    static long dirBytes(long namePtr, long len)
+    static Address dirBytes(Address namePtr, long len)
     {
-        long b = findClass(namePtr, len);
+        long b = findClass(namePtr, len).toLong();
         if (b == 0L)
         {
-            b = JarFs.classBytes(namePtr, len);
+            b = JarFs.classBytes(namePtr.toLong(), len);
         }
-        return b;
+        return Address.fromLong(b);
     }
 
     /** Companion to {@link #dirBytes}: the embedded class's byte length for [namePtr,len), or 0. */
-    static long dirLen(long namePtr, long len)
+    static long dirLen(Address namePtr, long len)
     {
         long i = 0L;
         while (i < classCount)
         {
-            long e = classDir + i * 32L;
-            if (Address.fromLong(e).plus(8L).loadLong() == len && bytesEqual(Address.fromLong(e).loadLong(), namePtr, len))
+            Address e = Address.fromLong(classDir + i * 32L);
+            if (e.plus(8L).loadLong() == len && bytesEqual(e.loadAddress(), namePtr, len))
             {
-                return Address.fromLong(e).plus(24L).loadLong();
+                return e.plus(24L).loadLong();
             }
             i = i + 1L;
         }
-        return JarFs.classLen(namePtr, len);           // not embedded: the classpath jar may still hold it
+        return JarFs.classLen(namePtr.toLong(), len);           // not embedded: the classpath jar may still hold it
     }
 
     /** Whether {@code len} bytes at {@code a} equal those at {@code b}. */
-    private static boolean bytesEqual(long a, long b, long len)
+    private static boolean bytesEqual(Address a, Address b, long len)
     {
         long i = 0L;
         while (i < len)
         {
-            if (Address.fromLong(a).plus(i).loadUnsignedByte() != Address.fromLong(b).plus(i).loadUnsignedByte())
+            if (a.plus(i).loadUnsignedByte() != b.plus(i).loadUnsignedByte())
             {
                 return false;
             }
@@ -5123,8 +5123,8 @@ public final class VM
         long start = Address.fromLong(e).loadLong();
         long end = Address.fromLong(e).plus(8L).loadLong();
         long size = Address.fromLong(e).plus(16L).loadLong();
-        return frameSizeAt(start) == size                  // inside -> its frame size
-               && frameSizeAt(end) != size;                // just past the end -> not this frame
+        return frameSizeAt(Address.fromLong(start)) == size                  // inside -> its frame size
+               && frameSizeAt(Address.fromLong(end)) != size;                // just past the end -> not this frame
     }
 
     /** Allocate objects that become unreachable, giving the collector something to reclaim. */
