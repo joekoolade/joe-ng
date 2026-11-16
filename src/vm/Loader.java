@@ -343,16 +343,16 @@ public final class Loader
      */
     /** Halt NAMED if {@code entry} is a code buffer the collector swept — the initializer is about to be
      *  called and would execute zeros, reported minutes later from an unnamed address. */
-    private static void checkClinitEntry(long entry, int idx)
+    private static void checkClinitEntry(Address entry, int idx)
     {
-        if (Heap.codeBlockFreeAt(Address.fromLong(entry)) == 1)
+        if (Heap.codeBlockFreeAt(entry) == 1)
         {
             Uart.write(Magic.bytes("\nCLINIT ENTRY WAS SWEPT idx="));
             VM.printDec(idx);
             Uart.write(Magic.bytes(" entry="));
-            VM.printHex(entry);
+            VM.printHex(entry.toLong());
             Uart.putc(0x0A);
-            VMGc.reportSweptPc(entry);
+            VMGc.reportSweptPc(entry.toLong());
             printCurrentClass();
             Uart.putc(0x0A);
             while (true) { Magic.wfe(); }
@@ -383,7 +383,7 @@ public final class Loader
                     Uart.write(Magic.bytes(" cell="));
                     VM.printHex(dlTab[k].cell);
                     Uart.write(Magic.bytes("\n  method: "));
-                    printFrameAt(target);
+                    printFrameAt(Address.fromLong(target));
                     Uart.putc(0x0A);
                     while (true) { Magic.wfe(); }
                 }
@@ -419,7 +419,7 @@ public final class Loader
         Uart.write(Magic.bytes("\nSTALE REGISTRY REF (blob "));
         VM.printHex(addr);
         Uart.write(Magic.bytes("\n  from "));
-        printFrameAt(lr - 4L);
+        printFrameAt(Address.fromLong(lr - 4L));
         Uart.write(Magic.bytes("\n  while compiling "));
         printCurrentClass();
         Uart.putc(0x0A);
@@ -1242,7 +1242,7 @@ public final class Loader
                 Uart.write(Magic.bytes("  clinit(fd-first) java/io/FileDescriptor\n"));
             }
             long fdEntry = clinitEntryOf(clinitFdFirst);
-            checkClinitEntry(fdEntry, clinitFdFirst);
+            checkClinitEntry(Address.fromLong(fdEntry), clinitFdFirst);
             warnClinitUnderLock(clinitFdFirst);
             long unusedFd = Magic.call0(fdEntry);
             clinitRan[clinitFdFirst] = 1;
@@ -1280,7 +1280,7 @@ public final class Loader
                         Uart.putc(0x0A);
                     }
                     long entry = clinitEntryOf(i);   // compiled HERE, on the run that actually needs it
-                    checkClinitEntry(entry, i);
+                    checkClinitEntry(Address.fromLong(entry), i);
                     warnClinitUnderLock(i);
                     long unused = Magic.call0(entry);
                     clinitRan[i] = 1;
@@ -1301,7 +1301,7 @@ public final class Loader
                 if (j < snap)
                 {
                     long cyEntry = clinitEntryOf(j);
-                    checkClinitEntry(cyEntry, j);
+                    checkClinitEntry(Address.fromLong(cyEntry), j);
                     warnClinitUnderLock(j);
                     long unused = Magic.call0(cyEntry);
                     clinitRan[j] = 1;
@@ -3435,15 +3435,15 @@ public final class Loader
      * object instead of printing. Image frames carry the combined {@code owner/Class.method} as the method name
      * (they sit above the guest frames the caller inspects, so their exact split doesn't matter).
      */
-    private static long frameToElement(long pc, long steTib)
+    private static long frameToElement(Address pc, long steTib)
     {
         // THE BLOCK LOOKUP IS HOISTED, as in printFrameAt and for the same reason: inSameCodeBlock scans every
         // code block, and calling it per candidate made each element O(rgCount * codeBlockN). Pi, 2026-11-05:
         // a failed TLS handshake spent ~465 s here materialising its exceptions' stack traces (hang dump in
         // Heap.codeBlockEndAt), long after the connection was dead. pc's block is the same for every candidate,
         // so "buf is in pc's block" is the range test buf >= pStart; a pc in no block keeps the exact call.
-        long pEnd = Heap.codeBlockEndAt(Address.fromLong(pc)).toLong();
-        long pStart = pEnd == 0L ? 0L : Heap.codeBlockStartAt(Address.fromLong(pc)).toLong();
+        long pEnd = Heap.codeBlockEndAt(pc).toLong();
+        long pStart = pEnd == 0L ? 0L : Heap.codeBlockStartAt(pc).toLong();
         long bestBuf = 0L;
         int bestReg = -1;
         int bestClin = -1;
@@ -3451,16 +3451,16 @@ public final class Loader
         while (i < rgCount)
         {
             long b = rgTab[i].buf;
-            if (b != 0L && b <= pc && b > bestBuf
-                    && (pEnd != 0L ? b >= pStart : inSameCodeBlock(b, pc))) { bestBuf = b; bestReg = i; bestClin = -1; }
+            if (b != 0L && b <= pc.toLong() && b > bestBuf
+                    && (pEnd != 0L ? b >= pStart : inSameCodeBlock(Address.fromLong(b), pc))) { bestBuf = b; bestReg = i; bestClin = -1; }
             i += 1;
         }
         int c = 0;
         while (c < clinitN)
         {
             long b = clinitEntry[c];
-            if (b != 0L && b <= pc && b > bestBuf
-                    && (pEnd != 0L ? b >= pStart : inSameCodeBlock(b, pc))) { bestBuf = b; bestClin = c; bestReg = -1; }
+            if (b != 0L && b <= pc.toLong() && b > bestBuf
+                    && (pEnd != 0L ? b >= pStart : inSameCodeBlock(Address.fromLong(b), pc))) { bestBuf = b; bestClin = c; bestReg = -1; }
             c += 1;
         }
         long clsStr = 0L;
@@ -3473,7 +3473,7 @@ public final class Loader
                     u2(rgTab[bestReg].base + rgTab[bestReg].classOff));
             methStr = guestStringUtf8(rgTab[bestReg].base, rgTab[bestReg].nameOff);
             fileStr = guestStringUtf8(rgTab[bestReg].src, 0);
-            line = lineAtOffset(rgTab[bestReg].line, (int) ((pc - bestBuf) >> 2));
+            line = lineAtOffset(rgTab[bestReg].line, (int) ((pc.toLong() - bestBuf) >> 2));
         }
         else if (bestClin >= 0)
         {
@@ -3490,7 +3490,7 @@ public final class Loader
             {
                 long e = tab + k * 40L;
                 long start = Address.fromLong(e).loadLong();
-                if (pc >= start && pc < Address.fromLong(e).plus(8L).loadLong())
+                if (pc.toLong() >= start && pc.toLong() < Address.fromLong(e).plus(8L).loadLong())
                 {
                     // The symbol is "owner/Class.method", combined: split it at the LAST '.' (a method name
                     // has none) so the class is a class and the method a method, as on a JVM.
@@ -3511,7 +3511,7 @@ public final class Loader
                         methStr = guestStringUtf8(sym, 0);
                     }
                     fileStr = guestStringUtf8(Address.fromLong(e).plus(24L).loadLong(), 0);
-                    line = lineAtOffset(Address.fromLong(e).plus(32L).loadLong(), (int) ((pc - start) >> 2));
+                    line = lineAtOffset(Address.fromLong(e).plus(32L).loadLong(), (int) ((pc.toLong() - start) >> 2));
                     k = n;
                 }
                 else
@@ -3628,7 +3628,7 @@ public final class Loader
             }
             if (arr != 0L)
             {
-                Address.fromLong(arr).plus(24L).plus(n * 8L).store(frameToElement(cpc, steTib));
+                Address.fromLong(arr).plus(24L).plus(n * 8L).store(frameToElement(Address.fromLong(cpc), steTib));
             }
             n += 1;
             long cfs = VM.frameSizeAt(Address.fromLong(cpc));
@@ -3695,7 +3695,7 @@ public final class Loader
         {
             long fpc = deep != 0L ? Address.fromLong(deep).plus(ObjectModel.ARRAY_BASE_OFFSET).plus((long) i * 8L).loadLong()
                                   : Address.fromLong(exc).plus(16L).plus((long) i * 8L).loadLong();
-            arr.plus(24L).plus((long) i * 8L).store(frameToElement(fpc, tib));
+            arr.plus(24L).plus((long) i * 8L).store(frameToElement(Address.fromLong(fpc), tib));
             i += 1;
         }
         return arr.toLong();
@@ -8219,10 +8219,10 @@ public final class Loader
      * pc outside it belongs to something else. An unregistered block ({@code 0}) is ACCEPTED rather than
      * rejected: that is the pre-existing behaviour, and image/native addresses must keep resolving.
      */
-    private static boolean inSameCodeBlock(long buf, long pc)
+    private static boolean inSameCodeBlock(Address buf, Address pc)
     {
-        long end = Heap.codeBlockEndAt(Address.fromLong(buf)).toLong();
-        return end == 0L || pc < end;
+        long end = Heap.codeBlockEndAt(buf).toLong();
+        return end == 0L || pc.toLong() < end;
     }
 
     /**
@@ -8230,14 +8230,14 @@ public final class Loader
      * table claims is either compiled by a path that never registers it, or registered but rejected because
      * the pc ran past its block end -- and only the distance to the nearest entry tells those apart.
      */
-    private static void printNearestBelow(long addr)
+    private static void printNearestBelow(Address addr)
     {
         long best = 0L;
         int bestReg = -1;
         int i = 0;
         while (i < rgCount)
         {
-            if (rgTab[i].buf != 0L && rgTab[i].buf <= addr && rgTab[i].buf > best)
+            if (rgTab[i].buf != 0L && rgTab[i].buf <= addr.toLong() && rgTab[i].buf > best)
             {
                 best = rgTab[i].buf;
                 bestReg = i;
@@ -8253,12 +8253,12 @@ public final class Loader
         Uart.putc(0x2E);
         writeName(rgTab[bestReg].base + rgTab[bestReg].nameOff + 2, u2(rgTab[bestReg].base + rgTab[bestReg].nameOff));
         Uart.write(Magic.bytes(" +"));
-        VM.printHex(addr - best);
+        VM.printHex(addr.toLong() - best);
         Uart.write(Magic.bytes(" end="));
         VM.printHex(Heap.codeBlockEndAt(Address.fromLong(best)).toLong());
     }
 
-    static void printFrameAt(long addr)
+    static void printFrameAt(Address addr)
     {
         // THE BLOCK LOOKUP IS HOISTED, and that is the whole cost of a stack trace. `inSameCodeBlock` calls
         // `Heap.codeBlockEndAt`, which LINEARLY SCANS EVERY CODE BLOCK -- and it was called once per registry
@@ -8273,8 +8273,8 @@ public final class Loader
         // predicate degenerates to "buf is in no block either", which cannot be answered by a range test. That
         // path keeps the per-candidate call: it is exact, it is rare, and such a frame is about to be named by
         // printImageFrameAt anyway.
-        long aEnd = Heap.codeBlockEndAt(Address.fromLong(addr)).toLong();
-        long aStart = aEnd == 0L ? 0L : Heap.codeBlockStartAt(Address.fromLong(addr)).toLong();
+        long aEnd = Heap.codeBlockEndAt(addr).toLong();
+        long aStart = aEnd == 0L ? 0L : Heap.codeBlockStartAt(addr).toLong();
         long bestBuf = 0L;
         int bestReg = -1;
         int bestClin = -1;
@@ -8282,16 +8282,16 @@ public final class Loader
         while (i < rgCount)
         {
             long b = rgTab[i].buf;
-            if (b != 0L && b <= addr && b > bestBuf
-                    && (aEnd != 0L ? b >= aStart : inSameCodeBlock(b, addr))) { bestBuf = b; bestReg = i; bestClin = -1; }
+            if (b != 0L && b <= addr.toLong() && b > bestBuf
+                    && (aEnd != 0L ? b >= aStart : inSameCodeBlock(Address.fromLong(b), addr))) { bestBuf = b; bestReg = i; bestClin = -1; }
             i += 1;
         }
         int c = 0;
         while (c < clinitN)
         {
             long b = clinitEntry[c];
-            if (b != 0L && b <= addr && b > bestBuf
-                    && (aEnd != 0L ? b >= aStart : inSameCodeBlock(b, addr))) { bestBuf = b; bestClin = c; bestReg = -1; }
+            if (b != 0L && b <= addr.toLong() && b > bestBuf
+                    && (aEnd != 0L ? b >= aStart : inSameCodeBlock(Address.fromLong(b), addr))) { bestBuf = b; bestClin = c; bestReg = -1; }
             c += 1;
         }
         if (bestReg < 0 && bestClin < 0)
@@ -8299,7 +8299,7 @@ public final class Loader
             if (!printImageFrameAt(addr))                            // writer-compiled VM/driver code: image symbol table
             {
                 Uart.write(Magic.bytes("<unclaimed pc="));
-                VM.printHex(addr);
+                VM.printHex(addr.toLong());
                 printNearestBelow(addr);                        // the only handle on a frame no table claims
                 Uart.putc(0x3E);
 
@@ -8311,7 +8311,7 @@ public final class Loader
             writeName(rgTab[bestReg].base + rgTab[bestReg].classOff + 2, u2(rgTab[bestReg].base + rgTab[bestReg].classOff));
             Uart.putc(0x2E);
             writeName(rgTab[bestReg].base + rgTab[bestReg].nameOff + 2, u2(rgTab[bestReg].base + rgTab[bestReg].nameOff));
-            int line = lineAtOffset(rgTab[bestReg].line, (int) ((addr - bestBuf) >> 2));   // (pc-base)/4 = word offset
+            int line = lineAtOffset(rgTab[bestReg].line, (int) ((addr.toLong() - bestBuf) >> 2)); // (pc-base)/4 = word offset
             if (rgTab[bestReg].src != 0L)
             {
                 Uart.putc(0x28);                                 // '('
@@ -8330,9 +8330,9 @@ public final class Loader
             Uart.write(Magic.bytes(".<clinit>"));
         }
         Uart.write(Magic.bytes(" [pc="));                        // debug: absolute PC + offset into the method
-        VM.printHex(addr);                                       // printHex already prints the "0x" prefix
+        VM.printHex(addr.toLong());                                       // printHex already prints the "0x" prefix
         Uart.write(Magic.bytes(" +"));
-        VM.printHex(addr - bestBuf);
+        VM.printHex(addr.toLong() - bestBuf);
         Uart.putc(0x5D);                                         // ']'
     }
 
@@ -8342,7 +8342,7 @@ public final class Loader
      * {@code owner/Class.method(SourceFile.java:line) [pc=... +off]} like a loaded frame, or returns false
      * if {@code addr} is in no image method. Linear scan (traces are rare).
      */
-    private static boolean printImageFrameAt(long addr)
+    private static boolean printImageFrameAt(Address addr)
     {
         long tab = VM.imageSymTable;
         if (tab == 0L)
@@ -8355,7 +8355,7 @@ public final class Loader
         {
             long e = tab + i * 40L;                              // 5 longs per entry
             long start = Address.fromLong(e).loadLong();
-            if (addr >= start && addr < Address.fromLong(e).plus(8L).loadLong())
+            if (addr.toLong() >= start && addr.toLong() < Address.fromLong(e).plus(8L).loadLong())
             {
                 long nameAddr = Address.fromLong(e).plus(16L).loadLong();
                 long srcAddr = Address.fromLong(e).plus(24L).loadLong();
@@ -8365,7 +8365,7 @@ public final class Loader
                 {
                     Uart.putc(0x28);                             // '('
                     writeName(srcAddr + 2, srcLen);              // SourceFile filename
-                    int line = lineAtOffset(Address.fromLong(e).plus(32L).loadLong(), (int) ((addr - start) >> 2));
+                    int line = lineAtOffset(Address.fromLong(e).plus(32L).loadLong(), (int) ((addr.toLong() - start) >> 2));
                     if (line >= 0)
                     {
                         Uart.putc(0x3A);                         // ':'
@@ -8374,9 +8374,9 @@ public final class Loader
                     Uart.putc(0x29);                             // ')'
                 }
                 Uart.write(Magic.bytes(" [pc="));
-                VM.printHex(addr);
+                VM.printHex(addr.toLong());
                 Uart.write(Magic.bytes(" +"));
-                VM.printHex(addr - start);
+                VM.printHex(addr.toLong() - start);
                 Uart.putc(0x5D);
                 return true;
             }
@@ -8397,22 +8397,22 @@ public final class Loader
      * the faulting call AND the one before it -- the pair that matters when a result flows straight out of
      * one call into the next.
      */
-    static void reportCallCells(long up)
+    static void reportCallCells(Address up)
     {
-        long w = up - 60L;
-        while (w <= up - 4L)
+        long w = up.toLong() - 60L;
+        while (w <= up.toLong() - 4L)
         {
             if ((Address.fromLong(w).loadInt() & 0xFFFFFFFFL) == 0xD63F0200L                    // blr x16
                     && (Address.fromLong(w).minus(4L).loadInt() & 0xFFFFFFFFL) == 0xF9400230L)       // ldr x16,[x17]
             {
                 Uart.write(Magic.bytes("      call at up-0x"));
-                VM.printHex(up - w);
+                VM.printHex(up.toLong() - w);
                 Uart.write(Magic.bytes(" cell=0x"));
-                VM.printHex(cellImmAt(w - 8L));
+                VM.printHex(cellImmAt(Address.fromLong(w - 8L)));
                 Uart.write(Magic.bytes(" -> "));
-                if (cellImmAt(w - 8L) != 0L)
+                if (cellImmAt(Address.fromLong(w - 8L)) != 0L)
                 {
-                    printFrameAt(Address.fromLong(cellImmAt(w - 8L)).loadLong());
+                    printFrameAt(Address.fromLong(cellImmAt(Address.fromLong(w - 8L))).loadAddress());
                 }
                 Uart.putc(0x0A);
             }
@@ -8421,13 +8421,13 @@ public final class Loader
     }
 
     /** Reconstruct the {@code x17} immediate built by the (up to three) movz/movk words ending at {@code at}. */
-    private static long cellImmAt(long at)
+    private static long cellImmAt(Address at)
     {
         long v = 0L;
         int k = 0;
         while (k < 3)
         {
-            long insn = Address.fromLong(at).minus((long) (k * 4)).loadInt() & 0xFFFFFFFFL;
+            long insn = at.minus((long) (k * 4)).loadInt() & 0xFFFFFFFFL;
             if ((insn & 0x1FL) != 17L
                     || (((insn >> 23) & 0x1FFL) != 0x1A5L && ((insn >> 23) & 0x1FFL) != 0x1E5L))
             {
@@ -8444,13 +8444,13 @@ public final class Loader
 
     /** #43 fault diagnostic: name the demand-compiled method whose code contains {@code addr} (the highest
      *  registered buffer base <= addr), plus the byte offset into it, over the UART. */
-    static void reportMethodAt(long addr)
+    static void reportMethodAt(Address addr)
     {
         // Print the (up to) 4 registered methods whose buffer base is nearest at-or-below addr, closest first,
         // each with base + delta. If methods are densely packed the first line is the container; a large delta
         // to the next-lower base means addr sits in a gap (an unregistered/synthetic method).
         int printed = 0;
-        long ceil = addr + 1L;                             // strictly-below-ceil watermark; walks downward
+        long ceil = addr.toLong() + 1L;                    // strictly-below-ceil watermark; walks downward
         while (printed < 5)
         {
             long bestBuf = 0L;
@@ -8478,7 +8478,7 @@ public final class Loader
             Uart.write(Magic.bytes("\n    @0x"));
             VM.printHex(bestBuf);
             Uart.write(Magic.bytes(" (+0x"));
-            VM.printHex(addr - bestBuf);
+            VM.printHex(addr.toLong() - bestBuf);
             Uart.write(Magic.bytes(") "));
             if (bestReg >= 0)
             {
@@ -8572,7 +8572,7 @@ public final class Loader
         // only falls back to Runnable.run when that entry is absent, which is REPORTED: the thread still runs, but
         // a handler set on it would silently never fire.
         long buf = ifaceMethodFromItable(recv, metalThreadEntryTypeAddr(), 0);
-        if (buf == 0L || !plausibleCode(buf))
+        if (buf == 0L || !plausibleCode(Address.fromLong(buf)))
         {
             if (metalThreadEntryTypeAddr() != 0L && !reportedNoThreadEntry)
             {
@@ -8581,7 +8581,7 @@ public final class Loader
             }
             buf = runFromItable(recv);
         }
-        if (buf == 0L || !plausibleCode(buf))
+        if (buf == 0L || !plausibleCode(Address.fromLong(buf)))
         {
             Uart.write(Magic.bytes("\n  RUNTRAMP: no run()V for "));
             long tib = Address.fromLong(recv).loadLong();
@@ -12352,12 +12352,12 @@ public final class Loader
             lzNHigh = lzN + 1;                      // high-water across reclaims
         }
         lzN += 1;
-        long buf = mBuf[i];                             // stub-sized buffer allocated by sizeMethod
+        Address buf = Address.fromLong(mBuf[i]);        // stub-sized buffer allocated by sizeMethod
         noteStub(buf, idx);                             // ... and make it NAMEABLE: without this a fault landing
                                                         //   here reports stubIdx -1 and reads as an ordinary body
-        Heap.pinCodeAt(Address.fromLong(buf));                            // the batch-path twin of buildLazyCompileStub: same stub,
+        Heap.pinCodeAt(buf);                                              // the batch-path twin of buildLazyCompileStub: same stub,
                                                         //   same lifetime problem, same fix (see the note there)
-        lzTab[idx].stubLit = writeLazyStub(buf, idx);
+        lzTab[idx].stubLit = writeLazyStub(buf, idx).toLong();
     }
 
     /** Buffer assigned to the method whose bytecode is at {@code code}. */
@@ -15961,7 +15961,7 @@ public final class Loader
                 // default body lives. Try it before reporting; this is the whole reason a stream pipeline
                 // could not call Sink.begin on a lambda downstream.
                 long ib = resolveViaItableDir(type, vsName[idx], vsDesc[idx]);
-                if (ib != 0L && plausibleCode(ib))
+                if (ib != 0L && plausibleCode(Address.fromLong(ib)))
                 {
                     vsMemoIdx = idx;
                     vsMemoType = type;
@@ -16093,7 +16093,7 @@ public final class Loader
             Uart.putc(0x0A);
             return VM.denylistTrapAddr;
         }
-        if (!plausibleCode(buf))
+        if (!plausibleCode(Address.fromLong(buf)))
         {
             reportBadTarget(clTab[ci].base + clTab[ci].nameOff, vsName[idx], vsDesc[idx], buf, 0);
             return VM.denylistTrapAddr;                 // and do NOT memoize it
@@ -16308,7 +16308,7 @@ public final class Loader
         while (i < VM.bakeStubCount)
         {
             long memo = Address.fromLong(VM.bakeStubTable).plus(i * 32L).plus(24L).loadLong();
-            if (memo != 0L && stubIdxAt(memo) == (long) idx)
+            if (memo != 0L && stubIdxAt(Address.fromLong(memo)) == (long) idx)
             {
                 Uart.write(Magic.bytes("  ... and the BAKE-STUB MEMO still returns it: entry="));
                 VM.printDec((int) i);
@@ -16341,9 +16341,9 @@ public final class Loader
      *
      * @param kind 1 = a lazy/deferral stub (idx indexes lzTab), 2 = a link stub
      */
-    private static void checkTramp(long tramp, int idx, int kind)
+    private static void checkTramp(Address tramp, int idx, int kind)
     {
-        if (tramp != 0L)
+        if (tramp.toLong() != 0L)
         {
             return;
         }
@@ -16392,26 +16392,26 @@ public final class Loader
      *
      * @param kind 1 = lazy-compile, 2 = link-stub, 3 = late-virtual
      */
-    private static int emitTailGuard(long buf, int w, int kind)
+    private static int emitTailGuard(Address buf, int w, int kind)
     {
         long ha = VM.badTailTargetAddr;
         if (ha == 0L)
         {
             return w;
         }
-        Address.fromLong(buf).plus(w * 4L).store(A64Enc.cbnz(16, 7)); // target ok: skip
+        buf.plus(w * 4L).store(A64Enc.cbnz(16, 7));                   // target ok: skip
         w += 1;
-        Address.fromLong(buf).plus(w * 4L).store(A64Enc.movz(0, kind, 0)); // x0 = which trampoline
+        buf.plus(w * 4L).store(A64Enc.movz(0, kind, 0));                   // x0 = which trampoline
         w += 1;
-        Address.fromLong(buf).plus(w * 4L).store(A64Enc.ldrx(1, STUB_SP, STUB_LR_OFF)); // x1 = the call site
+        buf.plus(w * 4L).store(A64Enc.ldrx(1, STUB_SP, STUB_LR_OFF));                   // x1 = the call site
         w += 1;
-        Address.fromLong(buf).plus(w * 4L).store(A64Enc.movz(16, (int) (ha & 0xFFFF), 0));
+        buf.plus(w * 4L).store(A64Enc.movz(16, (int) (ha & 0xFFFF), 0));
         w += 1;
-        Address.fromLong(buf).plus(w * 4L).store(A64Enc.movk(16, (int) ((ha >> 16) & 0xFFFF), 1));
+        buf.plus(w * 4L).store(A64Enc.movk(16, (int) ((ha >> 16) & 0xFFFF), 1));
         w += 1;
-        Address.fromLong(buf).plus(w * 4L).store(A64Enc.movk(16, (int) ((ha >> 32) & 0xFFFF), 2));
+        buf.plus(w * 4L).store(A64Enc.movk(16, (int) ((ha >> 32) & 0xFFFF), 2));
         w += 1;
-        Address.fromLong(buf).plus(w * 4L).store(A64Enc.blr(16)); // halts; no return
+        buf.plus(w * 4L).store(A64Enc.blr(16));                   // halts; no return
         w += 1;
         return w;
     }
@@ -16421,11 +16421,11 @@ public final class Loader
      * the site index arrives in x17. Saves x0..x15 + LR so the resolve cannot disturb the arguments, then
      * tail-branches to the target -- so the callee returns straight to the original call site.
      */
-    static long virtualTramp()
+    static Address virtualTramp()
     {
         if (virtualTrampAddr != 0L)
         {
-            return virtualTrampAddr;
+            return Address.fromLong(virtualTrampAddr);
         }
         Address buf = Heap.allocCode(256);
         long ra = VM.virtualResolveAddr;
@@ -16456,7 +16456,7 @@ public final class Loader
         // A zero target here would `br` to address 0 -- and `br` does not write x30, so the wild
         // branch would erase its own provenance. Check while the frame is still up: the call site
         // is on it (late-virtual trampoline).
-        w = emitTailGuard(buf.toLong(), w, 3);
+        w = emitTailGuard(buf, w, 3);
         r = 0;
         while (r <= STUB_SAVE_HI)
         {
@@ -16475,7 +16475,7 @@ public final class Loader
         virtualTrampAddr = buf.toLong();
         virtualTrampLo = buf.toLong() + 4L;                      // the `sub sp` above establishes it
         registerTrampFrames();
-        return buf.toLong();
+        return buf;
     }
 
     // ---- java.lang.invoke: the MethodHandle signature-polymorphic call ------------------------------------
@@ -16514,31 +16514,31 @@ public final class Loader
      * of the saved x0) rather than the receiver, because a linkTo* target is named by the LAST argument and an
      * invoke's handle may be REPLACED (invoke adapts it), so mhResolve has to read and write the saved registers.
      */
-    static long mhTramp()
+    static Address mhTramp()
     {
         if (mhTrampAddr == 0L)
         {
-            long buf = buildSaveAreaTramp(VM.mhResolveAddr, 4);
+            long buf = buildSaveAreaTramp(Address.fromLong(VM.mhResolveAddr), 4).toLong();
             mhTrampLo = buf + 4L;
             mhTrampHi = saveTrampHi;
             mhTrampAddr = buf;
             registerTrampFrames();
         }
-        return mhTrampAddr;
+        return Address.fromLong(mhTrampAddr);
     }
 
     /** The invokedynamic trampoline: {@link #mhTramp}'s shape, resolved by {@link #indyResolve}. */
-    static long indyTramp()
+    static Address indyTramp()
     {
         if (indyTrampAddr == 0L)
         {
-            long buf = buildSaveAreaTramp(VM.indyResolveAddr, 5);
+            long buf = buildSaveAreaTramp(Address.fromLong(VM.indyResolveAddr), 5).toLong();
             indyTrampLo = buf + 4L;
             indyTrampHi = saveTrampHi;
             indyTrampAddr = buf;
             registerTrampFrames();
         }
-        return indyTrampAddr;
+        return Address.fromLong(indyTrampAddr);
     }
 
     private static long indyTrampAddr;
@@ -16553,7 +16553,7 @@ public final class Loader
      * reads it), call {@code ra(&saved x0, x17)}, restore and tail-branch to what it answered -- so the target
      * returns straight to the call site and an exception thrown by the resolver unwinds through this frame.
      */
-    private static long buildSaveAreaTramp(long ra, int guardKind)
+    private static Address buildSaveAreaTramp(Address ra, int guardKind)
     {
         Address buf = Heap.allocCode(256);
         int w = 0;
@@ -16572,17 +16572,17 @@ public final class Loader
         w += 1;
         buf.plus(w * 4L).store(A64Enc.movReg(1, 17)); // x1 = site idx
         w += 1;
-        buf.plus(w * 4L).store(A64Enc.movz(16, (int) (ra & 0xFFFF), 0));
+        buf.plus(w * 4L).store(A64Enc.movz(16, (int) (ra.toLong() & 0xFFFF), 0));
         w += 1;
-        buf.plus(w * 4L).store(A64Enc.movk(16, (int) ((ra >> 16) & 0xFFFF), 1));
+        buf.plus(w * 4L).store(A64Enc.movk(16, (int) ((ra.toLong() >> 16) & 0xFFFF), 1));
         w += 1;
-        buf.plus(w * 4L).store(A64Enc.movk(16, (int) ((ra >> 32) & 0xFFFF), 2));
+        buf.plus(w * 4L).store(A64Enc.movk(16, (int) ((ra.toLong() >> 32) & 0xFFFF), 2));
         w += 1;
         buf.plus(w * 4L).store(A64Enc.blr(16)); // x0 = target
         w += 1;
         buf.plus(w * 4L).store(A64Enc.movReg(16, 0));
         w += 1;
-        w = emitTailGuard(buf.toLong(), w, guardKind);
+        w = emitTailGuard(buf, w, guardKind);
         r = 0;
         while (r <= STUB_SAVE_HI)
         {
@@ -16598,7 +16598,7 @@ public final class Loader
         buf.plus(w * 4L).store(A64Enc.br(16)); // tail-call
         w += 1;
         Heap.publishCode(buf, buf.plus(w * 4L));
-        return buf.toLong();
+        return buf;
     }
 
     // ---- invokedynamic and loadable dynamic constants the JIT does not lower itself -----------------------
@@ -19341,7 +19341,7 @@ public final class Loader
     public static long stubTabN;
 
     /** Note that {@code buf} is the deferral stub for lazy method {@code idx}. */
-    static void noteStub(long buf, int idx)
+    static void noteStub(Address buf, int idx)
     {
         if (STUB_TAB + stubTabN * 16L + 16L <= STUB_TAB_END)
         {
@@ -19352,13 +19352,13 @@ public final class Loader
     }
 
     /** The lazy index of the stub containing {@code addr}, or -1. Stubs are 32 bytes. */
-    public static long stubIdxAt(long addr)
+    public static long stubIdxAt(Address addr)
     {
         long i = 0;
         while (i < stubTabN)
         {
             long b = Address.fromLong(STUB_TAB).plus(i * 16L).loadLong();
-            if (addr >= b && addr < b + 32L)
+            if (addr.toLong() >= b && addr.toLong() < b + 32L)
             {
                 return Address.fromLong(STUB_TAB).plus(i * 16L).plus(8L).loadLong();
             }
@@ -19406,25 +19406,25 @@ public final class Loader
      * cross-core I-cache maintenance and none of the ARM ARM's concurrent-modification-of-code rules apply
      * (MOVZ -> B is not in their permitted set). A misaligned buffer keeps the old, unpatchable form.
      */
-    private static long writeLazyStub(long buf, int idx)
+    private static Address writeLazyStub(Address buf, int idx)
     {
-        checkTramp(lazyTrampAddr, idx, 1);
-        Address.fromLong(buf).store(A64Enc.movz(17, idx & 0xFFFF, 0));                // x17 = idx
-        if ((buf & 7L) != 0L)
+        checkTramp(Address.fromLong(lazyTrampAddr), idx, 1);
+        buf.store(A64Enc.movz(17, idx & 0xFFFF, 0));                                  // x17 = idx
+        if ((buf.toLong() & 7L) != 0L)
         {
-            Address.fromLong(buf).plus(4L).store(A64Enc.movz(16, (int) (lazyTrampAddr & 0xFFFF), 0));
-            Address.fromLong(buf).plus(8L).store(A64Enc.movk(16, (int) ((lazyTrampAddr >> 16) & 0xFFFF), 1));
-            Address.fromLong(buf).plus(12L).store(A64Enc.movk(16, (int) ((lazyTrampAddr >> 32) & 0xFFFF), 2));
-            Address.fromLong(buf).plus(16L).store(A64Enc.br(16));
-            Heap.publishCode(Address.fromLong(buf), Address.fromLong(buf + 20L));
-            return 0L;
+            buf.plus(4L).store(A64Enc.movz(16, (int) (lazyTrampAddr & 0xFFFF), 0));
+            buf.plus(8L).store(A64Enc.movk(16, (int) ((lazyTrampAddr >> 16) & 0xFFFF), 1));
+            buf.plus(12L).store(A64Enc.movk(16, (int) ((lazyTrampAddr >> 32) & 0xFFFF), 2));
+            buf.plus(16L).store(A64Enc.br(16));
+            Heap.publishCode(buf, buf.plus(20L));
+            return Address.zero();
         }
-        Address.fromLong(buf).plus(4L).store(A64Enc.ldrLitX(16, 12));                    // x16 = [buf + 16]
-        Address.fromLong(buf).plus(8L).store(A64Enc.br(16));
-        Address.fromLong(buf).plus(12L).store(A64Enc.nop());
-        Address.fromLong(buf).plus(16L).store(lazyTrampAddr);
-        Heap.publishCode(Address.fromLong(buf), Address.fromLong(buf + 24L));
-        return buf + 16L;
+        buf.plus(4L).store(A64Enc.ldrLitX(16, 12));                                      // x16 = [buf + 16]
+        buf.plus(8L).store(A64Enc.br(16));
+        buf.plus(12L).store(A64Enc.nop());
+        buf.plus(16L).store(lazyTrampAddr);
+        Heap.publishCode(buf, buf.plus(24L));
+        return buf.plus(16L);
     }
 
     /**
@@ -19445,9 +19445,9 @@ public final class Loader
         Address.fromLong(lit).store(body);
     }
 
-    private static long buildLazyCompileStub(int idx)
+    private static Address buildLazyCompileStub(int idx)
     {
-        long buf = Heap.allocCode(32).toLong();
+        Address buf = Heap.allocCode(32);
         noteStub(buf, idx);
         // A deferral stub outlives its own dispatch cell. Once the first call patches the cell to the compiled
         // body the stub looks unreferenced, and the sweep frees it -- correctly, by reachability. But the cell
@@ -19456,8 +19456,8 @@ public final class Loader
         // It turns fatal only once the stub has been swept: the space is reused and the branch lands in
         // whatever data now lives there. So pin it. 32 bytes each, and it is the safety net that makes every
         // stale dispatch copy correct.
-        Heap.pinCodeAt(Address.fromLong(buf));
-        lzTab[idx].stubLit = writeLazyStub(buf, idx);
+        Heap.pinCodeAt(buf);
+        lzTab[idx].stubLit = writeLazyStub(buf, idx).toLong();
         return buf;
     }
 
@@ -19503,7 +19503,7 @@ public final class Loader
         // A zero target here would `br` to address 0 -- and `br` does not write x30, so the wild
         // branch would erase its own provenance. Check while the frame is still up: the call site
         // is on it (lazy-compile trampoline).
-        w = emitTailGuard(buf.toLong(), w, 1);
+        w = emitTailGuard(buf, w, 1);
         r = 0;
         while (r <= STUB_SAVE_HI)
         {
@@ -19589,7 +19589,7 @@ public final class Loader
         lkNameU[lkCount] = nameU;
         lkDescU[lkCount] = descU;
         lkMemo[lkCount] = 0L;
-        lkStub[lkCount] = buildLinkStub(lkCount);
+        lkStub[lkCount] = buildLinkStub(lkCount).toLong();
         lkCount += 1;
         return lkStub[lkCount - 1];
     }
@@ -19617,14 +19617,14 @@ public final class Loader
 
     /** x17 = stub index, then jump to the shared link trampoline. Same shape as the lazy deferral stub, and
      *  x16/x17 for the same reason: x0.. are the call's arguments and must survive untouched. */
-    private static long buildLinkStub(int idx)
+    private static Address buildLinkStub(int idx)
     {
         Address buf = Heap.allocCode(32);
         Heap.pinCodeAt(buf);                                 // only a patched `bl` displacement names it
         int w = 0;
         // A 0 here bakes `br 0` into the stub, and `br` writes no x30 -- so the failure would
         // surface as an untraceable reboot whenever this stub is finally entered. Fail now.
-        checkTramp(linkTrampAddr, idx, 2);
+        checkTramp(Address.fromLong(linkTrampAddr), idx, 2);
         buf.plus(w * 4L).store(A64Enc.movz(17, idx & 0xFFFF, 0));
         w += 1;
         buf.plus(w * 4L).store(A64Enc.movz(16, (int) (linkTrampAddr & 0xFFFF), 0));
@@ -19636,7 +19636,7 @@ public final class Loader
         buf.plus(w * 4L).store(A64Enc.br(16));
         w += 1;
         Heap.publishCode(buf, buf.plus(w * 4L));
-        return buf.toLong();
+        return buf;
     }
 
     /**
@@ -19678,7 +19678,7 @@ public final class Loader
         // A zero target here would `br` to address 0 -- and `br` does not write x30, so the wild
         // branch would erase its own provenance. Check while the frame is still up: the call site
         // is on it (link-stub trampoline).
-        w = emitTailGuard(buf.toLong(), w, 2);
+        w = emitTailGuard(buf, w, 2);
         r = 0;
         while (r <= STUB_SAVE_HI)
         {
@@ -20327,7 +20327,7 @@ public final class Loader
             buf = inheritedLinkTarget(reg, nameU, descU);  // the named class only INHERITS it
             tier = 4;
         }
-        if (buf != 0L && !plausibleCode(buf))
+        if (buf != 0L && !plausibleCode(Address.fromLong(buf)))
         {
             // THE LATE PATHS WERE THE ONE UNGUARDED DISPATCH. Every inline call site gets
             // Baseline.dispatchTargetGuard, but a late-resolved target is TAIL-BRANCHED to by the trampoline
@@ -20396,9 +20396,9 @@ public final class Loader
      * only rejected `java/lang/String.getBytes` on its first real use -- an instrument that broke the boot it
      * was added to diagnose.
      */
-    static boolean plausibleCode(long buf)
+    static boolean plausibleCode(Address buf)
     {
-        return buf > 0x1000L && (buf >> 24) <= (long) Symbols.CODE_TOP_BYTE_MAX && (buf & 3L) == 0L;
+        return buf.toLong() > 0x1000L && (buf.toLong() >> 24) <= (long) Symbols.CODE_TOP_BYTE_MAX && (buf.toLong() & 3L) == 0L;
     }
 
     /** Name a late-resolved target that is not code, and which of the tiers produced it. */
@@ -20672,7 +20672,7 @@ public final class Loader
             // invariant clinitEntryOf states and observes; this fixes the leak, not that.)
             VM.loaderUnlock();
         }
-        if (done != 0L && !plausibleCode(done))
+        if (done != 0L && !plausibleCode(Address.fromLong(done)))
         {
             // The third and last tail-branching path (with the link stub and the late-virtual resolve). Its
             // trampoline branches to whatever comes back with nothing checking it, so a bogus buffer here is a
@@ -24556,7 +24556,7 @@ public final class Loader
     }
 
     /** Load a 48-bit absolute address into {@code rd}. */
-    private static int emitMov48(long t, int w, int rd, long v)
+    private static int emitMov48(Address t, int w, int rd, long v)
     {
         w = emitAt(t, w, A64Enc.movz(rd, (int) (v & 0xFFFF), 0));
         w = emitAt(t, w, A64Enc.movk(rd, (int) ((v >> 16) & 0xFFFF), 1));
@@ -24570,10 +24570,10 @@ public final class Loader
      * frame's address in x2 and the Method in x1. The frame is registered with the unwinder, so a throw from the
      * handler unwinds through it to the caller like any other.
      */
-    private static long proxyThunk(long method, long helper)
+    private static Address proxyThunk(long method, long helper)
     {
-        long t = Heap.allocCode(32 * 4).toLong();
-        Heap.pinCodeAt(Address.fromLong(t));                              // only an itable or vtable names it
+        Address t = Heap.allocCode(32 * 4);
+        Heap.pinCodeAt(t);                                                // only an itable or vtable names it
         int w = 0;
         w = emitAt(t, w, A64Enc.subImm(STUB_SP, STUB_SP, PROXY_FRAME));
         w = emitAt(t, w, A64Enc.strx(STUB_LR, STUB_SP, STUB_LR_OFF));
@@ -24588,11 +24588,11 @@ public final class Loader
         w = emitMov48(t, w, 16, helper);
         w = emitAt(t, w, A64Enc.blr(16));
         w = emitAt(t, w, A64Enc.ldrx(STUB_LR, STUB_SP, STUB_LR_OFF));
-        long thi = t + w * 4L;
+        Address thi = t.plus(w * 4L);
         w = emitAt(t, w, A64Enc.addImm(STUB_SP, STUB_SP, PROXY_FRAME));
         w = emitAt(t, w, A64Enc.ret());
-        Heap.publishCode(Address.fromLong(t), Address.fromLong(t + w * 4L));
-        VM.addJitFrame(Address.fromLong(t + 4L), Address.fromLong(thi), PROXY_FRAME, 0L);  // live from just after the `sub sp`
+        Heap.publishCode(t, t.plus(w * 4L));
+        VM.addJitFrame(t.plus(4L), thi, PROXY_FRAME, 0L);                                  // live from just after the `sub sp`
         return t;
     }
 
@@ -24703,7 +24703,7 @@ public final class Loader
                     if (rawEqUtf8(nb + 24L, (int) Address.fromLong(nb).plus(16L).loadLong(), ifBase[m], ifNameOff[m])
                             && rawEqUtf8(db + 24L, (int) Address.fromLong(db).plus(16L).loadLong(), ifBase[m], ifDescOff[m]))
                     {
-                        thunk = proxyThunk(Address.fromLong(methodsArr).plus(24L).plus(j * 8L).loadLong(), helper);
+                        thunk = proxyThunk(Address.fromLong(methodsArr).plus(24L).plus(j * 8L).loadLong(), helper).toLong();
                     }
                     j += 1;
                 }
@@ -24730,7 +24730,7 @@ public final class Loader
         int k = 0;
         while (k < 3)
         {
-            proxyObjThunks[i * 3 + k] = proxyThunk(Address.fromLong(objArr).plus(24L).plus(k * 8L).loadLong(), helper);
+            proxyObjThunks[i * 3 + k] = proxyThunk(Address.fromLong(objArr).plus(24L).plus(k * 8L).loadLong(), helper).toLong();
             k += 1;
         }
         proxyN += 1;
@@ -25762,12 +25762,12 @@ public final class Loader
         lzTab[idx].maxLocals = u2(code - 6L);
         lzTab[idx].cache = 0L;
         lzN += 1;
-        long buf = Heap.allocCode(32).toLong();
+        Address buf = Heap.allocCode(32);
         noteStub(buf, idx);
-        Heap.pinCodeAt(Address.fromLong(buf));
-        lzTab[idx].stubLit = writeLazyStub(buf, idx);
-        gvTab[s].implBuf = buf;                         // a class implementing N interfaces that each declare
-        return buf;                                     //   this method would otherwise mint N identical stubs
+        Heap.pinCodeAt(buf);
+        lzTab[idx].stubLit = writeLazyStub(buf, idx).toLong();
+        gvTab[s].implBuf = buf.toLong();                // a class implementing N interfaces that each declare
+        return buf.toLong();                            //   this method would otherwise mint N identical stubs
     }
 
     /**
@@ -27211,7 +27211,7 @@ public final class Loader
      * TAIL-branches to {@code VMBox.unboxNull}: LR still names the SAM call site, so the exception unwinds from
      * there, a frame the walker knows.
      */
-    private static int emitUnboxArgs(long thunk, int w, int idx, int pStart, int sStart, int regBase,
+    private static int emitUnboxArgs(Address thunk, int w, int idx, int pStart, int sStart, int regBase,
             boolean framed)
     {
         int implDesc = mrefDescOff(lambdaImplMref(idx));
@@ -27238,7 +27238,7 @@ public final class Loader
                         w = emitAt(thunk, w, A64Enc.addImm(STUB_SP, STUB_SP, BOX_FRAME));
                     }
                     w = emitAt(thunk, w, A64Enc.movz(0, 1, 0));                  // unboxNull's "really throw"
-                    long at = thunk + w * 4L;
+                    long at = thunk.toLong() + w * 4L;
                     w = emitAt(thunk, w, A64Enc.b((int) ((VM.unboxNullAddr - at) / 4L)));
                     w = emitAt(thunk, w, A64Enc.ldrx(r, r, 16));                 // xR = wrapper.value
                 }
@@ -27302,23 +27302,23 @@ public final class Loader
     }
 
     /** Emit one instruction word at word index {@code w}; returns the next index. */
-    private static int emitAt(long thunk, int w, int word)
+    private static int emitAt(Address thunk, int w, int word)
     {
-        Address.fromLong(thunk).plus(w * 4L).store(word);
+        thunk.plus(w * 4L).store(word);
         return w + 1;
     }
 
     /** Load an absolute trampoline address into x16, the register both thunk tails branch through. */
-    private static int emitTrampAddr(long thunk, int w, long addr)
+    private static int emitTrampAddr(Address thunk, int w, Address addr)
     {
-        w = emitAt(thunk, w, A64Enc.movz(16, (int) (addr & 0xFFFF), 0));
-        w = emitAt(thunk, w, A64Enc.movk(16, (int) ((addr >> 16) & 0xFFFF), 1));
-        w = emitAt(thunk, w, A64Enc.movk(16, (int) ((addr >> 32) & 0xFFFF), 2));
+        w = emitAt(thunk, w, A64Enc.movz(16, (int) (addr.toLong() & 0xFFFF), 0));
+        w = emitAt(thunk, w, A64Enc.movk(16, (int) ((addr.toLong() >> 16) & 0xFFFF), 1));
+        w = emitAt(thunk, w, A64Enc.movk(16, (int) ((addr.toLong() >> 32) & 0xFFFF), 2));
         return w;
     }
 
     /** Frame prologue for a thunk that must CALL rather than tail-branch. */
-    private static int emitBoxPrologue(long thunk, int w)
+    private static int emitBoxPrologue(Address thunk, int w)
     {
         w = emitAt(thunk, w, A64Enc.subImm(STUB_SP, STUB_SP, BOX_FRAME));
         w = emitAt(thunk, w, A64Enc.strx(STUB_LR, STUB_SP, STUB_LR_OFF));
@@ -27333,17 +27333,17 @@ public final class Loader
      * a GC stack walk) can pass through here; a frame the walker cannot size is what turns a real fault into
      * an unreadable trace.
      */
-    private static int emitBoxReturn(long thunk, int w, int retKind)
+    private static int emitBoxReturn(Address thunk, int w, int retKind)
     {
         w = emitAt(thunk, w, A64Enc.movz(1, retKind, 0));               // x1 = the descriptor kind char
-        long at = thunk + w * 4L;
+        long at = thunk.toLong() + w * 4L;
         Address.fromLong(at).store(A64Enc.bl((int) ((VM.boxPrimAddr - at) / 4L)));
         w += 1;
         w = emitAt(thunk, w, A64Enc.ldrx(STUB_LR, STUB_SP, STUB_LR_OFF));
-        long thi = thunk + w * 4L;                                      // at the `add sp`: the frame dies here
+        Address thi = thunk.plus(w * 4L);                               // at the `add sp`: the frame dies here
         w = emitAt(thunk, w, A64Enc.addImm(STUB_SP, STUB_SP, BOX_FRAME));
         w = emitAt(thunk, w, A64Enc.ret());
-        VM.addJitFrame(Address.fromLong(thunk + 4L), Address.fromLong(thi), BOX_FRAME, 0L);                 // live from just after the `sub sp`
+        VM.addJitFrame(thunk.plus(4L), thi, BOX_FRAME, 0L);                                                 // live from just after the `sub sp`
         return w;
     }
 
@@ -27370,10 +27370,10 @@ public final class Loader
      * <p>Five words, and it cannot make a working thunk fail: it fires only on a target of 0, which could
      * not have branched anywhere useful.
      */
-    private static int emitThunkTargetGuard(long thunk, int w, int mref)
+    private static int emitThunkTargetGuard(Address thunk, int w, int mref)
     {
-        long tramp = virtualTramp();
-        if (tramp == 0L)
+        Address tramp = virtualTramp();
+        if (tramp.toLong() == 0L)
         {
             return w;                                   // no trampoline to route to: leave the thunk as it was
         }
@@ -27498,7 +27498,7 @@ public final class Loader
         int w = 0;
         if (boxRet)
         {
-            w = emitBoxPrologue(thunk.toLong(), w);
+            w = emitBoxPrologue(thunk, w);
         }
         if (kind == 5 || kind == 9)
         {
@@ -27514,7 +27514,7 @@ public final class Loader
                     w += 1;
                     j += 1;
                 }
-                w = emitUnboxArgs(thunk.toLong(), w, idx, 0, 1, 1, boxRet);    // param p = samArg[p+1], in x(1+p)
+                w = emitUnboxArgs(thunk, w, idx, 0, 1, 1, boxRet);             // param p = samArg[p+1], in x(1+p)
             }
             else
             {
@@ -27547,7 +27547,7 @@ public final class Loader
                     w += 1;
                     c -= 1;
                 }
-                w = emitUnboxArgs(thunk.toLong(), w, idx, nc - 1, 0, 1, boxRet);   // params past the captured ones
+                w = emitUnboxArgs(thunk, w, idx, nc - 1, 0, 1, boxRet);            // params past the captured ones
             }
             int slot = globalVtableSlot(lambdaImplMref(idx));                 // vtable slot of the referenced method
             if (slot < 0)
@@ -27564,26 +27564,26 @@ public final class Loader
                     printNameAt(gbase, mrefNameOff(lambdaImplMref(idx)));
                     Uart.putc(0x0A);
                 }
-                w = emitAt(thunk.toLong(), w, A64Enc.movz(17, virtualSiteIndex(lambdaImplMref(idx)), 0));
-                w = emitTrampAddr(thunk.toLong(), w, virtualTramp());
+                w = emitAt(thunk, w, A64Enc.movz(17, virtualSiteIndex(lambdaImplMref(idx)), 0));
+                w = emitTrampAddr(thunk, w, virtualTramp());
             }
             else
             {
-                w = emitAt(thunk.toLong(), w, A64Enc.ldrx(16, 0, 0));                 // x16 = recv.tib (TIB@0)
-                w = emitAt(thunk.toLong(), w, A64Enc.ldrx(16, 16, 8 + slot * 8));     // x16 = vtable[slot]
+                w = emitAt(thunk, w, A64Enc.ldrx(16, 0, 0));                          // x16 = recv.tib (TIB@0)
+                w = emitAt(thunk, w, A64Enc.ldrx(16, 16, 8 + slot * 8));              // x16 = vtable[slot]
             }
-            w = emitThunkTargetGuard(thunk.toLong(), w, lambdaImplMref(idx));    // x16 == 0 -> resolve late, not a wild branch
+            w = emitThunkTargetGuard(thunk, w, lambdaImplMref(idx));             // x16 == 0 -> resolve late, not a wild branch
             if (boxRet)
             {
-                w = emitAt(thunk.toLong(), w, A64Enc.blr(16));                        // CALL: the result must be boxed
-                w = emitBoxReturn(thunk.toLong(), w, retKind);
+                w = emitAt(thunk, w, A64Enc.blr(16));                                 // CALL: the result must be boxed
+                w = emitBoxReturn(thunk, w, retKind);
             }
             else
             {
-                w = emitAt(thunk.toLong(), w, A64Enc.br(16));                         // tail-call
+                w = emitAt(thunk, w, A64Enc.br(16));                                  // tail-call
             }
             Heap.publishCode(thunk, thunk.plus(w * 4L));
-            return finishLambdaClass(thunk.toLong(), ifaceType, idx, nc);
+            return finishLambdaClass(thunk, ifaceType, idx, nc);
         }
         if (kind == 8)
         {
@@ -27614,7 +27614,7 @@ public final class Loader
                 {
                     reportLambdaCtorNoTib(cr);
                 }
-                return finishLambdaClass(thunk.toLong(), ifaceType, idx, nc);   // discarded by the retry
+                return finishLambdaClass(thunk, ifaceType, idx, nc);            // discarded by the retry
             }
             int size = 16 + clTab[cr].fieldCount * 8;
             long ctib = clTab[cr].tib;
@@ -27631,7 +27631,7 @@ public final class Loader
                 reportLambdaCtorNoTib(cr);              // registered but phase B has not built its TIB yet
             }
             long initBuf = lambdaImplBuf(idx);                               // its <init> buffer (cross-class ok)
-            w = emitUnboxArgs(thunk.toLong(), w, idx, 0, 0, 1, false);   // Foo(int) from a Function<Integer,Foo>: BEFORE the frame
+            w = emitUnboxArgs(thunk, w, idx, 0, 0, 1, false);            // Foo(int) from a Function<Integer,Foo>: BEFORE the frame
             int frame = ((2 + ia + 1) & ~1) * 8;                            // LR + obj + ia args, 16-byte aligned
             thunk.plus(w * 4L).store(A64Enc.subImm(31, 31, frame)); // sub sp, #frame
             w += 1;
@@ -27741,7 +27741,7 @@ public final class Loader
             w += 1;
             Heap.publishCode(thunk, thunk.plus(w * 4L));
             VM.addJitFrame(tlo, thi, frame, 0L);        // it calls <init>; an exception from there unwinds through here
-            return finishLambdaClass(thunk.toLong(), ifaceType, idx, nc);
+            return finishLambdaClass(thunk, ifaceType, idx, nc);
         }
         long implBuf = lambdaImplBuf(idx);
         // The body is lambda$xxx(captures..., samArgs...). On entry x0 = lambda obj, x1..x(ia) = SAM args.
@@ -27775,7 +27775,7 @@ public final class Loader
             w += 1;
             c -= 1;
         }
-        w = emitUnboxArgs(thunk.toLong(), w, idx, nc, 0, 0, boxRet);                 // static referent: param p in x(p)
+        w = emitUnboxArgs(thunk, w, idx, nc, 0, 0, boxRet);                          // static referent: param p in x(p)
         long bAt = thunk.toLong() + w * 4L;
         if (implBuf != 0L)
         {
@@ -27803,10 +27803,10 @@ public final class Loader
         w += 1;
         if (boxRet)
         {
-            w = emitBoxReturn(thunk.toLong(), w, retKind);
+            w = emitBoxReturn(thunk, w, retKind);
         }
         Heap.publishCode(thunk, thunk.plus(w * 4L));
-        return finishLambdaClass(thunk.toLong(), ifaceType, idx, nc);
+        return finishLambdaClass(thunk, ifaceType, idx, nc);
     }
 
     /** Initialize the loaded class whose Type node is {@code type} (VMNatives.ensureMirrorInit); a Type the
@@ -27963,7 +27963,7 @@ public final class Loader
         return false;
     }
 
-    private static long finishLambdaClass(long thunk, long ifaceType, int idx, int nc)
+    private static long finishLambdaClass(Address thunk, long ifaceType, int idx, int nc)
     {
         // M8 itables: PER-interface itables. The SAM's identity is (indy name, MethodType desc);
         // each directory entry -- the functional interface AND every interface it transitively
@@ -28073,7 +28073,7 @@ public final class Loader
     /** A lambda's itable for interface {@code ir}: zeroes except the thunk at the interface's
      *  flattened slot of the SAM (name/desc offsets in the CURRENT blob). {@code ir < 0} (the
      *  functional interface isn't registered) degrades to a one-slot table holding the thunk. */
-    private static long lambdaItableFor(int ir, int samName, int samDesc, long thunk)
+    private static long lambdaItableFor(int ir, int samName, int samDesc, Address thunk)
     {
         if (ir < 0)
         {
@@ -29968,7 +29968,7 @@ public final class Loader
             Uart.write(Magic.bytes(">"));
         }
         Uart.write(Magic.bytes("\n  at "));
-        printFrameAt(pc);
+        printFrameAt(Address.fromLong(pc));
         Uart.putc(0x0A);
         while (true) { Magic.wfe(); }
     }

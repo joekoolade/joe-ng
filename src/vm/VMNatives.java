@@ -2048,7 +2048,7 @@ final class VMNatives
                 break;
             }
             Uart.write(Magic.bytes("  at "));
-            Loader.printFrameAt(fpc);
+            Loader.printFrameAt(Address.fromLong(fpc));
             Uart.putc(0x0A);
             i += 1;
         }
