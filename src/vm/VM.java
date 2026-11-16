@@ -3128,6 +3128,12 @@ public final class VM
         }
     }
 
+    /** {@link #printHex(long)} of an address's 64-bit word. */
+    public static void printHex(Address v)
+    {
+        printHex(v.toLong());
+    }
+
     /**
      * Report an on-metal JIT compile failure (the {@link compiler.Symbols} fail() seam, metal side) over
      * the UART so an unsupported bytecode/intrinsic in a loaded class is NAMED rather than a silent hang.
@@ -3367,9 +3373,12 @@ public final class VM
 
     // ----- exception unwinding --------------------------------------------
     // Addresses/counts of the handler and frame tables, filled by the writer.
-    static long handlerTable, handlerCount;   // entries: {machineStart, machineEnd, handler, catchType}
-    static long frameTable, frameCount;       // entries: {codeStart, codeEnd, frameSize}
-    static long localTable, localCount;       // parallel {codeStart, codeEnd, regLocals} for IMAGE methods
+    static Address handlerTable;              // entries: {machineStart, machineEnd, handler, catchType}
+    static long handlerCount;
+    static Address frameTable;                // entries: {codeStart, codeEnd, frameSize}
+    static long frameCount;
+    static Address localTable;                // parallel {codeStart, codeEnd, regLocals} for IMAGE methods
+    static long localCount;
     static long imageSymTable, imageSymCount; // stack-trace symbols: {codeStart, codeEnd, nameAddr, srcAddr, lineAddr}
 
     // [start, end) of Loader.launchMain's image code, filled by the writer. A launched program's bottom frame
@@ -3389,13 +3398,15 @@ public final class VM
     // compiled method (codeStart, codeEnd, frameSize) as it emits. Same triple
     // layout as frameTable; frameSizeAt consults both, so unwinding can pop a JIT'd
     // frame just like a compiled one.
-    static long jitFrameTable, jitFrameCount;
-    static long jitLocalTable, jitLocalCount;   // parallel {codeStart, codeEnd, regLocals} — unwind's pre-try local restore
+    static Address jitFrameTable;
+    static long jitFrameCount;
+    static Address jitLocalTable;               // parallel {codeStart, codeEnd, regLocals} — unwind's pre-try local restore
+    static long jitLocalCount;
     // 16 slots PER TASK (MAX_TASKS of them, indexed by curTask()): an unwind's scratch for reconstructing the
     // handler's callee-saved locals. It was ONE buffer for the whole VM, so two tasks unwinding at once on two
     // cores resumed into handlers holding each other's locals (ExcMessageRaceProbe: a captured AtomicInteger
     // that held another thread's String). A task id is stable across migration, so preemption is safe too.
-    static long unwindLocBufs;
+    static Address unwindLocBufs;
 
     /** Point the JIT unwind tables (frame/local/handler) at their fixed scratch region if not yet set. These
      *  tables persist for the whole run behind these static pointers, but every JIT frame keeps writing to them,
@@ -3405,16 +3416,17 @@ public final class VM
      *  pointer -- which corrupted loaded classfiles (a big class's cp bytes) mid-compile. See Heap.JIT_TABLES. */
     static void ensureJitTables()
     {
-        if (jitFrameTable == 0L)
+        if (jitFrameTable.isZero())
         {
             // Fixed scratch addresses OUTSIDE the managed heap -- see Heap.JIT_TABLES for why these can't be
             // Heap.allocData'd (GC free-list / per-batch rewind would reuse the memory under the live pointer).
             // Offsets are DERIVED from the caps; the sizes in the old comments here (0x18000/0x30000/0x20000)
             // were the 4096-cap figures and stayed after the caps were raised, which is half the reason the
             // overrun into the mark stack went unnoticed. See VM.JIT_TABLES_BYTES and ScratchMap.
-            jitFrameTable = Heap.JIT_TABLES;                         // frame:   JIT_FRAME_MAX * 24
-            jitLocalTable = Heap.JIT_TABLES + JIT_FRAME_MAX * 24L;   // local:   JIT_FRAME_MAX * 24
-            jitHandlerTable = Heap.JIT_TABLES + JIT_FRAME_MAX * 48L; // handler: JIT_HANDLER_MAX * 32
+            Address t = Address.fromLong(Heap.JIT_TABLES);
+            jitFrameTable = t;                                       // frame:   JIT_FRAME_MAX * 24
+            jitLocalTable = t.plus(JIT_FRAME_MAX * 24L);             // local:   JIT_FRAME_MAX * 24
+            jitHandlerTable = t.plus(JIT_FRAME_MAX * 48L);           // handler: JIT_HANDLER_MAX * 32
         }
     }
 
@@ -3467,11 +3479,11 @@ public final class VM
             reportJitTableFull(Magic.bytes("frame"), jitFrameCount);
             return;
         }
-        Address e = Address.fromLong(jitFrameTable + jitFrameCount * 24L);
+        Address e = jitFrameTable.plus(jitFrameCount * 24L);
         e.store(codeStart);
         e.plus(8L).store(codeEnd);
         e.plus(16L).store(frameSize);
-        Address le = Address.fromLong(jitLocalTable + jitLocalCount * 24L);               // same pc-range, parallel table (tableValueIn reads it)
+        Address le = jitLocalTable.plus(jitLocalCount * 24L);               // same pc-range, parallel table (tableValueIn reads it)
         le.store(codeStart);
         le.plus(8L).store(codeEnd);
         le.plus(16L).store(regLocals);
@@ -3508,12 +3520,12 @@ public final class VM
         // the image table first is only sound if a MISS is distinguishable from an entry whose value is 0 --
         // a leaf image method that saved nothing is exactly that -- or the JIT table would be consulted for
         // pcs the image table had already answered.
-        long rl = tableValueIn(Address.fromLong(localTable), localCount, pc);          // image methods; -1 = no entry here
+        long rl = tableValueIn(localTable, localCount, pc);          // image methods; -1 = no entry here
         if (rl >= 0L)
         {
             return rl;
         }
-        return tableValueIn(Address.fromLong(jitLocalTable), jitLocalCount, pc);       // runtime JIT'd methods; -1 = UNKNOWN
+        return tableValueIn(jitLocalTable, jitLocalCount, pc);       // runtime JIT'd methods; -1 = UNKNOWN
     }
     static final int JIT_FRAME_MAX = 16384;    // one BATCH's framed methods must fit (compacted at each
                                                //   rewind); 512 overflowed on the ~170-class Lisp closure and
@@ -3528,9 +3540,9 @@ public final class VM
      */
     static void dropJitTablesAbove(Address codeMark)
     {
-        jitFrameCount = compactTable(Address.fromLong(jitFrameTable), jitFrameCount, 24L, codeMark);
-        jitLocalCount = compactTable(Address.fromLong(jitLocalTable), jitLocalCount, 24L, codeMark);
-        jitHandlerCount = compactTable(Address.fromLong(jitHandlerTable), jitHandlerCount, 32L, codeMark);
+        jitFrameCount = compactTable(jitFrameTable, jitFrameCount, 24L, codeMark);
+        jitLocalCount = compactTable(jitLocalTable, jitLocalCount, 24L, codeMark);
+        jitHandlerCount = compactTable(jitHandlerTable, jitHandlerCount, 32L, codeMark);
     }
 
     /**
@@ -3542,9 +3554,9 @@ public final class VM
      */
     static void dropJitTablesIn(Address lo, Address hi)
     {
-        jitFrameCount = compactTableOutside(Address.fromLong(jitFrameTable), jitFrameCount, 24L, lo, hi);
-        jitLocalCount = compactTableOutside(Address.fromLong(jitLocalTable), jitLocalCount, 24L, lo, hi);
-        jitHandlerCount = compactTableOutside(Address.fromLong(jitHandlerTable), jitHandlerCount, 32L, lo, hi);
+        jitFrameCount = compactTableOutside(jitFrameTable, jitFrameCount, 24L, lo, hi);
+        jitLocalCount = compactTableOutside(jitLocalTable, jitLocalCount, 24L, lo, hi);
+        jitHandlerCount = compactTableOutside(jitHandlerTable, jitHandlerCount, 32L, lo, hi);
     }
 
     /** Keep only entries whose code RANGE falls outside {@code [lo,hi)}; the kept count. */
@@ -3612,7 +3624,8 @@ public final class VM
     // A jit handler table paralleling the image handlerTable, so a metal-built/JIT'd method's
     // try/catch is findable during a cross-method unwind. Entries {machStart, machEnd, handler,
     // catchType} (32 bytes), same layout as handlerTable; findHandler consults both.
-    static long jitHandlerTable, jitHandlerCount;
+    static Address jitHandlerTable;
+    static long jitHandlerCount;
     static final int JIT_HANDLER_MAX = 16384;  // same sizing rule as JIT_FRAME_MAX
 
     /** Total bytes the three JIT unwind tables occupy: frame + local (24 each) + handler (32).
@@ -3630,7 +3643,7 @@ public final class VM
             reportJitTableFull(Magic.bytes("handler"), jitHandlerCount);
             return;
         }
-        Address e = Address.fromLong(jitHandlerTable + jitHandlerCount * 32L);
+        Address e = jitHandlerTable.plus(jitHandlerCount * 32L);
         e.store(machStart);
         e.plus(8L).store(machEnd);
         e.plus(16L).store(handler);
@@ -3653,12 +3666,12 @@ public final class VM
     /** Frame size covering machine PC {@code pc}, from either table (0 = none). Package-visible for the self-check. */
     static long frameSizeAt(Address pc)
     {
-        long fs = tableValueIn(Address.fromLong(frameTable), frameCount, pc);       // image methods
+        long fs = tableValueIn(frameTable, frameCount, pc);       // image methods
         if (fs >= 0L)
         {
             return fs;
         }
-        fs = tableValueIn(Address.fromLong(jitFrameTable), jitFrameCount, pc);      // runtime JIT'd methods
+        fs = tableValueIn(jitFrameTable, jitFrameCount, pc);      // runtime JIT'd methods
         // 0 = NO FRAME is this method's long-standing contract -- VMUnwind reads it as "the exception reached
         // the top uncaught". Preserved deliberately: a frame entry is only ever added with frameSize > 0, so
         // for THIS table absent and zero cannot be confused anyway.
@@ -5119,12 +5132,12 @@ public final class VM
         // The LAST entry: code buffers allocate in ascending order, so no frame is ever registered past
         // its end — the "just past" negative check can't collide with a NEIGHBORING method that happens
         // to share the same frame size (probing the FIRST entry did, and the answer flipped with layout).
-        long e = jitFrameTable + (jitFrameCount - 1L) * 24L;
-        long start = Address.fromLong(e).loadLong();
-        long end = Address.fromLong(e).plus(8L).loadLong();
-        long size = Address.fromLong(e).plus(16L).loadLong();
-        return frameSizeAt(Address.fromLong(start)) == size                  // inside -> its frame size
-               && frameSizeAt(Address.fromLong(end)) != size;                // just past the end -> not this frame
+        Address e = jitFrameTable.plus((jitFrameCount - 1L) * 24L);
+        Address start = e.loadAddress();
+        Address end = e.plus(8L).loadAddress();
+        long size = e.plus(16L).loadLong();
+        return frameSizeAt(start) == size                                     // inside -> its frame size
+               && frameSizeAt(end) != size;                                  // just past the end -> not this frame
     }
 
     /** Allocate objects that become unreachable, giving the collector something to reclaim. */

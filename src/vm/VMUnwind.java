@@ -53,15 +53,19 @@ final class VMUnwind
      * These record the MEASURED state rather than a guess: if the stopped frame's saved word looks like a
      * return address into code, there WAS more stack and the trace was truncated.
      */
-    static long traceStopPc;
-    static long traceStopWord;
+    static Address traceStopPc;
+    static Address traceStopWord;
 
-    static void captureTrace(long exc, long pc, long sp)
+    /** Entered by descriptor {@code (JJJ)V} (the CAPTURE_TRACE helper), so its parameters stay raw words. */
+    static void captureTrace(long exc, long pcWord, long spWord)
     {
         if (exc <= 0x1000L || !Loader.awaitsThrowTrace(exc))   // boot force-compile passes 0; only a VM-made exception
         {
             return;                                          //   is filled here (a constructed one has its trace or none)
         }
+        Address pc = Address.fromLong(pcWord);
+        Address sp = Address.fromLong(spWord);
+        Address e = Address.fromLong(exc);
         if (NPE_TRACE && Loader.isNpe(exc))
         {
             // A MESSAGELESS NPE is the JIT's own null check, so it names no cause and picocli can only report
@@ -69,20 +73,20 @@ final class VMUnwind
             // the moment the backtrace is captured. Filtered to NPEs because the launcher throws typed
             // exceptions as ordinary control flow by the dozen.
             Uart.write(Magic.bytes("  NPE at "));
-            Loader.printFrameAt(Address.fromLong(pc));
-            long fs = frameSizeAt(Address.fromLong(pc));
+            Loader.printFrameAt(pc);
+            long fs = frameSizeAt(pc);
             if (fs != 0L)
             {
                 Uart.write(Magic.bytes("      <- "));
-                Loader.printFrameAt(Address.fromLong(sp).loadAddress().minus(4L));
+                Loader.printFrameAt(sp.loadAddress().minus(4L));
             }
         }
-        traceStopPc = 0L;
-        traceStopWord = 0L;
-        int n = throwFrames(exc, pc, sp, 0L);                  // pass 1: the inline slots, and the true depth
+        traceStopPc = Address.zero();
+        traceStopWord = Address.zero();
+        int n = throwFrames(e, pc, sp, Address.zero());        // pass 1: the inline slots, and the true depth
         if (n < 8)
         {
-            Address.fromLong(exc).plus(16L + n * 8L).store(0L);   // 0-terminate the backtrace
+            e.plus(16L + n * 8L).store(0L);                    // 0-terminate the backtrace
         }
         if (n > 8)
         {
@@ -93,7 +97,7 @@ final class VMUnwind
             long arr = Loader.newThrowableBacktrace(exc, n);
             if (arr != 0L)
             {
-                throwFrames(exc, pc, sp, arr);                 // pass 2: the same walk, into the array
+                throwFrames(e, pc, sp, Address.fromLong(arr)); // pass 2: the same walk, into the array
             }
         }
     }
@@ -104,35 +108,35 @@ final class VMUnwind
      * go into the inline {@code bt0..bt7} and the stop state is recorded; otherwise every pc goes into the
      * {@code long[]} {@code arr}. Returns the number of frames. Allocates nothing.
      */
-    private static int throwFrames(long exc, long cpc, long csp, long arr)
+    private static int throwFrames(Address exc, Address cpc, Address csp, Address arr)
     {
         int n = 0;
-        while (n < MAX_TRACE_DEPTH && cpc > 0x1000L)
+        while (n < MAX_TRACE_DEPTH && cpc.toLong() > 0x1000L)
         {
-            if (arr != 0L)
+            if (!arr.isZero())
             {
-                Address.fromLong(arr).plus(24L + n * 8L).store(cpc);
+                arr.plus(24L + n * 8L).store(cpc);
             }
             else if (n < 8)
             {
-                Address.fromLong(exc).plus(16L + n * 8L).store(cpc);
+                exc.plus(16L + n * 8L).store(cpc);
             }
             n += 1;
-            long cfs = frameSizeAt(Address.fromLong(cpc));
+            long cfs = frameSizeAt(cpc);
             if (cfs == 0L)
             {
                 // Top of the JIT/image stack -- OR a pc no frame table claims. Record both so the printer can
                 // tell those apart instead of ending the trace identically for each.
-                if (arr == 0L)
+                if (arr.isZero())
                 {
                     traceStopPc = cpc;
-                    traceStopWord = Address.fromLong(csp).loadLong();
+                    traceStopWord = csp.loadAddress();
                 }
                 break;
             }
-            cpc = Address.fromLong(csp).loadLong() - 4L;       // caller's return address (the call site)
-            csp += cfs;
-            if (VM.isLaunchFrame(Address.fromLong(cpc)))
+            cpc = csp.loadAddress().minus(4L);                 // caller's return address (the call site)
+            csp = csp.plus(cfs);
+            if (VM.isLaunchFrame(cpc))
             {
                 break;                                         // below main(): the VM's launch frames, not the program's
             }
@@ -158,9 +162,9 @@ final class VMUnwind
         {
             return;                                            // boot force-compile passes 0
         }
-        long cpc = lr - 4L;
-        long csp = mysp + frameSizeAt(Address.fromLong(VM.fillTraceAddr));       // the caller's SP: ours plus our own frame
-        int n = keptFrames(exc, cpc, csp, 0L);                 // pass 1: the inline slots, and the true depth
+        Address cpc = Address.fromLong(lr).minus(4L);
+        Address csp = Address.fromLong(mysp).plus(frameSizeAt(Address.fromLong(VM.fillTraceAddr)));   // the caller's SP: ours plus our own frame
+        int n = keptFrames(exc, cpc, csp, Address.zero());     // pass 1: the inline slots, and the true depth
         if (n < 8)
         {
             Address.fromLong(exc).plus(16L + n * 8L).store(0L);   // 0-terminate (an empty trace stays all-zero)
@@ -170,7 +174,7 @@ final class VMUnwind
             long arr = Loader.newThrowableBacktrace(exc, n);   // deeper than the slots: every frame, as stock
             if (arr != 0L)
             {
-                keptFrames(exc, cpc, csp, arr);                // pass 2: the same walk, into the array
+                keptFrames(exc, cpc, csp, Address.fromLong(arr));   // pass 2: the same walk, into the array
             }
         }
         else
@@ -189,11 +193,12 @@ final class VMUnwind
      * inline {@code bt0..bt7}; otherwise every kept pc goes into the {@code long[]} {@code arr}, which pass 1
      * sized. Returns the number of frames kept. Allocates nothing, so the two passes see the same stack.
      */
-    private static int keptFrames(long exc, long cpc, long csp, long arr)
+    private static int keptFrames(long exc, Address cpc, Address csp, Address arr)
     {
+        Address e = Address.fromLong(exc);
         int phase = Loader.FRAME_FILL;
         int n = 0;
-        while (n < MAX_TRACE_DEPTH && cpc > 0x1000L)
+        while (n < MAX_TRACE_DEPTH && cpc.toLong() > 0x1000L)
         {
             if (phase != Loader.FRAME_KEEP)
             {
@@ -209,24 +214,24 @@ final class VMUnwind
             }
             if (phase == Loader.FRAME_KEEP)
             {
-                if (arr != 0L)
+                if (!arr.isZero())
                 {
-                    Address.fromLong(arr).plus(24L + n * 8L).store(cpc);
+                    arr.plus(24L + n * 8L).store(cpc);
                 }
                 else if (n < 8)
                 {
-                    Address.fromLong(exc).plus(16L + n * 8L).store(cpc);
+                    e.plus(16L + n * 8L).store(cpc);
                 }
                 n += 1;
             }
-            long cfs = frameSizeAt(Address.fromLong(cpc));
+            long cfs = frameSizeAt(cpc);
             if (cfs == 0L)
             {
                 break;                                         // top of the resolvable stack
             }
-            cpc = Address.fromLong(csp).loadLong() - 4L;       // caller's return address (the call site)
-            csp += cfs;
-            if (VM.isLaunchFrame(Address.fromLong(cpc)))
+            cpc = csp.loadAddress().minus(4L);                 // caller's return address (the call site)
+            csp = csp.plus(cfs);
+            if (VM.isLaunchFrame(cpc))
             {
                 break;                                         // below main(): the VM's launch frames
             }
@@ -237,8 +242,12 @@ final class VMUnwind
     /** One report per boot: the first bad throw is the informative one; the rest are its wreckage. */
     private static boolean badThrowReported;
 
-    static void unwind(long exc, long pc, long sp)
+    /** Entered by descriptor {@code (JJJ)V} (the UNWIND helper, athrow, the fault path), so its parameters stay raw words. */
+    static void unwind(long exc, long pcWord, long spWord)
     {
+        Address pc = Address.fromLong(pcWord);
+        Address sp = Address.fromLong(spWord);
+        Address ea = Address.fromLong(exc);
         // A NON-THROWABLE reaching the unwinder is always a VM bug, so report it AT THE THROW SITE -- the one
         // place the original pc is still in hand. The uncaught report at the top of the stack cannot supply
         // this: by then the walk has reached VM.boot and the pc names the boot frame, not the thrower.
@@ -248,7 +257,7 @@ final class VMUnwind
         // budget is spent long before anything interesting happens. This fires only on the broken case.
         if (exc > 0x1000L && !badThrowReported)
         {
-            long t = Address.fromLong(exc).loadLong();
+            long t = ea.loadLong();
             long thrType = Loader.throwableTypeAddr();
             if (t > 0x1000L && thrType != 0L && VM.instanceOf(exc, thrType) == 0)
             {
@@ -258,7 +267,7 @@ final class VMUnwind
                 Uart.write(Magic.bytes(" at pc="));
                 printHex(pc);
                 Uart.write(Magic.bytes("\n    thrown by "));
-                Loader.printFrameAt(Address.fromLong(pc));
+                Loader.printFrameAt(pc);
                 Uart.putc(0x0A);
             }
         }
@@ -269,7 +278,7 @@ final class VMUnwind
             printHex(exc);
             if (exc > 0x1000L && exc < 0x40000000L)
             {
-                long tib = Address.fromLong(exc).loadLong();
+                long tib = ea.loadLong();
                 if (tib > 0x1000L && tib < 0x40000000L)
                 {
                     Loader.reportClassOfType(Address.fromLong(tib).loadLong());
@@ -277,7 +286,7 @@ final class VMUnwind
             }
             Uart.write(Magic.bytes(" at 0x"));
             printHex(pc);
-            Loader.reportMethodAt(Address.fromLong(pc));
+            Loader.reportMethodAt(pc);
             Uart.putc(0x0A);
         }
         // REFUSE to unwind something that is not a throwable. captureTrace WRITES an 8-slot backtrace into
@@ -286,7 +295,7 @@ final class VMUnwind
         // value reaching athrow is a bug either way; the report names the throwing method while its pc is
         // still in hand, instead of the walk running to the top and printing UNWIND LOST with the evidence
         // already gone.
-        long etib = exc > 0x1000L ? Address.fromLong(exc).loadLong() : 0L;
+        long etib = exc > 0x1000L ? ea.loadLong() : 0L;
         if (exc <= 0x1000L || etib <= 0x1000L || etib >= 0x40000000L)
         {
             Uart.write(Magic.bytes("\nBAD THROW exc="));
@@ -296,14 +305,14 @@ final class VMUnwind
             if (exc > 0x1000L)
             {
                 Uart.write(Magic.bytes(" status="));
-                printHex(Address.fromLong(exc).plus(8L).loadLong());   // size | mark: is this a heap block at all?
+                printHex(ea.plus(8L).loadLong());   // size | mark: is this a heap block at all?
                 Uart.write(Magic.bytes(" inHeap="));
                 printHex(exc >= Heap.BASE && exc < Address.fromLong(Heap.PTR_CELL).loadLong() ? 1L : 0L);
             }
             Uart.write(Magic.bytes(" thrownAt="));
             printHex(pc);
             Uart.putc(0x20);
-            Loader.printFrameAt(Address.fromLong(pc));
+            Loader.printFrameAt(pc);
             Uart.putc(0x0A);
             // HALT rather than return. The JIT emits `bl unwind` for athrow on the assumption it never comes
             // back; returning resumes the throwing method as though nothing was thrown, turning a diagnosable
@@ -315,13 +324,13 @@ final class VMUnwind
                 Magic.wfe();
             }
         }
-        captureTrace(exc, pc, sp);                     // fill exc's backtrace if not already captured at the throw site
-        if (unwindLocBufs == 0L)
+        captureTrace(exc, pc.toLong(), sp.toLong());                     // fill exc's backtrace if not already captured at the throw site
+        if (unwindLocBufs.isZero())
         {
-            unwindLocBufs = Heap.allocData(MAX_TASKS * 16 * 8).toLong();   // 16 callee-saved local slots per task
+            unwindLocBufs = Heap.allocData(MAX_TASKS * 16 * 8);    // 16 callee-saved local slots per task
         }
         // this task's own, never another's
-        Address unwindLocBuf = Address.fromLong(unwindLocBufs).plus((long) curTask() * 16L * 8L);
+        Address unwindLocBuf = unwindLocBufs.plus((long) curTask() * 16L * 8L);
         // Seed with the register snapshot AT THE THROW: this method's OWN prologue saved the throwing frame's
         // x19..x28 (10 slots) at [our_sp + 8 + k*8]. That captures every handler local a shallow-regLocals callee
         // preserved but never re-saved (its value flowed through untouched into our prologue's save). Slots that
@@ -348,7 +357,7 @@ final class VMUnwind
                 Uart.write(Magic.bytes("  UNW handler pc="));
                 printHex(pc);
                 Uart.write(Magic.bytes(" nrl="));
-                printHex(jitRegLocalsAt(Address.fromLong(pc)));
+                printHex(jitRegLocalsAt(pc));
                 Uart.write(Magic.bytes(" buf0="));
                 printHex(unwindLocBuf.loadLong());
                 // addJitFrame writes the frame and local tables in LOCKSTEP and both compaction sites treat
@@ -368,17 +377,17 @@ final class VMUnwind
                 faultDepth = 0;                                            // fault resolved by a handler: a later fault
                                                                            //   (incl. one inside the handler) is FRESH,
                                                                            //   not a nested unwind fault
-                long hrl = jitRegLocalsAt(Address.fromLong(pc));                             // -1 = unknown; resume ignores it,
-                Magic.resume(h, sp, exc, hrl < 0L ? 0L : hrl, unwindLocBuf.toLong());  //   but never pass it a negative
+                long hrl = jitRegLocalsAt(pc);                             // -1 = unknown; resume ignores it,
+                Magic.resume(h, sp.toLong(), exc, hrl < 0L ? 0L : hrl, unwindLocBuf.toLong());  //   but never pass it a negative
             }
-            long fs = frameSizeAt(Address.fromLong(pc));
+            long fs = frameSizeAt(pc);
             if (fs == 0L)
             {
                 // No frame entry for this pc: the exception reached the TOP uncaught (past main/boot). A valid
                 // Throwable here is an EXPECTED uncaught exception (e.g. a JDK test throwing to signal failure) --
                 // report it like a JVM ("Exception in thread \"main\" <class>: <message>"), not a VM error. Only
                 // an absent/invalid exception object means a real frame-table gap (overflowed/unregistered method).
-                long xt = Address.fromLong(exc).loadLong();
+                long xt = ea.loadLong();
                 // IS IT ACTUALLY A THROWABLE? Everything below reads Throwable's LAYOUT off this object -- the
                 // backtrace at +16..+72 and detailMessage after it -- so on any other object those are unrelated
                 // instance fields, and the "stack trace" is FABRICATED from whatever they hold. That is not
@@ -404,7 +413,7 @@ final class VMUnwind
                     Uart.write(Magic.bytes(" sp="));
                     printHex(sp);
                     Uart.write(Magic.bytes("\n  in "));
-                    Loader.printFrameAt(Address.fromLong(pc));
+                    Loader.printFrameAt(pc);
                     // IS IT A MIS-TYPED EXCEPTION RATHER THAN A WRONG OPERAND? joe-ng has produced
                     // wrong-typed objects before -- a `new` of a class the compile could not resolve once took
                     // the CURRENT class's TIB. If this object carries a Throwable-shaped payload (a String
@@ -417,7 +426,7 @@ final class VMUnwind
                         Uart.write(Magic.bytes(" +"));
                         printDec(wi * 8);
                         Uart.putc(0x3D);
-                        printHex(Address.fromLong(exc).plus(wi * 8L).loadLong());
+                        printHex(ea.plus(wi * 8L).loadLong());
                         wi += 1;
                     }
                     Uart.putc(0x0A);
@@ -454,13 +463,13 @@ final class VMUnwind
                 int fi = 0;
                 while (fi < 8)
                 {
-                    long fpc = Address.fromLong(exc).plus(16L + fi * 8L).loadLong();
-                    if (fpc == 0L)
+                    Address fpc = ea.plus(16L + fi * 8L).loadAddress();
+                    if (fpc.isZero())
                     {
                         break;
                     }
                     Uart.write(Magic.bytes("  at "));
-                    Loader.printFrameAt(Address.fromLong(fpc));
+                    Loader.printFrameAt(fpc);
                     Uart.putc(0x0A);
                     fi += 1;
                 }
@@ -468,12 +477,12 @@ final class VMUnwind
                 // which happened -- and say it only when the evidence is there. A code-looking word under the
                 // stopped frame means there WAS a caller and these frames are INCOMPLETE; at the true top
                 // (frameless VM.boot) that word is not a return address, so a healthy trace stays silent.
-                if (fi > 0 && traceStopPc != 0L && Loader.plausibleCode(Address.fromLong(traceStopWord)))
+                if (fi > 0 && !traceStopPc.isZero() && Loader.plausibleCode(traceStopWord))
                 {
                     Uart.write(Magic.bytes("  ... TRACE TRUNCATED -- no frame-table entry for pc="));
                     printHex(traceStopPc);
                     Uart.write(Magic.bytes("; the caller below it is:\n      at "));
-                    Loader.printFrameAt(Address.fromLong(traceStopWord - 4L));
+                    Loader.printFrameAt(traceStopWord.minus(4L));
                     Uart.putc(0x0A);
                 }
                 if (fi == 0)
@@ -509,8 +518,8 @@ final class VMUnwind
             // -1 = no local entry covers this pc (today: every IMAGE frame, since the image lookup is off);
             // 0 = the frame genuinely saved no callee-saved register. Both mean "copy nothing", but they are
             // no longer the same answer, so a future gap can be reported instead of silently skipped.
-            long nrl = jitRegLocalsAt(Address.fromLong(pc));
-            if (Loader.UNWIND_DUMP && nrl < 0L && pc >= Heap.CODE_BASE)
+            long nrl = jitRegLocalsAt(pc);
+            if (Loader.UNWIND_DUMP && nrl < 0L && pc.toLong() >= Heap.CODE_BASE)
             {
                 // A JIT pc the FRAME table covers but the LOCAL table does not, though addJitFrame writes
                 // both at the same index with the same range. Find the frame entry's index and print the
@@ -519,10 +528,10 @@ final class VMUnwind
                 long i = 0L;
                 while (i < jitFrameCount)
                 {
-                    Address fe = Address.fromLong(jitFrameTable).plus(i * 24L);
-                    if (pc >= fe.loadLong() && pc < fe.plus(8L).loadLong())
+                    Address fe = jitFrameTable.plus(i * 24L);
+                    if (pc.toLong() >= fe.loadLong() && pc.toLong() < fe.plus(8L).loadLong())
                     {
-                        Address le = Address.fromLong(jitLocalTable).plus(i * 24L);
+                        Address le = jitLocalTable.plus(i * 24L);
                         Uart.write(Magic.bytes("  UNW MISS idx="));
                         printHex(i);
                         Uart.write(Magic.bytes(" frame[lo="));
@@ -558,37 +567,37 @@ final class VMUnwind
                 Uart.write(Magic.bytes("  UNW pc="));
                 printHex(pc);
                 Uart.write(Magic.bytes(" img="));
-                printHex(pc < 0x02400000L ? 1L : 0L);
+                printHex(pc.toLong() < 0x02400000L ? 1L : 0L);
                 Uart.write(Magic.bytes(" fs="));
                 printHex(fs);
                 Uart.write(Magic.bytes(" nrl="));
                 printHex(nrl);
                 Uart.write(Magic.bytes(" lr@0="));
-                printHex(Address.fromLong(sp).loadLong());
+                printHex(sp.loadLong());
                 Uart.write(Magic.bytes(" x19@8="));
-                printHex(Address.fromLong(sp).plus(8L).loadLong());
+                printHex(sp.plus(8L).loadLong());
                 Uart.write(Magic.bytes(" x20@16="));
-                printHex(Address.fromLong(sp).plus(16L).loadLong());
+                printHex(sp.plus(16L).loadLong());
                 Uart.putc((byte) 0x0A);
             }
             long k2 = 0L;
             while (k2 < nrl && k2 < 16L)
             {
-                unwindLocBuf.plus(k2 * 8L).store(Address.fromLong(sp).plus(8L + k2 * 8L).loadLong());
+                unwindLocBuf.plus(k2 * 8L).store(sp.plus(8L + k2 * 8L).loadLong());
                 k2 += 1L;
             }
-            pc = Address.fromLong(sp).loadLong() - 4L;   // the call site (return address - one instruction)
-            sp = sp + fs;                           // pop this frame
+            pc = sp.loadAddress().minus(4L);        // the call site (return address - one instruction)
+            sp = sp.plus(fs);                       // pop this frame
             // A SYNCHRONIZED METHOD whose frame just went away must drop its implicit monitor, or an
             // exception leaving it leaks the lock for the rest of the boot -- trading a missing lock for a
             // permanent deadlock, which is strictly worse than the bug ACC_SYNCHRONIZED support fixes.
             // STRICTLY below the new sp, so a handler INSIDE a synchronized method keeps its own monitor:
             // its frame is not popped, and its normal return still pairs with monExitSync.
-            VM.monUnwindSync(Address.fromLong(sp));
+            VM.monUnwindSync(sp);
         }
     }
 
-    private static long findHandler(long pc, long exc)
+    private static long findHandler(Address pc, long exc)
     {
         long h = findHandlerIn(handlerTable, handlerCount, pc, exc);   // image methods
         if (h != 0L)
@@ -598,13 +607,13 @@ final class VMUnwind
         return findHandlerIn(jitHandlerTable, jitHandlerCount, pc, exc);   // metal-built / JIT'd methods
     }
 
-    private static long findHandlerIn(long table, long count, long pc, long exc)
+    private static long findHandlerIn(Address table, long count, Address pc, long exc)
     {
         long i = 0L;
         while (i < count)
         {
-            Address e = Address.fromLong(table).plus(i * 32L);
-            if (pc >= e.loadLong() && pc < e.plus(8L).loadLong())
+            Address e = table.plus(i * 32L);
+            if (pc.toLong() >= e.loadLong() && pc.toLong() < e.plus(8L).loadLong())
             {
                 long catchType = e.plus(24L).loadLong();
                 if (catchType == 0L)

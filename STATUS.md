@@ -4,6 +4,29 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 19: the unwinder walks in Addresses; its tables are Address (2026-11-16).**
+  Pi-validated (build 35903d05a6656a68).
+  - **Tables:** `VM.handlerTable`, `frameTable`, `localTable` (writer-filled by NAME through `fillStatic`, which writes
+    the 64-bit word whatever the field's type), `jitFrameTable`, `jitLocalTable`, `jitHandlerTable` and
+    `unwindLocBufs` are `Address`; their counts stay `long`. The two-per-line declarations are split.
+    `ensureJitTables`/`addJitFrame`/`addJitHandler`, the compaction calls, `frameSizeAt`/`jitRegLocalsAt` and the
+    unwind self-check use them directly. SelfBuild's fixpoint compares and VMGc's stale-code scan take `.toLong()`
+    (VMGc's own retype is a later increment).
+  - **`VMUnwind`:** `throwFrames`/`keptFrames` walk with Address pc/sp/array; `traceStopPc`/`traceStopWord` are
+    Address; `unwind` converts pc and sp once on entry and pops frames with `sp.loadAddress().minus(4)` /
+    `sp.plus(fs)`; `findHandler`/`findHandlerIn` take an Address table and pc. `Loader.ctorFrameKind` takes an
+    Address pc (its one caller). New `VM.printHex(Address)` overload.
+  - **Left long, deliberately:** the three entry points `unwind(JJJ)V`, `captureTrace(JJJ)V`, `fillInTrace(J)V` --
+    the compiler (`Symbols.UNWIND`/`CAPTURE_TRACE`), the writer and SelfBuild reach them BY DESCRIPTOR (the
+    descriptor-named-helpers item); `exc`, an object reference handed to ~10 Loader calls; ordering compares
+    (`pc.toLong() >= e.loadLong()`), per the increment-17 rule.
+  - **Measured:** conversions VMUnwind 54 -> **32**; the five changed files 1083 -> 1052. Load/store mix identical to
+    main in all five classes (VMUnwind 23 loads / 9 stores, all 64-bit; VM 81 loads). Code size neutral: VMUnwind
+    1573 -> 1557 words, VM +8 (the overload), the rest unchanged. Image build: no `helper-stash MISS`.
+  - **Validation:** `make test` + overlaycheck; full regression **209/209**; Pi: every page 200, hello x2, the Boom
+    stack trace (captureTrace + unwind + the trace print), the bench, a forced stop, AddressFieldProbe 36/0 via
+    `/run` (its AIOOBE/NPE/NASE catches cross the unwinder), the SHA-256 check, a staged 39 MB PUT + discard, `/net`
+    InHdrErrors 0 / InErrs 0.
 - **UNBOXED TYPES, INCREMENT 18: `if_acmp` compares all 64 bits; `fromIntSignExtend` sign-extends (2026-11-16).**
   Pi-validated (build 78ea4c1816052db0). Closes the hazard increment 17 found.
   - **`if_acmpeq`/`if_acmpne` get their own `Baseline.branchCmpRef`:** a plain 64-bit `CMP` + `B.cond`. They used to
