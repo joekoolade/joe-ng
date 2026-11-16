@@ -1191,7 +1191,7 @@ public final class Loader
         }
         clinitLockSaid += 1;
         Uart.write(Magic.bytes("\n  *** INITIALIZER RUNNING UNDER THE LOADER LOCK: "));
-        printUtf8Capped(clinitBase[i] != 0L ? clinitBase[i] + clinitNameOff[i] : 0L);
+        printUtf8Capped(Address.fromLong(clinitBase[i] != 0L ? clinitBase[i] + clinitNameOff[i] : 0L));
         Uart.write(Magic.bytes(" ***\n  ... guest code is executing while this task holds the loader lock. If\n"));
         Uart.write(Magic.bytes("  ... this <clinit> blocks on a monitor, joins a thread or waits, every task\n"));
         Uart.write(Magic.bytes("  ... that must COMPILE in order to wake it is queued behind this lock.\n"));
@@ -1276,7 +1276,7 @@ public final class Loader
                     if (logClinit != 0)                  // #43: name each <clinit> as it runs (spot a hanging one)
                     {
                         Uart.write(Magic.bytes("  clinit "));
-                        writeName(clinitBase[i] + clinitNameOff[i] + 2, u2(clinitBase[i] + clinitNameOff[i]));
+                        writeName(Address.fromLong(clinitBase[i] + clinitNameOff[i] + 2), u2(clinitBase[i] + clinitNameOff[i]));
                         Uart.putc(0x0A);
                     }
                     long entry = clinitEntryOf(i);   // compiled HERE, on the run that actually needs it
@@ -1425,23 +1425,23 @@ public final class Loader
      * run inside the blob. Absolute because a blob never moves, so it is the same value in both compiler
      * passes; an offset would need a base the compile can re-point underneath it.
      */
-    static long refClassNameAddr(int refCp)
+    static Address refClassNameAddr(int refCp)
     {
         if (gbase == 0L)
         {
-            return 0L;
+            return Address.zero();
         }
-        return gbase + (long) refClassNameOff(refCp);
+        return Address.fromLong(gbase + (long) refClassNameOff(refCp));
     }
 
     /** {@link #refClassNameAddr} for a {@code CONSTANT_Class} -- the {@code new} counterpart. */
-    static long classNameAddr(int classCp)
+    static Address classNameAddr(int classCp)
     {
         if (gbase == 0L)
         {
-            return 0L;
+            return Address.zero();
         }
-        return gbase + (long) gcp[u2(gbase + gcp[classCp])];
+        return Address.fromLong(gbase + (long) gcp[u2(gbase + gcp[classCp])]);
     }
 
     /**
@@ -1478,14 +1478,14 @@ public final class Loader
     static final boolean GUARDS_ONLY = true;
 
     /** Print an absolute {u2 len}{bytes} class name with a tag. Temporary, paired with INIT_GUARD_LOG. */
-    static void logInitGuard(byte[] tag, long clsU)
+    static void logInitGuard(byte[] tag, Address clsU)
     {
-        if (!INIT_GUARD_LOG || clsU == 0L)
+        if (!INIT_GUARD_LOG || clsU.toLong() == 0L)
         {
             return;
         }
         Uart.write(tag);
-        printNameAt(clsU, 0);
+        printNameAt(clsU.toLong(), 0);
         Uart.write(Magic.bytes(" [in "));
         if (gbase != 0L)
         {
@@ -1509,10 +1509,10 @@ public final class Loader
         {
             return;
         }
-        int reg = regBySigU(clsU);
+        int reg = regBySigU(Address.fromLong(clsU));
         if (INIT_GUARD_LOG)
         {
-            logInitGuard(Magic.bytes("  IG-fire "), clsU);
+            logInitGuard(Magic.bytes("  IG-fire "), Address.fromLong(clsU));
             Uart.write(Magic.bytes("      reg="));
             VM.printDec(reg);
             if (reg >= 0)
@@ -1680,7 +1680,7 @@ public final class Loader
             }
             k += 1;
         }
-        int reg = regBySigU(clsU);
+        int reg = regBySigU(Address.fromLong(clsU));
         boolean need = reg < 0 || clTab[reg] == null || clTab[reg].state < RVMClass.ST_INITIALIZED;
         if (igN < IGMEMO)
         {
@@ -1972,7 +1972,7 @@ public final class Loader
         {
             long superU = clTab[reg].base + clTab[reg].absentSuperOff;
             byte[] msg = new byte[u2(superU)];
-            putUtf8(msg, 0, superU);
+            putUtf8(msg, 0, Address.fromLong(superU));
             throw (Error) Magic.fromAddr(newExcWithMessage(Magic.bytes("java/lang/NoClassDefFoundError"), msg));
         }
     }
@@ -2095,7 +2095,7 @@ public final class Loader
             if (clinitBusy[i] != 0 && clinitDone[i] == 0)
             {
                 Uart.write(Magic.bytes("  init claimed: "));
-                printUtf8Capped(clinitBase[i] != 0L ? clinitBase[i] + clinitNameOff[i] : 0L);
+                printUtf8Capped(Address.fromLong(clinitBase[i] != 0L ? clinitBase[i] + clinitNameOff[i] : 0L));
                 Uart.write(Magic.bytes(" owner task="));
                 VM.printDec(clinitOwner[i] - 1);
                 Uart.write(Magic.bytes(" ran="));
@@ -3359,7 +3359,7 @@ public final class Loader
      * to one of those reads the first two characters as a length and then garbage; that mistake was made once
      * already, in a class-chain fallback that was written and removed before it shipped.
      */
-    static long utf8Blob(byte[] s)
+    static Address utf8Blob(byte[] s)
     {
         Address p = Heap.allocData(s.length + 2);
         p.store((byte) ((s.length >> 8) & 0xFF));
@@ -3370,7 +3370,7 @@ public final class Loader
             p.plus(2L).plus(i).store(s[i]);
             i += 1;
         }
-        return p.toLong();
+        return p;
     }
 
     /** A guest java/lang/String from a length-prefixed Utf8 at {@code base+off} (u2 length, then bytes); 0 if base 0. */
@@ -3868,7 +3868,7 @@ public final class Loader
             Uart.write(Magic.bytes("<none>"));           // no compile in progress -- distinct from a bad pointer
             return;
         }
-        printUtf8Capped(gbase + gThisNameOff);
+        printUtf8Capped(Address.fromLong(gbase + gThisNameOff));
     }
 
     // ----- code-embedded roots ---------------------------------------------------------------------
@@ -5624,7 +5624,7 @@ public final class Loader
             q += 1;
         }
         int off = internIndyNameAt(start, (int) (q - start));
-        if (regBySigU(indyNameBuf + off) >= 0)
+        if (regBySigU(Address.fromLong(indyNameBuf + off)) >= 0)
         {
             return;                                      // already registered: re-pending it every round
         }                                                //   would grow the pend list for nothing
@@ -7353,7 +7353,7 @@ public final class Loader
         addBlob(bytes, (int) VM.dirLen(Address.fromLong(namePtr), len));
         long us = elapsedUs(t0);
         Uart.write(Magic.bytes("  load "));
-        writeName(namePtr, len);
+        writeName(Address.fromLong(namePtr), len);
         Uart.putc(0x20);
         printDur(us);
         Uart.putc(0x0A);
@@ -7414,12 +7414,12 @@ public final class Loader
     }
 
     /** Write {@code len} raw name bytes to the UART (a '/'-separated internal class name). */
-    private static void writeName(long p, int len)
+    private static void writeName(Address p, int len)
     {
         int i = 0;
         while (i < len)
         {
-            Uart.putc((byte) u1(p + i));
+            Uart.putc((byte) u1(p.toLong() + i));
             i += 1;
         }
     }
@@ -7434,7 +7434,7 @@ public final class Loader
             if (clTab[i].type == type)
             {
                 Uart.write(Magic.bytes(" class="));
-                writeName(clTab[i].base + clTab[i].nameOff + 2, u2(clTab[i].base + clTab[i].nameOff));
+                writeName(Address.fromLong(clTab[i].base + clTab[i].nameOff + 2), u2(clTab[i].base + clTab[i].nameOff));
                 Uart.write(Magic.bytes(" gvCount="));
                 VM.printDec(clTab[i].vtCount);
                 return;
@@ -7453,7 +7453,7 @@ public final class Loader
         {
             if (clTab[i].type == type)
             {
-                writeName(clTab[i].base + clTab[i].nameOff + 2, u2(clTab[i].base + clTab[i].nameOff));
+                writeName(Address.fromLong(clTab[i].base + clTab[i].nameOff + 2), u2(clTab[i].base + clTab[i].nameOff));
                 return;
             }
             i += 1;
@@ -8042,7 +8042,7 @@ public final class Loader
         // moves that to a ClassNotFoundException the caller can handle: it is what lets ServiceLoader skip a
         // provider it cannot load (JUnit's file-writing OpenTestReportGeneratingListener) instead of halting
         // the run.
-        if (isDenylisted(utf8Blob(slash), 0))
+        if (isDenylisted(utf8Blob(slash).toLong(), 0))
         {
             return 0L;                                  // => the guest throws ClassNotFoundException
         }
@@ -8101,7 +8101,7 @@ public final class Loader
             }
             if (classIndexByName(el) < 0)
             {
-                if (isDenylisted(utf8Blob(el), 0) || loadClassIncremental(el) == 0L)
+                if (isDenylisted(utf8Blob(el).toLong(), 0) || loadClassIncremental(el) == 0L)
                 {
                     return 0L;
                 }
@@ -8111,7 +8111,7 @@ public final class Loader
         {
             return 0L;                                  // 'V', an unknown char, or trailing bytes
         }
-        long tib = arrayTibOfDesc(utf8Blob(desc), 0);
+        long tib = arrayTibOfDesc(utf8Blob(desc).toLong(), 0);
         return tib <= ObjectModel.MAX_RAW_ARRAY_TIB ? 0L : classMirror(Address.fromLong(tib).loadLong());
     }
 
@@ -8249,9 +8249,9 @@ public final class Loader
             return;
         }
         Uart.write(Magic.bytes(" after "));
-        writeName(rgTab[bestReg].base + rgTab[bestReg].classOff + 2, u2(rgTab[bestReg].base + rgTab[bestReg].classOff));
+        writeName(Address.fromLong(rgTab[bestReg].base + rgTab[bestReg].classOff + 2), u2(rgTab[bestReg].base + rgTab[bestReg].classOff));
         Uart.putc(0x2E);
-        writeName(rgTab[bestReg].base + rgTab[bestReg].nameOff + 2, u2(rgTab[bestReg].base + rgTab[bestReg].nameOff));
+        writeName(Address.fromLong(rgTab[bestReg].base + rgTab[bestReg].nameOff + 2), u2(rgTab[bestReg].base + rgTab[bestReg].nameOff));
         Uart.write(Magic.bytes(" +"));
         VM.printHex(addr.toLong() - best);
         Uart.write(Magic.bytes(" end="));
@@ -8308,14 +8308,15 @@ public final class Loader
         }
         if (bestReg >= 0)
         {
-            writeName(rgTab[bestReg].base + rgTab[bestReg].classOff + 2, u2(rgTab[bestReg].base + rgTab[bestReg].classOff));
+            writeName(Address.fromLong(rgTab[bestReg].base + rgTab[bestReg].classOff + 2),
+                    u2(rgTab[bestReg].base + rgTab[bestReg].classOff));
             Uart.putc(0x2E);
-            writeName(rgTab[bestReg].base + rgTab[bestReg].nameOff + 2, u2(rgTab[bestReg].base + rgTab[bestReg].nameOff));
+            writeName(Address.fromLong(rgTab[bestReg].base + rgTab[bestReg].nameOff + 2), u2(rgTab[bestReg].base + rgTab[bestReg].nameOff));
             int line = lineAtOffset(rgTab[bestReg].line, (int) ((addr.toLong() - bestBuf) >> 2)); // (pc-base)/4 = word offset
             if (rgTab[bestReg].src != 0L)
             {
                 Uart.putc(0x28);                                 // '('
-                writeName(rgTab[bestReg].src + 2, u2(rgTab[bestReg].src));   // SourceFile filename
+                writeName(Address.fromLong(rgTab[bestReg].src + 2), u2(rgTab[bestReg].src));   // SourceFile filename
                 if (line >= 0)
                 {
                     Uart.putc(0x3A);                             // ':'
@@ -8326,7 +8327,8 @@ public final class Loader
         }
         else
         {
-            writeName(clinitBase[bestClin] + clinitNameOff[bestClin] + 2, u2(clinitBase[bestClin] + clinitNameOff[bestClin]));
+            writeName(Address.fromLong(clinitBase[bestClin] + clinitNameOff[bestClin] + 2),
+                    u2(clinitBase[bestClin] + clinitNameOff[bestClin]));
             Uart.write(Magic.bytes(".<clinit>"));
         }
         Uart.write(Magic.bytes(" [pc="));                        // debug: absolute PC + offset into the method
@@ -8359,12 +8361,12 @@ public final class Loader
             {
                 long nameAddr = Address.fromLong(e).plus(16L).loadLong();
                 long srcAddr = Address.fromLong(e).plus(24L).loadLong();
-                writeName(nameAddr + 2, u2(nameAddr));           // "owner/Class.method"
+                writeName(Address.fromLong(nameAddr + 2), u2(nameAddr));    // "owner/Class.method"
                 int srcLen = u2(srcAddr);
                 if (srcLen > 0)
                 {
                     Uart.putc(0x28);                             // '('
-                    writeName(srcAddr + 2, srcLen);              // SourceFile filename
+                    writeName(Address.fromLong(srcAddr + 2), srcLen);       // SourceFile filename
                     int line = lineAtOffset(Address.fromLong(e).plus(32L).loadLong(), (int) ((addr.toLong() - start) >> 2));
                     if (line >= 0)
                     {
@@ -8482,13 +8484,16 @@ public final class Loader
             Uart.write(Magic.bytes(") "));
             if (bestReg >= 0)
             {
-                writeName(rgTab[bestReg].base + rgTab[bestReg].classOff + 2, u2(rgTab[bestReg].base + rgTab[bestReg].classOff));
+                writeName(Address.fromLong(rgTab[bestReg].base + rgTab[bestReg].classOff + 2),
+                        u2(rgTab[bestReg].base + rgTab[bestReg].classOff));
                 Uart.putc(0x2E);
-                writeName(rgTab[bestReg].base + rgTab[bestReg].nameOff + 2, u2(rgTab[bestReg].base + rgTab[bestReg].nameOff));
+                writeName(Address.fromLong(rgTab[bestReg].base + rgTab[bestReg].nameOff + 2),
+                        u2(rgTab[bestReg].base + rgTab[bestReg].nameOff));
             }
             else
             {
-                writeName(clinitBase[bestClin] + clinitNameOff[bestClin] + 2, u2(clinitBase[bestClin] + clinitNameOff[bestClin]));
+                writeName(Address.fromLong(clinitBase[bestClin] + clinitNameOff[bestClin] + 2),
+                        u2(clinitBase[bestClin] + clinitNameOff[bestClin]));
                 Uart.write(Magic.bytes(".<clinit>"));
             }
             ceil = bestBuf;
@@ -8765,7 +8770,7 @@ public final class Loader
                     seen[seenN] = classOff;
                     seenN += 1;
                     Uart.write(Magic.bytes("    needs "));
-                    writeName(gbase + classOff + 2, u2(gbase + classOff));
+                    writeName(Address.fromLong(gbase + classOff + 2), u2(gbase + classOff));
                     Uart.putc(0x0A);
                 }
             }
@@ -9538,7 +9543,7 @@ public final class Loader
      */
     private static void reportZeroCellBind(long refBase, int classOff, int nameOff)
     {
-        if (regBySigU(refBase + classOff) < 0)
+        if (regBySigU(Address.fromLong(refBase + classOff)) < 0)
         {
             return;                                     // class not loaded yet: a later batch resolves it
         }
@@ -9627,7 +9632,7 @@ public final class Loader
             Uart.write(Magic.bytes("DENYLISTED (reading null is intended)"));
             return;
         }
-        boolean registered = regBySigU(clsU) >= 0;
+        boolean registered = regBySigU(Address.fromLong(clsU)) >= 0;
         // Ask the IMAGE DIRECTORY, not classIndexByName -- that searches the LOADED registry (clTab), so it
         // answers "not loaded", which is the question we are already asking with regBySigU. The first cut of
         // this instrument used it and reported "absent from the classDir" for a class the image plainly
@@ -9877,7 +9882,7 @@ public final class Loader
         // the blob, burying the failure this exists to name. Not hypothetical: printUtf8Capped's own doc
         // records a diagnostic that streamed several hundred bytes of the stub table onto the console for
         // exactly this reason. It prints <null>/<bad utf8 ptr> itself, which says more than printing nothing.
-        printUtf8Capped(gbase != 0L ? gbase + gThisNameOff : 0L);
+        printUtf8Capped(Address.fromLong(gbase != 0L ? gbase + gThisNameOff : 0L));
         Uart.write(Magic.bytes(" at="));
         VM.printDec(where);
         Uart.write(Magic.bytes(" task="));
@@ -10039,7 +10044,7 @@ public final class Loader
         // this line runs in the one state where the length word cannot be trusted -- the condition being
         // reported IS "gbase moved under a reader" -- so a garbage u2 of 65535 is ~5.7 SECONDS of blocking
         // UART plus a read far past the blob, burying the failure this exists to name.
-        printUtf8Capped(gbase != 0L ? gbase + gThisNameOff : 0L);
+        printUtf8Capped(Address.fromLong(gbase != 0L ? gbase + gThisNameOff : 0L));
     }
 
     /** {@code isSync} is MANDATORY rather than defaulted: dropping it compiles a synchronized method with no
@@ -10575,7 +10580,7 @@ public final class Loader
             else
             {
                 Uart.write(Magic.bytes("  lifecycle DIFF "));
-                writeName(clTab[lc].base + clTab[lc].nameOff + 2, u2(clTab[lc].base + clTab[lc].nameOff));
+                writeName(Address.fromLong(clTab[lc].base + clTab[lc].nameOff + 2), u2(clTab[lc].base + clTab[lc].nameOff));
                 Uart.write(Magic.bytes(" state="));
                 VM.printDec(clTab[lc].state);
                 Uart.putc(0x0A);
@@ -11625,9 +11630,9 @@ public final class Loader
         {
             return;                                     // not registered yet -- a later batch seeds it
         }
-        long cls = utf8Blob(Magic.bytes("jdk/internal/misc/MetalStdStreams"));
-        long name = utf8Blob(Magic.bytes("newStream"));
-        long desc = utf8Blob(Magic.bytes("()Ljava/io/PrintStream;"));
+        Address cls = utf8Blob(Magic.bytes("jdk/internal/misc/MetalStdStreams"));
+        Address name = utf8Blob(Magic.bytes("newStream"));
+        Address desc = utf8Blob(Magic.bytes("()Ljava/io/PrintStream;"));
         long buf = bufBySigU(cls, name, desc);
         if (buf == 0L)
         {
@@ -12623,9 +12628,9 @@ public final class Loader
         if (reportUnresolved != 0)                      // probe mode: name the unembedded reference (surface)
         {
             Uart.write(Magic.bytes("    ? "));
-            writeName(gbase + classOff + 2, u2(gbase + classOff));
+            writeName(Address.fromLong(gbase + classOff + 2), u2(gbase + classOff));
             Uart.putc(0x2E);                            // '.'
-            writeName(gbase + nameOff + 2, u2(gbase + nameOff));
+            writeName(Address.fromLong(gbase + nameOff + 2), u2(gbase + nameOff));
             Uart.putc(0x0A);
         }
         return 0L;                                      // unresolved: an unloaded class or a native
@@ -13305,9 +13310,9 @@ public final class Loader
                     Uart.write(Magic.bytes("  TRAPWIRE["));   // matched at runtime by x30 in denylistTrap
                     VM.printDec(trapWireCount);
                     Uart.write(Magic.bytes("] "));
-                    writeName(rcBase[i] + rcClass[i] + 2, u2(rcBase[i] + rcClass[i]));   // callee class Utf8
+                    writeName(Address.fromLong(rcBase[i] + rcClass[i] + 2), u2(rcBase[i] + rcClass[i]));   // callee class Utf8
                     Uart.putc(0x2E);                       // '.'
-                    writeName(rcBase[i] + rcName[i] + 2, u2(rcBase[i] + rcName[i]));     // callee method Utf8
+                    writeName(Address.fromLong(rcBase[i] + rcName[i] + 2), u2(rcBase[i] + rcName[i]));     // callee method Utf8
                     Uart.putc(0x0A);
                 }
                 trapWireSite[trapWireCount] = rcAddr[i];   // ALWAYS recorded: denylistTrap looks up the fired
@@ -13318,7 +13323,8 @@ public final class Loader
             pcUnresDeny += 1;
             if (!isDenylisted(rcBase[i], rcClass[i]))
             {
-                long stub = linkStubFor(rcBase[i] + rcClass[i], rcBase[i] + rcName[i], rcBase[i] + rcDesc[i]);
+                long stub = linkStubFor(Address.fromLong(rcBase[i] + rcClass[i]), Address.fromLong(rcBase[i] + rcName[i]),
+                        Address.fromLong(rcBase[i] + rcDesc[i]));
                 if (stub != 0L)
                 {
                     target = stub;
@@ -13348,9 +13354,9 @@ public final class Loader
             if (target >= Heap.BASE)                       // DIAGNOSTIC: a call "resolved" into the DATA heap
             {                                              //   (blob/object, not code) -> name the callee
                 Uart.write(Magic.bytes("  BADPATCH "));
-                writeName(rcBase[i] + rcClass[i] + 2, u2(rcBase[i] + rcClass[i]));
+                writeName(Address.fromLong(rcBase[i] + rcClass[i] + 2), u2(rcBase[i] + rcClass[i]));
                 Uart.putc(0x2E);
-                writeName(rcBase[i] + rcName[i] + 2, u2(rcBase[i] + rcName[i]));
+                writeName(Address.fromLong(rcBase[i] + rcName[i] + 2), u2(rcBase[i] + rcName[i]));
                 Uart.write(Magic.bytes(" -> "));
                 VM.printHex(target);
                 Uart.putc(0x0A);
@@ -13953,10 +13959,10 @@ public final class Loader
      * <p>STATED LIMIT: an inherited static METHOD ({@code invokestatic Sub.m()}, declared by Base) still guards
      * the named class, which initializes Sub as well as Base -- an over-initialization, not a missed one.
      */
-    static long initTargetNameAddr(int refCp)
+    static Address initTargetNameAddr(int refCp)
     {
-        long named = refClassNameAddr(refCp);
-        if (named == 0L || gcpTag[refCp] != 9)          // 9 = CONSTANT_Fieldref
+        Address named = refClassNameAddr(refCp);
+        if (named.toLong() == 0L || gcpTag[refCp] != 9) // 9 = CONSTANT_Fieldref
         {
             return named;
         }
@@ -13967,7 +13973,7 @@ public final class Loader
             return named;                               // declared by the named class itself
         }
         int k = inheritedStaticIndex(gbase, classOff, gbase, nameOff, 0);
-        return k < 0 ? named : sgTab[k].base + (long) sgTab[k].classOff;
+        return k < 0 ? named : Address.fromLong(sgTab[k].base + (long) sgTab[k].classOff);
     }
 
     /**
@@ -14836,7 +14842,7 @@ public final class Loader
         if (logVtable != 0)                             // #43: class -> vtable slot count (spot too-short vtables)
         {
             Uart.write(Magic.bytes("  C "));
-            writeName(gbase + gThisNameOff + 2, u2(gbase + gThisNameOff));
+            writeName(Address.fromLong(gbase + gThisNameOff + 2), u2(gbase + gThisNameOff));
             Uart.putc(0x20);
             VM.printDec(gvCount);
             Uart.putc(0x0A);
@@ -15433,9 +15439,9 @@ public final class Loader
         if (VT_TRACE)
         {
             Uart.write(Magic.bytes("  VTMISS "));
-            writeName(gbase + classOff + 2, u2(gbase + classOff));
+            writeName(Address.fromLong(gbase + classOff + 2), u2(gbase + classOff));
             Uart.putc(0x2E);
-            writeName(gbase + nameOff + 2, u2(gbase + nameOff));
+            writeName(Address.fromLong(gbase + nameOff + 2), u2(gbase + nameOff));
             Uart.putc(0x0A);
         }
         return -1;                                      // unresolved -> the caller lowers a late-dispatch site
@@ -15681,7 +15687,7 @@ public final class Loader
     /** The VarHandle accessor named by site {@code idx} with descriptor {@code d}, up {@code ci}'s chain, or 0. */
     private static long vhChainResolve(int ci, int idx, byte[] d)
     {
-        long descU = utf8Blob(d);
+        long descU = utf8Blob(d).toLong();
         long buf = 0L;
         int c = ci;
         int hops = 0;
@@ -16074,7 +16080,7 @@ public final class Loader
                 // Stock throws UnsupportedOperationException naming the mode (VarForm.getMemberName), and so
                 // does this. Only when NO accessor of that name exists anywhere up the handle's chain: one that
                 // exists under another descriptor is a resolution gap in this VM, and keeps the named trap.
-                buf = missingNativeThunk(0L, vsName[idx], 0L);
+                buf = missingNativeThunk(Address.zero(), Address.fromLong(vsName[idx]), Address.zero());
             }
         }
         if (buf == 0L)
@@ -16095,7 +16101,8 @@ public final class Loader
         }
         if (!plausibleCode(Address.fromLong(buf)))
         {
-            reportBadTarget(clTab[ci].base + clTab[ci].nameOff, vsName[idx], vsDesc[idx], buf, 0);
+            reportBadTarget(Address.fromLong(clTab[ci].base + clTab[ci].nameOff), Address.fromLong(vsName[idx]),
+                    Address.fromLong(vsDesc[idx]), buf, 0);
             return VM.denylistTrapAddr;                 // and do NOT memoize it
         }
         vsMemoIdx = idx;
@@ -16155,7 +16162,7 @@ public final class Loader
         int i = 0;
         while (i < n)
         {
-            int r = regBySigU(names[i]);
+            int r = regBySigU(Address.fromLong(names[i]));
             boolean seen = r < 0;
             int e = 0;
             while (!seen && e < ne)
@@ -16181,7 +16188,7 @@ public final class Loader
         int q = 0;
         while (q < n)
         {
-            regs[q] = regBySigU(names[q]);
+            regs[q] = regBySigU(Address.fromLong(names[q]));
             q += 1;
         }
         int decl = mostSpecificDeclarer(regs, n, nameU, descU);
@@ -16315,10 +16322,10 @@ public final class Loader
                 Uart.write(Magic.bytes(" stub=0x"));
                 VM.printHex(memo);
                 Uart.write(Magic.bytes(" for "));
-                printUtf8Capped(Address.fromLong(VM.bakeStubTable).plus(i * 32L).loadLong());
+                printUtf8Capped(Address.fromLong(VM.bakeStubTable).plus(i * 32L).loadAddress());
                 Uart.putc(0x2E);
-                printUtf8Capped(Address.fromLong(VM.bakeStubTable).plus(i * 32L).plus(8L).loadLong());
-                printUtf8Capped(Address.fromLong(VM.bakeStubTable).plus(i * 32L).plus(16L).loadLong());
+                printUtf8Capped(Address.fromLong(VM.bakeStubTable).plus(i * 32L).plus(8L).loadAddress());
+                printUtf8Capped(Address.fromLong(VM.bakeStubTable).plus(i * 32L).plus(16L).loadAddress());
                 Uart.putc(0x0A);
             }
             i += 1L;
@@ -16362,7 +16369,7 @@ public final class Loader
                 && lzTab[idx] != null && lzTab[idx].blob != 0L && lzTab[idx].nameOff != 0)
         {
             Uart.write(Magic.bytes(" for "));
-            printUtf8Capped(lzTab[idx].blob + lzTab[idx].nameOff);   // Utf8-shaped: u2 length, then bytes
+            printUtf8Capped(Address.fromLong(lzTab[idx].blob + lzTab[idx].nameOff));   // Utf8-shaped: u2 length, then bytes
         }
         Uart.write(Magic.bytes("\n    Halting HERE, where the stub is still nameable. `br` does not write x30,"));
         Uart.write(Magic.bytes("\n    so a 0 baked now is an untraceable reboot whenever this stub is entered.\n"));
@@ -17734,9 +17741,9 @@ public final class Loader
     }
 
     /** Parameter count of a raw method descriptor Utf8 ("(...)ret") at {@code descAddr} (array params fold once). */
-    private static int descParamCountRaw(long descAddr)
+    private static int descParamCountRaw(Address descAddr)
     {
-        long p = descAddr + 2 + 1;                          // past u2 length and '('
+        long p = descAddr.toLong() + 2 + 1;                 // past u2 length and '('
         int n = 0;
         while (u1(p) != 0x29)                               // ')'
         {
@@ -17777,7 +17784,7 @@ public final class Loader
         {
             return rawEqUtf8(ctorWantDesc + 24L, (int) Address.fromLong(ctorWantDesc).plus(16L).loadLong(), base, descOff);
         }
-        return descParamCountRaw(base + descOff) == paramCount;
+        return descParamCountRaw(Address.fromLong(base + descOff)) == paramCount;
     }
 
     /** {@link #constructorResolve} matched by DESCRIPTOR (see {@link #ctorWantDesc}); -1 if none. */
@@ -18288,9 +18295,9 @@ public final class Loader
             // no-arg booleans resolve to the SAME slot, success() is really running blockingFailure() --
             // which returns false for a SUCCESS and produces exactly the observed maybeThrow(null).
             Uart.write(Magic.bytes("  VW "));
-            writeName(gbase + classOff + 2, u2(gbase + classOff));
+            writeName(Address.fromLong(gbase + classOff + 2), u2(gbase + classOff));
             Uart.putc(0x2E);
-            writeName(gbase + nameOff + 2, u2(gbase + nameOff));
+            writeName(Address.fromLong(gbase + nameOff + 2), u2(gbase + nameOff));
             Uart.write(Magic.bytes(" slot "));
             VM.printDec(slot);
             Uart.putc(0x20);
@@ -18299,9 +18306,9 @@ public final class Loader
         }
         if (logVtable == 0 || slot < 20) { return; }
         Uart.write(Magic.bytes("  V "));
-        writeName(gbase + classOff + 2, u2(gbase + classOff));
+        writeName(Address.fromLong(gbase + classOff + 2), u2(gbase + classOff));
         Uart.putc(0x2E);
-        writeName(gbase + nameOff + 2, u2(gbase + nameOff));
+        writeName(Address.fromLong(gbase + nameOff + 2), u2(gbase + nameOff));
         Uart.putc(0x20);
         VM.printDec(slot);
         Uart.putc(0x20);
@@ -18780,14 +18787,14 @@ public final class Loader
      * burying the failure it was added to name. A name is never 512 bytes, so a longer one means the pointer
      * is wrong -- which is itself worth saying, and worth saying in one short line.
      */
-    private static void printUtf8Capped(long u)
+    private static void printUtf8Capped(Address u)
     {
-        if (u == 0L)
+        if (u.toLong() == 0L)
         {
             Uart.write(Magic.bytes("<null>"));
             return;
         }
-        int len = u2(u);
+        int len = u2(u.toLong());
         if (len <= 0 || len > 512)
         {
             Uart.write(Magic.bytes("<bad utf8 ptr>"));
@@ -18796,7 +18803,7 @@ public final class Loader
         int i = 0;
         while (i < len)
         {
-            Uart.putc(u1(u + 2 + i));
+            Uart.putc(u1(u.toLong() + 2 + i));
             i += 1;
         }
     }
@@ -19378,7 +19385,7 @@ public final class Loader
         }
         printNameAt(clTab[lzTab[k].reg].base, clTab[lzTab[k].reg].nameOff);
         Uart.putc(0x2E);
-        writeName(lzTab[k].blob + lzTab[k].nameOff + 2, u2(lzTab[k].blob + lzTab[k].nameOff));
+        writeName(Address.fromLong(lzTab[k].blob + lzTab[k].nameOff + 2), u2(lzTab[k].blob + lzTab[k].nameOff));
     }
 
     /**
@@ -19553,7 +19560,7 @@ public final class Loader
      * sites calling the same method share one. Returns 0 if the table is full, and the caller falls back to
      * the trap.
      */
-    private static long linkStubFor(long clsU, long nameU, long descU)
+    private static long linkStubFor(Address clsU, Address nameU, Address descU)
     {
         // A LINEAR SCAN, and deliberately left one. It was indexed during the `patch` arc on the theory that
         // this was hot; MEASURED, the index bought NOTHING, and the cost turned out to be `dlCellOf` two
@@ -19564,9 +19571,9 @@ public final class Loader
         while (k < lkCount)
         {
             pcStubSteps += 1;
-            if (utf8EqAt(lkClsU[k], 0, clsU, 0)
-                    && utf8EqAt(lkNameU[k], 0, nameU, 0)
-                    && utf8EqAt(lkDescU[k], 0, descU, 0))
+            if (utf8EqAt(lkClsU[k], 0, clsU.toLong(), 0)
+                    && utf8EqAt(lkNameU[k], 0, nameU.toLong(), 0)
+                    && utf8EqAt(lkDescU[k], 0, descU.toLong(), 0))
             {
                 return lkStub[k];
             }
@@ -19578,16 +19585,16 @@ public final class Loader
             // reports `denied callee: <class>.<method>` for a class on NO denylist -- the exact
             // misattribution that has cost this project several debugging sessions. `java/util/LinkedHashSet
             // .<init>`, reached from picocli's CommandSpec.aliases, was one: shipped, allowed, and trapped.
-            linkStubFull(clsU, nameU, descU);
+            linkStubFull(clsU.toLong(), nameU.toLong(), descU.toLong());
             return 0L;
         }
         if (linkTrampAddr == 0L)
         {
             buildLinkTramp();
         }
-        lkClsU[lkCount] = clsU;
-        lkNameU[lkCount] = nameU;
-        lkDescU[lkCount] = descU;
+        lkClsU[lkCount] = clsU.toLong();
+        lkNameU[lkCount] = nameU.toLong();
+        lkDescU[lkCount] = descU.toLong();
         lkMemo[lkCount] = 0L;
         lkStub[lkCount] = buildLinkStub(lkCount).toLong();
         lkCount += 1;
@@ -19605,11 +19612,11 @@ public final class Loader
         Uart.write(Magic.bytes("\n  LINK STUB TABLE FULL at "));
         VM.printDec(MAXLINKSTUB);
         Uart.write(Magic.bytes(" -- this site becomes a DENYLIST TRAP for a class that is NOT denied: "));
-        printUtf8Capped(clsU);
+        printUtf8Capped(Address.fromLong(clsU));
         Uart.putc(0x2E);
-        printUtf8Capped(nameU);
+        printUtf8Capped(Address.fromLong(nameU));
         Uart.putc(0x20);
-        printUtf8Capped(descU);
+        printUtf8Capped(Address.fromLong(descU));
         Uart.putc(0x0A);
     }
 
@@ -19742,7 +19749,7 @@ public final class Loader
             // the two paths agreeing; a second walk over the same relation is the trap this file has paid for
             // repeatedly. It cannot be called from INSIDE resolveLinkTarget -- it calls resolveLinkTarget per
             // interface, so that would recurse -- which is why it belongs here, at the terminal caller.
-            int ireg = regBySigU(lkClsU[idx]);
+            int ireg = regBySigU(Address.fromLong(lkClsU[idx]));
             viHops = 0;
             viIfaceN = -1;                              // -1 distinguishes "tier skipped" from "walk found none"
             // STEP 2 OF JVMS 5.4.3.3: C's SUPERCLASSES, most-derived first. This is where the body usually is,
@@ -19809,14 +19816,15 @@ public final class Loader
             long thunk = 0L;
             if (lnkFailWhy == 3)
             {
-                int nreg = regBySigU(lkClsU[idx]);
+                int nreg = regBySigU(Address.fromLong(lkClsU[idx]));
                 if (nreg >= 0)
                 {
                     thunk = missingNativeOnChain(nreg, lkNameU[idx], lkDescU[idx]);
                 }
                 else if (declaredNative(lkClsU[idx], lkNameU[idx], lkDescU[idx]))
                 {
-                    thunk = missingNativeThunk(lkClsU[idx], lkNameU[idx], lkDescU[idx]);
+                    thunk = missingNativeThunk(Address.fromLong(lkClsU[idx]), Address.fromLong(lkNameU[idx]),
+                            Address.fromLong(lkDescU[idx]));
                 }
             }
             if (thunk != 0L)
@@ -19869,14 +19877,14 @@ public final class Loader
      * as if the native itself had thrown. 0 when the table is full or the helper was not baked: the caller keeps
      * the trap.
      */
-    private static long missingNativeThunk(long clsU, long nameU, long descU)
+    private static long missingNativeThunk(Address clsU, Address nameU, Address descU)
     {
         int k = 0;
         while (k < mnCount)
         {
-            if (clsU == 0L ? mnCls[k] == 0L && utf8Same(mnName[k], nameU)
-                    : mnCls[k] != 0L && utf8Same(mnCls[k], clsU) && utf8Same(mnName[k], nameU)
-                            && utf8Same(mnDesc[k], descU))
+            if (clsU.toLong() == 0L ? mnCls[k] == 0L && utf8Same(mnName[k], nameU.toLong())
+                    : mnCls[k] != 0L && utf8Same(mnCls[k], clsU.toLong()) && utf8Same(mnName[k], nameU.toLong())
+                            && utf8Same(mnDesc[k], descU.toLong()))
             {
                 return mnThunk[k];
             }
@@ -19901,9 +19909,9 @@ public final class Loader
         buf.plus(w * 4L).store(A64Enc.br(16));
         w += 1;
         Heap.publishCode(buf, buf.plus(w * 4L));
-        mnCls[mnCount] = clsU;
-        mnName[mnCount] = nameU;
-        mnDesc[mnCount] = descU;
+        mnCls[mnCount] = clsU.toLong();
+        mnName[mnCount] = nameU.toLong();
+        mnDesc[mnCount] = descU.toLong();
         mnThunk[mnCount] = buf.toLong();
         mnCount += 1;
         return buf.toLong();
@@ -19923,7 +19931,7 @@ public final class Loader
             long clsU = clTab[c].base + clTab[c].nameOff;
             if (declaredNative(clsU, nameU, descU))
             {
-                return missingNativeThunk(clsU, nameU, descU);
+                return missingNativeThunk(Address.fromLong(clsU), Address.fromLong(nameU), Address.fromLong(descU));
             }
             c = superRegOf(c);
             hops += 1;
@@ -19955,7 +19963,7 @@ public final class Loader
             VM.loaderUnlock();
         }
         byte[] msg = new byte[u2(mnName[k])];
-        putUtf8(msg, 0, mnName[k]);
+        putUtf8(msg, 0, Address.fromLong(mnName[k]));
         return newExcWithMessage(name, msg);
     }
 
@@ -19999,8 +20007,8 @@ public final class Loader
         p = putDotted(msg, p, mnCls[k]);
         msg[p] = (byte) '.';
         p += 1;
-        p = putUtf8(msg, p, mnName[k]);
-        p = putUtf8(msg, p, mnDesc[k]);
+        p = putUtf8(msg, p, Address.fromLong(mnName[k]));
+        p = putUtf8(msg, p, Address.fromLong(mnDesc[k]));
         i = 0;
         while (i < post.length)
         {
@@ -20012,13 +20020,13 @@ public final class Loader
     }
 
     /** Append the Utf8 at {@code utf8Addr} as it is. */
-    private static int putUtf8(byte[] out, int p, long utf8Addr)
+    private static int putUtf8(byte[] out, int p, Address utf8Addr)
     {
-        int len = u2(utf8Addr);
+        int len = u2(utf8Addr.toLong());
         int i = 0;
         while (i < len && p < out.length)
         {
-            out[p] = (byte) u1(utf8Addr + 2L + i);
+            out[p] = (byte) u1(utf8Addr.toLong() + 2L + i);
             p += 1;
             i += 1;
         }
@@ -20046,9 +20054,9 @@ public final class Loader
     }
 
     /** The Utf8 entry at blob offset {@code off} (u2 len + bytes) equals the Utf8 at absolute address {@code u}. */
-    private static boolean utf8BlobSame(long base, int off, long u)
+    private static boolean utf8BlobSame(long base, int off, Address u)
     {
-        return utf8Same(base + off, u);
+        return utf8Same(base + off, u.toLong());
     }
 
     /**
@@ -20124,8 +20132,8 @@ public final class Loader
         while (m < mcount)
         {
             int access = u2(p);
-            if ((!nativeOnly || (access & 0x0100) != 0) && utf8BlobSame(base, off[u2(p + 2L)], nameU)
-                    && (descU == 0L || utf8BlobSame(base, off[u2(p + 4L)], descU)))
+            if ((!nativeOnly || (access & 0x0100) != 0) && utf8BlobSame(base, off[u2(p + 2L)], Address.fromLong(nameU))
+                    && (descU == 0L || utf8BlobSame(base, off[u2(p + 4L)], Address.fromLong(descU))))
             {
                 return true;
             }
@@ -20284,7 +20292,7 @@ public final class Loader
         }
         // The name is already a Utf8 run at clsU: ask the index directly, and build the byte[] copy only when
         // the class has to be LOADED -- this runs per execution of an unmemoised site.
-        int reg = regBySigU(clsU);
+        int reg = regBySigU(Address.fromLong(clsU));
         if (reg < 0)
         {
             byte[] slash = new byte[len];
@@ -20297,20 +20305,20 @@ public final class Loader
             if (loadClassIncremental(slash) == 0L)
             {
                 lnkFailWhy = 1;                         // RECORD, do not print: see reportLinkFail
-                linkResolveLog(clsU, nameU, descU, 0L, 0);
+                linkResolveLog(Address.fromLong(clsU), Address.fromLong(nameU), Address.fromLong(descU), 0L, 0);
                 return 0L;
             }
-            reg = regBySigU(clsU);
+            reg = regBySigU(Address.fromLong(clsU));
         }
         if (reg >= 0 && clTab[reg].state < RVMClass.ST_INSTANTIATED)
         {
             // Loaded but not brought all the way up: its <clinit> was blocked or its structure never
             // registered. Branching in would run against half-built statics and a possibly empty vtable.
             lnkFailWhy = 2;
-            linkResolveLog(clsU, nameU, descU, 0L, 0);
+            linkResolveLog(Address.fromLong(clsU), Address.fromLong(nameU), Address.fromLong(descU), 0L, 0);
             return 0L;
         }
-        long buf = bufBySigU(clsU, nameU, descU);
+        long buf = bufBySigU(Address.fromLong(clsU), Address.fromLong(nameU), Address.fromLong(descU));
         int tier = 1;
         if (buf == 0L)
         {
@@ -20319,7 +20327,8 @@ public final class Loader
         }
         if (buf == 0L)
         {
-            buf = compileSigOnDemand(clsU, nameU, descU);   // never compiled AND not dispatchable: JIT it now
+            buf = compileSigOnDemand(Address.fromLong(clsU), Address.fromLong(nameU),
+                    Address.fromLong(descU));   // never compiled AND not dispatchable: JIT it now
             tier = 3;
         }
         if (buf == 0L && reg >= 0)
@@ -20336,7 +20345,7 @@ public final class Loader
             // into whatever that word is. Read as an address, two adjacent instruction words look exactly like
             // one: that is how this surfaced, as a bare instruction abort at a pc no table claims, with the
             // caller nowhere in the report. Trap it by name instead.
-            reportBadTarget(clsU, nameU, descU, buf, tier);
+            reportBadTarget(Address.fromLong(clsU), Address.fromLong(nameU), Address.fromLong(descU), buf, tier);
             return 0L;                                  // -> the caller substitutes denylistTrap
         }
         if (buf == 0L)
@@ -20346,7 +20355,7 @@ public final class Loader
             // abstract/native method with no VM helper, or a descriptor mismatch.
             lnkFailWhy = 3;
         }
-        linkResolveLog(clsU, nameU, descU, buf, tier);
+        linkResolveLog(Address.fromLong(clsU), Address.fromLong(nameU), Address.fromLong(descU), buf, tier);
         return buf;
     }
 
@@ -20364,14 +20373,14 @@ public final class Loader
         while (sreg >= 0 && guard < 64)
         {
             long sU = clTab[sreg].base + clTab[sreg].nameOff;
-            long b = bufBySigU(sU, nameU, descU);
+            long b = bufBySigU(Address.fromLong(sU), Address.fromLong(nameU), Address.fromLong(descU));
             if (b == 0L)
             {
                 b = nativeBufAt(sU, 0, nameU, 0);
             }
             if (b == 0L)
             {
-                b = compileSigOnDemand(sU, nameU, descU);
+                b = compileSigOnDemand(Address.fromLong(sU), Address.fromLong(nameU), Address.fromLong(descU));
             }
             if (b != 0L)
             {
@@ -20402,17 +20411,17 @@ public final class Loader
     }
 
     /** Name a late-resolved target that is not code, and which of the tiers produced it. */
-    private static void reportBadTarget(long clsU, long nameU, long descU, long buf, int tier)
+    private static void reportBadTarget(Address clsU, Address nameU, Address descU, long buf, int tier)
     {
         Uart.write(Magic.bytes("\n  BAD LINK TARGET tier="));
         VM.printDec(tier);
         Uart.write(Magic.bytes(" buf="));
         VM.printHex(buf);
         Uart.write(Magic.bytes(" for "));
-        printNameAt(clsU, 0);
+        printNameAt(clsU.toLong(), 0);
         Uart.putc(0x2E);
-        printNameAt(nameU, 0);
-        printNameAt(descU, 0);
+        printNameAt(nameU.toLong(), 0);
+        printNameAt(descU.toLong(), 0);
         Uart.putc(0x0A);
     }
 
@@ -20429,7 +20438,7 @@ public final class Loader
      * on a monitor or spawn threads, and holding the loader lock across that would deadlock any task that
      * needs to compile before it can release.
      */
-    private static long compileSigOnDemand(long clsU, long nameU, long descU)
+    private static long compileSigOnDemand(Address clsU, Address nameU, Address descU)
     {
         VM.loaderLock(VM.LOCK_SIG_DEMAND);
         long r;
@@ -20461,7 +20470,7 @@ public final class Loader
      * {@code of(T...)} are different methods at the same name, and compiling the wrong one links the call
      * site to a body with the wrong signature. Returns 0 if there is no such method or it has no Code.
      */
-    private static long compileSigOnDemandLocked(long clsU, long nameU, long descU)
+    private static long compileSigOnDemandLocked(Address clsU, Address nameU, Address descU)
     {
         int reg = regBySigU(clsU);
         if (reg < 0)
@@ -20489,8 +20498,8 @@ public final class Loader
         while (m < mcount)
         {
             int attrs = u2(p + 6);
-            if (utf8EqAt(blob, gcp[u2(p + 2)], nameU, 0)
-                    && utf8EqAt(blob, gcp[u2(p + 4)], descU, 0))
+            if (utf8EqAt(blob, gcp[u2(p + 2)], nameU.toLong(), 0)
+                    && utf8EqAt(blob, gcp[u2(p + 4)], descU.toLong(), 0))
             {
                 long c = findCode(blob, p + 8, attrs);  // sets gcodeLen + gMaxLocals
                 if (c != 0L)
@@ -20606,7 +20615,7 @@ public final class Loader
             q += 1;
         }
         int off = internIndyNameAt(p + 1, (int) (q - p - 1));
-        if (regBySigU(indyNameBuf + off) >= 0)
+        if (regBySigU(Address.fromLong(indyNameBuf + off)) >= 0)
         {
             return;                                     // already a REGISTERED class -- re-adding its blob
         }                                               //   re-registers it (lifecycle DIFF, then a wild branch)
@@ -20781,9 +20790,9 @@ public final class Loader
                 Uart.write(Magic.bytes("\n  LAZY RE-FIND FAILED (method not in its blob): idx="));
                 VM.printDec(idx);
                 Uart.write(Magic.bytes(" name="));
-                printUtf8Capped(lzTab[idx].blob + lzTab[idx].nameOff);
+                printUtf8Capped(Address.fromLong(lzTab[idx].blob + lzTab[idx].nameOff));
                 Uart.write(Magic.bytes(" desc="));
-                printUtf8Capped(lzTab[idx].blob + lzTab[idx].descOff);
+                printUtf8Capped(Address.fromLong(lzTab[idx].blob + lzTab[idx].descOff));
                 Uart.write(Magic.bytes(" blob=0x"));
                 VM.printHex(lzTab[idx].blob);
                 Uart.write(Magic.bytes(" reg="));
@@ -21127,7 +21136,7 @@ public final class Loader
             // returned a half-lifecycle class -- halt loudly rather than branch into a 0 buffer.
             capHalt(Magic.bytes("lifecycle-resolve"), lreg);
         }
-        long buf = bufBySigU(clsU, nameU, descU);
+        long buf = bufBySigU(Address.fromLong(clsU), Address.fromLong(nameU), Address.fromLong(descU));
         if (buf == 0L)
         {
             buf = nativeBufAt(clsU, 0, nameU, 0);       // a PROVIDED NATIVE has no bytecode to find: link the VM helper
@@ -21143,7 +21152,7 @@ public final class Loader
             // `java/lang/String.toUpperCase(Ljava/util/Locale;)` is the shape: a baked java.base body calls
             // it, nothing statically reachable does, so it has no buffer and no slot -- and the bake stub had
             // nowhere left to look.
-            buf = compileSigOnDemand(clsU, nameU, descU);
+            buf = compileSigOnDemand(Address.fromLong(clsU), Address.fromLong(nameU), Address.fromLong(descU));
         }
         if (buf == 0L)
         {
@@ -21152,9 +21161,9 @@ public final class Loader
             Uart.write(Magic.bytes("\n  BAKERESOLVE NO BODY: "));
             Uart.write(slash);
             Uart.putc(0x2E);
-            printUtf8Capped(nameU);
+            printUtf8Capped(Address.fromLong(nameU));
             Uart.putc(0x20);
-            printUtf8Capped(descU);
+            printUtf8Capped(Address.fromLong(descU));
             Uart.putc(0x0A);
             capHalt(Magic.bytes("bakeresolve-find"), 0);
         }
@@ -21164,19 +21173,19 @@ public final class Loader
     /** A callable buffer for (class, name, desc) given as absolute utf8 runs: a registered compiled
      *  buffer, else a phase-A static cell's stub, else the class's TIB slot (virtual lazy stub) — any
      *  of which self-compiles on entry if still lazy. 0 if unknown. */
-    private static long bufBySigU(long clsU, long nameU, long descU)
+    private static long bufBySigU(Address clsU, Address nameU, Address descU)
     {
         // The registry through its class+name index (rgBucket). The scan answered the LOWEST index with a
         // buffer, and those chains are newest-first, so walk the whole chain and keep the oldest hit.
         buildRegIndex();
         int best = -1;
-        int k = rgBucket[utf8Hash2(clsU, 0, nameU, 0) & (RGTAB - 1)];
+        int k = rgBucket[utf8Hash2(clsU.toLong(), 0, nameU.toLong(), 0) & (RGTAB - 1)];
         while (k >= 0)
         {
             if (rgTab[k].buf != 0L
-                    && utf8EqAt(rgTab[k].base, rgTab[k].classOff, clsU, 0)
-                    && utf8EqAt(rgTab[k].base, rgTab[k].nameOff, nameU, 0)
-                    && utf8EqAt(rgTab[k].base, rgTab[k].descOff, descU, 0))
+                    && utf8EqAt(rgTab[k].base, rgTab[k].classOff, clsU.toLong(), 0)
+                    && utf8EqAt(rgTab[k].base, rgTab[k].nameOff, nameU.toLong(), 0)
+                    && utf8EqAt(rgTab[k].base, rgTab[k].descOff, descU.toLong(), 0))
             {
                 best = k;
             }
@@ -21186,14 +21195,14 @@ public final class Loader
         {
             return rgTab[best].buf;
         }
-        long cell = dlCellOf(clsU, 0, nameU, 0, descU, 0);   // tier 2: a celled static, callable via its cell
+        long cell = dlCellOf(clsU.toLong(), 0, nameU.toLong(), 0, descU.toLong(), 0);   // tier 2: a celled static, callable via its cell
         if (cell != 0L)
         {
             return Address.fromLong(cell).loadLong();
         }
         // Every matching vtable entry names the same class, so regBySigU answers the same for all of them and
         // the first match decides, as it did in the scan.
-        k = vtEntryOf(clsU, 0, nameU, 0, descU, 0);
+        k = vtEntryOf(clsU.toLong(), 0, nameU.toLong(), 0, descU.toLong(), 0);
         if (k >= 0)
         {
             int r = regBySigU(clsU);
@@ -21250,13 +21259,13 @@ public final class Loader
      */
     static long catchTypeByName(long clsU)
     {
-        int r = regBySigU(clsU);
+        int r = regBySigU(Address.fromLong(clsU));
         return r < 0 ? 0L : clTab[r].type;
     }
 
-    private static int regBySigU(long clsU)
+    private static int regBySigU(Address clsU)
     {
-        return classRegAt(clsU, 0);                      // an absolute {u2 len}{bytes} run: offset 0 of clsU
+        return classRegAt(clsU.toLong(), 0);             // an absolute {u2 len}{bytes} run: offset 0 of clsU
     }
 
     /**
@@ -21437,8 +21446,8 @@ public final class Loader
                     Uart.write(Magic.bytes("    missing slot "));
                     VM.printDec(w);
                     Uart.putc(0x20);
-                    writeName(Address.fromLong(q).loadLong() + 2L, u2(Address.fromLong(q).loadLong()));
-                    writeName(Address.fromLong(q).plus(8L).loadLong() + 2L, u2(Address.fromLong(q).plus(8L).loadLong()));
+                    writeName(Address.fromLong(q).loadAddress().plus(2L), u2(Address.fromLong(q).loadLong()));
+                    writeName(Address.fromLong(q).plus(8L).loadAddress().plus(2L), u2(Address.fromLong(q).plus(8L).loadLong()));
                     Uart.putc(0x0A);
                 }
                 w += 1;
@@ -23688,7 +23697,7 @@ public final class Loader
         {
             return classMirror(clTab[ci].type);
         }
-        if (isDenylisted(utf8Blob(name), 0))
+        if (isDenylisted(utf8Blob(name).toLong(), 0))
         {
             reportNestedNotLoaded(name);
             return 0L;
@@ -23838,7 +23847,7 @@ public final class Loader
         {
             return 0L;
         }
-        return resolveLinkTarget(clTab[reg].base + clTab[reg].nameOff, utf8Blob(name), utf8Blob(desc));
+        return resolveLinkTarget(clTab[reg].base + clTab[reg].nameOff, utf8Blob(name).toLong(), utf8Blob(desc).toLong());
     }
 
     /**
@@ -24017,10 +24026,10 @@ public final class Loader
      * and nothing between two iterations can run guest code -- unlike {@link #putComponent}'s reference arm,
      * which calls {@code toString} and could reach a literal intern.
      */
-    private static int putUtf8(char[] out, int p, long utf8Addr)
+    private static int putUtf8(char[] out, int p, Address utf8Addr)
     {
-        int len = u2(utf8Addr);
-        long src = utf8Addr + 2L;
+        int len = u2(utf8Addr.toLong());
+        long src = utf8Addr.toLong() + 2L;
         int i = 0;
         while (i < len && p < out.length)
         {
@@ -24224,7 +24233,7 @@ public final class Loader
                 p = putAscii(out, p, Magic.bytes(", "));
             }
             int j = recordComponent(reg, k);
-            p = putUtf8(out, p, fldTab[j].base + fldTab[j].nameOff);
+            p = putUtf8(out, p, Address.fromLong(fldTab[j].base + fldTab[j].nameOff));
             p = putAscii(out, p, Magic.bytes("="));
             p = putComponent(out, p, Address.fromLong(obj).plus(16L).plus(fldTab[j].slot * 8L).loadLong(),
                     u1(fldTab[j].base + fldTab[j].descOff + 2L));
@@ -24548,10 +24557,11 @@ public final class Loader
         {
             return objectCloneBuf;
         }
-        objectCloneCls = utf8Blob(Magic.bytes("jdk/internal/misc/MetalObjects"));
-        objectCloneName = utf8Blob(Magic.bytes("clone"));
-        objectCloneDesc = utf8Blob(Magic.bytes("(Ljava/lang/Object;)Ljava/lang/Object;"));
-        objectCloneBuf = linkStubFor(objectCloneCls, objectCloneName, objectCloneDesc);
+        objectCloneCls = utf8Blob(Magic.bytes("jdk/internal/misc/MetalObjects")).toLong();
+        objectCloneName = utf8Blob(Magic.bytes("clone")).toLong();
+        objectCloneDesc = utf8Blob(Magic.bytes("(Ljava/lang/Object;)Ljava/lang/Object;")).toLong();
+        objectCloneBuf = linkStubFor(Address.fromLong(objectCloneCls), Address.fromLong(objectCloneName),
+                Address.fromLong(objectCloneDesc));
         return objectCloneBuf;
     }
 
@@ -24793,7 +24803,7 @@ public final class Loader
                 return;
             }
         }
-        long cls = utf8Blob(Magic.bytes("jdk/internal/misc/MetalAnnotations"));
+        Address cls = utf8Blob(Magic.bytes("jdk/internal/misc/MetalAnnotations"));
         if (annoEqBuf == 0L)
         {
             annoEqBuf = helperBuf(cls, Magic.bytes("annoEquals"), Magic.bytes("(Ljava/lang/Object;Ljava/lang/Object;)Z"));
@@ -24808,10 +24818,10 @@ public final class Loader
         }
     }
 
-    private static long helperBuf(long cls, byte[] name, byte[] desc)
+    private static long helperBuf(Address cls, byte[] name, byte[] desc)
     {
-        long n = utf8Blob(name);
-        long d = utf8Blob(desc);
+        Address n = utf8Blob(name);
+        Address d = utf8Blob(desc);
         long buf = bufBySigU(cls, n, d);
         return buf != 0L ? buf : compileSigOnDemand(cls, n, d);
     }
@@ -28684,7 +28694,7 @@ public final class Loader
                     if (r >= 0)
                     {
                         Uart.write(Magic.bytes("  arrayadopt [L"));
-                        writeName(clTab[r].base + clTab[r].nameOff + 2, u2(clTab[r].base + clTab[r].nameOff));
+                        writeName(Address.fromLong(clTab[r].base + clTab[r].nameOff + 2), u2(clTab[r].base + clTab[r].nameOff));
                         Uart.putc(0x3B);                // ';'
                     }
                     else
@@ -29504,18 +29514,18 @@ public final class Loader
      *  stub and is resolved again HERE, on first call, so a silent site has to be explained at both ends.
      *  Tier 1 bufBySigU (registered buffer / static cell / vtable slot), 2 provided native, 3
      *  compileSigOnDemand; 0 marks an EARLY return, where lnkFailWhy says which guard refused. */
-    private static void linkResolveLog(long clsU, long nameU, long descU, long buf, int tier)
+    private static void linkResolveLog(Address clsU, Address nameU, Address descU, long buf, int tier)
     {
-        if (!BUF_WATCH_ON || !utf8IsAtBase(clsU, 0, BUF_WATCH_CLASS))
+        if (!BUF_WATCH_ON || !utf8IsAtBase(clsU.toLong(), 0, BUF_WATCH_CLASS))
         {
             return;
         }
         Uart.write(Magic.bytes("  LINKWATCH "));
-        printNameAt(clsU, 0);
+        printNameAt(clsU.toLong(), 0);
         Uart.putc(0x2E);
-        printNameAt(nameU, 0);
+        printNameAt(nameU.toLong(), 0);
         Uart.putc(0x20);
-        printNameAt(descU, 0);
+        printNameAt(descU.toLong(), 0);
         Uart.write(Magic.bytes(" -> buf="));
         VM.printHex(buf);
         Uart.write(Magic.bytes(" tier"));
@@ -29570,7 +29580,7 @@ public final class Loader
         // printNameAt trusts the u2 length it lands on, so that is unbounded output over the UART on the one
         // line a reader most needs. printUtf8Capped answers <bad utf8 ptr>, which is both short and is itself
         // the evidence that the context was clobbered rather than merely wrong.
-        printUtf8Capped(gbase != 0L ? gbase + gThisNameOff : 0L);
+        printUtf8Capped(Address.fromLong(gbase != 0L ? gbase + gThisNameOff : 0L));
         Uart.write(Magic.bytes(" uses slot "));
         VM.printDec(needed - 1);
         Uart.write(Magic.bytes(" but max_locals="));
@@ -29900,7 +29910,7 @@ public final class Loader
         {
         // The name is already a Utf8 run at clsU: ask the index directly, and build the byte[] copy only when
         // the class has to be LOADED -- these sites are NOT cold (a warm TLS session executes them repeatedly).
-        reg = regBySigU(clsU);
+        reg = regBySigU(Address.fromLong(clsU));
         if (reg < 0)
         {
             if (LOAD_LOG)
@@ -29917,7 +29927,7 @@ public final class Loader
                 k += 1;
             }
             long pulled = loadClassIncremental(slash);
-            reg = regBySigU(clsU);
+            reg = regBySigU(Address.fromLong(clsU));
         }
         tib = 0L;
         fields = 0;

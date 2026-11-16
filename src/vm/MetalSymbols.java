@@ -214,23 +214,23 @@ final class MetalSymbols implements Symbols
      */
     public void initGuard(CodeBuffer cb, int refCp)
     {
-        emitInitGuard(cb, Loader.initTargetNameAddr(refCp));   // a field's DECLARING class (JVMS 5.5)
+        emitInitGuard(cb, Loader.initTargetNameAddr(refCp).toLong());   // a field's DECLARING class (JVMS 5.5)
     }
 
     /** {@link #initGuard} for {@code new}, whose operand is a CONSTANT_Class rather than a {@code *ref}. */
     public void initGuardClass(CodeBuffer cb, int classCp)
     {
-        emitInitGuard(cb, Loader.classNameAddr(classCp));
+        emitInitGuard(cb, Loader.classNameAddr(classCp).toLong());
     }
 
     public boolean needsInitGuard(int refCp)
     {
-        return Loader.initGuardNeeded(Loader.initTargetNameAddr(refCp));   // the SAME class initGuard emits
+        return Loader.initGuardNeeded(Loader.initTargetNameAddr(refCp).toLong());   // the SAME class initGuard emits
     }
 
     public boolean needsInitGuardClass(int classCp)
     {
-        return Loader.initGuardNeeded(Loader.classNameAddr(classCp));
+        return Loader.initGuardNeeded(Loader.classNameAddr(classCp).toLong());
     }
 
     /** x0 = the class-name Utf8 address, then the helper. Shared so the two seams cannot drift apart. */
@@ -240,7 +240,7 @@ final class MetalSymbols implements Symbols
         {
             return;                                     // no resolvable name: the late paths still cover it
         }
-        Loader.logInitGuard(Magic.bytes("  IG-emit "), clsU);
+        Loader.logInitGuard(Magic.bytes("  IG-emit "), Address.fromLong(clsU));
         emitAddr(cb, 0, clsU);
         callHelper(cb, Symbols.ENSURE_INIT);
     }

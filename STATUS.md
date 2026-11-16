@@ -4,6 +4,26 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 14: `Loader`'s utf8/name-address API (2026-11-15).** Pi-validated (build
+  b3b8419697a26b7b). 20 `Loader` signatures whose `long` is the address of utf8 bytes take or return `Address`:
+  - returns ("none" = `Address.zero()`): `refClassNameAddr`, `classNameAddr`, `initTargetNameAddr`, `utf8Blob`;
+  - the `clsU`/`nameU`/`descU` group: `linkStubFor`, `missingNativeThunk`, `bufBySigU`, `compileSigOnDemand(Locked)`,
+    `regBySigU`, and the first three params of `reportBadTarget` and `linkResolveLog`;
+  - utf8 readers: `putUtf8` (both), `utf8BlobSame` (`u`), `descParamCountRaw`, `logInitGuard`, `helperBuf` (`cls`);
+  - name printers: `writeName`, `printUtf8Capped`.
+  - **Left long:** `printNameAt`, `Utf8At` and the other class-file `base + off` helpers (`utf8EqAt`, `utf8Same`,
+    `classRegAt`, `dlCellOf`, `vtEntryOf`, `nativeBufAt`, `isDenylisted`...) -- the next increment, which should also
+    remove most of the ~126 `Address.fromLong(base + off + 2)` wraps added here at their call sites; `siteIndexFor`
+    and `initGuardNeeded`/`ensureInitFor` (the address is a memo/dedupe KEY, and `ensureInitFor` is reached from the
+    descriptor-named `VM.ensureInitByName(J)V`); `catchTypeByName` (carries `CATCH_BY_NAME` values); the long fields
+    (`lkClsU`/`lkNameU`/`lkDescU`, `mn*`, `objectClone*`).
+  - **Width check (Loader, MetalSymbols vs HEAD):** identical 64/32/8 mix (5 `loadLong` became `loadAddress`, all
+    64-bit). Image build: no `helper-stash MISS`. **Code size (whole class):** Loader 90 words smaller.
+  - **Measured:** `make test`; overlaycheck 0 new; full regression **208/208**. Pi: committed first try; every page;
+    `/run`s (class definition resolves through these name lookups); a throwing main's stack trace; the stop-poll
+    benchmark (same figures); a forced stop of four threads; the kernel SHA-256; a staged 39 MB upload SHA-256-verified
+    in 26.2 s; `/net` 0 IP header errors, 0 TCP errors, 2 retransmits.
+
 - **UNBOXED TYPES, INCREMENT 13: `Loader`'s code/pc API (2026-11-15).** Pi-validated (build 0edde9b24478750b). 33
   `Loader` methods whose `long` is a code or pc address take or return `Address`:
   - pc/code lookups and reporting: `printFrameAt`, `reportMethodAt`, `plausibleCode`, `printImageFrameAt`,
