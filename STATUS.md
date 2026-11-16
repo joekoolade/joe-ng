@@ -4,6 +4,38 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 22: `magic.ObjectReference` (2026-11-16).** Pi-validated (build 85ccf2b0700618ad).
+  The fifth unboxed type, after Jikes RVM's `org.vmmagic.unboxed.ObjectReference`: an object's start as a raw
+  word -- what a `long` holding a REFERENCE meant in VM code (a native's argument, a slot read off the heap), as
+  opposed to an Address, which is any byte of memory.
+  - **API:** `nullReference`, `fromObject`, `toObject`, `toAddress`, `isNull`, `EQ`/`NE`; joe-ng's `fromLong`/`toLong`
+    for the descriptor ABI (natives and helpers take references as `long`). `Address` gains `toObjectReference`,
+    `loadObjectReference()`/`(Offset)` and `store(ObjectReference[, Offset])`. Deliberately absent, as in Jikes:
+    `equals`/`hashCode` -- inherited from Object they would be real virtual calls on a non-object, and they have no
+    lowering, so a call fails the compile.
+  - **Compiler:** `Unboxed.OBJECT_REFERENCE` with its OWN op table (`referenceOp`), not the shared rules, so a
+    reference has no arithmetic, ordering or loads; every op maps to an EXISTING intrinsic (UB_MOVE, ADDR_OF,
+    FROM_ADDR, UB_ZERO, UB_IS_ZERO, UB_EQ/NE; the Address additions to UB_MOVE/LOAD64/STORE64) -- no new codegen.
+    Both worlds classify through the one `Unboxed`, so the metal JIT took a guest class using it with no change.
+  - **GC:** a field of the type is an `L` field (`mayHoldPointer`), traced like any reference field, so it keeps its
+    object alive. **The probe's keep-alive checks cannot fail yet (measured):** a negative control -- a long[6]
+    held only as two int statics, allocated in a popped frame -- was still not freed after the same collections
+    (word 0 still its TIB, not a free-list link): a launched program's arena on cores 1-3 is never collected
+    (BACKLOG, Collector) and roots are conservative. The checks stay so they bite once that is fixed.
+  - **First adopter -- `ArrayCopy` (every `System.arraycopy`):** the arrays are ObjectReference, the TIBs and the
+    element ranges Address; a Type stays the Loader's `long` id. `VMNatives.arraycopy(JIJII)V` keeps its descriptor
+    (the writer stashes it by name) and converts once. Load/store widths identical to main (3 `loadLong` -> 2
+    `loadAddress` + 1 `loadObjectReference`, 1 `store(J)` -> `store(ObjectReference)`, all 64-bit); 5 `lcmp` became
+    `isNull`/`isZero`/`NE`; ArrayCopy **1564 -> 1507 words**, VMNatives unchanged.
+  - **Tests:** UnboxedTest 61 -> **86** (153 public methods classify; ObjectReference ops compile to the SAME words
+    as their long/Address twins -- field read, load/store of a reference, toObject, fromLong round trip, isNull,
+    EQ, NE, nullReference; and plus/LT/loadLong/equals/hashCode have no lowering). AddressFieldProbe 36 -> **51**:
+    unset field is null, fromObject/toObject/fromLong round trips, static and instance ObjectReference fields as
+    the only reference across 4 collections, EQ/NE (all 64 bits), loadObjectReference/store(ObjectReference)
+    through an Object[] element.
+  - **Validation:** `make test` + overlaycheck; full regression **209/209**; image build no `helper-stash MISS`. Pi:
+    every page 200, hello x2, Boom, bench, forced stop, AddressFieldProbe **51/0** compiled ON THE BOARD via `/run`,
+    DnsCheck, SHA-256 check, staged 39 MB PUT + discard, `/net` InHdrErrors 0 / InErrs 0 / InCsumErrors 0.
 - **UNBOXED TYPES, INCREMENT 21: the network stack's buffer pointers are Address (2026-11-16).** Pi-validated
   (build 75ddc0e315b1e4e1). The follow-on of increment 20: `net/` was the long-typed side of every Cyw43 boundary.
   - **Retyped (host memory only):** `Ip.ourMac`/`ourIp`/`netMask`/`gwMac` (Cyw43 assigns them directly now);

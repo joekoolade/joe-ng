@@ -14,6 +14,7 @@ package compiler;
 import magic.Address;
 import magic.AddressArray;
 import magic.Magic;
+import magic.ObjectReference;
 import magic.Offset;
 import magic.Word;
 
@@ -306,5 +307,67 @@ final class UnboxedFixture
     static Address sext(int i)
     {
         return Address.fromIntSignExtend(i);
+    }
+
+    // ObjectReference: each must be the same words as its long / Magic twin above.
+
+    static long refFieldLong(Object o)
+    {
+        return Magic.load64(Magic.addrOf(o) + 16L);
+    }
+
+    static long refFieldRef(Object o)
+    {
+        return ObjectReference.fromObject(o).toAddress().plus(16L).loadLong();
+    }
+
+    static long loadRefAddr(Address a)
+    {
+        return a.loadObjectReference().toLong();
+    }
+
+    static void storeRefAddr(Address a, ObjectReference v)
+    {
+        a.store(v);
+    }
+
+    static Object objRef(ObjectReference r)
+    {
+        return r.toObject();
+    }
+
+    static long refLong(long r)
+    {
+        return ObjectReference.fromLong(r).toAddress().toObjectReference().toLong();
+    }
+
+    static boolean isNullRef(ObjectReference r)
+    {
+        return r.isNull();
+    }
+
+    static boolean eqAddr(Address a, Address b)
+    {
+        return a.EQ(b);
+    }
+
+    static boolean eqRef(ObjectReference a, ObjectReference b)
+    {
+        return a.EQ(b);
+    }
+
+    static boolean neAddr(Address a, Address b)
+    {
+        return a.NE(b);
+    }
+
+    static boolean neRef(ObjectReference a, ObjectReference b)
+    {
+        return a.NE(b);
+    }
+
+    static ObjectReference nullRef()
+    {
+        return ObjectReference.nullReference();
     }
 }
