@@ -15,7 +15,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.security.SecureRandom;
-import magic.Magic;
+import magic.Address;
 
 /**
  * {@code java.security.SecureRandom} in the boot suite, so the DRBG is PI-GATED -- and so the board reports
@@ -62,7 +62,7 @@ public final class SecureRandomDemo
     {
         try
         {
-            return Integer.toHexString(Magic.load32(addr));
+            return Integer.toHexString(Address.fromLong(addr).loadInt());
         }
         catch (Throwable t)
         {
@@ -140,7 +140,7 @@ public final class SecureRandomDemo
         }
         else
         {
-            int before = Magic.load32(0xFE10_4024L) & 0xFF;
+            int before = Address.fromLong(0xFE10_4024L).loadInt() & 0xFF;
             if (before == 0)
             {
                 System.out.println("  hw RNG fifo: EMPTY (count=0) -- nothing to draw, would need a CTRL write");
@@ -150,7 +150,7 @@ public final class SecureRandomDemo
                 String w0 = peek(0xFE10_4020L);
                 String w1 = peek(0xFE10_4020L);
                 String w2 = peek(0xFE10_4020L);
-                int after = Magic.load32(0xFE10_4024L) & 0xFF;
+                int after = Address.fromLong(0xFE10_4024L).loadInt() & 0xFF;
                 boolean vary = !w0.equals(w1) && !w1.equals(w2) && !w0.equals(w2);
                 System.out.println("  hw RNG fifo: count " + before + " -> " + after
                         + "  words " + w0 + " " + w1 + " " + w2

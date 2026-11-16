@@ -11,6 +11,7 @@
  */
 package java.util.concurrent.atomic;
 
+import magic.Address;
 import magic.Magic;
 
 /** JDK-free {@code AtomicLongFieldUpdater} -- like {@link AtomicIntegerFieldUpdater} with 64-bit accesses. */
@@ -34,7 +35,7 @@ public class AtomicLongFieldUpdater<T>
 
     public void set(T obj, long newValue)
     {
-        Magic.store64(Magic.addrOf(obj) + fieldOffset0(fname, obj), newValue);
+        Address.fromObject(obj).plus(fieldOffset0(fname, obj)).store(newValue);
     }
 
     public void lazySet(T obj, long newValue)
@@ -44,7 +45,7 @@ public class AtomicLongFieldUpdater<T>
 
     public long get(T obj)
     {
-        return Magic.load64(Magic.addrOf(obj) + fieldOffset0(fname, obj));
+        return Address.fromObject(obj).plus(fieldOffset0(fname, obj)).loadLong();
     }
 
     /**

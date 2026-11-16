@@ -17,7 +17,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
-import magic.Magic;
+import magic.Address;
 
 /**
  * The filesystem this VM has: one writable tree in memory, seeded from the file table the image writer bakes from
@@ -168,7 +168,7 @@ public final class MetalRamfs
         for (int i = 0; i < n; i++)
         {
             long e = dir + (long) i * ENTRY;
-            String p = utf8(Magic.load64(e), (int) Magic.load64(e + 8L));
+            String p = utf8(Address.fromLong(e).loadLong(), (int) Address.fromLong(e + 8L).loadLong());
             String[] parts = p.substring(1).split("/");
             MetalFsNode d = r;
             for (int k = 0; k < parts.length - 1; k++)
@@ -183,7 +183,7 @@ public final class MetalRamfs
             }
             MetalFsNode f = newNode(false, 0644, 0L);
             f.baked = e;
-            f.size = Magic.load64(e + 24L);
+            f.size = Address.fromLong(e + 24L).loadLong();
             d.kids.put(parts[parts.length - 1], f);
         }
         if (!r.kids.containsKey("tmp"))
@@ -1310,10 +1310,10 @@ public final class MetalRamfs
             }
             else
             {
-                long src = Magic.load64(node.baked + 16L) + pos;
+                long src = Address.fromLong(node.baked + 16L).loadLong() + pos;
                 for (int k = 0; k < n; k++)
                 {
-                    u.putByte(addr + k, (byte) Magic.load8(src + k));
+                    u.putByte(addr + k, (byte) Address.fromLong(src + k).loadUnsignedByte());
                 }
             }
             return n;
@@ -1748,7 +1748,7 @@ public final class MetalRamfs
         byte[] b = new byte[n];
         for (int k = 0; k < n; k++)
         {
-            b[k] = (byte) Magic.load8(addr + k);
+            b[k] = (byte) Address.fromLong(addr + k).loadUnsignedByte();
         }
         return new String(b, StandardCharsets.UTF_8);
     }

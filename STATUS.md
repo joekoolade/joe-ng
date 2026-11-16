@@ -4,6 +4,27 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 10: `guestsrc` (2026-11-15).** Pi-validated (build a272322b7b21d078). The overlay
+  `jdk/internal/misc/Unsafe` (43 loads/stores and 19 `cas64` -- every atomic, VarHandle and ConcurrentHashMap goes
+  through it), `java/lang/reflect/Field`, the three `Atomic*FieldUpdater`s, `MetalFsNode`, `MetalOffHeap`,
+  `MetalProxies`, `MetalRamfs`, and the demos `TickProbe`, `SecureRandomDemo`, `AddrTrapDemo` use `Address`; no member
+  added or removed (overlaycheck 0 new). Deliberately left on `Magic`: `CasDemo` and `RawLoadDemo` (their subject IS
+  `cas64` / `load32`), `UnboxedProbe` (the reference its Address checks compare against), the updaters' three `cas64`
+  (documented as ONE cas64), and `addrOf`/`fromAddr` where the value is a long, not an address.
+  - **Checked independently, per class against HEAD** (on the class FILES -- javap given a `java.*` NAME reads the seed
+    JDK's own class, not the overlay): Unsafe load64 21 = 19 `loadLong` + 2 `loadAddress`, store64 5 = 4 `store(J)` + 1
+    `store(Address)`, cas64 19 = 17 `attempt(JJ)` + 2 `attempt(Address,Address)` (one CAS64 each), load32/load8/store32/
+    store8 one to one; Field, the updaters and the Metal* classes width for width. No `Magic` load/store left in any
+    converted class.
+  - **One real cost:** a byte store now needs `(byte)` to pick the 8-bit overload, and the cast emits a sign-extend:
+    one extra instruction per byte in Unsafe.copyMemory's byte loops. Behaviour identical (only the low byte is stored).
+  - Guest `<clinit>`s can run on the seed JVM (StaticSnapshot), where Address's host bodies throw -- but so do
+    Magic's, so converting a Magic call adds no hazard; the image build confirms it.
+  - **Measured:** `make test`; overlaycheck 0 new; full regression **208/208**. Pi: committed first try; every page
+    (the server's collections go through Unsafe); `/run`s; a throwing main; the stop-poll benchmark (same figures); a
+    forced stop of four threads; the kernel SHA-256; a staged 39 MB upload SHA-256-verified in 21.5 s; `/net` 0 IP
+    header errors, 0 TCP errors, 2 retransmits.
+
 - **UNBOXED TYPES, INCREMENT 9: `Loader.java`, PART 3 OF 3 -- THE LOADER HAS NO `Magic` LOAD OR STORE LEFT
   (2026-11-15).** Pi-validated (build 8a2357fa3284cd8f). The methods from `methodParamName` to the end of the file (252
   sites: reflection/mirror helpers, Class[]/Annotation[] builders, proxy and lambda itable/TIB/thunk builders incl.

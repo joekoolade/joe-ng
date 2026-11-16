@@ -12,7 +12,7 @@
 package jdk.internal.misc;
 
 import java.util.TreeMap;
-import magic.Magic;
+import magic.Address;
 
 /**
  * One file or directory of the tree {@link MetalRamfs} serves. A file's content starts as the image's -- the baked
@@ -66,7 +66,7 @@ final class MetalFsNode
         {
             throw new IllegalStateException("joe-ng: byteAt on /boot file " + fat.name);
         }
-        return Magic.load8(Magic.load64(baked + 16L) + pos) & 0xFF;
+        return Address.fromLong(baked + 16L).loadAddress().plus(pos).loadUnsignedByte() & 0xFF;
     }
 
     /** Make the content a heap array of at least {@code cap} bytes, copying the image's on the first write. */

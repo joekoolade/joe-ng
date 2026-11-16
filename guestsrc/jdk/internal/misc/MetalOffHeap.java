@@ -12,6 +12,7 @@
 package jdk.internal.misc;
 
 import java.util.HashMap;
+import magic.Address;
 import magic.Magic;
 
 /**
@@ -91,7 +92,7 @@ final class MetalOffHeap
         long i = 0L;
         while (i < keep)
         {
-            Magic.store8(fresh + i, Magic.load8(address + i));
+            Address.fromLong(fresh + i).store((byte) Address.fromLong(address + i).loadUnsignedByte());
             i += 1L;
         }
         free(address);
