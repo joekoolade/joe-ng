@@ -4,6 +4,30 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 15: the link-target chain; class-file BASE POINTERS NEED FIELD RETYPING FIRST
+  (2026-11-15).** Pi-validated (build 8e20b5c108a96f17). Smaller than planned, and the reason is the finding:
+  - **Changed:** the link-target chain takes its `clsU`/`nameU`/`descU` as `Address` (`resolveLinkTarget`,
+    `inheritedLinkTarget`, `missingNativeOnChain`, `declaredNative`, `declaresMethod`, `linkStubFull`,
+    `vhModeUnsupported`), so the utf8 names typed in increment 14 stay Address end to end; `utf8Same(Address, Address)`;
+    new overloads `u1(Address)`, `u2(Address)`, `printNameAt(Address, int)` (the long `printNameAt` forwards to it).
+  - **NOT changed, and why:** the plan was to retype the class-file base pointers and so remove increment 14's
+    ~126 `Address.fromLong(base + off + 2)` wraps. Those bases come from LONG FIELDS AND TABLES, not locals --
+    `gbase` alone feeds 75 `u1`/`u2` reads and 41 `printNameAt` calls, plus `pdBase[]`, `clTab[].base`,
+    `rgTab[].base`, `lk*U[]`, `vs*[]`, `mn*` -- so converting the `(base, off)` helpers (`utf8EqAt`, `classRegAt`,
+    `dlCellOf`, `parseConstPool`, `findMethod`...) would add a wrap at nearly every call. Net here: `Address.fromLong(`
+    607 -> 615, `.toLong()` 216 -> 202. `Utf8At` is metal-only but built only from `gbase`: unchanged.
+  - **The prerequisite is FIELD retyping, which is new ground:** no field in the tree is `Address`-typed yet. Before
+    retyping `gbase` and friends, check that the compiler, the writer's static snapshot and the GC's precise maps
+    treat an `Address` field as a raw word (today every `L` field is a candidate reference that `tryMark` validates);
+    and `long[]` tables cannot become `Address[]` (an object array with store checks) -- they need an AddressArray-style
+    type (Jikes has one) or stay `long[]`. A probe should cover both.
+  - **Width check:** identical 64/32/8 mix except one more `loadUnsignedByte` (the new `u1(Address)` body).
+    **Code size:** Loader +3 words (the overload bodies) -- the first increment in which a class grew.
+    Image build: no `helper-stash MISS`.
+  - **Measured:** `make test`; overlaycheck 0 new; full regression **208/208**. Pi: committed first try; every page;
+    `/run`s; a throwing main's stack trace; the stop-poll benchmark (same figures); a forced stop of four threads; the
+    kernel SHA-256; a staged 39 MB upload SHA-256-verified in 22.0 s; `/net` 0 IP header errors, 0 TCP errors.
+
 - **UNBOXED TYPES, INCREMENT 14: `Loader`'s utf8/name-address API (2026-11-15).** Pi-validated (build
   b3b8419697a26b7b). 20 `Loader` signatures whose `long` is the address of utf8 bytes take or return `Address`:
   - returns ("none" = `Address.zero()`): `refClassNameAddr`, `classNameAddr`, `initTargetNameAddr`, `utf8Blob`;
