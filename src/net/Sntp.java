@@ -43,7 +43,7 @@ public final class Sntp
     /** Ask, and set the clock from the answer. Prints one {@code clock:} line saying which source it now runs on. */
     public static void sync()
     {
-        long ip = Heap.allocData(4);
+        long ip = Heap.allocData(4).toLong();
         if (!board.cyw43.Cyw43.dnsResolve(Magic.bytes("pool.ntp.org"), ip))  // the NTP pool's round-robin name
         {
             Uart.write(Magic.bytes("clock: no DNS answer for pool.ntp.org -- stays at the commit time + uptime\n"));
@@ -76,8 +76,8 @@ public final class Sntp
     /** One SNTP exchange with {@code serverIp}, resent every second for 5 s; the time now in ms, or 0. */
     private static long query(long serverIp)
     {
-        long buf = Heap.allocData(128);
-        long rx = Heap.allocData(2048);
+        long buf = Heap.allocData(128).toLong();
+        long rx = Heap.allocData(2048).toLong();
         long freq = Magic.readCNTFRQ_EL0();
         long endT = Magic.readCNTPCT_EL0() + freq * 5L;
         long nextSend = 0L;

@@ -293,15 +293,15 @@ final class VMNatives
             return 0L;                                     // boot-time force-compile passes 0; no-op
         }
         long size = Address.fromLong(ref + 8L).loadLong() & -8L;          // block size from the status word
-        long copy = Heap.alloc((int) size);
-        Address.fromLong(copy).store(Address.fromLong(ref).loadLong());            // same TIB (raw elem size or typed array TIB)
+        Address copy = Heap.alloc((int) size);
+        copy.store(Address.fromLong(ref).loadLong());            // same TIB (raw elem size or typed array TIB)
         long i = 16L;
         while (i < size)
         {
-            Address.fromLong(copy + i).store(Address.fromLong(ref + i).loadLong());
+            copy.plus(i).store(Address.fromLong(ref + i).loadLong());
             i += 8L;
         }
-        return copy;
+        return copy.toLong();
     }
 
     /**
@@ -648,7 +648,7 @@ final class VMNatives
      */
     private static long heapReservation()
     {
-        return Heap.managedTop() - Heap.BASE;
+        return Heap.managedTop().toLong() - Heap.BASE;
     }
 
     /** {@code Runtime.totalMemory()} -> the fixed heap reservation (see {@link #heapReservation}). */
@@ -686,7 +686,7 @@ final class VMNatives
         int c = 1;
         while (c < 4)
         {
-            used = used + (Address.fromLong(Heap.PTR_CELL + (long) c * 8L).loadLong() - Heap.arenaBase(c));
+            used = used + (Address.fromLong(Heap.PTR_CELL + (long) c * 8L).loadLong() - Heap.arenaBase(c).toLong());
             c += 1;
         }
         return heapReservation() - used;
@@ -1505,13 +1505,13 @@ final class VMNatives
         }
         int hlen = (int) Address.fromLong(hostArrRef + 16L).loadLong();   // guest byte[] length
         byte[] host = heapBytes(hostArrRef + 24L, hlen);
-        long ipOut = Heap.allocData(4);
-        if (!board.cyw43.Cyw43.dnsResolve(host, ipOut))
+        Address ipOut = Heap.allocData(4);
+        if (!board.cyw43.Cyw43.dnsResolve(host, ipOut.toLong()))
         {
             return 0;
         }
-        return ((Address.fromLong(ipOut).loadUnsignedByte() & 0xFF) << 24) | ((Address.fromLong(ipOut + 1).loadUnsignedByte() & 0xFF) << 16)
-                | ((Address.fromLong(ipOut + 2).loadUnsignedByte() & 0xFF) << 8) | (Address.fromLong(ipOut + 3).loadUnsignedByte() & 0xFF);
+        return ((ipOut.loadUnsignedByte() & 0xFF) << 24) | ((ipOut.plus(1).loadUnsignedByte() & 0xFF) << 16)
+                | ((ipOut.plus(2).loadUnsignedByte() & 0xFF) << 8) | (ipOut.plus(3).loadUnsignedByte() & 0xFF);
     }
 
     /**
@@ -1754,14 +1754,14 @@ final class VMNatives
     /** Byte offset of the instance field {@code name} in {@code obj}'s class or a superclass, or -1. */
     private static long fieldOffsetNamed(long obj, byte[] name)
     {
-        long raw = Heap.allocData(name.length);
+        Address raw = Heap.allocData(name.length);
         int i = 0;
         while (i < name.length)
         {
-            Address.fromLong(raw + i).store(name[i]);
+            raw.plus(i).store(name[i]);
             i += 1;
         }
-        return Loader.vhFieldOffset(raw, name.length, Address.fromLong(obj).loadLong());
+        return Loader.vhFieldOffset(raw.toLong(), name.length, Address.fromLong(obj).loadLong());
     }
 
     /**

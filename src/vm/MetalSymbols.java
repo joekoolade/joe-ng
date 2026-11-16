@@ -12,6 +12,7 @@
 package vm;
 
 import board.bcm2711.Uart;
+import magic.Address;
 import magic.Magic;
 import asm.A64Enc;
 import asm.CodeBuffer;
@@ -56,7 +57,7 @@ final class MetalSymbols implements Symbols
             // asymmetry the lambda thunks had before it was fixed: late-bound path pins, immediate path did
             // not. Symptom: `US_ASCII.<clinit>+0x50` calling a 64-byte buffer freed at the previous
             // collection, executing zeros, reported as InternalError.
-            Heap.pinCodeAt(target);
+            Heap.pinCodeAt(Address.fromLong(target));
             Loader.noteCodeEdge(cb.base() + (long) cb.wordCount() * 4L, target);
         }
         emitBl(cb, target);

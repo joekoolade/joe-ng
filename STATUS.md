@@ -4,6 +4,28 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 11: `Heap`'s public API (2026-11-15).** Pi-validated (build 2251bf61e2bdb96a). First step
+  of the public-signature phase (user's choice: convert ALL public APIs, not stop at the load/store boundary).
+  `alloc`, `allocData`, `allocArray`, `allocCode`, `managedTop`, `arenaBase`, `arenaLimit`, `codeBlockStartAt`,
+  `codeBlockEndAt` return `Address` ("not in a block" is `Address.zero()`); `publishCode`/`Clean`/`Inval`, `pinCodeAt`,
+  `codePinnedIn`, `codeBlockIndexOf`/`Scan`/`FreeAt`, `blockIndexAt`, `addFree`, `addFreeLarge` take it. Sizes, indices
+  and counts stay int/long.
+  - **Baked descriptors:** the JIT allocation helpers are named by string -- `WriterSymbols.HELPER_KEY` and
+    `ImageBuilder.stashHelper` now say `vm/Heap.alloc(I)Lmagic/Address;` and `allocArray(II)Lmagic/Address;`, and the
+    retired `SelfBuild` keeps compiling with the same strings. A real image build prints no `helper-stash MISS`.
+  - **Callers:** a local became `Address` where it is then loaded/stored through and not reassigned (68 in Loader, 14 in
+    Cyw43, a few elsewhere); otherwise it keeps `long` with `.toLong()` -- long fields and tables, reassigned locals,
+    long APIs, sentinels, signed comparisons (VM's two `managedTop()` compares).
+  - **Width check, all 21 changed classes vs HEAD:** store and load mixes identical per class (64/32/8, counting
+    `store(Address)`/`loadAddress` as 64). One store moved from `store(long)` to `store(Address)` with no javac error
+    (`Heap.allocArray(0, 1)` stored into a buffer) -- 64-bit either way, which the check confirms.
+  - **Code size:** never larger; 161 words smaller in total (Loader -101, Cyw43 -25, VMConcat -10, VMNatives -10, VM -8),
+    where callers stopped converting back and forth.
+  - **Measured:** `make test`; overlaycheck 0 new; full regression **208/208**. Pi: committed first try; every page;
+    `/run`s; a throwing main; the stop-poll benchmark (same figures); a forced stop of four threads; the kernel SHA-256;
+    a staged 39 MB upload SHA-256-verified in 23.5 s; `/net` 0 IP header errors, 0 TCP errors, 1 retransmit.
+  - **Next:** the public APIs of VM, Loader, VMNatives and the drivers, one increment each.
+
 - **UNBOXED TYPES, INCREMENT 10: `guestsrc` (2026-11-15).** Pi-validated (build a272322b7b21d078). The overlay
   `jdk/internal/misc/Unsafe` (43 loads/stores and 19 `cas64` -- every atomic, VarHandle and ConcurrentHashMap goes
   through it), `java/lang/reflect/Field`, the three `Atomic*FieldUpdater`s, `MetalFsNode`, `MetalOffHeap`,

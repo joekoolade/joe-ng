@@ -187,9 +187,9 @@ public final class Tcp
                 orphan[i] = 0;
                 if (ring[i] == 0L)
                 {
-                    ring[i] = Heap.allocData(RCVBUF);
-                    rip[i] = Heap.allocData(4);
-                    rmac[i] = Heap.allocData(6);
+                    ring[i] = Heap.allocData(RCVBUF).toLong();
+                    rip[i] = Heap.allocData(4).toLong();
+                    rmac[i] = Heap.allocData(6).toLong();
                 }
                 st[i] = RESERVED;
                 lport[i] = 0;
@@ -1416,7 +1416,7 @@ public final class Tcp
         }
         if (syncRx == 0L)
         {
-            syncRx = Heap.allocData(2048);
+            syncRx = Heap.allocData(2048).toLong();
         }
         long ip = Ip.recvIp(syncRx, 2048, ms);
         if (ip != 0L && (Address.fromLong(ip).plus(9).loadUnsignedByte() & 0xFF) == 6)
@@ -1448,7 +1448,7 @@ public final class Tcp
     private static void sendRaw(long dmac, long dstIp, int lp, int rp, int seq, int ack, int flags, int win,
             long payload, int payLen)
     {
-        long buf = Heap.allocData(2048);
+        long buf = Heap.allocData(2048).toLong();
         Address bufA = Address.fromLong(buf);
         Address dmacA = Address.fromLong(dmac);
         int i = 0;

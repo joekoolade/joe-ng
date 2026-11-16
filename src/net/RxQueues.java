@@ -66,7 +66,7 @@ public final class RxQueues
     /** Allocate the pool, the queue table and their semaphores, and bind the control queue. Call once. */
     public static void init()
     {
-        pool = Heap.allocData(POOL * FRAME);
+        pool = Heap.allocData(POOL * FRAME).toLong();
         freeList = new int[POOL];
         int i = 0;
         while (i < POOL)

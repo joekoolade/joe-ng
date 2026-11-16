@@ -162,7 +162,7 @@ final class CodeCompact
         long dst = Heap.CODE_BASE;
         while (cursor < arenaTop)
         {
-            long i = Heap.blockIndexAt(cursor);
+            long i = Heap.blockIndexAt(Address.fromLong(cursor));
             if (i < 0L || planN >= PLAN_CAP)
             {
                 planOk = 0L;                             // unmapped address, or more blocks than the table holds
@@ -280,17 +280,17 @@ final class CodeCompact
             long nb = e.plus(8).loadLong();
             if (nb != 0L && nb != IMMOVABLE)
             {
-                long k = Heap.blockIndexAt(e.loadLong());
+                long k = Heap.blockIndexAt(Address.fromLong(e.loadLong()));
                 if (k >= 0L)
                 {
                     Address.fromLong(Heap.CODE_BLOCKS + k * 16L).store(nb);
                 }
-                Heap.pinCodeAt(nb);                      // re-pin at the new address (stale bits are safe)
+                Heap.pinCodeAt(Address.fromLong(nb));                      // re-pin at the new address (stale bits are safe)
             }
             i += 1L;
         }
         Address.fromLong(Heap.CODE_PTR_CELL).store(arenaTop - safeRecovered);
-        Heap.publishCode(Heap.CODE_BASE, arenaTop);
+        Heap.publishCode(Address.fromLong(Heap.CODE_BASE), Address.fromLong(arenaTop));
         verifyAfter();
         if (verifyFailed != 0L)
         {

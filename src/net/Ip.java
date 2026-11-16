@@ -123,7 +123,7 @@ public final class Ip
         {
             return;                                      // not asking for us
         }
-        long buf = Heap.allocData(64);
+        long buf = Heap.allocData(64).toLong();
         Address bufA = Address.fromLong(buf);
         int i = 0;
         while (i < 6)

@@ -190,7 +190,7 @@ final class VMGc
         int sc = 1;                                   // secondary cores' arenas are ROOT RANGES (never
         while (sc < 4)                                //   collected, but their tasks hold refs into core 0's
         {                                             //   heap — e.g. spawned Runnable receivers)
-            markRange(Address.fromLong(Heap.arenaBase(sc)), Address.fromLong(Heap.PTR_CELL + sc * 8L).loadAddress());
+            markRange(Heap.arenaBase(sc), Address.fromLong(Heap.PTR_CELL + sc * 8L).loadAddress());
             sc += 1;
         }
         rootProbes = probes;                          // split the metric: everything above is ROOT scanning
@@ -261,7 +261,7 @@ final class VMGc
                 {
                     if (runSize != 0L)                     // a survivor ends the run of dead blocks
                     {
-                        Heap.addFree(runStart.toLong(), runSize);
+                        Heap.addFree(runStart, runSize);
                         runStart = Address.zero();
                         runSize = 0L;
                     }
@@ -284,7 +284,7 @@ final class VMGc
         }
         if (runSize != 0L)                             // the heap ended on dead blocks
         {
-            Heap.addFree(runStart.toLong(), runSize);
+            Heap.addFree(runStart, runSize);
         }
         sweepLargeRegion();
         if (gcLog != 0)
@@ -979,9 +979,9 @@ final class VMGc
         Uart.write(Magic.bytes("  insn at pc = "));
         printHex(Address.fromLong(pc).loadLong() & 0xFFFFFFFFL);
         Uart.write(Magic.bytes("  pinned="));
-        printHex((long) Heap.codePinnedIn(pc & -8L, 8L));
+        printHex((long) Heap.codePinnedIn(Address.fromLong(pc & -8L), 8L));
         Uart.write(Magic.bytes("  block now "));
-        int st = Heap.codeBlockFreeAt(pc);
+        int st = Heap.codeBlockFreeAt(Address.fromLong(pc));
         if (st < 0)
         {
             Uart.write(Magic.bytes("UNREGISTERED\n"));
@@ -1169,7 +1169,7 @@ final class VMGc
                     Uart.write(Magic.bytes(" target="));
                     printHex(was);
                     Uart.write(Magic.bytes(" nowFree="));
-                    printHex((long) Heap.codeBlockFreeAt(was));
+                    printHex((long) Heap.codeBlockFreeAt(Address.fromLong(was)));
                     Uart.write(Magic.bytes(" stubIdx="));
                     printHex(Loader.stubIdxAt(was));
                     Uart.putc(0x0A);
@@ -1247,7 +1247,7 @@ final class VMGc
                 codeLive = codeLive + size;
                 hit = 1;
             }
-            if (hit == 0 && Heap.codePinnedIn(start, size) != 0)
+            if (hit == 0 && Heap.codePinnedIn(Address.fromLong(start), size) != 0)
             {
                 codeLive = codeLive + size;            // branched to directly by another buffer: not free
                 hit = 1;
@@ -1295,7 +1295,7 @@ final class VMGc
             // One I-cache pass over the whole swept span. Heap.publishCode invalidates the entire
             // instruction cache per call, so per-buffer publishing would repeat that thousands of times to
             // no benefit; the span may also cover live methods, which costs those a refetch and nothing else.
-            Heap.publishCode(zeroLo, zeroHi);
+            Heap.publishCode(Address.fromLong(zeroLo), Address.fromLong(zeroHi));
         }
     }
 
@@ -1391,7 +1391,7 @@ final class VMGc
                 {
                     if (runSize != 0L)
                     {
-                        Heap.addFreeLarge(runStart.toLong(), runSize);
+                        Heap.addFreeLarge(runStart, runSize);
                         runStart = Address.zero();
                         runSize = 0L;
                     }
