@@ -99,13 +99,12 @@ public final class NetStats
      * the frame, a correct header checksum, not a fragment, and addressed to our IP or a broadcast (any address
      * before a lease exists, when DHCP's offer is addressed to an IP we do not have yet).
      */
-    public static boolean ipIn(long ip, int avail)
+    public static boolean ipIn(Address ip, int avail)
     {
         ipInReceives = ipInReceives + 1;
-        Address ipA = Address.fromLong(ip);
-        int vihl = ipA.loadUnsignedByte() & 0xFF;
+        int vihl = ip.loadUnsignedByte() & 0xFF;
         int ihl = (vihl & 0x0F) * 4;
-        int total = ((ipA.plus(2).loadUnsignedByte() & 0xFF) << 8) | (ipA.plus(3).loadUnsignedByte() & 0xFF);
+        int total = ((ip.plus(2).loadUnsignedByte() & 0xFF) << 8) | (ip.plus(3).loadUnsignedByte() & 0xFF);
         if ((vihl >> 4) != 4 || ihl < 20 || total < ihl || total > avail)
         {
             ipInHdrErrors = ipInHdrErrors + 1;
@@ -116,13 +115,13 @@ public final class NetStats
             ipInHdrErrors = ipInHdrErrors + 1;
             return false;
         }
-        int frag = ((ipA.plus(6).loadUnsignedByte() & 0xFF) << 8) | (ipA.plus(7).loadUnsignedByte() & 0xFF);
+        int frag = ((ip.plus(6).loadUnsignedByte() & 0xFF) << 8) | (ip.plus(7).loadUnsignedByte() & 0xFF);
         if ((frag & 0x3FFF) != 0)                        // MF set or a nonzero offset
         {
             ipReasmFails = ipReasmFails + 1;
             return false;
         }
-        if (Ip.ourIp != 0L && !Ip.eq(ip + 16, Ip.ourIp) && (ipA.plus(19).loadUnsignedByte() & 0xFF) != 0xFF)
+        if (!Ip.ourIp.isZero() && !Ip.eq(ip.plus(16), Ip.ourIp) && (ip.plus(19).loadUnsignedByte() & 0xFF) != 0xFF)
         {
             ipInAddrErrors = ipInAddrErrors + 1;
             return false;
@@ -135,27 +134,25 @@ public final class NetStats
      * every reader then parses for itself, so this only counts what arrived -- an IPv4 datagram's checks and
      * the protocol it carries. It drops nothing.
      */
-    public static void rxSync(long rx, int len)
+    public static void rxSync(Address rx, int len)
     {
-        Address rxA = Address.fromLong(rx);
-        if (len < 12 || (rxA.plus(5).loadUnsignedByte() & 0x0F) != 2)
+        if (len < 12 || (rx.plus(5).loadUnsignedByte() & 0x0F) != 2)
         {
             return;                                      // no frame, or not the data channel
         }
-        long eth = rx + (rxA.plus(7).loadUnsignedByte() & 0xFF);
-        eth = eth + 4 + (Address.fromLong(eth).plus(3).loadUnsignedByte() & 0xFF) * 4;
-        Address ethA = Address.fromLong(eth);
-        if (((ethA.plus(12).loadUnsignedByte() & 0xFF) << 8 | (ethA.plus(13).loadUnsignedByte() & 0xFF)) != 0x0800)
+        Address eth = rx.plus(rx.plus(7).loadUnsignedByte() & 0xFF);
+        eth = eth.plus(4 + (eth.plus(3).loadUnsignedByte() & 0xFF) * 4);
+        if (((eth.plus(12).loadUnsignedByte() & 0xFF) << 8 | (eth.plus(13).loadUnsignedByte() & 0xFF)) != 0x0800)
         {
             return;
         }
-        long ip = eth + 14;
-        if (!ipIn(ip, len - (int) (ip - rx)))
+        Address ip = eth.plus(14);
+        if (!ipIn(ip, len - ip.diff(rx).toInt()))
         {
             return;
         }
         ipInDelivers = ipInDelivers + 1;
-        int proto = Address.fromLong(ip).plus(9).loadUnsignedByte() & 0xFF;
+        int proto = ip.plus(9).loadUnsignedByte() & 0xFF;
         if (proto == 6)
         {
             tcpInSegs = tcpInSegs + 1;
@@ -179,17 +176,16 @@ public final class NetStats
      * its length field, and its checksum unless the sender left it 0 (optional over IPv4, RFC 768). Counts a
      * failure; true when it may be delivered.
      */
-    public static boolean udpOk(long ip, long udp, int len)
+    public static boolean udpOk(Address ip, Address udp, int len)
     {
-        Address udpA = Address.fromLong(udp);
-        int ulen = ((udpA.plus(4).loadUnsignedByte() & 0xFF) << 8) | (udpA.plus(5).loadUnsignedByte() & 0xFF);
+        int ulen = ((udp.plus(4).loadUnsignedByte() & 0xFF) << 8) | (udp.plus(5).loadUnsignedByte() & 0xFF);
         if (len < 8 || ulen < 8 || ulen > len)
         {
             udpInErrors = udpInErrors + 1;
             return false;
         }
-        int ck = ((udpA.plus(6).loadUnsignedByte() & 0xFF) << 8) | (udpA.plus(7).loadUnsignedByte() & 0xFF);
-        if (ck != 0 && l4Cksum(17, udp, ulen, ip + 12, ip + 16) != 0)
+        int ck = ((udp.plus(6).loadUnsignedByte() & 0xFF) << 8) | (udp.plus(7).loadUnsignedByte() & 0xFF);
+        if (ck != 0 && l4Cksum(17, udp, ulen, ip.plus(12), ip.plus(16)) != 0)
         {
             udpInErrors = udpInErrors + 1;
             udpInCsumErrors = udpInCsumErrors + 1;
@@ -204,27 +200,24 @@ public final class NetStats
      * carries its checksum the result is 0 when the checksum is right; over one whose checksum field is 0 it
      * is the value to store there.
      */
-    public static int l4Cksum(int proto, long seg, int len, long srcIp, long dstIp)
+    public static int l4Cksum(int proto, Address seg, int len, Address srcIp, Address dstIp)
     {
-        Address srcA = Address.fromLong(srcIp);
-        Address dstA = Address.fromLong(dstIp);
-        Address segA = Address.fromLong(seg);
         int sum = 0;
-        sum = sum + (((srcA.loadUnsignedByte() & 0xFF) << 8) | (srcA.plus(1).loadUnsignedByte() & 0xFF));
-        sum = sum + (((srcA.plus(2).loadUnsignedByte() & 0xFF) << 8) | (srcA.plus(3).loadUnsignedByte() & 0xFF));
-        sum = sum + (((dstA.loadUnsignedByte() & 0xFF) << 8) | (dstA.plus(1).loadUnsignedByte() & 0xFF));
-        sum = sum + (((dstA.plus(2).loadUnsignedByte() & 0xFF) << 8) | (dstA.plus(3).loadUnsignedByte() & 0xFF));
+        sum = sum + (((srcIp.loadUnsignedByte() & 0xFF) << 8) | (srcIp.plus(1).loadUnsignedByte() & 0xFF));
+        sum = sum + (((srcIp.plus(2).loadUnsignedByte() & 0xFF) << 8) | (srcIp.plus(3).loadUnsignedByte() & 0xFF));
+        sum = sum + (((dstIp.loadUnsignedByte() & 0xFF) << 8) | (dstIp.plus(1).loadUnsignedByte() & 0xFF));
+        sum = sum + (((dstIp.plus(2).loadUnsignedByte() & 0xFF) << 8) | (dstIp.plus(3).loadUnsignedByte() & 0xFF));
         sum = sum + proto;                               // zero byte + protocol
         sum = sum + len;
         int i = 0;
         while (i + 1 < len)
         {
-            sum = sum + (((segA.plus(i).loadUnsignedByte() & 0xFF) << 8) | (segA.plus(i + 1).loadUnsignedByte() & 0xFF));
+            sum = sum + (((seg.plus(i).loadUnsignedByte() & 0xFF) << 8) | (seg.plus(i + 1).loadUnsignedByte() & 0xFF));
             i = i + 2;
         }
         if (i < len)
         {
-            sum = sum + ((segA.plus(i).loadUnsignedByte() & 0xFF) << 8);   // odd trailing byte
+            sum = sum + ((seg.plus(i).loadUnsignedByte() & 0xFF) << 8);    // odd trailing byte
         }
         while ((sum >> 16) != 0)
         {
@@ -234,24 +227,23 @@ public final class NetStats
     }
 
     /** Count one transmitted 802.3 frame ({@code frame}, {@code len} bytes) by its ethertype and protocol. */
-    public static void out(long frame, int len)
+    public static void out(Address frame, int len)
     {
         if (len < 34)
         {
             return;
         }
-        Address frameA = Address.fromLong(frame);
-        int et = ((frameA.plus(12).loadUnsignedByte() & 0xFF) << 8) | (frameA.plus(13).loadUnsignedByte() & 0xFF);
+        int et = ((frame.plus(12).loadUnsignedByte() & 0xFF) << 8) | (frame.plus(13).loadUnsignedByte() & 0xFF);
         if (et != 0x0800)
         {
             return;
         }
         ipOutRequests = ipOutRequests + 1;
-        int proto = frameA.plus(14 + 9).loadUnsignedByte() & 0xFF;
+        int proto = frame.plus(14 + 9).loadUnsignedByte() & 0xFF;
         if (proto == 6)
         {
             tcpOutSegs = tcpOutSegs + 1;
-            if ((frameA.plus(14 + ((frameA.plus(14).loadUnsignedByte() & 0x0F) * 4) + 13).loadUnsignedByte() & 0x04) != 0)
+            if ((frame.plus(14 + ((frame.plus(14).loadUnsignedByte() & 0x0F) * 4) + 13).loadUnsignedByte() & 0x04) != 0)
             {
                 tcpOutRsts = tcpOutRsts + 1;
             }

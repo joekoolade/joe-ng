@@ -43,8 +43,8 @@ public final class Sntp
     /** Ask, and set the clock from the answer. Prints one {@code clock:} line saying which source it now runs on. */
     public static void sync()
     {
-        long ip = Heap.allocData(4).toLong();
-        if (!board.cyw43.Cyw43.dnsResolve(Magic.bytes("pool.ntp.org"), Address.fromLong(ip)))  // the NTP pool's round-robin name
+        Address ip = Heap.allocData(4);
+        if (!board.cyw43.Cyw43.dnsResolve(Magic.bytes("pool.ntp.org"), ip))                    // the NTP pool's round-robin name
         {
             Uart.write(Magic.bytes("clock: no DNS answer for pool.ntp.org -- stays at the commit time + uptime\n"));
             return;
@@ -74,10 +74,10 @@ public final class Sntp
     }
 
     /** One SNTP exchange with {@code serverIp}, resent every second for 5 s; the time now in ms, or 0. */
-    private static long query(long serverIp)
+    private static long query(Address serverIp)
     {
-        long buf = Heap.allocData(128).toLong();
-        long rx = Heap.allocData(2048).toLong();
+        Address buf = Heap.allocData(128);
+        Address rx = Heap.allocData(2048);
         long freq = Magic.readCNTFRQ_EL0();
         long endT = Magic.readCNTPCT_EL0() + freq * 5L;
         long nextSend = 0L;
@@ -99,34 +99,33 @@ public final class Sntp
                 Ip.send(buf, flen);
                 nextSend = now + freq;
             }
-            long ip = Ip.recvIp(q, rx, 2048, RX_WAIT_MS);
-            if (ip == 0L)
+            Address ip = Ip.recvIp(q, rx, 2048, RX_WAIT_MS);
+            if (ip.isZero())
             {
                 continue;
             }
-            if ((Address.fromLong(ip).plus(9).loadUnsignedByte() & 0xFF) != 17 || !Ip.eq(ip + 12, serverIp))
+            if ((ip.plus(9).loadUnsignedByte() & 0xFF) != 17 || !Ip.eq(ip.plus(12), serverIp))
             {
                 continue;                                // not UDP, or not from the server
             }
-            long udp = ip + Ip.lastIhl;
-            if (be16(udp) != NTP_PORT || be16(udp + 2) != localPort || be16(udp + 4) < 8 + 48)
+            Address udp = ip.plus(Ip.lastIhl);
+            if (be16(udp) != NTP_PORT || be16(udp.plus(2)) != localPort || be16(udp.plus(4)) < 8 + 48)
             {
                 continue;
             }
-            long m = udp + 8;
-            Address mA = Address.fromLong(m);
-            int b0 = mA.loadUnsignedByte() & 0xFF;
+            Address m = udp.plus(8);
+            int b0 = m.loadUnsignedByte() & 0xFF;
             int vn = (b0 >> 3) & 7;
-            if ((b0 & 7) != 4 || vn < 3 || vn > 4 || (mA.plus(1).loadUnsignedByte() & 0xFF) == 0)
+            if ((b0 & 7) != 4 || vn < 3 || vn > 4 || (m.plus(1).loadUnsignedByte() & 0xFF) == 0)
             {
                 continue;                                // not a server reply, or a kiss-o'-death
             }
-            if ((Ip.readBe32(m + 24) & 0xFFFFFFFFL) != stampHi || (Ip.readBe32(m + 28) & 0xFFFFFFFFL) != stampLo)
+            if ((Ip.readBe32(m.plus(24)) & 0xFFFFFFFFL) != stampHi || (Ip.readBe32(m.plus(28)) & 0xFFFFFFFFL) != stampLo)
             {
                 continue;                                // not the answer to our last request
             }
-            long secs = Ip.readBe32(m + 40) & 0xFFFFFFFFL;
-            long frac = Ip.readBe32(m + 44) & 0xFFFFFFFFL;
+            long secs = Ip.readBe32(m.plus(40)) & 0xFFFFFFFFL;
+            long frac = Ip.readBe32(m.plus(44)) & 0xFFFFFFFFL;
             if (secs == 0L)
             {
                 continue;
@@ -143,52 +142,48 @@ public final class Sntp
      * An Ethernet/IPv4/UDP/NTP client request from {@code localPort} to {@code serverIp} in {@code buf}; returns the
      * frame length.
      */
-    private static int build(long buf, long serverIp, int localPort, int stampHi, int stampLo)
+    private static int build(Address buf, Address serverIp, int localPort, int stampHi, int stampLo)
     {
-        Address bufA = Address.fromLong(buf);
         int i = 0;
         while (i < 6)
         {
-            bufA.plus(i).store((byte) Address.fromLong(Ip.gwMac).plus(i).loadUnsignedByte());       // off-subnet: to the gateway
-            bufA.plus(6 + i).store((byte) Address.fromLong(Ip.ourMac).plus(i).loadUnsignedByte());
+            buf.plus(i).store((byte) Ip.gwMac.plus(i).loadUnsignedByte());                          // off-subnet: to the gateway
+            buf.plus(6 + i).store((byte) Ip.ourMac.plus(i).loadUnsignedByte());
             i = i + 1;
         }
-        Ip.be16(buf + 12, 0x0800);
-        long ip = buf + 14;
-        long udp = buf + 34;
-        long m = buf + 42;
-        Address ipA = Address.fromLong(ip);
-        Address mA = Address.fromLong(m);
+        Ip.be16(buf.plus(12), 0x0800);
+        Address ip = buf.plus(14);
+        Address udp = buf.plus(34);
+        Address m = buf.plus(42);
         i = 0;
         while (i < 48)
         {
-            mA.plus(i).store((byte) 0);
+            m.plus(i).store((byte) 0);
             i = i + 1;
         }
-        mA.store((byte) 0x23);                           // LI 0, version 4, mode 3 (client)
-        Ip.be32(m + 40, stampHi);                        // transmit timestamp, echoed as the reply's originate
-        Ip.be32(m + 44, stampLo);
-        Ip.be16(udp + 0, localPort);
-        Ip.be16(udp + 2, NTP_PORT);
-        Ip.be16(udp + 4, 8 + 48);
-        Ip.be16(udp + 6, 0);                             // no UDP checksum (allowed over IPv4)
-        ipA.plus(0).store((byte) 0x45);
-        ipA.plus(1).store((byte) 0);
-        Ip.be16(ip + 2, 20 + 8 + 48);
-        Ip.be16(ip + 4, 0);
-        Ip.be16(ip + 6, 0);
-        ipA.plus(8).store((byte) 64);
-        ipA.plus(9).store((byte) 17);                        // UDP
-        Ip.be16(ip + 10, 0);
-        Ip.copy4(Ip.ourIp, ip + 12);
-        Ip.copy4(serverIp, ip + 16);
-        Ip.be16(ip + 10, Ip.cksum(ip, 20));
+        m.store((byte) 0x23);                            // LI 0, version 4, mode 3 (client)
+        Ip.be32(m.plus(40), stampHi);                    // transmit timestamp, echoed as the reply's originate
+        Ip.be32(m.plus(44), stampLo);
+        Ip.be16(udp.plus(0), localPort);
+        Ip.be16(udp.plus(2), NTP_PORT);
+        Ip.be16(udp.plus(4), 8 + 48);
+        Ip.be16(udp.plus(6), 0);                         // no UDP checksum (allowed over IPv4)
+        ip.plus(0).store((byte) 0x45);
+        ip.plus(1).store((byte) 0);
+        Ip.be16(ip.plus(2), 20 + 8 + 48);
+        Ip.be16(ip.plus(4), 0);
+        Ip.be16(ip.plus(6), 0);
+        ip.plus(8).store((byte) 64);
+        ip.plus(9).store((byte) 17);                         // UDP
+        Ip.be16(ip.plus(10), 0);
+        Ip.copy4(Ip.ourIp, ip.plus(12));
+        Ip.copy4(serverIp, ip.plus(16));
+        Ip.be16(ip.plus(10), Ip.cksum(ip, 20));
         return 14 + 20 + 8 + 48;
     }
 
-    private static int be16(long addr)
+    private static int be16(Address a)
     {
-        Address a = Address.fromLong(addr);
         return ((a.loadUnsignedByte() & 0xFF) << 8) | (a.plus(1).loadUnsignedByte() & 0xFF);
     }
 
@@ -240,9 +235,8 @@ public final class Sntp
         Uart.putc(0x30 + (int) (v % 10L));
     }
 
-    private static void printIp(long addr)
+    private static void printIp(Address a)
     {
-        Address a = Address.fromLong(addr);
         int i = 0;
         while (i < 4)
         {

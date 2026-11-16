@@ -133,7 +133,7 @@ public final class WlanPoll
                 Cyw43.glomNext(Address.zero(), 0);                   // no buffer: drop this subframe
                 continue;
             }
-            int len = Cyw43.glomNext(Address.fromLong(net.RxQueues.bufAddr(b)), net.RxQueues.FRAME);
+            int len = Cyw43.glomNext(net.RxQueues.bufAddr(b), net.RxQueues.FRAME);
             if (len == 0)
             {
                 net.RxQueues.freeBuf(b);                 // only malformed subframes were left
@@ -157,7 +157,7 @@ public final class WlanPoll
                 VMScheduler.kernelYield();                 // consumers hold every buffer: let them drain
                 continue;
             }
-            Address dst = Address.fromLong(net.RxQueues.bufAddr(b));
+            Address dst = net.RxQueues.bufAddr(b);
             busLock();
             long s0 = Magic.readCNTPCT_EL0();
             int len = Cyw43.readFrameOnce(dst, net.RxQueues.FRAME);

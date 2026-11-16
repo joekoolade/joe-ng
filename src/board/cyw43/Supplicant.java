@@ -80,13 +80,13 @@ public final class Supplicant
      * An EAPOL frame on the RX task. {@code eth} is the 802.3 header, {@code len} the bytes from it to the
      * end of the frame.
      */
-    public static void input(long eth, int len)
+    public static void input(Address eth, int len)
     {
         if (!ready || len < 14 + 99)
         {
             return;
         }
-        Address body = Address.fromLong(eth).plus(14);
+        Address body = eth.plus(14);
         if ((body.plus(1).loadUnsignedByte() & 0xFF) != 3)        // not EAPOL-Key
         {
             return;
@@ -98,7 +98,7 @@ public final class Supplicant
             return;
         }
         int ki = ((body.plus(5).loadUnsignedByte() & 0xFF) << 8) | (body.plus(6).loadUnsignedByte() & 0xFF);
-        byte[] aa = Cyw43.heapBytes(Address.fromLong(eth).plus(6), 6);         // the AP's MAC (Ethernet source)
+        byte[] aa = Cyw43.heapBytes(eth.plus(6), 6);                           // the AP's MAC (Ethernet source)
         if ((ki & KI_ACK) == 0)
         {
             return;                                      // not from the authenticator

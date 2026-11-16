@@ -4,6 +4,31 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 21: the network stack's buffer pointers are Address (2026-11-16).** Pi-validated
+  (build 75ddc0e315b1e4e1). The follow-on of increment 20: `net/` was the long-typed side of every Cyw43 boundary.
+  - **Retyped (host memory only):** `Ip.ourMac`/`ourIp`/`netMask`/`gwMac` (Cyw43 assigns them directly now);
+    `Tcp.ring`/`rip`/`rmac` are `AddressArray`, created together on first use in `Tcp.allocLocked` (an AddressArray
+    static cannot have an initializer) -- every other read is for a slot that has left FREE, and only
+    `allocLocked` takes a slot out of FREE; `Tcp.syncRx`, `RxQueues.pool`; the pointer parameters of `Ip.send`,
+    `recvIp` x2 (return Address), `answerArp`, `cksum`, `be16`, `be32`, `readBe32`, `eq`, `copy4`; `Tcp.connect(Address,
+    int)`, `read`/`write`'s buffer, `input`; `RxQueues.bufAddr` (returns Address), `recv`'s `dst`; `NetStats.ipIn`,
+    `rxSync`, `udpOk`, `l4Cksum`, `out`; every packet pointer in Tcp's and Sntp's private helpers; `Supplicant.input`
+    (its one caller is `RxQueues.dispatch`). Pointer differences are `ip.diff(rx).toInt()`; the empty payload of a
+    control segment is `Address.zero()`.
+  - **Left long, deliberately:** times (`synAt`/`closeAt` stay `long[]`), counters, lengths, sequence numbers, ports,
+    handles, `rngState`; `ipBe` (an IP held as a VALUE, `connect(int, int, int)` unchanged); `fdRef` (an object
+    reference); the socket natives' own `(J...)` signatures -- `sockRead0`/`sockWrite0` wrap `address` once at the
+    call into `Tcp.read`/`write`.
+  - **Measured:** conversions Ip 20 -> **0**, Tcp 22 -> **0**, Sntp 13 -> **0**, NetStats 10 -> **0**, RxQueues 8 -> **0**,
+    Cyw43 29 -> 15 (the rest are `Sdio.cmd53*`/`txqBuf` and the 2 signed ordering compares), WlanPoll 2 -> 0,
+    Supplicant 2 -> 0, VMNatives 70 -> 67. Load/store mix identical to main in all 9 classes. No `if_acmp`, no
+    unsigned `Address.LT/GT`; 9 `lcmp` zero tests became `isZero()`. **Code size:** -361 words (Ip 983 -> 880, Tcp
+    7492 -> 7385, NetStats 1368 -> 1284, Sntp -32, VMNatives -15, RxQueues -14, Supplicant -6; Cyw43 and WlanPoll
+    unchanged). No `helper-stash MISS`.
+  - **Validation:** `make test` + overlaycheck; full regression **209/209**. Pi (every HTTP request is `net.Tcp`): the
+    push's trial boot, every page 200, hello x2, Boom stack trace, bench, forced stop, AddressFieldProbe 36/0,
+    DnsCheck via `/run` (resolved 172.234.25.10), the SNTP-set wall clock on `/`, SHA-256 check, staged 39 MB PUT +
+    discard, `/net` InHdrErrors 0 / InErrs 0 / InCsumErrors 0 / RetransSegs 0.
 - **UNBOXED TYPES, INCREMENT 20: the WiFi driver's buffer pointers are Address (2026-11-16).** Pi-validated
   (build 98dcdcd40a0d203a). Increment 4 converted Cyw43's loads and stores but kept every signature `long`; this is
   the other half. (VMGc, planned next, was measured first and deferred: its remaining wraps are mostly fixed-address

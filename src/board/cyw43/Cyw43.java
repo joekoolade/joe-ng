@@ -534,7 +534,7 @@ public final class Cyw43
             int sub = glomNext(dst, cap);                // the rest of a superframe read earlier
             if (sub > 0)
             {
-                net.NetStats.rxSync(dst.toLong(), sub);
+                net.NetStats.rxSync(dst, sub);
                 return sub;
             }
         }
@@ -554,7 +554,7 @@ public final class Cyw43
                 len = glomNext(dst, cap);
             }
         }
-        net.NetStats.rxSync(dst.toLong(), len);
+        net.NetStats.rxSync(dst, len);
         int ints = bpRead32(SDIOD_CORE + SD_INTSTATUS);
         serviceInts(ints);                               // mailbox ACK + flow control, before the status is cleared
         bpWrite32(SDIOD_CORE + SD_INTSTATUS, ints & ~SD_FCSTATE);   // write-1-to-clear (FC_STATE is a level)
@@ -1454,7 +1454,7 @@ public final class Cyw43
             i = i + 1;
         }
         int total = 12 + 4 + flen;
-        net.NetStats.out(frame.toLong(), flen);
+        net.NetStats.out(frame, flen);
         store16(tx.plus(0), total);
         store16(tx.plus(2), ~total);
         sendFrame(tx, total);
@@ -1721,10 +1721,10 @@ public final class Cyw43
             return;
         }
         // Publish the interface config to the reusable stack (net.*): net.Tcp and the M3 socket layer read it.
-        net.Ip.ourMac = ourMac.toLong();
-        net.Ip.ourIp = ourIp.toLong();
-        net.Ip.netMask = snMask.toLong();
-        net.Ip.gwMac = gwMac.toLong();
+        net.Ip.ourMac = ourMac;
+        net.Ip.ourIp = ourIp;
+        net.Ip.netMask = snMask;
+        net.Ip.gwMac = gwMac;
         board.bcm2711.Uart.write(Magic.bytes("wifi: gateway mac "));
         int i = 0;
         while (i < 6)
@@ -1789,7 +1789,7 @@ public final class Cyw43
     {
         // The TCP state machine now lives in the reusable net.Tcp stack; this is just an HTTP client over it
         // (and the pattern the M3 java.net.Socket path will follow through the VM socket helpers).
-        int h = net.Tcp.connect(serverIp.toLong(), 80);
+        int h = net.Tcp.connect(serverIp, 80);
         if (h < 0)
         {
             board.bcm2711.Uart.write(Magic.bytes("wifi: tcp no synack\n"));
@@ -1799,14 +1799,14 @@ public final class Cyw43
 
         Address req = Heap.allocData(256);
         int reqLen = buildHttpReq(req, host);
-        net.Tcp.write(h, req.toLong(), 0, reqLen);
+        net.Tcp.write(h, req, 0, reqLen);
         board.bcm2711.Uart.write(Magic.bytes("wifi: GET sent -----\n"));
 
         Address rxbuf = Heap.allocData(2048);
         int total = 0;
         while (true)
         {
-            int n = net.Tcp.read(h, rxbuf.toLong(), 0, 2048);
+            int n = net.Tcp.read(h, rxbuf, 0, 2048);
             if (n <= 0)                                  // n<0 = peer FIN/EOF, n==0 = timeout with no data
             {
                 break;
@@ -2044,7 +2044,7 @@ public final class Cyw43
             int et = (eth.plus(12).loadUnsignedByte() & 0xFF) << 8 | (eth.plus(13).loadUnsignedByte() & 0xFF);
             if (et == 0x0806)
             {
-                net.Ip.answerArp(eth.toLong());                   // a stale gateway re-verifies us mid-query
+                net.Ip.answerArp(eth);                            // a stale gateway re-verifies us mid-query
                 continue;
             }
             if (et != 0x0800)
@@ -2053,7 +2053,7 @@ public final class Cyw43
             }
             ipv4 = ipv4 + 1;
             Address ip = eth.plus(14);
-            if ((ip.plus(9).loadUnsignedByte() & 0xFF) != 17 || !net.Ip.eq(ip.plus(12).toLong(), dnsIp.toLong()))
+            if ((ip.plus(9).loadUnsignedByte() & 0xFF) != 17 || !net.Ip.eq(ip.plus(12), dnsIp))
             {
                 continue;                                // not UDP, or not from our DNS server
             }
@@ -2888,7 +2888,7 @@ public final class Cyw43
                 vm.VMScheduler.kernelSleep(RX_WAIT_MS);  // no queue could be bound (table full): nothing
                 return 0;                                //   can arrive for this consumer
             }
-            return net.RxQueues.recv(q, dst.toLong(), cap, RX_WAIT_MS);
+            return net.RxQueues.recv(q, dst, cap, RX_WAIT_MS);
         }
         return waitFrameIrq(dst, cap, RX_WAIT_MS);
     }

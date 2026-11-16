@@ -12,6 +12,7 @@
 package net;
 
 import magic.Address;
+import magic.AddressArray;
 import magic.Magic;
 import vm.Heap;
 import vm.VM;
@@ -81,7 +82,7 @@ public final class Tcp
     public static final int ECONNREFUSED = 111;
 
     private static int[]  st    = new int[MAXCONN];   // slot state
-    private static long[] rip   = new long[MAXCONN];  // remote IPv4 (4-byte heap buf)
+    private static AddressArray rip;                  // remote IPv4 (4-byte heap buf); created by allocLocked
     private static int[]  rport = new int[MAXCONN];   // remote port
     private static int[]  lport = new int[MAXCONN];   // local (ephemeral) port
     private static int[]  snd   = new int[MAXCONN];   // our next send sequence number
@@ -91,7 +92,7 @@ public final class Tcp
     private static int[]  finIn = new int[MAXCONN];   // 1 = the peer's FIN is accepted (counted in rcv, not data)
     private static int[]  finPend = new int[MAXCONN]; // 1 = a FIN arrived past a hole; finAt is its sequence
     private static int[]  finAt = new int[MAXCONN];
-    private static long[] ring  = new long[MAXCONN];  // RCVBUF-byte receive ring, indexed by sequence number
+    private static AddressArray ring;                 // RCVBUF-byte receive ring, indexed by sequence number
     private static int[]  holeS = new int[MAXCONN * MAXHOLE];   // out-of-order runs [holeS, holeE) held in
     private static int[]  holeE = new int[MAXCONN * MAXHOLE];   //   the ring past rcv
     private static int[]  holes = new int[MAXCONN];
@@ -109,14 +110,14 @@ public final class Tcp
     private static int[]  pisn  = new int[MAXCONN];   // the peer's ISN (0 until the SYN-ACK)
 
     private static int[]  parent = new int[MAXCONN];  // a child's listener until accept() takes it, else -1
-    private static long[] rmac  = new long[MAXCONN];  // the peer's 6-byte MAC (heap buf)
+    private static AddressArray rmac;                 // the peer's 6-byte MAC (heap buf)
     private static int[]  useRmac = new int[MAXCONN]; // 1 = send to rmac (a child: the SYN's source MAC)
     private static long[] synAt = new long[MAXCONN];  // CNTPCT when a child's SYN arrived (for reaping)
     private static int[] orphan = new int[MAXCONN];    // 1: the socket is closed; the stack finishes its FIN exchange
     private static long[] closeAt = new long[MAXCONN]; // CNTPCT when an orphan's socket was closed
 
     private static int lock = -1;                     // one mutex over the whole table (-1: before init, no-op)
-    private static long syncRx;                       // receive buffer for the pre-RX-task path
+    private static Address syncRx;                    // receive buffer for the pre-RX-task path
 
     /** {@code sun.nio.ch.IOStatus.UNAVAILABLE}: a non-blocking read found nothing to return yet. */
     public static final int UNAVAILABLE = -2;
@@ -175,6 +176,12 @@ public final class Tcp
     {
         long now = Magic.readCNTPCT_EL0();
         long limit = Magic.readCNTFRQ_EL0() * CLOSE_MS / 1000L;
+        if (ring == null)                                // no initializer: an AddressArray cannot be created on
+        {                                                //   the host JVM, where the writer runs <clinit>
+            ring = AddressArray.create(MAXCONN);
+            rip = AddressArray.create(MAXCONN);
+            rmac = AddressArray.create(MAXCONN);
+        }
         int i = 0;
         while (i < MAXCONN)
         {
@@ -185,11 +192,11 @@ public final class Tcp
             if (st[i] == FREE)
             {
                 orphan[i] = 0;
-                if (ring[i] == 0L)
+                if (ring.get(i).isZero())
                 {
-                    ring[i] = Heap.allocData(RCVBUF).toLong();
-                    rip[i] = Heap.allocData(4).toLong();
-                    rmac[i] = Heap.allocData(6).toLong();
+                    ring.set(i, Heap.allocData(RCVBUF));
+                    rip.set(i, Heap.allocData(4));
+                    rmac.set(i, Heap.allocData(6));
                 }
                 st[i] = RESERVED;
                 lport[i] = 0;
@@ -340,7 +347,7 @@ public final class Tcp
         {
             return 0;
         }
-        return Ip.readBe32(rip[h]);
+        return Ip.readBe32(rip.get(h));
     }
 
     /** The remote port of connection {@code h}. */
@@ -402,13 +409,13 @@ public final class Tcp
         {
             return -ECONNREFUSED;                        // 127/8: no socket on this VM listens
         }
-        if (Ip.ourIp == 0L)
+        if (Ip.ourIp.isZero())
         {
             return -ENETUNREACH;                         // no interface is up (no WiFi, or QEMU)
         }
         int isn = (int) Ip.nextRandom();                // a fresh initial sequence number
         lock();
-        Address ripA = Address.fromLong(rip[h]);
+        Address ripA = rip.get(h);
         ripA.plus(0).store((byte) ((ipBe >> 24) & 0xFF));
         ripA.plus(1).store((byte) ((ipBe >> 16) & 0xFF));
         ripA.plus(2).store((byte) ((ipBe >> 8) & 0xFF));
@@ -455,7 +462,7 @@ public final class Tcp
             if (now >= nextSend)
             {
                 snd[h] = isn;
-                sendSeg(h, 0x02, 0L, 0);                 // SYN (with our MSS)
+                sendSeg(h, 0x02, Address.zero(), 0);     // SYN (with our MSS)
                 snd[h] = isn + 1;
                 syns = syns + 1;
                 if (syns > 1)
@@ -485,7 +492,7 @@ public final class Tcp
 
     /** Convenience for driver code (e.g. the WiFi HTTP demo): allocate + connect to a 4-byte IPv4 at
      *  {@code ipAddr}. Returns a connection handle, or -1 on failure. */
-    public static int connect(long ipAddr, int port)
+    public static int connect(Address ipAddr, int port)
     {
         int h = alloc();
         if (h < 0)
@@ -506,7 +513,7 @@ public final class Tcp
      * that never connected, -EBADF on a bad handle. Never -1: NioSocketImpl adds the result to its offset, and a
      * -1 (its EOF code, which no native write returns) made the next put run at offset -1 (Pi run 7/8 IOOBE).
      */
-    public static int write(int h, long buf, int off, int len)
+    public static int write(int h, Address buf, int off, int len)
     {
         if (h < 0 || h >= MAXCONN || st[h] == FREE)
         {
@@ -540,7 +547,7 @@ public final class Tcp
         {
             n = OUR_MSS;
         }
-        sendSeg(h, 0x18, buf + off, n);                 // PSH|ACK
+        sendSeg(h, 0x18, buf.plus(off), n);             // PSH|ACK
         snd[h] = snd[h] + n;
         unlock();
         return n;
@@ -553,7 +560,7 @@ public final class Tcp
      * time limit, as {@code read(2)} does -- {@code setSoTimeout} bounds it through {@link #poll}. A NON-blocking
      * socket answers {@link #UNAVAILABLE} when nothing has arrived.
      */
-    public static int read(int h, long buf, int off, int len)
+    public static int read(int h, Address buf, int off, int len)
     {
         if (h < 0 || h >= MAXCONN || st[h] == FREE)
         {
@@ -571,7 +578,7 @@ public final class Tcp
             if (avail > 0)
             {
                 long c0 = Magic.readCNTPCT_EL0();
-                int n = copyOut(h, buf + off, avail < len ? avail : len);
+                int n = copyOut(h, buf.plus(off), avail < len ? avail : len);
                 NetStats.tcpAppCopyTicks = NetStats.tcpAppCopyTicks + (Magic.readCNTPCT_EL0() - c0);
                 NetStats.tcpAppReads = NetStats.tcpAppReads + 1;
                 unlock();
@@ -699,7 +706,7 @@ public final class Tcp
         lock();
         if (st[h] == CONNECTED && finOut[h] == 0)
         {
-            sendSeg(h, 0x11, 0L, 0);                     // FIN|ACK
+            sendSeg(h, 0x11, Address.zero(), 0);         // FIN|ACK
             snd[h] = snd[h] + 1;
             finOut[h] = 1;
         }
@@ -723,7 +730,7 @@ public final class Tcp
             {
                 if (parent[i] == h && st[i] != FREE)
                 {
-                    sendSeg(i, 0x14, 0L, 0);             // RST|ACK: nobody will accept it now
+                    sendSeg(i, 0x14, Address.zero(), 0); // RST|ACK: nobody will accept it now
                     st[i] = FREE;
                     parent[i] = -1;
                 }
@@ -764,7 +771,7 @@ public final class Tcp
         }
         if (how != 0 && st[h] == CONNECTED && finOut[h] == 0)
         {
-            sendSeg(h, 0x11, 0L, 0);                     // FIN|ACK
+            sendSeg(h, 0x11, Address.zero(), 0);         // FIN|ACK
             snd[h] = snd[h] + 1;
             finOut[h] = 1;
         }
@@ -802,35 +809,34 @@ public final class Tcp
      * ({@link RxQueues#dispatch}); the frame's buffer is reused when this returns, so everything kept is
      * copied. Checks the TCP checksum, finds the connection, applies the segment and wakes a waiting reader.
      */
-    public static void input(long ip, int ipTotal)
+    public static void input(Address ip, int ipTotal)
     {
-        int ihl = (Address.fromLong(ip).loadUnsignedByte() & 0x0F) * 4;
-        long tcp = ip + ihl;
-        Address tcpA = Address.fromLong(tcp);
+        int ihl = (ip.loadUnsignedByte() & 0x0F) * 4;
+        Address tcp = ip.plus(ihl);
         int tlen = ipTotal - ihl;
         if (tlen < 20)
         {
             NetStats.tcpInErrs = NetStats.tcpInErrs + 1;
             return;
         }
-        int dataOff = ((tcpA.plus(12).loadUnsignedByte() >> 4) & 0x0F) * 4;
+        int dataOff = ((tcp.plus(12).loadUnsignedByte() >> 4) & 0x0F) * 4;
         if (dataOff < 20 || dataOff > tlen)
         {
             NetStats.tcpInErrs = NetStats.tcpInErrs + 1;
             return;
         }
-        if (NetStats.l4Cksum(6, tcp, tlen, ip + 12, ip + 16) != 0)
+        if (NetStats.l4Cksum(6, tcp, tlen, ip.plus(12), ip.plus(16)) != 0)
         {
             NetStats.tcpInErrs = NetStats.tcpInErrs + 1;
             NetStats.tcpInCsumErrors = NetStats.tcpInCsumErrors + 1;
             return;
         }
-        int sport = ((tcpA.loadUnsignedByte() & 0xFF) << 8) | (tcpA.plus(1).loadUnsignedByte() & 0xFF);
-        int dport = ((tcpA.plus(2).loadUnsignedByte() & 0xFF) << 8) | (tcpA.plus(3).loadUnsignedByte() & 0xFF);
-        int flags = tcpA.plus(13).loadUnsignedByte() & 0x3F;
+        int sport = ((tcp.loadUnsignedByte() & 0xFF) << 8) | (tcp.plus(1).loadUnsignedByte() & 0xFF);
+        int dport = ((tcp.plus(2).loadUnsignedByte() & 0xFF) << 8) | (tcp.plus(3).loadUnsignedByte() & 0xFF);
+        int flags = tcp.plus(13).loadUnsignedByte() & 0x3F;
         int payLen = tlen - dataOff;
         lock();
-        int h = find(ip + 12, sport, dport);
+        int h = find(ip.plus(12), sport, dport);
         if (h < 0)
         {
             int l = (flags & 0x17) == 0x02 ? listener(dport) : -1;   // a bare SYN to a listening port
@@ -880,14 +886,14 @@ public final class Tcp
     }
 
     /** The connection a segment from {@code srcIp}:{@code sport} to our {@code dport} belongs to, or -1. */
-    private static int find(long srcIp, int sport, int dport)
+    private static int find(Address srcIp, int sport, int dport)
     {
         int i = 0;
         while (i < MAXCONN)
         {
             int s = st[i];
             if ((s == SYN_SENT || s == SYN_RCVD || s == CONNECTED || s == CLOSED) && lport[i] == dport && rport[i] == sport
-                    && Ip.eq(srcIp, rip[i]))
+                    && Ip.eq(srcIp, rip.get(i)))
             {
                 return i;
             }
@@ -917,7 +923,7 @@ public final class Tcp
      * on our own subnet is answered directly rather than through the gateway. Dropped -- the peer resends -- when
      * the backlog is full or no slot is free.
      */
-    private static void synArrived(int l, long ip, long tcp, int sport, int dport, int dataOff)
+    private static void synArrived(int l, Address ip, Address tcp, int sport, int dport, int dataOff)
     {
         reapHalfOpen(l);
         if (backlog(l) >= MAXBACKLOG)
@@ -931,18 +937,17 @@ public final class Tcp
             NetStats.tcpAttemptFails = NetStats.tcpAttemptFails + 1;
             return;
         }
-        Ip.copy4(ip + 12, rip[h]);
-        long eth = ip - 14;
-        Address ethA = Address.fromLong(eth);
-        Address rmacA = Address.fromLong(rmac[h]);
+        Ip.copy4(ip.plus(12), rip.get(h));
+        Address eth = ip.minus(14);
+        Address rmacA = rmac.get(h);
         int i = 0;
         while (i < 6)
         {
-            rmacA.plus(i).store((byte) ethA.plus(6 + i).loadUnsignedByte());
+            rmacA.plus(i).store((byte) eth.plus(6 + i).loadUnsignedByte());
             i = i + 1;
         }
         useRmac[h] = 1;
-        int seq = Ip.readBe32(tcp + 4);
+        int seq = Ip.readBe32(tcp.plus(4));
         int isn = (int) Ip.nextRandom();
         rport[h] = sport;
         lport[h] = dport;
@@ -961,7 +966,7 @@ public final class Tcp
         synAt[h] = Magic.readCNTPCT_EL0();
         st[h] = SYN_RCVD;
         snd[h] = isn;
-        sendSeg(h, 0x12, 0L, 0);                         // SYN|ACK (with our MSS)
+        sendSeg(h, 0x12, Address.zero(), 0);             // SYN|ACK (with our MSS)
         snd[h] = isn + 1;
         NetStats.tcpPassiveOpens = NetStats.tcpPassiveOpens + 1;
     }
@@ -982,7 +987,7 @@ public final class Tcp
             if (parent[i] == l && st[i] == SYN_RCVD && now - synAt[i] > limit)
             {
                 snd[i] = isn0[i] + 1;
-                sendSeg(i, 0x14, 0L, 0);                 // RST|ACK
+                sendSeg(i, 0x14, Address.zero(), 0);     // RST|ACK
                 st[i] = FREE;
                 parent[i] = -1;
                 NetStats.tcpAttemptFails = NetStats.tcpAttemptFails + 1;
@@ -997,14 +1002,14 @@ public final class Tcp
      * had resent it for seconds and then reset, after every request the web server answered. With an ACK the
      * RST takes its sequence from that ACK; without one it is RST|ACK acknowledging the segment.
      */
-    private static void resetFor(long ip, long tcp, int flags, int payLen, int sport, int dport)
+    private static void resetFor(Address ip, Address tcp, int flags, int payLen, int sport, int dport)
     {
         int seq = 0;
         int ack = 0;
         int rflags = 0x04;
         if ((flags & 0x10) != 0)
         {
-            seq = Ip.readBe32(tcp + 8);
+            seq = Ip.readBe32(tcp.plus(8));
         }
         else
         {
@@ -1017,17 +1022,17 @@ public final class Tcp
             {
                 len = len + 1;
             }
-            ack = Ip.readBe32(tcp + 4) + len;
+            ack = Ip.readBe32(tcp.plus(4)) + len;
             rflags = 0x14;
         }
-        sendRaw(ip - 14 + 6, ip + 12, dport, sport, seq, ack, rflags, 0, 0L, 0);
+        sendRaw(ip.minus(14).plus(6), ip.plus(12), dport, sport, seq, ack, rflags, 0, Address.zero(), 0);
     }
 
     /**
      * A segment for a child whose SYN-ACK is out. The ACK of our SYN completes it (true: the caller then takes
      * any data it carries); a resent SYN gets the SYN-ACK again; a RST frees it.
      */
-    private static boolean synRcvd(int h, long tcp, int flags)
+    private static boolean synRcvd(int h, Address tcp, int flags)
     {
         if ((flags & 0x04) != 0)
         {
@@ -1037,16 +1042,16 @@ public final class Tcp
         }
         if ((flags & 0x02) != 0)
         {
-            if (Ip.readBe32(tcp + 4) == pisn[h])         // our SYN-ACK was lost: send it again
+            if (Ip.readBe32(tcp.plus(4)) == pisn[h])     // our SYN-ACK was lost: send it again
             {
                 snd[h] = isn0[h];
-                sendSeg(h, 0x12, 0L, 0);
+                sendSeg(h, 0x12, Address.zero(), 0);
                 snd[h] = isn0[h] + 1;
                 NetStats.tcpRetransSegs = NetStats.tcpRetransSegs + 1;
             }
             return false;
         }
-        if ((flags & 0x10) != 0 && Ip.readBe32(tcp + 8) == isn0[h] + 1)
+        if ((flags & 0x10) != 0 && Ip.readBe32(tcp.plus(8)) == isn0[h] + 1)
         {
             una[h] = isn0[h] + 1;
             st[h] = CONNECTED;
@@ -1062,9 +1067,9 @@ public final class Tcp
     }
 
     /** A segment for a connection whose SYN is out: the SYN-ACK completes it, a RST refuses it. */
-    private static void synSent(int h, long tcp, int flags, int dataOff)
+    private static void synSent(int h, Address tcp, int flags, int dataOff)
     {
-        boolean ackOk = (flags & 0x10) != 0 && Ip.readBe32(tcp + 8) == isn0[h] + 1;
+        boolean ackOk = (flags & 0x10) != 0 && Ip.readBe32(tcp.plus(8)) == isn0[h] + 1;
         if ((flags & 0x04) != 0)                         // RST: refused, if it acknowledges our SYN (RFC 9293)
         {
             if (ackOk)
@@ -1076,14 +1081,14 @@ public final class Tcp
         if ((flags & 0x10) != 0 && !ackOk)               // an ACK of something we never sent: the peer holds an
         {                                                //   old connection on this 4-tuple. RST it (seq = their
             int keep = snd[h];                           //   ack, RFC 9293 3.10.7.3); connect keeps sending SYNs
-            snd[h] = Ip.readBe32(tcp + 8);
-            sendSeg(h, 0x04, 0L, 0);
+            snd[h] = Ip.readBe32(tcp.plus(8));
+            sendSeg(h, 0x04, Address.zero(), 0);
             snd[h] = keep;
             return;
         }
         if ((flags & 0x12) == 0x12)                      // SYN|ACK of our SYN
         {
-            int seq = Ip.readBe32(tcp + 4);
+            int seq = Ip.readBe32(tcp.plus(4));
             pisn[h] = seq;
             rcv[h] = seq + 1;                            // their ISN + 1
             rdSeq[h] = seq + 1;
@@ -1091,18 +1096,17 @@ public final class Tcp
             una[h] = snd[h];
             peerMss[h] = mssOption(tcp, dataOff);
             st[h] = CONNECTED;
-            sendSeg(h, 0x10, 0L, 0);                     // ACK: the handshake's third segment (Pi run 9)
+            sendSeg(h, 0x10, Address.zero(), 0);         // ACK: the handshake's third segment (Pi run 9)
         }
     }
 
     /** The MSS option in a SYN-ACK's options ({@code tcp+20 .. tcp+dataOff}), or 536 (RFC 9293) without one. */
-    private static int mssOption(long tcp, int dataOff)
+    private static int mssOption(Address tcp, int dataOff)
     {
-        Address tcpA = Address.fromLong(tcp);
         int p = 20;
         while (p < dataOff)
         {
-            int kind = tcpA.plus(p).loadUnsignedByte() & 0xFF;
+            int kind = tcp.plus(p).loadUnsignedByte() & 0xFF;
             if (kind == 0)
             {
                 break;                                   // end of options
@@ -1116,14 +1120,14 @@ public final class Tcp
             {
                 break;
             }
-            int olen = tcpA.plus(p + 1).loadUnsignedByte() & 0xFF;
+            int olen = tcp.plus(p + 1).loadUnsignedByte() & 0xFF;
             if (olen < 2)
             {
                 break;                                   // malformed: stop
             }
             if (kind == 2 && olen == 4 && p + 4 <= dataOff)
             {
-                return ((tcpA.plus(p + 2).loadUnsignedByte() & 0xFF) << 8) | (tcpA.plus(p + 3).loadUnsignedByte() & 0xFF);
+                return ((tcp.plus(p + 2).loadUnsignedByte() & 0xFF) << 8) | (tcp.plus(p + 3).loadUnsignedByte() & 0xFF);
             }
             p = p + olen;
         }
@@ -1131,15 +1135,15 @@ public final class Tcp
     }
 
     /** A segment for an established (or peer-closed) connection. */
-    private static void established(int h, long tcp, int flags, int payLen, int dataOff)
+    private static void established(int h, Address tcp, int flags, int payLen, int dataOff)
     {
-        int segSeq = Ip.readBe32(tcp + 4);
+        int segSeq = Ip.readBe32(tcp.plus(4));
         if ((flags & 0x12) == 0x12)
         {
             if (segSeq == pisn[h])                       // a retransmitted SYN-ACK: our handshake ACK was lost --
             {                                            //   send it again (RFC 9293 3.10.7.4)
                 NetStats.tcpSynAckRetrans = NetStats.tcpSynAckRetrans + 1;
-                sendSeg(h, 0x10, 0L, 0);
+                sendSeg(h, 0x10, Address.zero(), 0);
             }
             return;
         }
@@ -1157,7 +1161,7 @@ public final class Tcp
             else if (st[h] == CONNECTED && segSeq - rcv[h] > 0 && segSeq - rcv[h] < window(h))
             {
                 NetStats.tcpChallengeAcks = NetStats.tcpChallengeAcks + 1;
-                sendSeg(h, 0x10, 0L, 0);                 // in the window but not exact: a challenge ACK
+                sendSeg(h, 0x10, Address.zero(), 0);     // in the window but not exact: a challenge ACK
             }
             else
             {
@@ -1167,7 +1171,7 @@ public final class Tcp
         }
         if ((flags & 0x10) != 0)
         {
-            int ack = Ip.readBe32(tcp + 8);
+            int ack = Ip.readBe32(tcp.plus(8));
             if (ack - una[h] > 0 && ack - snd[h] <= 0)
             {
                 una[h] = ack;
@@ -1181,17 +1185,17 @@ public final class Tcp
         if (st[h] == CLOSED)                             // the peer resends after we closed: ACK what we have
         {
             NetStats.tcpDupAcksOut = NetStats.tcpDupAcksOut + 1;
-            sendSeg(h, 0x10, 0L, 0);
+            sendSeg(h, 0x10, Address.zero(), 0);
             return;
         }
-        receive(h, tcp + dataOff, segSeq, payLen, fin);
+        receive(h, tcp.plus(dataOff), segSeq, payLen, fin);
     }
 
     /**
      * Take the payload ({@code len} bytes at {@code data}, sequence {@code seq}) and FIN of one segment into
      * connection {@code h}'s ring, advance {@code rcv} over everything now contiguous, and ACK.
      */
-    private static void receive(int h, long data, int seq, int len, boolean fin)
+    private static void receive(int h, Address data, int seq, int len, boolean fin)
     {
         int finSeq = seq + len;                          // where a FIN on this segment sits
         boolean dup = false;
@@ -1207,7 +1211,7 @@ public final class Tcp
             else
             {
                 NetStats.tcpPartialDup = NetStats.tcpPartialDup + 1;
-                data = data - off;                       // trim the front we already have
+                data = data.minus(off);                  // trim the front we already have
                 len = len + off;
                 seq = rcv[h];
                 off = 0;
@@ -1252,11 +1256,11 @@ public final class Tcp
             rcv[h] = rcv[h] + 1;
             if (finOut[h] != 0)
             {
-                sendSeg(h, 0x10, 0L, 0);                 // ours went out at shutdown(SHUT_WR): ACK its FIN only
+                sendSeg(h, 0x10, Address.zero(), 0);     // ours went out at shutdown(SHUT_WR): ACK its FIN only
             }
             else
             {
-                sendSeg(h, 0x11, 0L, 0);                 // ACK its FIN and send ours (FIN|ACK)
+                sendSeg(h, 0x11, Address.zero(), 0);     // ACK its FIN and send ours (FIN|ACK)
                 snd[h] = snd[h] + 1;
             }
             st[h] = CLOSED;
@@ -1266,42 +1270,38 @@ public final class Tcp
         {
             NetStats.tcpDupAcksOut = NetStats.tcpDupAcksOut + 1;   // a duplicate ACK (RFC 5681 4.2): it tells
         }                                                          //   the sender exactly which byte is missing
-        sendSeg(h, 0x10, 0L, 0);
+        sendSeg(h, 0x10, Address.zero(), 0);
     }
 
     /** Copy {@code n} bytes from {@code src} into connection {@code h}'s ring at sequence {@code seq}. */
-    private static void copyIn(int h, int seq, long src, int n)
+    private static void copyIn(int h, int seq, Address src, int n)
     {
-        long r = ring[h];
-        Address rA = Address.fromLong(r);
-        Address srcA = Address.fromLong(src);
+        Address rA = ring.get(h);
         int idx = seq - (pisn[h] + 1);
         int i = 0;
         while (i < n)
         {
-            rA.plus((idx + i) & RCVMASK).store((byte) srcA.plus(i).loadUnsignedByte());
+            rA.plus((idx + i) & RCVMASK).store((byte) src.plus(i).loadUnsignedByte());
             i = i + 1;
         }
     }
 
     /** Copy {@code n} buffered bytes to {@code dst}, advance the read point, and reopen a closed-down window. */
-    private static int copyOut(int h, long dst, int n)
+    private static int copyOut(int h, Address dst, int n)
     {
-        long r = ring[h];
-        Address rA = Address.fromLong(r);
-        Address dstA = Address.fromLong(dst);
+        Address rA = ring.get(h);
         int idx = rdSeq[h] - (pisn[h] + 1);
         int i = 0;
         while (i < n)
         {
-            dstA.plus(i).store((byte) rA.plus((idx + i) & RCVMASK).loadUnsignedByte());
+            dst.plus(i).store((byte) rA.plus((idx + i) & RCVMASK).loadUnsignedByte());
             i = i + 1;
         }
         rdSeq[h] = rdSeq[h] + n;
         if (st[h] == CONNECTED && lastWin[h] < RCVBUF / 4 && window(h) >= RCVBUF / 2)
         {
             NetStats.tcpWinUpdates = NetStats.tcpWinUpdates + 1;
-            sendSeg(h, 0x10, 0L, 0);                     // tell the peer the room is back (no SWS: big steps only)
+            sendSeg(h, 0x10, Address.zero(), 0);         // tell the peer the room is back (no SWS: big steps only)
         }
         return n;
     }
@@ -1414,12 +1414,12 @@ public final class Tcp
             VMScheduler.semWaitTimeout(connSem[h], ms);
             return;
         }
-        if (syncRx == 0L)
+        if (syncRx.isZero())
         {
-            syncRx = Heap.allocData(2048).toLong();
+            syncRx = Heap.allocData(2048);
         }
-        long ip = Ip.recvIp(syncRx, 2048, ms);
-        if (ip != 0L && (Address.fromLong(ip).plus(9).loadUnsignedByte() & 0xFF) == 6)
+        Address ip = Ip.recvIp(syncRx, 2048, ms);
+        if (!ip.isZero() && (ip.plus(9).loadUnsignedByte() & 0xFF) == 6)
         {
             input(ip, Ip.lastIpTotal);
         }
@@ -1431,12 +1431,12 @@ public final class Tcp
      * Build an Ethernet/IP/TCP segment for connection {@code h} and send it. A SYN carries our MSS option; every
      * segment advertises the ring's free space as its window. Called under the table lock.
      */
-    private static void sendSeg(int h, int flags, long payload, int payLen)
+    private static void sendSeg(int h, int flags, Address payload, int payLen)
     {
         int win = window(h);
         lastWin[h] = win;
-        long dmac = useRmac[h] != 0 ? rmac[h] : Ip.gwMac;
-        sendRaw(dmac, rip[h], lport[h], rport[h], snd[h], (flags & 0x10) != 0 ? rcv[h] : 0, flags, win, payload,
+        Address dmac = useRmac[h] != 0 ? rmac.get(h) : Ip.gwMac;
+        sendRaw(dmac, rip.get(h), lport[h], rport[h], snd[h], (flags & 0x10) != 0 ? rcv[h] : 0, flags, win, payload,
                 payLen);
     }
 
@@ -1445,61 +1445,56 @@ public final class Tcp
      * {@code dmac} (6 bytes) and send it. A SYN carries our MSS option. No connection slot is needed, so a RST can
      * answer a segment that has none.
      */
-    private static void sendRaw(long dmac, long dstIp, int lp, int rp, int seq, int ack, int flags, int win,
-            long payload, int payLen)
+    private static void sendRaw(Address dmac, Address dstIp, int lp, int rp, int seq, int ack, int flags, int win,
+            Address payload, int payLen)
     {
-        long buf = Heap.allocData(2048).toLong();
-        Address bufA = Address.fromLong(buf);
-        Address dmacA = Address.fromLong(dmac);
+        Address buf = Heap.allocData(2048);
         int i = 0;
         while (i < 6)
         {
-            bufA.plus(i).store((byte) dmacA.plus(i).loadUnsignedByte());
-            bufA.plus(6 + i).store((byte) Address.fromLong(Ip.ourMac).plus(i).loadUnsignedByte());
+            buf.plus(i).store((byte) dmac.plus(i).loadUnsignedByte());
+            buf.plus(6 + i).store((byte) Ip.ourMac.plus(i).loadUnsignedByte());
             i = i + 1;
         }
-        bufA.plus(12).store((byte) 0x08);
-        bufA.plus(13).store((byte) 0x00);
-        long ip = buf + 14;
-        long tcp = buf + 34;
-        Address ipA = Address.fromLong(ip);
-        Address tcpA = Address.fromLong(tcp);
-        Address payloadA = Address.fromLong(payload);
+        buf.plus(12).store((byte) 0x08);
+        buf.plus(13).store((byte) 0x00);
+        Address ip = buf.plus(14);
+        Address tcp = buf.plus(34);
         int hdr = (flags & 0x02) != 0 ? 24 : 20;         // a SYN carries the 4-byte MSS option
-        Ip.be16(tcp + 0, lp);
-        Ip.be16(tcp + 2, rp);
-        Ip.be32(tcp + 4, seq);
-        Ip.be32(tcp + 8, ack);
-        tcpA.plus(12).store((byte) ((hdr / 4) << 4));          // data offset
-        tcpA.plus(13).store((byte) flags);
-        Ip.be16(tcp + 14, win);
-        Ip.be16(tcp + 16, 0);                            // checksum (filled below)
-        Ip.be16(tcp + 18, 0);                            // urgent pointer
+        Ip.be16(tcp.plus(0), lp);
+        Ip.be16(tcp.plus(2), rp);
+        Ip.be32(tcp.plus(4), seq);
+        Ip.be32(tcp.plus(8), ack);
+        tcp.plus(12).store((byte) ((hdr / 4) << 4));           // data offset
+        tcp.plus(13).store((byte) flags);
+        Ip.be16(tcp.plus(14), win);
+        Ip.be16(tcp.plus(16), 0);                        // checksum (filled below)
+        Ip.be16(tcp.plus(18), 0);                        // urgent pointer
         if (hdr == 24)
         {
-            tcpA.plus(20).store((byte) 2);                   // kind = MSS
-            tcpA.plus(21).store((byte) 4);
-            Ip.be16(tcp + 22, OUR_MSS);
+            tcp.plus(20).store((byte) 2);                    // kind = MSS
+            tcp.plus(21).store((byte) 4);
+            Ip.be16(tcp.plus(22), OUR_MSS);
         }
         i = 0;
         while (i < payLen)
         {
-            tcpA.plus(hdr + i).store((byte) payloadA.plus(i).loadUnsignedByte());
+            tcp.plus(hdr + i).store((byte) payload.plus(i).loadUnsignedByte());
             i = i + 1;
         }
         int tcpLen = hdr + payLen;
-        Ip.be16(tcp + 16, NetStats.l4Cksum(6, tcp, tcpLen, Ip.ourIp, dstIp));
-        ipA.plus(0).store((byte) 0x45);
-        ipA.plus(1).store((byte) 0);
-        Ip.be16(ip + 2, 20 + tcpLen);
-        Ip.be16(ip + 4, 0);
-        Ip.be16(ip + 6, 0x4000);                         // don't fragment
-        ipA.plus(8).store((byte) 64);
-        ipA.plus(9).store((byte) 6);                         // protocol = TCP
-        Ip.be16(ip + 10, 0);
-        Ip.copy4(Ip.ourIp, ip + 12);
-        Ip.copy4(dstIp, ip + 16);
-        Ip.be16(ip + 10, Ip.cksum(ip, 20));
+        Ip.be16(tcp.plus(16), NetStats.l4Cksum(6, tcp, tcpLen, Ip.ourIp, dstIp));
+        ip.plus(0).store((byte) 0x45);
+        ip.plus(1).store((byte) 0);
+        Ip.be16(ip.plus(2), 20 + tcpLen);
+        Ip.be16(ip.plus(4), 0);
+        Ip.be16(ip.plus(6), 0x4000);                     // don't fragment
+        ip.plus(8).store((byte) 64);
+        ip.plus(9).store((byte) 6);                          // protocol = TCP
+        Ip.be16(ip.plus(10), 0);
+        Ip.copy4(Ip.ourIp, ip.plus(12));
+        Ip.copy4(dstIp, ip.plus(16));
+        Ip.be16(ip.plus(10), Ip.cksum(ip, 20));
         Ip.send(buf, 14 + 20 + tcpLen);
     }
 }
