@@ -437,6 +437,18 @@ public final class Loader
         return (u2(p) << 16) | u2(p + 2);
     }
 
+    /** {@link #u1(long)} at an {@link Address}: the same zero-extending 8-bit read. */
+    private static int u1(Address p)
+    {
+        return p.loadUnsignedByte() & 0xFF;
+    }
+
+    /** {@link #u2(long)} at an {@link Address}: big-endian, as the classfile stores it. */
+    private static int u2(Address p)
+    {
+        return (u1(p) << 8) | u1(p.plus(1L));
+    }
+
     private static void seek(long nameP, int nameLen, long descP, int descLen)
     {
         gnameP = nameP;
@@ -1485,7 +1497,7 @@ public final class Loader
             return;
         }
         Uart.write(tag);
-        printNameAt(clsU.toLong(), 0);
+        printNameAt(clsU, 0);
         Uart.write(Magic.bytes(" [in "));
         if (gbase != 0L)
         {
@@ -7419,7 +7431,7 @@ public final class Loader
         int i = 0;
         while (i < len)
         {
-            Uart.putc((byte) u1(p.toLong() + i));
+            Uart.putc((byte) u1(p.plus(i)));
             i += 1;
         }
     }
@@ -14610,13 +14622,15 @@ public final class Loader
                 }
                 if (decl >= 0)
                 {
-                    long d = resolveLinkTarget(clTab[decl].base + clTab[decl].nameOff, nameOff, descOff);
+                    long d = resolveLinkTarget(Address.fromLong(clTab[decl].base + clTab[decl].nameOff),
+                            Address.fromLong(nameOff), Address.fromLong(descOff));
                     if (d != 0L)
                     {
                         return d;
                     }
                 }
-                long b = resolveLinkTarget(clTab[ir].base + clTab[ir].nameOff, nameOff, descOff);
+                long b = resolveLinkTarget(Address.fromLong(clTab[ir].base + clTab[ir].nameOff),
+                        Address.fromLong(nameOff), Address.fromLong(descOff));
                 if (b != 0L)
                 {
                     if (ITABLE_DIR_WATCH)
@@ -15662,19 +15676,19 @@ public final class Loader
      * Whether {@code nameU} is a VarHandle ACCESS MODE (one of VarHandle's own signature-polymorphic natives) that
      * no class of handle class {@code hc}'s chain below VarHandle declares under ANY descriptor.
      */
-    private static boolean vhModeUnsupported(int hc, long nameU)
+    private static boolean vhModeUnsupported(int hc, Address nameU)
     {
         byte[] vh = Magic.bytes("java/lang/invoke/VarHandle");
         int c = hc;
         int hops = 0;
         while (c >= 0 && hops < MAXCHAIN)
         {
-            long clsU = clTab[c].base + clTab[c].nameOff;
+            Address clsU = Address.fromLong(clTab[c].base + clTab[c].nameOff);
             if (utf8IsAtBase(clTab[c].base, clTab[c].nameOff, vh))
             {
-                return declaresMethod(clsU, nameU, 0L, true);   // the mode IS an access mode
+                return declaresMethod(clsU, nameU, Address.zero(), true);   // the mode IS an access mode
             }
-            if (declaresMethod(clsU, nameU, 0L, false))
+            if (declaresMethod(clsU, nameU, Address.zero(), false))
             {
                 return false;
             }
@@ -15687,7 +15701,7 @@ public final class Loader
     /** The VarHandle accessor named by site {@code idx} with descriptor {@code d}, up {@code ci}'s chain, or 0. */
     private static long vhChainResolve(int ci, int idx, byte[] d)
     {
-        long descU = utf8Blob(d).toLong();
+        Address descU = utf8Blob(d);
         long buf = 0L;
         int c = ci;
         int hops = 0;
@@ -15695,7 +15709,8 @@ public final class Loader
         {
             if (clTab[c] != null)
             {
-                buf = resolveLinkTarget(clTab[c].base + clTab[c].nameOff, vsName[idx], descU);
+                buf = resolveLinkTarget(Address.fromLong(clTab[c].base + clTab[c].nameOff),
+                        Address.fromLong(vsName[idx]), descU);
             }
             c = superRegOf(c);
             hops += 1;
@@ -16022,7 +16037,8 @@ public final class Loader
         {
             if (clTab[c] != null)
             {
-                buf = resolveLinkTarget(clTab[c].base + clTab[c].nameOff, vsName[idx], vsDesc[idx]);
+                buf = resolveLinkTarget(Address.fromLong(clTab[c].base + clTab[c].nameOff),
+                        Address.fromLong(vsName[idx]), Address.fromLong(vsDesc[idx]));
             }
             c = superRegOf(c);
             hops += 1;
@@ -16074,7 +16090,7 @@ public final class Loader
                 // FieldStaticReadWrite extends), so every wrapper reaching this site resolves the same way.
                 buf = resolveVhAccessor(ti, idx);
             }
-            if (buf == 0L && vhModeUnsupported(hc, vsName[idx]))
+            if (buf == 0L && vhModeUnsupported(hc, Address.fromLong(vsName[idx])))
             {
                 // An ACCESS MODE this handle does not support -- `set` on a final static's FieldStaticReadOnly.
                 // Stock throws UnsupportedOperationException naming the mode (VarForm.getMemberName), and so
@@ -16085,7 +16101,8 @@ public final class Loader
         }
         if (buf == 0L)
         {
-            buf = missingNativeOnChain(ci, vsName[idx], vsDesc[idx]);   // an unimplemented native THROWS
+            buf = missingNativeOnChain(ci, Address.fromLong(vsName[idx]),
+                    Address.fromLong(vsDesc[idx]));   // an unimplemented native THROWS
         }
         if (buf == 0L)
         {
@@ -16194,7 +16211,8 @@ public final class Loader
         int decl = mostSpecificDeclarer(regs, n, nameU, descU);
         if (decl >= 0)
         {
-            long d = resolveLinkTarget(clTab[decl].base + clTab[decl].nameOff, nameU, descU);
+            long d = resolveLinkTarget(Address.fromLong(clTab[decl].base + clTab[decl].nameOff),
+                    Address.fromLong(nameU), Address.fromLong(descU));
             if (d != 0L)
             {
                 return d;
@@ -16203,7 +16221,8 @@ public final class Loader
         int k = 0;
         while (k < n)
         {
-            long buf = resolveLinkTarget(names[k], nameU, descU);
+            long buf = resolveLinkTarget(Address.fromLong(names[k]), Address.fromLong(nameU),
+                    Address.fromLong(descU));
             if (buf != 0L)
             {
                 return buf;
@@ -18769,11 +18788,17 @@ public final class Loader
 
     private static void printNameAt(long base, int off)
     {
-        int len = u2(base + off);
+        printNameAt(Address.fromLong(base), off);
+    }
+
+    /** {@link #printNameAt(long, int)} for a base already held as an {@link Address}. */
+    private static void printNameAt(Address base, int off)
+    {
+        int len = u2(base.plus(off));
         int i = 0;
         while (i < len)
         {
-            Uart.putc(u1(base + off + 2 + i));
+            Uart.putc(u1(base.plus(off + 2 + i)));
             i += 1;
         }
     }
@@ -18794,7 +18819,7 @@ public final class Loader
             Uart.write(Magic.bytes("<null>"));
             return;
         }
-        int len = u2(u.toLong());
+        int len = u2(u);
         if (len <= 0 || len > 512)
         {
             Uart.write(Magic.bytes("<bad utf8 ptr>"));
@@ -18803,7 +18828,7 @@ public final class Loader
         int i = 0;
         while (i < len)
         {
-            Uart.putc(u1(u.toLong() + 2 + i));
+            Uart.putc(u1(u.plus(2 + i)));
             i += 1;
         }
     }
@@ -19585,7 +19610,7 @@ public final class Loader
             // reports `denied callee: <class>.<method>` for a class on NO denylist -- the exact
             // misattribution that has cost this project several debugging sessions. `java/util/LinkedHashSet
             // .<init>`, reached from picocli's CommandSpec.aliases, was one: shipped, allowed, and trapped.
-            linkStubFull(clsU.toLong(), nameU.toLong(), descU.toLong());
+            linkStubFull(clsU, nameU, descU);
             return 0L;
         }
         if (linkTrampAddr == 0L)
@@ -19602,7 +19627,7 @@ public final class Loader
     }
 
     /** Report the link-stub table overflowing, once -- the site it could not serve becomes a denylist trap. */
-    private static void linkStubFull(long clsU, long nameU, long descU)
+    private static void linkStubFull(Address clsU, Address nameU, Address descU)
     {
         if (lkFullReported)
         {
@@ -19612,11 +19637,11 @@ public final class Loader
         Uart.write(Magic.bytes("\n  LINK STUB TABLE FULL at "));
         VM.printDec(MAXLINKSTUB);
         Uart.write(Magic.bytes(" -- this site becomes a DENYLIST TRAP for a class that is NOT denied: "));
-        printUtf8Capped(Address.fromLong(clsU));
+        printUtf8Capped(clsU);
         Uart.putc(0x2E);
-        printUtf8Capped(Address.fromLong(nameU));
+        printUtf8Capped(nameU);
         Uart.putc(0x20);
-        printUtf8Capped(Address.fromLong(descU));
+        printUtf8Capped(descU);
         Uart.putc(0x0A);
     }
 
@@ -19729,7 +19754,8 @@ public final class Loader
         try
         {
         lnkFailWhy = 0;
-        buf = resolveLinkTarget(lkClsU[idx], lkNameU[idx], lkDescU[idx]);
+        buf = resolveLinkTarget(Address.fromLong(lkClsU[idx]), Address.fromLong(lkNameU[idx]),
+                Address.fromLong(lkDescU[idx]));
         if (buf == 0L)
         {
             // JVMS 5.4.3.3 searches C, then C's SUPERCLASSES, then its maximally-specific SUPERINTERFACES.
@@ -19770,7 +19796,8 @@ public final class Loader
             while (buf == 0L && c >= 0 && hops < MAXIFACECHAIN)
             {
                 int why = lnkFailWhy;
-                buf = resolveLinkTarget(clTab[c].base + clTab[c].nameOff, lkNameU[idx], lkDescU[idx]);
+                buf = resolveLinkTarget(Address.fromLong(clTab[c].base + clTab[c].nameOff),
+                        Address.fromLong(lkNameU[idx]), Address.fromLong(lkDescU[idx]));
                 if (buf == 0L)
                 {
                     lnkFailWhy = why;                   // a miss at one level is "try the super", not a verdict
@@ -19819,9 +19846,11 @@ public final class Loader
                 int nreg = regBySigU(Address.fromLong(lkClsU[idx]));
                 if (nreg >= 0)
                 {
-                    thunk = missingNativeOnChain(nreg, lkNameU[idx], lkDescU[idx]);
+                    thunk = missingNativeOnChain(nreg, Address.fromLong(lkNameU[idx]),
+                            Address.fromLong(lkDescU[idx]));
                 }
-                else if (declaredNative(lkClsU[idx], lkNameU[idx], lkDescU[idx]))
+                else if (declaredNative(Address.fromLong(lkClsU[idx]), Address.fromLong(lkNameU[idx]),
+                        Address.fromLong(lkDescU[idx])))
                 {
                     thunk = missingNativeThunk(Address.fromLong(lkClsU[idx]), Address.fromLong(lkNameU[idx]),
                             Address.fromLong(lkDescU[idx]));
@@ -19882,9 +19911,10 @@ public final class Loader
         int k = 0;
         while (k < mnCount)
         {
-            if (clsU.toLong() == 0L ? mnCls[k] == 0L && utf8Same(mnName[k], nameU.toLong())
-                    : mnCls[k] != 0L && utf8Same(mnCls[k], clsU.toLong()) && utf8Same(mnName[k], nameU.toLong())
-                            && utf8Same(mnDesc[k], descU.toLong()))
+            if (clsU.toLong() == 0L ? mnCls[k] == 0L && utf8Same(Address.fromLong(mnName[k]), nameU)
+                    : mnCls[k] != 0L && utf8Same(Address.fromLong(mnCls[k]), clsU)
+                            && utf8Same(Address.fromLong(mnName[k]), nameU)
+                            && utf8Same(Address.fromLong(mnDesc[k]), descU))
             {
                 return mnThunk[k];
             }
@@ -19922,16 +19952,16 @@ public final class Loader
      * 0 -- the late-virtual twin of the link-stub check (an instance native is dispatched, not linked). The nearest
      * declaring class names it, as an inherited method's own class would.
      */
-    private static long missingNativeOnChain(int ci, long nameU, long descU)
+    private static long missingNativeOnChain(int ci, Address nameU, Address descU)
     {
         int c = ci;
         int hops = 0;
         while (c >= 0 && hops < 64)
         {
-            long clsU = clTab[c].base + clTab[c].nameOff;
+            Address clsU = Address.fromLong(clTab[c].base + clTab[c].nameOff);
             if (declaredNative(clsU, nameU, descU))
             {
-                return missingNativeThunk(Address.fromLong(clsU), Address.fromLong(nameU), Address.fromLong(descU));
+                return missingNativeThunk(clsU, nameU, descU);
             }
             c = superRegOf(c);
             hops += 1;
@@ -20022,11 +20052,11 @@ public final class Loader
     /** Append the Utf8 at {@code utf8Addr} as it is. */
     private static int putUtf8(byte[] out, int p, Address utf8Addr)
     {
-        int len = u2(utf8Addr.toLong());
+        int len = u2(utf8Addr);
         int i = 0;
         while (i < len && p < out.length)
         {
-            out[p] = (byte) u1(utf8Addr.toLong() + 2L + i);
+            out[p] = (byte) u1(utf8Addr.plus(2L + i));
             p += 1;
             i += 1;
         }
@@ -20034,7 +20064,7 @@ public final class Loader
     }
 
     /** Two Utf8s, each at an absolute address (u2 len + bytes), are byte-equal. */
-    private static boolean utf8Same(long a, long b)
+    private static boolean utf8Same(Address a, Address b)
     {
         int len = u2(a);
         if (len != u2(b))
@@ -20044,7 +20074,7 @@ public final class Loader
         int i = 0;
         while (i < len)
         {
-            if (u1(a + 2L + i) != u1(b + 2L + i))
+            if (u1(a.plus(2L + i)) != u1(b.plus(2L + i)))
             {
                 return false;
             }
@@ -20056,7 +20086,7 @@ public final class Loader
     /** The Utf8 entry at blob offset {@code off} (u2 len + bytes) equals the Utf8 at absolute address {@code u}. */
     private static boolean utf8BlobSame(long base, int off, Address u)
     {
-        return utf8Same(base + off, u.toLong());
+        return utf8Same(Address.fromLong(base + off), u);
     }
 
     /**
@@ -20065,16 +20095,16 @@ public final class Loader
      * failing link must not disturb. Only the named class is consulted: a native inherited from a superclass
      * keeps the trap.
      */
-    private static boolean declaredNative(long clsU, long nameU, long descU)
+    private static boolean declaredNative(Address clsU, Address nameU, Address descU)
     {
         return declaresMethod(clsU, nameU, descU, true);
     }
 
     /** Whether class {@code clsU} itself declares a method {@code name desc} -- any descriptor when {@code descU}
      *  is 0, and only a NATIVE one when {@code nativeOnly}. The classfile walk {@link #declaredNative} describes. */
-    private static boolean declaresMethod(long clsU, long nameU, long descU, boolean nativeOnly)
+    private static boolean declaresMethod(Address clsU, Address nameU, Address descU, boolean nativeOnly)
     {
-        int pd = findPdByName(clsU, 0);
+        int pd = findPdByName(clsU.toLong(), 0);
         if (pd < 0)
         {
             return false;
@@ -20132,8 +20162,8 @@ public final class Loader
         while (m < mcount)
         {
             int access = u2(p);
-            if ((!nativeOnly || (access & 0x0100) != 0) && utf8BlobSame(base, off[u2(p + 2L)], Address.fromLong(nameU))
-                    && (descU == 0L || utf8BlobSame(base, off[u2(p + 4L)], Address.fromLong(descU))))
+            if ((!nativeOnly || (access & 0x0100) != 0) && utf8BlobSame(base, off[u2(p + 2L)], nameU)
+                    && (descU.toLong() == 0L || utf8BlobSame(base, off[u2(p + 4L)], descU)))
             {
                 return true;
             }
@@ -20238,7 +20268,7 @@ public final class Loader
      * fallback. Returns 0 rather than halting: an unresolvable callee here is a legitimate outcome (the class
      * is genuinely absent), and the caller turns it back into the denylist trap.
      */
-    private static long resolveLinkTarget(long clsU, long nameU, long descU)
+    private static long resolveLinkTarget(Address clsU, Address nameU, Address descU)
     {
         if (clTab == null)
         {
@@ -20266,7 +20296,7 @@ public final class Loader
         int c = 0;
         while (sane && c < len)
         {
-            int b = u1(clsU + 2 + c);
+            int b = u1(clsU.plus(2 + c));
             if (b < 0x20 || b > 0x7E)
             {
                 sane = false;
@@ -20276,11 +20306,11 @@ public final class Loader
         if (!sane)
         {
             Uart.write(Magic.bytes("\nBAD BAKE STUB ENTRY (pointer, not a missing class)\n  clsU="));
-            VM.printHex(clsU);
+            VM.printHex(clsU.toLong());
             Uart.write(Magic.bytes(" nameU="));
-            VM.printHex(nameU);
+            VM.printHex(nameU.toLong());
             Uart.write(Magic.bytes(" descU="));
-            VM.printHex(descU);
+            VM.printHex(descU.toLong());
             Uart.write(Magic.bytes("\n  u2(clsU)="));
             VM.printHex((long) len);
             Uart.write(Magic.bytes(" table="));
@@ -20292,43 +20322,42 @@ public final class Loader
         }
         // The name is already a Utf8 run at clsU: ask the index directly, and build the byte[] copy only when
         // the class has to be LOADED -- this runs per execution of an unmemoised site.
-        int reg = regBySigU(Address.fromLong(clsU));
+        int reg = regBySigU(clsU);
         if (reg < 0)
         {
             byte[] slash = new byte[len];
             int i = 0;
             while (i < len)
             {
-                slash[i] = (byte) u1(clsU + 2 + i);
+                slash[i] = (byte) u1(clsU.plus(2 + i));
                 i += 1;
             }
             if (loadClassIncremental(slash) == 0L)
             {
                 lnkFailWhy = 1;                         // RECORD, do not print: see reportLinkFail
-                linkResolveLog(Address.fromLong(clsU), Address.fromLong(nameU), Address.fromLong(descU), 0L, 0);
+                linkResolveLog(clsU, nameU, descU, 0L, 0);
                 return 0L;
             }
-            reg = regBySigU(Address.fromLong(clsU));
+            reg = regBySigU(clsU);
         }
         if (reg >= 0 && clTab[reg].state < RVMClass.ST_INSTANTIATED)
         {
             // Loaded but not brought all the way up: its <clinit> was blocked or its structure never
             // registered. Branching in would run against half-built statics and a possibly empty vtable.
             lnkFailWhy = 2;
-            linkResolveLog(Address.fromLong(clsU), Address.fromLong(nameU), Address.fromLong(descU), 0L, 0);
+            linkResolveLog(clsU, nameU, descU, 0L, 0);
             return 0L;
         }
-        long buf = bufBySigU(Address.fromLong(clsU), Address.fromLong(nameU), Address.fromLong(descU));
+        long buf = bufBySigU(clsU, nameU, descU);
         int tier = 1;
         if (buf == 0L)
         {
-            buf = nativeBufAt(clsU, 0, nameU, 0);       // a PROVIDED NATIVE has no bytecode to find
+            buf = nativeBufAt(clsU.toLong(), 0, nameU.toLong(), 0);       // a PROVIDED NATIVE has no bytecode to find
             tier = 2;
         }
         if (buf == 0L)
         {
-            buf = compileSigOnDemand(Address.fromLong(clsU), Address.fromLong(nameU),
-                    Address.fromLong(descU));   // never compiled AND not dispatchable: JIT it now
+            buf = compileSigOnDemand(clsU, nameU, descU);   // never compiled AND not dispatchable: JIT it now
             tier = 3;
         }
         if (buf == 0L && reg >= 0)
@@ -20345,7 +20374,7 @@ public final class Loader
             // into whatever that word is. Read as an address, two adjacent instruction words look exactly like
             // one: that is how this surfaced, as a bare instruction abort at a pc no table claims, with the
             // caller nowhere in the report. Trap it by name instead.
-            reportBadTarget(Address.fromLong(clsU), Address.fromLong(nameU), Address.fromLong(descU), buf, tier);
+            reportBadTarget(clsU, nameU, descU, buf, tier);
             return 0L;                                  // -> the caller substitutes denylistTrap
         }
         if (buf == 0L)
@@ -20355,7 +20384,7 @@ public final class Loader
             // abstract/native method with no VM helper, or a descriptor mismatch.
             lnkFailWhy = 3;
         }
-        linkResolveLog(Address.fromLong(clsU), Address.fromLong(nameU), Address.fromLong(descU), buf, tier);
+        linkResolveLog(clsU, nameU, descU, buf, tier);
         return buf;
     }
 
@@ -20366,27 +20395,27 @@ public final class Loader
      * about the named class, so without this such a site could not resolve at all. Stops at the first
      * declaring class whatever it answers -- climbing past one is the silent mis-binding this exists to avoid.
      */
-    private static long inheritedLinkTarget(int reg, long nameU, long descU)
+    private static long inheritedLinkTarget(int reg, Address nameU, Address descU)
     {
         int sreg = superRegOf(reg);
         int guard = 0;
         while (sreg >= 0 && guard < 64)
         {
             long sU = clTab[sreg].base + clTab[sreg].nameOff;
-            long b = bufBySigU(Address.fromLong(sU), Address.fromLong(nameU), Address.fromLong(descU));
+            long b = bufBySigU(Address.fromLong(sU), nameU, descU);
             if (b == 0L)
             {
-                b = nativeBufAt(sU, 0, nameU, 0);
+                b = nativeBufAt(sU, 0, nameU.toLong(), 0);
             }
             if (b == 0L)
             {
-                b = compileSigOnDemand(Address.fromLong(sU), Address.fromLong(nameU), Address.fromLong(descU));
+                b = compileSigOnDemand(Address.fromLong(sU), nameU, descU);
             }
             if (b != 0L)
             {
                 return b;
             }
-            if (blobDeclares(clTab[sreg].base, nameU, 0, descU, 0) == 1)
+            if (blobDeclares(clTab[sreg].base, nameU.toLong(), 0, descU.toLong(), 0) == 1)
             {
                 return 0L;                              // declared here and still not callable: report, do not climb
             }
@@ -20418,10 +20447,10 @@ public final class Loader
         Uart.write(Magic.bytes(" buf="));
         VM.printHex(buf);
         Uart.write(Magic.bytes(" for "));
-        printNameAt(clsU.toLong(), 0);
+        printNameAt(clsU, 0);
         Uart.putc(0x2E);
-        printNameAt(nameU.toLong(), 0);
-        printNameAt(descU.toLong(), 0);
+        printNameAt(nameU, 0);
+        printNameAt(descU, 0);
         Uart.putc(0x0A);
     }
 
@@ -23847,7 +23876,8 @@ public final class Loader
         {
             return 0L;
         }
-        return resolveLinkTarget(clTab[reg].base + clTab[reg].nameOff, utf8Blob(name).toLong(), utf8Blob(desc).toLong());
+        return resolveLinkTarget(Address.fromLong(clTab[reg].base + clTab[reg].nameOff), utf8Blob(name),
+                utf8Blob(desc));
     }
 
     /**
@@ -24028,7 +24058,7 @@ public final class Loader
      */
     private static int putUtf8(char[] out, int p, Address utf8Addr)
     {
-        int len = u2(utf8Addr.toLong());
+        int len = u2(utf8Addr);
         long src = utf8Addr.toLong() + 2L;
         int i = 0;
         while (i < len && p < out.length)
@@ -29521,11 +29551,11 @@ public final class Loader
             return;
         }
         Uart.write(Magic.bytes("  LINKWATCH "));
-        printNameAt(clsU.toLong(), 0);
+        printNameAt(clsU, 0);
         Uart.putc(0x2E);
-        printNameAt(nameU.toLong(), 0);
+        printNameAt(nameU, 0);
         Uart.putc(0x20);
-        printNameAt(descU.toLong(), 0);
+        printNameAt(descU, 0);
         Uart.write(Magic.bytes(" -> buf="));
         VM.printHex(buf);
         Uart.write(Magic.bytes(" tier"));
