@@ -51,10 +51,18 @@ public final class Unboxed
 
     public static final int EXTENT = 4;
 
+    /** {@code magic/AddressArray}: a {@code long[]} at run time; its ops are the array bytecodes' lowerings. */
+    public static final int ADDRESS_ARRAY = 5;
+
     private static final long O_ADDRESS = 7816296518595377735L; // "magic/Address"
     private static final long O_WORD = 2502753236447134729L;  // "magic/Word"
     private static final long O_OFFSET = -5453143413838101434L; // "magic/Offset"
     private static final long O_EXTENT = -5385282434997603451L; // "magic/Extent"
+    private static final long O_ADDRESS_ARRAY = -2760638129083984252L; // "magic/AddressArray"
+    private static final long N_CREATE = -626457835795418115L; // "create"
+    private static final long N_GET = -3106811833996379657L;  // "get"
+    private static final long N_SET = -9062501282150740445L;  // "set"
+    private static final long N_LENGTH = -1580386065683472715L; // "length"
     private static final long N_ZERO = 2461754175573238659L;  // "zero"
     private static final long N_ONE = 1875936269717626031L;   // "one"
     private static final long N_MAX = 580772045163143161L;    // "max"
@@ -135,6 +143,10 @@ public final class Unboxed
         {
             return EXTENT;
         }
+        if (h == O_ADDRESS_ARRAY)
+        {
+            return ADDRESS_ARRAY;
+        }
         return NONE;
     }
 
@@ -147,6 +159,10 @@ public final class Unboxed
     {
         long h = hash(name);
         int params = paramCount(desc);
+        if (kind == ADDRESS_ARRAY)
+        {
+            return arrayOp(h, params);
+        }
         if (h == N_FROM_LONG || h == N_TO_LONG || h == N_TO_WORD || h == N_TO_ADDRESS || h == N_TO_OFFSET
                 || h == N_TO_EXTENT || h == N_FROM_INT_SIGN_EXTEND)
         {
@@ -241,6 +257,28 @@ public final class Unboxed
         if (h == N_ATTEMPT)
         {
             return params == 2 ? Intrinsics.CAS64 : -1;
+        }
+        return -1;
+    }
+
+    /** {@code magic/AddressArray}'s four methods, or -1. */
+    private static int arrayOp(long h, int params)
+    {
+        if (h == N_CREATE && params == 1)
+        {
+            return Intrinsics.AA_NEW;
+        }
+        if (h == N_GET && params == 1)
+        {
+            return Intrinsics.AA_GET;
+        }
+        if (h == N_SET && params == 2)
+        {
+            return Intrinsics.AA_SET;
+        }
+        if (h == N_LENGTH && params == 0)
+        {
+            return Intrinsics.AA_LENGTH;
         }
         return -1;
     }

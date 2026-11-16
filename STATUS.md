@@ -4,6 +4,42 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 16: `AddressArray`, and Address-typed FIELDS proven (2026-11-16).** Pi-validated
+  (build 8aac4d9f0fcaa85c). The prerequisite increment 15 named.
+  - **Fields needed no new mechanism, and it is now MEASURED, not inferred:** an `Lmagic/Address;` field is a plain
+    64-bit slot (getstatic/putstatic/getfield/putfield move the raw word, no barrier); the GC refmap counts L and J alike
+    (`ClassFile.mayHoldPointer`, `Loader.mayHoldPointer`) and validates every candidate; and the writer's
+    `StaticSnapshot.reference` reads an Address static as null on the host (no host Address object can exist), which
+    bakes 0, exactly as a long 0. **Rule:** never give such a field an initializer (`= Address.zero()` THROWS on the
+    seed JVM if the writer runs that class init).
+  - **`magic/AddressArray`** (Jikes' name): at run time a `long[]`. `create`/`get`/`set`/`length` lower to
+    `newarray long` / `laload` / `lastore` / `arraylength` -- Baseline's own `lowerNewArray(11)` / `arrayLoad(3)` /
+    `arrayStore(3)` / `arrayLength`, so the same instructions and the same null/bounds/negative-size checks. New
+    `Unboxed.ADDRESS_ARRAY` kind and `Intrinsics.AA_NEW..AA_LENGTH` (143-146, deliberately outside the UB_ range: they
+    check and, for create, call). An `Address[]` is not the same thing (an object array with covariant store checks on
+    elements that are not objects), which is why the type exists.
+  - **Two pre-passes had to learn it**, because the generic rule for an unboxed call is "instructions, not a call":
+    `isNonLeaf` decides an AddressArray call exactly as its bytecode (create always non-leaf; get/set/length non-leaf
+    only with implicit checks, whose throw path is a BL), and `computeDepths` gives create newarray's +1 transient.
+    **Negative control, run:** with get/set/length decided as leaf, the probe FAILS -- `at()`'s
+    ArrayIndexOutOfBoundsException escaped its caller's catch as an `<unclaimed pc>`, the divideDeep/getstatic-areturn
+    trap family. Restored, it passes.
+  - **Tests:** `UnboxedTest` (56 checks): AddressArray classified; `get`/`set`/`length`/a summing loop compile to
+    EXACTLY the words of their long[] twins (`create` calls the allocator, which that harness cannot compile -- the
+    probe covers it). New **`demo/AddressFieldProbe`** (solo, gated, metal-only), 31 checks: Address/Word static and
+    instance fields (unset reads zero; sentinels either side intact; a raw non-heap address, the all-ones word and an
+    interior address of a dead array survive four collections unchanged); AddressArray create/length/zero-fill/set/get,
+    load through an element, `instanceof long[]`, an array reachable ONLY through a static AddressArray field survives
+    collections, and out-of-bounds get/set, null length and negative create throw from single-access methods.
+  - **Not done here, and why:** the `gbase`/`gp` retype was tried and REVERTED -- alone it took Loader's `.toLong()`
+    from 202 to 557 (gbase feeds long-base helpers whose other callers pass long[] tables: utf8IsAtBase 88 of 427
+    calls). With AddressArray the tables can move WITH it: that is the next increment.
+  - **Measured:** `make test`; overlaycheck 0 new; full regression **209/209** (the new probe included). Pi: committed
+    first try; the probe itself uploaded through `/run` (as `piprobe.AddressFieldProbe`; the image's copy is refused as
+    a duplicate) -- **31 checks, 0 failures**; every page; `/run`s; a throwing main's stack trace; the stop-poll
+    benchmark (same figures); a forced stop of four threads; the kernel SHA-256; a staged 39 MB upload SHA-256-verified
+    in 28.6 s; `/net` 0 IP header errors, 0 TCP errors.
+
 - **UNBOXED TYPES, INCREMENT 15: the link-target chain; class-file BASE POINTERS NEED FIELD RETYPING FIRST
   (2026-11-15).** Pi-validated (build 8e20b5c108a96f17). Smaller than planned, and the reason is the finding:
   - **Changed:** the link-target chain takes its `clsU`/`nameU`/`descU` as `Address` (`resolveLinkTarget`,

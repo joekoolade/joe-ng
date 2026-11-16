@@ -230,3 +230,4 @@ demo/RunProbe            solo gate=RunProbe PASS     # defines classes once per 
 demo/ExitProbe           solo gate=[exit status=0x0000000000000007]     # an ordinary exit: hook, then halt; ends the boot
 demo/UnboxedProbe        solo gate=UnboxedProbe PASS     # magic.Address/Word/Offset/Extent on the metal JIT; metal-only (unboxed stubs throw on a host)
 demo/TickProbe           solo gate=TickProbe TICKS     # the scheduler tick reaches a launched program (QEMU's GIC without Security Extensions)
+demo/AddressFieldProbe   solo gate=AddressFieldProbe PASS     # Address/Word-typed static and instance fields on the metal JIT survive collections (raw, all-ones, dead-interior values); metal-only

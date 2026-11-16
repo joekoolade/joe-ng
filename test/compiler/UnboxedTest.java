@@ -59,6 +59,12 @@ public final class UnboxedTest
         same(fx, "diffLong", "(JJ)J", "diffAddr", "(Lmagic/Address;Lmagic/Address;)Lmagic/Offset;");
         same(fx, "objLong", "(J)Ljava/lang/Object;", "objAddr", "(Lmagic/Address;)Ljava/lang/Object;");
         same(fx, "nopLong", "(J)J", "nopAddr", "(J)J");
+        // AddressArray IS a long[]: each op compiles to exactly its array bytecode's words.
+        // (create allocates through a helper, which this harness cannot compile: AddressFieldProbe covers it on metal.)
+        same(fx, "getLong", "([JI)J", "getAddr", "(Lmagic/AddressArray;I)J");
+        same(fx, "setLong", "([JIJ)V", "setAddr", "(Lmagic/AddressArray;ILmagic/Address;)V");
+        same(fx, "lenLong", "([J)I", "lenAddr", "(Lmagic/AddressArray;)I");
+        same(fx, "sumLong", "([J)J", "sumAddr", "(Lmagic/AddressArray;)J");
 
         // x9 is operand slot 0, x10 slot 1, x11 slot 2; locals live in x19.. (after normal(): in first-use order).
         // Every method below moves its arguments into locals first (x0 -> x19, x1 -> x20, ...) and returns in x0.
@@ -86,7 +92,7 @@ public final class UnboxedTest
     /** Every public method of the four types maps to a lowering. */
     private static void classifiesAll()
     {
-        String[] types = { "Address", "Word", "Offset", "Extent" };
+        String[] types = { "Address", "Word", "Offset", "Extent", "AddressArray" };
         int n = 0;
         int missing = 0;
         for (String t : types)
@@ -144,6 +150,14 @@ public final class UnboxedTest
         T.eq("fromIntZeroExtend", Intrinsics.UB_ZEXT32,
                 Unboxed.op(a, utf8("fromIntZeroExtend"), utf8("(I)Lmagic/Address;")));
         T.eq("an unknown name", -1, Unboxed.op(a, utf8("prefetch"), utf8("()V")));
+        int aa = Unboxed.ADDRESS_ARRAY;
+        T.eq("AddressArray owner", aa, Unboxed.ownerKind(utf8("magic/AddressArray")));
+        T.eq("AddressArray.create", Intrinsics.AA_NEW, Unboxed.op(aa, utf8("create"), utf8("(I)Lmagic/AddressArray;")));
+        T.eq("AddressArray.get", Intrinsics.AA_GET, Unboxed.op(aa, utf8("get"), utf8("(I)Lmagic/Address;")));
+        T.eq("AddressArray.set", Intrinsics.AA_SET, Unboxed.op(aa, utf8("set"), utf8("(ILmagic/Address;)V")));
+        T.eq("AddressArray.length", Intrinsics.AA_LENGTH, Unboxed.op(aa, utf8("length"), utf8("()I")));
+        T.eq("AddressArray: an Address name is not an array op", -1,
+                Unboxed.op(aa, utf8("plus"), utf8("(I)Lmagic/Address;")));
     }
 
     /**

@@ -863,7 +863,7 @@ public final class Baseline
         }
         else if (op == 0xB8)
         {
-            lowerInvokeStatic(u2(code, pos + 1), cb);
+            lowerInvokeStatic(u2(code, pos + 1), cb, pos);
             return 3;
         }
         else if (op == 0xB9)
@@ -1961,7 +1961,7 @@ public final class Baseline
     }
 
     // ----- calls / intrinsics ----------------------------------------------
-    private void lowerInvokeStatic(int cpIndex, CodeBuffer cb)
+    private void lowerInvokeStatic(int cpIndex, CodeBuffer cb, int pos)
     {
         // AN INTRINSIC IS NOT AN ACTIVE USE, AND GUARDING ONE IS ACTIVELY HARMFUL. `Magic.*` is a pseudo-class
         // of lowerings -- it has no <clinit>, is never registered and can never need initializing -- so a
@@ -1971,7 +1971,7 @@ public final class Baseline
         // -- the operand-clobbered-across-a-call family this file already records for Magic.call2.
         if (symbols.isIntrinsicCall(cpIndex))
         {
-            lowerIntrinsic(symbols.intrinsicId(cpIndex), cb);
+            lowerIntrinsic(symbols.intrinsicId(cpIndex), cb, pos);
             return;
         }
         // Math.multiplyHigh / unsignedMultiplyHigh: one instruction, no call and no init guard. MEASURED (Pi tick
@@ -2079,7 +2079,7 @@ public final class Baseline
     {
         if (symbols.isIntrinsicCall(cpIndex))
         {
-            lowerIntrinsic(symbols.intrinsicId(cpIndex), cb);  // an unboxed type's method: no null check, no call
+            lowerIntrinsic(symbols.intrinsicId(cpIndex), cb, pos);  // an unboxed type's method: no null check, no call
             return;
         }
         if (symbols.isMhSigPoly(cpIndex))                       // MethodHandle.invokeExact/invoke/invokeBasic
@@ -3802,6 +3802,43 @@ public final class Baseline
         symbols.tagArray(cb, opSlot(sp - 1), classCp, true);  // tag the result as [L<element>;
     }
 
+    /**
+     * {@code magic.AddressArray}: a {@code long[]} at run time, so each op IS the array bytecode's lowering -- the
+     * same instructions, null/bounds checks and allocation call as {@code newarray long} / {@code laload} /
+     * {@code lastore} / {@code arraylength}. The operand stack matches too: create's [length] -> [array], get's
+     * [array, index] -> [value], set's [array, index, value] -> [], length's [array] -> [int].
+     */
+    private void lowerAddressArray(int id, CodeBuffer cb, int pos)
+    {
+        if (id == Intrinsics.AA_NEW)
+        {
+            lowerNewArray(11, cb, pos);                         // atype 11 = T_LONG (JVMS newarray)
+        }
+        else if (id == Intrinsics.AA_GET)
+        {
+            arrayLoad(cb, 3, pos);
+        }
+        else if (id == Intrinsics.AA_SET)
+        {
+            arrayStore(cb, 3, pos);
+        }
+        else
+        {
+            arrayLength(cb, pos);
+        }
+    }
+
+    /** The {@code magic.AddressArray} op an invoke at {@code cp} lowers to, or -1 when it is anything else. */
+    private int addressArrayOp(int cp)
+    {
+        if (!symbols.isIntrinsicCall(cp))
+        {
+            return -1;
+        }
+        int id = symbols.intrinsicId(cp);
+        return id >= Intrinsics.AA_NEW && id <= Intrinsics.AA_LENGTH ? id : -1;
+    }
+
     private void arrayLength(CodeBuffer cb, int pos)
     {
         int arr = popReg();
@@ -3914,11 +3951,16 @@ public final class Baseline
      * (resolved per world behind {@link Symbols#intrinsicId}). Branching on an int
      * rather than a {@code String} key keeps this compilable on metal.
      */
-    private void lowerIntrinsic(int id, CodeBuffer cb)
+    private void lowerIntrinsic(int id, CodeBuffer cb, int pos)
     {
         if (id >= Intrinsics.UB_MOVE && id <= Intrinsics.UB_ST64_OFF)
         {
             lowerUnboxed(id, cb);
+            return;
+        }
+        if (id >= Intrinsics.AA_NEW && id <= Intrinsics.AA_LENGTH)
+        {
+            lowerAddressArray(id, cb, pos);
             return;
         }
         if (id == Intrinsics.WFE)
@@ -4415,6 +4457,23 @@ public final class Baseline
         while (pos < code.length)
         {
             int op = code[pos] & 0xFF;
+            // magic.AddressArray: decided exactly as the array bytecode it lowers to -- create allocates (a call,
+            // like newarray); get/set/length are non-leaf only when implicit checks put a BL on their throw path
+            // (like laload/lastore/arraylength below). Ahead of the generic intrinsic rules, which would call
+            // these instructions-only.
+            if (op == 0xB6 || op == 0xB8)
+            {
+                int aa = addressArrayOp(u2(code, pos + 1));
+                if (aa == Intrinsics.AA_NEW || (aa >= 0 && symbols.implicitChecks()))
+                {
+                    return true;
+                }
+                if (aa >= 0)
+                {
+                    pos += opLen(op, code, pos);
+                    continue;
+                }
+            }
             if (op == 0xB6 && symbols.isIntrinsicCall(u2(code, pos + 1)) && !symbols.intrinsicEmitsCall(u2(code, pos + 1)))
             {
                 pos += opLen(op, code, pos);            // an unboxed type's method: instructions, not a call
@@ -4693,6 +4752,11 @@ public final class Baseline
             if (op == 0xC0 || op == 0xC1)                              // checkcast / instanceof: +1 (target Type)
             {
                 trans = d + 1;
+            }
+            else if (op == 0xB8 && addressArrayOp(((code[pc + 1] & 0xFF) << 8) | (code[pc + 2] & 0xFF))
+                    == Intrinsics.AA_NEW)
+            {
+                trans = d + 1;                                        // AddressArray.create: newarray's +1
             }
             else if (op == 0xBC || op == 0xBD)                         // newarray / anewarray: +1 (element size
             {                                                          //   pushed over the length for the alloc call)

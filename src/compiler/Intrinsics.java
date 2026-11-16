@@ -167,4 +167,11 @@ public final class Intrinsics
     public static final int UB_ST16_OFF = 140;
     public static final int UB_ST32_OFF = 141;
     public static final int UB_ST64_OFF = 142;
+
+    // magic.AddressArray: a long[] at run time, so each op is the array bytecode's own lowering -- NOT in the
+    // UB_MOVE..UB_ST64_OFF range, because unlike those it checks null/bounds and (create) calls the allocator.
+    public static final int AA_NEW = 143;            // create(int): newarray long
+    public static final int AA_GET = 144;            // get(int): laload
+    public static final int AA_SET = 145;            // set(int, Address): lastore
+    public static final int AA_LENGTH = 146;         // length(): arraylength
 }
