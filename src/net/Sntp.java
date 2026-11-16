@@ -44,7 +44,7 @@ public final class Sntp
     public static void sync()
     {
         long ip = Heap.allocData(4).toLong();
-        if (!board.cyw43.Cyw43.dnsResolve(Magic.bytes("pool.ntp.org"), ip))  // the NTP pool's round-robin name
+        if (!board.cyw43.Cyw43.dnsResolve(Magic.bytes("pool.ntp.org"), Address.fromLong(ip)))  // the NTP pool's round-robin name
         {
             Uart.write(Magic.bytes("clock: no DNS answer for pool.ntp.org -- stays at the commit time + uptime\n"));
             return;

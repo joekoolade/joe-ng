@@ -86,20 +86,19 @@ public final class Supplicant
         {
             return;
         }
-        long body = eth + 14;
-        Address b = Address.fromLong(body);
-        if ((b.plus(1).loadUnsignedByte() & 0xFF) != 3)        // not EAPOL-Key
+        Address body = Address.fromLong(eth).plus(14);
+        if ((body.plus(1).loadUnsignedByte() & 0xFF) != 3)        // not EAPOL-Key
         {
             return;
         }
-        int eapLen = ((b.plus(2).loadUnsignedByte() & 0xFF) << 8) | (b.plus(3).loadUnsignedByte() & 0xFF);
+        int eapLen = ((body.plus(2).loadUnsignedByte() & 0xFF) << 8) | (body.plus(3).loadUnsignedByte() & 0xFF);
         if (eapLen < 95 || 4 + eapLen > len - 14)
         {
             reject(Magic.bytes("wifi: rekey short frame\n"));
             return;
         }
-        int ki = ((b.plus(5).loadUnsignedByte() & 0xFF) << 8) | (b.plus(6).loadUnsignedByte() & 0xFF);
-        byte[] aa = Cyw43.heapBytes(eth + 6, 6);         // the AP's MAC (Ethernet source)
+        int ki = ((body.plus(5).loadUnsignedByte() & 0xFF) << 8) | (body.plus(6).loadUnsignedByte() & 0xFF);
+        byte[] aa = Cyw43.heapBytes(Address.fromLong(eth).plus(6), 6);         // the AP's MAC (Ethernet source)
         if ((ki & KI_ACK) == 0)
         {
             return;                                      // not from the authenticator
@@ -119,13 +118,12 @@ public final class Supplicant
     }
 
     /** Pairwise msg1: derive a PTK from its ANonce and our SNonce, send msg2. */
-    private static void msg1(long body, byte[] aa)
+    private static void msg1(Address body, byte[] aa)
     {
-        byte[] aNonce = Cyw43.heapBytes(body + 17, 32);
-        byte[] r = Cyw43.heapBytes(body + 9, 8);
+        byte[] aNonce = Cyw43.heapBytes(body.plus(17), 32);
+        byte[] r = Cyw43.heapBytes(body.plus(9), 8);
         pendReplay = r;
-        Address b = Address.fromLong(body);
-        pendKeyLen = ((b.plus(7).loadUnsignedByte() & 0xFF) << 8) | (b.plus(8).loadUnsignedByte() & 0xFF);
+        pendKeyLen = ((body.plus(7).loadUnsignedByte() & 0xFF) << 8) | (body.plus(8).loadUnsignedByte() & 0xFF);
         if (sNonce == null)
         {
             sNonce = new byte[32];
@@ -141,7 +139,7 @@ public final class Supplicant
     }
 
     /** Pairwise msg3: verify with the pending PTK, unwrap the GTK, send msg4, install TK + GTK. */
-    private static void msg3(long body, int eapLen, byte[] aa)
+    private static void msg3(Address body, int eapLen, byte[] aa)
     {
         if (pendKck == null)
         {
@@ -160,7 +158,7 @@ public final class Supplicant
             reject(Magic.bytes("wifi: rekey msg3 no GTK\n"));
             return;
         }
-        replay = Cyw43.heapBytes(body + 9, 8);
+        replay = Cyw43.heapBytes(body.plus(9), 8);
         Cyw43.sendEapol(aa, KI_MSG4, replay, pendKeyLen, new byte[32], new byte[0], 0, pendKck);
         Cyw43.installKey(0, pendTk, 16, aa, true);
         Cyw43.installKey(gtkId, gtk, 16, new byte[6], false);
@@ -178,7 +176,7 @@ public final class Supplicant
     }
 
     /** Group msg1: verify with the current PTK, unwrap the new GTK, send group msg2, install the GTK. */
-    private static void groupMsg1(long body, int eapLen, byte[] aa)
+    private static void groupMsg1(Address body, int eapLen, byte[] aa)
     {
         if (!micOk(body, eapLen, kck) || !fresh(body, replay))
         {
@@ -192,7 +190,7 @@ public final class Supplicant
             reject(Magic.bytes("wifi: group rekey no GTK\n"));
             return;
         }
-        replay = Cyw43.heapBytes(body + 9, 8);
+        replay = Cyw43.heapBytes(body.plus(9), 8);
         Cyw43.sendEapol(aa, KI_GROUP2, replay, 0, new byte[32], new byte[0], 0, kck);
         Cyw43.installKey(gtkId, gtk, 16, new byte[6], false);
         groupRekeys = groupRekeys + 1;
@@ -202,7 +200,7 @@ public final class Supplicant
     }
 
     /** HMAC-SHA1-128 over the EAPOL frame (MIC field zeroed) equals the frame's MIC. */
-    private static boolean micOk(long body, int eapLen, byte[] ck)
+    private static boolean micOk(Address body, int eapLen, byte[] ck)
     {
         byte[] frame = Cyw43.heapBytes(body, 4 + eapLen);
         byte[] rxMic = Cyw43.slice(frame, 81, 16);
@@ -218,9 +216,9 @@ public final class Supplicant
     }
 
     /** The frame's replay counter is strictly greater than {@code base} (big-endian, unsigned). */
-    private static boolean fresh(long body, byte[] base)
+    private static boolean fresh(Address body, byte[] base)
     {
-        byte[] r = Cyw43.heapBytes(body + 9, 8);
+        byte[] r = Cyw43.heapBytes(body.plus(9), 8);
         int i = 0;
         while (i < 8)
         {
@@ -236,15 +234,14 @@ public final class Supplicant
     }
 
     /** AES-unwrap the key data with {@code ek} and pull out the GTK KDE; its key id, or -1. */
-    private static int unwrapGtk(long body, byte[] ek, byte[] gtk)
+    private static int unwrapGtk(Address body, byte[] ek, byte[] gtk)
     {
-        Address b = Address.fromLong(body);
-        int kdLen = ((b.plus(97).loadUnsignedByte() & 0xFF) << 8) | (b.plus(98).loadUnsignedByte() & 0xFF);
+        int kdLen = ((body.plus(97).loadUnsignedByte() & 0xFF) << 8) | (body.plus(98).loadUnsignedByte() & 0xFF);
         if (kdLen < 16 || (kdLen & 7) != 0)
         {
             return -1;
         }
-        byte[] wrapped = Cyw43.heapBytes(body + 99, kdLen);
+        byte[] wrapped = Cyw43.heapBytes(body.plus(99), kdLen);
         byte[] kd = new byte[kdLen - 8];
         if (!crypto.KeyWrap.unwrap(ek, wrapped, kdLen, kd))
         {
