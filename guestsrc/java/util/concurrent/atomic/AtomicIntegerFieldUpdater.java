@@ -11,6 +11,7 @@
  */
 package java.util.concurrent.atomic;
 
+import magic.Address;
 import magic.Magic;
 
 /**
@@ -44,7 +45,7 @@ public class AtomicIntegerFieldUpdater<T>
      *  32-bit store over a negative value). */
     public void set(T obj, int newValue)
     {
-        Magic.store64(Magic.addrOf(obj) + fieldOffset0(fname, obj), newValue);
+        Address.fromObject(obj).plus(fieldOffset0(fname, obj)).store((long) newValue);
     }
 
     public void lazySet(T obj, int newValue)
@@ -54,7 +55,7 @@ public class AtomicIntegerFieldUpdater<T>
 
     public int get(T obj)
     {
-        return Magic.load32(Magic.addrOf(obj) + fieldOffset0(fname, obj));
+        return Address.fromObject(obj).plus(fieldOffset0(fname, obj)).loadInt();
     }
 
     /**

@@ -15,6 +15,7 @@ import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.lang.reflect.UndeclaredThrowableException;
+import magic.Address;
 import magic.Magic;
 
 /**
@@ -80,9 +81,9 @@ public final class MetalProxies
     {
         if (n <= 15 || i < 14)
         {
-            return Magic.load64(args + 8L * i);
+            return Address.fromLong(args + 8L * i).loadLong();
         }
-        return Magic.load64(Magic.load64(args + 8L * 14) + 8L * (i - 14));
+        return Address.fromLong(args + 8L * 14).loadAddress().plus(8L * (i - 14)).loadLong();
     }
 
     private static Object box(Class<?> t, long raw)

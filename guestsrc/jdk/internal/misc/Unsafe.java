@@ -11,6 +11,7 @@
  */
 package jdk.internal.misc;
 
+import magic.Address;
 import magic.Magic;
 
 /**
@@ -148,28 +149,28 @@ public final class Unsafe
 
     public byte getByte(Object o, long offset)
     {
-        return (byte) Magic.load8(at(o, offset));
+        return (byte) Address.fromLong(at(o, offset)).loadUnsignedByte();
     }
 
     public int getInt(Object o, long offset)
     {
-        return Magic.load32(at(o, offset));
+        return Address.fromLong(at(o, offset)).loadInt();
     }
 
     public long getLong(Object o, long offset)
     {
-        return Magic.load64(at(o, offset));
+        return Address.fromLong(at(o, offset)).loadLong();
     }
 
     // Normal RAM is Normal-cacheable memory, so unaligned LDR/LDRW are permitted; no split needed.
     public int getIntUnaligned(Object o, long offset)
     {
-        return Magic.load32(at(o, offset));
+        return Address.fromLong(at(o, offset)).loadInt();
     }
 
     public long getLongUnaligned(Object o, long offset)
     {
-        return Magic.load64(at(o, offset));
+        return Address.fromLong(at(o, offset)).loadLong();
     }
 
     // ------------------------------------------------------------------------------------------------
@@ -212,7 +213,7 @@ public final class Unsafe
 
     public boolean compareAndSetLong(Object o, long offset, long expected, long x)
     {
-        return Magic.cas64(at(o, offset), expected, x);
+        return Address.fromLong(at(o, offset)).attempt(expected, x);
     }
 
     public boolean compareAndSetInt(Object o, long offset, int expected, int x)
@@ -221,12 +222,12 @@ public final class Unsafe
         {
             return casInt(o, offset, expected, x) == expected;   // 4-byte element; cas64 would span two
         }
-        return Magic.cas64(at(o, offset), expected, x);   // sign-extended in an 8-byte slot; see above
+        return Address.fromLong(at(o, offset)).attempt(expected, x);   // sign-extended in an 8-byte slot; see above
     }
 
     public boolean compareAndSetReference(Object o, long offset, Object expected, Object x)
     {
-        return Magic.cas64(at(o, offset), Magic.addrOf(expected), Magic.addrOf(x));
+        return Address.fromLong(at(o, offset)).attempt(Address.fromObject(expected), Address.fromObject(x));
     }
 
     /** Stock's weak forms may fail SPURIOUSLY and callers always retry; an LL/SC CAS may too, so these are
@@ -250,8 +251,8 @@ public final class Unsafe
      *  returning `expected`, which would tell the caller its CAS failed against the value it already had. */
     public long compareAndExchangeLong(Object o, long offset, long expected, long x)
     {
-        long a = at(o, offset);
-        return Magic.cas64(a, expected, x) ? expected : Magic.load64(a);
+        Address a = Address.fromLong(at(o, offset));
+        return a.attempt(expected, x) ? expected : a.loadLong();
     }
 
     public int compareAndExchangeInt(Object o, long offset, int expected, int x)
@@ -260,18 +261,18 @@ public final class Unsafe
         {
             return casInt(o, offset, expected, x);           // casNarrow already answers the witnessed value
         }
-        long a = at(o, offset);
-        return Magic.cas64(a, expected, x) ? expected : (int) Magic.load64(a);
+        Address a = Address.fromLong(at(o, offset));
+        return a.attempt(expected, x) ? expected : (int) a.loadLong();
     }
 
     public Object compareAndExchangeReference(Object o, long offset, Object expected, Object x)
     {
-        long a = at(o, offset);
-        if (Magic.cas64(a, Magic.addrOf(expected), Magic.addrOf(x)))
+        Address a = Address.fromLong(at(o, offset));
+        if (a.attempt(Address.fromObject(expected), Address.fromObject(x)))
         {
             return expected;
         }
-        return Magic.fromAddr(Magic.load64(a));
+        return a.loadAddress().toObject();
     }
 
     // The read-modify-write family. Each LOOPS, which is required rather than defensive: an LL/SC CAS may
@@ -290,13 +291,13 @@ public final class Unsafe
     // narrow-slot caller would not fail, it would corrupt its neighbour.
     public long getAndAddLong(Object o, long offset, long delta)
     {
-        long a = at(o, offset);
+        Address a = Address.fromLong(at(o, offset));
         long v;
         do
         {
-            v = Magic.load64(a);
+            v = a.loadLong();
         }
-        while (!Magic.cas64(a, v, v + delta));
+        while (!a.attempt(v, v + delta));
         return v;
     }
 
@@ -312,25 +313,25 @@ public final class Unsafe
             while (casInt(o, offset, e, e + delta) != e);
             return e;
         }
-        long a = at(o, offset);
+        Address a = Address.fromLong(at(o, offset));
         int v;
         do
         {
-            v = (int) Magic.load64(a);
+            v = (int) a.loadLong();
         }
-        while (!Magic.cas64(a, v, v + delta));
+        while (!a.attempt(v, v + delta));
         return v;
     }
 
     public long getAndSetLong(Object o, long offset, long x)
     {
-        long a = at(o, offset);
+        Address a = Address.fromLong(at(o, offset));
         long v;
         do
         {
-            v = Magic.load64(a);
+            v = a.loadLong();
         }
-        while (!Magic.cas64(a, v, x));
+        while (!a.attempt(v, x));
         return v;
     }
 
@@ -346,26 +347,26 @@ public final class Unsafe
             while (casInt(o, offset, e, x) != e);
             return e;
         }
-        long a = at(o, offset);
+        Address a = Address.fromLong(at(o, offset));
         int v;
         do
         {
-            v = (int) Magic.load64(a);
+            v = (int) a.loadLong();
         }
-        while (!Magic.cas64(a, v, x));
+        while (!a.attempt(v, x));
         return v;
     }
 
     public Object getAndSetReference(Object o, long offset, Object x)
     {
-        long a = at(o, offset);
+        Address a = Address.fromLong(at(o, offset));
         long nx = Magic.addrOf(x);
         long v;
         do
         {
-            v = Magic.load64(a);
+            v = a.loadLong();
         }
-        while (!Magic.cas64(a, v, nx));
+        while (!a.attempt(v, nx));
         return Magic.fromAddr(v);
     }
 
@@ -412,13 +413,13 @@ public final class Unsafe
             while (casInt(o, offset, e, e | mask) != e);
             return e;
         }
-        long a = at(o, offset);
+        Address a = Address.fromLong(at(o, offset));
         int v;
         do
         {
-            v = (int) Magic.load64(a);
+            v = (int) a.loadLong();
         }
-        while (!Magic.cas64(a, v, v | mask));
+        while (!a.attempt(v, v | mask));
         return v;
     }
 
@@ -444,13 +445,13 @@ public final class Unsafe
             while (casInt(o, offset, e, e & mask) != e);
             return e;
         }
-        long a = at(o, offset);
+        Address a = Address.fromLong(at(o, offset));
         int v;
         do
         {
-            v = (int) Magic.load64(a);
+            v = (int) a.loadLong();
         }
-        while (!Magic.cas64(a, v, v & mask));
+        while (!a.attempt(v, v & mask));
         return v;
     }
 
@@ -476,13 +477,13 @@ public final class Unsafe
             while (casInt(o, offset, e, e ^ mask) != e);
             return e;
         }
-        long a = at(o, offset);
+        Address a = Address.fromLong(at(o, offset));
         int v;
         do
         {
-            v = (int) Magic.load64(a);
+            v = (int) a.loadLong();
         }
-        while (!Magic.cas64(a, v, v ^ mask));
+        while (!a.attempt(v, v ^ mask));
         return v;
     }
 
@@ -498,13 +499,13 @@ public final class Unsafe
 
     public long getAndBitwiseOrLong(Object o, long offset, long mask)
     {
-        long a = at(o, offset);
+        Address a = Address.fromLong(at(o, offset));
         long v;
         do
         {
-            v = Magic.load64(a);
+            v = a.loadLong();
         }
-        while (!Magic.cas64(a, v, v | mask));
+        while (!a.attempt(v, v | mask));
         return v;
     }
 
@@ -520,13 +521,13 @@ public final class Unsafe
 
     public long getAndBitwiseAndLong(Object o, long offset, long mask)
     {
-        long a = at(o, offset);
+        Address a = Address.fromLong(at(o, offset));
         long v;
         do
         {
-            v = Magic.load64(a);
+            v = a.loadLong();
         }
-        while (!Magic.cas64(a, v, v & mask));
+        while (!a.attempt(v, v & mask));
         return v;
     }
 
@@ -542,13 +543,13 @@ public final class Unsafe
 
     public long getAndBitwiseXorLong(Object o, long offset, long mask)
     {
-        long a = at(o, offset);
+        Address a = Address.fromLong(at(o, offset));
         long v;
         do
         {
-            v = Magic.load64(a);
+            v = a.loadLong();
         }
-        while (!Magic.cas64(a, v, v ^ mask));
+        while (!a.attempt(v, v ^ mask));
         return v;
     }
 
@@ -571,12 +572,12 @@ public final class Unsafe
 
     public Object getReference(Object o, long offset)
     {
-        return Magic.fromAddr(Magic.load64(at(o, offset)));
+        return Address.fromLong(at(o, offset)).loadAddress().toObject();
     }
 
     public void putReference(Object o, long offset, Object x)
     {
-        Magic.store64(at(o, offset), Magic.addrOf(x));
+        Address.fromLong(at(o, offset)).store(Address.fromObject(x));
     }
 
     public Object getReferenceAcquire(Object o, long offset)
@@ -676,7 +677,7 @@ public final class Unsafe
 
     public void putLong(Object o, long offset, long x)
     {
-        Magic.store64(at(o, offset), x);
+        Address.fromLong(at(o, offset)).store(x);
     }
 
     public void putLongRelease(Object o, long offset, long x)
@@ -816,20 +817,20 @@ public final class Unsafe
     /** Read {@code width} bytes little-endian, ZERO-extended. Exact for all three layouts; see above. */
     private static long getBits(Object o, long offset, int width)
     {
-        long a = at(o, offset);
+        Address a = Address.fromLong(at(o, offset));
         if (width == 1)
         {
-            return Magic.load8(a) & 0xFFL;
+            return a.loadUnsignedByte() & 0xFFL;
         }
         if (width == 2)
         {
-            return (Magic.load8(a) & 0xFFL) | ((Magic.load8(a + 1) & 0xFFL) << 8);
+            return (a.loadUnsignedByte() & 0xFFL) | ((a.plus(1L).loadUnsignedByte() & 0xFFL) << 8);
         }
         if (width == 4)
         {
-            return Magic.load32(a) & 0xFFFFFFFFL;
+            return a.loadInt() & 0xFFFFFFFFL;
         }
-        return Magic.load64(a);
+        return a.loadLong();
     }
 
     /**
@@ -840,26 +841,26 @@ public final class Unsafe
      */
     private static void putBits(Object o, long offset, long v, int width)
     {
-        long a = at(o, offset);
+        Address a = Address.fromLong(at(o, offset));
         if (o != null && !isArrayRef(o))
         {
-            Magic.store64(a, v);                 // a FIELD: one slot, exactly as putfield's strx leaves it
+            a.store(v);                 // a FIELD: one slot, exactly as putfield's strx leaves it
             return;
         }
         if (width == 8)
         {
-            Magic.store64(a, v);
+            a.store(v);
             return;
         }
         if (width == 4)
         {
-            Magic.store32(a, (int) v);
+            a.store((int) v);
             return;
         }
-        Magic.store8(a, (int) v);
+        a.store((byte) v);
         if (width == 2)
         {
-            Magic.store8(a + 1, (int) (v >>> 8));
+            a.plus(1L).store((byte) (v >>> 8));
         }
     }
 
@@ -915,14 +916,14 @@ public final class Unsafe
 
     public double getDouble(Object o, long offset)
     {
-        return Double.longBitsToDouble(Magic.load64(at(o, offset)));
+        return Double.longBitsToDouble(Address.fromLong(at(o, offset)).loadLong());
     }
 
     /** The one narrow-ish width that needs no discriminator: a double is 8 bytes as a field AND as an
      *  element, so the slot write and the element write are the same instruction. */
     public void putDouble(Object o, long offset, double x)
     {
-        Magic.store64(at(o, offset), Double.doubleToRawLongBits(x));
+        Address.fromLong(at(o, offset)).store(Double.doubleToRawLongBits(x));
     }
 
     // ----- memory modes for those widths ------------------------------------------------------------
@@ -1410,12 +1411,12 @@ public final class Unsafe
         {
             while (true)
             {
-                long full = Magic.load64(a);
+                long full = Address.fromLong(a).loadLong();
                 if ((full & vmask) != (expected & vmask))
                 {
                     return full;                         // witnessed; the caller narrows it
                 }
-                if (Magic.cas64(a, full, x))
+                if (Address.fromLong(a).attempt(full, x))
                 {
                     return expected;
                 }
@@ -1428,12 +1429,12 @@ public final class Unsafe
         long maskedX = (x & vmask) << shift;
         while (true)
         {
-            long full = Magic.load64(word);
+            long full = Address.fromLong(word).loadLong();
             if ((full & mask) != maskedExpected)
             {
                 return (full & mask) >>> shift;
             }
-            if (Magic.cas64(word, full, (full & ~mask) | maskedX))
+            if (Address.fromLong(word).attempt(full, (full & ~mask) | maskedX))
             {
                 return expected;
             }
@@ -2608,14 +2609,14 @@ public final class Unsafe
             while (i > 0L)
             {
                 i = i - 1L;
-                Magic.store8(d + i, Magic.load8(s + i));
+                Address.fromLong(d).plus(i).store((byte) Address.fromLong(s).plus(i).loadUnsignedByte());
             }
             return;
         }
         long i = 0L;
         while (i < bytes)
         {
-            Magic.store8(d + i, Magic.load8(s + i));
+            Address.fromLong(d).plus(i).store((byte) Address.fromLong(s).plus(i).loadUnsignedByte());
             i = i + 1L;
         }
     }
@@ -2628,11 +2629,11 @@ public final class Unsafe
     public void setMemory(Object o, long offset, long bytes, byte value)
     {
         setMemoryChecks(o, offset, bytes, value);
-        long a = at(o, offset);
+        Address a = Address.fromLong(at(o, offset));
         long i = 0L;
         while (i < bytes)
         {
-            Magic.store8(a + i, value);
+            a.plus(i).store(value);
             i = i + 1L;
         }
     }
@@ -2848,13 +2849,13 @@ public final class Unsafe
         long k = 0L;
         while (k < size)
         {
-            v = v | ((Magic.load8(src + k) & 0xFFL) << (k * 8L));
+            v = v | ((Address.fromLong(src).plus(k).loadUnsignedByte() & 0xFFL) << (k * 8L));
             k = k + 1L;
         }
         k = 0L;
         while (k < size)
         {
-            Magic.store8(dst + size - 1L - k, (byte) (v >>> (k * 8L)));
+            Address.fromLong(dst).plus(size - 1L - k).store((byte) (v >>> (k * 8L)));
             k = k + 1L;
         }
     }

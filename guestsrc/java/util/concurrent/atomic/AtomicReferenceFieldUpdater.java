@@ -11,6 +11,7 @@
  */
 package java.util.concurrent.atomic;
 
+import magic.Address;
 import magic.Magic;
 
 /**
@@ -38,8 +39,8 @@ public class AtomicReferenceFieldUpdater<T, V>
 
     public void set(T obj, V newValue)
     {
-        long a = Magic.addrOf(obj) + fieldOffset0(fname, obj);
-        Magic.store64(a, (newValue == null) ? 0L : Magic.addrOf(newValue));
+        Address a = Address.fromObject(obj).plus(fieldOffset0(fname, obj));
+        a.store((newValue == null) ? 0L : Magic.addrOf(newValue));
     }
 
     public void lazySet(T obj, V newValue)

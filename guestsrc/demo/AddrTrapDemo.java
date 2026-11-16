@@ -11,7 +11,7 @@
  */
 package demo;
 
-import magic.Magic;
+import magic.Address;
 
 /** Address-trap smoke test: a load from an unmapped address raises an EL1 data abort, which the fault
  *  handler converts into a NullPointerException thrown at the faulting instruction -- a real, catchable
@@ -23,7 +23,7 @@ public class AddrTrapDemo
         long bad = 0x8000000000L;             // 512 GiB -- beyond the 4 GiB board, unmapped
         try
         {
-            long x = Magic.load64(bad);       // data abort -> NullPointerException, thrown here
+            long x = Address.fromLong(bad).loadLong();       // data abort -> NullPointerException, thrown here
             System.out.println("no trap? " + x);
         }
         catch (NullPointerException e)

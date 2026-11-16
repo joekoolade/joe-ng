@@ -11,6 +11,7 @@
  */
 package java.lang.reflect;
 
+import magic.Address;
 import magic.Magic;
 
 /**
@@ -180,7 +181,7 @@ public final class Field extends AccessibleObject implements Member
      */
     private long integral(long a)
     {
-        long bits = Magic.load64(a);
+        long bits = Address.fromLong(a).loadLong();
         if (typeChar == 'B')
         {
             return (byte) bits;
@@ -227,7 +228,7 @@ public final class Field extends AccessibleObject implements Member
         }
         if (typeChar == 'D')
         {
-            Magic.store64(a, Double.doubleToRawLongBits((double) v));
+            Address.fromLong(a).store(Double.doubleToRawLongBits((double) v));
             return;
         }
         slot(a, v);
@@ -266,13 +267,13 @@ public final class Field extends AccessibleObject implements Member
         }
         if (typeChar == 'F')
         {
-            return Float.valueOf(Float.intBitsToFloat(Magic.load32(a)));
+            return Float.valueOf(Float.intBitsToFloat(Address.fromLong(a).loadInt()));
         }
         if (typeChar == 'D')
         {
-            return Double.valueOf(Double.longBitsToDouble(Magic.load64(a)));
+            return Double.valueOf(Double.longBitsToDouble(Address.fromLong(a).loadLong()));
         }
-        return Magic.fromAddr(Magic.load64(a));
+        return Address.fromLong(a).loadAddress().toObject();
     }
 
     /**
@@ -292,7 +293,7 @@ public final class Field extends AccessibleObject implements Member
             {
                 throw new IllegalArgumentException(name);
             }
-            Magic.store64(a, value == null ? 0L : Magic.addrOf(value));
+            Address.fromLong(a).store(value == null ? 0L : Magic.addrOf(value));
             return;
         }
         if (value instanceof Integer v)
@@ -342,13 +343,13 @@ public final class Field extends AccessibleObject implements Member
      */
     private static void slot(long a, long extended)
     {
-        Magic.store64(a, extended);
+        Address.fromLong(a).store(extended);
     }
 
     /** A float's raw bits, zero-extended into the slot -- what a compiled {@code putfield} of an {@code F} leaves. */
     private static void floatSlot(long a, float v)
     {
-        Magic.store64(a, Float.floatToRawIntBits(v) & 0xFFFFFFFFL);
+        Address.fromLong(a).store(Float.floatToRawIntBits(v) & 0xFFFFFFFFL);
     }
 
     /** A float into a float or double field; anything else refuses. */
@@ -361,7 +362,7 @@ public final class Field extends AccessibleObject implements Member
         }
         if (typeChar == 'D')
         {
-            Magic.store64(a, Double.doubleToRawLongBits((double) v));
+            Address.fromLong(a).store(Double.doubleToRawLongBits((double) v));
             return;
         }
         throw new IllegalArgumentException(name);
@@ -374,7 +375,7 @@ public final class Field extends AccessibleObject implements Member
         {
             throw new IllegalArgumentException(name);
         }
-        Magic.store64(a, Double.doubleToRawLongBits(v));
+        Address.fromLong(a).store(Double.doubleToRawLongBits(v));
     }
 
     /**
@@ -439,7 +440,7 @@ public final class Field extends AccessibleObject implements Member
         readableAs('F');
         if (typeChar == 'F')
         {
-            return Float.intBitsToFloat(Magic.load32(a));
+            return Float.intBitsToFloat(Address.fromLong(a).loadInt());
         }
         return (float) integral(a);
     }
@@ -451,11 +452,11 @@ public final class Field extends AccessibleObject implements Member
         readableAs('D');
         if (typeChar == 'D')
         {
-            return Double.longBitsToDouble(Magic.load64(a));
+            return Double.longBitsToDouble(Address.fromLong(a).loadLong());
         }
         if (typeChar == 'F')
         {
-            return (double) Float.intBitsToFloat(Magic.load32(a));
+            return (double) Float.intBitsToFloat(Address.fromLong(a).loadInt());
         }
         return (double) integral(a);
     }
