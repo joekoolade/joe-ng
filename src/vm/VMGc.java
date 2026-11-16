@@ -219,8 +219,9 @@ final class VMGc
                                  Address.fromLong(Heap.LARGE_PTR_CELL).loadAddress());
             findStaleCodeInRaw(scanFrom, stackTop, 1L);                     // the stack (the CURRENT task's)
             findStaleCodeInRaw(staticsStart, staticsEnd, 2L);               // image statics
-            findStaleCodeInRaw(VM.jitFrameTable, VM.jitFrameTable + VM.jitFrameCount * 24L, 3L);
-            findStaleCodeInRaw(VM.jitHandlerTable, VM.jitHandlerTable + VM.jitHandlerCount * 32L, 4L);
+            findStaleCodeInRaw(VM.jitFrameTable.toLong(), VM.jitFrameTable.plus(VM.jitFrameCount * 24L).toLong(), 3L);
+            findStaleCodeInRaw(VM.jitHandlerTable.toLong(), VM.jitHandlerTable.plus(VM.jitHandlerCount * 32L).toLong(),
+                               4L);
         }
                                                       // (counted AFTER the ordinary trace, so the count is
                                                       //  exactly "what nothing else kept alive")

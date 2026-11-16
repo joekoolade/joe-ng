@@ -456,8 +456,8 @@ final class SelfBuild
         layoutDataRegions();
         return dAddr(dStaticsStart) == staticsStart
             && dAddr(dStaticsEnd) == staticsEnd
-            && dAddr(dFrameStart) == frameTable
-            && dAddr(dHandlerStart) == handlerTable
+            && dAddr(dFrameStart) == frameTable.toLong()
+            && dAddr(dHandlerStart) == handlerTable.toLong()
             && dAddr(dBlobStart) == guestBytes
             && dAddr(dClassDirStart) == classDir
             && drFrameCount == frameCount

@@ -29278,9 +29278,9 @@ public final class Loader
      * keeps its own frame. The method is named from the JIT registry or, for baked code (stock exception
      * constructors live in the image), from the image symbol table; a pc found in neither is kept.
      */
-    static int ctorFrameKind(long pc, long exc)
+    static int ctorFrameKind(Address pc, long exc)
     {
-        long blk = Heap.codeBlockStartAt(Address.fromLong(pc)).toLong();
+        long blk = Heap.codeBlockStartAt(pc).toLong();
         if (blk != 0L)
         {
             int i = 0;
@@ -29305,7 +29305,7 @@ public final class Loader
         while (k < VM.imageSymCount)
         {
             long e = tab + k * 40L;
-            if (pc >= Address.fromLong(e).loadLong() && pc < Address.fromLong(e).plus(8L).loadLong())
+            if (pc.toLong() >= Address.fromLong(e).loadLong() && pc.toLong() < Address.fromLong(e).plus(8L).loadLong())
             {
                 Address sym = Address.fromLong(e).plus(16L).loadAddress();        // "owner/Class.method", length-prefixed
                 int symLen = u2(sym);
