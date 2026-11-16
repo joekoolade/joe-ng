@@ -42,7 +42,7 @@ public final class Ip
     /** Send a fully-built 802.3 Ethernet frame over the WiFi data path. */
     public static void send(long frame, int len)
     {
-        board.cyw43.Cyw43.txData(frame, len);
+        board.cyw43.Cyw43.txData(Address.fromLong(frame), len);
     }
 
     /**
@@ -74,7 +74,7 @@ public final class Ip
         }
         else
         {
-            len = board.cyw43.Cyw43.waitFrameIrq(rx, cap, ms);
+            len = board.cyw43.Cyw43.waitFrameIrq(Address.fromLong(rx), cap, ms);
         }
         if (len == 0)
         {

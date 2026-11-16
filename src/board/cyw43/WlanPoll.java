@@ -11,6 +11,7 @@
  */
 package board.cyw43;
 
+import magic.Address;
 import magic.Magic;
 import vm.VM;
 import vm.VMScheduler;
@@ -129,10 +130,10 @@ public final class WlanPoll
             int b = net.RxQueues.allocBuf();
             if (b < 0)
             {
-                Cyw43.glomNext(0L, 0);                   // no buffer: drop this subframe
+                Cyw43.glomNext(Address.zero(), 0);                   // no buffer: drop this subframe
                 continue;
             }
-            int len = Cyw43.glomNext(net.RxQueues.bufAddr(b), net.RxQueues.FRAME);
+            int len = Cyw43.glomNext(Address.fromLong(net.RxQueues.bufAddr(b)), net.RxQueues.FRAME);
             if (len == 0)
             {
                 net.RxQueues.freeBuf(b);                 // only malformed subframes were left
@@ -156,7 +157,7 @@ public final class WlanPoll
                 VMScheduler.kernelYield();                 // consumers hold every buffer: let them drain
                 continue;
             }
-            long dst = net.RxQueues.bufAddr(b);
+            Address dst = Address.fromLong(net.RxQueues.bufAddr(b));
             busLock();
             long s0 = Magic.readCNTPCT_EL0();
             int len = Cyw43.readFrameOnce(dst, net.RxQueues.FRAME);

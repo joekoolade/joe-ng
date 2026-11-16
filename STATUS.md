@@ -4,6 +4,34 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 20: the WiFi driver's buffer pointers are Address (2026-11-16).** Pi-validated
+  (build 98dcdcd40a0d203a). Increment 4 converted Cyw43's loads and stores but kept every signature `long`; this is
+  the other half. (VMGc, planned next, was measured first and deferred: its remaining wraps are mostly fixed-address
+  `long` constants -- which cannot become Address, since an Address static bakes as 0 -- and scheduler stack arrays.)
+  - **Retyped (host memory only):** the buffer statics `buf`, `staSsid`, `staPsk`, `rxbuf`, `heldEapol`, `ourMac`,
+    `ourIp`, `gwIp`, `snMask`, `dnsIp`, `gwMac`, `drainBuf`, `glomBuf` (each assigned only from `Heap.allocData`, no
+    initializer); the public/package APIs `waitFrameIrq`, `txData`, `txDataP`, `rxFrame`, `recvCtrl` x2,
+    `readFrameOnce`, `isGlomDesc`, `glomNext`, `readSuperframe`, `heapBytes`, `dnsResolve`'s `ipOut`, `logRxEvent`,
+    `setupWpa2`, `sendBcdc`'s data pointer; ~50 private frame builders/parsers (DHCP/ARP/DNS/ICMP/TCP/EAPOL, NVRAM,
+    BCDC); `bpWrite`'s `src`; the firmware-blob pointers (`loadLong` -> `loadAddress`, the same 64-bit load). The
+    `xA = Address.fromLong(x)` hoisted locals increment 4 introduced are gone. `setEvt(mask, ev)`'s `mask` is a
+    POINTER into the `event_msgs` buffer despite its name, so it is Address too. Supplicant's private `body`
+    parameters likewise.
+  - **Left long, deliberately:** every BACKPLANE (chip-side) address -- `bpRead32`/`bpWrite32`/`setWindow`/`testAddr`
+    `addr`, `bpWrite`'s `bpAddr`, `armCr4*`'s `wrap`, `curWindow`, the `SI_ENUM_BASE`/`RAMBASE`/core constants:
+    those are addresses in the WiFi chip's memory, not ours. `txqBuf` stays a `long[]`. Supplicant's public `input`
+    (its caller is `net.RxQueues`, still long). The `net/` layer is touched only at its call sites into Cyw43
+    (`Address.fromLong` / `.toLong()` at the boundary).
+  - **Measured:** Cyw43 conversions **221 -> 29**; Supplicant 3 -> 2; net/Ip +2, Sntp +1, WlanPoll +2 (boundary wraps),
+    VMNatives -1. Load/store mix identical to main in all 7 classes but for the 4 `loadLong` -> `loadAddress` swaps.
+    Compare opcodes: 20 of Cyw43's 38 `lcmp` were zero tests and are `isZero()` now (one CBZ); no `if_acmp`, no
+    unsigned `Address.LT/GT` introduced -- the 2 ordering compares on pointers stay signed long. **Code size:** Cyw43
+    **-495 words** (15,473 -> 14,978, -3.2%), Supplicant -48, the rest unchanged. No `helper-stash MISS`.
+  - **Validation:** `make test` + overlaycheck; full regression **209/209** (QEMU has no WiFi -- the Pi is the test
+    here). Pi: the push's trial boot (WiFi join, WPA2 4-way, DHCP, first HTTP answer -- all over the retyped driver);
+    every page 200; hello x2; Boom stack trace; bench; forced stop; AddressFieldProbe 36/0; a new `/run` DnsCheck
+    (`InetAddress.getByName("pool.ntp.org")` -> `VMNatives.dnsResolve` -> `Cyw43.dnsResolve`) resolved
+    23.111.186.186; SHA-256 check; staged 39 MB PUT + discard over the RX path; `/net` InHdrErrors 0 / InErrs 0.
 - **UNBOXED TYPES, INCREMENT 19: the unwinder walks in Addresses; its tables are Address (2026-11-16).**
   Pi-validated (build 35903d05a6656a68).
   - **Tables:** `VM.handlerTable`, `frameTable`, `localTable` (writer-filled by NAME through `fillStatic`, which writes

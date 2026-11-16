@@ -280,7 +280,7 @@ public final class RxQueues
         {
             if (ch == 1)
             {
-                board.cyw43.Cyw43.logRxEvent(rx, len);
+                board.cyw43.Cyw43.logRxEvent(rxA, len);
             }
             freeBuf(b);
             return;
