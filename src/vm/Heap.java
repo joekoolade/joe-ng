@@ -159,25 +159,25 @@ public final class Heap
      * {@code Loader.printFrameAt}, where calling the end-lookup per registry entry made a stack trace
      * O(rgCount * codeBlockN) and each printed frame visibly slower than the last.
      */
-    public static long codeBlockStartAt(long addr)
+    public static Address codeBlockStartAt(Address addr)
     {
         long b = codeBlockIndexOf(addr);
-        return b < 0L ? 0L : Address.fromLong(CODE_BLOCKS + b * 16L).loadLong();
+        return b < 0L ? Address.zero() : Address.fromLong(CODE_BLOCKS + b * 16L).loadAddress();
     }
 
-    public static long codeBlockEndAt(long addr)
+    public static Address codeBlockEndAt(Address addr)
     {
         long b = codeBlockIndexOf(addr);
         if (b < 0L)
         {
-            return 0L;
+            return Address.zero();
         }
         Address e = Address.fromLong(CODE_BLOCKS + b * 16L);
-        return e.loadLong() + (e.plus(8).loadLong() & -8L);
+        return e.loadAddress().plus(e.plus(8).loadLong() & -8L);
     }
 
     /** The registry index of the code block containing {@code addr}, as {@link #codeBlockIndexScan}; see below. */
-    static long codeBlockIndexOf(long addr)
+    static long codeBlockIndexOf(Address addr)
     {
         long fast = codeBlockIndexFast(addr);
         return fast != CB_UNKNOWN ? fast : codeBlockIndexScan(addr);
@@ -203,9 +203,8 @@ public final class Heap
      * (temporary checker): 8,037 lookups over 30 probe boots and 990 on SslEngineProbe, every one answered
      * here and 0 different.
      */
-    private static long codeBlockIndexFast(long addr)
+    private static long codeBlockIndexFast(Address ad)
     {
-        Address ad = Address.fromLong(addr);
         Address codeBase = Address.fromLong(CODE_BASE);
         if (ad.LT(codeBase) || ad.GE(Address.fromLong(CODE_LIMIT)))
         {
@@ -215,7 +214,7 @@ public final class Heap
         {
             return CB_UNKNOWN;
         }
-        Address a = Address.fromLong(addr & -8L);
+        Address a = Address.fromLong(ad.toLong() & -8L);
         Address stop = ad.minus(CB_WALK_MAX);
         if (stop.LT(codeBase))
         {
@@ -235,9 +234,8 @@ public final class Heap
     }
 
     /** The scan the fast path replaces: first entry whose [start, start + usable) holds {@code addr}, or -1. */
-    static long codeBlockIndexScan(long addr)
+    static long codeBlockIndexScan(Address ad)
     {
-        Address ad = Address.fromLong(addr);
         long i = 0;
         while (i < codeBlockN)
         {
@@ -285,22 +283,21 @@ public final class Heap
     }
 
     /** Mark the code at {@code addr} as branched-to directly, so the sweep must keep it. */
-    public static void pinCodeAt(long addr)
+    public static void pinCodeAt(Address ad)
     {
-        Address ad = Address.fromLong(addr);
         if (ad.LT(Address.fromLong(CODE_BASE)) || ad.GE(Address.fromLong(CODE_LIMIT)))
         {
             return;
         }
-        long bit = (addr - CODE_BASE) >> 3;
+        long bit = (ad.toLong() - CODE_BASE) >> 3;
         Address w = Address.fromLong(CODE_PIN_BITMAP + ((bit >> 6) << 3));
         w.store(w.loadLong() | (1L << (int) (bit & 63L)));
     }
 
     /** 1 if any address in {@code [start,start+size)} has been pinned. */
-    public static int codePinnedIn(long start, long size)
+    public static int codePinnedIn(Address start, long size)
     {
-        long b = (start - CODE_BASE) >> 3;
+        long b = (start.toLong() - CODE_BASE) >> 3;
         long bEnd = b + (size >> 3);
         while (b < bEnd)
         {
@@ -336,15 +333,15 @@ public final class Heap
     static int  gcPressure;
 
     /** Base of core {@code c}'s arena. Core 0 = {@link #BASE}; secondaries carve 64 MiB slots from {@link #LARGE_LIMIT} up. */
-    static long arenaBase(int core)
+    static Address arenaBase(int core)
     {
-        return core == 0 ? BASE : LARGE_LIMIT + (long) (core - 1) * 0x0400_0000L;
+        return Address.fromLong(core == 0 ? BASE : LARGE_LIMIT + (long) (core - 1) * 0x0400_0000L);
     }
 
     /** End of core {@code c}'s arena: core 0 runs up to the secondaries' base; each secondary has 64 MiB. */
-    static long arenaLimit(int core)
+    static Address arenaLimit(int core)
     {
-        return core == 0 ? LARGE_BASE : arenaBase(core) + 0x0400_0000L;   // core 0's tail is the large region
+        return core == 0 ? Address.fromLong(LARGE_BASE) : arenaBase(core).plus(0x0400_0000L);   // core 0's tail is the large region
     }
 
     /**
@@ -353,7 +350,7 @@ public final class Heap
      * which is most objects touched by a spawned thread. Any check of the form "is this a heap reference"
      * must use this.
      */
-    public static long managedTop()
+    public static Address managedTop()
     {
         return arenaLimit(3);
     }
@@ -437,7 +434,7 @@ public final class Heap
                 if (rest >= PAGE)                          // the remainder is a whole number of pages, so it
                 {                                          //   stays on the same lattice as every request
                     f.plus(ObjectModel.STATUS_OFFSET).store(want);
-                    addFreeLarge(f.plus(want).toLong(), rest);
+                    addFreeLarge(f.plus(want), rest);
                 }
                 largeReuse = largeReuse + 1L;
                 long served = f.plus(ObjectModel.STATUS_OFFSET).loadLong();
@@ -463,9 +460,8 @@ public final class Heap
     }
 
     /** Push a run onto the large region's free list. */
-    public static void addFreeLarge(long addr, long size)
+    public static void addFreeLarge(Address a, long size)
     {
-        Address a = Address.fromLong(addr);
         Address head = Address.fromLong(LARGE_FREE_CELL);
         a.store(head.loadAddress());
         a.plus(ObjectModel.STATUS_OFFSET).store(size);
@@ -478,13 +474,13 @@ public final class Heap
      * full by the compiler, so no zeroing; {@link #publishCode} handles I-cache coherence. Core-0 only (the JIT
      * runs on core 0). No reclaim -- the whole boot's code is a few MiB, far under the 16 MiB arena.
      */
-    public static long allocCode(int size)
+    public static Address allocCode(int size)
     {
         VM.loaderLock(VM.LOCK_ALLOC_CODE);                               // SMP: one bump pointer, and no atomic behind it
-        long buf;
+        Address buf;
         try
         {
-            buf = allocCodeLocked(size).toLong();
+            buf = allocCodeLocked(size);
         }
         finally
         {
@@ -1228,9 +1224,9 @@ public final class Heap
     }
 
     /** Registry index of the block STARTING at {@code start}, or -1. Needs {@link #indexBlocksForWalk} first. */
-    static long blockIndexAt(long start)
+    static long blockIndexAt(Address start)
     {
-        return lookupCodeBlock(Address.fromLong(start));
+        return lookupCodeBlock(start);
     }
 
     /**
@@ -1329,7 +1325,7 @@ public final class Heap
      * no block covers it. Lets a caller assert the invariant that matters after a code sweep: every address
      * something still dispatches through must lie in an allocated buffer.
      */
-    public static int codeBlockFreeAt(long addr)
+    public static int codeBlockFreeAt(Address addr)
     {
         long b = codeBlockIndexOf(addr);
         if (b < 0L)
@@ -1374,7 +1370,7 @@ public final class Heap
      * over the just-written buffer and the CPU fetches garbage. QEMU models no I-cache, so
      * this is a no-op-shaped sequence there. (PLAN.md §D; M5.5c JIT publish.)
      */
-    public static void publishCode(long start, long end)
+    public static void publishCode(Address start, Address end)
     {
         // Both maintenance ops are BY VIRTUAL ADDRESS, which is what makes them broadcast to the whole
         // Inner Shareable domain -- i.e. to the other three cores. This used to end in IC IALLU, which is
@@ -1404,11 +1400,10 @@ public final class Heap
     // lines that were actually written.
 
     /** Clean the D-cache lines covering {@code [start, end)} to PoU. NO barrier: see {@link #publishMid}. */
-    public static void publishClean(long start, long end)
+    public static void publishClean(Address start, Address end)
     {
-        Address a = Address.fromLong(start & ~63L);   // Cortex-A72 cache line = 64 bytes
-        Address e = Address.fromLong(end);
-        while (a.LT(e))
+        Address a = Address.fromLong(start.toLong() & ~63L);   // Cortex-A72 cache line = 64 bytes
+        while (a.LT(end))
         {
             Magic.dcCVAU(a.toLong());          // clean the D-cache line to PoU (broadcast)
             a = a.plus(64);
@@ -1416,11 +1411,10 @@ public final class Heap
     }
 
     /** Drop the I-cache lines covering {@code [start, end)} on EVERY core. NO barrier. */
-    public static void publishInval(long start, long end)
+    public static void publishInval(Address start, Address end)
     {
-        Address a = Address.fromLong(start & ~63L);
-        Address e = Address.fromLong(end);
-        while (a.LT(e))
+        Address a = Address.fromLong(start.toLong() & ~63L);
+        while (a.LT(end))
         {
             Magic.icIVAU(a.toLong());          // drop that line from EVERY core's I-cache
             a = a.plus(64);
@@ -1442,7 +1436,7 @@ public final class Heap
 
     /** Allocate {@code size} bytes: reuse a freed block if one fits, else bump; on core 0, an exhausted
      *  arena triggers a collection ({@link Magic#gc}) and one retry before halting out-of-memory. */
-    public static long alloc(int size)
+    public static Address alloc(int size)
     {
         // The free-list unlink and the bump-pointer load..store below MUST NOT be preempted: the timer
         // scheduler switches tasks on this core, and a task switched in mid-alloc allocates the SAME
@@ -1455,7 +1449,7 @@ public final class Heap
         {
             Magic.enableIrq();
         }
-        return p.toLong();
+        return p;
     }
 
     private static Address allocLocked(int size)
@@ -1556,7 +1550,7 @@ public final class Heap
                     if (rest >= (long) ObjectModel.HEADER_SIZE)
                     {
                         f.plus(ObjectModel.STATUS_OFFSET).store((long) aligned);       // this block's size
-                        addFree(f.plus(aligned).toLong(), rest);                        // ... and the rest
+                        addFree(f.plus(aligned), rest);                        // ... and the rest
                     }
                     if (core == 0)
                     {
@@ -1569,7 +1563,7 @@ public final class Heap
             }
             scanFreeBytes = scanFreeBytes + Address.fromLong(SIZE_BYTES + core * 8L).loadLong();   // the general
             Address p = ptrCell.loadAddress();                                     //   list was walked; the sized
-            if (p.plus(aligned).LE(Address.fromLong(arenaLimit(core))))           //   lists are counted
+            if (p.plus(aligned).LE(arenaLimit(core)))           //   lists are counted
             {
                 noteBumpCause((long) aligned, 0);            // shortage, or space of the wrong shape?
                 if ((long) aligned >= LARGE_REQ)             // and if it was large, snapshot the moment: the
@@ -1636,9 +1630,9 @@ public final class Heap
      * probes {@code w - 16} so a payload pointer marks its block, and the trace phase scans marked
      * blocks from +16 — exactly the payload — so refs inside these structs keep their targets alive.
      */
-    public static long allocData(int size)
+    public static Address allocData(int size)
     {
-        return alloc(size + ObjectModel.HEADER_SIZE) + ObjectModel.HEADER_SIZE;
+        return alloc(size + ObjectModel.HEADER_SIZE).plus(ObjectModel.HEADER_SIZE);
     }
 
     /**
@@ -1663,7 +1657,7 @@ public final class Heap
      * 2^29, which is the identical unbounded-access shape arrived at from the other end. A real JVM answers
      * that with OutOfMemoryError; {@code alloc} takes an int, so anything that will not fit is refused here.
      */
-    public static long allocArray(int length, int elemSize)
+    public static Address allocArray(int length, int elemSize)
     {
         long bytes = (long) ObjectModel.ARRAY_BASE_OFFSET + (long) length * (long) elemSize;
         if (length < 0 || bytes > (long) MAX_ARRAY_BYTES)
@@ -1683,13 +1677,13 @@ public final class Heap
                 Magic.wfe();
             }
         }
-        Address p = Address.fromLong(alloc((int) bytes));
+        Address p = alloc((int) bytes);
         // The array's TIB slot holds its element size (1/2/4/8) — small, so it's distinguishable from an
         // object's TIB (a heap pointer), and it lets a generic System.arraycopy compute byte offsets. The
         // conservative GC never derefs this slot (it scans from +16), so a non-pointer here is safe.
         p.plus(ObjectModel.TIB_OFFSET).store((long) elemSize);
         p.plus(ObjectModel.ARRAY_LENGTH_OFFSET).store((long) length);
-        return p.toLong();
+        return p;
     }
 
     /** Reset the current core's free list (start of a sweep — the GC runs on the collecting core). */
@@ -1745,7 +1739,7 @@ public final class Heap
                 if (rest >= (long) ObjectModel.HEADER_SIZE)
                 {
                     f.plus(ObjectModel.STATUS_OFFSET).store((long) aligned);
-                    addFree(f.plus(aligned).toLong(), rest);
+                    addFree(f.plus(aligned), rest);
                 }
                 return f;
             }
@@ -1755,10 +1749,9 @@ public final class Heap
     }
 
     /** Add a reclaimed block to the current core's free list: its exact-size list when small, else the general one. */
-    static void addFree(long addr, long size)
+    static void addFree(Address a, long size)
     {
         int core = (int) (Magic.readMPIDR() & 3L);
-        Address a = Address.fromLong(addr);
         Address freeCell = Address.fromLong(FREE_CELL + core * 8L);
         if (size >= (long) ObjectModel.HEADER_SIZE && size <= (long) SMALL_MAX && (size & 7L) == 0L)
         {

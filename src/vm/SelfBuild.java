@@ -20,6 +20,7 @@ import board.bcm2711.Reset;
 import board.bcm2711.Uart;
 import classfile.ClassReader;
 import compiler.Baseline;
+import magic.Address;
 import magic.Magic;
 import objectmodel.ObjectModel;
 import static vm.VM.*;   // the retired engine references VM's live state (findClass, printDec, frame/handler
@@ -235,7 +236,7 @@ final class SelfBuild
     /** The self-hosting generation from the scratch sector (0 if uninitialised, -1 if no card). */
     static int readGeneration()   // package-private: called by VM.run() (live generation-counter readback)
     {
-        long buf = Heap.allocData(512);
+        long buf = Heap.allocData(512).toLong();
         if (!Emmc.readBlock(GEN_SECTOR, buf))
         {
             return -1;
@@ -250,7 +251,7 @@ final class SelfBuild
     /** Persist {@code gen} into the scratch sector (magic + count). */
     private static boolean writeGeneration(int gen)
     {
-        long buf = Heap.allocData(512);                          // Heap.alloc zeroes the rest of the sector
+        long buf = Heap.allocData(512).toLong();                          // Heap.alloc zeroes the rest of the sector
         Magic.store32(buf, GEN_MAGIC);
         Magic.store32(buf + 4L, gen);
         return Emmc.writeBlock(GEN_SECTOR, buf);
@@ -273,7 +274,7 @@ final class SelfBuild
         }
         long buf = materializeImage();
         long wlen = (len + 511L) / 512L * 512L;              // whole sectors
-        long chk = Heap.allocData((int) wlen);
+        long chk = Heap.allocData((int) wlen).toLong();
         if (!Fat32.writeKernel(buf, wlen) || !Fat32.readKernel(chk, wlen))
         {
             return false;
@@ -298,8 +299,8 @@ final class SelfBuild
             return false;
         }
         long nbytes = (Fat32.kernelSize() + 511L) / 512L * 512L;   // whole sectors of the file
-        long w = Heap.allocData((int) nbytes);
-        long r = Heap.allocData((int) nbytes);
+        long w = Heap.allocData((int) nbytes).toLong();
+        long r = Heap.allocData((int) nbytes).toLong();
         long i = 0L;
         while (i < nbytes)
         {
@@ -325,7 +326,7 @@ final class SelfBuild
     /** Whether the EMMC driver initialises and reads block 0 with a valid boot-sector signature. */
     private static boolean sdReadOk()
     {
-        long sd = Heap.allocData(512);
+        long sd = Heap.allocData(512).toLong();
         return Emmc.init() == 0
             && Emmc.readBlock(0L, sd)
             && Magic.load8(sd + 510L) == 0x55
@@ -335,8 +336,8 @@ final class SelfBuild
     /** Whether a written scratch block reads back byte-identical (single-sector write round-trip). */
     private static boolean sdWriteOk()
     {
-        long w = Heap.allocData(512);
-        long r = Heap.allocData(512);
+        long w = Heap.allocData(512).toLong();
+        long r = Heap.allocData(512).toLong();
         int i = 0;
         while (i < 128)                                    // fill with a recognizable pattern
         {
@@ -395,7 +396,7 @@ final class SelfBuild
     private static long materializeImage()
     {
         int endW = imageEndWord();
-        long buf = Heap.allocData((endW * 4 + 511) & ~511);      // padded to a whole sector (zeroed tail)
+        long buf = Heap.allocData((endW * 4 + 511) & ~511).toLong();      // padded to a whole sector (zeroed tail)
         int w = 0;
         while (w < endW)                                     // copy the whole running image (byte-identical)
         {
@@ -469,8 +470,8 @@ final class SelfBuild
         discoverImage();
         return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("reportFault"), Magic.bytes("()V")) == reportFaultAddr
             && imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("gcCollect"), Magic.bytes("(J)V")) == gcCollect
-            && imAddrOf(Magic.bytes("vm/Heap"), Magic.bytes("alloc"), Magic.bytes("(I)J")) == heapAlloc
-            && imAddrOf(Magic.bytes("vm/Heap"), Magic.bytes("allocArray"), Magic.bytes("(II)J")) == allocArray
+            && imAddrOf(Magic.bytes("vm/Heap"), Magic.bytes("alloc"), Magic.bytes("(I)Lmagic/Address;")) == heapAlloc
+            && imAddrOf(Magic.bytes("vm/Heap"), Magic.bytes("allocArray"), Magic.bytes("(II)Lmagic/Address;")) == allocArray
             && imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("instanceOf"), Magic.bytes("(JJ)I")) == instanceOfAddr
             && imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("checkCast"), Magic.bytes("(JJ)J")) == checkCastAddr
             && imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("unwind"), Magic.bytes("(JJJ)V")) == unwindAddr;
@@ -535,11 +536,11 @@ final class SelfBuild
             cur += clSize[p];
             p += 1;
         }
-        long codeBuf = Heap.allocData(cur * 4);
+        long codeBuf = Heap.allocData(cur * 4).toLong();
 
         layoutClassRegions(codeBuf);
         boolean ok = patchNewAndWrite(codeBuf);
-        Heap.publishCode(codeBuf, codeBuf + cur * 4L);
+        Heap.publishCode(Address.fromLong(codeBuf), Address.fromLong(codeBuf + cur * 4L));
 
         long makeEntry = codeBuf + clWordOff[0] * 4L;
         long r = Magic.call2(makeEntry, 0x37L, 0L);        // make(0x37)
@@ -594,11 +595,11 @@ final class SelfBuild
             cur += clSize[p];
             p += 1;
         }
-        long codeBuf = Heap.allocData(cur * 4);
+        long codeBuf = Heap.allocData(cur * 4).toLong();
 
         layoutClassRegions(codeBuf);
         boolean ok = patchNewAndWrite(codeBuf);
-        Heap.publishCode(codeBuf, codeBuf + cur * 4L);
+        Heap.publishCode(Address.fromLong(codeBuf), Address.fromLong(codeBuf + cur * 4L));
 
         long r = Magic.call0(codeBuf + clWordOff[0] * 4L);  // selfCheck()
         return ok && (int) r == 1;
@@ -656,7 +657,7 @@ final class SelfBuild
             return;
         }
         ifIface[ifCount] = utf8Copy(classOff);
-        ifTypeAddr[ifCount] = Heap.allocData(ObjectModel.TYPE_SIZE);   // zeroed: instanceSize/super/itableDir = 0
+        ifTypeAddr[ifCount] = Heap.allocData(ObjectModel.TYPE_SIZE).toLong();   // zeroed: instanceSize/super/itableDir = 0
         ifCount += 1;
     }
 
@@ -683,12 +684,12 @@ final class SelfBuild
             return;
         }
         byte[] name = utf8Copy(classOff);
-        long type = Heap.allocData(ObjectModel.TYPE_SIZE);
+        long type = Heap.allocData(ObjectModel.TYPE_SIZE).toLong();
         Magic.store64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET,
                       ObjectModel.scalarSize(MetalClassModel.instanceFieldCount(name)));
         Magic.store64(type + ObjectModel.TYPE_SUPER_OFFSET, 0L);       // Cell's super is Object (a root)
         int vsize = MetalClassModel.vtableSize(name);                  // builds the vtable scratch
-        long tib = Heap.allocData(ObjectModel.tibSize(vsize));
+        long tib = Heap.allocData(ObjectModel.tibSize(vsize)).toLong();
         Magic.store64(tib + ObjectModel.tibSlotOffset(ObjectModel.TIB_TYPE_SLOT), type);
         int slot = 0;
         while (slot < vsize)                                           // fill each placed vtable method's address
@@ -725,7 +726,7 @@ final class SelfBuild
         {
             return 0L;
         }
-        long dir = Heap.allocData((impls + 1) * ObjectModel.ITABLE_ENTRY_SIZE);   // +1 zeroed sentinel
+        long dir = Heap.allocData((impls + 1) * ObjectModel.ITABLE_ENTRY_SIZE).toLong();   // +1 zeroed sentinel
         int e = 0;
         k = 0;
         while (k < ifCount)
@@ -746,7 +747,7 @@ final class SelfBuild
     private static long buildItable(byte[] iface, long codeBuf)
     {
         int n = MetalClassModel.interfaceMethodCount(iface);
-        long itab = Heap.allocData(n * ObjectModel.WORD);
+        long itab = Heap.allocData(n * ObjectModel.WORD).toLong();
         int slot = 0;
         while (slot < n)
         {
@@ -904,7 +905,7 @@ final class SelfBuild
     private static long internLiteral(int utf8Off)
     {
         int len = ClassReader.u2(cB, utf8Off);
-        long arr = Heap.allocArray(len, 1);
+        long arr = Heap.allocArray(len, 1).toLong();
         int i = 0;
         while (i < len)
         {
@@ -947,10 +948,10 @@ final class SelfBuild
         clSize[0] = words.length;
         clWordOff[0] = 0;
 
-        long codeBuf = Heap.allocData(words.length * 4);
+        long codeBuf = Heap.allocData(words.length * 4).toLong();
         layoutClassRegions(codeBuf);
         boolean ok = patchNewAndWrite(codeBuf);
-        Heap.publishCode(codeBuf, codeBuf + words.length * 4L);
+        Heap.publishCode(Address.fromLong(codeBuf), Address.fromLong(codeBuf + words.length * 4L));
 
         long r = Magic.call0(codeBuf);                     // tag()
         return ok && (int) r == 0x5A;                      // 'Z'
@@ -1008,11 +1009,11 @@ final class SelfBuild
             cur += clSize[p];
             p += 1;
         }
-        long codeBuf = Heap.allocData(cur * 4);
+        long codeBuf = Heap.allocData(cur * 4).toLong();
 
         layoutClassRegions(codeBuf);
         boolean ok = patchNewAndWrite(codeBuf);
-        Heap.publishCode(codeBuf, codeBuf + cur * 4L);
+        Heap.publishCode(Address.fromLong(codeBuf), Address.fromLong(codeBuf + cur * 4L));
 
         long r = Magic.call2(codeBuf + clWordOff[0] * 4L, 0x37L, 0L);  // viaVirtual(0x37)
         return ok && (int) r == 0x37;
@@ -1069,11 +1070,11 @@ final class SelfBuild
             cur += clSize[p];
             p += 1;
         }
-        long codeBuf = Heap.allocData(cur * 4);
+        long codeBuf = Heap.allocData(cur * 4).toLong();
 
         layoutClassRegions(codeBuf);
         boolean ok = patchNewAndWrite(codeBuf);
-        Heap.publishCode(codeBuf, codeBuf + cur * 4L);
+        Heap.publishCode(Address.fromLong(codeBuf), Address.fromLong(codeBuf + cur * 4L));
 
         long r = Magic.call0(codeBuf + clWordOff[0] * 4L);  // probe()
         return ok && (int) r == 0x52;                       // 'R'
@@ -1128,11 +1129,11 @@ final class SelfBuild
             cur += clSize[p];
             p += 1;
         }
-        long codeBuf = Heap.allocData(cur * 4);
+        long codeBuf = Heap.allocData(cur * 4).toLong();
 
         layoutClassRegions(codeBuf);
         boolean ok = patchNewAndWrite(codeBuf);
-        Heap.publishCode(codeBuf, codeBuf + cur * 4L);
+        Heap.publishCode(Address.fromLong(codeBuf), Address.fromLong(codeBuf + cur * 4L));
 
         long r = Magic.call0(codeBuf + clWordOff[0] * 4L);  // probe()
         return ok && (int) r == 1;
@@ -1373,10 +1374,10 @@ final class SelfBuild
             cur += gmSize[p];
             p += 1;
         }
-        long codeBuf = Heap.allocData(cur * 4);
+        long codeBuf = Heap.allocData(cur * 4).toLong();
 
         collectStaticsG();
-        long staticsBuf = Heap.allocData(stCount * 8);
+        long staticsBuf = Heap.allocData(stCount * 8).toLong();
         int s = 0;
         while (s < stCount)
         {
@@ -1388,7 +1389,7 @@ final class SelfBuild
 
         layoutClassRegionsG(codeBuf);
         boolean ok = patchCrossAndWrite(codeBuf);
-        Heap.publishCode(codeBuf, codeBuf + cur * 4L);
+        Heap.publishCode(Address.fromLong(codeBuf), Address.fromLong(codeBuf + cur * 4L));
         registerFramesAndHandlers(codeBuf);                 // so cross-method throw/catch can unwind
 
         runGeneratedInitClasses(codeBuf);                   // eager static init before the entry runs
@@ -1424,7 +1425,7 @@ final class SelfBuild
             return;
         }
         int total = 2 + n + 3;                              // prologue(2) + n BLs + epilogue(3)
-        long initBuf = Heap.allocData(total * 4);
+        long initBuf = Heap.allocData(total * 4).toLong();
         int frame = A64Enc.align16(8);                      // LR only
         int w = 0;
         Magic.store32(initBuf + w * 4L, A64Enc.subImm(31, 31, frame));
@@ -1448,7 +1449,7 @@ final class SelfBuild
         w += 1;
         Magic.store32(initBuf + w * 4L, A64Enc.ret());
         w += 1;
-        Heap.publishCode(initBuf, initBuf + total * 4L);
+        Heap.publishCode(Address.fromLong(initBuf), Address.fromLong(initBuf + total * 4L));
         long unused = Magic.call0(initBuf);                 // bound to a local (no pop2 in Baseline)
     }
 
@@ -1676,11 +1677,11 @@ final class SelfBuild
     {
         if (id == 0)
         {
-            imEnqueue(Magic.bytes("vm/Heap"), Magic.bytes("alloc"), Magic.bytes("(I)J"));
+            imEnqueue(Magic.bytes("vm/Heap"), Magic.bytes("alloc"), Magic.bytes("(I)Lmagic/Address;"));
         }
         else if (id == 1)
         {
-            imEnqueue(Magic.bytes("vm/Heap"), Magic.bytes("allocArray"), Magic.bytes("(II)J"));
+            imEnqueue(Magic.bytes("vm/Heap"), Magic.bytes("allocArray"), Magic.bytes("(II)Lmagic/Address;"));
         }
         else if (id == 2)
         {
@@ -2071,11 +2072,11 @@ final class SelfBuild
     {
         if (id == 0)
         {
-            return imAddrOf(Magic.bytes("vm/Heap"), Magic.bytes("alloc"), Magic.bytes("(I)J"));
+            return imAddrOf(Magic.bytes("vm/Heap"), Magic.bytes("alloc"), Magic.bytes("(I)Lmagic/Address;"));
         }
         if (id == 1)
         {
-            return imAddrOf(Magic.bytes("vm/Heap"), Magic.bytes("allocArray"), Magic.bytes("(II)J"));
+            return imAddrOf(Magic.bytes("vm/Heap"), Magic.bytes("allocArray"), Magic.bytes("(II)Lmagic/Address;"));
         }
         if (id == 2)
         {
@@ -2356,8 +2357,8 @@ final class SelfBuild
         if (bytesEqual(nm, Magic.bytes("staticsEnd"))) { return dAddr(dStaticsEnd); }
         if (bytesEqual(nm, Magic.bytes("classDir"))) { return dAddr(dClassDirStart); }
         if (bytesEqual(nm, Magic.bytes("classCount"))) { return classCount; }
-        if (bytesEqual(nm, Magic.bytes("heapAlloc"))) { return imAddrOf(Magic.bytes("vm/Heap"), Magic.bytes("alloc"), Magic.bytes("(I)J")); }
-        if (bytesEqual(nm, Magic.bytes("allocArray"))) { return imAddrOf(Magic.bytes("vm/Heap"), Magic.bytes("allocArray"), Magic.bytes("(II)J")); }
+        if (bytesEqual(nm, Magic.bytes("heapAlloc"))) { return imAddrOf(Magic.bytes("vm/Heap"), Magic.bytes("alloc"), Magic.bytes("(I)Lmagic/Address;")); }
+        if (bytesEqual(nm, Magic.bytes("allocArray"))) { return imAddrOf(Magic.bytes("vm/Heap"), Magic.bytes("allocArray"), Magic.bytes("(II)Lmagic/Address;")); }
         if (bytesEqual(nm, Magic.bytes("gcCollect"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("gcCollect"), Magic.bytes("(J)V")); }
         if (bytesEqual(nm, Magic.bytes("instanceOfAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("instanceOf"), Magic.bytes("(JJ)I")); }
         if (bytesEqual(nm, Magic.bytes("checkCastAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("checkCast"), Magic.bytes("(JJ)J")); }
@@ -2960,7 +2961,7 @@ final class SelfBuild
             return;
         }
         ifIface[ifCount] = name;
-        ifTypeAddr[ifCount] = Heap.allocData(ObjectModel.TYPE_SIZE);   // zeroed
+        ifTypeAddr[ifCount] = Heap.allocData(ObjectModel.TYPE_SIZE).toLong();   // zeroed
         ifCount += 1;
     }
 
@@ -2986,7 +2987,7 @@ final class SelfBuild
         {
             return;   // already laid out (or an interface, whose Type is built in pass 1)
         }
-        long type = Heap.allocData(ObjectModel.TYPE_SIZE);
+        long type = Heap.allocData(ObjectModel.TYPE_SIZE).toLong();
         Magic.store64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET,
                       ObjectModel.scalarSize(MetalClassModel.instanceFieldCount(name)));
         // superType: 0 for a root super (chain ends), else the laid-out super's Type. Heap.alloc
@@ -2996,7 +2997,7 @@ final class SelfBuild
         int si = sup == null || MetalClassModel.isRoot(sup) ? -1 : findTibClassBytes(sup);
         Magic.store64(type + ObjectModel.TYPE_SUPER_OFFSET, si >= 0 ? nbTypeAddr[si] : 0L);
         int vs = MetalClassModel.vtableSize(name);
-        long tib = Heap.allocData(ObjectModel.tibSize(vs));
+        long tib = Heap.allocData(ObjectModel.tibSize(vs)).toLong();
         Magic.store64(tib + ObjectModel.tibSlotOffset(ObjectModel.TIB_TYPE_SLOT), type);
         int slot = 0;
         while (slot < vs)
@@ -3034,7 +3035,7 @@ final class SelfBuild
         {
             return 0L;
         }
-        long dir = Heap.allocData((impls + 1) * ObjectModel.ITABLE_ENTRY_SIZE);   // +1 zeroed sentinel
+        long dir = Heap.allocData((impls + 1) * ObjectModel.ITABLE_ENTRY_SIZE).toLong();   // +1 zeroed sentinel
         int e = 0;
         k = 0;
         while (k < ifCount)
@@ -3055,7 +3056,7 @@ final class SelfBuild
     private static long buildItableG(byte[] clsName, byte[] iface, long codeBuf)
     {
         int n = MetalClassModel.interfaceMethodCount(iface);
-        long itab = Heap.allocData(n * ObjectModel.WORD);
+        long itab = Heap.allocData(n * ObjectModel.WORD).toLong();
         int slot = 0;
         while (slot < n)
         {
@@ -3370,13 +3371,13 @@ final class SelfBuild
             cur += clSize[p];
             p += 1;
         }
-        long buf = Heap.allocData(cur * 4);
+        Address buf = Heap.allocData(cur * 4);
 
         // patch each recorded call to its callee's base, then write the words to the buffer.
-        boolean ok = patchAndWrite(buf);
-        Heap.publishCode(buf, buf + cur * 4L);             // I-cache maintenance before executing built code
+        boolean ok = patchAndWrite(buf.toLong());
+        Heap.publishCode(buf, buf.plus(cur * 4L));             // I-cache maintenance before executing built code
 
-        long entry = buf + clWordOff[0] * 4L;
+        long entry = buf.toLong() + clWordOff[0] * 4L;
         long unused = Magic.call2(entry, 0x7EL, 0L);       // run the built putc('~'); ignore the void return
         return ok;
     }
@@ -3633,11 +3634,11 @@ final class SelfBuild
             cur += clSize[p];
             p += 1;
         }
-        long codeBuf = Heap.allocData(cur * 4);
+        long codeBuf = Heap.allocData(cur * 4).toLong();
 
         // collect distinct statics and give each a zeroed 8-byte slot.
         collectStatics();
-        long staticsBuf = Heap.allocData(stCount * 8);
+        long staticsBuf = Heap.allocData(stCount * 8).toLong();
         int s = 0;
         while (s < stCount)
         {
@@ -3648,7 +3649,7 @@ final class SelfBuild
         }
 
         boolean ok = patchStaticsAndWrite(codeBuf);
-        Heap.publishCode(codeBuf, codeBuf + cur * 4L);     // I-cache maintenance before executing built code
+        Heap.publishCode(Address.fromLong(codeBuf), Address.fromLong(codeBuf + cur * 4L));     // I-cache maintenance before executing built code
 
         // execute: three bumps then a read.
         long bumpEntry = codeBuf + clWordOff[0] * 4L;

@@ -315,7 +315,7 @@ public final class VM
         // then the next timer IRQ vectors into clobbered/zeroed memory and the CPU spins on undefined
         // instructions (looked like a "reset" during the long regex/split compile). The JIT code arena is
         // never reclaimed, so allocate there (same rationale as the #43 code arena for JIT buffers).
-        long raw = Heap.allocCode(0x1000);
+        long raw = Heap.allocCode(0x1000).toLong();
         long table = (raw + 0x7FFL) & ~0x7FFL;             // VBAR_EL1 requires 2 KiB alignment
         int i = 0;
         while (i < 16)
@@ -332,7 +332,7 @@ public final class VM
             }
             i += 1;
         }
-        Heap.publishCode(table, table + 0x800L);
+        Heap.publishCode(Address.fromLong(table), Address.fromLong(table + 0x800L));
         vbarBase = table;                                  // kept so startTimerTick can install the IRQ entry
         Magic.writeVBAR_EL1(table);
         Magic.isb();                                       // the new vector base takes effect
@@ -371,7 +371,7 @@ public final class VM
             irqHandler();
         }
         // A stub: save x0..x30, BL the Java handler, restore, ERET back to the interrupted code.
-        long raw = Heap.alloc(0x400);
+        long raw = Heap.alloc(0x400).toLong();
         // 16-byte-aligned code, but PAST the {TIB, status} header: aligning raw itself would land on
         // raw+8 (the size header) when raw is only 8-aligned, and the stub's first instruction would
         // clobber it -- leaving a heap block the GC sweep reads as a bogus size and walks off of.
@@ -401,14 +401,14 @@ public final class VM
         w += 1;
         stubAt.plus(w * 4L).store(A64Enc.eret());
         w += 1;
-        Heap.publishCode(stub, stub + w * 4L);
+        Heap.publishCode(Address.fromLong(stub), Address.fromLong(stub + w * 4L));
         // Route both the IRQ (entry 5, +0x280) and FIQ (entry 6, +0x300) vectors of "Current EL with
         // SPx" to the stub -- QEMU's single-security-state GICv2 may signal group-0 as FIQ.
         long e5 = vbarBase + 5L * 0x80L;
         Address.fromLong(e5).store(A64Enc.b((int) ((stub - e5) / 4L)));
         long e6 = vbarBase + 6L * 0x80L;
         Address.fromLong(e6).store(A64Enc.b((int) ((stub - e6) / 4L)));
-        Heap.publishCode(e5, e6 + 4L);
+        Heap.publishCode(Address.fromLong(e5), Address.fromLong(e6 + 4L));
         Magic.isb();
 
         // Bring up the GIC and enable the non-secure physical-timer PPI (INTID 30). With the GIC
@@ -1384,7 +1384,7 @@ public final class VM
         // ... and its first instance field. For a GroupValidationResult slot 0 is `type`, which is the thing
         // that decides success()/blockingFailure() -- so this says WHICH result was stored, not just that
         // something was.
-        if (v >= Heap.BASE && v < Heap.managedTop() && (v & 7L) == 0L)
+        if (v >= Heap.BASE && v < Heap.managedTop().toLong() && (v & 7L) == 0L)
         {
             Uart.write(Magic.bytes(" field0="));
             printHex(Address.fromLong(v).plus(16L).loadLong());
@@ -1402,7 +1402,7 @@ public final class VM
         printDec((int) site);
         Uart.putc((byte) 0x20);
         printHex(v);
-        if (v >= Heap.BASE && v < Heap.managedTop() && (v & 7L) == 0L)
+        if (v >= Heap.BASE && v < Heap.managedTop().toLong() && (v & 7L) == 0L)
         {
             Uart.write(Magic.bytes(" field0="));
             printHex(Address.fromLong(v).plus(16L).loadLong());
@@ -1880,7 +1880,7 @@ public final class VM
         {
             // Four words, one per core: task+1 that core is switching OFF, 0 when none (VMScheduler.pickNext /
             // claimable). In the code arena for the stub's reason: never GC'd, never rewound, fixed address.
-            long lraw = Heap.allocCode(64);
+            long lraw = Heap.allocCode(64).toLong();
             coreLeavingAddr = (lraw + (long) ObjectModel.HEADER_SIZE + 0xFL) & ~0xFL;
             int q = 0;
             while (q < 4)
@@ -1889,7 +1889,7 @@ public final class VM
                 q += 1;
             }
         }
-        long raw = Heap.allocCode(0x400);
+        long raw = Heap.allocCode(0x400).toLong();
         long stub = (raw + (long) ObjectModel.HEADER_SIZE + 0xFL) & ~0xFL;   // 16-byte-aligned code start
         Address stubAt = Address.fromLong(stub);              // 32-bit instruction-word stores below
         int w = 0;
@@ -1951,7 +1951,7 @@ public final class VM
         }
         stubAt.plus(w * 4L).store(A64Enc.addImm(31, 31, (int) SCHED_FRAME)); w += 1;   // add sp, #272
         stubAt.plus(w * 4L).store(A64Enc.eret());                w += 1;
-        Heap.publishCode(stub, stub + w * 4L);
+        Heap.publishCode(Address.fromLong(stub), Address.fromLong(stub + w * 4L));
         return stub;
     }
 
@@ -1975,7 +1975,7 @@ public final class VM
         Address.fromLong(e5).store(A64Enc.b((int) ((irqStub - e5) / 4L)));
         long e6 = vbarBase + 6L * 0x80L;                   // FIQ
         Address.fromLong(e6).store(A64Enc.b((int) ((irqStub - e6) / 4L)));
-        Heap.publishCode(e4, e6 + 4L);
+        Heap.publishCode(Address.fromLong(e4), Address.fromLong(e6 + 4L));
         Magic.isb();
     }
 
@@ -2365,14 +2365,14 @@ public final class VM
         // bytes and manifestValue stops at its max without a word, so a long line was cut SILENTLY: a
         // 279-byte `args=` of JUnit classes arrived as "... CloseWrappedSt" (CANNOT LOAD), and the class after
         // it never ran.
-        long nm = Heap.allocData(flen + 8);
+        long nm = Heap.allocData(flen + 8).toLong();
         int nl = manifestValue(conf, flen, Magic.bytes("main"), nm, flen);
         if (nl == 0)
         {
             return false;
         }
         byte[] mainClass = heapBytes(nm, nl);
-        long al = Heap.allocData(flen + 8);
+        long al = Heap.allocData(flen + 8).toLong();
         int alen = manifestValue(conf, flen, Magic.bytes("args"), al, flen);
         byte[] argsLine = heapBytes(al, alen);              // raw space-separated args; argv built after loadAll
         openClasspath(conf, flen);                          // classpath=<jar>: classes the image lacks come from it
@@ -2397,7 +2397,7 @@ public final class VM
      */
     private static void openClasspath(long conf, int flen)
     {
-        long cp = Heap.allocData(flen + 8);
+        long cp = Heap.allocData(flen + 8).toLong();
         int n = manifestValue(conf, flen, Magic.bytes("classpath"), cp, flen);
         if (n == 0)
         {
@@ -2428,10 +2428,10 @@ public final class VM
      */
     private static void armStdin(long conf, int flen)
     {
-        long v = Heap.allocData(16);
-        int n = manifestValue(conf, flen, Magic.bytes("stdin"), v, 8);
-        if (n == 4 && Address.fromLong(v).loadUnsignedByte() == 0x75 && Address.fromLong(v).plus(1L).loadUnsignedByte() == 0x61 && Address.fromLong(v).plus(2L).loadUnsignedByte() == 0x72
-                && Address.fromLong(v).plus(3L).loadUnsignedByte() == 0x74)            // "uart"
+        Address v = Heap.allocData(16);
+        int n = manifestValue(conf, flen, Magic.bytes("stdin"), v.toLong(), 8);
+        if (n == 4 && v.loadUnsignedByte() == 0x75 && v.plus(1L).loadUnsignedByte() == 0x61 && v.plus(2L).loadUnsignedByte() == 0x72
+                && v.plus(3L).loadUnsignedByte() == 0x74)            // "uart"
         {
             Console.stdinOn = 1;
             Uart.write(Magic.bytes("stdin: uart\n"));
@@ -2440,13 +2440,13 @@ public final class VM
 
     private static void armHangDump(long conf, int flen)
     {
-        long v = Heap.allocData(16);
-        int n = manifestValue(conf, flen, Magic.bytes("hangdump"), v, 8);
+        Address v = Heap.allocData(16);
+        int n = manifestValue(conf, flen, Magic.bytes("hangdump"), v.toLong(), 8);
         long secs = 0L;
         int i = 0;
         while (i < n)
         {
-            int c = Address.fromLong(v).plus(i).loadUnsignedByte() & 0xFF;
+            int c = v.plus(i).loadUnsignedByte() & 0xFF;
             if (c < 0x30 || c > 0x39)
             {
                 break;
@@ -2478,9 +2478,9 @@ public final class VM
         }
         long conf = Address.fromLong(e).plus(16L).loadLong();
         int flen = (int) Address.fromLong(e).plus(24L).loadLong();
-        long v = Heap.allocData(16);
-        int n = manifestValue(conf, flen, Magic.bytes("net"), v, 8);
-        return n >= 1 && (Address.fromLong(v).loadUnsignedByte() & 0xFF) == 0x31;   // "1"
+        Address v = Heap.allocData(16);
+        int n = manifestValue(conf, flen, Magic.bytes("net"), v.toLong(), 8);
+        return n >= 1 && (v.loadUnsignedByte() & 0xFF) == 0x31;   // "1"
     }
 
     /**
@@ -2502,7 +2502,7 @@ public final class VM
         }
         long conf = Address.fromLong(e).plus(16L).loadLong();
         int flen = (int) Address.fromLong(e).plus(24L).loadLong();
-        long v = Heap.allocData(256);
+        long v = Heap.allocData(256).toLong();
         // ... and neither does an EMPTY manifest, which is exactly how the no-manifest suite image is built:
         // the file exists, so fileFind succeeds, and only `smp=` was ever consulted. That handed cores 1-3 to
         // the LAUNCH path before `smpDemo` was set, so they skipped smpWork/pcCoreMain entirely (jobs/core
@@ -3773,8 +3773,8 @@ public final class VM
     // the writer so the on-metal JIT (via MetalSymbols) can BL them. Indexed to match
     // the ids in compiler/Symbols: heapAlloc=0, allocArray=1, gcCollect=2, instanceOf=3,
     // checkCast=4, unwind=5.
-    static long heapAlloc;              // Heap.alloc(I)J, so on-metal `new` can BL it
-    static long allocArray;            // Heap.allocArray(II)J
+    static long heapAlloc;              // Heap.alloc(I)Lmagic/Address;, so on-metal `new` can BL it
+    static long allocArray;            // Heap.allocArray(II)Lmagic/Address;
     static long gcCollect;             // VM.gcCollect(J)V
     static long instanceOfAddr;        // VM.instanceOf(JJ)I
     static long checkCastAddr;         // VM.checkCast(JJ)J

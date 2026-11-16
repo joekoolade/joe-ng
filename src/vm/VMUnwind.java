@@ -318,7 +318,7 @@ final class VMUnwind
         captureTrace(exc, pc, sp);                     // fill exc's backtrace if not already captured at the throw site
         if (unwindLocBufs == 0L)
         {
-            unwindLocBufs = Heap.allocData(MAX_TASKS * 16 * 8);   // 16 callee-saved local slots per task
+            unwindLocBufs = Heap.allocData(MAX_TASKS * 16 * 8).toLong();   // 16 callee-saved local slots per task
         }
         // this task's own, never another's
         Address unwindLocBuf = Address.fromLong(unwindLocBufs).plus((long) curTask() * 16L * 8L);

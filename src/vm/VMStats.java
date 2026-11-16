@@ -174,7 +174,7 @@ final class VMStats
         int c = 1;
         while (c < 4)
         {
-            i = put(arr, len, i, Address.fromLong(Heap.PTR_CELL + c * 8L).loadLong() - Heap.arenaBase(c));   // core c's arena use
+            i = put(arr, len, i, Address.fromLong(Heap.PTR_CELL + c * 8L).loadLong() - Heap.arenaBase(c).toLong());   // core c's arena use
             c += 1;
         }
         return (long) i;

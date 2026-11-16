@@ -1432,8 +1432,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         fillStatic(image, staticWord, "vm/VM.ifaceIdNext", nextIfaceId);
         // Stash each runtime-helper method address so the on-metal JIT (MetalSymbols)
         // can BL it. Keys mirror compiler/WriterSymbols.HELPER_KEY.
-        stashHelper(image, staticWord, wordOffset, "vm/Heap.alloc(I)J",       "vm/VM.heapAlloc");
-        stashHelper(image, staticWord, wordOffset, "vm/Heap.allocArray(II)J", "vm/VM.allocArray");
+        stashHelper(image, staticWord, wordOffset, "vm/Heap.alloc(I)Lmagic/Address;",       "vm/VM.heapAlloc");
+        stashHelper(image, staticWord, wordOffset, "vm/Heap.allocArray(II)Lmagic/Address;", "vm/VM.allocArray");
         stashHelper(image, staticWord, wordOffset, "vm/VMGc.gcCollect(J)V",   "vm/VM.gcCollect");
         stashHelper(image, staticWord, wordOffset, "vm/VM.instanceOf(JJ)I",   "vm/VM.instanceOfAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.checkCast(JJ)J",    "vm/VM.checkCastAddr");

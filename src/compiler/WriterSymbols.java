@@ -44,8 +44,8 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
     private static final String[] HELPER_KEY = new String[64];
     static
     {
-        HELPER_KEY[Symbols.HEAP_ALLOC]       = "vm/Heap.alloc(I)J";
-        HELPER_KEY[Symbols.HEAP_ALLOC_ARRAY] = "vm/Heap.allocArray(II)J";
+        HELPER_KEY[Symbols.HEAP_ALLOC]       = "vm/Heap.alloc(I)Lmagic/Address;";
+        HELPER_KEY[Symbols.HEAP_ALLOC_ARRAY] = "vm/Heap.allocArray(II)Lmagic/Address;";
         HELPER_KEY[Symbols.GC_COLLECT]       = "vm/VMGc.gcCollect(J)V";
         HELPER_KEY[Symbols.INSTANCE_OF]      = "vm/VM.instanceOf(JJ)I";
         HELPER_KEY[Symbols.CHECK_CAST]       = "vm/VM.checkCast(JJ)J";

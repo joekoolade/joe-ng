@@ -40,19 +40,18 @@ final class VMConcat
      */
     static long scStart()
     {
-        long buf = Heap.allocArray(64, 1);
-        long sb = Heap.alloc(40);
-        Address sbA = Address.fromLong(sb);
-        sbA.plus(16).store(buf);
-        sbA.plus(24).store(0L);
-        sbA.plus(32).store(0L);
-        return sb;
+        long buf = Heap.allocArray(64, 1).toLong();
+        Address sb = Heap.alloc(40);
+        sb.plus(16).store(buf);
+        sb.plus(24).store(0L);
+        sb.plus(32).store(0L);
+        return sb.toLong();
     }
 
     /** Grow a builder's backing byte[] to twice {@code cap} bytes, copying {@code count} units; returns the new buf. */
     static long scGrow(long sb, long buf, long count, long cap)
     {
-        long nbuf = Heap.allocArray((int) (cap * 2L), 1);
+        long nbuf = Heap.allocArray((int) (cap * 2L), 1).toLong();
         Address nbufA = Address.fromLong(nbuf);
         Address bufA = Address.fromLong(buf);
         long i = 0L;
@@ -242,25 +241,23 @@ final class VMConcat
         long count = sbA.plus(24).loadLong();
         int coder = sbA.plus(32).loadLong() < 256L ? 0 : 1;
         long nbytes = coder == 0 ? count : count * 2L;
-        long out = Heap.allocArray((int) nbytes, 1);
-        Address outA = Address.fromLong(out);
+        Address out = Heap.allocArray((int) nbytes, 1);
         if (byteArrayTibCache != 0L)
         {
-            outA.store(byteArrayTibCache);
+            out.store(byteArrayTibCache);
         }
         long i = 0L;
         while (i < nbytes)
         {
             long from = coder == 0 ? i * 2L : i;           // LATIN1 keeps each unit's low byte
-            outA.plus(24L + i).store((byte) bufA.plus(24L + from).loadUnsignedByte());
+            out.plus(24L + i).store((byte) bufA.plus(24L + from).loadUnsignedByte());
             i = i + 1L;
         }
-        long str = Heap.alloc(Loader.stringSize());
-        Address strA = Address.fromLong(str);
-        strA.store(Loader.stringTib());                    // TIB_OFFSET = 0
-        strA.plus(16).store(out);                          // value
-        strA.plus(24).store((long) coder);                 // coder: 0 = LATIN1, 1 = UTF16
-        return str;
+        Address str = Heap.alloc(Loader.stringSize());
+        str.store(Loader.stringTib());                    // TIB_OFFSET = 0
+        str.plus(16).store(out);                          // value
+        str.plus(24).store((long) coder);                 // coder: 0 = LATIN1, 1 = UTF16
+        return str.toLong();
     }
 
     /**

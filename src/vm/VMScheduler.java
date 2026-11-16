@@ -109,7 +109,7 @@ public final class VMScheduler
     /** Build a task-1 initial context frame on a fresh stack, entering {@link #pcTask1}(id). Primary-only. */
     static long pcMakeTask(int id)
     {
-        long stk = Heap.alloc(0x8000);
+        long stk = Heap.alloc(0x8000).toLong();
         long top = (stk + 0x8000L) & ~0xFL;                // 16-byte aligned; grows down
         Address frame = Address.fromLong(top - SCHED_FRAME);
         int r = 0;
@@ -143,7 +143,7 @@ public final class VMScheduler
             entry.store(A64Enc.b((int) ((target - entry.toLong()) / 4L)));   // a 32-bit instruction word
             i += 1;
         }
-        Heap.publishCode(PC_VBAR, PC_VBAR + 0x800L);
+        Heap.publishCode(Address.fromLong(PC_VBAR), Address.fromLong(PC_VBAR + 0x800L));
 
         int core = 1;                                       // pre-build each secondary's task-1 frame (no alloc race)
         while (core <= 3)
@@ -505,7 +505,7 @@ public final class VMScheduler
         stub.plus(w * 4L).store(A64Enc.movk(3, hi, 2));            w += 1;   // x3 = &secondaryMain
         stub.plus(w * 4L).store(A64Enc.msr(A64Enc.ELR_EL2, 3));     w += 1;
         stub.plus(w * 4L).store(A64Enc.eret());                   w += 1;   // -> secondaryMain(core) at EL1
-        Heap.publishCode(s, s + w * 4L);
+        Heap.publishCode(Address.fromLong(s), Address.fromLong(s + w * 4L));
         cleanToPoC(s, s + w * 4L);                         // secondaries fetch the stub uncached (MMU off) ...
 
         Address.fromLong(0x00E0L).store(stub);             // spin_cpu1 -> stub
@@ -1739,19 +1739,19 @@ public final class VMScheduler
             }
             i += 1;
         }
-        long arr = Heap.allocArray(count, 8);              // Thread[count] (null TIB: iterated by index)
+        Address arr = Heap.allocArray(count, 8);              // Thread[count] (null TIB: iterated by index)
         int j = 0;
         i = 0;
         while (i < taskCount)
         {
             if (taskThreadObj[i] != 0L && taskDone[i] == 0)
             {
-                Address.fromLong(arr).plus(24L + j * 8L).store(taskThreadObj[i]);
+                arr.plus(24L + j * 8L).store(taskThreadObj[i]);
                 j += 1;
             }
             i += 1;
         }
-        return arr;
+        return arr.toLong();
     }
 
     /** Demo task 1: print 'A', then voluntarily yield() the CPU (cooperative — works without the timer). */
@@ -1899,7 +1899,7 @@ public final class VMScheduler
         long stk = taskStackBase[id];
         if (stk == 0L)
         {
-            stk = Heap.alloc(0x8000);
+            stk = Heap.alloc(0x8000).toLong();
             taskStackBase[id] = stk;                       // object base: keeps the stack GC-reachable
         }
         long top = (stk + 0x8000L) & ~0xFL;                // 16-byte aligned top; stack grows down

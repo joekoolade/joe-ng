@@ -40,8 +40,8 @@ import asm.CodeBuffer;
 public interface Symbols
 {
     // Synthesised runtime helpers the compiler calls that are not in any classfile.
-    int HEAP_ALLOC = 0;         // vm/Heap.alloc(I)J
-    int HEAP_ALLOC_ARRAY = 1;   // vm/Heap.allocArray(II)J
+    int HEAP_ALLOC = 0;         // vm/Heap.alloc(I)Lmagic/Address;
+    int HEAP_ALLOC_ARRAY = 1;   // vm/Heap.allocArray(II)Lmagic/Address;
     int GC_COLLECT = 2;         // vm/VM.gcCollect(J)V
     int INSTANCE_OF = 3;        // vm/VM.instanceOf(JJ)I
     int CHECK_CAST = 4;         // vm/VM.checkCast(JJ)J

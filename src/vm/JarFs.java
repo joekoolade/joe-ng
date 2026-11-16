@@ -269,12 +269,11 @@ public final class JarFs
             }
             return -1;
         }
-        long nameBlob = Heap.allocData(len);
-        Address nameBlobA = Address.fromLong(nameBlob);
+        Address nameBlob = Heap.allocData(len);
         int k = 0;
         while (k < len)
         {
-            nameBlobA.plus(k).store((byte) nameA.plus(k).loadUnsignedByte());
+            nameBlob.plus(k).store((byte) nameA.plus(k).loadUnsignedByte());
             k += 1;
         }
         long blob = 0L;
@@ -282,7 +281,7 @@ public final class JarFs
         if (data != null)
         {
             blobLen = data.length;
-            blob = Heap.allocData(blobLen);
+            blob = Heap.allocData(blobLen).toLong();
             Address blobA = Address.fromLong(blob);
             k = 0;
             while (k < blobLen)
@@ -291,7 +290,7 @@ public final class JarFs
                 k += 1;
             }
         }
-        cacheName[cacheCount] = nameBlob;
+        cacheName[cacheCount] = nameBlob.toLong();
         cacheNameLen[cacheCount] = len;
         cacheBlob[cacheCount] = blob;
         cacheBlobLen[cacheCount] = blobLen;

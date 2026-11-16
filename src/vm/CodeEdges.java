@@ -324,12 +324,12 @@ final class CodeEdges
             else if (got == want)
             {
                 okCount += 1;
-                if (Heap.codeBlockFreeAt(want) == 1)
+                if (Heap.codeBlockFreeAt(Address.fromLong(want)) == 1)
                 {
                     danglingCount += 1;                  // live caller -> freed callee: the #146 signature
                 }
             }
-            else if (Heap.codeBlockFreeAt(site) == 1)
+            else if (Heap.codeBlockFreeAt(Address.fromLong(site)) == 1)
             {
                 staleCount += 1;                         // the caller's own buffer was swept: edge is dead
             }
