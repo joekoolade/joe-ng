@@ -70,7 +70,7 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         // (see needsInitGuard).
         HELPER_KEY[Symbols.ENSURE_INIT]      = "vm/VM.ensureInitByName(J)V";
         // REACHED: every baked getClass() call site (see isGetClass).
-        HELPER_KEY[Symbols.GET_CLASS]        = "vm/VM.getClassOf(J)J";
+        HELPER_KEY[Symbols.GET_CLASS]        = "vm/VM.getClassOf(Lmagic/ObjectReference;)J";
         HELPER_KEY[Symbols.CALLER_CLASS]     = "vm/VMNatives.classAtPc(J)J";
     }
 

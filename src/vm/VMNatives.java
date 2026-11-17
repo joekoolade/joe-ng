@@ -188,7 +188,7 @@ final class VMNatives
             return 0L;
         }
         VM.loaderLock();
-        long r = Loader.poolIntern(str.toLong());
+        long r = Loader.poolIntern(str);
         VM.loaderUnlock();
         return r;
     }
@@ -236,19 +236,19 @@ final class VMNatives
     /** {@code System.setOut0(PrintStream)} native: redirect the stream JUnit captures test output through. */
     static void setOut0(long ps)
     {
-        Loader.setStdStream(Magic.bytes("out"), ps);
+        Loader.setStdStream(Magic.bytes("out"), ObjectReference.fromLong(ps));
     }
 
     /** {@code System.setErr0(PrintStream)} native. */
     static void setErr0(long ps)
     {
-        Loader.setStdStream(Magic.bytes("err"), ps);
+        Loader.setStdStream(Magic.bytes("err"), ObjectReference.fromLong(ps));
     }
 
     /** {@code System.setIn0(InputStream)} native. */
     static void setIn0(long is)
     {
-        Loader.setStdStream(Magic.bytes("in"), is);
+        Loader.setStdStream(Magic.bytes("in"), ObjectReference.fromLong(is));
     }
 
     static long identity(long x)
@@ -404,7 +404,7 @@ final class VMNatives
     /** {@code Throwable.stackTrace0(Throwable)} native: its inline backtrace as a StackTraceElement[]. */
     static long throwableTrace(long exc)
     {
-        return Loader.traceFromThrowable(exc);
+        return Loader.traceFromThrowable(ObjectReference.fromLong(exc));
     }
 
     /**
@@ -2034,14 +2034,14 @@ final class VMNatives
         {
             Loader.printClassName(Address.fromLong(tib).loadLong());      // TIB[0] = Type -> the exception's class name
         }
-        long msg = Loader.throwableMessage(self.toLong());          // Throwable.detailMessage, by name
+        long msg = Loader.throwableMessage(self);          // Throwable.detailMessage, by name
         if (msg > 0x1000L)
         {
             Uart.write(Magic.bytes(": "));
-            printStr(msg);
+            printStr(ObjectReference.fromLong(msg));
         }
         Uart.putc(0x0A);
-        long deep = Loader.throwableBacktrace(self.toLong());       // every frame, when there were more than eight
+        long deep = Loader.throwableBacktrace(self);       // every frame, when there were more than eight
         int n = deep != 0L ? Address.fromLong(deep + ObjectModel.ARRAY_LENGTH_OFFSET).loadInt() : 8;
         int i = 0;
         while (i < n)

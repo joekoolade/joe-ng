@@ -1494,10 +1494,10 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMConcat.scBool(Lmagic/Address;I)V",       "vm/VM.scBoolAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMConcat.scDouble(Lmagic/Address;J)V",     "vm/VM.scDoubleAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMConcat.scFloat(Lmagic/Address;I)V",      "vm/VM.scFloatAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VM.printStr(J)V",      "vm/VM.printStrAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VM.recordHash(J)J",     "vm/VM.recordHashAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VM.recordEquals(JJ)J",  "vm/VM.recordEqualsAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VM.recordToString(J)J", "vm/VM.recordToStringAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.printStr(Lmagic/ObjectReference;)V",      "vm/VM.printStrAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.recordHash(Lmagic/ObjectReference;)J",     "vm/VM.recordHashAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.recordEquals(Lmagic/ObjectReference;Lmagic/ObjectReference;)J",  "vm/VM.recordEqualsAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.recordToString(Lmagic/ObjectReference;)J", "vm/VM.recordToStringAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.denylistTrap()V",   "vm/VM.denylistTrapAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.nativeMissing(I)V", "vm/VM.nativeMissingAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.nanoTime()J",       "vm/VM.nanoTimeAddr");
@@ -1666,7 +1666,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.indyResolve(JJ)J", "vm/VM.indyResolveAddr"); // invokedynamic (generic)
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.ldcConst(J)J", "vm/VM.ldcConstAddr"); // ldc of a dynamic constant
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classBytes(Lmagic/ObjectReference;)J", "vm/VM.classBytesAddr"); // MethodHandleNatives.classBytes0
-        stashHelper(image, staticWord, wordOffset, "vm/VM.getClassOf(J)J",    "vm/VM.getClassAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.getClassOf(Lmagic/ObjectReference;)J",    "vm/VM.getClassAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.watchRet(JJ)V",   "vm/VM.watchRetAddr");   // DEBUG call-site watch
         stashHelper(image, staticWord, wordOffset, "vm/VM.watchArg(JJ)V",   "vm/VM.watchArgAddr");   // DEBUG argument watch
         stashHelper(image, staticWord, wordOffset, "vm/VM.watchX21(JJ)V",   "vm/VM.watchX21Addr");   // DEBUG callee-save check
