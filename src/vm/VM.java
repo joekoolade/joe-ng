@@ -2580,7 +2580,7 @@ public final class VM
             printHex(tib);
             if (tib > 0x1000L && tib < 0x40000000L)
             {
-                long type = Address.fromLong(tib).loadLong();                 // TIB[0] = Type
+                Address type = Address.fromLong(tib).loadAddress();                 // TIB[0] = Type
                 Uart.write(Magic.bytes(" type="));
                 printHex(type);
                 Loader.reportClassOfType(type);
@@ -3259,7 +3259,7 @@ public final class VM
                 // no display, no superclass link), so it never reaches Object. Map.Entry[] -> Object[] is
                 // the live case -- AbstractCollection.toArray(T[]) casts exactly that, which is how
                 // Map.copyOf(...) (java.util.jar.Attributes$Name's initializer) reached a checkCast spin.
-                return elemTarget == Loader.objectTypeAddr();
+                return elemTarget == Loader.objectTypeAddr().toLong();
             }
             // a primitive element on either side is invariant: only the exact-match below can succeed
         }
@@ -3268,7 +3268,7 @@ public final class VM
         // instanceof Cloneable answered false, and through the element recursion int[][] was no Cloneable[]
         // (ArrayCovarianceProbe). Ahead of the fast paths, because an array Type's implements-bitmap answers
         // the interface-ID test without either bit.
-        if (isArrayType(type) && Loader.isArrayInterface(targetType))
+        if (isArrayType(type) && Loader.isArrayInterface(Address.fromLong(targetType)))
         {
             return true;
         }

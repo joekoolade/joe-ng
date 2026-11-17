@@ -4,6 +4,33 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 33: Type/TIB pointers, stage 1 -- sources and readers (2026-11-17).** Pi-validated
+  (build e790be8510ffc4d4). A Type and a TIB are raw heap STRUCTURES, not objects, so a pointer to either is an
+  Address; they were `long` "type ids" through ~80 Loader/VM APIs and ~40 fields. Staged by increment 15's lesson
+  (retyping consumers without their sources adds a wrap at every caller): sources and consumers together, judged by
+  the NET conversion count. Plan: (1) this; (2) method resolution / assignability APIs; (3) the `long[]` Type/TIB
+  tables; (4) the descriptor-reached JIT helpers' `targetType`.
+  - **Sources:** `RVMClass.tib`/`type`/`statics`; the Loader statics `gTib`, `gType`, `gStatics`, `gAdoptType`,
+    `gAdoptStatics` and the caches `classTibCache`, `cloneableTypeCache`, `serializableTypeCache`, `steFieldsTib`,
+    `vsMemoType` (no initializers -- none is filled by the writer, checked); producers `steTib`, `stringTib`,
+    `classTib`, `loadClassIncremental`, `defineFromBytes`, `objectTypeAddr`, `typeOfClass`, `typeOfObject`,
+    `lambdaIfaceType`, ... return Address.
+  - **Reads:** a mirror's Type (~30 sites), TIB slot 0, an object's TIB, itable-dir keys, element types ->
+    `loadAddress()` (the same 64-bit load).
+  - **Consumers:** the reader family -- names (`classNameString`, `typeNameBytes`, `printClassName`, ...),
+    predicates (`isArrayType`, `isPrimitiveType`, `primArrayElemChar`, ...), registry lookups (`regOfType`,
+    `classRegByType`, `classIndexByType`, `typeNeedsInit`, `ensureInitOfType`, `classMirror`, ...), the field
+    lookups (`staticSlotOfType` ... `fieldTypeChar`, `vhFieldOffset`'s tib), `allocInstance`, `buildDisplay`,
+    `buildImplBitmap`, `buildRefMap`, `fillObjectVtable`, and a few more of the family that lowered the count.
+  - **Left for later stages (convert at the boundary):** descriptor-reached code (`instanceOf`/`checkCast`/
+    `castOk`/`newCce`, every native signature, the `MetalSymbols.emitAddr` producers); the resolution APIs; the
+    `long[]` tables (`mirType`, `primArrTib`, `refArrTib`, `dsType`, `lambdaTibRoots`, ...); and, by the net rule,
+    `isSynthesisedTib`/`isAnnoTib`/`proxyIndexOfTib`, VM's `isArrayType` twin, `isImageStatics`.
+  - **Measured:** total conversions across src/ **1300 -> 1284** (Loader 578 -> 559). Loads/stores only 64-bit swaps
+    (Loader: 58 `loadLong` -> `loadAddress`, 34 `store(J)` -> `store(Address)`); Loader 79 `lcmp` -> `isZero`/`EQ`/
+    `NE`; no new ordering compare. **Code:** Loader **-547 words** (120,921 -> 120,374), VMNatives -40, ArrayCopy -12.
+  - **Validation:** `make test` + overlaycheck; full regression **209/209**. Pi: the usual set (class definition
+    877 ms, unchanged), AddressFieldProbe 58/0, ConcatCheck identical to a host JVM, bench unchanged.
 - **UNBOXED TYPES, INCREMENT 32: method-local pointers are Address (2026-11-16).** Pi-validated (build
   31e34e5d181f1ca5). No signature, field or return-type changes -- so no descriptor work.
   - **The rule, applied strictly per local:** a `long` local that holds an address becomes `Address` only if its

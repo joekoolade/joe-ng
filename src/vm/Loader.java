@@ -82,7 +82,7 @@ public final class Loader
     private static long gnameP, gdescP;   // packed name/descriptor being searched for
     private static int gnameLen;
     private static int gdescLen;
-    private static long gStatics;   // this class's statics block
+    private static Address gStatics;   // this class's statics block
     private static int[] gsfName;   // Utf8 offset of each static field's name (index = slot)
     private static int[] gsfAccess; // access_flags of each static field (index = slot): ACC_VOLATILE for the JIT
     private static int gsfCount;
@@ -100,8 +100,8 @@ public final class Loader
     private static final int MAXMV = 512;
     private static VtSlot[] gvTab;  // the building class's flattened vtable (reified; reused per class)
     private static int gvCount;     // flattened vtable size
-    private static long gTib;       // this class's TIB { Type, vtable... }, built before emit
-    private static long gType;      // this class's Type { superType } — a metal instanceof chain node
+    private static Address gTib;       // this class's TIB { Type, vtable... }, built before emit
+    private static Address gType;      // this class's Type { superType } — a metal instanceof chain node
     private static int gSuperNameOff;  // superclass name Utf8 offset (unloaded/Object => no inherit)
     private static int[] gImplIfName;  // name Utf8 offsets of the interfaces this class implements
     private static int gImplIfCount;
@@ -151,7 +151,7 @@ public final class Loader
     private static long[] mirType;        // VM Type addr key
     private static ObjectReferenceArray mirObj;   // its Class mirror object (no initializer: created per batch)
     private static int mirN;
-    private static long classTibCache;    // guest java/lang/Class's TIB (0 = not loaded)
+    private static Address classTibCache;    // guest java/lang/Class's TIB (0 = not loaded)
     // Directly-declared interfaces per registered class/interface, as registry indices, flat:
     // clIfaceReg[r*MAX_DIRECT_IF + j], j < clIfaceRegN[r]. buildItableDir transitively closes over these so
     // an itable directory keys on the SUPER-interfaces too (e.g. ArrayList implements List extends Iterable
@@ -1744,7 +1744,7 @@ public final class Loader
 
     private static void clinitCellWatch(int reg, byte[] when)
     {
-        if (!CELL_WATCH || clTab[reg] == null || clTab[reg].statics == 0L)
+        if (!CELL_WATCH || clTab[reg] == null || clTab[reg].statics.isZero())
         {
             return;
         }
@@ -1765,7 +1765,7 @@ public final class Loader
             Uart.write(Magic.bytes(" ["));
             VM.printDec(k);
             Uart.write(Magic.bytes("]="));
-            VM.printHex(Address.fromLong(clTab[reg].statics).plus(k * 8L).loadLong());
+            VM.printHex(clTab[reg].statics.plus(k * 8L).loadLong());
             k += 1;
         }
         Uart.putc(0x0A);
@@ -1780,7 +1780,7 @@ public final class Loader
     /** Whether the class at {@code reg} shares an image statics block whose initializer already ran. */
     private static boolean bootInitedReg(int reg)
     {
-        long st = clTab[reg].statics;
+        long st = clTab[reg].statics.toLong();
         if (!isImageStatics(st))
         {
             return false;
@@ -1806,7 +1806,7 @@ public final class Loader
      */
     private static void noteBootInited(int reg)
     {
-        if (!runtimeUp || reg < 0 || !isImageStatics(clTab[reg].statics) || bootInitedReg(reg))
+        if (!runtimeUp || reg < 0 || !isImageStatics(clTab[reg].statics.toLong()) || bootInitedReg(reg))
         {
             return;                                     // only the RUNTIME world's initializations count: see below
         }
@@ -1825,7 +1825,7 @@ public final class Loader
             }
             bootInited = grown;
         }
-        bootInited[bootInitedN] = clTab[reg].statics;
+        bootInited[bootInitedN] = clTab[reg].statics.toLong();
         bootInitedN += 1;
     }
 
@@ -2547,9 +2547,9 @@ public final class Loader
     }
 
     /** Class-registry index of the class whose Type node is {@code type}, or -1. */
-    private static int classRegByType(long type)
+    private static int classRegByType(Address type)
     {
-        if (type == 0L)
+        if (type.isZero())
         {
             return -1;
         }
@@ -3423,7 +3423,7 @@ public final class Loader
     }
 
     /** TIB of {@code java/lang/StackTraceElement}, pulling the class if it is not loaded yet (0 only if absent). */
-    private static long steTib()
+    private static Address steTib()
     {
         int i = classIndexByName(Magic.bytes("java/lang/StackTraceElement"));
         if (i < 0)
@@ -3448,7 +3448,7 @@ public final class Loader
             }
             i = classIndexByName(Magic.bytes("java/lang/StackTraceElement"));
         }
-        return i >= 0 ? clTab[i].tib : 0L;
+        return i >= 0 ? clTab[i].tib : Address.zero();
     }
 
     /**
@@ -3458,7 +3458,7 @@ public final class Loader
      * object instead of printing. Image frames carry the combined {@code owner/Class.method} as the method name
      * (they sit above the guest frames the caller inspects, so their exact split doesn't matter).
      */
-    private static long frameToElement(Address pc, long steTib)
+    private static long frameToElement(Address pc, Address steTib)
     {
         // THE BLOCK LOOKUP IS HOISTED, as in printFrameAt and for the same reason: inSameCodeBlock scans every
         // code block, and calling it per candidate made each element O(rgCount * codeBlockN). Pi, 2026-11-05:
@@ -3567,7 +3567,7 @@ public final class Loader
         // The four fields are found BY NAME: StackTraceElement is the JDK 26 class, whose layout puts the
         // class-loader, module and Class-object fields first. Its other fields stay null/0 -- format 0 is
         // stock's "show all", and toString prints no loader or module for a null name.
-        if (steTib != steFieldsTib)
+        if (steTib.NE(steFieldsTib))
         {
             int si = classIndexByName(Magic.bytes("java/lang/StackTraceElement"));
             steSize = 16L + clTab[si].fieldCount * 8L;
@@ -3587,7 +3587,7 @@ public final class Loader
     }
 
     // frameToElement's StackTraceElement layout, resolved once per TIB.
-    private static long steFieldsTib;
+    private static Address steFieldsTib;
     private static long steSize;
     private static long steClassOff;
     private static long steMethodOff;
@@ -3637,7 +3637,7 @@ public final class Loader
      * thread's bottom frame is run(), not the trampoline) and at main()'s caller ({@link VM#isLaunchFrame}). {@code savedX30} (non-0 only for a parked thread) lets
      * the FIRST frame step over a leaf {@code taskYield} whose caller return is in x30, not on the stack.
      */
-    private static int traceWalk(long pc, long sp, long savedX30, long arr, long steTib)
+    private static int traceWalk(long pc, long sp, long savedX30, long arr, Address steTib)
     {
         long cpc = pc;
         long csp = sp;
@@ -3694,7 +3694,7 @@ public final class Loader
         {
             return 0L;
         }
-        long tib = steTib();
+        Address tib = steTib();
         Address deep = Address.fromLong(throwableBacktrace(exc));             // every frame, when there were more than eight
         int n = 0;
         if (!deep.isZero())
@@ -3709,9 +3709,9 @@ public final class Loader
             }
         }
         Address arr = Heap.allocArray(n, 8);
-        if (tib != 0L)
+        if (!tib.isZero())
         {
-            arr.plus(ObjectModel.TIB_OFFSET).store(refArrayTib(Address.fromLong(tib).loadLong()));
+            arr.plus(ObjectModel.TIB_OFFSET).store(refArrayTib(tib.loadAddress()));
         }
         int i = 0;
         while (i < n)
@@ -3794,14 +3794,14 @@ public final class Loader
     /** Materialise a {@code StackTraceElement[]} for the frame chain at ({@code pc},{@code sp}). */
     static long buildTrace(long pc, long sp, long savedX30)
     {
-        long tib = steTib();
+        Address tib = steTib();
         int count = traceWalk(pc, sp, savedX30, 0L, tib);  // pass 1: count
         long arr = Heap.allocArray(count, 8).toLong();              // StackTraceElement[count]
-        if (tib != 0L)
+        if (!tib.isZero())
         {
             // Give the array the [LStackTraceElement; TIB (element Type = TIB[0]) so a `checkcast
             // [LStackTraceElement;` on a Map.Entry.getValue() result passes instead of walking a null Type.
-            Address.fromLong(arr).plus(ObjectModel.TIB_OFFSET).store(refArrayTib(Address.fromLong(tib).loadLong()));
+            Address.fromLong(arr).plus(ObjectModel.TIB_OFFSET).store(refArrayTib(tib.loadAddress()));
         }
         traceWalk(pc, sp, savedX30, arr, tib);             // pass 2: fill
         return arr;
@@ -4395,7 +4395,7 @@ public final class Loader
         mirType = new long[MAXMIRROR];     // Class mirrors: also per batch (reclaimed heap)
         mirObj = ObjectReferenceArray.create(MAXMIRROR);
         mirN = 0;
-        classTibCache = 0L;
+        classTibCache = Address.zero();
         clTab = new RVMClass[MAXCLASS];
         clCount = 0;
         clIndexed = 0;                                  // BESIDE the table it indexes: a watermark that
@@ -4438,8 +4438,8 @@ public final class Loader
         // MEASURED stable in the suite (thrTypeCache filled at generation 4 and matched a fresh lookup to the
         // end; the Cloneable/Serializable pair never filled), so this is hygiene, not a fix.
         thrTypeCache = 0L;
-        cloneableTypeCache = 0L;
-        serializableTypeCache = 0L;
+        cloneableTypeCache = Address.zero();
+        serializableTypeCache = Address.zero();
         arrayIfaceScanned = 0;
         pcBase = AddressArray.create(MAXPARSECACHE);
         pcBytes = new byte[MAXPARSECACHE][];
@@ -7451,12 +7451,12 @@ public final class Loader
 
     /** #43 fault diagnostic: name the loaded class whose Type node is {@code type} (the wild-branch receiver's
      *  class), over the UART, or nothing if unknown. */
-    static void reportClassOfType(long type)
+    static void reportClassOfType(Address type)
     {
         int i = 0;
         while (i < clCount)
         {
-            if (clTab[i].type == type)
+            if (clTab[i].type.EQ(type))
             {
                 Uart.write(Magic.bytes(" class="));
                 writeName(clTab[i].base.plus(clTab[i].nameOff + 2), u2(clTab[i].base.plus(clTab[i].nameOff)));
@@ -7471,12 +7471,12 @@ public final class Loader
 
     /** Print the loaded class name whose Type node is {@code type} (just the bare name), or a placeholder.
      *  Used by {@code Throwable.printStackTrace()} for the header line. */
-    static void printClassName(long type)
+    static void printClassName(Address type)
     {
         int i = 0;
         while (i < clCount)
         {
-            if (clTab[i].type == type)
+            if (clTab[i].type.EQ(type))
             {
                 writeName(clTab[i].base.plus(clTab[i].nameOff + 2), u2(clTab[i].base.plus(clTab[i].nameOff)));
                 return;
@@ -7488,7 +7488,7 @@ public final class Loader
 
     /** M4 {@code Class.getName()}: a fresh guest String of {@code type}'s dotted binary name (registry
      *  name bytes, '/'->'.'), or 0 if the Type isn't in the loaded registry. */
-    static long classNameString(long type)
+    static long classNameString(Address type)
     {
         int len = classNameLen(type);
         if (len <= 0)
@@ -7522,7 +7522,7 @@ public final class Loader
      * Capped, because {@code getName()} is called freely and an unbounded report would flood the UART and
      * starve the run it is meant to diagnose.
      */
-    private static void reportNamelessType(long type)
+    private static void reportNamelessType(Address type)
     {
         if (namelessN >= 8)
         {
@@ -7546,13 +7546,13 @@ public final class Loader
     }
 
     /** {@link #isSynthesisedTib} keyed by TYPE: a synthesised TIB holds its Type in slot 0. */
-    private static int isSynthesisedType(long type)
+    private static int isSynthesisedType(Address type)
     {
         return synthIndexOf(type) >= 0 ? 1 : 0;
     }
 
     /** The synthesised-TIB table index whose TIB carries {@code type}, or -1. */
-    private static int synthIndexOf(long type)
+    private static int synthIndexOf(Address type)
     {
         if (lambdaTibRoots == null)
         {
@@ -7561,7 +7561,7 @@ public final class Loader
         int i = 0;
         while (i < lambdaTibRootN)
         {
-            if (lambdaTibRoots[i] != 0L && Address.fromLong(lambdaTibRoots[i]).loadLong() == type)
+            if (lambdaTibRoots[i] != 0L && Address.fromLong(lambdaTibRoots[i]).loadAddress().EQ(type))
             {
                 return i;
             }
@@ -7571,7 +7571,7 @@ public final class Loader
     }
 
     /** Length of the host-class prefix of synthesised type {@code type}'s name: its binary name, or 0. */
-    private static int synthHostLen(long type)
+    private static int synthHostLen(Address type)
     {
         int i = synthIndexOf(type);
         if (i < 0 || lambdaHostBase.get(i).isZero())
@@ -7633,28 +7633,28 @@ public final class Loader
     static long primitiveMirror(int descChar)
     {
         long t = primitiveType(descChar);
-        return t == 0L ? 0L : classMirror(t);
+        return t == 0L ? 0L : classMirror(Address.fromLong(t));
     }
 
     /** True if {@code type} is a primitive Type ({@link ObjectModel#PRIM_TYPE_TAG}). */
-    static boolean isPrimitiveType(long type)
+    static boolean isPrimitiveType(Address type)
     {
-        if (type == 0L)
+        if (type.isZero())
         {
             return false;
         }
-        long instSize = Address.fromLong(type).plus(ObjectModel.TYPE_INSTANCE_SIZE_OFFSET).loadLong();
+        long instSize = type.plus(ObjectModel.TYPE_INSTANCE_SIZE_OFFSET).loadLong();
         return (instSize & ObjectModel.ARRAY_TYPE_TAG_MASK) == ObjectModel.PRIM_TYPE_TAG;
     }
 
     /** The descriptor char of a primitive Type ('I'), or 0. */
-    private static int primTypeChar(long type)
+    private static int primTypeChar(Address type)
     {
         if (!isPrimitiveType(type))
         {
             return 0;
         }
-        return (int) (Address.fromLong(type).plus(ObjectModel.TYPE_INSTANCE_SIZE_OFFSET).loadLong() & 0xFFL);
+        return (int) (type.plus(ObjectModel.TYPE_INSTANCE_SIZE_OFFSET).loadLong() & 0xFFL);
     }
 
     /**
@@ -7707,13 +7707,13 @@ public final class Loader
     }
 
     /** True if {@code type} is an array Type (its instanceSize slot carries {@link ObjectModel#ARRAY_TYPE_TAG}). */
-    static boolean isArrayType(long type)
+    static boolean isArrayType(Address type)
     {
-        if (type == 0L)
+        if (type.isZero())
         {
             return false;
         }
-        long instSize = Address.fromLong(type).plus(ObjectModel.TYPE_INSTANCE_SIZE_OFFSET).loadLong();
+        long instSize = type.plus(ObjectModel.TYPE_INSTANCE_SIZE_OFFSET).loadLong();
         return (instSize & ObjectModel.ARRAY_TYPE_TAG_MASK) == ObjectModel.ARRAY_TYPE_TAG;
     }
 
@@ -7725,13 +7725,13 @@ public final class Loader
      * {@code float[]} (both 4) -- and because that works for a writer-BAKED array Type the loader merely
      * adopted, which no metal-side field would have been filled in for.
      */
-    private static int primElemCharOf(long type)
+    private static int primElemCharOf(Address type)
     {
         int atype = 4;
         while (atype < 12)
         {
             long tib = primArrTib[atype];
-            if (tib != 0L && Address.fromLong(tib).loadLong() == type)
+            if (tib != 0L && Address.fromLong(tib).loadAddress().EQ(type))
             {
                 return primDescChar(atype);
             }
@@ -7754,14 +7754,14 @@ public final class Loader
      * already uses to render {@code "[I"}, and one that also works for a writer-BAKED array Type the loader
      * merely adopted, which no metal-side field would have been filled in for.
      */
-    static long arrayComponentMirror(long type)
+    static long arrayComponentMirror(Address type)
     {
-        if (type == 0L || !isArrayType(type))
+        if (type.isZero() || !isArrayType(type))
         {
             return 0L;
         }
-        long el = Address.fromLong(type).plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong();
-        if (el != 0L)
+        Address el = type.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadAddress();
+        if (!el.isZero())
         {
             return classMirror(el);                      // a REFERENCE array: the element Type is right there
         }
@@ -7781,9 +7781,9 @@ public final class Loader
      * {@code getComponentType()} answered null for a primitive array; fixing that opens the route, so the two
      * belong together.
      */
-    static long newArrayOfComponent(long compType, int length)
+    static long newArrayOfComponent(Address compType, int length)
     {
-        if (compType != 0L && isPrimitiveType(compType))
+        if (!compType.isZero() && isPrimitiveType(compType))
         {
             int atype = atypeForDescChar(primTypeChar(compType));
             if (atype >= 0)
@@ -7794,7 +7794,7 @@ public final class Loader
             }
         }
         Address arr = Heap.allocArray(length, ObjectModel.WORD);
-        if (compType != 0L)
+        if (!compType.isZero())
         {
             arr.store(refArrayTib(compType));    // typed [L<component>;, interned per element
         }
@@ -7802,7 +7802,7 @@ public final class Loader
     }
 
     /** Length of {@code type}'s dotted binary name, or 0 if it has none (unregistered / unresolved element). */
-    private static int classNameLen(long type)
+    private static int classNameLen(Address type)
     {
         if (isPrimitiveType(type))
         {
@@ -7810,8 +7810,8 @@ public final class Loader
         }
         if (isArrayType(type))
         {
-            long el = Address.fromLong(type).plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong();
-            if (el == 0L)
+            Address el = type.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadAddress();
+            if (el.isZero())
             {
                 return primElemCharOf(type) == 0 ? 0 : 2;        // "[I"; 0 = a ref array whose element is unresolved
             }
@@ -7821,7 +7821,7 @@ public final class Loader
         int i = 0;
         while (i < clCount)
         {
-            if (clTab[i].type == type)
+            if (clTab[i].type.EQ(type))
             {
                 return u2(clTab[i].base.plus(clTab[i].nameOff));
             }
@@ -7840,9 +7840,9 @@ public final class Loader
      * class is registered only when its blob is pulled, and VM code can `new` one without that (see
      * ImageBuilder's type-name table); getName() on such an object used to answer NULL.
      */
-    private static long bakedTypeName(long type)
+    private static long bakedTypeName(Address type)
     {
-        long rel = type - VM.bakedTypeBase;
+        long rel = type.toLong() - VM.bakedTypeBase;
         if (VM.bakedTypeNames == 0L || rel < 0L || rel % ObjectModel.TYPE_SIZE != 0L)
         {
             return 0L;
@@ -7867,7 +7867,7 @@ public final class Loader
      * ADDRESS is what makes it distinct per lambda, which matters because a single constant name would make
      * every lambda compare equal by name.
      */
-    private static int writeSynthName(long type, long dst, int pos)
+    private static int writeSynthName(Address type, long dst, int pos)
     {
         int si = synthIndexOf(type);
         if (si >= 0 && !lambdaHostBase.get(si).isZero())
@@ -7894,7 +7894,7 @@ public final class Loader
         int d = 15;
         while (d >= 0)
         {
-            int nib = (int) ((type >>> (d * 4)) & 0xFL);
+            int nib = (int) ((type.toLong() >>> (d * 4)) & 0xFL);
             Address.fromLong(dst).plus(pos).store((byte) (nib < 10 ? 0x30 + nib : 0x61 + nib - 10));
             pos += 1;
             d -= 1;
@@ -7934,7 +7934,7 @@ public final class Loader
     }
 
     /** Length of an array element's DESCRIPTOR form: "[I" for a nested array, "Ljava.lang.String;" otherwise. */
-    private static int elemDescLen(long el)
+    private static int elemDescLen(Address el)
     {
         if (isArrayType(el))
         {
@@ -7945,7 +7945,7 @@ public final class Loader
     }
 
     /** Write {@code type}'s name at {@code dst+pos} (dots for '/'); returns the position after it. */
-    private static int writeClassName(long type, long dst, int pos)
+    private static int writeClassName(Address type, long dst, int pos)
     {
         if (isPrimitiveType(type))
         {
@@ -7955,8 +7955,8 @@ public final class Loader
         {
             Address.fromLong(dst).plus(pos).store((byte) 0x5B);                // '['
             pos += 1;
-            long el = Address.fromLong(type).plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong();
-            if (el == 0L)
+            Address el = type.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadAddress();
+            if (el.isZero())
             {
                 // A PRIMITIVE array names itself by descriptor char. An element of 0 that matches no
                 // primitive TIB is an array whose element class never resolved -- write '?' rather than the
@@ -7978,7 +7978,7 @@ public final class Loader
         int i = 0;
         while (i < clCount)
         {
-            if (clTab[i].type == type)
+            if (clTab[i].type.EQ(type))
             {
                 int len = u2(clTab[i].base.plus(clTab[i].nameOff));
                 Address src = clTab[i].base.plus(clTab[i].nameOff + 2);
@@ -8071,8 +8071,8 @@ public final class Loader
         {
             return 0L;                                  // => the guest throws ClassNotFoundException
         }
-        long type = loadClassIncremental(slash);
-        if (type != 0L)
+        Address type = loadClassIncremental(slash);
+        if (!type.isZero())
         {
             linkable(classRegByType(type));
         }
@@ -8080,7 +8080,7 @@ public final class Loader
         {
             ensureClinit(classRegByType(type));         // JVMS 5.5: forName INITIALIZES, and this batch's
         }                                               // runClinits left a gated initializer pending
-        return type == 0L ? 0L : classMirror(type);
+        return type.isZero() ? 0L : classMirror(type);
     }
 
     /**
@@ -8126,7 +8126,7 @@ public final class Loader
             }
             if (classIndexByName(el) < 0)
             {
-                if (isDenylisted(utf8Blob(el), 0) || loadClassIncremental(el) == 0L)
+                if (isDenylisted(utf8Blob(el), 0) || loadClassIncremental(el).isZero())
                 {
                     return 0L;
                 }
@@ -8137,7 +8137,7 @@ public final class Loader
             return 0L;                                  // 'V', an unknown char, or trailing bytes
         }
         long tib = arrayTibOfDesc(utf8Blob(desc), 0);
-        return tib <= ObjectModel.MAX_RAW_ARRAY_TIB ? 0L : classMirror(Address.fromLong(tib).loadLong());
+        return tib <= ObjectModel.MAX_RAW_ARRAY_TIB ? 0L : classMirror(Address.fromLong(tib).loadAddress());
     }
 
     /**
@@ -8146,12 +8146,12 @@ public final class Loader
      * ({@code pdDone}/{@code pdDoneB}), so the live program's compiled code + heap survive. Every method of the
      * pulled class is seeded reachable (reflection may invoke any). Returns its Type, or 0 if not embedded.
      */
-    private static long loadClassIncremental(byte[] slash)
+    private static Address loadClassIncremental(byte[] slash)
     {
         long blob = pullClass(slash);
         if (blob == 0L)
         {
-            return 0L;                                  // not embedded in the classDir
+            return Address.zero();                                  // not embedded in the classDir
         }
         pullIndyIfaces(Address.fromLong(blob));         // its lambdas' interfaces: named in no CONSTANT_Class
         // Seed the class's <clinit> as the reachability root: it (and everything it transitively calls) gets
@@ -8162,7 +8162,7 @@ public final class Loader
         entryPoint(blob, Magic.bytes("<clinit>"), Magic.bytes("()V"));   // may be absent (addReach(0) is a no-op)
         loadAll();
         int ci = classIndexByName(slash);
-        return ci < 0 ? 0L : clTab[ci].type;
+        return ci < 0 ? Address.zero() : clTab[ci].type;
     }
 
     /**
@@ -8177,11 +8177,11 @@ public final class Loader
      * and unused; the just-defined class is located after load by its unique blob base ({@code clBase}). No
      * duplicate-definition check, no delegation hierarchy (single application loader).
      */
-    static long defineFromBytes(ObjectReference byteArr, int off, int len)
+    static Address defineFromBytes(ObjectReference byteArr, int off, int len)
     {
         if (byteArr.toLong() <= 0x1000L || len <= 0)
         {
-            return 0L;                                  // boot force-compile guard / empty input
+            return Address.zero();                                  // boot force-compile guard / empty input
         }
         Address blob = Heap.allocData(len);             // raw offset-0 base: classfile byte 0 lives at blob+0
         long blobKey = blob.toLong();                   // ... and as the long the blob table and clTab compare by
@@ -8212,7 +8212,7 @@ public final class Loader
             }
             ci += 1;
         }
-        return 0L;
+        return Address.zero();
     }
 
     /** M4 {@code Thread.currentThread()}: a bare guest {@code java/lang/Thread} (no ctor run; fields null)
@@ -8605,7 +8605,7 @@ public final class Loader
         long buf = ifaceMethodFromItable(recv, metalThreadEntryTypeAddr(), 0);
         if (buf == 0L || !plausibleCode(Address.fromLong(buf)))
         {
-            if (metalThreadEntryTypeAddr() != 0L && !reportedNoThreadEntry)
+            if (!metalThreadEntryTypeAddr().isZero() && !reportedNoThreadEntry)
             {
                 reportedNoThreadEntry = true;
                 Uart.write(Magic.bytes("\n  RUNTRAMP: no metalThreadEntry -- uncaught-exception handlers will not fire\n"));
@@ -8618,7 +8618,7 @@ public final class Loader
             long tib = recv.toAddress().loadLong();
             if (tib > 0x1000L)
             {
-                reportClassOfType(Address.fromLong(tib).loadLong());
+                reportClassOfType(Address.fromLong(tib).loadAddress());
             }
             Uart.write(Magic.bytes(" (buf="));
             VM.printHex(buf);
@@ -8631,7 +8631,7 @@ public final class Loader
     private static boolean reportedNoThreadEntry;
 
     /** java/lang/MetalThreadEntry's Type (0 if not loaded). Its one method is slot 0 of its itable run. */
-    private static long metalThreadEntryTypeAddr()
+    private static Address metalThreadEntryTypeAddr()
     {
         int i = 0;
         while (i < clCount)
@@ -8642,7 +8642,7 @@ public final class Loader
             }
             i += 1;
         }
-        return 0L;
+        return Address.zero();
     }
 
     /** {@code run()V} via the receiver's itable entry for java/lang/Runnable, or 0. Bounded, unlike the
@@ -8653,9 +8653,9 @@ public final class Loader
     }
 
     /** Slot {@code slot} of the receiver's itable run for interface {@code want}, or 0 (also 0 for want == 0). */
-    private static long ifaceMethodFromItable(ObjectReference recv, long want, int slot)
+    private static long ifaceMethodFromItable(ObjectReference recv, Address want, int slot)
     {
-        if (want == 0L)
+        if (want.isZero())
         {
             return 0L;
         }
@@ -8677,12 +8677,12 @@ public final class Loader
         int n = 0;
         while (n < MAXIFACEFALLBACK)
         {
-            long ent = dir.plus(n * (long) ObjectModel.ITABLE_ENTRY_SIZE).loadLong();
-            if (ent == 0L)
+            Address ent = dir.plus(n * (long) ObjectModel.ITABLE_ENTRY_SIZE).loadAddress();
+            if (ent.isZero())
             {
                 return 0L;                              // the sentinel: STOP (the old scan ran past it)
             }
-            if (ent == want)
+            if (ent.EQ(want))
             {
                 long it = dir.plus(n * (long) ObjectModel.ITABLE_ENTRY_SIZE)
                         .plus(ObjectModel.ITABLE_ENTRY_TABLE_OFFSET).loadLong();
@@ -8698,7 +8698,7 @@ public final class Loader
     }
 
     /** java/lang/Runnable's ONE Type (0 if not loaded: no Runnables can exist yet). */
-    private static long runnableTypeAddr()
+    private static Address runnableTypeAddr()
     {
         int i = 0;
         while (i < clCount)
@@ -8709,7 +8709,7 @@ public final class Loader
             }
             i += 1;
         }
-        return 0L;
+        return Address.zero();
     }
 
     /** run()V's slot in Runnable's flattened per-interface run (0 if Runnable isn't loaded). */
@@ -8980,11 +8980,11 @@ public final class Loader
         gifCount = islot;                               // total: inherited + own
         gvCount = 0;                                    // no vtable unless parseVtable runs
         gMethodsStart = p;                              // methods_count follows the fields
-        gStatics = Heap.allocData(slot * 8 + 8).toLong();
+        gStatics = Heap.allocData(slot * 8 + 8);
         int z = 0;
         while (z < slot)
         {
-            Address.fromLong(gStatics).plus(z * 8).store(0L);    // statics default to 0
+            gStatics.plus(z * 8).store(0L);    // statics default to 0
             z += 1;
         }
         gp = p;
@@ -9278,10 +9278,10 @@ public final class Loader
                         Uart.putc(0x2E);
                         printNameAt(gbase, nameOff);
                         Uart.write(Magic.bytes(" -> "));
-                        VM.printHex(gStatics + s * 8);
+                        VM.printHex(gStatics.plus(s * 8));
                         Uart.putc(0x0A);
                     }
-                    return gStatics + s * 8;
+                    return gStatics.plus(s * 8).toLong();
                 }
                 s += 1;
             }
@@ -9427,7 +9427,7 @@ public final class Loader
                     Uart.write(slash);
                     Uart.putc(0x0A);
                 }
-                long pulled = loadClassIncremental(slash);
+                Address pulled = loadClassIncremental(slash);
             }
             i += 1;
         }
@@ -10973,7 +10973,7 @@ public final class Loader
             // (superType = Object's shared node; nothing reads an interface Type's instanceSize).
             findVtSig();                                // adoption entry (itparity compares later, post-fill)
             adoptStatics();                             // interface constants share the writer block too
-            if (gAdoptType != 0L)
+            if (!gAdoptType.isZero())
             {
                 gType = gAdoptType;
                 if (LOAD_LOG)
@@ -10985,19 +10985,19 @@ public final class Loader
             }
             else
             {
-                gType = Heap.allocData(ObjectModel.TYPE_SIZE).toLong();
-                Address.fromLong(gType).store(0L);           // instanceSize (not instantiated)
-                Address.fromLong(gType).plus(8).store(0L);           // superType
-                Address.fromLong(gType).plus(16).store(0L);          // no itableDir
-                Address.fromLong(gType).plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).store(0L);
-                Address.fromLong(gType).plus(ObjectModel.TYPE_DEPTH_OFFSET).store(-1L);   // interface: never in a chain
-                Address.fromLong(gType).plus(ObjectModel.TYPE_DISPLAY_OFFSET).store(0L);
+                gType = Heap.allocData(ObjectModel.TYPE_SIZE);
+                gType.store(0L);           // instanceSize (not instantiated)
+                gType.plus(8).store(0L);           // superType
+                gType.plus(16).store(0L);          // no itableDir
+                gType.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).store(0L);
+                gType.plus(ObjectModel.TYPE_DEPTH_OFFSET).store(-1L);   // interface: never in a chain
+                gType.plus(ObjectModel.TYPE_DISPLAY_OFFSET).store(0L);
                 // O(1) interface checks: number this interface from the shared counter (the writer
                 // used 1..N-1; IDs >= 128 stay 0 = unnumbered -> those targets keep the dir walk).
                 long nid = VM.ifaceIdNext;
-                Address.fromLong(gType).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).store(
+                gType.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).store(
                               nid > 0L && nid < 128L ? nid : 0L);
-                Address.fromLong(gType).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).store(0L);
+                gType.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).store(0L);
                 if (nid > 0L && nid < 128L)
                 {
                     VM.ifaceIdNext = nid + 1L;
@@ -11008,7 +11008,7 @@ public final class Loader
             clTab[clCount].base = gbase;
             clTab[clCount].nameOff = gThisNameOff;
             clTab[clCount].nameHash = utf8Hash(gbase, gThisNameOff);   // folded once; see RVMClass.nameHash
-            clTab[clCount].tib = 0L;
+            clTab[clCount].tib = Address.zero();
             clTab[clCount].type = gType;
             clTab[clCount].fieldCount = 0;
             clTab[clCount].vtCount = 0;
@@ -11161,7 +11161,7 @@ public final class Loader
         {
             if (utf8IsAtBase(gbase, gsfName[s], name))
             {
-                return gStatics + s * 8L;
+                return gStatics.plus(s * 8L).toLong();
             }
             s += 1;
         }
@@ -11174,12 +11174,12 @@ public final class Loader
      * {@code typeAddr}, or 0. The Type-keyed sibling of {@link #staticSlotOf} (which keys on a name pair),
      * for {@code Unsafe.staticFieldOffset(Field)}, whose caller holds a Class rather than a name.
      */
-    static long staticSlotOfType(long typeAddr, Address fnBase, int fnLen)
+    static long staticSlotOfType(Address typeAddr, Address fnBase, int fnLen)
     {
         int ci = 0;
         while (ci < clCount)
         {
-            if (clTab[ci].type == typeAddr)
+            if (clTab[ci].type.EQ(typeAddr))
             {
                 int i = 0;
                 while (i < sgCount)
@@ -11252,7 +11252,7 @@ public final class Loader
             reportPropsGap(Magic.bytes("java/util/Properties could not be allocated"));
             return;
         }
-        int ctor = constructorResolve(clTab[pi].type, 0);
+        int ctor = constructorResolve(clTab[pi].type.toLong(), 0);
         if (ctor < 0 || rgTab[ctor].buf == 0L)
         {
             reportPropsGap(Magic.bytes("java/util/Properties.<init>() has no compiled body"));
@@ -11353,7 +11353,7 @@ public final class Loader
             return;
         }
         long obj = allocInstance(clTab[pi].type);
-        int ctor = constructorResolve(clTab[pi].type, 0);
+        int ctor = constructorResolve(clTab[pi].type.toLong(), 0);
         if (obj == 0L || ctor < 0 || rgTab[ctor].buf == 0L)
         {
             reportPropsGap(Magic.bytes("VM.savedProps: java/util/Properties could not be constructed"));
@@ -12310,7 +12310,7 @@ public final class Loader
             long ct = 0L;                                   // 0 = catch-all (a finally, or catch_type 0)
             if (gHCatchCp[h] != 0)
             {
-                ct = typeOfClass(gHCatchCp[h]);
+                ct = typeOfClass(gHCatchCp[h]).toLong();
                 if (ct == 0L)
                 {
                     // The catch class is not registered. This used to store the 0 typeOfClass answers --
@@ -14535,7 +14535,7 @@ public final class Loader
         {
             return 0;
         }
-        int reg = classRegByType(fromType);
+        int reg = classRegByType(Address.fromLong(fromType));
         if (reg < 0)
         {
             return 0;
@@ -14557,7 +14557,7 @@ public final class Loader
             int r = clIfaceReg[reg * MAX_DIRECT_IF + i];
             if (r >= 0 && clTab[r] != null)
             {
-                if (clTab[r].type == targetType)
+                if (clTab[r].type.toLong() == targetType)
                 {
                     return true;
                 }
@@ -14601,8 +14601,8 @@ public final class Loader
         }
         int decl = -2;                                  // the maximally specific declarer, found on first need
         Address entry = Address.fromLong(dir);
-        long iface = entry.plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadLong();
-        while (iface != 0L)                             // 0 interfaceType terminates the directory
+        Address iface = entry.plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadAddress();
+        while (!iface.isZero())                             // 0 interfaceType terminates the directory
         {
             int ir = classRegByType(iface);
             if (ir >= 0 && ir < clCount && clTab[ir] != null)
@@ -14680,7 +14680,7 @@ public final class Loader
                 }
             }
             entry = entry.plus(ObjectModel.ITABLE_ENTRY_SIZE);
-            iface = entry.plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadLong();
+            iface = entry.plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadAddress();
         }
         return 0L;
     }
@@ -14694,13 +14694,13 @@ public final class Loader
         int[] regs = new int[MAXIFACEFALLBACK];
         int n = 0;
         Address entry = Address.fromLong(dir);
-        long iface = entry.plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadLong();
-        while (iface != 0L && n < regs.length)
+        Address iface = entry.plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadAddress();
+        while (!iface.isZero() && n < regs.length)
         {
             regs[n] = classRegByType(iface);
             n += 1;
             entry = entry.plus(ObjectModel.ITABLE_ENTRY_SIZE);
-            iface = entry.plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadLong();
+            iface = entry.plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadAddress();
         }
         return mostSpecificDeclarer(regs, n, nameU, descU);
     }
@@ -14749,7 +14749,7 @@ public final class Loader
             // report existed to produce.
             Uart.putc(0x0A);
         }
-        long type = Address.fromLong(tib).loadLong();
+        Address type = Address.fromLong(tib).loadAddress();
         Uart.write(Magic.bytes(" type=0x"));
         VM.printHex(type);
         // The WHOLE prefix: one zero slot is a clobbered or pruned entry, all-zero is a clobbered or unbuilt TIB,
@@ -14838,7 +14838,7 @@ public final class Loader
             sgTab[sgCount].base = gbase;
             sgTab[sgCount].classOff = gThisNameOff;
             sgTab[sgCount].nameOff = gsfName[st];
-            sgTab[sgCount].addr = gStatics + st * 8L;
+            sgTab[sgCount].addr = gStatics.plus(st * 8L).toLong();
             sgTab[sgCount].access = gsfAccess[st];
             sgCount += 1;
             st += 1;
@@ -15413,7 +15413,7 @@ public final class Loader
     static long defaultIfaceTypeOf(int idx)
     {
         int ir = defaultIfaceRegOf(idx);
-        return ir < 0 ? 0L : clTab[ir].type;
+        return ir < 0 ? 0L : clTab[ir].type.toLong();
     }
 
     /** Slot of Methodref {@code idx} within that interface's flattened method list. */
@@ -15494,7 +15494,8 @@ public final class Loader
     private static int[] vsBucket;                       // hash -> site index + 1 (0 = empty)
     private static long virtualTrampAddr;
     private static long virtualTrampLo, virtualTrampHi;   // the range over which its frame is live
-    private static long vsMemoType, vsMemoBuf;           // one-entry memo: the same site is usually monomorphic
+    private static Address vsMemoType;                   // one-entry memo: the same site is usually monomorphic
+    private static long vsMemoBuf;
     private static int vsMemoIdx = -1;
     // PER-SITE, WRITE-ONCE memo: the first receiver Type a site resolved for, and the body it resolved to.
     // The one-entry memo above is shared by EVERY site, so a loop alternating two late sites -- a VarHandle
@@ -15689,7 +15690,7 @@ public final class Loader
         {
             return -1;
         }
-        return regOfType(Address.fromLong(tib).loadLong());
+        return regOfType(Address.fromLong(tib).loadAddress());
     }
 
     /**
@@ -15968,8 +15969,8 @@ public final class Loader
         {
             return VM.denylistTrapAddr;                 // a raw array has no Type to dispatch through
         }
-        long type = Address.fromLong(tib).loadLong();
-        if (idx == vsMemoIdx && type == vsMemoType && vsMemoBuf != 0L)
+        Address type = Address.fromLong(tib).loadAddress();
+        if (idx == vsMemoIdx && type.EQ(vsMemoType) && vsMemoBuf != 0L)
         {
             return vsMemoBuf;                           // monomorphic site: skip the whole lookup
         }
@@ -16001,13 +16002,13 @@ public final class Loader
                 // itable directory naming the interface it satisfies -- and that interface is where the
                 // default body lives. Try it before reporting; this is the whole reason a stream pipeline
                 // could not call Sink.begin on a lambda downstream.
-                long ib = resolveViaItableDir(type, vsName.get(idx), vsDesc.get(idx));
+                long ib = resolveViaItableDir(type.toLong(), vsName.get(idx), vsDesc.get(idx));
                 if (ib != 0L && plausibleCode(Address.fromLong(ib)))
                 {
                     vsMemoIdx = idx;
                     vsMemoType = type;
                     vsMemoBuf = ib;
-                    publishSiteMemo(idx, type, ib);
+                    publishSiteMemo(idx, type.toLong(), ib);
                     return ib;
                 }
                 Uart.write(Magic.bytes("\n  DISPATCH ON UNREGISTERED TYPE (receiver's class not in the registry): "));
@@ -16025,17 +16026,17 @@ public final class Loader
                 Uart.write(Magic.bytes(" type="));
                 VM.printHex(type);
                 Uart.write(Magic.bytes("\n    size="));
-                VM.printHex(Address.fromLong(type).plus(0).loadLong());
+                VM.printHex(type.plus(0).loadLong());
                 Uart.write(Magic.bytes(" super="));
-                VM.printHex(Address.fromLong(type).plus(ObjectModel.TYPE_SUPER_OFFSET).loadLong());
+                VM.printHex(type.plus(ObjectModel.TYPE_SUPER_OFFSET).loadLong());
                 Uart.write(Magic.bytes(" itableDir="));
-                VM.printHex(Address.fromLong(type).plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).loadLong());
+                VM.printHex(type.plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).loadLong());
                 Uart.write(Magic.bytes("\n    depth="));
-                VM.printHex(Address.fromLong(type).plus(ObjectModel.TYPE_DEPTH_OFFSET).loadLong());
+                VM.printHex(type.plus(ObjectModel.TYPE_DEPTH_OFFSET).loadLong());
                 Uart.write(Magic.bytes(" display="));
-                VM.printHex(Address.fromLong(type).plus(ObjectModel.TYPE_DISPLAY_OFFSET).loadLong());
+                VM.printHex(type.plus(ObjectModel.TYPE_DISPLAY_OFFSET).loadLong());
                 Uart.write(Magic.bytes(" elem="));
-                VM.printHex(Address.fromLong(type).plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong());
+                VM.printHex(type.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong());
                 Uart.write(Magic.bytes(" objectType="));
                 VM.printHex(objectTypeAddr());
                 Uart.write(Magic.bytes("\n    synthesised(lambda/anno TIB)="));
@@ -16145,7 +16146,7 @@ public final class Loader
         vsMemoIdx = idx;
         vsMemoType = type;
         vsMemoBuf = buf;
-        publishSiteMemo(idx, type, buf);
+        publishSiteMemo(idx, type.toLong(), buf);
         return buf;
     }
 
@@ -16680,7 +16681,7 @@ public final class Loader
             dsDone = new int[MAXDSITE];
         }
         int reg = classRegByNameAt(gbase, gThisNameOff);
-        long type = reg >= 0 ? clTab[reg].type : 0L;
+        long type = reg >= 0 ? clTab[reg].type.toLong() : 0L;
         int i = 0;
         while (i < dsCount)                             // dedup: the compiler visits each site in both passes
         {
@@ -16784,7 +16785,7 @@ public final class Loader
                 byte[] desc = kind == DYN_INDY ? Magic.bytes("(Ljava/lang/Class;I)Ljava/lang/invoke/CallSite;")
                         : kind == DYN_CONST ? Magic.bytes("(Ljava/lang/Class;I)Ljava/lang/Object;")
                         : Magic.bytes("(Ljava/lang/Class;I)J");
-                li = methodResolveExact(clTab[reg].type, ObjectReference.fromLong(guestBytes(name)),
+                li = methodResolveExact(clTab[reg].type.toLong(), ObjectReference.fromLong(guestBytes(name)),
                         ObjectReference.fromLong(guestBytes(desc)));
                 dynLinkerIdx[kind] = li;
             }
@@ -16795,7 +16796,7 @@ public final class Loader
             Uart.write(Magic.bytes("\n  INDY LINK: no MethodHandleNatives linker\n"));
             return 0L;
         }
-        return Magic.call2(m.buf, classMirror(dsType[idx]), (long) dsCp[idx]);
+        return Magic.call2(m.buf, classMirror(Address.fromLong(dsType[idx])), (long) dsCp[idx]);
     }
 
     /** Pull java/lang/invoke/MethodHandleNatives in when a dynamic site is the program's first use of it. */
@@ -16804,8 +16805,8 @@ public final class Loader
         VM.loaderLock(VM.LOCK_REFLECT);
         try
         {
-            long t = loadClassIncremental(Magic.bytes("java/lang/invoke/MethodHandleNatives"));
-            if (t != 0L)
+            Address t = loadClassIncremental(Magic.bytes("java/lang/invoke/MethodHandleNatives"));
+            if (!t.isZero())
             {
                 ensureInitOfType(t);
             }
@@ -16817,7 +16818,7 @@ public final class Loader
     }
 
     /** {@code MethodHandleNatives.classBytes0}: a guest copy of the class file the class was loaded from, or 0. */
-    static long classFileCopy(long type)
+    static long classFileCopy(Address type)
     {
         int reg = regOfType(type);
         if (reg < 0 || clTab[reg] == null)
@@ -17062,7 +17063,7 @@ public final class Loader
                 Uart.write(Magic.bytes("\n  MH LINK: java/lang/invoke/MethodHandleNatives is not loaded\n"));
                 return 0L;
             }
-            li = methodResolveExact(clTab[reg].type,
+            li = methodResolveExact(clTab[reg].type.toLong(),
                     ObjectReference.fromLong(guestBytes(exact ? Magic.bytes("linkExact") : Magic.bytes("linkGeneric"))),
                     ObjectReference.fromLong(guestBytes(Magic.bytes("(Ljava/lang/invoke/MethodHandle;Ljava/lang/String;)Ljava/lang/invoke/MethodHandle;"))));
             if (exact)
@@ -17137,13 +17138,13 @@ public final class Loader
      *  <p>The declaring class's slot is the right answer for a subclass instance because layout is chain-aware
      *  -- inherited fields are laid out FIRST ({@code ClassFile.chainFieldBase}) -- so a field keeps its slot
      *  in every subclass. Same shape as {@code globalVtableSlot}'s chain tier, and for the same reason. */
-    static long vhFieldOffset(Address fnBase, int fnLen, long tib)
+    static long vhFieldOffset(Address fnBase, int fnLen, Address tib)
     {
         int start = -1;
         int ci = 0;
         while (ci < clCount)
         {
-            if (clTab[ci] != null && clTab[ci].tib == tib)
+            if (clTab[ci] != null && clTab[ci].tib.EQ(tib))
             {
                 start = ci;
                 ci = clCount;
@@ -17173,12 +17174,12 @@ public final class Loader
 
     /** Field-registry index of instance field {@code fname} (raw bytes) declared by the class whose Type is
      *  {@code typeAddr}, or -1. Used by the reflection field-metadata natives. */
-    private static int fieldRegIndex(long typeAddr, Address fnBase, int fnLen)
+    private static int fieldRegIndex(Address typeAddr, Address fnBase, int fnLen)
     {
         int ci = 0;
         while (ci < clCount)
         {
-            if (clTab[ci].type == typeAddr)
+            if (clTab[ci].type.EQ(typeAddr))
             {
                 int j = 0;
                 while (j < fldCount)
@@ -17214,7 +17215,7 @@ public final class Loader
     /** Find a field by name in the class's own FIELDS section; sets {@link #cfFieldAccess}/{@link
      *  #cfFieldDescChar}. Both are read in ONE walk: each call re-parses the constant pool, and reading the
      *  descriptor after a second walk would be against a re-derived cursor. */
-    private static boolean classfileFieldInfo(long typeAddr, Address fnBase, int fnLen)
+    private static boolean classfileFieldInfo(Address typeAddr, Address fnBase, int fnLen)
     {
         int ci = classRegByType(typeAddr);
         if (ci < 0)
@@ -17250,7 +17251,7 @@ public final class Loader
      * ACTIVE USE (JVMS 5.5), so returning the cell of a class whose {@code <clinit>} has not run would hand
      * back a zero that looks like a value.
      */
-    static long staticCellFor(long typeAddr, Address fnBase, int fnLen)
+    static long staticCellFor(Address typeAddr, Address fnBase, int fnLen)
     {
         int ci = classRegByType(typeAddr);
         if (ci < 0)
@@ -17288,7 +17289,7 @@ public final class Loader
      * <p>Same registry and the same {@code 16 + slot*8} layout as every other field access here, so a handle
      * obtained this way and an ordinary {@code getfield} address the same memory by construction.
      */
-    static long fieldOffsetOfType(long typeAddr, Address fnBase, int fnLen)
+    static long fieldOffsetOfType(Address typeAddr, Address fnBase, int fnLen)
     {
         int j = fieldRegIndex(typeAddr, fnBase, fnLen);
         if (j >= 0)
@@ -17298,7 +17299,7 @@ public final class Loader
         return -1L;
     }
 
-    static int fieldMods(long typeAddr, Address fnBase, int fnLen)
+    static int fieldMods(Address typeAddr, Address fnBase, int fnLen)
     {
         int j = fieldRegIndex(typeAddr, fnBase, fnLen);
         if (j >= 0)
@@ -17314,12 +17315,12 @@ public final class Loader
      * {@code private}/{@code protected}/{@code static} distinction), so prefer the {@code InnerClasses} entry
      * whose {@code inner_class_info} is this class. The VM-only {@code ACC_SUPER} (0x20) bit is stripped.
      */
-    static int classModifiersOf(long type)
+    static int classModifiersOf(Address type)
     {
         int i = 0;
         while (i < clCount)
         {
-            if (clTab[i].type == type)
+            if (clTab[i].type.EQ(type))
             {
                 int inner = innerClassFlags(i);
                 if (inner >= 0)
@@ -17401,7 +17402,7 @@ public final class Loader
         {
             return -1;
         }
-        ensureClinit(classRegByType(type));             // reflective invoke is an active use (JVMS 5.5) --
+        ensureClinit(classRegByType(Address.fromLong(type)));             // reflective invoke is an active use (JVMS 5.5) --
                                                         // Class.getEnumConstants reaches values() this way, and
                                                         // values() reads $VALUES, which only <clinit> sets
         int idx = methodResolveRegistry(type, nameArr);
@@ -17427,7 +17428,7 @@ public final class Loader
         {
             return -1;
         }
-        ensureClinit(classRegByType(type));             // reflective invoke is an active use (JVMS 5.5)
+        ensureClinit(classRegByType(Address.fromLong(type)));             // reflective invoke is an active use (JVMS 5.5)
         int idx = methodResolveRegistryDesc(type, nameArr, descArr);
         if (idx >= 0)
         {
@@ -17565,7 +17566,7 @@ public final class Loader
         {
             return -1;
         }
-        int ci = classIndexByType(type);
+        int ci = classIndexByType(Address.fromLong(type));
         if (ci >= clCount)
         {
             return -1;
@@ -17677,7 +17678,7 @@ public final class Loader
      *  stops at the first method of that name, which for an overloaded class is a coin toss between two bodies. */
     private static int compileMethodOnDemandLocked(long type, ObjectReference nameArr, ObjectReference descArr)
     {
-        int ci = classIndexByType(type);
+        int ci = classIndexByType(Address.fromLong(type));
         // AN INTERFACE IS NOT REFUSED any more. It was, for having no TIB to reuse -- but this path compiles with
         // compileReuseTib, which never touches one (the reason compileSigOnDemand already compiles interface
         // STATICS). The refusal left every not-yet-called DEFAULT method unresolvable by reflection:
@@ -17869,20 +17870,21 @@ public final class Loader
      * scans it replaces left in {@code ci}. A validated memo: an entry is used only if that class's type IS
      * {@code type}, so a stale or torn slot costs a scan, never a wrong answer while each Type names one class.
      */
-    static int classIndexByType(long type)
+    static int classIndexByType(Address type)
     {
-        int h = (int) ((type >>> 4) ^ (type >>> 16)) & (CTMEMO - 1);
+        long bits = type.toLong();
+        int h = (int) ((bits >>> 4) ^ (bits >>> 16)) & (CTMEMO - 1);
         int[] m = ctMemo;
         if (m != null)
         {
             int c = m[h];
-            if (c >= 0 && c < clCount && clTab[c].type == type)
+            if (c >= 0 && c < clCount && clTab[c].type.EQ(type))
             {
                 return c;
             }
         }
         int ci = 0;
-        while (ci < clCount && clTab[ci].type != type)
+        while (ci < clCount && clTab[ci].type.NE(type))
         {
             ci += 1;
         }
@@ -17975,7 +17977,7 @@ public final class Loader
         VM.loaderLock(VM.LOCK_REFLECT);                 // buildRegIndex mutates the index a compiling task extends
         try
         {
-            int ci = classIndexByType(type);
+            int ci = classIndexByType(Address.fromLong(type));
             if (ci >= clCount)
             {
                 return -1;
@@ -18009,7 +18011,7 @@ public final class Loader
         VM.loaderLock(VM.LOCK_REFLECT);
         try
         {
-            int ci = classIndexByType(type);
+            int ci = classIndexByType(Address.fromLong(type));
             if (ci >= clCount)
             {
                 return -1;
@@ -18080,7 +18082,7 @@ public final class Loader
         {
             return -1;
         }
-        int ci = classIndexByType(type);
+        int ci = classIndexByType(Address.fromLong(type));
         if (ci >= clCount || clTab[ci].isIface)
         {
             return -1;
@@ -18179,9 +18181,9 @@ public final class Loader
 
     /** Reflection ({@code Constructor.newInstance}): allocate an instance of the class whose Type is {@code type}
      *  (zeroed fields + its TIB in the header), or 0. The caller runs the {@code <init>} on it. */
-    static long allocInstance(long type)
+    static long allocInstance(Address type)
     {
-        if (type == 0L)
+        if (type.isZero())
         {
             return 0L;
         }
@@ -18290,7 +18292,7 @@ public final class Loader
     }
 
     /** Reflection: first char of the field's JVM type descriptor (the byte after the u2 Utf8 length), or -1. */
-    static int fieldTypeChar(long typeAddr, Address fnBase, int fnLen)
+    static int fieldTypeChar(Address typeAddr, Address fnBase, int fnLen)
     {
         int j = fieldRegIndex(typeAddr, fnBase, fnLen);
         if (j >= 0)
@@ -18644,7 +18646,7 @@ public final class Loader
         // (instanceSize matches by field-layout parity; superType matches because supers adopt
         // too, so clTab[sr].type IS the writer's super node); itableDir stays loader-owned
         // (buildTib overwrites it with this world's imap dir -- the writer side never reads it).
-        if (gAdoptType != 0L)
+        if (!gAdoptType.isZero())
         {
             gType = gAdoptType;
             if (LOAD_LOG)
@@ -18656,24 +18658,24 @@ public final class Loader
         }
         else
         {
-            gType = Heap.allocData(ObjectModel.TYPE_SIZE).toLong();
+            gType = Heap.allocData(ObjectModel.TYPE_SIZE);
         }
-        Address.fromLong(gType).plus(0).store((long) (16 + gifCount * 8));       // TYPE_INSTANCE_SIZE_OFFSET
-        Address.fromLong(gType).plus(8).store(sr >= 0 ? clTab[sr].type : 0L);   // TYPE_SUPER_OFFSET (0 at Object)
-        if (gAdoptType == 0L)
+        gType.plus(0).store((long) (16 + gifCount * 8));       // TYPE_INSTANCE_SIZE_OFFSET
+        gType.plus(8).store(sr >= 0 ? clTab[sr].type : Address.zero());   // TYPE_SUPER_OFFSET (0 at Object)
+        if (gAdoptType.isZero())
         {
             // O(1) type checks: metal-built class Types get a depth + display like the writer's
             // (adopted nodes already carry the writer's -- never overwrite with batch-heap arrays).
-            Address.fromLong(gType).plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).store(0L);
-            Address.fromLong(gType).plus(ObjectModel.TYPE_DEPTH_OFFSET).store(0L);
-            Address.fromLong(gType).plus(ObjectModel.TYPE_DISPLAY_OFFSET).store(0L);
-            Address.fromLong(gType).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).store(0L);       // bitmap built at fillTib
-            Address.fromLong(gType).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).store(0L);
-            buildDisplay(gType, sr >= 0 ? clTab[sr].type : 0L);
-            buildRefMap(gType, sr >= 0 ? clTab[sr].type : 0L);   // GC reference map (adopted nodes carry
+            gType.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).store(0L);
+            gType.plus(ObjectModel.TYPE_DEPTH_OFFSET).store(0L);
+            gType.plus(ObjectModel.TYPE_DISPLAY_OFFSET).store(0L);
+            gType.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).store(0L);       // bitmap built at fillTib
+            gType.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).store(0L);
+            buildDisplay(gType, sr >= 0 ? clTab[sr].type : Address.zero());
+            buildRefMap(gType, sr >= 0 ? clTab[sr].type : Address.zero());   // GC reference map (adopted nodes carry
         }                                                        //   the writer's -- never overwrite it)
-        gTib = Heap.allocData((1 + gvCount) * 8).toLong();
-        Address.fromLong(gTib).store(gType);                      // TIB[0] = Type (slots filled by fillTib)
+        gTib = Heap.allocData((1 + gvCount) * 8);
+        gTib.store(gType);                      // TIB[0] = Type (slots filled by fillTib)
     }
 
     /**
@@ -18686,18 +18688,18 @@ public final class Loader
      * map or the class is wider than the two words can describe — never to a map that under-describes an
      * object, which would free live data.
      */
-    private static void buildRefMap(long type, long superType)
+    private static void buildRefMap(Address type, Address superType)
     {
         long w0 = 1L;                                   // bit 0: this map is computed
         long w1 = 0L;
-        if (superType != 0L)
+        if (!superType.isZero())
         {
-            w0 = Address.fromLong(superType).plus(ObjectModel.TYPE_REFMAP_OFFSET).loadLong();
-            w1 = Address.fromLong(superType).plus(ObjectModel.TYPE_REFMAP_OFFSET).plus(8L).loadLong();
+            w0 = superType.plus(ObjectModel.TYPE_REFMAP_OFFSET).loadLong();
+            w1 = superType.plus(ObjectModel.TYPE_REFMAP_OFFSET).plus(8L).loadLong();
             if ((w0 & 1L) == 0L)
             {
-                Address.fromLong(type).plus(ObjectModel.TYPE_REFMAP_OFFSET).store(0L);      // super is unmapped: so are we
-                Address.fromLong(type).plus(ObjectModel.TYPE_REFMAP_OFFSET).plus(8L).store(0L);
+                type.plus(ObjectModel.TYPE_REFMAP_OFFSET).store(0L);      // super is unmapped: so are we
+                type.plus(ObjectModel.TYPE_REFMAP_OFFSET).plus(8L).store(0L);
                 return;
             }
         }
@@ -18706,8 +18708,8 @@ public final class Loader
         {
             if (s > ObjectModel.TYPE_REFMAP_MAX_SLOT)
             {
-                Address.fromLong(type).plus(ObjectModel.TYPE_REFMAP_OFFSET).store(0L);      // too wide to describe
-                Address.fromLong(type).plus(ObjectModel.TYPE_REFMAP_OFFSET).plus(8L).store(0L);
+                type.plus(ObjectModel.TYPE_REFMAP_OFFSET).store(0L);      // too wide to describe
+                type.plus(ObjectModel.TYPE_REFMAP_OFFSET).plus(8L).store(0L);
                 return;
             }
             if (mayHoldPointer(gifDescOff[s]))
@@ -18723,8 +18725,8 @@ public final class Loader
             }
             s += 1;
         }
-        Address.fromLong(type).plus(ObjectModel.TYPE_REFMAP_OFFSET).store(w0);
-        Address.fromLong(type).plus(ObjectModel.TYPE_REFMAP_OFFSET).plus(8L).store(w1);
+        type.plus(ObjectModel.TYPE_REFMAP_OFFSET).store(w0);
+        type.plus(ObjectModel.TYPE_REFMAP_OFFSET).plus(8L).store(w1);
     }
 
     /** Whether the field whose descriptor Utf8 sits at {@code descOff} may hold a pointer the collector
@@ -18780,7 +18782,7 @@ public final class Loader
             {
                 b = mintPrunedStub(s);
             }
-            Address.fromLong(gTib).plus(8).plus(s * 8).store(b);            // TIB[1+slot] = impl code
+            gTib.plus(8).plus(s * 8).store(b);            // TIB[1+slot] = impl code
             s += 1;
         }
         long dir = buildItableDir();                    // M8 itables: per-interface tables (writer numbering)
@@ -18790,7 +18792,7 @@ public final class Loader
             instImapReg[instImapN] = classRegByName(gThisNameOff);
             instImapN += 1;
         }
-        Address.fromLong(gType).plus(16).store(dir);                 // TYPE_ITABLE_DIR_OFFSET
+        gType.plus(16).store(dir);                 // TYPE_ITABLE_DIR_OFFSET
         buildImplBitmap(gType);                         // O(1) interface checks: super bits | dir bits
     }
 
@@ -20348,7 +20350,7 @@ public final class Loader
                 slash[i] = (byte) u1(clsU.plus(2 + i));
                 i += 1;
             }
-            if (loadClassIncremental(slash) == 0L)
+            if (loadClassIncremental(slash).isZero())
             {
                 lnkFailWhy = 1;                         // RECORD, do not print: see reportLinkFail
                 linkResolveLog(clsU, nameU, descU, 0L, 0);
@@ -21156,7 +21158,7 @@ public final class Loader
         }
         if (classIndexByName(slash) < 0)
         {
-            if (loadClassIncremental(slash) == 0L)
+            if (loadClassIncremental(slash).isZero())
             {
                 // NAME THE SUBJECT. `bakeresolve-load count=0` says only that some baked stub wanted a class
                 // that would not load -- true and unactionable, and the count is not even a count.
@@ -21251,9 +21253,9 @@ public final class Loader
         if (k >= 0)
         {
             int r = regBySigU(clsU);
-            if (r >= 0 && clTab[r].tib != 0L)
+            if (r >= 0 && !clTab[r].tib.isZero())
             {
-                return Address.fromLong(clTab[r].tib).plus(8).plus(vtSlot[k] * 8L).loadLong();
+                return clTab[r].tib.plus(8).plus(vtSlot[k] * 8L).loadLong();
             }
         }
         return 0L;
@@ -21305,7 +21307,7 @@ public final class Loader
     static long catchTypeByName(long clsU)
     {
         int r = regBySigU(Address.fromLong(clsU));
-        return r < 0 ? 0L : clTab[r].type;
+        return r < 0 ? 0L : clTab[r].type.toLong();
     }
 
     private static int regBySigU(Address clsU)
@@ -21323,20 +21325,20 @@ public final class Loader
     // M8 Type adoption: the writer's Type node for the class currently in phase A (0 = none) --
     // set by checkVtParity from the signature table, consumed by allocTib so a baked class has
     // ONE Type across both worlds (cross-world instanceof/checkcast compare equal pointers).
-    private static long gAdoptType;
+    private static Address gAdoptType;
 
     private static long gVtSigSlots;    // matched vtSig entry's slot-pair table (0 = class not baked)
     private static int gVtSigCount;     // ... its slot count
-    private static long gAdoptStatics;  // M8 statics unification: the writer's dense per-class block (0 = none)
+    private static Address gAdoptStatics;  // M8 statics unification: the writer's dense per-class block (0 = none)
     private static int gAdoptStaticCount;   // ... its declared-static slot count (guard vs gsfCount)
 
     /** Find the current class's vtSig/adoption entry: sets gAdoptType/gAdoptStatics + parity data. */
     private static void findVtSig()
     {
-        gAdoptType = 0L;
+        gAdoptType = Address.zero();
         gVtSigSlots = 0L;
         gVtSigCount = 0;
-        gAdoptStatics = 0L;
+        gAdoptStatics = Address.zero();
         gAdoptStaticCount = 0;
         int n = (int) VM.vtSigCount;
         int i = 0;
@@ -21347,8 +21349,8 @@ public final class Loader
             {
                 gVtSigSlots = e.plus(8L).loadLong();
                 gVtSigCount = (int) e.plus(16L).loadLong();
-                gAdoptType = e.plus(24L).loadLong();
-                gAdoptStatics = e.plus(32L).loadLong();
+                gAdoptType = e.plus(24L).loadAddress();
+                gAdoptStatics = e.plus(32L).loadAddress();
                 gAdoptStaticCount = (int) e.plus(40L).loadLong();
                 return;
             }
@@ -21363,7 +21365,7 @@ public final class Loader
      *  keeps the loader block (safe degrade) and prints the divergence. */
     private static void adoptStatics()
     {
-        if (gAdoptStatics == 0L)
+        if (gAdoptStatics.isZero())
         {
             return;
         }
@@ -21893,8 +21895,8 @@ public final class Loader
             boolean holes = false;
             int off = 0;
             int k = 0;
-            long t = dir.loadLong();
-            while (t != 0L)                             // walk entries by their TYPE key (order-independent)
+            Address t = dir.loadAddress();
+            while (!t.isZero())                             // walk entries by their TYPE key (order-independent)
             {
                 int ir = regOfType(t);
                 if (ir >= 0)
@@ -21907,7 +21909,7 @@ public final class Loader
                     off += clTab[ir].ifmCount;
                 }
                 k += 1;
-                t = dir.plus(k * 16).loadLong();
+                t = dir.plus(k * 16).loadAddress();
             }
             if (holes)
             {
@@ -21972,8 +21974,8 @@ public final class Loader
     {
         int total = 0;
         int k = 0;
-        long t = Address.fromLong(dir).loadLong();
-        while (t != 0L)
+        Address t = Address.fromLong(dir).loadAddress();
+        while (!t.isZero())
         {
             int ir = regOfType(t);
             if (ir >= 0)
@@ -21981,7 +21983,7 @@ public final class Loader
                 total += clTab[ir].ifmCount;
             }
             k += 1;
-            t = Address.fromLong(dir).plus(k * 16).loadLong();
+            t = Address.fromLong(dir).plus(k * 16).loadAddress();
         }
         return total;
     }
@@ -22262,7 +22264,7 @@ public final class Loader
         {
             return 0L;
         }
-        int ci = classRegByType(mirror.toAddress().plus(16L).loadLong());
+        int ci = classRegByType(mirror.toAddress().plus(16L).loadAddress());
         if (ci < 0)
         {
             return 0L;
@@ -22298,7 +22300,7 @@ public final class Loader
         {
             return 0L;
         }
-        long type = mirror.toAddress().plus(16L).loadLong();
+        Address type = mirror.toAddress().plus(16L).loadAddress();
         int ci = classRegByType(type);
         if (ci < 0)
         {
@@ -22359,7 +22361,7 @@ public final class Loader
         {
             return 0L;
         }
-        int ci = classRegByType(mirror.toAddress().plus(16L).loadLong());
+        int ci = classRegByType(mirror.toAddress().plus(16L).loadAddress());
         if (ci < 0)
         {
             return 0L;
@@ -22489,7 +22491,7 @@ public final class Loader
         {
             return 0L;
         }
-        int reg = regOfType(mirror.toAddress().plus(16L).loadLong());
+        int reg = regOfType(mirror.toAddress().plus(16L).loadAddress());
         if (reg < 0)
         {
             return 0L;
@@ -22616,7 +22618,7 @@ public final class Loader
         {
             return 0L;
         }
-        int reg = regOfType(mirror.toAddress().plus(16L).loadLong());
+        int reg = regOfType(mirror.toAddress().plus(16L).loadAddress());
         if (reg < 0)
         {
             return 0L;
@@ -22693,7 +22695,7 @@ public final class Loader
         {
             return 0L;
         }
-        int ci = classRegByType(mirror.toAddress().plus(16L).loadLong());
+        int ci = classRegByType(mirror.toAddress().plus(16L).loadAddress());
         if (ci < 0)
         {
             return 0L;
@@ -22739,7 +22741,7 @@ public final class Loader
         {
             return 0L;
         }
-        int reg = regOfType(mirror.toAddress().plus(16L).loadLong());
+        int reg = regOfType(mirror.toAddress().plus(16L).loadAddress());
         if (reg < 0)
         {
             return 0L;
@@ -22781,7 +22783,7 @@ public final class Loader
         {
             return 0L;
         }
-        int reg = regOfType(mirror.toAddress().plus(16L).loadLong());
+        int reg = regOfType(mirror.toAddress().plus(16L).loadAddress());
         if (reg < 0)
         {
             return 0L;
@@ -22808,7 +22810,7 @@ public final class Loader
         {
             return 0L;
         }
-        int reg = regOfType(mirror.toAddress().plus(16L).loadLong());
+        int reg = regOfType(mirror.toAddress().plus(16L).loadAddress());
         if (reg < 0)
         {
             return 0L;
@@ -22846,7 +22848,7 @@ public final class Loader
         {
             return 0L;
         }
-        int reg = regOfType(mirror.toAddress().plus(16L).loadLong());
+        int reg = regOfType(mirror.toAddress().plus(16L).loadAddress());
         if (reg < 0)
         {
             return 0L;
@@ -22879,7 +22881,7 @@ public final class Loader
         {
             return Address.zero();
         }
-        int reg = regOfType(mirror.toAddress().plus(16L).loadLong());
+        int reg = regOfType(mirror.toAddress().plus(16L).loadAddress());
         if (reg < 0)
         {
             return Address.zero();
@@ -22997,7 +22999,7 @@ public final class Loader
         {
             return 0L;
         }
-        int reg = regOfType(mirror.toAddress().plus(16L).loadLong());
+        int reg = regOfType(mirror.toAddress().plus(16L).loadAddress());
         if (reg < 0)
         {
             return 0L;
@@ -23079,7 +23081,7 @@ public final class Loader
         {
             return 0L;
         }
-        int ci = classRegByType(mirror.toAddress().plus(16L).loadLong());
+        int ci = classRegByType(mirror.toAddress().plus(16L).loadAddress());
         if (ci < 0)
         {
             return 0L;
@@ -23121,7 +23123,7 @@ public final class Loader
         {
             return 0L;
         }
-        int ci = classRegByType(mirror.toAddress().plus(16L).loadLong());
+        int ci = classRegByType(mirror.toAddress().plus(16L).loadAddress());
         if (ci < 0)
         {
             return 0L;
@@ -23166,7 +23168,7 @@ public final class Loader
         {
             return 0L;
         }
-        int ci = classRegByType(mirror.toAddress().plus(16L).loadLong());
+        int ci = classRegByType(mirror.toAddress().plus(16L).loadAddress());
         if (ci < 0)
         {
             return 0L;
@@ -23306,7 +23308,7 @@ public final class Loader
         {
             return 0L;
         }
-        long type = Address.fromLong(elemMirror).plus(16L).loadLong();
+        Address type = Address.fromLong(elemMirror).plus(16L).loadAddress();
         int k = 0;
         while (k < dims)
         {
@@ -23315,7 +23317,7 @@ public final class Loader
             {
                 return 0L;
             }
-            type = Address.fromLong(tib).loadLong();
+            type = Address.fromLong(tib).loadAddress();
             k += 1;
         }
         return classMirror(type);
@@ -23329,7 +23331,7 @@ public final class Loader
         {
             return 0L;
         }
-        long type = Address.fromLong(tib).loadLong();
+        Address type = Address.fromLong(tib).loadAddress();
         int k = 1;
         while (k < dims)
         {
@@ -23338,7 +23340,7 @@ public final class Loader
             {
                 return 0L;
             }
-            type = Address.fromLong(tib).loadLong();
+            type = Address.fromLong(tib).loadAddress();
             k += 1;
         }
         return classMirror(type);
@@ -23388,7 +23390,7 @@ public final class Loader
     }
 
     /** The Type of {@code java/lang/Class}, for typing a {@code Class[]}. */
-    private static long classMirrorTypeAddr()
+    private static Address classMirrorTypeAddr()
     {
         int i = classIndexByName(Magic.bytes("java/lang/Class"));
         return i < 0 ? objectTypeAddr() : clTab[i].type;
@@ -23401,7 +23403,7 @@ public final class Loader
         {
             return 0L;
         }
-        int reg = regOfType(mirror.toAddress().plus(16L).loadLong());
+        int reg = regOfType(mirror.toAddress().plus(16L).loadAddress());
         if (reg < 0)
         {
             return 0L;
@@ -23456,12 +23458,12 @@ public final class Loader
      */
     static long classInterfaces(ObjectReference mirror)
     {
-        long elemType = classMirrorTypeAddr();
+        Address elemType = classMirrorTypeAddr();
         if (mirror.toLong() <= 0x1000L)
         {
             return 0L;
         }
-        int reg = regOfType(mirror.toAddress().plus(16L).loadLong());
+        int reg = regOfType(mirror.toAddress().plus(16L).loadAddress());
         int n = reg >= 0 ? clIfaceRegN[reg] : 0;
         Address arr = Heap.allocArray(n, 8);
         arr.plus(ObjectModel.TIB_OFFSET).store(refArrayTib(elemType));
@@ -23501,7 +23503,7 @@ public final class Loader
         {
             return 0L;
         }
-        int reg = regOfType(mirror.toAddress().plus(16L).loadLong());
+        int reg = regOfType(mirror.toAddress().plus(16L).loadAddress());
         if (reg < 0)
         {
             return emptyAnnoArray();
@@ -23646,7 +23648,7 @@ public final class Loader
         {
             return 0L;                                  // boot force-compile guard passes 0; allocates nothing
         }
-        int reg = regOfType(mirror.toAddress().plus(16L).loadLong());
+        int reg = regOfType(mirror.toAddress().plus(16L).loadAddress());
         if (reg < 0)
         {
             return emptyClassArray();
@@ -23747,8 +23749,8 @@ public final class Loader
             reportNestedNotLoaded(name);
             return 0L;
         }
-        long type = loadClassIncremental(name);
-        if (type == 0L)
+        Address type = loadClassIncremental(name);
+        if (type.isZero())
         {
             reportNestedNotLoaded(name);
             return 0L;
@@ -23821,7 +23823,7 @@ public final class Loader
         {
             return -1;                                  // raw array: no Type node to key on
         }
-        return regOfType(Address.fromLong(tib).loadLong());            // TIB[0] = Type
+        return regOfType(Address.fromLong(tib).loadAddress());            // TIB[0] = Type
     }
 
     /** {@code fldTab} index of the {@code want}-th instance field DECLARED by class {@code reg}, or -1. */
@@ -24357,7 +24359,7 @@ public final class Loader
     }
 
     /** {@code java/lang/annotation/Annotation}'s Type, or Object's if it is not loaded. */
-    private static long annotationTypeAddr()
+    private static Address annotationTypeAddr()
     {
         int i = classIndexByName(Magic.bytes("java/lang/annotation/Annotation"));
         return i >= 0 ? clTab[i].type : objectTypeAddr();
@@ -24742,7 +24744,7 @@ public final class Loader
         while (e < ni)
         {
             Address mirror = Address.fromLong(ifacesArr).plus(24L).plus(e * 8L).loadAddress();
-            long ity = mirror.isZero() ? 0L : mirror.plus(16L).loadLong();
+            Address ity = mirror.isZero() ? Address.zero() : mirror.plus(16L).loadAddress();
             int ir = classRegByType(ity);
             int cn = ir >= 0 ? clTab[ir].ifmCount : 0;
             Address cit = Heap.allocData(cn > 0 ? cn * 8 : 8);
@@ -24777,12 +24779,12 @@ public final class Loader
         type.plus(ObjectModel.TYPE_SUPER_OFFSET).store(clTab[pr].type);
         type.plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).store(dir);
         int onv = objectVtableCount();
-        long tib = Heap.allocData(8 + onv * 8).toLong();
-        Address.fromLong(tib).plus(0L).store(type);
+        Address tib = Heap.allocData(8 + onv * 8);
+        tib.plus(0L).store(type);
         fillObjectVtable(tib);
         int i = proxyN;
         proxyTypes[i] = type.toLong();
-        proxyTibs[i] = tib;
+        proxyTibs[i] = tib.toLong();
         int k = 0;
         while (k < 3)
         {
@@ -24793,14 +24795,14 @@ public final class Loader
         patchProxyObject(i);
         if (lambdaTibRoots != null && lambdaTibRootN < MAXLAMBDATIB)
         {
-            lambdaTibRoots[lambdaTibRootN] = tib;       // the same GC root a lambda's TIB has: nothing scanned
+            lambdaTibRoots[lambdaTibRootN] = tib.toLong();       // the same GC root a lambda's TIB has: nothing scanned
             lambdaTibVtCap[lambdaTibRootN] = onv;       //   would otherwise reach it
             lambdaTibFilled[lambdaTibRootN] = false;
             lambdaHostBase.set(lambdaTibRootN, Address.zero());        // a proxy has no host class
             lambdaHostNameOff[lambdaTibRootN] = 0;
             lambdaTibRootN += 1;
         }
-        return classMirror(type.toLong());
+        return classMirror(type);
     }
 
     /** {@code Proxy.proxyAlloc0}: a zeroed instance of proxy class {@code mirror}, or 0 if it is not one. */
@@ -24922,7 +24924,7 @@ public final class Loader
         Address e = Address.fromLong(dir);
         while (e.loadLong() != 0L)
         {
-            int r = classRegByType(e.loadLong());
+            int r = classRegByType(e.loadAddress());
             Address it = e.plus(8L).loadAddress();
             if (r >= 0 && !it.isZero() && utf8IsAtBase(clTab[r].base, clTab[r].nameOff, Magic.bytes("java/lang/annotation/Annotation")))
             {
@@ -24963,7 +24965,7 @@ public final class Loader
     /** The shared TIB for annotation interface {@code ifaceReg}, built once and GC-rooted like a lambda's. */
     private static long annoTibFor(int ifaceReg)
     {
-        long ifaceType = clTab[ifaceReg].type;
+        long ifaceType = clTab[ifaceReg].type.toLong();
         if (ifaceType == 0L)
         {
             return 0L;
@@ -25078,7 +25080,7 @@ public final class Loader
         int onv2 = objectVtableCount();
         long tib = Heap.allocData(8 + onv2 * 8).toLong();
         Address.fromLong(tib).plus(0L).store(type);
-        fillObjectVtable(tib);
+        fillObjectVtable(Address.fromLong(tib));
         patchAnnoContract(tib, onv2, dir.toLong());
         annoTibKey[annoTibN] = ifaceType;
         annoTibVal[annoTibN] = tib;
@@ -25461,8 +25463,8 @@ public final class Loader
         {
             return 0L;
         }
-        long et = elementTypeOfArrayDescN(base, ret, len - (ret - descOff - 2));
-        return et == 0L ? 0L : refArrayTib(et);
+        Address et = elementTypeOfArrayDescN(base, ret, len - (ret - descOff - 2));
+        return et.isZero() ? 0L : refArrayTib(et);
     }
 
     private static void noteAnnoPending(int kind, Address a, Address b)
@@ -25652,8 +25654,8 @@ public final class Loader
             bytes.plus(24).plus(i).store((byte) u1(base.plus(off + 2 + i)));
             i += 1;
         }
-        long tib = stringTib();
-        if (tib == 0L)
+        Address tib = stringTib();
+        if (tib.isZero())
         {
             return bytes.toLong();
         }
@@ -26182,7 +26184,7 @@ public final class Loader
         {
             return false;
         }
-        return exc.toAddress().plus(0L).loadLong() == clTab[i].tib;
+        return exc.toAddress().plus(0L).loadAddress().EQ(clTab[i].tib);
     }
 
     /** Allocate a mini {@code java/lang/NullPointerException} (TIB set, field-free) — the JIT's null-check helper. */
@@ -26305,8 +26307,8 @@ public final class Loader
     static long newArrayStoreException(long value)
     {
         long e = newExc(Magic.bytes("java/lang/ArrayStoreException"));
-        long valueType = value == 0L ? 0L : typeOfObject(ObjectReference.fromLong(value));
-        if (e != 0L && valueType != 0L && classNameLen(valueType) > 0)   // a lambda has no name: omit
+        Address valueType = value == 0L ? Address.zero() : typeOfObject(ObjectReference.fromLong(value));
+        if (e != 0L && !valueType.isZero() && classNameLen(valueType) > 0)   // a lambda has no name: omit
         {
             setThrowableMessage(ObjectReference.fromLong(e), classNameString(valueType));
         }
@@ -26314,10 +26316,10 @@ public final class Loader
     }
 
     /** {@code obj}'s Type, or 0 for a RAW array, whose TIB slot holds a small tag rather than a Type pointer. */
-    private static long typeOfObject(ObjectReference obj)
+    private static Address typeOfObject(ObjectReference obj)
     {
         long tib = obj.toAddress().loadLong();
-        return tib > ObjectModel.MAX_RAW_ARRAY_TIB ? Address.fromLong(tib).loadLong() : 0L;
+        return tib > ObjectModel.MAX_RAW_ARRAY_TIB ? Address.fromLong(tib).loadAddress() : Address.zero();
     }
 
     /**
@@ -26335,9 +26337,9 @@ public final class Loader
     }
 
     /** {@code type}'s name as {@code Class.getName()} spells it, as raw ASCII; empty if it has none (a lambda). */
-    static byte[] typeNameBytes(long type)
+    static byte[] typeNameBytes(Address type)
     {
-        int len = type == 0L ? 0 : classNameLen(type);
+        int len = type.isZero() ? 0 : classNameLen(type);
         byte[] out = new byte[len < 0 ? 0 : len];
         if (out.length > 0)
         {
@@ -26347,7 +26349,7 @@ public final class Loader
     }
 
     /** A PRIMITIVE array Type's element descriptor char ('I' for {@code int[]}), or 0 for any other Type. */
-    static int primArrayElemChar(long type)
+    static int primArrayElemChar(Address type)
     {
         return primElemCharOf(type);
     }
@@ -26481,13 +26483,13 @@ public final class Loader
     }
 
     /** "class a.B cannot be cast to class c.D", or null when either Type cannot be named. */
-    private static byte[] castFailureMessage(long fromTib, long fromType, long toType)
+    private static byte[] castFailureMessage(long fromTib, Address fromType, long toType)
     {
         byte[] out = new byte[512];
         int p = putUtf8Bytes(out, 0, Magic.bytes("class "));
         p = putTypeName(out, p, fromType, fromTib);
         p = putUtf8Bytes(out, p, Magic.bytes(" cannot be cast to class "));
-        p = putTypeName(out, p, toType, 0L);
+        p = putTypeName(out, p, Address.fromLong(toType), 0L);
         byte[] exact = new byte[p];
         int q = 0;
         while (q < p)
@@ -26506,9 +26508,9 @@ public final class Loader
      * binary name, mirroring a hidden class), so a message that bailed out on one would omit itself exactly
      * when the cast failed for the most surprising reason.
      */
-    private static int putTypeName(byte[] out, int p, long type, long tib)
+    private static int putTypeName(byte[] out, int p, Address type, long tib)
     {
-        if (type <= 0x1000L)
+        if (type.toLong() <= 0x1000L)
         {
             // No Type node. Say what was actually READ rather than guessing which kind of object it is --
             // inferring from an absence is what produced two wrong readings of this very failure.
@@ -26543,7 +26545,7 @@ public final class Loader
         // and `buildLambdaTib` could not resolve its functional interface. Reporting both as "nothing" is
         // what made the two indistinguishable in the log.
         p = putUtf8Bytes(out, p, Magic.bytes("<synthesised, implements"));
-        Address dir = Address.fromLong(type).plus(16L).loadAddress();
+        Address dir = type.plus(16L).loadAddress();
         if (dir.isZero())
         {
             return putUtf8Bytes(out, p, Magic.bytes(" -- NO itable directory (not a lambda; an interface or bare Type)>"));
@@ -26551,8 +26553,8 @@ public final class Loader
         int n = 0;
         while (!dir.isZero() && n < 8)
         {
-            long ifType = dir.plus(n * 16L).loadLong();
-            if (ifType == 0L)
+            Address ifType = dir.plus(n * 16L).loadAddress();
+            if (ifType.isZero())
             {
                 break;                                   // sentinel ends the directory
             }
@@ -26637,7 +26639,7 @@ public final class Loader
             // and indistinguishable at the catch site from an exception that simply says little.
             excMissing(name);
         }
-        long tib = i >= 0 ? clTab[i].tib : 0L;
+        Address tib = i >= 0 ? clTab[i].tib : Address.zero();
         long obj = Heap.alloc(i >= 0 ? (16 + clTab[i].fieldCount * 8) : 16).toLong();
         Address.fromLong(obj).plus(0L).store(tib);
         if (i >= 0)
@@ -26752,10 +26754,10 @@ public final class Loader
     }
 
     /** TIB of the loaded mini {@code java/lang/String} (for the concat's {@code VMConcat.scEnd}), or 0. */
-    static long stringTib()
+    static Address stringTib()
     {
         int i = stringClassIndex();
-        return i >= 0 ? clTab[i].tib : 0L;
+        return i >= 0 ? clTab[i].tib : Address.zero();
     }
 
     /** Instance size (bytes) of the loaded mini {@code java/lang/String} (header + fields). */
@@ -27058,7 +27060,7 @@ public final class Loader
                 : ch == 'F' ? Magic.bytes("java/lang/Float")
                 : Magic.bytes("java/lang/Double");
         int ci = classIndexByName(name);
-        return ci < 0 ? 0L : clTab[ci].type;
+        return ci < 0 ? 0L : clTab[ci].type.toLong();
     }
 
     /** JIT buffer of the lambda body (bootstrap_arguments[1] MethodHandle -> its Methodref, same class). */
@@ -27163,7 +27165,7 @@ public final class Loader
     }
 
     /** Type of the functional interface = the indy descriptor's return class, or 0 if not loaded. */
-    private static long lambdaIfaceType(int idx)
+    private static Address lambdaIfaceType(int idx)
     {
         int descOff = mrefDescOff(idx);
         Address p = gbase.plus(descOff + 2);                   // skip the u2 length
@@ -27174,7 +27176,7 @@ public final class Loader
         p = p.plus(1);                                         // past ')'
         if (u1(p) != 'L')
         {
-            return 0L;
+            return Address.zero();
         }
         Address nameStart = p.plus(1);
         Address q = nameStart;
@@ -27192,7 +27194,7 @@ public final class Loader
             }
             i += 1;
         }
-        return 0L;
+        return Address.zero();
     }
 
     /** The SAM's descriptor Utf8 offset: bootstrap_arguments[0] MethodType (its name is the indy's name). */
@@ -27492,9 +27494,9 @@ public final class Loader
 
     static long buildLambdaTib(int idx)
     {
-        long ifaceType = lambdaIfaceType(idx);
-        Address ifaceU = ifaceType == 0L ? lambdaIfaceNameU(idx) : Address.zero();
-        if (ifaceType == 0L && !ifaceU.isZero() && lzCompiling && !lzRetried
+        Address ifaceType = lambdaIfaceType(idx);
+        Address ifaceU = ifaceType.isZero() ? lambdaIfaceNameU(idx) : Address.zero();
+        if (ifaceType.isZero() && !ifaceU.isZero() && lzCompiling && !lzRetried
                 && !VM.dirBytes(ifaceU.plus(2L), u2(ifaceU)).isZero() && notePullNeeded(ifaceU))
         {
             // A LATE compile met a lambda whose interface is in the classDir but not loaded -- a deferred
@@ -27504,7 +27506,7 @@ public final class Loader
             // reachable yet. SILENT: the TIB built now is discarded with the body, and only an interface
             // still missing after the pull is a failure worth naming.
         }
-        else if (ifaceType == 0L)
+        else if (ifaceType.isZero())
         {
             // 0 is also the itable directory's END SENTINEL, so a lambda built with it satisfies NO interface
             // and every dispatch on it throws NPE from the directory miss, far from the indy that caused it.
@@ -27674,7 +27676,7 @@ public final class Loader
                 return finishLambdaClass(thunk, ifaceType, idx, nc);            // discarded by the retry
             }
             int size = 16 + clTab[cr].fieldCount * 8;
-            long ctib = clTab[cr].tib;
+            long ctib = clTab[cr].tib.toLong();
             // A ZERO TIB HERE WOULD BE BAKED AS AN IMMEDIATE AND STAY ZERO FOR EVER -- there is no reloc on
             // this store for a later batch to patch, the same trap a class literal for an unpulled class fell
             // into. The object then comes back with a null TIB, and the first thing done with it (a checkcast,
@@ -27868,9 +27870,9 @@ public final class Loader
 
     /** Initialize the loaded class whose Type node is {@code type} (VMNatives.ensureMirrorInit); a Type the
      *  registry does not know -- an array, a primitive -- has no initializer and is left alone. */
-    static void ensureInitOfType(long type)
+    static void ensureInitOfType(Address type)
     {
-        if (type == 0L || !runtimeUp)
+        if (type.isZero() || !runtimeUp)
         {
             return;
         }
@@ -27892,9 +27894,9 @@ public final class Loader
      * answer is only a needless initialization barrier, which can push a handle off a pregenerated form. A class
      * with no registry entry is one {@code ensureClinit} cannot initialize, so a barrier would only add a no-op.
      */
-    static boolean typeNeedsInit(long type)
+    static boolean typeNeedsInit(Address type)
     {
-        if (type == 0L || !runtimeUp)
+        if (type.isZero() || !runtimeUp)
         {
             return false;
         }
@@ -27922,7 +27924,7 @@ public final class Loader
     }
 
     /** Registry index of the loaded class/interface whose Type node is {@code type}, or -1. */
-    private static int regOfType(long type)
+    private static int regOfType(Address type)
     {
         return ctProbe(type);
     }
@@ -27948,9 +27950,9 @@ public final class Loader
 
     /** Hash a Type NODE ADDRESS. Types come from {@code allocData}, so the low bits are always 0 -- hashing
      *  the raw address would drop every entry into a handful of buckets. */
-    private static int typeHashOf(long type)
+    private static int typeHashOf(Address type)
     {
-        int h = (int) (type >> 3);
+        int h = (int) (type.toLong() >> 3);
         h = h * 0x9E3779B1;
         h = h ^ (h >>> 15);
         return h & (CTTAB - 1);
@@ -27976,7 +27978,7 @@ public final class Loader
         }
         while (ctIndexed < clCount)
         {
-            int h = typeHashOf(clTab[ctIndexed] != null ? clTab[ctIndexed].type : 0L);
+            int h = typeHashOf(clTab[ctIndexed] != null ? clTab[ctIndexed].type : Address.zero());
             ctNext[ctIndexed] = ctBucket[h];
             ctBucket[h] = ctIndexed;
             ctIndexed += 1;
@@ -27984,7 +27986,7 @@ public final class Loader
     }
 
     /** The registry index the linear scan would have returned for {@code type}, or -1. */
-    private static int ctProbe(long type)
+    private static int ctProbe(Address type)
     {
         ctIndexTo();
         int best = -1;
@@ -27995,7 +27997,7 @@ public final class Loader
             // The LOWEST matching index still wins, which the scan gave for free and a chain does not:
             // head-insertion makes the chain DESCENDING, so it is searched for the minimum rather than
             // stopped at the first hit. Same care `findPdByName`'s index needed.
-            if (clTab[i] != null && clTab[i].type == type && (best < 0 || i < best))
+            if (clTab[i] != null && clTab[i].type.EQ(type) && (best < 0 || i < best))
             {
                 best = i;
             }
@@ -28020,7 +28022,7 @@ public final class Loader
         return false;
     }
 
-    private static long finishLambdaClass(Address thunk, long ifaceType, int idx, int nc)
+    private static long finishLambdaClass(Address thunk, Address ifaceType, int idx, int nc)
     {
         // M8 itables: PER-interface itables. The SAM's identity is (indy name, MethodType desc);
         // each directory entry -- the functional interface AND every interface it transitively
@@ -28096,7 +28098,7 @@ public final class Loader
         type.plus(ObjectModel.TYPE_DISPLAY_OFFSET).store(0L);
         type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).store(0L);
         type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).store(0L);
-        buildImplBitmap(type.toLong());                           // a lambda's dir interfaces ARE numbered
+        buildImplBitmap(type);                           // a lambda's dir interfaces ARE numbered
         // TIB { Type, Object's vtable }. The lambda declares no virtual method of its OWN -- its SAM is
         // reached through the itable directory above -- but it is still an ordinary object, and
         // equals/hashCode/toString on it must select java/lang/Object's implementations (JVMS 5.4.6: the
@@ -28110,13 +28112,13 @@ public final class Loader
         // Stream.sorted(). Identity semantics inherited from Object are exactly right here --
         // LambdaMetafactory specifies the identity of a captured function object as unpredictable.
         int onv = objectVtableCount();
-        long tib = Heap.allocData(8 + onv * 8).toLong();
-        Address.fromLong(tib).plus(0L).store(type);
+        Address tib = Heap.allocData(8 + onv * 8);
+        tib.plus(0L).store(type);
         fillObjectVtable(tib);                           // may copy zeros if Object is not compiled yet;
                                                          //   refillSynthTibVtables repairs that at loadAll's end
         if (lambdaTibRoots != null && lambdaTibRootN < lambdaTibRoots.length)
         {
-            lambdaTibRoots[lambdaTibRootN] = tib;   // keep this TIB (and, via its trace, Type/dir/itables) a GC root
+            lambdaTibRoots[lambdaTibRootN] = tib.toLong();   // keep this TIB (and, via its trace, Type/dir/itables) a GC root
             lambdaTibVtCap[lambdaTibRootN] = onv;   // ... and how many vtable slots it has room for
             lambdaTibFilled[lambdaTibRootN] = false;// ... and NOT yet filled (explicit: see the field's note --
                                                     //   allocArray leaves elements undefined on this VM)
@@ -28124,7 +28126,7 @@ public final class Loader
             lambdaHostNameOff[lambdaTibRootN] = gThisNameOff;
             lambdaTibRootN += 1;
         }
-        return tib;
+        return tib.toLong();
     }
 
     /** A lambda's itable for interface {@code ir}: zeroes except the thunk at the interface's
@@ -28219,7 +28221,7 @@ public final class Loader
 
 
     /** Type node of the class named by {@code Class} entry {@code classIdx}, or 0 if unloaded. */
-    static long typeOfClass(int classIdx)
+    static Address typeOfClass(int classIdx)
     {
         // Self-reference (a class doing `x instanceof Self` / `(Self) x`): the current class isn't in the
         // registry until AFTER its own compile, but its Type node (gType) is already built by buildTib —
@@ -28228,14 +28230,14 @@ public final class Loader
         if (u1(gbase.plus(nameOff + 2)) == 0x5B)            // '[' : an array class ("[B", "[Ljava/...;", "[[I")
         {
             long tib = arrayTibOfDesc(gbase, nameOff);
-            return tib == 0L ? 0L : Address.fromLong(tib).loadLong();  // the array Type (checkcast/instanceof target)
+            return tib == 0L ? Address.zero() : Address.fromLong(tib).loadAddress();  // the array Type (checkcast/instanceof target)
         }
         if (utf8EqAt(gbase, nameOff, gbase, gThisNameOff))
         {
             return gType;
         }
         int r = classRegOf(classIdx);
-        return r >= 0 ? clTab[r].type : 0L;
+        return r >= 0 ? clTab[r].type : Address.zero();
     }
 
     // ----- array Types -----------------------------------------------------
@@ -28247,8 +28249,8 @@ public final class Loader
 
     /** java/lang/Object's Type (array super), or 0 if Object isn't loaded yet. */
     /** Cached Types of the two interfaces every array implements; 0 until each is found (Types never move). */
-    private static long cloneableTypeCache;
-    private static long serializableTypeCache;
+    private static Address cloneableTypeCache;
+    private static Address serializableTypeCache;
     /** {@code clTab[0, arrayIfaceScanned)} has been searched for those two names. */
     private static int arrayIfaceScanned;
 
@@ -28265,13 +28267,13 @@ public final class Loader
      * is append-only ({@code type} is written once, before {@code clCount} moves -- see the ctProbe note), so
      * the entries added since the last call are the only ones that can change the answer.
      */
-    static boolean isArrayInterface(long type)
+    static boolean isArrayInterface(Address type)
     {
-        if (type == 0L)
+        if (type.isZero())
         {
             return false;
         }
-        if (cloneableTypeCache == 0L || serializableTypeCache == 0L)
+        if (cloneableTypeCache.isZero() || serializableTypeCache.isZero())
         {
             int n = clCount;
             int i = arrayIfaceScanned;
@@ -28279,12 +28281,12 @@ public final class Loader
             {
                 if (clTab[i] != null)
                 {
-                    if (cloneableTypeCache == 0L
+                    if (cloneableTypeCache.isZero()
                             && utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/Cloneable")))
                     {
                         cloneableTypeCache = clTab[i].type;
                     }
-                    else if (serializableTypeCache == 0L
+                    else if (serializableTypeCache.isZero()
                             && utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/io/Serializable")))
                     {
                         serializableTypeCache = clTab[i].type;
@@ -28294,10 +28296,10 @@ public final class Loader
             }
             arrayIfaceScanned = n;
         }
-        return type == cloneableTypeCache || type == serializableTypeCache;
+        return type.EQ(cloneableTypeCache) || type.EQ(serializableTypeCache);
     }
 
-    static long objectTypeAddr()
+    static Address objectTypeAddr()
     {
         int i = 0;
         while (i < clCount)
@@ -28308,14 +28310,14 @@ public final class Loader
             }
             i += 1;
         }
-        return 0L;
+        return Address.zero();
     }
 
     /** Allocate an array Type {tag|elemSize, super=Object, itableDir=0, elementType} + a 1-word TIB; return the TIB. */
-    private static long makeArrayTib(int elemSize, long elementType)
+    private static long makeArrayTib(int elemSize, Address elementType)
     {
         Address type = Heap.allocData(ObjectModel.ARRAY_TYPE_SIZE);
-        long objType = objectTypeAddr();
+        Address objType = objectTypeAddr();
         type.plus(ObjectModel.TYPE_INSTANCE_SIZE_OFFSET).store(ObjectModel.ARRAY_TYPE_TAG | (long) elemSize);
         type.plus(ObjectModel.TYPE_SUPER_OFFSET).store(objType);            // arr instanceof Object
         type.plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).store(0L);            // Cloneable/Serializable: later
@@ -28324,16 +28326,16 @@ public final class Loader
         type.plus(ObjectModel.TYPE_DISPLAY_OFFSET).store(0L);
         type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).store(1L);   // empty-but-computed bitmap
         type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).store(0L);
-        buildDisplay(type.toLong(), objType);                     // depth 1, display [Object, self]
+        buildDisplay(type, objType);                     // depth 1, display [Object, self]
         // The array TIB carries java/lang/Object's vtable so an invokevirtual on an array works. An array's static
         // type is Object at a dispatch site (e.g. Arrays.deepEquals0's `e1.equals(e2)`, or `element.toString()` in
         // String.valueOf/join), so the receiver's TIB must resolve equals/hashCode/toString to Object's impls.
         // Without the vtable the dispatch read past a 1-word TIB and BLR'd garbage (a wild branch to the image entry).
         int nv = objectVtableCount();
-        long tib = Heap.allocData(8 + nv * 8).toLong();
-        Address.fromLong(tib).plus(ObjectModel.TIB_TYPE_SLOT * 8).store(type);                // TIB[0] = Type
+        Address tib = Heap.allocData(8 + nv * 8);
+        tib.plus(ObjectModel.TIB_TYPE_SLOT * 8).store(type);                // TIB[0] = Type
         fillObjectVtable(tib);                                                   // TIB[1..] = Object's vtable slots
-        return tib;
+        return tib.toLong();
     }
 
     /** Number of vtable slots a SYNTHESISED TIB reserves (= java/lang/Object's flattened vtable count), or 0.
@@ -28355,7 +28357,7 @@ public final class Loader
      * -- filled to every slot it has room for -- which is the only condition under which the caller may
      * latch it and stop revisiting.
      */
-    private static boolean fillObjectVtableUpTo(long tib, int cap)
+    private static boolean fillObjectVtableUpTo(Address tib, int cap)
     {
         int oi = objectClassIndex();
         if (oi < 0)
@@ -28368,13 +28370,13 @@ public final class Loader
         int k = 0;
         while (k < n)
         {
-            long want = Address.fromLong(clTab[oi].tib).plus(8L).plus((long) k * 8L).loadLong();
+            long want = clTab[oi].tib.plus(8L).plus((long) k * 8L).loadLong();
             sySlots += 1;
-            if (Address.fromLong(tib).plus(8L).plus((long) k * 8L).loadLong() != want)
+            if (tib.plus(8L).plus((long) k * 8L).loadLong() != want)
             {
                 syChanged += 1;                          // the write that was actually NECESSARY. This read
             }                                            //   is the evidence the latch below rests on: it
-            Address.fromLong(tib).plus(8L).plus((long) k * 8L).store(want);//   must stay ~= the first-fill count, never grow
+            tib.plus(8L).plus((long) k * 8L).store(want);//   must stay ~= the first-fill count, never grow
             k += 1;
         }
         return n >= cap;                                 // COMPLETE, not merely attempted -- see lambdaTibFilled
@@ -28395,7 +28397,7 @@ public final class Loader
         {
             if (lambdaTibRoots[i] != 0L && !lambdaTibFilled[i])
             {
-                if (fillObjectVtableUpTo(lambdaTibRoots[i], lambdaTibVtCap[i]))
+                if (fillObjectVtableUpTo(Address.fromLong(lambdaTibRoots[i]), lambdaTibVtCap[i]))
                 {
                     lambdaTibFilled[i] = true;           // complete: nothing more can ever be written here
                 }
@@ -28413,7 +28415,7 @@ public final class Loader
         }
     }
 
-    private static void fillObjectVtable(long tib)
+    private static void fillObjectVtable(Address tib)
     {
         int oi = objectClassIndex();
         if (oi < 0)
@@ -28424,7 +28426,7 @@ public final class Loader
         int k = 0;
         while (k < nv)
         {
-            Address.fromLong(tib).plus(8L).plus((long) k * 8L).store(Address.fromLong(clTab[oi].tib).plus(8L).plus((long) k * 8L).loadLong());
+            tib.plus(8L).plus((long) k * 8L).store(clTab[oi].tib.plus(8L).plus((long) k * 8L).loadLong());
             k += 1;
         }
     }
@@ -28441,7 +28443,7 @@ public final class Loader
             {
                 if (primArrTib[a] != 0L && !primArrAdopted[a])
                 {
-                    fillObjectVtable(primArrTib[a]);   // adopted (baked) TIBs keep their writer impls
+                    fillObjectVtable(Address.fromLong(primArrTib[a]));   // adopted (baked) TIBs keep their writer impls
                 }
                 a += 1;
             }
@@ -28451,7 +28453,7 @@ public final class Loader
         {
             if (refArrTib[r] != 0L && !refArrAdopted[r])
             {
-                fillObjectVtable(refArrTib[r]);        // adopted (baked) TIBs keep their writer impls
+                fillObjectVtable(Address.fromLong(refArrTib[r]));        // adopted (baked) TIBs keep their writer impls
             }
             r += 1;
         }
@@ -28511,7 +28513,7 @@ public final class Loader
             }
             else
             {
-                primArrTib[atype] = makeArrayTib(primElemSize(atype), 0L);
+                primArrTib[atype] = makeArrayTib(primElemSize(atype), Address.zero());
             }
         }
         return primArrTib[atype];
@@ -28521,29 +28523,29 @@ public final class Loader
      *  display[d] = ancestor at depth d, display[depth] = self). Copies the super's display, so it
      *  requires the super's Type to be complete (supers register first; adopted supers carry the
      *  writer's). A super without a display leaves this one without too (the walk fallback holds). */
-    private static void buildDisplay(long type, long superType)
+    private static void buildDisplay(Address type, Address superType)
     {
         long d = 0L;
-        long sd = 0L;
-        if (superType != 0L)
+        Address sd = Address.zero();
+        if (!superType.isZero())
         {
-            sd = Address.fromLong(superType).plus(ObjectModel.TYPE_DISPLAY_OFFSET).loadLong();
-            if (sd == 0L)
+            sd = superType.plus(ObjectModel.TYPE_DISPLAY_OFFSET).loadAddress();
+            if (sd.isZero())
             {
                 return;                                  // super has no display: stay on the walk
             }
-            d = Address.fromLong(superType).plus(ObjectModel.TYPE_DEPTH_OFFSET).loadLong() + 1L;
+            d = superType.plus(ObjectModel.TYPE_DEPTH_OFFSET).loadLong() + 1L;
         }
         Address disp = Heap.allocData(((int) d + 1) * 8);
         long i = 0L;
         while (i < d)
         {
-            disp.plus(i * 8L).store(Address.fromLong(sd).plus(i * 8L).loadLong());
+            disp.plus(i * 8L).store(sd.plus(i * 8L).loadLong());
             i += 1;
         }
         disp.plus(d * 8L).store(type);
-        Address.fromLong(type).plus(ObjectModel.TYPE_DEPTH_OFFSET).store(d);
-        Address.fromLong(type).plus(ObjectModel.TYPE_DISPLAY_OFFSET).store(disp);
+        type.plus(ObjectModel.TYPE_DEPTH_OFFSET).store(d);
+        type.plus(ObjectModel.TYPE_DISPLAY_OFFSET).store(disp);
     }
 
     /** O(1) interface checks: (re)build {@code type}'s doesImplement bitmap = the super's bitmap |
@@ -28551,11 +28553,11 @@ public final class Loader
      *  interfaces' ID bits. Unnumbered dir interfaces are simply skipped -- their targets fall back
      *  to the dir walk, so the bitmap stays definitive for every NUMBERED interface. A super without
      *  a computed bitmap leaves this type without one too (walk fallback). */
-    private static void buildImplBitmap(long type)
+    private static void buildImplBitmap(Address type)
     {
         long b0 = 1L;                                    // bit 0 = computed marker
         long b1 = 0L;
-        Address superType = Address.fromLong(type).plus(ObjectModel.TYPE_SUPER_OFFSET).loadAddress();
+        Address superType = type.plus(ObjectModel.TYPE_SUPER_OFFSET).loadAddress();
         if (!superType.isZero())
         {
             long sb0 = superType.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).loadLong();
@@ -28566,13 +28568,13 @@ public final class Loader
             b0 |= sb0;
             b1 |= superType.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).loadLong();
         }
-        long own0 = Address.fromLong(type).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).loadLong();
+        long own0 = type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).loadLong();
         if ((own0 & 1L) != 0L)                           // adopted node: keep the writer's bits
         {
             b0 |= own0;
-            b1 |= Address.fromLong(type).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).loadLong();
+            b1 |= type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).loadLong();
         }
-        Address e = Address.fromLong(type).plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).loadAddress();
+        Address e = type.plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).loadAddress();
         if (!e.isZero())
         {
             Address iface = e.plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadAddress();
@@ -28591,8 +28593,8 @@ public final class Loader
                 iface = e.plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadAddress();
             }
         }
-        Address.fromLong(type).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).store(b0);
-        Address.fromLong(type).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).store(b1);
+        type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).store(b0);
+        type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).store(b1);
     }
 
     /** JVMS descriptor char for a newarray atype (4..11). */
@@ -28626,7 +28628,7 @@ public final class Loader
     static long stringTypeAddr()
     {
         int i = classIndexByName(Magic.bytes("java/lang/String"));
-        return i < 0 ? 0L : clTab[i].type;
+        return i < 0 ? 0L : clTab[i].type.toLong();
     }
 
     /** JVMS field-descriptor char -> newarray atype (Z/B/C/S/I/J/F/D), or -1 for a reference/array element. */
@@ -28664,18 +28666,18 @@ public final class Loader
         if (c == 0x5B)                                  // '[': nested -- element desc is this minus one '['
         {
             long elTib = arrayTibOfDescN(base, off + 1, n - 1);
-            return refArrayTib(elTib == 0L ? 0L : Address.fromLong(elTib).loadLong());
+            return refArrayTib(elTib == 0L ? Address.zero() : Address.fromLong(elTib).loadAddress());
         }
         return refArrayTib(elementTypeOfArrayDescN(base, off, n));   // "[L<class>;"
     }
 
     /** Element Type of the {@code n}-byte reference-array descriptor "[L<class>;" at {@code base+off}
      *  (the class's Type, or 0 when unresolved). */
-    private static long elementTypeOfArrayDescN(Address base, int off, int n)
+    private static Address elementTypeOfArrayDescN(Address base, int off, int n)
     {
         if (u1(base.plus(off + 1)) != 0x4C)                 // not 'L'
         {
-            return 0L;
+            return Address.zero();
         }
         int i = 0;                                      // strip the leading "[L" and trailing ';' -> class name
         while (i < clCount)
@@ -28686,7 +28688,7 @@ public final class Loader
             }
             i += 1;
         }
-        return 0L;
+        return Address.zero();
     }
 
     /** True if the {@code n}-byte slice at {@code aBase+aOff} equals the Utf8 name at {@code bBase+bNameOff}. */
@@ -28709,12 +28711,13 @@ public final class Loader
     }
 
     /** Array TIB for a reference array with the given element Type; created + cached (keyed by element Type). */
-    static long refArrayTib(long elementType)
+    static long refArrayTib(Address elementType)
     {
+        long elemKey = elementType.toLong();            // the cache's key (refArrElem is still a long[])
         int i = 0;
         while (i < refArrCount)
         {
-            if (refArrElem[i] == elementType)
+            if (refArrElem[i] == elemKey)
             {
                 return refArrTib[i];
             }
@@ -28726,14 +28729,14 @@ public final class Loader
         // TIB -- and the covariance walk compares one set of nodes. Metal-built when not baked.
         long tib = 0L;
         boolean adopted = false;
-        if (elementType != 0L)
+        if (!elementType.isZero())
         {
             Address tab = Address.fromLong(VM.refArrayTibs);
             long n = VM.refArrayTibCount;
             long k = 0;
             while (k < n)
             {
-                if (tab.plus(k * 16L).loadLong() == elementType)
+                if (tab.plus(k * 16L).loadAddress().EQ(elementType))
                 {
                     tib = tab.plus(k * 16L).plus(8L).loadLong();
                     adopted = true;
@@ -28762,7 +28765,7 @@ public final class Loader
         {
             growRefArrCache();
         }
-        refArrElem[refArrCount] = elementType;
+        refArrElem[refArrCount] = elemKey;
         refArrTib[refArrCount] = tib;
         refArrAdopted[refArrCount] = adopted;
         refArrCount += 1;
@@ -28831,8 +28834,8 @@ public final class Loader
      */
     static long refArrayTibForClass(int classCp)
     {
-        long type = typeOfClass(classCp);
-        if (type == 0L)
+        Address type = typeOfClass(classCp);
+        if (type.isZero())
         {
             int nameOff = gcp[u2(gbase.plus(gcp[classCp]))];
             if (u1(gbase.plus(nameOff + 2)) != 0x5B                     // an array-of-array builds its own Type
@@ -28841,8 +28844,8 @@ public final class Loader
                 return 0L;                                          // discarded compile: retried with it loaded
             }
             reportUntypedArray(gbase.plus(nameOff));
-            long obj = objectTypeAddr();
-            return obj == 0L ? 0L : refArrayTib(obj);               // Object[]: covariance holds, elements traced
+            Address obj = objectTypeAddr();
+            return obj.isZero() ? 0L : refArrayTib(obj);               // Object[]: covariance holds, elements traced
         }
         return refArrayTib(type);
     }
@@ -28891,9 +28894,9 @@ public final class Loader
     // the guest java/lang/Class when loaded, else a bare identity object (TIB 0) -- enough for `==`.
 
     /** guest java/lang/Class's TIB, or 0 if it isn't loaded in this batch. */
-    private static long classTib()
+    private static Address classTib()
     {
-        if (classTibCache == 0L)
+        if (classTibCache.isZero())
         {
             int i = 0;
             while (i < clCount)
@@ -28910,16 +28913,17 @@ public final class Loader
     }
 
     /** The Class mirror for VM Type {@code type}, materialised + cached (identity stable across ldc/getClass). */
-    static long classMirror(long type)
+    static long classMirror(Address type)
     {
-        if (type == 0L)
+        if (type.isZero())
         {
             return 0L;
         }
+        long key = type.toLong();                       // the mirror table's key (mirType is still a long[])
         int i = 0;
         while (i < mirN)
         {
-            if (mirType[i] == type)
+            if (mirType[i] == key)
             {
                 return mirObj.get(i).toLong();
             }
@@ -28930,12 +28934,12 @@ public final class Loader
         // overlay's field count by hand: a field declared in guestsrc/java/lang/Class.java but not counted here is
         // written PAST the object.
         Address obj = Heap.alloc(56);
-        long ctib = classTib();
+        Address ctib = classTib();
         if (mirN >= mirType.length)
         {
             reportMirrorCacheFull(type, ctib);              // past here getClass() mints a NEW mirror each ask
         }
-        if (ctib == 0L)
+        if (ctib.isZero())
         {
             reportMirrorNoTib(type);                        // a TIB-0 mirror is a WILD DISPATCH, not an identity
         }
@@ -28943,7 +28947,7 @@ public final class Loader
         obj.plus(16L).store(type);                     // the VM Type this Class mirrors
         if (mirN < mirType.length)
         {
-            mirType[mirN] = type;
+            mirType[mirN] = key;
             mirObj.set(mirN, obj.toObjectReference());
             mirN += 1;
         }
@@ -28962,7 +28966,7 @@ public final class Loader
      * every ask mints a fresh mirror, so {@code getClass() == getClass()} can still hold by luck while
      * {@code getClass() == X.class} does not -- and stock code compares mirrors constantly.
      */
-    private static void reportMirrorCacheFull(long type, long ctib)
+    private static void reportMirrorCacheFull(Address type, Address ctib)
     {
         if (mirFullReported)
         {
@@ -28997,7 +29001,7 @@ public final class Loader
      *
      * <p>{@code getClass()} is called on everything, so this is worth a line even though it costs one.
      */
-    private static void reportMirrorNoTib(long type)
+    private static void reportMirrorNoTib(Address type)
     {
         Uart.write(Magic.bytes("\n  CLASS MIRROR WITHOUT A TIB (getClass/instanceof will misdispatch): "));
         int r = regOfType(type);
@@ -29045,7 +29049,7 @@ public final class Loader
      */
     static long typeOfCheckedClass(int classCp)
     {
-        long type = typeOfClass(classCp);
+        long type = typeOfClass(classCp).toLong();
         int nameOff0 = gcp[u2(gbase.plus(gcp[classCp]))];
         if (u1(gbase.plus(nameOff0 + 2)) == 0x5B)
         {
@@ -29061,7 +29065,7 @@ public final class Loader
                 d += 1;
             }
             if (d < len && u1(gbase.plus(nameOff0 + 2 + d)) == 0x4C
-                    && elementTypeOfArrayDescN(gbase, nameOff0 + 2 + d - 1, len - d + 1) == 0L)
+                    && elementTypeOfArrayDescN(gbase, nameOff0 + 2 + d - 1, len - d + 1).isZero())
             {
                 int elOff = nameOff0 + 2 + d + 1;       // past the '['s and the 'L'
                 int elLen = len - d - 2;                // minus the trailing ';'
@@ -29136,8 +29140,8 @@ public final class Loader
 
     static long classLiteral(int classCp)
     {
-        long type = typeOfClass(classCp);
-        if (type == 0L)
+        Address type = typeOfClass(classCp);
+        if (type.isZero())
         {
             // A CLASS LITERAL FOR A CLASS NOTHING PULLED. `emitAddr` bakes the mirror as an IMMEDIATE, so
             // unlike a call there is no reloc for a later batch to patch -- 0 here means the literal is null
@@ -29202,7 +29206,7 @@ public final class Loader
         if (thrTypeCache == 0L)
         {
             int i = classIndexByName(Magic.bytes("java/lang/Throwable"));
-            thrTypeCache = i < 0 ? 0L : clTab[i].type;
+            thrTypeCache = i < 0 ? 0L : clTab[i].type.toLong();
         }
         return thrTypeCache;
     }
@@ -29376,7 +29380,7 @@ public final class Loader
             RVMClass c = clTab[ci];
             if (c != null && u2(c.base.plus(c.nameOff)) == len && sameBytesAt(c.base.plus(c.nameOff + 2L), p, len))
             {
-                return c.type;
+                return c.type.toLong();
             }
             ci += 1;
         }
@@ -29425,7 +29429,7 @@ public final class Loader
         {
             return 0L;                                      // a raw array (no Type) — no mirror
         }
-        return classMirror(Address.fromLong(tib).loadLong());              // TIB[0] = Type (class Type or array Type)
+        return classMirror(Address.fromLong(tib).loadAddress());              // TIB[0] = Type (class Type or array Type)
     }
 
     /**
@@ -29491,7 +29495,7 @@ public final class Loader
             Uart.write(Magic.bytes(" -- NULL TIB (object never got one)\n"));
             return;
         }
-        long type = tib.loadLong();
+        Address type = tib.loadAddress();
         Uart.write(Magic.bytes(" type="));
         VM.printHex(type);
         Uart.write(Magic.bytes(" class="));
@@ -29856,7 +29860,7 @@ public final class Loader
     {
         int r = classRegOf(classIdx);
         noteInitNeeded(r);                              // `new C` is an active use of C (JVMS 5.5)
-        return r >= 0 ? clTab[r].tib : gTib;            // unregistered => the SELF case (objectSizeOf traps the rest)
+        return (r >= 0 ? clTab[r].tib : gTib).toLong();            // unregistered => the SELF case (objectSizeOf traps the rest)
     }
 
     /** True if the {@code Class} entry {@code classIdx} names the class being compiled. */
@@ -29950,7 +29954,7 @@ public final class Loader
         Address clsU = unresBase.get(i).plus(unresOff[i]);
         int len = u2(clsU);
         VM.loaderLock(VM.LOCK_NEW_RESOLVE);                                // demand-loads a class: one compiler at a time
-        long tib;
+        Address tib;
         int fields;
         int reg;
         try
@@ -29973,10 +29977,10 @@ public final class Loader
                 slash[k] = (byte) u1(clsU.plus(2 + k));
                 k += 1;
             }
-            long pulled = loadClassIncremental(slash);
+            Address pulled = loadClassIncremental(slash);
             reg = regBySigU(clsU);
         }
-        tib = 0L;
+        tib = Address.zero();
         fields = 0;
         if (reg >= 0 && clTab[reg].state >= RVMClass.ST_INSTANTIATED)
         {
@@ -29988,7 +29992,7 @@ public final class Loader
         {
             VM.loaderUnlock();   // see the note in lazyCompile: a throw here used to strand the lock
         }
-        if (tib == 0L)
+        if (tib.isZero())
         {
             reportUnresolvedNew(site, pc);              // does not return
         }
@@ -30092,7 +30096,7 @@ public final class Loader
     static long ifaceTypeOfMethod(int idx)
     {
         int classIdx = u2(gbase.plus(gcp[idx]));            // *ref.class_index -> Class entry
-        return typeOfClass(classIdx);
+        return typeOfClass(classIdx).toLong();
     }
 
     // ----- the on-metal MetalSymbols stubs made real: strings + magic intrinsics -----
@@ -30225,9 +30229,9 @@ public final class Loader
             return litObjByCp[stringCp];
         }
         long bytes = internString(stringCp);
-        long tib = stringTib();
+        Address tib = stringTib();
         long result;
-        if (tib == 0L)
+        if (tib.isZero())
         {
             result = anchorLiteral(bytes);              // String not loaded: a raw byte[]
         }
