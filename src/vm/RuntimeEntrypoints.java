@@ -231,7 +231,7 @@ final class RuntimeEntrypoints
         {
             return ObjectModel.WORD;                     // '[' or 'L': the elements are references
         }
-        int atype = Loader.atypeForDescChar(c);
+        int atype = Primitives.atypeForDescChar(c);
         return atype < 0 ? ObjectModel.WORD : arrayElemSizeOfAtype(atype);
     }
 
@@ -270,7 +270,7 @@ final class RuntimeEntrypoints
     {
         int cnt = level == 0 ? c0 : level == 1 ? c1 : level == 2 ? c2 : c3;
         Address arr = Heap.allocArray(cnt, descElemSize(u1(desc.plus(off + 1))));
-        Address tib = Loader.arrayTibOfDescN(desc, off, n);
+        Address tib = ArrayTypes.arrayTibOfDescN(desc, off, n);
         if (!tib.isZero())
         {
             arr.plus(ObjectModel.TIB_OFFSET).store(tib);   // else leave the raw element size, as tagArray does

@@ -316,7 +316,7 @@ final class MethodHandles
         {
             return 0L;
         }
-        RVMMethod m = Loader.reflEntry((int) e);
+        RVMMethod m = Reflection.reflEntry((int) e);
         if (m == null || m.buf == 0L)
         {
             Uart.write(Magic.bytes("\n  MH LINK: no body for "));
@@ -367,7 +367,7 @@ final class MethodHandles
     private static long memberNameDispatch(ObjectReference recv, ObjectReference mn)
     {
         long e = memberNameEntry(mn);
-        RVMMethod m = e < 0L ? null : Loader.reflEntry((int) e);
+        RVMMethod m = e < 0L ? null : Reflection.reflEntry((int) e);
         if (m == null || recv.isNull())
         {
             return 0L;
@@ -397,7 +397,7 @@ final class MethodHandles
                 Uart.write(Magic.bytes("\n  MH LINK: java/lang/invoke/MethodHandleNatives is not loaded\n"));
                 return 0L;
             }
-            li = Loader.methodResolveExact(Loader.clTab[reg].type,
+            li = Reflection.methodResolveExact(Loader.clTab[reg].type,
                     ObjectReference.fromLong(Loader.guestBytes(exact ? Magic.bytes("linkExact") : Magic.bytes("linkGeneric"))),
                     ObjectReference.fromLong(Loader.guestBytes(Magic.bytes("(Ljava/lang/invoke/MethodHandle;Ljava/lang/String;)Ljava/lang/invoke/MethodHandle;"))));
             if (exact)
@@ -409,7 +409,7 @@ final class MethodHandles
                 mhLinkGenericIdx = li;
             }
         }
-        RVMMethod m = li < 0 ? null : Loader.reflEntry(li);
+        RVMMethod m = li < 0 ? null : Reflection.reflEntry(li);
         if (m == null || m.buf == 0L)
         {
             Uart.write(Magic.bytes("\n  MH LINK: no MethodHandleNatives linker\n"));
@@ -428,7 +428,7 @@ final class MethodHandles
             return -1L;
         }
         long g = Loader.guestBytes(field);
-        return Loader.fieldOffsetOfType(Loader.clTab[reg].type, Address.fromLong(g).plus(24L), field.length);
+        return Reflection.fieldOffsetOfType(Loader.clTab[reg].type, Address.fromLong(g).plus(24L), field.length);
     }
 
     /** The number of parameters in the absolute {@code {u2 len}(...)ret} descriptor at {@code descU}. */

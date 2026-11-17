@@ -1847,7 +1847,7 @@ public final class VM
 
     static long getClassOf(ObjectReference obj)
     {
-        return Loader.getClassOf(obj);
+        return ClassMirrors.getClassOf(obj);
     }
 
     /** Print a "string" (a mini java/lang/String or a raw byte[]): write its bytes to the UART. */
@@ -3268,7 +3268,7 @@ public final class VM
         // instanceof Cloneable answered false, and through the element recursion int[][] was no Cloneable[]
         // (ArrayCovarianceProbe). Ahead of the fast paths, because an array Type's implements-bitmap answers
         // the interface-ID test without either bit.
-        if (isArrayType(type) && Loader.isArrayInterface(targetType))
+        if (isArrayType(type) && ArrayTypes.isArrayInterface(targetType))
         {
             return true;
         }

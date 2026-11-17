@@ -324,7 +324,7 @@ final class VMNatives
             return 0L;                                     // boot force-compile passes 0; guest checks negative first
         }
         Address compType = componentMirror.toLong() > 0x1000L ? componentMirror.toAddress().plus(16L).loadAddress() : Address.zero();
-        return Loader.newArrayOfComponent(compType, (int) length);
+        return ArrayTypes.newArrayOfComponent(compType, (int) length);
     }
 
     /**
@@ -343,7 +343,7 @@ final class VMNatives
         {
             return 0L;
         }
-        return Loader.arrayComponentMirror(type);           // answers 0 for a non-array Type
+        return ArrayTypes.arrayComponentMirror(type);           // answers 0 for a non-array Type
     }
 
     /**
@@ -357,7 +357,7 @@ final class VMNatives
         {
             return 0L;                                     // boot-time force-compile passes 0; no-op
         }
-        return Loader.isArrayType(mirror.toAddress().plus(16L).loadAddress()) ? 1L : 0L;
+        return ArrayTypes.isArrayType(mirror.toAddress().plus(16L).loadAddress()) ? 1L : 0L;
     }
 
     /**
@@ -416,7 +416,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.declaredMethodName(mirror, (int) want);
+            return Reflection.declaredMethodName(mirror, (int) want);
         }
         finally
         {
@@ -430,7 +430,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.declaredMethodDesc(mirror, (int) want);
+            return Reflection.declaredMethodDesc(mirror, (int) want);
         }
         finally
         {
@@ -451,7 +451,7 @@ final class VMNatives
         Address type = mirror.toAddress().plus(16L).loadAddress();
         Address fnBase = nameArr.toAddress().plus(24L);         // byte[] payload
         int fnLen = (int) nameArr.toAddress().plus(16L).loadLong();  // byte[] length
-        return Loader.staticCellFor(type, fnBase, fnLen);
+        return Reflection.staticCellFor(type, fnBase, fnLen);
     }
 
     /** {@code Class.declaredFieldAt0(Class,int)} native: the NAME of the n-th field the class declares. */
@@ -460,7 +460,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.declaredFieldName(mirror, (int) want);
+            return Reflection.declaredFieldName(mirror, (int) want);
         }
         finally
         {
@@ -474,7 +474,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.declaredFieldDesc(mirror, (int) want);
+            return Reflection.declaredFieldDesc(mirror, (int) want);
         }
         finally
         {
@@ -488,7 +488,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.declaredFieldName(mirror, -1);
+            return Reflection.declaredFieldName(mirror, -1);
         }
         finally
         {
@@ -502,7 +502,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.declaredCtorPart(mirror, -1, 0);
+            return Reflection.declaredCtorPart(mirror, -1, 0);
         }
         finally
         {
@@ -516,7 +516,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.declaredCtorPart(mirror, (int) want, 1);
+            return Reflection.declaredCtorPart(mirror, (int) want, 1);
         }
         finally
         {
@@ -530,7 +530,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.declaredMethodName(mirror, -1);
+            return Reflection.declaredMethodName(mirror, -1);
         }
         finally
         {
@@ -749,7 +749,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.methodParamTypes((int) rgIndex);
+            return Reflection.methodParamTypes((int) rgIndex);
         }
         finally
         {
@@ -763,7 +763,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.methodReturnType((int) rgIndex);
+            return Reflection.methodReturnType((int) rgIndex);
         }
         finally
         {
@@ -781,7 +781,7 @@ final class VMNatives
             {
                 return 0L;
             }
-            return Loader.fieldTypeMirror(mirror, nameArr);
+            return Reflection.fieldTypeMirror(mirror, nameArr);
         }
         finally
         {
@@ -793,7 +793,7 @@ final class VMNatives
     /** {@code Class.interfaces0(Class)} native: the class's directly declared interfaces as mirrors. */
     static long classIfaces(ObjectReference mirror)
     {
-        return Loader.classInterfaces(mirror);
+        return ClassAttributes.classInterfaces(mirror);
     }
 
     /** {@code Executable.annoAll0(int)} native: every annotation DECLARED on that method, as an Annotation[]. */
@@ -816,7 +816,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.classSignature(mirror);
+            return ClassAttributes.classSignature(mirror);
         }
         finally
         {
@@ -830,7 +830,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.classEnclosingPart(mirror, part);
+            return ClassAttributes.classEnclosingPart(mirror, part);
         }
         finally
         {
@@ -844,7 +844,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.classNestPart(mirror, k);
+            return ClassAttributes.classNestPart(mirror, k);
         }
         finally
         {
@@ -858,7 +858,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.classFileWord(mirror, k);
+            return ClassAttributes.classFileWord(mirror, k);
         }
         finally
         {
@@ -872,7 +872,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.classInnerPart(mirror, part);
+            return ClassAttributes.classInnerPart(mirror, part);
         }
         finally
         {
@@ -886,7 +886,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.methodSignature((int) rgIndex);
+            return ClassAttributes.methodSignature((int) rgIndex);
         }
         finally
         {
@@ -900,7 +900,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.methodExceptionName((int) rgIndex, i);
+            return ClassAttributes.methodExceptionName((int) rgIndex, i);
         }
         finally
         {
@@ -914,7 +914,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.methodParamMeta((int) rgIndex, k);
+            return ClassAttributes.methodParamMeta((int) rgIndex, k);
         }
         finally
         {
@@ -928,7 +928,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.methodParamName((int) rgIndex, k);
+            return ClassAttributes.methodParamName((int) rgIndex, k);
         }
         finally
         {
@@ -970,7 +970,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.fieldSignature(mirror, nameArr);
+            return ClassAttributes.fieldSignature(mirror, nameArr);
         }
         finally
         {
@@ -984,7 +984,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.classSealed(mirror);
+            return ClassAttributes.classSealed(mirror);
         }
         finally
         {
@@ -1018,7 +1018,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.classRecordInfo(mirror, k);
+            return ClassAttributes.classRecordInfo(mirror, k);
         }
         finally
         {
@@ -1032,7 +1032,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.classRecordPart(mirror, k);
+            return ClassAttributes.classRecordPart(mirror, k);
         }
         finally
         {
@@ -1046,7 +1046,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.classRecordAnnos(mirror, k);
+            return ClassAttributes.classRecordAnnos(mirror, k);
         }
         finally
         {
@@ -1060,7 +1060,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.classPermitted(mirror, k);
+            return ClassAttributes.classPermitted(mirror, k);
         }
         finally
         {
@@ -1074,7 +1074,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.classDeclaredClasses(mirror);
+            return ClassAttributes.classDeclaredClasses(mirror);
         }
         finally
         {
@@ -1120,7 +1120,7 @@ final class VMNatives
      */
     static long primClassOf(long descChar)
     {
-        return Loader.primitiveMirror((int) descChar);
+        return Primitives.primitiveMirror((int) descChar);
     }
 
     /**
@@ -1133,7 +1133,7 @@ final class VMNatives
         {
             return 0L;
         }
-        return Loader.isPrimitiveType(mirror.toAddress().plus(16L).loadAddress()) ? 1L : 0L;
+        return Primitives.isPrimitiveType(mirror.toAddress().plus(16L).loadAddress()) ? 1L : 0L;
     }
 
     /**
@@ -1159,7 +1159,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.forNameMirror(nameArr);
+            return ClassMirrors.forNameMirror(nameArr);
         }
         finally
         {
@@ -1278,7 +1278,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.forNameMirror(nameArr, false);
+            return ClassMirrors.forNameMirror(nameArr, false);
         }
         finally
         {
@@ -1298,7 +1298,7 @@ final class VMNatives
         try
         {
             Address type = Loader.defineFromBytes(byteArr, (int) off, (int) len);
-            return type.isZero() ? 0L : Loader.classMirror(type);
+            return type.isZero() ? 0L : ClassMirrors.classMirror(type);
         }
         finally
         {
@@ -1320,7 +1320,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes: a nested class's InnerClasses entry
         try                                  // is read from its blob -- see the class doc
         {
-            return (long) Loader.classModifiersOf(mirror.toAddress().plus(16L).loadAddress());
+            return (long) Reflection.classModifiersOf(mirror.toAddress().plus(16L).loadAddress());
         }
         finally
         {
@@ -1335,7 +1335,7 @@ final class VMNatives
         {
             return -1;                                     // boot force-compile passes 0
         }
-        return Loader.methodResolve(mirrorRef.toAddress().plus(16L).loadAddress(), nameArrRef);
+        return Reflection.methodResolve(mirrorRef.toAddress().plus(16L).loadAddress(), nameArrRef);
     }
 
     /** Reflection: {@code Method.methodResolveDesc0(Class,byte[],byte[])} -> registry index of the method with
@@ -1346,7 +1346,7 @@ final class VMNatives
         {
             return -1;                                     // boot force-compile passes 0
         }
-        return Loader.methodResolveDesc(mirrorRef.toAddress().plus(16L).loadAddress(), nameArrRef, descArrRef);
+        return Reflection.methodResolveDesc(mirrorRef.toAddress().plus(16L).loadAddress(), nameArrRef, descArrRef);
     }
 
     /** Reflection: {@code Method.exact0(Class,byte[],byte[])} -> registry index of the method that class itself
@@ -1357,7 +1357,7 @@ final class VMNatives
         {
             return -1;                                     // boot force-compile passes 0
         }
-        return Loader.methodResolveExact(mirrorRef.toAddress().plus(16L).loadAddress(), nameArrRef, descArrRef);
+        return Reflection.methodResolveExact(mirrorRef.toAddress().plus(16L).loadAddress(), nameArrRef, descArrRef);
     }
 
     /** {@code MethodHandleNatives.declared0(Class,byte[],byte[])} -> see {@code Loader.mhDeclaredIndex}. */
@@ -1367,7 +1367,7 @@ final class VMNatives
         {
             return -1;                                     // boot force-compile passes 0
         }
-        return Loader.mhDeclaredIndex(mirrorRef.toAddress().plus(16L).loadAddress(), nameArrRef, descArrRef);
+        return Reflection.mhDeclaredIndex(mirrorRef.toAddress().plus(16L).loadAddress(), nameArrRef, descArrRef);
     }
 
     /** Reflection: {@code Method.itableTarget0(Object,int)} -> the receiver's itable answer for that method, or 0. */
@@ -1380,7 +1380,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // resolveViaItableDir walks the registries and may compile a default
         try
         {
-            return Loader.reflectItableTarget(recv, (int) rgIndex);
+            return Reflection.reflectItableTarget(recv, (int) rgIndex);
         }
         finally
         {
@@ -1395,7 +1395,7 @@ final class VMNatives
         {
             return 0;                                      // boot force-compile passes 0
         }
-        return Loader.methodInfo((int) rgIndex, paramCharsRef, outRef);
+        return Reflection.methodInfo((int) rgIndex, paramCharsRef, outRef);
     }
 
     /** Reflection: {@code Constructor.ctorResolveDesc0(Class,byte[])} -> registry index of the {@code <init>} with
@@ -1406,7 +1406,7 @@ final class VMNatives
         {
             return -1;                                     // boot force-compile passes 0
         }
-        return Loader.constructorResolveDesc(mirrorRef.toAddress().plus(16L).loadAddress(), descArrRef);
+        return Reflection.constructorResolveDesc(mirrorRef.toAddress().plus(16L).loadAddress(), descArrRef);
     }
 
     /** Reflection: {@code Constructor.ctorResolve0(Class,int)} -> registry index of the <init> with that arity, or -1. */
@@ -1416,7 +1416,7 @@ final class VMNatives
         {
             return -1;                                     // boot force-compile passes 0
         }
-        return Loader.constructorResolve(mirrorRef.toAddress().plus(16L).loadAddress(), (int) paramCount);
+        return Reflection.constructorResolve(mirrorRef.toAddress().plus(16L).loadAddress(), (int) paramCount);
     }
 
     /** Reflection: {@code Constructor.allocInstance0(Class)} -> a fresh zeroed instance (TIB set), or 0. */
@@ -1426,7 +1426,7 @@ final class VMNatives
         {
             return 0L;                                     // boot force-compile passes 0
         }
-        return Loader.allocInstance(mirrorRef.toAddress().plus(16L).loadAddress());
+        return Reflection.allocInstance(mirrorRef.toAddress().plus(16L).loadAddress());
     }
 
     /**
@@ -1467,7 +1467,7 @@ final class VMNatives
             return 0L;
         }
         Address st = mirror.toAddress().plus(16L).loadAddress().plus(8L).loadAddress();
-        return st.isZero() ? 0L : Loader.classMirror(st);
+        return st.isZero() ? 0L : ClassMirrors.classMirror(st);
     }
 
     /**
@@ -1596,7 +1596,7 @@ final class VMNatives
         Address typeAddr = mirrorRef.toAddress().plus(16L).loadAddress();       // Class.typeAddr
         int fnLen = (int) nameArrRef.toAddress().plus(16L).loadLong();    // guest byte[] length
         Address fnBase = nameArrRef.toAddress().plus(24L);          // guest byte[] data
-        return Loader.fieldOffsetOfType(typeAddr, fnBase, fnLen);
+        return Reflection.fieldOffsetOfType(typeAddr, fnBase, fnLen);
     }
 
     /**
@@ -1687,7 +1687,7 @@ final class VMNatives
             Address typeAddr = mirrorRef.toAddress().plus(16L).loadAddress();       // Class.typeAddr
             int fnLen = (int) nameArrRef.toAddress().plus(16L).loadLong();
             Address fnBase = nameArrRef.toAddress().plus(24L);
-            return Loader.fieldMods(typeAddr, fnBase, fnLen);
+            return Reflection.fieldMods(typeAddr, fnBase, fnLen);
         }
         finally
         {
@@ -1708,7 +1708,7 @@ final class VMNatives
             Address typeAddr = mirrorRef.toAddress().plus(16L).loadAddress();
             int fnLen = (int) nameArrRef.toAddress().plus(16L).loadLong();
             Address fnBase = nameArrRef.toAddress().plus(24L);
-            return Loader.fieldTypeChar(typeAddr, fnBase, fnLen);
+            return Reflection.fieldTypeChar(typeAddr, fnBase, fnLen);
         }
         finally
         {
@@ -1723,7 +1723,7 @@ final class VMNatives
         {
             return 0L;
         }
-        return Loader.classMirrorAtPc(pc);
+        return ClassMirrors.classMirrorAtPc(pc);
     }
 
     /** Net.socket0(preferIPv6, stream, reuse, fastLoopback) -> a fresh net.Tcp fd (the flags are ignored). */

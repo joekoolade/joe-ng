@@ -4,6 +4,30 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **LOADER REFACTOR, INCREMENT 4: reflection, class attributes, mirrors, array and primitive types out of
+  `vm/Loader` (2026-11-17).** Pure move.
+  - **`Reflection`** (JikesRVM `runtime/Reflection`): Method/Constructor/Field resolution (`methodResolve*`,
+    `constructorResolve*`, the registry-index lookups), static-field access (`staticCellFor`, `classfileFieldInfo`),
+    offsets and modifiers, `getDeclared*` enumeration (`declared*Part`), `allocInstance`, `reflEntry`,
+    `fieldRegIndex`.
+  - **`ClassAttributes`**: the classfile attributes reflection reports -- Signature, Exceptions, MethodParameters,
+    EnclosingMethod, NestHost/Members, InnerClasses, Record, PermittedSubclasses, declared interfaces/classes,
+    `methodInfoPos`, `classAttrNamed`.
+  - **`ClassMirrors`**: `classMirror` + its cache (`mirType`/`mirObj`/`mirN`, `classTibCache`), `classLiteral`,
+    `forNameMirror`, `classMirrorAtPc`, `getClassOf`.
+  - **`ArrayTypes`** (JikesRVM `RVMArray`): array TIBs and their caches (`primArrTib`, `refArr*`),
+    `refArrayTib(ForClass)`, `arrayTibOfDesc(N)`, `isArrayType`, `isArrayInterface`, component mirrors,
+    `refillArrayTibVtables`.
+  - **`Primitives`** (JikesRVM `Primitive`): primitive Types/mirrors, names, descriptor chars, atypes.
+  - **Stays for later increments:** type checks (`typeOfCheckedClass` -> DynamicTypeCheck), `objectTypeAddr` /
+    `fillObjectVtable*` / `buildDisplay` (TIB building), `classIndexByType` + `ctMemo` (class registry), the
+    lazy compile `compileMethodOnDemand*` (now package-private: Reflection calls it), and the debug watches.
+  - **Loader 25,717 -> 22,541 lines.** Image 39,535,944 -> 39,537,432 bytes (+1,488).
+  - **Validation:** `make test` + overlaycheck clean; 29 targeted QEMU probes pass (AnnoClassArray, ArrayAllocDepth,
+    ArrayCovariance, ArraycopyCheck, ArrayElem, ArrayTypeIdentity, ClassResource, CtorRefField, FieldPrim,
+    FieldSemantics, FieldSlot, Generics, IfaceObjectMethod, LinkTrap, MemberGenerics, MethodType, NestedEnum,
+    Nesting, ParamAnno, Parameter, RecordSealed, ReflectArray, ReflectLookup, ReflectUndeny, InternalReflect,
+    SortPrim, InheritedStatic, Proxy, VarHandle). Not run: full regression, suite, JUnit, Pi.
 - **LOADER REFACTOR, INCREMENT 3: java.lang.invoke, invokedynamic, lambdas and Proxy out of `vm/Loader`
   (2026-11-17).** Pure move.
   - **`MethodHandles`**: the MH signature-polymorphic trampoline (`mhTramp`, `buildSaveAreaTramp`), `mhResolve`,

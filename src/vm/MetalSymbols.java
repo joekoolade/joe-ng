@@ -96,19 +96,19 @@ final class MetalSymbols implements Symbols
     }
     public void arrayDescAddr(CodeBuffer cb, int reg, int classCp)
     {
-        emitAddr(cb, reg, Loader.arrayDescAddr(classCp));
+        emitAddr(cb, reg, ArrayTypes.arrayDescAddr(classCp));
     }
     public void classLiteral(CodeBuffer cb, int reg, int classCp)
     {
-        emitAddr(cb, reg, Loader.classLiteral(classCp));
+        emitAddr(cb, reg, ClassMirrors.classLiteral(classCp));
     }
     public long selfClassMonitor()
     {
-        return Loader.selfClassMirror();
+        return ClassMirrors.selfClassMirror();
     }
     public void emitSelfClassMonitor(CodeBuffer cb, int reg)
     {
-        emitAddr(cb, reg, Loader.selfClassMirror());
+        emitAddr(cb, reg, ClassMirrors.selfClassMirror());
     }
     public boolean isWatchedField(int fieldCp)
     {
@@ -184,7 +184,7 @@ final class MetalSymbols implements Symbols
     }
     public void tagArray(CodeBuffer cb, int arrReg, int operand, boolean isRef)
     {
-        long tib = (isRef ? Loader.refArrayTibForClass(operand) : Loader.primArrayTib(operand)).toLong();
+        long tib = (isRef ? ArrayTypes.refArrayTibForClass(operand) : ArrayTypes.primArrayTib(operand)).toLong();
         if (tib == 0L)
         {
             return;                                     // no array Type (Object not loaded): leave it raw

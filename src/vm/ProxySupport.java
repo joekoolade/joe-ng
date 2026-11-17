@@ -281,7 +281,7 @@ final class ProxySupport
             Loader.lambdaHostNameOff[Loader.lambdaTibRootN] = 0;
             Loader.lambdaTibRootN += 1;
         }
-        return Loader.classMirror(type);
+        return ClassMirrors.classMirror(type);
     }
 
     /** {@code Proxy.proxyAlloc0}: a zeroed instance of proxy class {@code mirror}, or 0 if it is not one. */
