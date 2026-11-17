@@ -65,29 +65,29 @@ final class ArrayCopy
         {
             return NOT_ARRAY;
         }
-        long type = tib.loadLong();
+        Address type = tib.loadAddress();
         if (!Loader.isArrayType(type))
         {
             return NOT_ARRAY;
         }
-        if (Address.fromLong(type).plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong() != 0L)
+        if (type.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong() != 0L)
         {
             return REF;
         }
         return Loader.primArrayElemChar(type) != 0 ? PRIM : REF;   // no element and no primitive: unresolved ref
     }
 
-    private static long typeOf(ObjectReference obj)
+    private static Address typeOf(ObjectReference obj)
     {
         Address tib = obj.toAddress().plus(ObjectModel.TIB_OFFSET).loadAddress();
-        return tib.toLong() > ObjectModel.MAX_RAW_ARRAY_TIB ? tib.loadLong() : 0L;
+        return tib.toLong() > ObjectModel.MAX_RAW_ARRAY_TIB ? tib.loadAddress() : Address.zero();
     }
 
     /** A reference array's element Type, or 0 if it is raw or the element never resolved. */
     private static long elemTypeOf(ObjectReference arr)
     {
-        long type = typeOf(arr);
-        return type == 0L ? 0L : Address.fromLong(type).plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong();
+        Address type = typeOf(arr);
+        return type.isZero() ? 0L : type.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong();
     }
 
     private static int lengthOf(ObjectReference arr)
@@ -223,8 +223,8 @@ final class ArrayCopy
             ObjectReference v = from.plus(i * 8L).loadObjectReference();
             if (!v.isNull() && VM.instanceOf(v, bound) == 0)
             {
-                byte[] s = Loader.typeNameBytes(stype);
-                byte[] b = Loader.typeNameBytes(bound);
+                byte[] s = Loader.typeNameBytes(Address.fromLong(stype));
+                byte[] b = Loader.typeNameBytes(Address.fromLong(bound));
                 if (VM.typesAssignable(bound, stype) == 0)
                 {
                     throwAse(cat(cat(Magic.bytes("arraycopy: type mismatch: can not copy "), s,

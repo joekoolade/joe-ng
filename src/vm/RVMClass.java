@@ -30,9 +30,9 @@ final class RVMClass
                          //   cacheable PREFIX -- and `refillImaps` re-folded it per closure interface, per
                          //   still-empty itable slot, on every batch. MEASURED on the demo suite: 916k of the
                          //   1,420k steps inside the refill were exactly this, against 38k of actual slot reads.
-    long    tib;         // its TIB { Type, vtable... }
-    long    type;        // its Type node (for instanceof/checkcast)
-    long    statics;     // its static block base (gStatics), reused across load phases
+    Address tib;         // its TIB { Type, vtable... }
+    Address type;        // its Type node (for instanceof/checkcast)
+    Address statics;     // its static block base (gStatics), reused across load phases
     int     fieldCount;  // instance-field count (for subclass field layout)
     int     vtCount;     // flattened vtable size (for subclass vtable copy)
     int     vtStart;     // start index of its slots in the vt registry

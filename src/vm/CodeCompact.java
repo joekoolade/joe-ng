@@ -535,7 +535,7 @@ final class CodeCompact
         while (i < n)
         {
             RVMClass c = Loader.classRegAt(i);
-            if (c != null && c.tib != 0L)
+            if (c != null && !c.tib.isZero())
             {
                 t += c.vtCount;
             }
@@ -562,9 +562,13 @@ final class CodeCompact
         while (i < n)
         {
             RVMClass c = Loader.classRegAt(i);
-            if (c != null && c.tib != 0L && slot >= c.tib + 8L && slot < c.tib + 8L + (long) c.vtCount * 8L)
+            if (c != null && !c.tib.isZero())
             {
-                return 1;
+                long lo = c.tib.toLong() + 8L;
+                if (slot >= lo && slot < lo + (long) c.vtCount * 8L)
+                {
+                    return 1;
+                }
             }
             i += 1;
         }

@@ -323,7 +323,7 @@ final class VMNatives
         {
             return 0L;                                     // boot force-compile passes 0; guest checks negative first
         }
-        long compType = componentMirror.toLong() > 0x1000L ? componentMirror.toAddress().plus(16L).loadLong() : 0L;
+        Address compType = componentMirror.toLong() > 0x1000L ? componentMirror.toAddress().plus(16L).loadAddress() : Address.zero();
         return Loader.newArrayOfComponent(compType, (int) length);
     }
 
@@ -338,8 +338,8 @@ final class VMNatives
         {
             return 0L;
         }
-        long type = mirror.toAddress().plus(16L).loadLong();            // mirror -> Type (@16)
-        if (type == 0L)
+        Address type = mirror.toAddress().plus(16L).loadAddress();            // mirror -> Type (@16)
+        if (type.isZero())
         {
             return 0L;
         }
@@ -357,7 +357,7 @@ final class VMNatives
         {
             return 0L;                                     // boot-time force-compile passes 0; no-op
         }
-        return Loader.isArrayType(mirror.toAddress().plus(16L).loadLong()) ? 1L : 0L;
+        return Loader.isArrayType(mirror.toAddress().plus(16L).loadAddress()) ? 1L : 0L;
     }
 
     /**
@@ -398,7 +398,7 @@ final class VMNatives
         {
             return 0L;                                     // boot force-compile passes 0
         }
-        return Loader.classFileCopy(mirror.toAddress().plus(16L).loadLong());
+        return Loader.classFileCopy(mirror.toAddress().plus(16L).loadAddress());
     }
 
     /** {@code Throwable.stackTrace0(Throwable)} native: its inline backtrace as a StackTraceElement[]. */
@@ -448,7 +448,7 @@ final class VMNatives
         {
             return 0L;
         }
-        long type = mirror.toAddress().plus(16L).loadLong();
+        Address type = mirror.toAddress().plus(16L).loadAddress();
         Address fnBase = nameArr.toAddress().plus(24L);         // byte[] payload
         int fnLen = (int) nameArr.toAddress().plus(16L).loadLong();  // byte[] length
         return Loader.staticCellFor(type, fnBase, fnLen);
@@ -1133,7 +1133,7 @@ final class VMNatives
         {
             return 0L;
         }
-        return Loader.isPrimitiveType(mirror.toAddress().plus(16L).loadLong()) ? 1L : 0L;
+        return Loader.isPrimitiveType(mirror.toAddress().plus(16L).loadAddress()) ? 1L : 0L;
     }
 
     /**
@@ -1146,7 +1146,7 @@ final class VMNatives
         {
             return 0L;                                     // boot-time force-compile passes 0; no-op
         }
-        return Loader.classNameString(mirror.toAddress().plus(16L).loadLong());
+        return Loader.classNameString(mirror.toAddress().plus(16L).loadAddress());
     }
 
     /**
@@ -1297,8 +1297,8 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            long type = Loader.defineFromBytes(byteArr, (int) off, (int) len);
-            return type == 0L ? 0L : Loader.classMirror(type);
+            Address type = Loader.defineFromBytes(byteArr, (int) off, (int) len);
+            return type.isZero() ? 0L : Loader.classMirror(type);
         }
         finally
         {
@@ -1320,7 +1320,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes: a nested class's InnerClasses entry
         try                                  // is read from its blob -- see the class doc
         {
-            return (long) Loader.classModifiersOf(mirror.toAddress().plus(16L).loadLong());
+            return (long) Loader.classModifiersOf(mirror.toAddress().plus(16L).loadAddress());
         }
         finally
         {
@@ -1426,7 +1426,7 @@ final class VMNatives
         {
             return 0L;                                     // boot force-compile passes 0
         }
-        return Loader.allocInstance(mirrorRef.toAddress().plus(16L).loadLong());
+        return Loader.allocInstance(mirrorRef.toAddress().plus(16L).loadAddress());
     }
 
     /**
@@ -1441,7 +1441,7 @@ final class VMNatives
         {
             return 0L;                                     // boot force-compile passes 0
         }
-        Loader.ensureInitOfType(mirrorRef.toAddress().plus(16L).loadLong());
+        Loader.ensureInitOfType(mirrorRef.toAddress().plus(16L).loadAddress());
         return 0L;
     }
 
@@ -1453,7 +1453,7 @@ final class VMNatives
         {
             return 0L;                                     // boot force-compile passes 0
         }
-        return Loader.typeNeedsInit(mirrorRef.toAddress().plus(16L).loadLong()) ? 1L : 0L;
+        return Loader.typeNeedsInit(mirrorRef.toAddress().plus(16L).loadAddress()) ? 1L : 0L;
     }
 
     /**
@@ -1466,8 +1466,8 @@ final class VMNatives
         {
             return 0L;
         }
-        long st = mirror.toAddress().plus(16L).loadAddress().plus(8L).loadLong();
-        return st == 0L ? 0L : Loader.classMirror(st);
+        Address st = mirror.toAddress().plus(16L).loadAddress().plus(8L).loadAddress();
+        return st.isZero() ? 0L : Loader.classMirror(st);
     }
 
     /**
@@ -1576,7 +1576,7 @@ final class VMNatives
         }
         int fnLen = (int) fnameArrRef.toAddress().plus(16L).loadLong();   // guest byte[] length
         Address fnBase = fnameArrRef.toAddress().plus(24L);         // guest byte[] data
-        long tib = objRef.toAddress().loadLong();                     // obj header TIB
+        Address tib = objRef.toAddress().loadAddress();                     // obj header TIB
         return Loader.vhFieldOffset(fnBase, fnLen, tib);
     }
 
@@ -1593,7 +1593,7 @@ final class VMNatives
         {
             return -1L;
         }
-        long typeAddr = mirrorRef.toAddress().plus(16L).loadLong();       // Class.typeAddr
+        Address typeAddr = mirrorRef.toAddress().plus(16L).loadAddress();       // Class.typeAddr
         int fnLen = (int) nameArrRef.toAddress().plus(16L).loadLong();    // guest byte[] length
         Address fnBase = nameArrRef.toAddress().plus(24L);          // guest byte[] data
         return Loader.fieldOffsetOfType(typeAddr, fnBase, fnLen);
@@ -1668,7 +1668,7 @@ final class VMNatives
         {
             return 0L;
         }
-        long typeAddr = mirrorRef.toAddress().plus(16L).loadLong();       // Class.typeAddr
+        Address typeAddr = mirrorRef.toAddress().plus(16L).loadAddress();       // Class.typeAddr
         int fnLen = (int) nameArrRef.toAddress().plus(16L).loadLong();
         Address fnBase = nameArrRef.toAddress().plus(24L);
         return Loader.staticSlotOfType(typeAddr, fnBase, fnLen);
@@ -1684,7 +1684,7 @@ final class VMNatives
             {
                 return -1;
             }
-            long typeAddr = mirrorRef.toAddress().plus(16L).loadLong();       // Class.typeAddr
+            Address typeAddr = mirrorRef.toAddress().plus(16L).loadAddress();       // Class.typeAddr
             int fnLen = (int) nameArrRef.toAddress().plus(16L).loadLong();
             Address fnBase = nameArrRef.toAddress().plus(24L);
             return Loader.fieldMods(typeAddr, fnBase, fnLen);
@@ -1705,7 +1705,7 @@ final class VMNatives
             {
                 return -1;
             }
-            long typeAddr = mirrorRef.toAddress().plus(16L).loadLong();
+            Address typeAddr = mirrorRef.toAddress().plus(16L).loadAddress();
             int fnLen = (int) nameArrRef.toAddress().plus(16L).loadLong();
             Address fnBase = nameArrRef.toAddress().plus(24L);
             return Loader.fieldTypeChar(typeAddr, fnBase, fnLen);
@@ -1766,7 +1766,7 @@ final class VMNatives
             raw.plus(i).store(name[i]);
             i += 1;
         }
-        return Loader.vhFieldOffset(raw, name.length, obj.toAddress().loadLong());
+        return Loader.vhFieldOffset(raw, name.length, obj.toAddress().loadAddress());
     }
 
     /**
@@ -2032,7 +2032,7 @@ final class VMNatives
         long tib = self.toAddress().loadLong();
         if (tib > 0x1000L)
         {
-            Loader.printClassName(Address.fromLong(tib).loadLong());      // TIB[0] = Type -> the exception's class name
+            Loader.printClassName(Address.fromLong(tib).loadAddress());      // TIB[0] = Type -> the exception's class name
         }
         long msg = Loader.throwableMessage(self);          // Throwable.detailMessage, by name
         if (msg > 0x1000L)

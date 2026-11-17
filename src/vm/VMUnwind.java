@@ -264,7 +264,7 @@ final class VMUnwind
             {
                 badThrowReported = true;
                 Uart.write(Magic.bytes("\n  BAD THROW: not a Throwable -- "));
-                Loader.printClassName(Address.fromLong(t).loadLong());
+                Loader.printClassName(Address.fromLong(t).loadAddress());
                 Uart.write(Magic.bytes(" at pc="));
                 printHex(pc);
                 Uart.write(Magic.bytes("\n    thrown by "));
@@ -282,7 +282,7 @@ final class VMUnwind
                 long tib = ea.loadLong();
                 if (tib > 0x1000L && tib < 0x40000000L)
                 {
-                    Loader.reportClassOfType(Address.fromLong(tib).loadLong());
+                    Loader.reportClassOfType(Address.fromLong(tib).loadAddress());
                 }
             }
             Uart.write(Magic.bytes(" at 0x"));
@@ -401,7 +401,7 @@ final class VMUnwind
                 if (xt > 0x1000L && !isThrowable)
                 {
                     Uart.write(Magic.bytes("\nUNWIND: THROWN OBJECT IS NOT A THROWABLE -- "));
-                    Loader.printClassName(Address.fromLong(xt).loadLong());
+                    Loader.printClassName(Address.fromLong(xt).loadAddress());
                     Uart.write(Magic.bytes(" at "));
                     printHex(excWord);
                     Uart.write(Magic.bytes("\n  (no backtrace decoded: this object has no Throwable layout,"));
@@ -443,7 +443,7 @@ final class VMUnwind
                 if (xt > 0x1000L)
                 {
                     Uart.write(Magic.bytes("\nException in thread \"main\" "));
-                    Loader.printClassName(Address.fromLong(xt).loadLong());
+                    Loader.printClassName(Address.fromLong(xt).loadAddress());
                     long msg = Loader.throwableMessage(exc);     // Throwable.detailMessage, by name
                     if (msg > 0x1000L)
                     {
