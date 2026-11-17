@@ -96,11 +96,11 @@ public final class VM
             printHex(src);
             Uart.write(Magic.bytes("\n    branch source: "));
             Loader.reportMethodAt(Address.fromLong(src));
-            Loader.reportReceiverAt(recv);
+            Loader.reportReceiverAt(ObjectReference.fromLong(recv));
             Uart.write(Magic.bytes("    x19 (callee-saved copy of the receiver): 0x"));
             printHex(recvSaved);
             Uart.putc(0x0A);
-            Loader.reportReceiverAt(recvSaved);
+            Loader.reportReceiverAt(ObjectReference.fromLong(recvSaved));
             Uart.write(Magic.bytes("    caller (saved LR at [sp]): "));
             if (sp0 >= 0x1000L)
             {
@@ -1424,7 +1424,7 @@ public final class VM
      * loader state. Same shape as the receiver dump the DISPATCH ON UNREGISTERED TYPE report already does,
      * except that this one runs when the dispatch SUCCEEDS -- which is the case that has no report at all.
      */
-    static void watchRecv(long ref, long site)
+    static void watchRecv(ObjectReference ref, long site)
     {
         Loader.describeRecv(ref, site);
     }
@@ -1525,7 +1525,7 @@ public final class VM
 
     /** Allocate a {@code java/lang/ClassCastException} — the JIT calls this on a failed {@code checkcast},
      *  passing the object and the target Type so the message can name both. */
-    static long newCce(long ref, long targetType)
+    static long newCce(ObjectReference ref, long targetType)
     {
         return Loader.newCce(ref, targetType);
     }
@@ -1537,13 +1537,13 @@ public final class VM
      * handler search would start in the wrong place. The JIT branches on this and throws INLINE instead,
      * which is what puts the caller's pc/sp in front of the unwinder.
      */
-    static int castOk(long ref, long targetType)
+    static int castOk(ObjectReference ref, long targetType)
     {
         if (targetType == 0L)
         {
             return 1;      // unresolved target (e.g. an array type "[B"): trust the class-file verifier
         }
-        if (ref == 0L)
+        if (ref.isNull())
         {
             return 1;      // null casts to anything
         }
@@ -1551,7 +1551,7 @@ public final class VM
         {
             return 1;
         }
-        if (Address.fromLong(ref).loadLong() <= ObjectModel.MAX_RAW_ARRAY_TIB && isArrayType(targetType))
+        if (ref.toAddress().loadLong() <= ObjectModel.MAX_RAW_ARRAY_TIB && isArrayType(targetType))
         {
             return 1;      // a RAW array (no Type node) cast to an array class: trust the verifier, as checkCast does
         }
@@ -1671,7 +1671,7 @@ public final class VM
     private static boolean syncOverflowReported;
 
     /** A synchronized method's entry: take the monitor, then record it against {@code sp} for the unwinder. */
-    static void monEnterSync(long obj, long sp)
+    static void monEnterSync(ObjectReference obj, long sp)
     {
         VMScheduler.monEnter(obj);
         if (syncDepth == null)
@@ -1696,7 +1696,7 @@ public final class VM
             }
             return;
         }
-        syncObj[t * MAX_SYNC_DEPTH + d] = obj;
+        syncObj[t * MAX_SYNC_DEPTH + d] = obj.toLong();
         syncSp[t * MAX_SYNC_DEPTH + d] = sp;
         syncDepth[t] = d + 1;
     }
@@ -1717,7 +1717,7 @@ public final class VM
         long obj = syncObj[t * MAX_SYNC_DEPTH + d];
         syncDepth[t] = d;
         syncObj[t * MAX_SYNC_DEPTH + d] = 0L;
-        VMScheduler.monExit(obj);
+        VMScheduler.monExit(ObjectReference.fromLong(obj));
     }
 
     /**
@@ -1742,7 +1742,7 @@ public final class VM
             long obj = syncObj[t * MAX_SYNC_DEPTH + d];
             syncDepth[t] = d;
             syncObj[t * MAX_SYNC_DEPTH + d] = 0L;
-            VMScheduler.monExit(obj);
+            VMScheduler.monExit(ObjectReference.fromLong(obj));
         }
     }
 
@@ -1816,7 +1816,7 @@ public final class VM
         {
             return 1;                                      // primitive-element array (shouldn't reach aastore) / unknown
         }
-        return instanceOf(value, elemType);                // 1 if value's Type <: element Type, else 0
+        return instanceOf(ObjectReference.fromLong(value), elemType);                // 1 if value's Type <: element Type, else 0
     }
 
     /** {@code java/lang/InternalError} — the fault handler's catch-all for an unexpected hardware trap. */
@@ -2009,8 +2009,8 @@ public final class VM
         }
         if (objNotifyAddr == 0L) { VMScheduler.objNotify(0L); }                  // (JIT'd guest reaches these via stashed addrs)
         if (objNotifyAllAddr == 0L) { VMScheduler.objNotifyAll(0L); }
-        if (monEnterAddr == 0L) { VMScheduler.monEnter(0L); }                    // monitorenter/exit + Thread.holdsLock
-        if (monExitAddr == 0L) { VMScheduler.monExit(0L); }
+        if (monEnterAddr == 0L) { VMScheduler.monEnter(ObjectReference.nullReference()); }                    // monitorenter/exit + Thread.holdsLock
+        if (monExitAddr == 0L) { VMScheduler.monExit(ObjectReference.nullReference()); }
         if (holdsLockAddr == 0L) { int u = VMScheduler.holdsLock(0L); }
         if (interruptAddr == 0L) { VMScheduler.interrupt(0L); }                  // Thread.interrupt/isInterrupted/isAlive
         if (isInterruptedAddr == 0L) { int u = VMScheduler.isInterrupted(0L); }
@@ -2025,7 +2025,7 @@ public final class VM
         if (newSemAddr == 0L) { int u = VMScheduler.newSem(0); }
         if (philReportAddr == 0L) { VMScheduler.philReport(0, 0); }
         if (taskExitAddr == 0L) { VMScheduler.taskExit(); }
-        if (runResolveAddr == 0L) { long u = Loader.resolveRun(0L); }   // the run-trampoline's dispatch
+        if (runResolveAddr == 0L) { long u = Loader.resolveRun(ObjectReference.nullReference()); }   // the run-trampoline's dispatch
         if (boxPrimAddr == 0L) { long u = VMBox.box(0L, 0); }          // boxes a method ref's primitive result
         if (unboxNullAddr == 0L) { long u = VMBox.unboxNull(0L); }     // a method ref's null primitive argument -> NPE
         if (scStartAddr == 0L) { Address u = VMConcat.scStart(); }        // string-concat helpers (JIT'd concat only)
@@ -2068,14 +2068,14 @@ public final class VM
         if (newNpeAddr == 0L) { long u = newNpe(); }                  // implicit-exception ctors (JIT'd checks)
         if (watchRetAddr == 0L) { watchRet(0L, 0L); }                     // force-compile the debug watch helper
         if (watchArgAddr == 0L) { watchArg(0L, 0L); }
-        if (watchRecvAddr == 0L) { watchRecv(0L, 0L); }
+        if (watchRecvAddr == 0L) { watchRecv(ObjectReference.nullReference(), 0L); }
         if (watchX21Addr == 0L) { watchX21(0L, 0L); }                     // ... and its argument-side twin
         if (newAioobeAddr == 0L) { long u = newAioobe(); }
         if (newAioobeIndexAddr == 0L) { long u = newAioobeIndex(0L, 0L); }
         if (newAseAddr == 0L) { long u = newAse(0L); }                // ArrayStoreException (aastore mismatch)
         if (arrayStoreOkAddr == 0L) { int u = arrayStoreOk(0L, 0L); } // aastore covariant check
-        if (newCceAddr == 0L) { long u = newCce(0L, 0L); }            // ClassCastException (failed checkcast)
-        if (castOkAddr == 0L) { int u = castOk(0L, 0L); }             // checkcast predicate
+        if (newCceAddr == 0L) { long u = newCce(ObjectReference.nullReference(), 0L); }            // ClassCastException (failed checkcast)
+        if (castOkAddr == 0L) { int u = castOk(ObjectReference.nullReference(), 0L); }             // checkcast predicate
         if (newUnresolvedAddr == 0L) { long u = newUnresolved(-1L); } // `new` the loader cannot resolve early
         if (ctorRefInit0 == 0L) { ctorRefInit(-1L); }                 // a constructor reference's <clinit> (JVMS 5.5)
         if (newArithAddr == 0L) { long u = newArith(); }
@@ -2085,7 +2085,7 @@ public final class VM
         if (newNaseAddr == 0L) { long u = newNase(0L); }                // NegativeArraySizeException (newarray < 0)
         if (dremAddr == 0L) { double u = drem(1.0, 1.0); }            // frem/drem
         if (multiNewArrayAddr == 0L) { long u = multiNewArray(0L, 0, 0, 0, 0, 0); }   // multianewarray
-        if (monEnterSyncAddr == 0L) { monEnterSync(0L, 0L); }         // a synchronized METHOD's implicit monitor
+        if (monEnterSyncAddr == 0L) { monEnterSync(ObjectReference.nullReference(), 0L); }         // a synchronized METHOD's implicit monitor
         if (monExitSyncAddr == 0L) { monExitSync(); }
         if (getClassAddr == 0L) { long u = getClassOf(ObjectReference.nullReference()); }          // Object.getClass() intrinsic
         if (arrayCloneAddr == 0L) { long u = VMNatives.arrayClone(ObjectReference.nullReference()); }        // [T.clone() intrinsic
@@ -2111,7 +2111,7 @@ public final class VM
         if (declFieldCountAddr == 0L) { long u = VMNatives.declaredFieldCount(ObjectReference.nullReference()); }
         if (stackTraceAddr == 0L) { long u = VMNatives.throwableTrace(0L); }          // Throwable.stackTrace0
         if (fillTraceAddr == 0L) { VMUnwind.fillInTrace(ObjectReference.nullReference()); }                       // Throwable.fillInStackTrace0
-        if (virtualResolveAddr == 0L) { long u = VMNatives.virtualResolve(0L, 0L); }  // late virtual dispatch
+        if (virtualResolveAddr == 0L) { long u = VMNatives.virtualResolve(ObjectReference.nullReference(), 0L); }  // late virtual dispatch
         if (mhResolveAddr == 0L) { long u = VMNatives.mhResolve(0L, 0L); }            // MethodHandle sig-poly calls
         if (indyResolveAddr == 0L) { long u = VMNatives.indyResolve(0L, 0L); }        // invokedynamic (generic)
         if (ldcConstAddr == 0L) { long u = VMNatives.ldcConst(-1L); }                 // ldc of a dynamic constant
@@ -2203,7 +2203,7 @@ public final class VM
         if (methodResolveDescAddr == 0L) { int u = VMNatives.methodResolveDesc(ObjectReference.nullReference(), ObjectReference.nullReference(), ObjectReference.nullReference()); } // Method.methodResolveDesc0
         if (methodResolveExactAddr == 0L) { int u = VMNatives.methodResolveExact(ObjectReference.nullReference(), ObjectReference.nullReference(), ObjectReference.nullReference()); } // Method.exact0
         if (mhDeclaredAddr == 0L) { int u = VMNatives.mhDeclared(ObjectReference.nullReference(), ObjectReference.nullReference(), ObjectReference.nullReference()); }   // MethodHandleNatives.declared0
-        if (methodItableTargetAddr == 0L) { long u = VMNatives.methodItableTarget(0L, 0L); } // Method.itableTarget0
+        if (methodItableTargetAddr == 0L) { long u = VMNatives.methodItableTarget(ObjectReference.nullReference(), 0L); } // Method.itableTarget0
         if (methodInfoAddr == 0L) { int u = VMNatives.methodInfo(0L, ObjectReference.nullReference(), ObjectReference.nullReference()); }   // Method.methodInfo0 native (reflection M2)
         if (constructorResolveAddr == 0L) { int u = VMNatives.constructorResolve(ObjectReference.nullReference(), 0L); } // Constructor.ctorResolve0 (M2)
         if (ctorResolveDescAddr == 0L) { int u = VMNatives.ctorResolveDesc(ObjectReference.nullReference(), ObjectReference.nullReference()); } // Constructor.ctorResolveDesc0
@@ -3175,13 +3175,13 @@ public final class VM
     // inherited from a superclass, since each class's directory is checked on the way
     // up. Not yet: super-interfaces (a directory lists directly-declared interfaces, so
     // `x instanceof Base` where x implements `Greeter extends Base` is missed).
-    static int instanceOf(long ref, long targetType)
+    static int instanceOf(ObjectReference ref, long targetType)
     {
-        if (ref == 0L)
+        if (ref.isNull())
         {
             return 0;    // null is never an instance
         }
-        long tib = Address.fromLong(ref).loadLong();                  // header→TIB (@0)
+        long tib = ref.toAddress().loadLong();                        // header→TIB (@0)
         if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
         {
             return 0;    // a raw array (element size in @0, no Type): not an instance of any class/interface type
@@ -3347,29 +3347,29 @@ public final class VM
 
     /** {@code checkcast} support: return {@code ref} if the cast holds, else halt
      *  (no exceptions yet). Null always passes. */
-    static long checkCast(long ref, long targetType)
+    static long checkCast(ObjectReference ref, long targetType)
     {
         if (targetType == 0L)
         {
-            return ref;    // unresolved target (e.g. an array type "[B" — arrays carry no Type): the class-file
-                           // verifier already proved this cast holds, so trust it rather than walk a raw array
+            return ref.toLong();    // unresolved target (e.g. an array type "[B" — arrays carry no Type): the class-file
+                                    // verifier already proved this cast holds, so trust it rather than walk a raw array
         }
-        if (ref != 0L && instanceOf(ref, targetType) == 0)
+        if (!ref.isNull() && instanceOf(ref, targetType) == 0)
         {
-            if (Address.fromLong(ref).loadLong() <= ObjectModel.MAX_RAW_ARRAY_TIB && isArrayType(targetType))
+            if (ref.toAddress().loadLong() <= ObjectModel.MAX_RAW_ARRAY_TIB && isArrayType(targetType))
             {
                 // A RAW array (writer/boot alloc: element size in @0, no Type node) cast to an array class:
                 // there is no Type to walk, so trust the verifier-proved cast — the mirror of instanceOf's
                 // conservative 0 for raw arrays. Reached when a baked method's array result (e.g. the value
                 // of Integer.toString's String) flows into loader-compiled code that casts it.
-                return ref;
+                return ref.toLong();
             }
             while (true)
             {
                 Magic.wfe();
             }
         }
-        return ref;
+        return ref.toLong();
     }
 
     // ----- exception unwinding --------------------------------------------
@@ -3790,8 +3790,8 @@ public final class VM
     static long heapAlloc;              // Heap.alloc(I)Lmagic/Address;, so on-metal `new` can BL it
     static long allocArray;            // Heap.allocArray(II)Lmagic/Address;
     static long gcCollect;             // VM.gcCollect(J)V
-    static long instanceOfAddr;        // VM.instanceOf(JJ)I
-    static long checkCastAddr;         // VM.checkCast(JJ)J
+    static long instanceOfAddr;        // VM.instanceOf(Lmagic/ObjectReference;J)I
+    static long checkCastAddr;         // VM.checkCast(Lmagic/ObjectReference;J)J
     static long unwindAddr;            // VMUnwind.unwind(Lmagic/ObjectReference;Lmagic/Address;Lmagic/Address;)V
     static long captureTraceAddr;      // VMUnwind.captureTrace(Lmagic/ObjectReference;Lmagic/Address;Lmagic/Address;)V — throw-site backtrace for printStackTrace()
     // Scheduler helpers the JIT-loaded mini java.base runtime BLs (Symbols ids 6..11).
@@ -3799,8 +3799,8 @@ public final class VM
     static long objWaitAddr;           // VM.objWait(JJ)V     — Object.wait
     static long objNotifyAddr;         // VM.objNotify(J)V    — Object.notify
     static long objNotifyAllAddr;      // VM.objNotifyAll(J)V — Object.notifyAll
-    static long monEnterAddr;          // VM.monEnter(J)V     — monitorenter
-    static long monExitAddr;           // VM.monExit(J)V      — monitorexit
+    static long monEnterAddr;          // VMScheduler.monEnter(Lmagic/ObjectReference;)V — monitorenter
+    static long monExitAddr;           // VMScheduler.monExit(Lmagic/ObjectReference;)V  — monitorexit
     static long holdsLockAddr;         // VM.holdsLock(J)I    — Thread.holdsLock
     static long interruptAddr;         // VM.interrupt(J)V    — Thread.interrupt
     static long isInterruptedAddr;     // VM.isInterrupted(J)I— Thread.isInterrupted
@@ -3816,7 +3816,7 @@ public final class VM
     static long newSemAddr;            // VM.newSem(I)I
     static long philReportAddr;        // VM.philReport(II)V
     static long taskExitAddr;          // VM.taskExit()V — the run-trampoline's tail (loader-emitted BL)
-    static long runResolveAddr;        // Loader.resolveRun(J)J — the run-trampoline's Runnable.run() lookup
+    static long runResolveAddr;        // Loader.resolveRun(Lmagic/ObjectReference;)J — the run-trampoline's Runnable.run() lookup
     // invokedynamic string-concat helpers (JIT'd concat lowering BLs these).
     static long scStartAddr;           // VM.scStart()Lmagic/Address;
     static long boxPrimAddr;           // VMBox.box(JI)J — a method ref's primitive result, boxed for a generic SAM
@@ -3910,11 +3910,11 @@ public final class VM
     static long newNaseAddr;           // VM.newNase(J)J   — a java/lang/NegativeArraySizeException (newarray < 0)
     static long dremAddr;              // VM.drem(DD)D    — frem/drem (AArch64 has no remainder instruction)
     static long multiNewArrayAddr;     // VM.multiNewArray(JIIIII)J — multianewarray (JVMS 6.5)
-    static long monEnterSyncAddr;      // VM.monEnterSync(JJ)V — a synchronized METHOD's implicit monitorenter
+    static long monEnterSyncAddr;      // VM.monEnterSync(Lmagic/ObjectReference;J)V — a synchronized METHOD's implicit monitorenter
     static long monExitSyncAddr;       // VM.monExitSync()V    — ... and its release on normal return
     static long arrayStoreOkAddr;      // VM.arrayStoreOk(JJ)I — aastore covariant type check
-    static long newCceAddr;            // VM.newCce(JJ)J  — a java/lang/ClassCastException (failed checkcast)
-    static long castOkAddr;            // VM.castOk(JJ)I  — checkcast predicate (1 = holds, 0 = throw)
+    static long newCceAddr;            // VM.newCce(Lmagic/ObjectReference;J)J  — a java/lang/ClassCastException (failed checkcast)
+    static long castOkAddr;            // VM.castOk(Lmagic/ObjectReference;J)I  — checkcast predicate (1 = holds, 0 = throw)
     static long newUnresolvedAddr;     // VM.newUnresolved(J)J — an executed `new` the loader resolves late
     static long ctorRefInit0;          // VM.ctorRefInit(J)V — a constructor reference initializes its target (JVMS 5.5)
     static long printStackTraceAddr;   // VM.printStackTrace(Lmagic/ObjectReference;)V — Throwable.printStackTrace0() native (self in x0)
@@ -4009,7 +4009,7 @@ public final class VM
     static long methodResolveDescAddr; // VM.methodResolveDesc(Lmagic/ObjectReference;Lmagic/ObjectReference;Lmagic/ObjectReference;)I — Method.methodResolveDesc0 (overload-exact)
     static long methodResolveExactAddr; // VMNatives.methodResolveExact(Lmagic/ObjectReference;Lmagic/ObjectReference;Lmagic/ObjectReference;)I — Method.exact0 (virtual dispatch step)
     static long mhDeclaredAddr;        // VMNatives.mhDeclared(Lmagic/ObjectReference;Lmagic/ObjectReference;Lmagic/ObjectReference;)I — MethodHandleNatives.declared0 (MemberName resolve)
-    static long methodItableTargetAddr; // VMNatives.methodItableTarget(JJ)J — Method.itableTarget0 (synthesised receivers)
+    static long methodItableTargetAddr; // VMNatives.methodItableTarget(Lmagic/ObjectReference;J)J — Method.itableTarget0 (synthesised receivers)
     static long methodInfoAddr;        // VM.methodInfo(JLmagic/ObjectReference;Lmagic/ObjectReference;)I — Method.methodInfo0 (reflection M2)
     static long constructorResolveAddr;// VM.constructorResolve(Lmagic/ObjectReference;J)I — Constructor.ctorResolve0 (reflection M2)
     static long ctorResolveDescAddr;   // VMNatives.ctorResolveDesc(Lmagic/ObjectReference;Lmagic/ObjectReference;)I — Constructor.ctorResolveDesc0
@@ -4021,7 +4021,7 @@ public final class VM
     static long watchRetAddr;          // VM.watchRet(J)V — DEBUG: value returned by a watched call site
     static long watchX21Addr;          // VM.watchX21(JJ)V — DEBUG: callee-saved discipline check
     static long watchArgAddr;          // VM.watchArg(J)V — DEBUG: value an argument-watched call site passes
-    static long watchRecvAddr;         // VM.watchRecv(JJ)V — DEBUG: the RECEIVER a watched dispatch is about to use
+    static long watchRecvAddr;         // VM.watchRecv(Lmagic/ObjectReference;J)V — DEBUG: the RECEIVER a watched dispatch is about to use
     static long getClassAddr;          // VM.getClassOf(Lmagic/ObjectReference;)J — Object.getClass() intrinsic
     static long arrayCloneAddr;        // VM.arrayClone(Lmagic/ObjectReference;)J — [T.clone() intrinsic (no vtable on array TIBs)
     static long newReflectArrayAddr;   // VM.newReflectArray(Lmagic/ObjectReference;J)J — reflect/Array.newInstance0 (typed ref array)
@@ -4046,7 +4046,7 @@ public final class VM
     static long declFieldCountAddr;    // VMNatives.declaredFieldCount(Lmagic/ObjectReference;)J — Class.declaredFieldCount0
     static long stackTraceAddr;        // VM.throwableTrace(J)J — Throwable.stackTrace0 (inline bt -> STE[])
     static long fillTraceAddr;         // VMUnwind.fillInTrace(Lmagic/ObjectReference;)V — Throwable.fillInStackTrace0 (trace at construction)
-    static long virtualResolveAddr;    // VM.virtualResolve(JJ)J — late virtual dispatch (receiver + site idx)
+    static long virtualResolveAddr;    // VMNatives.virtualResolve(Lmagic/ObjectReference;J)J — late virtual dispatch (receiver + site idx)
     static long mhResolveAddr;         // VMNatives.mhResolve(JJ)J — the MH trampoline's resolver (save area + site)
     static long indyResolveAddr;       // VMNatives.indyResolve(JJ)J — the indy trampoline's resolver (save area + site)
     static long ldcConstAddr;          // VMNatives.ldcConst(J)J — a loadable dynamic constant's value

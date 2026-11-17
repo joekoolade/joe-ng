@@ -8585,16 +8585,16 @@ public final class Loader
      * past it: on a fresh task stack a bad word here becomes a branch that no report can attribute, because
      * there is no caller on the stack to name.
      */
-    static long resolveRun(long recv)
+    static long resolveRun(ObjectReference recv)
     {
-        if (recv == 0L)
+        if (recv.isNull())
         {
             return 0L;                                  // boot force-compile probe: make the helper reachable
         }
-        if (recv < Heap.BASE || recv >= Heap.managedTop().toLong() || (recv & 7L) != 0L)
+        if (recv.toLong() < Heap.BASE || recv.toLong() >= Heap.managedTop().toLong() || (recv.toLong() & 7L) != 0L)
         {
             Uart.write(Magic.bytes("\n  RUNTRAMP: receiver is not an object: "));
-            VM.printHex(recv);
+            VM.printHex(recv.toLong());
             Uart.putc(0x0A);
             return VM.denylistTrapAddr;
         }
@@ -8614,7 +8614,7 @@ public final class Loader
         if (buf == 0L || !plausibleCode(Address.fromLong(buf)))
         {
             Uart.write(Magic.bytes("\n  RUNTRAMP: no run()V for "));
-            long tib = Address.fromLong(recv).loadLong();
+            long tib = recv.toAddress().loadLong();
             if (tib > 0x1000L)
             {
                 reportClassOfType(Address.fromLong(tib).loadLong());
@@ -8646,19 +8646,19 @@ public final class Loader
 
     /** {@code run()V} via the receiver's itable entry for java/lang/Runnable, or 0. Bounded, unlike the
      *  hand-emitted scan it replaces: it stops at the 0 terminator instead of walking past it. */
-    private static long runFromItable(long recv)
+    private static long runFromItable(ObjectReference recv)
     {
         return ifaceMethodFromItable(recv, runnableTypeAddr(), runnableRunSlot());
     }
 
     /** Slot {@code slot} of the receiver's itable run for interface {@code want}, or 0 (also 0 for want == 0). */
-    private static long ifaceMethodFromItable(long recv, long want, int slot)
+    private static long ifaceMethodFromItable(ObjectReference recv, long want, int slot)
     {
         if (want == 0L)
         {
             return 0L;
         }
-        long tib = Address.fromLong(recv).loadLong();
+        long tib = recv.toAddress().loadLong();
         if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
         {
             return 0L;
@@ -14401,7 +14401,7 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("permitted0")))           { return VM.classPermittedAddr; }   // (Class,J)String
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("forName0")))          { return VM.forNameAddr; }       // (byte[])Class
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("classModifiers0")))   { return VM.classModifiersAddr; } // (Class)I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isInstance0")))       { return VM.instanceOfAddr; }    // (Object,J)Z == VM.instanceOf(JJ)I
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isInstance0")))       { return VM.instanceOfAddr; }    // (Object,J)Z == VM.instanceOf(Lmagic/ObjectReference;J)I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("assignable0")))       { return VM.assignableAddr; }    // (J,J)Z -- interfaces too
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("superclass0")))       { return VM.superclassAddr; }    // (Class)Class
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldMods0")))        { return VM.fieldModsAddr; }     // (Class,byte[])I
@@ -14717,16 +14717,16 @@ public final class Loader
      * answer rather than an error -- that is a writer-BAKED TIB, which would mean the hole is in the image
      * rather than in anything the loader built.
      */
-    static void reportReceiverAt(long recv)
+    static void reportReceiverAt(ObjectReference recv)
     {
         Uart.write(Magic.bytes("\n    recv=0x"));
-        VM.printHex(recv);
-        if (recv < Heap.BASE || recv >= Heap.managedTop().toLong())
+        VM.printHex(recv.toLong());
+        if (recv.toLong() < Heap.BASE || recv.toLong() >= Heap.managedTop().toLong())
         {
             Uart.write(Magic.bytes("  NOT A MANAGED HEAP ADDRESS (not an object)\n"));
             return;
         }
-        long tib = Address.fromLong(recv).loadLong();
+        long tib = recv.toAddress().loadLong();
         Uart.write(Magic.bytes(" tib=0x"));
         VM.printHex(tib);
         if (tib == 0L)
@@ -15666,7 +15666,7 @@ public final class Loader
 
     /** The registry index of the TARGET handle's class when {@code recv} (of registered class {@code ci}) is a
      *  LazyInitializingVarHandle, else -1. */
-    private static int lazyVhTargetReg(long recv, int ci)
+    private static int lazyVhTargetReg(ObjectReference recv, int ci)
     {
         byte[] lazy = Magic.bytes("java/lang/invoke/LazyInitializingVarHandle");
         if (!utf8IsAtBase(clTab[ci].base, clTab[ci].nameOff, lazy))
@@ -15678,7 +15678,7 @@ public final class Loader
         {
             return -1;
         }
-        long target = Address.fromLong(recv).plus(off).loadLong();
+        long target = recv.toAddress().plus(off).loadLong();
         if (target == 0L || !receiverAddress(target))
         {
             return -1;
@@ -15838,7 +15838,7 @@ public final class Loader
         return at + src.length;
     }
 
-    static long virtualResolve(long recv, int idx)
+    static long virtualResolve(ObjectReference recv, int idx)
     {
         // THE LAST TRAMPOLINE WITHOUT A LOCK -- AND NOT, AS THIS COMMENT FIRST CLAIMED, THE LAST UNLOCKED
         // PATH. It called this "the SIXTH unlocked path into the loader's static context", which reads as a
@@ -15891,13 +15891,13 @@ public final class Loader
      * rather than inline so {@link #virtualResolve}, which carries a try/finally, stays SHALLOW. The receiver
      * checks are the ones virtualResolveLocked makes, so a garbage receiver still reaches its reporting path.
      */
-    private static long siteMemoHit(long recv, int idx)
+    private static long siteMemoHit(ObjectReference recv, int idx)
     {
         if (vsSiteType == null || idx < 0 || idx >= vsCount)
         {
             return 0L;
         }
-        if (!receiverAddress(recv))
+        if (!receiverAddress(recv.toLong()))
         {
             return 0L;
         }
@@ -15908,7 +15908,7 @@ public final class Loader
         }
         Magic.dsb();                                    // the Type was read before the body
         long memoBuf = vsSiteBuf[idx];
-        long tib = Address.fromLong(recv).plus(ObjectModel.TIB_OFFSET).loadLong();
+        long tib = recv.toAddress().plus(ObjectModel.TIB_OFFSET).loadLong();
         if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB || Address.fromLong(tib).loadLong() != memoType)
         {
             return 0L;
@@ -15937,13 +15937,13 @@ public final class Loader
         return a >= VM.STACK_TOP && a < Heap.IMAGE_CEILING;
     }
 
-    private static long virtualResolveLocked(long recv, int idx)
+    private static long virtualResolveLocked(ObjectReference recv, int idx)
     {
-        if (recv == 0L || idx < 0 || idx >= vsCount || clTab == null)
+        if (recv.isNull() || idx < 0 || idx >= vsCount || clTab == null)
         {
             return VM.denylistTrapAddr;
         }
-        if (!receiverAddress(recv))
+        if (!receiverAddress(recv.toLong()))
         {
             // NOT AN OBJECT AT ALL. The bound is managedTop(), NOT LARGE_LIMIT: that is only where the
             // SECONDARIES' arenas begin, so LARGE_LIMIT rejects every object cores 1-3 allocate -- which is
@@ -15952,7 +15952,7 @@ public final class Loader
             // with the caller nowhere in it. The site's name+descriptor is right here, so say which dispatch
             // was handed the garbage; that is the one fact the fault report cannot recover.
             Uart.write(Magic.bytes("\n  BAD RECEIVER at dispatch: recv="));
-            VM.printHex(recv);
+            VM.printHex(recv.toLong());
             if (vsName != null && idx >= 0 && idx < vsCount)
             {
                 Uart.write(Magic.bytes(" site="));
@@ -15962,7 +15962,7 @@ public final class Loader
             Uart.putc(0x0A);
             return VM.denylistTrapAddr;
         }
-        long tib = Address.fromLong(recv).plus(ObjectModel.TIB_OFFSET).loadLong();
+        long tib = recv.toAddress().plus(ObjectModel.TIB_OFFSET).loadLong();
         if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
         {
             return VM.denylistTrapAddr;                 // a raw array has no Type to dispatch through
@@ -16018,7 +16018,7 @@ public final class Loader
                 // real display, and an array Type carries an element type. Those are distinguishable, and
                 // without them this report says only "something".
                 Uart.write(Magic.bytes("\n    recv="));
-                VM.printHex(recv);
+                VM.printHex(recv.toLong());
                 Uart.write(Magic.bytes(" tib="));
                 VM.printHex(tib);
                 Uart.write(Magic.bytes(" type="));
@@ -16948,7 +16948,7 @@ public final class Loader
         {
             return memberNameTarget(mn);
         }
-        return memberNameDispatch(Address.fromLong(save).loadLong(), mn);
+        return memberNameDispatch(Address.fromLong(save).loadObjectReference(), mn);
     }
 
     /** The code of {@code mh}'s LambdaForm: {@code mh.form.vmentry}'s method. */
@@ -17028,11 +17028,11 @@ public final class Loader
     }
 
     /** linkToVirtual/linkToInterface: the MemberName's method as the RECEIVER's class runs it. */
-    private static long memberNameDispatch(long recv, long mn)
+    private static long memberNameDispatch(ObjectReference recv, long mn)
     {
         long e = memberNameEntry(mn);
         RVMMethod m = e < 0L ? null : reflEntry((int) e);
-        if (m == null || recv == 0L)
+        if (m == null || recv.isNull())
         {
             return 0L;
         }
@@ -17511,14 +17511,14 @@ public final class Loader
      * a Type and an itable but no class file for a class-chain walk to read, and it answers a default method
      * with the implementation THIS receiver runs.
      */
-    static long reflectItableTarget(long recv, int rgIndex)
+    static long reflectItableTarget(ObjectReference recv, int rgIndex)
     {
         RVMMethod e = reflEntry(rgIndex);
-        if (e == null || recv <= 0x1000L)
+        if (e == null || recv.toLong() <= 0x1000L)
         {
             return 0L;
         }
-        long tib = Address.fromLong(recv).loadLong();
+        long tib = recv.toAddress().loadLong();
         if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
         {
             return 0L;
@@ -26468,13 +26468,13 @@ public final class Loader
      * <p>They used to be recorded in statics by {@code castOk}'s failing path and read back here, which another
      * core's failing cast could overwrite or clear in between (ExcMessageRaceProbe).
      */
-    static long newCce(long ref, long targetType)
+    static long newCce(ObjectReference ref, long targetType)
     {
         long e = newExc(Magic.bytes("java/lang/ClassCastException"));
-        if (e != 0L && ref != 0L && targetType != 0L)
+        if (e != 0L && !ref.isNull() && targetType != 0L)
         {
-            long tib = Address.fromLong(ref).loadLong();
-            setThrowableMessage(ObjectReference.fromLong(e), guestString(castFailureMessage(tib, typeOfObject(ObjectReference.fromLong(ref)), targetType)));
+            long tib = ref.toAddress().loadLong();
+            setThrowableMessage(ObjectReference.fromLong(e), guestString(castFailureMessage(tib, typeOfObject(ref), targetType)));
         }
         return e;
     }
@@ -29280,7 +29280,7 @@ public final class Loader
      * keeps its own frame. The method is named from the JIT registry or, for baked code (stock exception
      * constructors live in the image), from the image symbol table; a pc found in neither is kept.
      */
-    static int ctorFrameKind(Address pc, long exc)
+    static int ctorFrameKind(Address pc, ObjectReference exc)
     {
         long blk = Heap.codeBlockStartAt(pc).toLong();
         if (blk != 0L)
@@ -29471,18 +29471,18 @@ public final class Loader
      * because "unregistered" and "I could not look it up" are different answers and this project has been
      * misled by conflating them before.
      */
-    static void describeRecv(long ref, long site)
+    static void describeRecv(ObjectReference ref, long site)
     {
         Uart.write(Magic.bytes("  RECVWATCH site="));
         VM.printDec((int) site);
         Uart.write(Magic.bytes(" recv="));
-        VM.printHex(ref);
-        if (ref < Heap.BASE || ref >= Heap.managedTop().toLong() || (ref & 7L) != 0L)
+        VM.printHex(ref.toLong());
+        if (ref.toLong() < Heap.BASE || ref.toLong() >= Heap.managedTop().toLong() || (ref.toLong() & 7L) != 0L)
         {
             Uart.write(Magic.bytes(" -- NOT a managed heap reference\n"));
             return;
         }
-        long tib = Address.fromLong(ref).loadLong();
+        long tib = ref.toAddress().loadLong();
         Uart.write(Magic.bytes(" tib="));
         VM.printHex(tib);
         if (tib == 0L)
@@ -29504,11 +29504,11 @@ public final class Loader
             Uart.write(Magic.bytes("<unregistered Type>"));
         }
         Uart.write(Magic.bytes("\n    status="));
-        VM.printHex(Address.fromLong(ref).plus(8L).loadLong());
+        VM.printHex(ref.toAddress().plus(8L).loadLong());
         Uart.write(Magic.bytes(" slot0(+16)="));
-        VM.printHex(Address.fromLong(ref).plus(16L).loadLong());
+        VM.printHex(ref.toAddress().plus(16L).loadLong());
         Uart.write(Magic.bytes(" slot1(+24)="));
-        VM.printHex(Address.fromLong(ref).plus(24L).loadLong());
+        VM.printHex(ref.toAddress().plus(24L).loadLong());
         Uart.putc((byte) 0x0A);
     }
 

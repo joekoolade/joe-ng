@@ -364,7 +364,7 @@ final class VMNatives
      * Late virtual dispatch: resolve call site {@code idx} against the receiver's dynamic type. Called only
      * from {@code Loader.virtualTramp}, which has already saved the argument registers.
      */
-    static long virtualResolve(long recv, long idx)
+    static long virtualResolve(ObjectReference recv, long idx)
     {
         return Loader.virtualResolve(recv, (int) idx);
     }
@@ -1371,9 +1371,9 @@ final class VMNatives
     }
 
     /** Reflection: {@code Method.itableTarget0(Object,int)} -> the receiver's itable answer for that method, or 0. */
-    static long methodItableTarget(long recv, long rgIndex)
+    static long methodItableTarget(ObjectReference recv, long rgIndex)
     {
-        if (recv <= 0x1000L)
+        if (recv.toLong() <= 0x1000L)
         {
             return 0L;                                     // boot force-compile passes 0
         }
