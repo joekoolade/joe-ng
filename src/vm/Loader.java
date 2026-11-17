@@ -22,6 +22,7 @@ import zip.ZipDir;
 import magic.Address;
 import magic.AddressArray;
 import magic.Magic;
+import magic.ObjectReference;
 
 /**
  * A minimal classfile loader that runs <em>on the metal</em> (compiled into the
@@ -22225,7 +22226,7 @@ public final class Loader
      *
      * <p>{@code <init>}/{@code <clinit>} are excluded, as {@code getDeclaredMethods} specifies.
      */
-    static long declaredMethodName(long mirror, int want)
+    static long declaredMethodName(ObjectReference mirror, int want)
     {
         return declaredMethodPart(mirror, want, 0);
     }
@@ -22238,7 +22239,7 @@ public final class Loader
      * reported the test's own annotation for both while the factory was unreachable.) The caller pairs this with
      * the name and resolves through {@link #methodResolveDesc}.
      */
-    static long declaredMethodDesc(long mirror, int want)
+    static long declaredMethodDesc(ObjectReference mirror, int want)
     {
         return declaredMethodPart(mirror, want, 1);
     }
@@ -22253,13 +22254,13 @@ public final class Loader
      *
      * <p>{@code part} 0 = name ({@code <init>}), 1 = descriptor. {@code want < 0} answers the COUNT.
      */
-    static long declaredCtorPart(long mirror, int want, int part)
+    static long declaredCtorPart(ObjectReference mirror, int want, int part)
     {
-        if (mirror <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L)
         {
             return 0L;
         }
-        int ci = classRegByType(Address.fromLong(mirror).plus(16L).loadLong());
+        int ci = classRegByType(mirror.toAddress().plus(16L).loadLong());
         if (ci < 0)
         {
             return 0L;
@@ -22289,13 +22290,13 @@ public final class Loader
         return want < 0 ? (long) seen : 0L;
     }
 
-    private static long declaredMethodPart(long mirror, int want, int part)
+    private static long declaredMethodPart(ObjectReference mirror, int want, int part)
     {
-        if (mirror <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L)
         {
             return 0L;
         }
-        long type = Address.fromLong(mirror).plus(16L).loadLong();
+        long type = mirror.toAddress().plus(16L).loadLong();
         int ci = classRegByType(type);
         if (ci < 0)
         {
@@ -22328,13 +22329,13 @@ public final class Loader
     }
 
     /** The {@code want}-th declared FIELD's name, or the count when {@code want < 0}. */
-    static long declaredFieldName(long mirror, int want)
+    static long declaredFieldName(ObjectReference mirror, int want)
     {
         return declaredFieldPart(mirror, want, 0);
     }
 
     /** The {@code want}-th declared field's DESCRIPTOR -- the companion of {@link #declaredFieldName}. */
-    static long declaredFieldDesc(long mirror, int want)
+    static long declaredFieldDesc(ObjectReference mirror, int want)
     {
         return declaredFieldPart(mirror, want, 1);
     }
@@ -22350,13 +22351,13 @@ public final class Loader
      * <p>STATIC fields are included, as {@code getDeclaredFields} requires: the caller filters by modifier if
      * it cares, and dropping them here would silently answer a different question.
      */
-    private static long declaredFieldPart(long mirror, int want, int part)
+    private static long declaredFieldPart(ObjectReference mirror, int want, int part)
     {
-        if (mirror <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L)
         {
             return 0L;
         }
-        int ci = classRegByType(Address.fromLong(mirror).plus(16L).loadLong());
+        int ci = classRegByType(mirror.toAddress().plus(16L).loadLong());
         if (ci < 0)
         {
             return 0L;
@@ -22480,13 +22481,13 @@ public final class Loader
      * so a non-ASCII identifier in one would read wrongly. ALLOCATION-FREE for a bad argument, because
      * {@code VM.forceCompile} probes this native with zero.
      */
-    static long classSignature(long mirror)
+    static long classSignature(ObjectReference mirror)
     {
-        if (mirror <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L)
         {
             return 0L;
         }
-        int reg = regOfType(Address.fromLong(mirror).plus(16L).loadLong());
+        int reg = regOfType(mirror.toAddress().plus(16L).loadLong());
         if (reg < 0)
         {
             return 0L;
@@ -22607,13 +22608,13 @@ public final class Loader
      * {@code Method.getDefaultValue} asks {@link #methodParamMeta} for the attribute first. 0 when the type is
      * not a loaded class.
      */
-    static long annoDefaultInstance(long mirror)
+    static long annoDefaultInstance(ObjectReference mirror)
     {
-        if (mirror <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L)
         {
             return 0L;
         }
-        int reg = regOfType(Address.fromLong(mirror).plus(16L).loadLong());
+        int reg = regOfType(mirror.toAddress().plus(16L).loadLong());
         if (reg < 0)
         {
             return 0L;
@@ -22684,13 +22685,13 @@ public final class Loader
      * {@code Field.signature0}: the {@code Signature} attribute of field {@code nameArr} (a raw {@code byte[]})
      * of the class whose mirror is given, or 0. The field walk is {@link #fieldAnnotation}'s.
      */
-    static long fieldSignature(long mirror, long nameArr)
+    static long fieldSignature(ObjectReference mirror, long nameArr)
     {
-        if (mirror <= 0x1000L || nameArr <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L || nameArr <= 0x1000L)
         {
             return 0L;
         }
-        int ci = classRegByType(Address.fromLong(mirror).plus(16L).loadLong());
+        int ci = classRegByType(mirror.toAddress().plus(16L).loadLong());
         if (ci < 0)
         {
             return 0L;
@@ -22730,13 +22731,13 @@ public final class Loader
      * are the three elements of stock's {@code getEnclosingMethod0()} array, with the class left as a name for
      * the guest to resolve. ALLOCATION-FREE for a bad argument, because {@code VM.forceCompile} probes with 0.
      */
-    static long classEnclosingPart(long mirror, long part)
+    static long classEnclosingPart(ObjectReference mirror, long part)
     {
-        if (mirror <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L)
         {
             return 0L;
         }
-        int reg = regOfType(Address.fromLong(mirror).plus(16L).loadLong());
+        int reg = regOfType(mirror.toAddress().plus(16L).loadLong());
         if (reg < 0)
         {
             return 0L;
@@ -22772,13 +22773,13 @@ public final class Loader
      * included -- the cached modifiers strip it, and for a nested class the flags are not {@code InnerClasses}'.
      * 0 for a mirror with no classfile (a primitive or array type: the guest answers those itself).
      */
-    static long classFileWord(long mirror, long k)
+    static long classFileWord(ObjectReference mirror, long k)
     {
-        if (mirror <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L)
         {
             return 0L;
         }
-        int reg = regOfType(Address.fromLong(mirror).plus(16L).loadLong());
+        int reg = regOfType(mirror.toAddress().plus(16L).loadLong());
         if (reg < 0)
         {
             return 0L;
@@ -22799,13 +22800,13 @@ public final class Loader
      * {@code NestMembers} entry's internal name, or 0 past the end or when there is no such attribute. Names
      * only: the guest resolves them, so nothing here demand-loads under the cursor.
      */
-    static long classNestPart(long mirror, long k)
+    static long classNestPart(ObjectReference mirror, long k)
     {
-        if (mirror <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L)
         {
             return 0L;
         }
-        int reg = regOfType(Address.fromLong(mirror).plus(16L).loadLong());
+        int reg = regOfType(mirror.toAddress().plus(16L).loadLong());
         if (reg < 0)
         {
             return 0L;
@@ -22837,13 +22838,13 @@ public final class Loader
      * for a top-level or anonymous class; HotSpot's {@code getSimpleBinaryName0}. Read from the classfile, never
      * from the binary name, so a top-level class whose name contains '$' stays top-level.
      */
-    static long classInnerPart(long mirror, long part)
+    static long classInnerPart(ObjectReference mirror, long part)
     {
-        if (mirror <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L)
         {
             return 0L;
         }
-        int reg = regOfType(Address.fromLong(mirror).plus(16L).loadLong());
+        int reg = regOfType(mirror.toAddress().plus(16L).loadLong());
         if (reg < 0)
         {
             return 0L;
@@ -22870,13 +22871,13 @@ public final class Loader
      * The class's attribute named {@code name} -- position of its body, or 0 when absent or the mirror has no
      * classfile. The base of the blob is left in {@link #gAttrBase} for the caller's reads.
      */
-    private static Address classAttrOf(long mirror, byte[] name)
+    private static Address classAttrOf(ObjectReference mirror, byte[] name)
     {
-        if (mirror <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L)
         {
             return Address.zero();
         }
-        int reg = regOfType(Address.fromLong(mirror).plus(16L).loadLong());
+        int reg = regOfType(mirror.toAddress().plus(16L).loadLong());
         if (reg < 0)
         {
             return Address.zero();
@@ -22915,7 +22916,7 @@ public final class Loader
      * {@code RecordComponent.recordInfo0}: the number of components in the class's {@code Record} attribute
      * (JVMS 4.7.30), or -1 when it has none -- which is what makes it a record, beyond extending Record.
      */
-    static long classRecordInfo(long mirror, long k)
+    static long classRecordInfo(ObjectReference mirror, long k)
     {
         Address rec = classAttrOf(mirror, Magic.bytes("Record"));
         return rec.isZero() ? -1L : u2(rec);
@@ -22926,7 +22927,7 @@ public final class Loader
      * its field descriptor, 2 its {@code Signature} attribute -- as a String, or 0 (no such component, or no
      * Signature).
      */
-    static long classRecordPart(long mirror, long code)
+    static long classRecordPart(ObjectReference mirror, long code)
     {
         Address rec = classAttrOf(mirror, Magic.bytes("Record"));
         if (rec.isZero())
@@ -22953,7 +22954,7 @@ public final class Loader
     }
 
     /** {@code RecordComponent.recordAnnos0}: the annotations written on component {@code idx}, as an Annotation[]. */
-    static long classRecordAnnos(long mirror, long idx)
+    static long classRecordAnnos(ObjectReference mirror, long idx)
     {
         Address rec = classAttrOf(mirror, Magic.bytes("Record"));
         if (rec.isZero())
@@ -22971,7 +22972,7 @@ public final class Loader
     }
 
     /** {@code Class.permitted0}: the {@code k}th name in the class's {@code PermittedSubclasses}, or 0. */
-    static long classPermitted(long mirror, long k)
+    static long classPermitted(ObjectReference mirror, long k)
     {
         Address ps = classAttrOf(mirror, Magic.bytes("PermittedSubclasses"));
         if (ps.isZero() || k < 0L || k >= u2(ps))         // u2 number_of_classes, then u2 class indices
@@ -22988,13 +22989,13 @@ public final class Loader
      * else 0. That is exactly when stock's {@code getPermittedSubclasses()} is non-null, which is stock's whole
      * definition of {@code isSealed()} for a non-array, non-primitive class.
      */
-    static long classSealed(long mirror)
+    static long classSealed(ObjectReference mirror)
     {
-        if (mirror <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L)
         {
             return 0L;
         }
-        int reg = regOfType(Address.fromLong(mirror).plus(16L).loadLong());
+        int reg = regOfType(mirror.toAddress().plus(16L).loadLong());
         if (reg < 0)
         {
             return 0L;
@@ -23070,13 +23071,13 @@ public final class Loader
      * <p>JUnit's {@code AnnotationUtils.findAnnotation} walks this to reach META-ANNOTATIONS, and walks it
      * UNGUARDED, so an un-annotated field must answer an EMPTY array rather than null.
      */
-    static long fieldAnnotationsAll(long mirror, long nameArr)
+    static long fieldAnnotationsAll(ObjectReference mirror, long nameArr)
     {
-        if (mirror <= 0x1000L || nameArr <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L || nameArr <= 0x1000L)
         {
             return 0L;
         }
-        int ci = classRegByType(Address.fromLong(mirror).plus(16L).loadLong());
+        int ci = classRegByType(mirror.toAddress().plus(16L).loadLong());
         if (ci < 0)
         {
             return 0L;
@@ -23112,13 +23113,13 @@ public final class Loader
         return annotationsAt(base, lp);
     }
 
-    static long fieldAnnotation(long mirror, long nameArr, long descArr, int descLen)
+    static long fieldAnnotation(ObjectReference mirror, long nameArr, long descArr, int descLen)
     {
-        if (mirror <= 0x1000L || nameArr <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L || nameArr <= 0x1000L)
         {
             return 0L;
         }
-        int ci = classRegByType(Address.fromLong(mirror).plus(16L).loadLong());
+        int ci = classRegByType(mirror.toAddress().plus(16L).loadLong());
         if (ci < 0)
         {
             return 0L;
@@ -23157,13 +23158,13 @@ public final class Loader
      * re-parses a blob and moves the {@code gcp}/{@code gbase} cursor. Blobs themselves do not move, so an
      * absolute Utf8 pointer survives it -- the same property {@code applyAnnoDefaults} relies on.
      */
-    static long fieldTypeMirror(long mirror, long nameArr)
+    static long fieldTypeMirror(ObjectReference mirror, long nameArr)
     {
-        if (mirror <= 0x1000L || nameArr <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L || nameArr <= 0x1000L)
         {
             return 0L;
         }
-        int ci = classRegByType(Address.fromLong(mirror).plus(16L).loadLong());
+        int ci = classRegByType(mirror.toAddress().plus(16L).loadLong());
         if (ci < 0)
         {
             return 0L;
@@ -23392,13 +23393,13 @@ public final class Loader
     }
 
     /** {@code Class.getAnnotation0}: the same, for the annotations on a CLASS (its own attribute list). */
-    static long classAnnotation(long mirror, long descArr, int descLen)
+    static long classAnnotation(ObjectReference mirror, long descArr, int descLen)
     {
-        if (mirror <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L)
         {
             return 0L;
         }
-        int reg = regOfType(Address.fromLong(mirror).plus(16L).loadLong());
+        int reg = regOfType(mirror.toAddress().plus(16L).loadLong());
         if (reg < 0)
         {
             return 0L;
@@ -23451,14 +23452,14 @@ public final class Loader
      * {@code AnnotationUtils.findAnnotation} needs: it recurses into each interface itself, so handing it a
      * flattened closure would make it walk the same interfaces repeatedly.
      */
-    static long classInterfaces(long mirror)
+    static long classInterfaces(ObjectReference mirror)
     {
         long elemType = classMirrorTypeAddr();
-        if (mirror <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L)
         {
             return 0L;
         }
-        int reg = regOfType(Address.fromLong(mirror).plus(16L).loadLong());
+        int reg = regOfType(mirror.toAddress().plus(16L).loadLong());
         int n = reg >= 0 ? clIfaceRegN[reg] : 0;
         Address arr = Heap.allocArray(n, 8);
         arr.plus(ObjectModel.TIB_OFFSET).store(refArrayTib(elemType));
@@ -23492,13 +23493,13 @@ public final class Loader
      * names it: there is no itable to give such an instance, so the alternative is a null element, which
      * reads to the caller as an annotation that is present but broken.
      */
-    static long classAnnotationsAll(long mirror)
+    static long classAnnotationsAll(ObjectReference mirror)
     {
-        if (mirror <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L)
         {
             return 0L;
         }
-        int reg = regOfType(Address.fromLong(mirror).plus(16L).loadLong());
+        int reg = regOfType(mirror.toAddress().plus(16L).loadLong());
         if (reg < 0)
         {
             return emptyAnnoArray();
@@ -23637,13 +23638,13 @@ public final class Loader
      * <p>A member class that cannot be loaded is OMITTED and named on the console, rather than left as a null
      * element -- a null reads to the caller as a class that exists but is broken.
      */
-    static long classDeclaredClasses(long mirror)
+    static long classDeclaredClasses(ObjectReference mirror)
     {
-        if (mirror <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L)
         {
             return 0L;                                  // boot force-compile guard passes 0; allocates nothing
         }
-        int reg = regOfType(Address.fromLong(mirror).plus(16L).loadLong());
+        int reg = regOfType(mirror.toAddress().plus(16L).loadLong());
         if (reg < 0)
         {
             return emptyClassArray();
@@ -24801,13 +24802,13 @@ public final class Loader
     }
 
     /** {@code Proxy.proxyAlloc0}: a zeroed instance of proxy class {@code mirror}, or 0 if it is not one. */
-    static long proxyAlloc(long mirror)
+    static long proxyAlloc(ObjectReference mirror)
     {
-        if (mirror <= 0x1000L || proxyTypes == null)
+        if (mirror.toLong() <= 0x1000L || proxyTypes == null)
         {
             return 0L;
         }
-        long type = Address.fromLong(mirror).plus(16L).loadLong();
+        long type = mirror.toAddress().plus(16L).loadLong();
         int i = 0;
         while (i < proxyN)
         {

@@ -4,6 +4,30 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 23: Class mirrors are ObjectReferences (2026-11-16).** Pi-validated (build
+  23770804a699ae40). The second adopter of increment 22's type, and the first DESCRIPTOR change of the arc.
+  - **Retyped:** the mirror parameter (`mirror`/`mirrorRef`/`componentMirror`, always the first) of the 50 reflection
+    natives in VMNatives (Class.getName0, getModifiers, isPrimitive0/isArray0, getComponentType0, the declared
+    method/field/ctor tables, annotations, records, permitted/nest/inner/enclosing parts, method and ctor
+    resolution, allocInstance, Unsafe field offsets, Array.newInstance0, ...) and of the 28 Loader APIs behind them
+    (incl. the private `classAttrOf`), each called only from VMNatives or each other. The mirror's Type is read as
+    `mirror.toAddress().plus(16L).loadLong()`. Return values and the byte[] name/descriptor arguments stay `long`.
+  - **Descriptor ABI:** the natives are reached BY DESCRIPTOR, so each change is three edits: the signature, its
+    `stashHelper` key in ImageBuilder (`(J..)J` -> `(Lmagic/ObjectReference;..)J`, 50 keys), and its reachability
+    call in `VM.boot` (`ObjectReference.nullReference()`, 50 lines); the `xxxAddr` comments quote the new
+    descriptors. The guest binding is by NAME, so guestsrc is untouched. A missed key shows as `helper-stash MISS`:
+    none.
+  - **Left:** the small-value guards `mirror <= 0x1000L` stay SIGNED long compares (`mirror.toLong() <= 0x1000L`,
+    not `isNull()` -- they also reject small non-zero junk); two `long mirror` LOCALS in Loader (read out of arrays)
+    for a later increment, with nameArr/descArr/fdRef.
+  - **Measured:** conversion counts flat (VMNatives 69 -> 72, Loader 673 -> 673): each removed
+    `Address.fromLong(mirror ...)` became a `.toLong()` in its guard -- this increment buys the type, not fewer
+    words of source. Load/store mix and compare opcodes identical to main in VMNatives, Loader and VM. **Code:**
+    VMNatives **-120 words** (6227 -> 6107), Loader -95, VM unchanged.
+  - **Validation:** `make test` + overlaycheck; full regression **209/209** (28 reflection/annotation/record/proxy
+    probes among them); image build no MISS. Pi: every page 200, hello x2 (main found and called by reflection),
+    Boom trace, bench, forced stop, AddressFieldProbe 51/0, DnsCheck, SHA-256 check, staged 39 MB PUT + discard,
+    `/net` errors 0.
 - **UNBOXED TYPES, INCREMENT 22: `magic.ObjectReference` (2026-11-16).** Pi-validated (build 85ccf2b0700618ad).
   The fifth unboxed type, after Jikes RVM's `org.vmmagic.unboxed.ObjectReference`: an object's start as a raw
   word -- what a `long` holding a REFERENCE meant in VM code (a native's argument, a slot read off the heap), as

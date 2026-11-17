@@ -1505,17 +1505,17 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                     "vm/VM.cdsSeedAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.currentTimeMillis()J", "vm/VM.currentTimeMillisAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.identity(J)J",      "vm/VM.identityAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredCtorCount(J)J", "vm/VM.declCtorCountAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredCtorDescAt(JJ)J", "vm/VM.declCtorDescAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredCtorCount(Lmagic/ObjectReference;)J", "vm/VM.declCtorCountAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredCtorDescAt(Lmagic/ObjectReference;J)J", "vm/VM.declCtorDescAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.availableProcessors()I", "vm/VM.availProcsAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.runtimeGc()V", "vm/VM.runtimeGcAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.runtimeFreeMemory()J", "vm/VM.runtimeFreeAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.runtimeTotalMemory()J", "vm/VM.runtimeTotalAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.runtimeMaxMemory()J", "vm/VM.runtimeMaxAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.finalizationEnabled()Z", "vm/VM.finalizationEnabledAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.fieldAnnoAll(JJ)J", "vm/VM.fieldAnnoAllAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.unsafeStaticFieldAddr(JJ)J", "vm/VM.unsafeStaticAddrAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.unsafeFieldOffset(JJ)J", "vm/VM.unsafeFieldOffsetAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.fieldAnnoAll(Lmagic/ObjectReference;J)J", "vm/VM.fieldAnnoAllAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.unsafeStaticFieldAddr(Lmagic/ObjectReference;J)J", "vm/VM.unsafeStaticAddrAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.unsafeFieldOffset(Lmagic/ObjectReference;J)J", "vm/VM.unsafeFieldOffsetAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.noopNative(J)V", "vm/VM.noopNativeAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.unsafeFence(J)V", "vm/VM.unsafeFenceAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.refGet0(J)J", "vm/VM.refGet0Addr");
@@ -1529,9 +1529,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.setErr0(J)V",     "vm/VM.setErr0Addr");   // System.setErr
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.setIn0(J)V",      "vm/VM.setIn0Addr");    // System.setIn
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.annoGet(JJ)J",      "vm/VM.annoGetAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classAnnoGet(JJ)J", "vm/VM.classAnnoGetAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.fieldAnnoGet(JJJ)J", "vm/VM.fieldAnnoGetAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.fieldType(JJ)J", "vm/VM.fieldTypeAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classAnnoGet(Lmagic/ObjectReference;J)J", "vm/VM.classAnnoGetAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.fieldAnnoGet(Lmagic/ObjectReference;JJ)J", "vm/VM.fieldAnnoGetAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.fieldType(Lmagic/ObjectReference;J)J", "vm/VM.fieldTypeAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodParamTypes(J)J", "vm/VM.paramTypesAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodReturnType(J)J", "vm/VM.returnTypeAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.arraycopy(JIJII)V", "vm/VM.arraycopyAddr");
@@ -1558,8 +1558,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.dnsResolve(J)I",     "vm/VM.dnsResolveAddr"); // M3: InetAddress.resolve0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.netifState(J)J",     "vm/VM.netifStateAddr"); // NetworkInterface.wifi0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.vhFieldOffset(JJ)J", "vm/VM.vhFieldOffsetAddr"); // M3: VarHandle.fieldOffset0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.fieldMods(JJ)I", "vm/VM.fieldModsAddr");         // reflection: Class.fieldMods0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.fieldTypeChar(JJ)I", "vm/VM.fieldTypeCharAddr"); // reflection: Class.fieldTypeChar0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.fieldMods(Lmagic/ObjectReference;J)I", "vm/VM.fieldModsAddr");         // reflection: Class.fieldMods0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.fieldTypeChar(Lmagic/ObjectReference;J)I", "vm/VM.fieldTypeCharAddr"); // reflection: Class.fieldTypeChar0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classAtPc(J)J", "vm/VM.classAtPcAddr");           // getCallerClass (updater access check)
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockSocket0(JJJJ)I", "vm/VM.sockSocket0Addr");   // M3 sockets
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockConnect0(JJJJ)I","vm/VM.sockConnect0Addr");
@@ -1578,7 +1578,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockConfigureBlocking(JJ)V", "vm/VM.sockConfigureBlockingAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.fdVal(J)I",          "vm/VM.fdValAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.setFdVal(JJ)V",      "vm/VM.setFdValAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.staticCell(JJ)J",   "vm/VM.staticCellAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.staticCell(Lmagic/ObjectReference;J)J",   "vm/VM.staticCellAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockNoop()V",        "vm/VM.sockNoopAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.shutdownBeforeHalt()V", "vm/VM.shutdownBeforeHaltAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.shutdownHalt0(J)V",  "vm/VM.shutdownHalt0Addr");
@@ -1593,7 +1593,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.pollHup()J",         "vm/VM.pollHupAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.pollNval()J",        "vm/VM.pollNvalAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.exclusiveBindNone()J", "vm/VM.exclusiveBindNoneAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classNameOf(J)J",    "vm/VM.classNameAddr");  // M4: Class.getName0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classNameOf(Lmagic/ObjectReference;)J",    "vm/VM.classNameAddr");  // M4: Class.getName0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.forName(J)J",        "vm/VM.forNameAddr");    // reflection M1: Class.forName0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.assignable(JJ)J",    "vm/VM.assignableAddr"); // Class.isAssignableFrom
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.forNameNoInit(J)J", "vm/VM.forNameNoInitAddr"); // MetalLoaders.lookup0
@@ -1607,21 +1607,21 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.blockWrite(JJJJ)J", "vm/VM.blockWriteAddr"); // MetalBlock.write0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.consoleAvailable()J", "vm/VM.consoleAvailAddr"); // MetalConsoleIn.available0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodAnnoAll(J)J", "vm/VM.methodAnnoAllAddr"); // Executable.annoAll0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classAnnoAll(J)J", "vm/VM.classAnnoAllAddr"); // Class.annoAll0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classDeclClasses(J)J", "vm/VM.classDeclClassesAddr"); // Class.declaredClasses0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classIfaces(J)J", "vm/VM.classIfacesAddr"); // Class.interfaces0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classSignature(J)J", "vm/VM.classSignatureAddr"); // Class.genericSignature0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classEnclosingPart(JJ)J", "vm/VM.classEnclosingPartAddr"); // Class.enclosingPart0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classNestPart(JJ)J", "vm/VM.classNestPartAddr"); // Class.nestPart0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classFileWord(JJ)J", "vm/VM.classFileWordAddr"); // Class.classFileWord0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classInnerPart(JJ)J", "vm/VM.classInnerPartAddr"); // Class.innerPart0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classSealed(J)J", "vm/VM.classSealedAddr"); // Class.sealed0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classAnnoAll(Lmagic/ObjectReference;)J", "vm/VM.classAnnoAllAddr"); // Class.annoAll0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classDeclClasses(Lmagic/ObjectReference;)J", "vm/VM.classDeclClassesAddr"); // Class.declaredClasses0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classIfaces(Lmagic/ObjectReference;)J", "vm/VM.classIfacesAddr"); // Class.interfaces0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classSignature(Lmagic/ObjectReference;)J", "vm/VM.classSignatureAddr"); // Class.genericSignature0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classEnclosingPart(Lmagic/ObjectReference;J)J", "vm/VM.classEnclosingPartAddr"); // Class.enclosingPart0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classNestPart(Lmagic/ObjectReference;J)J", "vm/VM.classNestPartAddr"); // Class.nestPart0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classFileWord(Lmagic/ObjectReference;J)J", "vm/VM.classFileWordAddr"); // Class.classFileWord0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classInnerPart(Lmagic/ObjectReference;J)J", "vm/VM.classInnerPartAddr"); // Class.innerPart0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classSealed(Lmagic/ObjectReference;)J", "vm/VM.classSealedAddr"); // Class.sealed0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.proxyType(JJJJJ)J", "vm/VM.proxyTypeAddr"); // Proxy.proxyType0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.proxyAlloc(J)J", "vm/VM.proxyAllocAddr"); // Proxy.proxyAlloc0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classRecordInfo(JJ)J", "vm/VM.classRecordInfoAddr"); // RecordComponent.recordInfo0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classRecordPart(JJ)J", "vm/VM.classRecordPartAddr"); // RecordComponent.recordPart0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classRecordAnnos(JJ)J", "vm/VM.classRecordAnnosAddr"); // RecordComponent.recordAnnos0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classPermitted(JJ)J", "vm/VM.classPermittedAddr"); // Class.permitted0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.proxyAlloc(Lmagic/ObjectReference;)J", "vm/VM.proxyAllocAddr"); // Proxy.proxyAlloc0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classRecordInfo(Lmagic/ObjectReference;J)J", "vm/VM.classRecordInfoAddr"); // RecordComponent.recordInfo0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classRecordPart(Lmagic/ObjectReference;J)J", "vm/VM.classRecordPartAddr"); // RecordComponent.recordPart0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classRecordAnnos(Lmagic/ObjectReference;J)J", "vm/VM.classRecordAnnosAddr"); // RecordComponent.recordAnnos0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classPermitted(Lmagic/ObjectReference;J)J", "vm/VM.classPermittedAddr"); // Class.permitted0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodSignature(J)J", "vm/VM.methodSignatureAddr"); // Executable.signature0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodExceptionName(JJ)J", "vm/VM.methodExceptionNameAddr"); // Executable.exceptionName0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodParamMeta(JJ)J", "vm/VM.methodParamMetaAddr"); // Executable.paramMeta0
@@ -1629,43 +1629,43 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMStats.fill(JJ)J", "vm/VM.statsFillAddr"); // MetalStats.fill0
         stashHelper(image, staticWord, wordOffset, "vm/VMStats.taskThread(J)J", "vm/VM.statsTaskThreadAddr"); // MetalStats.taskThread0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodParamAnnoRow(JJ)J", "vm/VM.methodParamAnnoRowAddr"); // Executable.paramAnnoRow0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.annoDefaultInstance(J)J", "vm/VM.annoDefaultInstanceAddr"); // Method.annoDefaults0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.fieldSignature(JJ)J", "vm/VM.fieldSignatureAddr"); // Field.signature0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.annoDefaultInstance(Lmagic/ObjectReference;)J", "vm/VM.annoDefaultInstanceAddr"); // Method.annoDefaults0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.fieldSignature(Lmagic/ObjectReference;J)J", "vm/VM.fieldSignatureAddr"); // Field.signature0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.defineClass(JJJJ)J", "vm/VM.defineClassAddr"); // reflection M3: ClassLoader.defineClass0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classModifiers(J)J", "vm/VM.classModifiersAddr"); // reflection M1: Class.getModifiers
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodResolve(JJ)I", "vm/VM.methodResolveAddr");  // reflection M2: Method.methodResolve0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodResolveDesc(JJJ)I", "vm/VM.methodResolveDescAddr"); // overload-exact resolve
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodResolveExact(JJJ)I", "vm/VM.methodResolveExactAddr"); // Method.exact0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.mhDeclared(JJJ)I", "vm/VM.mhDeclaredAddr"); // MethodHandleNatives.declared0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classModifiers(Lmagic/ObjectReference;)J", "vm/VM.classModifiersAddr"); // reflection M1: Class.getModifiers
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodResolve(Lmagic/ObjectReference;J)I", "vm/VM.methodResolveAddr");  // reflection M2: Method.methodResolve0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodResolveDesc(Lmagic/ObjectReference;JJ)I", "vm/VM.methodResolveDescAddr"); // overload-exact resolve
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodResolveExact(Lmagic/ObjectReference;JJ)I", "vm/VM.methodResolveExactAddr"); // Method.exact0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.mhDeclared(Lmagic/ObjectReference;JJ)I", "vm/VM.mhDeclaredAddr"); // MethodHandleNatives.declared0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodItableTarget(JJ)J", "vm/VM.methodItableTargetAddr"); // Method.itableTarget0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodInfo(JJJ)I",   "vm/VM.methodInfoAddr");     // reflection M2: Method.methodInfo0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.constructorResolve(JJ)I", "vm/VM.constructorResolveAddr"); // M2: Constructor.ctorResolve0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.ctorResolveDesc(JJ)I", "vm/VM.ctorResolveDescAddr"); // Constructor.ctorResolveDesc0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.allocInstance(J)J",  "vm/VM.allocInstanceAddr");  // reflection M2: Constructor.allocInstance0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.ensureMirrorInit(J)J", "vm/VM.ensureMirrorInitAddr"); // Unsafe.ensureClassInitialized0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.shouldBeInit(J)J", "vm/VM.shouldBeInitAddr"); // Unsafe.shouldBeInitialized0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.superclassOf(J)J",   "vm/VM.superclassAddr"); // M4: Class.superclass0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.constructorResolve(Lmagic/ObjectReference;J)I", "vm/VM.constructorResolveAddr"); // M2: Constructor.ctorResolve0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.ctorResolveDesc(Lmagic/ObjectReference;J)I", "vm/VM.ctorResolveDescAddr"); // Constructor.ctorResolveDesc0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.allocInstance(Lmagic/ObjectReference;)J",  "vm/VM.allocInstanceAddr");  // reflection M2: Constructor.allocInstance0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.ensureMirrorInit(Lmagic/ObjectReference;)J", "vm/VM.ensureMirrorInitAddr"); // Unsafe.ensureClassInitialized0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.shouldBeInit(Lmagic/ObjectReference;)J", "vm/VM.shouldBeInitAddr"); // Unsafe.shouldBeInitialized0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.superclassOf(Lmagic/ObjectReference;)J",   "vm/VM.superclassAddr"); // M4: Class.superclass0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.currentThreadObj()J","vm/VM.currentThreadAddr"); // M4: Thread.currentThread0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.arrayClone(J)J",    "vm/VM.arrayCloneAddr");  // [T.clone() intrinsic
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.newReflectArray(JJ)J", "vm/VM.newReflectArrayAddr"); // reflect/Array.newInstance0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.componentTypeOf(J)J", "vm/VM.componentTypeAddr");   // Class.getComponentType0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.isArrayClass(J)J", "vm/VM.isArrayClassAddr");        // Class.isArray0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.isPrimClass(J)J", "vm/VM.isPrimClassAddr");          // Class.isPrimitive0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.newReflectArray(Lmagic/ObjectReference;J)J", "vm/VM.newReflectArrayAddr"); // reflect/Array.newInstance0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.componentTypeOf(Lmagic/ObjectReference;)J", "vm/VM.componentTypeAddr");   // Class.getComponentType0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.isArrayClass(Lmagic/ObjectReference;)J", "vm/VM.isArrayClassAddr");        // Class.isArray0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.isPrimClass(Lmagic/ObjectReference;)J", "vm/VM.isPrimClassAddr");          // Class.isPrimitive0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.primClassOf(J)J", "vm/VM.primClassAddr");            // Class.primitiveClass0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.annoPresent(JJ)J", "vm/VM.annoPresentAddr");         // Executable.annoPresent0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredMethodAt(JJ)J", "vm/VM.declMethodAddr");     // Class.declaredMethodAt0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredMethodDescAt(JJ)J", "vm/VM.declMethodDescAddr"); // Class.declaredMethodDescAt0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredMethodCount(J)J", "vm/VM.declMethodCountAddr"); // Class.declaredMethodCount0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredFieldAt(JJ)J", "vm/VM.declFieldAddr");        // Class.declaredFieldAt0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredFieldDescAt(JJ)J", "vm/VM.declFieldDescAddr"); // Class.declaredFieldDescAt0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredFieldCount(J)J", "vm/VM.declFieldCountAddr"); // Class.declaredFieldCount0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredMethodAt(Lmagic/ObjectReference;J)J", "vm/VM.declMethodAddr");     // Class.declaredMethodAt0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredMethodDescAt(Lmagic/ObjectReference;J)J", "vm/VM.declMethodDescAddr"); // Class.declaredMethodDescAt0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredMethodCount(Lmagic/ObjectReference;)J", "vm/VM.declMethodCountAddr"); // Class.declaredMethodCount0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredFieldAt(Lmagic/ObjectReference;J)J", "vm/VM.declFieldAddr");        // Class.declaredFieldAt0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredFieldDescAt(Lmagic/ObjectReference;J)J", "vm/VM.declFieldDescAddr"); // Class.declaredFieldDescAt0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredFieldCount(Lmagic/ObjectReference;)J", "vm/VM.declFieldCountAddr"); // Class.declaredFieldCount0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.throwableTrace(J)J", "vm/VM.stackTraceAddr");        // Throwable.stackTrace0
         stashHelper(image, staticWord, wordOffset, "vm/VMUnwind.fillInTrace(J)V", "vm/VM.fillTraceAddr");          // Throwable.fillInStackTrace0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.virtualResolve(JJ)J", "vm/VM.virtualResolveAddr"); // late virtual dispatch
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.mhResolve(JJ)J", "vm/VM.mhResolveAddr"); // MethodHandle sig-poly calls
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.indyResolve(JJ)J", "vm/VM.indyResolveAddr"); // invokedynamic (generic)
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.ldcConst(J)J", "vm/VM.ldcConstAddr"); // ldc of a dynamic constant
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classBytes(J)J", "vm/VM.classBytesAddr"); // MethodHandleNatives.classBytes0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classBytes(Lmagic/ObjectReference;)J", "vm/VM.classBytesAddr"); // MethodHandleNatives.classBytes0
         stashHelper(image, staticWord, wordOffset, "vm/VM.getClassOf(J)J",    "vm/VM.getClassAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.watchRet(JJ)V",   "vm/VM.watchRetAddr");   // DEBUG call-site watch
         stashHelper(image, staticWord, wordOffset, "vm/VM.watchArg(JJ)V",   "vm/VM.watchArgAddr");   // DEBUG argument watch
