@@ -47,8 +47,8 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         HELPER_KEY[Symbols.HEAP_ALLOC]       = "vm/Heap.alloc(I)Lmagic/Address;";
         HELPER_KEY[Symbols.HEAP_ALLOC_ARRAY] = "vm/Heap.allocArray(II)Lmagic/Address;";
         HELPER_KEY[Symbols.GC_COLLECT]       = "vm/VMGc.gcCollect(J)V";
-        HELPER_KEY[Symbols.INSTANCE_OF]      = "vm/VM.instanceOf(Lmagic/ObjectReference;J)I";
-        HELPER_KEY[Symbols.CHECK_CAST]       = "vm/VM.checkCast(Lmagic/ObjectReference;J)J";
+        HELPER_KEY[Symbols.INSTANCE_OF]      = "vm/VM.instanceOf(Lmagic/ObjectReference;Lmagic/Address;)I";
+        HELPER_KEY[Symbols.CHECK_CAST]       = "vm/VM.checkCast(Lmagic/ObjectReference;Lmagic/Address;)J";
         HELPER_KEY[Symbols.UNWIND]           = "vm/VMUnwind.unwind(Lmagic/ObjectReference;Lmagic/Address;Lmagic/Address;)V";
         // frem/drem and multianewarray are METAL-JIT only today (arrayDescAddr refuses in the host writer),
         // but naming them costs nothing and keeps the table a statement about capability.
@@ -68,7 +68,7 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         HELPER_KEY[Symbols.SC_FLOAT]         = "vm/VMConcat.scFloat(Lmagic/Address;I)V";
         // REACHED: the guard baked at a site that touches a class whose statics the image does not snapshot
         // (see needsInitGuard).
-        HELPER_KEY[Symbols.ENSURE_INIT]      = "vm/VM.ensureInitByName(J)V";
+        HELPER_KEY[Symbols.ENSURE_INIT]      = "vm/VM.ensureInitByName(Lmagic/Address;)V";
         // REACHED: every baked getClass() call site (see isGetClass).
         HELPER_KEY[Symbols.GET_CLASS]        = "vm/VM.getClassOf(Lmagic/ObjectReference;)J";
         HELPER_KEY[Symbols.CALLER_CLASS]     = "vm/VMNatives.classAtPc(J)J";
