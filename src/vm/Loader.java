@@ -3511,13 +3511,13 @@ public final class Loader
             long k = 0;
             while (k < n)
             {
-                long e = tab + k * 40L;
-                long start = Address.fromLong(e).loadLong();
-                if (pc.toLong() >= start && pc.toLong() < Address.fromLong(e).plus(8L).loadLong())
+                Address e = Address.fromLong(tab + k * 40L);
+                long start = e.loadLong();
+                if (pc.toLong() >= start && pc.toLong() < e.plus(8L).loadLong())
                 {
                     // The symbol is "owner/Class.method", combined: split it at the LAST '.' (a method name
                     // has none) so the class is a class and the method a method, as on a JVM.
-                    Address sym = Address.fromLong(e).plus(16L).loadAddress();
+                    Address sym = e.plus(16L).loadAddress();
                     int symLen = u2(sym);
                     int dot = symLen - 1;
                     while (dot > 0 && u1(sym.plus(2L + dot)) != 0x2E)
@@ -3533,8 +3533,8 @@ public final class Loader
                     {
                         methStr = guestStringUtf8(sym, 0);
                     }
-                    fileStr = guestStringUtf8(Address.fromLong(e).plus(24L).loadAddress(), 0);
-                    line = lineAtOffset(Address.fromLong(e).plus(32L).loadLong(), (int) ((pc.toLong() - start) >> 2));
+                    fileStr = guestStringUtf8(e.plus(24L).loadAddress(), 0);
+                    line = lineAtOffset(e.plus(32L).loadLong(), (int) ((pc.toLong() - start) >> 2));
                     k = n;
                 }
                 else
@@ -3695,11 +3695,11 @@ public final class Loader
             return 0L;
         }
         long tib = steTib();
-        long deep = throwableBacktrace(exc);             // every frame, when there were more than eight
+        Address deep = Address.fromLong(throwableBacktrace(exc));             // every frame, when there were more than eight
         int n = 0;
-        if (deep != 0L)
+        if (!deep.isZero())
         {
-            n = Address.fromLong(deep).plus(ObjectModel.ARRAY_LENGTH_OFFSET).loadInt();
+            n = deep.plus(ObjectModel.ARRAY_LENGTH_OFFSET).loadInt();
         }
         else
         {
@@ -3716,9 +3716,9 @@ public final class Loader
         int i = 0;
         while (i < n)
         {
-            long fpc = deep != 0L ? Address.fromLong(deep).plus(ObjectModel.ARRAY_BASE_OFFSET).plus((long) i * 8L).loadLong()
-                                  : exc.toAddress().plus(16L).plus((long) i * 8L).loadLong();
-            arr.plus(24L).plus((long) i * 8L).store(frameToElement(Address.fromLong(fpc), tib));
+            Address fpc = !deep.isZero() ? deep.plus(ObjectModel.ARRAY_BASE_OFFSET).plus((long) i * 8L).loadAddress()
+                                     : exc.toAddress().plus(16L).plus((long) i * 8L).loadAddress();
+            arr.plus(24L).plus((long) i * 8L).store(frameToElement(fpc, tib));
             i += 1;
         }
         return arr.toLong();
@@ -3785,10 +3785,10 @@ public final class Loader
             exc.toAddress().plus(off).store(exc);
             return 0L;
         }
-        long arr = Heap.allocArray(n, 8).toLong();
-        Address.fromLong(arr).plus(ObjectModel.TIB_OFFSET).store(primArrayTib(11));   // long[]
+        Address arr = Heap.allocArray(n, 8);
+        arr.plus(ObjectModel.TIB_OFFSET).store(primArrayTib(11));   // long[]
         exc.toAddress().plus(off).store(arr);
-        return arr;
+        return arr.toLong();
     }
 
     /** Materialise a {@code StackTraceElement[]} for the frame chain at ({@code pc},{@code sp}). */
@@ -3939,13 +3939,13 @@ public final class Loader
         long i = 0;
         while (i < codeRootN)
         {
-            long src = CODE_ROOTS + i * CODE_ROOT_ENTRY;
-            long owner = Address.fromLong(src).plus(8L).loadLong();
+            Address src = Address.fromLong(CODE_ROOTS + i * CODE_ROOT_ENTRY);
+            long owner = src.plus(8L).loadLong();
             if (owner < lo || owner >= hi)
             {
-                long dst = CODE_ROOTS + kept * CODE_ROOT_ENTRY;
-                Address.fromLong(dst).store(Address.fromLong(src).loadLong());
-                Address.fromLong(dst).plus(8L).store(owner);
+                Address dst = Address.fromLong(CODE_ROOTS + kept * CODE_ROOT_ENTRY);
+                dst.store(src.loadLong());
+                dst.plus(8L).store(owner);
                 kept += 1;
             }
             i += 1;
@@ -8381,19 +8381,19 @@ public final class Loader
         long i = 0;
         while (i < n)
         {
-            long e = tab + i * 40L;                              // 5 longs per entry
-            long start = Address.fromLong(e).loadLong();
-            if (addr.toLong() >= start && addr.toLong() < Address.fromLong(e).plus(8L).loadLong())
+            Address e = Address.fromLong(tab + i * 40L);                           // 5 longs per entry
+            long start = e.loadLong();
+            if (addr.toLong() >= start && addr.toLong() < e.plus(8L).loadLong())
             {
-                Address nameAddr = Address.fromLong(e).plus(16L).loadAddress();
-                Address srcAddr = Address.fromLong(e).plus(24L).loadAddress();
+                Address nameAddr = e.plus(16L).loadAddress();
+                Address srcAddr = e.plus(24L).loadAddress();
                 writeName(nameAddr.plus(2), u2(nameAddr));    // "owner/Class.method"
                 int srcLen = u2(srcAddr);
                 if (srcLen > 0)
                 {
                     Uart.putc(0x28);                             // '('
                     writeName(srcAddr.plus(2), srcLen);       // SourceFile filename
-                    int line = lineAtOffset(Address.fromLong(e).plus(32L).loadLong(), (int) ((addr.toLong() - start) >> 2));
+                    int line = lineAtOffset(e.plus(32L).loadLong(), (int) ((addr.toLong() - start) >> 2));
                     if (line >= 0)
                     {
                         Uart.putc(0x3A);                         // ':'
@@ -8427,24 +8427,24 @@ public final class Loader
      */
     static void reportCallCells(Address up)
     {
-        long w = up.toLong() - 60L;
-        while (w <= up.toLong() - 4L)
+        Address w = up.minus(60L);
+        while (w.toLong() <= up.toLong() - 4L)
         {
-            if ((Address.fromLong(w).loadInt() & 0xFFFFFFFFL) == 0xD63F0200L                    // blr x16
-                    && (Address.fromLong(w).minus(4L).loadInt() & 0xFFFFFFFFL) == 0xF9400230L)       // ldr x16,[x17]
+            if ((w.loadInt() & 0xFFFFFFFFL) == 0xD63F0200L                    // blr x16
+                    && (w.minus(4L).loadInt() & 0xFFFFFFFFL) == 0xF9400230L)       // ldr x16,[x17]
             {
                 Uart.write(Magic.bytes("      call at up-0x"));
-                VM.printHex(up.toLong() - w);
+                VM.printHex(up.toLong() - w.toLong());
                 Uart.write(Magic.bytes(" cell=0x"));
-                VM.printHex(cellImmAt(Address.fromLong(w - 8L)));
+                VM.printHex(cellImmAt(w.minus(8L)));
                 Uart.write(Magic.bytes(" -> "));
-                if (cellImmAt(Address.fromLong(w - 8L)) != 0L)
+                if (cellImmAt(w.minus(8L)) != 0L)
                 {
-                    printFrameAt(Address.fromLong(cellImmAt(Address.fromLong(w - 8L))).loadAddress());
+                    printFrameAt(Address.fromLong(cellImmAt(w.minus(8L))).loadAddress());
                 }
                 Uart.putc(0x0A);
             }
-            w += 4L;
+            w = w.plus(4L);
         }
     }
 
@@ -8669,22 +8669,22 @@ public final class Loader
         {
             return 0L;
         }
-        long dir = Address.fromLong(type).plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).loadLong();
-        if (dir <= 0x1000L)
+        Address dir = Address.fromLong(type).plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).loadAddress();
+        if (dir.toLong() <= 0x1000L)
         {
             return 0L;
         }
         int n = 0;
         while (n < MAXIFACEFALLBACK)
         {
-            long ent = Address.fromLong(dir).plus(n * (long) ObjectModel.ITABLE_ENTRY_SIZE).loadLong();
+            long ent = dir.plus(n * (long) ObjectModel.ITABLE_ENTRY_SIZE).loadLong();
             if (ent == 0L)
             {
                 return 0L;                              // the sentinel: STOP (the old scan ran past it)
             }
             if (ent == want)
             {
-                long it = Address.fromLong(dir).plus(n * (long) ObjectModel.ITABLE_ENTRY_SIZE)
+                long it = dir.plus(n * (long) ObjectModel.ITABLE_ENTRY_SIZE)
                         .plus(ObjectModel.ITABLE_ENTRY_TABLE_OFFSET).loadLong();
                 if (it <= 0x1000L)
                 {
@@ -11230,13 +11230,13 @@ public final class Loader
      */
     static void seedSystemProps()
     {
-        long slot = staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("props"));
-        if (slot == 0L)
+        Address slot = Address.fromLong(staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("props")));
+        if (slot.isZero())
         {
             reportPropsGap(Magic.bytes("java/lang/System.props has no static cell"));
             return;
         }
-        if (Address.fromLong(slot).loadLong() != 0L)
+        if (slot.loadLong() != 0L)
         {
             return;                                     // already seeded: not a failure, say nothing
         }
@@ -11259,7 +11259,7 @@ public final class Loader
             return;                                     // no runnable <init>: leaving props null is honest
         }
         Magic.call2(rgTab[ctor].buf, obj, 0L);          // receiver in x0; a no-arg ctor reads nothing else
-        Address.fromLong(slot).store(obj);
+        slot.store(obj);
         seedStandardProps(obj, pi);
         seedLineSeparator();
     }
@@ -11336,13 +11336,13 @@ public final class Loader
 
     static void seedSavedProps()
     {
-        long slot = staticSlotOf(Magic.bytes("jdk/internal/misc/VM"), Magic.bytes("savedProps"));
-        if (slot == 0L)
+        Address slot = Address.fromLong(staticSlotOf(Magic.bytes("jdk/internal/misc/VM"), Magic.bytes("savedProps")));
+        if (slot.isZero())
         {
             reportPropsGap(Magic.bytes("jdk/internal/misc/VM.savedProps has no static cell (getSavedProperty throws)"));
             return;
         }
-        if (Address.fromLong(slot).loadLong() != 0L)
+        if (slot.loadLong() != 0L)
         {
             return;
         }
@@ -11361,7 +11361,7 @@ public final class Loader
         }
         Magic.call2(rgTab[ctor].buf, obj, 0L);
         seedStandardProps(obj, pi);
-        Address.fromLong(slot).store(obj);
+        slot.store(obj);
     }
 
     /**
@@ -11392,10 +11392,10 @@ public final class Loader
      */
     private static void seedLineSeparator()
     {
-        long slot = staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("lineSeparator"));
-        if (slot != 0L && Address.fromLong(slot).loadLong() == 0L)
+        Address slot = Address.fromLong(staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("lineSeparator")));
+        if (!slot.isZero() && slot.loadLong() == 0L)
         {
-            Address.fromLong(slot).store(guestString(Magic.bytes("\n")));   // Uart.putc makes this CRLF for the console
+            slot.store(guestString(Magic.bytes("\n")));   // Uart.putc makes this CRLF for the console
         }
     }
 
@@ -11916,12 +11916,12 @@ public final class Loader
         {
             return;
         }
-        long slot = staticSlotOf(Magic.bytes("jdk/internal/misc/VM"), Magic.bytes("lock"));
-        if (slot != 0L && Address.fromLong(slot).loadLong() == 0L)
+        Address slot = Address.fromLong(staticSlotOf(Magic.bytes("jdk/internal/misc/VM"), Magic.bytes("lock")));
+        if (!slot.isZero() && slot.loadLong() == 0L)
         {
             Address inst = Heap.alloc(16);                          // header only: a monitor needs no fields
             inst.store(clTab[oi].tib);
-            Address.fromLong(slot).store(inst);
+            slot.store(inst);
             sdVmLock = true;
         }
     }
@@ -12482,9 +12482,9 @@ public final class Loader
             printCurrentClass();
             Uart.putc(0x0A);
         }
-        long tab = Heap.allocCode(4 + n * 8).toLong();
-        Address.fromLong(tab).store(n);
-        long w = tab + 4;
+        Address tab = Heap.allocCode(4 + n * 8);
+        tab.store(n);
+        Address w = tab.plus(4);
         prev = -1;
         bci = 0;
         while (bci < len)                                 // pass 2: emit (wordOffset, line) at each transition
@@ -12494,15 +12494,15 @@ public final class Loader
                 int line = lnAt[bci];
                 if (line != prev)
                 {
-                    Address.fromLong(w).store(gBcToWord[bci]);
-                    Address.fromLong(w).plus(4).store(line);
-                    w += 8;
+                    w.store(gBcToWord[bci]);
+                    w.plus(4).store(line);
+                    w = w.plus(8);
                     prev = line;
                 }
             }
             bci += 1;
         }
-        return tab;
+        return tab.toLong();
     }
 
     /** Source line for machine word offset {@code wordOff} within a method's line table, or -1. */
@@ -12513,19 +12513,19 @@ public final class Loader
             return -1;
         }
         int n = Address.fromLong(tab).loadInt();
-        long w = tab + 4;
+        Address w = Address.fromLong(tab + 4);
         int best = -1;
         int bestOff = -1;
         int i = 0;
         while (i < n)
         {
-            int off = Address.fromLong(w).loadInt();
+            int off = w.loadInt();
             if (off <= wordOff && off > bestOff)
             {
                 bestOff = off;
-                best = Address.fromLong(w).plus(4).loadInt();
+                best = w.plus(4).loadInt();
             }
-            w += 8;
+            w = w.plus(8);
             i += 1;
         }
         return best;
@@ -14600,8 +14600,8 @@ public final class Loader
             return 0L;
         }
         int decl = -2;                                  // the maximally specific declarer, found on first need
-        long entry = dir;
-        long iface = Address.fromLong(entry).plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadLong();
+        Address entry = Address.fromLong(dir);
+        long iface = entry.plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadLong();
         while (iface != 0L)                             // 0 interfaceType terminates the directory
         {
             int ir = classRegByType(iface);
@@ -14619,10 +14619,10 @@ public final class Loader
                 int slot = ifmSlotAbs(ir, nameOff, descOff);
                 if (slot >= 0)
                 {
-                    long itable = Address.fromLong(entry).plus(ObjectModel.ITABLE_ENTRY_TABLE_OFFSET).loadLong();
-                    if (itable != 0L)
+                    Address itable = entry.plus(ObjectModel.ITABLE_ENTRY_TABLE_OFFSET).loadAddress();
+                    if (!itable.isZero())
                     {
-                        long hit = Address.fromLong(itable).plus(slot * 8L).loadLong();
+                        long hit = itable.plus(slot * 8L).loadLong();
                         if (hit != 0L)
                         {
                             return hit;
@@ -14679,8 +14679,8 @@ public final class Loader
                     return b;
                 }
             }
-            entry += ObjectModel.ITABLE_ENTRY_SIZE;
-            iface = Address.fromLong(entry).plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadLong();
+            entry = entry.plus(ObjectModel.ITABLE_ENTRY_SIZE);
+            iface = entry.plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadLong();
         }
         return 0L;
     }
@@ -14693,14 +14693,14 @@ public final class Loader
     {
         int[] regs = new int[MAXIFACEFALLBACK];
         int n = 0;
-        long entry = dir;
-        long iface = Address.fromLong(entry).plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadLong();
+        Address entry = Address.fromLong(dir);
+        long iface = entry.plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadLong();
         while (iface != 0L && n < regs.length)
         {
             regs[n] = classRegByType(iface);
             n += 1;
-            entry += ObjectModel.ITABLE_ENTRY_SIZE;
-            iface = Address.fromLong(entry).plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadLong();
+            entry = entry.plus(ObjectModel.ITABLE_ENTRY_SIZE);
+            iface = entry.plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadLong();
         }
         return mostSpecificDeclarer(regs, n, nameU, descU);
     }
@@ -16353,8 +16353,8 @@ public final class Loader
         long i = 0L;
         while (i < VM.bakeStubCount)
         {
-            long memo = Address.fromLong(VM.bakeStubTable).plus(i * 32L).plus(24L).loadLong();
-            if (memo != 0L && stubIdxAt(Address.fromLong(memo)) == (long) idx)
+            Address memo = Address.fromLong(VM.bakeStubTable).plus(i * 32L).plus(24L).loadAddress();
+            if (!memo.isZero() && stubIdxAt(memo) == (long) idx)
             {
                 Uart.write(Magic.bytes("  ... and the BAKE-STUB MEMO still returns it: entry="));
                 VM.printDec((int) i);
@@ -21342,14 +21342,14 @@ public final class Loader
         int i = 0;
         while (i < n)
         {
-            long e = VM.vtSigTable + (long) i * 48L;
-            if (utf8EqAt(gbase, gThisNameOff, Address.fromLong(e).loadAddress(), 0))
+            Address e = Address.fromLong(VM.vtSigTable + (long) i * 48L);
+            if (utf8EqAt(gbase, gThisNameOff, e.loadAddress(), 0))
             {
-                gVtSigSlots = Address.fromLong(e).plus(8L).loadLong();
-                gVtSigCount = (int) Address.fromLong(e).plus(16L).loadLong();
-                gAdoptType = Address.fromLong(e).plus(24L).loadLong();
-                gAdoptStatics = Address.fromLong(e).plus(32L).loadLong();
-                gAdoptStaticCount = (int) Address.fromLong(e).plus(40L).loadLong();
+                gVtSigSlots = e.plus(8L).loadLong();
+                gVtSigCount = (int) e.plus(16L).loadLong();
+                gAdoptType = e.plus(24L).loadLong();
+                gAdoptStatics = e.plus(32L).loadLong();
+                gAdoptStaticCount = (int) e.plus(40L).loadLong();
                 return;
             }
             i += 1;
@@ -21421,10 +21421,10 @@ public final class Loader
         int s = 0;
         while (s < gVtSigCount)
         {
-            long p = gVtSigSlots + (long) s * 16L;
+            Address p = Address.fromLong(gVtSigSlots + (long) s * 16L);
             int i = clTab[reg].ifmStart + s;
-            if (!utf8EqAt(ifBase.get(i), ifNameOff[i], Address.fromLong(p).loadAddress(), 0)
-                    || !utf8EqAt(ifBase.get(i), ifDescOff[i], Address.fromLong(p).plus(8L).loadAddress(), 0))
+            if (!utf8EqAt(ifBase.get(i), ifNameOff[i], p.loadAddress(), 0)
+                    || !utf8EqAt(ifBase.get(i), ifDescOff[i], p.plus(8L).loadAddress(), 0))
             {
                 ifParityHeader();
                 Uart.write(Magic.bytes(" DIFF slot "));
@@ -21473,13 +21473,13 @@ public final class Loader
                                                         //   the diagnosis (six Object virtuals = no Object)
             while (w < count)
             {
-                long q = slots + (long) w * 16L;
+                Address q = Address.fromLong(slots + (long) w * 16L);
                 int f = 0;
                 int found = 0;
                 while (f < gvCount)
                 {
-                    if (utf8EqAt(gvTab[f].base, gvTab[f].name, Address.fromLong(q).loadAddress(), 0)
-                            && utf8EqAt(gvTab[f].base, gvTab[f].desc, Address.fromLong(q).plus(8L).loadAddress(), 0))
+                    if (utf8EqAt(gvTab[f].base, gvTab[f].name, q.loadAddress(), 0)
+                            && utf8EqAt(gvTab[f].base, gvTab[f].desc, q.plus(8L).loadAddress(), 0))
                     {
                         found = 1;
                         f = gvCount;
@@ -21491,8 +21491,8 @@ public final class Loader
                     Uart.write(Magic.bytes("    missing slot "));
                     VM.printDec(w);
                     Uart.putc(0x20);
-                    writeName(Address.fromLong(q).loadAddress().plus(2L), u2(Address.fromLong(q).loadLong()));
-                    writeName(Address.fromLong(q).plus(8L).loadAddress().plus(2L), u2(Address.fromLong(q).plus(8L).loadLong()));
+                    writeName(q.loadAddress().plus(2L), u2(q.loadLong()));
+                    writeName(q.plus(8L).loadAddress().plus(2L), u2(q.plus(8L).loadLong()));
                     Uart.putc(0x0A);
                 }
                 w += 1;
@@ -21502,9 +21502,9 @@ public final class Loader
         int s = 0;
         while (s < count)
         {
-            long p = slots + (long) s * 16L;
-            if (!utf8EqAt(gvTab[s].base, gvTab[s].name, Address.fromLong(p).loadAddress(), 0)
-                    || !utf8EqAt(gvTab[s].base, gvTab[s].desc, Address.fromLong(p).plus(8L).loadAddress(), 0))
+            Address p = Address.fromLong(slots + (long) s * 16L);
+            if (!utf8EqAt(gvTab[s].base, gvTab[s].name, p.loadAddress(), 0)
+                    || !utf8EqAt(gvTab[s].base, gvTab[s].desc, p.plus(8L).loadAddress(), 0))
             {
                 vtParityHeader();
                 Uart.write(Magic.bytes(" DIFF slot "));
@@ -21549,12 +21549,12 @@ public final class Loader
         int i = 0;
         while (i < n)
         {
-            long e = VM.bakedTable + (long) i * 32L;
-            if (utf8EqAt(gbase, gThisNameOff, Address.fromLong(e).loadAddress(), 0)
-                    && utf8EqAt(gbase, nameOff, Address.fromLong(e).plus(8L).loadAddress(), 0)
-                    && utf8EqAt(gbase, descOff, Address.fromLong(e).plus(16L).loadAddress(), 0))
+            Address e = Address.fromLong(VM.bakedTable + (long) i * 32L);
+            if (utf8EqAt(gbase, gThisNameOff, e.loadAddress(), 0)
+                    && utf8EqAt(gbase, nameOff, e.plus(8L).loadAddress(), 0)
+                    && utf8EqAt(gbase, descOff, e.plus(16L).loadAddress(), 0))
             {
-                return Address.fromLong(e).plus(24L).loadLong();
+                return e.plus(24L).loadLong();
             }
             i += 1;
         }
@@ -21861,9 +21861,9 @@ public final class Loader
                 continue;
             }
             rfVisit += 1;
-            long dir = instImaps[m];                    // the class's itable DIRECTORY (per-interface tables)
+            Address dir = Address.fromLong(instImaps[m]);                    // the class's itable DIRECTORY (per-interface tables)
             int reg = instImapReg[m];
-            if (reg < 0 || dir == 0L)
+            if (reg < 0 || dir.isZero())
             {
                 instImapDone[m] = true;                 // nothing to repair, ever
                 m += 1;
@@ -21876,7 +21876,7 @@ public final class Loader
             // computed regardless. refillItable already tests every slot for 0, so it can report what it saw.
             rfClos += 1;
             int n = ifaceClosureOf(reg);                // the class's full interface set (persistent registries)
-            int slots = imapSlotCount(dir);
+            int slots = imapSlotCount(dir.toLong());
             int[] decl = instImapDecl[m];
             if (decl == null || instImapDeclN[m] != n || decl.length != slots)
             {
@@ -21893,13 +21893,13 @@ public final class Loader
             boolean holes = false;
             int off = 0;
             int k = 0;
-            long t = Address.fromLong(dir).loadLong();
+            long t = dir.loadLong();
             while (t != 0L)                             // walk entries by their TYPE key (order-independent)
             {
                 int ir = regOfType(t);
                 if (ir >= 0)
                 {
-                    long it = Address.fromLong(dir).plus(k * 16).plus(8).loadLong();
+                    long it = dir.plus(k * 16).plus(8).loadLong();
                     if (refillItable(n, ir, it, decl, off))   // still short after the repair: a later batch may
                     {                                         //   compile the class that declares the default
                         holes = true;
@@ -21907,7 +21907,7 @@ public final class Loader
                     off += clTab[ir].ifmCount;
                 }
                 k += 1;
-                t = Address.fromLong(dir).plus(k * 16).loadLong();
+                t = dir.plus(k * 16).loadLong();
             }
             if (holes)
             {
@@ -23875,13 +23875,13 @@ public final class Loader
             return 0L;
         }
         long[] slots = new long[2];                     // fresh per call: a component's own equals/hashCode
-        long argBase = Magic.addrOf(slots) + 24L;       // may re-enter this for a nested record
-        Address.fromLong(argBase).store(obj);
+        Address argBase = ObjectReference.fromObject(slots).toAddress().plus(24L);  // may re-enter this for a nested record
+        argBase.store(obj);
         if (argc > 1)
         {
-            Address.fromLong(argBase).plus(8L).store(arg1);
+            argBase.plus(8L).store(arg1);
         }
-        return Magic.callN(code, argBase);
+        return Magic.callN(code, argBase.toLong());
     }
 
     /** The compiled body of {@code name desc} for {@code obj}'s class, or 0 (null, a raw array, unresolvable). */
@@ -24741,8 +24741,8 @@ public final class Loader
         int e = 0;
         while (e < ni)
         {
-            long mirror = Address.fromLong(ifacesArr).plus(24L).plus(e * 8L).loadLong();
-            long ity = mirror == 0L ? 0L : Address.fromLong(mirror).plus(16L).loadLong();
+            Address mirror = Address.fromLong(ifacesArr).plus(24L).plus(e * 8L).loadAddress();
+            long ity = mirror.isZero() ? 0L : mirror.plus(16L).loadLong();
             int ir = classRegByType(ity);
             int cn = ir >= 0 ? clTab[ir].ifmCount : 0;
             Address cit = Heap.allocData(cn > 0 ? cn * 8 : 8);
@@ -24750,16 +24750,16 @@ public final class Loader
             while (z < cn)
             {
                 int m = clTab[ir].ifmStart + z;
-                long thunk = 0L;
+                Address thunk = Address.zero();
                 int j = 0;
-                while (j < nm && thunk == 0L)
+                while (j < nm && thunk.isZero())
                 {
-                    long nb = Address.fromLong(namesArr).plus(24L).plus(j * 8L).loadLong();
-                    long db = Address.fromLong(descsArr).plus(24L).plus(j * 8L).loadLong();
-                    if (rawEqUtf8(Address.fromLong(nb).plus(24L), (int) Address.fromLong(nb).plus(16L).loadLong(), ifBase.get(m), ifNameOff[m])
-                            && rawEqUtf8(Address.fromLong(db).plus(24L), (int) Address.fromLong(db).plus(16L).loadLong(), ifBase.get(m), ifDescOff[m]))
+                    Address nb = Address.fromLong(namesArr).plus(24L).plus(j * 8L).loadAddress();
+                    Address db = Address.fromLong(descsArr).plus(24L).plus(j * 8L).loadAddress();
+                    if (rawEqUtf8(nb.plus(24L), (int) nb.plus(16L).loadLong(), ifBase.get(m), ifNameOff[m])
+                            && rawEqUtf8(db.plus(24L), (int) db.plus(16L).loadLong(), ifBase.get(m), ifDescOff[m]))
                     {
-                        thunk = proxyThunk(Address.fromLong(methodsArr).plus(24L).plus(j * 8L).loadLong(), helper).toLong();
+                        thunk = proxyThunk(Address.fromLong(methodsArr).plus(24L).plus(j * 8L).loadLong(), helper);
                     }
                     j += 1;
                 }
@@ -24919,12 +24919,12 @@ public final class Loader
         {
             return;
         }
-        long e = dir;
-        while (Address.fromLong(e).loadLong() != 0L)
+        Address e = Address.fromLong(dir);
+        while (e.loadLong() != 0L)
         {
-            int r = classRegByType(Address.fromLong(e).loadLong());
-            long it = Address.fromLong(e).plus(8L).loadLong();
-            if (r >= 0 && it != 0L && utf8IsAtBase(clTab[r].base, clTab[r].nameOff, Magic.bytes("java/lang/annotation/Annotation")))
+            int r = classRegByType(e.loadLong());
+            Address it = e.plus(8L).loadAddress();
+            if (r >= 0 && !it.isZero() && utf8IsAtBase(clTab[r].base, clTab[r].nameOff, Magic.bytes("java/lang/annotation/Annotation")))
             {
                 int z = 0;
                 while (z < clTab[r].ifmCount)
@@ -24933,12 +24933,12 @@ public final class Loader
                     long buf = annoContractBufFor(ifBase.get(m), ifNameOff[m], ifDescOff[m]);
                     if (buf != 0L)
                     {
-                        Address.fromLong(it).plus(z * 8L).store(buf);
+                        it.plus(z * 8L).store(buf);
                     }
                     z += 1;
                 }
             }
-            e += 16L;
+            e = e.plus(16L);
         }
     }
 
@@ -25001,17 +25001,17 @@ public final class Loader
             // AnnotatedElement's default getDeclaredAnnotationsByType keyed its map by null (RepeatableProbe).
             // annotationType() gets the mirror thunk here too; an inherited equals/hashCode/toString stays 0,
             // which the dispatch guard turns into a resolution, not a branch.
-            long thunk = 0L;
+            Address thunk = Address.zero();
             boolean own = ifBase.get(clTab[ifaceReg].ifmStart + s).EQ(ownBase);
             boolean isAnnoType = utf8IsAtBase(ifBase.get(clTab[ifaceReg].ifmStart + s),
                     ifNameOff[clTab[ifaceReg].ifmStart + s], Magic.bytes("annotationType"));
             if (own || isAnnoType)
             {
-                thunk = Heap.allocCode(8).toLong();
-                Heap.pinCodeAt(Address.fromLong(thunk));                  // only the itable names it; no `bl` displacement does
-                Address.fromLong(thunk).plus(0L).store(A64Enc.ldrx(0, 0, 16 + (own ? s : n) * 8));
-                Address.fromLong(thunk).plus(4L).store(A64Enc.ret());
-                Heap.publishCode(Address.fromLong(thunk), Address.fromLong(thunk + 8L));    // another core may run it: maintenance is BY ADDRESS
+                thunk = Heap.allocCode(8);
+                Heap.pinCodeAt(thunk);                  // only the itable names it; no `bl` displacement does
+                thunk.plus(0L).store(A64Enc.ldrx(0, 0, 16 + (own ? s : n) * 8));
+                thunk.plus(4L).store(A64Enc.ret());
+                Heap.publishCode(thunk, thunk.plus(8L));    // another core may run it: maintenance is BY ADDRESS
             }
             it.plus(s * 8L).store(thunk);
             s += 1;
@@ -25337,35 +25337,35 @@ public final class Loader
         int count = u2(p.plus(1));
         int atype = atypeForDescChar(annoArrayPrim);
         int esz = arrayElemSizeOfAtype(atype);
-        long arr = Heap.allocArray(count, esz).toLong();
-        Address.fromLong(arr).plus(ObjectModel.TIB_OFFSET).store(primArrayTib(atype));
+        Address arr = Heap.allocArray(count, esz);
+        arr.plus(ObjectModel.TIB_OFFSET).store(primArrayTib(atype));
         Address q = p.plus(3L);
         int i = 0;
         while (i < count)
         {
             long v = annoElementValue(base, q);         // B C I S Z F: the value or raw bits; J D: 64 bits
-            long at = arr + ObjectModel.ARRAY_BASE_OFFSET + (long) i * esz;
+            Address at = arr.plus(ObjectModel.ARRAY_BASE_OFFSET + (long) i * esz);
             if (esz == 1)
             {
-                Address.fromLong(at).store((byte) v);
+                at.store((byte) v);
             }
             else if (esz == 2)
             {
-                Address.fromLong(at).store((byte) v);
-                Address.fromLong(at).plus(1L).store((byte) (v >>> 8));
+                at.store((byte) v);
+                at.plus(1L).store((byte) (v >>> 8));
             }
             else if (esz == 4)
             {
-                Address.fromLong(at).store((int) v);
+                at.store((int) v);
             }
             else
             {
-                Address.fromLong(at).store(v);
+                at.store(v);
             }
             q = skipElementValue(q);
             i += 1;
         }
-        return arr;
+        return arr.toLong();
     }
 
     /**
@@ -25539,16 +25539,16 @@ public final class Loader
                     // after the walks, and resolving a Class here can demand-load and collect. The array is
                     // reachable from the object's value slot, so going via the slot keeps it alive; a stashed
                     // address would not.
-                    long arr = obj.toAddress().plus(16L).plus(eat[i] * 8L).loadLong();
+                    Address arr = obj.toAddress().plus(16L).plus(eat[i] * 8L).loadAddress();
                     // BOUNDS-CHECK BEFORE STORING. A raw store at a COMPUTED offset: if the slot does not hold
                     // the array this entry was recorded against, or the index is stale, it writes into the
                     // middle of whatever object is there. Not the cause of the corruption this change was once
                     // blamed for -- that was the code arena overlapping the image -- but unchecked computed
                     // stores were three separate defects in one day, so this one does not ship unchecked.
                     // A miss means the pending record is wrong, so it is skipped, not clamped.
-                    if (arr != 0L && eidx[i] < (int) Address.fromLong(arr).plus(16L).loadLong())
+                    if (!arr.isZero() && eidx[i] < (int) arr.plus(16L).loadLong())
                     {
-                        Address.fromLong(arr).plus(24L).plus(eidx[i] * 8L).store(v);
+                        arr.plus(24L).plus(eidx[i] * 8L).store(v);
                     }
                 }
             }
@@ -26543,15 +26543,15 @@ public final class Loader
         // and `buildLambdaTib` could not resolve its functional interface. Reporting both as "nothing" is
         // what made the two indistinguishable in the log.
         p = putUtf8Bytes(out, p, Magic.bytes("<synthesised, implements"));
-        long dir = Address.fromLong(type).plus(16L).loadLong();
-        if (dir == 0L)
+        Address dir = Address.fromLong(type).plus(16L).loadAddress();
+        if (dir.isZero())
         {
             return putUtf8Bytes(out, p, Magic.bytes(" -- NO itable directory (not a lambda; an interface or bare Type)>"));
         }
         int n = 0;
-        while (dir != 0L && n < 8)
+        while (!dir.isZero() && n < 8)
         {
-            long ifType = Address.fromLong(dir).plus(n * 16L).loadLong();
+            long ifType = dir.plus(n * 16L).loadLong();
             if (ifType == 0L)
             {
                 break;                                   // sentinel ends the directory
@@ -27393,8 +27393,8 @@ public final class Loader
     private static int emitBoxReturn(Address thunk, int w, int retKind)
     {
         w = emitAt(thunk, w, A64Enc.movz(1, retKind, 0));               // x1 = the descriptor kind char
-        long at = thunk.toLong() + w * 4L;
-        Address.fromLong(at).store(A64Enc.bl((int) ((VM.boxPrimAddr - at) / 4L)));
+        Address at = thunk.plus(w * 4L);
+        at.store(A64Enc.bl((int) ((VM.boxPrimAddr - at.toLong()) / 4L)));
         w += 1;
         w = emitAt(thunk, w, A64Enc.ldrx(STUB_LR, STUB_SP, STUB_LR_OFF));
         Address thi = thunk.plus(w * 4L);                               // at the `add sp`: the frame dies here
@@ -27743,14 +27743,14 @@ public final class Loader
             {
                 thunk.plus(w * 4L).store(A64Enc.movz(0, cr, 0)); // x0 = class registry index
                 w += 1;
-                long h0 = thunk.toLong() + w * 4L;
-                Address.fromLong(h0).store(A64Enc.bl((int) ((initAddr - h0) / 4L))); // run <clinit> if it has not run
+                Address h0 = thunk.plus(w * 4L);
+                h0.store(A64Enc.bl((int) ((initAddr - h0.toLong()) / 4L))); // run <clinit> if it has not run
                 w += 1;
             }
             thunk.plus(w * 4L).store(A64Enc.movz(0, size, 0)); // x0 = instance size
             w += 1;
-            long h1 = thunk.toLong() + w * 4L;
-            Address.fromLong(h1).store(A64Enc.bl((int) ((VM.heapAlloc - h1) / 4L))); // x0 = Heap.alloc(size)
+            Address h1 = thunk.plus(w * 4L);
+            h1.store(A64Enc.bl((int) ((VM.heapAlloc - h1.toLong()) / 4L))); // x0 = Heap.alloc(size)
             w += 1;
             thunk.plus(w * 4L).store(A64Enc.movz(1, (int) (ctib & 0xFFFFL), 0));
             w += 1;
@@ -28555,16 +28555,16 @@ public final class Loader
     {
         long b0 = 1L;                                    // bit 0 = computed marker
         long b1 = 0L;
-        long superType = Address.fromLong(type).plus(ObjectModel.TYPE_SUPER_OFFSET).loadLong();
-        if (superType != 0L)
+        Address superType = Address.fromLong(type).plus(ObjectModel.TYPE_SUPER_OFFSET).loadAddress();
+        if (!superType.isZero())
         {
-            long sb0 = Address.fromLong(superType).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).loadLong();
+            long sb0 = superType.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).loadLong();
             if ((sb0 & 1L) == 0L)
             {
                 return;                                  // super uncomputed: stay on the walk
             }
             b0 |= sb0;
-            b1 |= Address.fromLong(superType).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).loadLong();
+            b1 |= superType.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).loadLong();
         }
         long own0 = Address.fromLong(type).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).loadLong();
         if ((own0 & 1L) != 0L)                           // adopted node: keep the writer's bits
@@ -28572,13 +28572,13 @@ public final class Loader
             b0 |= own0;
             b1 |= Address.fromLong(type).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).loadLong();
         }
-        long e = Address.fromLong(type).plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).loadLong();
-        if (e != 0L)
+        Address e = Address.fromLong(type).plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).loadAddress();
+        if (!e.isZero())
         {
-            long iface = Address.fromLong(e).plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadLong();
-            while (iface != 0L)
+            Address iface = e.plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadAddress();
+            while (!iface.isZero())
             {
-                long id = Address.fromLong(iface).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).loadLong();
+                long id = iface.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).loadLong();
                 if (id > 0L && id < 64L)
                 {
                     b0 |= 1L << (int) id;
@@ -28587,8 +28587,8 @@ public final class Loader
                 {
                     b1 |= 1L << (int) (id - 64L);
                 }
-                e += ObjectModel.ITABLE_ENTRY_SIZE;
-                iface = Address.fromLong(e).plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadLong();
+                e = e.plus(ObjectModel.ITABLE_ENTRY_SIZE);
+                iface = e.plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadAddress();
             }
         }
         Address.fromLong(type).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).store(b0);
@@ -28728,14 +28728,14 @@ public final class Loader
         boolean adopted = false;
         if (elementType != 0L)
         {
-            long tab = VM.refArrayTibs;
+            Address tab = Address.fromLong(VM.refArrayTibs);
             long n = VM.refArrayTibCount;
             long k = 0;
             while (k < n)
             {
-                if (Address.fromLong(tab).plus(k * 16L).loadLong() == elementType)
+                if (tab.plus(k * 16L).loadLong() == elementType)
                 {
-                    tib = Address.fromLong(tab).plus(k * 16L).plus(8L).loadLong();
+                    tib = tab.plus(k * 16L).plus(8L).loadLong();
                     adopted = true;
                     int r = regOfType(elementType);
                     if (r >= 0)
@@ -29307,10 +29307,10 @@ public final class Loader
         long k = 0;
         while (k < VM.imageSymCount)
         {
-            long e = tab + k * 40L;
-            if (pc.toLong() >= Address.fromLong(e).loadLong() && pc.toLong() < Address.fromLong(e).plus(8L).loadLong())
+            Address e = Address.fromLong(tab + k * 40L);
+            if (pc.toLong() >= e.loadLong() && pc.toLong() < e.plus(8L).loadLong())
             {
-                Address sym = Address.fromLong(e).plus(16L).loadAddress();        // "owner/Class.method", length-prefixed
+                Address sym = e.plus(16L).loadAddress();        // "owner/Class.method", length-prefixed
                 int symLen = u2(sym);
                 int dot = symLen - 1;
                 while (dot > 0 && u1(sym.plus(2L + dot)) != 0x2E)
@@ -29483,15 +29483,15 @@ public final class Loader
             Uart.write(Magic.bytes(" -- NOT a managed heap reference\n"));
             return;
         }
-        long tib = ref.toAddress().loadLong();
+        Address tib = ref.toAddress().loadAddress();
         Uart.write(Magic.bytes(" tib="));
         VM.printHex(tib);
-        if (tib == 0L)
+        if (tib.isZero())
         {
             Uart.write(Magic.bytes(" -- NULL TIB (object never got one)\n"));
             return;
         }
-        long type = Address.fromLong(tib).loadLong();
+        long type = tib.loadLong();
         Uart.write(Magic.bytes(" type="));
         VM.printHex(type);
         Uart.write(Magic.bytes(" class="));
@@ -30285,13 +30285,13 @@ public final class Loader
     /** FNV-1a over a String's coder and value bytes. */
     private static int poolHash(long str)
     {
-        long val = Address.fromLong(str).plus(16L).loadLong();
-        int len = (int) Address.fromLong(val).plus(16L).loadLong();
+        Address val = Address.fromLong(str).plus(16L).loadAddress();
+        int len = (int) val.plus(16L).loadLong();
         int h = 0x811C9DC5 ^ (int) Address.fromLong(str).plus(24L).loadLong();
         int i = 0;
         while (i < len)
         {
-            h = (h ^ (Address.fromLong(val).plus(24L).plus(i).loadUnsignedByte() & 0xFF)) * 0x01000193;
+            h = (h ^ (val.plus(24L).plus(i).loadUnsignedByte() & 0xFF)) * 0x01000193;
             i += 1;
         }
         return h & 0x7FFFFFFF;
@@ -30304,17 +30304,17 @@ public final class Loader
         {
             return false;
         }
-        long va = Address.fromLong(a).plus(16L).loadLong();
-        long vb = Address.fromLong(b).plus(16L).loadLong();
-        int len = (int) Address.fromLong(va).plus(16L).loadLong();
-        if (len != (int) Address.fromLong(vb).plus(16L).loadLong())
+        Address va = Address.fromLong(a).plus(16L).loadAddress();
+        Address vb = Address.fromLong(b).plus(16L).loadAddress();
+        int len = (int) va.plus(16L).loadLong();
+        if (len != (int) vb.plus(16L).loadLong())
         {
             return false;
         }
         int i = 0;
         while (i < len)
         {
-            if (Address.fromLong(va).plus(24L).plus(i).loadUnsignedByte() != Address.fromLong(vb).plus(24L).plus(i).loadUnsignedByte())
+            if (va.plus(24L).plus(i).loadUnsignedByte() != vb.plus(24L).plus(i).loadUnsignedByte())
             {
                 return false;
             }

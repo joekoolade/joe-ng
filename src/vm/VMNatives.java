@@ -1642,16 +1642,16 @@ final class VMNatives
         {
             return tib == 0L ? 0L : 1L;                       // raw array: the TIB slot IS the element size
         }
-        long type = Address.fromLong(tib).loadLong();
-        if (type == 0L)
+        Address type = Address.fromLong(tib).loadAddress();
+        if (type.isZero())
         {
             return 0L;
         }
-        if ((Address.fromLong(type).loadLong() & ObjectModel.ARRAY_TYPE_TAG_MASK) != ObjectModel.ARRAY_TYPE_TAG)
+        if ((type.loadLong() & ObjectModel.ARRAY_TYPE_TAG_MASK) != ObjectModel.ARRAY_TYPE_TAG)
         {
             return 0L;
         }
-        return Address.fromLong(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong() == 0L ? 1L : 2L;
+        return type.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong() == 0L ? 1L : 2L;
     }
 
     /**
@@ -2041,19 +2041,19 @@ final class VMNatives
             printStr(ObjectReference.fromLong(msg));
         }
         Uart.putc(0x0A);
-        long deep = Loader.throwableBacktrace(self);       // every frame, when there were more than eight
-        int n = deep != 0L ? Address.fromLong(deep + ObjectModel.ARRAY_LENGTH_OFFSET).loadInt() : 8;
+        Address deep = Address.fromLong(Loader.throwableBacktrace(self));       // every frame, when there were more than eight
+        int n = !deep.isZero() ? deep.plus(ObjectModel.ARRAY_LENGTH_OFFSET).loadInt() : 8;
         int i = 0;
         while (i < n)
         {
-            long fpc = deep != 0L ? Address.fromLong(deep + ObjectModel.ARRAY_BASE_OFFSET + i * 8L).loadLong()
-                                  : self.toAddress().plus(16L + i * 8L).loadLong();
-            if (fpc == 0L)
+            Address fpc = !deep.isZero() ? deep.plus(ObjectModel.ARRAY_BASE_OFFSET + i * 8L).loadAddress()
+                                     : self.toAddress().plus(16L + i * 8L).loadAddress();
+            if (fpc.isZero())
             {
                 break;
             }
             Uart.write(Magic.bytes("  at "));
-            Loader.printFrameAt(Address.fromLong(fpc));
+            Loader.printFrameAt(fpc);
             Uart.putc(0x0A);
             i += 1;
         }

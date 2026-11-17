@@ -1853,12 +1853,12 @@ public final class VM
     /** Print a "string" (a mini java/lang/String or a raw byte[]): write its bytes to the UART. */
     static void printStr(ObjectReference ref)
     {
-        long arr = strBytes(ref);
-        long len = Address.fromLong(arr).plus(16L).loadLong();
+        Address arr = Address.fromLong(strBytes(ref));
+        long len = arr.plus(16L).loadLong();
         long i = 0L;
         while (i < len)
         {
-            Uart.putc((byte) Address.fromLong(arr).plus(24L + i).loadUnsignedByte());
+            Uart.putc((byte) arr.plus(24L + i).loadUnsignedByte());
             i = i + 1L;
         }
     }
@@ -2544,7 +2544,7 @@ public final class VM
     static void reportFault()
     {
         long rcv = Magic.readX0();                         // FIRST ops: capture the faulting blr's receiver (x0) and
-        long lr = Magic.readLR();                          // return addr (x30) before anything clobbers them
+        Address lr = Address.fromLong(Magic.readLR());                         // return addr (x30) before anything clobbers them
         Uart.lock();                                       // and never release: this core halts at the end of the
                                                            //   report, so its trace prints whole, not interleaved
         long esr = Magic.readESR_EL1();
@@ -2566,10 +2566,10 @@ public final class VM
         Loader.printFrameAt(Address.fromLong(elr));            //   image symbol table names writer-compiled
         Uart.putc(0x0A);                                       //   code, which reportMethodAt (JIT-only) cannot
         Uart.write(Magic.bytes("  at lr:  "));                 //   -- without this a fault inside the loader
-        Loader.printFrameAt(Address.fromLong(lr));                               //   reads as "(no registered method)" and the
+        Loader.printFrameAt(lr);                               //   reads as "(no registered method)" and the
         Uart.putc(0x0A);                                       //   only clue is a raw address
         Uart.write(Magic.bytes("  faulting method (lr): "));   // #43: name the demand-compiled method at lr
-        Loader.reportMethodAt(Address.fromLong(lr));
+        Loader.reportMethodAt(lr);
         Uart.putc(0x0A);
         Uart.write(Magic.bytes("  receiver x0="));             // #43: the wild-branch receiver + its TIB/Type
         printHex(rcv);
@@ -2608,22 +2608,22 @@ public final class VM
     static void throwFromFault(long sp)
     {
         long esr = Magic.readESR_EL1();
-        long elr = Magic.readELR_EL1();
-        stashFaultRegs(Address.fromLong(sp), Address.fromLong(elr));
+        Address elr = Address.fromLong(Magic.readELR_EL1());
+        stashFaultRegs(Address.fromLong(sp), elr);
         if (faultDepth != 0)                                            // a fault DURING the unwind of a prior fault:
         {                                                              // turning THIS one into an exception + unwinding
-            reportNestedFault(esr, Address.fromLong(elr), Address.fromLong(Magic.readFAR_EL1()));          // would re-fault forever (the silent reboot loop
+            reportNestedFault(esr, elr, Address.fromLong(Magic.readFAR_EL1()));          // would re-fault forever (the silent reboot loop
         }                                                              // seen on QEMU) -- report both faults + halt.
         faultDepth = 1;                                                // cleared in unwind once a handler is resumed
         fault0Core = (int) (Magic.readMPIDR() & 3L);
         fault0Esr = esr;
-        fault0Elr = elr;
+        fault0Elr = elr.toLong();
         fault0Far = Magic.readFAR_EL1();
         long ec = (esr >> 26) & 0x3FL;
         long exc = 0L;
         if (ec == 0x24L || ec == 0x25L || ec == 0x20L || ec == 0x21L)   // data / instruction abort = address trap
         {
-            if ((ec == 0x20L || ec == 0x21L) && !Loader.plausibleCode(Address.fromLong(elr)))
+            if ((ec == 0x20L || ec == 0x21L) && !Loader.plausibleCode(elr))
             {
                 reportWildBranch(Address.fromLong(sp));        // executing at a non-code address: say who branched there
             }
@@ -2638,24 +2638,24 @@ public final class VM
             Uart.write(Magic.bytes(" far="));
             printHex(Magic.readFAR_EL1());
             Uart.putc(0x0A);
-            if (elr >= Heap.CODE_BASE && elr < Heap.CODE_LIMIT)
+            if (elr.toLong() >= Heap.CODE_BASE && elr.toLong() < Heap.CODE_LIMIT)
             {
                 // An undefined instruction inside the code arena is almost always "we are executing a buffer
                 // the sweep zeroed". Report it HERE: once this becomes a Java exception and unwinds, the
                 // block state and swept-log history are no longer meaningful.
-                VMGc.reportSweptPc(elr);
-                Loader.printFrameAt(Address.fromLong(elr));
+                VMGc.reportSweptPc(elr.toLong());
+                Loader.printFrameAt(elr);
                 Uart.putc(0x0A);
             }
             exc = newInternalError();
         }
         if (exc <= 0x1000L || Address.fromLong(exc).loadLong() == 0L)                  // exception class not loaded (TIB 0): can't
         {                                                              // throw without re-faulting inside unwind ->
-            reportFaultStack(Address.fromLong(elr), Address.fromLong(sp));                                 // ... but say WHERE first: the leaf alone
+            reportFaultStack(elr, Address.fromLong(sp));                                 // ... but say WHERE first: the leaf alone
             reportFault();                                             // print the raw fault + halt (never returns)
         }
         Magic.enableIrq();                                             // resumed via branch, not ERET: re-unmask IRQs
-        VMUnwind.unwind(ObjectReference.fromLong(exc), Address.fromLong(elr), Address.fromLong(sp));   // throw at the faulting instruction (never returns)
+        VMUnwind.unwind(ObjectReference.fromLong(exc), elr, Address.fromLong(sp));   // throw at the faulting instruction (never returns)
     }
 
     static long throwFromFaultAddr;    // VM.throwFromFault(J)V — hardware fault -> Java exception (address trap -> NPE)
@@ -2691,14 +2691,14 @@ public final class VM
     private static void printJavaString(ObjectReference str)
     {
         long[] s = new long[8];
-        long b = Magic.addrOf(s) + 24L;                    // array elements (header 16 + length 8)
-        Address.fromLong(b).store(str);
-        long n = Magic.callN(stringLengthAddr, b);
+        Address b = ObjectReference.fromObject(s).toAddress().plus(24L);              // array elements (header 16 + length 8)
+        b.store(str);
+        long n = Magic.callN(stringLengthAddr, b.toLong());
         for (int i = 0; i < (int) n; i++)
         {
-            Address.fromLong(b).store(str);
-            Address.fromLong(b).plus(8L).store((long) i);
-            Uart.putc((int) Magic.callN(stringCharAtAddr, b));
+            b.store(str);
+            b.plus(8L).store((long) i);
+            Uart.putc((int) Magic.callN(stringCharAtAddr, b.toLong()));
         }
     }
 
@@ -2732,8 +2732,8 @@ public final class VM
                 Magic.wfe();                            // halt loudly rather than read past the table
             }
         }
-        long e = bakeStubTable + (long) idx * 32L;
-        long memo = Address.fromLong(e).plus(24L).loadLong();
+        Address e = Address.fromLong(bakeStubTable + (long) idx * 32L);
+        long memo = e.plus(24L).loadLong();
         if (memo != 0L)
         {
             return memo;
@@ -2742,8 +2742,8 @@ public final class VM
         long buf;
         try
         {
-            buf = Loader.resolveBakeStub(Address.fromLong(e).loadAddress(), Address.fromLong(e).plus(8L).loadAddress(), Address.fromLong(e).plus(16L).loadAddress());
-            Address.fromLong(e).plus(24L).store(buf);
+            buf = Loader.resolveBakeStub(e.loadAddress(), e.plus(8L).loadAddress(), e.plus(16L).loadAddress());
+            e.plus(24L).store(buf);
         }
         finally
         {
@@ -3046,12 +3046,12 @@ public final class VM
     static void reportWildBranch(Address sp)
     {
         Uart.write(Magic.bytes("\nWILD BRANCH: pc is not code. Conservative scan of the faulting stack:\n"));
-        long p = sp.toLong();
+        Address p = sp;
         int shown = 0;
         int i = 0;
         while (i < 128 && shown < 12)
         {
-            long w = Address.fromLong(p).loadLong();
+            long w = p.loadLong();
             if (Loader.plausibleCode(Address.fromLong(w)) || (w >= 0x80000L && w < Heap.IMAGE_CEILING))
             {
                 Uart.write(Magic.bytes("  [sp+"));
@@ -3061,7 +3061,7 @@ public final class VM
                 Uart.putc(0x0A);
                 shown += 1;
             }
-            p += 8L;
+            p = p.plus(8L);
             i += 1;
         }
         if (shown == 0)
@@ -3078,21 +3078,21 @@ public final class VM
         }
         Uart.write(Magic.bytes("\n  loader was compiling: "));
         Loader.printCurrentClass();
-        long cpc = pc.toLong();
-        long csp = sp.toLong();
+        Address cpc = pc;
+        Address csp = sp;
         int depth = 0;
-        while (depth < 12 && cpc > 0x1000L)
+        while (depth < 12 && cpc.toLong() > 0x1000L)
         {
             Uart.write(Magic.bytes("\n    at "));
-            Loader.printFrameAt(Address.fromLong(cpc));
-            long fs = frameSizeAt(Address.fromLong(cpc));
+            Loader.printFrameAt(cpc);
+            long fs = frameSizeAt(cpc);
             if (fs == 0L)
             {
                 Uart.write(Magic.bytes("  <frameless: caller unknown>"));
                 break;                                     // a leaf keeps its return address in x30, which the
             }                                              //   sync vector's own bl has already overwritten
-            cpc = Address.fromLong(csp).loadLong() - 4L;                  // caller's return address = the call site
-            csp += fs;
+            cpc = csp.loadAddress().minus(4L);                  // caller's return address = the call site
+            csp = csp.plus(fs);
             depth += 1;
         }
         Uart.putc(0x0A);
@@ -3279,15 +3279,15 @@ public final class VM
         if (targetType != 0L)
         {
             long tDisp = Address.fromLong(targetType).plus(ObjectModel.TYPE_DISPLAY_OFFSET).loadLong();
-            long disp = Address.fromLong(type).plus(ObjectModel.TYPE_DISPLAY_OFFSET).loadLong();
-            if (tDisp != 0L && disp != 0L)
+            Address disp = Address.fromLong(type).plus(ObjectModel.TYPE_DISPLAY_OFFSET).loadAddress();
+            if (tDisp != 0L && !disp.isZero())
             {
                 long tDepth = Address.fromLong(targetType).plus(ObjectModel.TYPE_DEPTH_OFFSET).loadLong();
                 if (Address.fromLong(type).plus(ObjectModel.TYPE_DEPTH_OFFSET).loadLong() < tDepth)
                 {
                     return false;
                 }
-                return Address.fromLong(disp).plus(tDepth * 8L).loadLong() == targetType;
+                return disp.plus(tDepth * 8L).loadLong() == targetType;
             }
             // O(1) interface fast path: a NUMBERED interface target (depth -1, ID 1..127) against a
             // receiver with a COMPUTED doesImplement bitmap is one bit test. Unnumbered interfaces
@@ -3326,19 +3326,19 @@ public final class VM
             {
                 return true;
             }
-            long dir = Address.fromLong(type).plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).loadLong();
-            if (dir != 0L)
+            Address dir = Address.fromLong(type).plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).loadAddress();
+            if (!dir.isZero())
             {
-                long entry = dir;
-                long iface = Address.fromLong(entry).plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadLong();
+                Address entry = dir;
+                long iface = entry.plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadLong();
                 while (iface != 0L)                    // 0 interfaceType terminates the directory
                 {
                     if (iface == targetType)
                     {
                         return true;
                     }
-                    entry += ObjectModel.ITABLE_ENTRY_SIZE;
-                    iface = Address.fromLong(entry).plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadLong();
+                    entry = entry.plus(ObjectModel.ITABLE_ENTRY_SIZE);
+                    iface = entry.plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadLong();
                 }
             }
             type = Address.fromLong(type).plus(ObjectModel.TYPE_SUPER_OFFSET).loadLong();
@@ -4205,13 +4205,13 @@ public final class VM
         u16[6] = (byte) '!';
         byte[] ch = new byte[4];
         long[] slots = new long[8];
-        long argBase = Magic.addrOf(slots) + 24L;         // array elements (header 16 + length 8)
-        Address.fromLong(argBase).store(Magic.addrOf(u16));  // value
-        Address.fromLong(argBase).plus(8L).store(0L);                 // srcBegin
-        Address.fromLong(argBase).plus(16L).store(4L);                 // srcEnd
-        Address.fromLong(argBase).plus(24L).store(Magic.addrOf(ch));   // dst
-        Address.fromLong(argBase).plus(32L).store(0L);                 // dstBegin
-        Magic.callN(utf16GetBytesAddr, argBase);
+        Address argBase = ObjectReference.fromObject(slots).toAddress().plus(24L);  // array elements (header 16 + length 8)
+        argBase.store(Magic.addrOf(u16));  // value
+        argBase.plus(8L).store(0L);                 // srcBegin
+        argBase.plus(16L).store(4L);                 // srcEnd
+        argBase.plus(24L).store(Magic.addrOf(ch));   // dst
+        argBase.plus(32L).store(0L);                 // dstBegin
+        Magic.callN(utf16GetBytesAddr, argBase.toLong());
         Uart.write(ch);
         boolean snapOk = ch[0] == 'J' && ch[1] == 'O' && ch[2] == 'E' && ch[3] == '!';
         Uart.write(snapOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (static not snapshotted?)\n"));
@@ -4224,11 +4224,11 @@ public final class VM
         // baked ARRAY was read, not just a primitive slot.
         Uart.write(Magic.bytes("  Integer.formatUnsignedInt(0xCAFE)="));
         byte[] hex = new byte[4];
-        Address.fromLong(argBase).store(0xCAFEL);            // val
-        Address.fromLong(argBase).plus(8L).store(4L);                 // shift (hex)
-        Address.fromLong(argBase).plus(16L).store(Magic.addrOf(hex));  // buf
-        Address.fromLong(argBase).plus(24L).store(4L);                 // len
-        Magic.callN(formatUnsignedIntAddr, argBase);
+        argBase.store(0xCAFEL);            // val
+        argBase.plus(8L).store(4L);                 // shift (hex)
+        argBase.plus(16L).store(Magic.addrOf(hex));  // buf
+        argBase.plus(24L).store(4L);                 // len
+        Magic.callN(formatUnsignedIntAddr, argBase.toLong());
         Uart.write(hex);
         boolean objOk = hex[0] == 'c' && hex[1] == 'a' && hex[2] == 'f' && hex[3] == 'e';
         Uart.write(objOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (object static not baked?)\n"));
@@ -4241,12 +4241,12 @@ public final class VM
         // the object to stock Integer.intValue(), a baked getfield accessor called directly. '*'
         // proves array elements point at real baked objects whose fields hold the seed's values.
         Uart.write(Magic.bytes("  IntegerCache.cache[170].intValue()="));
-        long cacheArr = Address.fromLong(integerCacheSlotAddr).loadLong();   // the static slot -> baked Integer[]
-        long obj170 = cacheArr == 0 ? 0 : Address.fromLong(cacheArr).plus(24L + 170L * 8L).loadLong();  // elements at +24
-        Address.fromLong(argBase).store(obj170);                   // receiver
-        long iv = obj170 == 0 ? 0 : Magic.callN(integerIntValueAddr, argBase);
+        Address cacheArr = Address.fromLong(integerCacheSlotAddr).loadAddress();   // the static slot -> baked Integer[]
+        long obj170 = cacheArr.isZero() ? 0 : cacheArr.plus(24L + 170L * 8L).loadLong();  // elements at +24
+        argBase.store(obj170);                   // receiver
+        long iv = obj170 == 0 ? 0 : Magic.callN(integerIntValueAddr, argBase.toLong());
         Uart.putc((int) iv);                              // '*'
-        boolean scalarOk = cacheArr != 0 && obj170 != 0 && iv == 42;
+        boolean scalarOk = !cacheArr.isZero() && obj170 != 0 && iv == 42;
         Uart.write(scalarOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (scalar objects not baked?)\n"));
 
         // valueOf itself (bake stubs): baking stock Integer.valueOf drags in `new Integer`, and with
@@ -4256,12 +4256,12 @@ public final class VM
         // allocates a fresh Integer on the METAL heap -- whose TIB must equal the baked object's TIB,
         // i.e. image-baked and runtime-allocated objects share one real class.
         Uart.write(Magic.bytes("  Integer.valueOf(42)==cache[170], valueOf(200).intValue()="));
-        Address.fromLong(argBase).store(42L);
-        long va = Magic.callN(integerValueOfAddr, argBase);
-        Address.fromLong(argBase).store(200L);
-        long vc = Magic.callN(integerValueOfAddr, argBase);
-        Address.fromLong(argBase).store(vc);
-        long vv = Magic.callN(integerIntValueAddr, argBase);
+        argBase.store(42L);
+        long va = Magic.callN(integerValueOfAddr, argBase.toLong());
+        argBase.store(200L);
+        long vc = Magic.callN(integerValueOfAddr, argBase.toLong());
+        argBase.store(vc);
+        long vv = Magic.callN(integerIntValueAddr, argBase.toLong());
         printDec((int) vv);                               // 200
         boolean vOk = va != 0 && va == obj170 && vv == 200
                    && Address.fromLong(va).loadLong() != 0 && Address.fromLong(va).loadLong() == Address.fromLong(vc).loadLong();
@@ -4274,21 +4274,21 @@ public final class VM
         // because every baked scalar's class now joins the TIB layout (stub-safe vtable pull);
         // Long.equals dispatches longValue() through it.
         Uart.write(Magic.bytes("  Integer.equals(42,42|43)="));
-        Address.fromLong(argBase).store(obj170);                   // receiver: baked Integer 42
-        Address.fromLong(argBase).plus(8L).store(va);                  // arg: valueOf(42) -> the same baked object
-        long eqSame = Magic.callN(integerEqualsAddr, argBase);
-        long obj171 = cacheArr == 0 ? 0 : Address.fromLong(cacheArr).plus(24L + 171L * 8L).loadLong();
-        Address.fromLong(argBase).plus(8L).store(obj171);              // arg: baked Integer 43
-        long eqDiff = Magic.callN(integerEqualsAddr, argBase);
+        argBase.store(obj170);                   // receiver: baked Integer 42
+        argBase.plus(8L).store(va);                  // arg: valueOf(42) -> the same baked object
+        long eqSame = Magic.callN(integerEqualsAddr, argBase.toLong());
+        long obj171 = cacheArr.isZero() ? 0 : cacheArr.plus(24L + 171L * 8L).loadLong();
+        argBase.plus(8L).store(obj171);              // arg: baked Integer 43
+        long eqDiff = Magic.callN(integerEqualsAddr, argBase.toLong());
         printDec((int) eqSame);
         Uart.putc(',');
         printDec((int) eqDiff);
         Uart.write(Magic.bytes("  Long.equals(42L,42L)="));
-        long lCacheArr = Address.fromLong(longCacheSlotAddr).loadLong(); // the static slot -> baked Long[]
-        long lobj170 = lCacheArr == 0 ? 0 : Address.fromLong(lCacheArr).plus(24L + 170L * 8L).loadLong();
-        Address.fromLong(argBase).store(lobj170);                  // receiver: baked Long 42
-        Address.fromLong(argBase).plus(8L).store(lobj170);             // arg: the same baked Long
-        long leq = lobj170 == 0 ? 0 : Magic.callN(longEqualsAddr, argBase);
+        Address lCacheArr = Address.fromLong(longCacheSlotAddr).loadAddress(); // the static slot -> baked Long[]
+        long lobj170 = lCacheArr.isZero() ? 0 : lCacheArr.plus(24L + 170L * 8L).loadLong();
+        argBase.store(lobj170);                  // receiver: baked Long 42
+        argBase.plus(8L).store(lobj170);             // arg: the same baked Long
+        long leq = lobj170 == 0 ? 0 : Magic.callN(longEqualsAddr, argBase.toLong());
         printDec((int) leq);
         boolean vtOk = eqSame == 1 && eqDiff == 0 && lobj170 != 0 && leq == 1;
         Uart.write(vtOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (baked vtables?)\n"));
@@ -4299,18 +4299,18 @@ public final class VM
         // length() and charAt() (virtual targets coder()/isLatin1() rooted; COMPACT_STRINGS
         // snapshotted from the auto-deferred String.<clinit>) read the chars back on the metal.
         Uart.write(Magic.bytes("  String.valueOf(true)="));
-        Address.fromLong(argBase).store(1L);
-        long strTrue = Magic.callN(stringValueOfBoolAddr, argBase);
-        Address.fromLong(argBase).store(strTrue);
-        long strLen = Magic.callN(stringLengthAddr, argBase);
+        argBase.store(1L);
+        long strTrue = Magic.callN(stringValueOfBoolAddr, argBase.toLong());
+        argBase.store(strTrue);
+        long strLen = Magic.callN(stringLengthAddr, argBase.toLong());
         for (int sp = 0; sp < (int) strLen; sp++)
         {
-            Address.fromLong(argBase).store(strTrue);
-            Address.fromLong(argBase).plus(8L).store((long) sp);
-            Uart.putc((int) Magic.callN(stringCharAtAddr, argBase));
+            argBase.store(strTrue);
+            argBase.plus(8L).store((long) sp);
+            Uart.putc((int) Magic.callN(stringCharAtAddr, argBase.toLong()));
         }
-        Address.fromLong(argBase).store(0L);
-        long strFalse = Magic.callN(stringValueOfBoolAddr, argBase);
+        argBase.store(0L);
+        long strFalse = Magic.callN(stringValueOfBoolAddr, argBase.toLong());
         boolean strOk = strTrue != 0 && strLen == 4 && strFalse != 0 && strFalse != strTrue;
         Uart.write(strOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (baked strings?)\n"));
 
@@ -4320,27 +4320,27 @@ public final class VM
         // the private String(byte[],byte) constructor -- and String.equals compares content: two
         // DISTINCT heap Strings from the same value are equal, different values are not.
         Uart.write(Magic.bytes("  Integer.toString(-2026)="));
-        Address.fromLong(argBase).store(-2026L);
-        long tsNeg = Magic.callN(integerToStringAddr, argBase);
+        argBase.store(-2026L);
+        long tsNeg = Magic.callN(integerToStringAddr, argBase.toLong());
         printJavaString(ObjectReference.fromLong(tsNeg));
         Uart.write(Magic.bytes(" Long.toString(1<<40)="));
-        Address.fromLong(argBase).store(1L << 40);
-        long tsLong = Magic.callN(longToStringAddr, argBase);
+        argBase.store(1L << 40);
+        long tsLong = Magic.callN(longToStringAddr, argBase.toLong());
         printJavaString(ObjectReference.fromLong(tsLong));
         Uart.write(Magic.bytes(" toHex(0xBEEF)="));
-        Address.fromLong(argBase).store(0xBEEFL);
-        long tsHex = Magic.callN(integerToHexStringAddr, argBase);
+        argBase.store(0xBEEFL);
+        long tsHex = Magic.callN(integerToHexStringAddr, argBase.toLong());
         printJavaString(ObjectReference.fromLong(tsHex));
-        Address.fromLong(argBase).store(42L);
-        long s42a = Magic.callN(integerToStringAddr, argBase);
-        Address.fromLong(argBase).store(42L);
-        long s42b = Magic.callN(integerToStringAddr, argBase);
-        Address.fromLong(argBase).store(s42a);
-        Address.fromLong(argBase).plus(8L).store(s42b);
-        long seq = Magic.callN(stringEqualsAddr, argBase);
-        Address.fromLong(argBase).store(s42a);
-        Address.fromLong(argBase).plus(8L).store(tsHex);
-        long sne = Magic.callN(stringEqualsAddr, argBase);
+        argBase.store(42L);
+        long s42a = Magic.callN(integerToStringAddr, argBase.toLong());
+        argBase.store(42L);
+        long s42b = Magic.callN(integerToStringAddr, argBase.toLong());
+        argBase.store(s42a);
+        argBase.plus(8L).store(s42b);
+        long seq = Magic.callN(stringEqualsAddr, argBase.toLong());
+        argBase.store(s42a);
+        argBase.plus(8L).store(tsHex);
+        long sne = Magic.callN(stringEqualsAddr, argBase.toLong());
         Uart.write(Magic.bytes(" equals="));
         printDec((int) seq);
         Uart.putc(',');
@@ -5085,12 +5085,12 @@ public final class VM
      *  ({@code /etc/init}'s {@code classpath=}), so jar classes resolve everywhere embedded ones do. */
     static Address dirBytes(Address namePtr, long len)
     {
-        long b = findClass(namePtr, len).toLong();
-        if (b == 0L)
+        Address b = findClass(namePtr, len);
+        if (b.isZero())
         {
-            b = JarFs.classBytes(namePtr.toLong(), len);
+            b = Address.fromLong(JarFs.classBytes(namePtr.toLong(), len));
         }
-        return Address.fromLong(b);
+        return b;
     }
 
     /** Companion to {@link #dirBytes}: the embedded class's byte length for [namePtr,len), or 0. */
