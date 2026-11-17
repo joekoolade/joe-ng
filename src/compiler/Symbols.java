@@ -65,7 +65,7 @@ public interface Symbols
     int NEW_NPE = 19;           // vm/VM.newNpe()J    — a java/lang/NullPointerException (null deref)
     int NEW_AIOOBE = 20;        // vm/VM.newAioobe()J — a java/lang/ArrayIndexOutOfBoundsException (bad index)
     int GET_CLASS = 21;         // vm/VM.getClassOf(J)J — Object.getClass() -> the receiver's Class mirror
-    int ARRAY_CLONE = 22;       // vm/VM.arrayClone(J)J — [T.clone() -> a shallow array copy (no vtable on array TIBs)
+    int ARRAY_CLONE = 22;       // vm/VM.arrayClone(Lmagic/ObjectReference;)J — [T.clone() -> a shallow array copy (no vtable on array TIBs)
     int CAPTURE_TRACE = 23;     // vm/VM.captureTrace(JJJ)V — fill exc's backtrace at the throw site (all throws)
     int NEW_ARITH = 24;         // vm/VM.newArith()J  — a java/lang/ArithmeticException (integer / or % by zero)
     // Object monitors + Thread.join: the mini java.base runtime's wait/notify/join lower to VM scheduler helpers.

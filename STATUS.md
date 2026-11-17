@@ -4,6 +4,29 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 25: the rest of VMNatives' reference parameters are ObjectReferences (2026-11-16).**
+  Pi-validated (build 45bb34c082d10c4d).
+  - **Retyped (31 natives):** Reference `get0`/`refersTo0`/`clear0`, `String.intern`, `arrayClone` (also the `[T.clone()`
+    helper -- reached only through its stash slot), `elemSize`, `arrayKindOf`, `printStackTrace`, `runStop`
+    (`Thread` + exception); the byte-buffer natives' `arr` (consoleRead, blockRead/Write, hwEntropy); every socket
+    native's `fdRef` plus `sockConnect0`'s `inetRef`, `fdVal`/`setFdVal`; `vhFieldOffset`'s object and the private
+    `fdIndex`/`fieldOffsetNamed`. `sockRead0`/`sockWrite0`'s `address` -- raw memory, not an object -- is an
+    **Address**, passed straight to `Tcp.read`/`write` (increment 21's boundary wrap is gone). `refersTo0` compares
+    `loadObjectReference().EQ(o)`; `sockConnect0`'s `InetAddressHolder` is an ObjectReference loaded as one;
+    `runStop` matches `taskThreadObj[t]` with `EQ`. ArrayCopy's three `elemSize(x.toLong())` pass the reference.
+  - **Descriptor ABI:** 27 `stashHelper` keys, 27 `VM.boot` reachability calls, 19 `xxxAddr` comments (8 had none);
+    no `helper-stash MISS`.
+  - **Left long:** return values; callees still taking long (`poolIntern`, `throwableMessage/Backtrace`,
+    `Console.readCooked`, `Emmc.read/writeBlocks`, `Rng.fill`) get `.toLong()`; pass-through-only refs
+    (`setOut0/Err0/In0`, `throwableTrace`, `virtualResolve`, `methodItableTarget`, `proxyType`, `identity`,
+    `unsafeFence`) and `arraycopy`'s documented long ABI.
+  - **Measured:** conversions VMNatives 78 -> **71**, ArrayCopy 9 -> 6. Load/store mix identical to main but for 2
+    `loadLong` -> `loadObjectReference` (64-bit). 12 `lcmp` became `isNull`/`EQ`. **Code:** VMNatives **-128 words**
+    (6011 -> 5883).
+  - **Validation:** `make test` + overlaycheck; full regression **209/209**; image build no MISS. Pi (the web server
+    is guest Java over these socket natives, so every request reads and writes through them): every page 200,
+    hello x2, Boom, bench, the Spin forced stop (`runStop`), AddressFieldProbe 51/0, DnsCheck, SHA-256 check, staged
+    39 MB PUT + discard, `/net` errors 0.
 - **UNBOXED TYPES, INCREMENT 24: guest byte[] arguments are ObjectReferences, their payloads Addresses
   (2026-11-16).** Pi-validated (build 6e1faadfa761ab8b). The follow-on of increment 23: the OTHER object
   arguments of the reflection natives.

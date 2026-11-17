@@ -181,14 +181,14 @@ final class VMNatives
 
     /** {@code String.intern()}: see {@code Loader.poolIntern}. The pool is shared with literal interning,
      *  which runs inside compiles, so it is touched only under the loader lock. */
-    static long stringIntern(long str)
+    static long stringIntern(ObjectReference str)
     {
-        if (str == 0L)                                  // VM.forceCompile calls every native with 0 at boot
+        if (str.isNull())                                  // VM.forceCompile calls every native with 0 at boot
         {
             return 0L;
         }
         VM.loaderLock();
-        long r = Loader.poolIntern(str);
+        long r = Loader.poolIntern(str.toLong());
         VM.loaderUnlock();
         return r;
     }
@@ -206,31 +206,31 @@ final class VMNatives
         VMScheduler.parkNanos(nanos);
     }
 
-    static long refGet0(long ref)
+    static long refGet0(ObjectReference ref)
     {
-        if (ref == 0L)
+        if (ref.isNull())
         {
             return 0L;
         }
-        return Address.fromLong(ref + REFERENT_OFFSET).loadLong();
+        return ref.toAddress().plus(REFERENT_OFFSET).loadLong();
     }
 
-    static long refRefersTo0(long ref, long o)
+    static long refRefersTo0(ObjectReference ref, ObjectReference o)
     {
-        if (ref == 0L)
+        if (ref.isNull())
         {
             return 0L;
         }
-        return Address.fromLong(ref + REFERENT_OFFSET).loadLong() == o ? 1L : 0L;
+        return ref.toAddress().plus(REFERENT_OFFSET).loadObjectReference().EQ(o) ? 1L : 0L;
     }
 
-    static void refClear0(long ref)
+    static void refClear0(ObjectReference ref)
     {
-        if (ref == 0L)                                  // VM.forceCompile calls it with 0: never store there
+        if (ref.isNull())                                  // VM.forceCompile calls it with 0: never store there
         {
             return;
         }
-        Address.fromLong(ref + REFERENT_OFFSET).store(0L);
+        ref.toAddress().plus(REFERENT_OFFSET).store(0L);
     }
 
     /** {@code System.setOut0(PrintStream)} native: redirect the stream JUnit captures test output through. */
@@ -257,9 +257,9 @@ final class VMNatives
     }
 
     /** Element size (bytes) of an array: a raw array keeps it in @0; a typed array keeps it in its array Type's tag. */
-    static long elemSize(long arr)
+    static long elemSize(ObjectReference arr)
     {
-        long tib = Address.fromLong(arr + 0L).loadLong();
+        long tib = arr.toAddress().loadLong();
         if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
         {
             return tib;                                    // raw array: @0 is the element size
@@ -291,19 +291,19 @@ final class VMNatives
      * elements, from the status-word size — every allocation records it) and carries the TIB over, so raw
      * (elem-size) and typed (array-Type TIB) arrays clone alike. Element values copy verbatim (shallow).
      */
-    static long arrayClone(long ref)
+    static long arrayClone(ObjectReference ref)
     {
-        if (ref <= 0x1000L)
+        if (ref.toLong() <= 0x1000L)
         {
             return 0L;                                     // boot-time force-compile passes 0; no-op
         }
-        long size = Address.fromLong(ref + 8L).loadLong() & -8L;          // block size from the status word
+        long size = ref.toAddress().plus(8L).loadLong() & -8L;          // block size from the status word
         Address copy = Heap.alloc((int) size);
-        copy.store(Address.fromLong(ref).loadLong());            // same TIB (raw elem size or typed array TIB)
+        copy.store(ref.toAddress().loadLong());            // same TIB (raw elem size or typed array TIB)
         long i = 16L;
         while (i < size)
         {
-            copy.plus(i).store(Address.fromLong(ref + i).loadLong());
+            copy.plus(i).store(ref.toAddress().plus(i).loadLong());
             i += 8L;
         }
         return copy.toLong();
@@ -1188,13 +1188,13 @@ final class VMNatives
      * {@code arr[off..off+len)} (bounds checked by the guest). The count, or -1 at end-of-file -- always -1
      * unless {@code /etc/init} said {@code stdin=uart}.
      */
-    static long consoleRead(long arr, long off, long len)
+    static long consoleRead(ObjectReference arr, long off, long len)
     {
-        if (arr == 0L || len <= 0L)
+        if (arr.isNull() || len <= 0L)
         {
             return 0L;
         }
-        return Console.readCooked(arr + ObjectModel.ARRAY_BASE_OFFSET + (int) off, (int) len);
+        return Console.readCooked(arr.toLong() + ObjectModel.ARRAY_BASE_OFFSET + (int) off, (int) len);
     }
 
     /** {@code MetalBoard.buildId0()} native: the build id the writer stamped into {@link VM#buildId}. */
@@ -1229,24 +1229,24 @@ final class VMNatives
     }
 
     /** {@code MetalBlock.read0(long,byte[],int,int)} native: bounds and alignment checked by the guest. 0 = ok. */
-    static long blockRead(long lba, long arr, long off, long n)
+    static long blockRead(long lba, ObjectReference arr, long off, long n)
     {
-        if (arr == 0L || n <= 0L)
+        if (arr.isNull() || n <= 0L)
         {
             return n == 0L ? 0L : -1L;
         }
-        long dst = arr + ObjectModel.ARRAY_BASE_OFFSET + off;
+        long dst = arr.toLong() + ObjectModel.ARRAY_BASE_OFFSET + off;
         return board.bcm2711.Emmc.readBlocks(lba, dst, (int) n) ? 0L : -1L;
     }
 
     /** {@code MetalBlock.write0(long,byte[],int,int)} native: as {@link #blockRead}, the other way. */
-    static long blockWrite(long lba, long arr, long off, long n)
+    static long blockWrite(long lba, ObjectReference arr, long off, long n)
     {
-        if (arr == 0L || n <= 0L)
+        if (arr.isNull() || n <= 0L)
         {
             return n == 0L ? 0L : -1L;
         }
-        long src = arr + ObjectModel.ARRAY_BASE_OFFSET + off;
+        long src = arr.toLong() + ObjectModel.ARRAY_BASE_OFFSET + off;
         return board.bcm2711.Emmc.writeBlocks(lba, src, (int) n) ? 0L : -1L;
     }
 
@@ -1256,15 +1256,15 @@ final class VMNatives
         return Console.cookedAvailable();
     }
 
-    static long hwEntropy(long arr, long len)
+    static long hwEntropy(ObjectReference arr, long len)
     {
-        if (arr == 0L || len <= 0L)
+        if (arr.isNull() || len <= 0L)
         {
             return 0L;
         }
-        long cap = Address.fromLong(arr + ObjectModel.ARRAY_LENGTH_OFFSET).loadLong();
+        long cap = arr.toAddress().plus(ObjectModel.ARRAY_LENGTH_OFFSET).loadLong();
         long n = len < cap ? len : cap;
-        return Rng.fill(arr + ObjectModel.ARRAY_BASE_OFFSET, (int) n);
+        return Rng.fill(arr.toLong() + ObjectModel.ARRAY_BASE_OFFSET, (int) n);
     }
 
     /**
@@ -1561,22 +1561,22 @@ final class VMNatives
     }
 
     /** The net.Tcp handle stored in a FileDescriptor's fd field (offset 16 = first instance field). */
-    private static int fdIndex(long fdRef)
+    private static int fdIndex(ObjectReference fdRef)
     {
-        return (int) Address.fromLong(fdRef + 16L).loadLong();
+        return (int) fdRef.toAddress().plus(16L).loadLong();
     }
 
     /** VarHandle overlay: byte offset of instance field named by the guest {@code byte[]} within {@code obj}'s
      *  class -> {@code java/lang/invoke/VarHandle.fieldOffset0(byte[],Object)J}. */
-    static long vhFieldOffset(ObjectReference fnameArrRef, long objRef)
+    static long vhFieldOffset(ObjectReference fnameArrRef, ObjectReference objRef)
     {
-        if (fnameArrRef.toLong() <= 0x1000L || objRef <= 0x1000L)     // boot-time force-compile passes 0
+        if (fnameArrRef.toLong() <= 0x1000L || objRef.toLong() <= 0x1000L)     // boot-time force-compile passes 0
         {
             return -1L;
         }
         int fnLen = (int) fnameArrRef.toAddress().plus(16L).loadLong();   // guest byte[] length
         Address fnBase = fnameArrRef.toAddress().plus(24L);         // guest byte[] data
-        long tib = Address.fromLong(objRef).loadLong();                     // obj header TIB
+        long tib = objRef.toAddress().loadLong();                     // obj header TIB
         return Loader.vhFieldOffset(fnBase, fnLen, tib);
     }
 
@@ -1631,13 +1631,13 @@ final class VMNatives
      * array could in principle be a reference array; those are writer/boot arrays and do not reach guest
      * {@code Unsafe} calls, and answering 1 keeps the width decision (natural width) right either way.
      */
-    static long arrayKindOf(long ref)
+    static long arrayKindOf(ObjectReference ref)
     {
-        if (ref <= 0x1000L)                                  // null, and the boot-time force-compile's 0
+        if (ref.toLong() <= 0x1000L)                                  // null, and the boot-time force-compile's 0
         {
             return 0L;
         }
-        long tib = Address.fromLong(ref + ObjectModel.TIB_OFFSET).loadLong();
+        long tib = ref.toAddress().plus(ObjectModel.TIB_OFFSET).loadLong();
         if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
         {
             return tib == 0L ? 0L : 1L;                       // raw array: the TIB slot IS the element size
@@ -1736,7 +1736,7 @@ final class VMNatives
      * Net.connect0(preferIPv6, FileDescriptor fd, InetAddress remote, int port) -> 1 on success, else a negated
      * errno (net.Tcp.connect); the sun.nio.ch.Net overlay throws for it, since a VM native cannot throw.
      */
-    static int sockConnect0(long preferIPv6, long fdRef, long inetRef, long port)
+    static int sockConnect0(long preferIPv6, ObjectReference fdRef, ObjectReference inetRef, long port)
     {
         // Stock InetAddress keeps its address in holder.address -- the field the C (NET_InetAddressToSockaddr)
         // reads. Located BY NAME through the same super-walking lookup the guest's VarHandles use, so a layout
@@ -1746,18 +1746,18 @@ final class VMNatives
         {
             return -net.Tcp.EINVAL;
         }
-        long holder = Address.fromLong(inetRef + holderOff).loadLong();
+        ObjectReference holder = inetRef.toAddress().plus(holderOff).loadObjectReference();
         long addrOff = fieldOffsetNamed(holder, Magic.bytes("address"));
         if (addrOff < 0L)
         {
             return -net.Tcp.EINVAL;
         }
-        int ipBe = (int) Address.fromLong(holder + addrOff).loadLong(); // InetAddressHolder.address: big-endian IPv4
+        int ipBe = (int) holder.toAddress().plus(addrOff).loadLong(); // InetAddressHolder.address: big-endian IPv4
         return net.Tcp.connect(fdIndex(fdRef), ipBe, (int) port);
     }
 
     /** Byte offset of the instance field {@code name} in {@code obj}'s class or a superclass, or -1. */
-    private static long fieldOffsetNamed(long obj, byte[] name)
+    private static long fieldOffsetNamed(ObjectReference obj, byte[] name)
     {
         Address raw = Heap.allocData(name.length);
         int i = 0;
@@ -1766,50 +1766,50 @@ final class VMNatives
             raw.plus(i).store(name[i]);
             i += 1;
         }
-        return Loader.vhFieldOffset(raw, name.length, Address.fromLong(obj).loadLong());
+        return Loader.vhFieldOffset(raw, name.length, obj.toAddress().loadLong());
     }
 
     /**
      * SocketDispatcher.read0(fd, address, len) -> bytes read into {@code address}, -1 at EOF, or a negated errno
      * (the SocketDispatcher overlay throws for it, as SocketDispatcher.c does).
      */
-    static int sockRead0(long fdRef, long address, long len)
+    static int sockRead0(ObjectReference fdRef, Address address, long len)
     {
-        return net.Tcp.read(fdIndex(fdRef), Address.fromLong(address), 0, (int) len);
+        return net.Tcp.read(fdIndex(fdRef), address, 0, (int) len);
     }
 
     /** SocketDispatcher.write0(fd, address, len) -> bytes written from {@code address}, or a negated errno. */
-    static int sockWrite0(long fdRef, long address, long len)
+    static int sockWrite0(ObjectReference fdRef, Address address, long len)
     {
-        return net.Tcp.write(fdIndex(fdRef), Address.fromLong(address), 0, (int) len);
+        return net.Tcp.write(fdIndex(fdRef), address, 0, (int) len);
     }
 
     /** UnixDispatcher.close0(fd). */
-    static void sockClose0(long fdRef)
+    static void sockClose0(ObjectReference fdRef)
     {
         net.Tcp.close(fdIndex(fdRef));
     }
 
     /** Net.shutdown0(fd, how) -> 0, or a negated errno (net.Tcp.shutdown); the Net overlay throws for it. */
-    static int sockShutdown0(long fdRef, long how)
+    static int sockShutdown0(ObjectReference fdRef, long how)
     {
         return net.Tcp.shutdown(fdIndex(fdRef), (int) how);
     }
 
     /** Net.bindPort0(fd, port) -> 0, or a negated errno (net.Tcp.bind); the Net overlay throws for it. */
-    static int sockBind(long fdRef, long port)
+    static int sockBind(ObjectReference fdRef, long port)
     {
         return net.Tcp.bind(fdIndex(fdRef), (int) port);
     }
 
     /** Net.listen0(fd, backlog) -> 0, or a negated errno (net.Tcp.listen; the backlog is the stack's own). */
-    static int sockListen(long fdRef, long backlog)
+    static int sockListen(ObjectReference fdRef, long backlog)
     {
         return net.Tcp.listen(fdIndex(fdRef));
     }
 
     /** Net.accept0(fd) -> the accepted connection's handle, IOStatus.UNAVAILABLE, or a negated errno. */
-    static int sockAccept(long fdRef)
+    static int sockAccept(ObjectReference fdRef)
     {
         return net.Tcp.accept(fdIndex(fdRef));
     }
@@ -1827,13 +1827,13 @@ final class VMNatives
     }
 
     /** Net.localPort(fd) -> the socket's local port (bound, connected, or accepted; 0 before any). */
-    static int sockLocalPort(long fdRef)
+    static int sockLocalPort(ObjectReference fdRef)
     {
         return net.Tcp.localPort(fdIndex(fdRef));
     }
 
     /** Net.available(fd) -> bytes buffered for a non-blocking read. */
-    static int sockAvailable(long fdRef)
+    static int sockAvailable(ObjectReference fdRef)
     {
         return net.Tcp.available(fdIndex(fdRef));
     }
@@ -1844,27 +1844,27 @@ final class VMNatives
      * NioSocketImpl parks here whenever a non-blocking read answers UNAVAILABLE -- which is how
      * {@code setSoTimeout} bounds a read. Unbound, it was a DENYLIST TRAP that halted the VM.
      */
-    static int sockPoll(long fdRef, long events, long timeout)
+    static int sockPoll(ObjectReference fdRef, long events, long timeout)
     {
         return net.Tcp.poll(fdIndex(fdRef), (int) events, timeout);
     }
 
     /** {@code IOUtil.configureBlocking(fd, blocking)}: NioSocketImpl's first step for a timed read (net.Tcp). */
-    static void sockConfigureBlocking(long fdRef, long blocking)
+    static void sockConfigureBlocking(ObjectReference fdRef, long blocking)
     {
         net.Tcp.setBlocking(fdIndex(fdRef), blocking != 0L);
     }
 
     /** IOUtil.fdVal(fd) -> the fd int (the net.Tcp handle). */
-    static int fdVal(long fdRef)
+    static int fdVal(ObjectReference fdRef)
     {
-        return (int) Address.fromLong(fdRef + 16L).loadLong();
+        return (int) fdRef.toAddress().plus(16L).loadLong();
     }
 
     /** IOUtil.setfdVal(fd, value). */
-    static void setFdVal(long fdRef, long value)
+    static void setFdVal(ObjectReference fdRef, long value)
     {
-        Address.fromLong(fdRef + 16L).store(value);
+        fdRef.toAddress().plus(16L).store(value);
     }
 
     /** Shared no-op for the void socket natives (UnixDispatcher.init/preClose0, IOUtil.initIDs,
@@ -1879,9 +1879,9 @@ final class VMNatives
      * Baseline.emitStopPoll). 1 when the thread has a live task, 0 when it has none (never started, or done). The
      * guest interrupts the thread as well, so one blocked in sleep/wait/join comes back to its own code.
      */
-    static long runStop(long threadObj, long exc)
+    static long runStop(ObjectReference threadObj, ObjectReference exc)
     {
-        if (threadObj == 0L || exc == 0L || taskThreadObj == null)
+        if (threadObj.isNull() || exc.isNull() || taskThreadObj == null)
         {
             return 0L;
         }
@@ -1890,13 +1890,13 @@ final class VMNatives
         int t = 0;
         while (t < taskCount)
         {
-            if (taskThreadObj[t] == threadObj && taskDone[t] == 0)
+            if (ObjectReference.fromLong(taskThreadObj[t]).EQ(threadObj) && taskDone[t] == 0)
             {
                 if (taskStopExc[t] == 0L)
                 {
                     taskStopFirst[t] = 0L;             // the kill clock starts at its first poll from now
                 }
-                taskStopExc[t] = exc;
+                taskStopExc[t] = exc.toLong();
                 found = 1L;
             }
             t += 1;
@@ -2022,32 +2022,32 @@ final class VMNatives
         return -1L;
     }
 
-    static void printStackTrace(long self)
+    static void printStackTrace(ObjectReference self)
     {
-        if (self <= 0x1000L)
+        if (self.toLong() <= 0x1000L)
         {
             return;                                        // the boot-time force-compile calls this with 0; no-op
         }
         Uart.putc(0x0A);
-        long tib = Address.fromLong(self).loadLong();
+        long tib = self.toAddress().loadLong();
         if (tib > 0x1000L)
         {
             Loader.printClassName(Address.fromLong(tib).loadLong());      // TIB[0] = Type -> the exception's class name
         }
-        long msg = Loader.throwableMessage(self);          // Throwable.detailMessage, by name
+        long msg = Loader.throwableMessage(self.toLong());          // Throwable.detailMessage, by name
         if (msg > 0x1000L)
         {
             Uart.write(Magic.bytes(": "));
             printStr(msg);
         }
         Uart.putc(0x0A);
-        long deep = Loader.throwableBacktrace(self);       // every frame, when there were more than eight
+        long deep = Loader.throwableBacktrace(self.toLong());       // every frame, when there were more than eight
         int n = deep != 0L ? Address.fromLong(deep + ObjectModel.ARRAY_LENGTH_OFFSET).loadInt() : 8;
         int i = 0;
         while (i < n)
         {
             long fpc = deep != 0L ? Address.fromLong(deep + ObjectModel.ARRAY_BASE_OFFSET + i * 8L).loadLong()
-                                  : Address.fromLong(self + 16L + i * 8L).loadLong();
+                                  : self.toAddress().plus(16L + i * 8L).loadLong();
             if (fpc == 0L)
             {
                 break;
