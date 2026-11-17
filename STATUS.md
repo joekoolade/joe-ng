@@ -4,6 +4,26 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 34: Type/TIB pointers, stage 2 -- resolution and assignability (2026-11-17).**
+  Pi-validated (build 11f90daa1b5b2e2a).
+  - **Retyped (the Type parameter -> Address):** Loader `methodResolve`, `methodResolveDesc`, `methodResolveExact`,
+    `mhDeclaredIndex`, `bodylessIndex`, `compileMethodOnDemand` x2, `compileMethodOnDemandLocked`,
+    `constructorResolve`, `constructorResolveLocked`, `constructorResolveDesc`, `methodResolveRegistry(Desc)`,
+    `ifaceExtends`, `extendsIfaceFrom` (`clTab[r].type.EQ(targetType)`), `resolveViaItableDir`, `publishSiteMemo`,
+    `dirDeclarer`; VM `typesAssignable`, `typeAssignable`, the private `isArrayType`; ArrayCopy `elemTypeOf` and
+    `copyChecked`'s bounds. Stage 1's `.toLong()` boundaries in front of these are gone; VMNatives' six mirror reads
+    feeding them are `loadAddress()`.
+  - **`typeAssignable` (behind every cast and instanceof):** every Type, element, display, interface and super read
+    is `loadAddress()` and compared with `EQ`/`NE`/`isZero` -- 64-bit equality as before; depth/implements/-1
+    sentinels stay long reads, the depth compare stays signed.
+  - **Left:** the descriptor-reached `instanceOf`/`castOk`/`checkCast`/`newCce`/`assignable(JJ)J` keep long and
+    convert at the call (stage 4); `isSynthesisedTib`/`isAnnoTib`/`proxyIndexOfTib`/`annoTibFor`/
+    `patchAnnoContract` are fed by the stage-3 `long[]` tables; `castFailureMessage` was a tie.
+  - **Measured:** total conversions across src/ **1284 -> 1255**. Loads only 64-bit `loadLong` -> `loadAddress`
+    swaps (16); `lcmp` -> `isZero`/`EQ`/`NE` (VM 15, Loader 9, ArrayCopy 2); no new ordering compare, no `if_acmp`.
+    **Code:** Loader -86 words, VM -66, ArrayCopy -8.
+  - **Validation:** `make test` + overlaycheck; full regression **209/209**. Pi: the usual set, AddressFieldProbe
+    58/0, ConcatCheck identical to a host JVM, bench unchanged.
 - **UNBOXED TYPES, INCREMENT 33: Type/TIB pointers, stage 1 -- sources and readers (2026-11-17).** Pi-validated
   (build e790be8510ffc4d4). A Type and a TIB are raw heap STRUCTURES, not objects, so a pointer to either is an
   Address; they were `long` "type ids" through ~80 Loader/VM APIs and ~40 fields. Staged by increment 15's lesson

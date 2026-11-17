@@ -1170,7 +1170,7 @@ final class VMNatives
     /** {@code Class.assignable0(from, target)} native: the VM's own type assignability, interfaces included. */
     static long assignable(long fromType, long targetType)
     {
-        return VM.typesAssignable(fromType, targetType);
+        return VM.typesAssignable(Address.fromLong(fromType), Address.fromLong(targetType));
     }
 
     /**
@@ -1335,7 +1335,7 @@ final class VMNatives
         {
             return -1;                                     // boot force-compile passes 0
         }
-        return Loader.methodResolve(mirrorRef.toAddress().plus(16L).loadLong(), nameArrRef);
+        return Loader.methodResolve(mirrorRef.toAddress().plus(16L).loadAddress(), nameArrRef);
     }
 
     /** Reflection: {@code Method.methodResolveDesc0(Class,byte[],byte[])} -> registry index of the method with
@@ -1346,7 +1346,7 @@ final class VMNatives
         {
             return -1;                                     // boot force-compile passes 0
         }
-        return Loader.methodResolveDesc(mirrorRef.toAddress().plus(16L).loadLong(), nameArrRef, descArrRef);
+        return Loader.methodResolveDesc(mirrorRef.toAddress().plus(16L).loadAddress(), nameArrRef, descArrRef);
     }
 
     /** Reflection: {@code Method.exact0(Class,byte[],byte[])} -> registry index of the method that class itself
@@ -1357,7 +1357,7 @@ final class VMNatives
         {
             return -1;                                     // boot force-compile passes 0
         }
-        return Loader.methodResolveExact(mirrorRef.toAddress().plus(16L).loadLong(), nameArrRef, descArrRef);
+        return Loader.methodResolveExact(mirrorRef.toAddress().plus(16L).loadAddress(), nameArrRef, descArrRef);
     }
 
     /** {@code MethodHandleNatives.declared0(Class,byte[],byte[])} -> see {@code Loader.mhDeclaredIndex}. */
@@ -1367,7 +1367,7 @@ final class VMNatives
         {
             return -1;                                     // boot force-compile passes 0
         }
-        return Loader.mhDeclaredIndex(mirrorRef.toAddress().plus(16L).loadLong(), nameArrRef, descArrRef);
+        return Loader.mhDeclaredIndex(mirrorRef.toAddress().plus(16L).loadAddress(), nameArrRef, descArrRef);
     }
 
     /** Reflection: {@code Method.itableTarget0(Object,int)} -> the receiver's itable answer for that method, or 0. */
@@ -1406,7 +1406,7 @@ final class VMNatives
         {
             return -1;                                     // boot force-compile passes 0
         }
-        return Loader.constructorResolveDesc(mirrorRef.toAddress().plus(16L).loadLong(), descArrRef);
+        return Loader.constructorResolveDesc(mirrorRef.toAddress().plus(16L).loadAddress(), descArrRef);
     }
 
     /** Reflection: {@code Constructor.ctorResolve0(Class,int)} -> registry index of the <init> with that arity, or -1. */
@@ -1416,7 +1416,7 @@ final class VMNatives
         {
             return -1;                                     // boot force-compile passes 0
         }
-        return Loader.constructorResolve(mirrorRef.toAddress().plus(16L).loadLong(), (int) paramCount);
+        return Loader.constructorResolve(mirrorRef.toAddress().plus(16L).loadAddress(), (int) paramCount);
     }
 
     /** Reflection: {@code Constructor.allocInstance0(Class)} -> a fresh zeroed instance (TIB set), or 0. */
