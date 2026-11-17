@@ -8014,29 +8014,29 @@ public final class Loader
      * the guest throws {@code ClassNotFoundException}) if the name contains '/' (not a valid binary name), is
      * not embedded in the classDir, or resolves to no loaded Type.
      */
-    static long forNameMirror(long nameArr)
+    static long forNameMirror(ObjectReference nameArr)
     {
         return forNameMirror(nameArr, true);
     }
 
     /**
-     * As {@link #forNameMirror(long)}, initializing the class only when {@code init} is set: ClassLoader.loadClass
+     * As {@link #forNameMirror(ObjectReference)}, initializing the class only when {@code init} is set: ClassLoader.loadClass
      * and Class.forName(name, false, loader) must not run a {@code <clinit>} (JVMS 5.5 names the initializing
      * triggers, and loading is not one of them).
      */
-    static long forNameMirror(long nameArr, boolean init)
+    static long forNameMirror(ObjectReference nameArr, boolean init)
     {
-        if (nameArr <= 0x1000L)
+        if (nameArr.toLong() <= 0x1000L)
         {
             return 0L;                                  // boot force-compile guard passes 0
         }
-        int len = (int) Address.fromLong(nameArr).plus(16L).loadLong();    // byte[] length @16
-        long src = nameArr + 24L;                        // byte[] elements @24
+        int len = (int) nameArr.toAddress().plus(16L).loadLong();    // byte[] length @16
+        Address src = nameArr.toAddress().plus(24L);     // byte[] elements @24
         byte[] slash = new byte[len];
         int i = 0;
         while (i < len)
         {
-            int c = u1(src + i);
+            int c = u1(src.plus(i));
             if (c == 0x2F)                              // '/' is not a valid binary-name char -> not found
             {
                 return 0L;
@@ -8176,19 +8176,19 @@ public final class Loader
      * and unused; the just-defined class is located after load by its unique blob base ({@code clBase}). No
      * duplicate-definition check, no delegation hierarchy (single application loader).
      */
-    static long defineFromBytes(long byteArr, int off, int len)
+    static long defineFromBytes(ObjectReference byteArr, int off, int len)
     {
-        if (byteArr <= 0x1000L || len <= 0)
+        if (byteArr.toLong() <= 0x1000L || len <= 0)
         {
             return 0L;                                  // boot force-compile guard / empty input
         }
         Address blob = Heap.allocData(len);             // raw offset-0 base: classfile byte 0 lives at blob+0
         long blobKey = blob.toLong();                   // ... and as the long the blob table and clTab compare by
-        long srcAddr = byteArr + 24L + off;             // byte[] elements @24, plus the caller's offset
+        Address srcAddr = byteArr.toAddress().plus(24L).plus(off);   // byte[] elements @24, plus the caller's offset
         int i = 0;
         while (i < len)
         {
-            blob.plus(i).store((byte) Address.fromLong(srcAddr).plus(i).loadUnsignedByte());
+            blob.plus(i).store((byte) srcAddr.plus(i).loadUnsignedByte());
             i += 1;
         }
         addBlob(blobKey, len);
@@ -11173,7 +11173,7 @@ public final class Loader
      * {@code typeAddr}, or 0. The Type-keyed sibling of {@link #staticSlotOf} (which keys on a name pair),
      * for {@code Unsafe.staticFieldOffset(Field)}, whose caller holds a Class rather than a name.
      */
-    static long staticSlotOfType(long typeAddr, long fnBase, int fnLen)
+    static long staticSlotOfType(long typeAddr, Address fnBase, int fnLen)
     {
         int ci = 0;
         while (ci < clCount)
@@ -16783,7 +16783,8 @@ public final class Loader
                 byte[] desc = kind == DYN_INDY ? Magic.bytes("(Ljava/lang/Class;I)Ljava/lang/invoke/CallSite;")
                         : kind == DYN_CONST ? Magic.bytes("(Ljava/lang/Class;I)Ljava/lang/Object;")
                         : Magic.bytes("(Ljava/lang/Class;I)J");
-                li = methodResolveExact(clTab[reg].type, guestBytes(name), guestBytes(desc));
+                li = methodResolveExact(clTab[reg].type, ObjectReference.fromLong(guestBytes(name)),
+                        ObjectReference.fromLong(guestBytes(desc)));
                 dynLinkerIdx[kind] = li;
             }
         }
@@ -17061,8 +17062,8 @@ public final class Loader
                 return 0L;
             }
             li = methodResolveExact(clTab[reg].type,
-                    guestBytes(exact ? Magic.bytes("linkExact") : Magic.bytes("linkGeneric")),
-                    guestBytes(Magic.bytes("(Ljava/lang/invoke/MethodHandle;Ljava/lang/String;)Ljava/lang/invoke/MethodHandle;")));
+                    ObjectReference.fromLong(guestBytes(exact ? Magic.bytes("linkExact") : Magic.bytes("linkGeneric"))),
+                    ObjectReference.fromLong(guestBytes(Magic.bytes("(Ljava/lang/invoke/MethodHandle;Ljava/lang/String;)Ljava/lang/invoke/MethodHandle;"))));
             if (exact)
             {
                 mhLinkExactIdx = li;
@@ -17091,7 +17092,7 @@ public final class Loader
             return -1L;
         }
         long g = guestBytes(field);
-        return fieldOffsetOfType(clTab[reg].type, g + 24L, field.length);
+        return fieldOffsetOfType(clTab[reg].type, Address.fromLong(g).plus(24L), field.length);
     }
 
     /** The number of parameters in the absolute {@code {u2 len}(...)ret} descriptor at {@code descU}. */
@@ -17135,7 +17136,7 @@ public final class Loader
      *  <p>The declaring class's slot is the right answer for a subclass instance because layout is chain-aware
      *  -- inherited fields are laid out FIRST ({@code ClassFile.chainFieldBase}) -- so a field keeps its slot
      *  in every subclass. Same shape as {@code globalVtableSlot}'s chain tier, and for the same reason. */
-    static long vhFieldOffset(long fnBase, int fnLen, long tib)
+    static long vhFieldOffset(Address fnBase, int fnLen, long tib)
     {
         int start = -1;
         int ci = 0;
@@ -17171,7 +17172,7 @@ public final class Loader
 
     /** Field-registry index of instance field {@code fname} (raw bytes) declared by the class whose Type is
      *  {@code typeAddr}, or -1. Used by the reflection field-metadata natives. */
-    private static int fieldRegIndex(long typeAddr, long fnBase, int fnLen)
+    private static int fieldRegIndex(long typeAddr, Address fnBase, int fnLen)
     {
         int ci = 0;
         while (ci < clCount)
@@ -17212,7 +17213,7 @@ public final class Loader
     /** Find a field by name in the class's own FIELDS section; sets {@link #cfFieldAccess}/{@link
      *  #cfFieldDescChar}. Both are read in ONE walk: each call re-parses the constant pool, and reading the
      *  descriptor after a second walk would be against a re-derived cursor. */
-    private static boolean classfileFieldInfo(long typeAddr, long fnBase, int fnLen)
+    private static boolean classfileFieldInfo(long typeAddr, Address fnBase, int fnLen)
     {
         int ci = classRegByType(typeAddr);
         if (ci < 0)
@@ -17248,7 +17249,7 @@ public final class Loader
      * ACTIVE USE (JVMS 5.5), so returning the cell of a class whose {@code <clinit>} has not run would hand
      * back a zero that looks like a value.
      */
-    static long staticCellFor(long typeAddr, long fnBase, int fnLen)
+    static long staticCellFor(long typeAddr, Address fnBase, int fnLen)
     {
         int ci = classRegByType(typeAddr);
         if (ci < 0)
@@ -17286,7 +17287,7 @@ public final class Loader
      * <p>Same registry and the same {@code 16 + slot*8} layout as every other field access here, so a handle
      * obtained this way and an ordinary {@code getfield} address the same memory by construction.
      */
-    static long fieldOffsetOfType(long typeAddr, long fnBase, int fnLen)
+    static long fieldOffsetOfType(long typeAddr, Address fnBase, int fnLen)
     {
         int j = fieldRegIndex(typeAddr, fnBase, fnLen);
         if (j >= 0)
@@ -17296,7 +17297,7 @@ public final class Loader
         return -1L;
     }
 
-    static int fieldMods(long typeAddr, long fnBase, int fnLen)
+    static int fieldMods(long typeAddr, Address fnBase, int fnLen)
     {
         int j = fieldRegIndex(typeAddr, fnBase, fnLen);
         if (j >= 0)
@@ -17393,9 +17394,9 @@ public final class Loader
      * {@code nameArr} (a raw {@code byte[]}) declared by the class whose Type is {@code type}, or -1. Matches
      * class name + method name (no overload/param-type resolution yet — first match wins).
      */
-    static int methodResolve(long type, long nameArr)
+    static int methodResolve(long type, ObjectReference nameArr)
     {
-        if (type == 0L || nameArr <= 0x1000L)
+        if (type == 0L || nameArr.toLong() <= 0x1000L)
         {
             return -1;
         }
@@ -17415,13 +17416,13 @@ public final class Loader
      * back to the name-only answer when the descriptor matches nothing, so a caller that has no descriptor (or
      * one this VM spells differently) is never made worse off than {@link #methodResolve}.
      */
-    static int methodResolveDesc(long type, long nameArr, long descArr)
+    static int methodResolveDesc(long type, ObjectReference nameArr, ObjectReference descArr)
     {
-        if (descArr <= 0x1000L)
+        if (descArr.toLong() <= 0x1000L)
         {
             return methodResolve(type, nameArr);
         }
-        if (type == 0L || nameArr <= 0x1000L)
+        if (type == 0L || nameArr.toLong() <= 0x1000L)
         {
             return -1;
         }
@@ -17459,9 +17460,9 @@ public final class Loader
      * step of reflective VIRTUAL dispatch, where a same-named method with another descriptor is not an
      * override and must not be called. Not an active use of the class: the receiver's class is initialized.
      */
-    static int methodResolveExact(long type, long nameArr, long descArr)
+    static int methodResolveExact(long type, ObjectReference nameArr, ObjectReference descArr)
     {
-        if (type == 0L || nameArr <= 0x1000L || descArr <= 0x1000L)
+        if (type == 0L || nameArr.toLong() <= 0x1000L || descArr.toLong() <= 0x1000L)
         {
             return -1;
         }
@@ -17485,10 +17486,10 @@ public final class Loader
      * a NAME-ONLY match, where resolution that finds no exact descriptor must fail -- the JVMS 5.4.3.3 walk over
      * superclasses and superinterfaces is the caller's, one class at a time.
      */
-    static int mhDeclaredIndex(long type, long nameArr, long descArr)
+    static int mhDeclaredIndex(long type, ObjectReference nameArr, ObjectReference descArr)
     {
         int idx = methodResolveExact(type, nameArr, descArr);
-        if (idx >= 0 || type == 0L || nameArr <= 0x1000L || descArr <= 0x1000L)
+        if (idx >= 0 || type == 0L || nameArr.toLong() <= 0x1000L || descArr.toLong() <= 0x1000L)
         {
             return idx;
         }
@@ -17557,9 +17558,9 @@ public final class Loader
      * reflection natives read this table, through {@link #reflEntry}. One entry per method: a repeat lookup
      * answers the same index.
      */
-    private static int bodylessIndex(long type, long nameArr, long descArr)
+    private static int bodylessIndex(long type, ObjectReference nameArr, ObjectReference descArr)
     {
-        if (descArr <= 0x1000L)
+        if (descArr.toLong() <= 0x1000L)
         {
             return -1;
         }
@@ -17573,10 +17574,10 @@ public final class Loader
         Address p = gMethodsStart;
         int mcount = u2(p);
         p = p.plus(2);
-        int nlen = (int) Address.fromLong(nameArr).plus(16L).loadLong();
-        long nbase = nameArr + 24L;
-        int dlen = (int) Address.fromLong(descArr).plus(16L).loadLong();
-        long dbase = descArr + 24L;
+        int nlen = (int) nameArr.toAddress().plus(16L).loadLong();
+        Address nbase = nameArr.toAddress().plus(24L);
+        int dlen = (int) descArr.toAddress().plus(16L).loadLong();
+        Address dbase = descArr.toAddress().plus(24L);
         int m = 0;
         while (m < mcount)
         {
@@ -17638,9 +17639,9 @@ public final class Loader
      * index, or -1. Limitation: the method's cross-class callees must already be compiled (no dep pull here); a
      * same-class callee it needs is compiled alongside it (they share this compile batch).
      */
-    private static int compileMethodOnDemand(long type, long nameArr)
+    private static int compileMethodOnDemand(long type, ObjectReference nameArr)
     {
-        return compileMethodOnDemand(type, nameArr, 0L);
+        return compileMethodOnDemand(type, nameArr, ObjectReference.nullReference());
     }
 
     /**
@@ -17656,7 +17657,7 @@ public final class Loader
      * on a monitor or spawn threads, and holding the loader lock across that would deadlock any task that
      * needs to compile before it can release.
      */
-    private static int compileMethodOnDemand(long type, long nameArr, long descArr)
+    private static int compileMethodOnDemand(long type, ObjectReference nameArr, ObjectReference descArr)
     {
         VM.loaderLock(VM.LOCK_ON_DEMAND);
         int r;
@@ -17673,7 +17674,7 @@ public final class Loader
 
     /** {@link #compileMethodOnDemand} restricted to one DESCRIPTOR ({@code descArr} 0 = any). Without it the walk
      *  stops at the first method of that name, which for an overloaded class is a coin toss between two bodies. */
-    private static int compileMethodOnDemandLocked(long type, long nameArr, long descArr)
+    private static int compileMethodOnDemandLocked(long type, ObjectReference nameArr, ObjectReference descArr)
     {
         int ci = classIndexByType(type);
         // AN INTERFACE IS NOT REFUSED any more. It was, for having no TIB to reuse -- but this path compiles with
@@ -17703,10 +17704,10 @@ public final class Loader
         Address p = gMethodsStart;
         int mcount = u2(p);
         p = p.plus(2);
-        int nlen = (int) Address.fromLong(nameArr).plus(16L).loadLong();
-        long nbase = nameArr + 24L;
-        int dlen = descArr <= 0x1000L ? 0 : (int) Address.fromLong(descArr).plus(16L).loadLong();
-        long dbase = descArr + 24L;
+        int nlen = (int) nameArr.toAddress().plus(16L).loadLong();
+        Address nbase = nameArr.toAddress().plus(24L);
+        int dlen = descArr.toLong() <= 0x1000L ? 0 : (int) descArr.toAddress().plus(16L).loadLong();
+        Address dbase = descArr.toAddress().plus(24L);
         long code = 0L;
         int descOff = 0;
         int isStatic = 0;
@@ -17813,27 +17814,27 @@ public final class Loader
      * could hand back the String one. Set only by {@link #constructorResolveDesc}, under the loader lock, and
      * consulted at the two match points (the registry scan and the on-demand method walk).
      */
-    private static long ctorWantDesc;
+    private static ObjectReference ctorWantDesc;
 
     /** Does the {@code <init>} whose descriptor is at {@code base + descOff} match the current request? */
     private static boolean ctorMatches(Address base, int descOff, int paramCount)
     {
-        if (ctorWantDesc != 0L)
+        if (!ctorWantDesc.isNull())
         {
-            return rawEqUtf8(ctorWantDesc + 24L, (int) Address.fromLong(ctorWantDesc).plus(16L).loadLong(), base, descOff);
+            return rawEqUtf8(ctorWantDesc.toAddress().plus(24L), (int) ctorWantDesc.toAddress().plus(16L).loadLong(), base, descOff);
         }
         return descParamCountRaw(base.plus(descOff)) == paramCount;
     }
 
     /** {@link #constructorResolve} matched by DESCRIPTOR (see {@link #ctorWantDesc}); -1 if none. */
-    static int constructorResolveDesc(long type, long descArr)
+    static int constructorResolveDesc(long type, ObjectReference descArr)
     {
-        if (descArr <= 0x1000L)
+        if (descArr.toLong() <= 0x1000L)
         {
             return -1;
         }
         VM.loaderLock(VM.LOCK_DEFERRED_CT);
-        long outer = ctorWantDesc;
+        ObjectReference outer = ctorWantDesc;
         int r;
         try
         {
@@ -17904,7 +17905,7 @@ public final class Loader
     }
 
     /** utf8Hash2 of (the Utf8 at {@code b1 + o1}, then the raw bytes {@code [raw, raw + rawLen)}). */
-    private static int utf8HashThenRaw(Address b1, int o1, long raw, int rawLen)
+    private static int utf8HashThenRaw(Address b1, int o1, Address raw, int rawLen)
     {
         int len = u2(b1.plus(o1));
         Address q = b1.plus(o1 + 2L);
@@ -17918,7 +17919,7 @@ public final class Loader
         i = 0;
         while (i < rawLen)
         {
-            h = (h ^ u1(raw + i)) * 0x01000193;
+            h = (h ^ u1(raw.plus(i))) * 0x01000193;
             i += 1;
         }
         return h;
@@ -17968,7 +17969,7 @@ public final class Loader
     /** Method-registry index of the method named {@code nameArr} declared by the class whose Type is {@code type}
      *  (class name + method name match), or -1 if it is not currently compiled/registered. Takes the loader
      *  lock: it is reached unlocked, and buildRegIndex extends the index a compiling task also extends. */
-    private static int methodResolveRegistry(long type, long nameArr)
+    private static int methodResolveRegistry(long type, ObjectReference nameArr)
     {
         VM.loaderLock(VM.LOCK_REFLECT);                 // buildRegIndex mutates the index a compiling task extends
         try
@@ -17978,8 +17979,8 @@ public final class Loader
             {
                 return -1;
             }
-            int nlen = (int) Address.fromLong(nameArr).plus(16L).loadLong();
-            long nbase = nameArr + 24L;
+            int nlen = (int) nameArr.toAddress().plus(16L).loadLong();
+            Address nbase = nameArr.toAddress().plus(24L);
             buildRegIndex();
             int best = -1;
             int i = rgBucket[utf8HashThenRaw(clTab[ci].base, clTab[ci].nameOff, nbase, nlen) & (RGTAB - 1)];
@@ -18002,7 +18003,7 @@ public final class Loader
     }
 
     /** {@link #methodResolveRegistry} with the descriptor compared too. Takes the loader lock, likewise. */
-    private static int methodResolveRegistryDesc(long type, long nameArr, long descArr)
+    private static int methodResolveRegistryDesc(long type, ObjectReference nameArr, ObjectReference descArr)
     {
         VM.loaderLock(VM.LOCK_REFLECT);
         try
@@ -18012,10 +18013,10 @@ public final class Loader
             {
                 return -1;
             }
-            int nlen = (int) Address.fromLong(nameArr).plus(16L).loadLong();
-            long nbase = nameArr + 24L;
-            int dlen = (int) Address.fromLong(descArr).plus(16L).loadLong();
-            long dbase = descArr + 24L;
+            int nlen = (int) nameArr.toAddress().plus(16L).loadLong();
+            Address nbase = nameArr.toAddress().plus(24L);
+            int dlen = (int) descArr.toAddress().plus(16L).loadLong();
+            Address dbase = descArr.toAddress().plus(24L);
             buildRegIndex();
             int best = -1;
             int i = rgBucket[utf8HashThenRaw(clTab[ci].base, clTab[ci].nameOff, nbase, nlen) & (RGTAB - 1)];
@@ -18200,7 +18201,7 @@ public final class Loader
      * 'L'/'['), and write {@code out} (a guest {@code long[3]}): {@code [buffer, access_flags, returnChar]}.
      * Returns the parameter count. Float/double params are marshalled as their raw bits (no v-register support).
      */
-    static int methodInfo(int rgIndex, long paramCharsArr, long outArr)
+    static int methodInfo(int rgIndex, ObjectReference paramCharsArr, ObjectReference outArr)
     {
         if (reflEntry(rgIndex) == null)
         {
@@ -18208,34 +18209,34 @@ public final class Loader
         }
         Address descAddr = reflEntry(rgIndex).base.plus(reflEntry(rgIndex).descOff);   // "(...)ret" Utf8 (u2 length, then bytes)
         Address p = descAddr.plus(2 + 1);                              // past u2 length and '('
-        long pc = paramCharsArr + 24L;                          // byte[] elements
+        Address pc = paramCharsArr.toAddress().plus(24L);       // byte[] elements
         int n = 0;
         while (u1(p) != 0x29)                                   // ')'
         {
             int c = u1(p);
             if (c == 0x4C)                                      // 'L' reference: skip to ';'
             {
-                Address.fromLong(pc).plus(n).store((byte) 0x4C);
+                pc.plus(n).store((byte) 0x4C);
                 while (u1(p) != 0x3B) { p = p.plus(1); }               // ';'
                 p = p.plus(1);
             }
             else if (c == 0x5B)                                // '[' array: reference; skip prefixes + element
             {
-                Address.fromLong(pc).plus(n).store((byte) 0x5B);
+                pc.plus(n).store((byte) 0x5B);
                 while (u1(p) == 0x5B) { p = p.plus(1); }
                 if (u1(p) == 0x4C) { while (u1(p) != 0x3B) { p = p.plus(1); } }
                 p = p.plus(1);
             }
             else                                               // primitive: one char, one slot
             {
-                Address.fromLong(pc).plus(n).store((byte) c);
+                pc.plus(n).store((byte) c);
                 p = p.plus(1);
             }
             n += 1;
         }
-        Address.fromLong(outArr).plus(24L).plus(0L).store(reflEntry(rgIndex).buf);      // out[0] = compiled buffer
-        Address.fromLong(outArr).plus(24L).plus(8L).store((long) reflEntry(rgIndex).access);   // out[1] = access flags
-        Address.fromLong(outArr).plus(24L).plus(16L).store((long) u1(p.plus(1)));   // out[2] = return-type char (after ')')
+        outArr.toAddress().plus(24L).plus(0L).store(reflEntry(rgIndex).buf);      // out[0] = compiled buffer
+        outArr.toAddress().plus(24L).plus(8L).store((long) reflEntry(rgIndex).access);   // out[1] = access flags
+        outArr.toAddress().plus(24L).plus(16L).store((long) u1(p.plus(1)));   // out[2] = return-type char (after ')')
         return n;
     }
 
@@ -18288,7 +18289,7 @@ public final class Loader
     }
 
     /** Reflection: first char of the field's JVM type descriptor (the byte after the u2 Utf8 length), or -1. */
-    static int fieldTypeChar(long typeAddr, long fnBase, int fnLen)
+    static int fieldTypeChar(long typeAddr, Address fnBase, int fnLen)
     {
         int j = fieldRegIndex(typeAddr, fnBase, fnLen);
         if (j >= 0)
@@ -18299,7 +18300,7 @@ public final class Loader
     }
 
     /** True if the raw byte range {@code rawBase..+rawLen} equals the Utf8 (u2 length + bytes) at {@code utBase+utOff}. */
-    private static boolean rawEqUtf8(long rawBase, int rawLen, Address utBase, int utOff)
+    private static boolean rawEqUtf8(Address rawBase, int rawLen, Address utBase, int utOff)
     {
         if (u2(utBase.plus(utOff)) != rawLen)
         {
@@ -18308,7 +18309,7 @@ public final class Loader
         int k = 0;
         while (k < rawLen)
         {
-            if ((Address.fromLong(rawBase).plus(k).loadUnsignedByte() & 0xFF) != u1(utBase.plus(utOff + 2 + k)))
+            if ((rawBase.plus(k).loadUnsignedByte() & 0xFF) != u1(utBase.plus(utOff + 2 + k)))
             {
                 return false;
             }
@@ -22447,7 +22448,7 @@ public final class Loader
 
     /** True if the method registered at {@code rgIndex} carries the annotation whose descriptor is the
      *  {@code descLen} bytes at the {@code byte[]} payload {@code descArr} (e.g. "Lorg/junit/jupiter/api/Test;"). */
-    static boolean methodAnnoPresent(int rgIndex, long descArr, int descLen)
+    static boolean methodAnnoPresent(int rgIndex, ObjectReference descArr, int descLen)
     {
         Address p = methodInfoPos(rgIndex);
         if (p.isZero())
@@ -22462,7 +22463,7 @@ public final class Loader
      * method registered at {@code rgIndex}, or 0 if it is absent (or its interface is not loaded, since
      * without the interface there is no itable to give the object).
      */
-    static long methodAnnotation(int rgIndex, long descArr, int descLen)
+    static long methodAnnotation(int rgIndex, ObjectReference descArr, int descLen)
     {
         Address p = methodInfoPos(rgIndex);
         if (p.isZero())
@@ -22685,9 +22686,9 @@ public final class Loader
      * {@code Field.signature0}: the {@code Signature} attribute of field {@code nameArr} (a raw {@code byte[]})
      * of the class whose mirror is given, or 0. The field walk is {@link #fieldAnnotation}'s.
      */
-    static long fieldSignature(ObjectReference mirror, long nameArr)
+    static long fieldSignature(ObjectReference mirror, ObjectReference nameArr)
     {
-        if (mirror.toLong() <= 0x1000L || nameArr <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L || nameArr.toLong() <= 0x1000L)
         {
             return 0L;
         }
@@ -22702,8 +22703,8 @@ public final class Loader
         p = p.plus(2L + u2(p) * 2L);                           // past the interfaces list
         int fcount = u2(p);
         p = p.plus(2);
-        int nlen = (int) Address.fromLong(nameArr).plus(16L).loadLong();   // byte[] length @16
-        long nbase = nameArr + 24L;
+        int nlen = (int) nameArr.toAddress().plus(16L).loadLong();   // byte[] length @16
+        Address nbase = nameArr.toAddress().plus(24L);
         int f = 0;
         while (f < fcount)
         {
@@ -23071,9 +23072,9 @@ public final class Loader
      * <p>JUnit's {@code AnnotationUtils.findAnnotation} walks this to reach META-ANNOTATIONS, and walks it
      * UNGUARDED, so an un-annotated field must answer an EMPTY array rather than null.
      */
-    static long fieldAnnotationsAll(ObjectReference mirror, long nameArr)
+    static long fieldAnnotationsAll(ObjectReference mirror, ObjectReference nameArr)
     {
-        if (mirror.toLong() <= 0x1000L || nameArr <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L || nameArr.toLong() <= 0x1000L)
         {
             return 0L;
         }
@@ -23088,8 +23089,8 @@ public final class Loader
         p = p.plus(2L + u2(p) * 2L);                           // past the interfaces list
         int fcount = u2(p);
         p = p.plus(2);
-        int nlen = (int) Address.fromLong(nameArr).plus(16L).loadLong();
-        long nbase = nameArr + 24L;
+        int nlen = (int) nameArr.toAddress().plus(16L).loadLong();
+        Address nbase = nameArr.toAddress().plus(24L);
         Address lp = Address.zero();
         int f = 0;
         while (f < fcount)
@@ -23113,9 +23114,9 @@ public final class Loader
         return annotationsAt(base, lp);
     }
 
-    static long fieldAnnotation(ObjectReference mirror, long nameArr, long descArr, int descLen)
+    static long fieldAnnotation(ObjectReference mirror, ObjectReference nameArr, ObjectReference descArr, int descLen)
     {
-        if (mirror.toLong() <= 0x1000L || nameArr <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L || nameArr.toLong() <= 0x1000L)
         {
             return 0L;
         }
@@ -23130,8 +23131,8 @@ public final class Loader
         p = p.plus(2L + u2(p) * 2L);                           // past the interfaces list
         int fcount = u2(p);
         p = p.plus(2);
-        int nlen = (int) Address.fromLong(nameArr).plus(16L).loadLong();   // byte[] length @16
-        long nbase = nameArr + 24L;
+        int nlen = (int) nameArr.toAddress().plus(16L).loadLong();   // byte[] length @16
+        Address nbase = nameArr.toAddress().plus(24L);
         int f = 0;
         while (f < fcount)
         {
@@ -23158,9 +23159,9 @@ public final class Loader
      * re-parses a blob and moves the {@code gcp}/{@code gbase} cursor. Blobs themselves do not move, so an
      * absolute Utf8 pointer survives it -- the same property {@code applyAnnoDefaults} relies on.
      */
-    static long fieldTypeMirror(ObjectReference mirror, long nameArr)
+    static long fieldTypeMirror(ObjectReference mirror, ObjectReference nameArr)
     {
-        if (mirror.toLong() <= 0x1000L || nameArr <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L || nameArr.toLong() <= 0x1000L)
         {
             return 0L;
         }
@@ -23175,8 +23176,8 @@ public final class Loader
         p = p.plus(2L + u2(p) * 2L);                           // past the interfaces list
         int fcount = u2(p);
         p = p.plus(2);
-        int nlen = (int) Address.fromLong(nameArr).plus(16L).loadLong();
-        long nbase = nameArr + 24L;
+        int nlen = (int) nameArr.toAddress().plus(16L).loadLong();
+        Address nbase = nameArr.toAddress().plus(24L);
         Address descU = Address.zero();
         int f = 0;
         while (f < fcount)
@@ -23393,7 +23394,7 @@ public final class Loader
     }
 
     /** {@code Class.getAnnotation0}: the same, for the annotations on a CLASS (its own attribute list). */
-    static long classAnnotation(ObjectReference mirror, long descArr, int descLen)
+    static long classAnnotation(ObjectReference mirror, ObjectReference descArr, int descLen)
     {
         if (mirror.toLong() <= 0x1000L)
         {
@@ -23414,7 +23415,7 @@ public final class Loader
     }
 
     /** Find RuntimeVisibleAnnotations in an attribute list and build the matching annotation's instance. */
-    private static long annoFromAttrs(Address base, Address p, int attrs, long descArr, int descLen)
+    private static long annoFromAttrs(Address base, Address p, int attrs, ObjectReference descArr, int descLen)
     {
         int a = 0;
         while (a < attrs)
@@ -24429,7 +24430,7 @@ public final class Loader
     }
 
     /** {@code "Lcom/x/Foo;"} -> the class-registry index of {@code com/x/Foo}, or -1 if it is not loaded. */
-    private static int regOfAnnoDesc(long descArr, int descLen)
+    private static int regOfAnnoDesc(ObjectReference descArr, int descLen)
     {
         if (descLen < 3)
         {
@@ -24439,7 +24440,7 @@ public final class Loader
         int i = 0;
         while (i < descLen - 2)
         {
-            name[i] = (byte) u1(descArr + 24 + 1 + i);  // byte[] elements start at +24
+            name[i] = (byte) u1(descArr.toAddress().plus(24 + 1 + i));  // byte[] elements start at +24
             i += 1;
         }
         return classIndexByName(name);
@@ -24450,7 +24451,7 @@ public final class Loader
      * the answer is null -- and a silent null here reads as "the annotation is absent", which is a different
      * and wrong statement. Reported once per descriptor.
      */
-    private static void reportAnnoIfaceMissing(long descArr, int descLen)
+    private static void reportAnnoIfaceMissing(ObjectReference descArr, int descLen)
     {
         if (annoMissSeen == null)
         {
@@ -24460,7 +24461,7 @@ public final class Loader
         int k = 0;
         while (k < annoMissSeenN)
         {
-            if (annoMissSeen[k] == descArr)
+            if (annoMissSeen[k] == descArr.toLong())
             {
                 return;
             }
@@ -24468,14 +24469,14 @@ public final class Loader
         }
         if (annoMissSeenN < 32)
         {
-            annoMissSeen[annoMissSeenN] = descArr;
+            annoMissSeen[annoMissSeenN] = descArr.toLong();
             annoMissSeenN += 1;
         }
         Uart.write(Magic.bytes("\n  ANNOTATION IFACE NOT LOADED (reads null): "));
         int i = 0;
         while (i < descLen)
         {
-            Uart.putc((byte) u1(descArr + 24 + i));
+            Uart.putc((byte) u1(descArr.toAddress().plus(24 + i)));
             i += 1;
         }
         Uart.putc(0x0A);
@@ -24485,7 +24486,7 @@ public final class Loader
     private static int annoMissSeenN;
 
     /** Scan an attribute list for RuntimeVisibleAnnotations and look for the wanted descriptor in it. */
-    private static boolean annoInAttrs(Address base, Address p, int attrs, long descArr, int descLen)
+    private static boolean annoInAttrs(Address base, Address p, int attrs, ObjectReference descArr, int descLen)
     {
         int a = 0;
         while (a < attrs)
@@ -24505,7 +24506,7 @@ public final class Loader
     }
 
     /** {@code { u2 num_annotations; annotation[] }} -- true if any annotation's type descriptor matches. */
-    private static boolean annoListHas(Address base, Address p, long descArr, int descLen)
+    private static boolean annoListHas(Address base, Address p, ObjectReference descArr, int descLen)
     {
         int n = u2(p);
         p = p.plus(2);
@@ -24754,8 +24755,8 @@ public final class Loader
                 {
                     long nb = Address.fromLong(namesArr).plus(24L).plus(j * 8L).loadLong();
                     long db = Address.fromLong(descsArr).plus(24L).plus(j * 8L).loadLong();
-                    if (rawEqUtf8(nb + 24L, (int) Address.fromLong(nb).plus(16L).loadLong(), ifBase.get(m), ifNameOff[m])
-                            && rawEqUtf8(db + 24L, (int) Address.fromLong(db).plus(16L).loadLong(), ifBase.get(m), ifDescOff[m]))
+                    if (rawEqUtf8(Address.fromLong(nb).plus(24L), (int) Address.fromLong(nb).plus(16L).loadLong(), ifBase.get(m), ifNameOff[m])
+                            && rawEqUtf8(Address.fromLong(db).plus(24L), (int) Address.fromLong(db).plus(16L).loadLong(), ifBase.get(m), ifDescOff[m]))
                     {
                         thunk = proxyThunk(Address.fromLong(methodsArr).plus(24L).plus(j * 8L).loadLong(), helper).toLong();
                     }
@@ -25662,7 +25663,7 @@ public final class Loader
     }
 
     /** The position of the element_value_pairs of the annotation matching {@code descArr}, or 0. */
-    private static Address annoListFind(Address base, Address p, long descArr, int descLen)
+    private static Address annoListFind(Address base, Address p, ObjectReference descArr, int descLen)
     {
         int n = u2(p);
         p = p.plus(2);
@@ -25724,7 +25725,7 @@ public final class Loader
     }
 
     /** True if the Utf8 at {@code base+off} equals the {@code n} bytes of the byte[] payload at {@code arr}. */
-    private static boolean utf8EqArr(Address base, int off, long arr, int n)
+    private static boolean utf8EqArr(Address base, int off, ObjectReference arr, int n)
     {
         if (u2(base.plus(off)) != n)
         {
@@ -25733,7 +25734,7 @@ public final class Loader
         int k = 0;
         while (k < n)
         {
-            if (u1(base.plus(off + 2 + k)) != (Address.fromLong(arr).plus(24L).plus(k).loadUnsignedByte() & 0xFF))
+            if (u1(base.plus(off + 2 + k)) != (arr.toAddress().plus(24L).plus(k).loadUnsignedByte() & 0xFF))
             {
                 return false;
             }

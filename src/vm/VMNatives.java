@@ -442,15 +442,15 @@ final class VMNatives
      * {@code Field.staticCell0(Class, byte[])} native: the ADDRESS of a static field's cell, or 0.
      * Field.get/set reads and writes through this the way an instance field goes through an offset.
      */
-    static long staticCell(ObjectReference mirror, long nameArr)
+    static long staticCell(ObjectReference mirror, ObjectReference nameArr)
     {
-        if (mirror.toLong() <= 0x1000L || nameArr <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L || nameArr.toLong() <= 0x1000L)
         {
             return 0L;
         }
         long type = mirror.toAddress().plus(16L).loadLong();
-        long fnBase = nameArr + 24L;                    // byte[] payload
-        int fnLen = (int) Address.fromLong(nameArr + 16L).loadLong();  // byte[] length
+        Address fnBase = nameArr.toAddress().plus(24L);         // byte[] payload
+        int fnLen = (int) nameArr.toAddress().plus(16L).loadLong();  // byte[] length
         return Loader.staticCellFor(type, fnBase, fnLen);
     }
 
@@ -542,16 +542,16 @@ final class VMNatives
      * {@code Executable.annoPresent0(int, byte[])} native: 1 if the method registered at {@code rgIndex} carries
      * the annotation whose descriptor the byte[] holds. Marker level -- presence only, no element values.
      */
-    static long annoPresent(long rgIndex, long descArr)
+    static long annoPresent(long rgIndex, ObjectReference descArr)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            if (descArr <= 0x1000L)
+            if (descArr.toLong() <= 0x1000L)
             {
                 return 0L;                                     // boot-time force-compile passes 0; no-op
             }
-            int n = (int) Address.fromLong(descArr + 16L).loadLong();         // byte[] length @16
+            int n = (int) descArr.toAddress().plus(16L).loadLong();         // byte[] length @16
             return Loader.methodAnnoPresent((int) rgIndex, descArr, n) ? 1L : 0L;
         }
         finally
@@ -565,16 +565,16 @@ final class VMNatives
      * registered at {@code rgIndex}, or 0. The instance-level twin of {@link #annoPresent}, which only ever
      * answered presence.
      */
-    static long annoGet(long rgIndex, long descArr)
+    static long annoGet(long rgIndex, ObjectReference descArr)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            if (descArr <= 0x1000L)
+            if (descArr.toLong() <= 0x1000L)
             {
                 return 0L;                                     // boot-time force-compile passes 0; no-op
             }
-            int n = (int) Address.fromLong(descArr + 16L).loadLong();         // byte[] length @16
+            int n = (int) descArr.toAddress().plus(16L).loadLong();         // byte[] length @16
             return Loader.methodAnnotation((int) rgIndex, descArr, n);
         }
         finally
@@ -712,7 +712,7 @@ final class VMNatives
     }
 
     /** {@code Field.fieldAnnoAll0(Class,byte[])} -> every annotation declared on that field. */
-    static long fieldAnnoAll(ObjectReference mirror, long nameArr)
+    static long fieldAnnoAll(ObjectReference mirror, ObjectReference nameArr)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
@@ -725,16 +725,16 @@ final class VMNatives
         }
     }
 
-    static long fieldAnnoGet(ObjectReference mirror, long nameArr, long descArr)
+    static long fieldAnnoGet(ObjectReference mirror, ObjectReference nameArr, ObjectReference descArr)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            if (descArr <= 0x1000L || mirror.toLong() <= 0x1000L || nameArr <= 0x1000L)
+            if (descArr.toLong() <= 0x1000L || mirror.toLong() <= 0x1000L || nameArr.toLong() <= 0x1000L)
             {
                 return 0L;
             }
-            int n = (int) Address.fromLong(descArr + 16L).loadLong();
+            int n = (int) descArr.toAddress().plus(16L).loadLong();
             return Loader.fieldAnnotation(mirror, nameArr, descArr, n);
         }
         finally
@@ -772,12 +772,12 @@ final class VMNatives
     }
 
     /** {@code Field.type0(Class, byte[])} native: the Class mirror of a field's declared type. */
-    static long fieldType(ObjectReference mirror, long nameArr)
+    static long fieldType(ObjectReference mirror, ObjectReference nameArr)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            if (mirror.toLong() <= 0x1000L || nameArr <= 0x1000L)
+            if (mirror.toLong() <= 0x1000L || nameArr.toLong() <= 0x1000L)
             {
                 return 0L;
             }
@@ -965,7 +965,7 @@ final class VMNatives
     }
 
     /** {@code Field.signature0(Class, byte[])} native: the field's Signature attribute as a String, or 0. */
-    static long fieldSignature(ObjectReference mirror, long nameArr)
+    static long fieldSignature(ObjectReference mirror, ObjectReference nameArr)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
@@ -1096,16 +1096,16 @@ final class VMNatives
         }
     }
 
-    static long classAnnoGet(ObjectReference mirror, long descArr)
+    static long classAnnoGet(ObjectReference mirror, ObjectReference descArr)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            if (descArr <= 0x1000L || mirror.toLong() <= 0x1000L)
+            if (descArr.toLong() <= 0x1000L || mirror.toLong() <= 0x1000L)
             {
                 return 0L;
             }
-            int n = (int) Address.fromLong(descArr + 16L).loadLong();
+            int n = (int) descArr.toAddress().plus(16L).loadLong();
             return Loader.classAnnotation(mirror, descArr, n);
         }
         finally
@@ -1154,7 +1154,7 @@ final class VMNatives
      * Class mirror, incrementally loading the class into the live program if needed. 0 => guest throws
      * {@code ClassNotFoundException}. Boot force-compile passes a 0 array (guarded in {@code forNameMirror}).
      */
-    static long forName(long nameArr)
+    static long forName(ObjectReference nameArr)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
@@ -1273,7 +1273,7 @@ final class VMNatives
      * findLoadedClass0/findBootstrapClass stand on (loadClass does not initialize). {@link #forName} is the
      * initializing twin, for Class.forName.
      */
-    static long forNameNoInit(long nameArr)
+    static long forNameNoInit(ObjectReference nameArr)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
@@ -1292,7 +1292,7 @@ final class VMNatives
      * {@code ClassFormatError}/returns null. The {@code name} arg is advisory (the loader uses the classfile's
      * own this_class); boot force-compile passes a 0 array (guarded in {@code defineFromBytes}).
      */
-    static long defineClass(long nameArr, long byteArr, long off, long len)
+    static long defineClass(ObjectReference nameArr, ObjectReference byteArr, long off, long len)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
@@ -1329,9 +1329,9 @@ final class VMNatives
     }
 
     /** Reflection: {@code Method.methodResolve0(Class,byte[])} -> method-registry index of the named method, or -1. */
-    static int methodResolve(ObjectReference mirrorRef, long nameArrRef)
+    static int methodResolve(ObjectReference mirrorRef, ObjectReference nameArrRef)
     {
-        if (mirrorRef.toLong() <= 0x1000L || nameArrRef <= 0x1000L)
+        if (mirrorRef.toLong() <= 0x1000L || nameArrRef.toLong() <= 0x1000L)
         {
             return -1;                                     // boot force-compile passes 0
         }
@@ -1340,9 +1340,9 @@ final class VMNatives
 
     /** Reflection: {@code Method.methodResolveDesc0(Class,byte[],byte[])} -> registry index of the method with
      *  that name AND descriptor -- the only key that tells two overloads apart. -1 if there is none. */
-    static int methodResolveDesc(ObjectReference mirrorRef, long nameArrRef, long descArrRef)
+    static int methodResolveDesc(ObjectReference mirrorRef, ObjectReference nameArrRef, ObjectReference descArrRef)
     {
-        if (mirrorRef.toLong() <= 0x1000L || nameArrRef <= 0x1000L)
+        if (mirrorRef.toLong() <= 0x1000L || nameArrRef.toLong() <= 0x1000L)
         {
             return -1;                                     // boot force-compile passes 0
         }
@@ -1351,9 +1351,9 @@ final class VMNatives
 
     /** Reflection: {@code Method.exact0(Class,byte[],byte[])} -> registry index of the method that class itself
      *  declares with exactly that name and descriptor and a body, or -1 -- the per-class step of virtual dispatch. */
-    static int methodResolveExact(ObjectReference mirrorRef, long nameArrRef, long descArrRef)
+    static int methodResolveExact(ObjectReference mirrorRef, ObjectReference nameArrRef, ObjectReference descArrRef)
     {
-        if (mirrorRef.toLong() <= 0x1000L || nameArrRef <= 0x1000L)
+        if (mirrorRef.toLong() <= 0x1000L || nameArrRef.toLong() <= 0x1000L)
         {
             return -1;                                     // boot force-compile passes 0
         }
@@ -1361,9 +1361,9 @@ final class VMNatives
     }
 
     /** {@code MethodHandleNatives.declared0(Class,byte[],byte[])} -> see {@code Loader.mhDeclaredIndex}. */
-    static int mhDeclared(ObjectReference mirrorRef, long nameArrRef, long descArrRef)
+    static int mhDeclared(ObjectReference mirrorRef, ObjectReference nameArrRef, ObjectReference descArrRef)
     {
-        if (mirrorRef.toLong() <= 0x1000L || nameArrRef <= 0x1000L)
+        if (mirrorRef.toLong() <= 0x1000L || nameArrRef.toLong() <= 0x1000L)
         {
             return -1;                                     // boot force-compile passes 0
         }
@@ -1389,9 +1389,9 @@ final class VMNatives
     }
 
     /** Reflection: {@code Method.methodInfo0(int,byte[],long[])} -> fills param chars + {buf,access,retChar}; count. */
-    static int methodInfo(long rgIndex, long paramCharsRef, long outRef)
+    static int methodInfo(long rgIndex, ObjectReference paramCharsRef, ObjectReference outRef)
     {
-        if (paramCharsRef <= 0x1000L || outRef <= 0x1000L)
+        if (paramCharsRef.toLong() <= 0x1000L || outRef.toLong() <= 0x1000L)
         {
             return 0;                                      // boot force-compile passes 0
         }
@@ -1400,7 +1400,7 @@ final class VMNatives
 
     /** Reflection: {@code Constructor.ctorResolveDesc0(Class,byte[])} -> registry index of the {@code <init>} with
      *  exactly that descriptor, or -1. */
-    static int ctorResolveDesc(ObjectReference mirrorRef, long descArrRef)
+    static int ctorResolveDesc(ObjectReference mirrorRef, ObjectReference descArrRef)
     {
         if (mirrorRef.toLong() <= 0x1000L)
         {
@@ -1502,14 +1502,14 @@ final class VMNatives
      * (a&lt;&lt;24)|(b&lt;&lt;16)|(c&lt;&lt;8)|d), 0 on failure. Backs {@code java.net.Inet4AddressImpl.resolve0} (the
      * overlay's lookupAllHostAddr) with the WiFi DNS resolver.
      */
-    static int dnsResolve(long hostArrRef)
+    static int dnsResolve(ObjectReference hostArrRef)
     {
-        if (hostArrRef <= 0x1000L)                         // boot-time force-compile passes 0
+        if (hostArrRef.toLong() <= 0x1000L)                         // boot-time force-compile passes 0
         {
             return 0;
         }
-        int hlen = (int) Address.fromLong(hostArrRef + 16L).loadLong();   // guest byte[] length
-        byte[] host = heapBytes(Address.fromLong(hostArrRef + 24L), hlen);
+        int hlen = (int) hostArrRef.toAddress().plus(16L).loadLong();   // guest byte[] length
+        byte[] host = heapBytes(hostArrRef.toAddress().plus(24L), hlen);
         Address ipOut = Heap.allocData(4);
         if (!board.cyw43.Cyw43.dnsResolve(host, ipOut))
         {
@@ -1568,14 +1568,14 @@ final class VMNatives
 
     /** VarHandle overlay: byte offset of instance field named by the guest {@code byte[]} within {@code obj}'s
      *  class -> {@code java/lang/invoke/VarHandle.fieldOffset0(byte[],Object)J}. */
-    static long vhFieldOffset(long fnameArrRef, long objRef)
+    static long vhFieldOffset(ObjectReference fnameArrRef, long objRef)
     {
-        if (fnameArrRef <= 0x1000L || objRef <= 0x1000L)     // boot-time force-compile passes 0
+        if (fnameArrRef.toLong() <= 0x1000L || objRef <= 0x1000L)     // boot-time force-compile passes 0
         {
             return -1L;
         }
-        int fnLen = (int) Address.fromLong(fnameArrRef + 16L).loadLong();   // guest byte[] length
-        long fnBase = fnameArrRef + 24L;                     // guest byte[] data
+        int fnLen = (int) fnameArrRef.toAddress().plus(16L).loadLong();   // guest byte[] length
+        Address fnBase = fnameArrRef.toAddress().plus(24L);         // guest byte[] data
         long tib = Address.fromLong(objRef).loadLong();                     // obj header TIB
         return Loader.vhFieldOffset(fnBase, fnLen, tib);
     }
@@ -1587,15 +1587,15 @@ final class VMNatives
      * family, which drives its atomics through Unsafe offsets rather than VarHandles by design. Keyed on the
      * CLASS, not on an instance: at initializer time there is no object to read a TIB from.
      */
-    static long unsafeFieldOffset(ObjectReference mirrorRef, long nameArrRef)
+    static long unsafeFieldOffset(ObjectReference mirrorRef, ObjectReference nameArrRef)
     {
-        if (mirrorRef.toLong() <= 0x1000L || nameArrRef <= 0x1000L)   // boot-time force-compile passes 0
+        if (mirrorRef.toLong() <= 0x1000L || nameArrRef.toLong() <= 0x1000L)   // boot-time force-compile passes 0
         {
             return -1L;
         }
         long typeAddr = mirrorRef.toAddress().plus(16L).loadLong();       // Class.typeAddr
-        int fnLen = (int) Address.fromLong(nameArrRef + 16L).loadLong();    // guest byte[] length
-        long fnBase = nameArrRef + 24L;                      // guest byte[] data
+        int fnLen = (int) nameArrRef.toAddress().plus(16L).loadLong();    // guest byte[] length
+        Address fnBase = nameArrRef.toAddress().plus(24L);          // guest byte[] data
         return Loader.fieldOffsetOfType(typeAddr, fnBase, fnLen);
     }
 
@@ -1662,31 +1662,31 @@ final class VMNatives
      * address, so the whole address goes here and {@code staticFieldBase} answers null -- which is the stock
      * contract for an absolute offset. Reached from ForkJoinPool's initializer (its {@code poolIds} counter).
      */
-    static long unsafeStaticFieldAddr(ObjectReference mirrorRef, long nameArrRef)
+    static long unsafeStaticFieldAddr(ObjectReference mirrorRef, ObjectReference nameArrRef)
     {
-        if (mirrorRef.toLong() <= 0x1000L || nameArrRef <= 0x1000L)   // boot-time force-compile passes 0
+        if (mirrorRef.toLong() <= 0x1000L || nameArrRef.toLong() <= 0x1000L)   // boot-time force-compile passes 0
         {
             return 0L;
         }
         long typeAddr = mirrorRef.toAddress().plus(16L).loadLong();       // Class.typeAddr
-        int fnLen = (int) Address.fromLong(nameArrRef + 16L).loadLong();
-        long fnBase = nameArrRef + 24L;
+        int fnLen = (int) nameArrRef.toAddress().plus(16L).loadLong();
+        Address fnBase = nameArrRef.toAddress().plus(24L);
         return Loader.staticSlotOfType(typeAddr, fnBase, fnLen);
     }
 
     /** Reflection: {@code Class.fieldMods0(Class,byte[])} -> the named own instance field's access_flags, or -1. */
-    static int fieldMods(ObjectReference mirrorRef, long nameArrRef)
+    static int fieldMods(ObjectReference mirrorRef, ObjectReference nameArrRef)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            if (mirrorRef.toLong() <= 0x1000L || nameArrRef <= 0x1000L)
+            if (mirrorRef.toLong() <= 0x1000L || nameArrRef.toLong() <= 0x1000L)
             {
                 return -1;
             }
             long typeAddr = mirrorRef.toAddress().plus(16L).loadLong();       // Class.typeAddr
-            int fnLen = (int) Address.fromLong(nameArrRef + 16L).loadLong();
-            long fnBase = nameArrRef + 24L;
+            int fnLen = (int) nameArrRef.toAddress().plus(16L).loadLong();
+            Address fnBase = nameArrRef.toAddress().plus(24L);
             return Loader.fieldMods(typeAddr, fnBase, fnLen);
         }
         finally
@@ -1696,18 +1696,18 @@ final class VMNatives
     }
 
     /** Reflection: {@code Class.fieldTypeChar0(Class,byte[])} -> the field's descriptor first char, or -1. */
-    static int fieldTypeChar(ObjectReference mirrorRef, long nameArrRef)
+    static int fieldTypeChar(ObjectReference mirrorRef, ObjectReference nameArrRef)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            if (mirrorRef.toLong() <= 0x1000L || nameArrRef <= 0x1000L)
+            if (mirrorRef.toLong() <= 0x1000L || nameArrRef.toLong() <= 0x1000L)
             {
                 return -1;
             }
             long typeAddr = mirrorRef.toAddress().plus(16L).loadLong();
-            int fnLen = (int) Address.fromLong(nameArrRef + 16L).loadLong();
-            long fnBase = nameArrRef + 24L;
+            int fnLen = (int) nameArrRef.toAddress().plus(16L).loadLong();
+            Address fnBase = nameArrRef.toAddress().plus(24L);
             return Loader.fieldTypeChar(typeAddr, fnBase, fnLen);
         }
         finally
@@ -1766,7 +1766,7 @@ final class VMNatives
             raw.plus(i).store(name[i]);
             i += 1;
         }
-        return Loader.vhFieldOffset(raw.toLong(), name.length, Address.fromLong(obj).loadLong());
+        return Loader.vhFieldOffset(raw, name.length, Address.fromLong(obj).loadLong());
     }
 
     /**

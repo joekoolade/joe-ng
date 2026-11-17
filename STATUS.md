@@ -4,6 +4,31 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 24: guest byte[] arguments are ObjectReferences, their payloads Addresses
+  (2026-11-16).** Pi-validated (build 6e1faadfa761ab8b). The follow-on of increment 23: the OTHER object
+  arguments of the reflection natives.
+  - **References -> ObjectReference:** the guest-array parameters (`nameArr`, `descArr`, `*ArrRef`, `hostArrRef`,
+    `paramCharsRef`/`outRef`, and `defineClass`'s `byteArr`) of 23 VMNatives natives (staticCell, annoPresent/Get,
+    fieldAnno*, fieldType/Signature, classAnnoGet, forName/NoInit, defineClass, methodResolve*, mhDeclared,
+    methodInfo, ctorResolveDesc, dnsResolve, vhFieldOffset, Unsafe field offsets, fieldMods/TypeChar) and of 29
+    Loader APIs (forNameMirror, method/ctor resolution, compileMethodOnDemand*, the annotation readers, the field
+    readers, methodInfo, utf8EqArr, defineFromBytes). The static `ctorWantDesc` is an ObjectReference (no
+    initializer); a "any descriptor" `0L` is `nullReference()`.
+  - **Payloads -> Address:** `nbase`/`dbase`/`fnBase`/`srcAddr` (`arr.toAddress().plus(24L)`), and the helpers that
+    take them: `rawEqUtf8` (18 callers), `utf8HashThenRaw`, and the 8 field-lookup APIs (staticSlotOfType,
+    vhFieldOffset, fieldRegIndex, classfileFieldInfo, staticCellFor, fieldOffsetOfType, fieldMods, fieldTypeChar).
+  - **Descriptor ABI:** 23 `stashHelper` keys, 23 `VM.boot` reachability calls and 23 `xxxAddr` comments, as in
+    increment 23; no `helper-stash MISS`.
+  - **Left long:** return values; the `<= 0x1000L` guards (signed, via `.toLong()`); `annoMissSeen` stays a `long[]`
+    of raw refs; byte[] refs that arrive as long from `guestBytes(...)` (indy/MH linkers, wrapped with `fromLong`)
+    and the proxy builder's `nb`/`db` locals; the byte-buffer natives not in this set (elemSize, consoleRead,
+    blockRead/Write, hwEntropy) for a later increment.
+  - **Measured:** conversions VMNatives 72 -> 78, Loader 673 -> 676 (the guards' `toLong()` outnumber the removed
+    wraps, again: the type, not fewer conversions). Load/store mix identical to main in VMNatives, Loader and VM;
+    one `lcmp` became `isNull`. **Code:** VMNatives **-96 words** (6107 -> 6011), Loader **-142**.
+  - **Validation:** `make test` + overlaycheck; full regression **209/209**; image build no MISS. Pi: every page 200,
+    hello x2 (classes defined, main resolved by reflection), Boom, bench, forced stop, AddressFieldProbe 51/0,
+    DnsCheck (the retyped `dnsResolve` host array), SHA-256 check, staged 39 MB PUT + discard, `/net` errors 0.
 - **UNBOXED TYPES, INCREMENT 23: Class mirrors are ObjectReferences (2026-11-16).** Pi-validated (build
   23770804a699ae40). The second adopter of increment 22's type, and the first DESCRIPTOR change of the arc.
   - **Retyped:** the mirror parameter (`mirror`/`mirrorRef`/`componentMirror`, always the first) of the 50 reflection
