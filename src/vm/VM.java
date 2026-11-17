@@ -2110,7 +2110,7 @@ public final class VM
         if (declFieldDescAddr == 0L) { long u = VMNatives.declaredFieldDescAt(ObjectReference.nullReference(), -1L); }
         if (declFieldCountAddr == 0L) { long u = VMNatives.declaredFieldCount(ObjectReference.nullReference()); }
         if (stackTraceAddr == 0L) { long u = VMNatives.throwableTrace(0L); }          // Throwable.stackTrace0
-        if (fillTraceAddr == 0L) { VMUnwind.fillInTrace(0L); }                       // Throwable.fillInStackTrace0
+        if (fillTraceAddr == 0L) { VMUnwind.fillInTrace(ObjectReference.nullReference()); }                       // Throwable.fillInStackTrace0
         if (virtualResolveAddr == 0L) { long u = VMNatives.virtualResolve(0L, 0L); }  // late virtual dispatch
         if (mhResolveAddr == 0L) { long u = VMNatives.mhResolve(0L, 0L); }            // MethodHandle sig-poly calls
         if (indyResolveAddr == 0L) { long u = VMNatives.indyResolve(0L, 0L); }        // invokedynamic (generic)
@@ -2654,7 +2654,7 @@ public final class VM
             reportFault();                                             // print the raw fault + halt (never returns)
         }
         Magic.enableIrq();                                             // resumed via branch, not ERET: re-unmask IRQs
-        VMUnwind.unwind(exc, elr, sp);                                          // throw at the faulting instruction (never returns)
+        VMUnwind.unwind(ObjectReference.fromLong(exc), Address.fromLong(elr), Address.fromLong(sp));   // throw at the faulting instruction (never returns)
     }
 
     static long throwFromFaultAddr;    // VM.throwFromFault(J)V — hardware fault -> Java exception (address trap -> NPE)
@@ -3792,8 +3792,8 @@ public final class VM
     static long gcCollect;             // VM.gcCollect(J)V
     static long instanceOfAddr;        // VM.instanceOf(JJ)I
     static long checkCastAddr;         // VM.checkCast(JJ)J
-    static long unwindAddr;            // VM.unwind(JJJ)V
-    static long captureTraceAddr;      // VM.captureTrace(JJJ)V — throw-site backtrace for printStackTrace()
+    static long unwindAddr;            // VMUnwind.unwind(Lmagic/ObjectReference;Lmagic/Address;Lmagic/Address;)V
+    static long captureTraceAddr;      // VMUnwind.captureTrace(Lmagic/ObjectReference;Lmagic/Address;Lmagic/Address;)V — throw-site backtrace for printStackTrace()
     // Scheduler helpers the JIT-loaded mini java.base runtime BLs (Symbols ids 6..11).
     static long startThreadAddr;       // VM.startThread(J)V
     static long objWaitAddr;           // VM.objWait(JJ)V     — Object.wait
@@ -4045,7 +4045,7 @@ public final class VM
     static long declFieldDescAddr;     // VMNatives.declaredFieldDescAt(Lmagic/ObjectReference;J)J — Class.declaredFieldDescAt0
     static long declFieldCountAddr;    // VMNatives.declaredFieldCount(Lmagic/ObjectReference;)J — Class.declaredFieldCount0
     static long stackTraceAddr;        // VM.throwableTrace(J)J — Throwable.stackTrace0 (inline bt -> STE[])
-    static long fillTraceAddr;         // VMUnwind.fillInTrace(J)V — Throwable.fillInStackTrace0 (trace at construction)
+    static long fillTraceAddr;         // VMUnwind.fillInTrace(Lmagic/ObjectReference;)V — Throwable.fillInStackTrace0 (trace at construction)
     static long virtualResolveAddr;    // VM.virtualResolve(JJ)J — late virtual dispatch (receiver + site idx)
     static long mhResolveAddr;         // VMNatives.mhResolve(JJ)J — the MH trampoline's resolver (save area + site)
     static long indyResolveAddr;       // VMNatives.indyResolve(JJ)J — the indy trampoline's resolver (save area + site)

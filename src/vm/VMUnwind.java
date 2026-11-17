@@ -58,16 +58,14 @@ final class VMUnwind
     static Address traceStopWord;
 
     /** Entered by descriptor {@code (JJJ)V} (the CAPTURE_TRACE helper), so its parameters stay raw words. */
-    static void captureTrace(long exc, long pcWord, long spWord)
+    static void captureTrace(ObjectReference exc, Address pc, Address sp)
     {
-        if (exc <= 0x1000L || !Loader.awaitsThrowTrace(ObjectReference.fromLong(exc)))   // boot force-compile passes 0; only a VM-made exception
+        if (exc.toLong() <= 0x1000L || !Loader.awaitsThrowTrace(exc))   // boot force-compile passes 0; only a VM-made exception
         {
             return;                                          //   is filled here (a constructed one has its trace or none)
         }
-        Address pc = Address.fromLong(pcWord);
-        Address sp = Address.fromLong(spWord);
-        Address e = Address.fromLong(exc);
-        if (NPE_TRACE && Loader.isNpe(ObjectReference.fromLong(exc)))
+        Address e = exc.toAddress();
+        if (NPE_TRACE && Loader.isNpe(exc))
         {
             // A MESSAGELESS NPE is the JIT's own null check, so it names no cause and picocli can only report
             // that one happened. Its throw SITE is the missing fact, and it is already in hand here: this is
@@ -95,7 +93,7 @@ final class VMUnwind
             // constructor gets here -- the JIT's implicit NPE / ArithmeticException / AIOOBE, so fillInTrace never
             // ran (DeepTraceProbe: 8 frames before this). Those paths have just allocated the exception itself,
             // so one more allocation is nothing new for them.
-            long arr = Loader.newThrowableBacktrace(ObjectReference.fromLong(exc), n);
+            long arr = Loader.newThrowableBacktrace(exc, n);
             if (arr != 0L)
             {
                 throwFrames(e, pc, sp, Address.fromLong(arr)); // pass 2: the same walk, into the array
@@ -155,11 +153,11 @@ final class VMUnwind
      * is filled at its throw; one whose class overrides {@code fillInStackTrace} to skip the capture, or that
      * was built with a false {@code writableStackTrace}, has no trace, as stock.
      */
-    static void fillInTrace(long exc)
+    static void fillInTrace(ObjectReference exc)
     {
         long lr = Magic.readLR();                              // FIRST op: x30 = the return into fillInStackTrace0's caller
         long mysp = Magic.readSP();                            // this frame's base (SP is stable post-prologue)
-        if (exc <= 0x1000L)
+        if (exc.toLong() <= 0x1000L)
         {
             return;                                            // boot force-compile passes 0
         }
@@ -168,11 +166,11 @@ final class VMUnwind
         int n = keptFrames(exc, cpc, csp, Address.zero());     // pass 1: the inline slots, and the true depth
         if (n < 8)
         {
-            Address.fromLong(exc).plus(16L + n * 8L).store(0L);   // 0-terminate (an empty trace stays all-zero)
+            exc.toAddress().plus(16L + n * 8L).store(0L);         // 0-terminate (an empty trace stays all-zero)
         }
         if (n > 8)
         {
-            long arr = Loader.newThrowableBacktrace(ObjectReference.fromLong(exc), n);   // deeper than the slots: every frame, as stock
+            long arr = Loader.newThrowableBacktrace(exc, n);   // deeper than the slots: every frame, as stock
             if (arr != 0L)
             {
                 keptFrames(exc, cpc, csp, Address.fromLong(arr));   // pass 2: the same walk, into the array
@@ -180,7 +178,7 @@ final class VMUnwind
         }
         else
         {
-            Loader.newThrowableBacktrace(ObjectReference.fromLong(exc), 0);              // fits the slots: clear an older deep trace
+            Loader.newThrowableBacktrace(exc, 0);              // fits the slots: clear an older deep trace
         }
     }
 
@@ -194,16 +192,16 @@ final class VMUnwind
      * inline {@code bt0..bt7}; otherwise every kept pc goes into the {@code long[]} {@code arr}, which pass 1
      * sized. Returns the number of frames kept. Allocates nothing, so the two passes see the same stack.
      */
-    private static int keptFrames(long exc, Address cpc, Address csp, Address arr)
+    private static int keptFrames(ObjectReference exc, Address cpc, Address csp, Address arr)
     {
-        Address e = Address.fromLong(exc);
+        Address e = exc.toAddress();
         int phase = Loader.FRAME_FILL;
         int n = 0;
         while (n < MAX_TRACE_DEPTH && cpc.toLong() > 0x1000L)
         {
             if (phase != Loader.FRAME_KEEP)
             {
-                int kind = Loader.ctorFrameKind(cpc, exc);
+                int kind = Loader.ctorFrameKind(cpc, exc.toLong());
                 if (kind == Loader.FRAME_INIT)
                 {
                     phase = Loader.FRAME_INIT;                 // fillInStackTrace frames end at the first <init>
@@ -243,12 +241,14 @@ final class VMUnwind
     /** One report per boot: the first bad throw is the informative one; the rest are its wreckage. */
     private static boolean badThrowReported;
 
-    /** Entered by descriptor {@code (JJJ)V} (the UNWIND helper, athrow, the fault path), so its parameters stay raw words. */
-    static void unwind(long exc, long pcWord, long spWord)
+    /**
+     * Entered by descriptor (the UNWIND helper, athrow, the fault path). {@code excWord} is the same reference as a
+     * raw word: the guards and reports below must survive a value that is NOT an object -- catching that is their job.
+     */
+    static void unwind(ObjectReference exc, Address pc, Address sp)
     {
-        Address pc = Address.fromLong(pcWord);
-        Address sp = Address.fromLong(spWord);
-        Address ea = Address.fromLong(exc);
+        long excWord = exc.toLong();
+        Address ea = exc.toAddress();
         // A NON-THROWABLE reaching the unwinder is always a VM bug, so report it AT THE THROW SITE -- the one
         // place the original pc is still in hand. The uncaught report at the top of the stack cannot supply
         // this: by then the walk has reached VM.boot and the pc names the boot frame, not the thrower.
@@ -256,11 +256,11 @@ final class VMUnwind
         // Deliberately NOT folded into `unwindLog`, which caps at the first 24 throws: picocli and JUnit throw
         // ClassNotFoundException/NoSuchMethodException/NumberFormatException as ordinary CONTROL FLOW, so that
         // budget is spent long before anything interesting happens. This fires only on the broken case.
-        if (exc > 0x1000L && !badThrowReported)
+        if (excWord > 0x1000L && !badThrowReported)
         {
             long t = ea.loadLong();
             long thrType = Loader.throwableTypeAddr();
-            if (t > 0x1000L && thrType != 0L && VM.instanceOf(exc, thrType) == 0)
+            if (t > 0x1000L && thrType != 0L && VM.instanceOf(excWord, thrType) == 0)
             {
                 badThrowReported = true;
                 Uart.write(Magic.bytes("\n  BAD THROW: not a Throwable -- "));
@@ -276,8 +276,8 @@ final class VMUnwind
         {
             unwindLogged += 1;
             Uart.write(Magic.bytes("\n  THROW exc="));
-            printHex(exc);
-            if (exc > 0x1000L && exc < 0x40000000L)
+            printHex(excWord);
+            if (excWord > 0x1000L && excWord < 0x40000000L)
             {
                 long tib = ea.loadLong();
                 if (tib > 0x1000L && tib < 0x40000000L)
@@ -296,19 +296,19 @@ final class VMUnwind
         // value reaching athrow is a bug either way; the report names the throwing method while its pc is
         // still in hand, instead of the walk running to the top and printing UNWIND LOST with the evidence
         // already gone.
-        long etib = exc > 0x1000L ? ea.loadLong() : 0L;
-        if (exc <= 0x1000L || etib <= 0x1000L || etib >= 0x40000000L)
+        long etib = excWord > 0x1000L ? ea.loadLong() : 0L;
+        if (excWord <= 0x1000L || etib <= 0x1000L || etib >= 0x40000000L)
         {
             Uart.write(Magic.bytes("\nBAD THROW exc="));
-            printHex(exc);
+            printHex(excWord);
             Uart.write(Magic.bytes(" tib="));
             printHex(etib);
-            if (exc > 0x1000L)
+            if (excWord > 0x1000L)
             {
                 Uart.write(Magic.bytes(" status="));
                 printHex(ea.plus(8L).loadLong());   // size | mark: is this a heap block at all?
                 Uart.write(Magic.bytes(" inHeap="));
-                printHex(exc >= Heap.BASE && exc < Address.fromLong(Heap.PTR_CELL).loadLong() ? 1L : 0L);
+                printHex(excWord >= Heap.BASE && excWord < Address.fromLong(Heap.PTR_CELL).loadLong() ? 1L : 0L);
             }
             Uart.write(Magic.bytes(" thrownAt="));
             printHex(pc);
@@ -325,7 +325,7 @@ final class VMUnwind
                 Magic.wfe();
             }
         }
-        captureTrace(exc, pc.toLong(), sp.toLong());                     // fill exc's backtrace if not already captured at the throw site
+        captureTrace(exc, pc, sp);                     // fill exc's backtrace if not already captured at the throw site
         if (unwindLocBufs.isZero())
         {
             unwindLocBufs = Heap.allocData(MAX_TASKS * 16 * 8);    // 16 callee-saved local slots per task
@@ -379,7 +379,7 @@ final class VMUnwind
                                                                            //   (incl. one inside the handler) is FRESH,
                                                                            //   not a nested unwind fault
                 long hrl = jitRegLocalsAt(pc);                             // -1 = unknown; resume ignores it,
-                Magic.resume(h, sp.toLong(), exc, hrl < 0L ? 0L : hrl, unwindLocBuf.toLong());  //   but never pass it a negative
+                Magic.resume(h, sp.toLong(), excWord, hrl < 0L ? 0L : hrl, unwindLocBuf.toLong());  //   but never pass it a negative
             }
             long fs = frameSizeAt(pc);
             if (fs == 0L)
@@ -397,13 +397,13 @@ final class VMUnwind
                 // wild branch that had never happened. Say what the object IS instead.
                 long thrType = Loader.throwableTypeAddr();
                 boolean isThrowable = xt > 0x1000L
-                        && (thrType == 0L || VM.instanceOf(exc, thrType) != 0);
+                        && (thrType == 0L || VM.instanceOf(excWord, thrType) != 0);
                 if (xt > 0x1000L && !isThrowable)
                 {
                     Uart.write(Magic.bytes("\nUNWIND: THROWN OBJECT IS NOT A THROWABLE -- "));
                     Loader.printClassName(Address.fromLong(xt).loadLong());
                     Uart.write(Magic.bytes(" at "));
-                    printHex(exc);
+                    printHex(excWord);
                     Uart.write(Magic.bytes("\n  (no backtrace decoded: this object has no Throwable layout,"));
                     Uart.write(Magic.bytes(" so its fields are NOT frame pcs)\n"));
                     // WHERE the unwind gave up -- the one fact the class and address do not supply. `pc` is
@@ -444,7 +444,7 @@ final class VMUnwind
                 {
                     Uart.write(Magic.bytes("\nException in thread \"main\" "));
                     Loader.printClassName(Address.fromLong(xt).loadLong());
-                    long msg = Loader.throwableMessage(ObjectReference.fromLong(exc));     // Throwable.detailMessage, by name
+                    long msg = Loader.throwableMessage(exc);     // Throwable.detailMessage, by name
                     if (msg > 0x1000L)
                     {
                         Uart.write(Magic.bytes(": "));
@@ -457,7 +457,7 @@ final class VMUnwind
                     Uart.write(Magic.bytes("\nUNWIND LOST pc="));   // no valid exception object -> a genuine
                     printHex(pc);                                    //   frame-table gap, not an uncaught throw
                     Uart.write(Magic.bytes(" exc="));
-                    printHex(exc);
+                    printHex(excWord);
                     Uart.putc(0x0A);
                 }
                 // print the captured stack trace (method + SourceFile + line) as printStackTrace does.
@@ -598,7 +598,7 @@ final class VMUnwind
         }
     }
 
-    private static long findHandler(Address pc, long exc)
+    private static long findHandler(Address pc, ObjectReference exc)
     {
         long h = findHandlerIn(handlerTable, handlerCount, pc, exc);   // image methods
         if (h != 0L)
@@ -608,7 +608,7 @@ final class VMUnwind
         return findHandlerIn(jitHandlerTable, jitHandlerCount, pc, exc);   // metal-built / JIT'd methods
     }
 
-    private static long findHandlerIn(Address table, long count, Address pc, long exc)
+    private static long findHandlerIn(Address table, long count, Address pc, ObjectReference exc)
     {
         long i = 0L;
         while (i < count)
@@ -627,7 +627,7 @@ final class VMUnwind
                     // (see Loader.catchTypeByName) -- never "catch everything", which is what 0 used to say.
                     catchType = Loader.catchTypeByName(catchType & ~CATCH_BY_NAME);
                 }
-                if (catchType != 0L && instanceOf(exc, catchType) != 0)
+                if (catchType != 0L && instanceOf(exc.toLong(), catchType) != 0)
                 {
                     return e.plus(16L).loadLong();
                 }

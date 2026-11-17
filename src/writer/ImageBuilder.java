@@ -1437,8 +1437,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMGc.gcCollect(J)V",   "vm/VM.gcCollect");
         stashHelper(image, staticWord, wordOffset, "vm/VM.instanceOf(JJ)I",   "vm/VM.instanceOfAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.checkCast(JJ)J",    "vm/VM.checkCastAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VMUnwind.unwind(JJJ)V", "vm/VM.unwindAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VMUnwind.captureTrace(JJJ)V", "vm/VM.captureTraceAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMUnwind.unwind(Lmagic/ObjectReference;Lmagic/Address;Lmagic/Address;)V", "vm/VM.unwindAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMUnwind.captureTrace(Lmagic/ObjectReference;Lmagic/Address;Lmagic/Address;)V", "vm/VM.captureTraceAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.reportFault()V",    "vm/VM.reportFaultAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.throwFromFault(J)V", "vm/VM.throwFromFaultAddr");
         stashHelper(image, staticWord, wordOffset, "vm/Loader.lazyCompile(I)J", "vm/VM.lazyCompileAddr");
@@ -1660,7 +1660,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredFieldDescAt(Lmagic/ObjectReference;J)J", "vm/VM.declFieldDescAddr"); // Class.declaredFieldDescAt0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredFieldCount(Lmagic/ObjectReference;)J", "vm/VM.declFieldCountAddr"); // Class.declaredFieldCount0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.throwableTrace(J)J", "vm/VM.stackTraceAddr");        // Throwable.stackTrace0
-        stashHelper(image, staticWord, wordOffset, "vm/VMUnwind.fillInTrace(J)V", "vm/VM.fillTraceAddr");          // Throwable.fillInStackTrace0
+        stashHelper(image, staticWord, wordOffset, "vm/VMUnwind.fillInTrace(Lmagic/ObjectReference;)V", "vm/VM.fillTraceAddr");          // Throwable.fillInStackTrace0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.virtualResolve(JJ)J", "vm/VM.virtualResolveAddr"); // late virtual dispatch
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.mhResolve(JJ)J", "vm/VM.mhResolveAddr"); // MethodHandle sig-poly calls
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.indyResolve(JJ)J", "vm/VM.indyResolveAddr"); // invokedynamic (generic)

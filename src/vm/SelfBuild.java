@@ -474,7 +474,7 @@ final class SelfBuild
             && imAddrOf(Magic.bytes("vm/Heap"), Magic.bytes("allocArray"), Magic.bytes("(II)Lmagic/Address;")) == allocArray
             && imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("instanceOf"), Magic.bytes("(JJ)I")) == instanceOfAddr
             && imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("checkCast"), Magic.bytes("(JJ)J")) == checkCastAddr
-            && imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("unwind"), Magic.bytes("(JJJ)V")) == unwindAddr;
+            && imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("unwind"), Magic.bytes("(Lmagic/ObjectReference;Lmagic/Address;Lmagic/Address;)V")) == unwindAddr;
     }
 
     // ----- M5.5c step 3b.2: object allocation (new -> tib + Type/TIB region) -----
@@ -1697,7 +1697,7 @@ final class SelfBuild
         }
         else
         {
-            imEnqueue(Magic.bytes("vm/VM"), Magic.bytes("unwind"), Magic.bytes("(JJJ)V"));
+            imEnqueue(Magic.bytes("vm/VM"), Magic.bytes("unwind"), Magic.bytes("(Lmagic/ObjectReference;Lmagic/Address;Lmagic/Address;)V"));
         }
     }
 
@@ -2090,7 +2090,7 @@ final class SelfBuild
         {
             return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("checkCast"), Magic.bytes("(JJ)J"));
         }
-        return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("unwind"), Magic.bytes("(JJJ)V"));
+        return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("unwind"), Magic.bytes("(Lmagic/ObjectReference;Lmagic/Address;Lmagic/Address;)V"));
     }
 
     /** Patch every relocation site in {@code sym}'s just-compiled {@code words} to its image address. */
@@ -2362,7 +2362,7 @@ final class SelfBuild
         if (bytesEqual(nm, Magic.bytes("gcCollect"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("gcCollect"), Magic.bytes("(J)V")); }
         if (bytesEqual(nm, Magic.bytes("instanceOfAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("instanceOf"), Magic.bytes("(JJ)I")); }
         if (bytesEqual(nm, Magic.bytes("checkCastAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("checkCast"), Magic.bytes("(JJ)J")); }
-        if (bytesEqual(nm, Magic.bytes("unwindAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("unwind"), Magic.bytes("(JJJ)V")); }
+        if (bytesEqual(nm, Magic.bytes("unwindAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("unwind"), Magic.bytes("(Lmagic/ObjectReference;Lmagic/Address;Lmagic/Address;)V")); }
         if (bytesEqual(nm, Magic.bytes("reportFaultAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("reportFault"), Magic.bytes("()V")); }
         if (bytesEqual(nm, Magic.bytes("throwFromFaultAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("throwFromFault"), Magic.bytes("(J)V")); }
         if (bytesEqual(nm, Magic.bytes("irqHandlerAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("irqHandler"), Magic.bytes("()V")); }
