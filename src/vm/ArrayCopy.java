@@ -221,7 +221,7 @@ final class ArrayCopy
         while (i < (long) len)
         {
             ObjectReference v = from.plus(i * 8L).loadObjectReference();
-            if (!v.isNull() && VM.instanceOf(v, bound.toLong()) == 0)
+            if (!v.isNull() && VM.instanceOf(v, bound) == 0)
             {
                 byte[] s = Loader.typeNameBytes(stype);
                 byte[] b = Loader.typeNameBytes(bound);

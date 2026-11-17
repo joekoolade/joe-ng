@@ -1516,9 +1516,9 @@ public final class Loader
         Uart.putc(0x0A);
     }
 
-    static void ensureInitFor(long clsU)
+    static void ensureInitFor(Address clsU)
     {
-        if (clsU == 0L)
+        if (clsU.isZero())
         {
             return;                                     // VM.forceCompile's touch, and an unresolvable name
         }
@@ -1526,14 +1526,14 @@ public final class Loader
         {
             return;                                     // a BAKED guard (WriterSymbols) reached before the loader
         }                                               //   tables exist: no class is registered yet to initialize
-        if (initDoneMemoHit(clsU))
+        if (initDoneMemoHit(clsU.toLong()))
         {
             return;
         }
-        int reg = regBySigU(Address.fromLong(clsU));
+        int reg = regBySigU(clsU);
         if (INIT_GUARD_LOG)
         {
-            logInitGuard(Magic.bytes("  IG-fire "), Address.fromLong(clsU));
+            logInitGuard(Magic.bytes("  IG-fire "), clsU);
             Uart.write(Magic.bytes("      reg="));
             VM.printDec(reg);
             if (reg >= 0)
@@ -1549,7 +1549,7 @@ public final class Loader
             RVMClass c = clTab[reg];
             if (c.state >= RVMClass.ST_INITIALIZED && c.superInited && !c.initFailed)
             {
-                initDoneMemoPut(clsU);
+                initDoneMemoPut(clsU.toLong());
             }
         }
     }
@@ -4437,7 +4437,7 @@ public final class Loader
         // The same for a cached registry Type: it names a class of the registry this method replaces.
         // MEASURED stable in the suite (thrTypeCache filled at generation 4 and matched a fresh lookup to the
         // end; the Cloneable/Serializable pair never filled), so this is hygiene, not a fix.
-        thrTypeCache = 0L;
+        thrTypeCache = Address.zero();
         cloneableTypeCache = Address.zero();
         serializableTypeCache = Address.zero();
         arrayIfaceScanned = 0;
@@ -14402,7 +14402,7 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("permitted0")))           { return VM.classPermittedAddr; }   // (Class,J)String
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("forName0")))          { return VM.forNameAddr; }       // (byte[])Class
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("classModifiers0")))   { return VM.classModifiersAddr; } // (Class)I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isInstance0")))       { return VM.instanceOfAddr; }    // (Object,J)Z == VM.instanceOf(Lmagic/ObjectReference;J)I
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isInstance0")))       { return VM.instanceOfAddr; }    // (Object,J)Z == VM.instanceOf(Lmagic/ObjectReference;Lmagic/Address;)I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("assignable0")))       { return VM.assignableAddr; }    // (J,J)Z -- interfaces too
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("superclass0")))       { return VM.superclassAddr; }    // (Class)Class
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldMods0")))        { return VM.fieldModsAddr; }     // (Class,byte[])I
@@ -26472,10 +26472,10 @@ public final class Loader
      * <p>They used to be recorded in statics by {@code castOk}'s failing path and read back here, which another
      * core's failing cast could overwrite or clear in between (ExcMessageRaceProbe).
      */
-    static long newCce(ObjectReference ref, long targetType)
+    static long newCce(ObjectReference ref, Address targetType)
     {
         long e = newExc(Magic.bytes("java/lang/ClassCastException"));
-        if (e != 0L && !ref.isNull() && targetType != 0L)
+        if (e != 0L && !ref.isNull() && !targetType.isZero())
         {
             long tib = ref.toAddress().loadLong();
             setThrowableMessage(ObjectReference.fromLong(e), guestString(castFailureMessage(tib, typeOfObject(ref), targetType)));
@@ -26484,13 +26484,13 @@ public final class Loader
     }
 
     /** "class a.B cannot be cast to class c.D", or null when either Type cannot be named. */
-    private static byte[] castFailureMessage(long fromTib, Address fromType, long toType)
+    private static byte[] castFailureMessage(long fromTib, Address fromType, Address toType)
     {
         byte[] out = new byte[512];
         int p = putUtf8Bytes(out, 0, Magic.bytes("class "));
         p = putTypeName(out, p, fromType, fromTib);
         p = putUtf8Bytes(out, p, Magic.bytes(" cannot be cast to class "));
-        p = putTypeName(out, p, Address.fromLong(toType), 0L);
+        p = putTypeName(out, p, toType, 0L);
         byte[] exact = new byte[p];
         int q = 0;
         while (q < p)
@@ -29200,17 +29200,17 @@ public final class Loader
     }
 
     /** The Type of {@code java/lang/Throwable}, or 0 if it is not loaded. Cached: this is asked on a fault path. */
-    static long throwableTypeAddr()
+    static Address throwableTypeAddr()
     {
-        if (thrTypeCache == 0L)
+        if (thrTypeCache.isZero())
         {
             int i = classIndexByName(Magic.bytes("java/lang/Throwable"));
-            thrTypeCache = i < 0 ? 0L : clTab[i].type.toLong();
+            thrTypeCache = i < 0 ? Address.zero() : clTab[i].type;
         }
         return thrTypeCache;
     }
 
-    private static long thrTypeCache;
+    private static Address thrTypeCache;
 
     /**
      * The Class mirror of the JIT'd method containing machine PC {@code pc} (getCallerClass), or 0.
@@ -29299,8 +29299,8 @@ public final class Loader
                     {
                         return FRAME_KEEP;
                     }
-                    long type = typeByName(rgTab[i].base.plus(rgTab[i].classOff + 2L), u2(rgTab[i].base.plus(rgTab[i].classOff)));
-                    return type != 0L && VM.instanceOf(exc, type) != 0 ? kind : FRAME_KEEP;
+                    Address type = typeByName(rgTab[i].base.plus(rgTab[i].classOff + 2L), u2(rgTab[i].base.plus(rgTab[i].classOff)));
+                    return !type.isZero() && VM.instanceOf(exc, type) != 0 ? kind : FRAME_KEEP;
                 }
                 i += 1;
             }
@@ -29329,8 +29329,8 @@ public final class Loader
                 {
                     return FRAME_KEEP;
                 }
-                long type = typeByName(sym.plus(2L), dot);
-                return type != 0L && VM.instanceOf(exc, type) != 0 ? kind : FRAME_KEEP;
+                Address type = typeByName(sym.plus(2L), dot);
+                return !type.isZero() && VM.instanceOf(exc, type) != 0 ? kind : FRAME_KEEP;
             }
             k += 1;
         }
@@ -29371,7 +29371,7 @@ public final class Loader
     }
 
     /** The Type of the registered class whose internal name is the {@code len} bytes at {@code p}, or 0. */
-    private static long typeByName(Address p, int len)
+    private static Address typeByName(Address p, int len)
     {
         int ci = 0;
         while (ci < clCount)
@@ -29379,11 +29379,11 @@ public final class Loader
             RVMClass c = clTab[ci];
             if (c != null && u2(c.base.plus(c.nameOff)) == len && sameBytesAt(c.base.plus(c.nameOff + 2L), p, len))
             {
-                return c.type.toLong();
+                return c.type;
             }
             ci += 1;
         }
-        return 0L;
+        return Address.zero();
     }
 
     /** Whether the {@code len} bytes at {@code a} and at {@code b} are equal. */

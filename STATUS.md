@@ -4,6 +4,30 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 36: Type/TIB pointers, stage 4 -- the descriptor-reached helpers (2026-11-17).**
+  Pi-validated (build 0ac3ea1ce7ac7629). Closes the Type/TIB sub-arc.
+  - **Retyped (the Type argument -> Address, with every descriptor site):** `VM.instanceOf`/`checkCast`
+    `(Lmagic/ObjectReference;Lmagic/Address;)` (stash keys, `WriterSymbols.HELPER_KEY`, 5 SelfBuild strings each,
+    comments); `castOk`/`newCce` (stash keys, SelfBuild, reachability calls `Address.zero()`); `VMNatives.assignable`
+    -- both arguments are Type addresses (`Class.assignable0(other.typeAddr, typeAddr)`) -> `(Lmagic/Address;
+    Lmagic/Address;)J`; `ensureInitByName` -- its argument is a raw absolute Utf8 class-name address, so it is an
+    Address too, with `Loader.ensureInitFor`. `Loader.newCce`/`castFailureMessage`, `throwableTypeAddr`/
+    `thrTypeCache`, `typeByName` and `arrayStoreOk`'s element type follow; the earlier stages' `fromLong(targetType)`
+    boundaries inside and around these are gone.
+  - **The compiler is untouched:** Baseline runs on the HOST when the writer bakes, where Address throws, so the
+    `Symbols` interface and `MetalSymbols`' `long` immediates stay; only the three `HELPER_KEY` strings and five
+    `Symbols` comments changed. The JIT passes the Type as a raw 64-bit immediate in x1 either way -- the ABI is the
+    same.
+  - **Left long:** VMUnwind's `catchType` and `Loader.catchTypeByName` (the handler-table word carries the
+    CATCH_BY_NAME tag bit and is masked), `vsSiteType` (its address feeds the compiled inline cache),
+    `checkCast`'s return (the object reference).
+  - **Measured:** total conversions across src/ **1221 -> 1213**. One 64-bit load swap; `lcmp` -> `isZero` (VM 3,
+    Loader 5, VMUnwind 2); no new ordering compare or `if_acmp`. **Code:** VM -35 words, Loader -29, VMUnwind -8,
+    VMNatives -4. No `helper-stash MISS`.
+  - **Validation:** `make test` + overlaycheck; full regression **209/209** (every JIT'd cast and instanceof calls
+    through the new descriptors). Pi: the usual set, AddressFieldProbe 58/0, ConcatCheck identical to a host JVM,
+    bench unchanged.
+  - **The Type/TIB sub-arc (33-36):** src/ conversions 1300 -> 1213; Loader 120,921 -> 120,042 words.
 - **UNBOXED TYPES, INCREMENT 35: Type/TIB pointers, stage 3 -- the tables (2026-11-17).** Pi-validated (build
   47b574eeea000c87).
   - **Tables -> AddressArray** (every slot a Type/TIB pointer or 0, no element arithmetic, none parked in a

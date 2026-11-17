@@ -1526,7 +1526,7 @@ public final class VM
 
     /** Allocate a {@code java/lang/ClassCastException} — the JIT calls this on a failed {@code checkcast},
      *  passing the object and the target Type so the message can name both. */
-    static long newCce(ObjectReference ref, long targetType)
+    static long newCce(ObjectReference ref, Address targetType)
     {
         return Loader.newCce(ref, targetType);
     }
@@ -1538,9 +1538,9 @@ public final class VM
      * handler search would start in the wrong place. The JIT branches on this and throws INLINE instead,
      * which is what puts the caller's pc/sp in front of the unwinder.
      */
-    static int castOk(ObjectReference ref, long targetType)
+    static int castOk(ObjectReference ref, Address targetType)
     {
-        if (targetType == 0L)
+        if (targetType.isZero())
         {
             return 1;      // unresolved target (e.g. an array type "[B"): trust the class-file verifier
         }
@@ -1552,7 +1552,7 @@ public final class VM
         {
             return 1;
         }
-        if (ref.toAddress().loadLong() <= ObjectModel.MAX_RAW_ARRAY_TIB && isArrayType(Address.fromLong(targetType)))
+        if (ref.toAddress().loadLong() <= ObjectModel.MAX_RAW_ARRAY_TIB && isArrayType(targetType))
         {
             return 1;      // a RAW array (no Type node) cast to an array class: trust the verifier, as checkCast does
         }
@@ -1770,7 +1770,7 @@ public final class VM
      * they are answered from Loader's epoch-tagged memo by address. Without it each call hashed and
      * byte-compared the name (classRegAt) -- MEASURED as the largest cost of a warm TLS session.
      */
-    static void ensureInitByName(long clsU)
+    static void ensureInitByName(Address clsU)
     {
         Loader.ensureInitFor(clsU);
     }
@@ -1812,8 +1812,8 @@ public final class VM
         {
             return 1;                                      // untyped/raw array (no element Type to check against)
         }
-        long elemType = Address.fromLong(tib).loadAddress().plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong();
-        if (elemType == 0L)
+        Address elemType = Address.fromLong(tib).loadAddress().plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadAddress();
+        if (elemType.isZero())
         {
             return 1;                                      // primitive-element array (shouldn't reach aastore) / unknown
         }
@@ -2030,7 +2030,7 @@ public final class VM
         if (boxPrimAddr == 0L) { long u = VMBox.box(0L, 0); }          // boxes a method ref's primitive result
         if (unboxNullAddr == 0L) { long u = VMBox.unboxNull(0L); }     // a method ref's null primitive argument -> NPE
         if (scStartAddr == 0L) { Address u = VMConcat.scStart(); }        // string-concat helpers (JIT'd concat only)
-        if (ensureInitAddr == 0L) { ensureInitByName(0L); }   // 0 is the no-op arg (Loader.ensureInitFor)
+        if (ensureInitAddr == 0L) { ensureInitByName(Address.zero()); }   // 0 is the no-op arg (Loader.ensureInitFor)
         if (scCharAddr == 0L) { VMConcat.scChar(Address.zero(), 0); }
         if (scIntAddr == 0L) { VMConcat.scInt(Address.zero(), 0); }
         if (scEndAddr == 0L) { ObjectReference u = VMConcat.scEnd(Address.zero()); }
@@ -2075,8 +2075,8 @@ public final class VM
         if (newAioobeIndexAddr == 0L) { long u = newAioobeIndex(0L, 0L); }
         if (newAseAddr == 0L) { long u = newAse(0L); }                // ArrayStoreException (aastore mismatch)
         if (arrayStoreOkAddr == 0L) { int u = arrayStoreOk(ObjectReference.nullReference(), ObjectReference.nullReference()); } // aastore covariant check
-        if (newCceAddr == 0L) { long u = newCce(ObjectReference.nullReference(), 0L); }            // ClassCastException (failed checkcast)
-        if (castOkAddr == 0L) { int u = castOk(ObjectReference.nullReference(), 0L); }             // checkcast predicate
+        if (newCceAddr == 0L) { long u = newCce(ObjectReference.nullReference(), Address.zero()); }            // ClassCastException (failed checkcast)
+        if (castOkAddr == 0L) { int u = castOk(ObjectReference.nullReference(), Address.zero()); }             // checkcast predicate
         if (newUnresolvedAddr == 0L) { long u = newUnresolved(-1L); } // `new` the loader cannot resolve early
         if (ctorRefInit0 == 0L) { ctorRefInit(-1L); }                 // a constructor reference's <clinit> (JVMS 5.5)
         if (newArithAddr == 0L) { long u = newArith(); }
@@ -2159,7 +2159,7 @@ public final class VM
         if (exclusiveBindNoneAddr == 0L) { long u = VMNatives.exclusiveBindNone(); } // Net.isExclusiveBindAvailable
         if (classNameAddr == 0L) { long u = VMNatives.classNameOf(ObjectReference.nullReference()); }        // Class.getName0() native (M4)
         if (forNameAddr == 0L) { long u = VMNatives.forName(ObjectReference.nullReference()); }              // Class.forName0() native (reflection M1)
-        if (assignableAddr == 0L) { long u = VMNatives.assignable(0L, 0L); }    // Class.assignable0 (interfaces too)
+        if (assignableAddr == 0L) { long u = VMNatives.assignable(Address.zero(), Address.zero()); }    // Class.assignable0 (interfaces too)
         if (hwEntropyAddr == 0L) { long u = VMNatives.hwEntropy(ObjectReference.nullReference(), 0L); } // MetalRamfs.hwEntropy0
         if (consoleReadAddr == 0L) { long u = VMNatives.consoleRead(ObjectReference.nullReference(), 0L, 0L); } // MetalConsoleIn.read0
         if (boardBuildIdAddr == 0L) { long u = VMNatives.boardBuildId(); }              // MetalBoard.buildId0
@@ -3176,7 +3176,7 @@ public final class VM
     // inherited from a superclass, since each class's directory is checked on the way
     // up. Not yet: super-interfaces (a directory lists directly-declared interfaces, so
     // `x instanceof Base` where x implements `Greeter extends Base` is missed).
-    static int instanceOf(ObjectReference ref, long targetType)
+    static int instanceOf(ObjectReference ref, Address targetType)
     {
         if (ref.isNull())
         {
@@ -3188,7 +3188,7 @@ public final class VM
             return 0;    // a raw array (element size in @0, no Type): not an instance of any class/interface type
         }
         Address type = Address.fromLong(tib).loadAddress();           // TIB→Type (@0); for a typed array, the array Type
-        return typeAssignable(type, Address.fromLong(targetType)) ? 1 : 0;
+        return typeAssignable(type, targetType) ? 1 : 0;
     }
 
     /** True if an array Type (its instanceSize slot carries the tag). */
@@ -3348,16 +3348,16 @@ public final class VM
 
     /** {@code checkcast} support: return {@code ref} if the cast holds, else halt
      *  (no exceptions yet). Null always passes. */
-    static long checkCast(ObjectReference ref, long targetType)
+    static long checkCast(ObjectReference ref, Address targetType)
     {
-        if (targetType == 0L)
+        if (targetType.isZero())
         {
             return ref.toLong();    // unresolved target (e.g. an array type "[B" — arrays carry no Type): the class-file
                                     // verifier already proved this cast holds, so trust it rather than walk a raw array
         }
         if (!ref.isNull() && instanceOf(ref, targetType) == 0)
         {
-            if (ref.toAddress().loadLong() <= ObjectModel.MAX_RAW_ARRAY_TIB && isArrayType(Address.fromLong(targetType)))
+            if (ref.toAddress().loadLong() <= ObjectModel.MAX_RAW_ARRAY_TIB && isArrayType(targetType))
             {
                 // A RAW array (writer/boot alloc: element size in @0, no Type node) cast to an array class:
                 // there is no Type to walk, so trust the verifier-proved cast — the mirror of instanceOf's
@@ -3791,8 +3791,8 @@ public final class VM
     static long heapAlloc;              // Heap.alloc(I)Lmagic/Address;, so on-metal `new` can BL it
     static long allocArray;            // Heap.allocArray(II)Lmagic/Address;
     static long gcCollect;             // VM.gcCollect(J)V
-    static long instanceOfAddr;        // VM.instanceOf(Lmagic/ObjectReference;J)I
-    static long checkCastAddr;         // VM.checkCast(Lmagic/ObjectReference;J)J
+    static long instanceOfAddr;        // VM.instanceOf(Lmagic/ObjectReference;Lmagic/Address;)I
+    static long checkCastAddr;         // VM.checkCast(Lmagic/ObjectReference;Lmagic/Address;)J
     static long unwindAddr;            // VMUnwind.unwind(Lmagic/ObjectReference;Lmagic/Address;Lmagic/Address;)V
     static long captureTraceAddr;      // VMUnwind.captureTrace(Lmagic/ObjectReference;Lmagic/Address;Lmagic/Address;)V — throw-site backtrace for printStackTrace()
     // Scheduler helpers the JIT-loaded mini java.base runtime BLs (Symbols ids 6..11).
@@ -3827,7 +3827,7 @@ public final class VM
     static long scEndAddr;             // VM.scEnd(Lmagic/Address;)Lmagic/ObjectReference;
     static long scStrAddr;             // VM.scStr(Lmagic/Address;Lmagic/ObjectReference;)V — append a String/byte[] (slice 1b)
     static long scLongAddr;            // VM.scLong(Lmagic/Address;J)V — append a long in decimal (slice 1b)
-    static long ensureInitAddr;        // VM.ensureInitByName(J)V — JVMS 5.5 trigger at an active use
+    static long ensureInitAddr;        // VM.ensureInitByName(Lmagic/Address;)V — JVMS 5.5 trigger at an active use
     static long scBoolAddr;            // VMConcat.scBool(Lmagic/Address;I)V — append "true"/"false" (JLS 15.18.1)
     static long scDoubleAddr;          // VMConcat.scDouble(Lmagic/Address;J)V — append a double (raw bits in)
     static long scFloatAddr;           // VMConcat.scFloat(Lmagic/Address;I)V  — ... and a float (its OWN shortest string)
@@ -3914,8 +3914,8 @@ public final class VM
     static long monEnterSyncAddr;      // VM.monEnterSync(Lmagic/ObjectReference;J)V — a synchronized METHOD's implicit monitorenter
     static long monExitSyncAddr;       // VM.monExitSync()V    — ... and its release on normal return
     static long arrayStoreOkAddr;      // VM.arrayStoreOk(Lmagic/ObjectReference;Lmagic/ObjectReference;)I — aastore covariant type check
-    static long newCceAddr;            // VM.newCce(Lmagic/ObjectReference;J)J  — a java/lang/ClassCastException (failed checkcast)
-    static long castOkAddr;            // VM.castOk(Lmagic/ObjectReference;J)I  — checkcast predicate (1 = holds, 0 = throw)
+    static long newCceAddr;            // VM.newCce(Lmagic/ObjectReference;Lmagic/Address;)J  — a java/lang/ClassCastException (failed checkcast)
+    static long castOkAddr;            // VM.castOk(Lmagic/ObjectReference;Lmagic/Address;)I  — checkcast predicate (1 = holds, 0 = throw)
     static long newUnresolvedAddr;     // VM.newUnresolved(J)J — an executed `new` the loader resolves late
     static long ctorRefInit0;          // VM.ctorRefInit(J)V — a constructor reference initializes its target (JVMS 5.5)
     static long printStackTraceAddr;   // VM.printStackTrace(Lmagic/ObjectReference;)V — Throwable.printStackTrace0() native (self in x0)
@@ -3960,7 +3960,7 @@ public final class VM
     static long exclusiveBindNoneAddr; // VMNatives.exclusiveBindNone()J -- Net.isExclusiveBindAvailable
     static long classNameAddr;         // VM.classNameOf(Lmagic/ObjectReference;)J — Class.getName0(Class) native (M4)
     static long forNameAddr;           // VM.forName(Lmagic/ObjectReference;)J — Class.forName0(byte[]) native (reflection arc M1)
-    static long assignableAddr;        // VMNatives.assignable(JJ)J — Class.assignable0(J,J)
+    static long assignableAddr;        // VMNatives.assignable(Lmagic/Address;Lmagic/Address;)J — Class.assignable0(J,J)
     static long hwEntropyAddr;         // VMNatives.hwEntropy(Lmagic/ObjectReference;J)J — MetalRamfs.hwEntropy0(byte[],int)
     static long consoleReadAddr;       // VMNatives.consoleRead(Lmagic/ObjectReference;JJ)J — MetalConsoleIn.read0(byte[],int,int)
     /**

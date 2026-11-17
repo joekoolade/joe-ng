@@ -43,8 +43,8 @@ public interface Symbols
     int HEAP_ALLOC = 0;         // vm/Heap.alloc(I)Lmagic/Address;
     int HEAP_ALLOC_ARRAY = 1;   // vm/Heap.allocArray(II)Lmagic/Address;
     int GC_COLLECT = 2;         // vm/VM.gcCollect(J)V
-    int INSTANCE_OF = 3;        // vm/VM.instanceOf(Lmagic/ObjectReference;J)I
-    int CHECK_CAST = 4;         // vm/VM.checkCast(Lmagic/ObjectReference;J)J
+    int INSTANCE_OF = 3;        // vm/VM.instanceOf(Lmagic/ObjectReference;Lmagic/Address;)I
+    int CHECK_CAST = 4;         // vm/VM.checkCast(Lmagic/ObjectReference;Lmagic/Address;)J
     int UNWIND = 5;             // vm/VMUnwind.unwind(Lmagic/ObjectReference;Lmagic/Address;Lmagic/Address;)V
     // Scheduler helpers reachable from JIT-loaded guest code (the mini java.base runtime).
     int SPAWN = 6;              // vm/VM.startThread(J)V  — start a task running a Runnable
@@ -100,8 +100,8 @@ public interface Symbols
     int NEW_ASE = 41;           // vm/VM.newAse(J)J   — a java/lang/ArrayStoreException (aastore type mismatch)
     int ARRAY_STORE_OK = 42;    // vm/VM.arrayStoreOk(Lmagic/ObjectReference;Lmagic/ObjectReference;)I — 1 if a value may be aastore'd into an array, else 0
     int NEW_UNRESOLVED = 43;    // vm/VM.newUnresolved(J)J — `new` the loader cannot resolve at compile time
-    int CAST_OK = 44;           // vm/VM.castOk(Lmagic/ObjectReference;J)I  — 1 if a checkcast holds, else 0 (the JIT then throws)
-    int NEW_CCE = 45;           // vm/VM.newCce(Lmagic/ObjectReference;J)J   — a java/lang/ClassCastException (failed checkcast)
+    int CAST_OK = 44;           // vm/VM.castOk(Lmagic/ObjectReference;Lmagic/Address;)I  — 1 if a checkcast holds, else 0 (the JIT then throws)
+    int NEW_CCE = 45;           // vm/VM.newCce(Lmagic/ObjectReference;Lmagic/Address;)J   — a java/lang/ClassCastException (failed checkcast)
     int SET_PRIO = 46;          // vm/VMScheduler.setPriority(JI)V — Thread.setPriority (0..1024 scale)
     int GET_PRIO = 47;          // vm/VMScheduler.getPriority(J)I  — Thread.getPriority (0..1024 scale)
     // NOTE FOR THE NEXT HELPER ADDED: these ids are ONE namespace (everything MetalSymbols.helperAddr
@@ -122,7 +122,7 @@ public interface Symbols
     // JVMS 5.5 initialization AT THE ACTIVE USE. 61 is the max over the WHOLE file + 1, per the NOTE at the
     // declaration: the ids are one namespace but NOT one contiguous block, so appending after the last line
     // picks a used number (NEW_NASE took VIRTUAL_RESOLVE's 48 exactly that way).
-    int ENSURE_INIT = 61;       // vm/VM.ensureInitByName(J)V — initialize the class named by an absolute Utf8
+    int ENSURE_INIT = 61;       // vm/VM.ensureInitByName(Lmagic/Address;)V — initialize the class named by an absolute Utf8
     // The bounds check's own AIOOBE, carrying stock's message: x0 = the index, x1 = the length.
     int NEW_AIOOBE_IDX = 62;    // vm/VM.newAioobeIndex(JJ)J — "Index i out of bounds for length n"
     // Reflection.getCallerClass(): the class of a code address -- the CALL SITE in the caller of the method

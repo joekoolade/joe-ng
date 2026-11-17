@@ -1168,9 +1168,9 @@ final class VMNatives
     }
 
     /** {@code Class.assignable0(from, target)} native: the VM's own type assignability, interfaces included. */
-    static long assignable(long fromType, long targetType)
+    static long assignable(Address fromType, Address targetType)
     {
-        return VM.typesAssignable(Address.fromLong(fromType), Address.fromLong(targetType));
+        return VM.typesAssignable(fromType, targetType);
     }
 
     /**

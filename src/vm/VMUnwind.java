@@ -259,8 +259,8 @@ final class VMUnwind
         if (excWord > 0x1000L && !badThrowReported)
         {
             long t = ea.loadLong();
-            long thrType = Loader.throwableTypeAddr();
-            if (t > 0x1000L && thrType != 0L && VM.instanceOf(exc, thrType) == 0)
+            Address thrType = Loader.throwableTypeAddr();
+            if (t > 0x1000L && !thrType.isZero() && VM.instanceOf(exc, thrType) == 0)
             {
                 badThrowReported = true;
                 Uart.write(Magic.bytes("\n  BAD THROW: not a Throwable -- "));
@@ -395,9 +395,9 @@ final class VMUnwind
                 // hypothetical: a thrown non-Throwable printed a plausible-looking frame at pc 0x060B9DB8,
                 // which was simply a heap reference in one of its fields, and it sent the diagnosis chasing a
                 // wild branch that had never happened. Say what the object IS instead.
-                long thrType = Loader.throwableTypeAddr();
+                Address thrType = Loader.throwableTypeAddr();
                 boolean isThrowable = xt > 0x1000L
-                        && (thrType == 0L || VM.instanceOf(exc, thrType) != 0);
+                        && (thrType.isZero() || VM.instanceOf(exc, thrType) != 0);
                 if (xt > 0x1000L && !isThrowable)
                 {
                     Uart.write(Magic.bytes("\nUNWIND: THROWN OBJECT IS NOT A THROWABLE -- "));
@@ -627,7 +627,7 @@ final class VMUnwind
                     // (see Loader.catchTypeByName) -- never "catch everything", which is what 0 used to say.
                     catchType = Loader.catchTypeByName(catchType & ~CATCH_BY_NAME);
                 }
-                if (catchType != 0L && instanceOf(exc, catchType) != 0)
+                if (catchType != 0L && instanceOf(exc, Address.fromLong(catchType)) != 0)
                 {
                     return e.plus(16L).loadLong();
                 }
