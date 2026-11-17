@@ -1447,26 +1447,26 @@ public final class VM
 
     static long newNpe()
     {
-        return Loader.newNpe();
+        return RuntimeEntrypoints.newNpe();
     }
 
     /** Allocate a mini {@code java/lang/ArrayIndexOutOfBoundsException} — the JIT calls this on a bad index. */
     static long newAioobe()
     {
-        return Loader.newAioobe();
+        return RuntimeEntrypoints.newAioobe();
     }
 
     /** The JIT's bounds check: an AIOOBE carrying stock's {@code "Index i out of bounds for length n"}. */
     static long newAioobeIndex(long index, long length)
     {
-        return Loader.newAioobeIndex(index, length);
+        return RuntimeEntrypoints.newAioobeIndex(index, length);
     }
 
     /** Allocate a mini {@code java/lang/ArithmeticException} — the JIT calls this on an integer / or % by zero
      *  (AArch64 SDIV/UDIV don't trap, so the compiler emits an explicit divisor-zero check). */
     static long newArith()
     {
-        return Loader.newArith();
+        return RuntimeEntrypoints.newArith();
     }
 
     /**
@@ -1528,7 +1528,7 @@ public final class VM
      *  passing the object and the target Type so the message can name both. */
     static long newCce(ObjectReference ref, Address targetType)
     {
-        return Loader.newCce(ref, targetType);
+        return RuntimeEntrypoints.newCce(ref, targetType);
     }
 
     /**
@@ -1563,14 +1563,14 @@ public final class VM
      *  stores a value not assignable to the array's element type, passing the value. */
     static long newAse(long value)
     {
-        return Loader.newArrayStoreException(value);
+        return RuntimeEntrypoints.newArrayStoreException(value);
     }
 
     /** Allocate a mini {@code java/lang/NegativeArraySizeException} — the JIT calls this when a
      *  {@code newarray}/{@code anewarray}/{@code multianewarray} length is negative (JVMS 6.5), passing it. */
     static long newNase(long length)
     {
-        return Loader.newNase(length);
+        return RuntimeEntrypoints.newNase(length);
     }
 
     /** {@code multianewarray} (JVMS 6.5): the first {@code dims} levels of the array type named by the
@@ -1581,7 +1581,7 @@ public final class VM
         {
             return 0L;                                   // the boot force-compile probe, not a real request
         }
-        return Loader.multiNewArray(desc, dims, c0, c1, c2, c3);
+        return RuntimeEntrypoints.multiNewArray(desc, dims, c0, c1, c2, c3);
     }
 
     /**
@@ -1823,7 +1823,7 @@ public final class VM
     /** {@code java/lang/InternalError} — the fault handler's catch-all for an unexpected hardware trap. */
     static long newInternalError()
     {
-        return Loader.newInternalError();
+        return RuntimeEntrypoints.newInternalError();
     }
 
     /** {@code Object.getClass()} (intrinsified): the Class mirror for the object's Type (header→TIB→Type→Class). */
