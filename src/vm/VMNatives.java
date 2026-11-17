@@ -317,13 +317,13 @@ final class VMNatives
      * arrays TimSort/ComparableTimSort/Arrays.copyOf allocate reflectively. Falls back to an untyped raw array
      * if the component's Type isn't resolvable (still fine for fill-and-return uses).
      */
-    static long newReflectArray(long componentMirror, long length)
+    static long newReflectArray(ObjectReference componentMirror, long length)
     {
         if (length < 0L)
         {
             return 0L;                                     // boot force-compile passes 0; guest checks negative first
         }
-        long compType = componentMirror > 0x1000L ? Address.fromLong(componentMirror + 16L).loadLong() : 0L;
+        long compType = componentMirror.toLong() > 0x1000L ? componentMirror.toAddress().plus(16L).loadLong() : 0L;
         return Loader.newArrayOfComponent(compType, (int) length);
     }
 
@@ -332,13 +332,13 @@ final class VMNatives
      * (read from the array Type's element slot); for a non-array Class, 0. Lets
      * {@code a.getClass().getComponentType()} feed {@link #newReflectArray} the right element Type.
      */
-    static long componentTypeOf(long mirror)
+    static long componentTypeOf(ObjectReference mirror)
     {
-        if (mirror <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L)
         {
             return 0L;
         }
-        long type = Address.fromLong(mirror + 16L).loadLong();            // mirror -> Type (@16)
+        long type = mirror.toAddress().plus(16L).loadLong();            // mirror -> Type (@16)
         if (type == 0L)
         {
             return 0L;
@@ -351,13 +351,13 @@ final class VMNatives
      * {@code long} rather than {@code int} for the same reason {@code classModifiers0} does -- a 1-arg
      * int-returning native mis-compiles in the JIT, and {@code (J)J} is the shape known to work.
      */
-    static long isArrayClass(long mirror)
+    static long isArrayClass(ObjectReference mirror)
     {
-        if (mirror <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L)
         {
             return 0L;                                     // boot-time force-compile passes 0; no-op
         }
-        return Loader.isArrayType(Address.fromLong(mirror + 16L).loadLong()) ? 1L : 0L;
+        return Loader.isArrayType(mirror.toAddress().plus(16L).loadLong()) ? 1L : 0L;
     }
 
     /**
@@ -392,13 +392,13 @@ final class VMNatives
     }
 
     /** {@code MethodHandleNatives.classBytes0(Class)}: a guest copy of the class's class file, or null. */
-    static long classBytes(long mirror)
+    static long classBytes(ObjectReference mirror)
     {
-        if (mirror <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L)
         {
             return 0L;                                     // boot force-compile passes 0
         }
-        return Loader.classFileCopy(Address.fromLong(mirror + 16L).loadLong());
+        return Loader.classFileCopy(mirror.toAddress().plus(16L).loadLong());
     }
 
     /** {@code Throwable.stackTrace0(Throwable)} native: its inline backtrace as a StackTraceElement[]. */
@@ -411,7 +411,7 @@ final class VMNatives
      * {@code Class.declaredMethodAt0(Class, int)} native: the NAME of the n-th method the class declares, as a
      * guest String. A negative {@code want} returns the COUNT instead, so one native serves both.
      */
-    static long declaredMethodAt(long mirror, long want)
+    static long declaredMethodAt(ObjectReference mirror, long want)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
@@ -425,7 +425,7 @@ final class VMNatives
     }
 
     /** {@code Class.declaredMethodDescAt0(Class,int)} native: the n-th declared method's DESCRIPTOR. */
-    static long declaredMethodDescAt(long mirror, long want)
+    static long declaredMethodDescAt(ObjectReference mirror, long want)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
@@ -442,20 +442,20 @@ final class VMNatives
      * {@code Field.staticCell0(Class, byte[])} native: the ADDRESS of a static field's cell, or 0.
      * Field.get/set reads and writes through this the way an instance field goes through an offset.
      */
-    static long staticCell(long mirror, long nameArr)
+    static long staticCell(ObjectReference mirror, long nameArr)
     {
-        if (mirror <= 0x1000L || nameArr <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L || nameArr <= 0x1000L)
         {
             return 0L;
         }
-        long type = Address.fromLong(mirror + 16L).loadLong();
+        long type = mirror.toAddress().plus(16L).loadLong();
         long fnBase = nameArr + 24L;                    // byte[] payload
         int fnLen = (int) Address.fromLong(nameArr + 16L).loadLong();  // byte[] length
         return Loader.staticCellFor(type, fnBase, fnLen);
     }
 
     /** {@code Class.declaredFieldAt0(Class,int)} native: the NAME of the n-th field the class declares. */
-    static long declaredFieldAt(long mirror, long want)
+    static long declaredFieldAt(ObjectReference mirror, long want)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
@@ -469,7 +469,7 @@ final class VMNatives
     }
 
     /** {@code Class.declaredFieldDescAt0(Class,int)} native: the n-th declared field's DESCRIPTOR. */
-    static long declaredFieldDescAt(long mirror, long want)
+    static long declaredFieldDescAt(ObjectReference mirror, long want)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
@@ -483,7 +483,7 @@ final class VMNatives
     }
 
     /** {@code Class.declaredFieldCount0(Class)} native: how many fields the class declares (statics included). */
-    static long declaredFieldCount(long mirror)
+    static long declaredFieldCount(ObjectReference mirror)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
@@ -497,7 +497,7 @@ final class VMNatives
     }
 
     /** {@code Class.declaredCtorCount0(Class)}: how many CONSTRUCTORS the class declares. */
-    static long declaredCtorCount(long mirror)
+    static long declaredCtorCount(ObjectReference mirror)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
@@ -511,7 +511,7 @@ final class VMNatives
     }
 
     /** {@code Class.declaredCtorDescAt0(Class,int)}: the n-th constructor's DESCRIPTOR. */
-    static long declaredCtorDescAt(long mirror, long want)
+    static long declaredCtorDescAt(ObjectReference mirror, long want)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
@@ -525,7 +525,7 @@ final class VMNatives
     }
 
     /** {@code Class.declaredMethodCount0(Class)} native: how many methods the class declares. */
-    static long declaredMethodCount(long mirror)
+    static long declaredMethodCount(ObjectReference mirror)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
@@ -712,7 +712,7 @@ final class VMNatives
     }
 
     /** {@code Field.fieldAnnoAll0(Class,byte[])} -> every annotation declared on that field. */
-    static long fieldAnnoAll(long mirror, long nameArr)
+    static long fieldAnnoAll(ObjectReference mirror, long nameArr)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
@@ -725,12 +725,12 @@ final class VMNatives
         }
     }
 
-    static long fieldAnnoGet(long mirror, long nameArr, long descArr)
+    static long fieldAnnoGet(ObjectReference mirror, long nameArr, long descArr)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            if (descArr <= 0x1000L || mirror <= 0x1000L || nameArr <= 0x1000L)
+            if (descArr <= 0x1000L || mirror.toLong() <= 0x1000L || nameArr <= 0x1000L)
             {
                 return 0L;
             }
@@ -772,12 +772,12 @@ final class VMNatives
     }
 
     /** {@code Field.type0(Class, byte[])} native: the Class mirror of a field's declared type. */
-    static long fieldType(long mirror, long nameArr)
+    static long fieldType(ObjectReference mirror, long nameArr)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            if (mirror <= 0x1000L || nameArr <= 0x1000L)
+            if (mirror.toLong() <= 0x1000L || nameArr <= 0x1000L)
             {
                 return 0L;
             }
@@ -791,7 +791,7 @@ final class VMNatives
 
     /** {@code Class.annoGet0(Class, byte[])} native: the same, for an annotation on the CLASS itself. */
     /** {@code Class.interfaces0(Class)} native: the class's directly declared interfaces as mirrors. */
-    static long classIfaces(long mirror)
+    static long classIfaces(ObjectReference mirror)
     {
         return Loader.classInterfaces(mirror);
     }
@@ -811,7 +811,7 @@ final class VMNatives
     }
 
     /** {@code Class.genericSignature0(Class)} native: the class's Signature attribute as a String, or 0. */
-    static long classSignature(long mirror)
+    static long classSignature(ObjectReference mirror)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
@@ -825,7 +825,7 @@ final class VMNatives
     }
 
     /** {@code Class.enclosingPart0(Class, long)} native: one part of the EnclosingMethod attribute as a String, or 0 -- see Loader. */
-    static long classEnclosingPart(long mirror, long part)
+    static long classEnclosingPart(ObjectReference mirror, long part)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
@@ -839,7 +839,7 @@ final class VMNatives
     }
 
     /** {@code Class.nestPart0(Class, long)} native: the nest host's name, or the k-th nest member's, or 0 -- see Loader. */
-    static long classNestPart(long mirror, long k)
+    static long classNestPart(ObjectReference mirror, long k)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
@@ -853,7 +853,7 @@ final class VMNatives
     }
 
     /** {@code Class.classFileWord0(Class, long)} native: the classfile version or raw access_flags -- see Loader. */
-    static long classFileWord(long mirror, long k)
+    static long classFileWord(ObjectReference mirror, long k)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
@@ -867,7 +867,7 @@ final class VMNatives
     }
 
     /** {@code Class.innerPart0(Class, long)} native: one part of the class's own InnerClasses entry as a String, or 0 -- see Loader. */
-    static long classInnerPart(long mirror, long part)
+    static long classInnerPart(ObjectReference mirror, long part)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
@@ -951,7 +951,7 @@ final class VMNatives
     }
 
     /** {@code Method.annoDefaults0(Class)} native: an instance of the annotation type with every element defaulted. */
-    static long annoDefaultInstance(long mirror)
+    static long annoDefaultInstance(ObjectReference mirror)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
@@ -965,7 +965,7 @@ final class VMNatives
     }
 
     /** {@code Field.signature0(Class, byte[])} native: the field's Signature attribute as a String, or 0. */
-    static long fieldSignature(long mirror, long nameArr)
+    static long fieldSignature(ObjectReference mirror, long nameArr)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
@@ -979,7 +979,7 @@ final class VMNatives
     }
 
     /** {@code Class.sealed0(Class)} native: 1 when the class has a PermittedSubclasses attribute, else 0. */
-    static long classSealed(long mirror)
+    static long classSealed(ObjectReference mirror)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
@@ -1007,13 +1007,13 @@ final class VMNatives
     }
 
     /** {@code Proxy.proxyAlloc0} native: a zeroed instance of a proxy class. */
-    static long proxyAlloc(long mirror)
+    static long proxyAlloc(ObjectReference mirror)
     {
         return Loader.proxyAlloc(mirror);
     }
 
     /** {@code RecordComponent.recordInfo0} native: the Record attribute's component count, or -1. */
-    static long classRecordInfo(long mirror, long k)
+    static long classRecordInfo(ObjectReference mirror, long k)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
@@ -1027,7 +1027,7 @@ final class VMNatives
     }
 
     /** {@code RecordComponent.recordPart0} native: a record component's name, descriptor or signature. */
-    static long classRecordPart(long mirror, long k)
+    static long classRecordPart(ObjectReference mirror, long k)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
@@ -1041,7 +1041,7 @@ final class VMNatives
     }
 
     /** {@code RecordComponent.recordAnnos0} native: a record component's annotations. */
-    static long classRecordAnnos(long mirror, long k)
+    static long classRecordAnnos(ObjectReference mirror, long k)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
@@ -1055,7 +1055,7 @@ final class VMNatives
     }
 
     /** {@code Class.permitted0} native: the k-th PermittedSubclasses name, or 0. */
-    static long classPermitted(long mirror, long k)
+    static long classPermitted(ObjectReference mirror, long k)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
@@ -1069,7 +1069,7 @@ final class VMNatives
     }
 
     /** {@code Class.declaredClasses0(Class)} native: the MEMBER classes it declares, as a Class[]. */
-    static long classDeclClasses(long mirror)
+    static long classDeclClasses(ObjectReference mirror)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
@@ -1083,7 +1083,7 @@ final class VMNatives
     }
 
     /** {@code Class.annoAll0(Class)} native: every annotation DECLARED on the class, as an Annotation[]. */
-    static long classAnnoAll(long mirror)
+    static long classAnnoAll(ObjectReference mirror)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
@@ -1096,12 +1096,12 @@ final class VMNatives
         }
     }
 
-    static long classAnnoGet(long mirror, long descArr)
+    static long classAnnoGet(ObjectReference mirror, long descArr)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            if (descArr <= 0x1000L || mirror <= 0x1000L)
+            if (descArr <= 0x1000L || mirror.toLong() <= 0x1000L)
             {
                 return 0L;
             }
@@ -1127,26 +1127,26 @@ final class VMNatives
      * {@code Class.isPrimitive0(Class)} native: 1 if the mirror's Type is a primitive Type, else 0. Same
      * {@code (J)J} shape as {@link #isArrayClass} and for the same JIT reason.
      */
-    static long isPrimClass(long mirror)
+    static long isPrimClass(ObjectReference mirror)
     {
-        if (mirror <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L)
         {
             return 0L;
         }
-        return Loader.isPrimitiveType(Address.fromLong(mirror + 16L).loadLong()) ? 1L : 0L;
+        return Loader.isPrimitiveType(mirror.toAddress().plus(16L).loadLong()) ? 1L : 0L;
     }
 
     /**
      * M4: {@code Class.getName0(Class)} native — the mirror's Type ({@code @16}) -> a fresh guest String of
      * the class's dotted binary name (built by {@code Loader.classNameString} from the registry name bytes).
      */
-    static long classNameOf(long mirror)
+    static long classNameOf(ObjectReference mirror)
     {
-        if (mirror <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L)
         {
             return 0L;                                     // boot-time force-compile passes 0; no-op
         }
-        return Loader.classNameString(Address.fromLong(mirror + 16L).loadLong());
+        return Loader.classNameString(mirror.toAddress().plus(16L).loadLong());
     }
 
     /**
@@ -1311,16 +1311,16 @@ final class VMNatives
      * these come from the enclosing class's {@code InnerClasses} attribute (so a {@code private} inner reports
      * {@code private}); the VM-internal {@code ACC_SUPER} (0x20) bit is stripped either way.
      */
-    static long classModifiers(long mirror)
+    static long classModifiers(ObjectReference mirror)
     {
-        if (mirror <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L)
         {
             return 0L;                                     // boot force-compile passes 0
         }
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes: a nested class's InnerClasses entry
         try                                  // is read from its blob -- see the class doc
         {
-            return (long) Loader.classModifiersOf(Address.fromLong(mirror + 16L).loadLong());
+            return (long) Loader.classModifiersOf(mirror.toAddress().plus(16L).loadLong());
         }
         finally
         {
@@ -1329,45 +1329,45 @@ final class VMNatives
     }
 
     /** Reflection: {@code Method.methodResolve0(Class,byte[])} -> method-registry index of the named method, or -1. */
-    static int methodResolve(long mirrorRef, long nameArrRef)
+    static int methodResolve(ObjectReference mirrorRef, long nameArrRef)
     {
-        if (mirrorRef <= 0x1000L || nameArrRef <= 0x1000L)
+        if (mirrorRef.toLong() <= 0x1000L || nameArrRef <= 0x1000L)
         {
             return -1;                                     // boot force-compile passes 0
         }
-        return Loader.methodResolve(Address.fromLong(mirrorRef + 16L).loadLong(), nameArrRef);
+        return Loader.methodResolve(mirrorRef.toAddress().plus(16L).loadLong(), nameArrRef);
     }
 
     /** Reflection: {@code Method.methodResolveDesc0(Class,byte[],byte[])} -> registry index of the method with
      *  that name AND descriptor -- the only key that tells two overloads apart. -1 if there is none. */
-    static int methodResolveDesc(long mirrorRef, long nameArrRef, long descArrRef)
+    static int methodResolveDesc(ObjectReference mirrorRef, long nameArrRef, long descArrRef)
     {
-        if (mirrorRef <= 0x1000L || nameArrRef <= 0x1000L)
+        if (mirrorRef.toLong() <= 0x1000L || nameArrRef <= 0x1000L)
         {
             return -1;                                     // boot force-compile passes 0
         }
-        return Loader.methodResolveDesc(Address.fromLong(mirrorRef + 16L).loadLong(), nameArrRef, descArrRef);
+        return Loader.methodResolveDesc(mirrorRef.toAddress().plus(16L).loadLong(), nameArrRef, descArrRef);
     }
 
     /** Reflection: {@code Method.exact0(Class,byte[],byte[])} -> registry index of the method that class itself
      *  declares with exactly that name and descriptor and a body, or -1 -- the per-class step of virtual dispatch. */
-    static int methodResolveExact(long mirrorRef, long nameArrRef, long descArrRef)
+    static int methodResolveExact(ObjectReference mirrorRef, long nameArrRef, long descArrRef)
     {
-        if (mirrorRef <= 0x1000L || nameArrRef <= 0x1000L)
+        if (mirrorRef.toLong() <= 0x1000L || nameArrRef <= 0x1000L)
         {
             return -1;                                     // boot force-compile passes 0
         }
-        return Loader.methodResolveExact(Address.fromLong(mirrorRef + 16L).loadLong(), nameArrRef, descArrRef);
+        return Loader.methodResolveExact(mirrorRef.toAddress().plus(16L).loadLong(), nameArrRef, descArrRef);
     }
 
     /** {@code MethodHandleNatives.declared0(Class,byte[],byte[])} -> see {@code Loader.mhDeclaredIndex}. */
-    static int mhDeclared(long mirrorRef, long nameArrRef, long descArrRef)
+    static int mhDeclared(ObjectReference mirrorRef, long nameArrRef, long descArrRef)
     {
-        if (mirrorRef <= 0x1000L || nameArrRef <= 0x1000L)
+        if (mirrorRef.toLong() <= 0x1000L || nameArrRef <= 0x1000L)
         {
             return -1;                                     // boot force-compile passes 0
         }
-        return Loader.mhDeclaredIndex(Address.fromLong(mirrorRef + 16L).loadLong(), nameArrRef, descArrRef);
+        return Loader.mhDeclaredIndex(mirrorRef.toAddress().plus(16L).loadLong(), nameArrRef, descArrRef);
     }
 
     /** Reflection: {@code Method.itableTarget0(Object,int)} -> the receiver's itable answer for that method, or 0. */
@@ -1400,33 +1400,33 @@ final class VMNatives
 
     /** Reflection: {@code Constructor.ctorResolveDesc0(Class,byte[])} -> registry index of the {@code <init>} with
      *  exactly that descriptor, or -1. */
-    static int ctorResolveDesc(long mirrorRef, long descArrRef)
+    static int ctorResolveDesc(ObjectReference mirrorRef, long descArrRef)
     {
-        if (mirrorRef <= 0x1000L)
+        if (mirrorRef.toLong() <= 0x1000L)
         {
             return -1;                                     // boot force-compile passes 0
         }
-        return Loader.constructorResolveDesc(Address.fromLong(mirrorRef + 16L).loadLong(), descArrRef);
+        return Loader.constructorResolveDesc(mirrorRef.toAddress().plus(16L).loadLong(), descArrRef);
     }
 
     /** Reflection: {@code Constructor.ctorResolve0(Class,int)} -> registry index of the <init> with that arity, or -1. */
-    static int constructorResolve(long mirrorRef, long paramCount)
+    static int constructorResolve(ObjectReference mirrorRef, long paramCount)
     {
-        if (mirrorRef <= 0x1000L)
+        if (mirrorRef.toLong() <= 0x1000L)
         {
             return -1;                                     // boot force-compile passes 0
         }
-        return Loader.constructorResolve(Address.fromLong(mirrorRef + 16L).loadLong(), (int) paramCount);
+        return Loader.constructorResolve(mirrorRef.toAddress().plus(16L).loadLong(), (int) paramCount);
     }
 
     /** Reflection: {@code Constructor.allocInstance0(Class)} -> a fresh zeroed instance (TIB set), or 0. */
-    static long allocInstance(long mirrorRef)
+    static long allocInstance(ObjectReference mirrorRef)
     {
-        if (mirrorRef <= 0x1000L)
+        if (mirrorRef.toLong() <= 0x1000L)
         {
             return 0L;                                     // boot force-compile passes 0
         }
-        return Loader.allocInstance(Address.fromLong(mirrorRef + 16L).loadLong());
+        return Loader.allocInstance(mirrorRef.toAddress().plus(16L).loadLong());
     }
 
     /**
@@ -1435,38 +1435,38 @@ final class VMNatives
      * EFFECTS land elsewhere -- {@code SharedSecrets.javaUtilJarAccess()} initializes JarFile and then reads its
      * OWN static, which JarFile's initializer set -- so a no-op is a silent null there. Returns 0 (void native).
      */
-    static long ensureMirrorInit(long mirrorRef)
+    static long ensureMirrorInit(ObjectReference mirrorRef)
     {
-        if (mirrorRef <= 0x1000L)
+        if (mirrorRef.toLong() <= 0x1000L)
         {
             return 0L;                                     // boot force-compile passes 0
         }
-        Loader.ensureInitOfType(Address.fromLong(mirrorRef + 16L).loadLong());
+        Loader.ensureInitOfType(mirrorRef.toAddress().plus(16L).loadLong());
         return 0L;
     }
 
     /** {@code Unsafe.shouldBeInitialized0(Class)}: 1 if the class still needs initializing (see
      *  {@code Loader.typeNeedsInit}), else 0. A LONG result for the reason {@code classModifiers} gives. */
-    static long shouldBeInit(long mirrorRef)
+    static long shouldBeInit(ObjectReference mirrorRef)
     {
-        if (mirrorRef <= 0x1000L)
+        if (mirrorRef.toLong() <= 0x1000L)
         {
             return 0L;                                     // boot force-compile passes 0
         }
-        return Loader.typeNeedsInit(Address.fromLong(mirrorRef + 16L).loadLong()) ? 1L : 0L;
+        return Loader.typeNeedsInit(mirrorRef.toAddress().plus(16L).loadLong()) ? 1L : 0L;
     }
 
     /**
      * M4: {@code Class.superclass0(Class)} native — the mirror's Type's {@code superType} ({@code @8}) ->
      * its (cached) mirror, or 0 for {@code java/lang/Object}/unloaded.
      */
-    static long superclassOf(long mirror)
+    static long superclassOf(ObjectReference mirror)
     {
-        if (mirror <= 0x1000L)
+        if (mirror.toLong() <= 0x1000L)
         {
             return 0L;
         }
-        long st = Address.fromLong(mirror + 16L).loadAddress().plus(8L).loadLong();
+        long st = mirror.toAddress().plus(16L).loadAddress().plus(8L).loadLong();
         return st == 0L ? 0L : Loader.classMirror(st);
     }
 
@@ -1587,13 +1587,13 @@ final class VMNatives
      * family, which drives its atomics through Unsafe offsets rather than VarHandles by design. Keyed on the
      * CLASS, not on an instance: at initializer time there is no object to read a TIB from.
      */
-    static long unsafeFieldOffset(long mirrorRef, long nameArrRef)
+    static long unsafeFieldOffset(ObjectReference mirrorRef, long nameArrRef)
     {
-        if (mirrorRef <= 0x1000L || nameArrRef <= 0x1000L)   // boot-time force-compile passes 0
+        if (mirrorRef.toLong() <= 0x1000L || nameArrRef <= 0x1000L)   // boot-time force-compile passes 0
         {
             return -1L;
         }
-        long typeAddr = Address.fromLong(mirrorRef + 16L).loadLong();       // Class.typeAddr
+        long typeAddr = mirrorRef.toAddress().plus(16L).loadLong();       // Class.typeAddr
         int fnLen = (int) Address.fromLong(nameArrRef + 16L).loadLong();    // guest byte[] length
         long fnBase = nameArrRef + 24L;                      // guest byte[] data
         return Loader.fieldOffsetOfType(typeAddr, fnBase, fnLen);
@@ -1662,29 +1662,29 @@ final class VMNatives
      * address, so the whole address goes here and {@code staticFieldBase} answers null -- which is the stock
      * contract for an absolute offset. Reached from ForkJoinPool's initializer (its {@code poolIds} counter).
      */
-    static long unsafeStaticFieldAddr(long mirrorRef, long nameArrRef)
+    static long unsafeStaticFieldAddr(ObjectReference mirrorRef, long nameArrRef)
     {
-        if (mirrorRef <= 0x1000L || nameArrRef <= 0x1000L)   // boot-time force-compile passes 0
+        if (mirrorRef.toLong() <= 0x1000L || nameArrRef <= 0x1000L)   // boot-time force-compile passes 0
         {
             return 0L;
         }
-        long typeAddr = Address.fromLong(mirrorRef + 16L).loadLong();       // Class.typeAddr
+        long typeAddr = mirrorRef.toAddress().plus(16L).loadLong();       // Class.typeAddr
         int fnLen = (int) Address.fromLong(nameArrRef + 16L).loadLong();
         long fnBase = nameArrRef + 24L;
         return Loader.staticSlotOfType(typeAddr, fnBase, fnLen);
     }
 
     /** Reflection: {@code Class.fieldMods0(Class,byte[])} -> the named own instance field's access_flags, or -1. */
-    static int fieldMods(long mirrorRef, long nameArrRef)
+    static int fieldMods(ObjectReference mirrorRef, long nameArrRef)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            if (mirrorRef <= 0x1000L || nameArrRef <= 0x1000L)
+            if (mirrorRef.toLong() <= 0x1000L || nameArrRef <= 0x1000L)
             {
                 return -1;
             }
-            long typeAddr = Address.fromLong(mirrorRef + 16L).loadLong();       // Class.typeAddr
+            long typeAddr = mirrorRef.toAddress().plus(16L).loadLong();       // Class.typeAddr
             int fnLen = (int) Address.fromLong(nameArrRef + 16L).loadLong();
             long fnBase = nameArrRef + 24L;
             return Loader.fieldMods(typeAddr, fnBase, fnLen);
@@ -1696,16 +1696,16 @@ final class VMNatives
     }
 
     /** Reflection: {@code Class.fieldTypeChar0(Class,byte[])} -> the field's descriptor first char, or -1. */
-    static int fieldTypeChar(long mirrorRef, long nameArrRef)
+    static int fieldTypeChar(ObjectReference mirrorRef, long nameArrRef)
     {
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            if (mirrorRef <= 0x1000L || nameArrRef <= 0x1000L)
+            if (mirrorRef.toLong() <= 0x1000L || nameArrRef <= 0x1000L)
             {
                 return -1;
             }
-            long typeAddr = Address.fromLong(mirrorRef + 16L).loadLong();
+            long typeAddr = mirrorRef.toAddress().plus(16L).loadLong();
             int fnLen = (int) Address.fromLong(nameArrRef + 16L).loadLong();
             long fnBase = nameArrRef + 24L;
             return Loader.fieldTypeChar(typeAddr, fnBase, fnLen);
