@@ -120,7 +120,7 @@ final class ArrayCopy
         {
             return;
         }
-        long es = VMNatives.elemSize(src.toLong());
+        long es = VMNatives.elemSize(src);
         Address from = src.toAddress().plus((long) ObjectModel.ARRAY_BASE_OFFSET + (long) srcPos * es);
         Address to = dst.toAddress().plus((long) ObjectModel.ARRAY_BASE_OFFSET + (long) dstPos * es);
         if (sk == REF && dk == REF && src.NE(dst))
@@ -151,7 +151,7 @@ final class ArrayCopy
         }
         if (sk == RAW || dk == RAW)
         {
-            if (VMNatives.elemSize(src.toLong()) != VMNatives.elemSize(dst.toLong()))
+            if (VMNatives.elemSize(src) != VMNatives.elemSize(dst))
             {
                 throwAse(Magic.bytes("arraycopy: type mismatch"));
             }
