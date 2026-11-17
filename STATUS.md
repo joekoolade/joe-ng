@@ -4,6 +4,24 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **LOADER REFACTOR, INCREMENT 3: java.lang.invoke, invokedynamic, lambdas and Proxy out of `vm/Loader`
+  (2026-11-17).** Pure move.
+  - **`MethodHandles`**: the MH signature-polymorphic trampoline (`mhTramp`, `buildSaveAreaTramp`), `mhResolve`,
+    MemberName/LambdaForm targets, `mhLink`, `vhFieldOffset`, `classFileCopy`/`Length`.
+  - **`Indy`**: BootstrapMethods (`findBootstrapMethods`, `bsmArg*`), the recognised bootstraps (`isStringConcat`,
+    `isLambdaIndy`, `isRecordIndy`, `isTypeSwitchIndy` + labels), and the dynamic-site table + trampoline
+    (`indyTramp`, `dynSiteIndex`, `indyResolve`, `ldcConst`, `dynLink`).
+  - **`LambdaFactory`**: lambda synthesis -- capture/SAM queries, boxing adapters, `buildLambdaTib`,
+    `finishLambdaClass`, `ctorRefInit`, altMetafactory flags.
+  - **`ProxySupport`**: `java.lang.reflect.Proxy` instances + the Object.clone helper their thunks share.
+  - **Stays in Loader:** the synthesised-TIB registry (`lambdaTibRoots`, `lambdaHost*`, `refillSynthTibVtables`) --
+    lambdas, proxies and annotation instances all fill it; and `fieldRegIndex` (reflection).
+  - Also repointed every `{@link #x}` / `{@link Loader#x}` whose target moved in increments 1-3.
+  - **Loader 27,923 -> 25,717 lines.** Image 39,534,944 -> 39,535,944 bytes (+1,000).
+  - **Validation:** `make test` + overlaycheck clean; 23 targeted QEMU probes pass (AnnoProxy, Capture,
+    ConcatUtf16, InvokeGap, CtorRefField, Indy, InvokeDefault, InvokeSemantics, Lambda4, LambdaAdapt, MethodHandle,
+    MethodRefBoxFloat, MethodRefUnbox, MhInvoke, MhSpin, PatternSwitch, ProxyEdge, Proxy, RecordFp, LazyVarHandle,
+    SerLambda, VarHandle, VirtualInvoke). Not run: full regression, suite, Pi.
 - **LOADER REFACTOR, INCREMENT 2: annotations and records out of `vm/Loader` (2026-11-17).** Pure move again.
   - **`Annotations`** (JikesRVM `AnnotatedElement`): finding annotations in `RuntimeVisibleAnnotations` /
     parameter / default attributes -- `methodAnnoPresent`, `methodAnnotation`, `classAnnotation(sAll)`,

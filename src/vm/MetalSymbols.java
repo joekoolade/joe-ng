@@ -156,11 +156,11 @@ final class MetalSymbols implements Symbols
     }
     public boolean isMhSigPoly(int methodCp)
     {
-        return Loader.isMhSigPoly(methodCp);
+        return MethodHandles.isMhSigPoly(methodCp);
     }
     public int dynSiteIndex(int cpIndex)
     {
-        return Loader.dynSiteIndex(cpIndex);
+        return Indy.dynSiteIndex(cpIndex);
     }
     public boolean isGetCallerClass(int methodCp)
     {
@@ -383,43 +383,43 @@ final class MetalSymbols implements Symbols
     // ----- invokedynamic (string concat) -----
     public boolean isConcatIndy(int idx)
     {
-        return Loader.isStringConcat(idx);
+        return Indy.isStringConcat(idx);
     }
     public int concatRecipeOff(int idx)
     {
-        return Loader.concatRecipeOff(idx);
+        return Indy.concatRecipeOff(idx);
     }
 
     // ----- invokedynamic (lambda) -----
     public boolean isLambdaIndy(int idx)
     {
-        return Loader.isLambdaIndy(idx);
+        return Indy.isLambdaIndy(idx);
     }
     public int lambdaSize(int idx)
     {
-        return Loader.lambdaSize(idx);
+        return LambdaFactory.lambdaSize(idx);
     }
     public int lambdaSamArgc(int idx)
     {
-        return Loader.lambdaSamArgc(idx);
+        return LambdaFactory.lambdaSamArgc(idx);
     }
     public void lambdaTib(CodeBuffer cb, int reg, int idx)
     {
-        long tib = Loader.buildLambdaTib(idx);              // synthesise the lambda class now; bake its TIB
+        long tib = LambdaFactory.buildLambdaTib(idx);              // synthesise the lambda class now; bake its TIB
         if (LAMBDA_WATCH)
         {
             Uart.write(Magic.bytes("  LAMBDA idx="));
             VM.printDec(idx);
             Uart.write(Magic.bytes(" nc="));
-            VM.printDec(Loader.lambdaCaptureCount(idx));
+            VM.printDec(LambdaFactory.lambdaCaptureCount(idx));
             Uart.write(Magic.bytes(" samArgc="));
-            VM.printDec(Loader.lambdaSamArgcOf(idx));
+            VM.printDec(LambdaFactory.lambdaSamArgcOf(idx));
             Uart.write(Magic.bytes(" size="));
-            VM.printDec(Loader.lambdaSize(idx));
+            VM.printDec(LambdaFactory.lambdaSize(idx));
             Uart.write(Magic.bytes(" kind="));
-            VM.printDec(Loader.lambdaImplKindOf(idx));
+            VM.printDec(LambdaFactory.lambdaImplKindOf(idx));
             Uart.write(Magic.bytes(" impl="));
-            Loader.printLambdaImplName(idx);            // WHICH lambda -- idx alone cannot say, see the helper
+            LambdaFactory.printLambdaImplName(idx);            // WHICH lambda -- idx alone cannot say, see the helper
             Uart.putc(0x0A);
         }
         emitAddr(cb, reg, tib);
@@ -429,43 +429,43 @@ final class MetalSymbols implements Symbols
     private static final boolean LAMBDA_WATCH = false;
     public boolean isTypeSwitchIndy(int idx)
     {
-        return Loader.isTypeSwitchIndy(idx);
+        return Indy.isTypeSwitchIndy(idx);
     }
     public int typeSwitchLabelCount(int idx)
     {
-        return Loader.typeSwitchLabelCount(idx);
+        return Indy.typeSwitchLabelCount(idx);
     }
     public int typeSwitchLabelClass(int idx, int k)
     {
-        return Loader.typeSwitchLabelClass(idx, k);
+        return Indy.typeSwitchLabelClass(idx, k);
     }
     public int typeSwitchSelectorKind(int idx)
     {
-        return Loader.typeSwitchSelectorKind(idx);
+        return Indy.typeSwitchSelectorKind(idx);
     }
     public int typeSwitchPrimitiveLabel(int idx, int k)
     {
-        return Loader.typeSwitchPrimitiveLabel(idx, k);
+        return Indy.typeSwitchPrimitiveLabel(idx, k);
     }
     public void typeSwitchLabelType(CodeBuffer cb, int reg, int idx, int k)
     {
-        int c = Loader.typeSwitchLabelClass(idx, k);
+        int c = Indy.typeSwitchLabelClass(idx, k);
         if (c >= 0)
         {
             type(cb, reg, c);
         }
         else
         {
-            emitAddr(cb, reg, Loader.typeSwitchWrapperType(idx, k));
+            emitAddr(cb, reg, Indy.typeSwitchWrapperType(idx, k));
         }
     }
     public boolean isRecordIndy(int idx)
     {
-        return Loader.isRecordIndy(idx);
+        return Indy.isRecordIndy(idx);
     }
     public int recordKind(int idx)
     {
-        return Loader.recordIndyKind(idx);
+        return Indy.recordIndyKind(idx);
     }
 
     public void recordCall(CodeBuffer cb, int kind)
@@ -519,11 +519,11 @@ final class MetalSymbols implements Symbols
         }
         if (helper == Symbols.MH_INVOKE)
         {
-            return Loader.mhTramp().toLong();           // the same, for MethodHandle signature-polymorphic calls
+            return MethodHandles.mhTramp().toLong();           // the same, for MethodHandle signature-polymorphic calls
         }
         if (helper == Symbols.INDY_INVOKE)
         {
-            return Loader.indyTramp().toLong();         // ... and for invokedynamic the JIT does not lower itself
+            return Indy.indyTramp().toLong();         // ... and for invokedynamic the JIT does not lower itself
         }
         if (helper == Symbols.LDC_CONST)
         {

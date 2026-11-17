@@ -1798,7 +1798,7 @@ public final class VM
         {
             return;                                    // boot force-compile probe: make the helper reachable only
         }
-        Loader.ctorRefInit((int) reg);
+        LambdaFactory.ctorRefInit((int) reg);
     }
 
     static int arrayStoreOk(ObjectReference array, ObjectReference value)
@@ -2597,8 +2597,8 @@ public final class VM
      * Turn a hardware fault into a Java exception thrown at the faulting instruction. Reached from the EL1
      * synchronous vector's non-SVC path with {@code sp} = the FAULTING stack pointer (the vector stub undoes
      * its own frame). Reads ESR/ELR (still holding the fault); an address trap (data/instruction abort)
-     * becomes a {@link Loader#newNpe NullPointerException}; any other unexpected trap (alignment, undefined
-     * instruction, MSR trap, ...) becomes a {@link Loader#newInternalError InternalError} after logging the raw
+     * becomes a {@link RuntimeEntrypoints#newNpe NullPointerException}; any other unexpected trap (alignment, undefined
+     * instruction, MSR trap, ...) becomes a {@link RuntimeEntrypoints#newInternalError InternalError} after logging the raw
      * EC/ELR/FAR. {@link #unwind} then throws it at ELR -- so a catch (or an uncaught stack trace) sees it like
      * any thrown exception. The one fault we can't convert is an unloaded exception class (a TIB of 0 would just
      * re-fault inside unwind); that falls back to the raw {@link #reportFault} print + halt. A taken exception

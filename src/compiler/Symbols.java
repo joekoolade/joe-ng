@@ -131,9 +131,9 @@ public interface Symbols
     // A java.lang.invoke.MethodHandle signature-polymorphic call (invokeExact, invoke, invokeBasic, linkTo*): the
     // method-handle trampoline. Same shape as VIRTUAL_RESOLVE -- x17 = the site, x0..x15 preserved, tail-branch
     // to the target -- and its resolver reads the KIND from the site's name. See Baseline.lowerMhCall.
-    int MH_INVOKE = 64;         // vm/Loader.mhTramp() -> VMNatives.mhResolve(JJ)J
+    int MH_INVOKE = 64;         // vm/MethodHandles.mhTramp() -> VMNatives.mhResolve(JJ)J
     // invokedynamic with a bootstrap the JIT does not lower itself: the indy trampoline (x17 = the dynamic site).
-    int INDY_INVOKE = 65;       // vm/Loader.indyTramp() -> VMNatives.indyResolve(JJ)J
+    int INDY_INVOKE = 65;       // vm/Indy.indyTramp() -> VMNatives.indyResolve(JJ)J
     // ldc of a MethodType, MethodHandle or dynamic constant: x0 = the dynamic site -> its value (object or bits).
     int LDC_CONST = 66;         // vm/VMNatives.ldcConst(J)J
     // A stoppable program's loop-header poll (Baseline.emitStopPoll): this task's pending stop error, or 0.

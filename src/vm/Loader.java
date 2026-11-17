@@ -48,13 +48,13 @@ public final class Loader
 {
     private Loader() {}
 
-    private static Address gbase;   // class blob base address
+    static Address gbase;   // class blob base address
     static Address gp;      // parse cursor
     static int[] gcp;       // byte offset of each constant-pool entry body
-    private static byte[] gbytes;   // heap copy of the current class, for the shared ClassReader
+    static byte[] gbytes;   // heap copy of the current class, for the shared ClassReader
     private static int[] gBcToWord; // last compiled method's bci -> machine word offset (Baseline.bcToWord)
     private static int gAfterCp;    // offset just past the constant pool (stable; gp gets reused as a cursor)
-    private static int[] gcpTag;    // tag of each entry (7 = Class — used for dependencies)
+    static int[] gcpTag;    // tag of each entry (7 = Class — used for dependencies)
     private static int gcpCount;
     // Per-blob constant-pool PARSE CACHE. parseConstPool used to copy the whole blob (toBytes) + allocate
     // gcp/gcpTag/litObjByCp EVERY call; RTA (resolveVirtuals) re-parses each instantiated class's superclass
@@ -96,9 +96,9 @@ public final class Loader
     private static int[] gifAccess; // access_flags of each own instance field (index = slot; 0 for inherited)
     private static int[] gifDescOff;// Utf8 offset of each own instance field's type descriptor (index = slot)
     private static int gifCount;
-    private static int gThisNameOff;     // Utf8 offset of this class's own name
+    static int gThisNameOff;     // Utf8 offset of this class's own name
     static Address gMethodsStart;   // address of the methods_count (for callee lookup)
-    private static Address gBsmOff;      // address of the BootstrapMethods attr body (num_bootstrap_methods), or 0
+    static Address gBsmOff;      // address of the BootstrapMethods attr body (num_bootstrap_methods), or 0
     // Flattened vtable of the class being built: superclass slots first, overrides
     // replacing in place, new methods appended. Each slot's signature may live in a
     // superclass's blob (gvBase), and its implementation is either an inherited
@@ -142,7 +142,7 @@ public final class Loader
     // method bodies + builds the TIBs, by which point every cross-class new/field/vtable/itable/cast target is
     // registered -> load order no longer matters (only method-CALL cycles remain, handled by patchRelocs).
     static RVMClass[] clTab;
-    private static int clCount;
+    static int clCount;
     // Array Type cache (per demand-load batch, since resetLoader reclaims the heap under them). primArrTib is
     // indexed by newarray atype (4..11); refArr* is a small element-Type-keyed registry for reference arrays.
     private static AddressArray primArrTib;     // arrayTib per primitive atype (0 = not yet created)
@@ -327,7 +327,7 @@ public final class Loader
     private static int[] dpOwner;        // index into pd* of the blob that has this dependency
     private static int[] dpOff;          // dependency's name Utf8 offset (in dpBase[d])
     private static final int MAXINDYNAME = 16384;  // scratch bytes for interned invokedynamic interface names
-    private static Address indyNameBuf;     // [u2 len][name] runs; a Loader static, so the statics scan roots it
+    static Address indyNameBuf;     // [u2 len][name] runs; a Loader static, so the statics scan roots it
     private static int indyNameUsed;
     private static AddressArray dpBase;        // blob the name lives in: usually pdBase[dpOwner], but an
                                          //   invokedynamic's functional interface is named only inside a
@@ -1391,7 +1391,7 @@ public final class Loader
     }
 
     /** Class-registry index of the class with this exact name, or -1. */
-    private static int classRegByNameBytes(byte[] name)
+    static int classRegByNameBytes(byte[] name)
     {
         int r = 0;
         while (r < clCount)
@@ -2344,7 +2344,7 @@ public final class Loader
     private static int lzInitWant;                       // DISTINCT classes this compile wants initialized
     private static int lzInitWantMax;                    // ... and the most any one compile has wanted
     private static boolean lzInitFullSaid;
-    private static boolean lzCompiling;
+    static boolean lzCompiling;
 
     // Said ONCE if an active use is ever noted outside a bracketed compile. See noteInitNeeded: this
     // replaced the ctor-init mechanism, which existed only because `<init>` used to compile at load time
@@ -3720,7 +3720,7 @@ public final class Loader
     }
 
     /**
-     * Whether {@code exc} is a VM-allocated exception still waiting for its trace: {@link #newExc} sets its
+     * Whether {@code exc} is a VM-allocated exception still waiting for its trace: {@link RuntimeEntrypoints#newExc} sets its
      * backtrace to itself, and nothing has filled the inline slots yet. These, and only these, are filled at the
      * throw ({@code VMUnwind.captureTrace}); a constructed exception has its trace from construction, or none
      * when stock would have none (a false {@code writableStackTrace}, or an overridden {@code fillInStackTrace}).
@@ -4325,11 +4325,11 @@ public final class Loader
         // MessageDigest.clone handed back its receiver (copy == this), so the original and the clone shared one
         // engine -- `sha256 clone = ...FORK-WRONG` on QEMU and the Pi, while DigestProbe, booted alone with a
         // single launch, passed. The other three cache compiled bodies of this launch, the dblToStrBuf hazard.
-        objectCloneBuf = 0L;
-        objectCloneCls = Address.zero();
-        objectCloneName = Address.zero();
-        objectCloneDesc = Address.zero();
-        proxyHelperBuf = 0L;
+        ProxySupport.objectCloneBuf = 0L;
+        ProxySupport.objectCloneCls = Address.zero();
+        ProxySupport.objectCloneName = Address.zero();
+        ProxySupport.objectCloneDesc = Address.zero();
+        ProxySupport.proxyHelperBuf = 0L;
         AnnotationInstances.annoEqBuf = 0L;
         AnnotationInstances.annoHashBuf = 0L;
         AnnotationInstances.annoStrBuf = 0L;
@@ -4396,7 +4396,7 @@ public final class Loader
         // TIB built for another interface, whose slots call the anno*/proxy helper bodies reset per launch
         // (see objectCloneBuf). Not measured failing -- the suite resets only in its early demos, before
         // either table fills -- but wrong by construction, so they reset beside the root they depend on.
-        proxyN = 0;
+        ProxySupport.proxyN = 0;
         AnnotationInstances.annoTibN = 0;
         // The same for a cached registry Type: it names a class of the registry this method replaces.
         // MEASURED stable in the suite (thrTypeCache filled at generation 4 and matched a fresh lookup to the
@@ -5483,7 +5483,7 @@ public final class Loader
     private static void collectBlob(Address base, int len)
     {
         parseForMethods(base, len);
-        findBootstrapMethods();                         // set gBsmOff so collectRefs can resolve lambda indys
+        Indy.findBootstrapMethods();                         // set gBsmOff so collectRefs can resolve lambda indys
         Address p = gMethodsStart;
         int mcount = u2(p);
         p = p.plus(2);
@@ -5565,11 +5565,11 @@ public final class Loader
             {
                 addPend(base, classCpNameOff(u2(code + pc + 1)), 0, 0, PEND_PULL);
             }
-            else if (op == 0xba && isLambdaIndy(u2(code + pc + 1)))          // lambda/method-ref: mark its impl body
+            else if (op == 0xba && Indy.isLambdaIndy(u2(code + pc + 1)))          // lambda/method-ref: mark its impl body
             {
                 int idx = u2(code + pc + 1);
-                int mref = lambdaImplMref(idx);
-                int mk = lambdaImplKind(idx);
+                int mref = LambdaFactory.lambdaImplMref(idx);
+                int mk = LambdaFactory.lambdaImplKind(idx);
                 addPend(base, refClassNameOff(mref), mrefNameOff(mref), mrefDescOff(mref),
                         (mk == 5 || mk == 9) ? 1 : 0);   // invokeVirtual/Interface -> name+desc; else class-qualified
                 pendIndyIface(idx);                      // ... and the FUNCTIONAL INTERFACE, which nothing else names
@@ -9233,14 +9233,14 @@ public final class Loader
     // drainPendingPulls has copied them; reset whenever the pull list is empty.
     private static byte[][] lzPullKeep;
     private static int lzPullKeepN;
-    private static boolean lzRetried;
+    static boolean lzRetried;
     /** Bounds the ON-DEMAND compile paths to one pull-and-retry each. Separate from {@link #lzRetried},
      *  which those paths save and restore around their own attempt so a nested compile is unaffected. */
     private static boolean odRetried;
 
     /** Note that the body being compiled reads a static of the (unloaded) class named at {@code clsU}.
      *  False if it is not worth retrying for -- absent from the classDir, denylisted, or the list is full. */
-    private static boolean notePullNeeded(Address clsU)
+    static boolean notePullNeeded(Address clsU)
     {
         if (lzPullN >= MAXPENDPULL || isDenylisted(clsU, 0))
         {
@@ -9504,7 +9504,7 @@ public final class Loader
      * never heard of it. Each arm below is a different bug with a different fix, and they were indistinguish-
      * able on the wire.
      */
-    private static void printWhyUnpulled(Address clsU)
+    static void printWhyUnpulled(Address clsU)
     {
         if (isDenylisted(clsU, 0))
         {
@@ -9945,7 +9945,7 @@ public final class Loader
     // compiled with the flag clear -- so buildTib gave the class a THROWAWAY Type and TIB, and every
     // self-reference in that body baked them. `new InetAddress[]{a}` inside InetAddress.getAllByName became an
     // array of an unregistered Type, and storing an Inet4Address into it threw ArrayStoreException.
-    private static boolean compileReuseTib;
+    static boolean compileReuseTib;
 
     /**
      * Compile <em>every</em> method of the current class into its own buffer (in
@@ -10037,7 +10037,7 @@ public final class Loader
     /** Hand the loader a class blob; {@link #loadAll} works out when to load it. */
     /** A loader table is about to overflow: name it over the UART and halt, rather than write out of bounds and
      *  corrupt the heap (which surfaces later as a garbage-pointer fault). Deterministic; grows a cap when hit. */
-    private static void capHalt(byte[] which, int count)
+    static void capHalt(byte[] which, int count)
     {
         Uart.write(Magic.bytes("\nCAP EXCEEDED: "));
         Uart.write(which);
@@ -10074,7 +10074,7 @@ public final class Loader
     /**
      * Pull the exception classes the JIT can throw from an IMPLICIT check: bounds, null deref, divide-by-zero
      * and array store. NOTHING in the guest bytecode names them -- the compiler synthesises those throws -- so
-     * dependency discovery never reaches them. When one is missing {@link #newExc} has no TIB to give the
+     * dependency discovery never reaches them. When one is missing {@link RuntimeEntrypoints#newExc} has no TIB to give the
      * object and hands back a 16-byte husk with {@code tib=0}, which the JIT stores into {@code $exception}
      * and throws; the unwinder then gets a non-throwable and halts (BAD THROW). That is how a genuine
      * out-of-bounds in {@code LinkedKeySet.toArray} presented as an unreadable UNWIND LOST.
@@ -10690,7 +10690,7 @@ public final class Loader
     }
 
     /** As {@link #internIndyName}, from an absolute address. */
-    private static int internIndyNameAt(Address raw, int len)
+    static int internIndyNameAt(Address raw, int len)
     {
         if (indyNameBuf.isZero())
         {
@@ -10791,7 +10791,7 @@ public final class Loader
                                                         //   class's InnerClasses flags are read at REFLECTION time
                                                         //   instead (innerClassFlags, under the loader lock).
         parseFields();                                  // hierarchy-aware field layout (allocates gStatics)
-        findBootstrapMethods();                         // locate BootstrapMethods (for invokedynamic), if any
+        Indy.findBootstrapMethods();                         // locate BootstrapMethods (for invokedynamic), if any
         if (gIsInterface)
         {
             if (clCount >= MAXCLASS) { capHalt(Magic.bytes("MAXCLASS-iface"), clCount); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
@@ -10890,7 +10890,7 @@ public final class Loader
         lbParseT += Magic.readCNTPCT_EL0() - lb0;
         int reg = classRegByName(gThisNameOff);
         gStatics = clTab[reg].statics;                      // REUSE the phase-A static block (cross-class getstatic keys on it)
-        findBootstrapMethods();
+        Indy.findBootstrapMethods();
         if (clTab[reg].isIface)
         {
             gType = clTab[reg].type;                        // restore the interface's phase-A Type so a default method's
@@ -11547,7 +11547,7 @@ public final class Loader
     }
 
     /** Byte offset of instance field {@code fname} declared by registered class {@code classIdx}, or -1.
-     *  The byte[]-name sibling of {@link #vhFieldOffset} (which keys on a raw pointer + a TIB). */
+     *  The byte[]-name sibling of {@link MethodHandles#vhFieldOffset} (which keys on a raw pointer + a TIB). */
     static long instanceFieldOffset(int classIdx, byte[] fname)
     {
         int j = 0;
@@ -14187,7 +14187,7 @@ public final class Loader
             if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("notify")))            { return VM.objNotifyAddr; }
             if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("notifyAll")))         { return VM.objNotifyAllAddr; }
             if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("wait0")))             { return VM.objWaitAddr; }       // (obj, ms)
-            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("clone")))             { return objectCloneHelper(); }  // Cloneable check, then copy
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("clone")))             { return ProxySupport.objectCloneHelper(); }  // Cloneable check, then copy
         }
         if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalObjects")))
         {
@@ -14999,7 +14999,7 @@ public final class Loader
     }
 
     /** Slot of (name, desc in {@code base}) within registered interface {@code r}'s run, or -1. */
-    private static int ifmSlotIn(int r, Address base, int nameOff, int descOff)
+    static int ifmSlotIn(int r, Address base, int nameOff, int descOff)
     {
         return ifmSlotFind(r, base, nameOff, base, descOff);
     }
@@ -15159,7 +15159,7 @@ public final class Loader
         return best;
     }
 
-    private static int classRegByNameAt(Address base, int nameOff)
+    static int classRegByNameAt(Address base, int nameOff)
     {
         if (nameOff == 0)
         {
@@ -15168,7 +15168,7 @@ public final class Loader
         return classRegAt(base, nameOff);
     }
 
-    private static int classRegByName(int nameOff)
+    static int classRegByName(int nameOff)
     {
         if (nameOff == 0)
         {
@@ -15254,7 +15254,7 @@ public final class Loader
         return ir < 0 ? 0 : ifmSlotIn(ir, gbase, mrefNameOff(idx), mrefDescOff(idx));
     }
 
-    private static int globalVtableSlot(int idx)
+    static int globalVtableSlot(int idx)
     {
         int classOff = refClassNameOff(idx);
         int nameOff = mrefNameOff(idx);
@@ -15315,13 +15315,13 @@ public final class Loader
     // calls a trampoline that resolves against the receiver's actual type at first execution.
     private static final int MAXVSITE = 16384;
     private static final int VSHASH = 32768;             // power of two, > 2x MAXVSITE (open addressing)
-    private static AddressArray vsName;
-    private static AddressArray vsDesc;                // Utf8 ADDRESSES (blob base + offset), not offsets
+    static AddressArray vsName;
+    static AddressArray vsDesc;                // Utf8 ADDRESSES (blob base + offset), not offsets
     // The site's OWNER class, recorded for the same reason: a native has no bytecode and no vtable slot, so
     // when the receiver's Type is not in the class registry the native table is the only thing that can
     // answer -- and nativeBufAt is keyed by CLASS + name.
     private static AddressArray vsCls;
-    private static int vsCount;
+    static int vsCount;
     private static int[] vsBucket;                       // hash -> site index + 1 (0 = empty)
     private static long virtualTrampAddr;
     private static long virtualTrampLo, virtualTrampHi;   // the range over which its frame is live
@@ -15406,7 +15406,7 @@ public final class Loader
     }
 
     /** {@link #virtualSiteIndex} keyed by absolute Utf8 addresses -- also how a linkToVirtual site is made. */
-    private static int siteIndexFor(Address nameAddr, Address descAddr, Address clsAddr)
+    static int siteIndexFor(Address nameAddr, Address descAddr, Address clsAddr)
     {
         if (vsName == null)
         {
@@ -16270,7 +16270,7 @@ public final class Loader
      *
      * @param kind 1 = lazy-compile, 2 = link-stub, 3 = late-virtual
      */
-    private static int emitTailGuard(Address buf, int w, int kind)
+    static int emitTailGuard(Address buf, int w, int kind)
     {
         long ha = VM.badTailTargetAddr;
         if (ha == 0L)
@@ -16356,652 +16356,11 @@ public final class Loader
         return buf;
     }
 
-    // ---- java.lang.invoke: the MethodHandle signature-polymorphic call ------------------------------------
-    //
-    // `mh.invokeExact(a, b)`, `mh.invokeBasic(...)` and `MethodHandle.linkToStatic(..., mn)` have no method of
-    // the site's descriptor to call: HotSpot links each to an intrinsic. Here every such site is compiled as
-    // an ordinary call of its own descriptor -- the arguments land in x0.. exactly as they would for a real
-    // method -- to the MH trampoline below, with x17 = the site. The trampoline saves x0..x15, asks
-    // mhResolve for the target, restores, and tail-branches, so the target returns straight to the site.
-    // What makes that work is the shape of a LambdaForm method: it takes the handle as its FIRST parameter
-    // and the call's arguments after it, which is precisely the register layout of `mh.invokeBasic(args)`.
 
-    private static long mhTrampAddr;
-    private static long mhTrampLo;
-    private static long mhTrampHi;
-
-    /** True if the *ref at {@code idx} is a MethodHandle signature-polymorphic method the VM links itself. */
-    static boolean isMhSigPoly(int idx)
-    {
-        if (!Utf8.utf8IsAtBase(gbase, refClassNameOff(idx), Magic.bytes("java/lang/invoke/MethodHandle")))
-        {
-            return false;
-        }
-        int n = mrefNameOff(idx);
-        return Utf8.utf8IsAtBase(gbase, n, Magic.bytes("invokeExact"))
-                || Utf8.utf8IsAtBase(gbase, n, Magic.bytes("invoke"))
-                || Utf8.utf8IsAtBase(gbase, n, Magic.bytes("invokeBasic"))
-                || Utf8.utf8IsAtBase(gbase, n, Magic.bytes("linkToStatic"))
-                || Utf8.utf8IsAtBase(gbase, n, Magic.bytes("linkToSpecial"))
-                || Utf8.utf8IsAtBase(gbase, n, Magic.bytes("linkToVirtual"))
-                || Utf8.utf8IsAtBase(gbase, n, Magic.bytes("linkToInterface"));
-    }
-
-    /**
-     * The MH trampoline: {@link #virtualTramp}'s shape, with the resolver handed the SAVE AREA (x0 = the address
-     * of the saved x0) rather than the receiver, because a linkTo* target is named by the LAST argument and an
-     * invoke's handle may be REPLACED (invoke adapts it), so mhResolve has to read and write the saved registers.
-     */
-    static Address mhTramp()
-    {
-        if (mhTrampAddr == 0L)
-        {
-            long buf = buildSaveAreaTramp(Address.fromLong(VM.mhResolveAddr), 4).toLong();
-            mhTrampLo = buf + 4L;
-            mhTrampHi = saveTrampHi;
-            mhTrampAddr = buf;
-            registerTrampFrames();
-        }
-        return Address.fromLong(mhTrampAddr);
-    }
-
-    /** The invokedynamic trampoline: {@link #mhTramp}'s shape, resolved by {@link #indyResolve}. */
-    static Address indyTramp()
-    {
-        if (indyTrampAddr == 0L)
-        {
-            long buf = buildSaveAreaTramp(Address.fromLong(VM.indyResolveAddr), 5).toLong();
-            indyTrampLo = buf + 4L;
-            indyTrampHi = saveTrampHi;
-            indyTrampAddr = buf;
-            registerTrampFrames();
-        }
-        return Address.fromLong(indyTrampAddr);
-    }
-
-    private static long indyTrampAddr;
-    private static long indyTrampLo;
-    private static long indyTrampHi;
-
-    /** Where the last {@link #buildSaveAreaTramp}'s frame is torn down (its unwind range ends there). */
-    private static long saveTrampHi;
-
-    /**
-     * A resolve trampoline whose resolver is handed the SAVE AREA: save x0..x15 + LR (LR at [sp+0], where VM.unwind
-     * reads it), call {@code ra(&saved x0, x17)}, restore and tail-branch to what it answered -- so the target
-     * returns straight to the call site and an exception thrown by the resolver unwinds through this frame.
-     */
-    private static Address buildSaveAreaTramp(Address ra, int guardKind)
-    {
-        Address buf = Heap.allocCode(256);
-        int w = 0;
-        buf.plus(w * 4L).store(A64Enc.subImm(STUB_SP, STUB_SP, STUB_FRAME));
-        w += 1;
-        int r = 0;
-        while (r <= STUB_SAVE_HI)
-        {
-            buf.plus(w * 4L).store(A64Enc.strx(r, STUB_SP, STUB_SAVE0 + r * ObjectModel.WORD));
-            w += 1;
-            r += 1;
-        }
-        buf.plus(w * 4L).store(A64Enc.strx(STUB_LR, STUB_SP, STUB_LR_OFF)); // LR at [sp+0] for VM.unwind
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.addImm(0, STUB_SP, STUB_SAVE0)); // x0 = &saved x0
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.movReg(1, 17)); // x1 = site idx
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.movz(16, (int) (ra.toLong() & 0xFFFF), 0));
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.movk(16, (int) ((ra.toLong() >> 16) & 0xFFFF), 1));
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.movk(16, (int) ((ra.toLong() >> 32) & 0xFFFF), 2));
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.blr(16)); // x0 = target
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.movReg(16, 0));
-        w += 1;
-        w = emitTailGuard(buf, w, guardKind);
-        r = 0;
-        while (r <= STUB_SAVE_HI)
-        {
-            buf.plus(w * 4L).store(A64Enc.ldrx(r, STUB_SP, STUB_SAVE0 + r * ObjectModel.WORD));
-            w += 1;
-            r += 1;
-        }
-        buf.plus(w * 4L).store(A64Enc.ldrx(STUB_LR, STUB_SP, STUB_LR_OFF));
-        w += 1;
-        saveTrampHi = buf.toLong() + w * 4L;
-        buf.plus(w * 4L).store(A64Enc.addImm(STUB_SP, STUB_SP, STUB_FRAME));
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.br(16)); // tail-call
-        w += 1;
-        Heap.publishCode(buf, buf.plus(w * 4L));
-        return buf;
-    }
-
-    // ---- invokedynamic and loadable dynamic constants the JIT does not lower itself -----------------------
-    //
-    // A site is (caller Type, constant-pool index); the guest linker in MethodHandleNatives reads the bootstrap
-    // specifier out of the caller's own class file and links it with stock CallSite.makeSite. dsVal caches what it
-    // answered -- a CallSite, a constant, or a primitive constant's raw bits -- which is safe to hold as an address
-    // because the guest's LINKED map keeps it reachable and the collector does not move objects.
-
-    private static final int MAXDSITE = 4096;
-    private static AddressArray dsType;
-    private static int[] dsCp;
-    private static AddressArray dsDesc;                       // absolute Utf8 descriptor, or 0 for a MethodType/MethodHandle
-    private static long[] dsVal;
-    private static int[] dsDone;
-    private static int dsCount;
-
-    private static final int DYN_INDY = 0;
-    private static final int DYN_CONST = 1;
-    private static final int DYN_BITS = 2;
-    private static final int[] dynLinkerIdx = { -1, -1, -1 };
-    private static long mhOffCsTarget = -1L;
-
-    /** The site index of the invokedynamic or loadable constant at {@code cpIndex} of the class being compiled. */
-    static int dynSiteIndex(int cpIndex)
-    {
-        if (dsType == null)
-        {
-            dsType = AddressArray.create(MAXDSITE);
-            dsCp = new int[MAXDSITE];
-            dsDesc = AddressArray.create(MAXDSITE);
-            dsVal = new long[MAXDSITE];
-            dsDone = new int[MAXDSITE];
-        }
-        int reg = classRegByNameAt(gbase, gThisNameOff);
-        Address type = reg >= 0 ? clTab[reg].type : Address.zero();
-        int i = 0;
-        while (i < dsCount)                             // dedup: the compiler visits each site in both passes
-        {
-            if (dsType.get(i).EQ(type) && dsCp[i] == cpIndex)
-            {
-                return i;
-            }
-            i += 1;
-        }
-        if (dsCount >= MAXDSITE)
-        {
-            capHalt(Magic.bytes("MAXDSITE"), dsCount);
-        }
-        int tag = u1(gbase.plus(gcp[cpIndex] - 1L));         // gcp points just PAST an entry's tag byte
-        dsType.set(dsCount, type);
-        dsCp[dsCount] = cpIndex;
-        dsDesc.set(dsCount, (tag == 17 || tag == 18) ? gbase.plus(mrefDescOff(cpIndex)) : Address.zero());
-        dsVal[dsCount] = 0L;
-        dsDone[dsCount] = 0;
-        dsCount += 1;
-        return dsCount - 1;
-    }
-
-    /**
-     * The indy trampoline's resolver: link the site once (the guest's linkIndy), then run its CallSite's CURRENT
-     * target -- read each call, so a MutableCallSite retargets -- as invokeBasic: the arguments are shifted one
-     * register right and the target handle goes in x0, which is a LambdaForm method's layout.
-     */
-    static long indyResolve(long save, int idx)
-    {
-        if (save == 0L || dsType == null || idx < 0 || idx >= dsCount)
-        {
-            return 0L;                                  // boot force-compile passes 0
-        }
-        if (dsDone[idx] == 0)
-        {
-            long cs = dynLink(idx, DYN_INDY);           // may throw BootstrapMethodError: unwinds to the site
-            dsVal[idx] = cs;
-            Magic.dsb();
-            dsDone[idx] = 1;
-        }
-        if (mhOffCsTarget < 0L)
-        {
-            mhOffCsTarget = declaredFieldOffset(Magic.bytes("java/lang/invoke/CallSite"), Magic.bytes("target"));
-        }
-        long target = Address.fromLong(dsVal[idx]).plus(mhOffCsTarget).loadLong();
-        int n = descParamCountAt(dsDesc.get(idx));
-        if (n > STUB_SAVE_HI - 1)
-        {
-            Uart.write(Magic.bytes("\n  INDY LINK: unsupported arity for "));
-            printNameAt(dsDesc.get(idx), 0);
-            Uart.putc(0x0A);
-            return 0L;
-        }
-        int r = n;
-        while (r > 0)
-        {
-            Address.fromLong(save).plus(r * 8L).store(Address.fromLong(save).plus((r - 1) * 8L).loadLong());
-            r -= 1;
-        }
-        Address.fromLong(save).store(target);
-        return lambdaFormTarget(ObjectReference.fromLong(target));
-    }
-
-    /** The LDC_CONST helper: a loadable dynamic constant's value -- an object, or a primitive's raw bits. */
-    static long ldcConst(int idx)
-    {
-        if (dsType == null || idx < 0 || idx >= dsCount)
-        {
-            return 0L;                                  // boot force-compile passes 0
-        }
-        if (dsDone[idx] != 0)
-        {
-            return dsVal[idx];
-        }
-        Address d = dsDesc.get(idx);
-        boolean prim = !d.isZero() && u1(d.plus(2L)) != 0x4C && u1(d.plus(2L)) != 0x5B;   // not 'L' and not '['
-        long v = dynLink(idx, prim ? DYN_BITS : DYN_CONST);
-        dsVal[idx] = v;
-        Magic.dsb();
-        dsDone[idx] = 1;
-        return v;
-    }
-
-    /** Call the guest linker of {@code kind} (MethodHandleNatives.linkIndy / linkConstant / constantBits). */
-    private static long dynLink(int idx, int kind)
-    {
-        int li = dynLinkerIdx[kind];
-        if (li < 0)
-        {
-            int reg = classRegByNameBytes(Magic.bytes("java/lang/invoke/MethodHandleNatives"));
-            if (reg < 0)
-            {
-                ensureMhnLoaded();
-                reg = classRegByNameBytes(Magic.bytes("java/lang/invoke/MethodHandleNatives"));
-            }
-            if (reg >= 0)
-            {
-                byte[] name = kind == DYN_INDY ? Magic.bytes("linkIndy")
-                        : kind == DYN_CONST ? Magic.bytes("linkConstant") : Magic.bytes("constantBits");
-                byte[] desc = kind == DYN_INDY ? Magic.bytes("(Ljava/lang/Class;I)Ljava/lang/invoke/CallSite;")
-                        : kind == DYN_CONST ? Magic.bytes("(Ljava/lang/Class;I)Ljava/lang/Object;")
-                        : Magic.bytes("(Ljava/lang/Class;I)J");
-                li = methodResolveExact(clTab[reg].type, ObjectReference.fromLong(guestBytes(name)),
-                        ObjectReference.fromLong(guestBytes(desc)));
-                dynLinkerIdx[kind] = li;
-            }
-        }
-        RVMMethod m = li < 0 ? null : reflEntry(li);
-        if (m == null || m.buf == 0L)
-        {
-            Uart.write(Magic.bytes("\n  INDY LINK: no MethodHandleNatives linker\n"));
-            return 0L;
-        }
-        return Magic.call2(m.buf, classMirror(dsType.get(idx)), (long) dsCp[idx]);
-    }
-
-    /** Pull java/lang/invoke/MethodHandleNatives in when a dynamic site is the program's first use of it. */
-    private static void ensureMhnLoaded()
-    {
-        VM.loaderLock(VM.LOCK_REFLECT);
-        try
-        {
-            Address t = loadClassIncremental(Magic.bytes("java/lang/invoke/MethodHandleNatives"));
-            if (!t.isZero())
-            {
-                ensureInitOfType(t);
-            }
-        }
-        finally
-        {
-            VM.loaderUnlock();
-        }
-    }
-
-    /** {@code MethodHandleNatives.classBytes0}: a guest copy of the class file the class was loaded from, or 0. */
-    static long classFileCopy(Address type)
-    {
-        int reg = regOfType(type);
-        if (reg < 0 || clTab[reg] == null)
-        {
-            return 0L;
-        }
-        Address base = clTab[reg].base;
-        if (base.isZero() || u4(base) != 0xCAFEBABE)
-        {
-            return 0L;
-        }
-        return guestBytes(VM.heapBytes(base, classFileLength(base)));
-    }
-
-    /** The length of the class file at {@code base}, by walking its structure (JVMS 4.1). */
-    private static int classFileLength(Address base)
-    {
-        int count = u2(base.plus(8L));
-        Address p = base.plus(10L);
-        int i = 1;
-        while (i < count)
-        {
-            int tag = u1(p);
-            if (tag == 1)
-            {
-                p = p.plus(3L + u2(p.plus(1L)));
-            }
-            else if (tag == 5 || tag == 6)
-            {
-                p = p.plus(9L);
-                i += 1;                                 // a long or double takes two slots
-            }
-            else if (tag == 7 || tag == 8 || tag == 16 || tag == 19 || tag == 20)
-            {
-                p = p.plus(3L);
-            }
-            else if (tag == 15)
-            {
-                p = p.plus(4L);
-            }
-            else
-            {
-                p = p.plus(5L);
-            }
-            i += 1;
-        }
-        p = p.plus(6L);                                        // access_flags, this_class, super_class
-        p = p.plus(2L + 2L * u2(p));                           // interfaces
-        int f = u2(p);
-        p = p.plus(2L);
-        while (f > 0)
-        {
-            p = skipAttributes(p.plus(8L), u2(p.plus(6L)));
-            f -= 1;
-        }
-        int m = u2(p);
-        p = p.plus(2L);
-        while (m > 0)
-        {
-            p = skipAttributes(p.plus(8L), u2(p.plus(6L)));
-            m -= 1;
-        }
-        p = skipAttributes(p.plus(2L), u2(p));
-        return p.diff(base).toInt();
-    }
-
-    // Field offsets of the four objects a dispatch walks, looked up once against each DECLARING class (the field
-    // registry keys a field by the class that declares it, so DirectMethodHandle would not find `form`).
-    private static long mhOffForm = -1L;
-    private static long mhOffVmentry = -1L;
-    private static long mhOffMethod = -1L;
-    private static long mhOffVmtarget = -1L;
-
-    /** Each linker's reflection index, found once (it is compiled on demand: nothing in Java calls it). */
-    private static int mhLinkExactIdx = -1;
-    private static int mhLinkGenericIdx = -1;
-
-    /**
-     * The MH trampoline's resolver: the code {@code save}'s call should run. {@code save} is the trampoline's save
-     * area (x_r at {@code save + r*8}); the site's NAME is the kind.
-     *
-     * <ul>
-     *   <li>{@code invokeBasic}: the handle's LambdaForm -- {@code mh.form.vmentry}, a MemberName.
-     *   <li>{@code linkToStatic}/{@code linkToSpecial}: the trailing MemberName itself. The callee ignores the
-     *       extra register it arrives in, which is HotSpot's "drop the trailing argument" for free.
-     *   <li>{@code linkToVirtual}/{@code linkToInterface}: the MemberName's method dispatched on the receiver in
-     *       x0, through the late-virtual resolver (a site registered for that method).
-     *   <li>{@code invokeExact}/{@code invoke}: the guest linker first -- it throws WrongMethodTypeException, or
-     *       for invoke returns an adapted handle, which replaces x0 in the save area -- then as invokeBasic.
-     * </ul>
-     *
-     * Answers 0 after naming what failed; the trampoline's tail guard then halts at the call site.
-     */
-    static long mhResolve(long save, int idx)
-    {
-        if (save == 0L || vsName == null || idx < 0 || idx >= vsCount)
-        {
-            return 0L;                                  // boot force-compile passes 0
-        }
-        Address nameU = vsName.get(idx);
-        if (Utf8.utf8IsAtBase(nameU, 0, Magic.bytes("invokeBasic")))
-        {
-            return lambdaFormTarget(Address.fromLong(save).loadObjectReference());
-        }
-        boolean exact = Utf8.utf8IsAtBase(nameU, 0, Magic.bytes("invokeExact"));
-        if (exact || Utf8.utf8IsAtBase(nameU, 0, Magic.bytes("invoke")))
-        {
-            long linked = mhLink(Address.fromLong(save).loadLong(), vsDesc.get(idx), exact);
-            Address.fromLong(save).store(linked);                // invoke may have adapted the handle: run the adapted one
-            return lambdaFormTarget(ObjectReference.fromLong(linked));
-        }
-        int last = descParamCountAt(vsDesc.get(idx)) - 1;   // linkTo* is static: the MemberName is the last argument
-        if (last < 0 || last > STUB_SAVE_HI - 1)
-        {
-            Uart.write(Magic.bytes("\n  MH LINK: unsupported arity for "));
-            printNameAt(nameU, 0);
-            printNameAt(vsDesc.get(idx), 0);
-            Uart.putc(0x0A);
-            return 0L;
-        }
-        ObjectReference mn = Address.fromLong(save).plus(last * 8L).loadObjectReference();
-        if (memberNameEntryQuiet(mn) == -10L)
-        {
-            // The MemberName IS MethodHandle.invokeBasic (a handle whose target is that intrinsic): run
-            // invokeBasic on the receiver, which is the handle in x0 -- the trailing MemberName is dropped.
-            return lambdaFormTarget(Address.fromLong(save).loadObjectReference());
-        }
-        if (Utf8.utf8IsAtBase(nameU, 0, Magic.bytes("linkToStatic")) || Utf8.utf8IsAtBase(nameU, 0, Magic.bytes("linkToSpecial")))
-        {
-            return memberNameTarget(mn);
-        }
-        return memberNameDispatch(Address.fromLong(save).loadObjectReference(), mn);
-    }
-
-    /** The code of {@code mh}'s LambdaForm: {@code mh.form.vmentry}'s method. */
-    private static long lambdaFormTarget(ObjectReference mh)
-    {
-        if (mh.isNull())
-        {
-            return 0L;
-        }
-        if (mhOffForm < 0L)
-        {
-            mhOffForm = declaredFieldOffset(Magic.bytes("java/lang/invoke/MethodHandle"), Magic.bytes("form"));
-            mhOffVmentry = declaredFieldOffset(Magic.bytes("java/lang/invoke/LambdaForm"), Magic.bytes("vmentry"));
-        }
-        ObjectReference form = mh.toAddress().plus(mhOffForm).loadObjectReference();
-        if (form.isNull())
-        {
-            Uart.write(Magic.bytes("\n  MH LINK: a method handle with no LambdaForm\n"));
-            return 0L;
-        }
-        return memberNameTarget(form.toAddress().plus(mhOffVmentry).loadObjectReference());
-    }
-
-    /** The current body of the method a resolved MemberName names: its ResolvedMethodName's registry index. */
-    private static long memberNameTarget(ObjectReference mn)
-    {
-        long e = memberNameEntry(mn);
-        if (e < 0L)
-        {
-            return 0L;
-        }
-        RVMMethod m = reflEntry((int) e);
-        if (m == null || m.buf == 0L)
-        {
-            Uart.write(Magic.bytes("\n  MH LINK: no body for "));
-            if (m != null)
-            {
-                printNameAt(m.base.plus(m.classOff), 0);
-                Uart.putc(0x2E);
-                printNameAt(m.base.plus(m.nameOff), 0);
-                printNameAt(m.base.plus(m.descOff), 0);
-            }
-            Uart.putc(0x0A);
-            return 0L;
-        }
-        return m.buf;
-    }
-
-    /** The reflection index a MemberName's ResolvedMethodName carries, or -1 after naming why there is none. */
-    private static long memberNameEntry(ObjectReference mn)
-    {
-        if (mhOffMethod < 0L)
-        {
-            mhOffMethod = declaredFieldOffset(Magic.bytes("java/lang/invoke/MemberName"), Magic.bytes("method"));
-            mhOffVmtarget = declaredFieldOffset(Magic.bytes("java/lang/invoke/ResolvedMethodName"), Magic.bytes("vmtarget"));
-        }
-        ObjectReference rmn = mn.isNull() ? ObjectReference.nullReference() : mn.toAddress().plus(mhOffMethod).loadObjectReference();
-        long vt = rmn.isNull() ? -1L : rmn.toAddress().plus(mhOffVmtarget).loadLong();
-        if (vt < 0L)
-        {
-            Uart.write(Magic.bytes("\n  MH LINK: an unresolved MemberName (no vmtarget)\n"));
-            return -1L;
-        }
-        return vt;
-    }
-
-    /** A MemberName's vmtarget without any report: a registry index, a negative intrinsic code, or -1. */
-    private static long memberNameEntryQuiet(ObjectReference mn)
-    {
-        if (mhOffMethod < 0L)
-        {
-            mhOffMethod = declaredFieldOffset(Magic.bytes("java/lang/invoke/MemberName"), Magic.bytes("method"));
-            mhOffVmtarget = declaredFieldOffset(Magic.bytes("java/lang/invoke/ResolvedMethodName"), Magic.bytes("vmtarget"));
-        }
-        ObjectReference rmn = mn.isNull() ? ObjectReference.nullReference() : mn.toAddress().plus(mhOffMethod).loadObjectReference();
-        return rmn.isNull() ? -1L : rmn.toAddress().plus(mhOffVmtarget).loadLong();
-    }
-
-    /** linkToVirtual/linkToInterface: the MemberName's method as the RECEIVER's class runs it. */
-    private static long memberNameDispatch(ObjectReference recv, ObjectReference mn)
-    {
-        long e = memberNameEntry(mn);
-        RVMMethod m = e < 0L ? null : reflEntry((int) e);
-        if (m == null || recv.isNull())
-        {
-            return 0L;
-        }
-        int site;
-        VM.loaderLock(VM.LOCK_REFLECT);                 // the site table is the compiler's, written under the lock
-        try
-        {
-            site = siteIndexFor(m.base.plus(m.nameOff), m.base.plus(m.descOff), m.base.plus(m.classOff));
-        }
-        finally
-        {
-            VM.loaderUnlock();
-        }
-        return site < 0 ? 0L : virtualResolve(recv, site);
-    }
-
-    /** Run the guest linker (MethodHandleNatives.linkExact / linkGeneric) on {@code mh} and the site's descriptor. */
-    private static long mhLink(long mh, Address descU, boolean exact)
-    {
-        int li = exact ? mhLinkExactIdx : mhLinkGenericIdx;
-        if (li < 0)
-        {
-            int reg = classRegByNameBytes(Magic.bytes("java/lang/invoke/MethodHandleNatives"));
-            if (reg < 0)
-            {
-                Uart.write(Magic.bytes("\n  MH LINK: java/lang/invoke/MethodHandleNatives is not loaded\n"));
-                return 0L;
-            }
-            li = methodResolveExact(clTab[reg].type,
-                    ObjectReference.fromLong(guestBytes(exact ? Magic.bytes("linkExact") : Magic.bytes("linkGeneric"))),
-                    ObjectReference.fromLong(guestBytes(Magic.bytes("(Ljava/lang/invoke/MethodHandle;Ljava/lang/String;)Ljava/lang/invoke/MethodHandle;"))));
-            if (exact)
-            {
-                mhLinkExactIdx = li;
-            }
-            else
-            {
-                mhLinkGenericIdx = li;
-            }
-        }
-        RVMMethod m = li < 0 ? null : reflEntry(li);
-        if (m == null || m.buf == 0L)
-        {
-            Uart.write(Magic.bytes("\n  MH LINK: no MethodHandleNatives linker\n"));
-            return 0L;
-        }
-        long desc = guestString(VM.heapBytes(descU.plus(2L), u2(descU)));
-        return Magic.call2(m.buf, mh, desc);            // may throw WrongMethodTypeException: unwinds to the site
-    }
-
-    /** Byte offset of the instance field the named class itself declares, or -1. */
-    private static long declaredFieldOffset(byte[] cls, byte[] field)
-    {
-        int reg = classRegByNameBytes(cls);
-        if (reg < 0)
-        {
-            return -1L;
-        }
-        long g = guestBytes(field);
-        return fieldOffsetOfType(clTab[reg].type, Address.fromLong(g).plus(24L), field.length);
-    }
-
-    /** The number of parameters in the absolute {@code {u2 len}(...)ret} descriptor at {@code descU}. */
-    private static int descParamCountAt(Address descU)
-    {
-        Address p = descU.plus(3L);                            // past the u2 length and '('
-        int n = 0;
-        while (u1(p) != 0x29)                           // ')'
-        {
-            while (u1(p) == 0x5B)                       // '[' prefixes
-            {
-                p = p.plus(1);
-            }
-            if (u1(p) == 0x4C)                          // 'L' ... ';'
-            {
-                while (u1(p) != 0x3B)
-                {
-                    p = p.plus(1);
-                }
-            }
-            p = p.plus(1);
-            n += 1;
-        }
-        return n;
-    }
 
     /** VarHandle overlay: vtable slot of an op by NAME only (its op names are unique), regardless of the
      *  signature-polymorphic call-site descriptor. Returns -1 if the VarHandle overlay isn't registered yet. */
 
-    /** VarHandle shim: byte offset of instance field {@code fname} (raw bytes at {@code fnBase..+fnLen}) within
-     *  the class whose TIB is {@code tib}. Uses the class registry (TIB->class) + field registry (class+name->
-     *  slot). Returns -1 if unresolved.
-     *
-     *  <p>WALKS THE SUPERCLASS CHAIN, most-derived first. The field registry records a field against the class
-     *  that DECLARES it, so matching only against the object's own class finds nothing for an INHERITED field
-     *  -- and this is reached with the object's class, not the field's. It returned -1 for every such field,
-     *  and {@code Field.addr} adds the result to the object's address, so a reflective get read 8 bytes at
-     *  {@code obj - 1} (straddling the header) and a reflective SET wrote there. Silent heap corruption, and
-     *  the read looked like a plausible reference.
-     *
-     *  <p>The declaring class's slot is the right answer for a subclass instance because layout is chain-aware
-     *  -- inherited fields are laid out FIRST ({@code ClassFile.chainFieldBase}) -- so a field keeps its slot
-     *  in every subclass. Same shape as {@code globalVtableSlot}'s chain tier, and for the same reason. */
-    static long vhFieldOffset(Address fnBase, int fnLen, Address tib)
-    {
-        int start = -1;
-        int ci = 0;
-        while (ci < clCount)
-        {
-            if (clTab[ci] != null && clTab[ci].tib.EQ(tib))
-            {
-                start = ci;
-                ci = clCount;
-            }
-            else
-            {
-                ci += 1;
-            }
-        }
-        int chain = start;
-        while (chain >= 0 && clTab[chain] != null)
-        {
-            int j = 0;
-            while (j < fldCount)
-            {
-                if (utf8EqAt(clTab[chain].base, clTab[chain].nameOff, fldTab[j].base, fldTab[j].classOff)
-                        && Utf8.rawEqUtf8(fnBase, fnLen, fldTab[j].base, fldTab[j].nameOff))
-                {
-                    return 16L + fldTab[j].slot * 8L;
-                }
-                j += 1;
-            }
-            chain = superRegOf(chain);
-        }
-        return -1L;
-    }
 
     /** Field-registry index of instance field {@code fname} (raw bytes) declared by the class whose Type is
      *  {@code typeAddr}, or -1. Used by the reflection field-metadata natives. */
@@ -17113,7 +16472,7 @@ public final class Loader
 
     /**
      * Byte offset of the instance field {@code fnBase/fnLen} declared by the class whose Type is
-     * {@code typeAddr}, or -1. The Class-keyed sibling of {@link #vhFieldOffset} (which keys on a TIB read
+     * {@code typeAddr}, or -1. The Class-keyed sibling of {@link MethodHandles#vhFieldOffset} (which keys on a TIB read
      * from a live object) -- {@code Unsafe.objectFieldOffset(Class, String)} has only the class, never an
      * instance, so it cannot go through the TIB.
      *
@@ -17529,7 +16888,7 @@ public final class Loader
             return -1;
         }
         gStatics = clTab[reg].statics;                         // reuse the phase-A statics (cross-class getstatic keys on it)
-        findBootstrapMethods();
+        Indy.findBootstrapMethods();
         parseVtable(blob);                                 // gvImplBuf/gvImplCode (for any invokevirtual in the body)
         gType = clTab[reg].type;
         gTib = clTab[reg].tib;
@@ -17893,7 +17252,7 @@ public final class Loader
             return -1;
         }
         gStatics = clTab[reg].statics;
-        findBootstrapMethods();
+        Indy.findBootstrapMethods();
         parseVtable(blob);
         gType = clTab[reg].type;
         gTib = clTab[reg].tib;
@@ -18582,7 +17941,7 @@ public final class Loader
     }
 
     /** Print the {@code {u2 len}{bytes}} Utf8 at {@code off} in the blob at {@code base}. */
-    private static void printNameAt(Address base, int off)
+    static void printNameAt(Address base, int off)
     {
         int len = u2(base.plus(off));
         int i = 0;
@@ -19375,7 +18734,7 @@ public final class Loader
      * sites calling the same method share one. Returns 0 if the table is full, and the caller falls back to
      * the trap.
      */
-    private static long linkStubFor(Address clsU, Address nameU, Address descU)
+    static long linkStubFor(Address clsU, Address nameU, Address descU)
     {
         // A LINEAR SCAN, and deliberately left one. It was indexed during the `patch` arc on the theory that
         // this was hot; MEASURED, the index bought NOTHING, and the cost turned out to be `dlCellOf` two
@@ -19790,7 +19149,7 @@ public final class Loader
     /**
      * The {@code UnsatisfiedLinkError} for missing native {@code k}, its message naming the method: {@code joe-ng:
      * native sun.nio.ch.Net.setIntOption0(Ljava/io/FileDescriptor;ZIIIZ)V is not implemented}. Loads the error
-     * class first if no program has used it yet -- {@link #newExc} of an unloaded class gives an exception with no
+     * class first if no program has used it yet -- {@link RuntimeEntrypoints#newExc} of an unloaded class gives an exception with no
      * Type, which nothing can catch.
      */
     static long missingNativeError(int k)
@@ -20276,7 +19635,7 @@ public final class Loader
         parseConstPool(blob, len);                      // rebuild this class's compile state (as loadBodies
         parseFields();                                  //   does, minus the TIB fill)
         gStatics = clTab[reg].statics;                  // reuse the phase-A statics block
-        findBootstrapMethods();
+        Indy.findBootstrapMethods();
         parseVtable(blob);
         gType = clTab[reg].type;
         gTib = clTab[reg].tib;                          // 0 for an interface; compileReuseTib means unused
@@ -20504,13 +19863,13 @@ public final class Loader
     // callee-saved locals from [sp+8]), so putting it anywhere else makes the walk treat a saved argument
     // register as the return address. STUB_FRAME is the trampolines' size specifically; the lambda thunk
     // sizes its own frame from the ctor's arity.
-    private static final int STUB_SP      = 31;                      // SP in the load/store encodings
-    private static final int STUB_LR      = 30;                      // x30
-    private static final int STUB_LR_OFF  = 0;                       // ... saved where the unwinder looks
-    private static final int STUB_SAVE0   = 8;                       // x0 here; x_r at STUB_SAVE0 + r*WORD
-    private static final int STUB_SAVE_HI = 15;                      // x0..x15: every register a callee can
+    static final int STUB_SP      = 31;                      // SP in the load/store encodings
+    static final int STUB_LR      = 30;                      // x30
+    static final int STUB_LR_OFF  = 0;                       // ... saved where the unwinder looks
+    static final int STUB_SAVE0   = 8;                       // x0 here; x_r at STUB_SAVE0 + r*WORD
+    static final int STUB_SAVE_HI = 15;                      // x0..x15: every register a callee can
                                                                      //   read as an argument (see buildLazyTramp)
-    private static final int STUB_FRAME   = 144;                     // LR + 16 saved = 136, rounded up to the
+    static final int STUB_FRAME   = 144;                     // LR + 16 saved = 136, rounded up to the
                                                                      //   16-byte SP alignment AArch64 requires
 
     /**
@@ -20527,7 +19886,7 @@ public final class Loader
      * ONCE and cached for the life of the VM while {@code jitFrameCount} is zeroed per batch — registering
      * only at build time would leave every batch after the first unwalkable again.
      */
-    private static void registerTrampFrames()
+    static void registerTrampFrames()
     {
         if (lazyTrampAddr != 0L)
         {
@@ -20537,13 +19896,13 @@ public final class Loader
         {
             VM.addJitFrame(Address.fromLong(virtualTrampLo), Address.fromLong(virtualTrampHi), STUB_FRAME, 0L);
         }
-        if (mhTrampAddr != 0L)
+        if (MethodHandles.mhTrampAddr != 0L)
         {
-            VM.addJitFrame(Address.fromLong(mhTrampLo), Address.fromLong(mhTrampHi), STUB_FRAME, 0L);
+            VM.addJitFrame(Address.fromLong(MethodHandles.mhTrampLo), Address.fromLong(MethodHandles.mhTrampHi), STUB_FRAME, 0L);
         }
-        if (indyTrampAddr != 0L)
+        if (Indy.indyTrampAddr != 0L)
         {
-            VM.addJitFrame(Address.fromLong(indyTrampLo), Address.fromLong(indyTrampHi), STUB_FRAME, 0L);
+            VM.addJitFrame(Address.fromLong(Indy.indyTrampLo), Address.fromLong(Indy.indyTrampHi), STUB_FRAME, 0L);
         }
     }
 
@@ -20857,7 +20216,7 @@ public final class Loader
         parseConstPool(bytes, len);
         parseFields();
         gStatics = clTab[reg].statics;
-        findBootstrapMethods();
+        Indy.findBootstrapMethods();
         parseVtable(bytes);
         gType = clTab[reg].type;
         gTib = clTab[reg].tib;
@@ -23308,7 +22667,7 @@ public final class Loader
     /**
      * Append a plain ASCII {@code byte[]} to a BYTE buffer; returns the new position.
      *
-     * <p>The twin of {@link #putAscii}, kept because {@link #castFailureMessage} builds its message in a
+     * <p>The twin of {@link #putAscii}, kept because {@link RuntimeEntrypoints#castFailureMessage} builds its message in a
      * {@code byte[]} and renders CLASS NAMES rather than user data. Widening that path too would be scope
      * with no measured defect behind it -- {@code guestStringUtf8}, which it shares the shape of, has the
      * same latent gap and the same reason to leave it alone.
@@ -23396,286 +22755,6 @@ public final class Loader
         Address arr = Heap.allocArray(0, 8);
         arr.plus(ObjectModel.TIB_OFFSET).store(refArrayTib(classMirrorTypeAddr()));
         return arr.toLong();
-    }
-
-
-
-    // ===== java.lang.reflect.Proxy instances =========================================================
-    // A proxy is synthesised like a lambda or an annotation instance: a Type the registry does not know, whose
-    // itable directory names the proxied interfaces. Its SUPERCLASS is java/lang/reflect/Proxy, so the object
-    // carries Proxy's `h` field and `instanceof Proxy` holds. Every interface method -- and equals/hashCode/
-    // toString, through the Object vtable slots -- is one THUNK that spills the argument registers and calls
-    // jdk/internal/misc/MetalProxies.dispatch(proxy, Method, argsAddr); dispatch boxes the arguments, asks the
-    // InvocationHandler, and returns the unboxed raw result in x0.
-    private static final int MAXPROXY = 256;
-    private static final int PROXY_FRAME = 144;         // x30 at [sp], x1..x15 at [sp+16..sp+128], 16-aligned
-    private static AddressArray proxyTypes;
-    private static AddressArray proxyTibs;
-    private static long[] proxyObjThunks;               // 3 per proxy: hashCode, equals, toString
-    private static int proxyN;
-    private static long proxyHelperBuf;
-
-    /** MetalProxies.dispatch, compiled once; its class is loaded on first use. 0 if it will not compile. */
-    private static long proxyHelper()
-    {
-        if (proxyHelperBuf != 0L)
-        {
-            return proxyHelperBuf;
-        }
-        if (classIndexByName(Magic.bytes("jdk/internal/misc/MetalProxies")) < 0)
-        {
-            loadClassIncremental(Magic.bytes("jdk/internal/misc/MetalProxies"));
-            if (classIndexByName(Magic.bytes("jdk/internal/misc/MetalProxies")) < 0)
-            {
-                return 0L;
-            }
-        }
-        proxyHelperBuf = helperBuf(utf8Blob(Magic.bytes("jdk/internal/misc/MetalProxies")), Magic.bytes("dispatch"),
-                Magic.bytes("(Ljava/lang/Object;Ljava/lang/Object;J)J"));
-        return proxyHelperBuf;
-    }
-
-    private static long objectCloneBuf;
-    private static Address objectCloneCls;                 // the stub's name runs, held in statics (a GC root) for
-    private static Address objectCloneName;                //   as long as the stub may still resolve through them
-    private static Address objectCloneDesc;
-
-    /**
-     * The binding of the native Object.clone(): a LINK STUB for MetalObjects.clone, a static (Object)Object, so
-     * the receiver of the instance native is already where its one argument goes. The stub loads and compiles
-     * the helper on its first CALL, never here. MEASURED: when this loaded and compiled the helper, the baked
-     * Locale.initDefault(Category) branched through a receiver of 0x100 (LocaleInitProbe) although the helper
-     * itself never ran, and binding only the OTHER Object natives passed. The mechanism is INFERRED, not
-     * measured: nativeBufAt is asked while a class's vtable is being filled, under the loader's single
-     * in-progress-class context, and a nested load there overwrites it. 0 if the stub table is full, which
-     * leaves the native unbound (a trap at the call, never a silent copy).
-     */
-    private static long objectCloneHelper()
-    {
-        if (objectCloneBuf != 0L)
-        {
-            return objectCloneBuf;
-        }
-        objectCloneCls = utf8Blob(Magic.bytes("jdk/internal/misc/MetalObjects"));
-        objectCloneName = utf8Blob(Magic.bytes("clone"));
-        objectCloneDesc = utf8Blob(Magic.bytes("(Ljava/lang/Object;)Ljava/lang/Object;"));
-        objectCloneBuf = linkStubFor(objectCloneCls, objectCloneName,
-                objectCloneDesc);
-        return objectCloneBuf;
-    }
-
-    /** Load a 48-bit absolute address into {@code rd}. */
-    private static int emitMov48(Address t, int w, int rd, long v)
-    {
-        w = emitAt(t, w, A64Enc.movz(rd, (int) (v & 0xFFFF), 0));
-        w = emitAt(t, w, A64Enc.movk(rd, (int) ((v >> 16) & 0xFFFF), 1));
-        w = emitAt(t, w, A64Enc.movk(rd, (int) ((v >> 32) & 0xFFFF), 2));
-        return w;
-    }
-
-    /**
-     * One proxy method's thunk. The receiver (the proxy) is already in x0. x1..x15 -- every register an argument
-     * can arrive in, including x15's pointer to the rest past sixteen -- go to the frame, and dispatch gets the
-     * frame's address in x2 and the Method in x1. The frame is registered with the unwinder, so a throw from the
-     * handler unwinds through it to the caller like any other.
-     */
-    private static Address proxyThunk(long method, long helper)
-    {
-        Address t = Heap.allocCode(32 * 4);
-        Heap.pinCodeAt(t);                                                // only an itable or vtable names it
-        int w = 0;
-        w = emitAt(t, w, A64Enc.subImm(STUB_SP, STUB_SP, PROXY_FRAME));
-        w = emitAt(t, w, A64Enc.strx(STUB_LR, STUB_SP, STUB_LR_OFF));
-        int r = 1;
-        while (r <= 15)
-        {
-            w = emitAt(t, w, A64Enc.strx(r, STUB_SP, 8 + r * 8));
-            r += 1;
-        }
-        w = emitMov48(t, w, 1, method);
-        w = emitAt(t, w, A64Enc.addImm(2, STUB_SP, 16));
-        w = emitMov48(t, w, 16, helper);
-        w = emitAt(t, w, A64Enc.blr(16));
-        w = emitAt(t, w, A64Enc.ldrx(STUB_LR, STUB_SP, STUB_LR_OFF));
-        Address thi = t.plus(w * 4L);
-        w = emitAt(t, w, A64Enc.addImm(STUB_SP, STUB_SP, PROXY_FRAME));
-        w = emitAt(t, w, A64Enc.ret());
-        Heap.publishCode(t, t.plus(w * 4L));
-        VM.addJitFrame(t.plus(4L), thi, PROXY_FRAME, 0L);                                  // live from just after the `sub sp`
-        return t;
-    }
-
-    /** Put proxy {@code i}'s equals/hashCode/toString thunks into its TIB's Object vtable slots. */
-    private static void patchProxyObject(int i)
-    {
-        int oi = objectClassIndex();
-        if (oi < 0)
-        {
-            return;
-        }
-        int st = clTab[oi].vtStart;
-        int nv = clTab[oi].vtCount;
-        int k = 0;
-        while (k < nv)
-        {
-            Address b = vtNameBase.get(st + k);
-            int no = vtNameOff[st + k];
-            int dof = vtDescOff[st + k];
-            long thunk = 0L;
-            if (Utf8.utf8IsAtBase(b, no, Magic.bytes("hashCode")) && Utf8.utf8IsAtBase(b, dof, Magic.bytes("()I")))
-            {
-                thunk = proxyObjThunks[i * 3];
-            }
-            else if (Utf8.utf8IsAtBase(b, no, Magic.bytes("equals")) && Utf8.utf8IsAtBase(b, dof, Magic.bytes("(Ljava/lang/Object;)Z")))
-            {
-                thunk = proxyObjThunks[i * 3 + 1];
-            }
-            else if (Utf8.utf8IsAtBase(b, no, Magic.bytes("toString")) && Utf8.utf8IsAtBase(b, dof, Magic.bytes("()Ljava/lang/String;")))
-            {
-                thunk = proxyObjThunks[i * 3 + 2];
-            }
-            if (thunk != 0L)
-            {
-                proxyTibs.get(i).plus(8L).plus((long) k * 8L).store(thunk);
-            }
-            k += 1;
-        }
-    }
-
-    /** The proxy index of TIB {@code tib}, or -1. */
-    private static int proxyIndexOfTib(Address tib)
-    {
-        int i = 0;
-        while (i < proxyN)
-        {
-            if (proxyTibs.get(i).EQ(tib))
-            {
-                return i;
-            }
-            i += 1;
-        }
-        return -1;
-    }
-
-    /**
-     * {@code Proxy.proxyType0}: build a proxy class for the interface CLOSURE {@code ifacesArr} (Class[]).
-     * {@code methodsArr}/{@code namesArr}/{@code descsArr} are parallel: every non-static method of the closure,
-     * its name and its descriptor as raw byte[]s; a slot is given the FIRST method matching its name and
-     * descriptor, in the order the guest listed them. {@code objArr} holds Object's hashCode, equals, toString.
-     * Returns the new class's mirror, or 0.
-     */
-    static long proxyType(long ifacesArr, long methodsArr, long namesArr, long descsArr, long objArr)
-    {
-        if (ifacesArr <= 0x1000L || methodsArr <= 0x1000L || namesArr <= 0x1000L || descsArr <= 0x1000L
-                || objArr <= 0x1000L)
-        {
-            return 0L;
-        }
-        int pr = classIndexByName(Magic.bytes("java/lang/reflect/Proxy"));
-        long helper = proxyHelper();
-        if (pr < 0 || helper == 0L)
-        {
-            return 0L;
-        }
-        if (proxyTypes == null)
-        {
-            proxyTypes = AddressArray.create(MAXPROXY);
-            proxyTibs = AddressArray.create(MAXPROXY);
-            proxyObjThunks = new long[MAXPROXY * 3];
-        }
-        if (proxyN >= MAXPROXY)
-        {
-            Uart.write(Magic.bytes("\n  PROXY TABLE FULL: no more proxy classes (MAXPROXY)\n"));
-            return 0L;
-        }
-        int ni = (int) Address.fromLong(ifacesArr).plus(16L).loadLong();
-        int nm = (int) Address.fromLong(methodsArr).plus(16L).loadLong();
-        Address dir = Heap.allocData((ni + 1) * 16);
-        int e = 0;
-        while (e < ni)
-        {
-            Address mirror = Address.fromLong(ifacesArr).plus(24L).plus(e * 8L).loadAddress();
-            Address ity = mirror.isZero() ? Address.zero() : mirror.plus(16L).loadAddress();
-            int ir = classRegByType(ity);
-            int cn = ir >= 0 ? clTab[ir].ifmCount : 0;
-            Address cit = Heap.allocData(cn > 0 ? cn * 8 : 8);
-            int z = 0;
-            while (z < cn)
-            {
-                int m = clTab[ir].ifmStart + z;
-                Address thunk = Address.zero();
-                int j = 0;
-                while (j < nm && thunk.isZero())
-                {
-                    Address nb = Address.fromLong(namesArr).plus(24L).plus(j * 8L).loadAddress();
-                    Address db = Address.fromLong(descsArr).plus(24L).plus(j * 8L).loadAddress();
-                    if (Utf8.rawEqUtf8(nb.plus(24L), (int) nb.plus(16L).loadLong(), ifBase.get(m), ifNameOff[m])
-                            && Utf8.rawEqUtf8(db.plus(24L), (int) db.plus(16L).loadLong(), ifBase.get(m), ifDescOff[m]))
-                    {
-                        thunk = proxyThunk(Address.fromLong(methodsArr).plus(24L).plus(j * 8L).loadLong(), helper);
-                    }
-                    j += 1;
-                }
-                cit.plus(z * 8L).store(thunk);
-                z += 1;
-            }
-            dir.plus(e * 16L).store(ity);
-            dir.plus(e * 16L).plus(8L).store(cit);
-            e += 1;
-        }
-        dir.plus(ni * 16L).store(0L);              // sentinel: interfaceType 0 ends the directory
-        dir.plus(ni * 16L).plus(8L).store(0L);
-        Address type = Heap.allocData(ObjectModel.TYPE_SIZE);
-        type.plus(0L).store((long) (16 + clTab[pr].fieldCount * 8));   // Proxy's instance: header + h
-        type.plus(ObjectModel.TYPE_SUPER_OFFSET).store(clTab[pr].type);
-        type.plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).store(dir);
-        int onv = objectVtableCount();
-        Address tib = Heap.allocData(8 + onv * 8);
-        tib.plus(0L).store(type);
-        fillObjectVtable(tib);
-        int i = proxyN;
-        proxyTypes.set(i, type);
-        proxyTibs.set(i, tib);
-        int k = 0;
-        while (k < 3)
-        {
-            proxyObjThunks[i * 3 + k] = proxyThunk(Address.fromLong(objArr).plus(24L).plus(k * 8L).loadLong(), helper).toLong();
-            k += 1;
-        }
-        proxyN += 1;
-        patchProxyObject(i);
-        if (lambdaTibRoots != null && lambdaTibRootN < MAXLAMBDATIB)
-        {
-            lambdaTibRoots.set(lambdaTibRootN, tib);             // the same GC root a lambda's TIB has: nothing scanned
-            lambdaTibVtCap[lambdaTibRootN] = onv;       //   would otherwise reach it
-            lambdaTibFilled[lambdaTibRootN] = false;
-            lambdaHostBase.set(lambdaTibRootN, Address.zero());        // a proxy has no host class
-            lambdaHostNameOff[lambdaTibRootN] = 0;
-            lambdaTibRootN += 1;
-        }
-        return classMirror(type);
-    }
-
-    /** {@code Proxy.proxyAlloc0}: a zeroed instance of proxy class {@code mirror}, or 0 if it is not one. */
-    static long proxyAlloc(ObjectReference mirror)
-    {
-        if (mirror.toLong() <= 0x1000L || proxyTypes == null)
-        {
-            return 0L;
-        }
-        Address type = mirror.toAddress().plus(16L).loadAddress();
-        int i = 0;
-        while (i < proxyN)
-        {
-            if (proxyTypes.get(i).EQ(type))
-            {
-                Address obj = Heap.alloc((int) type.loadLong());
-                obj.plus(ObjectModel.TIB_OFFSET).store(proxyTibs.get(i));
-                return obj.toLong();
-            }
-            i += 1;
-        }
-        return 0L;
     }
 
 
@@ -23946,7 +23025,7 @@ public final class Loader
     }
 
     /** Name Utf8 offset of Methodref {@code idx}. */
-    private static int mrefNameOff(int idx)
+    static int mrefNameOff(int idx)
     {
         if (PARSE_CTX_WATCH)
         {
@@ -23956,7 +23035,7 @@ public final class Loader
     }
 
     /** Class-name Utf8 offset of a {@code *ref} constant (Fieldref/Methodref layout). */
-    private static int refClassNameOff(int idx)
+    static int refClassNameOff(int idx)
     {
         if (PARSE_CTX_WATCH)
         {
@@ -23966,7 +23045,7 @@ public final class Loader
     }
 
     /** Descriptor Utf8 offset of Methodref {@code idx}. */
-    private static int mrefDescOff(int idx)
+    static int mrefDescOff(int idx)
     {
         if (PARSE_CTX_WATCH)
         {
@@ -23975,82 +23054,11 @@ public final class Loader
         return ClassReader.refDescOff(gbytes, gcp, idx);
     }
 
-    // ----- invokedynamic: BootstrapMethods + StringConcatFactory recognition (M-B slice 1) -----
 
     /** True if the Utf8 at {@code off} in the current class equals the literal {@code want} (raw bytes). */
-    private static boolean utf8IsStr(int off, byte[] want)
+    static boolean utf8IsStr(int off, byte[] want)
     {
         return Utf8.utf8IsAtBase(gbase, off, want);
-    }
-
-    /** Locate the class-level {@code BootstrapMethods} attribute (after the methods table); set gBsmOff (0 if none). */
-    private static void findBootstrapMethods()
-    {
-        gBsmOff = Address.zero();
-        Address p = gMethodsStart;                         // methods_count
-        int mcount = u2(p);
-        p = p.plus(2);
-        int m = 0;
-        while (m < mcount)                              // skip every method + its attributes
-        {
-            int macount = u2(p.plus(6));                    // access(2) name(2) desc(2) attrs_count(2)
-            p = skipAttributes(p.plus(8), macount);
-            m += 1;
-        }
-        int cacount = u2(p);                            // class attributes_count
-        p = p.plus(2);
-        byte[] want = Magic.bytes("BootstrapMethods");
-        int a = 0;
-        while (a < cacount)
-        {
-            int nameIdx = u2(p);
-            int alen = u4(p.plus(2));
-            if (utf8IsStr(gcp[nameIdx], want))
-            {
-                gBsmOff = p.plus(6);                        // attribute body: num_bootstrap_methods
-                return;
-            }
-            p = p.plus(6 + alen);
-            a += 1;
-        }
-    }
-
-    /** Address of {@code bootstrap_methods[k]} (its {@code bootstrap_method_ref}) within the attribute. */
-    private static Address bsmEntryOff(int k)
-    {
-        Address p = gBsmOff.plus(2);                           // skip num_bootstrap_methods
-        int j = 0;
-        while (j < k)
-        {
-            int nargs = u2(p.plus(2));
-            p = p.plus(4 + nargs * 2);                         // bsm_ref(2) num_args(2) args(num_args*2)
-            j += 1;
-        }
-        return p;
-    }
-
-    /** True if the invokedynamic at cp {@code idx} bootstraps via {@code StringConcatFactory.makeConcatWithConstants}. */
-    static boolean isStringConcat(int idx)
-    {
-        if (gBsmOff.isZero())
-        {
-            return false;
-        }
-        int bmIdx = u2(gbase.plus(gcp[idx]));               // invokedynamic.bootstrap_method_attr_index
-        Address e = bsmEntryOff(bmIdx);
-        int mhIdx = u2(e);                              // bootstrap_method_ref -> CONSTANT_MethodHandle
-        int mrefIdx = u2(gbase.plus(gcp[mhIdx] + 1));       // MethodHandle{ kind(u1), reference_index(u2) }
-        return utf8IsStr(refClassNameOff(mrefIdx), Magic.bytes("java/lang/invoke/StringConcatFactory"))
-            && utf8IsStr(mrefNameOff(mrefIdx), Magic.bytes("makeConcatWithConstants"));
-    }
-
-    /** Utf8 body offset of the concat recipe (bootstrap_arguments[0], a String) for indy {@code idx}. */
-    static int concatRecipeOff(int idx)
-    {
-        int bmIdx = u2(gbase.plus(gcp[idx]));
-        Address e = bsmEntryOff(bmIdx);
-        int arg0Idx = u2(e.plus(4));                        // bootstrap_arguments[0] = String cp index (the recipe)
-        return ClassReader.stringUtf8Off(gbytes, gcp, arg0Idx);
     }
 
 
@@ -24134,7 +23142,7 @@ public final class Loader
     // ----- multianewarray (JVMS 6.5) ---------------------------------------
 
     /** Absolute address of the ARRAY DESCRIPTOR Utf8 ({@code {u2 len}{bytes}}) named by {@code classCp} --
-     *  what {@link #multiNewArray} walks. Blobs do not move, so this address outlives the compile. */
+     *  what {@link RuntimeEntrypoints#multiNewArray} walks. Blobs do not move, so this address outlives the compile. */
     static long arrayDescAddr(int classCp)
     {
         return gbase.plus((long) gcp[u2(gbase.plus(gcp[classCp]))]).toLong();
@@ -24251,608 +23259,16 @@ public final class Loader
         return i >= 0 ? (16 + clTab[i].fieldCount * 8) : 24;
     }
 
-    // ----- invokedynamic: lambda synthesis (LambdaMetafactory), M-B slice 1c -----
-    // A lambda `(caps...) -> body(caps..., samArgs...)` is synthesised as a tiny class: a heap object whose
-    // fields hold the captures, a Type whose itable maps the functional-interface method to a THUNK that
-    // loads the captures into arg registers and tail-calls the lambda-body method. So `iface.sam()` on the
-    // lambda dispatches (via the normal itable path) into the body with the captured values. Slice 1c
-    // supports a zero-arg SAM (Runnable-like); the body may capture any number of values.
-
-    /**
-     * Which record method an {@code ObjectMethods} indy site implements: 1 hashCode, 2 equals, 3 toString,
-     * 0 anything else. The name is the indy's own NameAndType -- one bootstrap serves all three, so the
-     * site cannot be told apart by its bootstrap.
-     */
-    static int recordIndyKind(int idx)
-    {
-        int nat = u2(gbase.plus(gcp[idx] + 2));             // invokedynamic.name_and_type_index
-        int off = gcp[u2(gbase.plus(gcp[nat]))];            // NameAndType.name_index -> Utf8
-        if (utf8IsStr(off, Magic.bytes("hashCode")))
-        {
-            return 1;
-        }
-        if (utf8IsStr(off, Magic.bytes("equals")))
-        {
-            return 2;
-        }
-        if (utf8IsStr(off, Magic.bytes("toString")))
-        {
-            return 3;
-        }
-        return 0;
-    }
-
-    private static int indyBsmIndex(int idx)
-    {
-        return u2(gbase.plus(gcp[idx]));                    // invokedynamic.bootstrap_method_attr_index
-    }
-
-    /**
-     * {@code LambdaMetafactory}'s flag bits, as its own javadoc names them. An {@code altMetafactory} site
-     * carries a flags word as {@code bootstrap_arguments[3]}; a plain {@code metafactory} site has none.
-     */
-    private static final int LMF_SERIALIZABLE = 1;
-    private static final int LMF_MARKERS = 2;
-    private static final int LMF_BRIDGES = 4;
-
-    /** {@code bootstrap_arguments[k]} of the indy at {@code idx}, as a constant-pool index. */
-    private static int bsmArg(int idx, int k)
-    {
-        return u2(bsmEntryOff(indyBsmIndex(idx)).plus(4 + k * 2));
-    }
-
-    /** {@code num_bootstrap_arguments} of the indy at {@code idx}. */
-    private static int bsmArgCount(int idx)
-    {
-        return u2(bsmEntryOff(indyBsmIndex(idx)).plus(2));
-    }
-
-    /**
-     * The {@code int} value of a {@code CONSTANT_Integer} at cp index {@code c}.
-     *
-     * <p>NO {@code +1} FOR THE TAG: {@code gcp[]} holds the offset of an entry's BODY, the tag already
-     * consumed -- which is why {@code lambdaSamDescOff} reads a MethodType's descriptor_index at
-     * {@code gcp[mtIdx]} and a MethodHandle's reference_index at {@code gcp[mhIdx] + 1} (past the
-     * 1-byte reference_kind, not past a tag). Adding one here read the flags word one byte high, so every
-     * {@code altMetafactory} site was refused as if it carried unknown bits.
-     */
-    private static int cpIntAt(int c)
-    {
-        return u4(gbase.plus(gcp[c]));
-    }
-
-    /**
-     * The {@code altMetafactory} flags word for the indy at {@code idx}, or 0 when the site has none -- a
-     * plain {@code metafactory} site, or one whose argument list is too short to carry them.
-     *
-     * <p>Callers must have established that this IS a lambda indy ({@link #isLambdaIndy}); the classifier is
-     * what refuses the flag combinations this VM cannot honour, so anything reaching here is honourable.
-     */
-    static int lambdaAltFlags(int idx)
-    {
-        if (gBsmOff.isZero() || !isAltMetafactory(idx) || bsmArgCount(idx) < 4)
-        {
-            return 0;
-        }
-        return cpIntAt(bsmArg(idx, 3));
-    }
-
-    /** True if the indy at {@code idx} bootstraps through {@code LambdaMetafactory.altMetafactory}. */
-    private static boolean isAltMetafactory(int idx)
-    {
-        Address e = bsmEntryOff(indyBsmIndex(idx));
-        int mrefIdx = u2(gbase.plus(gcp[u2(e)] + 1));
-        return utf8IsStr(refClassNameOff(mrefIdx), Magic.bytes("java/lang/invoke/LambdaMetafactory"))
-            && utf8IsStr(mrefNameOff(mrefIdx), Magic.bytes("altMetafactory"));
-    }
-
-    /**
-     * True if the {@code altMetafactory} site at {@code idx} has a flags tail this VM can honour.
-     *
-     * <p>Its first THREE static arguments are byte-for-byte {@code metafactory}'s -- samMethodType,
-     * implMethod, instantiatedMethodType -- so the whole of {@link #buildLambdaTib} reads them unchanged and
-     * only the TAIL has to be decided:
-     *
-     * <ul>
-     * <li>{@code FLAG_SERIALIZABLE}: the function object must also implement {@code java.io.Serializable}.
-     *     HONOURED -- {@link #finishLambdaClass} adds it to the itable directory, so
-     *     {@code lambda instanceof Serializable} answers true as it does on stock. Nothing here serialises
-     *     anything ({@code java/io/ObjectStream*} is denied), so the marker's only observable is that
-     *     answer, and getting it silently wrong is the failure mode this project has paid for repeatedly.</li>
-     * <li>{@code FLAG_BRIDGES} with a bridge count of ZERO: an empty list, so nothing to do. javac emits it
-     *     alongside {@code FLAG_SERIALIZABLE} for a generic intersection cast, which is how every such site
-     *     in java.base reads.</li>
-     * <li>{@code FLAG_MARKERS}, a NON-zero bridge count, or any bit outside those two: REFUSED. Each names
-     *     extra interfaces or extra methods the function object must carry, and a directory that silently
-     *     lacked them would answer a type test wrongly or leave a dispatch with nowhere to go. Refusing
-     *     keeps today's behaviour exactly -- the classifier says no, and {@code Baseline.lowerInvokeDynamic}
-     *     reports {@code JIT unsupported ... 0xBA} naming the class. Nothing in java.base needs them
-     *     (measured: all EIGHT {@code altMetafactory} users read flags=5, bridgeCount=0), so honouring them
-     *     would be shipping code that cannot fire.</li>
-     * </ul>
-     */
-    private static boolean altFormSupported(int idx)
-    {
-        int nargs = bsmArgCount(idx);
-        if (nargs < 4)
-        {
-            return false;                               // no flags word to decide on
-        }
-        int flags = cpIntAt(bsmArg(idx, 3));
-        if ((flags & ~(LMF_SERIALIZABLE | LMF_BRIDGES)) != 0)
-        {
-            return false;                               // FLAG_MARKERS, or a bit this VM has never seen
-        }
-        if ((flags & LMF_BRIDGES) != 0)
-        {
-            // The bridge COUNT follows the flags (there is no marker list, or FLAG_MARKERS would be set).
-            if (nargs < 5 || cpIntAt(bsmArg(idx, 4)) != 0)
-            {
-                return false;                           // a real bridge list needs real bridge methods
-            }
-        }
-        return true;
-    }
-
-    /**
-     * True if the invokedynamic at {@code idx} bootstraps via {@code LambdaMetafactory} in a form this JIT
-     * lowers: {@code metafactory}, or {@code altMetafactory} with an honourable flags tail (see
-     * {@link #altFormSupported}).
-     *
-     * <p>{@code altMetafactory} is what javac emits for a lambda cast to an INTERSECTION type, and matching
-     * the name {@code metafactory} exactly is what kept stock {@code java.util.Comparator} from running at
-     * all: every one of its combinators casts its lambda to {@code (Comparator<T> & Serializable)}, so the
-     * class has exactly ONE bootstrap method and it is the alt one. The site then fell through to
-     * {@code Baseline}'s unsupported-bootstrap arm.
-     */
-    static boolean isLambdaIndy(int idx)
-    {
-        if (gBsmOff.isZero())
-        {
-            return false;
-        }
-        Address e = bsmEntryOff(indyBsmIndex(idx));
-        int mhIdx = u2(e);                              // bootstrap_method_ref -> MethodHandle
-        int mrefIdx = u2(gbase.plus(gcp[mhIdx] + 1));       // MethodHandle.reference_index -> Methodref
-        if (!utf8IsStr(refClassNameOff(mrefIdx), Magic.bytes("java/lang/invoke/LambdaMetafactory")))
-        {
-            return false;
-        }
-        if (utf8IsStr(mrefNameOff(mrefIdx), Magic.bytes("metafactory")))
-        {
-            return true;
-        }
-        return utf8IsStr(mrefNameOff(mrefIdx), Magic.bytes("altMetafactory")) && altFormSupported(idx);
-    }
-
-    /**
-     * True if the invokedynamic at {@code idx} bootstraps via {@code java/lang/runtime/ObjectMethods.bootstrap}
-     * — a record's synthesised {@code equals}/{@code hashCode}/{@code toString}. We don't synthesise record
-     * semantics yet; RTA pulls these in for any instantiated record (e.g. {@code Collectors$CollectorImpl}),
-     * but they are essentially never actually invoked in the paths we run (a Collector is never compared,
-     * hashed or printed during {@code collect()}). The JIT lowers such an indy to a runtime trap so the record
-     * still compiles; see {@code Baseline.lowerRecordTrap}.
-     */
-    static boolean isRecordIndy(int idx)
-    {
-        if (gBsmOff.isZero())
-        {
-            return false;
-        }
-        Address e = bsmEntryOff(indyBsmIndex(idx));
-        int mhIdx = u2(e);
-        int mrefIdx = u2(gbase.plus(gcp[mhIdx] + 1));
-        return utf8IsStr(refClassNameOff(mrefIdx), Magic.bytes("java/lang/runtime/ObjectMethods"));
-    }
-
-    /**
-     * True if the invokedynamic at {@code idx} bootstraps via {@code java/lang/runtime/SwitchBootstraps.typeSwitch}
-     * -- a pattern-matching {@code switch}. Its static arguments are the case labels; the JIT lowers it inline
-     * ({@code Baseline.lowerTypeSwitch}), so no MethodHandle runtime is involved.
-     */
-    static boolean isTypeSwitchIndy(int idx)
-    {
-        if (gBsmOff.isZero())
-        {
-            return false;
-        }
-        Address e = bsmEntryOff(indyBsmIndex(idx));
-        int mhIdx = u2(e);
-        int mrefIdx = u2(gbase.plus(gcp[mhIdx] + 1));
-        return utf8IsStr(refClassNameOff(mrefIdx), Magic.bytes("java/lang/runtime/SwitchBootstraps"))
-                && utf8IsStr(mrefNameOff(mrefIdx), Magic.bytes("typeSwitch"));
-    }
-
-    /** Number of case labels of the typeSwitch indy at {@code idx}. */
-    static int typeSwitchLabelCount(int idx)
-    {
-        return bsmArgCount(idx);
-    }
-
-    /** Constant-pool index of label {@code k} if it is a CONSTANT_Class; -2 for a primitive-class dynamic
-     *  constant ({@link #primitiveLabelKind}); else -1. */
-    static int typeSwitchLabelClass(int idx, int k)
-    {
-        int c = bsmArg(idx, k);
-        if (gcpTag[c] == 7)
-        {
-            return c;
-        }
-        return primitiveLabelKind(c) != 0 ? -2 : -1;
-    }
-
-    /** Kind of the typeSwitch selector: the first parameter of the indy's descriptor ({@code (II)I} -> 'I'). */
-    static int typeSwitchSelectorKind(int idx)
-    {
-        return ClassReader.descParamKind(gbytes, mrefDescOff(idx), 0);
-    }
-
-    /** Primitive descriptor char of label {@code k} if it is a primitive-class constant, else 0. */
-    static int typeSwitchPrimitiveLabel(int idx, int k)
-    {
-        return primitiveLabelKind(bsmArg(idx, k));
-    }
-
-    /**
-     * The descriptor char of a {@code CONSTANT_Dynamic} that is {@code ConstantBootstraps.primitiveClass} -- javac's
-     * spelling of {@code int.class} as a typeSwitch LABEL, for a record component pattern like
-     * {@code Rect(int w, int h)} -- or 0 for any other constant. The dynamic constant's NAME is the descriptor
-     * ("I"); its bootstrap must be primitiveClass, checked rather than assumed.
-     */
-    private static int primitiveLabelKind(int c)
-    {
-        if (gcpTag[c] != 17 || gBsmOff.isZero())
-        {
-            return 0;
-        }
-        Address body = gbase.plus(gcp[c]);
-        int bsm = u2(body);                             // bootstrap_method_attr_index
-        int nat = u2(body.plus(2));                         // name_and_type_index
-        Address e = bsmEntryOff(bsm);
-        int mrefIdx = u2(gbase.plus(gcp[u2(e)] + 1));
-        if (!utf8IsStr(refClassNameOff(mrefIdx), Magic.bytes("java/lang/invoke/ConstantBootstraps"))
-                || !utf8IsStr(mrefNameOff(mrefIdx), Magic.bytes("primitiveClass")))
-        {
-            return 0;
-        }
-        int nameOff = gcp[u2(gbase.plus(gcp[nat]))];        // NameAndType.name -> Utf8 offset
-        if (u2(gbase.plus(nameOff)) != 1)
-        {
-            return 0;
-        }
-        int ch = u1(gbase.plus(nameOff + 2));
-        return (ch == 'Z' || ch == 'B' || ch == 'C' || ch == 'S' || ch == 'I' || ch == 'J' || ch == 'F' || ch == 'D')
-                ? ch : 0;
-    }
-
-    /**
-     * Type of the WRAPPER for primitive-class label {@code k}: a selector matches {@code int.class} iff it is an
-     * {@code Integer}. EXACT for every label javac emits without --enable-preview: a primitive label appears only
-     * where the selector's static type IS that primitive (a record component), so the value arrives boxed as
-     * exactly its own wrapper. Primitive patterns against an arbitrary Object -- where a Byte would also match
-     * {@code int} by exact widening -- are a PREVIEW feature, and would need SwitchBootstraps' conversion table.
-     */
-    static long typeSwitchWrapperType(int idx, int k)
-    {
-        int ch = primitiveLabelKind(bsmArg(idx, k));
-        byte[] name = ch == 'Z' ? Magic.bytes("java/lang/Boolean")
-                : ch == 'B' ? Magic.bytes("java/lang/Byte")
-                : ch == 'C' ? Magic.bytes("java/lang/Character")
-                : ch == 'S' ? Magic.bytes("java/lang/Short")
-                : ch == 'I' ? Magic.bytes("java/lang/Integer")
-                : ch == 'J' ? Magic.bytes("java/lang/Long")
-                : ch == 'F' ? Magic.bytes("java/lang/Float")
-                : Magic.bytes("java/lang/Double");
-        int ci = classIndexByName(name);
-        return ci < 0 ? 0L : clTab[ci].type.toLong();
-    }
-
-    /** JIT buffer of the lambda body (bootstrap_arguments[1] MethodHandle -> its Methodref, same class). */
-    private static long lambdaImplBuf(int idx)
-    {
-        return resolveCallBuf(lambdaImplMref(idx));
-    }
-
-    /** Methodref (cp index) the impl MethodHandle (bootstrap_arguments[1]) points at. */
-    private static int lambdaImplMref(int idx)
-    {
-        Address e = bsmEntryOff(indyBsmIndex(idx));
-        int mhIdx = u2(e.plus(6));                          // bootstrap_arguments[1] = the impl MethodHandle
-        return u2(gbase.plus(gcp[mhIdx] + 1));              // MethodHandle.reference_index -> Methodref
-    }
-
-    /** reference_kind of the impl MethodHandle: 6 = invokeStatic (lambda body / static ref), 5/9 = invokeVirtual/
-     *  invokeInterface (an UNBOUND instance method ref, whose receiver is the SAM's first arg). */
-    private static int lambdaImplKind(int idx)
-    {
-        Address e = bsmEntryOff(indyBsmIndex(idx));
-        int mhIdx = u2(e.plus(6));
-        return u1(gbase.plus(gcp[mhIdx]));                  // MethodHandle.reference_kind
-    }
-
-    /** Print the functional interface named by the indy descriptor at {@code idx}. */
-    /**
-     * Report WHY a lambda's functional interface resolved to Type 0, using the same checked-cause routing as
-     * the unresolved-static and null-class-literal reports. The name lives MID-DESCRIPTOR with no length
-     * prefix, so it is interned into {@code indyNameBuf} first -- {@code printWhyUnpulled} wants a
-     * Utf8-shaped run.
-     */
-    private static void printWhyLambdaIface(int idx)
-    {
-        Address clsU = lambdaIfaceNameU(idx);
-        if (clsU.isZero())
-        {
-            Uart.write(Magic.bytes("non-reference return"));
-            return;
-        }
-        printWhyUnpulled(clsU);
-    }
-
-    /** The lambda's functional interface name as a Utf8-shaped run in {@code indyNameBuf}, or 0 if the indy
-     *  descriptor returns a primitive. */
-    private static Address lambdaIfaceNameU(int idx)
-    {
-        Address p = gbase.plus(mrefDescOff(idx) + 2);
-        while (u1(p) != ')')
-        {
-            p = p.plus(1);
-        }
-        p = p.plus(1);
-        if (u1(p) != 'L')
-        {
-            return Address.zero();
-        }
-        Address start = p.plus(1);
-        Address q = start;
-        while (u1(q) != ';')
-        {
-            q = q.plus(1);
-        }
-        int off = internIndyNameAt(start, q.diff(start).toInt());
-        return indyNameBuf.plus(off);
-    }
-
-    /**
-     * Name the lambda's IMPLEMENTATION method, {@code class.name}, for the compile-time lambda trace.
-     *
-     * <p>Without it that trace prints {@code idx=}, which is an indy index WITHIN the class being compiled --
-     * useless for finding one lambda in a launcher boot that synthesises thousands. The failure being chased
-     * is named exactly ({@code lambda$ofVoidMethod$0}), so the log has to be greppable by that name.
-     */
-    static void printLambdaImplName(int idx)
-    {
-        int mref = lambdaImplMref(idx);
-        printNameAt(gbase, refClassNameOff(mref));
-        Uart.putc(0x2E);
-        printNameAt(gbase, mrefNameOff(mref));
-    }
-
-    private static void printLambdaIfaceName(int idx)
-    {
-        Address p = gbase.plus(mrefDescOff(idx) + 2);
-        while (u1(p) != ')')
-        {
-            p = p.plus(1);
-        }
-        p = p.plus(1);
-        if (u1(p) != 'L')
-        {
-            Uart.write(Magic.bytes("<non-reference return>"));
-            return;
-        }
-        p = p.plus(1);
-        while (u1(p) != ';')
-        {
-            Uart.putc(u1(p));
-            p = p.plus(1);
-        }
-    }
-
-    /** Type of the functional interface = the indy descriptor's return class, or 0 if not loaded. */
-    private static Address lambdaIfaceType(int idx)
-    {
-        int descOff = mrefDescOff(idx);
-        Address p = gbase.plus(descOff + 2);                   // skip the u2 length
-        while (u1(p) != ')')
-        {
-            p = p.plus(1);
-        }
-        p = p.plus(1);                                         // past ')'
-        if (u1(p) != 'L')
-        {
-            return Address.zero();
-        }
-        Address nameStart = p.plus(1);
-        Address q = nameStart;
-        while (u1(q) != ';')
-        {
-            q = q.plus(1);
-        }
-        int nameLen = q.diff(nameStart).toInt();
-        int i = 0;
-        while (i < clCount)
-        {
-            if (Utf8.rawNameEq(clTab[i].base, clTab[i].nameOff, nameStart, nameLen))
-            {
-                return clTab[i].type;
-            }
-            i += 1;
-        }
-        return Address.zero();
-    }
-
-    /** The SAM's descriptor Utf8 offset: bootstrap_arguments[0] MethodType (its name is the indy's name). */
-    private static int lambdaSamDescOff(int idx)
-    {
-        Address e = bsmEntryOff(indyBsmIndex(idx));
-        int mtIdx = u2(e.plus(4));                          // bootstrap_arguments[0] = MethodType (SAM signature)
-        return gcp[u2(gbase.plus(gcp[mtIdx]))];             // MethodType.descriptor_index -> Utf8 offset
-    }
-
-    /** SAM parameter count (bootstrap_arguments[0] MethodType) — slice 1c supports only 0. */
-    static int lambdaSamArgc(int idx)
-    {
-        Address e = bsmEntryOff(indyBsmIndex(idx));
-        int mtIdx = u2(e.plus(4));
-        int descOff = gcp[u2(gbase.plus(gcp[mtIdx]))];
-        return ClassReader.descParamCount(gbytes, descOff);
-    }
-
-    /** Instance size of a lambda object: header + one field per captured value. */
-    /** Debug accessors for the lambda-site trace in MetalSymbols. */
-    static int lambdaCaptureCount(int idx)
-    {
-        return ClassReader.descParamCount(gbytes, mrefDescOff(idx));
-    }
-
-    static int lambdaSamArgcOf(int idx)
-    {
-        return lambdaSamArgc(idx);
-    }
-
-    static int lambdaImplKindOf(int idx)
-    {
-        return lambdaImplKind(idx);
-    }
-
-    static int lambdaSize(int idx)
-    {
-        return 16 + ClassReader.descParamCount(gbytes, mrefDescOff(idx)) * 8;
-    }
-
-    /** Frame a boxing thunk establishes so it can CALL the referent and then the boxer: LR only, but SP must
-     *  stay 16-byte aligned. LR sits at STUB_LR_OFF, where {@code VM.unwind} looks for it. */
-    private static final int BOX_FRAME = 16;
-
-    /**
-     * Primitive kinds a thunk can box: all eight. Float and double are boxed through the GUEST
-     * {@code Float/Double.valueOf}, resolved by name at run time ({@link #boxFloating}): the boxer is image code
-     * and naming those classes there pulled their boot-hostile initializers into the image.
-     */
-    private static boolean boxableKind(int k)
-    {
-        return k == 'Z' || k == 'B' || k == 'C' || k == 'S' || k == 'I' || k == 'J' || k == 'F' || k == 'D';
-    }
-
-    /**
-     * UNBOX the arguments a method reference's referent takes as PRIMITIVES while its erased SAM passes them
-     * as REFERENCES -- the conversion {@code LambdaMetafactory} inserts on a stock JVM. The thunks boxed a
-     * primitive result and never did this, so {@code Integer::sum} summed two {@code Integer} ADDRESSES
-     * ({@code ConcurrentHashMap.merge} counted 91,635,776 for 100) and {@code Float::sum} branched wild.
-     *
-     * <p>Referent parameter {@code p} for {@code p >= pStart} is SAM argument {@code sStart + (p - pStart)},
-     * and sits in register {@code regBase + p} once the arm has placed the arguments. Parameters below
-     * {@code pStart} are CAPTURES, which are already of the referent's type.
-     *
-     * <p>ONE LOAD unboxes any of the eight: every wrapper's only instance field is {@code value}, slot 0, and a
-     * field slot is 8 bytes holding the value as the compiler keeps it (sign-extended integral, raw float or
-     * double bits), so {@code ldr xR, [xR, #16]} leaves exactly what a primitive argument would carry. A
-     * widening the referent wants ({@code Integer} into a {@code long} parameter) is already in that slot.
-     *
-     * <p>A NULL must throw {@code NullPointerException}, and address 16 is mapped RAM here, so the load
-     * would silently read garbage. The null path drops this thunk's frame if it has one ({@code framed}) and
-     * TAIL-branches to {@code VMBox.unboxNull}: LR still names the SAM call site, so the exception unwinds from
-     * there, a frame the walker knows.
-     */
-    private static int emitUnboxArgs(Address thunk, int w, int idx, int pStart, int sStart, int regBase,
-            boolean framed)
-    {
-        int implDesc = mrefDescOff(lambdaImplMref(idx));
-        int samDesc = lambdaSamDescOff(idx);
-        int n = ClassReader.descParamCount(gbytes, implDesc);
-        int p = pStart;
-        while (p < n)
-        {
-            int ik = ClassReader.descParamKind(gbytes, implDesc, p);
-            int sk = ClassReader.descParamKind(gbytes, samDesc, sStart + (p - pStart));
-            if (sk == 'L' && ik != 'L' && ik != '[' && ik != 0)
-            {
-                int r = regBase + p;
-                if (r > 7 || VM.unboxNullAddr == 0L)
-                {
-                    reportUnboxArg(idx, p, r);
-                }
-                else
-                {
-                    int nullLen = framed ? 3 : 2;                                 // [add sp], movz, b
-                    w = emitAt(thunk, w, A64Enc.cbnz(r, 1 + nullLen));           // non-null -> the load
-                    if (framed)
-                    {
-                        w = emitAt(thunk, w, A64Enc.addImm(STUB_SP, STUB_SP, BOX_FRAME));
-                    }
-                    w = emitAt(thunk, w, A64Enc.movz(0, 1, 0));                  // unboxNull's "really throw"
-                    long at = thunk.toLong() + w * 4L;
-                    w = emitAt(thunk, w, A64Enc.b((int) ((VM.unboxNullAddr - at) / 4L)));
-                    w = emitAt(thunk, w, A64Enc.ldrx(r, r, 16));                 // xR = wrapper.value
-                }
-            }
-            p += 1;
-        }
-        return w;
-    }
-
-    /** A primitive parameter the thunk cannot unbox: past x7 (a stacked argument) or no helper to throw with. */
-    private static void reportUnboxArg(int idx, int p, int r)
-    {
-        int mref = lambdaImplMref(idx);
-        Uart.write(Magic.bytes("  METHOD REF ARG NOT UNBOXED "));
-        printNameAt(gbase, refClassNameOff(mref));
-        Uart.putc(0x2E);
-        printNameAt(gbase, mrefNameOff(mref));
-        Uart.write(Magic.bytes(" param="));
-        VM.printDec(p);
-        if (r > 7)
-        {
-            Uart.write(Magic.bytes(" (stacked argument)\n"));
-        }
-        else
-        {
-            Uart.write(Magic.bytes(" (vm/VMBox.unboxNull not stashed)\n"));
-        }
-    }
-
-    /** True if the erased SAM at {@code idx} returns a reference while its referent returns a primitive, so
-     *  the thunk must box. A constructor reference is excluded by its {@code V} return. */
-    private static boolean lambdaNeedsBoxing(int idx)
-    {
-        char samRet = ClassReader.descReturnKind(gbytes, lambdaSamDescOff(idx));
-        if (samRet != 'L' && samRet != '[')
-        {
-            return false;
-        }
-        char implRet = ClassReader.descReturnKind(gbytes, mrefDescOff(lambdaImplMref(idx)));
-        return implRet != 'V' && implRet != 'L' && implRet != '[';
-    }
-
-    /** Descriptor kind char of the referent's return type. */
-    private static int lambdaImplRetKind(int idx)
-    {
-        return ClassReader.descReturnKind(gbytes, mrefDescOff(lambdaImplMref(idx)));
-    }
-
-    /** Say which method reference needs an adaptation we do not emit, instead of silently emitting a thunk
-     *  that reads the wrong register. Named, because the symptom is otherwise a wild value in x0. */
-    private static void reportUnboxableRef(int idx, int retKind)
-    {
-        int mref = lambdaImplMref(idx);
-        Uart.write(Magic.bytes("  UNBOXABLE METHOD REF "));
-        printNameAt(gbase, refClassNameOff(mref));
-        Uart.putc(0x2E);
-        printNameAt(gbase, mrefNameOff(mref));
-        Uart.write(Magic.bytes(" returns "));
-        Uart.putc(retKind);
-        Uart.write(Magic.bytes(" into a generic SAM (vm/VMBox.box not stashed)\n"));
-    }
 
     /** Emit one instruction word at word index {@code w}; returns the next index. */
-    private static int emitAt(Address thunk, int w, int word)
+    static int emitAt(Address thunk, int w, int word)
     {
         thunk.plus(w * 4L).store(word);
         return w + 1;
     }
 
     /** Load an absolute trampoline address into x16, the register both thunk tails branch through. */
-    private static int emitTrampAddr(Address thunk, int w, Address addr)
+    static int emitTrampAddr(Address thunk, int w, Address addr)
     {
         w = emitAt(thunk, w, A64Enc.movz(16, (int) (addr.toLong() & 0xFFFF), 0));
         w = emitAt(thunk, w, A64Enc.movk(16, (int) ((addr.toLong() >> 16) & 0xFFFF), 1));
@@ -24860,497 +23276,6 @@ public final class Loader
         return w;
     }
 
-    /** Frame prologue for a thunk that must CALL rather than tail-branch. */
-    private static int emitBoxPrologue(Address thunk, int w)
-    {
-        w = emitAt(thunk, w, A64Enc.subImm(STUB_SP, STUB_SP, BOX_FRAME));
-        w = emitAt(thunk, w, A64Enc.strx(STUB_LR, STUB_SP, STUB_LR_OFF));
-        return w;
-    }
-
-    /**
-     * Epilogue of a boxing thunk: the referent has just been CALLED, so x0 holds its raw primitive. Hand it
-     * to {@code VMBox.box} with its descriptor kind and return the reference the SAM's caller expects.
-     *
-     * <p>It also registers the frame. The thunk now calls twice and the boxer allocates, so an exception (or
-     * a GC stack walk) can pass through here; a frame the walker cannot size is what turns a real fault into
-     * an unreadable trace.
-     */
-    private static int emitBoxReturn(Address thunk, int w, int retKind)
-    {
-        w = emitAt(thunk, w, A64Enc.movz(1, retKind, 0));               // x1 = the descriptor kind char
-        Address at = thunk.plus(w * 4L);
-        at.store(A64Enc.bl((int) ((VM.boxPrimAddr - at.toLong()) / 4L)));
-        w += 1;
-        w = emitAt(thunk, w, A64Enc.ldrx(STUB_LR, STUB_SP, STUB_LR_OFF));
-        Address thi = thunk.plus(w * 4L);                               // at the `add sp`: the frame dies here
-        w = emitAt(thunk, w, A64Enc.addImm(STUB_SP, STUB_SP, BOX_FRAME));
-        w = emitAt(thunk, w, A64Enc.ret());
-        VM.addJitFrame(thunk.plus(4L), thi, BOX_FRAME, 0L);                                                 // live from just after the `sub sp`
-        return w;
-    }
-
-    /** Build the synthetic lambda class (thunk + imap + itable dir + Type + TIB); returns the TIB address. */
-    /**
-     * RESOLVE instead of branching when a hand-emitted thunk's target is 0.
-     *
-     * <p>COMPILED dispatch sites get {@code dispatchTargetGuard}, whose null arm diverts to VIRTUAL_RESOLVE.
-     * A hand-emitted thunk had no such arm: it does {@code ldr x16, vtable[slot]} and {@code br x16}, so a
-     * slot RTA pruned reads 0 and branches to 0 -- which the firmware's low-memory shim turns into a silent
-     * re-entry of the image entry.
-     *
-     * <p>THAT FAILURE IS UNTRACEABLE, and specifically so: {@code br} does not write x30, so the
-     * BOOT RE-ENTERED report's x30 is a STALE return address from an earlier, healthy call, and every frame
-     * it names is an artifact. The launcher's wild branch was mis-attributed for several boots to a perfectly
-     * good `blr` in ArraySpliterator.forEachRemaining because of exactly that.
-     *
-     * <p>The thunk already handles the sibling case: when {@code globalVtableSlot} answers -1 it emits
-     * `movz x17, siteIndex` + the trampoline address and lets the shared branch call it. This is the same
-     * repair for the case that slipped through -- a slot number that IS valid but whose vtable BUFFER is
-     * still 0 because the body was never compiled. Same registers, same trampoline, same first-call
-     * resolution against the receiver.
-     *
-     * <p>Five words, and it cannot make a working thunk fail: it fires only on a target of 0, which could
-     * not have branched anywhere useful.
-     */
-    private static int emitThunkTargetGuard(Address thunk, int w, int mref)
-    {
-        Address tramp = virtualTramp();
-        if (tramp.isZero())
-        {
-            return w;                                   // no trampoline to route to: leave the thunk as it was
-        }
-        w = emitAt(thunk, w, A64Enc.cbnz(16, 5));       // target non-zero -> skip the four words below
-        w = emitAt(thunk, w, A64Enc.movz(17, virtualSiteIndex(mref), 0));   // x17 = site (name+descriptor)
-        w = emitTrampAddr(thunk, w, tramp);             // x16 = the late-dispatch trampoline (3 words)
-        return w;
-    }
-
-    /**
-     * Initialize the class a CONSTRUCTOR REFERENCE is about to instantiate (JVMS 5.5).
-     *
-     * <p>Called from the hand-emitted kind-8 thunk, which allocates and runs {@code <init>} itself rather
-     * than going through {@code resolveUnresolvedNew} -- the helper where this rule already lives.
-     *
-     * <p>{@code reg} is baked into the thunk as an immediate at build time. That is sound for the same
-     * reason the TIB beside it is: {@code resetLoader} rebuilds {@code clTab} per LAUNCH, and a thunk built
-     * in one launch has already had its baked TIB invalidated by the next -- so a stale index here is not a
-     * new exposure, and {@code ensureClinit} bounds-checks the index besides.
-     */
-    static void ctorRefInit(int reg)
-    {
-        ensureClinit(reg);
-    }
-
-    /**
-     * The constructor-reference initialization helper is not in this image, so the thunk cannot run the
-     * target's {@code <clinit>} before its {@code <init>}. Says which class is affected: the consequence is
-     * a constructor reading its own class's statics as null, which surfaces arbitrarily far away.
-     */
-    private static void reportCtorRefNoInitHelper(int cr)
-    {
-        Uart.write(Magic.bytes("\n  CTOR-REF CANNOT INITIALIZE (its <init> may read null statics): "));
-        if (clTab != null && cr >= 0 && cr < clCount && clTab[cr] != null)
-        {
-            printNameAt(clTab[cr].base, clTab[cr].nameOff);
-        }
-        else
-        {
-            Uart.write(Magic.bytes("<unregistered>"));
-        }
-        Uart.write(Magic.bytes(" -- vm/VM.ctorRefInit0 was not stashed\n"));
-    }
-
-    /** Names a constructor-reference target whose TIB is not built yet -- see the call site for why. */
-    private static void reportLambdaCtorNoTib(int cr)
-    {
-        Uart.write(Magic.bytes("\n  CTOR-REF TARGET HAS NO TIB (the reference would build a null-TIB object): "));
-        if (clTab != null && cr >= 0 && cr < clCount && clTab[cr] != null)
-        {
-            printNameAt(clTab[cr].base, clTab[cr].nameOff);
-        }
-        else
-        {
-            Uart.write(Magic.bytes("<unregistered>"));
-        }
-        Uart.putc(0x0A);
-    }
-
-    static long buildLambdaTib(int idx)
-    {
-        Address ifaceType = lambdaIfaceType(idx);
-        Address ifaceU = ifaceType.isZero() ? lambdaIfaceNameU(idx) : Address.zero();
-        if (ifaceType.isZero() && !ifaceU.isZero() && lzCompiling && !lzRetried
-                && !VM.dirBytes(ifaceU.plus(2L), u2(ifaceU)).isZero() && notePullNeeded(ifaceU))
-        {
-            // A LATE compile met a lambda whose interface is in the classDir but not loaded -- a deferred
-            // package (closureDeferred), which the batch pull loop skips by design. Note it for the pull-and-
-            // recompile the late path already runs, the same route an unpulled constructor-reference target
-            // takes below: NOT demand-loaded here, because a load can collect and this code buffer is not
-            // reachable yet. SILENT: the TIB built now is discarded with the body, and only an interface
-            // still missing after the pull is a failure worth naming.
-        }
-        else if (ifaceType.isZero())
-        {
-            // 0 is also the itable directory's END SENTINEL, so a lambda built with it satisfies NO interface
-            // and every dispatch on it throws NPE from the directory miss, far from the indy that caused it.
-            // Name it rather than let that happen quietly.
-            Uart.write(Magic.bytes("  LAMBDA IFACE UNRESOLVED "));
-            printLambdaIfaceName(idx);
-            // AND THE CHECKED CAUSE, not just the name. A Type of 0 here has several possible reasons and
-            // they call for opposite responses: DENYLISTED means the null is intended, "absent from the
-            // classDir" means the jar/dir lookup failed, and "registered" means the class IS loaded and the
-            // problem is ORDERING -- the interface arrived after this thunk was built. Naming which one
-            // costs two lines and is the difference between a fix and a guess; the same routing already
-            // settled `NULL CLASS LITERAL` and `UNRESOLVED STATIC` in one boot each.
-            Uart.write(Magic.bytes(" -- "));
-            printWhyLambdaIface(idx);
-            // WHICH COMPILE. "outside the retry window" has two very different causes and the fixes are
-            // opposite: compileReuseTib TRUE means a LATE compile that failed to bracket itself with
-            // lzCompiling (the bug fixed three times already -- lazyCompileLocked had the bracket,
-            // compileMethodOnDemand and compileSigOnDemand got it in #213, clinitEntryOf later), while FALSE
-            // means a BATCH phase-B compile, where there is no retry by design and the interface should have
-            // arrived as a probeAll/addIndyIfaceDep dependency instead.
-            Uart.write(Magic.bytes(" [reuseTib="));
-            VM.printDec(compileReuseTib ? 1 : 0);
-            Uart.write(Magic.bytes(" lzCompiling="));
-            VM.printDec(lzCompiling ? 1 : 0);
-            Uart.write(Magic.bytes(" lzRetried="));
-            VM.printDec(lzRetried ? 1 : 0);
-            Uart.putc(0x5D);
-            Uart.putc(0x0A);
-        }
-        int nc = ClassReader.descParamCount(gbytes, mrefDescOff(idx));   // number of captured values
-        int ia = lambdaSamArgc(idx);                                    // SAM (interface method) args
-        int kind = lambdaImplKind(idx);
-        boolean boxRet = lambdaNeedsBoxing(idx);
-        int retKind = boxRet ? lambdaImplRetKind(idx) : 0;
-        if (boxRet && (!boxableKind(retKind) || VM.boxPrimAddr == 0L))
-        {
-            reportUnboxableRef(idx, retKind);
-            boxRet = false;                 // an un-adapted result is wrong, but a `bl 0` re-enters the image
-        }
-        // 128 + the boxing epilogue's 7 words, PLUS two words per SAM argument: the kind-8 constructor-ref
-        // arm saves every ctor argument to the frame across Heap.alloc and reloads it before <init>, so its
-        // length grows with the arity while every other arm is fixed. At 160 flat a constructor reference
-        // with more than ~13 SAM arguments would have written PAST the allocation into whatever code the
-        // arena handed out next -- silent, and the worst failure mode this VM has. Nothing reached had that
-        // arity, so it never fired; sizing from `ia` removes the cliff rather than moving it.
-        // ... and up to five more per SAM argument for an unbox (cbnz, [add sp], movz, b, ldr): see emitUnboxArgs.
-        Address thunk = Heap.allocCode(160 + ia * 36);
-        int w = 0;
-        if (boxRet)
-        {
-            w = emitBoxPrologue(thunk, w);
-        }
-        if (kind == 5 || kind == 9)
-        {
-            // Instance method ref -> vtable-dispatch the referent on its receiver (so overrides resolve).
-            if (nc == 0)
-            {
-                // UNBOUND (String::compareTo): the SAM's first arg is the receiver, the rest are the method
-                // args. Shift the SAM args down to x0..x(ia-1) so x0 = receiver, x1.. = method args.
-                int j = 0;
-                while (j < ia)
-                {
-                    thunk.plus(w * 4L).store(A64Enc.movReg(j, 1 + j));    // x(j) = samArg[j] (x0 = receiver)
-                    w += 1;
-                    j += 1;
-                }
-                w = emitUnboxArgs(thunk, w, idx, 0, 1, 1, boxRet);             // param p = samArg[p+1], in x(1+p)
-            }
-            else
-            {
-                // BOUND: the receiver is captured field[0]. ANY FURTHER CAPTURES ARE LEADING ARGUMENTS and
-                // must be loaded too -- this branch used to emit only the receiver load, which is correct
-                // for a one-capture method reference (obj::method) and SILENTLY DROPS captures 1..nc-1 for
-                // a lambda BODY, whose kind is also 5 when javac targets a private nestmate instance method.
-                //
-                // The symptom is very specific and was reproduced before this was found: capture 0 arrives
-                // intact and every later one is garbage, because x1.. still hold whatever the caller left
-                // there. picocli's launcher hit it as an Optional local containing an enum constant
-                // (VIRTUALRESOLVE FAILED ...$2.map(Function)Optional); see test/jdk/junit/CaptureProbe.
-                //
-                // Same shape as the kind 6/7 path below: shift the SAM args UP to x(nc)..x(nc+ia-1) first
-                // (high->low, so a shift never clobbers a source), then load the captures into x0..x(nc-1)
-                // with x0 LAST, since x0 is the object being read from. With nc == 1 the shift is a no-op
-                // mov and the load is the single receiver load this used to emit, so a genuine bound method
-                // reference is byte-for-byte unchanged.
-                int j = ia - 1;
-                while (j >= 0)
-                {
-                    thunk.plus(w * 4L).store(A64Enc.movReg(nc + j, 1 + j));   // x(nc+j) = samArg[j]
-                    w += 1;
-                    j -= 1;
-                }
-                int c = nc - 1;
-                while (c >= 0)
-                {
-                    thunk.plus(w * 4L).store(A64Enc.ldrx(c, 0, 16 + c * 8));  // xC = obj.field[c] (x0 last)
-                    w += 1;
-                    c -= 1;
-                }
-                w = emitUnboxArgs(thunk, w, idx, nc - 1, 0, 1, boxRet);            // params past the captured ones
-            }
-            int slot = globalVtableSlot(lambdaImplMref(idx));                 // vtable slot of the referenced method
-            if (slot < 0)
-            {
-                // The referent's class has no vtable numbering yet -- it was pulled AFTER this method was
-                // compiled (a `newresolve`d class, say). Indexing on -1 would load TIB[0], the Type pointer,
-                // and branch into the heap. Resolve against the RECEIVER at first call instead, through the
-                // same late-dispatch trampoline a guarded call site uses: x0 is already the receiver here.
-                if (LOAD_LOG)
-                {
-                    Uart.write(Magic.bytes("  lambdaslot late "));
-                    printNameAt(gbase, refClassNameOff(lambdaImplMref(idx)));
-                    Uart.putc(0x2E);
-                    printNameAt(gbase, mrefNameOff(lambdaImplMref(idx)));
-                    Uart.putc(0x0A);
-                }
-                w = emitAt(thunk, w, A64Enc.movz(17, virtualSiteIndex(lambdaImplMref(idx)), 0));
-                w = emitTrampAddr(thunk, w, virtualTramp());
-            }
-            else
-            {
-                w = emitAt(thunk, w, A64Enc.ldrx(16, 0, 0));                          // x16 = recv.tib (TIB@0)
-                w = emitAt(thunk, w, A64Enc.ldrx(16, 16, 8 + slot * 8));              // x16 = vtable[slot]
-            }
-            w = emitThunkTargetGuard(thunk, w, lambdaImplMref(idx));             // x16 == 0 -> resolve late, not a wild branch
-            if (boxRet)
-            {
-                w = emitAt(thunk, w, A64Enc.blr(16));                                 // CALL: the result must be boxed
-                w = emitBoxReturn(thunk, w, retKind);
-            }
-            else
-            {
-                w = emitAt(thunk, w, A64Enc.br(16));                                  // tail-call
-            }
-            Heap.publishCode(thunk, thunk.plus(w * 4L));
-            return finishLambdaClass(thunk, ifaceType, idx, nc);
-        }
-        if (kind == 8)
-        {
-            // CONSTRUCTOR reference (Num::new): alloc the object, set its TIB, run <init>(obj, samArgs), return
-            // the object. Unlike the other thunks this makes two CALLS (Heap.alloc, <init>), so it needs a frame
-            // to preserve LR and the SAM args across them. (No captures: the ctor args are all SAM args.)
-            int cr = classRegByName(refClassNameOff(lambdaImplMref(idx)));    // the class being constructed
-            // THE TARGET MAY NOT BE LOADED YET, and this is the late-compile blind spot again: RTA marks a
-            // constructor reference's class instantiated at BATCH time (collectBlob's `mk == 8` arm), so a
-            // lambda in a body compiled LATER names a class nothing ever pulled. classRegByName then answers
-            // -1, and the code below indexed clTab[-1] -- baked code carries no bounds check, so it read
-            // garbage and BAKED A ZERO TIB as an immediate, with no reloc for a later batch to patch.
-            //
-            // The object then came back with a null TIB and failed a dozen frames away inside JUnit
-            // (`ClassCastException: class <no Type; tib=0x0>`), which is what made this look like a JUnit bug.
-            //
-            // Noted for the pull-and-recompile the lazy path already runs -- NOT demand-loaded here: a load
-            // parses every blob and can collect, and the code buffer being written is not reachable yet, which
-            // is why a demand-load inside this method was tried once and reverted.
-            if (cr < 0)
-            {
-                // Note it and let the retry pull it. SILENT on the first attempt: this is the EXPECTED state
-                // for any late-compiled constructor reference, and a report that fires on a run which then
-                // works is worse than none. Only a target still missing AFTER the pull is a real failure --
-                // and that one still bakes a zero TIB, so it must be said out loud.
-                notePullNeeded(gbase.plus(refClassNameOff(lambdaImplMref(idx))));
-                if (lzRetried)
-                {
-                    reportLambdaCtorNoTib(cr);
-                }
-                return finishLambdaClass(thunk, ifaceType, idx, nc);            // discarded by the retry
-            }
-            int size = 16 + clTab[cr].fieldCount * 8;
-            long ctib = clTab[cr].tib.toLong();
-            // A ZERO TIB HERE WOULD BE BAKED AS AN IMMEDIATE AND STAY ZERO FOR EVER -- there is no reloc on
-            // this store for a later batch to patch, the same trap a class literal for an unpulled class fell
-            // into. The object then comes back with a null TIB, and the first thing done with it (a checkcast,
-            // a virtual call) fails somewhere else entirely: the console launcher saw it as
-            // `ClassCastException: class <no Type; tib=0x0>` inside JUnit, a dozen frames from here.
-            //
-            // Report it by NAME rather than bake a zero. A class registered without a TIB is one whose phase B
-            // has not run yet, so this says exactly which class and when.
-            if (ctib == 0L)
-            {
-                reportLambdaCtorNoTib(cr);              // registered but phase B has not built its TIB yet
-            }
-            long initBuf = lambdaImplBuf(idx);                               // its <init> buffer (cross-class ok)
-            w = emitUnboxArgs(thunk, w, idx, 0, 0, 1, false);            // Foo(int) from a Function<Integer,Foo>: BEFORE the frame
-            int frame = ((2 + ia + 1) & ~1) * 8;                            // LR + obj + ia args, 16-byte aligned
-            thunk.plus(w * 4L).store(A64Enc.subImm(31, 31, frame)); // sub sp, #frame
-            w += 1;
-            thunk.plus(w * 4L).store(A64Enc.strx(STUB_LR, STUB_SP, STUB_LR_OFF)); // str x30,[sp] (LR)
-            w += 1;
-            int k = 0;
-            while (k < ia)
-            {
-                thunk.plus(w * 4L).store(A64Enc.strx(1 + k, 31, 16 + k * 8)); // save ctor arg k
-                w += 1;
-                k += 1;
-            }
-            // JVMS 5.5: CREATING AN INSTANCE IS AN ACTIVE USE, so the class initializes BEFORE the object
-            // exists and certainly before the <init> called below. This arm never did it -- a constructor
-            // reference was the one instantiation route in the VM with no ensureClinit anywhere on it.
-            //
-            // THE IDENTICAL DEFECT WAS FIXED ONCE ALREADY, for a deferred `new`: resolveUnresolvedNew calls
-            // ensureClinit for exactly this reason, and its comment records the symptom -- `java/util/
-            // ArrayList.<init>` reads DEFAULTCAPACITY_EMPTY_ELEMENTDATA, so an uninitialized class produced a
-            // list whose elementData was null and whose first add() threw NPE, far from the cause. A
-            // constructor reference reaches <init> without going through that helper at all.
-            //
-            // MEASURED, not assumed: COMPILE_WATCH on a launcher boot shows
-            // TestMethodTestDescriptor.<init> emitted at BATCH time (late=0) while its <clinit> is DEFERRED
-            // and compiles only on first active use (late=1) -- so the constructor's body exists before the
-            // initializer has run, and that constructor's whole job is `getstatic defaultInterceptorCall;
-            // putfield interceptorCall`.
-            //
-            // HERE, not at thunk-build time, and that half is load-bearing: building the thunk is LINKING,
-            // and JVMS 5.4 forbids linking from running an initializer -- the ordering inversion this VM
-            // already paid four failed fixes for. The call sits after the SAM arguments are saved to the
-            // frame and after LR is saved, so an initializer that allocates, compiles or throws is safe:
-            // the frame is established and is registered with the unwinder (addJitFrame, below) across
-            // exactly this range. It is NOT under the loader lock, deliberately -- clinitEntryOf takes that
-            // around the COMPILE only, because an initializer may block on a monitor or spawn threads.
-            long initAddr = VM.ctorRefInit0;
-            if (initAddr == 0L)
-            {
-                // The writer stashes this helper on every image (VM.forceCompile keeps it reachable), so 0
-                // means the stash is gone -- and emitting `bl 0` would re-enter the image entry rather than
-                // fail. Say so; skipping leaves today's behaviour, which is the bug this fixes.
-                reportCtorRefNoInitHelper(cr);
-            }
-            else if (cr > 0xFFFF)
-            {
-                // A movz carries 16 bits. MAXCLASS is far below that, so this cannot happen -- but a silent
-                // truncation here would initialize a DIFFERENT class, which is the shape of wrong answer
-                // this VM is least able to diagnose.
-                capHalt(Magic.bytes("ctorref-reg"), cr);
-            }
-            else
-            {
-                thunk.plus(w * 4L).store(A64Enc.movz(0, cr, 0)); // x0 = class registry index
-                w += 1;
-                Address h0 = thunk.plus(w * 4L);
-                h0.store(A64Enc.bl((int) ((initAddr - h0.toLong()) / 4L))); // run <clinit> if it has not run
-                w += 1;
-            }
-            thunk.plus(w * 4L).store(A64Enc.movz(0, size, 0)); // x0 = instance size
-            w += 1;
-            Address h1 = thunk.plus(w * 4L);
-            h1.store(A64Enc.bl((int) ((VM.heapAlloc - h1.toLong()) / 4L))); // x0 = Heap.alloc(size)
-            w += 1;
-            thunk.plus(w * 4L).store(A64Enc.movz(1, (int) (ctib & 0xFFFFL), 0));
-            w += 1;
-            thunk.plus(w * 4L).store(A64Enc.movk(1, (int) ((ctib >>> 16) & 0xFFFFL), 1)); // x1 = the class TIB
-            w += 1;
-            thunk.plus(w * 4L).store(A64Enc.strx(1, 0, 0)); // obj.tib = TIB
-            w += 1;
-            thunk.plus(w * 4L).store(A64Enc.strx(0, 31, 8)); // save obj at [sp+8]
-            w += 1;
-            k = 0;
-            while (k < ia)
-            {
-                thunk.plus(w * 4L).store(A64Enc.ldrx(1 + k, 31, 16 + k * 8)); // restore ctor arg k
-                w += 1;
-                k += 1;
-            }
-            long h2 = thunk.toLong() + w * 4L;
-            if (initBuf != 0L)
-            {
-                // A CODE->CODE edge, pinned for the same reason patchRelocs pins its targets: after this store
-                // the displacement inside the thunk is the ONLY record of initBuf, and nothing scans encodings.
-                Heap.pinCodeAt(Address.fromLong(initBuf));
-                CodeEdges.note(h2, initBuf);
-                Address.fromLong(h2).store(A64Enc.bl((int) ((initBuf - h2) / 4L)));                        // <init>(obj, args)
-            }
-            else
-            {
-                // The constructed class's <init> isn't compiled yet (its body is a later PHASE-B batch): emit
-                // `bl 0` and record a call site so patchRelocs rewrites it to the real <init> — same late-binding
-                // the normal lambda-body path (recordTailReloc) uses. Without this the `bl` with initBuf==0
-                // overflows imm26 and wild-branches (a constructor method-ref, Box::new, would jump to junk).
-                Address.fromLong(h2).store(A64Enc.bl(0));
-                recordCallReloc(h2, lambdaImplMref(idx));
-            }
-            w += 1;
-            thunk.plus(w * 4L).store(A64Enc.ldrx(0, 31, 8)); // x0 = obj (return)
-            w += 1;
-            thunk.plus(w * 4L).store(A64Enc.ldrx(STUB_LR, STUB_SP, STUB_LR_OFF)); // restore LR
-            w += 1;
-            Address tlo = thunk.plus(4L);                                                               // after `sub sp`
-            Address thi = thunk.plus(w * 4L);                                                           // at `add sp`
-            thunk.plus(w * 4L).store(A64Enc.addImm(31, 31, frame)); // add sp, #frame
-            w += 1;
-            thunk.plus(w * 4L).store(A64Enc.ret());
-            w += 1;
-            Heap.publishCode(thunk, thunk.plus(w * 4L));
-            VM.addJitFrame(tlo, thi, frame, 0L);        // it calls <init>; an exception from there unwinds through here
-            return finishLambdaClass(thunk, ifaceType, idx, nc);
-        }
-        long implBuf = lambdaImplBuf(idx);
-        // The body is lambda$xxx(captures..., samArgs...). On entry x0 = lambda obj, x1..x(ia) = SAM args.
-        // Build the thunk: move the SAM args to x(nc)..x(nc+ia-1), load the captures into x0..x(nc-1),
-        // then tail-call the body. Shift direction avoids clobbering: dest-source = nc-1, so shift UP
-        // (high->low) when nc>=1, DOWN (low->high) when nc==0.
-        if (nc >= 1)
-        {
-            int j = ia - 1;
-            while (j >= 0)
-            {
-                thunk.plus(w * 4L).store(A64Enc.movReg(nc + j, 1 + j));   // x(nc+j) = samArg[j]
-                w += 1;
-                j -= 1;
-            }
-        }
-        else
-        {
-            int j = 0;
-            while (j < ia)
-            {
-                thunk.plus(w * 4L).store(A64Enc.movReg(j, 1 + j));        // x(j) = samArg[j]
-                w += 1;
-                j += 1;
-            }
-        }
-        int c = nc - 1;
-        while (c >= 0)
-        {
-            thunk.plus(w * 4L).store(A64Enc.ldrx(c, 0, 16 + c * 8));   // xC = obj.field[c] (x0 last)
-            w += 1;
-            c -= 1;
-        }
-        w = emitUnboxArgs(thunk, w, idx, nc, 0, 0, boxRet);                          // static referent: param p in x(p)
-        long bAt = thunk.toLong() + w * 4L;
-        if (implBuf != 0L)
-        {
-            Heap.pinCodeAt(Address.fromLong(implBuf));
-            CodeEdges.note(bAt, implBuf);                                        // as above: a tail branch is
-            // Boxing makes this a CALL, not a tail branch: the boxer runs after the referent returns.
-            Address.fromLong(bAt).store(boxRet
-                    ? A64Enc.bl((int) ((implBuf - bAt) / 4L))
-                    : A64Enc.b((int) ((implBuf - bAt) / 4L)));              //   still a code->code edge
-        }
-        else if (boxRet)
-        {
-            // As below, but the site is a call, so it takes the CALL reloc: patchRelocs must leave the
-            // boxing epilogue after it reachable rather than turning the site into a tail branch.
-            Address.fromLong(bAt).store(A64Enc.bl(0));
-            recordCallReloc(bAt, lambdaImplMref(idx));
-        }
-        else
-        {
-            // A method ref whose cross-class impl isn't registered yet: emit `b 0` and record a tail reloc so
-            // patchRelocs rewrites it once every class is compiled (same late-binding as a normal bl call site).
-            Address.fromLong(bAt).store(A64Enc.b(0));
-            recordTailReloc(bAt, lambdaImplMref(idx));
-        }
-        w += 1;
-        if (boxRet)
-        {
-            w = emitBoxReturn(thunk, w, retKind);
-        }
-        Heap.publishCode(thunk, thunk.plus(w * 4L));
-        return finishLambdaClass(thunk, ifaceType, idx, nc);
-    }
 
     /** Initialize the loaded class whose Type node is {@code type} (VMNatives.ensureMirrorInit); a Type the
      *  registry does not know -- an array, a primitive -- has no initializer and is left alone. */
@@ -25492,7 +23417,7 @@ public final class Loader
 
     /** Wrap a built lambda thunk into a class: imap (SAM slot -> thunk), itable dir, Type, TIB; return the TIB. */
     /** True if registry index {@code r} is already among the first {@code n} entries of {@code ifClosureBuf}. */
-    private static boolean inIfaceClosure(int r, int n)
+    static boolean inIfaceClosure(int r, int n)
     {
         int i = 0;
         while (i < n)
@@ -25504,137 +23429,6 @@ public final class Loader
             i += 1;
         }
         return false;
-    }
-
-    private static long finishLambdaClass(Address thunk, Address ifaceType, int idx, int nc)
-    {
-        // M8 itables: PER-interface itables. The SAM's identity is (indy name, MethodType desc);
-        // each directory entry -- the functional interface AND every interface it transitively
-        // extends (a BinaryOperator accumulator is invoked as BiFunction by Stream.reduce) --
-        // gets its OWN itable with the thunk at that interface's flattened slot of the SAM.
-        int samName = mrefNameOff(idx);
-        int samDesc = lambdaSamDescOff(idx);
-        int fnReg = regOfType(ifaceType);
-        int n = fnReg >= 0 ? ifaceClosureOf(fnReg) : 0;
-        // FLAG_SERIALIZABLE: an altMetafactory site whose lambda was cast to an INTERSECTION with
-        // java.io.Serializable (every combinator in stock java.util.Comparator is). The marker declares no
-        // method, so honouring it is one more DIRECTORY entry and nothing else -- and the entry is what makes
-        // `lambda instanceof Serializable` answer true, as it does on stock. Nothing here serialises
-        // anything (java/io/ObjectStream* is denied), so that answer is the marker's only observable; leaving
-        // it false would be a silent wrong answer of exactly the shape this VM keeps paying for.
-        //
-        // If the interface is not REGISTERED there is no Type to put in the directory. Say so rather than
-        // drop it quietly: the lambda still works (its SAM is reached through the entries above) and only the
-        // type test is wrong, which is precisely the case a silent skip would hide. MEASURED rather than
-        // pre-empted with a pull -- java/io/Serializable is named as a CONSTANT_Class by every class that
-        // declares `implements Serializable`, so it is already registered in practice.
-        int serReg = -1;
-        if ((lambdaAltFlags(idx) & LMF_SERIALIZABLE) != 0)
-        {
-            serReg = classIndexByName(Magic.bytes("java/io/Serializable"));
-            if (serReg >= 0 && (serReg == fnReg || inIfaceClosure(serReg, n)))
-            {
-                serReg = -1;                            // already in the closure: one entry, not two
-            }
-            else if (serReg < 0)
-            {
-                Uart.write(Magic.bytes("\n  LAMBDA MARKER UNRESOLVED: java/io/Serializable is not registered"));
-                Uart.write(Magic.bytes(" -- the lambda runs, `instanceof Serializable` answers false\n"));
-            }
-        }
-        int extra = serReg >= 0 ? 1 : 0;
-        Address dir = Heap.allocData((n + 2 + extra) * 16);
-        dir.plus(0L).store(ifaceType);              // the functional interface itself
-        dir.plus(8L).store(lambdaItableFor(fnReg, samName, samDesc, thunk));
-        int e = 1;
-        int di = 0;
-        while (di < n)
-        {
-            dir.plus(e * 16L).plus(0L).store(clTab[ifClosureBuf[di]].type);
-            dir.plus(e * 16L).plus(8L).store(lambdaItableFor(ifClosureBuf[di], samName, samDesc, thunk));
-            e += 1;
-            di += 1;
-        }
-        if (serReg >= 0)
-        {
-            // Serializable declares no method, so its itable is a one-word block nothing can index: the
-            // directory entry exists to be FOUND by the type test, not to be dispatched through.
-            dir.plus(e * 16L).plus(0L).store(clTab[serReg].type);
-            dir.plus(e * 16L).plus(8L).store(lambdaItableFor(serReg, samName, samDesc, thunk));
-            e += 1;
-        }
-        dir.plus(e * 16L).plus(0L).store(0L);           // sentinel: interfaceType 0 ends the directory
-        dir.plus(e * 16L).plus(8L).store(0L);
-        // Type { instanceSize, superType=Object, itableDir } -- no depth/display (a lambda is
-        // only ever type-checked through its interface dir, so the walk fallback covers it).
-        //
-        // superType MUST be Object's Type, not 0. typeAssignable walks self -> itable dir -> superType, so a
-        // 0 super ends the walk at the lambda's own interfaces: `lambda instanceof Object` answered FALSE,
-        // and every aastore of a lambda into an Object[] threw ArrayStoreException. That is not an obscure
-        // path -- it is EVERY varargs call taking a lambda, e.g. Arguments.of((Executable) () -> ...) in the
-        // stock BasicGZIPInputStreamTest, whose argument array is an Object[].
-        Address type = Heap.allocData(ObjectModel.TYPE_SIZE);
-        type.plus(0L).store((long) (16 + nc * 8));
-        type.plus(ObjectModel.TYPE_SUPER_OFFSET).store(objectTypeAddr());
-        type.plus(16L).store(dir);
-        type.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).store(0L);
-        type.plus(ObjectModel.TYPE_DEPTH_OFFSET).store(0L);
-        type.plus(ObjectModel.TYPE_DISPLAY_OFFSET).store(0L);
-        type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).store(0L);
-        type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).store(0L);
-        buildImplBitmap(type);                           // a lambda's dir interfaces ARE numbered
-        // TIB { Type, Object's vtable }. The lambda declares no virtual method of its OWN -- its SAM is
-        // reached through the itable directory above -- but it is still an ordinary object, and
-        // equals/hashCode/toString on it must select java/lang/Object's implementations (JVMS 5.4.6: the
-        // maximally-specific override in the receiver's hierarchy, which is rooted at Object).
-        //
-        // This TIB used to be ONE WORD, on the premise that "a lambda is only ever type-checked through its
-        // interface dir". An Object method on a lambda receiver then had nowhere to resolve: the class
-        // registry has no entry (a lambda has no classfile and, exactly as for a real JVM's HIDDEN classes,
-        // no binary name to register under), and the itable directory holds only interface methods. The
-        // launcher hit it as `DISPATCH ON UNREGISTERED TYPE ... equals(Ljava/lang/Object;)Z` from
-        // Stream.sorted(). Identity semantics inherited from Object are exactly right here --
-        // LambdaMetafactory specifies the identity of a captured function object as unpredictable.
-        int onv = objectVtableCount();
-        Address tib = Heap.allocData(8 + onv * 8);
-        tib.plus(0L).store(type);
-        fillObjectVtable(tib);                           // may copy zeros if Object is not compiled yet;
-                                                         //   refillSynthTibVtables repairs that at loadAll's end
-        if (lambdaTibRoots != null && lambdaTibRootN < lambdaTibRoots.length())
-        {
-            lambdaTibRoots.set(lambdaTibRootN, tib);         // keep this TIB (and, via its trace, Type/dir/itables) a GC root
-            lambdaTibVtCap[lambdaTibRootN] = onv;   // ... and how many vtable slots it has room for
-            lambdaTibFilled[lambdaTibRootN] = false;// ... and NOT yet filled (explicit: see the field's note --
-                                                    //   allocArray leaves elements undefined on this VM)
-            lambdaHostBase.set(lambdaTibRootN, gbase); // ... and the class being compiled: the lambda's host
-            lambdaHostNameOff[lambdaTibRootN] = gThisNameOff;
-            lambdaTibRootN += 1;
-        }
-        return tib.toLong();
-    }
-
-    /** A lambda's itable for interface {@code ir}: zeroes except the thunk at the interface's
-     *  flattened slot of the SAM (name/desc offsets in the CURRENT blob). {@code ir < 0} (the
-     *  functional interface isn't registered) degrades to a one-slot table holding the thunk. */
-    private static long lambdaItableFor(int ir, int samName, int samDesc, Address thunk)
-    {
-        if (ir < 0)
-        {
-            Address one = Heap.allocData(8);
-            one.store(thunk);
-            return one.toLong();
-        }
-        int count = clTab[ir].ifmCount;
-        Address it = Heap.allocData(count > 0 ? count * 8 : 8);
-        int s = 0;
-        while (s < count)
-        {
-            it.plus(s * 8L).store(0L);
-            s += 1;
-        }
-        int slot = ifmSlotIn(ir, gbase, samName, samDesc);
-        it.plus((slot >= 0 ? slot : 0) * 8L).store(thunk);
-        return it.toLong();
     }
 
 
@@ -25858,10 +23652,10 @@ public final class Loader
                 {                                       //   annotation contract: put it back
                     AnnotationInstances.patchAnnoContract(lambdaTibRoots.get(i), lambdaTibVtCap[i], Address.zero());
                 }
-                int px = proxyIndexOfTib(lambdaTibRoots.get(i));
+                int px = ProxySupport.proxyIndexOfTib(lambdaTibRoots.get(i));
                 if (px >= 0)                            // ... and over a proxy's equals/hashCode/toString
                 {
-                    patchProxyObject(px);
+                    ProxySupport.patchProxyObject(px);
                 }
             }
             i += 1;
@@ -26006,7 +23800,7 @@ public final class Loader
      *  interfaces' ID bits. Unnumbered dir interfaces are simply skipped -- their targets fall back
      *  to the dir walk, so the bitmap stays definitive for every NUMBERED interface. A super without
      *  a computed bitmap leaves this type without one too (walk fallback). */
-    private static void buildImplBitmap(Address type)
+    static void buildImplBitmap(Address type)
     {
         long b0 = 1L;                                    // bit 0 = computed marker
         long b1 = 0L;
