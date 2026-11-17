@@ -20,7 +20,7 @@ import magic.Magic;
  * <p>This never arises for a lambda BODY: javac generates the synthetic {@code lambda$...} method with the
  * instantiated signature and puts the {@code valueOf} inside it. It arises only for a method REFERENCE,
  * where the referent's descriptor is fixed and {@code LambdaMetafactory} is what inserts the conversion.
- * joe-ng synthesises the lambda class itself ({@link Loader#buildLambdaTib}), so the conversion has to be
+ * joe-ng synthesises the lambda class itself ({@link LambdaFactory#buildLambdaTib}), so the conversion has to be
  * emitted into its thunk. Without it the raw primitive travels in x0 where the caller expects a reference:
  * {@code Assertions.assertDoesNotThrow(st::hasMoreTokens)} handed back the boolean 1 AS AN ADDRESS, and the
  * first virtual call on the result threw NPE from inside JUnit -- a fault that looked like a

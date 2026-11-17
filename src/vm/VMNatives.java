@@ -376,19 +376,19 @@ final class VMNatives
      */
     static long mhResolve(long save, long idx)
     {
-        return Loader.mhResolve(save, (int) idx);
+        return MethodHandles.mhResolve(save, (int) idx);
     }
 
     /** The indy trampoline's resolver ({@code Loader.indyTramp}); may run the bootstrap (guest code). */
     static long indyResolve(long save, long idx)
     {
-        return Loader.indyResolve(save, (int) idx);
+        return Indy.indyResolve(save, (int) idx);
     }
 
     /** The LDC_CONST helper: a loadable dynamic constant's value (an object address, or a primitive's bits). */
     static long ldcConst(long idx)
     {
-        return Loader.ldcConst((int) idx);
+        return Indy.ldcConst((int) idx);
     }
 
     /** {@code MethodHandleNatives.classBytes0(Class)}: a guest copy of the class's class file, or null. */
@@ -398,7 +398,7 @@ final class VMNatives
         {
             return 0L;                                     // boot force-compile passes 0
         }
-        return Loader.classFileCopy(mirror.toAddress().plus(16L).loadAddress());
+        return MethodHandles.classFileCopy(mirror.toAddress().plus(16L).loadAddress());
     }
 
     /** {@code Throwable.stackTrace0(Throwable)} native: its inline backtrace as a StackTraceElement[]. */
@@ -998,7 +998,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes and compiles the dispatch helper
         try
         {
-            return Loader.proxyType(ifaces, methods, names, descs, objMethods);
+            return ProxySupport.proxyType(ifaces, methods, names, descs, objMethods);
         }
         finally
         {
@@ -1009,7 +1009,7 @@ final class VMNatives
     /** {@code Proxy.proxyAlloc0} native: a zeroed instance of a proxy class. */
     static long proxyAlloc(ObjectReference mirror)
     {
-        return Loader.proxyAlloc(mirror);
+        return ProxySupport.proxyAlloc(mirror);
     }
 
     /** {@code RecordComponent.recordInfo0} native: the Record attribute's component count, or -1. */
@@ -1577,7 +1577,7 @@ final class VMNatives
         int fnLen = (int) fnameArrRef.toAddress().plus(16L).loadLong();   // guest byte[] length
         Address fnBase = fnameArrRef.toAddress().plus(24L);         // guest byte[] data
         Address tib = objRef.toAddress().loadAddress();                     // obj header TIB
-        return Loader.vhFieldOffset(fnBase, fnLen, tib);
+        return MethodHandles.vhFieldOffset(fnBase, fnLen, tib);
     }
 
     /**
@@ -1766,7 +1766,7 @@ final class VMNatives
             raw.plus(i).store(name[i]);
             i += 1;
         }
-        return Loader.vhFieldOffset(raw, name.length, obj.toAddress().loadAddress());
+        return MethodHandles.vhFieldOffset(raw, name.length, obj.toAddress().loadAddress());
     }
 
     /**
