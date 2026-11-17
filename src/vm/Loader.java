@@ -52,7 +52,7 @@ public final class Loader
     static Address gp;      // parse cursor
     static int[] gcp;       // byte offset of each constant-pool entry body
     static byte[] gbytes;   // heap copy of the current class, for the shared ClassReader
-    private static int[] gBcToWord; // last compiled method's bci -> machine word offset (Baseline.bcToWord)
+    static int[] gBcToWord; // last compiled method's bci -> machine word offset (Baseline.bcToWord)
     static int gAfterCp;    // offset just past the constant pool (stable; gp gets reused as a cursor)
     static int[] gcpTag;    // tag of each entry (7 = Class — used for dependencies)
     private static int gcpCount;
@@ -373,7 +373,7 @@ public final class Loader
                     Uart.write(Magic.bytes(" cell="));
                     VM.printHex(dlTab[k].cell);
                     Uart.write(Magic.bytes("\n  method: "));
-                    printFrameAt(Address.fromLong(target));
+                    StackTrace.printFrameAt(Address.fromLong(target));
                     Uart.putc(0x0A);
                     while (true) { Magic.wfe(); }
                 }
@@ -409,7 +409,7 @@ public final class Loader
         Uart.write(Magic.bytes("\nSTALE REGISTRY REF (blob "));
         VM.printHex(addr);
         Uart.write(Magic.bytes("\n  from "));
-        printFrameAt(Address.fromLong(lr - 4L));
+        StackTrace.printFrameAt(Address.fromLong(lr - 4L));
         Uart.write(Magic.bytes("\n  while compiling "));
         printCurrentClass();
         Uart.putc(0x0A);
@@ -3009,18 +3009,18 @@ public final class Loader
         // seeded nothing, and a latch set before the work succeeded meant they were never seeded at all.
         // System.out then read null in the third program (the demo suite's PipDemo). launch got this right by
         // accident, re-seeding after every program; doing it deliberately costs a few registry lookups.
-        seedSystemIn();                                     // System.in -> an empty stream (never null)
+        BootSeeds.seedSystemIn();                                     // System.in -> an empty stream (never null)
         buildRunTramp();                                    // enable Thread.start() (needs Runnable loaded)
         // seedSystemProps runs LAST of the seeds, because it is the only one that COMPILES a method:
         // resolving Properties.setProperty rebuilds the loader's compile cursor (gcp/gbase/gStatics) for
         // java/util/Properties, and every seed after it would then be standing on the wrong class's state.
         // That is the hazard already recorded for demand-loading inside buildLambdaTib, reached from a
         // different direction.
-        seedSystemProps();                                  // System.props -> a real Properties (setProperty)
-        seedSavedProps();                                   // jdk.internal.misc.VM.savedProps -> its own snapshot
-        seedSystemStreams();                                // System.out/err -> stock PrintStream over the UART
-        seedBooted();                                       // jdk.internal.misc.VM.initLevel -> SYSTEM_BOOTED, last
-        seedRefAccess();                                    // Reference.<clinit> -> SharedSecrets.javaLangRefAccess
+        BootSeeds.seedSystemProps();                                  // System.props -> a real Properties (setProperty)
+        BootSeeds.seedSavedProps();                                   // jdk.internal.misc.VM.savedProps -> its own snapshot
+        BootSeeds.seedSystemStreams();                                // System.out/err -> stock PrintStream over the UART
+        BootSeeds.seedBooted();                                       // jdk.internal.misc.VM.initLevel -> SYSTEM_BOOTED, last
+        BootSeeds.seedRefAccess();                                    // Reference.<clinit> -> SharedSecrets.javaLangRefAccess
         long argv = buildArgv(argsLine);                    // after loadAll: guestString needs String's TIB
         long buf = globalMethodBuf(className, Magic.bytes("main"), Magic.bytes("([Ljava/lang/String;)V"));
         if (buf == 0L)
@@ -3162,7 +3162,7 @@ public final class Loader
         entryPoint(entry, Magic.bytes("main"), Magic.bytes("([Ljava/lang/String;)V"));
         pullSupportClasses();
         loadAll();                                          // reachability-gated JIT of the whole closure
-        seedSystemIn();                                     // System.in -> an empty stream (never null)
+        BootSeeds.seedSystemIn();                                     // System.in -> an empty stream (never null)
         buildRunTramp();                                    // enable Thread.start(): the shared Runnable.run()
                                                             //   trampoline (needs Runnable loaded by loadAll;
                                                             //   harmless if the program spawns no threads)
@@ -3171,11 +3171,11 @@ public final class Loader
         // java/util/Properties, and every seed after it would then be standing on the wrong class's state.
         // That is the hazard already recorded for demand-loading inside buildLambdaTib, reached from a
         // different direction.
-        seedSystemProps();                                  // System.props -> a real Properties (setProperty)
-        seedSavedProps();                                   // jdk.internal.misc.VM.savedProps -> its own snapshot
-        seedSystemStreams();                                // System.out/err -> stock PrintStream over the UART
-        seedBooted();                                       // jdk.internal.misc.VM.initLevel -> SYSTEM_BOOTED, last
-        seedRefAccess();                                    // Reference.<clinit> -> SharedSecrets.javaLangRefAccess
+        BootSeeds.seedSystemProps();                                  // System.props -> a real Properties (setProperty)
+        BootSeeds.seedSavedProps();                                   // jdk.internal.misc.VM.savedProps -> its own snapshot
+        BootSeeds.seedSystemStreams();                                // System.out/err -> stock PrintStream over the UART
+        BootSeeds.seedBooted();                                       // jdk.internal.misc.VM.initLevel -> SYSTEM_BOOTED, last
+        BootSeeds.seedRefAccess();                                    // Reference.<clinit> -> SharedSecrets.javaLangRefAccess
         // Build the String[] argv AFTER loadAll: guestString needs the loaded String class's TIB, so the argv
         // MUST be built here, not before resetLoader() (that was the "args[i] throws" bug).
         long argv = buildArgv(argsLine);
@@ -3292,7 +3292,6 @@ public final class Loader
         return obj.toLong();
     }
 
-    // ----- M-B: Thread.getStackTrace() -> StackTraceElement[] (walk the frame chain, materialise elements) -----
 
     /**
      * A fresh guest {@code byte[]} holding a copy of {@code src}, or 0 for a null source.
@@ -3371,177 +3370,6 @@ public final class Loader
         return obj.toLong();
     }
 
-    /** TIB of {@code java/lang/StackTraceElement}, pulling the class if it is not loaded yet (0 only if absent). */
-    private static Address steTib()
-    {
-        int i = classIndexByName(Magic.bytes("java/lang/StackTraceElement"));
-        if (i < 0)
-        {
-            // PULL IT, do not answer 0. The stack-trace natives build StackTraceElements whatever the program's
-            // closure held, and a 0 TIB makes every element a receiver with no Type: its first virtual call
-            // (getClassName) went through late dispatch on a garbage itable directory and surfaced as an NPE
-            // inside resolveViaItableDir. It hid while the class rode into every batch by reference; deferring
-            // the logger (closureDeferred) moved StackWalker -- the referrer -- to a late pull, and
-            // SystemLoggerProbe's caller lookup found it.
-            VM.loaderLock(VM.LOCK_REFLECT);
-            try
-            {
-                if (classIndexByName(Magic.bytes("java/lang/StackTraceElement")) < 0)
-                {
-                    loadClassIncremental(Magic.bytes("java/lang/StackTraceElement"));
-                }
-            }
-            finally
-            {
-                VM.loaderUnlock();
-            }
-            i = classIndexByName(Magic.bytes("java/lang/StackTraceElement"));
-        }
-        return i >= 0 ? clTab[i].tib : Address.zero();
-    }
-
-    /**
-     * Build one {@code StackTraceElement} for machine PC {@code pc}: resolve its method (a JIT'd method, a
-     * {@code <clinit>}, or a writer-compiled image method) to declaringClass / methodName / fileName / line and
-     * write those four fields at their slot offsets. Mirrors {@link #printFrameAt}'s lookup, but materialises an
-     * object instead of printing. Image frames carry the combined {@code owner/Class.method} as the method name
-     * (they sit above the guest frames the caller inspects, so their exact split doesn't matter).
-     */
-    private static long frameToElement(Address pc, Address steTib)
-    {
-        // THE BLOCK LOOKUP IS HOISTED, as in printFrameAt and for the same reason: inSameCodeBlock scans every
-        // code block, and calling it per candidate made each element O(rgCount * codeBlockN). Pi, 2026-11-05:
-        // a failed TLS handshake spent ~465 s here materialising its exceptions' stack traces (hang dump in
-        // Heap.codeBlockEndAt), long after the connection was dead. pc's block is the same for every candidate,
-        // so "buf is in pc's block" is the range test buf >= pStart; a pc in no block keeps the exact call.
-        long pEnd = Heap.codeBlockEndAt(pc).toLong();
-        long pStart = pEnd == 0L ? 0L : Heap.codeBlockStartAt(pc).toLong();
-        long bestBuf = 0L;
-        int bestReg = -1;
-        int bestClin = -1;
-        int i = 0;
-        while (i < rgCount)
-        {
-            long b = rgTab[i].buf;
-            if (b != 0L && b <= pc.toLong() && b > bestBuf
-                    && (pEnd != 0L ? b >= pStart : inSameCodeBlock(Address.fromLong(b), pc))) { bestBuf = b; bestReg = i; bestClin = -1; }
-            i += 1;
-        }
-        int c = 0;
-        while (c < clinitN)
-        {
-            long b = clinitEntry[c];
-            if (b != 0L && b <= pc.toLong() && b > bestBuf
-                    && (pEnd != 0L ? b >= pStart : inSameCodeBlock(Address.fromLong(b), pc))) { bestBuf = b; bestClin = c; bestReg = -1; }
-            c += 1;
-        }
-        long clsStr = 0L;
-        long methStr = 0L;
-        long fileStr = 0L;
-        long line = 0L;
-        if (bestReg >= 0)
-        {
-            clsStr = guestBinaryName(rgTab[bestReg].base.plus(rgTab[bestReg].classOff + 2L),
-                    u2(rgTab[bestReg].base.plus(rgTab[bestReg].classOff)));
-            methStr = guestStringUtf8(rgTab[bestReg].base, rgTab[bestReg].nameOff);
-            fileStr = guestStringUtf8(rgTab[bestReg].src, 0);
-            line = lineAtOffset(rgTab[bestReg].line, (int) ((pc.toLong() - bestBuf) >> 2));
-        }
-        else if (bestClin >= 0)
-        {
-            clsStr = guestBinaryName(clinitBase.get(bestClin).plus(clinitNameOff[bestClin] + 2L),
-                    u2(clinitBase.get(bestClin).plus(clinitNameOff[bestClin])));
-            methStr = guestString(Magic.bytes("<clinit>"));
-        }
-        else
-        {
-            long tab = VM.imageSymTable;                    // writer-compiled VM/board method: image symbol table
-            long n = VM.imageSymCount;
-            long k = 0;
-            while (k < n)
-            {
-                Address e = Address.fromLong(tab + k * 40L);
-                long start = e.loadLong();
-                if (pc.toLong() >= start && pc.toLong() < e.plus(8L).loadLong())
-                {
-                    // The symbol is "owner/Class.method", combined: split it at the LAST '.' (a method name
-                    // has none) so the class is a class and the method a method, as on a JVM.
-                    Address sym = e.plus(16L).loadAddress();
-                    int symLen = u2(sym);
-                    int dot = symLen - 1;
-                    while (dot > 0 && u1(sym.plus(2L + dot)) != 0x2E)
-                    {
-                        dot -= 1;
-                    }
-                    if (dot > 0)
-                    {
-                        clsStr = guestBinaryName(sym.plus(2L), dot);
-                        methStr = guestBytes(sym.plus(2L + dot + 1L), symLen - dot - 1);
-                    }
-                    else
-                    {
-                        methStr = guestStringUtf8(sym, 0);
-                    }
-                    fileStr = guestStringUtf8(e.plus(24L).loadAddress(), 0);
-                    line = lineAtOffset(e.plus(32L).loadLong(), (int) ((pc.toLong() - start) >> 2));
-                    k = n;
-                }
-                else
-                {
-                    k += 1;
-                }
-            }
-        }
-        // declaringClass MUST NOT be null, and this is not tidiness: a caller that walks EVERY element and
-        // asks getClassName() gets a null and NPEs inside its own code, naming ITS class rather than this gap.
-        // JUnit's ExceptionUtils.pruneStackTrace does exactly that (className.startsWith("org.junit.start.")),
-        // and it is what stopped the console launcher while it was REPORTING an engine failure -- so the real
-        // failure was replaced by a mystery NPE in the reporter.
-        //
-        // The image-frame branch above fills in only the method (the combined "owner/Class.method"), on the
-        // premise -- stated in this method's own comment -- that such frames "sit above the guest frames the
-        // caller inspects, so their exact split doesn't matter". That holds for PRINTING and is false for any
-        // caller that reads the fields. A pc found in no table at all leaves BOTH null.
-        //
-        // The placeholder is deliberately not a plausible class name: it must not collide with a prefix a
-        // caller prunes on, and a reader seeing it should know the frame was unnameable rather than believe it.
-        if (clsStr == 0L)
-        {
-            clsStr = guestString(Magic.bytes("<vm>"));
-        }
-        if (methStr == 0L)
-        {
-            methStr = guestString(Magic.bytes("<unknown>"));
-        }
-        // The four fields are found BY NAME: StackTraceElement is the JDK 26 class, whose layout puts the
-        // class-loader, module and Class-object fields first. Its other fields stay null/0 -- format 0 is
-        // stock's "show all", and toString prints no loader or module for a null name.
-        if (steTib.NE(steFieldsTib))
-        {
-            int si = classIndexByName(Magic.bytes("java/lang/StackTraceElement"));
-            steSize = 16L + clTab[si].fieldCount * 8L;
-            steClassOff = instanceFieldOffset(si, Magic.bytes("declaringClass"));
-            steMethodOff = instanceFieldOffset(si, Magic.bytes("methodName"));
-            steFileOff = instanceFieldOffset(si, Magic.bytes("fileName"));
-            steLineOff = instanceFieldOffset(si, Magic.bytes("lineNumber"));
-            steFieldsTib = steTib;
-        }
-        Address ste = Heap.alloc((int) steSize);
-        ste.store(steTib);
-        ste.plus(steClassOff).store(clsStr);
-        ste.plus(steMethodOff).store(methStr);
-        ste.plus(steFileOff).store(fileStr);
-        ste.plus(steLineOff).store(line);
-        return ste.toLong();
-    }
-
-    // frameToElement's StackTraceElement layout, resolved once per TIB.
-    private static Address steFieldsTib;
-    private static long steSize;
-    private static long steClassOff;
-    private static long steMethodOff;
-    private static long steFileOff;
-    private static long steLineOff;
 
     /** A guest String of the {@code len} bytes at {@code src}. */
     static long guestBytes(Address src, int len)
@@ -3580,181 +3408,6 @@ public final class Loader
         return obj.toLong();
     }
 
-    /**
-     * Walk the frame chain from ({@code pc},{@code sp}) with {@link VM#frameSizeAt}: record each frame's PC into
-     * {@code arr} (a StackTraceElement[]) if non-0, else just count. Stops at the run-trampoline (so a spawned
-     * thread's bottom frame is run(), not the trampoline) and at main()'s caller ({@link VM#isLaunchFrame}). {@code savedX30} (non-0 only for a parked thread) lets
-     * the FIRST frame step over a leaf {@code taskYield} whose caller return is in x30, not on the stack.
-     */
-    private static int traceWalk(long pc, long sp, long savedX30, long arr, Address steTib)
-    {
-        long cpc = pc;
-        long csp = sp;
-        boolean first = true;
-        int n = 0;
-        while (n < 64 && cpc > 0x1000L)
-        {
-            if (VM.runTrampAddr != 0L && cpc >= VM.runTrampAddr && cpc < VM.runTrampAddr + 64L)
-            {
-                break;                                     // run-trampoline: end the trace at run()
-            }
-            if (arr != 0L)
-            {
-                Address.fromLong(arr).plus(24L).plus(n * 8L).store(frameToElement(Address.fromLong(cpc), steTib));
-            }
-            n += 1;
-            long cfs = VM.frameSizeAt(Address.fromLong(cpc));
-            if (cfs == 0L)
-            {
-                if (first && savedX30 > 0x1000L)
-                {
-                    cpc = savedX30 - 4L;                   // leaf top frame (taskYield): caller return is x30, SP unchanged
-                    first = false;
-                    continue;
-                }
-                break;                                     // top of the resolvable stack
-            }
-            cpc = Address.fromLong(csp).loadLong() - 4L;                  // caller's return address (the call site)
-            csp += cfs;
-            first = false;
-            if (VM.isLaunchFrame(Address.fromLong(cpc)))
-            {
-                break;                                     // below main(): end the trace at main, as on a JVM
-            }
-        }
-        return n;
-    }
-
-    /**
-     * Materialise a {@code StackTraceElement[]} from a Throwable's INLINE backtrace ({@code bt0..bt7} at
-     * {@code obj+16..+72}, 0-terminated), which {@link VM#unwind} fills at THROW time -- or, when the trace was
-     * deeper than eight frames, from the full-depth {@code long[]} in {@code Throwable.backtrace} that
-     * {@code VMUnwind.fillInTrace} records (DeepTraceProbe: a 20-deep throw used to come back as 8 frames).
-     *
-     * <p>An exception that has been constructed but not yet thrown therefore yields an EMPTY array, which is
-     * correct rather than merely convenient: stock semantics would capture at construction, and joe-ng
-     * deliberately captures at throw so that propagation allocates nothing. Callers that walk the result are
-     * fine with empty -- JUnit's {@code maybeTrimStackTrace}, the reason this exists, loops over the array and
-     * returns early when it finds no match.
-     */
-    static long traceFromThrowable(ObjectReference exc)
-    {
-        if (exc.isNull())
-        {
-            return 0L;
-        }
-        Address tib = steTib();
-        Address deep = Address.fromLong(throwableBacktrace(exc));             // every frame, when there were more than eight
-        int n = 0;
-        if (!deep.isZero())
-        {
-            n = deep.plus(ObjectModel.ARRAY_LENGTH_OFFSET).loadInt();
-        }
-        else
-        {
-            while (n < 8 && exc.toAddress().plus(16L).plus((long) n * 8L).loadLong() != 0L)
-            {
-                n += 1;
-            }
-        }
-        Address arr = Heap.allocArray(n, 8);
-        if (!tib.isZero())
-        {
-            arr.plus(ObjectModel.TIB_OFFSET).store(ArrayTypes.refArrayTib(tib.loadAddress()));
-        }
-        int i = 0;
-        while (i < n)
-        {
-            Address fpc = !deep.isZero() ? deep.plus(ObjectModel.ARRAY_BASE_OFFSET).plus((long) i * 8L).loadAddress()
-                                     : exc.toAddress().plus(16L).plus((long) i * 8L).loadAddress();
-            arr.plus(24L).plus((long) i * 8L).store(frameToElement(fpc, tib));
-            i += 1;
-        }
-        return arr.toLong();
-    }
-
-    /**
-     * Object offset of {@code Throwable.backtrace}, found by name once: 0 until it is known, -1 when the class
-     * is registered but has no such field (the eight inline slots are then the whole trace).
-     */
-    private static long thrBacktraceOff;
-
-    static long throwableBacktraceOff()
-    {
-        if (thrBacktraceOff == 0L && clTab != null)
-        {
-            int ti = classIndexByName(Magic.bytes("java/lang/Throwable"));
-            if (ti >= 0)
-            {
-                thrBacktraceOff = instanceFieldOffset(ti, Magic.bytes("backtrace"));   // -1 if absent: cached
-            }
-        }
-        return thrBacktraceOff;
-    }
-
-    /**
-     * {@code exc}'s full-depth backtrace ({@code long[]} of pcs), or 0 when its trace is the inline slots. The
-     * field holds {@code exc} ITSELF for an inline trace (see {@link #newThrowableBacktrace}), and null when none
-     * was captured; both answer 0 here.
-     */
-    static long throwableBacktrace(ObjectReference exc)
-    {
-        long off = throwableBacktraceOff();
-        ObjectReference bt = off > 0L ? exc.toAddress().plus(off).loadObjectReference() : ObjectReference.nullReference();
-        return bt.EQ(exc) ? 0L : bt.toLong();
-    }
-
-    /**
-     * Whether {@code exc} is a VM-allocated exception still waiting for its trace: {@link RuntimeEntrypoints#newExc} sets its
-     * backtrace to itself, and nothing has filled the inline slots yet. These, and only these, are filled at the
-     * throw ({@code VMUnwind.captureTrace}); a constructed exception has its trace from construction, or none
-     * when stock would have none (a false {@code writableStackTrace}, or an overridden {@code fillInStackTrace}).
-     */
-    static boolean awaitsThrowTrace(ObjectReference exc)
-    {
-        long off = throwableBacktraceOff();
-        return off > 0L && exc.toAddress().plus(off).loadObjectReference().EQ(exc) && exc.toAddress().plus(16L).loadLong() == 0L;
-    }
-
-    /**
-     * Give {@code exc} a fresh {@code long[n]} backtrace and return it, or 0 when the field is unknown. With
-     * {@code n == 0} it records that the trace is the INLINE slots instead, by storing {@code exc} itself:
-     * stock's Throwable reads a null backtrace as "no trace captured", so it must be non-null, and a re-capture
-     * ({@code fillInStackTrace()} again) that now fits the slots must not leave an older, deeper trace in place.
-     */
-    static long newThrowableBacktrace(ObjectReference exc, int n)
-    {
-        long off = throwableBacktraceOff();
-        if (off <= 0L)
-        {
-            return 0L;
-        }
-        if (n == 0)
-        {
-            exc.toAddress().plus(off).store(exc);
-            return 0L;
-        }
-        Address arr = Heap.allocArray(n, 8);
-        arr.plus(ObjectModel.TIB_OFFSET).store(ArrayTypes.primArrayTib(11));   // long[]
-        exc.toAddress().plus(off).store(arr);
-        return arr.toLong();
-    }
-
-    /** Materialise a {@code StackTraceElement[]} for the frame chain at ({@code pc},{@code sp}). */
-    static long buildTrace(long pc, long sp, long savedX30)
-    {
-        Address tib = steTib();
-        int count = traceWalk(pc, sp, savedX30, 0L, tib);  // pass 1: count
-        long arr = Heap.allocArray(count, 8).toLong();              // StackTraceElement[count]
-        if (!tib.isZero())
-        {
-            // Give the array the [LStackTraceElement; TIB (element Type = TIB[0]) so a `checkcast
-            // [LStackTraceElement;` on a Map.Entry.getValue() result passes instead of walking a null Type.
-            Address.fromLong(arr).plus(ObjectModel.TIB_OFFSET).store(ArrayTypes.refArrayTib(tib.loadAddress()));
-        }
-        traceWalk(pc, sp, savedX30, arr, tib);             // pass 2: fill
-        return arr;
-    }
 
     /** Copy an ASCII {@code byte[]} into a fresh mini String and run the compiled real {@code Integer.parseInt(s, 10)}. */
     static int runParseInt(byte[] ascii)
@@ -4244,11 +3897,11 @@ public final class Loader
         // flag left set here would skip the seed for the whole launch and leave System.out / the Integer
         // cache / int.class null -- silently. Same rule as every other watermark in this file: it resets
         // beside the table it indexes.
-        sdVmLock = false;
-        sdJio = false;
-        sdJla = false;
-        sdPrim = false;
-        sdPrimMask = 0;
+        BootSeeds.sdVmLock = false;
+        BootSeeds.sdJio = false;
+        BootSeeds.sdJla = false;
+        BootSeeds.sdPrim = false;
+        BootSeeds.sdPrimMask = 0;
         relocRecording = 0;
         lkCount = 0;                                    // link stubs name utf8 inside THIS batch's blobs
         linkTrampAddr = 0L;                             //   (and the trampoline lives in reclaimable code)
@@ -7717,189 +7370,6 @@ public final class Loader
         return obj.toLong();
     }
 
-    /** Print the ONE demand-compiled method (or {@code <clinit>}) containing {@code addr} as a single line
-     *  "class.method +0xoff" -- the printStackTrace frame formatter (compact vs {@link #reportMethodAt}). */
-    /**
-     * Whether {@code pc} lies in the same code block as the compiled buffer {@code buf}.
-     *
-     * <p>The pc -> method lookups pick the nearest registered buffer at-or-below the pc, which has no upper
-     * bound of its own: an address in an UNREGISTERED buffer -- a lambda thunk, a line table, a stub, or
-     * plain garbage from a derailed unwind -- silently borrows the name of whatever method sits below it.
-     * Every bogus pc then reports as the same method (the one with the highest registered buffer), which is
-     * how a fault report came to blame {@code LinkedKeySet.toArray} for addresses that were not code at all,
-     * and {@code String.<clinit>+0xC8} for a buffer that was never String's.
-     *
-     * <p>A method's buffer IS a code block, so the block containing {@code buf} is the method's extent and a
-     * pc outside it belongs to something else. An unregistered block ({@code 0}) is ACCEPTED rather than
-     * rejected: that is the pre-existing behaviour, and image/native addresses must keep resolving.
-     */
-    private static boolean inSameCodeBlock(Address buf, Address pc)
-    {
-        long end = Heap.codeBlockEndAt(buf).toLong();
-        return end == 0L || pc.toLong() < end;
-    }
-
-    /**
-     * Name the nearest registered body BELOW {@code addr}, ignoring the code-block bound. A frame that no
-     * table claims is either compiled by a path that never registers it, or registered but rejected because
-     * the pc ran past its block end -- and only the distance to the nearest entry tells those apart.
-     */
-    private static void printNearestBelow(Address addr)
-    {
-        long best = 0L;
-        int bestReg = -1;
-        int i = 0;
-        while (i < rgCount)
-        {
-            if (rgTab[i].buf != 0L && rgTab[i].buf <= addr.toLong() && rgTab[i].buf > best)
-            {
-                best = rgTab[i].buf;
-                bestReg = i;
-            }
-            i += 1;
-        }
-        if (bestReg < 0)
-        {
-            return;
-        }
-        Uart.write(Magic.bytes(" after "));
-        writeName(rgTab[bestReg].base.plus(rgTab[bestReg].classOff + 2), u2(rgTab[bestReg].base.plus(rgTab[bestReg].classOff)));
-        Uart.putc(0x2E);
-        writeName(rgTab[bestReg].base.plus(rgTab[bestReg].nameOff + 2), u2(rgTab[bestReg].base.plus(rgTab[bestReg].nameOff)));
-        Uart.write(Magic.bytes(" +"));
-        VM.printHex(addr.toLong() - best);
-        Uart.write(Magic.bytes(" end="));
-        VM.printHex(Heap.codeBlockEndAt(Address.fromLong(best)).toLong());
-    }
-
-    static void printFrameAt(Address addr)
-    {
-        // THE BLOCK LOOKUP IS HOISTED, and that is the whole cost of a stack trace. `inSameCodeBlock` calls
-        // `Heap.codeBlockEndAt`, which LINEARLY SCANS EVERY CODE BLOCK -- and it was called once per registry
-        // entry that beat the running best, so naming ONE frame was O(rgCount * codeBlockN) with both tables
-        // growing all boot. The user's report is the signature: each printed frame took longer than the last.
-        //
-        // addr's block is the same for every candidate, so it is computed ONCE. With it known, "buf is in
-        // addr's block" is a RANGE TEST: the scan already requires buf <= addr, so buf >= aStart settles it
-        // exactly, with no inner scan at all.
-        //
-        // When addr is in NO block -- image/baked code, where codeBlockEndAt answers 0 -- the original
-        // predicate degenerates to "buf is in no block either", which cannot be answered by a range test. That
-        // path keeps the per-candidate call: it is exact, it is rare, and such a frame is about to be named by
-        // printImageFrameAt anyway.
-        long aEnd = Heap.codeBlockEndAt(addr).toLong();
-        long aStart = aEnd == 0L ? 0L : Heap.codeBlockStartAt(addr).toLong();
-        long bestBuf = 0L;
-        int bestReg = -1;
-        int bestClin = -1;
-        int i = 0;
-        while (i < rgCount)
-        {
-            long b = rgTab[i].buf;
-            if (b != 0L && b <= addr.toLong() && b > bestBuf
-                    && (aEnd != 0L ? b >= aStart : inSameCodeBlock(Address.fromLong(b), addr))) { bestBuf = b; bestReg = i; bestClin = -1; }
-            i += 1;
-        }
-        int c = 0;
-        while (c < clinitN)
-        {
-            long b = clinitEntry[c];
-            if (b != 0L && b <= addr.toLong() && b > bestBuf
-                    && (aEnd != 0L ? b >= aStart : inSameCodeBlock(Address.fromLong(b), addr))) { bestBuf = b; bestClin = c; bestReg = -1; }
-            c += 1;
-        }
-        if (bestReg < 0 && bestClin < 0)
-        {
-            if (!printImageFrameAt(addr))                            // writer-compiled VM/driver code: image symbol table
-            {
-                Uart.write(Magic.bytes("<unclaimed pc="));
-                VM.printHex(addr.toLong());
-                printNearestBelow(addr);                        // the only handle on a frame no table claims
-                Uart.putc(0x3E);
-
-            }
-            return;
-        }
-        if (bestReg >= 0)
-        {
-            writeName(rgTab[bestReg].base.plus(rgTab[bestReg].classOff + 2),
-                    u2(rgTab[bestReg].base.plus(rgTab[bestReg].classOff)));
-            Uart.putc(0x2E);
-            writeName(rgTab[bestReg].base.plus(rgTab[bestReg].nameOff + 2), u2(rgTab[bestReg].base.plus(rgTab[bestReg].nameOff)));
-            int line = lineAtOffset(rgTab[bestReg].line, (int) ((addr.toLong() - bestBuf) >> 2)); // (pc-base)/4 = word offset
-            if (!rgTab[bestReg].src.isZero())
-            {
-                Uart.putc(0x28);                                 // '('
-                writeName(rgTab[bestReg].src.plus(2), u2(rgTab[bestReg].src));   // SourceFile filename
-                if (line >= 0)
-                {
-                    Uart.putc(0x3A);                             // ':'
-                    VM.printDec(line);
-                }
-                Uart.putc(0x29);                                 // ')'
-            }
-        }
-        else
-        {
-            writeName(clinitBase.get(bestClin).plus(clinitNameOff[bestClin] + 2),
-                    u2(clinitBase.get(bestClin).plus(clinitNameOff[bestClin])));
-            Uart.write(Magic.bytes(".<clinit>"));
-        }
-        Uart.write(Magic.bytes(" [pc="));                        // debug: absolute PC + offset into the method
-        VM.printHex(addr.toLong());                                       // printHex already prints the "0x" prefix
-        Uart.write(Magic.bytes(" +"));
-        VM.printHex(addr.toLong() - bestBuf);
-        Uart.putc(0x5D);                                         // ']'
-    }
-
-    /**
-     * Resolve a writer-compiled (image) code address via the embedded image symbol table (built by
-     * ImageBuilder): entries {@code {codeStart, codeEnd, nameAddr, srcAddr, lineAddr}} (5 longs). Prints
-     * {@code owner/Class.method(SourceFile.java:line) [pc=... +off]} like a loaded frame, or returns false
-     * if {@code addr} is in no image method. Linear scan (traces are rare).
-     */
-    private static boolean printImageFrameAt(Address addr)
-    {
-        long tab = VM.imageSymTable;
-        if (tab == 0L)
-        {
-            return false;
-        }
-        long n = VM.imageSymCount;
-        long i = 0;
-        while (i < n)
-        {
-            Address e = Address.fromLong(tab + i * 40L);                           // 5 longs per entry
-            long start = e.loadLong();
-            if (addr.toLong() >= start && addr.toLong() < e.plus(8L).loadLong())
-            {
-                Address nameAddr = e.plus(16L).loadAddress();
-                Address srcAddr = e.plus(24L).loadAddress();
-                writeName(nameAddr.plus(2), u2(nameAddr));    // "owner/Class.method"
-                int srcLen = u2(srcAddr);
-                if (srcLen > 0)
-                {
-                    Uart.putc(0x28);                             // '('
-                    writeName(srcAddr.plus(2), srcLen);       // SourceFile filename
-                    int line = lineAtOffset(e.plus(32L).loadLong(), (int) ((addr.toLong() - start) >> 2));
-                    if (line >= 0)
-                    {
-                        Uart.putc(0x3A);                         // ':'
-                        VM.printDec(line);
-                    }
-                    Uart.putc(0x29);                             // ')'
-                }
-                Uart.write(Magic.bytes(" [pc="));
-                VM.printHex(addr.toLong());
-                Uart.write(Magic.bytes(" +"));
-                VM.printHex(addr.toLong() - start);
-                Uart.putc(0x5D);
-                return true;
-            }
-            i += 1;
-        }
-        return false;
-    }
 
     /**
      * Decode a JIT call site's PHASE-A CELL sequence and name the method it ACTUALLY reached.
@@ -7928,7 +7398,7 @@ public final class Loader
                 Uart.write(Magic.bytes(" -> "));
                 if (cellImmAt(w.minus(8L)) != 0L)
                 {
-                    printFrameAt(Address.fromLong(cellImmAt(w.minus(8L))).loadAddress());
+                    StackTrace.printFrameAt(Address.fromLong(cellImmAt(w.minus(8L))).loadAddress());
                 }
                 Uart.putc(0x0A);
             }
@@ -9240,7 +8710,7 @@ public final class Loader
     // without compiling nested-and-reentrant (the shared static compile state and
     // the writer-side 10-local ceiling both make on-the-fly recursion awkward).
     private static final int MAXM = 512;
-    private static long[] mCode;      // each reachable method's bytecode address
+    static long[] mCode;      // each reachable method's bytecode address
     private static int[] mLen;        // ... and its length
     private static long[] mBuf;       // ... and the buffer assigned to it
     private static long[] mEnd;       // ... and the END of what emitMethod actually wrote there (0 = nothing,
@@ -9968,9 +9438,9 @@ public final class Loader
         // Seed BEFORE runClinits: a <clinit> can call these (StreamOpFlag.<clinit> builds an EnumMap -- needs the
         // JLA -- and boxes flag values via Integer.valueOf -- needs the IntegerCache). The seeds are independent
         // of any <clinit> (they build the JLA object / boxed caches directly), so running them first is sound.
-        seedJavaLangAccess();                           // SharedSecrets.javaLangAccess (EnumMap.getKeyUniverse)
-        seedJavaIOAccess();                             // SharedSecrets.javaIOAccess (System.console() -> null)
-        seedVmInitLock();                               // jdk.internal.misc.VM.lock (System.exit -> VM.shutdown)
+        BootSeeds.seedJavaLangAccess();                           // SharedSecrets.javaLangAccess (EnumMap.getKeyUniverse)
+        BootSeeds.seedJavaIOAccess();                             // SharedSecrets.javaIOAccess (System.console() -> null)
+        BootSeeds.seedVmInitLock();                               // jdk.internal.misc.VM.lock (System.exit -> VM.shutdown)
         Primitives.seedPrimitiveTypes();                           // Integer.TYPE etc: int.class is a getstatic, not an ldc
         long tSeed = Magic.readCNTPCT_EL0();
         cumSeeds += tSeed - tRf3;
@@ -10655,190 +10125,6 @@ public final class Loader
 
 
     /**
-     * Install a real {@code java.util.Properties} in {@code System.props}, the same way
-     * {@link #seedSystemStreams()} installs the streams: stock {@code System.initPhase1} is native-heavy and
-     * never runs on metal, so the field stays null and the FIRST {@code System.setProperty} NPEs inside
-     * java.base -- which is where JUnit's {@code ConsoleLauncher} dies before printing anything.
-     *
-     * <p>Unlike the PrintStream overlay this one CANNOT be a bare allocation: {@code Properties} extends
-     * {@code Hashtable}, whose table array is built by its constructor, so an object with only a TIB would NPE
-     * on the first {@code put} instead. The {@code <init>} is resolved and run on the fresh instance.
-     *
-     * <p>No-op if the class is absent or the slot is already filled -- a boot whose closure lacks Properties
-     * has no {@code setProperty} caller either.
-     */
-    static void seedSystemProps()
-    {
-        Address slot = Address.fromLong(staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("props")));
-        if (slot.isZero())
-        {
-            reportPropsGap(Magic.bytes("java/lang/System.props has no static cell"));
-            return;
-        }
-        if (slot.loadLong() != 0L)
-        {
-            return;                                     // already seeded: not a failure, say nothing
-        }
-        int pi = classIndexByName(Magic.bytes("java/util/Properties"));
-        if (pi < 0)
-        {
-            reportPropsGap(Magic.bytes("java/util/Properties is not registered"));
-            return;
-        }
-        long obj = Reflection.allocInstance(clTab[pi].type);
-        if (obj == 0L)
-        {
-            reportPropsGap(Magic.bytes("java/util/Properties could not be allocated"));
-            return;
-        }
-        int ctor = Reflection.constructorResolve(clTab[pi].type, 0);
-        if (ctor < 0 || rgTab[ctor].buf == 0L)
-        {
-            reportPropsGap(Magic.bytes("java/util/Properties.<init>() has no compiled body"));
-            return;                                     // no runnable <init>: leaving props null is honest
-        }
-        Magic.call2(rgTab[ctor].buf, obj, 0L);          // receiver in x0; a no-arg ctor reads nothing else
-        slot.store(obj);
-        seedStandardProps(obj, pi);
-        seedLineSeparator();
-    }
-
-    /**
-     * Fill {@code jdk.internal.misc.VM.savedProps}, the snapshot stock {@code System.initPhase1} hands to
-     * {@code VM.saveProperties}. joe-ng never runs initPhase1, so the field stayed null and
-     * {@code VM.getSavedProperty} THREW "Not yet initialized" -- inside {@code ThreadLocalRandom.<clinit>}, which
-     * reads {@code java.util.secureRandomSeed}. That left every TLR static null, and stock
-     * {@code ConcurrentHashMap} NPE'd in {@code addCount} the first time two threads contended.
-     *
-     * <p>A SEPARATE {@code Properties} with the same standard entries, NOT the {@code System.props} object: stock
-     * keeps the two apart, so a {@code System.setProperty} in {@code main} is invisible to
-     * {@code getSavedProperty}. Sharing one object would let a program's runtime property change what java.base
-     * read as its launch configuration -- a silent difference, which is the kind this project removes.
-     *
-     * <p>Runs at LAUNCH beside {@link #seedSystemProps} because it compiles the same {@code Properties} methods,
-     * which the per-batch seed site must not do. A missing {@code savedProps} cell is REPORTED: it means VM was
-     * not registered at launch and a later {@code getSavedProperty} would throw.
-     */
-    /**
-     * Raise {@code jdk.internal.misc.VM.initLevel} to {@code SYSTEM_BOOTED} (4) before {@code main}, where stock
-     * {@code System.initPhase3} leaves it. This VM runs no initPhase, so the level stayed 0 and
-     * {@code VM.isBooted()} answered false for ever: {@code System.getLogger} handed out a BootstrapLogger that
-     * queues every record until a boot that never came, and {@code jdk.internal.util.Exceptions.setup} refused to
-     * run, so exception texts omitted the host.
-     *
-     * <p>initPhase3 also installs the system class loader and the main thread's context loader before setting
-     * the level. Here those two happen on FIRST USE instead (stock ClassLoader.getSystemClassLoader, the Thread
-     * overlay's getContextClassLoader): doing them at launch -- tried, measured -- put the stock loader stack's
-     * whole reachable closure (+567 classes, launch ~2.6x on QEMU) in front of every program. This used to claim
-     * the two were "already in place here"; neither was (LoaderProbe: "context loader is the app loader =
-     * false"). Set by storing the cell, as the other launch seeds do: nothing can be waiting on the level's lock
-     * yet. Last of the seeds, because every one before it is part of what "booted" means.
-     */
-    static void seedBooted()
-    {
-        long slot = staticSlotOf(Magic.bytes("jdk/internal/misc/VM"), Magic.bytes("initLevel"));
-        if (slot == 0L)
-        {
-            reportPropsGap(Magic.bytes("jdk/internal/misc/VM.initLevel has no static cell (isBooted stays false)"));
-            return;
-        }
-        Address.fromLong(slot).store(4L);
-    }
-
-    /**
-     * Run {@code java.lang.ref.Reference}'s initializer before the program does, as HotSpot does during startup.
-     *
-     * <p>That initializer is the ONLY writer of {@code SharedSecrets.javaLangRefAccess}, and the reader takes it
-     * on trust: {@code Runtime.runFinalization} is {@code SharedSecrets.getJavaLangRefAccess().runFinalization()}
-     * with no null check, because on HotSpot the class is initialized before any program runs ({@code
-     * System.initPhase1} then calls {@code getJavaLangRefAccess().startThreads()} on it). Here nothing touched
-     * Reference unless the program made a Reference, so {@code System.runFinalization()} was an NPE inside
-     * java.base (RuntimeProbe; the zip test FinalizeInflater calls it). Running the stock initializer, rather
-     * than seeding the slot, is rule 2: the class sets up its own statics.
-     *
-     * <p>{@code startThreads} is still NOT called: the Reference Handler would wait on a pending list this
-     * collector never fills, and the Finalizer thread is pointless with finalization disabled.
-     *
-     * <p>Last of the seeds for the reason {@code seedSystemProps} is placed late: an initializer COMPILES, which
-     * re-points the loader's compile cursor, and no seed after it may rely on that cursor.
-     */
-    static void seedRefAccess()
-    {
-        int reg = classRegByNameBytes(Magic.bytes("java/lang/ref/Reference"));
-        if (reg < 0)
-        {
-            reportPropsGap(Magic.bytes("java/lang/ref/Reference is not registered (Runtime.runFinalization NPEs)"));
-            return;
-        }
-        ensureClinit(reg);
-    }
-
-    static void seedSavedProps()
-    {
-        Address slot = Address.fromLong(staticSlotOf(Magic.bytes("jdk/internal/misc/VM"), Magic.bytes("savedProps")));
-        if (slot.isZero())
-        {
-            reportPropsGap(Magic.bytes("jdk/internal/misc/VM.savedProps has no static cell (getSavedProperty throws)"));
-            return;
-        }
-        if (slot.loadLong() != 0L)
-        {
-            return;
-        }
-        int pi = classIndexByName(Magic.bytes("java/util/Properties"));
-        if (pi < 0)
-        {
-            reportPropsGap(Magic.bytes("VM.savedProps: java/util/Properties is not registered"));
-            return;
-        }
-        long obj = Reflection.allocInstance(clTab[pi].type);
-        int ctor = Reflection.constructorResolve(clTab[pi].type, 0);
-        if (obj == 0L || ctor < 0 || rgTab[ctor].buf == 0L)
-        {
-            reportPropsGap(Magic.bytes("VM.savedProps: java/util/Properties could not be constructed"));
-            return;
-        }
-        Magic.call2(rgTab[ctor].buf, obj, 0L);
-        seedStandardProps(obj, pi);
-        slot.store(obj);
-    }
-
-    /**
-     * Say WHY the system properties could not be seeded.
-     *
-     * <p>Every exit on this path used to be silent, and that silence is the whole problem: an empty property
-     * map does not fail where it is created, it fails much later inside a library that reads a property
-     * unconditionally and does not expect null. picocli's {@code Ansi.isWindows()} does
-     * {@code System.getProperty("os.name").toLowerCase()}; its {@code trimLineSeparator} does
-     * {@code result.endsWith(System.getProperty("line.separator"))}. Both NPE deep inside the library, naming
-     * nothing the VM did, and the two look like unrelated bugs while sharing one cause.
-     */
-    private static void reportPropsGap(byte[] why)
-    {
-        Uart.write(Magic.bytes("\n  SYSTEM PROPERTIES NOT SEEDED (every getProperty answers null): "));
-        Uart.write(why);
-        Uart.putc(0x0A);
-    }
-
-    /**
-     * Fill {@code System.lineSeparator}, which is a STATIC FIELD and not a property lookup.
-     *
-     * <p>Seeding {@code System.props} is not enough and the distinction is not academic: stock
-     * {@code System.lineSeparator()} returns a private static that {@code initPhase1} copies out of the
-     * properties -- and joe-ng never runs initPhase1. So the map said "\n" while the accessor still answered
-     * NULL, and {@code PrintWriter.newLine()} wrote a null separator straight into {@code Writer.write},
-     * NPE-ing inside java.base with the real cause two frames up. That is how JUnit's console output failed.
-     */
-    private static void seedLineSeparator()
-    {
-        Address slot = Address.fromLong(staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("lineSeparator")));
-        if (!slot.isZero() && slot.loadLong() == 0L)
-        {
-            slot.store(guestString(Magic.bytes("\n")));   // Uart.putc makes this CRLF for the console
-        }
-    }
-
-    /**
      * Fill the standard system properties every JVM defines.
      *
      * <p>Not decoration: library code reads these UNCONDITIONALLY and does not expect null. picocli's
@@ -10988,172 +10274,6 @@ public final class Loader
         return Magic.bytes("jdk/internal/math/FloatToDecimal");
     }
 
-    private static void seedStandardProps(long props, int propsClass)
-    {
-        // NOT through the method registry: `rgTab` holds one entry per COMPILED method, and bodies compile on
-        // FIRST CALL -- this runs during loader init, so nothing has called setProperty and it is not in there
-        // at all. Asking the registry could therefore only ever succeed by accident, in a closure that had
-        // already compiled it for some other reason. That is exactly the shape of the bug this replaced: the
-        // launcher image worked and a smaller one left EVERY property null.
-        long buf = bufBySigU(utf8Blob(Magic.bytes("java/util/Properties")),
-                utf8Blob(Magic.bytes("setProperty")),
-                utf8Blob(Magic.bytes("(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;")));
-        if (buf == 0L)
-        {
-            // A BODY COMPILES ON FIRST CALL, and nothing has called setProperty yet: this runs during loader
-            // init, long before any program. So a zero buffer here does NOT mean "unavailable", it means "not
-            // yet" -- and treating the two alike is what left EVERY property null in any closure that had not
-            // already compiled it for some other reason. That is the "works in one closure, broken in
-            // another" signature: the launcher image happened to compile it and worked, while a smaller one
-            // NPE'd inside picocli reading os.name.
-            //
-            // The registry entry already holds the three Utf8-shaped pointers compileSigOnDemand wants
-            // (`base + *Off` is a u2 length followed by bytes), so this is the method's own identity, not a
-            // reconstruction of it.
-            buf = compileSigOnDemand(utf8Blob(Magic.bytes("java/util/Properties")),
-                    utf8Blob(Magic.bytes("setProperty")),
-                    utf8Blob(Magic.bytes("(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;")));
-        }
-        if (buf == 0L)
-        {
-            reportPropsGap(Magic.bytes("java/util/Properties.setProperty would not compile"));
-            return;
-        }
-        putProp(buf, props, Magic.bytes("os.name"), Magic.bytes("joe-ng"));
-        putProp(buf, props, Magic.bytes("os.arch"), Magic.bytes("aarch64"));
-        putProp(buf, props, Magic.bytes("os.version"), Magic.bytes("1.0"));
-        putProp(buf, props, Magic.bytes("java.vm.name"), Magic.bytes("joe-ng"));
-        putProp(buf, props, Magic.bytes("java.vm.vendor"), Magic.bytes("joe-ng"));
-        putProp(buf, props, Magic.bytes("java.version"), Magic.bytes("26"));
-        putProp(buf, props, Magic.bytes("java.specification.version"), Magic.bytes("26"));
-        putProp(buf, props, Magic.bytes("line.separator"), Magic.bytes("\n"));
-        putProp(buf, props, Magic.bytes("file.separator"), Magic.bytes("/"));
-        putProp(buf, props, Magic.bytes("path.separator"), Magic.bytes(":"));
-        putProp(buf, props, Magic.bytes("file.encoding"), Magic.bytes("UTF-8"));
-        putProp(buf, props, Magic.bytes("native.encoding"), Magic.bytes("UTF-8"));
-        putProp(buf, props, Magic.bytes("user.dir"), Magic.bytes("/"));
-        putProp(buf, props, Magic.bytes("user.name"), Magic.bytes("root"));
-        putProp(buf, props, Magic.bytes("java.io.tmpdir"), Magic.bytes("/tmp"));
-        // THE SET BELOW IS NOT AD HOC: jdk/internal/util/StaticProperty.<clinit> reads fourteen keys through a
-        // private getProperty(props, key) that THROWS InternalError("null property: " + key) on a null, so any
-        // one of them missing halts the VM as soon as that initializer runs. Under the run-all-clinits rule it
-        // always runs. The list was taken from the JDK 26 source in one pass rather than one key per ten-minute
-        // boot -- `java.home` was simply the first of six to be reached.
-        putProp(buf, props, Magic.bytes("java.home"), Magic.bytes("/"));
-        putProp(buf, props, Magic.bytes("user.home"), Magic.bytes("/"));
-        // The three console encodings and sun.jnu.encoding: everything this VM reads or writes is UTF-8 (the
-        // String fast paths compare against UTF_8.INSTANCE), so naming anything else here would be a claim the
-        // rest of the VM does not honour.
-        putProp(buf, props, Magic.bytes("stdout.encoding"), Magic.bytes("UTF-8"));
-        putProp(buf, props, Magic.bytes("stderr.encoding"), Magic.bytes("UTF-8"));
-        putProp(buf, props, Magic.bytes("stdin.encoding"), Magic.bytes("UTF-8"));
-        putProp(buf, props, Magic.bytes("sun.jnu.encoding"), Magic.bytes("UTF-8"));
-        // The class path: stock ClassLoaders.<clinit> builds the application loader's URLClassPath from it, which
-        // is how ClassLoader.getResource answers a URL into the jar. The init file's classpath= jar, or "" (stock's
-        // default with no class path given).
-        putProp(buf, props, Magic.bytes("java.class.path"), JarFs.path());
-    }
-
-    /** One {@code props.setProperty(key, value)} through the ordinary call convention. */
-    private static void putProp(long buf, long props, byte[] key, byte[] value)
-    {
-        long[] args = new long[3];
-        args[0] = props;
-        args[1] = guestString(key);
-        args[2] = guestString(value);
-        Magic.callN(buf, Magic.addrOf(args) + 24L);     // args[] elements start at +24
-    }
-
-
-    /**
-     * Install {@code System.out} / {@code System.err} as STOCK {@link java.io.PrintStream}s over the UART,
-     * built by {@code jdk.internal.misc.MetalStdStreams.newStream()} (pulled by {@link #pullSupportClasses}).
-     *
-     * <p>Stock {@code System.initPhase1} that builds them is native-heavy and unrunnable, so the VM calls the
-     * helper once per empty slot and stores what it returns. It used to drop a BARE instance of a
-     * hand-written PrintStream overlay into each slot -- no constructor, no state -- which is why that overlay
-     * had to be field-free and why it silently dropped every stock member it did not declare.
-     *
-     * <p>An ENSURE, not a set: a slot already holding a LIVE stream keeps its identity (a launched program, or
-     * JUnit's {@code System.setOut}, may have replaced it), and nothing happens if the helper is not
-     * registered yet. A stream built before a {@link #resetLoader} is NOT live -- see {@link #stdSlotNeedsSeed}.
-     *
-     * <p>It COMPILES a method, so it runs after {@link #seedSystemProps} for the reason recorded there: a
-     * compile rebuilds the loader's cursor, and a seed after it would stand on the wrong class's state.
-     */
-    static void seedSystemStreams()
-    {
-        long outSlot = staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("out"));
-        long errSlot = staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("err"));
-        boolean needOut = stdSlotNeedsSeed(outSlot, STD_OUT);
-        boolean needErr = stdSlotNeedsSeed(errSlot, STD_ERR);
-        if (!needOut && !needErr)
-        {
-            return;
-        }
-        if (classIndexByName(Magic.bytes("jdk/internal/misc/MetalStdStreams")) < 0)
-        {
-            return;                                     // not registered yet -- a later batch seeds it
-        }
-        Address cls = utf8Blob(Magic.bytes("jdk/internal/misc/MetalStdStreams"));
-        Address name = utf8Blob(Magic.bytes("newStream"));
-        Address desc = utf8Blob(Magic.bytes("()Ljava/io/PrintStream;"));
-        long buf = bufBySigU(cls, name, desc);
-        if (buf == 0L)
-        {
-            buf = compileSigOnDemand(cls, name, desc);  // bodies compile on first call; this IS the first
-        }
-        if (buf == 0L)
-        {
-            // Say so: a null System.out does not fail here, it fails as an NPE at the program's first println.
-            Uart.write(Magic.bytes("\n  SYSTEM STREAMS NOT SEEDED: MetalStdStreams.newStream would not compile\n"));
-            return;
-        }
-        if (needOut)
-        {
-            Address.fromLong(outSlot).store(Magic.call0(buf));
-            setStdGen(STD_OUT);
-        }
-        if (needErr)
-        {
-            Address.fromLong(errSlot).store(Magic.call0(buf));
-            setStdGen(STD_ERR);
-        }
-    }
-
-    /**
-     * Point {@code System.out}/{@code err}/{@code in} at {@code ref} -- the body of stock's {@code setOut0}
-     * family, which are natives precisely because those fields are {@code final} and the JDK reassigns them
-     * from the VM side.
-     *
-     * <p>Here the field is an ordinary static cell that {@link #seedSystemStreams} already writes at boot, so
-     * redirection is one store. JUnit's {@code StandardStreamsHandler} calls {@code System.setOut} to CAPTURE
-     * a test's output; without the native the call resolved nowhere and surfaced as a DENYLIST TRAP naming a
-     * list System is not on.
-     *
-     * <p>No {@code checkIO}: there is no SecurityManager on metal, and stock's own check is a no-op now.
-     */
-    static void setStdStream(byte[] name, ObjectReference ref)
-    {
-        long slot = staticSlotOf(Magic.bytes("java/lang/System"), name);
-        if (slot != 0L)
-        {
-            Address.fromLong(slot).store(ref);
-            // A stream the PROGRAM installed is current: the seed must not replace it this generation.
-            if (name[0] == 'o')
-            {
-                setStdGen(STD_OUT);
-            }
-            else if (name[0] == 'e')
-            {
-                setStdGen(STD_ERR);
-            }
-            else
-            {
-                setStdGen(STD_IN);
-            }
-        }
-    }
 
     /** Byte offset of instance field {@code fname} declared by registered class {@code classIdx}, or -1.
      *  The byte[]-name sibling of {@link MethodHandles#vhFieldOffset} (which keys on a raw pointer + a TIB). */
@@ -11172,240 +10292,9 @@ public final class Loader
         return -1L;
     }
 
-    /**
-     * Install {@code System.in} as an EMPTY stream — a {@code java.io.ByteArrayInputStream} over a zero-length
-     * array, so it reads as immediate end-of-file. There is no console input on metal, but the field being
-     * NULL is worse than it being empty: stock code passes {@code System.in} straight into a constructor that
-     * null-checks it, so a test doing {@code new ZipInputStream(System.in)} died with a bare
-     * NullPointerException before reaching anything it meant to test (java/util/zip/ZipInputStream/Skip).
-     *
-     * <p>Seeded rather than constructed, like {@link #seedSystemStreams}: the fields are filled directly at
-     * their registered offsets, so no {@code <init>} has to run. Reading answers -1 without ever touching the
-     * buffer, since {@code count} is 0.
-     */
     /** Bumped by every {@link #resetLoader}: objects built before it belong to a registry that is gone. */
-    private static int loaderGen;
+    static int loaderGen;
 
-    /** The {@link #loaderGen} each standard stream was installed in (seeded, or set by the program); -1 none. */
-    private static int outGen = -1;
-    private static int errGen = -1;
-    private static int inGen = -1;
-
-    private static final int STD_OUT = 0;
-    private static final int STD_ERR = 1;
-    private static final int STD_IN = 2;
-
-    private static int stdGen(int which)
-    {
-        if (which == STD_OUT)
-        {
-            return outGen;
-        }
-        return which == STD_ERR ? errGen : inGen;
-    }
-
-    private static void setStdGen(int which)
-    {
-        if (which == STD_OUT)
-        {
-            outGen = loaderGen;
-        }
-        else if (which == STD_ERR)
-        {
-            errGen = loaderGen;
-        }
-        else
-        {
-            inGen = loaderGen;
-        }
-    }
-
-    /**
-     * True if a {@code System.out}/{@code err}/{@code in} slot must be (re)seeded: it is empty, or what it
-     * holds was installed under an EARLIER loader generation.
-     *
-     * <p>The second case is a stream built before a {@link #resetLoader}. The static cell survives the reset
-     * (it is the baked {@code System} block), so the object does too -- built from classes of a registry
-     * that no longer exists. Ordinary vtable calls through it still work, which is why it went unnoticed for
-     * programs at a time; the first call site needing LATE resolution asks the new registry about an old Type
-     * and stops at {@code DISPATCH ON UNREGISTERED TYPE}. Measured: the demo suite died there at
-     * {@code DefaultIfaceDemo}'s first {@code println}, eleven programs after the reset that orphaned it.
-     *
-     * <p>It is a GENERATION and not a "is its class registered?" test, and that was learned the hard way: the
-     * first cut asked about the stream object's own Type, and {@code PrintStream} is a BAKED class whose Type
-     * every new registry adopts again -- so the stale stream passed, while the {@code StreamEncoder} inside it,
-     * a demand-loaded class, was the orphan. Asking about one object of a graph cannot answer for the graph.
-     */
-    private static boolean stdSlotNeedsSeed(long slot, int which)
-    {
-        if (slot == 0L)
-        {
-            return false;                               // no cell: nothing can be seeded
-        }
-        return Address.fromLong(slot).loadLong() == 0L || stdGen(which) != loaderGen;
-    }
-
-    static void seedSystemIn()
-    {
-        long inSlot = staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("in"));
-        if (!stdSlotNeedsSeed(inSlot, STD_IN))
-        {
-            return;                                     // unknown slot, or a live stream already there
-        }
-        if (Console.stdinOn != 0)
-        {
-            int ci = classIndexByName(Magic.bytes("jdk/internal/misc/MetalConsoleIn"));
-            if (ci >= 0)                                // field-free: the TIB is the whole object
-            {
-                Address cobj = Heap.alloc(16 + clTab[ci].fieldCount * 8);
-                cobj.store(clTab[ci].tib);
-                Address.fromLong(inSlot).store(cobj);
-                setStdGen(STD_IN);
-                return;
-            }
-            Uart.write(Magic.bytes("\n  stdin=uart: MetalConsoleIn not loaded, System.in stays empty\n"));
-        }
-        int bi = classIndexByName(Magic.bytes("java/io/ByteArrayInputStream"));
-        if (bi < 0)
-        {
-            return;                                     // not in this batch: leave the slot as it was
-        }
-        long bufOff = instanceFieldOffset(bi, Magic.bytes("buf"));
-        long posOff = instanceFieldOffset(bi, Magic.bytes("pos"));
-        long cntOff = instanceFieldOffset(bi, Magic.bytes("count"));
-        if (bufOff < 0L || posOff < 0L || cntOff < 0L)
-        {
-            return;
-        }
-        Address obj = Heap.alloc(16 + clTab[bi].fieldCount * 8);
-        obj.store(clTab[bi].tib);
-        obj.plus(bufOff).store(Heap.allocArray(0, 1));   // empty byte[]; never read (count == 0)
-        obj.plus(posOff).store(0L);
-        obj.plus(cntOff).store(0L);
-        Address.fromLong(inSlot).store(obj);
-        setStdGen(STD_IN);
-    }
-
-    /**
-     * Seed a {@code MetalJavaLangAccess} instance into {@code SharedSecrets.javaLangAccess} so
-     * {@code EnumMap.getKeyUniverse} (-&gt; {@code getJavaLangAccess().getEnumConstantsShared()}) works. On stock
-     * the JLA is registered by {@code System.<clinit>}, which the metal skips, leaving the field null. Runs inside
-     * {@code loadAll} BEFORE {@code runClinits}, since {@code StreamOpFlag.<clinit>} builds an EnumMap. No-op when
-     * neither class is in the batch (non-EnumMap programs). Field-free overlay -> just the TIB (itable dispatch).
-     */
-    /**
-     * Seed {@code SharedSecrets.javaIOAccess} with a {@link jdk.internal.access.MetalJavaIOAccess}.
-     *
-     * <p>Stock registers one from {@code java.io.Console}'s initializer, which needs a tty. Without it
-     * {@code System.console()} dereferences null -- it calls {@code .console()} on the shim unconditionally --
-     * so this is not an optional nicety: it is what makes {@code System.console()} answer NULL instead of
-     * throwing, which is what every stock caller is written for.
-     */
-    /**
-     * Seed {@code jdk/internal/misc/VM.lock} with a plain Object.
-     *
-     * <p>That class is {@code clinitBlocked} -- its initializer is a native {@code initialize()} that sets
-     * saved properties and direct-memory limits -- so its {@code private static final Object lock} stays null.
-     * {@code VM.initLevel(int)} opens with {@code synchronized (lock)}, so the null is a {@code monitorenter}
-     * on null: an NPE from inside java.base on the SHUTDOWN path, where {@code Shutdown.runHooks} calls
-     * {@code VM.shutdown()}. System.exit could not complete.
-     *
-     * <p>A bare Object is the whole requirement -- the field is only ever a monitor, never read for content --
-     * so this seeds exactly what the blocked initializer would have provided and nothing more.
-     */
-    /**
-     * ONE-SHOT FLAGS FOR THE SEEDS, and they are the whole fix for the largest item in the clinit phase.
-     *
-     * <p>Every seed below is IDEMPOTENT and its result IMMUTABLE -- a field-free access object, a bare
-     * monitor, a primitive mirror. Re-running them per batch therefore cannot change an answer, and it cost
-     * fifteen linear walks of the static registry per batch plus 512 allocations, over ~209 batches of a
-     * launcher boot.
-     *
-     * <p>THE TWO BOX-CACHE SEEDS ARE GONE (2026-09-24), and with them the question the next paragraph
-     * leaves open. {@code seedIntegerCache}/{@code seedLongCache} built an {@code Integer[256]}/
-     * {@code Long[256]} on the HEAP and stored it over the array the WRITER had already baked -- a joe-ng
-     * special case standing where stock's own archived-subgraph path belongs. The image carries the cache,
-     * so nothing needs to build one: with both seeds deleted every box in [-128,127] comes back at an IMAGE
-     * address, measured rather than argued.
-     *
-     * <p>I ALSO CLAIMED RE-RUNNING BROKE SMALL-INTEGER BOX IDENTITY, AND A NEGATIVE CONTROL REFUTED IT. Four
-     * of these allocate, so re-running looked like it must REPLACE the object the static already held, making
-     * `Integer.valueOf(5) == Integer.valueOf(5)` false across a batch boundary. A probe that forces a
-     * demand-load BETWEEN the two calls reports `int=1 long=1 TYPE=1` with these guards REMOVED, so the
-     * re-seed does not in fact replace the cache the running program reads. WHY it does not is not
-     * established, and the probe was deleted rather than kept: an arm that passes in both states is not a
-     * control, and leaving it in the suite would read as evidence to the next person.
-     *
-     * <p>A flag is set only on SUCCESS, because a seed legitimately cannot run until its class is registered
-     * (a seed returns early while the class it fills is absent), and it must be retried until then. THEY RESET IN `resetLoader` BESIDE `sgCount = 0` -- a flag that outlived the static registry it
-     * guards would skip the seed for a whole launch and leave the statics null, which is the same
-     * watermark-outliving-its-table trap already recorded twice here.
-     */
-    static boolean sdVmLock, sdJio, sdJla, sdPrim;
-    static int sdPrimMask;                      // one bit per wrapper TYPE already seeded (see seedPrimType)
-
-    static void seedVmInitLock()
-    {
-        if (sdVmLock)
-        {
-            return;
-        }
-        int oi = classIndexByName(Magic.bytes("java/lang/Object"));
-        if (oi < 0)
-        {
-            return;
-        }
-        Address slot = Address.fromLong(staticSlotOf(Magic.bytes("jdk/internal/misc/VM"), Magic.bytes("lock")));
-        if (!slot.isZero() && slot.loadLong() == 0L)
-        {
-            Address inst = Heap.alloc(16);                          // header only: a monitor needs no fields
-            inst.store(clTab[oi].tib);
-            slot.store(inst);
-            sdVmLock = true;
-        }
-    }
-
-    static void seedJavaIOAccess()
-    {
-        if (sdJio)
-        {
-            return;
-        }
-        int mi = classIndexByName(Magic.bytes("jdk/internal/access/MetalJavaIOAccess"));
-        if (mi < 0)
-        {
-            return;
-        }
-        long slot = staticSlotOf(Magic.bytes("jdk/internal/access/SharedSecrets"), Magic.bytes("javaIOAccess"));
-        if (slot != 0L)
-        {
-            Address inst = Heap.alloc(16 + clTab[mi].fieldCount * 8);   // field-free -> header only
-            inst.store(clTab[mi].tib);                 // TIB (itable dir for the console() dispatch)
-            Address.fromLong(slot).store(inst);
-            sdJio = true;
-        }
-    }
-
-    static void seedJavaLangAccess()
-    {
-        if (sdJla)
-        {
-            return;
-        }
-        int mi = classIndexByName(Magic.bytes("jdk/internal/access/MetalJavaLangAccess"));
-        if (mi < 0)
-        {
-            return;
-        }
-        long slot = staticSlotOf(Magic.bytes("jdk/internal/access/SharedSecrets"), Magic.bytes("javaLangAccess"));
-        if (slot != 0L)
-        {
-            Address inst = Heap.alloc(16 + clTab[mi].fieldCount * 8);   // field-free -> header only
-            inst.store(clTab[mi].tib);                 // TIB (itable dir for getEnumConstantsShared dispatch)
-            Address.fromLong(slot).store(inst);
-            sdJla = true;
-        }
-    }
 
     /**
      * ACC_SYNCHRONIZED coverage for the launch that just ended, printed AT THE END rather than on the batch
@@ -11725,8 +10614,8 @@ public final class Loader
         int[] words = compileMethod(i, mBuf[i]);        // real base -> resolved addresses
         relocRecording = 0;
         codeRootOwner = 0L;
-        mLine[i] = buildLineTable(i);                   // stack-trace debug info (PC-offset -> source line)
-        mSrc.set(i, sourceFileAddr());
+        mLine[i] = StackTrace.buildLineTable(i);                   // stack-trace debug info (PC-offset -> source line)
+        mSrc.set(i, StackTrace.sourceFileAddr());
         long out = mBuf[i];
         int k = 0;
         while (k < words.length)
@@ -11860,115 +10749,7 @@ public final class Loader
         return -1;
     }
 
-    // ----- stack-trace debug info: PC -> source line (SourceFile + LineNumberTable) -----
 
-    /** Address of the current class's SourceFile filename Utf8 (persists in the blob), or 0 if none. */
-    private static Address sourceFileAddr()
-    {
-        int off = ClassReader.sourceFileNameOff(gbytes, gcp, gAfterCp, Magic.bytes("SourceFile"));
-        return off < 0 ? Address.zero() : gbase.plus(off);
-    }
-
-    /**
-     * Build method {@code i}'s persistent line table from {@code gBcToWord} (bci -> machine word offset, just
-     * compiled) and the method's LineNumberTable. Layout: {@code {u32 count, (u32 wordOffset, u32 line) * count}}
-     * -- one entry per source-line transition, in code-heap memory (persists, like the method buffer). The
-     * frame resolver finds the largest {@code wordOffset <= (pc-base)/4} and reads its line. Returns 0 if the
-     * class was compiled without line info (no {@code -g}).
-     */
-    /** buildLineTable's per-bytecode line scratch (see ClassReader.linesByBci); grown, never shrunk. */
-    private static int[] lnAt;
-
-    private static long buildLineTable(int i)
-    {
-        if (gBcToWord == null)
-        {
-            return 0L;
-        }
-        int codeBodyOff = (int) (mCode[i] - gbase.toLong()) - 8;   // Code attr body (max_stack) sits 8 bytes before code[]
-        int lntOff = ClassReader.lineNumberTableOff(gbytes, gcp, codeBodyOff, Magic.bytes("LineNumberTable"));
-        if (lntOff < 0)
-        {
-            return 0L;
-        }
-        int len = gBcToWord.length;
-        if (lnAt == null || lnAt.length < len)
-        {
-            lnAt = new int[len < 4096 ? 4096 : len];      // scratch, reused: compiles hold the loader lock
-        }
-        ClassReader.linesByBci(gbytes, lntOff, lnAt, len);
-        int n = 0;
-        int prev = -1;
-        int bci = 0;
-        while (bci < len)                                 // pass 1: count line transitions
-        {
-            if (gBcToWord[bci] >= 0)
-            {
-                int line = lnAt[bci];
-                if (line != prev)
-                {
-                    n += 1;
-                    prev = line;
-                }
-            }
-            bci += 1;
-        }
-        if (4 + n * 8 >= 0x80000)
-        {
-            Uart.write(Magic.bytes("  HUGE lineTable n="));
-            VM.printDec(n);
-            Uart.write(Magic.bytes(" for "));
-            printCurrentClass();
-            Uart.putc(0x0A);
-        }
-        Address tab = Heap.allocCode(4 + n * 8);
-        tab.store(n);
-        Address w = tab.plus(4);
-        prev = -1;
-        bci = 0;
-        while (bci < len)                                 // pass 2: emit (wordOffset, line) at each transition
-        {
-            if (gBcToWord[bci] >= 0)
-            {
-                int line = lnAt[bci];
-                if (line != prev)
-                {
-                    w.store(gBcToWord[bci]);
-                    w.plus(4).store(line);
-                    w = w.plus(8);
-                    prev = line;
-                }
-            }
-            bci += 1;
-        }
-        return tab.toLong();
-    }
-
-    /** Source line for machine word offset {@code wordOff} within a method's line table, or -1. */
-    private static int lineAtOffset(long tab, int wordOff)
-    {
-        if (tab == 0L)
-        {
-            return -1;
-        }
-        int n = Address.fromLong(tab).loadInt();
-        Address w = Address.fromLong(tab + 4);
-        int best = -1;
-        int bestOff = -1;
-        int i = 0;
-        while (i < n)
-        {
-            int off = w.loadInt();
-            if (off <= wordOff && off > bestOff)
-            {
-                bestOff = off;
-                best = w.plus(4).loadInt();
-            }
-            w = w.plus(8);
-            i += 1;
-        }
-        return best;
-    }
 
     // ----- method-registry hash index ---------------------------------------
     /**
@@ -15557,12 +14338,12 @@ public final class Loader
                 // Stock throws UnsupportedOperationException naming the mode (VarForm.getMemberName), and so
                 // does this. Only when NO accessor of that name exists anywhere up the handle's chain: one that
                 // exists under another descriptor is a resolution gap in this VM, and keeps the named trap.
-                buf = missingNativeThunk(Address.zero(), vsName.get(idx), Address.zero());
+                buf = NativeMethods.missingNativeThunk(Address.zero(), vsName.get(idx), Address.zero());
             }
         }
         if (buf == 0L)
         {
-            buf = missingNativeOnChain(ci, vsName.get(idx),
+            buf = NativeMethods.missingNativeOnChain(ci, vsName.get(idx),
                     vsDesc.get(idx));   // an unimplemented native THROWS
         }
         if (buf == 0L)
@@ -17711,13 +16492,13 @@ public final class Loader
                 int nreg = regBySigU(lkClsU.get(idx));
                 if (nreg >= 0)
                 {
-                    thunk = missingNativeOnChain(nreg, lkNameU.get(idx),
+                    thunk = NativeMethods.missingNativeOnChain(nreg, lkNameU.get(idx),
                             lkDescU.get(idx));
                 }
-                else if (declaredNative(lkClsU.get(idx), lkNameU.get(idx),
+                else if (NativeMethods.declaredNative(lkClsU.get(idx), lkNameU.get(idx),
                         lkDescU.get(idx)))
                 {
-                    thunk = missingNativeThunk(lkClsU.get(idx), lkNameU.get(idx),
+                    thunk = NativeMethods.missingNativeThunk(lkClsU.get(idx), lkNameU.get(idx),
                             lkDescU.get(idx));
                 }
             }
@@ -17754,165 +16535,6 @@ public final class Loader
         return buf;
     }
 
-    // ---- Natives this VM does not implement: each gets a thunk that throws UnsatisfiedLinkError ----
-    // An entry with mnCls 0 is instead an UNSUPPORTED VarHandle ACCESS MODE (mnName the mode, mnDesc unused),
-    // whose thunk throws UnsupportedOperationException naming the mode, as stock does.
-    private static final int MAXMISSINGNATIVE = 128;
-    private static final AddressArray mnCls = AddressArray.create(MAXMISSINGNATIVE);     // the callee's Utf8 ADDRESSES (u2 len + bytes)
-    private static final AddressArray mnName = AddressArray.create(MAXMISSINGNATIVE);
-    private static final AddressArray mnDesc = AddressArray.create(MAXMISSINGNATIVE);
-    private static final long[] mnThunk = new long[MAXMISSINGNATIVE];
-    private static int mnCount;
-
-    /**
-     * A branch target for a call to the native {@code cls.name desc} that throws {@code UnsatisfiedLinkError}: a
-     * thunk {@code movz x0,#k ; br VM.nativeMissing}, one per method and shared by every site that calls it. A
-     * {@code br} writes no x30, so {@link VM#nativeMissing} sees the CALLER's return address and the error unwinds
-     * as if the native itself had thrown. 0 when the table is full or the helper was not baked: the caller keeps
-     * the trap.
-     */
-    private static long missingNativeThunk(Address clsU, Address nameU, Address descU)
-    {
-        int k = 0;
-        while (k < mnCount)
-        {
-            if (clsU.isZero() ? mnCls.get(k).isZero() && Utf8.utf8Same(mnName.get(k), nameU)
-                    : !mnCls.get(k).isZero() && Utf8.utf8Same(mnCls.get(k), clsU)
-                            && Utf8.utf8Same(mnName.get(k), nameU)
-                            && Utf8.utf8Same(mnDesc.get(k), descU))
-            {
-                return mnThunk[k];
-            }
-            k += 1;
-        }
-        long t = VM.nativeMissingAddr;
-        if (mnCount >= MAXMISSINGNATIVE || t == 0L)
-        {
-            return 0L;
-        }
-        Address buf = Heap.allocCode(32);
-        Heap.pinCodeAt(buf);                                 // only a memoised link target names it
-        int w = 0;
-        buf.plus(w * 4L).store(A64Enc.movz(0, mnCount, 0));
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.movz(16, (int) (t & 0xFFFF), 0));
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.movk(16, (int) ((t >> 16) & 0xFFFF), 1));
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.movk(16, (int) ((t >> 32) & 0xFFFF), 2));
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.br(16));
-        w += 1;
-        Heap.publishCode(buf, buf.plus(w * 4L));
-        mnCls.set(mnCount, clsU);
-        mnName.set(mnCount, nameU);
-        mnDesc.set(mnCount, descU);
-        mnThunk[mnCount] = buf.toLong();
-        mnCount += 1;
-        return buf.toLong();
-    }
-
-    /**
-     * The missing-native thunk for {@code name desc} when class {@code ci} or a superclass DECLARES it native, or
-     * 0 -- the late-virtual twin of the link-stub check (an instance native is dispatched, not linked). The nearest
-     * declaring class names it, as an inherited method's own class would.
-     */
-    private static long missingNativeOnChain(int ci, Address nameU, Address descU)
-    {
-        int c = ci;
-        int hops = 0;
-        while (c >= 0 && hops < 64)
-        {
-            Address clsU = clTab[c].base.plus(clTab[c].nameOff);
-            if (declaredNative(clsU, nameU, descU))
-            {
-                return missingNativeThunk(clsU, nameU, descU);
-            }
-            c = superRegOf(c);
-            hops += 1;
-        }
-        return 0L;
-    }
-
-    /** Whether thunk {@code k} is an unsupported VarHandle access mode rather than a missing native. */
-    static boolean missingNativeUnsupported(int k)
-    {
-        return mnCls.get(k).isZero();
-    }
-
-    /** The {@code UnsupportedOperationException} for unsupported access mode {@code k}, its message the mode's
-     *  name ({@code set}) exactly as stock's VarForm gives it. Loads the class first, as missingNativeError does. */
-    private static long unsupportedModeError(int k)
-    {
-        byte[] name = Magic.bytes("java/lang/UnsupportedOperationException");
-        VM.loaderLock(VM.LOCK_REFLECT);
-        try
-        {
-            if (classIndexByName(name) < 0)
-            {
-                loadClassIncremental(name);
-            }
-        }
-        finally
-        {
-            VM.loaderUnlock();
-        }
-        byte[] msg = new byte[u2(mnName.get(k))];
-        putUtf8(msg, 0, mnName.get(k));
-        return RuntimeEntrypoints.newExcWithMessage(name, msg);
-    }
-
-    /**
-     * The {@code UnsatisfiedLinkError} for missing native {@code k}, its message naming the method: {@code joe-ng:
-     * native sun.nio.ch.Net.setIntOption0(Ljava/io/FileDescriptor;ZIIIZ)V is not implemented}. Loads the error
-     * class first if no program has used it yet -- {@link RuntimeEntrypoints#newExc} of an unloaded class gives an exception with no
-     * Type, which nothing can catch.
-     */
-    static long missingNativeError(int k)
-    {
-        if (missingNativeUnsupported(k))
-        {
-            return unsupportedModeError(k);
-        }
-        byte[] name = Magic.bytes("java/lang/UnsatisfiedLinkError");
-        VM.loaderLock(VM.LOCK_REFLECT);
-        try
-        {
-            if (classIndexByName(name) < 0)
-            {
-                loadClassIncremental(name);
-            }
-        }
-        finally
-        {
-            VM.loaderUnlock();
-        }
-        byte[] pre = Magic.bytes("joe-ng: native ");
-        byte[] post = Magic.bytes(" is not implemented");
-        int len = pre.length + u2(mnCls.get(k)) + 1 + u2(mnName.get(k)) + u2(mnDesc.get(k)) + post.length;
-        byte[] msg = new byte[len];
-        int p = 0;
-        int i = 0;
-        while (i < pre.length)
-        {
-            msg[p] = pre[i];
-            p += 1;
-            i += 1;
-        }
-        p = putDotted(msg, p, mnCls.get(k));
-        msg[p] = (byte) '.';
-        p += 1;
-        p = putUtf8(msg, p, mnName.get(k));
-        p = putUtf8(msg, p, mnDesc.get(k));
-        i = 0;
-        while (i < post.length)
-        {
-            msg[p] = post[i];
-            p += 1;
-            i += 1;
-        }
-        return RuntimeEntrypoints.newExcWithMessage(name, msg);
-    }
 
     /** Append the Utf8 at {@code utf8Addr} as it is. */
     static int putUtf8(byte[] out, int p, Address utf8Addr)
@@ -17929,20 +16551,9 @@ public final class Loader
     }
 
 
-    /**
-     * Whether class {@code clsU} itself DECLARES {@code name desc} as a native method. Reads the classfile bytes
-     * directly -- its own constant-pool walk, never the shared parse context ({@code gbase}/{@code gcp}), which a
-     * failing link must not disturb. Only the named class is consulted: a native inherited from a superclass
-     * keeps the trap.
-     */
-    private static boolean declaredNative(Address clsU, Address nameU, Address descU)
-    {
-        return declaresMethod(clsU, nameU, descU, true);
-    }
-
     /** Whether class {@code clsU} itself declares a method {@code name desc} -- any descriptor when {@code descU}
-     *  is 0, and only a NATIVE one when {@code nativeOnly}. The classfile walk {@link #declaredNative} describes. */
-    private static boolean declaresMethod(Address clsU, Address nameU, Address descU, boolean nativeOnly)
+     *  is 0, and only a NATIVE one when {@code nativeOnly}. The classfile walk {@link NativeMethods#declaredNative} describes. */
+    static boolean declaresMethod(Address clsU, Address nameU, Address descU, boolean nativeOnly)
     {
         int pd = findPdByName(clsU, 0);
         if (pd < 0)
@@ -18307,7 +16918,7 @@ public final class Loader
      * on a monitor or spawn threads, and holding the loader lock across that would deadlock any task that
      * needs to compile before it can release.
      */
-    private static long compileSigOnDemand(Address clsU, Address nameU, Address descU)
+    static long compileSigOnDemand(Address clsU, Address nameU, Address descU)
     {
         VM.loaderLock(VM.LOCK_SIG_DEMAND);
         long r;
@@ -18850,7 +17461,7 @@ public final class Loader
     }
 
     /**
-     * Point the method registry at a freshly lazy-compiled body. {@link #printFrameAt} names a PC by the
+     * Point the method registry at a freshly lazy-compiled body. {@link StackTrace#printFrameAt} names a PC by the
      * nearest registered buffer at-or-below it, so an unregistered fresh buffer makes every frame in that
      * method report as whatever unrelated method happens to sit below it (the socket stack traced as
      * {@code InternalError.<init>} until this landed). A celled static has no registry entry at all, so it
@@ -19042,7 +17653,7 @@ public final class Loader
     /** A callable buffer for (class, name, desc) given as absolute utf8 runs: a registered compiled
      *  buffer, else a phase-A static cell's stub, else the class's TIB slot (virtual lazy stub) — any
      *  of which self-compiles on entry if still lazy. 0 if unknown. */
-    private static long bufBySigU(Address clsU, Address nameU, Address descU)
+    static long bufBySigU(Address clsU, Address nameU, Address descU)
     {
         // The registry through its class+name index (rgBucket). The scan answered the LOWEST index with a
         // buffer, and those chains are newest-first, so walk the whole chain and keep the oldest hit.
@@ -20739,7 +19350,7 @@ public final class Loader
 
 
     /** Append an internal class name with '/' rendered as '.', the form a Java programmer reads. */
-    private static int putDotted(byte[] out, int p, Address utf8Addr)
+    static int putDotted(byte[] out, int p, Address utf8Addr)
     {
         int len = u2(utf8Addr);
         int i = 0;
@@ -21216,7 +19827,6 @@ public final class Loader
         int i = classIndexByName(Magic.bytes("java/lang/String"));
         return i < 0 ? Address.zero() : clTab[i].type;
     }
-
 
 
     /** {@code ldc} of a CONSTANT_Class (a class literal {@code X.class}) at cp {@code classCp} -> its Class mirror. */
@@ -22048,7 +20658,7 @@ public final class Loader
             Uart.write(Magic.bytes(">"));
         }
         Uart.write(Magic.bytes("\n  at "));
-        printFrameAt(Address.fromLong(pc));
+        StackTrace.printFrameAt(Address.fromLong(pc));
         Uart.putc(0x0A);
         while (true) { Magic.wfe(); }
     }

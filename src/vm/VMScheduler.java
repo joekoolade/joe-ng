@@ -1041,7 +1041,7 @@ public final class VMScheduler
         while (depth < 12 && cpc > 0x1000L)
         {
             Uart.write(Magic.bytes("\n      at "));
-            Loader.printFrameAt(Address.fromLong(cpc));
+            StackTrace.printFrameAt(Address.fromLong(cpc));
             long fs = frameSizeAt(Address.fromLong(cpc));
             if (fs == 0L)
             {
@@ -1706,7 +1706,7 @@ public final class VMScheduler
      * {@code thread.getStackTrace()} -> a {@code StackTraceElement[]} for {@code threadObj}'s stack. If it is the
      * CALLING thread, walk from the call-site {@code pc}/{@code sp} the JIT captured (the top frame is well-formed).
      * Otherwise the thread is parked in {@link #taskYield}: its context is the saved switch frame -- start from the
-     * saved ELR/SP, handing {@link Loader#buildTrace} the saved x30 so it can step over the leaf {@code taskYield}
+     * saved ELR/SP, handing {@link StackTrace#buildTrace} the saved x30 so it can step over the leaf {@code taskYield}
      * frame. Returns 0-length if the thread isn't a live task.
      */
     static long threadStackTrace(long threadObj, long pc, long sp)
@@ -1714,17 +1714,17 @@ public final class VMScheduler
         int tid = threadTaskOf(threadObj);
         if (tid == curTask() || tid < 0)                   // the calling thread (or unknown): walk from here
         {
-            return Loader.buildTrace(pc, sp, 0L);
+            return StackTrace.buildTrace(pc, sp, 0L);
         }
         if (taskDone[tid] == 1)                            // a terminated thread has no stack (matches the JDK: a
         {                                                  // getStackTrace() on a finished thread returns length 0)
-            return Loader.buildTrace(0L, 0L, 0L);
+            return StackTrace.buildTrace(0L, 0L, 0L);
         }
         Address frame = Address.fromLong(taskSp[tid]);
         long elr = frame.plus(248L).loadLong();            // saved ELR: the yielded PC (inside taskYield)
         long ssp = taskSp[tid] + SCHED_FRAME;              // SP at the yield
         long x30 = frame.plus(240L).loadLong();            // saved x30: caller-of-taskYield (steps over the leaf)
-        return Loader.buildTrace(elr, ssp, x30);
+        return StackTrace.buildTrace(elr, ssp, x30);
     }
 
     /** Thread.getAllStackTraces() helper: a {@code Thread[]} of every live task's java/lang/Thread object (skips

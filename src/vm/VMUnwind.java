@@ -60,7 +60,7 @@ final class VMUnwind
     /** Entered by descriptor {@code (JJJ)V} (the CAPTURE_TRACE helper), so its parameters stay raw words. */
     static void captureTrace(ObjectReference exc, Address pc, Address sp)
     {
-        if (exc.toLong() <= 0x1000L || !Loader.awaitsThrowTrace(exc))   // boot force-compile passes 0; only a VM-made exception
+        if (exc.toLong() <= 0x1000L || !StackTrace.awaitsThrowTrace(exc))   // boot force-compile passes 0; only a VM-made exception
         {
             return;                                          //   is filled here (a constructed one has its trace or none)
         }
@@ -72,12 +72,12 @@ final class VMUnwind
             // the moment the backtrace is captured. Filtered to NPEs because the launcher throws typed
             // exceptions as ordinary control flow by the dozen.
             Uart.write(Magic.bytes("  NPE at "));
-            Loader.printFrameAt(pc);
+            StackTrace.printFrameAt(pc);
             long fs = frameSizeAt(pc);
             if (fs != 0L)
             {
                 Uart.write(Magic.bytes("      <- "));
-                Loader.printFrameAt(sp.loadAddress().minus(4L));
+                StackTrace.printFrameAt(sp.loadAddress().minus(4L));
             }
         }
         traceStopPc = Address.zero();
@@ -93,7 +93,7 @@ final class VMUnwind
             // constructor gets here -- the JIT's implicit NPE / ArithmeticException / AIOOBE, so fillInTrace never
             // ran (DeepTraceProbe: 8 frames before this). Those paths have just allocated the exception itself,
             // so one more allocation is nothing new for them.
-            long arr = Loader.newThrowableBacktrace(exc, n);
+            long arr = StackTrace.newThrowableBacktrace(exc, n);
             if (arr != 0L)
             {
                 throwFrames(e, pc, sp, Address.fromLong(arr)); // pass 2: the same walk, into the array
@@ -170,7 +170,7 @@ final class VMUnwind
         }
         if (n > 8)
         {
-            long arr = Loader.newThrowableBacktrace(exc, n);   // deeper than the slots: every frame, as stock
+            long arr = StackTrace.newThrowableBacktrace(exc, n);   // deeper than the slots: every frame, as stock
             if (arr != 0L)
             {
                 keptFrames(exc, cpc, csp, Address.fromLong(arr));   // pass 2: the same walk, into the array
@@ -178,7 +178,7 @@ final class VMUnwind
         }
         else
         {
-            Loader.newThrowableBacktrace(exc, 0);              // fits the slots: clear an older deep trace
+            StackTrace.newThrowableBacktrace(exc, 0);              // fits the slots: clear an older deep trace
         }
     }
 
@@ -268,7 +268,7 @@ final class VMUnwind
                 Uart.write(Magic.bytes(" at pc="));
                 printHex(pc);
                 Uart.write(Magic.bytes("\n    thrown by "));
-                Loader.printFrameAt(pc);
+                StackTrace.printFrameAt(pc);
                 Uart.putc(0x0A);
             }
         }
@@ -313,7 +313,7 @@ final class VMUnwind
             Uart.write(Magic.bytes(" thrownAt="));
             printHex(pc);
             Uart.putc(0x20);
-            Loader.printFrameAt(pc);
+            StackTrace.printFrameAt(pc);
             Uart.putc(0x0A);
             // HALT rather than return. The JIT emits `bl unwind` for athrow on the assumption it never comes
             // back; returning resumes the throwing method as though nothing was thrown, turning a diagnosable
@@ -414,7 +414,7 @@ final class VMUnwind
                     Uart.write(Magic.bytes(" sp="));
                     printHex(sp);
                     Uart.write(Magic.bytes("\n  in "));
-                    Loader.printFrameAt(pc);
+                    StackTrace.printFrameAt(pc);
                     // IS IT A MIS-TYPED EXCEPTION RATHER THAN A WRONG OPERAND? joe-ng has produced
                     // wrong-typed objects before -- a `new` of a class the compile could not resolve once took
                     // the CURRENT class's TIB. If this object carries a Throwable-shaped payload (a String
@@ -470,7 +470,7 @@ final class VMUnwind
                         break;
                     }
                     Uart.write(Magic.bytes("  at "));
-                    Loader.printFrameAt(fpc);
+                    StackTrace.printFrameAt(fpc);
                     Uart.putc(0x0A);
                     fi += 1;
                 }
@@ -483,7 +483,7 @@ final class VMUnwind
                     Uart.write(Magic.bytes("  ... TRACE TRUNCATED -- no frame-table entry for pc="));
                     printHex(traceStopPc);
                     Uart.write(Magic.bytes("; the caller below it is:\n      at "));
-                    Loader.printFrameAt(traceStopWord.minus(4L));
+                    StackTrace.printFrameAt(traceStopWord.minus(4L));
                     Uart.putc(0x0A);
                 }
                 if (fi == 0)
@@ -504,7 +504,7 @@ final class VMUnwind
                         printHex(fault0Far);
                         Uart.putc(0x0A);
                         Uart.write(Magic.bytes("  at "));
-                        Loader.printFrameAt(Address.fromLong(fault0Elr));
+                        StackTrace.printFrameAt(Address.fromLong(fault0Elr));
                         Uart.putc(0x0A);
                     }
                 }

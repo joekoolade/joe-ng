@@ -408,7 +408,7 @@ final class RuntimeEntrypoints
         thrCauseOff = throwableFieldOff(thrCauseOff, Magic.bytes("cause"));
         thrStackTraceOff = throwableFieldOff(thrStackTraceOff, Magic.bytes("stackTrace"));
         thrSuppressedOff = throwableFieldOff(thrSuppressedOff, Magic.bytes("suppressedExceptions"));
-        long btOff = Loader.throwableBacktraceOff();
+        long btOff = StackTrace.throwableBacktraceOff();
         if (btOff > 0L)
         {
             exc.toAddress().plus(btOff).store(exc);
