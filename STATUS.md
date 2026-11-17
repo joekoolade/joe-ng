@@ -4,6 +4,23 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 31: the last reference stragglers -- aastore's check, the MemberName path, the mirror
+  cache (2026-11-16).** Pi-validated (build 59729bc7e83f5df2).
+  - **`VM.arrayStoreOk(ObjectReference array, ObjectReference value)`** -- the covariant `aastore` check -- now passes
+    `value` to `instanceOf` directly. Descriptor ABI: its stash key, SelfBuild lookup, reachability call, comments;
+    no `helper-stash MISS`.
+  - **The method-handle linker:** `lambdaFormTarget(mh)` and `memberNameTarget`/`memberNameEntry`/
+    `memberNameEntryQuiet`/`memberNameDispatch(.., mn)` take ObjectReference; the `form`, `vmentry` MemberName and
+    its `ResolvedMethodName` are read with `loadObjectReference`; the `linkTo*` path loads its trailing MemberName as
+    one.
+  - **`Loader.mirObj`** (the Class-mirror cache) is an ObjectReferenceArray. **`litObjByCp` stays `long[]`:** each
+    class's copy is parked in the `long[][]` `pcLitObj`, and an array OF an unboxed array type would need
+    `anewarray` of a magic class -- not supported, and not worth inventing for one cache.
+  - **Measured:** 7 `loadLong` -> `loadObjectReference` (64-bit), mirObj's laload/lastore/newarray -> get/set/create
+    1:1; 7 `lcmp` -> `isNull`; conversions Loader 672 -> 668, VM 205 -> 203. **Code:** Loader -57 words, VM -14.
+  - **Validation:** `make test` + overlaycheck; full regression **209/209** (ten method-handle/lambda/invoke probes
+    among them; every reference `aastore` runs arrayStoreOk). Pi: the usual set incl. AddressFieldProbe 58/0 and
+    ConcatCheck identical to a host JVM; bench unchanged.
 - **UNBOXED TYPES, INCREMENT 30: `magic.ObjectReferenceArray`; the task and monitor tables use it (2026-11-16).**
   Pi-validated (build 7b276e9469b7541a).
   - **The type:** Jikes RVM's `ObjectReferenceArray` -- like AddressArray it IS a `long[]` at run time;
