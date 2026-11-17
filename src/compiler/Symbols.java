@@ -45,7 +45,7 @@ public interface Symbols
     int GC_COLLECT = 2;         // vm/VM.gcCollect(J)V
     int INSTANCE_OF = 3;        // vm/VM.instanceOf(JJ)I
     int CHECK_CAST = 4;         // vm/VM.checkCast(JJ)J
-    int UNWIND = 5;             // vm/VM.unwind(JJJ)V
+    int UNWIND = 5;             // vm/VMUnwind.unwind(Lmagic/ObjectReference;Lmagic/Address;Lmagic/Address;)V
     // Scheduler helpers reachable from JIT-loaded guest code (the mini java.base runtime).
     int SPAWN = 6;              // vm/VM.startThread(J)V  — start a task running a Runnable
     int SEM_WAIT = 7;           // vm/VM.semWait(I)V
@@ -66,7 +66,7 @@ public interface Symbols
     int NEW_AIOOBE = 20;        // vm/VM.newAioobe()J — a java/lang/ArrayIndexOutOfBoundsException (bad index)
     int GET_CLASS = 21;         // vm/VM.getClassOf(Lmagic/ObjectReference;)J — Object.getClass() -> the receiver's Class mirror
     int ARRAY_CLONE = 22;       // vm/VM.arrayClone(Lmagic/ObjectReference;)J — [T.clone() -> a shallow array copy (no vtable on array TIBs)
-    int CAPTURE_TRACE = 23;     // vm/VM.captureTrace(JJJ)V — fill exc's backtrace at the throw site (all throws)
+    int CAPTURE_TRACE = 23;     // vm/VMUnwind.captureTrace(Lmagic/ObjectReference;Lmagic/Address;Lmagic/Address;)V — fill exc's backtrace at the throw site (all throws)
     int NEW_ARITH = 24;         // vm/VM.newArith()J  — a java/lang/ArithmeticException (integer / or % by zero)
     // Object monitors + Thread.join: the mini java.base runtime's wait/notify/join lower to VM scheduler helpers.
     int MON_WAIT = 25;          // vm/VM.objWait(JJ)V      — park the current task on an object until notified

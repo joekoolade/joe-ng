@@ -49,7 +49,7 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         HELPER_KEY[Symbols.GC_COLLECT]       = "vm/VMGc.gcCollect(J)V";
         HELPER_KEY[Symbols.INSTANCE_OF]      = "vm/VM.instanceOf(JJ)I";
         HELPER_KEY[Symbols.CHECK_CAST]       = "vm/VM.checkCast(JJ)J";
-        HELPER_KEY[Symbols.UNWIND]           = "vm/VMUnwind.unwind(JJJ)V";
+        HELPER_KEY[Symbols.UNWIND]           = "vm/VMUnwind.unwind(Lmagic/ObjectReference;Lmagic/Address;Lmagic/Address;)V";
         // frem/drem and multianewarray are METAL-JIT only today (arrayDescAddr refuses in the host writer),
         // but naming them costs nothing and keeps the table a statement about capability.
         HELPER_KEY[Symbols.DREM]             = "vm/VM.drem(DD)D";

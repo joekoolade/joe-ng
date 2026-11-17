@@ -4,6 +4,26 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 28: the unwinder's entry points carry their real types (2026-11-16).** Pi-validated
+  (build fed1392b1d07ffae). Increment 19 left `unwind(JJJ)V`, `captureTrace(JJJ)V` and `fillInTrace(J)V` long
+  because they are reached BY DESCRIPTOR; increments 23-27 made that routine, so they now take
+  `(ObjectReference exc, Address pc, Address sp)` and `(ObjectReference exc)`.
+  - **VMUnwind:** the three entry points, `keptFrames`, `findHandler`/`findHandlerIn` take the ObjectReference;
+    the Throwable helpers (`awaitsThrowTrace`, `isNpe`, `newThrowableBacktrace`, `throwableMessage`) get it
+    directly -- increment 27's `fromLong` wraps are gone. In `unwind`, `long excWord = exc.toLong()` names the raw
+    word ONCE for the guards and BAD THROW / THROW reports, whose job is to survive a value that is NOT an object;
+    `VM.instanceOf`, `Loader.ctorFrameKind` and `Magic.resume` still take long.
+  - **Descriptor ABI:** 3 `stashHelper` keys, `WriterSymbols.HELPER_KEY[UNWIND]` (athrow's helper), SelfBuild's four
+    `unwind` lookups, the `fillInTrace` reachability call, the `Symbols`/`xxxAddr` comments. The fault handler's
+    direct `VMUnwind.unwind(...)` converts once at its call. No `helper-stash MISS`.
+  - **Trap avoided:** a word-boundary rename of `exc` -> `excWord` also rewrote three STRING LITERALS (`"THROW
+    exc="`, `"BAD THROW exc="`, `" exc="`); reverted -- a diagnostic's printed text is what logs are grepped for.
+  - **Measured:** conversions VMUnwind 39 -> **28**, VM 198 -> 201 (the fault handler's boundary). Load/store mix
+    and compare opcodes identical to main in VMUnwind, VM and SelfBuild. **Code:** VMUnwind 1557 -> 1537 words.
+  - **Validation:** `make test` + overlaycheck; full regression **209/209**. Pi: every page 200, hello x2, the Boom
+    trace (athrow -> unwind -> captureTrace, then printStackTrace), bench, forced stop, AddressFieldProbe 51/0
+    (its AIOOBE/NPE/NASE catches cross the unwinder), DnsCheck, ConcatCheck identical to a host JVM, SHA-256,
+    39 MB PUT, `/net` errors 0.
 - **UNBOXED TYPES, INCREMENT 27: the object-utility and Throwable helpers take ObjectReferences (2026-11-16).**
   Pi-validated (build 4214ae3db4b51a52).
   - **Retyped (reference parameters; return types unchanged -- `objToString` keeps its -1 sentinel):** VM
