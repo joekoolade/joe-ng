@@ -23,6 +23,7 @@ import compiler.Baseline;
 import magic.Address;
 import magic.Magic;
 import magic.ObjectReference;
+import magic.ObjectReferenceArray;
 import objectmodel.ObjectModel;
 
 /**
@@ -543,18 +544,18 @@ public final class VM
     static int[]  taskState;                // TASK_READY / TASK_SLEEPING / TASK_BLOCKED / TASK_EMPTY
     static long[] taskWake;                 // CNTPCT deadline at which a sleeping task becomes ready again
     static int[]  taskWaitOn;               // for a BLOCKED task: the semaphore index it is waiting on (-1 = an object monitor)
-    static long[] taskWaitObj;              // for a BLOCKED object-monitor waiter: the object it Object.wait()s on (0 = none)
+    static ObjectReferenceArray taskWaitObj;              // for a BLOCKED object-monitor waiter: the object it Object.wait()s on (0 = none)
     static int[]  taskDone;                 // 1 once a task ran VMScheduler.taskExit() (its run() returned) — Thread.join() polls this
-    static long[] taskThreadObj;            // M4: the guest java/lang/Thread of each task (0 until known/lazily wrapped)
+    static ObjectReferenceArray taskThreadObj;            // M4: the guest java/lang/Thread of each task (0 until known/lazily wrapped)
     // The error a STOPPED task throws at its next stop poll (VMNatives.runStop), 0 for none. Held by the guest's
     // MetalRunExit.Run too, so the object stays reachable; the count of nonzero entries is Heap.STOP_CELL.
-    static long[] taskStopExc;
+    static ObjectReferenceArray taskStopExc;
     // When this task's poll FIRST handed it its stop error (counter ticks), 0 before. A task still polling
     // STOP_KILL_MS later keeps catching the error, and the poll ends the task where it stands (stopPoll).
     static long[] taskStopFirst;
     static int[]  taskInterrupted;          // Thread.interrupt() flag per task (1 = interrupted; sleep/join observe it)
     static int[]  taskPermit;               // LockSupport permit per task (1 = a pending unpark; park consumes it)
-    static long[] taskMonWait;              // for a task BLOCKED on monitorenter: the object it is trying to lock (0 = none)
+    static ObjectReferenceArray taskMonWait;              // for a task BLOCKED on monitorenter: the object it is trying to lock (0 = none)
     static int[]  semCount;                 // counting-semaphore values
     static int    taskCount;                // number of live task slots
 
@@ -946,25 +947,25 @@ public final class VM
     {
         taskSp = new long[MAX_TASKS];
         taskStackBase = new long[MAX_TASKS];
-        taskThreadObj = new long[MAX_TASKS];
-        taskStopExc = new long[MAX_TASKS];
+        taskThreadObj = ObjectReferenceArray.create(MAX_TASKS);
+        taskStopExc = ObjectReferenceArray.create(MAX_TASKS);
         taskStopFirst = new long[MAX_TASKS];
         taskState = new int[MAX_TASKS];
         taskWake = new long[MAX_TASKS];
         taskWaitOn = new int[MAX_TASKS];
-        taskWaitObj = new long[MAX_TASKS];
+        taskWaitObj = ObjectReferenceArray.create(MAX_TASKS);
         taskDone = new int[MAX_TASKS];
-        taskMonWait = new long[MAX_TASKS];
+        taskMonWait = ObjectReferenceArray.create(MAX_TASKS);
         taskInterrupted = new int[MAX_TASKS];
         taskPermit = new int[MAX_TASKS];
         taskCore = new int[MAX_TASKS];
         taskIdle = new int[MAX_TASKS];
         taskPrio = new int[MAX_TASKS];
         taskBasePrio = new int[MAX_TASKS];
-        syncObj = new long[MAX_TASKS * MAX_SYNC_DEPTH];
+        syncObj = ObjectReferenceArray.create(MAX_TASKS * MAX_SYNC_DEPTH);
         syncSp = new long[MAX_TASKS * MAX_SYNC_DEPTH];
         syncDepth = new int[MAX_TASKS];
-        monObj = new long[MAX_MON];
+        monObj = ObjectReferenceArray.create(MAX_MON);
         monOwner = new int[MAX_MON];
         monCount = new int[MAX_MON];
         semCount = new int[NUM_SEM];
@@ -1209,7 +1210,7 @@ public final class VM
     // live while its object is held (monCount >= 1) and freed on the final monitorExit, so it holds only the
     // currently-held monitors. monitorenter/exit and Object.wait/notify + Thread.holdsLock all go through it.
     static final int MAX_MON = 64;
-    static long[] monObj;                   // the locked object (0 = free slot)
+    static ObjectReferenceArray monObj;                   // the locked object (0 = free slot)
     static int[]  monOwner;                 // owning task id
     static int[]  monCount;                 // recursion depth
 
@@ -1479,8 +1480,8 @@ public final class VM
             return 0L;
         }
         int t = curTask();
-        long exc = taskStopExc[t];
-        if (exc == 0L)
+        ObjectReference exc = taskStopExc.get(t);
+        if (exc.isNull())
         {
             return 0L;
         }
@@ -1500,7 +1501,7 @@ public final class VM
             Uart.write(Magic.bytes(" kept catching its stop; ended at a poll\n"));
             VMScheduler.taskExit();
         }
-        return exc;
+        return exc.toLong();
     }
 
     /** How long a task may keep catching its stop error before its poll ends it ({@link #stopPoll}). */
@@ -1513,7 +1514,7 @@ public final class VM
         int t = 0;
         while (t < MAX_TASKS)
         {
-            if (taskStopExc[t] != 0L)
+            if (!taskStopExc.get(t).isNull())
             {
                 n += 1L;
             }
@@ -1665,7 +1666,7 @@ public final class VM
     // that -- the demo suite then died at the scheduler set-piece with a Thread whose Type read as garbage,
     // while the same binary with this codegen disabled failed identically. Overflow is reported, not dropped.
     static final int MAX_SYNC_DEPTH = 32;
-    static long[] syncObj;                  // [task * MAX_SYNC_DEPTH + depth] the monitor
+    static ObjectReferenceArray syncObj;                  // [task * MAX_SYNC_DEPTH + depth] the monitor
     static long[] syncSp;                   // ... and the SP of the frame that took it
     static int[] syncDepth;                 // per-task depth
     private static boolean syncOverflowReported;
@@ -1696,7 +1697,7 @@ public final class VM
             }
             return;
         }
-        syncObj[t * MAX_SYNC_DEPTH + d] = obj.toLong();
+        syncObj.set(t * MAX_SYNC_DEPTH + d, obj);
         syncSp[t * MAX_SYNC_DEPTH + d] = sp;
         syncDepth[t] = d + 1;
     }
@@ -1714,10 +1715,10 @@ public final class VM
         {
             return;                                     // overflowed entry (reported above): nothing recorded
         }
-        long obj = syncObj[t * MAX_SYNC_DEPTH + d];
+        ObjectReference obj = syncObj.get(t * MAX_SYNC_DEPTH + d);
         syncDepth[t] = d;
-        syncObj[t * MAX_SYNC_DEPTH + d] = 0L;
-        VMScheduler.monExit(ObjectReference.fromLong(obj));
+        syncObj.set(t * MAX_SYNC_DEPTH + d, ObjectReference.nullReference());
+        VMScheduler.monExit(obj);
     }
 
     /**
@@ -1739,10 +1740,10 @@ public final class VM
             {
                 return;                                 // this frame is still live
             }
-            long obj = syncObj[t * MAX_SYNC_DEPTH + d];
+            ObjectReference obj = syncObj.get(t * MAX_SYNC_DEPTH + d);
             syncDepth[t] = d;
-            syncObj[t * MAX_SYNC_DEPTH + d] = 0L;
-            VMScheduler.monExit(ObjectReference.fromLong(obj));
+            syncObj.set(t * MAX_SYNC_DEPTH + d, ObjectReference.nullReference());
+            VMScheduler.monExit(obj);
         }
     }
 
@@ -2000,18 +2001,18 @@ public final class VM
         {
             try
             {
-                VMScheduler.objWait(0L, 0L);
+                VMScheduler.objWait(ObjectReference.nullReference(), 0L);
             }
             catch (InterruptedException e)
             {
                 // unreachable: the call only makes the writer compile objWait (it now declares the interrupt)
             }
         }
-        if (objNotifyAddr == 0L) { VMScheduler.objNotify(0L); }                  // (JIT'd guest reaches these via stashed addrs)
-        if (objNotifyAllAddr == 0L) { VMScheduler.objNotifyAll(0L); }
+        if (objNotifyAddr == 0L) { VMScheduler.objNotify(ObjectReference.nullReference()); }                  // (JIT'd guest reaches these via stashed addrs)
+        if (objNotifyAllAddr == 0L) { VMScheduler.objNotifyAll(ObjectReference.nullReference()); }
         if (monEnterAddr == 0L) { VMScheduler.monEnter(ObjectReference.nullReference()); }                    // monitorenter/exit + Thread.holdsLock
         if (monExitAddr == 0L) { VMScheduler.monExit(ObjectReference.nullReference()); }
-        if (holdsLockAddr == 0L) { int u = VMScheduler.holdsLock(0L); }
+        if (holdsLockAddr == 0L) { int u = VMScheduler.holdsLock(ObjectReference.nullReference()); }
         if (interruptAddr == 0L) { VMScheduler.interrupt(0L); }                  // Thread.interrupt/isInterrupted/isAlive
         if (isInterruptedAddr == 0L) { int u = VMScheduler.isInterrupted(0L); }
         if (checkIntrAddr == 0L) { int u = VMScheduler.checkClearInterrupt(); }
@@ -3796,12 +3797,12 @@ public final class VM
     static long captureTraceAddr;      // VMUnwind.captureTrace(Lmagic/ObjectReference;Lmagic/Address;Lmagic/Address;)V — throw-site backtrace for printStackTrace()
     // Scheduler helpers the JIT-loaded mini java.base runtime BLs (Symbols ids 6..11).
     static long startThreadAddr;       // VM.startThread(J)V
-    static long objWaitAddr;           // VM.objWait(JJ)V     — Object.wait
-    static long objNotifyAddr;         // VM.objNotify(J)V    — Object.notify
-    static long objNotifyAllAddr;      // VM.objNotifyAll(J)V — Object.notifyAll
+    static long objWaitAddr;           // VM.objWait(Lmagic/ObjectReference;J)V — Object.wait
+    static long objNotifyAddr;         // VM.objNotify(Lmagic/ObjectReference;)V — Object.notify
+    static long objNotifyAllAddr;      // VM.objNotifyAll(Lmagic/ObjectReference;)V — Object.notifyAll
     static long monEnterAddr;          // VMScheduler.monEnter(Lmagic/ObjectReference;)V — monitorenter
     static long monExitAddr;           // VMScheduler.monExit(Lmagic/ObjectReference;)V  — monitorexit
-    static long holdsLockAddr;         // VM.holdsLock(J)I    — Thread.holdsLock
+    static long holdsLockAddr;         // VM.holdsLock(Lmagic/ObjectReference;)I — Thread.holdsLock
     static long interruptAddr;         // VM.interrupt(J)V    — Thread.interrupt
     static long isInterruptedAddr;     // VM.isInterrupted(J)I— Thread.isInterrupted
     static long checkIntrAddr;         // VM.checkClearInterrupt()I — Thread.sleep interruption check

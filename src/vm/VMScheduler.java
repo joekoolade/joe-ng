@@ -282,11 +282,11 @@ public final class VMScheduler
         taskDone[id] = 0;
         taskWake[id] = 0L;
         taskWaitOn[id] = 0;
-        taskWaitObj[id] = 0L;
-        taskThreadObj[id] = 0L;
+        taskWaitObj.set(id, ObjectReference.nullReference());
+        taskThreadObj.set(id, ObjectReference.nullReference());
         taskInterrupted[id] = 0;
         taskPermit[id] = 0;
-        taskMonWait[id] = 0L;
+        taskMonWait.set(id, ObjectReference.nullReference());
         coreIdle[core] = id;
         coreTask[core] = id;
         coreSched[core] = 1;                               // core 0 counts these to know everyone joined
@@ -602,11 +602,11 @@ public final class VMScheduler
                 return;                                    // already at least this urgent: so is everyone below
             }
             taskPrio[t] = prio;
-            if (taskState[t] != TASK_BLOCKED || taskMonWait[t] == 0L)
+            if (taskState[t] != TASK_BLOCKED || taskMonWait.get(t).isNull())
             {
                 return;                                    // not itself waiting on a monitor: chain ends here
             }
-            int s = monSlotOf(taskMonWait[t]);
+            int s = monSlotOf(taskMonWait.get(t));
             if (s < 0)
             {
                 return;
@@ -629,9 +629,9 @@ public final class VMScheduler
         int w = 0;
         while (w < taskCount)
         {
-            if (taskState[w] == TASK_BLOCKED && taskMonWait[w] != 0L && taskPrio[w] > p)
+            if (taskState[w] == TASK_BLOCKED && !taskMonWait.get(w).isNull() && taskPrio[w] > p)
             {
-                int s = monSlotOf(taskMonWait[w]);
+                int s = monSlotOf(taskMonWait.get(w));
                 if (s >= 0 && monOwner[s] == t)
                 {
                     p = taskPrio[w];                       // still lending, for a different monitor
@@ -1010,9 +1010,9 @@ public final class VMScheduler
         Uart.write(Magic.bytes(" waitOn="));
         printDec(taskWaitOn[t]);
         Uart.write(Magic.bytes(" waitObj="));
-        printHex(taskWaitObj[t]);
+        printHex(taskWaitObj.get(t).toLong());
         Uart.write(Magic.bytes(" monWait="));
-        printHex(taskMonWait[t]);
+        printHex(taskMonWait.get(t).toLong());
         Uart.write(Magic.bytes(" permit="));
         printDec(taskPermit[t]);
         if (taskState[t] != TASK_RUNNING && taskSp[t] != 0L)
@@ -1385,12 +1385,12 @@ public final class VMScheduler
     }
 
     /** Index of {@code obj}'s live monitor slot, or -1. */
-    private static int monSlotOf(long obj)
+    private static int monSlotOf(ObjectReference obj)
     {
         int i = 0;
         while (i < MAX_MON)
         {
-            if (monObj[i] == obj)
+            if (monObj.get(i).EQ(obj))
             {
                 return i;
             }
@@ -1400,14 +1400,14 @@ public final class VMScheduler
     }
 
     /** Claim a free monitor slot for {@code obj} (halts if more than MAX_MON are held at once). */
-    private static int monAlloc(long obj)
+    private static int monAlloc(ObjectReference obj)
     {
         int i = 0;
         while (i < MAX_MON)
         {
-            if (monObj[i] == 0L)
+            if (monObj.get(i).isNull())
             {
-                monObj[i] = obj;
+                monObj.set(i, obj);
                 return i;
             }
             i += 1;
@@ -1420,13 +1420,13 @@ public final class VMScheduler
     }
 
     /** Wake ONE task blocked in monitorenter for {@code obj}. */
-    private static int wakeMonWaiter(long obj)
+    private static int wakeMonWaiter(ObjectReference obj)
     {
         int woken = -1;
         int i = 0;
         while (i < taskCount)                              // just one, and it is the most urgent waiter:
         {                                                  //   a released monitor goes UP the priority order
-            if (taskState[i] == TASK_BLOCKED && taskMonWait[i] == obj
+            if (taskState[i] == TASK_BLOCKED && taskMonWait.get(i).EQ(obj)
                 && (woken < 0 || taskPrio[i] > taskPrio[woken]))
             {
                 woken = i;
@@ -1449,7 +1449,7 @@ public final class VMScheduler
         }
         long daif = schedLock();
         int me = curTask();
-        int s = monSlotOf(obj.toLong());
+        int s = monSlotOf(obj);
         VMStats.monEnters = VMStats.monEnters + 1L;
         if (s >= 0 && monOwner[s] != me)
         {
@@ -1457,19 +1457,19 @@ public final class VMScheduler
         }
         while (s >= 0 && monOwner[s] != me)                // held by another task: block until it is released
         {
-            taskMonWait[me] = obj.toLong();
+            taskMonWait.set(me, obj);
             taskWaitOn[me] = -2;                            // a monitor-acquire waiter
             taskState[me] = TASK_BLOCKED;
             inherit(monOwner[s], taskPrio[me]);             // lend our urgency to the holder, and down its chain
             schedUnlock(daif);
             taskYield();
             daif = schedLock();
-            s = monSlotOf(obj.toLong());
+            s = monSlotOf(obj);
         }
-        taskMonWait[me] = 0L;
+        taskMonWait.set(me, ObjectReference.nullReference());
         if (s < 0)                                         // unowned: take a fresh slot
         {
-            s = monAlloc(obj.toLong());
+            s = monAlloc(obj);
             monOwner[s] = me;
             monCount[s] = 0;
         }
@@ -1488,16 +1488,16 @@ public final class VMScheduler
         long daif = schedLock();
         int woken = -1;
         int me = curTask();
-        int s = monSlotOf(obj.toLong());
+        int s = monSlotOf(obj);
         if (s >= 0)
         {
             monCount[s] -= 1;
             if (monCount[s] <= 0)
             {
-                monObj[s] = 0L;                            // cleared BEFORE the recompute, so the monitor we
+                monObj.set(s, ObjectReference.nullReference());                            // cleared BEFORE the recompute, so the monitor we
                 monOwner[s] = -1;                          //   just released no longer counts as lent-to
                 monCount[s] = 0;
-                woken = wakeMonWaiter(obj.toLong());
+                woken = wakeMonWaiter(obj);
                 if (taskPrio[me] != taskBasePrio[me])      // only a boosted task can owe anything back, and
                 {                                          //   that guard keeps the common exit free
                     recomputePrio(me);
@@ -1509,7 +1509,7 @@ public final class VMScheduler
     }
 
     /** {@code Thread.holdsLock(obj)}: 1 if the current task owns {@code obj}'s monitor, else 0. */
-    static int holdsLock(long obj)
+    static int holdsLock(ObjectReference obj)
     {
         long daif = schedLock();
         int s = monSlotOf(obj);
@@ -1535,7 +1535,7 @@ public final class VMScheduler
      * the monitor and its recursion depth are restored. Both clear the status, as on the JDK. Before this an
      * interrupted wait returned normally and a pre-set status was ignored (InterruptWaitProbe).
      */
-    static void objWait(long obj, long ms) throws InterruptedException
+    static void objWait(ObjectReference obj, long ms) throws InterruptedException
     {
         if (ms < 0L)
         {
@@ -1560,7 +1560,7 @@ public final class VMScheduler
         int saved = monCount[s];
         if (saved > 0)
         {
-            monObj[s] = 0L;
+            monObj.set(s, ObjectReference.nullReference());
             monOwner[s] = -1;
             monCount[s] = 0;
             wakeMonWaiter(obj);
@@ -1569,7 +1569,7 @@ public final class VMScheduler
                 recomputePrio(me);                         // wait() releases the monitor: give the boost back
             }
         }
-        taskWaitObj[me] = obj;
+        taskWaitObj.set(me, obj);
         taskWaitOn[me] = -1;                               // an object monitor, not a semaphore
         if (ms > 0L)
         {
@@ -1584,12 +1584,12 @@ public final class VMScheduler
         taskYield();                                       // parked until objNotify/objNotifyAll flips us READY
         long woke = schedLock();
         markRunning(me);                                   // a fallback resume returns here still BLOCKED
-        taskWaitObj[me] = 0L;
+        taskWaitObj.set(me, ObjectReference.nullReference());
         taskWake[me] = 0L;
         schedUnlock(woke);
         if (saved > 0)                                     // reacquire the monitor (blocks if the notifier still holds it)
         {
-            monEnter(ObjectReference.fromLong(obj));
+            monEnter(obj);
             monCount[monSlotOf(obj)] = saved;              // restore the recursion depth
         }
         daif = schedLock();
@@ -1603,7 +1603,7 @@ public final class VMScheduler
     }
 
     /** {@code obj.notify()}: wake ONE task waiting on {@code obj}. The caller must own {@code obj}'s monitor. */
-    static void objNotify(long obj)
+    static void objNotify(ObjectReference obj)
     {
         long daif = schedLock();
         requireOwner(obj, daif);
@@ -1611,7 +1611,7 @@ public final class VMScheduler
         int i = 0;
         while (i < taskCount)                              // just one, and it is the most urgent waiter
         {
-            if (taskState[i] == TASK_BLOCKED && taskWaitObj[i] == obj
+            if (taskState[i] == TASK_BLOCKED && taskWaitObj.get(i).EQ(obj)
                 && (woken < 0 || taskPrio[i] > taskPrio[woken]))
             {
                 woken = i;
@@ -1627,7 +1627,7 @@ public final class VMScheduler
     }
 
     /** {@code obj.notifyAll()}: wake EVERY task waiting on {@code obj}. The caller must own {@code obj}'s monitor. */
-    static void objNotifyAll(long obj)
+    static void objNotifyAll(ObjectReference obj)
     {
         long daif = schedLock();
         requireOwner(obj, daif);
@@ -1635,7 +1635,7 @@ public final class VMScheduler
         int i = 0;
         while (i < taskCount)
         {
-            if (taskState[i] == TASK_BLOCKED && taskWaitObj[i] == obj)
+            if (taskState[i] == TASK_BLOCKED && taskWaitObj.get(i).EQ(obj))
             {
                 taskState[i] = TASK_READY;
                 if (woken < 0 || taskPrio[i] > taskPrio[woken])
@@ -1654,7 +1654,7 @@ public final class VMScheduler
      * scheduler lock (taken by the caller as {@code daif}) first. Called with that lock held so the answer cannot
      * change before the notify that follows it.
      */
-    private static void requireOwner(long obj, long daif)
+    private static void requireOwner(ObjectReference obj, long daif)
     {
         int s = monSlotOf(obj);
         if (s < 0 || monOwner[s] != curTask())
@@ -1675,10 +1675,11 @@ public final class VMScheduler
     /** The task id whose java/lang/Thread object is {@code threadObj}, or -1 if none is live. */
     static int threadTaskOf(long threadObj)
     {
+        ObjectReference ref = ObjectReference.fromLong(threadObj);
         int i = 0;
         while (i < taskCount)
         {
-            if (taskThreadObj[i] == threadObj)
+            if (taskThreadObj.get(i).EQ(ref))
             {
                 return i;
             }
@@ -1734,7 +1735,7 @@ public final class VMScheduler
         int i = 0;
         while (i < taskCount)
         {
-            if (taskThreadObj[i] != 0L && taskDone[i] == 0)
+            if (!taskThreadObj.get(i).isNull() && taskDone[i] == 0)
             {
                 count += 1;
             }
@@ -1745,9 +1746,9 @@ public final class VMScheduler
         i = 0;
         while (i < taskCount)
         {
-            if (taskThreadObj[i] != 0L && taskDone[i] == 0)
+            if (!taskThreadObj.get(i).isNull() && taskDone[i] == 0)
             {
-                arr.plus(24L + j * 8L).store(taskThreadObj[i]);
+                arr.plus(24L + j * 8L).store(taskThreadObj.get(i));
                 j += 1;
             }
             i += 1;
@@ -1917,13 +1918,13 @@ public final class VMScheduler
         taskSp[id] = frame.toLong();
         taskWake[id] = 0L;                                 // reset per-task state (matters when recycling a slot)
         taskWaitOn[id] = 0;
-        taskWaitObj[id] = 0L;
-        taskThreadObj[id] = threadObj;                     // currentThread() of the new task, before it can run
-        taskStopExc[id] = 0L;                              // a recycled slot inherits no stop
+        taskWaitObj.set(id, ObjectReference.nullReference());
+        taskThreadObj.set(id, ObjectReference.fromLong(threadObj));   // currentThread() of the new task, before it can run
+        taskStopExc.set(id, ObjectReference.nullReference());   // a recycled slot inherits no stop
         taskStopFirst[id] = 0L;
         taskInterrupted[id] = 0;
         taskPermit[id] = 0;
-        taskMonWait[id] = 0L;
+        taskMonWait.set(id, ObjectReference.nullReference());
         taskBasePrio[id] = taskBasePrio[curTask()];        // inherit the creator's OWN priority (Thread
         taskPrio[id] = taskBasePrio[id];                   //   semantics) -- never a boost it merely borrowed
         long ready = schedLock();
@@ -2024,9 +2025,9 @@ public final class VMScheduler
         long daif = schedLock();
         int me = curTask();
         taskDone[me] = 1;                                  // Thread.join() waiters observe this
-        if (taskStopExc[me] != 0L)
+        if (!taskStopExc.get(me).isNull())
         {
-            taskStopExc[me] = 0L;                          // a stopped thread is gone: its polls are over
+            taskStopExc.set(me, ObjectReference.nullReference());                         // a stopped thread is gone: its polls are over
             recountStops();
         }
         taskState[me] = TASK_BLOCKED;

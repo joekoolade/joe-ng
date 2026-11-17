@@ -57,12 +57,16 @@ public final class Unboxed
     /** {@code magic/ObjectReference}: an object's address as a raw word; its ops are moves and compares. */
     public static final int OBJECT_REFERENCE = 6;
 
+    /** {@code magic/ObjectReferenceArray}: a {@code long[]} at run time, lowered exactly as {@link #ADDRESS_ARRAY}. */
+    public static final int OBJECT_REFERENCE_ARRAY = 7;
+
     private static final long O_ADDRESS = 7816296518595377735L; // "magic/Address"
     private static final long O_WORD = 2502753236447134729L;  // "magic/Word"
     private static final long O_OFFSET = -5453143413838101434L; // "magic/Offset"
     private static final long O_EXTENT = -5385282434997603451L; // "magic/Extent"
     private static final long O_ADDRESS_ARRAY = -2760638129083984252L; // "magic/AddressArray"
     private static final long O_OBJECT_REFERENCE = -5959478901542360285L; // "magic/ObjectReference"
+    private static final long O_OBJECT_REFERENCE_ARRAY = -3793534773957816616L; // "magic/ObjectReferenceArray"
     private static final long N_CREATE = -626457835795418115L; // "create"
     private static final long N_GET = -3106811833996379657L;  // "get"
     private static final long N_SET = -9062501282150740445L;  // "set"
@@ -159,6 +163,10 @@ public final class Unboxed
         {
             return OBJECT_REFERENCE;
         }
+        if (h == O_OBJECT_REFERENCE_ARRAY)
+        {
+            return OBJECT_REFERENCE_ARRAY;
+        }
         return NONE;
     }
 
@@ -171,9 +179,9 @@ public final class Unboxed
     {
         long h = hash(name);
         int params = paramCount(desc);
-        if (kind == ADDRESS_ARRAY)
+        if (kind == ADDRESS_ARRAY || kind == OBJECT_REFERENCE_ARRAY)
         {
-            return arrayOp(h, params);
+            return arrayOp(h, params);              // both ARE a long[]: the same four array-bytecode lowerings
         }
         if (kind == OBJECT_REFERENCE)
         {
@@ -319,7 +327,7 @@ public final class Unboxed
         return -1;
     }
 
-    /** {@code magic/AddressArray}'s four methods, or -1. */
+    /** {@code magic/AddressArray}'s and {@code magic/ObjectReferenceArray}'s four methods, or -1. */
     private static int arrayOp(long h, int params)
     {
         if (h == N_CREATE && params == 1)

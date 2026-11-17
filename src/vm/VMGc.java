@@ -13,6 +13,7 @@ package vm;
 
 import magic.Address;
 import magic.Magic;
+import magic.ObjectReference;
 import board.bcm2711.Uart;
 import objectmodel.ObjectModel;
 import static vm.VM.*;   // GC roots + shared state stay in VM: the task table (stale-root reaping),
@@ -92,7 +93,7 @@ final class VMGc
                 {
                     taskStackBase[t] = 0L;
                     taskSp[t] = 0L;
-                    taskThreadObj[t] = 0L;
+                    taskThreadObj.set(t, ObjectReference.nullReference());
                     taskState[t] = TASK_EMPTY;
                     reaped += 1;
                 }

@@ -77,6 +77,11 @@ public final class UnboxedTest
         same(fx, "setLong", "([JIJ)V", "setAddr", "(Lmagic/AddressArray;ILmagic/Address;)V");
         same(fx, "lenLong", "([J)I", "lenAddr", "(Lmagic/AddressArray;)I");
         same(fx, "sumLong", "([J)J", "sumAddr", "(Lmagic/AddressArray;)J");
+        // ObjectReferenceArray IS a long[] as well.
+        same(fx, "getLong", "([JI)J", "getRefArr", "(Lmagic/ObjectReferenceArray;I)J");
+        same(fx, "setLong", "([JIJ)V", "setRefArr", "(Lmagic/ObjectReferenceArray;ILmagic/ObjectReference;)V");
+        same(fx, "lenLong", "([J)I", "lenRefArr", "(Lmagic/ObjectReferenceArray;)I");
+        same(fx, "zeroAtAddr", "(Lmagic/AddressArray;I)Z", "nullAtRefArr", "(Lmagic/ObjectReferenceArray;I)Z");
 
         // x9 is operand slot 0, x10 slot 1, x11 slot 2; locals live in x19.. (after normal(): in first-use order).
         // Every method below moves its arguments into locals first (x0 -> x19, x1 -> x20, ...) and returns in x0.
@@ -104,7 +109,8 @@ public final class UnboxedTest
     /** Every public method of the four types maps to a lowering. */
     private static void classifiesAll()
     {
-        String[] types = { "Address", "Word", "Offset", "Extent", "AddressArray", "ObjectReference" };
+        String[] types = { "Address", "Word", "Offset", "Extent", "AddressArray", "ObjectReference",
+            "ObjectReferenceArray" };
         int n = 0;
         int missing = 0;
         for (String t : types)
@@ -172,6 +178,15 @@ public final class UnboxedTest
         T.eq("AddressArray.length", Intrinsics.AA_LENGTH, Unboxed.op(aa, utf8("length"), utf8("()I")));
         T.eq("AddressArray: an Address name is not an array op", -1,
                 Unboxed.op(aa, utf8("plus"), utf8("(I)Lmagic/Address;")));
+        int ra = Unboxed.OBJECT_REFERENCE_ARRAY;
+        T.eq("ObjectReferenceArray owner", ra, Unboxed.ownerKind(utf8("magic/ObjectReferenceArray")));
+        T.eq("ObjectReferenceArray.create", Intrinsics.AA_NEW,
+                Unboxed.op(ra, utf8("create"), utf8("(I)Lmagic/ObjectReferenceArray;")));
+        T.eq("ObjectReferenceArray.get", Intrinsics.AA_GET, Unboxed.op(ra, utf8("get"), utf8("(I)Lmagic/ObjectReference;")));
+        T.eq("ObjectReferenceArray.set", Intrinsics.AA_SET,
+                Unboxed.op(ra, utf8("set"), utf8("(ILmagic/ObjectReference;)V")));
+        T.eq("ObjectReferenceArray.length", Intrinsics.AA_LENGTH, Unboxed.op(ra, utf8("length"), utf8("()I")));
+        T.eq("ObjectReferenceArray: no isNull", -1, Unboxed.op(ra, utf8("isNull"), utf8("()Z")));
         int r = Unboxed.OBJECT_REFERENCE;
         T.eq("ObjectReference owner", r, Unboxed.ownerKind(utf8("magic/ObjectReference")));
         T.eq("ObjectReference.isNull", Intrinsics.UB_IS_ZERO, Unboxed.op(r, utf8("isNull"), utf8("()Z")));

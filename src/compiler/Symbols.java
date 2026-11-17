@@ -69,7 +69,7 @@ public interface Symbols
     int CAPTURE_TRACE = 23;     // vm/VMUnwind.captureTrace(Lmagic/ObjectReference;Lmagic/Address;Lmagic/Address;)V — fill exc's backtrace at the throw site (all throws)
     int NEW_ARITH = 24;         // vm/VM.newArith()J  — a java/lang/ArithmeticException (integer / or % by zero)
     // Object monitors + Thread.join: the mini java.base runtime's wait/notify/join lower to VM scheduler helpers.
-    int MON_WAIT = 25;          // vm/VM.objWait(JJ)V      — park the current task on an object until notified
+    int MON_WAIT = 25;          // vm/VM.objWait(Lmagic/ObjectReference;J)V — park the current task on an object until notified
     int WATCH_RET = 49;         // vm/VM.watchRet(J)V — DEBUG: print the value a watched call returned
     int WATCH_RECV = 52;        // vm/VM.watchRecv(Lmagic/ObjectReference;J)V — DEBUG: describe a watched call's RECEIVER — its
                                 // TIB, Type, class NAME and first field slots. WATCH_ARG prints a VALUE;
@@ -82,14 +82,14 @@ public interface Symbols
                                 // "instrument that conflates two things" failure this project records.
     int VIRTUAL_RESOLVE = 48;   // the late virtual-dispatch trampoline: resolve x17's site against x0's
                                 //   receiver, restore the args, and tail-branch to the real method
-    int MON_NOTIFY = 26;        // vm/VM.objNotify(J)V     — wake one waiter on an object
-    int MON_NOTALL = 27;        // vm/VM.objNotifyAll(J)V  — wake every waiter on an object
+    int MON_NOTIFY = 26;        // vm/VM.objNotify(Lmagic/ObjectReference;)V — wake one waiter on an object
+    int MON_NOTALL = 27;        // vm/VM.objNotifyAll(Lmagic/ObjectReference;)V — wake every waiter on an object
     int THREAD_JOIN = 28;       // vm/VM.threadJoin(J)V    — block until a Thread's task has exited
     int STACK_TRACE = 29;       // vm/VM.threadStackTrace(JJJ)J — a StackTraceElement[] for a Thread's stack
     int ALL_THREADS = 30;       // vm/VM.allThreads()J          — a Thread[] of every live task's Thread object
     int MON_ENTER = 31;         // vm/VMScheduler.monEnter(Lmagic/ObjectReference;)V — monitorenter (real, blocking, recursive)
     int MON_EXIT = 32;          // vm/VMScheduler.monExit(Lmagic/ObjectReference;)V  — monitorexit
-    int HOLDS_LOCK = 33;        // vm/VM.holdsLock(J)I          — Thread.holdsLock
+    int HOLDS_LOCK = 33;        // vm/VM.holdsLock(Lmagic/ObjectReference;)I — Thread.holdsLock
     int INTERRUPT = 34;         // vm/VM.interrupt(J)V          — Thread.interrupt
     int IS_INTERRUPTED = 35;    // vm/VM.isInterrupted(J)I      — Thread.isInterrupted
     int CHECK_INTR = 36;        // vm/VM.checkClearInterrupt()I — Thread.sleep interruption check (clears)

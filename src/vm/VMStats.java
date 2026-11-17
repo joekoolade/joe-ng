@@ -206,7 +206,7 @@ final class VMStats
         int s = 0;
         while (s < VM.MAX_MON)
         {
-            if (VM.monObj[s] != 0L)
+            if (!VM.monObj.get(s).isNull())
             {
                 n += 1L;
             }
@@ -274,7 +274,7 @@ final class VMStats
         {
             return 0L;
         }
-        return VM.taskThreadObj[(int) t];
+        return VM.taskThreadObj.get((int) t).toLong();
     }
 
     /** {@link NetStats} in its declaration order, then the WiFi driver's counters. */

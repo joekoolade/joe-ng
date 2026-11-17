@@ -14,6 +14,7 @@ package demo;
 import magic.Address;
 import magic.AddressArray;
 import magic.ObjectReference;
+import magic.ObjectReferenceArray;
 import magic.Word;
 
 /**
@@ -55,6 +56,8 @@ public class AddressFieldProbe
     private static ObjectReference sRef;  // the ONLY reference to its long[] across the collections
 
     private static ObjectReference sRefUnset;
+
+    private static ObjectReferenceArray sRefs;  // the ONLY reference to its long[] across the collections
 
     private static int failures;
 
@@ -249,6 +252,51 @@ public class AddressFieldProbe
         check("store(ObjectReference) writes a reference element", slots[1] == p.iRef.toObject());
         sRef = ObjectReference.nullReference();
         check("a field set to null reads null", sRef.isNull());
+        referenceArrays(p);
+    }
+
+    /** ObjectReferenceArray: a long[] whose elements read and write as ObjectReference. */
+    private static void referenceArrays(AddressFieldProbe p)
+    {
+        ObjectReferenceArray t = ObjectReferenceArray.create(4);
+        check("ObjectReferenceArray length", t.length() == 4);
+        check("ObjectReferenceArray starts null", t.get(0).isNull() && t.get(3).isNull());
+        long[] a = new long[6];
+        for (int i = 0; i < 6; i++)
+        {
+            a[i] = 0x0BE3_0000_0000L + i;
+        }
+        t.set(1, ObjectReference.fromObject(a));
+        t.set(2, p.iRef);
+        check("ObjectReferenceArray set/get", t.get(1).toObject() == a && t.get(2).EQ(p.iRef) && t.get(0).isNull());
+        check("ObjectReferenceArray is a long[]", ((Object) t) instanceof long[]
+                && ((long[]) (Object) t)[1] == Address.fromObject(a).toLong());
+        sRefs = t;
+        t = null;
+        a = null;
+        int sum = 0;
+        for (int round = 0; round < 3; round++)
+        {
+            sum = sum + churn(round + 20);
+            System.gc();
+        }
+        check("ObjectReferenceArray churned", sum > 0);
+        check("ObjectReferenceArray field keeps its array and elements", sRefs.length() == 4
+                && keptAlive(sRefs.get(1), 0x0BE3_0000_0000L) && sRefs.get(2).EQ(p.iRef));
+        check("ObjectReferenceArray get out of bounds throws", refGetThrowsAioobe(sRefs, 4));
+    }
+
+    private static boolean refGetThrowsAioobe(ObjectReferenceArray a, int i)
+    {
+        try
+        {
+            a.get(i);
+            return false;
+        }
+        catch (ArrayIndexOutOfBoundsException e)
+        {
+            return true;
+        }
     }
 
     /** The reference still names a live long[] holding base, base+1, ... base+5 (not a freed, reused block). */
