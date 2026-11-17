@@ -2049,9 +2049,9 @@ public final class VM
         if (runtimeTotalAddr == 0L) { long u = VMNatives.runtimeTotalMemory(); }
         if (runtimeMaxAddr == 0L) { long u = VMNatives.runtimeMaxMemory(); }
         if (finalizationEnabledAddr == 0L) { boolean u = VMNatives.finalizationEnabled(); }
-        if (fieldAnnoAllAddr == 0L) { long u = VMNatives.fieldAnnoAll(ObjectReference.nullReference(), 0L); }
-        if (unsafeStaticAddrAddr == 0L) { long u = VMNatives.unsafeStaticFieldAddr(ObjectReference.nullReference(), 0L); }
-        if (unsafeFieldOffsetAddr == 0L) { long u = VMNatives.unsafeFieldOffset(ObjectReference.nullReference(), 0L); }
+        if (fieldAnnoAllAddr == 0L) { long u = VMNatives.fieldAnnoAll(ObjectReference.nullReference(), ObjectReference.nullReference()); }
+        if (unsafeStaticAddrAddr == 0L) { long u = VMNatives.unsafeStaticFieldAddr(ObjectReference.nullReference(), ObjectReference.nullReference()); }
+        if (unsafeFieldOffsetAddr == 0L) { long u = VMNatives.unsafeFieldOffset(ObjectReference.nullReference(), ObjectReference.nullReference()); }
         if (noopNativeAddr == 0L) { VMNatives.noopNative(0L); }
         if (unsafeFenceAddr == 0L) { VMNatives.unsafeFence(0L); }
         if (refGet0Addr == 0L) { long u = VMNatives.refGet0(0L); }
@@ -2094,11 +2094,11 @@ public final class VM
         if (isArrayClassAddr == 0L) { long u = VMNatives.isArrayClass(ObjectReference.nullReference()); }          // Class.isArray0
         if (isPrimClassAddr == 0L) { long u = VMNatives.isPrimClass(ObjectReference.nullReference()); }            // Class.isPrimitive0
         if (primClassAddr == 0L) { long u = VMNatives.primClassOf(0L); }              // Class.primitiveClass0
-        if (annoPresentAddr == 0L) { long u = VMNatives.annoPresent(0L, 0L); }        // Executable.annoPresent0
-        if (annoGetAddr == 0L) { long u = VMNatives.annoGet(0L, 0L); }              // Executable.annoGet0
-        if (classAnnoGetAddr == 0L) { long u = VMNatives.classAnnoGet(ObjectReference.nullReference(), 0L); }     // Class.annoGet0
-        if (fieldAnnoGetAddr == 0L) { long u = VMNatives.fieldAnnoGet(ObjectReference.nullReference(), 0L, 0L); } // Field.annoGet0
-        if (fieldTypeAddr == 0L) { long u = VMNatives.fieldType(ObjectReference.nullReference(), 0L); }          // Field.type0
+        if (annoPresentAddr == 0L) { long u = VMNatives.annoPresent(0L, ObjectReference.nullReference()); }        // Executable.annoPresent0
+        if (annoGetAddr == 0L) { long u = VMNatives.annoGet(0L, ObjectReference.nullReference()); }              // Executable.annoGet0
+        if (classAnnoGetAddr == 0L) { long u = VMNatives.classAnnoGet(ObjectReference.nullReference(), ObjectReference.nullReference()); }     // Class.annoGet0
+        if (fieldAnnoGetAddr == 0L) { long u = VMNatives.fieldAnnoGet(ObjectReference.nullReference(), ObjectReference.nullReference(), ObjectReference.nullReference()); } // Field.annoGet0
+        if (fieldTypeAddr == 0L) { long u = VMNatives.fieldType(ObjectReference.nullReference(), ObjectReference.nullReference()); }          // Field.type0
         if (paramTypesAddr == 0L) { long u = VMNatives.methodParamTypes(-1L); }     // Method.paramTypes0
         if (returnTypeAddr == 0L) { long u = VMNatives.methodReturnType(-1L); }     // Method.returnType0
         if (declMethodAddr == 0L) { long u = VMNatives.declaredMethodAt(ObjectReference.nullReference(), -1L); }   // Class.declaredMethodAt0
@@ -2118,12 +2118,12 @@ public final class VM
         if (classBytesAddr == 0L) { long u = VMNatives.classBytes(ObjectReference.nullReference()); }              // MethodHandleNatives.classBytes0
         if (printStackTraceAddr == 0L) { VMNatives.printStackTrace(0L); }       // Throwable.printStackTrace0() native
         if (ramfsTableAddr == 0L) { long u = VMNatives.ramfsTable(0L); }        // MetalRamfs.table0
-        if (dnsResolveAddr == 0L) { int u = VMNatives.dnsResolve(0L); }         // java.net.InetAddress.resolve0() native (M3)
+        if (dnsResolveAddr == 0L) { int u = VMNatives.dnsResolve(ObjectReference.nullReference()); }         // java.net.InetAddress.resolve0() native (M3)
         if (netifStateAddr == 0L) { long u = VMNatives.netifState(-1L); }       // java.net.NetworkInterface.wifi0
-        if (vhFieldOffsetAddr == 0L) { long u = VMNatives.vhFieldOffset(0L, 0L); }      // VarHandle.fieldOffset0 native (M3)
-        if (fieldModsAddr == 0L) { int u = VMNatives.fieldMods(ObjectReference.nullReference(), 0L); }               // Class.fieldMods0 native (reflection)
-        if (staticCellAddr == 0L) { long u = VMNatives.staticCell(ObjectReference.nullReference(), 0L); }   // Field.staticCell0
-        if (fieldTypeCharAddr == 0L) { int u = VMNatives.fieldTypeChar(ObjectReference.nullReference(), 0L); }       // Class.fieldTypeChar0 native
+        if (vhFieldOffsetAddr == 0L) { long u = VMNatives.vhFieldOffset(ObjectReference.nullReference(), 0L); }      // VarHandle.fieldOffset0 native (M3)
+        if (fieldModsAddr == 0L) { int u = VMNatives.fieldMods(ObjectReference.nullReference(), ObjectReference.nullReference()); }               // Class.fieldMods0 native (reflection)
+        if (staticCellAddr == 0L) { long u = VMNatives.staticCell(ObjectReference.nullReference(), ObjectReference.nullReference()); }   // Field.staticCell0
+        if (fieldTypeCharAddr == 0L) { int u = VMNatives.fieldTypeChar(ObjectReference.nullReference(), ObjectReference.nullReference()); }       // Class.fieldTypeChar0 native
         if (classAtPcAddr == 0L) { long u = VMNatives.classAtPc(0L); }                  // getCallerClass native
         if (sockSocket0Addr == 0L) { int u = VMNatives.sockSocket0(0L, 0L, 0L, 0L); }   // M3 socket natives (dead calls,
         if (sockConnect0Addr == 0L) { int u = VMNatives.sockConnect0(0L, 0L, 0L, 0L); } // never run: the writer pre-stashes
@@ -2157,7 +2157,7 @@ public final class VM
         if (pollNvalAddr == 0L) { long u = VMNatives.pollNval(); }              // Net.pollnvalValue
         if (exclusiveBindNoneAddr == 0L) { long u = VMNatives.exclusiveBindNone(); } // Net.isExclusiveBindAvailable
         if (classNameAddr == 0L) { long u = VMNatives.classNameOf(ObjectReference.nullReference()); }        // Class.getName0() native (M4)
-        if (forNameAddr == 0L) { long u = VMNatives.forName(0L); }              // Class.forName0() native (reflection M1)
+        if (forNameAddr == 0L) { long u = VMNatives.forName(ObjectReference.nullReference()); }              // Class.forName0() native (reflection M1)
         if (assignableAddr == 0L) { long u = VMNatives.assignable(0L, 0L); }    // Class.assignable0 (interfaces too)
         if (hwEntropyAddr == 0L) { long u = VMNatives.hwEntropy(0L, 0L); } // MetalRamfs.hwEntropy0
         if (consoleReadAddr == 0L) { long u = VMNatives.consoleRead(0L, 0L, 0L); } // MetalConsoleIn.read0
@@ -2168,7 +2168,7 @@ public final class VM
         if (blockReadAddr == 0L) { long u = VMNatives.blockRead(0L, 0L, 0L, 0L); }      // MetalBlock.read0
         if (blockWriteAddr == 0L) { long u = VMNatives.blockWrite(0L, 0L, 0L, 0L); }    // MetalBlock.write0
         if (consoleAvailAddr == 0L) { long u = VMNatives.consoleAvailable(); }     // MetalConsoleIn.available0
-        if (forNameNoInitAddr == 0L) { long u = VMNatives.forNameNoInit(0L); }  // MetalLoaders.lookup0 (no <clinit>)
+        if (forNameNoInitAddr == 0L) { long u = VMNatives.forNameNoInit(ObjectReference.nullReference()); }  // MetalLoaders.lookup0 (no <clinit>)
         if (methodAnnoAllAddr == 0L) { long u = VMNatives.methodAnnoAll(-1L); } // Executable.annoAll0
         if (recordHashAddr == 0L) { long u = recordHash(0L); }                   // record hashCode
         if (recordEqualsAddr == 0L) { long u = recordEquals(0L, 0L); }           // record equals
@@ -2196,17 +2196,17 @@ public final class VM
         if (statsTaskThreadAddr == 0L) { long u = VMStats.taskThread(-1L); }          // MetalStats.taskThread0
         if (methodParamAnnoRowAddr == 0L) { long u = VMNatives.methodParamAnnoRow(-1L, 0L); } // Executable.paramAnnoRow0
         if (annoDefaultInstanceAddr == 0L) { long u = VMNatives.annoDefaultInstance(ObjectReference.nullReference()); } // Method.annoDefaults0
-        if (fieldSignatureAddr == 0L) { long u = VMNatives.fieldSignature(ObjectReference.nullReference(), 0L); } // Field.signature0
-        if (defineClassAddr == 0L) { long u = VMNatives.defineClass(0L, 0L, 0L, 0L); } // ClassLoader.defineClass0 (M3)
+        if (fieldSignatureAddr == 0L) { long u = VMNatives.fieldSignature(ObjectReference.nullReference(), ObjectReference.nullReference()); } // Field.signature0
+        if (defineClassAddr == 0L) { long u = VMNatives.defineClass(ObjectReference.nullReference(), ObjectReference.nullReference(), 0L, 0L); } // ClassLoader.defineClass0 (M3)
         if (classModifiersAddr == 0L) { long u = VMNatives.classModifiers(ObjectReference.nullReference()); } // Class.getModifiers() native (reflection M1)
-        if (methodResolveAddr == 0L) { int u = VMNatives.methodResolve(ObjectReference.nullReference(), 0L); } // Method.methodResolve0 native (reflection M2)
-        if (methodResolveDescAddr == 0L) { int u = VMNatives.methodResolveDesc(ObjectReference.nullReference(), 0L, 0L); } // Method.methodResolveDesc0
-        if (methodResolveExactAddr == 0L) { int u = VMNatives.methodResolveExact(ObjectReference.nullReference(), 0L, 0L); } // Method.exact0
-        if (mhDeclaredAddr == 0L) { int u = VMNatives.mhDeclared(ObjectReference.nullReference(), 0L, 0L); }   // MethodHandleNatives.declared0
+        if (methodResolveAddr == 0L) { int u = VMNatives.methodResolve(ObjectReference.nullReference(), ObjectReference.nullReference()); } // Method.methodResolve0 native (reflection M2)
+        if (methodResolveDescAddr == 0L) { int u = VMNatives.methodResolveDesc(ObjectReference.nullReference(), ObjectReference.nullReference(), ObjectReference.nullReference()); } // Method.methodResolveDesc0
+        if (methodResolveExactAddr == 0L) { int u = VMNatives.methodResolveExact(ObjectReference.nullReference(), ObjectReference.nullReference(), ObjectReference.nullReference()); } // Method.exact0
+        if (mhDeclaredAddr == 0L) { int u = VMNatives.mhDeclared(ObjectReference.nullReference(), ObjectReference.nullReference(), ObjectReference.nullReference()); }   // MethodHandleNatives.declared0
         if (methodItableTargetAddr == 0L) { long u = VMNatives.methodItableTarget(0L, 0L); } // Method.itableTarget0
-        if (methodInfoAddr == 0L) { int u = VMNatives.methodInfo(0L, 0L, 0L); }   // Method.methodInfo0 native (reflection M2)
+        if (methodInfoAddr == 0L) { int u = VMNatives.methodInfo(0L, ObjectReference.nullReference(), ObjectReference.nullReference()); }   // Method.methodInfo0 native (reflection M2)
         if (constructorResolveAddr == 0L) { int u = VMNatives.constructorResolve(ObjectReference.nullReference(), 0L); } // Constructor.ctorResolve0 (M2)
-        if (ctorResolveDescAddr == 0L) { int u = VMNatives.ctorResolveDesc(ObjectReference.nullReference(), 0L); } // Constructor.ctorResolveDesc0
+        if (ctorResolveDescAddr == 0L) { int u = VMNatives.ctorResolveDesc(ObjectReference.nullReference(), ObjectReference.nullReference()); } // Constructor.ctorResolveDesc0
         if (allocInstanceAddr == 0L) { long u = VMNatives.allocInstance(ObjectReference.nullReference()); }    // Constructor.allocInstance0 native (M2)
         if (ensureMirrorInitAddr == 0L) { long u = VMNatives.ensureMirrorInit(ObjectReference.nullReference()); } // Unsafe.ensureClassInitialized0
         if (shouldBeInitAddr == 0L) { long u = VMNatives.shouldBeInit(ObjectReference.nullReference()); }          // Unsafe.shouldBeInitialized0
@@ -3882,9 +3882,9 @@ public final class VM
     static long runtimeTotalAddr;      // VMNatives.runtimeTotalMemory()J — Runtime.totalMemory()
     static long runtimeMaxAddr;        // VMNatives.runtimeMaxMemory()J — Runtime.maxMemory()
     static long finalizationEnabledAddr; // VMNatives.finalizationEnabled()Z — Finalizer.isFinalizationEnabled()
-    static long fieldAnnoAllAddr;      // VMNatives.fieldAnnoAll(Lmagic/ObjectReference;J)J — Field.getDeclaredAnnotations()
-    static long unsafeStaticAddrAddr;  // VMNatives.unsafeStaticFieldAddr(Lmagic/ObjectReference;J)J — Unsafe.staticFieldOffset(Field)
-    static long unsafeFieldOffsetAddr; // VMNatives.unsafeFieldOffset(Lmagic/ObjectReference;J)J — Unsafe.objectFieldOffset(Class,String)
+    static long fieldAnnoAllAddr;      // VMNatives.fieldAnnoAll(Lmagic/ObjectReference;Lmagic/ObjectReference;)J — Field.getDeclaredAnnotations()
+    static long unsafeStaticAddrAddr;  // VMNatives.unsafeStaticFieldAddr(Lmagic/ObjectReference;Lmagic/ObjectReference;)J — Unsafe.staticFieldOffset(Field)
+    static long unsafeFieldOffsetAddr; // VMNatives.unsafeFieldOffset(Lmagic/ObjectReference;Lmagic/ObjectReference;)J — Unsafe.objectFieldOffset(Class,String)
     static long noopNativeAddr;        // VMNatives.noopNative(J)V — a native whose C body does nothing observable here
     static long unsafeFenceAddr;       // VMNatives.unsafeFence(J)V — Unsafe store/load/fullFence
     static long stringInternAddr;      // VMNatives.stringIntern(J)J — String.intern (the VM-wide pool)
@@ -3919,12 +3919,12 @@ public final class VM
     static long ctorRefInit0;          // VM.ctorRefInit(J)V — a constructor reference initializes its target (JVMS 5.5)
     static long printStackTraceAddr;   // VM.printStackTrace(J)V — Throwable.printStackTrace0() native (self in x0)
     static long ramfsTableAddr;        // VMNatives.ramfsTable(J)J — MetalRamfs.table0(long)
-    static long dnsResolveAddr;        // VM.dnsResolve(J)I — java.net.InetAddress.resolve0(byte[]) native (M3)
+    static long dnsResolveAddr;        // VM.dnsResolve(Lmagic/ObjectReference;)I — java.net.InetAddress.resolve0(byte[]) native (M3)
     static long netifStateAddr;        // VMNatives.netifState(J)J — java.net.NetworkInterface.wifi0(long)
-    static long vhFieldOffsetAddr;     // VM.vhFieldOffset(JJ)J — java.lang.invoke.VarHandle.fieldOffset0 (M3)
-    static long fieldModsAddr;         // VM.fieldMods(Lmagic/ObjectReference;J)I — Class.fieldMods0 (reflection)
-    static long staticCellAddr;        // VMNatives.staticCell(Lmagic/ObjectReference;J)J — Field.staticCell0 (reflective statics)
-    static long fieldTypeCharAddr;     // VM.fieldTypeChar(Lmagic/ObjectReference;J)I — Class.fieldTypeChar0 (reflection)
+    static long vhFieldOffsetAddr;     // VM.vhFieldOffset(Lmagic/ObjectReference;J)J — java.lang.invoke.VarHandle.fieldOffset0 (M3)
+    static long fieldModsAddr;         // VM.fieldMods(Lmagic/ObjectReference;Lmagic/ObjectReference;)I — Class.fieldMods0 (reflection)
+    static long staticCellAddr;        // VMNatives.staticCell(Lmagic/ObjectReference;Lmagic/ObjectReference;)J — Field.staticCell0 (reflective statics)
+    static long fieldTypeCharAddr;     // VM.fieldTypeChar(Lmagic/ObjectReference;Lmagic/ObjectReference;)I — Class.fieldTypeChar0 (reflection)
     static long classAtPcAddr;         // VM.classAtPc(J)J — getCallerClass for the field-updater access check
     static long sockSocket0Addr;       // M3 socket natives (stock sun.nio.ch over net.Tcp)
     static long sockConnect0Addr;
@@ -3958,7 +3958,7 @@ public final class VM
     static long pollNvalAddr;          // VMNatives.pollNval()J -- Net.pollnvalValue
     static long exclusiveBindNoneAddr; // VMNatives.exclusiveBindNone()J -- Net.isExclusiveBindAvailable
     static long classNameAddr;         // VM.classNameOf(Lmagic/ObjectReference;)J — Class.getName0(Class) native (M4)
-    static long forNameAddr;           // VM.forName(J)J — Class.forName0(byte[]) native (reflection arc M1)
+    static long forNameAddr;           // VM.forName(Lmagic/ObjectReference;)J — Class.forName0(byte[]) native (reflection arc M1)
     static long assignableAddr;        // VMNatives.assignable(JJ)J — Class.assignable0(J,J)
     static long hwEntropyAddr;         // VMNatives.hwEntropy(JJ)J — MetalRamfs.hwEntropy0(byte[],int)
     static long consoleReadAddr;       // VMNatives.consoleRead(JJJ)J — MetalConsoleIn.read0(byte[],int,int)
@@ -3974,7 +3974,7 @@ public final class VM
     static long blockReadAddr;         // VMNatives.blockRead(JJJJ)J — MetalBlock.read0(long,byte[],int,int)
     static long blockWriteAddr;        // VMNatives.blockWrite(JJJJ)J — MetalBlock.write0(long,byte[],int,int)
     static long consoleAvailAddr;      // VMNatives.consoleAvailable()J — MetalConsoleIn.available0()
-    static long forNameNoInitAddr;     // VMNatives.forNameNoInit(J)J — MetalLoaders.lookup0(byte[]), no <clinit>
+    static long forNameNoInitAddr;     // VMNatives.forNameNoInit(Lmagic/ObjectReference;)J — MetalLoaders.lookup0(byte[]), no <clinit>
     static long methodAnnoAllAddr;     // VMNatives.methodAnnoAll(J)J — Executable.annoAll0(int)
     static long recordHashAddr;        // VM.recordHash(J)J — a record's synthesised hashCode
     static long recordEqualsAddr;      // VM.recordEquals(JJ)J — a record's synthesised equals
@@ -4002,17 +4002,17 @@ public final class VM
     static long statsTaskThreadAddr;   // VMStats.taskThread(J)J — MetalStats.taskThread0(int)
     static long methodParamAnnoRowAddr; // VMNatives.methodParamAnnoRow(JJ)J — Executable.paramAnnoRow0(int, long)
     static long annoDefaultInstanceAddr; // VMNatives.annoDefaultInstance(Lmagic/ObjectReference;)J — Method.annoDefaults0(Class)
-    static long fieldSignatureAddr;    // VMNatives.fieldSignature(Lmagic/ObjectReference;J)J — Field.signature0(Class,byte[])
-    static long defineClassAddr;       // VM.defineClass(JJJJ)J — ClassLoader.defineClass0 native (reflection M3)
+    static long fieldSignatureAddr;    // VMNatives.fieldSignature(Lmagic/ObjectReference;Lmagic/ObjectReference;)J — Field.signature0(Class,byte[])
+    static long defineClassAddr;       // VM.defineClass(Lmagic/ObjectReference;Lmagic/ObjectReference;JJ)J — ClassLoader.defineClass0 native (reflection M3)
     static long classModifiersAddr;    // VM.classModifiers(Lmagic/ObjectReference;)I — Class.getModifiers() native (reflection M1)
-    static long methodResolveAddr;     // VM.methodResolve(Lmagic/ObjectReference;J)I — Method.methodResolve0 (reflection M2)
-    static long methodResolveDescAddr; // VM.methodResolveDesc(Lmagic/ObjectReference;JJ)I — Method.methodResolveDesc0 (overload-exact)
-    static long methodResolveExactAddr; // VMNatives.methodResolveExact(Lmagic/ObjectReference;JJ)I — Method.exact0 (virtual dispatch step)
-    static long mhDeclaredAddr;        // VMNatives.mhDeclared(Lmagic/ObjectReference;JJ)I — MethodHandleNatives.declared0 (MemberName resolve)
+    static long methodResolveAddr;     // VM.methodResolve(Lmagic/ObjectReference;Lmagic/ObjectReference;)I — Method.methodResolve0 (reflection M2)
+    static long methodResolveDescAddr; // VM.methodResolveDesc(Lmagic/ObjectReference;Lmagic/ObjectReference;Lmagic/ObjectReference;)I — Method.methodResolveDesc0 (overload-exact)
+    static long methodResolveExactAddr; // VMNatives.methodResolveExact(Lmagic/ObjectReference;Lmagic/ObjectReference;Lmagic/ObjectReference;)I — Method.exact0 (virtual dispatch step)
+    static long mhDeclaredAddr;        // VMNatives.mhDeclared(Lmagic/ObjectReference;Lmagic/ObjectReference;Lmagic/ObjectReference;)I — MethodHandleNatives.declared0 (MemberName resolve)
     static long methodItableTargetAddr; // VMNatives.methodItableTarget(JJ)J — Method.itableTarget0 (synthesised receivers)
-    static long methodInfoAddr;        // VM.methodInfo(JJJ)I — Method.methodInfo0 (reflection M2)
+    static long methodInfoAddr;        // VM.methodInfo(JLmagic/ObjectReference;Lmagic/ObjectReference;)I — Method.methodInfo0 (reflection M2)
     static long constructorResolveAddr;// VM.constructorResolve(Lmagic/ObjectReference;J)I — Constructor.ctorResolve0 (reflection M2)
-    static long ctorResolveDescAddr;   // VMNatives.ctorResolveDesc(Lmagic/ObjectReference;J)I — Constructor.ctorResolveDesc0
+    static long ctorResolveDescAddr;   // VMNatives.ctorResolveDesc(Lmagic/ObjectReference;Lmagic/ObjectReference;)I — Constructor.ctorResolveDesc0
     static long allocInstanceAddr;     // VM.allocInstance(Lmagic/ObjectReference;)J — Constructor.allocInstance0 (reflection M2)
     static long ensureMirrorInitAddr;  // VMNatives.ensureMirrorInit(Lmagic/ObjectReference;)J — Unsafe.ensureClassInitialized0
     static long shouldBeInitAddr;      // VMNatives.shouldBeInit(Lmagic/ObjectReference;)J — Unsafe.shouldBeInitialized0
@@ -4029,11 +4029,11 @@ public final class VM
     static long isArrayClassAddr;      // VM.isArrayClass(Lmagic/ObjectReference;)J — Class.isArray0 (array Type tag test)
     static long isPrimClassAddr;       // VM.isPrimClass(Lmagic/ObjectReference;)J — Class.isPrimitive0 (primitive Type tag test)
     static long primClassAddr;         // VM.primClassOf(J)J — Class.primitiveClass0 (desc char -> mirror)
-    static long annoPresentAddr;       // VM.annoPresent(JJ)J — Executable.annoPresent0 (RuntimeVisibleAnnotations)
-    static long annoGetAddr;           // VMNatives.annoGet(JJ)J — Executable.annoGet0 (annotation INSTANCE)
-    static long classAnnoGetAddr;      // VMNatives.classAnnoGet(Lmagic/ObjectReference;J)J — Class.annoGet0
-    static long fieldAnnoGetAddr;      // VMNatives.fieldAnnoGet(Lmagic/ObjectReference;JJ)J — Field.annoGet0
-    static long fieldTypeAddr;         // VMNatives.fieldType(Lmagic/ObjectReference;J)J — Field.type0
+    static long annoPresentAddr;       // VM.annoPresent(JLmagic/ObjectReference;)J — Executable.annoPresent0 (RuntimeVisibleAnnotations)
+    static long annoGetAddr;           // VMNatives.annoGet(JLmagic/ObjectReference;)J — Executable.annoGet0 (annotation INSTANCE)
+    static long classAnnoGetAddr;      // VMNatives.classAnnoGet(Lmagic/ObjectReference;Lmagic/ObjectReference;)J — Class.annoGet0
+    static long fieldAnnoGetAddr;      // VMNatives.fieldAnnoGet(Lmagic/ObjectReference;Lmagic/ObjectReference;Lmagic/ObjectReference;)J — Field.annoGet0
+    static long fieldTypeAddr;         // VMNatives.fieldType(Lmagic/ObjectReference;Lmagic/ObjectReference;)J — Field.type0
     static long paramTypesAddr;        // VMNatives.methodParamTypes(J)J — Method.paramTypes0
     static long returnTypeAddr;        // VMNatives.methodReturnType(J)J — Method.returnType0
     static long declMethodAddr;        // VM.declaredMethodAt(Lmagic/ObjectReference;J)J — Class.declaredMethodAt0 (enumeration)
