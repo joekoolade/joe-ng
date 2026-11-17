@@ -304,7 +304,7 @@ final class VMConcat
         ObjectReference str = ref;
         if (!isStringLike(ref))
         {
-            long s = Loader.objToString(ref);     // the String.valueOf(Object) JLS 15.18.1 asks for
+            long s = ObjectMethods.objToString(ref);     // the String.valueOf(Object) JLS 15.18.1 asks for
             if (s == -1L)
             {
                 appendNoToString(sb);                      // could not RESOLVE it -- not the same as null

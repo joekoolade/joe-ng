@@ -4,6 +4,24 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **LOADER REFACTOR, INCREMENT 2: annotations and records out of `vm/Loader` (2026-11-17).** Pure move again.
+  - **`Annotations`** (JikesRVM `AnnotatedElement`): finding annotations in `RuntimeVisibleAnnotations` /
+    parameter / default attributes -- `methodAnnoPresent`, `methodAnnotation`, `classAnnotation(sAll)`,
+    `fieldAnnotation(sAll)`, `methodParamAnnoRow`, `annoDefaultInstance`, the element_value skippers.
+  - **`AnnotationInstances`**: building the object `getAnnotation` returns -- `annoTibFor`, `buildAnnoObject`,
+    the element-value decoders, the pending-value queue and the per-interface TIB tables (`annoTibKey`/`Val`).
+  - **`ObjectMethods`** (JDK `java.lang.runtime.ObjectMethods`): record `hashCode`/`equals`/`toString`.
+  - **Deferred: Proxy** -- it is built on the lambda TIB machinery (`lambdaTib*`, `vtNameBase`, `ifBase`), so it
+    moves with the lambda factory in increment 3 rather than reaching back into Loader for all of it.
+  - Section comments moved into the new class headers. External callers requalified (VM, VMConcat, VMNatives).
+    `methodInfoPos` and the classfile-attribute queries (`classSignature`, `classRecordInfo`, ...) stay for the
+    reflection increment.
+  - **Loader 29,710 -> 27,923 lines.** Image 39,533,888 -> 39,534,944 bytes (+1,056).
+  - **Validation:** `make test` + overlaycheck clean; 17 targeted QEMU probes pass (AnnoClassArray, AnnoContract,
+    AnnoDefault, AnnoLoad, AnnoProxy, AnnoSlot, NestedEnum, Nesting, ParamAnno, Parameter, RecordFp, RecordSealed,
+    RecordUtf16, ReflectArray, ReflectLookup, InternalReflect, ThrowableToString). Not run: full regression,
+    suite, Pi.
+
 - **LOADER REFACTOR, INCREMENT 1: three leaf classes out of `vm/Loader` (2026-11-17).** The first step of
   reorganising the 30,616-line Loader along JikesRVM's `org.jikesrvm.classloader` lines (one responsibility per
   class; phase 1 moves code WITHOUT changing it, phase 2 replaces the `g*` "current class" parse statics with a
