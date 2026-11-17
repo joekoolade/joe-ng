@@ -244,7 +244,7 @@ final class VMConcat
         int coder = sb.plus(32).loadLong() < 256L ? 0 : 1;
         long nbytes = coder == 0 ? count : count * 2L;
         Address out = Heap.allocArray((int) nbytes, 1);
-        if (byteArrayTibCache != 0L)
+        if (!byteArrayTibCache.isZero())
         {
             out.store(byteArrayTibCache);
         }
