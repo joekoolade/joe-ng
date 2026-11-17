@@ -13,6 +13,7 @@ package vm;
 
 import board.bcm2711.Uart;
 import magic.Address;
+import magic.ObjectReference;
 import magic.Magic;
 import objectmodel.ObjectModel;
 import static vm.VM.*;   // strBytes (the string-ref -> byte[] accessor stays in VM, shared with the natives)
@@ -24,6 +25,9 @@ import static vm.VM.*;   // strBytes (the string-ref -> byte[] accessor stays in
  * {@code scLong}/{@code scStr} append; {@code scEnd} finishes it into a real typed {@code byte[]} (tagged with the
  * batch's array TIB in {@code byteArrayTibCache} so stock code can checkcast/clone {@code String.value}). Reached
  * only via the stashed {@code sc*Addr} statics (which stay in VM); grouped here to shrink VM.java.
+ *
+ * <p>The builder is a raw heap block, not a Java object (no TIB), so it is an {@link Address}; its backing
+ * {@code byte[]}, the argument references and the finished String are {@link ObjectReference}s.
  */
 final class VMConcat
 {
@@ -38,29 +42,29 @@ final class VMConcat
      * core language feature, found by ReaderProbe once stock charsets made a UTF-16 decode reachable. The largest
      * unit decides the result's coder in {@link #scEnd}, the choice stock {@code StringConcatHelper} makes.
      */
-    static long scStart()
+    static Address scStart()
     {
-        long buf = Heap.allocArray(64, 1).toLong();
+        ObjectReference buf = Heap.allocArray(64, 1).toObjectReference();
         Address sb = Heap.alloc(40);
         sb.plus(16).store(buf);
         sb.plus(24).store(0L);
         sb.plus(32).store(0L);
-        return sb.toLong();
+        return sb;
     }
 
     /** Grow a builder's backing byte[] to twice {@code cap} bytes, copying {@code count} units; returns the new buf. */
-    static long scGrow(long sb, long buf, long count, long cap)
+    static ObjectReference scGrow(Address sb, ObjectReference buf, long count, long cap)
     {
-        long nbuf = Heap.allocArray((int) (cap * 2L), 1).toLong();
-        Address nbufA = Address.fromLong(nbuf);
-        Address bufA = Address.fromLong(buf);
+        ObjectReference nbuf = Heap.allocArray((int) (cap * 2L), 1).toObjectReference();
+        Address nbufA = nbuf.toAddress();
+        Address bufA = buf.toAddress();
         long i = 0L;
         while (i < count * 2L)
         {
             nbufA.plus(24L + i).store((byte) bufA.plus(24L + i).loadUnsignedByte());
             i = i + 1L;
         }
-        Address.fromLong(sb).plus(16).store(nbuf);
+        sb.plus(16).store(nbuf);
         return nbuf;
     }
 
@@ -76,7 +80,7 @@ final class VMConcat
      *
      * <p>A verified classfile only ever holds 0 or 1 in a boolean, so {@code v != 0} is the whole test.
      */
-    static void scBool(long sb, int v)
+    static void scBool(Address sb, int v)
     {
         if (v != 0)
         {
@@ -114,7 +118,7 @@ final class VMConcat
      * shortest-round-trip is relative to the type's OWN precision. Widening would have been wrong in every
      * float concat, and wrong in a way that still looks like a number.
      */
-    static void scDouble(long sb, long bits)
+    static void scDouble(Address sb, long bits)
     {
         long buf = Loader.doubleToStringBuf();
         if (buf == 0L)
@@ -130,11 +134,11 @@ final class VMConcat
         // exactly as it always has around an ordinary call. Written back nested ON PURPOSE: with a local
         // here, nothing in the demo suite would exercise a live operand across an intrinsic call, and a
         // gate that cannot fail is not a gate. Revert the spill and ConcatDemo's eleven arms go empty.
-        scStr(sb, Magic.call2(buf, bits, 0L));         // (D)->String takes ONE arg; x1 is ignored by it
+        scStr(sb, ObjectReference.fromLong(Magic.call2(buf, bits, 0L)));   // (D)->String takes ONE arg; x1 ignored
     }
 
     /** The float half of {@link #scDouble} -- its own shortest string, never the widened double's. */
-    static void scFloat(long sb, int bits)
+    static void scFloat(Address sb, int bits)
     {
         long buf = Loader.floatToStringBuf();
         if (buf == 0L)
@@ -142,7 +146,7 @@ final class VMConcat
             appendNoFormatter(sb, 'F');
             return;
         }
-        scStr(sb, Magic.call2(buf, bits & 0xFFFFFFFFL, 0L));  // nested, for scDouble's reason
+        scStr(sb, ObjectReference.fromLong(Magic.call2(buf, bits & 0xFFFFFFFFL, 0L)));   // nested, for scDouble's reason
     }
 
     /**
@@ -153,7 +157,7 @@ final class VMConcat
      * a stub that answers something numeric-looking is indistinguishable from a working one, which is the
      * shape this project pays for most.
      */
-    private static void appendNoFormatter(long sb, int kind)
+    private static void appendNoFormatter(Address sb, int kind)
     {
         if (!noFmtSaid)
         {
@@ -171,24 +175,23 @@ final class VMConcat
     private static boolean noFmtSaid;
 
     /** Append one UTF-16 code unit {@code c} (a {@code char} argument, or a recipe/literal unit) to the builder. */
-    static void scChar(long sb, int c)
+    static void scChar(Address sb, int c)
     {
         int unit = c & 0xFFFF;
-        Address sbA = Address.fromLong(sb);
-        long buf = sbA.plus(16).loadLong();
-        long count = sbA.plus(24).loadLong();
-        long cap = Address.fromLong(buf).plus(16).loadLong();   // byte[] length (ARRAY_LENGTH_OFFSET)
+        ObjectReference buf = sb.plus(16).loadObjectReference();
+        long count = sb.plus(24).loadLong();
+        long cap = buf.toAddress().plus(16).loadLong();          // byte[] length (ARRAY_LENGTH_OFFSET)
         if (count * 2L + 2L > cap)
         {
             buf = scGrow(sb, buf, count, cap);
         }
-        Address at = Address.fromLong(buf).plus(24L + count * 2L);
+        Address at = buf.toAddress().plus(24L + count * 2L);
         at.store((byte) unit);                                   // ARRAY_BASE_OFFSET = 24; LO byte first
         at.plus(1).store((byte) (unit >> 8));
-        sbA.plus(24).store(count + 1L);
-        if (unit > sbA.plus(32).loadLong())
+        sb.plus(24).store(count + 1L);
+        if (unit > sb.plus(32).loadLong())
         {
-            sbA.plus(32).store((long) unit);
+            sb.plus(32).store((long) unit);
         }
     }
 
@@ -201,7 +204,7 @@ final class VMConcat
      * truncated number rather than a crash. The int range fits a long with room to negate, so widening once
      * removes the case instead of special-casing it.
      */
-    static void scInt(long sb, int v)
+    static void scInt(Address sb, int v)
     {
         if (v == 0)
         {
@@ -234,12 +237,11 @@ final class VMConcat
      * {@code StringUTF16.LO_BYTE_SHIFT} is seeded for AArch64) otherwise -- with the {@code coder} field SET, which the
      * old byte[]-and-wrap epilogue never did. The value array is typed with {@code VM.byteArrayTibCache}.
      */
-    static long scEnd(long sb)
+    static ObjectReference scEnd(Address sb)
     {
-        Address sbA = Address.fromLong(sb);
-        Address bufA = sbA.plus(16).loadAddress();
-        long count = sbA.plus(24).loadLong();
-        int coder = sbA.plus(32).loadLong() < 256L ? 0 : 1;
+        Address bufA = sb.plus(16).loadAddress();
+        long count = sb.plus(24).loadLong();
+        int coder = sb.plus(32).loadLong() < 256L ? 0 : 1;
         long nbytes = coder == 0 ? count : count * 2L;
         Address out = Heap.allocArray((int) nbytes, 1);
         if (byteArrayTibCache != 0L)
@@ -257,7 +259,7 @@ final class VMConcat
         str.store(Loader.stringTib());                    // TIB_OFFSET = 0
         str.plus(16).store(out);                          // value
         str.plus(24).store((long) coder);                 // coder: 0 = LATIN1, 1 = UTF16
-        return str.toLong();
+        return str.toObjectReference();
     }
 
     /**
@@ -287,43 +289,44 @@ final class VMConcat
      * dispatch, and bytecode from something other than javac is covered by the same arm. It also needs no
      * new helper id, no writer stash and no change to emitted code in either world.
      */
-    static void scStr(long sb, long ref)
+    static void scStr(Address sb, ObjectReference ref)
     {
         // A NULL REFERENCE CONCATENATES AS "null" (JLS 15.18.1), and getting this wrong was not merely
         // cosmetic: the old code ran strBytes(0) and then read `0 + 16`, i.e. ADDRESS 16 -- low firmware
         // memory on this board, which is readable. It happened to answer a zero length and print nothing;
         // any other value there would have appended that many bytes of garbage. Found by a probe printing
         // `q.peek()` on an empty queue, where stock prints "null" and this printed an empty string.
-        if (ref == 0L)
+        if (ref.isNull())
         {
             appendNull(sb);
             return;
         }
-        long str = ref;
-        if (!isStringLike(ref))
+        ObjectReference str = ref;
+        if (!isStringLike(ref.toLong()))
         {
-            str = Loader.objToString(ref);                 // the String.valueOf(Object) JLS 15.18.1 asks for
-            if (str == -1L)
+            long s = Loader.objToString(ref.toLong());     // the String.valueOf(Object) JLS 15.18.1 asks for
+            if (s == -1L)
             {
                 appendNoToString(sb);                      // could not RESOLVE it -- not the same as null
                 return;
             }
-            if (str == 0L)
+            if (s == 0L)
             {
                 appendNull(sb);                            // toString() RETURNED null: String.valueOf gives "null"
                 return;
             }
+            str = ObjectReference.fromLong(s);
         }
-        long arr = strBytes(str);
-        if (arr == 0L)
+        ObjectReference arr = ObjectReference.fromLong(strBytes(str.toLong()));
+        if (arr.isNull())
         {
             appendNull(sb);                                // a String with no value array: say so, never read +16
             return;
         }
-        Address arrA = Address.fromLong(arr);
+        Address arrA = arr.toAddress();
         long len = arrA.plus(16).loadLong();
         // a raw byte[] carrier has no coder: LATIN1
-        int coder = arr == str ? 0 : (int) Address.fromLong(str).plus(24).loadLong();
+        int coder = arr.EQ(str) ? 0 : (int) str.toAddress().plus(24).loadLong();
         long i = 0L;
         if (coder == 0)
         {
@@ -349,7 +352,7 @@ final class VMConcat
      * which is a perfectly ordinary answer a caller will believe -- so a broken dispatch would read as an
      * object that legitimately stringifies to nothing. A marker cannot be mistaken for either.
      */
-    private static void appendNoToString(long sb)
+    private static void appendNoToString(Address sb)
     {
         if (!noStrSaid)
         {
@@ -366,7 +369,7 @@ final class VMConcat
     private static boolean noStrSaid;
 
     /** Append the four characters of "null" -- what a null reference converts to (JLS 15.18.1). */
-    private static void appendNull(long sb)
+    private static void appendNull(Address sb)
     {
         scChar(sb, 0x6E);                                  // 'n'
         scChar(sb, 0x75);                                  // 'u'
@@ -375,7 +378,7 @@ final class VMConcat
     }
 
     /** Append {@code v} in decimal to the concat builder. */
-    static void scLong(long sb, long v)
+    static void scLong(Address sb, long v)
     {
         if (v == 0L)
         {

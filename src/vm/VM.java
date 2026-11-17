@@ -2028,16 +2028,16 @@ public final class VM
         if (runResolveAddr == 0L) { long u = Loader.resolveRun(0L); }   // the run-trampoline's dispatch
         if (boxPrimAddr == 0L) { long u = VMBox.box(0L, 0); }          // boxes a method ref's primitive result
         if (unboxNullAddr == 0L) { long u = VMBox.unboxNull(0L); }     // a method ref's null primitive argument -> NPE
-        if (scStartAddr == 0L) { long u = VMConcat.scStart(); }        // string-concat helpers (JIT'd concat only)
+        if (scStartAddr == 0L) { Address u = VMConcat.scStart(); }        // string-concat helpers (JIT'd concat only)
         if (ensureInitAddr == 0L) { ensureInitByName(0L); }   // 0 is the no-op arg (Loader.ensureInitFor)
-        if (scCharAddr == 0L) { VMConcat.scChar(0L, 0); }
-        if (scIntAddr == 0L) { VMConcat.scInt(0L, 0); }
-        if (scEndAddr == 0L) { long u = VMConcat.scEnd(0L); }
-        if (scStrAddr == 0L) { VMConcat.scStr(0L, 0L); }
-        if (scLongAddr == 0L) { VMConcat.scLong(0L, 0L); }
-        if (scBoolAddr == 0L) { VMConcat.scBool(0L, 0); }
-        if (scDoubleAddr == 0L) { VMConcat.scDouble(0L, 0L); }
-        if (scFloatAddr == 0L) { VMConcat.scFloat(0L, 0); }
+        if (scCharAddr == 0L) { VMConcat.scChar(Address.zero(), 0); }
+        if (scIntAddr == 0L) { VMConcat.scInt(Address.zero(), 0); }
+        if (scEndAddr == 0L) { ObjectReference u = VMConcat.scEnd(Address.zero()); }
+        if (scStrAddr == 0L) { VMConcat.scStr(Address.zero(), ObjectReference.nullReference()); }
+        if (scLongAddr == 0L) { VMConcat.scLong(Address.zero(), 0L); }
+        if (scBoolAddr == 0L) { VMConcat.scBool(Address.zero(), 0); }
+        if (scDoubleAddr == 0L) { VMConcat.scDouble(Address.zero(), 0L); }
+        if (scFloatAddr == 0L) { VMConcat.scFloat(Address.zero(), 0); }
         if (printStrAddr == 0L) { printStr(0L); }
         if (nanoTimeAddr == 0L) { long u = VMNatives.nanoTime(); }              // provided java.base natives (guest-called)
         if (cdsSeedAddr == 0L) { long u = VMNatives.cdsRandomSeedForDumping(); }
@@ -3818,18 +3818,18 @@ public final class VM
     static long taskExitAddr;          // VM.taskExit()V — the run-trampoline's tail (loader-emitted BL)
     static long runResolveAddr;        // Loader.resolveRun(J)J — the run-trampoline's Runnable.run() lookup
     // invokedynamic string-concat helpers (JIT'd concat lowering BLs these).
-    static long scStartAddr;           // VM.scStart()J
+    static long scStartAddr;           // VM.scStart()Lmagic/Address;
     static long boxPrimAddr;           // VMBox.box(JI)J — a method ref's primitive result, boxed for a generic SAM
     static long unboxNullAddr;         // VMBox.unboxNull(J)J — throws the NPE for a null argument a thunk must unbox
-    static long scCharAddr;            // VM.scChar(JI)V
-    static long scIntAddr;             // VM.scInt(JI)V
-    static long scEndAddr;             // VM.scEnd(J)J
-    static long scStrAddr;             // VM.scStr(JJ)V   — append a String/byte[] (slice 1b)
-    static long scLongAddr;            // VM.scLong(JJ)V  — append a long in decimal (slice 1b)
+    static long scCharAddr;            // VM.scChar(Lmagic/Address;I)V
+    static long scIntAddr;             // VM.scInt(Lmagic/Address;I)V
+    static long scEndAddr;             // VM.scEnd(Lmagic/Address;)Lmagic/ObjectReference;
+    static long scStrAddr;             // VM.scStr(Lmagic/Address;Lmagic/ObjectReference;)V — append a String/byte[] (slice 1b)
+    static long scLongAddr;            // VM.scLong(Lmagic/Address;J)V — append a long in decimal (slice 1b)
     static long ensureInitAddr;        // VM.ensureInitByName(J)V — JVMS 5.5 trigger at an active use
-    static long scBoolAddr;            // VMConcat.scBool(JI)V — append "true"/"false" (JLS 15.18.1)
-    static long scDoubleAddr;          // VMConcat.scDouble(JJ)V — append a double (raw bits in)
-    static long scFloatAddr;           // VMConcat.scFloat(JI)V  — ... and a float (its OWN shortest string)
+    static long scBoolAddr;            // VMConcat.scBool(Lmagic/Address;I)V — append "true"/"false" (JLS 15.18.1)
+    static long scDoubleAddr;          // VMConcat.scDouble(Lmagic/Address;J)V — append a double (raw bits in)
+    static long scFloatAddr;           // VMConcat.scFloat(Lmagic/Address;I)V  — ... and a float (its OWN shortest string)
     static long printStrAddr;          // VM.printStr(J)V
     static long denylistTrapAddr;      // VM.denylistTrap()V — patchRelocs points calls into pruned classes here (#43)
     static long nativeMissingAddr;     // VM.nativeMissing(I)V — a call to a native this VM does not implement throws here
