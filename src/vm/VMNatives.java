@@ -552,7 +552,7 @@ final class VMNatives
                 return 0L;                                     // boot-time force-compile passes 0; no-op
             }
             int n = (int) descArr.toAddress().plus(16L).loadLong();         // byte[] length @16
-            return Loader.methodAnnoPresent((int) rgIndex, descArr, n) ? 1L : 0L;
+            return Annotations.methodAnnoPresent((int) rgIndex, descArr, n) ? 1L : 0L;
         }
         finally
         {
@@ -575,7 +575,7 @@ final class VMNatives
                 return 0L;                                     // boot-time force-compile passes 0; no-op
             }
             int n = (int) descArr.toAddress().plus(16L).loadLong();         // byte[] length @16
-            return Loader.methodAnnotation((int) rgIndex, descArr, n);
+            return Annotations.methodAnnotation((int) rgIndex, descArr, n);
         }
         finally
         {
@@ -717,7 +717,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.fieldAnnotationsAll(mirror, nameArr);
+            return Annotations.fieldAnnotationsAll(mirror, nameArr);
         }
         finally
         {
@@ -735,7 +735,7 @@ final class VMNatives
                 return 0L;
             }
             int n = (int) descArr.toAddress().plus(16L).loadLong();
-            return Loader.fieldAnnotation(mirror, nameArr, descArr, n);
+            return Annotations.fieldAnnotation(mirror, nameArr, descArr, n);
         }
         finally
         {
@@ -802,7 +802,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.methodAnnotationsAll((int) rgIndex);
+            return Annotations.methodAnnotationsAll((int) rgIndex);
         }
         finally
         {
@@ -942,7 +942,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.methodParamAnnoRow((int) rgIndex, k);
+            return Annotations.methodParamAnnoRow((int) rgIndex, k);
         }
         finally
         {
@@ -956,7 +956,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.annoDefaultInstance(mirror);
+            return Annotations.annoDefaultInstance(mirror);
         }
         finally
         {
@@ -1088,7 +1088,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
         try
         {
-            return Loader.classAnnotationsAll(mirror);
+            return Annotations.classAnnotationsAll(mirror);
         }
         finally
         {
@@ -1106,7 +1106,7 @@ final class VMNatives
                 return 0L;
             }
             int n = (int) descArr.toAddress().plus(16L).loadLong();
-            return Loader.classAnnotation(mirror, descArr, n);
+            return Annotations.classAnnotation(mirror, descArr, n);
         }
         finally
         {

@@ -49,8 +49,8 @@ public final class Loader
     private Loader() {}
 
     private static Address gbase;   // class blob base address
-    private static Address gp;      // parse cursor
-    private static int[] gcp;       // byte offset of each constant-pool entry body
+    static Address gp;      // parse cursor
+    static int[] gcp;       // byte offset of each constant-pool entry body
     private static byte[] gbytes;   // heap copy of the current class, for the shared ClassReader
     private static int[] gBcToWord; // last compiled method's bci -> machine word offset (Baseline.bcToWord)
     private static int gAfterCp;    // offset just past the constant pool (stable; gp gets reused as a cursor)
@@ -97,7 +97,7 @@ public final class Loader
     private static int[] gifDescOff;// Utf8 offset of each own instance field's type descriptor (index = slot)
     private static int gifCount;
     private static int gThisNameOff;     // Utf8 offset of this class's own name
-    private static Address gMethodsStart;   // address of the methods_count (for callee lookup)
+    static Address gMethodsStart;   // address of the methods_count (for callee lookup)
     private static Address gBsmOff;      // address of the BootstrapMethods attr body (num_bootstrap_methods), or 0
     // Flattened vtable of the class being built: superclass slots first, overrides
     // replacing in place, new methods appended. Each slot's signature may live in a
@@ -165,7 +165,7 @@ public final class Loader
     private static final int MAX_DIRECT_IF = 8;
     private static int[] clIfaceReg;
     private static int[] clIfaceRegN;
-    private static int[] ifClosureBuf;   // scratch: registry indices in the current class's transitive iface closure
+    static int[] ifClosureBuf;   // scratch: registry indices in the current class's transitive iface closure
     // Every instantiated class's imap (the shared itable), captured at fillTib so refillImaps can repair
     // default-method slots that were 0 because the interface holding the default hadn't been EMITTED yet when
     // this class's buildImap ran (phase B is superclass-first, not super-interface-first).
@@ -224,13 +224,13 @@ public final class Loader
     // sat in no scanned root — so once a large closure (java.util.stream) fills the arena and GC runs during load
     // (before any instance exists), the lambda TIB was swept and a reused block scribbled its Type to garbage,
     // making a later Function.apply on it NPE. Holding each TIB here (a scanned static array) keeps it live.
-    private static final int MAXLAMBDATIB = 8192;
-    private static AddressArray lambdaTibRoots;
+    static final int MAXLAMBDATIB = 8192;
+    static AddressArray lambdaTibRoots;
     // Vtable CAPACITY of each synthesised TIB above, so refillSynthTibVtables can never write past one. The
     // capacity is whatever java/lang/Object's vtable count was WHEN THE TIB WAS BUILT, and Object may not have
     // been registered yet (objectVtableCount answers 0 then) -- refilling blind would then overflow an 8-byte
     // allocation once Object arrives with nine virtuals.
-    private static int[] lambdaTibVtCap;
+    static int[] lambdaTibVtCap;
     // FILLED TO CAPACITY ALREADY -- one bit per synthesised TIB, and the whole of the `synth` fix.
     //
     // MEASURED before it was believed: `refillSynthTibVtables` walked every synthesised TIB on EVERY batch
@@ -247,21 +247,21 @@ public final class Loader
     // to be corrected for. A TIB built while Object had fewer virtuals than the TIB has room for is filled
     // PARTIALLY; latching there would leave the rest zero for ever, and a 0 slot reached from baked code is
     // a wild branch rather than a named trap.
-    private static boolean[] lambdaTibFilled;
+    static boolean[] lambdaTibFilled;
     // The HOST class of each synthesised TIB above -- the class whose method the lambda was compiled in -- as
     // its blob base + name Utf8 offset, so getName() can answer stock's `Host$$Lambda/0x...`. 0 for the
     // synthesised kinds that have no host (annotation instances, proxies), which keep the bare `$$Lambda/`.
-    private static AddressArray lambdaHostBase;
-    private static int[] lambdaHostNameOff;
-    private static int lambdaTibRootN;
+    static AddressArray lambdaHostBase;
+    static int[] lambdaHostNameOff;
+    static int lambdaTibRootN;
 
     // Field registry: per instance field of each class, its class/name (base+offset)
     // and slot, so a cross-class get/putfield can find the offset.
     // 16384, not 4096: the cap matched MAXCLASS, but classes average MORE than one instance field, and the TLS
     // stack (SslEngineProbe, 2767 classes) filled 4096 first -- `CAP EXCEEDED: MAXFIELD count=4095`.
     private static final int MAXFIELD = 16384;
-    private static RVMField[] fldTab;   // global instance-field registry (reified: reuses RVMField; slot/access/descOff)
-    private static int fldCount;
+    static RVMField[] fldTab;   // global instance-field registry (reified: reuses RVMField; slot/access/descOff)
+    static int fldCount;
 
     // Vtable-slot registry: per virtual method of each class, its class/name/desc
     // (base+offset) and vtable slot, so a cross-class invokevirtual can find the
@@ -269,9 +269,9 @@ public final class Loader
     private static final int MAXVT = 65536;
     private static AddressArray vtClassBase;   // class the vtable belongs to (base + off)
     private static int[] vtClassOff;
-    private static AddressArray vtNameBase;    // method signature blob (may be a superclass's)
-    private static int[] vtNameOff;
-    private static int[] vtDescOff;
+    static AddressArray vtNameBase;    // method signature blob (may be a superclass's)
+    static int[] vtNameOff;
+    static int[] vtDescOff;
     private static int[] vtSlot;
     private static long[] vtBuf;         // slot's implementation buffer
     private static int vtCount;
@@ -285,9 +285,9 @@ public final class Loader
     private static final int MAXIFM = 8192;   // flattened per-interface runs duplicate inherited signatures
                                               // (2048 overflowed once the console launcher reached picocli's
                                               //  @ArgGroup members, whose closure is interface-dense)
-    private static AddressArray ifBase;        // interface blob holding the signature
-    private static int[] ifNameOff;
-    private static int[] ifDescOff;
+    static AddressArray ifBase;        // interface blob holding the signature
+    static int[] ifNameOff;
+    static int[] ifDescOff;
     // The blob of the interface that DECLARES this entry within its run: the run's own interface when it
     // declares (or redeclares) the signature itself, else the ancestor whose run it was copied from. ifBase
     // cannot answer this -- a redeclaration keeps the inherited entry (and its base) to keep the slot number.
@@ -1831,7 +1831,7 @@ public final class Loader
         return true;
     }
 
-    private static void ensureClinit(int reg)
+    static void ensureClinit(int reg)
     {
         if (reg < 0 || clTab == null || clTab[reg] == null)
         {
@@ -2522,7 +2522,7 @@ public final class Loader
     }
 
     /** Class-registry index of the class whose Type node is {@code type}, or -1. */
-    private static int classRegByType(Address type)
+    static int classRegByType(Address type)
     {
         if (type.isZero())
         {
@@ -4330,9 +4330,9 @@ public final class Loader
         objectCloneName = Address.zero();
         objectCloneDesc = Address.zero();
         proxyHelperBuf = 0L;
-        annoEqBuf = 0L;
-        annoHashBuf = 0L;
-        annoStrBuf = 0L;
+        AnnotationInstances.annoEqBuf = 0L;
+        AnnotationInstances.annoHashBuf = 0L;
+        AnnotationInstances.annoStrBuf = 0L;
         lzInitDropped = 0;                              // per LAUNCH, beside the table they describe --
         lzInitWant = 0;                                 //   reportPendInitDrops prints at the end of one
         lzInitWantMax = 0;
@@ -4397,7 +4397,7 @@ public final class Loader
         // (see objectCloneBuf). Not measured failing -- the suite resets only in its early demos, before
         // either table fills -- but wrong by construction, so they reset beside the root they depend on.
         proxyN = 0;
-        annoTibN = 0;
+        AnnotationInstances.annoTibN = 0;
         // The same for a cached registry Type: it names a class of the registry this method replaces.
         // MEASURED stable in the suite (thrTypeCache filled at generation 4 and matched a fresh lookup to the
         // end; the Cloneable/Serializable pair never filled), so this is hygiene, not a fix.
@@ -4761,7 +4761,7 @@ public final class Loader
      * {@code gThisNameOff}) — the lightweight parse the reachability mark needs, without {@link #parseFields}'
      * field-layout + statics allocation.
      */
-    private static void parseForMethods(Address base, int len)
+    static void parseForMethods(Address base, int len)
     {
         parseConstPool(base, len);
         Address p = gp;
@@ -6799,7 +6799,7 @@ public final class Loader
     }
 
     /** Length of the blob at address {@code base} (matched against the pending-blob table). */
-    private static int blobLenOf(Address base)
+    static int blobLenOf(Address base)
     {
         int b = 0;
         while (b < pdCount)
@@ -8025,7 +8025,7 @@ public final class Loader
      * ({@code pdDone}/{@code pdDoneB}), so the live program's compiled code + heap survive. Every method of the
      * pulled class is seeded reachable (reflection may invoke any). Returns its Type, or 0 if not embedded.
      */
-    private static Address loadClassIncremental(byte[] slash)
+    static Address loadClassIncremental(byte[] slash)
     {
         long blob = pullClass(slash);
         if (blob == 0L)
@@ -8688,7 +8688,7 @@ public final class Loader
      * its offsets are classfile-relative, so they still line up with the raw-address
      * access ({@code gbase + off}) the rest of the loader uses.
      */
-    private static void parseConstPool(Address base, int len)
+    static void parseConstPool(Address base, int len)
     {
         // AHEAD OF `gbase = base`, DELIBERATELY: the report names the view through gbase, so a guard placed
         // after the assignment would describe the blob being switched TO and say nothing about the one being
@@ -9604,7 +9604,7 @@ public final class Loader
         return 0L;
     }
 
-    private static Address skipAttributes(Address p, int attrs)
+    static Address skipAttributes(Address p, int attrs)
     {
         int a = 0;
         while (a < attrs)
@@ -17365,7 +17365,7 @@ public final class Loader
     }
 
     /** The entry a reflection index names: a registry slot, or {@code BODYLESS + k} for a bodyless method. */
-    private static RVMMethod reflEntry(int idx)
+    static RVMMethod reflEntry(int idx)
     {
         if (idx >= BODYLESS)
         {
@@ -19840,7 +19840,7 @@ public final class Loader
     }
 
     /** Append the Utf8 at {@code utf8Addr} as it is. */
-    private static int putUtf8(byte[] out, int p, Address utf8Addr)
+    static int putUtf8(byte[] out, int p, Address utf8Addr)
     {
         int len = u2(utf8Addr);
         int i = 0;
@@ -20033,7 +20033,7 @@ public final class Loader
      * fallback. Returns 0 rather than halting: an unresolvable callee here is a legitimate outcome (the class
      * is genuinely absent), and the caller turns it back into the denylist trap.
      */
-    private static long resolveLinkTarget(Address clsU, Address nameU, Address descU)
+    static long resolveLinkTarget(Address clsU, Address nameU, Address descU)
     {
         if (clTab == null)
         {
@@ -21738,7 +21738,7 @@ public final class Loader
     /** {@link #ifaceClosure} but for an already-registered class {@code reg}, from the PERSISTENT registries
      *  ({@code clIfaceReg}/{@code clSuperReg}) rather than the transient current-compile state -- so refillImaps
      *  can recompute a class's interface set after phase B. Fills {@link #ifClosureBuf}; returns the count. */
-    private static int ifaceClosureOf(int reg)
+    static int ifaceClosureOf(int reg)
     {
         int n = 0;
         int j = 0;
@@ -22149,16 +22149,6 @@ public final class Loader
         return obj.toLong();
     }
 
-    // ----- runtime annotations ------------------------------------------------------------------------
-    // Two levels. `methodAnnoPresent` is marker-level -- "does this method carry @Foo" -- and is enough for
-    // discovery (@Test/@BeforeEach/@Disabled). `methodAnnotation`/`classAnnotation` build a real INSTANCE whose
-    // element methods return the values; see annoTibFor. No Proxy runtime was needed: an annotation object has
-    // the same shape as a synthesised lambda.
-    //
-    // Only RuntimeVISIBLEAnnotations count. javac emits RuntimeINVISIBLEAnnotations unless the annotation type
-    // itself is declared @Retention(RUNTIME) -- so an annotation without that is not merely unreadable here, it
-    // is absent from the classfile entirely.
-
     /**
      * The {@code method_info} position (at {@code access_flags}) for the method registered at {@code rgIndex},
      * or 0 when there is no such registration or the class does not declare it. Its {@code attributes_count}
@@ -22168,7 +22158,7 @@ public final class Loader
      * whichever came first, the bug that made a {@code @ParameterizedTest} report the test's annotation for
      * its own factory.
      */
-    private static Address methodInfoPos(int rgIndex)
+    static Address methodInfoPos(int rgIndex)
     {
         if (reflEntry(rgIndex) == null)
         {
@@ -22196,32 +22186,6 @@ public final class Loader
         return Address.zero();
     }
 
-    /** True if the method registered at {@code rgIndex} carries the annotation whose descriptor is the
-     *  {@code descLen} bytes at the {@code byte[]} payload {@code descArr} (e.g. "Lorg/junit/jupiter/api/Test;"). */
-    static boolean methodAnnoPresent(int rgIndex, ObjectReference descArr, int descLen)
-    {
-        Address p = methodInfoPos(rgIndex);
-        if (p.isZero())
-        {
-            return false;
-        }
-        return annoInAttrs(reflEntry(rgIndex).base, p.plus(8), u2(p.plus(6)), descArr, descLen);
-    }
-
-    /**
-     * {@code Method.getAnnotation0}: the annotation instance for descriptor {@code descArr} carried by the
-     * method registered at {@code rgIndex}, or 0 if it is absent (or its interface is not loaded, since
-     * without the interface there is no itable to give the object).
-     */
-    static long methodAnnotation(int rgIndex, ObjectReference descArr, int descLen)
-    {
-        Address p = methodInfoPos(rgIndex);
-        if (p.isZero())
-        {
-            return 0L;
-        }
-        return annoFromAttrs(reflEntry(rgIndex).base, p.plus(8), u2(p.plus(6)), descArr, descLen);
-    }
 
     /**
      * {@code Class.genericSignature0}: the class's {@code Signature} attribute (JVMS 4.7.9) as a String, or 0
@@ -22352,27 +22316,6 @@ public final class Loader
         return u2(q.plus(1L + 4L * k + 2L));
     }
 
-    /**
-     * {@code Method.annoDefaults0}: an instance of annotation type {@code mirror} with NO element written, so
-     * that every element carries its {@code AnnotationDefault} -- built by {@link #buildAnnoObject} like any
-     * annotation, from an empty element-value-pair list. An element with no default reads null/0, which is why
-     * {@code Method.getDefaultValue} asks {@link #methodParamMeta} for the attribute first. 0 when the type is
-     * not a loaded class.
-     */
-    static long annoDefaultInstance(ObjectReference mirror)
-    {
-        if (mirror.toLong() <= 0x1000L)
-        {
-            return 0L;
-        }
-        int reg = regOfType(mirror.toAddress().plus(16L).loadAddress());
-        if (reg < 0)
-        {
-            return 0L;
-        }
-        Address zero = Heap.allocArray(2, 1);                    // u2 num_element_value_pairs = 0, zeroed by the allocator
-        return buildAnnoObject(clTab[reg].base, zero.plus(ObjectModel.ARRAY_BASE_OFFSET), reg);
-    }
 
     /**
      * {@code Executable.paramName0}: the name in {@code MethodParameters} entry {@code k} as a String, or 0 when
@@ -22396,45 +22339,10 @@ public final class Loader
         return nameIdx == 0 ? 0L : utf8ToString(base, gcp[nameIdx]);
     }
 
-    /**
-     * {@code Executable.paramAnnoRow0}: row {@code k} of the method's {@code RuntimeVisibleParameterAnnotations}
-     * as a fresh {@code Annotation[]}, or 0 when the attribute is absent or {@code k} is out of range. Rows
-     * are numbered as the ATTRIBUTE numbers them, which is not always the descriptor's numbering (see
-     * {@link #methodParamMeta}); {@code Executable.getParameterAnnotations} does stock's realignment.
-     */
-    static long methodParamAnnoRow(int rgIndex, long k)
-    {
-        Address p = methodInfoPos(rgIndex);
-        if (p.isZero())
-        {
-            return 0L;
-        }
-        Address base = reflEntry(rgIndex).base;
-        Address q = classAttrNamed(base, p.plus(8L), u2(p.plus(6L)), Magic.bytes("RuntimeVisibleParameterAnnotations"));
-        if (q.isZero() || k < 0L || k >= u1(q))
-        {
-            return 0L;
-        }
-        Address lp = q.plus(1L);                                // u1 num_parameters, then one annotation list per row
-        long r = 0L;
-        while (r < k)
-        {
-            int n = u2(lp);
-            lp = lp.plus(2L);
-            int i = 0;
-            while (i < n)
-            {
-                lp = skipElementPairs(lp.plus(2L));          // u2 type_index, then the element-value pairs
-                i += 1;
-            }
-            r += 1L;
-        }
-        return annotationsAt(base, lp);
-    }
 
     /**
      * {@code Field.signature0}: the {@code Signature} attribute of field {@code nameArr} (a raw {@code byte[]})
-     * of the class whose mirror is given, or 0. The field walk is {@link #fieldAnnotation}'s.
+     * of the class whose mirror is given, or 0. The field walk is {@link Annotations#fieldAnnotation}'s.
      */
     static long fieldSignature(ObjectReference mirror, ObjectReference nameArr)
     {
@@ -22718,8 +22626,8 @@ public final class Loader
         {
             return 0L;
         }
-        Address lp = annoListPos(base, p.plus(6L), u2(p.plus(4L)));
-        return lp.isZero() ? emptyAnnoArray() : annotationsAt(base, lp);
+        Address lp = Annotations.annoListPos(base, p.plus(6L), u2(p.plus(4L)));
+        return lp.isZero() ? Annotations.emptyAnnoArray() : Annotations.annotationsAt(base, lp);
     }
 
     /** {@code Class.permitted0}: the {@code k}th name in the class's {@code PermittedSubclasses}, or 0. */
@@ -22761,7 +22669,7 @@ public final class Loader
     }
 
     /** Position of the body of the attribute named {@code name} in an attribute list, or 0 if absent. */
-    private static Address classAttrNamed(Address base, Address p, int attrs, byte[] name)
+    static Address classAttrNamed(Address base, Address p, int attrs, byte[] name)
     {
         int a = 0;
         while (a < attrs)
@@ -22781,7 +22689,7 @@ public final class Loader
     }
 
     /** The class-level {@code attributes_count} position: past every method, which is where they begin. */
-    private static Address classAttrsPos(Address base)
+    static Address classAttrsPos(Address base)
     {
         parseForMethods(base, blobLenOf(base));
         Address p = gMethodsStart;
@@ -22796,106 +22704,6 @@ public final class Loader
         return p;
     }
 
-    /**
-     * {@code Field.annoGet0}: the annotation instance for {@code descArr} on the field named {@code nameArr}
-     * of the class whose mirror is given, or 0.
-     *
-     * <p>Field annotations are how a library declares CONFIGURATION: picocli's `@Option`/`@Parameters` live on
-     * fields, and without this its command spec has no options at all -- the launcher printed
-     * "Unknown options" for every argument and a usage block listing none.
-     */
-    /**
-     * Every annotation DECLARED on one instance field -> {@code Annotation[]}, or 0 for a bad argument.
-     *
-     * <p>The field-level twin of {@link #methodAnnotationsAll}, and it keeps that method's TWO PASSES OVER
-     * ABSOLUTE ADDRESSES for the reason recorded there: pass 2 RESOLVES, a resolve may demand-load, and a
-     * load re-parses a blob and moves the {@code gcp} cursor pass 1 reads. Blob addresses survive that; parse
-     * state does not.
-     *
-     * <p>The field WALK is {@link #fieldAnnotation}'s (past access_flags/this/super/interfaces, then the
-     * field_info list), so the two agree on where a field's attributes live by construction rather than by
-     * two copies of the same arithmetic.
-     *
-     * <p>ALLOCATION-FREE for a bad argument, because {@code VM.forceCompile} probes this native with zeros on
-     * every image during loader init -- every sibling probe there returns before allocating.
-     *
-     * <p>JUnit's {@code AnnotationUtils.findAnnotation} walks this to reach META-ANNOTATIONS, and walks it
-     * UNGUARDED, so an un-annotated field must answer an EMPTY array rather than null.
-     */
-    static long fieldAnnotationsAll(ObjectReference mirror, ObjectReference nameArr)
-    {
-        if (mirror.toLong() <= 0x1000L || nameArr.toLong() <= 0x1000L)
-        {
-            return 0L;
-        }
-        int ci = classRegByType(mirror.toAddress().plus(16L).loadAddress());
-        if (ci < 0)
-        {
-            return 0L;
-        }
-        Address base = clTab[ci].base;
-        parseConstPool(base, blobLenOf(base));
-        Address p = gp.plus(6L);                               // past access_flags, this_class, super_class
-        p = p.plus(2L + u2(p) * 2L);                           // past the interfaces list
-        int fcount = u2(p);
-        p = p.plus(2);
-        int nlen = (int) nameArr.toAddress().plus(16L).loadLong();
-        Address nbase = nameArr.toAddress().plus(24L);
-        Address lp = Address.zero();
-        int f = 0;
-        while (f < fcount)
-        {
-            int attrs = u2(p.plus(6));
-            if (Utf8.rawEqUtf8(nbase, nlen, base, gcp[u2(p.plus(2))]))
-            {
-                lp = annoListPos(base, p.plus(8L), attrs);
-                f = fcount;                             // found it; stop walking
-            }
-            else
-            {
-                p = skipAttributes(p.plus(8), attrs);
-                f += 1;
-            }
-        }
-        if (lp.isZero())
-        {
-            return emptyAnnoArray();                    // no such field, or none declared on it
-        }
-        return annotationsAt(base, lp);
-    }
-
-    static long fieldAnnotation(ObjectReference mirror, ObjectReference nameArr, ObjectReference descArr, int descLen)
-    {
-        if (mirror.toLong() <= 0x1000L || nameArr.toLong() <= 0x1000L)
-        {
-            return 0L;
-        }
-        int ci = classRegByType(mirror.toAddress().plus(16L).loadAddress());
-        if (ci < 0)
-        {
-            return 0L;
-        }
-        Address base = clTab[ci].base;
-        parseConstPool(base, blobLenOf(base));
-        Address p = gp.plus(6L);                               // past access_flags, this_class, super_class
-        p = p.plus(2L + u2(p) * 2L);                           // past the interfaces list
-        int fcount = u2(p);
-        p = p.plus(2);
-        int nlen = (int) nameArr.toAddress().plus(16L).loadLong();   // byte[] length @16
-        Address nbase = nameArr.toAddress().plus(24L);
-        int f = 0;
-        while (f < fcount)
-        {
-            int attrs = u2(p.plus(6));
-            if (Utf8.rawEqUtf8(nbase, nlen, base, gcp[u2(p.plus(2))]))
-            {
-                return annoFromAttrs(base, p.plus(8), attrs, descArr, descLen);
-            }
-            p = skipAttributes(p.plus(8), attrs);
-            f += 1;
-        }
-        return 0L;
-    }
 
     /**
      * {@code Field.type0}: the {@code Class} mirror of the declared type of field {@code nameArr}, or 0.
@@ -22941,7 +22749,7 @@ public final class Loader
             p = skipAttributes(p.plus(8), attrs);
             f += 1;
         }
-        return descU.isZero() ? 0L : annoClassValue(descU);
+        return descU.isZero() ? 0L : AnnotationInstances.annoClassValue(descU);
     }
 
     /**
@@ -23049,7 +22857,7 @@ public final class Loader
      * own {@code getParameterTypes()} failed for any array parameter (MemberGenericsProbe, through stock
      * {@code TypeVariableImpl.getGenericDeclaration}).
      */
-    private static long arrayOf(long elemMirror, int dims)
+    static long arrayOf(long elemMirror, int dims)
     {
         if (elemMirror == 0L)
         {
@@ -23071,7 +22879,7 @@ public final class Loader
     }
 
     /** As {@link #arrayOf}, for an array of the primitive with descriptor char {@code c}: {@code [I}, {@code [[J}. */
-    private static long primArrayMirror(int c, int dims)
+    static long primArrayMirror(int c, int dims)
     {
         Address tib = primArrayTib(atypeForDescChar(c));
         if (tib.isZero())
@@ -23143,57 +22951,6 @@ public final class Loader
         return i < 0 ? objectTypeAddr() : clTab[i].type;
     }
 
-    /** {@code Class.getAnnotation0}: the same, for the annotations on a CLASS (its own attribute list). */
-    static long classAnnotation(ObjectReference mirror, ObjectReference descArr, int descLen)
-    {
-        if (mirror.toLong() <= 0x1000L)
-        {
-            return 0L;
-        }
-        int reg = regOfType(mirror.toAddress().plus(16L).loadAddress());
-        if (reg < 0)
-        {
-            return 0L;
-        }
-        Address base = clTab[reg].base;
-        Address p = classAttrsPos(base);
-        if (p.isZero())
-        {
-            return 0L;
-        }
-        return annoFromAttrs(base, p.plus(2L), u2(p), descArr, descLen);
-    }
-
-    /** Find RuntimeVisibleAnnotations in an attribute list and build the matching annotation's instance. */
-    private static long annoFromAttrs(Address base, Address p, int attrs, ObjectReference descArr, int descLen)
-    {
-        int a = 0;
-        while (a < attrs)
-        {
-            int anIdx = u2(p);
-            p = p.plus(2);
-            int alen = u4(p);
-            p = p.plus(4);
-            if (Utf8.utf8IsAtBase(base, gcp[anIdx], Magic.bytes("RuntimeVisibleAnnotations")))
-            {
-                Address pairs = annoListFind(base, p, descArr, descLen);
-                if (pairs.isZero())
-                {
-                    return 0L;
-                }
-                int ifaceReg = regOfAnnoDesc(descArr, descLen);
-                if (ifaceReg < 0)
-                {
-                    reportAnnoIfaceMissing(descArr, descLen);
-                    return 0L;
-                }
-                return buildAnnoObject(base, pairs, ifaceReg);
-            }
-            p = p.plus(alen);
-            a += 1;
-        }
-        return 0L;
-    }
 
     /**
      * This class's DIRECTLY DECLARED interfaces, as Class mirrors, in declaration order.
@@ -23224,143 +22981,6 @@ public final class Loader
         return arr.toLong();
     }
 
-    /** Cap on annotations enumerated per class -- a classfile may declare any number; nothing real declares
-     *  more than a handful, and a fixed cap keeps the two passes below on plain locals. */
-    private static final int MAXDECLANNO = 32;
-
-    /**
-     * Every annotation DECLARED on this class, as instances, in a fresh {@code Annotation[]}.
-     *
-     * <p>Fresh each call because stock specifies the caller may modify the returned array, and because
-     * nothing here caches annotation instances (see the note on identity in {@code Class.getAnnotation}).
-     *
-     * <p>TWO PASSES, over ABSOLUTE addresses. Pass 1 records each entry's type descriptor and element-pair
-     * position as addresses into the blob; pass 2 builds. That split is not tidiness: {@code buildAnnoObject}
-     * reads {@code gcp[nameIdx]}, the parse CURSOR, and anything that resolves during a build re-parses a
-     * blob and moves it. Blob addresses do not move; the parse state does -- the same reason the written-pair
-     * and default phases are kept apart, and the reason a 'c'/'e' element defers.
-     *
-     * <p>An annotation whose INTERFACE is not loaded is skipped, and {@code buildAnnoObject}'s existing report
-     * names it: there is no itable to give such an instance, so the alternative is a null element, which
-     * reads to the caller as an annotation that is present but broken.
-     */
-    static long classAnnotationsAll(ObjectReference mirror)
-    {
-        if (mirror.toLong() <= 0x1000L)
-        {
-            return 0L;
-        }
-        int reg = regOfType(mirror.toAddress().plus(16L).loadAddress());
-        if (reg < 0)
-        {
-            return emptyAnnoArray();
-        }
-        Address base = clTab[reg].base;
-        Address ap = classAttrsPos(base);
-        if (ap.isZero())
-        {
-            return emptyAnnoArray();
-        }
-        Address lp = annoListPos(base, ap.plus(2L), u2(ap));
-        if (lp.isZero())
-        {
-            return emptyAnnoArray();                    // no RuntimeVisibleAnnotations: none declared
-        }
-        return annotationsAt(base, lp);
-    }
-
-    /**
-     * {@code Executable.annoAll0}: every annotation DECLARED on the method registered at {@code rgIndex}, as an
-     * {@code Annotation[]}. Never 0; a method with none answers a zero-length array.
-     *
-     * <p>The method-level twin of {@link #classAnnotationsAll}, and it keeps that method's TWO PASSES OVER
-     * ABSOLUTE ADDRESSES for the same non-negotiable reason: {@code buildAnnoObject} reads {@code gcp[..]},
-     * the parse CURSOR, and anything that resolves during a build re-parses a blob and moves it. Blob
-     * addresses survive that; the parse state does not. Pass 1 therefore records addresses only -- and
-     * {@code methodInfoPos} must run BEFORE pass 1 for the same reason, since it parses too.
-     *
-     * <p>The only difference from the class version is WHERE the attributes live: a method's own
-     * {@code attributes} rather than the class's. There is no inheritance to consider -- JLS 9.6.4.3 gives
-     * {@code @Inherited} effect on class declarations ALONE, and an overriding method does not inherit the
-     * annotations of the method it overrides -- so for a method "declared" and "present" coincide exactly,
-     * which is why {@code getAnnotations} may share this and diverge from stock nowhere.
-     */
-    static long methodAnnotationsAll(int rgIndex)
-    {
-        if (reflEntry(rgIndex) == null)
-        {
-            return 0L;                                  // no such registration; the guest answers an empty
-        }                                               // array. ALLOCATION-FREE, because VM.forceCompile
-        Address mp = methodInfoPos(rgIndex);               // probes this native with rgIndex -1 during boot.
-        if (mp.isZero())
-        {
-            return emptyAnnoArray();                    // registered but not declared here: none to read
-        }
-        Address base = reflEntry(rgIndex).base;
-        Address lp = annoListPos(base, mp.plus(8L), u2(mp.plus(6)));
-        if (lp.isZero())
-        {
-            return emptyAnnoArray();                    // no RuntimeVisibleAnnotations: none declared
-        }
-        return annotationsAt(base, lp);
-    }
-
-    /**
-     * The two passes shared by the class, field, method and parameter readers: every annotation in the list at {@code lp}
-     * ({@code u2 num_annotations} first, then the entries, as both {@code RuntimeVisibleAnnotations} and each
-     * row of {@code RuntimeVisibleParameterAnnotations} lay it out), built into a fresh {@code Annotation[]}.
-     * See {@link #methodAnnotationsAll} for why pass 1 records blob addresses only.
-     */
-    private static long annotationsAt(Address base, Address lp)
-    {
-        AddressArray descAbs = AddressArray.create(MAXDECLANNO);
-        AddressArray pairsAbs = AddressArray.create(MAXDECLANNO);
-        int n = u2(lp);
-        Address p = lp.plus(2L);
-        int found = 0;
-        int i = 0;
-        while (i < n && found < MAXDECLANNO)             // PASS 1: addresses only, nothing resolved or built
-        {
-            int typeIdx = u2(p);
-            p = p.plus(2);
-            descAbs.set(found, base.plus(gcp[typeIdx]));
-            pairsAbs.set(found, p);
-            found += 1;
-            p = skipElementPairs(p);
-            i += 1;
-        }
-        long[] objs = new long[found];                   // PASS 2: resolve + build
-        int built = 0;
-        int k = 0;
-        while (k < found)
-        {
-            int ifaceReg = loadAnnoTypeByDescAbs(descAbs.get(k));
-            if (ifaceReg >= 0)
-            {
-                // RE-POINT THE CURSOR at the annotated class first. buildAnnoObject matches element names through
-                // gcp, and building the PREVIOUS annotation re-parsed its annotation type's blob to read the
-                // defaults (as resolving one may), so without this every annotation after the first in a list
-                // matched no written element and answered its defaults: `@Mark @Num(3)` read `@Num(7)`.
-                parseForMethods(base, blobLenOf(base));
-                long obj = buildAnnoObject(base, pairsAbs.get(k), ifaceReg);
-                if (obj != 0L)
-                {
-                    objs[built] = obj;
-                    built += 1;
-                }
-            }
-            k += 1;
-        }
-        Address arr = Heap.allocArray(built, 8);
-        arr.plus(ObjectModel.TIB_OFFSET).store(refArrayTib(annotationTypeAddr()));
-        int j = 0;
-        while (j < built)
-        {
-            arr.plus(ObjectModel.ARRAY_BASE_OFFSET).plus(j * 8L).store(objs[j]);
-            j += 1;
-        }
-        return arr.toLong();
-    }
 
     /** Cap on member classes enumerated per class -- fixed so the two passes below stay on plain locals. */
     private static final int MAXDECLCLASS = 64;
@@ -23382,7 +23002,7 @@ public final class Loader
      * requires {@code outer_class_info_index} to be ZERO for both, and {@code inner_name_index} to be zero
      * for an anonymous class. Both are checked.
      *
-     * <p>TWO PASSES OVER ABSOLUTE ADDRESSES, for the reason {@link #classAnnotationsAll} records: pass 2
+     * <p>TWO PASSES OVER ABSOLUTE ADDRESSES, for the reason {@link Annotations#classAnnotationsAll} records: pass 2
      * RESOLVES, a resolve may demand-load, and a load re-parses a blob and moves the {@code gcp} cursor that
      * pass 1 reads. Blob addresses survive that; parse state does not.
      *
@@ -23540,26 +23160,8 @@ public final class Loader
         return Address.zero();
     }
 
-    // ---- records: hashCode / equals / toString, SYNTHESISED ------------------------------------------
-    //
-    // javac compiles a record's hashCode/equals/toString to an `invokedynamic` bootstrapped by
-    // java/lang/runtime/ObjectMethods, which hands back a MethodHandle -- the machinery this VM denies. They
-    // are synthesised here instead, which is the same choice already made for a lambda: recognise the
-    // bootstrap and BUILD THE BEHAVIOUR, rather than run the bootstrap.
-    //
-    // THE COMPONENTS ARE THE CLASS'S OWN INSTANCE FIELDS, and that is a GUARANTEE, not a convenience: JLS
-    // 8.10.3 forbids a record declaring any instance field other than the private final ones corresponding
-    // to its components. So no filtering is needed, and declaration order IS component order -- which is why
-    // nothing per-site is baked here. Everything is read from the object at call time.
-    //
-    // WHAT IS SPECIFIED AND WHAT IS NOT, because the three differ and it decides how exact each must be:
-    // `Record.equals` is fully specified (same record type, every component equal) and is exact here.
-    // `Record.hashCode` explicitly leaves its algorithm unspecified, so this need only be a consistent
-    // function of the component hashes -- equal records hash equally because it is derived from them alone.
-    // `Record.toString`'s exact format is likewise unspecified; this matches the standard rendering.
-
     /** Registry index of {@code obj}'s class, or -1 (null, or a raw array carrying no Type). */
-    private static int regOfObject(ObjectReference obj)
+    static int regOfObject(ObjectReference obj)
     {
         if (obj.isNull())
         {
@@ -23573,195 +23175,9 @@ public final class Loader
         return regOfType(Address.fromLong(tib).loadAddress());            // TIB[0] = Type
     }
 
-    /** {@code fldTab} index of the {@code want}-th instance field DECLARED by class {@code reg}, or -1. */
-    private static int recordComponent(int reg, int want)
-    {
-        int seen = 0;
-        int j = 0;
-        while (j < fldCount)
-        {
-            if (fldTab[j] != null
-                    && utf8EqAt(clTab[reg].base, clTab[reg].nameOff, fldTab[j].base, fldTab[j].classOff))
-            {
-                if (seen == want)
-                {
-                    return j;
-                }
-                seen += 1;
-            }
-            j += 1;
-        }
-        return -1;
-    }
-
-    /** How many components (declared instance fields) class {@code reg} has. */
-    private static int recordComponentCount(int reg)
-    {
-        int n = 0;
-        int j = 0;
-        while (j < fldCount)
-        {
-            if (fldTab[j] != null
-                    && utf8EqAt(clTab[reg].base, clTab[reg].nameOff, fldTab[j].base, fldTab[j].classOff))
-            {
-                n += 1;
-            }
-            j += 1;
-        }
-        return n;
-    }
-
-    /**
-     * Call {@code name desc} on the guest object {@code obj}, with {@code obj} as the receiver and
-     * optionally one further argument. 0 when the method cannot be resolved -- the caller decides what an
-     * unanswerable component means rather than this inventing a value.
-     */
-    private static long callOnObject(ObjectReference obj, byte[] name, byte[] desc, long arg1, int argc)
-    {
-        long code = resolveOn(obj, name, desc);
-        if (code == 0L)
-        {
-            return 0L;
-        }
-        long[] slots = new long[2];                     // fresh per call: a component's own equals/hashCode
-        Address argBase = ObjectReference.fromObject(slots).toAddress().plus(24L);  // may re-enter this for a nested record
-        argBase.store(obj);
-        if (argc > 1)
-        {
-            argBase.plus(8L).store(arg1);
-        }
-        return Magic.callN(code, argBase.toLong());
-    }
-
-    /** The compiled body of {@code name desc} for {@code obj}'s class, or 0 (null, a raw array, unresolvable). */
-    private static long resolveOn(ObjectReference obj, byte[] name, byte[] desc)
-    {
-        int reg = regOfObject(obj);
-        if (reg < 0)
-        {
-            return 0L;
-        }
-        return resolveLinkTarget(clTab[reg].base.plus(clTab[reg].nameOff), utf8Blob(name),
-                utf8Blob(desc));
-    }
-
-    /**
-     * {@code obj.toString()} on an arbitrary guest object, as a raw String/byte[] reference -- the call
-     * {@code String.valueOf(Object)} makes, reached the way {@link #recordToString} already reaches a
-     * component's own {@code toString}.
-     *
-     * <p>THE TWO FAILURE ANSWERS ARE KEPT APART, and that is the whole reason this is not just
-     * {@link #callOnObject}. {@code 0} is a {@code toString} that RETURNED null, which JLS 15.18.1 renders
-     * as the word "null"; {@code -1} is one that could not be RESOLVED, which is a gap in this VM. One
-     * sentinel for both would print a plausible "null" exactly where the dispatch is the broken thing --
-     * the shape this project pays for most.
-     */
-    static long objToString(ObjectReference obj)
-    {
-        long code = resolveOn(obj, Magic.bytes("toString"), Magic.bytes("()Ljava/lang/String;"));
-        if (code == 0L)
-        {
-            return -1L;
-        }
-        long[] slots = new long[2];                     // fresh per call: the callee may re-enter this
-        long argBase = Magic.addrOf(slots) + 24L;
-        Address.fromLong(argBase).store(obj);
-        return Magic.callN(code, argBase);
-    }
-
-    /** The hash of one component, by its descriptor's first character. */
-    private static int componentHash(long v, int tc)
-    {
-        if (tc == 'Z')
-        {
-            return v != 0L ? 1231 : 1237;               // Boolean.hashCode's specified values
-        }
-        if (tc == 'J' || tc == 'D')
-        {
-            return (int) (v ^ (v >>> 32));              // Long.hashCode; D uses its raw bits
-        }
-        if (tc == 'L' || tc == '[')
-        {
-            return v == 0L ? 0 : (int) callOnObject(ObjectReference.fromLong(v), Magic.bytes("hashCode"), Magic.bytes("()I"), 0L, 1);
-        }
-        return (int) v;                                 // B S C I, and F by its raw bits
-    }
-
-    /** {@code Record.hashCode}: a fold over the components. See the note above on why 31 is free to choose. */
-    static long recordHash(ObjectReference obj)
-    {
-        int reg = regOfObject(obj);
-        if (reg < 0)
-        {
-            return 0L;
-        }
-        int n = recordComponentCount(reg);
-        int h = 0;
-        int i = 0;
-        while (i < n)
-        {
-            int j = recordComponent(reg, i);
-            long v = obj.toAddress().plus(16L).plus(fldTab[j].slot * 8L).loadLong();
-            h = h * 31 + componentHash(v, u1(fldTab[j].base.plus(fldTab[j].descOff + 2L)));
-            i += 1;
-        }
-        return h;
-    }
-
-    /** {@code Record.equals}: same record class, and every component equal. Fully specified, so exact. */
-    static long recordEquals(ObjectReference a, ObjectReference b)
-    {
-        if (a.EQ(b))
-        {
-            return 1L;                                  // includes both null
-        }
-        if (a.isNull() || b.isNull())
-        {
-            return 0L;
-        }
-        int ra = regOfObject(a);
-        int rb = regOfObject(b);
-        if (ra < 0 || ra != rb)
-        {
-            return 0L;                                  // a different class is never equal to a record
-        }
-        int n = recordComponentCount(ra);
-        int i = 0;
-        while (i < n)
-        {
-            int j = recordComponent(ra, i);
-            long off = 16L + fldTab[j].slot * 8L;
-            long va = a.toAddress().plus(off).loadLong();
-            long vb = b.toAddress().plus(off).loadLong();
-            int tc = u1(fldTab[j].base.plus(fldTab[j].descOff + 2L));
-            if (tc == 'L' || tc == '[')
-            {
-                if (va != vb)                           // reference components compare with equals()
-                {
-                    if (va == 0L || vb == 0L)
-                    {
-                        return 0L;
-                    }
-                    if (callOnObject(ObjectReference.fromLong(va), Magic.bytes("equals"), Magic.bytes("(Ljava/lang/Object;)Z"), vb, 2) == 0L)
-                    {
-                        return 0L;
-                    }
-                }
-            }
-            else if (va != vb)
-            {
-                return 0L;                              // primitives compare by value
-            }
-            i += 1;
-        }
-        return 1L;
-    }
-
-    /** Cap on the rendered length of one record's toString, so the buffer below stays a plain local. */
-    private static final int MAXRECSTR = 1024;
 
     /** Append the ASCII of {@code v} (decimal, signed) at {@code p}; returns the new position. */
-    private static int putDec(char[] out, int p, long v, boolean signed)
+    static int putDec(char[] out, int p, long v, boolean signed)
     {
         // THE DIGITS ARE TAKEN IN THE NEGATIVE DOMAIN, for the reason {@code VMConcat.scLong} already
         // records: there is no type wider than long to borrow, and {@code -Long.MIN_VALUE} is still
@@ -23818,10 +23234,10 @@ public final class Loader
      * carries, one field over. {@link #decodeUtf8At} is the decoder {@link #internString} already uses.
      *
      * <p>Its {@code decCh}/{@code decNext} statics are safe here because the name is consumed in this loop
-     * and nothing between two iterations can run guest code -- unlike {@link #putComponent}'s reference arm,
+     * and nothing between two iterations can run guest code -- unlike {@link ObjectMethods#putComponent}'s reference arm,
      * which calls {@code toString} and could reach a literal intern.
      */
-    private static int putUtf8(char[] out, int p, Address utf8Addr)
+    static int putUtf8(char[] out, int p, Address utf8Addr)
     {
         int len = u2(utf8Addr);
         Address src = utf8Addr.plus(2L);
@@ -23836,62 +23252,6 @@ public final class Loader
         return p;
     }
 
-    /** Append one component's rendered VALUE; returns the new position. */
-    private static int putComponent(char[] out, int p, long v, int tc)
-    {
-        if (tc == 'Z')
-        {
-            return putAscii(out, p, v != 0L ? Magic.bytes("true") : Magic.bytes("false"));
-        }
-        if (tc == 'C')
-        {
-            // ALL SIXTEEN BITS. This used to store one byte into a byte[] buffer, so the whole rendering
-            // could only carry code points 0..255 and a char above that came out as a DIFFERENT character --
-            // '\u20ac' rendered as '\u00ac'. A plausible wrong character is the shape rule 2 exists to remove.
-            if (p < out.length)
-            {
-                out[p] = (char) v;
-                p += 1;
-            }
-            return p;
-        }
-        if (tc == 'L' || tc == '[')
-        {
-            if (v == 0L)
-            {
-                return putAscii(out, p, Magic.bytes("null"));
-            }
-            long str = callOnObject(ObjectReference.fromLong(v), Magic.bytes("toString"), Magic.bytes("()Ljava/lang/String;"), 0L, 1);
-            return putGuestString(out, p, ObjectReference.fromLong(str));
-        }
-        // F AND D GO THROUGH THE REAL FORMATTER, because this VM keeps a float or a double in an ORDINARY
-        // 64-BIT SLOT -- so {@code v} IS {@code Double.doubleToRawLongBits(d)}, and letting it fall through
-        // to putDec below printed a nineteen-digit integer where stock prints the number. It is also how the
-        // 2026-09-28 bare-minus defect reached a double: {@code doubleToRawLongBits(-0.0)} is
-        // {@code 0x8000000000000000}, which IS {@code Long.MIN_VALUE}.
-        //
-        // RESOLVED BY NAME AT RUNTIME rather than formatted here, which is the whole design decision.
-        // {@code Double.toString} is the SHORTEST decimal that round-trips (Schubfach), and re-deriving that
-        // by hand is a silent wrong answer waiting to happen -- it would get ordinary values right and NaN,
-        // the infinities and the signed zeros wrong. {@code VMConcat.scDouble} already reaches the stock
-        // formatter through these same two accessors; this is the same route from the record path.
-        //
-        // AND A FLOAT IS NOT A WIDENED DOUBLE, which is why there are two accessors and not one:
-        // {@code Float.toString(0.1f)} is "0.1" where {@code Double.toString((double) 0.1f)} is
-        // "0.10000000149011612". The slot holds a float's raw int SIGN-EXTENDED, so the low 32 bits are
-        // masked out before the call -- exactly what {@code VMConcat.scFloat} does.
-        if (tc == 'D' || tc == 'F')
-        {
-            long buf = tc == 'D' ? doubleToStringBuf() : floatToStringBuf();
-            if (buf == 0L)
-            {
-                return putAscii(out, p, Magic.bytes("?"));
-            }
-            long bits = tc == 'D' ? v : (v & 0xFFFFFFFFL);
-            return putGuestString(out, p, ObjectReference.fromLong(Magic.call2(buf, bits, 0L)));
-        }
-        return putDec(out, p, v, true);                  // B S I J
-    }
 
     /**
      * Append a guest {@code String}'s characters, HONOURING ITS CODER; {@code "?"} if it or its array is
@@ -23911,7 +23271,7 @@ public final class Loader
      * {@link #internString} stores it that way; reading it the other way round swaps the bytes of every
      * character.
      */
-    private static int putGuestString(char[] out, int p, ObjectReference str)
+    static int putGuestString(char[] out, int p, ObjectReference str)
     {
         if (str.isNull())
         {
@@ -23966,7 +23326,7 @@ public final class Loader
     }
 
     /** Append a plain ASCII {@code byte[]} to the record buffer, widened one character per byte. */
-    private static int putAscii(char[] out, int p, byte[] b)
+    static int putAscii(char[] out, int p, byte[] b)
     {
         int i = 0;
         while (i < b.length && p < out.length)
@@ -23978,65 +23338,6 @@ public final class Loader
         return p;
     }
 
-    /**
-     * {@code Record.toString}: {@code Simple[a=1, b=x]}. The exact format is unspecified by
-     * {@code Record.toString()}; this is the standard rendering, and the SIMPLE name is used (the part after
-     * the last '/' or '$'), as stock does.
-     */
-    static long recordToString(ObjectReference obj)
-    {
-        int reg = regOfObject(obj);
-        if (reg < 0)
-        {
-            return guestString(Magic.bytes("null"));
-        }
-        // A UTF-16 CODE-UNIT buffer, not bytes. It was a byte[] wrapped as a LATIN1 String at the end, so
-        // the whole rendering could only carry code points 0..255 however each component was appended.
-        char[] out = new char[MAXRECSTR];
-        int p = 0;
-        Address nm = clTab[reg].base.plus(clTab[reg].nameOff);  // the binary name, as a Utf8
-        int nlen = u2(nm);
-        int start = 0;
-        int i = 0;
-        while (i < nlen)
-        {
-            int c = u1(nm.plus(2L + i));
-            if (c == '/' || c == '$')
-            {
-                start = i + 1;                           // keep only the simple name
-            }
-            i += 1;
-        }
-        // The separator scan above is over RAW BYTES and stays correct under UTF-8: '/' and '$' are below
-        // 0x80, and a continuation byte is 0xxx in 0x80..0xBF, so neither can occur inside a multi-byte
-        // sequence. Only the copy below has to decode.
-        i = start;
-        while (i < nlen && p < out.length)
-        {
-            decodeUtf8At(nm.plus(2L), i, nlen);
-            out[p] = (char) decCh;
-            p += 1;
-            i = decNext;
-        }
-        p = putAscii(out, p, Magic.bytes("["));
-        int n = recordComponentCount(reg);
-        int k = 0;
-        while (k < n)
-        {
-            if (k > 0)
-            {
-                p = putAscii(out, p, Magic.bytes(", "));
-            }
-            int j = recordComponent(reg, k);
-            p = putUtf8(out, p, fldTab[j].base.plus(fldTab[j].nameOff));
-            p = putAscii(out, p, Magic.bytes("="));
-            p = putComponent(out, p, obj.toAddress().plus(16L).plus(fldTab[j].slot * 8L).loadLong(),
-                    u1(fldTab[j].base.plus(fldTab[j].descOff + 2L)));
-            k += 1;
-        }
-        p = putAscii(out, p, Magic.bytes("]"));
-        return guestStringChars(out, p);
-    }
 
     /**
      * Wrap the first {@code n} UTF-16 code units of {@code src} as a guest {@code java/lang/String},
@@ -24049,7 +23350,7 @@ public final class Loader
      *
      * <p>UTF16 is stored LO byte first because {@code StringUTF16.LO_BYTE_SHIFT} is seeded to 8 for AArch64.
      */
-    private static long guestStringChars(char[] src, int n)
+    static long guestStringChars(char[] src, int n)
     {
         int maxCh = 0;
         int i = 0;
@@ -24097,204 +23398,7 @@ public final class Loader
         return arr.toLong();
     }
 
-    /** A zero-length {@code Annotation[]} -- what a class with no declared annotations answers. */
-    private static long emptyAnnoArray()
-    {
-        Address arr = Heap.allocArray(0, 8);
-        arr.plus(ObjectModel.TIB_OFFSET).store(refArrayTib(annotationTypeAddr()));
-        return arr.toLong();
-    }
 
-    /** {@code java/lang/annotation/Annotation}'s Type, or Object's if it is not loaded. */
-    private static Address annotationTypeAddr()
-    {
-        int i = classIndexByName(Magic.bytes("java/lang/annotation/Annotation"));
-        return i >= 0 ? clTab[i].type : objectTypeAddr();
-    }
-
-    /** Position of the {@code RuntimeVisibleAnnotations} list ({@code u2 count} first), or 0 if absent. */
-    private static Address annoListPos(Address base, Address p, int attrs)
-    {
-        int a = 0;
-        while (a < attrs)
-        {
-            int anIdx = u2(p);
-            p = p.plus(2);
-            int alen = u4(p);
-            p = p.plus(4);
-            if (Utf8.utf8IsAtBase(base, gcp[anIdx], Magic.bytes("RuntimeVisibleAnnotations")))
-            {
-                return p;
-            }
-            p = p.plus(alen);
-            a += 1;
-        }
-        return Address.zero();
-    }
-
-    /**
-     * As {@link #regOfAnnoDescAbs}, LOADING the annotation type when nothing has yet -- an annotation whose
-     * type no class literal, cast or call names was left out of every reader, silently: a class carrying
-     * {@code @OnClass} answered {@code getDeclaredAnnotations() == []} (AnnoLoadProbe). The same demand-load
-     * {@code annoClassValue} does for a {@code Class} element. Callers re-point the parse cursor after it.
-     */
-    private static int loadAnnoTypeByDescAbs(Address utf8Addr)
-    {
-        int reg = regOfAnnoDescAbs(utf8Addr);
-        if (reg >= 0)
-        {
-            return reg;
-        }
-        int len = u2(utf8Addr);
-        if (len < 3 || u1(utf8Addr.plus(2)) != 0x4C)        // not "L...;"
-        {
-            return -1;
-        }
-        byte[] name = new byte[len - 2];
-        int i = 0;
-        while (i < len - 2)
-        {
-            name[i] = (byte) u1(utf8Addr.plus(2 + 1 + i));
-            i += 1;
-        }
-        loadClassIncremental(name);
-        return classIndexByName(name);
-    }
-
-    /** As {@link #regOfAnnoDesc}, for a descriptor at an ABSOLUTE length-prefixed Utf8 address. */
-    private static int regOfAnnoDescAbs(Address utf8Addr)
-    {
-        int len = u2(utf8Addr);
-        if (len < 3)
-        {
-            return -1;
-        }
-        byte[] name = new byte[len - 2];                // strip the leading 'L' and the trailing ';'
-        int i = 0;
-        while (i < len - 2)
-        {
-            name[i] = (byte) u1(utf8Addr.plus(2 + 1 + i));
-            i += 1;
-        }
-        return classIndexByName(name);
-    }
-
-    /** {@code "Lcom/x/Foo;"} -> the class-registry index of {@code com/x/Foo}, or -1 if it is not loaded. */
-    private static int regOfAnnoDesc(ObjectReference descArr, int descLen)
-    {
-        if (descLen < 3)
-        {
-            return -1;
-        }
-        byte[] name = new byte[descLen - 2];            // strip the leading 'L' and the trailing ';'
-        int i = 0;
-        while (i < descLen - 2)
-        {
-            name[i] = (byte) u1(descArr.toAddress().plus(24 + 1 + i));  // byte[] elements start at +24
-            i += 1;
-        }
-        return classIndexByName(name);
-    }
-
-    /**
-     * Name an annotation whose INTERFACE is not loaded. Without it there is no itable to give the instance, so
-     * the answer is null -- and a silent null here reads as "the annotation is absent", which is a different
-     * and wrong statement. Reported once per descriptor.
-     */
-    private static void reportAnnoIfaceMissing(ObjectReference descArr, int descLen)
-    {
-        if (annoMissSeen == null)
-        {
-            annoMissSeen = new long[32];
-            annoMissSeenN = 0;
-        }
-        int k = 0;
-        while (k < annoMissSeenN)
-        {
-            if (annoMissSeen[k] == descArr.toLong())
-            {
-                return;
-            }
-            k += 1;
-        }
-        if (annoMissSeenN < 32)
-        {
-            annoMissSeen[annoMissSeenN] = descArr.toLong();
-            annoMissSeenN += 1;
-        }
-        Uart.write(Magic.bytes("\n  ANNOTATION IFACE NOT LOADED (reads null): "));
-        int i = 0;
-        while (i < descLen)
-        {
-            Uart.putc((byte) u1(descArr.toAddress().plus(24 + i)));
-            i += 1;
-        }
-        Uart.putc(0x0A);
-    }
-
-    private static long[] annoMissSeen;
-    private static int annoMissSeenN;
-
-    /** Scan an attribute list for RuntimeVisibleAnnotations and look for the wanted descriptor in it. */
-    private static boolean annoInAttrs(Address base, Address p, int attrs, ObjectReference descArr, int descLen)
-    {
-        int a = 0;
-        while (a < attrs)
-        {
-            int anIdx = u2(p);
-            p = p.plus(2);
-            int alen = u4(p);
-            p = p.plus(4);
-            if (Utf8.utf8IsAtBase(base, gcp[anIdx], Magic.bytes("RuntimeVisibleAnnotations")))
-            {
-                return annoListHas(base, p, descArr, descLen);
-            }
-            p = p.plus(alen);
-            a += 1;
-        }
-        return false;
-    }
-
-    /** {@code { u2 num_annotations; annotation[] }} -- true if any annotation's type descriptor matches. */
-    private static boolean annoListHas(Address base, Address p, ObjectReference descArr, int descLen)
-    {
-        int n = u2(p);
-        p = p.plus(2);
-        int i = 0;
-        while (i < n)
-        {
-            int typeIdx = u2(p);
-            p = p.plus(2);
-            if (Utf8.utf8EqArr(base, gcp[typeIdx], descArr, descLen))
-            {
-                return true;
-            }
-            p = skipElementPairs(p);                     // must skip precisely: a later annotation may be the one
-            i += 1;
-        }
-        return false;
-    }
-
-    // ===== annotation INSTANCES ==========================================================================
-    // An annotation object has the SAME SHAPE as a synthesised lambda (finishLambdaClass): an object whose
-    // Type carries an itable directory for one interface. The difference is that a lambda has ONE thunk (its
-    // SAM) and an annotation has one per ELEMENT -- and each of those is trivial, because the value lives in
-    // the instance:
-    //
-    //     ldr x0, [x0, #16 + slot*8]
-    //     ret
-    //
-    // Two instructions, no boxing and no capture list, because the interface's own itable slot numbering IS
-    // the value index: the element method at slot s reads value slot s. That identity is what makes this
-    // small, and it is not a coincidence -- both sides are `ifmSlotIn`'s numbering for the same interface.
-    //
-    // Type/TIB/itable depend only on the annotation INTERFACE, never on the values, so they are built once per
-    // interface and shared by every instance.
-
-    private static final int MAXANNOTIB = 64;
-    private static AddressArray annoTibKey;                   // interface Type -> its shared TIB
-    private static AddressArray annoTibVal;
-    private static int annoTibN;
 
     // ===== java.lang.reflect.Proxy instances =========================================================
     // A proxy is synthesised like a lambda or an annotation instance: a Type the registry does not know, whose
@@ -24574,904 +23678,13 @@ public final class Loader
         return 0L;
     }
 
-    /** Compiled bodies of {@code MetalAnnotations.annoEquals/annoHashCode/annoToString}; 0 until compiled. */
-    private static long annoEqBuf;
-    private static long annoHashBuf;
-    private static long annoStrBuf;
 
-    /**
-     * Compile the annotation-contract helpers once, loading their class on first use -- lazily, so a program
-     * that reads no annotation pays nothing. Each stays 0 if it will not compile, and its slot then keeps
-     * {@code Object}'s identity behaviour, which is the old answer rather than a wild branch.
-     */
-    private static void annoContractBufs()
-    {
-        if (annoEqBuf != 0L && annoHashBuf != 0L && annoStrBuf != 0L)
-        {
-            return;
-        }
-        if (classIndexByName(Magic.bytes("jdk/internal/misc/MetalAnnotations")) < 0)
-        {
-            loadClassIncremental(Magic.bytes("jdk/internal/misc/MetalAnnotations"));
-            if (classIndexByName(Magic.bytes("jdk/internal/misc/MetalAnnotations")) < 0)
-            {
-                return;
-            }
-        }
-        Address cls = utf8Blob(Magic.bytes("jdk/internal/misc/MetalAnnotations"));
-        if (annoEqBuf == 0L)
-        {
-            annoEqBuf = helperBuf(cls, Magic.bytes("annoEquals"), Magic.bytes("(Ljava/lang/Object;Ljava/lang/Object;)Z"));
-        }
-        if (annoHashBuf == 0L)
-        {
-            annoHashBuf = helperBuf(cls, Magic.bytes("annoHashCode"), Magic.bytes("(Ljava/lang/Object;)I"));
-        }
-        if (annoStrBuf == 0L)
-        {
-            annoStrBuf = helperBuf(cls, Magic.bytes("annoToString"), Magic.bytes("(Ljava/lang/Object;)Ljava/lang/String;"));
-        }
-    }
-
-    private static long helperBuf(Address cls, byte[] name, byte[] desc)
+    static long helperBuf(Address cls, byte[] name, byte[] desc)
     {
         Address n = utf8Blob(name);
         Address d = utf8Blob(desc);
         long buf = bufBySigU(cls, n, d);
         return buf != 0L ? buf : compileSigOnDemand(cls, n, d);
-    }
-
-    /** Whether {@code tib} is one of the shared annotation TIBs. */
-    private static boolean isAnnoTib(Address tib)
-    {
-        int i = 0;
-        while (i < annoTibN)
-        {
-            if (annoTibVal.get(i).EQ(tib))
-            {
-                return true;
-            }
-            i += 1;
-        }
-        return false;
-    }
-
-    /**
-     * Point an annotation TIB's {@code equals}/{@code hashCode}/{@code toString} -- the {@code Object} vtable
-     * slots, and when {@code dir} is given the {@code java/lang/annotation/Annotation} itable entry -- at
-     * {@code MetalAnnotations}' static helpers, whose (receiver, arg) register layout is the instance method's.
-     * Before this an annotation was compared, hashed and printed as an identity object: two reads of the same
-     * annotation were not equal, a {@code HashSet} kept every copy, and {@code toString} printed a {@code $$Lambda}
-     * name (AnnoContractProbe). Slots beyond {@code cap} are not written.
-     */
-    private static void patchAnnoContract(Address tib, int cap, Address dir)
-    {
-        annoContractBufs();
-        int oi = objectClassIndex();
-        if (oi < 0)
-        {
-            return;
-        }
-        int st = clTab[oi].vtStart;
-        int nv = clTab[oi].vtCount;
-        int k = 0;
-        while (k < nv && k < cap)
-        {
-            long buf = annoContractBufFor(vtNameBase.get(st + k), vtNameOff[st + k], vtDescOff[st + k]);
-            if (buf != 0L)
-            {
-                tib.plus(8L).plus((long) k * 8L).store(buf);
-            }
-            k += 1;
-        }
-        if (dir.isZero())
-        {
-            return;
-        }
-        Address e = dir;
-        while (e.loadLong() != 0L)
-        {
-            int r = classRegByType(e.loadAddress());
-            Address it = e.plus(8L).loadAddress();
-            if (r >= 0 && !it.isZero() && Utf8.utf8IsAtBase(clTab[r].base, clTab[r].nameOff, Magic.bytes("java/lang/annotation/Annotation")))
-            {
-                int z = 0;
-                while (z < clTab[r].ifmCount)
-                {
-                    int m = clTab[r].ifmStart + z;
-                    long buf = annoContractBufFor(ifBase.get(m), ifNameOff[m], ifDescOff[m]);
-                    if (buf != 0L)
-                    {
-                        it.plus(z * 8L).store(buf);
-                    }
-                    z += 1;
-                }
-            }
-            e = e.plus(16L);
-        }
-    }
-
-    /** The contract helper for a method named and typed as {@code equals}/{@code hashCode}/{@code toString}, or 0. */
-    private static long annoContractBufFor(Address base, int nameOff, int descOff)
-    {
-        if (Utf8.utf8IsAtBase(base, nameOff, Magic.bytes("equals")) && Utf8.utf8IsAtBase(base, descOff, Magic.bytes("(Ljava/lang/Object;)Z")))
-        {
-            return annoEqBuf;
-        }
-        if (Utf8.utf8IsAtBase(base, nameOff, Magic.bytes("hashCode")) && Utf8.utf8IsAtBase(base, descOff, Magic.bytes("()I")))
-        {
-            return annoHashBuf;
-        }
-        if (Utf8.utf8IsAtBase(base, nameOff, Magic.bytes("toString")) && Utf8.utf8IsAtBase(base, descOff, Magic.bytes("()Ljava/lang/String;")))
-        {
-            return annoStrBuf;
-        }
-        return 0L;
-    }
-
-    /** The shared TIB for annotation interface {@code ifaceReg}, built once and GC-rooted like a lambda's. */
-    private static Address annoTibFor(int ifaceReg)
-    {
-        Address ifaceType = clTab[ifaceReg].type;
-        if (ifaceType.isZero())
-        {
-            return Address.zero();
-        }
-        if (annoTibKey == null)
-        {
-            annoTibKey = AddressArray.create(MAXANNOTIB);
-            annoTibVal = AddressArray.create(MAXANNOTIB);
-            annoTibN = 0;
-        }
-        int i = 0;
-        while (i < annoTibN)
-        {
-            if (annoTibKey.get(i).EQ(ifaceType))
-            {
-                return annoTibVal.get(i);
-            }
-            i += 1;
-        }
-        if (annoTibN >= MAXANNOTIB)
-        {
-            return Address.zero();
-        }
-        int n = clTab[ifaceReg].ifmCount;
-        Address it = Heap.allocData(n > 0 ? n * 8 : 8);
-        Address ownBase = clTab[ifaceReg].base;
-        int s = 0;
-        while (s < n)
-        {
-            // ONLY THE INTERFACE'S OWN ELEMENTS READ A VALUE SLOT. Its method list also carries what it inherits
-            // from java/lang/annotation/Annotation, and every slot used to get a value-reading thunk -- so
-            // annotationType() in THIS entry read an empty value slot. A direct call names Annotation and lands in
-            // that entry's thunk below, which is why it worked; a method reference resolves BY NAME and finds
-            // this entry first, so `Annotation::annotationType` on an annotation read null (AnnoRefProbe) and
-            // AnnotatedElement's default getDeclaredAnnotationsByType keyed its map by null (RepeatableProbe).
-            // annotationType() gets the mirror thunk here too; an inherited equals/hashCode/toString stays 0,
-            // which the dispatch guard turns into a resolution, not a branch.
-            Address thunk = Address.zero();
-            boolean own = ifBase.get(clTab[ifaceReg].ifmStart + s).EQ(ownBase);
-            boolean isAnnoType = Utf8.utf8IsAtBase(ifBase.get(clTab[ifaceReg].ifmStart + s),
-                    ifNameOff[clTab[ifaceReg].ifmStart + s], Magic.bytes("annotationType"));
-            if (own || isAnnoType)
-            {
-                thunk = Heap.allocCode(8);
-                Heap.pinCodeAt(thunk);                  // only the itable names it; no `bl` displacement does
-                thunk.plus(0L).store(A64Enc.ldrx(0, 0, 16 + (own ? s : n) * 8));
-                thunk.plus(4L).store(A64Enc.ret());
-                Heap.publishCode(thunk, thunk.plus(8L));    // another core may run it: maintenance is BY ADDRESS
-            }
-            it.plus(s * 8L).store(thunk);
-            s += 1;
-        }
-        // THE DIRECTORY MUST CARRY THE INTERFACE'S CLOSURE, NOT JUST THE INTERFACE. Every `@interface Foo`
-        // implicitly extends java.lang.annotation.Annotation, and a bounded `<T extends Annotation>` caller
-        // emits a `checkcast Annotation` on the result -- which walks this directory. With only Foo in it the
-        // cast throws ClassCastException, which is exactly how this first failed. Same closure treatment
-        // finishLambdaClass gives a functional interface, and for the same reason.
-        //
-        // The extra entries get CORRECTLY SIZED but ZERO-FILLED itables: nothing here implements
-        // Annotation.annotationType()/equals/hashCode, and a zero slot meets the dispatch guard (a named trap)
-        // rather than branching into whatever a short table would have run off into.
-        int closN = ifaceClosureOf(ifaceReg);
-        Address dir = Heap.allocData((closN + 2) * 16);
-        dir.plus(0L).store(ifaceType);
-        dir.plus(8L).store(it);
-        int e = 1;
-        int ci = 0;
-        while (ci < closN)
-        {
-            int cr = ifClosureBuf[ci];
-            int cn = clTab[cr].ifmCount;
-            Address cit = Heap.allocData(cn > 0 ? cn * 8 : 8);
-            int z = 0;
-            while (z < cn)
-            {
-                // annotationType() IS implemented: it reads the mirror buildAnnoObject stored in the trailing
-                // word. Leaving it zero cost a launcher boot -- JUnit's findRepeatableAnnotations calls it on
-                // every annotation it walks, and a null flowed through isInJavaLangAnnotationPackage's own
-                // null guard to NPE one line later, naming a JUnit method rather than this gap.
-                boolean isAnnoType = Utf8.utf8IsAtBase(ifBase.get(clTab[cr].ifmStart + z),
-                        ifNameOff[clTab[cr].ifmStart + z], Magic.bytes("annotationType"));
-                if (isAnnoType)
-                {
-                    Address at = Heap.allocCode(8);
-                    Heap.pinCodeAt(at);
-                    at.plus(0L).store(A64Enc.ldrx(0, 0, 16 + n * 8));
-                    at.plus(4L).store(A64Enc.ret());
-                    Heap.publishCode(at, at.plus(8L));
-                    cit.plus(z * 8L).store(at);
-                }
-                else
-                {
-                    cit.plus(z * 8L).store(0L);
-                }
-                z += 1;
-            }
-            dir.plus(e * 16L).plus(0L).store(clTab[cr].type);
-            dir.plus(e * 16L).plus(8L).store(cit);
-            e += 1;
-            ci += 1;
-        }
-        dir.plus(e * 16L).plus(0L).store(0L);          // sentinel: interfaceType 0 ends the directory
-        dir.plus(e * 16L).plus(8L).store(0L);
-        Address type = Heap.allocData(ObjectModel.TYPE_SIZE);
-        type.plus(0L).store((long) (16 + n * 8));
-        type.plus(ObjectModel.TYPE_SUPER_OFFSET).store(objectTypeAddr());   // NOT 0 -- see finishLambdaClass
-        type.plus(16L).store(dir);
-        // TIB { Type, Object's vtable } -- see finishLambdaClass. An annotation instance is synthesised the
-        // same way and has the same gap: unregistered, itable-only, so equals/hashCode/toString on one had
-        // nowhere to resolve. It also has to be the same SHAPE as a lambda TIB, because both live in
-        // lambdaTibRoots and refillSynthTibVtables walks that one array.
-        int onv2 = objectVtableCount();
-        Address tib = Heap.allocData(8 + onv2 * 8);
-        tib.plus(0L).store(type);
-        fillObjectVtable(tib);
-        patchAnnoContract(tib, onv2, dir);
-        annoTibKey.set(annoTibN, ifaceType);
-        annoTibVal.set(annoTibN, tib);
-        annoTibN += 1;
-        if (lambdaTibRoots != null && lambdaTibRootN < MAXLAMBDATIB)
-        {
-            lambdaTibRoots.set(lambdaTibRootN, tib);    // same GC root as a lambda TIB, for the same reason:
-            lambdaTibVtCap[lambdaTibRootN] = onv2;      //   nothing scanned would otherwise reference it
-            lambdaHostBase.set(lambdaTibRootN, Address.zero());        // an annotation instance has no host class
-            lambdaHostNameOff[lambdaTibRootN] = 0;
-            lambdaTibFilled[lambdaTibRootN] = false;    // EXPLICIT: allocArray does not zero its elements on
-                                                        //   this VM, so a garbage `true` here would skip a TIB
-                                                        //   that still needs filling -- a 0 vtable slot, i.e.
-                                                        //   a wild branch from baked code. Same trap the SMP
-                                                        //   arc hit with taskIdle/coreSched/gcParked.
-            lambdaTibRootN += 1;
-        }
-        return tib;
-    }
-
-    /**
-     * Build the annotation object for the annotation whose element_value_pairs start at {@code pairsPos}, as
-     * an instance of interface {@code ifaceReg}.
-     *
-     * <p>ELEMENT TYPES: primitives, {@code String} and arrays of those. {@code Class} ('c'), enum ('e') and
-     * nested annotation ('@') elements are left NULL and reported by name -- deliberately, because resolving
-     * one demand-loads a class, and a load re-parses a blob and clobbers {@code gcp}/{@code gbase} underneath
-     * this walk. That is the same hazard recorded for {@code buildLambdaTib}; the fix is the note-and-retry
-     * route the static/class-literal paths already use, and it belongs in its own increment rather than
-     * bolted into the first one.
-     */
-    private static long buildAnnoObject(Address base, Address pairsPos, int ifaceReg)
-    {
-        Address tib = annoTibFor(ifaceReg);
-        if (tib.isZero())
-        {
-            return 0L;
-        }
-        parseForMethods(base, blobLenOf(base));         // a first TIB compiles the contract helpers, which
-                                                        //   re-parses; phase 1 reads names through gcp
-        int n = clTab[ifaceReg].ifmCount;
-        // ONE EXTRA TRAILING WORD holds this annotation's own Class mirror, which is what
-        // Annotation.annotationType() answers. Keeping it IN THE INSTANCE is what lets that method reuse the
-        // same two-instruction thunk shape as every element accessor -- see annoTibFor.
-        Address obj = Heap.alloc(16 + (n + 1) * 8);
-        obj.plus(ObjectModel.TIB_OFFSET).store(tib);
-        obj.plus(16L).plus(n * 8L).store(classMirror(clTab[ifaceReg].type));
-        int start = clTab[ifaceReg].ifmStart;
-        int pendMark = annoPendN;                       // a NESTED build drains only what it adds past here
-        int pairs = u2(pairsPos);
-        // PHASE 1 -- every element the annotation USE writes, decoded against the annotated class's blob.
-        boolean[] filled = new boolean[n];
-        int s = 0;
-        while (s < n)
-        {
-            Address p = pairsPos.plus(2L);
-            int k = 0;
-            while (k < pairs)
-            {
-                int nameIdx = u2(p);
-                if (utf8EqAt(base, gcp[nameIdx], ifBase.get(start + s), ifNameOff[start + s]))
-                {
-                    annoPendSlot = s;                   // a 'c'/'e' value notes ITS slot, not a global one
-                    annoArrayTib = annoArrayTibFor(ifBase.get(start + s), ifDescOff[start + s]);
-                    annoArrayPrim = annoArrayPrimFor(ifBase.get(start + s), ifDescOff[start + s]);
-                    obj.plus(16L).plus(s * 8L).store(annoElementValue(base, p.plus(2L)));
-                    annoPendSlot = -1;
-                    annoArrayTib = Address.zero();
-                    annoArrayPrim = 0;
-                    filled[s] = true;
-                    break;
-                }
-                p = skipElementValue(p.plus(2L));
-                k += 1;
-            }
-            s += 1;
-        }
-        // PHASE 2 -- DEFAULTS, for every element the use omitted. Strictly after phase 1 and never interleaved
-        // with it: the defaults live in the ANNOTATION TYPE's classfile, and reading them re-parses that blob,
-        // which clobbers the gcp/gbase cursor phase 1 is walking. Two passes cost one extra parse and make the
-        // ordering impossible to get wrong.
-        //
-        // Not optional. An annotation use writes only the elements it overrides -- picocli's
-        // `@Command(name = "junit")` leaves a dozen defaulted -- so without this those read null and the
-        // library NPEs on its own annotation. That is exactly how this surfaced.
-        applyAnnoDefaults(obj.toObjectReference(), ifaceReg, filled, n);
-        // PHASE 3 -- the elements that need a CLASS RESOLVED ('c' and 'e'). Deferred to here for the reason
-        // phases 1 and 2 are separated at all: resolving demand-loads, a load re-parses a blob, and that
-        // clobbers the gcp/gbase cursor a walk is standing on. Nothing is walking now.
-        //
-        // The pending entries hold ABSOLUTE Utf8 addresses, which survive a re-parse because blobs do not move
-        // -- only the parse STATE does. That is the same property applyAnnoDefaults relies on.
-        drainAnnoPending(obj.toObjectReference(), pendMark);
-        return obj.toLong();
-    }
-
-    /**
-     * Fill the elements a use omitted from the annotation TYPE's {@code AnnotationDefault} attributes.
-     *
-     * <p>An element's default is stored as a single {@code element_value} on the interface's own method, so
-     * this is the same decode as a written pair -- only the blob differs. Elements with neither a written value
-     * nor a default (a mandatory element) keep 0/null, which is what the classfile says.
-     */
-    private static void applyAnnoDefaults(ObjectReference obj, int ifaceReg, boolean[] filled, int n)
-    {
-        int start = clTab[ifaceReg].ifmStart;
-        Address ibase = clTab[ifaceReg].base;
-        // Snapshot the element NAMES as absolute Utf8 addresses BEFORE re-parsing: ifNameOff[] is an offset
-        // into ifBase[], and the parse below is what makes those offsets resolvable against a different blob.
-        AddressArray want = AddressArray.create(n);
-        AddressArray defArrayTib = AddressArray.create(n);
-        int[] defArrayPrim = new int[n];
-        int s = 0;
-        while (s < n)
-        {
-            want.set(s, filled[s] ? Address.zero() : ifBase.get(start + s).plus(ifNameOff[start + s]));
-            // Computed HERE, before the re-parse: annoArrayTibFor reads the element method's descriptor
-            // through gcp/clTab, and the parse below moves that cursor to a different blob.
-            defArrayTib.set(s, filled[s] ? Address.zero() : annoArrayTibFor(ifBase.get(start + s), ifDescOff[start + s]));
-            defArrayPrim[s] = filled[s] ? 0 : annoArrayPrimFor(ifBase.get(start + s), ifDescOff[start + s]);
-            s += 1;
-        }
-        parseForMethods(ibase, blobLenOf(ibase));
-        Address p = gMethodsStart;
-        int mcount = u2(p);
-        p = p.plus(2);
-        int m = 0;
-        while (m < mcount)
-        {
-            int attrs = u2(p.plus(6));
-            int nameOff = gcp[u2(p.plus(2))];
-            int slot = -1;
-            int j = 0;
-            while (j < n)
-            {
-                if (!want.get(j).isZero() && utf8EqAt(ibase, nameOff, want.get(j), 0))
-                {
-                    slot = j;
-                    break;
-                }
-                j += 1;
-            }
-            if (slot >= 0)
-            {
-                Address q = p.plus(8);
-                int a = 0;
-                while (a < attrs)
-                {
-                    int anIdx = u2(q);
-                    q = q.plus(2);
-                    int alen = u4(q);
-                    q = q.plus(4);
-                    if (Utf8.utf8IsAtBase(ibase, gcp[anIdx], Magic.bytes("AnnotationDefault")))
-                    {
-                        annoPendSlot = slot;
-                        annoArrayTib = defArrayTib.get(slot);   // computed BEFORE this parse: see applyAnnoDefaults
-                        annoArrayPrim = defArrayPrim[slot];
-                        obj.toAddress().plus(16L).plus(slot * 8L).store(annoElementValue(ibase, q));
-                        annoPendSlot = -1;
-                        annoArrayTib = Address.zero();
-                        annoArrayPrim = 0;
-                        break;
-                    }
-                    q = q.plus(alen);
-                    a += 1;
-                }
-            }
-            p = skipAttributes(p.plus(8), attrs);
-            m += 1;
-        }
-    }
-
-    /** Decode one {@code element_value} to the word an element method should return. */
-    private static long annoElementValue(Address base, Address p)
-    {
-        int tag = u1(p);
-        int idx = u2(p.plus(1));
-        if (tag == 0x73)                                // 's' -- a String
-        {
-            return internUtf8Obj(base, gcp[idx]);
-        }
-        if (tag == 0x42 || tag == 0x43 || tag == 0x49 || tag == 0x53 || tag == 0x5A)
-        {
-            return (long) u4(base.plus(gcp[idx]));          // B C I S Z -- all CONSTANT_Integer
-        }
-        if (tag == 0x4A || tag == 0x44)                 // 'J' / 'D' -- CONSTANT_Long/Double, two u4 halves; a
-        {                                               //   double's raw bits, as the slot keeps them
-            return ((long) u4(base.plus(gcp[idx])) << 32) | ((long) u4(base.plus(gcp[idx] + 4)) & 0xFFFFFFFFL);
-        }
-        if (tag == 0x46)                                // 'F' -- CONSTANT_Float: its raw bits, zero-extended,
-        {                                               //   as a compiled putfield leaves a float. Unhandled, a
-            return (long) u4(base.plus(gcp[idx])) & 0xFFFFFFFFL;   // float or double element read 0.0
-        }
-        if (tag == 0x40)                                // '@' -- a nested annotation
-        {
-            return annoNestedValue(base, p.plus(1L));
-        }
-        if (tag == 0x5B && annoArrayPrim != 0)          // '[' of a PRIMITIVE element type
-        {
-            return annoPrimArray(base, p);
-        }
-        if (tag == 0x5B)                                // '[' -- array of element_values
-        {
-            int count = u2(p.plus(1));
-            Address arr = Heap.allocArray(count, 8);
-            // TYPE it as Object[]: a RAW 8-byte-element array is not traced as references, so the Strings this
-            // array holds would be reachable from nothing the collector follows and swept out from under it.
-            // TYPE IT BY THE ELEMENT METHOD'S OWN DESCRIPTOR, not as Object[]. Object[] traces correctly but is
-            // the WRONG TYPE: `@Command`'s String[] elements reach picocli as `cmd.customSynopsis().clone()`
-            // followed by `checkcast [Ljava/lang/String;`, and an Object[] fails that cast. Falling back to
-            // Object[] only when the element type is unresolvable keeps the GC tracing either way -- what must
-            // never happen is a RAW array, whose elements are not traced as references at all.
-            Address at = !annoArrayTib.isZero() ? annoArrayTib : refArrayTib(objectTypeAddr());
-            if (!at.isZero())
-            {
-                arr.plus(ObjectModel.TIB_OFFSET).store(at);
-            }
-            Address q = p.plus(3L);
-            int i = 0;
-            int outerElem = annoPendElem;
-            while (i < count)
-            {
-                // An element INSIDE an array keeps the enclosing value SLOT and adds its own INDEX, so a
-                // 'c'/'e' value here can be noted and resolved in phase 3 like any other. Suppressing the
-                // note (what this did before) left a Class[] element reading null for ever -- picocli's
-                // @Option(converter = ...) is exactly that shape.
-                annoPendElem = i;
-                arr.plus(24L).plus(i * 8L).store(annoElementValue(base, q));
-                q = skipElementValue(q);
-                i += 1;
-            }
-            annoPendElem = outerElem;
-            return arr.toLong();
-        }
-        if (tag == 0x63)                                // 'c' -- a Class literal; descriptor Utf8
-        {
-            noteAnnoPending(0, base.plus(gcp[idx]), Address.zero());
-            return 0L;                                  // filled by drainAnnoPending
-        }
-        if (tag == 0x65)                                // 'e' -- an enum constant: type descriptor + name
-        {
-            noteAnnoPending(1, base.plus(gcp[idx]), base.plus(gcp[u2(p.plus(3))]));
-            return 0L;
-        }
-        return 0L;
-    }
-
-    /**
-     * A {@code '['} element of a PRIMITIVE component -- {@code int[] ints() default {1, 2, 3}} -- as a real
-     * primitive array: that component's element width and the interned primitive-array TIB {@code new int[]}
-     * uses. It used to be built as 8-byte reference slots, so an {@code int[]} was malformed (the reader
-     * crashed in {@code Arrays.toString}) and an empty one came back typed {@code Object[]}.
-     */
-    private static long annoPrimArray(Address base, Address p)
-    {
-        int count = u2(p.plus(1));
-        int atype = atypeForDescChar(annoArrayPrim);
-        int esz = RuntimeEntrypoints.arrayElemSizeOfAtype(atype);
-        Address arr = Heap.allocArray(count, esz);
-        arr.plus(ObjectModel.TIB_OFFSET).store(primArrayTib(atype));
-        Address q = p.plus(3L);
-        int i = 0;
-        while (i < count)
-        {
-            long v = annoElementValue(base, q);         // B C I S Z F: the value or raw bits; J D: 64 bits
-            Address at = arr.plus(ObjectModel.ARRAY_BASE_OFFSET + (long) i * esz);
-            if (esz == 1)
-            {
-                at.store((byte) v);
-            }
-            else if (esz == 2)
-            {
-                at.store((byte) v);
-                at.plus(1L).store((byte) (v >>> 8));
-            }
-            else if (esz == 4)
-            {
-                at.store((int) v);
-            }
-            else
-            {
-                at.store(v);
-            }
-            q = skipElementValue(q);
-            i += 1;
-        }
-        return arr.toLong();
-    }
-
-    /**
-     * A {@code '@'} element: the nested annotation, built by {@link #buildAnnoObject} like any other -- it was
-     * left null, so every {@code @Repeatable} container read {@code value() == null}. {@code at} is the nested
-     * {@code annotation} structure ({@code u2 type_index}, then its element-value pairs).
-     *
-     * <p>A build is not re-entrant on its own, and this one runs INSIDE an outer build's walk:
-     * <ul>
-     *   <li>the decoder's per-element globals (slot, array index, array TIB and component) are saved and
-     *       restored around it;</li>
-     *   <li>its pending Class/enum values drain against IT -- {@link #drainAnnoPending} drains from the mark
-     *       {@code buildAnnoObject} takes, not the outer build's entries;</li>
-     *   <li>and the parse cursor is re-pointed at {@code base} after it, because applying its defaults
-     *       re-parsed its own type's blob and the outer walk reads element names through that cursor.</li>
-     * </ul>
-     */
-    private static long annoNestedValue(Address base, Address at)
-    {
-        int nreg = loadAnnoTypeByDescAbs(base.plus(gcp[u2(at)]));
-        if (nreg < 0)
-        {
-            parseForMethods(base, blobLenOf(base));
-            return 0L;
-        }
-        parseForMethods(base, blobLenOf(base));         // a load re-parses: the build reads names through gcp
-        int sSlot = annoPendSlot;
-        int sElem = annoPendElem;
-        Address sTib = annoArrayTib;
-        int sPrim = annoArrayPrim;
-        annoPendSlot = -1;
-        annoPendElem = -1;
-        annoArrayTib = Address.zero();
-        annoArrayPrim = 0;
-        long obj = buildAnnoObject(base, at.plus(2L), nreg);
-        annoPendSlot = sSlot;
-        annoPendElem = sElem;
-        annoArrayTib = sTib;
-        annoArrayPrim = sPrim;
-        parseForMethods(base, blobLenOf(base));
-        return obj;
-    }
-
-    // Pending Class/enum element resolutions for the annotation currently being built. Kept as a flat list
-    // rather than resolved in place: see buildAnnoObject phase 3. `annoPendAt` is the value slot, recorded by
-    // the caller because only it knows which element is being decoded.
-    private static final int MAXANNOPEND = 256;   // per annotation instance; ARRAY elements count too now
-                                                     //   (@Command.subcommands() is itself a Class[])
-    private static int[] annoPendKind;
-    private static AddressArray annoPendA;
-    private static AddressArray annoPendB;
-    private static int[] annoPendAt;
-    private static int[] annoPendIdx;                   // element index within the slot's array, or -1
-    private static int annoPendN;
-    private static int annoPendSlot = -1;               // the slot being decoded, or -1 outside an element
-    private static int annoPendElem = -1;               // array element index being decoded, or -1
-    private static Address annoArrayTib;                // the array TIB for that slot's declared element type
-    private static int annoArrayPrim;                   // that slot's PRIMITIVE array component char, or 0
-
-    /**
-     * The array TIB an element of declared type {@code ()[Lfoo;} needs, or 0 if it is not an array of a
-     * resolvable reference type. Read from the element METHOD's descriptor, which is the only place the
-     * element's real type is written down -- an {@code element_value} says what a value IS, never what the
-     * declaration expects.
-     */
-    /** The primitive component char of an element method's {@code ()[X} return type, or 0 for anything else. */
-    private static int annoArrayPrimFor(Address base, int descOff)
-    {
-        int len = u2(base.plus(descOff));
-        int i = 0;
-        while (i < len && u1(base.plus(descOff + 2 + i)) != 0x29)   // ')'
-        {
-            i += 1;
-        }
-        if (i + 2 >= len || u1(base.plus(descOff + 2 + i + 1)) != 0x5B)  // '['
-        {
-            return 0;
-        }
-        int c = u1(base.plus(descOff + 2 + i + 2));
-        return c == 0x4C || c == 0x5B ? 0 : c;          // 'L' / '[': a reference component
-    }
-
-    private static Address annoArrayTibFor(Address base, int descOff)
-    {
-        int len = u2(base.plus(descOff));
-        int i = 0;
-        while (i < len && u1(base.plus(descOff + 2 + i)) != 0x29)   // ')'
-        {
-            i += 1;
-        }
-        int ret = descOff + 2 + i + 1;                  // the return descriptor, just past ')'
-        if (ret - descOff - 2 >= len || u1(base.plus(ret)) != 0x5B)  // '['
-        {
-            return Address.zero();
-        }
-        Address et = elementTypeOfArrayDescN(base, ret, len - (ret - descOff - 2));
-        return et.isZero() ? Address.zero() : refArrayTib(et);
-    }
-
-    private static void noteAnnoPending(int kind, Address a, Address b)
-    {
-        if (annoPendSlot < 0)
-        {
-            return;                                     // outside any element -- nothing to fill in
-        }
-        if (annoPendKind == null)
-        {
-            annoPendKind = new int[MAXANNOPEND];
-            annoPendA = AddressArray.create(MAXANNOPEND);
-            annoPendB = AddressArray.create(MAXANNOPEND);
-            annoPendAt = new int[MAXANNOPEND];
-            annoPendIdx = new int[MAXANNOPEND];
-        }
-        if (annoPendN >= MAXANNOPEND)
-        {
-            return;
-        }
-        annoPendKind[annoPendN] = kind;
-        annoPendA.set(annoPendN, a);
-        annoPendB.set(annoPendN, b);
-        annoPendAt[annoPendN] = annoPendSlot;
-        annoPendIdx[annoPendN] = annoPendElem;          // -1 = the value slot itself, >=0 = that array element
-        annoPendN += 1;
-    }
-
-    /**
-     * Resolve every noted Class/enum element into {@code obj}. Runs with no classfile walk in progress, so a
-     * demand-load here is safe.
-     *
-     * <p>A Class element whose class cannot be loaded, and an enum constant whose class has no such static,
-     * stay NULL rather than becoming something plausible -- the same choice the rest of this runtime makes.
-     */
-    private static void drainAnnoPending(ObjectReference obj, int mark)
-    {
-        int n = annoPendN - mark;
-        if (n <= 0)
-        {
-            return;
-        }
-        // COPY this build's entries out, then release them: a <clinit> or another build below can note new
-        // entries, which land at `mark` and would overwrite the ones being resolved.
-        int[] kind = new int[n];
-        AddressArray ea = AddressArray.create(n);
-        AddressArray eb = AddressArray.create(n);
-        int[] eat = new int[n];
-        int[] eidx = new int[n];
-        int c = 0;
-        while (c < n)
-        {
-            kind[c] = annoPendKind[mark + c];
-            ea.set(c, annoPendA.get(mark + c));
-            eb.set(c, annoPendB.get(mark + c));
-            eat[c] = annoPendAt[mark + c];
-            eidx[c] = annoPendIdx[mark + c];
-            c += 1;
-        }
-        annoPendN = mark;
-        int i = 0;
-        while (i < n)
-        {
-            long v = kind[i] == 0 ? annoClassValue(ea.get(i)) : annoEnumValue(ea.get(i), eb.get(i));
-            if (v != 0L)
-            {
-                if (eidx[i] < 0)
-                {
-                    obj.toAddress().plus(16L).plus(eat[i] * 8L).store(v);
-                }
-                else
-                {
-                    // Reached THROUGH the live object rather than through a cached array address: this runs
-                    // after the walks, and resolving a Class here can demand-load and collect. The array is
-                    // reachable from the object's value slot, so going via the slot keeps it alive; a stashed
-                    // address would not.
-                    Address arr = obj.toAddress().plus(16L).plus(eat[i] * 8L).loadAddress();
-                    // BOUNDS-CHECK BEFORE STORING. A raw store at a COMPUTED offset: if the slot does not hold
-                    // the array this entry was recorded against, or the index is stale, it writes into the
-                    // middle of whatever object is there. Not the cause of the corruption this change was once
-                    // blamed for -- that was the code arena overlapping the image -- but unchecked computed
-                    // stores were three separate defects in one day, so this one does not ship unchecked.
-                    // A miss means the pending record is wrong, so it is skipped, not clamped.
-                    if (!arr.isZero() && eidx[i] < (int) arr.plus(16L).loadLong())
-                    {
-                        arr.plus(24L).plus(eidx[i] * 8L).store(v);
-                    }
-                }
-            }
-            i += 1;
-        }
-    }
-
-    /** A {@code 'c'} element: a field DESCRIPTOR Utf8 ("Lcom/x/Foo;", "I", "[I") -> its Class mirror, or 0. */
-    private static long annoClassValue(Address descU)
-    {
-        int len = u2(descU);
-        if (len == 1)
-        {
-            return primitiveMirror(u1(descU.plus(2)));      // I J Z C B S F D V
-        }
-        int dims = 0;                                   // an ARRAY class literal -- int[].class, String[][].class
-        while (dims < len && u1(descU.plus(2 + dims)) == 0x5B)  // -- read null before; '[' counts the dimensions
-        {
-            dims += 1;
-        }
-        if (dims > 0 && dims == len - 1)
-        {
-            return primArrayMirror(u1(descU.plus(2 + dims)), dims);
-        }
-        if (len - dims < 3 || u1(descU.plus(2 + dims)) != 0x4C)
-        {
-            return 0L;
-        }
-        byte[] name = new byte[len - dims - 2];
-        int i = 0;
-        while (i < name.length)
-        {
-            name[i] = (byte) u1(descU.plus(2 + dims + 1 + i));
-            i += 1;
-        }
-        int ci = classIndexByName(name);
-        if (ci < 0)
-        {
-            loadClassIncremental(name);                 // safe here: no walk is in progress
-            ci = classIndexByName(name);
-        }
-        if (ci < 0)
-        {
-            return 0L;
-        }
-        long m = classMirror(clTab[ci].type);
-        return dims == 0 ? m : arrayOf(m, dims);
-    }
-
-    /** An {@code 'e'} element: enum type descriptor + constant name -> the constant object, or 0. */
-    private static long annoEnumValue(Address typeU, Address nameU)
-    {
-        int tlen = u2(typeU);
-        if (tlen < 3 || u1(typeU.plus(2)) != 0x4C)
-        {
-            return 0L;
-        }
-        byte[] cls = new byte[tlen - 2];
-        int i = 0;
-        while (i < tlen - 2)
-        {
-            cls[i] = (byte) u1(typeU.plus(2 + 1 + i));
-            i += 1;
-        }
-        int ci = classIndexByName(cls);
-        if (ci < 0)
-        {
-            loadClassIncremental(cls);
-            ci = classIndexByName(cls);
-        }
-        if (ci < 0)
-        {
-            return 0L;
-        }
-        ensureClinit(ci);                               // the constants ARE statics, and only <clinit> sets them
-        int nlen = u2(nameU);
-        byte[] fname = new byte[nlen];
-        int k = 0;
-        while (k < nlen)
-        {
-            fname[k] = (byte) u1(nameU.plus(2 + k));
-            k += 1;
-        }
-        long slot = staticSlotOf(cls, fname);
-        return slot == 0L ? 0L : Address.fromLong(slot).loadLong();
-    }
-
-    /** A {@code java/lang/String} object for the Utf8 at {@code off} in {@code base} (no cp-index cache). */
-    private static long internUtf8Obj(Address base, int off)
-    {
-        int len = u2(base.plus(off));
-        Address bytes = Heap.allocArray(len, 1);
-        Address bt = byteArrayTib();
-        if (!bt.isZero())
-        {
-            bytes.plus(ObjectModel.TIB_OFFSET).store(bt);
-        }
-        int i = 0;
-        while (i < len)
-        {
-            bytes.plus(24).plus(i).store((byte) u1(base.plus(off + 2 + i)));
-            i += 1;
-        }
-        Address tib = stringTib();
-        if (tib.isZero())
-        {
-            return bytes.toLong();
-        }
-        Address obj = Heap.alloc(stringSize());
-        obj.plus(0L).store(tib);
-        obj.plus(16L).store(bytes);
-        return obj.toLong();
-    }
-
-    /** The position of the element_value_pairs of the annotation matching {@code descArr}, or 0. */
-    private static Address annoListFind(Address base, Address p, ObjectReference descArr, int descLen)
-    {
-        int n = u2(p);
-        p = p.plus(2);
-        int i = 0;
-        while (i < n)
-        {
-            int typeIdx = u2(p);
-            p = p.plus(2);
-            if (Utf8.utf8EqArr(base, gcp[typeIdx], descArr, descLen))
-            {
-                return p;
-            }
-            p = skipElementPairs(p);
-            i += 1;
-        }
-        return Address.zero();
-    }
-
-    /** {@code { u2 num_pairs; { u2 name_index; element_value }[] }} -> the position after it. */
-    private static Address skipElementPairs(Address p)
-    {
-        int n = u2(p);
-        p = p.plus(2);
-        int i = 0;
-        while (i < n)
-        {
-            p = skipElementValue(p.plus(2));                 // past element_name_index
-            i += 1;
-        }
-        return p;
-    }
-
-    /** One {@code element_value} (JVMS 4.7.16.1) -> the position after it. Recursive for '@' and '['. */
-    private static Address skipElementValue(Address p)
-    {
-        int tag = u1(p);
-        p = p.plus(1);
-        if (tag == 0x65)                                 // 'e' enum: type_name_index + const_name_index
-        {
-            return p.plus(4);
-        }
-        if (tag == 0x40)                                 // '@' nested annotation: type_index, then its pairs
-        {
-            return skipElementPairs(p.plus(2));
-        }
-        if (tag == 0x5B)                                 // '[' array of element_value
-        {
-            int n = u2(p);
-            p = p.plus(2);
-            int i = 0;
-            while (i < n)
-            {
-                p = skipElementValue(p);
-                i += 1;
-            }
-            return p;
-        }
-        return p.plus(2);                                    // B C D F I J S Z s c: one u2 constant-pool index
     }
 
 
@@ -27195,7 +25408,7 @@ public final class Loader
     }
 
     /** Registry index of the loaded class/interface whose Type node is {@code type}, or -1. */
-    private static int regOfType(Address type)
+    static int regOfType(Address type)
     {
         return ctProbe(type);
     }
@@ -27432,7 +25645,7 @@ public final class Loader
     }
 
     /** Compare a Utf8 entry in {@code baseA} against one in {@code baseB} (may be different classes). */
-    private static boolean utf8EqAt(Address baseA, int offA, Address baseB, int offB)
+    static boolean utf8EqAt(Address baseA, int offA, Address baseB, int offB)
     {
         if (baseA.isZero() || baseB.isZero())                // a reclaimed registry entry: halt NAMED, not wild
         {
@@ -27581,7 +25794,7 @@ public final class Loader
     /** Number of vtable slots a SYNTHESISED TIB reserves (= java/lang/Object's flattened vtable count), or 0.
      *  Used by array, lambda and annotation TIBs alike -- none of them has a classfile, and all of them are
      *  nonetheless ordinary objects whose equals/hashCode/toString must select Object's implementations. */
-    private static int objectVtableCount()
+    static int objectVtableCount()
     {
         int oi = objectClassIndex();
         return oi >= 0 ? clTab[oi].vtCount : 0;
@@ -27641,9 +25854,9 @@ public final class Loader
                 {
                     lambdaTibFilled[i] = true;           // complete: nothing more can ever be written here
                 }
-                if (isAnnoTib(lambdaTibRoots.get(i)))   // the refill copies Object's slots back over the
+                if (AnnotationInstances.isAnnoTib(lambdaTibRoots.get(i)))   // the refill copies Object's slots back over the
                 {                                       //   annotation contract: put it back
-                    patchAnnoContract(lambdaTibRoots.get(i), lambdaTibVtCap[i], Address.zero());
+                    AnnotationInstances.patchAnnoContract(lambdaTibRoots.get(i), lambdaTibVtCap[i], Address.zero());
                 }
                 int px = proxyIndexOfTib(lambdaTibRoots.get(i));
                 if (px >= 0)                            // ... and over a proxy's equals/hashCode/toString
@@ -27655,7 +25868,7 @@ public final class Loader
         }
     }
 
-    private static void fillObjectVtable(Address tib)
+    static void fillObjectVtable(Address tib)
     {
         int oi = objectClassIndex();
         if (oi < 0)
@@ -27700,7 +25913,7 @@ public final class Loader
     }
 
     /** Class-registry index of {@code java/lang/Object}, or -1 if it isn't loaded yet. */
-    private static int objectClassIndex()
+    static int objectClassIndex()
     {
         int i = 0;
         while (i < clCount)
@@ -27913,7 +26126,7 @@ public final class Loader
 
     /** Element Type of the {@code n}-byte reference-array descriptor "[L<class>;" at {@code base+off}
      *  (the class's Type, or 0 when unresolved). */
-    private static Address elementTypeOfArrayDescN(Address base, int off, int n)
+    static Address elementTypeOfArrayDescN(Address base, int off, int n)
     {
         if (u1(base.plus(off + 1)) != 0x4C)                 // not 'L'
         {
@@ -29295,8 +27508,8 @@ public final class Loader
      * and return its address, so the shared core's {@code ldc} loads a real ref.
      */
     /** The character decoded by {@link #decodeUtf8At}, and the byte index just past it. */
-    private static int decCh;
-    private static int decNext;
+    static int decCh;
+    static int decNext;
 
     /**
      * Decode ONE character of MODIFIED UTF-8 at {@code src + i}, leaving it in {@link #decCh} and the next
@@ -29309,7 +27522,7 @@ public final class Loader
      * <p>A malformed sequence keeps the lead byte as its own character rather than consuming bytes it cannot
      * verify: a decoder that ran off the end of a literal would read whatever followed it in the blob.
      */
-    private static void decodeUtf8At(Address src, int i, int len)
+    static void decodeUtf8At(Address src, int i, int len)
     {
         int b0 = u1(src.plus(i));
         if (b0 < 0x80)

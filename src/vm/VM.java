@@ -1830,19 +1830,19 @@ public final class VM
     /** A record's synthesised {@code hashCode} (the ObjectMethods indy lowers to a call here). */
     static long recordHash(ObjectReference obj)
     {
-        return Loader.recordHash(obj);
+        return ObjectMethods.recordHash(obj);
     }
 
     /** A record's synthesised {@code equals}. */
     static long recordEquals(ObjectReference a, ObjectReference b)
     {
-        return Loader.recordEquals(a, b);
+        return ObjectMethods.recordEquals(a, b);
     }
 
     /** A record's synthesised {@code toString}. */
     static long recordToString(ObjectReference obj)
     {
-        return Loader.recordToString(obj);
+        return ObjectMethods.recordToString(obj);
     }
 
     static long getClassOf(ObjectReference obj)
