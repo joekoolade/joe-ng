@@ -2404,7 +2404,7 @@ final class SelfBuild
         if (bytesEqual(nm, Magic.bytes("scEndAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("scEnd"), Magic.bytes("(J)J")); }
         if (bytesEqual(nm, Magic.bytes("scStrAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("scStr"), Magic.bytes("(JJ)V")); }
         if (bytesEqual(nm, Magic.bytes("scLongAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("scLong"), Magic.bytes("(JJ)V")); }
-        if (bytesEqual(nm, Magic.bytes("printStrAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("printStr"), Magic.bytes("(J)V")); }
+        if (bytesEqual(nm, Magic.bytes("printStrAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("printStr"), Magic.bytes("(Lmagic/ObjectReference;)V")); }
         if (bytesEqual(nm, Magic.bytes("nanoTimeAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("nanoTime"), Magic.bytes("()J")); }
         if (bytesEqual(nm, Magic.bytes("currentTimeMillisAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("currentTimeMillis"), Magic.bytes("()J")); }
         if (bytesEqual(nm, Magic.bytes("identityAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("identity"), Magic.bytes("(J)J")); }

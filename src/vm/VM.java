@@ -1284,21 +1284,21 @@ public final class VM
      * (TIB != 0) yields its {@code value} field (offset 16). Lets literals (interned byte[]) and concat
      * results (String objects) be used interchangeably wherever a string is expected.
      */
-    static long strBytes(long ref)
+    static long strBytes(ObjectReference ref)
     {
         // A byte[] is itself; a java/lang/String yields its value field (@16). A byte[]'s header @0 is either a
         // small raw element size (VM-internal buffers) or a pointer to an array TIB whose Type is tagged; a
         // String's @0 is a class TIB (Type not tagged).
-        long tib = Address.fromLong(ref).loadLong();
+        long tib = ref.toAddress().loadLong();
         if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
         {
-            return ref;                                 // raw byte[] (element size in @0)
+            return ref.toLong();                        // raw byte[] (element size in @0)
         }
         if ((Address.fromLong(tib).loadAddress().loadLong() & ObjectModel.ARRAY_TYPE_TAG_MASK) == ObjectModel.ARRAY_TYPE_TAG)
         {
-            return ref;                                 // typed byte[] (TIB[0]=array Type, Type[0] tagged)
+            return ref.toLong();                        // typed byte[] (TIB[0]=array Type, Type[0] tagged)
         }
-        return Address.fromLong(ref).plus(16L).loadLong();                 // a String object -> value field
+        return ref.toAddress().plus(16L).loadLong();                 // a String object -> value field
     }
 
     /**
@@ -1322,9 +1322,9 @@ public final class VM
      * keeps today's behaviour rather than diverting on a guess. The window is the baked boot battery, whose
      * concat arguments are interned literals and so take the array arm regardless.
      */
-    static boolean isStringLike(long ref)
+    static boolean isStringLike(ObjectReference ref)
     {
-        long tib = Address.fromLong(ref).loadLong();
+        long tib = ref.toAddress().loadLong();
         if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
         {
             return true;                                // raw byte[] (element size in @0)
@@ -1827,30 +1827,30 @@ public final class VM
 
     /** {@code Object.getClass()} (intrinsified): the Class mirror for the object's Type (header→TIB→Type→Class). */
     /** A record's synthesised {@code hashCode} (the ObjectMethods indy lowers to a call here). */
-    static long recordHash(long obj)
+    static long recordHash(ObjectReference obj)
     {
         return Loader.recordHash(obj);
     }
 
     /** A record's synthesised {@code equals}. */
-    static long recordEquals(long a, long b)
+    static long recordEquals(ObjectReference a, ObjectReference b)
     {
         return Loader.recordEquals(a, b);
     }
 
     /** A record's synthesised {@code toString}. */
-    static long recordToString(long obj)
+    static long recordToString(ObjectReference obj)
     {
         return Loader.recordToString(obj);
     }
 
-    static long getClassOf(long obj)
+    static long getClassOf(ObjectReference obj)
     {
         return Loader.getClassOf(obj);
     }
 
     /** Print a "string" (a mini java/lang/String or a raw byte[]): write its bytes to the UART. */
-    static void printStr(long ref)
+    static void printStr(ObjectReference ref)
     {
         long arr = strBytes(ref);
         long len = Address.fromLong(arr).plus(16L).loadLong();
@@ -2038,7 +2038,7 @@ public final class VM
         if (scBoolAddr == 0L) { VMConcat.scBool(Address.zero(), 0); }
         if (scDoubleAddr == 0L) { VMConcat.scDouble(Address.zero(), 0L); }
         if (scFloatAddr == 0L) { VMConcat.scFloat(Address.zero(), 0); }
-        if (printStrAddr == 0L) { printStr(0L); }
+        if (printStrAddr == 0L) { printStr(ObjectReference.nullReference()); }
         if (nanoTimeAddr == 0L) { long u = VMNatives.nanoTime(); }              // provided java.base natives (guest-called)
         if (cdsSeedAddr == 0L) { long u = VMNatives.cdsRandomSeedForDumping(); }
         if (currentTimeMillisAddr == 0L) { long u = VMNatives.currentTimeMillis(); }
@@ -2087,7 +2087,7 @@ public final class VM
         if (multiNewArrayAddr == 0L) { long u = multiNewArray(0L, 0, 0, 0, 0, 0); }   // multianewarray
         if (monEnterSyncAddr == 0L) { monEnterSync(0L, 0L); }         // a synchronized METHOD's implicit monitor
         if (monExitSyncAddr == 0L) { monExitSync(); }
-        if (getClassAddr == 0L) { long u = getClassOf(0L); }          // Object.getClass() intrinsic
+        if (getClassAddr == 0L) { long u = getClassOf(ObjectReference.nullReference()); }          // Object.getClass() intrinsic
         if (arrayCloneAddr == 0L) { long u = VMNatives.arrayClone(ObjectReference.nullReference()); }        // [T.clone() intrinsic
         if (newReflectArrayAddr == 0L) { long u = VMNatives.newReflectArray(ObjectReference.nullReference(), 0L); } // reflect/Array.newInstance0
         if (componentTypeAddr == 0L) { long u = VMNatives.componentTypeOf(ObjectReference.nullReference()); }       // Class.getComponentType0
@@ -2170,9 +2170,9 @@ public final class VM
         if (consoleAvailAddr == 0L) { long u = VMNatives.consoleAvailable(); }     // MetalConsoleIn.available0
         if (forNameNoInitAddr == 0L) { long u = VMNatives.forNameNoInit(ObjectReference.nullReference()); }  // MetalLoaders.lookup0 (no <clinit>)
         if (methodAnnoAllAddr == 0L) { long u = VMNatives.methodAnnoAll(-1L); } // Executable.annoAll0
-        if (recordHashAddr == 0L) { long u = recordHash(0L); }                   // record hashCode
-        if (recordEqualsAddr == 0L) { long u = recordEquals(0L, 0L); }           // record equals
-        if (recordToStringAddr == 0L) { long u = recordToString(0L); }           // record toString
+        if (recordHashAddr == 0L) { long u = recordHash(ObjectReference.nullReference()); }                   // record hashCode
+        if (recordEqualsAddr == 0L) { long u = recordEquals(ObjectReference.nullReference(), ObjectReference.nullReference()); }           // record equals
+        if (recordToStringAddr == 0L) { long u = recordToString(ObjectReference.nullReference()); }           // record toString
         if (classDeclClassesAddr == 0L) { long u = VMNatives.classDeclClasses(ObjectReference.nullReference()); } // Class.declaredClasses0
         if (classAnnoAllAddr == 0L) { long u = VMNatives.classAnnoAll(ObjectReference.nullReference()); }    // Class.annoAll0
         if (classIfacesAddr == 0L) { long u = VMNatives.classIfaces(ObjectReference.nullReference()); }      // Class.interfaces0
@@ -2687,7 +2687,7 @@ public final class VM
     static long vtSigCount;            // ... its entry count (Loader.checkVtParity verifies slot parity at load)
 
     /** Print a java/lang/String (baked or metal-heap) via the baked stock length()/charAt(). */
-    private static void printJavaString(long str)
+    private static void printJavaString(ObjectReference str)
     {
         long[] s = new long[8];
         long b = Magic.addrOf(s) + 24L;                    // array elements (header 16 + length 8)
@@ -3830,7 +3830,7 @@ public final class VM
     static long scBoolAddr;            // VMConcat.scBool(Lmagic/Address;I)V — append "true"/"false" (JLS 15.18.1)
     static long scDoubleAddr;          // VMConcat.scDouble(Lmagic/Address;J)V — append a double (raw bits in)
     static long scFloatAddr;           // VMConcat.scFloat(Lmagic/Address;I)V  — ... and a float (its OWN shortest string)
-    static long printStrAddr;          // VM.printStr(J)V
+    static long printStrAddr;          // VM.printStr(Lmagic/ObjectReference;)V
     static long denylistTrapAddr;      // VM.denylistTrap()V — patchRelocs points calls into pruned classes here (#43)
     static long nativeMissingAddr;     // VM.nativeMissing(I)V — a call to a native this VM does not implement throws here
     /**
@@ -3976,9 +3976,9 @@ public final class VM
     static long consoleAvailAddr;      // VMNatives.consoleAvailable()J — MetalConsoleIn.available0()
     static long forNameNoInitAddr;     // VMNatives.forNameNoInit(Lmagic/ObjectReference;)J — MetalLoaders.lookup0(byte[]), no <clinit>
     static long methodAnnoAllAddr;     // VMNatives.methodAnnoAll(J)J — Executable.annoAll0(int)
-    static long recordHashAddr;        // VM.recordHash(J)J — a record's synthesised hashCode
-    static long recordEqualsAddr;      // VM.recordEquals(JJ)J — a record's synthesised equals
-    static long recordToStringAddr;    // VM.recordToString(J)J — a record's synthesised toString
+    static long recordHashAddr;        // VM.recordHash(Lmagic/ObjectReference;)J — a record's synthesised hashCode
+    static long recordEqualsAddr;      // VM.recordEquals(Lmagic/ObjectReference;Lmagic/ObjectReference;)J — a record's synthesised equals
+    static long recordToStringAddr;    // VM.recordToString(Lmagic/ObjectReference;)J — a record's synthesised toString
     static long classDeclClassesAddr;  // VMNatives.classDeclClasses(Lmagic/ObjectReference;)J — Class.declaredClasses0(Class)
     static long classAnnoAllAddr;      // VMNatives.classAnnoAll(Lmagic/ObjectReference;)J — Class.annoAll0(Class)
     static long classIfacesAddr;       // VMNatives.classIfaces(Lmagic/ObjectReference;)J — Class.interfaces0(Class)
@@ -4022,7 +4022,7 @@ public final class VM
     static long watchX21Addr;          // VM.watchX21(JJ)V — DEBUG: callee-saved discipline check
     static long watchArgAddr;          // VM.watchArg(J)V — DEBUG: value an argument-watched call site passes
     static long watchRecvAddr;         // VM.watchRecv(JJ)V — DEBUG: the RECEIVER a watched dispatch is about to use
-    static long getClassAddr;          // VM.getClassOf(J)J — Object.getClass() intrinsic
+    static long getClassAddr;          // VM.getClassOf(Lmagic/ObjectReference;)J — Object.getClass() intrinsic
     static long arrayCloneAddr;        // VM.arrayClone(Lmagic/ObjectReference;)J — [T.clone() intrinsic (no vtable on array TIBs)
     static long newReflectArrayAddr;   // VM.newReflectArray(Lmagic/ObjectReference;J)J — reflect/Array.newInstance0 (typed ref array)
     static long componentTypeAddr;     // VM.componentTypeOf(Lmagic/ObjectReference;)J — Class.getComponentType0 (array element mirror)
@@ -4321,15 +4321,15 @@ public final class VM
         Uart.write(Magic.bytes("  Integer.toString(-2026)="));
         Address.fromLong(argBase).store(-2026L);
         long tsNeg = Magic.callN(integerToStringAddr, argBase);
-        printJavaString(tsNeg);
+        printJavaString(ObjectReference.fromLong(tsNeg));
         Uart.write(Magic.bytes(" Long.toString(1<<40)="));
         Address.fromLong(argBase).store(1L << 40);
         long tsLong = Magic.callN(longToStringAddr, argBase);
-        printJavaString(tsLong);
+        printJavaString(ObjectReference.fromLong(tsLong));
         Uart.write(Magic.bytes(" toHex(0xBEEF)="));
         Address.fromLong(argBase).store(0xBEEFL);
         long tsHex = Magic.callN(integerToHexStringAddr, argBase);
-        printJavaString(tsHex);
+        printJavaString(ObjectReference.fromLong(tsHex));
         Address.fromLong(argBase).store(42L);
         long s42a = Magic.callN(integerToStringAddr, argBase);
         Address.fromLong(argBase).store(42L);

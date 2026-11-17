@@ -58,13 +58,13 @@ public interface Symbols
     int SC_CHAR = 13;           // vm/VM.scChar(Lmagic/Address;I)V  — append one byte
     int SC_INT = 14;            // vm/VM.scInt(Lmagic/Address;I)V   — append an int in decimal
     int SC_END = 15;            // vm/VM.scEnd(Lmagic/Address;)Lmagic/ObjectReference;    — finish -> the String
-    int PRINT_STR = 16;         // vm/VM.printStr(J)V — print a mini java/lang/String's value bytes
+    int PRINT_STR = 16;         // vm/VM.printStr(Lmagic/ObjectReference;)V — print a mini java/lang/String's value bytes
     int SC_STR = 17;            // vm/VM.scStr(Lmagic/Address;Lmagic/ObjectReference;)V   — append a String/byte[] (slice 1b)
     int SC_LONG = 18;           // vm/VM.scLong(Lmagic/Address;J)V  — append a long in decimal (slice 1b)
     // Implicit (JVM-synthesised) exceptions: allocate the exception object the JIT throws on a failed check.
     int NEW_NPE = 19;           // vm/VM.newNpe()J    — a java/lang/NullPointerException (null deref)
     int NEW_AIOOBE = 20;        // vm/VM.newAioobe()J — a java/lang/ArrayIndexOutOfBoundsException (bad index)
-    int GET_CLASS = 21;         // vm/VM.getClassOf(J)J — Object.getClass() -> the receiver's Class mirror
+    int GET_CLASS = 21;         // vm/VM.getClassOf(Lmagic/ObjectReference;)J — Object.getClass() -> the receiver's Class mirror
     int ARRAY_CLONE = 22;       // vm/VM.arrayClone(Lmagic/ObjectReference;)J — [T.clone() -> a shallow array copy (no vtable on array TIBs)
     int CAPTURE_TRACE = 23;     // vm/VM.captureTrace(JJJ)V — fill exc's backtrace at the throw site (all throws)
     int NEW_ARITH = 24;         // vm/VM.newArith()J  — a java/lang/ArithmeticException (integer / or % by zero)

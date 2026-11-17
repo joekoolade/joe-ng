@@ -13,6 +13,7 @@ package vm;
 
 import magic.Address;
 import magic.Magic;
+import magic.ObjectReference;
 import board.bcm2711.Uart;
 import static vm.VM.*;   // exception-table state + shared helpers stay in VM: handlerTable/Count, jitHandler*,
                          // unwindLog/Logged, unwindLocBufs, faultDepth, and printHex/printStr/frameSizeAt/
@@ -59,14 +60,14 @@ final class VMUnwind
     /** Entered by descriptor {@code (JJJ)V} (the CAPTURE_TRACE helper), so its parameters stay raw words. */
     static void captureTrace(long exc, long pcWord, long spWord)
     {
-        if (exc <= 0x1000L || !Loader.awaitsThrowTrace(exc))   // boot force-compile passes 0; only a VM-made exception
+        if (exc <= 0x1000L || !Loader.awaitsThrowTrace(ObjectReference.fromLong(exc)))   // boot force-compile passes 0; only a VM-made exception
         {
             return;                                          //   is filled here (a constructed one has its trace or none)
         }
         Address pc = Address.fromLong(pcWord);
         Address sp = Address.fromLong(spWord);
         Address e = Address.fromLong(exc);
-        if (NPE_TRACE && Loader.isNpe(exc))
+        if (NPE_TRACE && Loader.isNpe(ObjectReference.fromLong(exc)))
         {
             // A MESSAGELESS NPE is the JIT's own null check, so it names no cause and picocli can only report
             // that one happened. Its throw SITE is the missing fact, and it is already in hand here: this is
@@ -94,7 +95,7 @@ final class VMUnwind
             // constructor gets here -- the JIT's implicit NPE / ArithmeticException / AIOOBE, so fillInTrace never
             // ran (DeepTraceProbe: 8 frames before this). Those paths have just allocated the exception itself,
             // so one more allocation is nothing new for them.
-            long arr = Loader.newThrowableBacktrace(exc, n);
+            long arr = Loader.newThrowableBacktrace(ObjectReference.fromLong(exc), n);
             if (arr != 0L)
             {
                 throwFrames(e, pc, sp, Address.fromLong(arr)); // pass 2: the same walk, into the array
@@ -171,7 +172,7 @@ final class VMUnwind
         }
         if (n > 8)
         {
-            long arr = Loader.newThrowableBacktrace(exc, n);   // deeper than the slots: every frame, as stock
+            long arr = Loader.newThrowableBacktrace(ObjectReference.fromLong(exc), n);   // deeper than the slots: every frame, as stock
             if (arr != 0L)
             {
                 keptFrames(exc, cpc, csp, Address.fromLong(arr));   // pass 2: the same walk, into the array
@@ -179,7 +180,7 @@ final class VMUnwind
         }
         else
         {
-            Loader.newThrowableBacktrace(exc, 0);              // fits the slots: clear an older deep trace
+            Loader.newThrowableBacktrace(ObjectReference.fromLong(exc), 0);              // fits the slots: clear an older deep trace
         }
     }
 
@@ -443,11 +444,11 @@ final class VMUnwind
                 {
                     Uart.write(Magic.bytes("\nException in thread \"main\" "));
                     Loader.printClassName(Address.fromLong(xt).loadLong());
-                    long msg = Loader.throwableMessage(exc);     // Throwable.detailMessage, by name
+                    long msg = Loader.throwableMessage(ObjectReference.fromLong(exc));     // Throwable.detailMessage, by name
                     if (msg > 0x1000L)
                     {
                         Uart.write(Magic.bytes(": "));
-                        printStr(msg);
+                        printStr(ObjectReference.fromLong(msg));
                     }
                     Uart.putc(0x0A);
                 }

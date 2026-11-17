@@ -302,9 +302,9 @@ final class VMConcat
             return;
         }
         ObjectReference str = ref;
-        if (!isStringLike(ref.toLong()))
+        if (!isStringLike(ref))
         {
-            long s = Loader.objToString(ref.toLong());     // the String.valueOf(Object) JLS 15.18.1 asks for
+            long s = Loader.objToString(ref);     // the String.valueOf(Object) JLS 15.18.1 asks for
             if (s == -1L)
             {
                 appendNoToString(sb);                      // could not RESOLVE it -- not the same as null
@@ -317,7 +317,7 @@ final class VMConcat
             }
             str = ObjectReference.fromLong(s);
         }
-        ObjectReference arr = ObjectReference.fromLong(strBytes(str.toLong()));
+        ObjectReference arr = ObjectReference.fromLong(strBytes(str));
         if (arr.isNull())
         {
             appendNull(sb);                                // a String with no value array: say so, never read +16

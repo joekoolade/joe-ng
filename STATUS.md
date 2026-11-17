@@ -4,6 +4,32 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 27: the object-utility and Throwable helpers take ObjectReferences (2026-11-16).**
+  Pi-validated (build 4214ae3db4b51a52).
+  - **Retyped (reference parameters; return types unchanged -- `objToString` keeps its -1 sentinel):** VM
+    `strBytes`, `isStringLike`, `printJavaString`, `printStr`, `recordHash`/`recordEquals`/`recordToString`,
+    `getClassOf`; Loader `objToString`, `callOnObject`, `resolveOn`, `regOfObject`, `typeOfObject`, `putGuestString`,
+    `poolIntern`, `getClassOf`, `recordHash`/`recordEquals`/`recordToString`, and the Throwable family
+    (`traceFromThrowable`, `throwableBacktrace`, `awaitsThrowTrace`, `newThrowableBacktrace`, `isNpe`,
+    `setDetailMessage`, `throwableMessage`, `setThrowableMessage`'s exc, `initVmThrowable`), `applyAnnoDefaults`,
+    `drainAnnoPending`, `setStdStream`. `throwableBacktrace`'s self-sentinel is `bt.EQ(exc)`; `awaitsThrowTrace`
+    compares `loadObjectReference().EQ(exc)`.
+  - **Callers:** VMConcat and VMNatives drop their `.toLong()` into these (VMConcat 7 -> 4 conversions); VMUnwind
+    and the exception factories in Loader still hold long and wrap with `fromLong` (VMUnwind 32 -> 39 -- the throw
+    path is a later increment); VMScheduler's two `setDetailMessage(Magic.addrOf(e), ...)` became
+    `ObjectReference.fromObject(e)`, the tree's first VM-side use of it (lowers to the same ADDR_OF).
+  - **Descriptor ABI:** stash keys for `printStr`, `recordHash`, `recordEquals`, `recordToString`, `getClassOf`;
+    `WriterSymbols.HELPER_KEY[GET_CLASS]` (the JIT's `getClass` helper); `SelfBuild`'s `printStr` lookup; the
+    reachability calls and comments. No `helper-stash MISS` (only the pre-existing `helper id 31`).
+  - **Left:** the JIT runtime/dispatch helpers (instanceOf, checkCast, castOk, newCce, monitors, virtualResolve*,
+    resolveRun, itable/reflect targets), VMUnwind's throw path, `VMNatives.throwableTrace`'s native ABI, the
+    `strPool`/`litAnchor` long[] tables.
+  - **Measured:** conversions Loader 676 -> 668, VM 196 -> 198, VMConcat 7 -> 4, VMNatives 71 -> 73, VMUnwind
+    32 -> 39. Load/store mix identical to main but for 64-bit swaps (Loader 2 `loadObjectReference`, 6
+    `store(ObjectReference)`; VM 2 `store(ObjectReference)`). **Code:** Loader -97 words, VM -22, the rest unchanged.
+  - **Validation:** `make test` + overlaycheck; full regression **209/209**. Pi: the usual set (pages, hello x2, the
+    Boom stack trace through the Throwable helpers, bench, forced stop, AddressFieldProbe 51/0, DnsCheck, SHA-256,
+    39 MB PUT, `/net` errors 0) and the `/run` ConcatCheck again byte-identical to a host JVM.
 - **UNBOXED TYPES, INCREMENT 26: the string-concat helpers are typed (2026-11-16).** Pi-validated (build
   7b921d4e89ea0266).
   - **The builder is an Address, not an ObjectReference:** `scStart`'s 40-byte block is a raw `Heap.alloc` with no

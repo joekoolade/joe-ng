@@ -17,6 +17,7 @@ import board.bcm2711.Gic;
 import board.bcm2711.Uart;
 import magic.Address;
 import magic.Magic;
+import magic.ObjectReference;
 import static vm.VM.*;   // shared state stays in VM: the *Addr helper statics, the task/monitor/semaphore tables,
                          // TASK_* constants, MAX_TASKS/NUM_SEM/MAX_MON, WIFI_SEM, SCHED_FRAME, the SMP/pc fields,
                          // vbarBase/ticks/timerReload/runTramp, and the staying helpers (installSchedVectors,
@@ -1539,7 +1540,7 @@ public final class VMScheduler
         if (ms < 0L)
         {
             IllegalArgumentException e = new IllegalArgumentException();
-            Loader.setDetailMessage(Magic.addrOf(e), Magic.bytes("timeout value is negative"));
+            Loader.setDetailMessage(ObjectReference.fromObject(e), Magic.bytes("timeout value is negative"));
             throw e;
         }
         long daif = schedLock();
@@ -1667,7 +1668,7 @@ public final class VMScheduler
     private static IllegalMonitorStateException notOwner()
     {
         IllegalMonitorStateException e = new IllegalMonitorStateException();
-        Loader.setDetailMessage(Magic.addrOf(e), Magic.bytes("current thread is not owner"));
+        Loader.setDetailMessage(ObjectReference.fromObject(e), Magic.bytes("current thread is not owner"));
         return e;
     }
 

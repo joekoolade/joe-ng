@@ -3687,9 +3687,9 @@ public final class Loader
      * fine with empty -- JUnit's {@code maybeTrimStackTrace}, the reason this exists, loops over the array and
      * returns early when it finds no match.
      */
-    static long traceFromThrowable(long exc)
+    static long traceFromThrowable(ObjectReference exc)
     {
-        if (exc == 0L)
+        if (exc.isNull())
         {
             return 0L;
         }
@@ -3702,7 +3702,7 @@ public final class Loader
         }
         else
         {
-            while (n < 8 && Address.fromLong(exc).plus(16L).plus((long) n * 8L).loadLong() != 0L)
+            while (n < 8 && exc.toAddress().plus(16L).plus((long) n * 8L).loadLong() != 0L)
             {
                 n += 1;
             }
@@ -3716,7 +3716,7 @@ public final class Loader
         while (i < n)
         {
             long fpc = deep != 0L ? Address.fromLong(deep).plus(ObjectModel.ARRAY_BASE_OFFSET).plus((long) i * 8L).loadLong()
-                                  : Address.fromLong(exc).plus(16L).plus((long) i * 8L).loadLong();
+                                  : exc.toAddress().plus(16L).plus((long) i * 8L).loadLong();
             arr.plus(24L).plus((long) i * 8L).store(frameToElement(Address.fromLong(fpc), tib));
             i += 1;
         }
@@ -3747,11 +3747,11 @@ public final class Loader
      * field holds {@code exc} ITSELF for an inline trace (see {@link #newThrowableBacktrace}), and null when none
      * was captured; both answer 0 here.
      */
-    static long throwableBacktrace(long exc)
+    static long throwableBacktrace(ObjectReference exc)
     {
         long off = throwableBacktraceOff();
-        long bt = off > 0L ? Address.fromLong(exc).plus(off).loadLong() : 0L;
-        return bt == exc ? 0L : bt;
+        ObjectReference bt = off > 0L ? exc.toAddress().plus(off).loadObjectReference() : ObjectReference.nullReference();
+        return bt.EQ(exc) ? 0L : bt.toLong();
     }
 
     /**
@@ -3760,10 +3760,10 @@ public final class Loader
      * throw ({@code VMUnwind.captureTrace}); a constructed exception has its trace from construction, or none
      * when stock would have none (a false {@code writableStackTrace}, or an overridden {@code fillInStackTrace}).
      */
-    static boolean awaitsThrowTrace(long exc)
+    static boolean awaitsThrowTrace(ObjectReference exc)
     {
         long off = throwableBacktraceOff();
-        return off > 0L && Address.fromLong(exc).plus(off).loadLong() == exc && Address.fromLong(exc).plus(16L).loadLong() == 0L;
+        return off > 0L && exc.toAddress().plus(off).loadObjectReference().EQ(exc) && exc.toAddress().plus(16L).loadLong() == 0L;
     }
 
     /**
@@ -3772,7 +3772,7 @@ public final class Loader
      * stock's Throwable reads a null backtrace as "no trace captured", so it must be non-null, and a re-capture
      * ({@code fillInStackTrace()} again) that now fits the slots must not leave an older, deeper trace in place.
      */
-    static long newThrowableBacktrace(long exc, int n)
+    static long newThrowableBacktrace(ObjectReference exc, int n)
     {
         long off = throwableBacktraceOff();
         if (off <= 0L)
@@ -3781,12 +3781,12 @@ public final class Loader
         }
         if (n == 0)
         {
-            Address.fromLong(exc).plus(off).store(exc);
+            exc.toAddress().plus(off).store(exc);
             return 0L;
         }
         long arr = Heap.allocArray(n, 8).toLong();
         Address.fromLong(arr).plus(ObjectModel.TIB_OFFSET).store(primArrayTib(11));   // long[]
-        Address.fromLong(exc).plus(off).store(arr);
+        exc.toAddress().plus(off).store(arr);
         return arr;
     }
 
@@ -11693,7 +11693,7 @@ public final class Loader
      *
      * <p>No {@code checkIO}: there is no SecurityManager on metal, and stock's own check is a no-op now.
      */
-    static void setStdStream(byte[] name, long ref)
+    static void setStdStream(byte[] name, ObjectReference ref)
     {
         long slot = staticSlotOf(Magic.bytes("java/lang/System"), name);
         if (slot != 0L)
@@ -23809,13 +23809,13 @@ public final class Loader
     // `Record.toString`'s exact format is likewise unspecified; this matches the standard rendering.
 
     /** Registry index of {@code obj}'s class, or -1 (null, or a raw array carrying no Type). */
-    private static int regOfObject(long obj)
+    private static int regOfObject(ObjectReference obj)
     {
-        if (obj == 0L)
+        if (obj.isNull())
         {
             return -1;
         }
-        long tib = Address.fromLong(obj).plus(0L).loadLong();
+        long tib = obj.toAddress().plus(0L).loadLong();
         if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
         {
             return -1;                                  // raw array: no Type node to key on
@@ -23866,7 +23866,7 @@ public final class Loader
      * optionally one further argument. 0 when the method cannot be resolved -- the caller decides what an
      * unanswerable component means rather than this inventing a value.
      */
-    private static long callOnObject(long obj, byte[] name, byte[] desc, long arg1, int argc)
+    private static long callOnObject(ObjectReference obj, byte[] name, byte[] desc, long arg1, int argc)
     {
         long code = resolveOn(obj, name, desc);
         if (code == 0L)
@@ -23884,7 +23884,7 @@ public final class Loader
     }
 
     /** The compiled body of {@code name desc} for {@code obj}'s class, or 0 (null, a raw array, unresolvable). */
-    private static long resolveOn(long obj, byte[] name, byte[] desc)
+    private static long resolveOn(ObjectReference obj, byte[] name, byte[] desc)
     {
         int reg = regOfObject(obj);
         if (reg < 0)
@@ -23906,7 +23906,7 @@ public final class Loader
      * sentinel for both would print a plausible "null" exactly where the dispatch is the broken thing --
      * the shape this project pays for most.
      */
-    static long objToString(long obj)
+    static long objToString(ObjectReference obj)
     {
         long code = resolveOn(obj, Magic.bytes("toString"), Magic.bytes("()Ljava/lang/String;"));
         if (code == 0L)
@@ -23932,13 +23932,13 @@ public final class Loader
         }
         if (tc == 'L' || tc == '[')
         {
-            return v == 0L ? 0 : (int) callOnObject(v, Magic.bytes("hashCode"), Magic.bytes("()I"), 0L, 1);
+            return v == 0L ? 0 : (int) callOnObject(ObjectReference.fromLong(v), Magic.bytes("hashCode"), Magic.bytes("()I"), 0L, 1);
         }
         return (int) v;                                 // B S C I, and F by its raw bits
     }
 
     /** {@code Record.hashCode}: a fold over the components. See the note above on why 31 is free to choose. */
-    static long recordHash(long obj)
+    static long recordHash(ObjectReference obj)
     {
         int reg = regOfObject(obj);
         if (reg < 0)
@@ -23951,7 +23951,7 @@ public final class Loader
         while (i < n)
         {
             int j = recordComponent(reg, i);
-            long v = Address.fromLong(obj).plus(16L).plus(fldTab[j].slot * 8L).loadLong();
+            long v = obj.toAddress().plus(16L).plus(fldTab[j].slot * 8L).loadLong();
             h = h * 31 + componentHash(v, u1(fldTab[j].base.plus(fldTab[j].descOff + 2L)));
             i += 1;
         }
@@ -23959,13 +23959,13 @@ public final class Loader
     }
 
     /** {@code Record.equals}: same record class, and every component equal. Fully specified, so exact. */
-    static long recordEquals(long a, long b)
+    static long recordEquals(ObjectReference a, ObjectReference b)
     {
-        if (a == b)
+        if (a.EQ(b))
         {
             return 1L;                                  // includes both null
         }
-        if (a == 0L || b == 0L)
+        if (a.isNull() || b.isNull())
         {
             return 0L;
         }
@@ -23981,8 +23981,8 @@ public final class Loader
         {
             int j = recordComponent(ra, i);
             long off = 16L + fldTab[j].slot * 8L;
-            long va = Address.fromLong(a).plus(off).loadLong();
-            long vb = Address.fromLong(b).plus(off).loadLong();
+            long va = a.toAddress().plus(off).loadLong();
+            long vb = b.toAddress().plus(off).loadLong();
             int tc = u1(fldTab[j].base.plus(fldTab[j].descOff + 2L));
             if (tc == 'L' || tc == '[')
             {
@@ -23992,7 +23992,7 @@ public final class Loader
                     {
                         return 0L;
                     }
-                    if (callOnObject(va, Magic.bytes("equals"), Magic.bytes("(Ljava/lang/Object;)Z"), vb, 2) == 0L)
+                    if (callOnObject(ObjectReference.fromLong(va), Magic.bytes("equals"), Magic.bytes("(Ljava/lang/Object;)Z"), vb, 2) == 0L)
                     {
                         return 0L;
                     }
@@ -24111,8 +24111,8 @@ public final class Loader
             {
                 return putAscii(out, p, Magic.bytes("null"));
             }
-            long str = callOnObject(v, Magic.bytes("toString"), Magic.bytes("()Ljava/lang/String;"), 0L, 1);
-            return putGuestString(out, p, str);
+            long str = callOnObject(ObjectReference.fromLong(v), Magic.bytes("toString"), Magic.bytes("()Ljava/lang/String;"), 0L, 1);
+            return putGuestString(out, p, ObjectReference.fromLong(str));
         }
         // F AND D GO THROUGH THE REAL FORMATTER, because this VM keeps a float or a double in an ORDINARY
         // 64-BIT SLOT -- so {@code v} IS {@code Double.doubleToRawLongBits(d)}, and letting it fall through
@@ -24138,7 +24138,7 @@ public final class Loader
                 return putAscii(out, p, Magic.bytes("?"));
             }
             long bits = tc == 'D' ? v : (v & 0xFFFFFFFFL);
-            return putGuestString(out, p, Magic.call2(buf, bits, 0L));
+            return putGuestString(out, p, ObjectReference.fromLong(Magic.call2(buf, bits, 0L)));
         }
         return putDec(out, p, v, true);                  // B S I J
     }
@@ -24161,9 +24161,9 @@ public final class Loader
      * {@link #internString} stores it that way; reading it the other way round swaps the bytes of every
      * character.
      */
-    private static int putGuestString(char[] out, int p, long str)
+    private static int putGuestString(char[] out, int p, ObjectReference str)
     {
-        if (str == 0L)
+        if (str.isNull())
         {
             return putAscii(out, p, Magic.bytes("?"));
         }
@@ -24173,7 +24173,7 @@ public final class Loader
             return putAscii(out, p, Magic.bytes("?"));
         }
         int nbytes = (int) Address.fromLong(arr).plus(16L).loadLong();
-        int coder = arr == str ? 0 : (int) Address.fromLong(str).plus(24L).loadLong();
+        int coder = ObjectReference.fromLong(arr).EQ(str) ? 0 : (int) str.toAddress().plus(24L).loadLong();
         if (coder == 0)
         {
             int i = 0;
@@ -24233,7 +24233,7 @@ public final class Loader
      * {@code Record.toString()}; this is the standard rendering, and the SIMPLE name is used (the part after
      * the last '/' or '$'), as stock does.
      */
-    static long recordToString(long obj)
+    static long recordToString(ObjectReference obj)
     {
         int reg = regOfObject(obj);
         if (reg < 0)
@@ -24280,7 +24280,7 @@ public final class Loader
             int j = recordComponent(reg, k);
             p = putUtf8(out, p, fldTab[j].base.plus(fldTab[j].nameOff));
             p = putAscii(out, p, Magic.bytes("="));
-            p = putComponent(out, p, Address.fromLong(obj).plus(16L).plus(fldTab[j].slot * 8L).loadLong(),
+            p = putComponent(out, p, obj.toAddress().plus(16L).plus(fldTab[j].slot * 8L).loadLong(),
                     u1(fldTab[j].base.plus(fldTab[j].descOff + 2L)));
             k += 1;
         }
@@ -25163,14 +25163,14 @@ public final class Loader
         // Not optional. An annotation use writes only the elements it overrides -- picocli's
         // `@Command(name = "junit")` leaves a dozen defaulted -- so without this those read null and the
         // library NPEs on its own annotation. That is exactly how this surfaced.
-        applyAnnoDefaults(obj.toLong(), ifaceReg, filled, n);
+        applyAnnoDefaults(obj.toObjectReference(), ifaceReg, filled, n);
         // PHASE 3 -- the elements that need a CLASS RESOLVED ('c' and 'e'). Deferred to here for the reason
         // phases 1 and 2 are separated at all: resolving demand-loads, a load re-parses a blob, and that
         // clobbers the gcp/gbase cursor a walk is standing on. Nothing is walking now.
         //
         // The pending entries hold ABSOLUTE Utf8 addresses, which survive a re-parse because blobs do not move
         // -- only the parse STATE does. That is the same property applyAnnoDefaults relies on.
-        drainAnnoPending(obj.toLong(), pendMark);
+        drainAnnoPending(obj.toObjectReference(), pendMark);
         return obj.toLong();
     }
 
@@ -25181,7 +25181,7 @@ public final class Loader
      * this is the same decode as a written pair -- only the blob differs. Elements with neither a written value
      * nor a default (a mandatory element) keep 0/null, which is what the classfile says.
      */
-    private static void applyAnnoDefaults(long obj, int ifaceReg, boolean[] filled, int n)
+    private static void applyAnnoDefaults(ObjectReference obj, int ifaceReg, boolean[] filled, int n)
     {
         int start = clTab[ifaceReg].ifmStart;
         Address ibase = clTab[ifaceReg].base;
@@ -25235,7 +25235,7 @@ public final class Loader
                         annoPendSlot = slot;
                         annoArrayTib = defArrayTib[slot];   // computed BEFORE this parse: see applyAnnoDefaults
                         annoArrayPrim = defArrayPrim[slot];
-                        Address.fromLong(obj).plus(16L).plus(slot * 8L).store(annoElementValue(ibase, q));
+                        obj.toAddress().plus(16L).plus(slot * 8L).store(annoElementValue(ibase, q));
                         annoPendSlot = -1;
                         annoArrayTib = 0L;
                         annoArrayPrim = 0;
@@ -25497,7 +25497,7 @@ public final class Loader
      * <p>A Class element whose class cannot be loaded, and an enum constant whose class has no such static,
      * stay NULL rather than becoming something plausible -- the same choice the rest of this runtime makes.
      */
-    private static void drainAnnoPending(long obj, int mark)
+    private static void drainAnnoPending(ObjectReference obj, int mark)
     {
         int n = annoPendN - mark;
         if (n <= 0)
@@ -25530,7 +25530,7 @@ public final class Loader
             {
                 if (eidx[i] < 0)
                 {
-                    Address.fromLong(obj).plus(16L).plus(eat[i] * 8L).store(v);
+                    obj.toAddress().plus(16L).plus(eat[i] * 8L).store(v);
                 }
                 else
                 {
@@ -25538,7 +25538,7 @@ public final class Loader
                     // after the walks, and resolving a Class here can demand-load and collect. The array is
                     // reachable from the object's value slot, so going via the slot keeps it alive; a stashed
                     // address would not.
-                    long arr = Address.fromLong(obj).plus(16L).plus(eat[i] * 8L).loadLong();
+                    long arr = obj.toAddress().plus(16L).plus(eat[i] * 8L).loadLong();
                     // BOUNDS-CHECK BEFORE STORING. A raw store at a COMPUTED offset: if the slot does not hold
                     // the array this entry was recorded against, or the index is stale, it writes into the
                     // middle of whatever object is there. Not the cause of the corruption this change was once
@@ -26174,14 +26174,14 @@ public final class Loader
     }
 
     /** True if {@code exc}'s TIB is java/lang/NullPointerException's -- the JIT's implicit null check. */
-    static boolean isNpe(long exc)
+    static boolean isNpe(ObjectReference exc)
     {
         int i = classIndexByName(Magic.bytes("java/lang/NullPointerException"));
-        if (i < 0 || exc == 0L)
+        if (i < 0 || exc.isNull())
         {
             return false;
         }
-        return Address.fromLong(exc).plus(0L).loadLong() == clTab[i].tib;
+        return exc.toAddress().plus(0L).loadLong() == clTab[i].tib;
     }
 
     /** Allocate a mini {@code java/lang/NullPointerException} (TIB set, field-free) — the JIT's null-check helper. */
@@ -26222,7 +26222,7 @@ public final class Loader
             text[k] = msg[k];
             k += 1;
         }
-        setDetailMessage(exc, text);
+        setDetailMessage(ObjectReference.fromLong(exc), text);
         return exc;
     }
 
@@ -26233,9 +26233,9 @@ public final class Loader
      * byte array where a String belongs, and {@code getMessage()} answered null (MonitorStateProbe). Left unset
      * if Throwable or its field cannot be named.
      */
-    static void setDetailMessage(long exc, byte[] ascii)
+    static void setDetailMessage(ObjectReference exc, byte[] ascii)
     {
-        if (exc == 0L)
+        if (exc.isNull())
         {
             return;
         }
@@ -26304,18 +26304,18 @@ public final class Loader
     static long newArrayStoreException(long value)
     {
         long e = newExc(Magic.bytes("java/lang/ArrayStoreException"));
-        long valueType = value == 0L ? 0L : typeOfObject(value);
+        long valueType = value == 0L ? 0L : typeOfObject(ObjectReference.fromLong(value));
         if (e != 0L && valueType != 0L && classNameLen(valueType) > 0)   // a lambda has no name: omit
         {
-            setThrowableMessage(e, classNameString(valueType));
+            setThrowableMessage(ObjectReference.fromLong(e), classNameString(valueType));
         }
         return e;
     }
 
     /** {@code obj}'s Type, or 0 for a RAW array, whose TIB slot holds a small tag rather than a Type pointer. */
-    private static long typeOfObject(long obj)
+    private static long typeOfObject(ObjectReference obj)
     {
-        long tib = Address.fromLong(obj).loadLong();
+        long tib = obj.toAddress().loadLong();
         return tib > ObjectModel.MAX_RAW_ARRAY_TIB ? Address.fromLong(tib).loadLong() : 0L;
     }
 
@@ -26328,7 +26328,7 @@ public final class Loader
         long e = newExc(name);
         if (e != 0L && msg != null)
         {
-            setDetailMessage(e, msg);
+            setDetailMessage(ObjectReference.fromLong(e), msg);
         }
         return e;
     }
@@ -26379,7 +26379,7 @@ public final class Loader
             text[k] = msg[k];
             k += 1;
         }
-        setDetailMessage(exc, text);
+        setDetailMessage(ObjectReference.fromLong(exc), text);
         return exc;
     }
 
@@ -26474,7 +26474,7 @@ public final class Loader
         if (e != 0L && ref != 0L && targetType != 0L)
         {
             long tib = Address.fromLong(ref).loadLong();
-            setThrowableMessage(e, guestString(castFailureMessage(tib, typeOfObject(ref), targetType)));
+            setThrowableMessage(ObjectReference.fromLong(e), guestString(castFailureMessage(tib, typeOfObject(ObjectReference.fromLong(ref)), targetType)));
         }
         return e;
     }
@@ -26641,7 +26641,7 @@ public final class Loader
         Address.fromLong(obj).plus(0L).store(tib);
         if (i >= 0)
         {
-            initVmThrowable(obj);
+            initVmThrowable(ObjectReference.fromLong(obj));
         }
         return obj;
     }
@@ -26676,7 +26676,7 @@ public final class Loader
      * which stock reads as suppression disabled. {@code backtrace = this} marks the exception for
      * {@code VMUnwind.captureTrace}, which fills its trace at the throw.
      */
-    private static void initVmThrowable(long exc)
+    private static void initVmThrowable(ObjectReference exc)
     {
         thrCauseOff = throwableFieldOff(thrCauseOff, Magic.bytes("cause"));
         thrStackTraceOff = throwableFieldOff(thrStackTraceOff, Magic.bytes("stackTrace"));
@@ -26684,11 +26684,11 @@ public final class Loader
         long btOff = throwableBacktraceOff();
         if (btOff > 0L)
         {
-            Address.fromLong(exc).plus(btOff).store(exc);
+            exc.toAddress().plus(btOff).store(exc);
         }
         if (thrCauseOff > 0L)
         {
-            Address.fromLong(exc).plus(thrCauseOff).store(exc);
+            exc.toAddress().plus(thrCauseOff).store(exc);
         }
         if (thrUnassignedSlot == 0L)
         {
@@ -26700,28 +26700,28 @@ public final class Loader
         }
         if (thrStackTraceOff > 0L && thrUnassignedSlot != 0L)
         {
-            Address.fromLong(exc).plus(thrStackTraceOff).store(Address.fromLong(thrUnassignedSlot).loadLong());
+            exc.toAddress().plus(thrStackTraceOff).store(Address.fromLong(thrUnassignedSlot).loadLong());
         }
         if (thrSuppressedOff > 0L && thrSentinelSlot != 0L)
         {
-            Address.fromLong(exc).plus(thrSuppressedOff).store(Address.fromLong(thrSentinelSlot).loadLong());
+            exc.toAddress().plus(thrSuppressedOff).store(Address.fromLong(thrSentinelSlot).loadLong());
         }
     }
 
     /** {@code exc}'s {@code Throwable.detailMessage} (a guest String reference), or 0. */
-    static long throwableMessage(long exc)
+    static long throwableMessage(ObjectReference exc)
     {
         thrMessageOff = throwableFieldOff(thrMessageOff, Magic.bytes("detailMessage"));
-        return thrMessageOff > 0L ? Address.fromLong(exc).plus(thrMessageOff).loadLong() : 0L;
+        return thrMessageOff > 0L ? exc.toAddress().plus(thrMessageOff).loadLong() : 0L;
     }
 
     /** Store the guest String {@code msg} as {@code exc}'s {@code Throwable.detailMessage}. */
-    private static void setThrowableMessage(long exc, long msg)
+    private static void setThrowableMessage(ObjectReference exc, long msg)
     {
         thrMessageOff = throwableFieldOff(thrMessageOff, Magic.bytes("detailMessage"));
         if (thrMessageOff > 0L)
         {
-            Address.fromLong(exc).plus(thrMessageOff).store(msg);
+            exc.toAddress().plus(thrMessageOff).store(msg);
         }
     }
 
@@ -29413,13 +29413,13 @@ public final class Loader
     }
 
     /** {@code Object.getClass()}: object header -> TIB -> Type -> its Class mirror. */
-    static long getClassOf(long obj)
+    static long getClassOf(ObjectReference obj)
     {
-        if (obj == 0L)
+        if (obj.isNull())
         {
             return 0L;
         }
-        long tib = Address.fromLong(obj).plus(0L).loadLong();
+        long tib = obj.toAddress().plus(0L).loadLong();
         if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
         {
             return 0L;                                      // a raw array (no Type) — no mirror
@@ -30386,16 +30386,16 @@ public final class Loader
 
     /** {@code String.intern()}: the canonical String with this content, adding {@code str} if there is none.
      *  Called under the loader lock -- literal interning runs inside compiles, which hold it. */
-    static long poolIntern(long str)
+    static long poolIntern(ObjectReference str)
     {
-        long canon = poolLookup(str);
+        long canon = poolLookup(str.toLong());
         if (canon != 0L)
         {
             return canon;
         }
-        anchorLiteral(str);
-        poolInsert(str);
-        return str;
+        anchorLiteral(str.toLong());
+        poolInsert(str.toLong());
+        return str.toLong();
     }
 
     /** Record {@code obj} (a literal the JIT bakes into code) as a GC root; returns it for chaining. */
