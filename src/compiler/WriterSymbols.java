@@ -63,9 +63,9 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         // Unlike DREM/MULTI_NEW_ARRAY/MON_*_SYNC above, this one is REACHED: the writer lowers string
         // concat too, so a baked `"x" + aBoolean` resolves through here. It is why the self-hosting
         // fixpoint (`compiler: N checks`) is the gate on this change.
-        HELPER_KEY[Symbols.SC_BOOL]          = "vm/VMConcat.scBool(JI)V";
-        HELPER_KEY[Symbols.SC_DOUBLE]        = "vm/VMConcat.scDouble(JJ)V";
-        HELPER_KEY[Symbols.SC_FLOAT]         = "vm/VMConcat.scFloat(JI)V";
+        HELPER_KEY[Symbols.SC_BOOL]          = "vm/VMConcat.scBool(Lmagic/Address;I)V";
+        HELPER_KEY[Symbols.SC_DOUBLE]        = "vm/VMConcat.scDouble(Lmagic/Address;J)V";
+        HELPER_KEY[Symbols.SC_FLOAT]         = "vm/VMConcat.scFloat(Lmagic/Address;I)V";
         // REACHED: the guard baked at a site that touches a class whose statics the image does not snapshot
         // (see needsInitGuard).
         HELPER_KEY[Symbols.ENSURE_INIT]      = "vm/VM.ensureInitByName(J)V";

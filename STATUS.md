@@ -4,6 +4,29 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 26: the string-concat helpers are typed (2026-11-16).** Pi-validated (build
+  7b921d4e89ea0266).
+  - **The builder is an Address, not an ObjectReference:** `scStart`'s 40-byte block is a raw `Heap.alloc` with no
+    TIB -- not a Java object -- so `sb` is `Address` in all nine helpers (`scStart` returns it). Its backing
+    `byte[]` (`buf`, stored at `sb+16` with `store(ObjectReference)`, read with `loadObjectReference`), `scGrow`'s
+    result, `scStr`'s argument / String / value array and `scEnd`'s finished String are `ObjectReference`; `scStr`
+    tests `isNull()` and `arr.EQ(str)`. `scDouble`/`scFloat` keep their DELIBERATELY NESTED
+    `scStr(sb, ...Magic.call2(...))` -- the regression test for a live operand across an intrinsic call.
+  - **Descriptor ABI:** 9 `stashHelper` keys, the 3 `WriterSymbols.HELPER_KEY` entries (scBool/scDouble/scFloat),
+    9 reachability calls, the `Symbols` and `xxxAddr` comments. No `helper-stash MISS`. (The image build's
+    `host writer cannot emit helper id 31` bake-stub is `MON_ENTER` in `Throwable.printStackTrace`, and is on main
+    too -- measured.)
+  - **Left long:** the shared callees `strBytes`/`isStringLike`/`objToString` (`.toLong()` at the call).
+  - **Measured:** conversions VMConcat 13 -> **7**. Load/store mix identical to main but for 1 `loadLong` ->
+    `loadObjectReference` and 2 `store(J)` -> `store(ObjectReference)` (all 64-bit); 3 `lcmp` -> `isNull`/`EQ`.
+    **Code:** 1185 -> 1148 words (-37).
+  - **Validation:** `make test` + overlaycheck; full regression **209/209** (ConcatUtf16Probe among them; nearly every
+    probe's output is built by concat). Pi: the usual set (pages, hello x2, Boom, bench, forced stop,
+    AddressFieldProbe 51/0, DnsCheck, SHA-256, 39 MB PUT, `/net` errors 0) PLUS a throwaway `/run` ConcatCheck
+    whose output is **byte-identical to a host JVM's**: int/long MIN_VALUE, boolean, a UTF-16 char, double/float
+    (0.1, 0.1f, -0.0, 1e20, NaN), a box, null, an object's toString, a UTF-16 string, and a 40-step growing
+    concat. (Its first cut used a nested class; `/run` of a lone `.class` cannot define `ConcatCheck$P`, so it
+    stopped at `UNRESOLVED NEW` -- the probe's fault, not the VM's.)
 - **UNBOXED TYPES, INCREMENT 25: the rest of VMNatives' reference parameters are ObjectReferences (2026-11-16).**
   Pi-validated (build 45bb34c082d10c4d).
   - **Retyped (31 natives):** Reference `get0`/`refersTo0`/`clear0`, `String.intern`, `arrayClone` (also the `[T.clone()`

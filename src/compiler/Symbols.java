@@ -54,13 +54,13 @@ public interface Symbols
     int NEW_SEM = 10;           // vm/VM.newSem(I)I  — allocate a semaphore, return its index
     int REPORT = 11;            // vm/VM.philReport(II)V — formatted status line (no String concat on metal)
     // invokedynamic string-concat (M-B slice 1): a growable byte[] builder + a status print.
-    int SC_START = 12;          // vm/VM.scStart()J -> a builder
-    int SC_CHAR = 13;           // vm/VM.scChar(JI)V  — append one byte
-    int SC_INT = 14;            // vm/VM.scInt(JI)V   — append an int in decimal
-    int SC_END = 15;            // vm/VM.scEnd(J)J    — finish -> a trimmed byte[]
+    int SC_START = 12;          // vm/VM.scStart()Lmagic/Address; -> a builder
+    int SC_CHAR = 13;           // vm/VM.scChar(Lmagic/Address;I)V  — append one byte
+    int SC_INT = 14;            // vm/VM.scInt(Lmagic/Address;I)V   — append an int in decimal
+    int SC_END = 15;            // vm/VM.scEnd(Lmagic/Address;)Lmagic/ObjectReference;    — finish -> the String
     int PRINT_STR = 16;         // vm/VM.printStr(J)V — print a mini java/lang/String's value bytes
-    int SC_STR = 17;            // vm/VM.scStr(JJ)V   — append a String/byte[] (slice 1b)
-    int SC_LONG = 18;           // vm/VM.scLong(JJ)V  — append a long in decimal (slice 1b)
+    int SC_STR = 17;            // vm/VM.scStr(Lmagic/Address;Lmagic/ObjectReference;)V   — append a String/byte[] (slice 1b)
+    int SC_LONG = 18;           // vm/VM.scLong(Lmagic/Address;J)V  — append a long in decimal (slice 1b)
     // Implicit (JVM-synthesised) exceptions: allocate the exception object the JIT throws on a failed check.
     int NEW_NPE = 19;           // vm/VM.newNpe()J    — a java/lang/NullPointerException (null deref)
     int NEW_AIOOBE = 20;        // vm/VM.newAioobe()J — a java/lang/ArrayIndexOutOfBoundsException (bad index)
@@ -116,9 +116,9 @@ public interface Symbols
     int MULTI_NEW_ARRAY = 55;   // vm/VM.multiNewArray(JIIIII)J — multianewarray (JVMS 6.5)
     int MON_ENTER_SYNC = 56;    // vm/VM.monEnterSync(JJ)V — a SYNCHRONIZED METHOD's implicit monitorenter
     int MON_EXIT_SYNC = 57;     // vm/VM.monExitSync()V    — ... and its release on normal return
-    int SC_BOOL = 58;           // vm/VMConcat.scBool(JI)V — append "true"/"false" (JLS 15.18.1), NOT 1/0
-    int SC_DOUBLE = 59;         // vm/VMConcat.scDouble(JJ)V — append a double (raw BITS in), JLS 15.18.1
-    int SC_FLOAT = 60;          // vm/VMConcat.scFloat(JI)V  — ... and a float, which is NOT the same string
+    int SC_BOOL = 58;           // vm/VMConcat.scBool(Lmagic/Address;I)V — append "true"/"false" (JLS 15.18.1), NOT 1/0
+    int SC_DOUBLE = 59;         // vm/VMConcat.scDouble(Lmagic/Address;J)V — append a double (raw BITS in), JLS 15.18.1
+    int SC_FLOAT = 60;          // vm/VMConcat.scFloat(Lmagic/Address;I)V  — ... and a float, which is NOT the same string
     // JVMS 5.5 initialization AT THE ACTIVE USE. 61 is the max over the WHOLE file + 1, per the NOTE at the
     // declaration: the ids are one namespace but NOT one contiguous block, so appending after the last line
     // picks a used number (NEW_NASE took VIRTUAL_RESOLVE's 48 exactly that way).
