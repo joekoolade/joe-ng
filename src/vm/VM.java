@@ -1274,11 +1274,11 @@ public final class VM
     // its result with it so a concat-built String's value is a REAL typed byte[] -- stock code checkcasts/clones
     // String.value (Arrays.copyOf -> "[B".clone -> checkcast "[B" inside getBytes), and VM.checkCast rejects raw
     // (elem-size-header) arrays, which used to halt the first System.out print of a concat string.
-    static long byteArrayTibCache;
+    static Address byteArrayTibCache;
 
     // The current batch's java/lang/String Type (Loader-set after each loadAll; 0 between batches).
     // isStringLike below compares against it; see Loader.stringTypeAddr for why once-per-batch and why exact.
-    static long stringTypeCache;
+    static Address stringTypeCache;
 
     /**
      * The byte[] behind a "string" ref: a raw byte[] (array TIB = 0) is itself; a mini java/lang/String
@@ -1330,12 +1330,12 @@ public final class VM
         {
             return true;                                // raw byte[] (element size in @0)
         }
-        long type = Address.fromLong(tib).loadLong();                  // TIB[0] = Type
-        if ((Address.fromLong(type).loadLong() & ObjectModel.ARRAY_TYPE_TAG_MASK) == ObjectModel.ARRAY_TYPE_TAG)
+        Address type = Address.fromLong(tib).loadAddress();            // TIB[0] = Type
+        if ((type.loadLong() & ObjectModel.ARRAY_TYPE_TAG_MASK) == ObjectModel.ARRAY_TYPE_TAG)
         {
             return true;                                // a typed array
         }
-        return stringTypeCache == 0L || type == stringTypeCache;
+        return stringTypeCache.isZero() || type.EQ(stringTypeCache);
     }
 
     // ----- provided java.base natives (called by loaded guest code via Loader.nativeBuf) -----
@@ -2679,9 +2679,9 @@ public final class VM
     static long longToStringAddr;      // baked stock Long.toString(J)
     static long integerToHexStringAddr;// baked stock Integer.toHexString(I)
     static long stringEqualsAddr;      // baked stock String.equals(Object) — content compare
-    static long bakedTypeBase;         // first baked class Type; they are contiguous, ObjectModel.TYPE_SIZE apart
+    static Address bakedTypeBase;      // first baked class Type; they are contiguous, ObjectModel.TYPE_SIZE apart
     static long bakedTypeCount;        // ... how many
-    static long bakedTypeNames;        // ... and word i is the name Utf8 ({u2 len}{bytes}) of Type i
+    static Address bakedTypeNames;     // ... and word i is the name Utf8 ({u2 len}{bytes}) of Type i
     static long bakedTable;            // M8 endgame: baked-method LINK table {classUtf8, nameUtf8, descUtf8, code}*
     static long bakedCount;            // ... its entry count (Loader.bakedBuf scans it at lazy-compile time)
     static long vtSigTable;            // M8 unification: per-baked-class writer vtable signatures {classUtf8, slots, count, 0}*
@@ -2704,8 +2704,8 @@ public final class VM
 
     static long bakeStubTable;         // M8 object links: {classUtf8, nameUtf8, descUtf8, memo}* per bake stub
     static long bakeStubCount;
-    static long primArrayTibs;         // M8 array unification: 8-long table, baked prim-array TIB per atype (4..11)
-    static long refArrayTibs;          // M8 ref arrays: {elementType, tib} pair table (baked single-dim ref arrays)
+    static Address primArrayTibs;      // M8 array unification: 8-long table, baked prim-array TIB per atype (4..11)
+    static Address refArrayTibs;       // M8 ref arrays: {elementType, tib} pair table (baked single-dim ref arrays)
     static long refArrayTibCount;
     static long ifaceIdNext;           // O(1) interface checks: next unassigned interface ID (writer used 1..N)
 

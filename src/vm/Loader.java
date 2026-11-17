@@ -139,16 +139,16 @@ public final class Loader
     private static int clCount;
     // Array Type cache (per demand-load batch, since resetLoader reclaims the heap under them). primArrTib is
     // indexed by newarray atype (4..11); refArr* is a small element-Type-keyed registry for reference arrays.
-    private static long[] primArrTib;     // arrayTib per primitive atype (0 = not yet created)
+    private static AddressArray primArrTib;     // arrayTib per primitive atype (0 = not yet created)
     private static boolean[] primArrAdopted;   // true = writer-baked image TIB (never refill: its Object
                                                // impls are baked code; loader bufs die with the batch heap)
-    private static long[] refArrElem;     // element Type key (reference arrays)
-    private static long[] refArrTib;      // arrayTib for that element
+    private static AddressArray refArrElem;     // element Type key (reference arrays)
+    private static AddressArray refArrTib;      // arrayTib for that element
     private static boolean[] refArrAdopted;    // true = writer-baked image TIB (never refill)
     private static int refArrCount;
     // java.lang.Class mirrors: one Class object per VM Type (identity stable), materialised on ldc class-literal
     // or Object.getClass(). Per batch (they live in the reclaimed demand heap, like array Types).
-    private static long[] mirType;        // VM Type addr key
+    private static AddressArray mirType;        // VM Type addr key
     private static ObjectReferenceArray mirObj;   // its Class mirror object (no initializer: created per batch)
     private static int mirN;
     private static Address classTibCache;    // guest java/lang/Class's TIB (0 = not loaded)
@@ -219,7 +219,7 @@ public final class Loader
     // (before any instance exists), the lambda TIB was swept and a reused block scribbled its Type to garbage,
     // making a later Function.apply on it NPE. Holding each TIB here (a scanned static array) keeps it live.
     private static final int MAXLAMBDATIB = 8192;
-    private static long[] lambdaTibRoots;
+    private static AddressArray lambdaTibRoots;
     // Vtable CAPACITY of each synthesised TIB above, so refillSynthTibVtables can never write past one. The
     // capacity is whatever java/lang/Object's vtable count was WHEN THE TIB WAS BUILT, and Object may not have
     // been registered yet (objectVtableCount answers 0 then) -- refilling blind would then overflow an 8-byte
@@ -3326,8 +3326,8 @@ public final class Loader
     static long guestString(byte[] ascii)
     {
         Address arr = Heap.allocArray(ascii.length, 1);    // a real byte[] (elem size 1, length@16, data@24)
-        long bt = byteArrayTib();                        // type value as [B so String.getBytes()'s `checkcast [B`
-        if (bt != 0L)                                    // resolves (else it spins forever -- e.g. println(arg))
+        Address bt = byteArrayTib();                     // type value as [B so String.getBytes()'s `checkcast [B`
+        if (!bt.isZero())                                // resolves (else it spins forever -- e.g. println(arg))
         {
             arr.plus(ObjectModel.TIB_OFFSET).store(bt);
         }
@@ -3359,8 +3359,8 @@ public final class Loader
             return 0L;
         }
         Address arr = Heap.allocArray(src.length, 1);
-        long bt = byteArrayTib();
-        if (bt != 0L)
+        Address bt = byteArrayTib();
+        if (!bt.isZero())
         {
             arr.plus(ObjectModel.TIB_OFFSET).store(bt);
         }
@@ -3405,8 +3405,8 @@ public final class Loader
         }
         int len = u2(base.plus(off));
         Address arr = Heap.allocArray(len, 1);
-        long bt = byteArrayTib();
-        if (bt != 0L)
+        Address bt = byteArrayTib();
+        if (!bt.isZero())
         {
             arr.plus(ObjectModel.TIB_OFFSET).store(bt);
         }
@@ -3609,8 +3609,8 @@ public final class Loader
     private static long guestBytesMapped(Address src, int len, boolean dots)
     {
         Address arr = Heap.allocArray(len, 1);
-        long bt = byteArrayTib();
-        if (bt != 0L)
+        Address bt = byteArrayTib();
+        if (!bt.isZero())
         {
             arr.plus(ObjectModel.TIB_OFFSET).store(bt);
         }
@@ -4276,8 +4276,8 @@ public final class Loader
         strPool = null;                                 // ... and the string pool those anchors keep alive
         strPoolN = 0;
         clearSiteMemos();                               // a (site, Type) answer holds within a launch only
-        VM.byteArrayTibCache = 0L;                      // the batch's [B TIB was just reclaimed with its heap
-        VM.stringTypeCache = 0L;                        // ... and so was the Type it is paired with: a STALE one
+        VM.byteArrayTibCache = Address.zero();          // the batch's [B TIB was just reclaimed with its heap
+        VM.stringTypeCache = Address.zero();            // ... and so was the Type it is paired with: a STALE one
                                                         //   could be matched by a later Type at the same address
         rgTab = new RVMMethod[MAXREG];
         rgCount = 0;
@@ -4380,10 +4380,10 @@ public final class Loader
         clinitN = 0;
         clinitFdFirst = -1;
         clinitRunFrom = 0;
-        primArrTib = new long[12];         // array Types live in the (reclaimed) demand heap: recreate per batch
+        primArrTib = AddressArray.create(12);         // array Types live in the (reclaimed) demand heap: recreate per batch
         primArrAdopted = new boolean[12];  // (adopted image TIBs are permanent but re-adopting is idempotent)
-        refArrElem = new long[64];
-        refArrTib = new long[64];
+        refArrElem = AddressArray.create(64);
+        refArrTib = AddressArray.create(64);
         refArrAdopted = new boolean[64];
         refArrCount = 0;
         // CLASS MIRRORS. 256 was not enough for the console launcher, which overflowed it mid-discovery
@@ -4392,7 +4392,7 @@ public final class Loader
         // mints a fresh mirror, so `getClass() == X.class` answers false while `getClass() == getClass()`
         // can still hold by luck, and stock code compares mirrors constantly. Sized for a launcher-scale
         // closure with room over: the cost is two words per entry, and only for classes actually asked.
-        mirType = new long[MAXMIRROR];     // Class mirrors: also per batch (reclaimed heap)
+        mirType = AddressArray.create(MAXMIRROR);     // Class mirrors: also per batch (reclaimed heap)
         mirObj = ObjectReferenceArray.create(MAXMIRROR);
         mirN = 0;
         classTibCache = Address.zero();
@@ -4419,7 +4419,7 @@ public final class Loader
             dm += 1;
         }
         instImapN = 0;
-        lambdaTibRoots = new long[MAXLAMBDATIB];
+        lambdaTibRoots = AddressArray.create(MAXLAMBDATIB);
         lambdaTibVtCap = new int[MAXLAMBDATIB];
         lambdaTibFilled = new boolean[MAXLAMBDATIB];    // beside the table it tracks: a latch that outlives
                                                         //   its array would skip a TIB that needs filling
@@ -7561,7 +7561,7 @@ public final class Loader
         int i = 0;
         while (i < lambdaTibRootN)
         {
-            if (lambdaTibRoots[i] != 0L && Address.fromLong(lambdaTibRoots[i]).loadAddress().EQ(type))
+            if (!lambdaTibRoots.get(i).isZero() && lambdaTibRoots.get(i).loadAddress().EQ(type))
             {
                 return i;
             }
@@ -7584,7 +7584,7 @@ public final class Loader
     /** How many times {@code Class.getName()} has answered null; the report itself is capped at 8. */
     static int namelessN;
 
-    private static long[] primTypeCache;                 // primitive Type per atype-style index (see primTypeIdx)
+    private static AddressArray primTypeCache;                 // primitive Type per atype-style index (see primTypeIdx)
 
     /** Index 0..8 for a JVMS primitive descriptor char (Z C F D B S I J V), or -1. */
     private static int primTypeIdx(int c)
@@ -7606,34 +7606,34 @@ public final class Loader
      * node rather than a small sentinel in the mirror deliberately: every {@code Class} native dereferences
      * the mirror's Type word, so a tiny value there would have to be guarded at each of them.
      */
-    static long primitiveType(int descChar)
+    static Address primitiveType(int descChar)
     {
         int idx = primTypeIdx(descChar);
         if (idx < 0)
         {
-            return 0L;
+            return Address.zero();
         }
         if (primTypeCache == null)
         {
-            primTypeCache = new long[9];
+            primTypeCache = AddressArray.create(9);
         }
-        if (primTypeCache[idx] == 0L)
+        if (primTypeCache.get(idx).isZero())
         {
             Address type = Heap.allocData(ObjectModel.TYPE_SIZE);
             type.plus(ObjectModel.TYPE_INSTANCE_SIZE_OFFSET).store(
                     ObjectModel.PRIM_TYPE_TAG | (long) descChar);
             type.plus(ObjectModel.TYPE_SUPER_OFFSET).store(0L);         // no super: instanceof stops here
             type.plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).store(0L);
-            primTypeCache[idx] = type.toLong();
+            primTypeCache.set(idx, type);
         }
-        return primTypeCache[idx];
+        return primTypeCache.get(idx);
     }
 
     /** The {@code Class} mirror for a primitive, e.g. {@code int.class}. Identity-stable via the mirror cache. */
     static long primitiveMirror(int descChar)
     {
-        long t = primitiveType(descChar);
-        return t == 0L ? 0L : classMirror(Address.fromLong(t));
+        Address t = primitiveType(descChar);
+        return t.isZero() ? 0L : classMirror(t);
     }
 
     /** True if {@code type} is a primitive Type ({@link ObjectModel#PRIM_TYPE_TAG}). */
@@ -7730,8 +7730,8 @@ public final class Loader
         int atype = 4;
         while (atype < 12)
         {
-            long tib = primArrTib[atype];
-            if (tib != 0L && Address.fromLong(tib).loadAddress().EQ(type))
+            Address tib = primArrTib.get(atype);
+            if (!tib.isZero() && tib.loadAddress().EQ(type))
             {
                 return primDescChar(atype);
             }
@@ -7842,13 +7842,13 @@ public final class Loader
      */
     private static long bakedTypeName(Address type)
     {
-        long rel = type.toLong() - VM.bakedTypeBase;
-        if (VM.bakedTypeNames == 0L || rel < 0L || rel % ObjectModel.TYPE_SIZE != 0L)
+        long rel = type.diff(VM.bakedTypeBase).toLong();
+        if (VM.bakedTypeNames.isZero() || rel < 0L || rel % ObjectModel.TYPE_SIZE != 0L)
         {
             return 0L;
         }
         long i = rel / ObjectModel.TYPE_SIZE;
-        return i < VM.bakedTypeCount ? Address.fromLong(VM.bakedTypeNames).plus(i * 8L).loadLong() : 0L;
+        return i < VM.bakedTypeCount ? VM.bakedTypeNames.plus(i * 8L).loadLong() : 0L;
     }
 
     /** {@code "$$Lambda/0x"} + 16 hex digits -- the length {@link #writeSynthName} writes. */
@@ -8136,8 +8136,8 @@ public final class Loader
         {
             return 0L;                                  // 'V', an unknown char, or trailing bytes
         }
-        long tib = arrayTibOfDesc(utf8Blob(desc), 0);
-        return tib <= ObjectModel.MAX_RAW_ARRAY_TIB ? 0L : classMirror(Address.fromLong(tib).loadAddress());
+        Address tib = arrayTibOfDesc(utf8Blob(desc), 0);
+        return tib.toLong() <= ObjectModel.MAX_RAW_ARRAY_TIB ? 0L : classMirror(tib.loadAddress());
     }
 
     /**
@@ -14749,7 +14749,8 @@ public final class Loader
             // report existed to produce.
             Uart.putc(0x0A);
         }
-        Address type = Address.fromLong(tib).loadAddress();
+        Address tibA = Address.fromLong(tib);
+        Address type = tibA.loadAddress();
         Uart.write(Magic.bytes(" type=0x"));
         VM.printHex(type);
         // The WHOLE prefix: one zero slot is a clobbered or pruned entry, all-zero is a clobbered or unbuilt TIB,
@@ -14761,11 +14762,11 @@ public final class Loader
         while (vi < 9)
         {
             Uart.write(Magic.bytes(" 0x"));
-            VM.printHex(Address.fromLong(tib).plus(8L).plus((long) (vi * 8)).loadLong());
+            VM.printHex(tibA.plus(8L).plus((long) (vi * 8)).loadLong());
             vi += 1;
         }
         Uart.write(Magic.bytes("  synthesised(lambda/anno TIB)="));
-        VM.printDec(isSynthesisedTib(tib));
+        VM.printDec(isSynthesisedTib(tibA));
         Uart.write(Magic.bytes("\n    class="));
         int r = classRegByType(type);
         if (r >= 0 && clTab != null && clTab[r] != null)
@@ -14779,16 +14780,16 @@ public final class Loader
         Uart.putc(0x0A);
     }
 
-    private static int isSynthesisedTib(long tib)
+    private static int isSynthesisedTib(Address tib)
     {
         if (lambdaTibRoots == null)
         {
             return 0;
         }
         int i = 0;
-        while (i < lambdaTibRoots.length)
+        while (i < lambdaTibRoots.length())
         {
-            if (lambdaTibRoots[i] == tib)
+            if (lambdaTibRoots.get(i).EQ(tib))
             {
                 return 1;
             }
@@ -16040,7 +16041,7 @@ public final class Loader
                 Uart.write(Magic.bytes(" objectType="));
                 VM.printHex(objectTypeAddr());
                 Uart.write(Magic.bytes("\n    synthesised(lambda/anno TIB)="));
-                VM.printDec(isSynthesisedTib(tib));
+                VM.printDec(isSynthesisedTib(Address.fromLong(tib)));
                 Uart.putc(0x0A);
             }
             return VM.denylistTrapAddr;
@@ -16656,7 +16657,7 @@ public final class Loader
     // because the guest's LINKED map keeps it reachable and the collector does not move objects.
 
     private static final int MAXDSITE = 4096;
-    private static long[] dsType;
+    private static AddressArray dsType;
     private static int[] dsCp;
     private static AddressArray dsDesc;                       // absolute Utf8 descriptor, or 0 for a MethodType/MethodHandle
     private static long[] dsVal;
@@ -16674,18 +16675,18 @@ public final class Loader
     {
         if (dsType == null)
         {
-            dsType = new long[MAXDSITE];
+            dsType = AddressArray.create(MAXDSITE);
             dsCp = new int[MAXDSITE];
             dsDesc = AddressArray.create(MAXDSITE);
             dsVal = new long[MAXDSITE];
             dsDone = new int[MAXDSITE];
         }
         int reg = classRegByNameAt(gbase, gThisNameOff);
-        long type = reg >= 0 ? clTab[reg].type.toLong() : 0L;
+        Address type = reg >= 0 ? clTab[reg].type : Address.zero();
         int i = 0;
         while (i < dsCount)                             // dedup: the compiler visits each site in both passes
         {
-            if (dsType[i] == type && dsCp[i] == cpIndex)
+            if (dsType.get(i).EQ(type) && dsCp[i] == cpIndex)
             {
                 return i;
             }
@@ -16696,7 +16697,7 @@ public final class Loader
             capHalt(Magic.bytes("MAXDSITE"), dsCount);
         }
         int tag = u1(gbase.plus(gcp[cpIndex] - 1L));         // gcp points just PAST an entry's tag byte
-        dsType[dsCount] = type;
+        dsType.set(dsCount, type);
         dsCp[dsCount] = cpIndex;
         dsDesc.set(dsCount, (tag == 17 || tag == 18) ? gbase.plus(mrefDescOff(cpIndex)) : Address.zero());
         dsVal[dsCount] = 0L;
@@ -16796,7 +16797,7 @@ public final class Loader
             Uart.write(Magic.bytes("\n  INDY LINK: no MethodHandleNatives linker\n"));
             return 0L;
         }
-        return Magic.call2(m.buf, classMirror(Address.fromLong(dsType[idx])), (long) dsCp[idx]);
+        return Magic.call2(m.buf, classMirror(dsType.get(idx)), (long) dsCp[idx]);
     }
 
     /** Pull java/lang/invoke/MethodHandleNatives in when a dynamic site is the program's first use of it. */
@@ -23221,8 +23222,8 @@ public final class Loader
         Address d = base.plus(off + 2);                        // the descriptor bytes: "(...)ret"
         int n = countDescParams(d, len);
         Address arr = Heap.allocArray(n, 8);
-        long at = refArrayTib(classMirrorTypeAddr());
-        if (at != 0L)
+        Address at = refArrayTib(classMirrorTypeAddr());
+        if (!at.isZero())
         {
             arr.plus(ObjectModel.TIB_OFFSET).store(at);
         }
@@ -23312,12 +23313,12 @@ public final class Loader
         int k = 0;
         while (k < dims)
         {
-            long tib = refArrayTib(type);
-            if (tib == 0L)
+            Address tib = refArrayTib(type);
+            if (tib.isZero())
             {
                 return 0L;
             }
-            type = Address.fromLong(tib).loadAddress();
+            type = tib.loadAddress();
             k += 1;
         }
         return classMirror(type);
@@ -23326,21 +23327,21 @@ public final class Loader
     /** As {@link #arrayOf}, for an array of the primitive with descriptor char {@code c}: {@code [I}, {@code [[J}. */
     private static long primArrayMirror(int c, int dims)
     {
-        long tib = primArrayTib(atypeForDescChar(c));
-        if (tib == 0L)
+        Address tib = primArrayTib(atypeForDescChar(c));
+        if (tib.isZero())
         {
             return 0L;
         }
-        Address type = Address.fromLong(tib).loadAddress();
+        Address type = tib.loadAddress();
         int k = 1;
         while (k < dims)
         {
             tib = refArrayTib(type);
-            if (tib == 0L)
+            if (tib.isZero())
             {
                 return 0L;
             }
-            type = Address.fromLong(tib).loadAddress();
+            type = tib.loadAddress();
             k += 1;
         }
         return classMirror(type);
@@ -24316,8 +24317,8 @@ public final class Loader
         }
         int coder = maxCh < 256 ? 0 : 1;
         Address arr = Heap.allocArray(coder == 0 ? n : n * 2, 1);
-        long bt = byteArrayTib();
-        if (bt != 0L)
+        Address bt = byteArrayTib();
+        if (!bt.isZero())
         {
             arr.plus(ObjectModel.TIB_OFFSET).store(bt);   // type it as [B so `checkcast [B` resolves
         }
@@ -24545,8 +24546,8 @@ public final class Loader
     // interface and shared by every instance.
 
     private static final int MAXANNOTIB = 64;
-    private static long[] annoTibKey;                   // interface Type -> its shared TIB
-    private static long[] annoTibVal;
+    private static AddressArray annoTibKey;                   // interface Type -> its shared TIB
+    private static AddressArray annoTibVal;
     private static int annoTibN;
 
     // ===== java.lang.reflect.Proxy instances =========================================================
@@ -24558,8 +24559,8 @@ public final class Loader
     // InvocationHandler, and returns the unboxed raw result in x0.
     private static final int MAXPROXY = 256;
     private static final int PROXY_FRAME = 144;         // x30 at [sp], x1..x15 at [sp+16..sp+128], 16-aligned
-    private static long[] proxyTypes;
-    private static long[] proxyTibs;
+    private static AddressArray proxyTypes;
+    private static AddressArray proxyTibs;
     private static long[] proxyObjThunks;               // 3 per proxy: hashCode, equals, toString
     private static int proxyN;
     private static long proxyHelperBuf;
@@ -24685,19 +24686,19 @@ public final class Loader
             }
             if (thunk != 0L)
             {
-                Address.fromLong(proxyTibs[i]).plus(8L).plus((long) k * 8L).store(thunk);
+                proxyTibs.get(i).plus(8L).plus((long) k * 8L).store(thunk);
             }
             k += 1;
         }
     }
 
     /** The proxy index of TIB {@code tib}, or -1. */
-    private static int proxyIndexOfTib(long tib)
+    private static int proxyIndexOfTib(Address tib)
     {
         int i = 0;
         while (i < proxyN)
         {
-            if (proxyTibs[i] == tib)
+            if (proxyTibs.get(i).EQ(tib))
             {
                 return i;
             }
@@ -24728,8 +24729,8 @@ public final class Loader
         }
         if (proxyTypes == null)
         {
-            proxyTypes = new long[MAXPROXY];
-            proxyTibs = new long[MAXPROXY];
+            proxyTypes = AddressArray.create(MAXPROXY);
+            proxyTibs = AddressArray.create(MAXPROXY);
             proxyObjThunks = new long[MAXPROXY * 3];
         }
         if (proxyN >= MAXPROXY)
@@ -24783,8 +24784,8 @@ public final class Loader
         tib.plus(0L).store(type);
         fillObjectVtable(tib);
         int i = proxyN;
-        proxyTypes[i] = type.toLong();
-        proxyTibs[i] = tib.toLong();
+        proxyTypes.set(i, type);
+        proxyTibs.set(i, tib);
         int k = 0;
         while (k < 3)
         {
@@ -24795,7 +24796,7 @@ public final class Loader
         patchProxyObject(i);
         if (lambdaTibRoots != null && lambdaTibRootN < MAXLAMBDATIB)
         {
-            lambdaTibRoots[lambdaTibRootN] = tib.toLong();       // the same GC root a lambda's TIB has: nothing scanned
+            lambdaTibRoots.set(lambdaTibRootN, tib);             // the same GC root a lambda's TIB has: nothing scanned
             lambdaTibVtCap[lambdaTibRootN] = onv;       //   would otherwise reach it
             lambdaTibFilled[lambdaTibRootN] = false;
             lambdaHostBase.set(lambdaTibRootN, Address.zero());        // a proxy has no host class
@@ -24812,14 +24813,14 @@ public final class Loader
         {
             return 0L;
         }
-        long type = mirror.toAddress().plus(16L).loadLong();
+        Address type = mirror.toAddress().plus(16L).loadAddress();
         int i = 0;
         while (i < proxyN)
         {
-            if (proxyTypes[i] == type)
+            if (proxyTypes.get(i).EQ(type))
             {
-                Address obj = Heap.alloc((int) Address.fromLong(type).loadLong());
-                obj.plus(ObjectModel.TIB_OFFSET).store(proxyTibs[i]);
+                Address obj = Heap.alloc((int) type.loadLong());
+                obj.plus(ObjectModel.TIB_OFFSET).store(proxyTibs.get(i));
                 return obj.toLong();
             }
             i += 1;
@@ -24875,12 +24876,12 @@ public final class Loader
     }
 
     /** Whether {@code tib} is one of the shared annotation TIBs. */
-    private static boolean isAnnoTib(long tib)
+    private static boolean isAnnoTib(Address tib)
     {
         int i = 0;
         while (i < annoTibN)
         {
-            if (annoTibVal[i] == tib)
+            if (annoTibVal.get(i).EQ(tib))
             {
                 return true;
             }
@@ -24897,7 +24898,7 @@ public final class Loader
      * annotation were not equal, a {@code HashSet} kept every copy, and {@code toString} printed a {@code $$Lambda}
      * name (AnnoContractProbe). Slots beyond {@code cap} are not written.
      */
-    private static void patchAnnoContract(long tib, int cap, long dir)
+    private static void patchAnnoContract(Address tib, int cap, Address dir)
     {
         annoContractBufs();
         int oi = objectClassIndex();
@@ -24913,15 +24914,15 @@ public final class Loader
             long buf = annoContractBufFor(vtNameBase.get(st + k), vtNameOff[st + k], vtDescOff[st + k]);
             if (buf != 0L)
             {
-                Address.fromLong(tib).plus(8L).plus((long) k * 8L).store(buf);
+                tib.plus(8L).plus((long) k * 8L).store(buf);
             }
             k += 1;
         }
-        if (dir == 0L)
+        if (dir.isZero())
         {
             return;
         }
-        Address e = Address.fromLong(dir);
+        Address e = dir;
         while (e.loadLong() != 0L)
         {
             int r = classRegByType(e.loadAddress());
@@ -24963,31 +24964,31 @@ public final class Loader
     }
 
     /** The shared TIB for annotation interface {@code ifaceReg}, built once and GC-rooted like a lambda's. */
-    private static long annoTibFor(int ifaceReg)
+    private static Address annoTibFor(int ifaceReg)
     {
-        long ifaceType = clTab[ifaceReg].type.toLong();
-        if (ifaceType == 0L)
+        Address ifaceType = clTab[ifaceReg].type;
+        if (ifaceType.isZero())
         {
-            return 0L;
+            return Address.zero();
         }
         if (annoTibKey == null)
         {
-            annoTibKey = new long[MAXANNOTIB];
-            annoTibVal = new long[MAXANNOTIB];
+            annoTibKey = AddressArray.create(MAXANNOTIB);
+            annoTibVal = AddressArray.create(MAXANNOTIB);
             annoTibN = 0;
         }
         int i = 0;
         while (i < annoTibN)
         {
-            if (annoTibKey[i] == ifaceType)
+            if (annoTibKey.get(i).EQ(ifaceType))
             {
-                return annoTibVal[i];
+                return annoTibVal.get(i);
             }
             i += 1;
         }
         if (annoTibN >= MAXANNOTIB)
         {
-            return 0L;
+            return Address.zero();
         }
         int n = clTab[ifaceReg].ifmCount;
         Address it = Heap.allocData(n > 0 ? n * 8 : 8);
@@ -25078,16 +25079,16 @@ public final class Loader
         // nowhere to resolve. It also has to be the same SHAPE as a lambda TIB, because both live in
         // lambdaTibRoots and refillSynthTibVtables walks that one array.
         int onv2 = objectVtableCount();
-        long tib = Heap.allocData(8 + onv2 * 8).toLong();
-        Address.fromLong(tib).plus(0L).store(type);
-        fillObjectVtable(Address.fromLong(tib));
-        patchAnnoContract(tib, onv2, dir.toLong());
-        annoTibKey[annoTibN] = ifaceType;
-        annoTibVal[annoTibN] = tib;
+        Address tib = Heap.allocData(8 + onv2 * 8);
+        tib.plus(0L).store(type);
+        fillObjectVtable(tib);
+        patchAnnoContract(tib, onv2, dir);
+        annoTibKey.set(annoTibN, ifaceType);
+        annoTibVal.set(annoTibN, tib);
         annoTibN += 1;
         if (lambdaTibRoots != null && lambdaTibRootN < MAXLAMBDATIB)
         {
-            lambdaTibRoots[lambdaTibRootN] = tib;       // same GC root as a lambda TIB, for the same reason:
+            lambdaTibRoots.set(lambdaTibRootN, tib);    // same GC root as a lambda TIB, for the same reason:
             lambdaTibVtCap[lambdaTibRootN] = onv2;      //   nothing scanned would otherwise reference it
             lambdaHostBase.set(lambdaTibRootN, Address.zero());        // an annotation instance has no host class
             lambdaHostNameOff[lambdaTibRootN] = 0;
@@ -25114,8 +25115,8 @@ public final class Loader
      */
     private static long buildAnnoObject(Address base, Address pairsPos, int ifaceReg)
     {
-        long tib = annoTibFor(ifaceReg);
-        if (tib == 0L)
+        Address tib = annoTibFor(ifaceReg);
+        if (tib.isZero())
         {
             return 0L;
         }
@@ -25148,7 +25149,7 @@ public final class Loader
                     annoArrayPrim = annoArrayPrimFor(ifBase.get(start + s), ifDescOff[start + s]);
                     obj.plus(16L).plus(s * 8L).store(annoElementValue(base, p.plus(2L)));
                     annoPendSlot = -1;
-                    annoArrayTib = 0L;
+                    annoArrayTib = Address.zero();
                     annoArrayPrim = 0;
                     filled[s] = true;
                     break;
@@ -25191,7 +25192,7 @@ public final class Loader
         // Snapshot the element NAMES as absolute Utf8 addresses BEFORE re-parsing: ifNameOff[] is an offset
         // into ifBase[], and the parse below is what makes those offsets resolvable against a different blob.
         AddressArray want = AddressArray.create(n);
-        long[] defArrayTib = new long[n];
+        AddressArray defArrayTib = AddressArray.create(n);
         int[] defArrayPrim = new int[n];
         int s = 0;
         while (s < n)
@@ -25199,7 +25200,7 @@ public final class Loader
             want.set(s, filled[s] ? Address.zero() : ifBase.get(start + s).plus(ifNameOff[start + s]));
             // Computed HERE, before the re-parse: annoArrayTibFor reads the element method's descriptor
             // through gcp/clTab, and the parse below moves that cursor to a different blob.
-            defArrayTib[s] = filled[s] ? 0L : annoArrayTibFor(ifBase.get(start + s), ifDescOff[start + s]);
+            defArrayTib.set(s, filled[s] ? Address.zero() : annoArrayTibFor(ifBase.get(start + s), ifDescOff[start + s]));
             defArrayPrim[s] = filled[s] ? 0 : annoArrayPrimFor(ifBase.get(start + s), ifDescOff[start + s]);
             s += 1;
         }
@@ -25236,11 +25237,11 @@ public final class Loader
                     if (utf8IsAtBase(ibase, gcp[anIdx], Magic.bytes("AnnotationDefault")))
                     {
                         annoPendSlot = slot;
-                        annoArrayTib = defArrayTib[slot];   // computed BEFORE this parse: see applyAnnoDefaults
+                        annoArrayTib = defArrayTib.get(slot);   // computed BEFORE this parse: see applyAnnoDefaults
                         annoArrayPrim = defArrayPrim[slot];
                         obj.toAddress().plus(16L).plus(slot * 8L).store(annoElementValue(ibase, q));
                         annoPendSlot = -1;
-                        annoArrayTib = 0L;
+                        annoArrayTib = Address.zero();
                         annoArrayPrim = 0;
                         break;
                     }
@@ -25293,8 +25294,8 @@ public final class Loader
             // followed by `checkcast [Ljava/lang/String;`, and an Object[] fails that cast. Falling back to
             // Object[] only when the element type is unresolvable keeps the GC tracing either way -- what must
             // never happen is a RAW array, whose elements are not traced as references at all.
-            long at = annoArrayTib != 0L ? annoArrayTib : refArrayTib(objectTypeAddr());
-            if (at != 0L)
+            Address at = !annoArrayTib.isZero() ? annoArrayTib : refArrayTib(objectTypeAddr());
+            if (!at.isZero())
             {
                 arr.plus(ObjectModel.TIB_OFFSET).store(at);
             }
@@ -25396,11 +25397,11 @@ public final class Loader
         parseForMethods(base, blobLenOf(base));         // a load re-parses: the build reads names through gcp
         int sSlot = annoPendSlot;
         int sElem = annoPendElem;
-        long sTib = annoArrayTib;
+        Address sTib = annoArrayTib;
         int sPrim = annoArrayPrim;
         annoPendSlot = -1;
         annoPendElem = -1;
-        annoArrayTib = 0L;
+        annoArrayTib = Address.zero();
         annoArrayPrim = 0;
         long obj = buildAnnoObject(base, at.plus(2L), nreg);
         annoPendSlot = sSlot;
@@ -25424,7 +25425,7 @@ public final class Loader
     private static int annoPendN;
     private static int annoPendSlot = -1;               // the slot being decoded, or -1 outside an element
     private static int annoPendElem = -1;               // array element index being decoded, or -1
-    private static long annoArrayTib;                   // the array TIB for that slot's declared element type
+    private static Address annoArrayTib;                // the array TIB for that slot's declared element type
     private static int annoArrayPrim;                   // that slot's PRIMITIVE array component char, or 0
 
     /**
@@ -25450,7 +25451,7 @@ public final class Loader
         return c == 0x4C || c == 0x5B ? 0 : c;          // 'L' / '[': a reference component
     }
 
-    private static long annoArrayTibFor(Address base, int descOff)
+    private static Address annoArrayTibFor(Address base, int descOff)
     {
         int len = u2(base.plus(descOff));
         int i = 0;
@@ -25461,10 +25462,10 @@ public final class Loader
         int ret = descOff + 2 + i + 1;                  // the return descriptor, just past ')'
         if (ret - descOff - 2 >= len || u1(base.plus(ret)) != 0x5B)  // '['
         {
-            return 0L;
+            return Address.zero();
         }
         Address et = elementTypeOfArrayDescN(base, ret, len - (ret - descOff - 2));
-        return et.isZero() ? 0L : refArrayTib(et);
+        return et.isZero() ? Address.zero() : refArrayTib(et);
     }
 
     private static void noteAnnoPending(int kind, Address a, Address b)
@@ -25643,8 +25644,8 @@ public final class Loader
     {
         int len = u2(base.plus(off));
         Address bytes = Heap.allocArray(len, 1);
-        long bt = byteArrayTib();
-        if (bt != 0L)
+        Address bt = byteArrayTib();
+        if (!bt.isZero())
         {
             bytes.plus(ObjectModel.TIB_OFFSET).store(bt);
         }
@@ -26442,8 +26443,8 @@ public final class Loader
     {
         int cnt = level == 0 ? c0 : level == 1 ? c1 : level == 2 ? c2 : c3;
         Address arr = Heap.allocArray(cnt, descElemSize(u1(desc.plus(off + 1))));
-        long tib = arrayTibOfDescN(desc, off, n);
-        if (tib != 0L)
+        Address tib = arrayTibOfDescN(desc, off, n);
+        if (!tib.isZero())
         {
             arr.plus(ObjectModel.TIB_OFFSET).store(tib);   // else leave the raw element size, as tagArray does
         }
@@ -28116,9 +28117,9 @@ public final class Loader
         tib.plus(0L).store(type);
         fillObjectVtable(tib);                           // may copy zeros if Object is not compiled yet;
                                                          //   refillSynthTibVtables repairs that at loadAll's end
-        if (lambdaTibRoots != null && lambdaTibRootN < lambdaTibRoots.length)
+        if (lambdaTibRoots != null && lambdaTibRootN < lambdaTibRoots.length())
         {
-            lambdaTibRoots[lambdaTibRootN] = tib.toLong();   // keep this TIB (and, via its trace, Type/dir/itables) a GC root
+            lambdaTibRoots.set(lambdaTibRootN, tib);         // keep this TIB (and, via its trace, Type/dir/itables) a GC root
             lambdaTibVtCap[lambdaTibRootN] = onv;   // ... and how many vtable slots it has room for
             lambdaTibFilled[lambdaTibRootN] = false;// ... and NOT yet filled (explicit: see the field's note --
                                                     //   allocArray leaves elements undefined on this VM)
@@ -28229,8 +28230,8 @@ public final class Loader
         int nameOff = gcp[u2(gbase.plus(gcp[classIdx]))];
         if (u1(gbase.plus(nameOff + 2)) == 0x5B)            // '[' : an array class ("[B", "[Ljava/...;", "[[I")
         {
-            long tib = arrayTibOfDesc(gbase, nameOff);
-            return tib == 0L ? Address.zero() : Address.fromLong(tib).loadAddress();  // the array Type (checkcast/instanceof target)
+            Address tib = arrayTibOfDesc(gbase, nameOff);
+            return tib.isZero() ? Address.zero() : tib.loadAddress();  // the array Type (checkcast/instanceof target)
         }
         if (utf8EqAt(gbase, nameOff, gbase, gThisNameOff))
         {
@@ -28314,7 +28315,7 @@ public final class Loader
     }
 
     /** Allocate an array Type {tag|elemSize, super=Object, itableDir=0, elementType} + a 1-word TIB; return the TIB. */
-    private static long makeArrayTib(int elemSize, Address elementType)
+    private static Address makeArrayTib(int elemSize, Address elementType)
     {
         Address type = Heap.allocData(ObjectModel.ARRAY_TYPE_SIZE);
         Address objType = objectTypeAddr();
@@ -28335,7 +28336,7 @@ public final class Loader
         Address tib = Heap.allocData(8 + nv * 8);
         tib.plus(ObjectModel.TIB_TYPE_SLOT * 8).store(type);                // TIB[0] = Type
         fillObjectVtable(tib);                                                   // TIB[1..] = Object's vtable slots
-        return tib.toLong();
+        return tib;
     }
 
     /** Number of vtable slots a SYNTHESISED TIB reserves (= java/lang/Object's flattened vtable count), or 0.
@@ -28395,17 +28396,17 @@ public final class Loader
         int i = 0;
         while (i < lambdaTibRootN)
         {
-            if (lambdaTibRoots[i] != 0L && !lambdaTibFilled[i])
+            if (!lambdaTibRoots.get(i).isZero() && !lambdaTibFilled[i])
             {
-                if (fillObjectVtableUpTo(Address.fromLong(lambdaTibRoots[i]), lambdaTibVtCap[i]))
+                if (fillObjectVtableUpTo(lambdaTibRoots.get(i), lambdaTibVtCap[i]))
                 {
                     lambdaTibFilled[i] = true;           // complete: nothing more can ever be written here
                 }
-                if (isAnnoTib(lambdaTibRoots[i]))       // the refill copies Object's slots back over the
+                if (isAnnoTib(lambdaTibRoots.get(i)))   // the refill copies Object's slots back over the
                 {                                       //   annotation contract: put it back
-                    patchAnnoContract(lambdaTibRoots[i], lambdaTibVtCap[i], 0L);
+                    patchAnnoContract(lambdaTibRoots.get(i), lambdaTibVtCap[i], Address.zero());
                 }
-                int px = proxyIndexOfTib(lambdaTibRoots[i]);
+                int px = proxyIndexOfTib(lambdaTibRoots.get(i));
                 if (px >= 0)                            // ... and over a proxy's equals/hashCode/toString
                 {
                     patchProxyObject(px);
@@ -28439,11 +28440,11 @@ public final class Loader
         if (primArrTib != null)
         {
             int a = 0;
-            while (a < primArrTib.length)
+            while (a < primArrTib.length())
             {
-                if (primArrTib[a] != 0L && !primArrAdopted[a])
+                if (!primArrTib.get(a).isZero() && !primArrAdopted[a])
                 {
-                    fillObjectVtable(Address.fromLong(primArrTib[a]));   // adopted (baked) TIBs keep their writer impls
+                    fillObjectVtable(primArrTib.get(a));                 // adopted (baked) TIBs keep their writer impls
                 }
                 a += 1;
             }
@@ -28451,9 +28452,9 @@ public final class Loader
         int r = 0;
         while (r < refArrCount)
         {
-            if (refArrTib[r] != 0L && !refArrAdopted[r])
+            if (!refArrTib.get(r).isZero() && !refArrAdopted[r])
             {
-                fillObjectVtable(Address.fromLong(refArrTib[r]));        // adopted (baked) TIBs keep their writer impls
+                fillObjectVtable(refArrTib.get(r));                      // adopted (baked) TIBs keep their writer impls
             }
             r += 1;
         }
@@ -28485,23 +28486,23 @@ public final class Loader
     }
 
     /** The array TIB for a primitive array of the given newarray {@code atype}; adopted or created on demand. */
-    static long primArrayTib(int atype)
+    static Address primArrayTib(int atype)
     {
         if (atype < 0 || atype >= 12)
         {
-            return 0L;
+            return Address.zero();
         }
-        if (primArrTib[atype] == 0L)
+        if (primArrTib.get(atype).isZero())
         {
             // M8 array-Type unification: ADOPT the writer-baked canonical array TIB (VM.primArrayTibs,
             // 8 longs indexed atype-4) so byte[] is ONE class across both worlds -- writer-tagged
             // arrays and loader arrays carry the same Type node, and instanceof/checkcast targets
             // resolve to it on both sides. Metal-built only if the image predates the table.
-            long tab = VM.primArrayTibs;
-            long baked = tab == 0L || atype < 4 ? 0L : Address.fromLong(tab).plus((long) (atype - 4) * 8L).loadLong();
-            if (baked != 0L)
+            Address tab = VM.primArrayTibs;
+            Address baked = tab.isZero() || atype < 4 ? Address.zero() : tab.plus((long) (atype - 4) * 8L).loadAddress();
+            if (!baked.isZero())
             {
-                primArrTib[atype] = baked;
+                primArrTib.set(atype, baked);
                 primArrAdopted[atype] = true;
                 if (LOAD_LOG)
                 {
@@ -28513,10 +28514,10 @@ public final class Loader
             }
             else
             {
-                primArrTib[atype] = makeArrayTib(primElemSize(atype), Address.zero());
+                primArrTib.set(atype, makeArrayTib(primElemSize(atype), Address.zero()));
             }
         }
-        return primArrTib[atype];
+        return primArrTib.get(atype);
     }
 
     /** O(1) type checks: give {@code type} a depth + superclass display (depth+1 Type addrs,
@@ -28611,7 +28612,7 @@ public final class Loader
     }
 
     /** Array TIB for a byte[] (newarray atype 8) — used to type String value arrays / interned literals. */
-    static long byteArrayTib()
+    static Address byteArrayTib()
     {
         return primArrayTib(8);
     }
@@ -28625,10 +28626,10 @@ public final class Loader
      * the two worlds share one Type -- the loader ADOPTS the writer's node, so a writer-baked String object
      * and a guest-built one carry the same address.
      */
-    static long stringTypeAddr()
+    static Address stringTypeAddr()
     {
         int i = classIndexByName(Magic.bytes("java/lang/String"));
-        return i < 0 ? 0L : clTab[i].type.toLong();
+        return i < 0 ? Address.zero() : clTab[i].type;
     }
 
     /** JVMS field-descriptor char -> newarray atype (Z/B/C/S/I/J/F/D), or -1 for a reference/array element. */
@@ -28647,7 +28648,7 @@ public final class Loader
 
     /** Array TIB for the array descriptor at {@code base+nameOff} (a Utf8 like "[B" / "[Ljava/lang/String;" /
      *  "[[I"), or 0. */
-    private static long arrayTibOfDesc(Address base, int nameOff)
+    private static Address arrayTibOfDesc(Address base, int nameOff)
     {
         return arrayTibOfDescN(base, nameOff + 2, u2(base.plus(nameOff)));   // skip the u2 length prefix
     }
@@ -28655,7 +28656,7 @@ public final class Loader
     /** Array TIB for the {@code n}-byte descriptor at {@code base+off}. Nested descriptors recurse: the
      *  element of "[[I" is "[I", whose Type keys the ref-array cache -- so int[][] shares the SAME canonical
      *  "[I" element node both worlds bake/adopt, and the covariance walk discriminates nested arrays. */
-    private static long arrayTibOfDescN(Address base, int off, int n)
+    private static Address arrayTibOfDescN(Address base, int off, int n)
     {
         int c = u1(base.plus(off + 1));                     // char after the leading '['
         int atype = atypeForDescChar(c);
@@ -28665,8 +28666,8 @@ public final class Loader
         }
         if (c == 0x5B)                                  // '[': nested -- element desc is this minus one '['
         {
-            long elTib = arrayTibOfDescN(base, off + 1, n - 1);
-            return refArrayTib(elTib == 0L ? Address.zero() : Address.fromLong(elTib).loadAddress());
+            Address elTib = arrayTibOfDescN(base, off + 1, n - 1);
+            return refArrayTib(elTib.isZero() ? Address.zero() : elTib.loadAddress());
         }
         return refArrayTib(elementTypeOfArrayDescN(base, off, n));   // "[L<class>;"
     }
@@ -28711,15 +28712,14 @@ public final class Loader
     }
 
     /** Array TIB for a reference array with the given element Type; created + cached (keyed by element Type). */
-    static long refArrayTib(Address elementType)
+    static Address refArrayTib(Address elementType)
     {
-        long elemKey = elementType.toLong();            // the cache's key (refArrElem is still a long[])
         int i = 0;
         while (i < refArrCount)
         {
-            if (refArrElem[i] == elemKey)
+            if (refArrElem.get(i).EQ(elementType))
             {
-                return refArrTib[i];
+                return refArrTib.get(i);
             }
             i += 1;
         }
@@ -28727,18 +28727,18 @@ public final class Loader
         // The table (VM.refArrayTibs: {elementType, tib} pairs) is keyed by the SAME adopted element
         // Type nodes both worlds share, so a writer-tagged Integer[] and a loader Integer[] carry one
         // TIB -- and the covariance walk compares one set of nodes. Metal-built when not baked.
-        long tib = 0L;
+        Address tib = Address.zero();
         boolean adopted = false;
         if (!elementType.isZero())
         {
-            Address tab = Address.fromLong(VM.refArrayTibs);
+            Address tab = VM.refArrayTibs;
             long n = VM.refArrayTibCount;
             long k = 0;
             while (k < n)
             {
                 if (tab.plus(k * 16L).loadAddress().EQ(elementType))
                 {
-                    tib = tab.plus(k * 16L).plus(8L).loadLong();
+                    tib = tab.plus(k * 16L).plus(8L).loadAddress();
                     adopted = true;
                     int r = regOfType(elementType);
                     if (r >= 0)
@@ -28757,16 +28757,16 @@ public final class Loader
                 k += 1;
             }
         }
-        if (tib == 0L)
+        if (tib.isZero())
         {
             tib = makeArrayTib(ObjectModel.WORD, elementType);   // reference elements are 8-byte pointers
         }
-        if (refArrCount >= refArrTib.length)
+        if (refArrCount >= refArrTib.length())
         {
             growRefArrCache();
         }
-        refArrElem[refArrCount] = elemKey;
-        refArrTib[refArrCount] = tib;
+        refArrElem.set(refArrCount, elementType);
+        refArrTib.set(refArrCount, tib);
         refArrAdopted[refArrCount] = adopted;
         refArrCount += 1;
         return tib;
@@ -28781,15 +28781,15 @@ public final class Loader
      */
     private static void growRefArrCache()
     {
-        int n = refArrTib.length * 2;
-        long[] elem = new long[n];
-        long[] tibs = new long[n];
+        int n = refArrTib.length() * 2;
+        AddressArray elem = AddressArray.create(n);
+        AddressArray tibs = AddressArray.create(n);
         boolean[] adopted = new boolean[n];
         int i = 0;
         while (i < refArrCount)
         {
-            elem[i] = refArrElem[i];
-            tibs[i] = refArrTib[i];
+            elem.set(i, refArrElem.get(i));
+            tibs.set(i, refArrTib.get(i));
             adopted[i] = refArrAdopted[i];
             i += 1;
         }
@@ -28832,7 +28832,7 @@ public final class Loader
      * <ol>
      * </ol>
      */
-    static long refArrayTibForClass(int classCp)
+    static Address refArrayTibForClass(int classCp)
     {
         Address type = typeOfClass(classCp);
         if (type.isZero())
@@ -28841,11 +28841,11 @@ public final class Loader
             if (u1(gbase.plus(nameOff + 2)) != 0x5B                     // an array-of-array builds its own Type
                     && lzCompiling && !lzRetried && notePullNeeded(gbase.plus(nameOff)))
             {
-                return 0L;                                          // discarded compile: retried with it loaded
+                return Address.zero();                              // discarded compile: retried with it loaded
             }
             reportUntypedArray(gbase.plus(nameOff));
             Address obj = objectTypeAddr();
-            return obj.isZero() ? 0L : refArrayTib(obj);               // Object[]: covariance holds, elements traced
+            return obj.isZero() ? Address.zero() : refArrayTib(obj);   // Object[]: covariance holds, elements traced
         }
         return refArrayTib(type);
     }
@@ -28919,11 +28919,10 @@ public final class Loader
         {
             return 0L;
         }
-        long key = type.toLong();                       // the mirror table's key (mirType is still a long[])
         int i = 0;
         while (i < mirN)
         {
-            if (mirType[i] == key)
+            if (mirType.get(i).EQ(type))
             {
                 return mirObj.get(i).toLong();
             }
@@ -28935,7 +28934,7 @@ public final class Loader
         // written PAST the object.
         Address obj = Heap.alloc(56);
         Address ctib = classTib();
-        if (mirN >= mirType.length)
+        if (mirN >= mirType.length())
         {
             reportMirrorCacheFull(type, ctib);              // past here getClass() mints a NEW mirror each ask
         }
@@ -28945,9 +28944,9 @@ public final class Loader
         }
         obj.plus(0L).store(ctib);                      // TIB (0 -> a bare identity object; see the report)
         obj.plus(16L).store(type);                     // the VM Type this Class mirrors
-        if (mirN < mirType.length)
+        if (mirN < mirType.length())
         {
-            mirType[mirN] = key;
+            mirType.set(mirN, type);
             mirObj.set(mirN, obj.toObjectReference());
             mirN += 1;
         }
@@ -30187,8 +30186,8 @@ public final class Loader
         }
         lastLiteralCoder = maxCh < 256 ? 0 : 1;
         Address arr = Heap.allocArray(lastLiteralCoder == 0 ? nchars : nchars * 2, 1);
-        long bt = byteArrayTib();
-        if (bt != 0L)
+        Address bt = byteArrayTib();
+        if (!bt.isZero())
         {
             arr.plus(ObjectModel.TIB_OFFSET).store(bt);   // type it as [B so `checkcast [B` on String.value resolves
         }

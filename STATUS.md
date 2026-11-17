@@ -4,6 +4,30 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 35: Type/TIB pointers, stage 3 -- the tables (2026-11-17).** Pi-validated (build
+  47b574eeea000c87).
+  - **Tables -> AddressArray** (every slot a Type/TIB pointer or 0, no element arithmetic, none parked in a
+    `long[][]`, all created at run time): Loader `primArrTib`, `refArrElem`, `refArrTib`, `mirType`,
+    `lambdaTibRoots`, `primTypeCache`, `dsType`, `annoTibKey`, `annoTibVal`, `proxyTibs`, `proxyTypes`, and
+    `applyAnnoDefaults`' local `defArrayTib`; `growRefArrCache` builds its replacements with `AddressArray.create`.
+  - **Table pointers / caches -> Address:** VM `bakedTypeBase`, `bakedTypeNames`, `primArrayTibs`, `refArrayTibs`
+    (filled by the writer BY NAME -- `fillStatic` is keyed by name alone and writes the raw 64-bit word, the same
+    mechanism increment 19's `handlerTable`/`frameTable` already rely on), `byteArrayTibCache`, `stringTypeCache`;
+    Loader `annoArrayTib`. `bakedTypeName` takes `type.diff(VM.bakedTypeBase).toLong()`, keeping `rel < 0` signed.
+  - **Readers/producers now on Address:** `isSynthesisedTib`, `isAnnoTib`, `proxyIndexOfTib`, `patchAnnoContract`,
+    `annoTibFor`, `classMirror`'s and `refArrayTib`'s keys (`EQ`), and the array-TIB producers (`makeArrayTib`,
+    `primArrayTib`, `refArrayTib`, `byteArrayTib`, `arrayTibOfDesc(N)`, `refArrayTibForClass`, `annoArrayTibFor`,
+    `stringTypeAddr`, `primitiveType`). `MetalSymbols.tagArray` converts once for `emitAddr` (stage 4).
+  - **Left:** `vsSiteType` (its address is taken with `Magic.addrOf` for the compiled inline cache -- passing an
+    AddressArray as an Object is unexercised, for a gain of 1); `castFailureMessage` and `thrTypeCache` (feed the
+    stage-4 descriptor helpers); SelfBuild's tables (that code may run on the host, where AddressArray throws).
+  - **Measured:** total conversions across src/ **1255 -> 1221**. Loader array ops swap 1:1 (32 laload -> get,
+    17 lastore -> set, 7 arraylength -> length, 14 newarray -> create); otherwise only 64-bit load/store swaps;
+    `lcmp` -> `isZero`/`EQ` (Loader 39, VM 2, VMConcat 1); no new ordering compare, no `if_acmp`. **Code:** Loader
+    **-217 words**, VM -10, VMConcat -4.
+  - **Validation:** `make test` + overlaycheck; full regression **209/209**. Pi: the usual set (the Boom trace's
+    class names come through the writer-filled baked-type tables), AddressFieldProbe 58/0, ConcatCheck identical
+    to a host JVM, bench unchanged.
 - **UNBOXED TYPES, INCREMENT 34: Type/TIB pointers, stage 2 -- resolution and assignability (2026-11-17).**
   Pi-validated (build 11f90daa1b5b2e2a).
   - **Retyped (the Type parameter -> Address):** Loader `methodResolve`, `methodResolveDesc`, `methodResolveExact`,

@@ -184,7 +184,7 @@ final class MetalSymbols implements Symbols
     }
     public void tagArray(CodeBuffer cb, int arrReg, int operand, boolean isRef)
     {
-        long tib = isRef ? Loader.refArrayTibForClass(operand) : Loader.primArrayTib(operand);
+        long tib = (isRef ? Loader.refArrayTibForClass(operand) : Loader.primArrayTib(operand)).toLong();
         if (tib == 0L)
         {
             return;                                     // no array Type (Object not loaded): leave it raw
