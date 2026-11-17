@@ -881,7 +881,7 @@ final class VMGc
                     printHex(Address.fromLong(Heap.LARGE_PTR_CELL).loadLong());
                     Uart.putc(0x0A);
                     Uart.write(Magic.bytes("  marked from "));
-                    Loader.printFrameAt(Address.fromLong(Magic.readLR())); // which scan handed us this word
+                    StackTrace.printFrameAt(Address.fromLong(Magic.readLR())); // which scan handed us this word
                     Uart.putc(0x0A);
                 }
                 return false;                          // refuse to mark it: not a block
@@ -1126,7 +1126,7 @@ final class VMGc
                         Uart.write(Magic.bytes(" target="));
                         printHex(w);
                         Uart.write(Magic.bytes("\n  freed method: "));
-                        Loader.printFrameAt(Address.fromLong(w));
+                        StackTrace.printFrameAt(Address.fromLong(w));
                         Uart.putc(0x0A);
                         while (true) { Magic.wfe(); }
                     }

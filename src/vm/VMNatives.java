@@ -236,19 +236,19 @@ final class VMNatives
     /** {@code System.setOut0(PrintStream)} native: redirect the stream JUnit captures test output through. */
     static void setOut0(long ps)
     {
-        Loader.setStdStream(Magic.bytes("out"), ObjectReference.fromLong(ps));
+        BootSeeds.setStdStream(Magic.bytes("out"), ObjectReference.fromLong(ps));
     }
 
     /** {@code System.setErr0(PrintStream)} native. */
     static void setErr0(long ps)
     {
-        Loader.setStdStream(Magic.bytes("err"), ObjectReference.fromLong(ps));
+        BootSeeds.setStdStream(Magic.bytes("err"), ObjectReference.fromLong(ps));
     }
 
     /** {@code System.setIn0(InputStream)} native. */
     static void setIn0(long is)
     {
-        Loader.setStdStream(Magic.bytes("in"), ObjectReference.fromLong(is));
+        BootSeeds.setStdStream(Magic.bytes("in"), ObjectReference.fromLong(is));
     }
 
     static long identity(long x)
@@ -284,7 +284,7 @@ final class VMNatives
     /**
      * {@code Throwable.printStackTrace0()} native (self in x0): print the throwable's class + the frames captured
      * into its inline backtrace (bt0..bt7 @ self+16) by {@link #unwind} at throw time. Names each frame's method
-     * via {@link Loader#printFrameAt} (demand-compiled methods / {@code <clinit>}s; image code shows "image/native").
+     * via {@link StackTrace#printFrameAt} (demand-compiled methods / {@code <clinit>}s; image code shows "image/native").
      */
     /**
      * {@code [T.clone()} intrinsic: a shallow copy of any array. Copies the whole block body (length word +
@@ -404,7 +404,7 @@ final class VMNatives
     /** {@code Throwable.stackTrace0(Throwable)} native: its inline backtrace as a StackTraceElement[]. */
     static long throwableTrace(long exc)
     {
-        return Loader.traceFromThrowable(ObjectReference.fromLong(exc));
+        return StackTrace.traceFromThrowable(ObjectReference.fromLong(exc));
     }
 
     /**
@@ -2041,7 +2041,7 @@ final class VMNatives
             printStr(ObjectReference.fromLong(msg));
         }
         Uart.putc(0x0A);
-        Address deep = Address.fromLong(Loader.throwableBacktrace(self));       // every frame, when there were more than eight
+        Address deep = Address.fromLong(StackTrace.throwableBacktrace(self));       // every frame, when there were more than eight
         int n = !deep.isZero() ? deep.plus(ObjectModel.ARRAY_LENGTH_OFFSET).loadInt() : 8;
         int i = 0;
         while (i < n)
@@ -2053,7 +2053,7 @@ final class VMNatives
                 break;
             }
             Uart.write(Magic.bytes("  at "));
-            Loader.printFrameAt(fpc);
+            StackTrace.printFrameAt(fpc);
             Uart.putc(0x0A);
             i += 1;
         }

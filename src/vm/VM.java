@@ -114,7 +114,7 @@ public final class VM
                 // holds several of the same shape (LispDemo.main makes FOUR String.valueOf(Object) calls),
                 // and the line table the printStackTrace walker already reads answers that in one boot.
                 Uart.write(Magic.bytes("\n    caller frame: "));
-                Loader.printFrameAt(Address.fromLong(up));
+                StackTrace.printFrameAt(Address.fromLong(up));
                 Uart.putc(0x0A);
 
                 // AND THE CALLER'S OWN CODE. The line names the STATEMENT; only the words that marshal x0
@@ -2563,10 +2563,10 @@ public final class VM
         printHex(lr);
         Uart.putc(0x0A);
         Uart.write(Magic.bytes("  at elr: "));                 // the faulting instruction's own method: the
-        Loader.printFrameAt(Address.fromLong(elr));            //   image symbol table names writer-compiled
+        StackTrace.printFrameAt(Address.fromLong(elr));            //   image symbol table names writer-compiled
         Uart.putc(0x0A);                                       //   code, which reportMethodAt (JIT-only) cannot
         Uart.write(Magic.bytes("  at lr:  "));                 //   -- without this a fault inside the loader
-        Loader.printFrameAt(lr);                               //   reads as "(no registered method)" and the
+        StackTrace.printFrameAt(lr);                               //   reads as "(no registered method)" and the
         Uart.putc(0x0A);                                       //   only clue is a raw address
         Uart.write(Magic.bytes("  faulting method (lr): "));   // #43: name the demand-compiled method at lr
         Loader.reportMethodAt(lr);
@@ -2644,7 +2644,7 @@ public final class VM
                 // the sweep zeroed". Report it HERE: once this becomes a Java exception and unwinds, the
                 // block state and swept-log history are no longer meaningful.
                 VMGc.reportSweptPc(elr.toLong());
-                Loader.printFrameAt(elr);
+                StackTrace.printFrameAt(elr);
                 Uart.putc(0x0A);
             }
             exc = newInternalError();
@@ -2828,7 +2828,7 @@ public final class VM
             r += 1;
         }
         Uart.write(Magic.bytes("\n    x30 in: "));
-        Loader.printFrameAt(Address.fromLong(faultRegs[c * 40 + 30] - 4L));
+        StackTrace.printFrameAt(Address.fromLong(faultRegs[c * 40 + 30] - 4L));
     }
 
     /** A second CPU fault fired while {@link #throwFromFault} was still turning the FIRST one into a Java
@@ -2849,7 +2849,7 @@ public final class VM
         Uart.write(Magic.bytes("\n    at "));
         Loader.reportMethodAt(Address.fromLong(fault0Elr));
         Uart.write(Magic.bytes("\n    elr in: "));                // names IMAGE code, which reportMethodAt cannot
-        Loader.printFrameAt(Address.fromLong(fault0Elr));
+        StackTrace.printFrameAt(Address.fromLong(fault0Elr));
         printFaultRegs(fault0Core);
         Uart.write(Magic.bytes("\n  nested:   core="));
         int me = (int) (Magic.readMPIDR() & 3L);
@@ -2863,7 +2863,7 @@ public final class VM
         Uart.write(Magic.bytes("\n    at "));
         Loader.reportMethodAt(elr);
         Uart.write(Magic.bytes("\n    elr in: "));
-        Loader.printFrameAt(elr);
+        StackTrace.printFrameAt(elr);
         Uart.write(Magic.bytes("\n    task="));                // the NESTED fault's own task: a different task
         printDec(curTask());                                   //   on the same core means the first was preempted
         Uart.write(Magic.bytes(" loaderOwner="));
@@ -2927,7 +2927,7 @@ public final class VM
         Uart.write(Magic.bytes("\n    call site (where the branch would have returned): 0x"));
         printHex(lr);
         Uart.write(Magic.bytes("\n    at "));
-        Loader.printFrameAt(Address.fromLong(lr));
+        StackTrace.printFrameAt(Address.fromLong(lr));
         Uart.write(Magic.bytes("\n    Halting. Without this check the branch erases its own provenance. ***\n"));
         while (true)
         {
@@ -2936,7 +2936,7 @@ public final class VM
     }
 
     /**
-     * A call to native method {@code k} of {@link Loader#missingNativeThunk}'s table, which this VM does not
+     * A call to native method {@code k} of {@link NativeMethods#missingNativeThunk}'s table, which this VM does not
      * implement: throw {@code UnsatisfiedLinkError} naming it (CLAUDE.md rule 3 -- a stub THROWS). Entered by
      * {@code br} from the thunk, so x30 is still the caller's return address and the error unwinds as if the
      * native itself had thrown. {@code k < 0} is the force-compile call in {@link #installFaultVectors}.
@@ -2947,11 +2947,11 @@ public final class VM
         {
             return;
         }
-        if (Loader.missingNativeUnsupported(k))
+        if (NativeMethods.missingNativeUnsupported(k))
         {
-            throw (UnsupportedOperationException) Magic.fromAddr(Loader.missingNativeError(k));   // a VarHandle mode
+            throw (UnsupportedOperationException) Magic.fromAddr(NativeMethods.missingNativeError(k));   // a VarHandle mode
         }
-        throw (UnsatisfiedLinkError) Magic.fromAddr(Loader.missingNativeError(k));
+        throw (UnsatisfiedLinkError) Magic.fromAddr(NativeMethods.missingNativeError(k));
     }
 
     static void denylistTrap()
@@ -2988,7 +2988,7 @@ public final class VM
         while (depth < 12 && cpc > 0x1000L)
         {
             Uart.write(Magic.bytes("\n    at "));
-            Loader.printFrameAt(Address.fromLong(cpc));
+            StackTrace.printFrameAt(Address.fromLong(cpc));
             long fs = frameSizeAt(Address.fromLong(cpc));
             if (fs == 0L)
             {
@@ -3057,7 +3057,7 @@ public final class VM
                 Uart.write(Magic.bytes("  [sp+"));
                 printDec(i * 8);
                 Uart.write(Magic.bytes("] "));
-                Loader.printFrameAt(Address.fromLong(w - 4L)); // a saved LR points PAST the call: name the call site
+                StackTrace.printFrameAt(Address.fromLong(w - 4L)); // a saved LR points PAST the call: name the call site
                 Uart.putc(0x0A);
                 shown += 1;
             }
@@ -3084,7 +3084,7 @@ public final class VM
         while (depth < 12 && cpc.toLong() > 0x1000L)
         {
             Uart.write(Magic.bytes("\n    at "));
-            Loader.printFrameAt(cpc);
+            StackTrace.printFrameAt(cpc);
             long fs = frameSizeAt(cpc);
             if (fs == 0L)
             {

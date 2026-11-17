@@ -108,7 +108,7 @@ final class Primitives
      */
     static void seedPrimitiveTypes()
     {
-        if (Loader.sdPrim)
+        if (BootSeeds.sdPrim)
         {
             return;
         }
@@ -125,14 +125,14 @@ final class Primitives
         seedPrimType(Magic.bytes("java/lang/Character"), 0x43, 6);    // 'C'
         seedPrimType(Magic.bytes("java/lang/Boolean"), 0x5A, 7);      // 'Z'
         seedPrimType(Magic.bytes("java/lang/Void"), 0x56, 8);         // 'V'
-        Loader.sdPrim = Loader.sdPrimMask == 0x1FF;                                 // all nine landed: skip the block outright
+        BootSeeds.sdPrim = BootSeeds.sdPrimMask == 0x1FF;                                 // all nine landed: skip the block outright
     }
 
     /** Seed one wrapper's {@code TYPE} unless {@code bit} says it already landed; records it in
-     *  {@link #sdPrimMask} when it does. */
+     *  {@link BootSeeds#sdPrimMask} when it does. */
     private static void seedPrimType(byte[] cls, int descChar, int bit)
     {
-        if ((Loader.sdPrimMask & (1 << bit)) != 0)
+        if ((BootSeeds.sdPrimMask & (1 << bit)) != 0)
         {
             return;
         }
@@ -145,7 +145,7 @@ final class Primitives
         Address.fromLong(slot).store(m);
         if (m != 0L)                                    // ... and so is a mirror the Type table cannot yet build
         {
-            Loader.sdPrimMask |= 1 << bit;
+            BootSeeds.sdPrimMask |= 1 << bit;
         }
     }
 

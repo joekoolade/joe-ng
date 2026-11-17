@@ -4,6 +4,26 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **LOADER REFACTOR, INCREMENT 5: stack traces, unimplemented natives and boot seeding out of `vm/Loader`
+  (2026-11-17).** Pure move.
+  - **`StackTrace`** (JikesRVM `runtime/StackTrace`): `buildTrace`/`traceWalk`/`frameToElement` and the
+    `StackTraceElement` layout cache, Throwable backtraces (`traceFromThrowable`, `newThrowableBacktrace`,
+    `awaitsThrowTrace`), the per-method line tables (`buildLineTable`, `lineAtOffset`, `sourceFileAddr`), and the
+    PC -> method frame printers (`printFrameAt`, `printImageFrameAt`) the collector, scheduler and unwinder use.
+  - **`NativeMethods`**: the throwing thunks for natives this VM does not implement and for unsupported VarHandle
+    modes (`missingNativeThunk`, `missingNativeError`, `declaredNative`).
+  - **`BootSeeds`**: `System.props`/saved properties/line separator, `System.out/err/in` (+ their install
+    generations), `VM.initLevel`'s lock, the `SharedSecrets` accessors.
+  - **Fixed in passing:** `seedSystemIn`'s javadoc sat above the `loaderGen` field (an earlier edit inserted the
+    field between them); it is on `seedSystemIn` again.
+  - **Stays:** `loaderGen` (dynamic-link cells read it too), the float-format/boxing helpers (`doubleToStringBuf`,
+    `boxFloating`, ...; VMBox/VMConcat/ObjectMethods use them), the RTA seeds (`seedClinits`, `seedRootBlob`, ...),
+    `provideKnownStatics`.
+  - **Loader 22,541 -> 21,151 lines.** Image 39,537,432 -> 39,538,016 bytes (+584).
+  - **Validation:** `make test` + overlaycheck clean; 22 targeted QEMU probes pass (AssertMsg, CallerSensitive,
+    CharsetIdentity, CtorChainTrace, DeepTrace, Format, IoStream, Locale, NativeArg, NativeMissing, PrintWriter,
+    SecurityProps, StackWalker, Stream, SystemLogger, Trace, Utf16Print, ThrowableStock, StockException, VarHandle,
+    ExcMessageRace, demo/ExitProbe). Not run: full regression, suite, JUnit, Pi.
 - **LOADER REFACTOR, INCREMENT 4: reflection, class attributes, mirrors, array and primitive types out of
   `vm/Loader` (2026-11-17).** Pure move.
   - **`Reflection`** (JikesRVM `runtime/Reflection`): Method/Constructor/Field resolution (`methodResolve*`,
