@@ -53,7 +53,7 @@ public final class Loader
     static int[] gcp;       // byte offset of each constant-pool entry body
     static byte[] gbytes;   // heap copy of the current class, for the shared ClassReader
     private static int[] gBcToWord; // last compiled method's bci -> machine word offset (Baseline.bcToWord)
-    private static int gAfterCp;    // offset just past the constant pool (stable; gp gets reused as a cursor)
+    static int gAfterCp;    // offset just past the constant pool (stable; gp gets reused as a cursor)
     static int[] gcpTag;    // tag of each entry (7 = Class — used for dependencies)
     private static int gcpCount;
     // Per-blob constant-pool PARSE CACHE. parseConstPool used to copy the whole blob (toBytes) + allocate
@@ -71,7 +71,7 @@ public final class Loader
     private static int[] pcAfterCp;  // offset past the constant pool
     private static int pcN;
     private static int gClassModifiers;   // current class's access_flags (ACC_SUPER stripped) — cached into clModifiers
-    private static int gcodeLen;    // length of the located method's bytecode
+    static int gcodeLen;    // length of the located method's bytecode
     private static int gMaxLocals;  // ... and its max_locals (frame sizing)
     private static int gFoundDescOff;  // descriptor Utf8 offset of the last findMethod hit
     private static int gFoundStatic;   // 1 if that method is static
@@ -88,7 +88,7 @@ public final class Loader
     private static long gnameP, gdescP;   // packed name/descriptor being searched for
     private static int gnameLen;
     private static int gdescLen;
-    private static Address gStatics;   // this class's statics block
+    static Address gStatics;   // this class's statics block
     private static int[] gsfName;   // Utf8 offset of each static field's name (index = slot)
     private static int[] gsfAccess; // access_flags of each static field (index = slot): ACC_VOLATILE for the JIT
     private static int gsfCount;
@@ -106,8 +106,8 @@ public final class Loader
     private static final int MAXMV = 512;
     private static VtSlot[] gvTab;  // the building class's flattened vtable (reified; reused per class)
     private static int gvCount;     // flattened vtable size
-    private static Address gTib;       // this class's TIB { Type, vtable... }, built before emit
-    private static Address gType;      // this class's Type { superType } — a metal instanceof chain node
+    static Address gTib;       // this class's TIB { Type, vtable... }, built before emit
+    static Address gType;      // this class's Type { superType } — a metal instanceof chain node
     private static int gSuperNameOff;  // superclass name Utf8 offset (unloaded/Object => no inherit)
     private static int[] gImplIfName;  // name Utf8 offsets of the interfaces this class implements
     private static int gImplIfCount;
@@ -116,17 +116,17 @@ public final class Loader
     // link to a method compiled in another. Each entry captures where its class /
     // name / descriptor Utf8 bytes live (all in that class's blob) plus its buffer.
     private static final int MAXREG = 24576;
-    private static RVMMethod[] rgTab;   // global method registry (reified: one RVMMethod per compiled method)
-    private static RVMMethod[] bdTab;   // BODYLESS methods (abstract/native, no Code): reflection-only, never linked
-    private static int bdCount;
+    static RVMMethod[] rgTab;   // global method registry (reified: one RVMMethod per compiled method)
+    static RVMMethod[] bdTab;   // BODYLESS methods (abstract/native, no Code): reflection-only, never linked
+    static int bdCount;
     /** A reflection index at or above this names {@code bdTab[idx - BODYLESS]} instead of a registry slot. */
-    private static final int BODYLESS = 1 << 24;
-    private static int rgCount;
+    static final int BODYLESS = 1 << 24;
+    static int rgCount;
 
     // Static-field registry: per loaded class, each static field's {class, name, slot address} so a
     // cross-class getstatic/putstatic (e.g. Long.formatUnsignedLong0 reading Integer.digits) resolves.
-    private static RVMField[] sgTab;   // global static-field registry (reified: one RVMField per static field)
-    private static int sgCount;
+    static RVMField[] sgTab;   // global static-field registry (reified: one RVMField per static field)
+    static int sgCount;
 
     // Class registry: per loaded class, what another class needs to `new` it and
     // dispatch through it — its name (base+offset), TIB, and instance-field count.
@@ -143,28 +143,13 @@ public final class Loader
     // registered -> load order no longer matters (only method-CALL cycles remain, handled by patchRelocs).
     static RVMClass[] clTab;
     static int clCount;
-    // Array Type cache (per demand-load batch, since resetLoader reclaims the heap under them). primArrTib is
-    // indexed by newarray atype (4..11); refArr* is a small element-Type-keyed registry for reference arrays.
-    private static AddressArray primArrTib;     // arrayTib per primitive atype (0 = not yet created)
-    private static boolean[] primArrAdopted;   // true = writer-baked image TIB (never refill: its Object
-                                               // impls are baked code; loader bufs die with the batch heap)
-    private static AddressArray refArrElem;     // element Type key (reference arrays)
-    private static AddressArray refArrTib;      // arrayTib for that element
-    private static boolean[] refArrAdopted;    // true = writer-baked image TIB (never refill)
-    private static int refArrCount;
-    // java.lang.Class mirrors: one Class object per VM Type (identity stable), materialised on ldc class-literal
-    // or Object.getClass(). Per batch (they live in the reclaimed demand heap, like array Types).
-    private static AddressArray mirType;        // VM Type addr key
-    private static ObjectReferenceArray mirObj;   // its Class mirror object (no initializer: created per batch)
-    private static int mirN;
-    private static Address classTibCache;    // guest java/lang/Class's TIB (0 = not loaded)
     // Directly-declared interfaces per registered class/interface, as registry indices, flat:
     // clIfaceReg[r*MAX_DIRECT_IF + j], j < clIfaceRegN[r]. buildItableDir transitively closes over these so
     // an itable directory keys on the SUPER-interfaces too (e.g. ArrayList implements List extends Iterable
     // -> its directory has both List and Iterable, so invokeinterface Iterable.iterator resolves).
-    private static final int MAX_DIRECT_IF = 8;
-    private static int[] clIfaceReg;
-    private static int[] clIfaceRegN;
+    static final int MAX_DIRECT_IF = 8;
+    static int[] clIfaceReg;
+    static int[] clIfaceRegN;
     static int[] ifClosureBuf;   // scratch: registry indices in the current class's transitive iface closure
     // Every instantiated class's imap (the shared itable), captured at fillTib so refillImaps can repair
     // default-method slots that were 0 because the interface holding the default hadn't been EMITTED yet when
@@ -1068,7 +1053,7 @@ public final class Loader
      * these (provideKnownStatics). Grows as new unrunnable stock initializers surface.
      */
     /** Entry addresses of this batch's compiled {@code <clinit>}s, in load order (run after patchRelocs). */
-    private static long[] clinitEntry;   // compiled entry of initializer i, or 0 until clinitEntryOf compiles it
+    static long[] clinitEntry;   // compiled entry of initializer i, or 0 until clinitEntryOf compiles it
     private static long[] clinitCode;    // its BYTECODE (captured at load); non-zero == this slot is enqueued
     private static int[] clinitCodeLen;
     private static int[] clinitDescOff;
@@ -1079,9 +1064,9 @@ public final class Loader
     // batch and which never re-lists a SETTLED blob -- so pd is meaningless to anything that outlives the batch
     // that enqueued the record. Blob base + class-name offset are properties of the classfile itself, so they
     // stay valid, and every use below that only wanted "which blob / which class" reads these instead.
-    private static AddressArray clinitBase;    // blob base of initializer i
-    private static int[] clinitNameOff;  // its class's name Utf8 offset within that blob
-    private static int clinitN;
+    static AddressArray clinitBase;    // blob base of initializer i
+    static int[] clinitNameOff;  // its class's name Utf8 offset within that blob
+    static int clinitN;
     private static int clinitFdFirst;    // index of java/io/FileDescriptor's enqueued <clinit> (run first), or -1
     private static int clinitRunFrom;    // watermark: clinits [0,clinitRunFrom) already ran (incremental forName load)
     private static int[] clinitRan;      // 1 once initializer i has actually executed (batch sweep OR lazy barrier)
@@ -1965,7 +1950,7 @@ public final class Loader
      * use of it, initializing or not, fails the same way. A subclass of it fails too: its superclass walk reaches
      * this through ensureClinit.
      */
-    private static void linkable(int reg)
+    static void linkable(int reg)
     {
         if (reg >= 0 && clTab != null && clTab[reg] != null && clTab[reg].absentSuperOff != 0)
         {
@@ -3290,7 +3275,7 @@ public final class Loader
     static long guestString(byte[] ascii)
     {
         Address arr = Heap.allocArray(ascii.length, 1);    // a real byte[] (elem size 1, length@16, data@24)
-        Address bt = byteArrayTib();                     // type value as [B so String.getBytes()'s `checkcast [B`
+        Address bt = ArrayTypes.byteArrayTib();                     // type value as [B so String.getBytes()'s `checkcast [B`
         if (!bt.isZero())                                // resolves (else it spins forever -- e.g. println(arg))
         {
             arr.plus(ObjectModel.TIB_OFFSET).store(bt);
@@ -3323,7 +3308,7 @@ public final class Loader
             return 0L;
         }
         Address arr = Heap.allocArray(src.length, 1);
-        Address bt = byteArrayTib();
+        Address bt = ArrayTypes.byteArrayTib();
         if (!bt.isZero())
         {
             arr.plus(ObjectModel.TIB_OFFSET).store(bt);
@@ -3369,7 +3354,7 @@ public final class Loader
         }
         int len = u2(base.plus(off));
         Address arr = Heap.allocArray(len, 1);
-        Address bt = byteArrayTib();
+        Address bt = ArrayTypes.byteArrayTib();
         if (!bt.isZero())
         {
             arr.plus(ObjectModel.TIB_OFFSET).store(bt);
@@ -3573,7 +3558,7 @@ public final class Loader
     private static long guestBytesMapped(Address src, int len, boolean dots)
     {
         Address arr = Heap.allocArray(len, 1);
-        Address bt = byteArrayTib();
+        Address bt = ArrayTypes.byteArrayTib();
         if (!bt.isZero())
         {
             arr.plus(ObjectModel.TIB_OFFSET).store(bt);
@@ -3675,7 +3660,7 @@ public final class Loader
         Address arr = Heap.allocArray(n, 8);
         if (!tib.isZero())
         {
-            arr.plus(ObjectModel.TIB_OFFSET).store(refArrayTib(tib.loadAddress()));
+            arr.plus(ObjectModel.TIB_OFFSET).store(ArrayTypes.refArrayTib(tib.loadAddress()));
         }
         int i = 0;
         while (i < n)
@@ -3750,7 +3735,7 @@ public final class Loader
             return 0L;
         }
         Address arr = Heap.allocArray(n, 8);
-        arr.plus(ObjectModel.TIB_OFFSET).store(primArrayTib(11));   // long[]
+        arr.plus(ObjectModel.TIB_OFFSET).store(ArrayTypes.primArrayTib(11));   // long[]
         exc.toAddress().plus(off).store(arr);
         return arr.toLong();
     }
@@ -3765,7 +3750,7 @@ public final class Loader
         {
             // Give the array the [LStackTraceElement; TIB (element Type = TIB[0]) so a `checkcast
             // [LStackTraceElement;` on a Map.Entry.getValue() result passes instead of walking a null Type.
-            Address.fromLong(arr).plus(ObjectModel.TIB_OFFSET).store(refArrayTib(tib.loadAddress()));
+            Address.fromLong(arr).plus(ObjectModel.TIB_OFFSET).store(ArrayTypes.refArrayTib(tib.loadAddress()));
         }
         traceWalk(pc, sp, savedX30, arr, tib);             // pass 2: fill
         return arr;
@@ -4073,7 +4058,7 @@ public final class Loader
     {
         loaderGen += 1;                                 // every registry built from here on is a new generation
         initDoneMemoClear();                            // classes re-register: no init-guard answer carries over
-        if (MIRROR_RESET_WATCH)
+        if (ClassMirrors.MIRROR_RESET_WATCH)
         {
             Uart.write(Magic.bytes("\n  LOADER RESET (Class mirrors invalidated)\n"));
         }
@@ -4344,22 +4329,22 @@ public final class Loader
         clinitN = 0;
         clinitFdFirst = -1;
         clinitRunFrom = 0;
-        primArrTib = AddressArray.create(12);         // array Types live in the (reclaimed) demand heap: recreate per batch
-        primArrAdopted = new boolean[12];  // (adopted image TIBs are permanent but re-adopting is idempotent)
-        refArrElem = AddressArray.create(64);
-        refArrTib = AddressArray.create(64);
-        refArrAdopted = new boolean[64];
-        refArrCount = 0;
+        ArrayTypes.primArrTib = AddressArray.create(12);         // array Types live in the (reclaimed) demand heap: recreate per batch
+        ArrayTypes.primArrAdopted = new boolean[12];  // (adopted image TIBs are permanent but re-adopting is idempotent)
+        ArrayTypes.refArrElem = AddressArray.create(64);
+        ArrayTypes.refArrTib = AddressArray.create(64);
+        ArrayTypes.refArrAdopted = new boolean[64];
+        ArrayTypes.refArrCount = 0;
         // CLASS MIRRORS. 256 was not enough for the console launcher, which overflowed it mid-discovery
         // (`CLASS MIRROR CACHE FULL ... first overflow is org/junit/jupiter/api/parallel/ResourceLock`) --
         // and an overflow is not a capacity nuisance, it SILENTLY BREAKS IDENTITY: past the end every ask
         // mints a fresh mirror, so `getClass() == X.class` answers false while `getClass() == getClass()`
         // can still hold by luck, and stock code compares mirrors constantly. Sized for a launcher-scale
         // closure with room over: the cost is two words per entry, and only for classes actually asked.
-        mirType = AddressArray.create(MAXMIRROR);     // Class mirrors: also per batch (reclaimed heap)
-        mirObj = ObjectReferenceArray.create(MAXMIRROR);
-        mirN = 0;
-        classTibCache = Address.zero();
+        ClassMirrors.mirType = AddressArray.create(MAXMIRROR);     // Class mirrors: also per batch (reclaimed heap)
+        ClassMirrors.mirObj = ObjectReferenceArray.create(MAXMIRROR);
+        ClassMirrors.mirN = 0;
+        ClassMirrors.classTibCache = Address.zero();
         clTab = new RVMClass[MAXCLASS];
         clCount = 0;
         clIndexed = 0;                                  // BESIDE the table it indexes: a watermark that
@@ -4402,9 +4387,9 @@ public final class Loader
         // MEASURED stable in the suite (thrTypeCache filled at generation 4 and matched a fresh lookup to the
         // end; the Cloneable/Serializable pair never filled), so this is hygiene, not a fix.
         thrTypeCache = Address.zero();
-        cloneableTypeCache = Address.zero();
-        serializableTypeCache = Address.zero();
-        arrayIfaceScanned = 0;
+        ArrayTypes.cloneableTypeCache = Address.zero();
+        ArrayTypes.serializableTypeCache = Address.zero();
+        ArrayTypes.arrayIfaceScanned = 0;
         pcBase = AddressArray.create(MAXPARSECACHE);
         pcBytes = new byte[MAXPARSECACHE][];
         pcCp = new int[MAXPARSECACHE][];
@@ -6894,7 +6879,7 @@ public final class Loader
      * java.util.regex.Pattern under MAXBLOB. A call that DOES reach a pruned class traps loudly (patchRelocs
      * points it at VM.denylistTrap) instead of wild-branching. Keep in sync with writer.ReachScan.DENY.
      */
-    private static boolean isDenylisted(Address base, int off)
+    static boolean isDenylisted(Address base, int off)
     {
         // The locale data layer (the locale-provider arc, 2026-10-24): Calendar's constructor reads the first day
         // of the week through CalendarDataUtility, and Date.toString names its zone through TimeZoneNameUtility.
@@ -7318,7 +7303,7 @@ public final class Loader
     }
 
     /** Write {@code len} raw name bytes to the UART (a '/'-separated internal class name). */
-    private static void writeName(Address p, int len)
+    static void writeName(Address p, int len)
     {
         int i = 0;
         while (i < len)
@@ -7411,7 +7396,7 @@ public final class Loader
         namelessN += 1;
         Uart.write(Magic.bytes("\n  CLASS NAME UNRESOLVED (Class.getName() answers NULL): type=0x"));
         VM.printHex(type);
-        if (isArrayType(type))
+        if (ArrayTypes.isArrayType(type))
         {
             Uart.write(Magic.bytes("\n  ... an ARRAY whose ELEMENT type is unresolved -- chase the element, not this"));
         }
@@ -7463,236 +7448,20 @@ public final class Loader
     /** How many times {@code Class.getName()} has answered null; the report itself is capped at 8. */
     static int namelessN;
 
-    private static AddressArray primTypeCache;                 // primitive Type per atype-style index (see primTypeIdx)
-
-    /** Index 0..8 for a JVMS primitive descriptor char (Z C F D B S I J V), or -1. */
-    private static int primTypeIdx(int c)
-    {
-        if (c == 0x5A) { return 0; }                    // 'Z' boolean
-        if (c == 0x43) { return 1; }                    // 'C' char
-        if (c == 0x46) { return 2; }                    // 'F' float
-        if (c == 0x44) { return 3; }                    // 'D' double
-        if (c == 0x42) { return 4; }                    // 'B' byte
-        if (c == 0x53) { return 5; }                    // 'S' short
-        if (c == 0x49) { return 6; }                    // 'I' int
-        if (c == 0x4A) { return 7; }                    // 'J' long
-        if (c == 0x56) { return 8; }                    // 'V' void
-        return -1;
-    }
-
-    /**
-     * The Type node backing {@code int.class} and friends, created on demand and cached. It is a real heap
-     * node rather than a small sentinel in the mirror deliberately: every {@code Class} native dereferences
-     * the mirror's Type word, so a tiny value there would have to be guarded at each of them.
-     */
-    static Address primitiveType(int descChar)
-    {
-        int idx = primTypeIdx(descChar);
-        if (idx < 0)
-        {
-            return Address.zero();
-        }
-        if (primTypeCache == null)
-        {
-            primTypeCache = AddressArray.create(9);
-        }
-        if (primTypeCache.get(idx).isZero())
-        {
-            Address type = Heap.allocData(ObjectModel.TYPE_SIZE);
-            type.plus(ObjectModel.TYPE_INSTANCE_SIZE_OFFSET).store(
-                    ObjectModel.PRIM_TYPE_TAG | (long) descChar);
-            type.plus(ObjectModel.TYPE_SUPER_OFFSET).store(0L);         // no super: instanceof stops here
-            type.plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).store(0L);
-            primTypeCache.set(idx, type);
-        }
-        return primTypeCache.get(idx);
-    }
-
-    /** The {@code Class} mirror for a primitive, e.g. {@code int.class}. Identity-stable via the mirror cache. */
-    static long primitiveMirror(int descChar)
-    {
-        Address t = primitiveType(descChar);
-        return t.isZero() ? 0L : classMirror(t);
-    }
-
-    /** True if {@code type} is a primitive Type ({@link ObjectModel#PRIM_TYPE_TAG}). */
-    static boolean isPrimitiveType(Address type)
-    {
-        if (type.isZero())
-        {
-            return false;
-        }
-        long instSize = type.plus(ObjectModel.TYPE_INSTANCE_SIZE_OFFSET).loadLong();
-        return (instSize & ObjectModel.ARRAY_TYPE_TAG_MASK) == ObjectModel.PRIM_TYPE_TAG;
-    }
-
-    /** The descriptor char of a primitive Type ('I'), or 0. */
-    private static int primTypeChar(Address type)
-    {
-        if (!isPrimitiveType(type))
-        {
-            return 0;
-        }
-        return (int) (type.plus(ObjectModel.TYPE_INSTANCE_SIZE_OFFSET).loadLong() & 0xFFL);
-    }
-
-    /**
-     * Install {@code Integer.TYPE} and friends. The writer cannot bake these: the seed JVM's value is a HOST
-     * {@code java.lang.Class}, which has no image representation, so the snapshot stores 0 and {@code int.class}
-     * -- which javac compiles to {@code getstatic Integer.TYPE}, not to an {@code ldc} -- reads null. Seeded
-     * here for the same reason {@code System.out} and the Integer cache are. No-op for classes not in the batch.
-     */
-    static void seedPrimitiveTypes()
-    {
-        if (sdPrim)
-        {
-            return;
-        }
-        // LATCHED PER WRAPPER, not all-or-nine. A wrapper not yet registered has no TYPE slot to write and
-        // must be retried -- but an all-or-nothing flag would then keep re-scanning for the EIGHT that are
-        // already seeded, and a wrapper a closure never carries (java/lang/Void is the likely one) would
-        // hold the flag down for the whole launch and preserve most of the cost this fix exists to remove.
-        seedPrimType(Magic.bytes("java/lang/Integer"), 0x49, 0);      // 'I'
-        seedPrimType(Magic.bytes("java/lang/Long"), 0x4A, 1);         // 'J'
-        seedPrimType(Magic.bytes("java/lang/Double"), 0x44, 2);       // 'D'
-        seedPrimType(Magic.bytes("java/lang/Float"), 0x46, 3);        // 'F'
-        seedPrimType(Magic.bytes("java/lang/Short"), 0x53, 4);        // 'S'
-        seedPrimType(Magic.bytes("java/lang/Byte"), 0x42, 5);         // 'B'
-        seedPrimType(Magic.bytes("java/lang/Character"), 0x43, 6);    // 'C'
-        seedPrimType(Magic.bytes("java/lang/Boolean"), 0x5A, 7);      // 'Z'
-        seedPrimType(Magic.bytes("java/lang/Void"), 0x56, 8);         // 'V'
-        sdPrim = sdPrimMask == 0x1FF;                                 // all nine landed: skip the block outright
-    }
-
-    /** Seed one wrapper's {@code TYPE} unless {@code bit} says it already landed; records it in
-     *  {@link #sdPrimMask} when it does. */
-    private static void seedPrimType(byte[] cls, int descChar, int bit)
-    {
-        if ((sdPrimMask & (1 << bit)) != 0)
-        {
-            return;
-        }
-        long slot = staticSlotOf(cls, Magic.bytes("TYPE"));
-        if (slot == 0L)
-        {
-            return;                                     // the wrapper is not registered yet -- retry next batch
-        }
-        long m = primitiveMirror(descChar);
-        Address.fromLong(slot).store(m);
-        if (m != 0L)                                    // ... and so is a mirror the Type table cannot yet build
-        {
-            sdPrimMask |= 1 << bit;
-        }
-    }
-
-    /** True if {@code type} is an array Type (its instanceSize slot carries {@link ObjectModel#ARRAY_TYPE_TAG}). */
-    static boolean isArrayType(Address type)
-    {
-        if (type.isZero())
-        {
-            return false;
-        }
-        long instSize = type.plus(ObjectModel.TYPE_INSTANCE_SIZE_OFFSET).loadLong();
-        return (instSize & ObjectModel.ARRAY_TYPE_TAG_MASK) == ObjectModel.ARRAY_TYPE_TAG;
-    }
-
-    /**
-     * The JVMS descriptor char of a PRIMITIVE array Type's element ('I' for {@code int[]}), or 0.
-     *
-     * <p>Recovered by identity against the per-atype cache rather than from the Type itself, because the
-     * element size cannot tell {@code byte[]} from {@code boolean[]} (both 1) or {@code int[]} from
-     * {@code float[]} (both 4) -- and because that works for a writer-BAKED array Type the loader merely
-     * adopted, which no metal-side field would have been filled in for.
-     */
-    private static int primElemCharOf(Address type)
-    {
-        int atype = 4;
-        while (atype < 12)
-        {
-            Address tib = primArrTib.get(atype);
-            if (!tib.isZero() && tib.loadAddress().EQ(type))
-            {
-                return primDescChar(atype);
-            }
-            atype += 1;
-        }
-        return 0;
-    }
-
-    /**
-     * The {@code Class} mirror of an ARRAY Type's COMPONENT, or 0 when {@code type} is not an array (or is a
-     * reference array whose element Type never resolved).
-     *
-     * <p>THE PRIMITIVE CASE NEEDS MORE THAN THE ELEMENT SLOT, which is why this is not one load. An array
-     * Type's {@code ARRAY_TYPE_ELEMENT_OFFSET} exists for reference-array COVARIANCE and is 0 for a primitive
-     * element by construction -- so reading it alone answered NULL for every {@code byte[]}/{@code int[]}, and
-     * null is not an error a caller sees: it is the answer for "not an array", so every caller branching on it
-     * took the not-an-array path for a real array. The element SIZE cannot stand in either
-     * ({@code byte[]}/{@code boolean[]} are both 1, {@code int[]}/{@code float[]} both 4), so the descriptor
-     * char is recovered by IDENTITY against the per-atype TIB cache -- the same trick {@link #classNameLen}
-     * already uses to render {@code "[I"}, and one that also works for a writer-BAKED array Type the loader
-     * merely adopted, which no metal-side field would have been filled in for.
-     */
-    static long arrayComponentMirror(Address type)
-    {
-        if (type.isZero() || !isArrayType(type))
-        {
-            return 0L;
-        }
-        Address el = type.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadAddress();
-        if (!el.isZero())
-        {
-            return classMirror(el);                      // a REFERENCE array: the element Type is right there
-        }
-        int c = primElemCharOf(type);
-        return c == 0 ? 0L : primitiveMirror(c);         // 0 = a ref array whose element never resolved
-    }
-
-    /**
-     * A reflectively created array of {@code length} elements whose COMPONENT Type is {@code compType}:
-     * {@code java.lang.reflect.Array.newInstance}'s allocation, and {@code Arrays.copyOf}/{@code toArray}
-     * behind it.
-     *
-     * <p>THE PRIMITIVE ARM IS WHY THIS EXISTS. The caller used to allocate 8-byte REFERENCE elements
-     * unconditionally and hang {@code refArrayTib} off them, which for a primitive component gives an array of
-     * the wrong element WIDTH under a reference TIB -- the right length, reflectively readable, and wrong the
-     * moment ordinary bytecode indexes past element 0. It was unreachable only because
-     * {@code getComponentType()} answered null for a primitive array; fixing that opens the route, so the two
-     * belong together.
-     */
-    static long newArrayOfComponent(Address compType, int length)
-    {
-        if (!compType.isZero() && isPrimitiveType(compType))
-        {
-            int atype = atypeForDescChar(primTypeChar(compType));
-            if (atype >= 0)
-            {
-                Address arr = Heap.allocArray(length, RuntimeEntrypoints.arrayElemSizeOfAtype(atype));
-                arr.store(primArrayTib(atype));  // the SAME interned TIB `new int[]` uses
-                return arr.toLong();
-            }
-        }
-        Address arr = Heap.allocArray(length, ObjectModel.WORD);
-        if (!compType.isZero())
-        {
-            arr.store(refArrayTib(compType));    // typed [L<component>;, interned per element
-        }
-        return arr.toLong();                                       // else a raw untyped array: still fills and returns
-    }
 
     /** Length of {@code type}'s dotted binary name, or 0 if it has none (unregistered / unresolved element). */
     static int classNameLen(Address type)
     {
-        if (isPrimitiveType(type))
+        if (Primitives.isPrimitiveType(type))
         {
-            return primNameLen(primTypeChar(type));
+            return Primitives.primNameLen(Primitives.primTypeChar(type));
         }
-        if (isArrayType(type))
+        if (ArrayTypes.isArrayType(type))
         {
             Address el = type.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadAddress();
             if (el.isZero())
             {
-                return primElemCharOf(type) == 0 ? 0 : 2;        // "[I"; 0 = a ref array whose element is unresolved
+                return ArrayTypes.primElemCharOf(type) == 0 ? 0 : 2;        // "[I"; 0 = a ref array whose element is unresolved
             }
             int n = elemDescLen(el);
             return n == 0 ? 0 : 1 + n;
@@ -7781,41 +7550,11 @@ public final class Loader
         return pos;
     }
 
-    /** The Java source name of a primitive descriptor char ("int"), as bytes. */
-    private static byte[] primNameBytes(int c)
-    {
-        if (c == 0x5A) { return Magic.bytes("boolean"); }
-        if (c == 0x43) { return Magic.bytes("char"); }
-        if (c == 0x46) { return Magic.bytes("float"); }
-        if (c == 0x44) { return Magic.bytes("double"); }
-        if (c == 0x42) { return Magic.bytes("byte"); }
-        if (c == 0x53) { return Magic.bytes("short"); }
-        if (c == 0x49) { return Magic.bytes("int"); }
-        if (c == 0x4A) { return Magic.bytes("long"); }
-        return Magic.bytes("void");
-    }
-
-    private static int primNameLen(int c)
-    {
-        return c == 0 ? 0 : primNameBytes(c).length;
-    }
-
-    private static int writePrimName(int c, long dst, int pos)
-    {
-        byte[] nm = primNameBytes(c);
-        int k = 0;
-        while (k < nm.length)
-        {
-            Address.fromLong(dst).plus(pos).plus(k).store(nm[k]);
-            k += 1;
-        }
-        return pos + nm.length;
-    }
 
     /** Length of an array element's DESCRIPTOR form: "[I" for a nested array, "Ljava.lang.String;" otherwise. */
     private static int elemDescLen(Address el)
     {
-        if (isArrayType(el))
+        if (ArrayTypes.isArrayType(el))
         {
             return classNameLen(el);
         }
@@ -7826,11 +7565,11 @@ public final class Loader
     /** Write {@code type}'s name at {@code dst+pos} (dots for '/'); returns the position after it. */
     private static int writeClassName(Address type, long dst, int pos)
     {
-        if (isPrimitiveType(type))
+        if (Primitives.isPrimitiveType(type))
         {
-            return writePrimName(primTypeChar(type), dst, pos);
+            return Primitives.writePrimName(Primitives.primTypeChar(type), dst, pos);
         }
-        if (isArrayType(type))
+        if (ArrayTypes.isArrayType(type))
         {
             Address.fromLong(dst).plus(pos).store((byte) 0x5B);                // '['
             pos += 1;
@@ -7841,11 +7580,11 @@ public final class Loader
                 // primitive TIB is an array whose element class never resolved -- write '?' rather than the
                 // NUL that `primElemCharOf` returns, which rendered as `class [` in a ClassCastException and
                 // told the reader nothing. A message with an embedded NUL is worse than a short one.
-                int pc = primElemCharOf(type);
+                int pc = ArrayTypes.primElemCharOf(type);
                 Address.fromLong(dst).plus(pos).store((byte) (pc != 0 ? pc : 0x3F));   // '?'
                 return pos + 1;
             }
-            if (isArrayType(el))
+            if (ArrayTypes.isArrayType(el))
             {
                 return writeClassName(el, dst, pos);             // nested: "[[I"
             }
@@ -7888,136 +7627,6 @@ public final class Loader
         return writeSynthName(type, dst, pos);   // unregistered => synthesised; classNameLen sized it
     }
 
-    /**
-     * {@code Class.forName0(byte[])} native: resolve a binary class name (raw ASCII bytes, dots) to its Class
-     * mirror, loading the class incrementally into the LIVE program if it is not already loaded. Returns 0 (=>
-     * the guest throws {@code ClassNotFoundException}) if the name contains '/' (not a valid binary name), is
-     * not embedded in the classDir, or resolves to no loaded Type.
-     */
-    static long forNameMirror(ObjectReference nameArr)
-    {
-        return forNameMirror(nameArr, true);
-    }
-
-    /**
-     * As {@link #forNameMirror(ObjectReference)}, initializing the class only when {@code init} is set: ClassLoader.loadClass
-     * and Class.forName(name, false, loader) must not run a {@code <clinit>} (JVMS 5.5 names the initializing
-     * triggers, and loading is not one of them).
-     */
-    static long forNameMirror(ObjectReference nameArr, boolean init)
-    {
-        if (nameArr.toLong() <= 0x1000L)
-        {
-            return 0L;                                  // boot force-compile guard passes 0
-        }
-        int len = (int) nameArr.toAddress().plus(16L).loadLong();    // byte[] length @16
-        Address src = nameArr.toAddress().plus(24L);     // byte[] elements @24
-        byte[] slash = new byte[len];
-        int i = 0;
-        while (i < len)
-        {
-            int c = u1(src.plus(i));
-            if (c == 0x2F)                              // '/' is not a valid binary-name char -> not found
-            {
-                return 0L;
-            }
-            slash[i] = (byte) (c == 0x2E ? 0x2F : c);   // '.' -> '/' (classDir keys are internal names)
-            i += 1;
-        }
-        if (len > 0 && slash[0] == 0x5B)                // '[': an ARRAY class, named by its descriptor
-        {
-            return arrayForName(slash);
-        }
-        int ci = classIndexByName(slash);
-        if (ci >= 0)
-        {
-            linkable(ci);                                   // loaded or not, initialized or not: no class at all
-            if (init)
-            {
-                ensureClinit(ci);                           // JVMS 5.5: Class.forName(name) INITIALIZES the class
-            }
-            return classMirror(clTab[ci].type);             // already loaded: cached mirror (identity-stable)
-        }
-        // A DENIED CLASS IS NOT FOUND, which is the truth: it is deliberately absent from this VM.
-        //
-        // `pullClass` goes straight to the classDir and does not consult the denylist -- the same bypass
-        // already recorded for the deferred-`new` path. So forName would LOAD a denied class happily, and the
-        // denial would only bite later, at a trap-wired call site, where it HALTS. Answering not-found here
-        // moves that to a ClassNotFoundException the caller can handle: it is what lets ServiceLoader skip a
-        // provider it cannot load (JUnit's file-writing OpenTestReportGeneratingListener) instead of halting
-        // the run.
-        if (isDenylisted(utf8Blob(slash), 0))
-        {
-            return 0L;                                  // => the guest throws ClassNotFoundException
-        }
-        Address type = loadClassIncremental(slash);
-        if (!type.isZero())
-        {
-            linkable(classRegByType(type));
-        }
-        if (init)
-        {
-            ensureClinit(classRegByType(type));         // JVMS 5.5: forName INITIALIZES, and this batch's
-        }                                               // runClinits left a gated initializer pending
-        return type.isZero() ? 0L : classMirror(type);
-    }
-
-    /**
-     * {@code Class.forName} of an ARRAY name -- {@code "[I"}, {@code "[[Ljava.lang.String;"} -- already turned to
-     * the internal form {@code desc}. It used to look the descriptor up as a CLASS name and answer not found, so
-     * every reflective route to an array class by name threw ClassNotFoundException.
-     *
-     * <p>The descriptor must be exact: one to 255 '[', then one primitive char that is not 'V', or
-     * {@code L<name>;} with a non-empty name; anything else is not found, as on stock. A reference element is
-     * LOADED but not INITIALIZED -- stock's {@code forName} initializes the class it names, and an array class has
-     * no initializer, so its element's {@code <clinit>} waits for the element's own first active use.
-     */
-    private static long arrayForName(byte[] desc)
-    {
-        int len = desc.length;
-        int dims = 0;
-        while (dims < len && desc[dims] == 0x5B)
-        {
-            dims += 1;
-        }
-        if (dims > 255 || dims == len)
-        {
-            return 0L;
-        }
-        int c = desc[dims];
-        if (c == 0x4C)                                  // 'L': a class element, "L<name>;"
-        {
-            if (len < dims + 3 || desc[len - 1] != 0x3B)
-            {
-                return 0L;
-            }
-            byte[] el = new byte[len - dims - 2];
-            int k = 0;
-            while (k < el.length)
-            {
-                int b = desc[dims + 1 + k];
-                if (b == 0x3B || b == 0x5B)             // ';' or '[' inside the name: malformed
-                {
-                    return 0L;
-                }
-                el[k] = (byte) b;
-                k += 1;
-            }
-            if (classIndexByName(el) < 0)
-            {
-                if (isDenylisted(utf8Blob(el), 0) || loadClassIncremental(el).isZero())
-                {
-                    return 0L;
-                }
-            }
-        }
-        else if (atypeForDescChar(c) < 0 || len != dims + 1)
-        {
-            return 0L;                                  // 'V', an unknown char, or trailing bytes
-        }
-        Address tib = arrayTibOfDesc(utf8Blob(desc), 0);
-        return tib.toLong() <= ObjectModel.MAX_RAW_ARRAY_TIB ? 0L : classMirror(tib.loadAddress());
-    }
 
     /**
      * Pull class {@code slash} (an internal '/'-separated name) and its dependency closure into the running
@@ -8781,7 +8390,7 @@ public final class Loader
     }
 
     /** Parse the fields, assigning each static field a slot; allocate a zeroed statics block. */
-    private static void parseFields()
+    static void parseFields()
     {
         Address p = gp;
         gIsInterface = (u2(p) & 0x0200) != 0;             // ACC_INTERFACE
@@ -8871,7 +8480,7 @@ public final class Loader
      * inherited slot in place (so it keeps the super's index) and a new method
      * appending. buildTib later fills the TIB from these slots.
      */
-    private static void parseVtable(Address bytes)
+    static void parseVtable(Address bytes)
     {
         gvCount = 0;
         int superReg = classRegByName(gSuperNameOff);
@@ -9227,7 +8836,7 @@ public final class Loader
     // must initialize. Same reason for deferring: loading mid-compile can collect the in-progress buffer.
     private static final int MAXPENDPULL = 32;
     private static AddressArray lzPullU;
-    private static int lzPullN;
+    static int lzPullN;
     // The length-prefixed names notePullNeededElement BUILT (an array's element class has no Utf8 entry of its
     // own to point at). Held here, as traced byte[]s, so the payload addresses in lzPullU stay valid until
     // drainPendingPulls has copied them; reset whenever the pull list is empty.
@@ -9236,7 +8845,7 @@ public final class Loader
     static boolean lzRetried;
     /** Bounds the ON-DEMAND compile paths to one pull-and-retry each. Separate from {@link #lzRetried},
      *  which those paths save and restore around their own attempt so a nested compile is unaffected. */
-    private static boolean odRetried;
+    static boolean odRetried;
 
     /** Note that the body being compiled reads a static of the (unloaded) class named at {@code clsU}.
      *  False if it is not worth retrying for -- absent from the classDir, denylisted, or the list is full. */
@@ -9266,7 +8875,7 @@ public final class Loader
 
     /** Demand-load every class noted during the compile that just finished. Snapshots and CLEARS the list
      *  first: a pull runs initializers, which can re-enter the compiler and note pulls of their own. */
-    private static void drainPendingPulls()
+    static void drainPendingPulls()
     {
         // EVERY NAME IS COPIED BEFORE ANYTHING LOADS. A load runs initializers, which can re-enter the compiler
         // and note pulls of their own -- and a note made while the list is empty resets lzPullKeep, which would
@@ -9455,8 +9064,8 @@ public final class Loader
 
     private static long unresStaticCell;
 
-    private static long[] unresStaticSeen;
-    private static int unresStaticSeenN;
+    static long[] unresStaticSeen;
+    static int unresStaticSeenN;
 
     /**
      * Name the class+field a late compile could not resolve -- silence here is what made this unfindable.
@@ -9583,7 +9192,7 @@ public final class Loader
     }
 
     /** Find the Code attribute among {@code attrs} at {@code p}; return the bytecode address. */
-    private static long findCode(Address base, Address p, int attrs)
+    static long findCode(Address base, Address p, int attrs)
     {
         int a = 0;
         while (a < attrs)
@@ -9906,7 +9515,7 @@ public final class Loader
 
     /** {@code isSync} is MANDATORY rather than defaulted: dropping it compiles a synchronized method with no
      *  monitor, which is silent and is the exact bug ACC_SYNCHRONIZED support exists to fix. */
-    private static long compile(long code, int len, int descOff, int isStatic, int isSync)
+    static long compile(long code, int len, int descOff, int isStatic, int isSync)
     {
         checkCompileLockHeld(1);
         allocMethodTables();
@@ -10350,7 +9959,7 @@ public final class Loader
         long tRf1 = Magic.readCNTPCT_EL0();
         refillSynthTibVtables();                        // ... and every synthesised lambda/annotation TIB
         long tRf2 = Magic.readCNTPCT_EL0();
-        refillArrayTibVtables();                        // Object's vtable is filled now -> repair any array TIB that
+        ArrayTypes.refillArrayTibVtables();                        // Object's vtable is filled now -> repair any array TIB that
                                                         // was created (e.g. by an early string-literal byte[]) before it
         long tRf3 = Magic.readCNTPCT_EL0();
         cumRfImap += tRf1 - tRest;
@@ -10362,7 +9971,7 @@ public final class Loader
         seedJavaLangAccess();                           // SharedSecrets.javaLangAccess (EnumMap.getKeyUniverse)
         seedJavaIOAccess();                             // SharedSecrets.javaIOAccess (System.console() -> null)
         seedVmInitLock();                               // jdk.internal.misc.VM.lock (System.exit -> VM.shutdown)
-        seedPrimitiveTypes();                           // Integer.TYPE etc: int.class is a getstatic, not an ldc
+        Primitives.seedPrimitiveTypes();                           // Integer.TYPE etc: int.class is a getstatic, not an ldc
         long tSeed = Magic.readCNTPCT_EL0();
         cumSeeds += tSeed - tRf3;
         runClinits();                                   // NOW run each compiled <clinit>: its cross-class calls are patched
@@ -10456,7 +10065,7 @@ public final class Loader
             }
             Uart.putc(0x0A);
         }
-        VM.byteArrayTibCache = byteArrayTib();          // type concat results ([B TIB) so stock getBytes can
+        VM.byteArrayTibCache = ArrayTypes.byteArrayTib();          // type concat results ([B TIB) so stock getBytes can
                                                         //   checkcast/clone a concat String's value
         VM.stringTypeCache = stringTypeAddr();          // tell a String from any other object at a concat site
         markActive = 0;                                 // don't leak the reachability state past this batch
@@ -11076,13 +10685,13 @@ public final class Loader
             reportPropsGap(Magic.bytes("java/util/Properties is not registered"));
             return;
         }
-        long obj = allocInstance(clTab[pi].type);
+        long obj = Reflection.allocInstance(clTab[pi].type);
         if (obj == 0L)
         {
             reportPropsGap(Magic.bytes("java/util/Properties could not be allocated"));
             return;
         }
-        int ctor = constructorResolve(clTab[pi].type, 0);
+        int ctor = Reflection.constructorResolve(clTab[pi].type, 0);
         if (ctor < 0 || rgTab[ctor].buf == 0L)
         {
             reportPropsGap(Magic.bytes("java/util/Properties.<init>() has no compiled body"));
@@ -11182,8 +10791,8 @@ public final class Loader
             reportPropsGap(Magic.bytes("VM.savedProps: java/util/Properties is not registered"));
             return;
         }
-        long obj = allocInstance(clTab[pi].type);
-        int ctor = constructorResolve(clTab[pi].type, 0);
+        long obj = Reflection.allocInstance(clTab[pi].type);
+        int ctor = Reflection.constructorResolve(clTab[pi].type, 0);
         if (obj == 0L || ctor < 0 || rgTab[ctor].buf == 0L)
         {
             reportPropsGap(Magic.bytes("VM.savedProps: java/util/Properties could not be constructed"));
@@ -11732,8 +11341,8 @@ public final class Loader
      * guards would skip the seed for a whole launch and leave the statics null, which is the same
      * watermark-outliving-its-table trap already recorded twice here.
      */
-    private static boolean sdVmLock, sdJio, sdJla, sdPrim;
-    private static int sdPrimMask;                      // one bit per wrapper TYPE already seeded (see seedPrimType)
+    static boolean sdVmLock, sdJio, sdJla, sdPrim;
+    static int sdPrimMask;                      // one bit per wrapper TYPE already seeded (see seedPrimType)
 
     static void seedVmInitLock()
     {
@@ -12380,13 +11989,13 @@ public final class Loader
      * <p>Same fix, and the same reasoning, as the name index that took {@code pull} from 6,664ms to 1,539ms
      * in the demand-load arc.
      */
-    private static final int RGTAB = 32768;              // power of two > MAXREG; chained, so a full table only lengthens chains
-    private static int[] rgBucket;                       // name hash -> first registry index, -1 when empty
-    private static int[] rgNext;                         // registry index -> next entry with the same name hash
+    static final int RGTAB = 32768;              // power of two > MAXREG; chained, so a full table only lengthens chains
+    static int[] rgBucket;                       // name hash -> first registry index, -1 when empty
+    static int[] rgNext;                         // registry index -> next entry with the same name hash
     private static int rgIndexed;                        // entries already linked in (the registry only grows)
 
     /** Link every registry entry added since the last call into the name index. */
-    private static void buildRegIndex()
+    static void buildRegIndex()
     {
         if (rgBucket == null)
         {
@@ -12431,7 +12040,7 @@ public final class Loader
     }
 
     /** Register every compiled method of the current class (walk its methods table). */
-    private static void registerAll()
+    static void registerAll()
     {
         Address p = gMethodsStart;
         int mcount = u2(p);
@@ -12555,7 +12164,7 @@ public final class Loader
      */
     private static long[] rcDone;
     static long pcSkipped;                              // tail visits skipped: the branch was already in place
-    private static int rcCount;
+    static int rcCount;
     /**
      * Per-site memo: the method-registry index that resolved this site last time, or -1.
      *
@@ -12627,7 +12236,7 @@ public final class Loader
     private static long[] rsAddr;                       // static sites: address-load site, ref blob base,
     private static AddressArray rsBase;
     private static int[] rsReg, rsClass, rsName;        //   destination reg, class/name Utf8 offsets
-    private static int rsCount;
+    static int rsCount;
     // #43 trap diagnostics: every call site rewritten to bl denylistTrap, recorded so denylistTrap can read x30
     // (the return address) and report WHICH pruned callee actually fired at runtime (vs the dead-branch refs).
     /** Name a call site left pointing at denylistTrap, once per class+method. */
@@ -12770,7 +12379,7 @@ public final class Loader
     }
 
     /** Re-resolve and rewrite every recorded reloc site now that all classes are loaded. */
-    private static void patchRelocs()
+    static void patchRelocs()
     {
         trapWireCount = 0;                                     // #43: fresh trap-site table per batch
         patchRelocsFrom(0, 0);
@@ -12950,7 +12559,7 @@ public final class Loader
     private static boolean pcPubAll;                     // pcWritten overflowed: publish every site in range
 
     /** Drop the reloc sites at and above {@code mark}; distrust the patch lists if any were actually dropped. */
-    private static void truncateRelocs(int mark)
+    static void truncateRelocs(int mark)
     {
         if (mark < rcCount)
         {
@@ -14422,7 +14031,7 @@ public final class Loader
     /** Trace every resolution the itable-directory tier makes: which interface, which member, what address. */
     private static final boolean ITABLE_DIR_WATCH = false;
 
-    private static long resolveViaItableDir(Address type, Address nameOff, Address descOff)
+    static long resolveViaItableDir(Address type, Address nameOff, Address descOff)
     {
         Address dir = type.plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).loadAddress();
         if (dir.isZero())
@@ -16357,471 +15966,12 @@ public final class Loader
     }
 
 
-
     /** VarHandle overlay: vtable slot of an op by NAME only (its op names are unique), regardless of the
      *  signature-polymorphic call-site descriptor. Returns -1 if the VarHandle overlay isn't registered yet. */
 
 
-    /** Field-registry index of instance field {@code fname} (raw bytes) declared by the class whose Type is
-     *  {@code typeAddr}, or -1. Used by the reflection field-metadata natives. */
-    private static int fieldRegIndex(Address typeAddr, Address fnBase, int fnLen)
-    {
-        int ci = 0;
-        while (ci < clCount)
-        {
-            if (clTab[ci].type.EQ(typeAddr))
-            {
-                int j = 0;
-                while (j < fldCount)
-                {
-                    if (utf8EqAt(clTab[ci].base, clTab[ci].nameOff, fldTab[j].base, fldTab[j].classOff)
-                            && Utf8.rawEqUtf8(fnBase, fnLen, fldTab[j].base, fldTab[j].nameOff))
-                    {
-                        return j;
-                    }
-                    j += 1;
-                }
-            }
-            ci += 1;
-        }
-        return -1;
-    }
-
     /** Reflection: access_flags of the instance field, or -1 if the class declares no such own field. */
 
-    // ----- reflective access to STATIC fields ----------------------------------------------------------
-    // The field registry (fldTab) holds INSTANCE fields only -- it exists to map a field to an offset within
-    // an object -- so every static answered -1 from fieldMods and getDeclaredFields dropped it silently. That
-    // is a real divergence from stock (getDeclaredFields must list statics, and Field.get(null) must read
-    // one), and it also made statics UNDIAGNOSABLE: no probe could read a static's value, which is exactly
-    // what chasing picocli's `blockingFailure()` needed.
-    //
-    // Statics are answered from the two places that do know about them: the CLASSFILE for the declaration
-    // (access flags, descriptor) and sgTab for the CELL.
-
-    private static int cfFieldAccess;                   // set by classfileFieldInfo
-    private static int cfFieldDescChar;
-
-    /** Find a field by name in the class's own FIELDS section; sets {@link #cfFieldAccess}/{@link
-     *  #cfFieldDescChar}. Both are read in ONE walk: each call re-parses the constant pool, and reading the
-     *  descriptor after a second walk would be against a re-derived cursor. */
-    private static boolean classfileFieldInfo(Address typeAddr, Address fnBase, int fnLen)
-    {
-        int ci = classRegByType(typeAddr);
-        if (ci < 0)
-        {
-            return false;
-        }
-        Address base = clTab[ci].base;
-        parseConstPool(base, blobLenOf(base));
-        Address p = gp.plus(6L);                               // past access_flags, this_class, super_class
-        p = p.plus(2L + u2(p) * 2L);                           // past the interfaces list
-        int fcount = u2(p);
-        p = p.plus(2);
-        int f = 0;
-        while (f < fcount)
-        {
-            if (Utf8.rawEqUtf8(fnBase, fnLen, base, gcp[u2(p.plus(2))]))
-            {
-                cfFieldAccess = u2(p);
-                cfFieldDescChar = u1(base.plus(gcp[u2(p.plus(4))] + 2L));
-                return true;
-            }
-            p = skipAttributes(p.plus(8), u2(p.plus(6)));
-            f += 1;
-        }
-        return false;
-    }
-
-    /**
-     * The ADDRESS of a static field's cell, or 0. {@code Field.get/set} reads and writes through this exactly
-     * as an instance field goes through an offset.
-     *
-     * <p>Runs the class's initializer first, which is what stock does: reflective access to a static is an
-     * ACTIVE USE (JVMS 5.5), so returning the cell of a class whose {@code <clinit>} has not run would hand
-     * back a zero that looks like a value.
-     */
-    static long staticCellFor(Address typeAddr, Address fnBase, int fnLen)
-    {
-        int ci = classRegByType(typeAddr);
-        if (ci < 0)
-        {
-            return 0L;
-        }
-        ensureClinit(ci);
-        int i = 0;
-        while (i < sgCount)
-        {
-            if (utf8EqAt(sgTab[i].base, sgTab[i].classOff, clTab[ci].base, clTab[ci].nameOff)
-                    && Utf8.rawEqUtf8(fnBase, fnLen, sgTab[i].base, sgTab[i].nameOff))
-            {
-                if (STATIC_ADDR_LOG)
-                {
-                    Uart.write(Magic.bytes("  reflectcell "));
-                    printNameAt(clTab[ci].base, clTab[ci].nameOff);
-                    Uart.write(Magic.bytes(" -> "));
-                    VM.printHex(sgTab[i].addr);
-                    Uart.putc(0x0A);
-                }
-                return sgTab[i].addr;
-            }
-            i += 1;
-        }
-        return 0L;
-    }
-
-    /**
-     * Byte offset of the instance field {@code fnBase/fnLen} declared by the class whose Type is
-     * {@code typeAddr}, or -1. The Class-keyed sibling of {@link MethodHandles#vhFieldOffset} (which keys on a TIB read
-     * from a live object) -- {@code Unsafe.objectFieldOffset(Class, String)} has only the class, never an
-     * instance, so it cannot go through the TIB.
-     *
-     * <p>Same registry and the same {@code 16 + slot*8} layout as every other field access here, so a handle
-     * obtained this way and an ordinary {@code getfield} address the same memory by construction.
-     */
-    static long fieldOffsetOfType(Address typeAddr, Address fnBase, int fnLen)
-    {
-        int j = fieldRegIndex(typeAddr, fnBase, fnLen);
-        if (j >= 0)
-        {
-            return 16L + fldTab[j].slot * 8L;
-        }
-        return -1L;
-    }
-
-    static int fieldMods(Address typeAddr, Address fnBase, int fnLen)
-    {
-        int j = fieldRegIndex(typeAddr, fnBase, fnLen);
-        if (j >= 0)
-        {
-            return fldTab[j].access;
-        }
-        return classfileFieldInfo(typeAddr, fnBase, fnLen) ? cfFieldAccess : -1;   // statics live only here
-    }
-
-    /**
-     * {@code Class.getModifiers()}: the loaded class's Java modifiers. For a nested class the real flags live
-     * in the enclosing class's {@code InnerClasses} attribute (this class's own {@code access_flags} lack the
-     * {@code private}/{@code protected}/{@code static} distinction), so prefer the {@code InnerClasses} entry
-     * whose {@code inner_class_info} is this class. The VM-only {@code ACC_SUPER} (0x20) bit is stripped.
-     */
-    static int classModifiersOf(Address type)
-    {
-        int i = 0;
-        while (i < clCount)
-        {
-            if (clTab[i].type.EQ(type))
-            {
-                int inner = innerClassFlags(i);
-                if (inner >= 0)
-                {
-                    return inner & ~0x0020 & 0x7FFF;           // as HotSpot: no ACC_SUPER, written flags only
-                }
-                return clTab[i].modifiers;                     // top-level: access_flags, cached at load time
-            }
-            i += 1;
-        }
-        return 0;
-    }
-
-    /**
-     * The {@code inner_class_access_flags} of this class's OWN entry in its {@code InnerClasses} attribute
-     * (JVMS 4.7.6), or -1 when it has none -- a top-level class. A nested class's {@code access_flags} cannot
-     * say {@code static}, {@code private} or {@code protected}; only this entry can, so without it every member
-     * class read as package-or-public and non-static ({@code toGenericString} printed {@code class X$Y} where
-     * stock prints {@code static class X$Y}; GenericsProbe). Read at reflection time, under the loader lock
-     * the native takes, from the blob -- the load-time capture keeps the raw flags for the reason noted there.
-     * Matched by constant-pool index: javac's {@code inner_class_info_index} for a class's own entry IS its
-     * {@code this_class}, as {@link #innerAccessOf} also relies on.
-     */
-    private static int innerClassFlags(int reg)
-    {
-        Address e = ownInnerClassEntry(clTab[reg].base);
-        if (e.isZero())
-        {
-            return -1;
-        }
-        return u2(e.plus(6));                               // inner_class_access_flags
-    }
-
-    /**
-     * Position of the class's OWN entry in its {@code InnerClasses} attribute (JVMS 4.7.6) -- the one whose
-     * {@code inner_class_info_index} is {@code this_class} -- or 0 when it has none (a top-level class). The
-     * entry is four u2s: inner class, outer class, simple name, access flags.
-     */
-    private static Address ownInnerClassEntry(Address base)
-    {
-        Address ap = classAttrsPos(base);
-        if (ap.isZero())
-        {
-            return Address.zero();
-        }
-        Address lp = innerClassesPos(base, ap.plus(2L), u2(ap));
-        if (lp.isZero())
-        {
-            return Address.zero();
-        }
-        int thisIdx = u2(base.plus(gAfterCp + 2));          // this_class, per the ClassReader.afterCp layout
-        if (thisIdx == 0)
-        {
-            return Address.zero();
-        }
-        int n = u2(lp);
-        Address p = lp.plus(2L);
-        int e = 0;
-        while (e < n)
-        {
-            if (u2(p) == thisIdx)                       // inner_class_info_index == this_class
-            {
-                return p;
-            }
-            p = p.plus(8);
-            e += 1;
-        }
-        return Address.zero();
-    }
-
-    /**
-     * Reflection ({@code Class.getDeclaredMethod}): the method-registry index of the first method named
-     * {@code nameArr} (a raw {@code byte[]}) declared by the class whose Type is {@code type}, or -1. Matches
-     * class name + method name (no overload/param-type resolution yet — first match wins).
-     */
-    static int methodResolve(Address type, ObjectReference nameArr)
-    {
-        if (type.isZero() || nameArr.toLong() <= 0x1000L)
-        {
-            return -1;
-        }
-        ensureClinit(classRegByType(type));             // reflective invoke is an active use (JVMS 5.5) --
-                                                        // Class.getEnumConstants reaches values() this way, and
-                                                        // values() reads $VALUES, which only <clinit> sets
-        int idx = methodResolveRegistry(type, nameArr);
-        if (idx >= 0)
-        {
-            return idx;                                    // already compiled + registered
-        }
-        return compileMethodOnDemand(type, nameArr);       // reflectively-only method: JIT it now, then resolve
-    }
-
-    /**
-     * Resolve a method by name AND DESCRIPTOR -- the only key that identifies one when a class overloads. Falls
-     * back to the name-only answer when the descriptor matches nothing, so a caller that has no descriptor (or
-     * one this VM spells differently) is never made worse off than {@link #methodResolve}.
-     */
-    static int methodResolveDesc(Address type, ObjectReference nameArr, ObjectReference descArr)
-    {
-        if (descArr.toLong() <= 0x1000L)
-        {
-            return methodResolve(type, nameArr);
-        }
-        if (type.isZero() || nameArr.toLong() <= 0x1000L)
-        {
-            return -1;
-        }
-        ensureClinit(classRegByType(type));             // reflective invoke is an active use (JVMS 5.5)
-        int idx = methodResolveRegistryDesc(type, nameArr, descArr);
-        if (idx >= 0)
-        {
-            return idx;
-        }
-        idx = compileMethodOnDemand(type, nameArr, descArr);   // reflectively-only method: JIT exactly THIS one
-        if (idx >= 0)
-        {
-            return idx;
-        }
-        VM.loaderLock(VM.LOCK_REFLECT);                 // bodylessIndex re-points the shared parse globals
-        try
-        {
-            idx = bodylessIndex(type, nameArr, descArr); // abstract or native: a Method with no body to call
-        }
-        finally
-        {
-            VM.loaderUnlock();
-        }
-        if (idx >= 0)
-        {
-            return idx;
-        }
-        return methodResolve(type, nameArr);            // descriptor matched nothing: no worse than name-only
-    }
-
-    /**
-     * {@code Method.exact0}: the registry index of the method the class whose Type is {@code type} DECLARES
-     * with exactly this name and descriptor and a body to run, compiling it on demand, or -1 -- never the
-     * name-only fallback {@link #methodResolveDesc} ends in, and never a bodyless entry. This is the per-class
-     * step of reflective VIRTUAL dispatch, where a same-named method with another descriptor is not an
-     * override and must not be called. Not an active use of the class: the receiver's class is initialized.
-     */
-    static int methodResolveExact(Address type, ObjectReference nameArr, ObjectReference descArr)
-    {
-        if (type.isZero() || nameArr.toLong() <= 0x1000L || descArr.toLong() <= 0x1000L)
-        {
-            return -1;
-        }
-        int idx = methodResolveRegistryDesc(type, nameArr, descArr);
-        if (idx >= 0)
-        {
-            return idx;
-        }
-        return compileMethodOnDemand(type, nameArr, descArr);
-    }
-
-    /**
-     * {@code MethodHandleNatives.declared0}: the reflection index of the method the class whose Type is
-     * {@code type} ITSELF declares with exactly this name and descriptor -- a body (compiled on demand), or an
-     * abstract/native one through {@link #bodylessIndex} -- or -1.
-     *
-     * <p>Two things {@link #methodResolveDesc} does are WRONG for MemberName resolution and are absent here. It
-     * runs the class's initializer, and HotSpot resolves a MemberName with {@code ClassInitMode::dont_init}:
-     * DirectMethodHandle decides for itself whether a handle needs an initialization barrier
-     * ({@code Unsafe.shouldBeInitialized}), and an eager one makes that answer always "no". And it falls back to
-     * a NAME-ONLY match, where resolution that finds no exact descriptor must fail -- the JVMS 5.4.3.3 walk over
-     * superclasses and superinterfaces is the caller's, one class at a time.
-     */
-    static int mhDeclaredIndex(Address type, ObjectReference nameArr, ObjectReference descArr)
-    {
-        int idx = methodResolveExact(type, nameArr, descArr);
-        if (idx >= 0 || type.isZero() || nameArr.toLong() <= 0x1000L || descArr.toLong() <= 0x1000L)
-        {
-            return idx;
-        }
-        VM.loaderLock(VM.LOCK_REFLECT);                 // bodylessIndex re-points the shared parse globals
-        try
-        {
-            return bodylessIndex(type, nameArr, descArr);
-        }
-        finally
-        {
-            VM.loaderUnlock();
-        }
-    }
-
-    /**
-     * {@code Method.itableTarget0}: the body the RECEIVER's itable directory answers for the method at reflection
-     * index {@code rgIndex}, or 0 -- {@link #resolveViaItableDir}, the tier the JIT's late interface dispatch
-     * uses. It is the only route to a receiver the VM SYNTHESISED (a lambda, an annotation instance), which has
-     * a Type and an itable but no class file for a class-chain walk to read, and it answers a default method
-     * with the implementation THIS receiver runs.
-     */
-    static long reflectItableTarget(ObjectReference recv, int rgIndex)
-    {
-        RVMMethod e = reflEntry(rgIndex);
-        if (e == null || recv.toLong() <= 0x1000L)
-        {
-            return 0L;
-        }
-        long tib = recv.toAddress().loadLong();
-        if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
-        {
-            return 0L;
-        }
-        Address type = Address.fromLong(tib).loadAddress();
-        if (type.toLong() <= 0x1000L)
-        {
-            return 0L;
-        }
-        return resolveViaItableDir(type, e.base.plus(e.nameOff), e.base.plus(e.descOff));
-    }
-
-    /** The entry a reflection index names: a registry slot, or {@code BODYLESS + k} for a bodyless method. */
-    static RVMMethod reflEntry(int idx)
-    {
-        if (idx >= BODYLESS)
-        {
-            int k = idx - BODYLESS;
-            return k < bdCount ? bdTab[k] : null;
-        }
-        if (idx < 0 || idx >= rgCount)
-        {
-            return null;
-        }
-        return rgTab[idx];
-    }
-
-    /**
-     * A reflection index for the ABSTRACT or NATIVE method the class whose Type is {@code type} declares with
-     * this name and descriptor, or -1 when it declares none without a {@code Code} attribute. Registration
-     * follows a compiled body, so such a method has no registry slot and, until this, no {@code Method}:
-     * {@code getMethod} threw for it and {@code getDeclaredMethods} silently left it out.
-     *
-     * <p>THE ENTRY IS KEPT OUT OF THE REGISTRY ON PURPOSE. The call linker's lookups ({@code globalBuf},
-     * {@code globalBufByRef}'s tiers) return the first matching entry's {@code buf} without testing it, so an
-     * entry with no body would answer 0 where the search used to fall through to its later tiers. Only the
-     * reflection natives read this table, through {@link #reflEntry}. One entry per method: a repeat lookup
-     * answers the same index.
-     */
-    private static int bodylessIndex(Address type, ObjectReference nameArr, ObjectReference descArr)
-    {
-        if (descArr.toLong() <= 0x1000L)
-        {
-            return -1;
-        }
-        int ci = classIndexByType(type);
-        if (ci >= clCount)
-        {
-            return -1;
-        }
-        Address blob = clTab[ci].base;
-        parseForMethods(blob, blobLenOf(blob));
-        Address p = gMethodsStart;
-        int mcount = u2(p);
-        p = p.plus(2);
-        int nlen = (int) nameArr.toAddress().plus(16L).loadLong();
-        Address nbase = nameArr.toAddress().plus(24L);
-        int dlen = (int) descArr.toAddress().plus(16L).loadLong();
-        Address dbase = descArr.toAddress().plus(24L);
-        int m = 0;
-        while (m < mcount)
-        {
-            int attrs = u2(p.plus(6));
-            if (Utf8.rawEqUtf8(nbase, nlen, blob, gcp[u2(p.plus(2))]) && Utf8.rawEqUtf8(dbase, dlen, blob, gcp[u2(p.plus(4))]))
-            {
-                if (findCode(blob, p.plus(8), attrs) != 0L)
-                {
-                    return -1;                          // it HAS a body: not this table's business
-                }
-                int nameOff = gcp[u2(p.plus(2))];
-                int descOff = gcp[u2(p.plus(4))];
-                int k = 0;
-                while (k < bdCount)
-                {
-                    if (bdTab[k].base.EQ(blob) && bdTab[k].nameOff == nameOff && bdTab[k].descOff == descOff)
-                    {
-                        return BODYLESS + k;
-                    }
-                    k += 1;
-                }
-                if (bdTab == null)
-                {
-                    bdTab = new RVMMethod[256];
-                }
-                if (bdCount >= bdTab.length)
-                {
-                    RVMMethod[] grown = new RVMMethod[bdTab.length * 2];
-                    int j = 0;
-                    while (j < bdCount)
-                    {
-                        grown[j] = bdTab[j];
-                        j += 1;
-                    }
-                    bdTab = grown;
-                }
-                RVMMethod e = new RVMMethod();
-                e.base = blob;
-                e.classOff = clTab[ci].nameOff;
-                e.nameOff = nameOff;
-                e.descOff = descOff;
-                e.buf = 0L;                             // nothing to call: Method.invoke dispatches or throws
-                e.access = u2(p);
-                bdTab[bdCount] = e;
-                bdCount += 1;
-                return BODYLESS + bdCount - 1;
-            }
-            p = skipAttributes(p.plus(8), attrs);
-            m += 1;
-        }
-        return -1;
-    }
 
     /**
      * On-demand compile: a method invoked ONLY reflectively was never RTA-reached, so it isn't compiled. Compile
@@ -16831,7 +15981,7 @@ public final class Loader
      * index, or -1. Limitation: the method's cross-class callees must already be compiled (no dep pull here); a
      * same-class callee it needs is compiled alongside it (they share this compile batch).
      */
-    private static int compileMethodOnDemand(Address type, ObjectReference nameArr)
+    static int compileMethodOnDemand(Address type, ObjectReference nameArr)
     {
         return compileMethodOnDemand(type, nameArr, ObjectReference.nullReference());
     }
@@ -16849,7 +15999,7 @@ public final class Loader
      * on a monitor or spawn threads, and holding the loader lock across that would deadlock any task that
      * needs to compile before it can release.
      */
-    private static int compileMethodOnDemand(Address type, ObjectReference nameArr, ObjectReference descArr)
+    static int compileMethodOnDemand(Address type, ObjectReference nameArr, ObjectReference descArr)
     {
         VM.loaderLock(VM.LOCK_ON_DEMAND);
         int r;
@@ -16966,92 +16116,12 @@ public final class Loader
         patchRelocs();                                     // resolve its cross-class calls (idempotent over prior relocs)
         if (dlen != 0)
         {
-            return methodResolveRegistryDesc(type, nameArr, descArr);
+            return Reflection.methodResolveRegistryDesc(type, nameArr, descArr);
         }
-        return methodResolveRegistry(type, nameArr);
+        return Reflection.methodResolveRegistry(type, nameArr);
     }
 
-    /** Parameter count of a raw method descriptor Utf8 ("(...)ret") at {@code descAddr} (array params fold once). */
-    private static int descParamCountRaw(Address descAddr)
-    {
-        long p = descAddr.toLong() + 2 + 1;                 // past u2 length and '('
-        int n = 0;
-        while (u1(p) != 0x29)                               // ')'
-        {
-            int c = u1(p);
-            if (c == 0x4C)                                  // 'L' reference
-            {
-                while (u1(p) != 0x3B) { p += 1; }
-                p += 1;
-                n += 1;
-            }
-            else if (c == 0x5B)                             // '[' array prefix: folds into its element
-            {
-                p += 1;
-            }
-            else                                            // primitive
-            {
-                p += 1;
-                n += 1;
-            }
-        }
-        return n;
-    }
 
-    /** Method-registry index of the class's {@code <init>} with {@code paramCount} parameters, or -1. */
-    /**
-     * The DESCRIPTOR a constructor resolve must match exactly (a raw {@code byte[]} address), or 0 for the arity
-     * match. Arity alone cannot tell {@code (String)} from {@code (int)}: the first one found answered for both, so
-     * {@code getDeclaredConstructors} listed one constructor twice and {@code getDeclaredConstructor(int.class)}
-     * could hand back the String one. Set only by {@link #constructorResolveDesc}, under the loader lock, and
-     * consulted at the two match points (the registry scan and the on-demand method walk).
-     */
-    private static ObjectReference ctorWantDesc;
-
-    /** Does the {@code <init>} whose descriptor is at {@code base + descOff} match the current request? */
-    private static boolean ctorMatches(Address base, int descOff, int paramCount)
-    {
-        if (!ctorWantDesc.isNull())
-        {
-            return Utf8.rawEqUtf8(ctorWantDesc.toAddress().plus(24L), (int) ctorWantDesc.toAddress().plus(16L).loadLong(), base, descOff);
-        }
-        return descParamCountRaw(base.plus(descOff)) == paramCount;
-    }
-
-    /** {@link #constructorResolve} matched by DESCRIPTOR (see {@link #ctorWantDesc}); -1 if none. */
-    static int constructorResolveDesc(Address type, ObjectReference descArr)
-    {
-        if (descArr.toLong() <= 0x1000L)
-        {
-            return -1;
-        }
-        VM.loaderLock(VM.LOCK_DEFERRED_CT);
-        ObjectReference outer = ctorWantDesc;
-        int r;
-        try
-        {
-            ctorWantDesc = descArr;
-            r = constructorResolveLocked(type, -1);
-        }
-        finally
-        {
-            ctorWantDesc = outer;
-            VM.loaderUnlock();
-        }
-        return r;
-    }
-
-    // ---- reflection lookups through the registry index ---------------------------------------------------
-    // ctorResolveRegistry / methodResolveRegistry(Desc) walked EVERY registry entry comparing names, after a
-    // linear clTab scan for the class. MEASURED (SslEngineProbe, QEMU 2026-11-07): 685 constructor and 867
-    // method-with-descriptor resolves walked 9.46M and 12.95M entries (rgCount reaches 17,852, each a separate
-    // object); on the Pi they were the largest busy items inside <clinit> by tick sampling (JCA providers are
-    // instantiated reflectively). The registry is already hashed by (class name, method name) -- rgBucket,
-    // the key lazyBodyEntry probes -- so these probe that one chain with the scan's own predicate and keep the
-    // LOWEST matching index, which is what the scan returned (chains run descending). Checked against the
-    // scans (temporary checker): 0 mismatches over 685 constructor and 867 descriptor resolves and 4,120
-    // type-memo hits on SslEngineProbe, and over the 25 reflection/invoke/proxy/record probes; the name-only
-    // resolve was not reached by any of them -- it has the descriptor form's key and predicate minus one test.
     private static final int CTMEMO = 4096;
     private static int[] ctMemo;                         // type hash -> clTab index, validated on every read
 
@@ -17095,360 +16165,6 @@ public final class Loader
             m[h] = ci;
         }
         return ci;
-    }
-
-
-    /** Constructor of clTab[ci] by arity (or ctorWantDesc): registry index, or -1. Caller holds the loader lock. */
-    private static int ctorResolveRegistry(int ci, int paramCount)
-    {
-        buildRegIndex();
-        int best = -1;
-        int i = rgBucket[Utf8.utf8HashThenBytes(clTab[ci].base, clTab[ci].nameOff, Magic.bytes("<init>")) & (RGTAB - 1)];
-        while (i >= 0)
-        {
-            if ((best < 0 || i < best)
-                    && utf8EqAt(clTab[ci].base, clTab[ci].nameOff, rgTab[i].base, rgTab[i].classOff)
-                    && Utf8.utf8IsAtBase(rgTab[i].base, rgTab[i].nameOff, Magic.bytes("<init>"))
-                    && ctorMatches(rgTab[i].base, rgTab[i].descOff, paramCount))
-            {
-                best = i;
-            }
-            i = rgNext[i];
-        }
-        return best;
-    }
-
-    /** Method-registry index of the method named {@code nameArr} declared by the class whose Type is {@code type}
-     *  (class name + method name match), or -1 if it is not currently compiled/registered. Takes the loader
-     *  lock: it is reached unlocked, and buildRegIndex extends the index a compiling task also extends. */
-    private static int methodResolveRegistry(Address type, ObjectReference nameArr)
-    {
-        VM.loaderLock(VM.LOCK_REFLECT);                 // buildRegIndex mutates the index a compiling task extends
-        try
-        {
-            int ci = classIndexByType(type);
-            if (ci >= clCount)
-            {
-                return -1;
-            }
-            int nlen = (int) nameArr.toAddress().plus(16L).loadLong();
-            Address nbase = nameArr.toAddress().plus(24L);
-            buildRegIndex();
-            int best = -1;
-            int i = rgBucket[Utf8.utf8HashThenRaw(clTab[ci].base, clTab[ci].nameOff, nbase, nlen) & (RGTAB - 1)];
-            while (i >= 0)
-            {
-                if ((best < 0 || i < best)
-                        && utf8EqAt(clTab[ci].base, clTab[ci].nameOff, rgTab[i].base, rgTab[i].classOff)
-                        && Utf8.rawEqUtf8(nbase, nlen, rgTab[i].base, rgTab[i].nameOff))
-                {
-                    best = i;
-                }
-                i = rgNext[i];
-            }
-            return best;
-        }
-        finally
-        {
-            VM.loaderUnlock();
-        }
-    }
-
-    /** {@link #methodResolveRegistry} with the descriptor compared too. Takes the loader lock, likewise. */
-    private static int methodResolveRegistryDesc(Address type, ObjectReference nameArr, ObjectReference descArr)
-    {
-        VM.loaderLock(VM.LOCK_REFLECT);
-        try
-        {
-            int ci = classIndexByType(type);
-            if (ci >= clCount)
-            {
-                return -1;
-            }
-            int nlen = (int) nameArr.toAddress().plus(16L).loadLong();
-            Address nbase = nameArr.toAddress().plus(24L);
-            int dlen = (int) descArr.toAddress().plus(16L).loadLong();
-            Address dbase = descArr.toAddress().plus(24L);
-            buildRegIndex();
-            int best = -1;
-            int i = rgBucket[Utf8.utf8HashThenRaw(clTab[ci].base, clTab[ci].nameOff, nbase, nlen) & (RGTAB - 1)];
-            while (i >= 0)
-            {
-                if ((best < 0 || i < best)
-                        && utf8EqAt(clTab[ci].base, clTab[ci].nameOff, rgTab[i].base, rgTab[i].classOff)
-                        && Utf8.rawEqUtf8(nbase, nlen, rgTab[i].base, rgTab[i].nameOff)
-                        && Utf8.rawEqUtf8(dbase, dlen, rgTab[i].base, rgTab[i].descOff))
-                {
-                    best = i;
-                }
-                i = rgNext[i];
-            }
-            return best;
-        }
-        finally
-        {
-            VM.loaderUnlock();
-        }
-    }
-
-
-    /**
-     * THE COMPILE CONTEXT IS STATIC, so exactly one task may be inside the compiler at a time. {@code
-     * lazyCompile} has always taken {@link VM#loaderLock} for that reason; this path reached {@code compile}
-     * without it, so a second task compiling here while another compiled elsewhere clobbered {@code gbytes}/
-     * {@code gcp} mid-compile -- which surfaces as a NULL bytecode array inside the compiler
-     * ({@code NullPointerException} in {@code Baseline.s4}, lowering a switch) rather than as anything
-     * resembling a locking bug. The lock is RECURSIVE and owned by TASK, so nesting inside an
-     * already-locked path costs nothing.
-     *
-     * <p>The lock covers the COMPILE only, never the running of an initializer: a {@code <clinit>} can block
-     * on a monitor or spawn threads, and holding the loader lock across that would deadlock any task that
-     * needs to compile before it can release.
-     */
-    static int constructorResolve(Address type, int paramCount)
-    {
-        VM.loaderLock(VM.LOCK_DEFERRED_CT);
-        int r;
-        try
-        {
-            r = constructorResolveLocked(type, paramCount);
-        }
-        finally
-        {
-            VM.loaderUnlock();   // see the note in lazyCompile: a throw here used to strand the lock
-        }
-        return r;
-    }
-
-    /**
-     * Reflection ({@code Class.getDeclaredConstructor}): registry index of the {@code <init>} of the class whose
-     * Type is {@code type} taking {@code paramCount} parameters (matched by ARITY — no param-type resolution yet),
-     * compiling it on demand if it was never RTA-reached. Returns -1 if none.
-     */
-    static int constructorResolveLocked(Address type, int paramCount)
-    {
-        if (type.isZero())
-        {
-            return -1;
-        }
-        int ci = classIndexByType(type);
-        if (ci >= clCount || clTab[ci].isIface)
-        {
-            return -1;
-        }
-        int idx = ctorResolveRegistry(ci, paramCount);
-        if (idx >= 0)
-        {
-            return idx;
-        }
-        // on-demand: compile the matching <init> (its declaring class is already structure-loaded)
-        Address blob = clTab[ci].base;
-        int len = blobLenOf(blob);
-        parseConstPool(blob, len);
-        parseFields();
-        int reg = classRegByName(gThisNameOff);
-        if (reg < 0)
-        {
-            return -1;
-        }
-        gStatics = clTab[reg].statics;
-        Indy.findBootstrapMethods();
-        parseVtable(blob);
-        gType = clTab[reg].type;
-        gTib = clTab[reg].tib;
-        parseForMethods(blob, len);
-        Address p = gMethodsStart;
-        int mcount = u2(p);
-        p = p.plus(2);
-        long code = 0L;
-        int descOff = 0;
-        int m = 0;
-        while (m < mcount)
-        {
-            int attrs = u2(p.plus(6));
-            int dOff = gcp[u2(p.plus(4))];
-            if (Utf8.utf8IsAtBase(blob, gcp[u2(p.plus(2))], Magic.bytes("<init>")) && ctorMatches(blob, dOff, paramCount))
-            {
-                long c = findCode(blob, p.plus(8), attrs);
-                if (c != 0L)
-                {
-                    code = c;
-                    descOff = dOff;
-                    break;
-                }
-            }
-            p = skipAttributes(p.plus(8), attrs);
-            m += 1;
-        }
-        if (code == 0L)
-        {
-            return -1;
-        }
-        // THE SAME DEFERRED-PULL RETRY THE OTHER ON-DEMAND PATHS HAVE. This is the FOURTH path that reaches
-        // compile() -- lazyCompileLocked, compileMethodOnDemand and compileSigOnDemand were given it in #213,
-        // clinitEntryOf in #241, and this one was missed. Without it a getstatic naming a class RTA never
-        // pulled resolves to the PERMANENTLY-ZERO cell: `compileReuseTib` means there is no later batch
-        // patchRelocs to fill it in, so 0 is the final answer and the field reads null for the life of the VM.
-        //
-        // picocli's CommandLine.<init> is exactly that: it reads Help.Ansi.AUTO, and reflective construction
-        // compiled it here, so the read bound to the zero cell and `defaultColorScheme` NPE'd on a null ansi
-        // ("in the classDir, but resolved outside the retry window" -- the report named the cause precisely).
-        int rcMark = rcCount;                              // patch only THIS compile's relocs
-        int rsMark = rsCount;
-        boolean reuseWas = compileReuseTib;              // a nested load resets it: restore, never clear
-        compileReuseTib = true;
-        boolean outerCompiling = lzCompiling;
-        boolean outerRetried = lzRetried;
-        int outerPullN = lzPullN;
-        lzCompiling = true;
-        lzPullN = 0;
-        lzRetried = false;
-        // JLS 8.8.3 forbids `synchronized` on a constructor, so isSync is 0 by the language, not by omission.
-        compile(code, gcodeLen, descOff, 0, 0);           // <init> is an instance method (receiver = the new object)
-        lzCompiling = outerCompiling;
-        compileReuseTib = reuseWas;
-        boolean pulled = lzPullN > 0;
-        if (pulled)
-        {
-            drainPendingPulls();
-            truncateRelocs(rcMark);                        // drop the doomed body's reloc sites: patching them
-            rsCount = rsMark;                              //   later would write into reused memory
-        }
-        lzRetried = outerRetried;
-        lzPullN = outerPullN;
-        if (pulled && !odRetried)
-        {
-            odRetried = true;                              // re-derived from (type, paramCount); bounded to one
-            int again = constructorResolveLocked(type, paramCount);
-            odRetried = false;
-            return again;
-        }
-        registerAll();
-        patchRelocs();
-        return ctorResolveRegistry(ci, paramCount);
-    }
-
-    /** Reflection ({@code Constructor.newInstance}): allocate an instance of the class whose Type is {@code type}
-     *  (zeroed fields + its TIB in the header), or 0. The caller runs the {@code <init>} on it. */
-    static long allocInstance(Address type)
-    {
-        if (type.isZero())
-        {
-            return 0L;
-        }
-        int ci = classIndexByType(type);
-        if (ci >= clCount || clTab[ci].isIface)
-        {
-            return 0L;
-        }
-        ensureClinit(ci);                               // reflective instantiation is an active use, like `new`
-        Address obj = Heap.alloc(16 + clTab[ci].fieldCount * 8);  // header(16) + instance fields (incl. inherited)
-        obj.plus(ObjectModel.TIB_OFFSET).store(clTab[ci].tib);
-        return obj.toLong();
-    }
-
-    /**
-     * Reflection: fill {@code paramCharsArr} (a guest {@code byte[]}) with the first descriptor char of each of
-     * method {@code rgIndex}'s parameters (primitives 'I'/'J'/'Z'/... verbatim; a reference or array param as
-     * 'L'/'['), and write {@code out} (a guest {@code long[3]}): {@code [buffer, access_flags, returnChar]}.
-     * Returns the parameter count. Float/double params are marshalled as their raw bits (no v-register support).
-     */
-    static int methodInfo(int rgIndex, ObjectReference paramCharsArr, ObjectReference outArr)
-    {
-        if (reflEntry(rgIndex) == null)
-        {
-            return 0;
-        }
-        Address descAddr = reflEntry(rgIndex).base.plus(reflEntry(rgIndex).descOff);   // "(...)ret" Utf8 (u2 length, then bytes)
-        Address p = descAddr.plus(2 + 1);                              // past u2 length and '('
-        Address pc = paramCharsArr.toAddress().plus(24L);       // byte[] elements
-        int n = 0;
-        while (u1(p) != 0x29)                                   // ')'
-        {
-            int c = u1(p);
-            if (c == 0x4C)                                      // 'L' reference: skip to ';'
-            {
-                pc.plus(n).store((byte) 0x4C);
-                while (u1(p) != 0x3B) { p = p.plus(1); }               // ';'
-                p = p.plus(1);
-            }
-            else if (c == 0x5B)                                // '[' array: reference; skip prefixes + element
-            {
-                pc.plus(n).store((byte) 0x5B);
-                while (u1(p) == 0x5B) { p = p.plus(1); }
-                if (u1(p) == 0x4C) { while (u1(p) != 0x3B) { p = p.plus(1); } }
-                p = p.plus(1);
-            }
-            else                                               // primitive: one char, one slot
-            {
-                pc.plus(n).store((byte) c);
-                p = p.plus(1);
-            }
-            n += 1;
-        }
-        outArr.toAddress().plus(24L).plus(0L).store(reflEntry(rgIndex).buf);      // out[0] = compiled buffer
-        outArr.toAddress().plus(24L).plus(8L).store((long) reflEntry(rgIndex).access);   // out[1] = access flags
-        outArr.toAddress().plus(24L).plus(16L).store((long) u1(p.plus(1)));   // out[2] = return-type char (after ')')
-        return n;
-    }
-
-
-    /**
-     * Scan the class-level {@code InnerClasses} attribute for the entry whose {@code inner_class_info_index}
-     * equals {@code thisClass}; return its {@code inner_class_access_flags}, or -1 if this class is not listed
-     * (a top-level class). Assumes {@code gMethodsStart}/{@code gcp} are current (post {@code parseForMethods}).
-     */
-    private static int innerAccessOf(int thisClass)
-    {
-        Address p = gMethodsStart;
-        int mcount = u2(p);
-        p = p.plus(2);
-        int m = 0;
-        while (m < mcount)                                // skip the methods table
-        {
-            p = skipAttributes(p.plus(8), u2(p.plus(6)));
-            m += 1;
-        }
-        int cacount = u2(p);                              // class attributes_count
-        p = p.plus(2);
-        byte[] want = Magic.bytes("InnerClasses");
-        int a = 0;
-        while (a < cacount)
-        {
-            int nameIdx = u2(p);
-            int alen = u4(p.plus(2));
-            if (utf8IsStr(gcp[nameIdx], want))
-            {
-                Address q = p.plus(6);                           // attribute body: number_of_classes
-                int nc = u2(q);
-                q = q.plus(2);
-                int e = 0;
-                while (e < nc)
-                {
-                    if (u2(q) == thisClass)               // inner_class_info_index == this_class
-                    {
-                        return u2(q.plus(6));                 // inner_class_access_flags
-                    }
-                    q = q.plus(8);                               // inner(2) outer(2) name(2) flags(2)
-                    e += 1;
-                }
-                return -1;
-            }
-            p = p.plus(6 + alen);
-            a += 1;
-        }
-        return -1;
-    }
-
-    /** Reflection: first char of the field's JVM type descriptor (the byte after the u2 Utf8 length), or -1. */
-    static int fieldTypeChar(Address typeAddr, Address fnBase, int fnLen)
-    {
-        int j = fieldRegIndex(typeAddr, fnBase, fnLen);
-        if (j >= 0)
-        {
-            return u1(fldTab[j].base.plus(fldTab[j].descOff + 2L));
-        }
-        return classfileFieldInfo(typeAddr, fnBase, fnLen) ? cfFieldDescChar : -1;
     }
 
 
@@ -21320,179 +20036,9 @@ public final class Loader
         return n;
     }
 
-    // ----- reflective method enumeration ----------------------------------------------------------------
-    // getDeclaredMethods over the METHOD REGISTRY rather than the classfile: the registry is exactly the set
-    // the VM knows about (every method of a registered class is there, compiled or as a deferral stub), and it
-    // is already keyed by class+name+descriptor. Reflection is not a hot path, so a linear scan is fine.
-
-    /**
-     * The {@code want}-th method DECLARED by the class mirrored by {@code mirror} -- or, for {@code want < 0},
-     * how many there are. Walks the CLASSFILE method table, not the method registry.
-     *
-     * <p>The registry was the obvious source and is the wrong one: it holds only what RTA marked reachable,
-     * and a test method is called by nobody, so every {@code @Test} is pruned from it. Enumerating the
-     * classfile sees what the class actually declares; the caller then resolves each by name through the
-     * ordinary reflection path, which compiles it on demand.
-     *
-     * <p>{@code <init>}/{@code <clinit>} are excluded, as {@code getDeclaredMethods} specifies.
-     */
-    static long declaredMethodName(ObjectReference mirror, int want)
-    {
-        return declaredMethodPart(mirror, want, 0);
-    }
-
-    /**
-     * The {@code want}-th declared method's DESCRIPTOR, the companion of {@link #declaredMethodName}. Two methods
-     * of a class can share a name, so the name ALONE does not identify one: enumerating by name and resolving by
-     * name gives the same overload twice and never the other. (That is exactly what a stock {@code
-     * @ParameterizedTest} looks like -- the test and its same-named {@code @MethodSource} factory -- and it
-     * reported the test's own annotation for both while the factory was unreachable.) The caller pairs this with
-     * the name and resolves through {@link #methodResolveDesc}.
-     */
-    static long declaredMethodDesc(ObjectReference mirror, int want)
-    {
-        return declaredMethodPart(mirror, want, 1);
-    }
-
-    /** Shared classfile walk: {@code part} 0 = the method's name Utf8, 1 = its descriptor Utf8. */
-    /**
-     * As {@link #declaredMethodPart}, but enumerating the CONSTRUCTORS -- exactly what that one filters out.
-     *
-     * <p>{@code declaredMethodPart} skips {@code <init>}/{@code <clinit>} because {@code getDeclaredMethods}
-     * must not report them; {@code Class.getDeclaredConstructors} needs the complement. Written as its own
-     * walk rather than a flag on that one so neither enumeration can quietly change the other's answer.
-     *
-     * <p>{@code part} 0 = name ({@code <init>}), 1 = descriptor. {@code want < 0} answers the COUNT.
-     */
-    static long declaredCtorPart(ObjectReference mirror, int want, int part)
-    {
-        if (mirror.toLong() <= 0x1000L)
-        {
-            return 0L;
-        }
-        int ci = classRegByType(mirror.toAddress().plus(16L).loadAddress());
-        if (ci < 0)
-        {
-            return 0L;
-        }
-        Address base = clTab[ci].base;
-        parseForMethods(base, blobLenOf(base));
-        Address p = gMethodsStart;
-        int mcount = u2(p);
-        p = p.plus(2);
-        int seen = 0;
-        int m = 0;
-        while (m < mcount)
-        {
-            int attrs = u2(p.plus(6));
-            int nameOff = gcp[u2(p.plus(2))];
-            if (Utf8.utf8IsAtBase(base, nameOff, Magic.bytes("<init>")))   // constructors ONLY; <clinit> is not one
-            {
-                if (want >= 0 && seen == want)
-                {
-                    return utf8ToString(base, part == 0 ? nameOff : gcp[u2(p.plus(4))]);
-                }
-                seen += 1;
-            }
-            p = skipAttributes(p.plus(8), attrs);
-            m += 1;
-        }
-        return want < 0 ? (long) seen : 0L;
-    }
-
-    private static long declaredMethodPart(ObjectReference mirror, int want, int part)
-    {
-        if (mirror.toLong() <= 0x1000L)
-        {
-            return 0L;
-        }
-        Address type = mirror.toAddress().plus(16L).loadAddress();
-        int ci = classRegByType(type);
-        if (ci < 0)
-        {
-            return want < 0 ? 0L : 0L;
-        }
-        Address base = clTab[ci].base;
-        parseForMethods(base, blobLenOf(base));
-        Address p = gMethodsStart;
-        int mcount = u2(p);
-        p = p.plus(2);
-        int seen = 0;
-        int m = 0;
-        while (m < mcount)
-        {
-            int attrs = u2(p.plus(6));
-            int nameOff = gcp[u2(p.plus(2))];
-            if (!Utf8.utf8IsAtBase(base, nameOff, Magic.bytes("<init>"))
-                    && !Utf8.utf8IsAtBase(base, nameOff, Magic.bytes("<clinit>")))
-            {
-                if (want >= 0 && seen == want)
-                {
-                    return utf8ToString(base, part == 0 ? nameOff : gcp[u2(p.plus(4))]);
-                }
-                seen += 1;
-            }
-            p = skipAttributes(p.plus(8), attrs);
-            m += 1;
-        }
-        return want < 0 ? (long) seen : 0L;
-    }
-
-    /** The {@code want}-th declared FIELD's name, or the count when {@code want < 0}. */
-    static long declaredFieldName(ObjectReference mirror, int want)
-    {
-        return declaredFieldPart(mirror, want, 0);
-    }
-
-    /** The {@code want}-th declared field's DESCRIPTOR -- the companion of {@link #declaredFieldName}. */
-    static long declaredFieldDesc(ObjectReference mirror, int want)
-    {
-        return declaredFieldPart(mirror, want, 1);
-    }
-
-    /**
-     * Walk the classfile's FIELDS section: {@code part} 0 = the field's name Utf8, 1 = its descriptor.
-     *
-     * <p>Walked from the constant pool rather than reusing {@code parseFields()}, which is the LAYOUT pass --
-     * it assigns slots, consults the superclass chain and writes {@code gsf*}/{@code superUnregistered}. Reusing
-     * it for a read-only enumeration would re-run layout as a side effect of reflection, which is how a
-     * "harmless" query corrupts state. This walk touches nothing but the cursor.
-     *
-     * <p>STATIC fields are included, as {@code getDeclaredFields} requires: the caller filters by modifier if
-     * it cares, and dropping them here would silently answer a different question.
-     */
-    private static long declaredFieldPart(ObjectReference mirror, int want, int part)
-    {
-        if (mirror.toLong() <= 0x1000L)
-        {
-            return 0L;
-        }
-        int ci = classRegByType(mirror.toAddress().plus(16L).loadAddress());
-        if (ci < 0)
-        {
-            return 0L;
-        }
-        Address base = clTab[ci].base;
-        parseConstPool(base, blobLenOf(base));
-        Address p = gp.plus(6L);                               // past access_flags, this_class, super_class
-        p = p.plus(2L + u2(p) * 2L);                           // past the interfaces list
-        int fcount = u2(p);
-        p = p.plus(2);
-        int f = 0;
-        while (f < fcount)
-        {
-            if (want >= 0 && f == want)
-            {
-                return utf8ToString(base, gcp[u2(p.plus((part == 0 ? 2 : 4)))]);
-            }
-            p = skipAttributes(p.plus(8), u2(p.plus(6)));       // access, name, desc, attr_count, then attributes
-            f += 1;
-        }
-        return want < 0 ? (long) fcount : 0L;
-    }
 
     /** The Utf8 at {@code base+off} as a fresh guest String (no '/'->'.' rewrite; this is a plain name). */
-    private static long utf8ToString(Address base, int off)
+    static long utf8ToString(Address base, int off)
     {
         int len = u2(base.plus(off));
         Address arr = Heap.allocArray(len, 1);
@@ -21508,1016 +20054,6 @@ public final class Loader
         return obj.toLong();
     }
 
-    /**
-     * The {@code method_info} position (at {@code access_flags}) for the method registered at {@code rgIndex},
-     * or 0 when there is no such registration or the class does not declare it. Its {@code attributes_count}
-     * is {@code u2(p + 6)} and its attributes begin at {@code p + 8}.
-     *
-     * <p>Matched on name AND descriptor, which is what separates two overloads -- a name-only match returns
-     * whichever came first, the bug that made a {@code @ParameterizedTest} report the test's annotation for
-     * its own factory.
-     */
-    static Address methodInfoPos(int rgIndex)
-    {
-        if (reflEntry(rgIndex) == null)
-        {
-            return Address.zero();
-        }
-        Address base = reflEntry(rgIndex).base;
-        int nameOff = reflEntry(rgIndex).nameOff;
-        int descOff = reflEntry(rgIndex).descOff;
-        parseForMethods(base, blobLenOf(base));
-        Address p = gMethodsStart;
-        int mcount = u2(p);
-        p = p.plus(2);
-        int m = 0;
-        while (m < mcount)
-        {
-            int attrs = u2(p.plus(6));
-            if (utf8EqAt(base, gcp[u2(p.plus(2))], base, nameOff)
-                    && utf8EqAt(base, gcp[u2(p.plus(4))], base, descOff))
-            {
-                return p;
-            }
-            p = skipAttributes(p.plus(8), attrs);
-            m += 1;
-        }
-        return Address.zero();
-    }
-
-
-    /**
-     * {@code Class.genericSignature0}: the class's {@code Signature} attribute (JVMS 4.7.9) as a String, or 0
-     * when it has none -- which is what stock's {@code getGenericSignature0} answers, and what makes
-     * {@code getGenericSuperclass} fall back to the erasure for a NON-generic class, exactly as stock does.
-     *
-     * <p>The bytes are copied as Latin-1 by {@link #utf8ToString}; a signature is a modified-UTF-8 string,
-     * so a non-ASCII identifier in one would read wrongly. ALLOCATION-FREE for a bad argument, because
-     * {@code VM.forceCompile} probes this native with zero.
-     */
-    static long classSignature(ObjectReference mirror)
-    {
-        if (mirror.toLong() <= 0x1000L)
-        {
-            return 0L;
-        }
-        int reg = regOfType(mirror.toAddress().plus(16L).loadAddress());
-        if (reg < 0)
-        {
-            return 0L;
-        }
-        Address base = clTab[reg].base;
-        Address ap = classAttrsPos(base);
-        if (ap.isZero())
-        {
-            return 0L;
-        }
-        Address p = classAttrNamed(base, ap.plus(2L), u2(ap), Magic.bytes("Signature"));
-        if (p.isZero())
-        {
-            return 0L;
-        }
-        return utf8ToString(base, gcp[u2(p)]);
-    }
-
-    /**
-     * {@code Executable.signature0}: the {@code Signature} attribute of the method or constructor registered at
-     * {@code rgIndex}, as a String, or 0 when it has none (a non-generic member, whose generic types ARE its
-     * erasures -- stock's answer too). The {@code method_info} is found by name AND descriptor
-     * ({@link #methodInfoPos}), so overloads keep their own signatures.
-     */
-    static long methodSignature(int rgIndex)
-    {
-        Address p = methodInfoPos(rgIndex);
-        if (p.isZero())
-        {
-            return 0L;
-        }
-        Address base = reflEntry(rgIndex).base;
-        Address q = classAttrNamed(base, p.plus(8L), u2(p.plus(6L)), Magic.bytes("Signature"));
-        if (q.isZero())
-        {
-            return 0L;
-        }
-        return utf8ToString(base, gcp[u2(q)]);
-    }
-
-    /**
-     * {@code Executable.exceptionName0}: the internal name of the {@code i}th class in the {@code Exceptions}
-     * attribute (JVMS 4.7.5) of the method or constructor registered at {@code rgIndex}, or 0 past the end --
-     * and 0 for every {@code i} when there is no such attribute, i.e. the member declares no {@code throws}.
-     * One name per call keeps this allocation-free for a bad argument ({@code VM.forceCompile} probes with -1).
-     */
-    static long methodExceptionName(int rgIndex, long i)
-    {
-        Address p = methodInfoPos(rgIndex);
-        if (p.isZero())
-        {
-            return 0L;
-        }
-        Address base = reflEntry(rgIndex).base;
-        Address q = classAttrNamed(base, p.plus(8L), u2(p.plus(6L)), Magic.bytes("Exceptions"));
-        if (q.isZero())
-        {
-            return 0L;
-        }
-        if (i < 0L || i >= u2(q))                       // u2 number_of_exceptions, then u2 class indices
-        {
-            return 0L;
-        }
-        int ci = u2(q.plus(2L + 2L * i));
-        return utf8ToString(base, gcp[u2(base.plus(gcp[ci]))]);  // CONSTANT_Class -> its name Utf8
-    }
-
-    /**
-     * {@code Executable.paramMeta0}: the integer half of a method's parameter attributes. {@code k == -1}
-     * answers the {@code parameters_count} of its {@code MethodParameters} attribute (JVMS 4.7.24), {@code -2}
-     * the {@code num_parameters} of its {@code RuntimeVisibleParameterAnnotations} (JVMS 4.7.18) -- each -1 when
-     * the attribute is absent -- and {@code k >= 0} the {@code access_flags} of {@code MethodParameters} entry
-     * {@code k}. The two counts can differ from the descriptor's and from each other: javac writes no
-     * annotation row for a constructor's implicit outer instance or an enum's name and ordinal, and a
-     * {@code MethodParameters} entry for each. -1 for anything out of range; allocation-free, since
-     * {@code VM.forceCompile} probes with rgIndex -1.
-     */
-    static long methodParamMeta(int rgIndex, long k)
-    {
-        Address p = methodInfoPos(rgIndex);
-        if (p.isZero())
-        {
-            return -1L;
-        }
-        Address base = reflEntry(rgIndex).base;
-        if (k == -3L)
-        {
-            // Not a parameter fact, but the same kind of question about the same method_info: does this
-            // annotation element have an AnnotationDefault (JVMS 4.7.22)? 1 or 0. Method.getDefaultValue asks.
-            return classAttrNamed(base, p.plus(8L), u2(p.plus(6L)), Magic.bytes("AnnotationDefault")).isZero() ? 0L : 1L;
-        }
-        if (k == -2L)
-        {
-            Address q = classAttrNamed(base, p.plus(8L), u2(p.plus(6L)), Magic.bytes("RuntimeVisibleParameterAnnotations"));
-            return q.isZero() ? -1L : u1(q);
-        }
-        Address q = classAttrNamed(base, p.plus(8L), u2(p.plus(6L)), Magic.bytes("MethodParameters"));
-        if (q.isZero())
-        {
-            return -1L;
-        }
-        int n = u1(q);                                   // u1 parameters_count, then {u2 name, u2 flags} each
-        if (k == -1L)
-        {
-            return n;
-        }
-        if (k < 0L || k >= n)
-        {
-            return -1L;
-        }
-        return u2(q.plus(1L + 4L * k + 2L));
-    }
-
-
-    /**
-     * {@code Executable.paramName0}: the name in {@code MethodParameters} entry {@code k} as a String, or 0 when
-     * the entry has none ({@code name_index} 0 -- javac writes that for an implicit or synthetic parameter of a
-     * class not compiled with {@code -parameters}), the attribute is absent, or {@code k} is out of range.
-     */
-    static long methodParamName(int rgIndex, long k)
-    {
-        Address p = methodInfoPos(rgIndex);
-        if (p.isZero())
-        {
-            return 0L;
-        }
-        Address base = reflEntry(rgIndex).base;
-        Address q = classAttrNamed(base, p.plus(8L), u2(p.plus(6L)), Magic.bytes("MethodParameters"));
-        if (q.isZero() || k < 0L || k >= u1(q))
-        {
-            return 0L;
-        }
-        int nameIdx = u2(q.plus(1L + 4L * k));
-        return nameIdx == 0 ? 0L : utf8ToString(base, gcp[nameIdx]);
-    }
-
-
-    /**
-     * {@code Field.signature0}: the {@code Signature} attribute of field {@code nameArr} (a raw {@code byte[]})
-     * of the class whose mirror is given, or 0. The field walk is {@link Annotations#fieldAnnotation}'s.
-     */
-    static long fieldSignature(ObjectReference mirror, ObjectReference nameArr)
-    {
-        if (mirror.toLong() <= 0x1000L || nameArr.toLong() <= 0x1000L)
-        {
-            return 0L;
-        }
-        int ci = classRegByType(mirror.toAddress().plus(16L).loadAddress());
-        if (ci < 0)
-        {
-            return 0L;
-        }
-        Address base = clTab[ci].base;
-        parseConstPool(base, blobLenOf(base));
-        Address p = gp.plus(6L);                               // past access_flags, this_class, super_class
-        p = p.plus(2L + u2(p) * 2L);                           // past the interfaces list
-        int fcount = u2(p);
-        p = p.plus(2);
-        int nlen = (int) nameArr.toAddress().plus(16L).loadLong();   // byte[] length @16
-        Address nbase = nameArr.toAddress().plus(24L);
-        int f = 0;
-        while (f < fcount)
-        {
-            int attrs = u2(p.plus(6));
-            if (Utf8.rawEqUtf8(nbase, nlen, base, gcp[u2(p.plus(2))]))
-            {
-                Address q = classAttrNamed(base, p.plus(8L), attrs, Magic.bytes("Signature"));
-                if (q.isZero())
-                {
-                    return 0L;
-                }
-                return utf8ToString(base, gcp[u2(q)]);
-            }
-            p = skipAttributes(p.plus(8), attrs);
-            f += 1;
-        }
-        return 0L;
-    }
-
-    /**
-     * {@code Class.enclosingPart0}: one part of the class's {@code EnclosingMethod} attribute (JVMS 4.7.7) as a
-     * String, or 0. Part 0 is the enclosing CLASS's internal name; 0 means the attribute is absent, which JVMS
-     * makes the definition of "neither local nor anonymous". Part 1 is the enclosing method's name and part 2
-     * its descriptor; both are 0 when {@code method_index} is 0, i.e. the class sits in an initializer. These
-     * are the three elements of stock's {@code getEnclosingMethod0()} array, with the class left as a name for
-     * the guest to resolve. ALLOCATION-FREE for a bad argument, because {@code VM.forceCompile} probes with 0.
-     */
-    static long classEnclosingPart(ObjectReference mirror, long part)
-    {
-        if (mirror.toLong() <= 0x1000L)
-        {
-            return 0L;
-        }
-        int reg = regOfType(mirror.toAddress().plus(16L).loadAddress());
-        if (reg < 0)
-        {
-            return 0L;
-        }
-        Address base = clTab[reg].base;
-        Address ap = classAttrsPos(base);
-        if (ap.isZero())
-        {
-            return 0L;
-        }
-        Address p = classAttrNamed(base, ap.plus(2L), u2(ap), Magic.bytes("EnclosingMethod"));
-        if (p.isZero())
-        {
-            return 0L;
-        }
-        if (part == 0L)
-        {
-            return utf8ToString(base, gcp[u2(base.plus(gcp[u2(p)]))]);  // CONSTANT_Class -> its name Utf8
-        }
-        int nat = u2(p.plus(2L));                           // u2 class_index, u2 method_index
-        if (nat == 0)
-        {
-            return 0L;
-        }
-        Address natPos = base.plus(gcp[nat]);                  // CONSTANT_NameAndType: u2 name, u2 descriptor
-        return utf8ToString(base, gcp[u2(natPos.plus((part == 1L ? 0L : 2L)))]);
-    }
-
-    /**
-     * {@code Class.classFileWord0} / {@code MetalJavaLangAccess.classFileWord0}: one word of the class's own
-     * classfile header. {@code k == 0} answers the version as stock's {@code getClassFileVersion0} packs it,
-     * {@code (minor << 16) | major}; {@code k == 1} answers the raw {@code access_flags}, {@code ACC_SUPER}
-     * included -- the cached modifiers strip it, and for a nested class the flags are not {@code InnerClasses}'.
-     * 0 for a mirror with no classfile (a primitive or array type: the guest answers those itself).
-     */
-    static long classFileWord(ObjectReference mirror, long k)
-    {
-        if (mirror.toLong() <= 0x1000L)
-        {
-            return 0L;
-        }
-        int reg = regOfType(mirror.toAddress().plus(16L).loadAddress());
-        if (reg < 0)
-        {
-            return 0L;
-        }
-        Address base = clTab[reg].base;
-        if (k == 0L)
-        {
-            return ((long) u2(base.plus(4L)) << 16) | u2(base.plus(6L));   // u4 magic, u2 minor, u2 major
-        }
-        parseConstPool(base, blobLenOf(base));          // leaves gp at access_flags, as loadStructure reads it
-        return u2(gp);
-    }
-
-    /**
-     * {@code Class.nestPart0}: the class's nest, as written by its {@code NestHost} and {@code NestMembers}
-     * attributes (JVMS 4.7.28, 4.7.29). {@code k == -1} answers the HOST's internal name, or 0 when this class
-     * has no {@code NestHost} -- it is then its own host; {@code k >= 0} answers the {@code k}th
-     * {@code NestMembers} entry's internal name, or 0 past the end or when there is no such attribute. Names
-     * only: the guest resolves them, so nothing here demand-loads under the cursor.
-     */
-    static long classNestPart(ObjectReference mirror, long k)
-    {
-        if (mirror.toLong() <= 0x1000L)
-        {
-            return 0L;
-        }
-        int reg = regOfType(mirror.toAddress().plus(16L).loadAddress());
-        if (reg < 0)
-        {
-            return 0L;
-        }
-        Address base = clTab[reg].base;
-        Address ap = classAttrsPos(base);
-        if (ap.isZero())
-        {
-            return 0L;
-        }
-        if (k < 0L)
-        {
-            Address p = classAttrNamed(base, ap.plus(2L), u2(ap), Magic.bytes("NestHost"));
-            return p.isZero() ? 0L : utf8ToString(base, gcp[u2(base.plus(gcp[u2(p)]))]);  // CONSTANT_Class -> name
-        }
-        Address p = classAttrNamed(base, ap.plus(2L), u2(ap), Magic.bytes("NestMembers"));
-        if (p.isZero() || k >= u2(p))                      // u2 number_of_classes, then u2 class indices
-        {
-            return 0L;
-        }
-        int ci = u2(p.plus(2L + 2L * k));
-        return utf8ToString(base, gcp[u2(base.plus(gcp[ci]))]);
-    }
-
-    /**
-     * {@code Class.innerPart0}: one part of the class's own {@code InnerClasses} entry as a String, or 0. Part 0
-     * is the OUTER class's internal name -- 0 for a top-level, local or anonymous class, since only a member
-     * class names an outer one; this is HotSpot's {@code getDeclaringClass0}. Part 1 is the SIMPLE name -- 0
-     * for a top-level or anonymous class; HotSpot's {@code getSimpleBinaryName0}. Read from the classfile, never
-     * from the binary name, so a top-level class whose name contains '$' stays top-level.
-     */
-    static long classInnerPart(ObjectReference mirror, long part)
-    {
-        if (mirror.toLong() <= 0x1000L)
-        {
-            return 0L;
-        }
-        int reg = regOfType(mirror.toAddress().plus(16L).loadAddress());
-        if (reg < 0)
-        {
-            return 0L;
-        }
-        Address base = clTab[reg].base;
-        Address e = ownInnerClassEntry(base);
-        if (e.isZero())
-        {
-            return 0L;
-        }
-        int idx = u2(e.plus((part == 0L ? 2L : 4L)));     // outer_class_info_index or inner_name_index
-        if (idx == 0)
-        {
-            return 0L;
-        }
-        if (part == 0L)
-        {
-            return utf8ToString(base, gcp[u2(base.plus(gcp[idx]))]);    // CONSTANT_Class -> its name Utf8
-        }
-        return utf8ToString(base, gcp[idx]);
-    }
-
-    /**
-     * The class's attribute named {@code name} -- position of its body, or 0 when absent or the mirror has no
-     * classfile. The base of the blob is left in {@link #gAttrBase} for the caller's reads.
-     */
-    private static Address classAttrOf(ObjectReference mirror, byte[] name)
-    {
-        if (mirror.toLong() <= 0x1000L)
-        {
-            return Address.zero();
-        }
-        int reg = regOfType(mirror.toAddress().plus(16L).loadAddress());
-        if (reg < 0)
-        {
-            return Address.zero();
-        }
-        Address base = clTab[reg].base;
-        Address ap = classAttrsPos(base);
-        if (ap.isZero())
-        {
-            return Address.zero();
-        }
-        gAttrBase = base;
-        return classAttrNamed(base, ap.plus(2L), u2(ap), name);
-    }
-
-    private static Address gAttrBase;                      // the blob classAttrOf last answered for
-
-    /** Position of record component {@code idx} in the Record attribute at {@code rec}, or 0 past the end. */
-    private static Address recordComponentPos(Address rec, long idx)
-    {
-        int n = u2(rec);                                // u2 components_count, then the components
-        if (idx < 0L || idx >= n)
-        {
-            return Address.zero();
-        }
-        Address p = rec.plus(2L);
-        long i = 0L;
-        while (i < idx)
-        {
-            p = skipAttributes(p.plus(6L), u2(p.plus(4L)));     // u2 name, u2 descriptor, u2 attributes_count, attrs
-            i += 1L;
-        }
-        return p;
-    }
-
-    /**
-     * {@code RecordComponent.recordInfo0}: the number of components in the class's {@code Record} attribute
-     * (JVMS 4.7.30), or -1 when it has none -- which is what makes it a record, beyond extending Record.
-     */
-    static long classRecordInfo(ObjectReference mirror, long k)
-    {
-        Address rec = classAttrOf(mirror, Magic.bytes("Record"));
-        return rec.isZero() ? -1L : u2(rec);
-    }
-
-    /**
-     * {@code RecordComponent.recordPart0}: for component {@code code >> 2}, part {@code code & 3} -- 0 its name, 1
-     * its field descriptor, 2 its {@code Signature} attribute -- as a String, or 0 (no such component, or no
-     * Signature).
-     */
-    static long classRecordPart(ObjectReference mirror, long code)
-    {
-        Address rec = classAttrOf(mirror, Magic.bytes("Record"));
-        if (rec.isZero())
-        {
-            return 0L;
-        }
-        Address base = gAttrBase;
-        Address p = recordComponentPos(rec, code >> 2);
-        if (p.isZero())
-        {
-            return 0L;
-        }
-        int part = (int) (code & 3L);
-        if (part == 0)
-        {
-            return utf8ToString(base, gcp[u2(p)]);
-        }
-        if (part == 1)
-        {
-            return utf8ToString(base, gcp[u2(p.plus(2L))]);
-        }
-        Address q = classAttrNamed(base, p.plus(6L), u2(p.plus(4L)), Magic.bytes("Signature"));
-        return q.isZero() ? 0L : utf8ToString(base, gcp[u2(q)]);
-    }
-
-    /** {@code RecordComponent.recordAnnos0}: the annotations written on component {@code idx}, as an Annotation[]. */
-    static long classRecordAnnos(ObjectReference mirror, long idx)
-    {
-        Address rec = classAttrOf(mirror, Magic.bytes("Record"));
-        if (rec.isZero())
-        {
-            return 0L;
-        }
-        Address base = gAttrBase;
-        Address p = recordComponentPos(rec, idx);
-        if (p.isZero())
-        {
-            return 0L;
-        }
-        Address lp = Annotations.annoListPos(base, p.plus(6L), u2(p.plus(4L)));
-        return lp.isZero() ? Annotations.emptyAnnoArray() : Annotations.annotationsAt(base, lp);
-    }
-
-    /** {@code Class.permitted0}: the {@code k}th name in the class's {@code PermittedSubclasses}, or 0. */
-    static long classPermitted(ObjectReference mirror, long k)
-    {
-        Address ps = classAttrOf(mirror, Magic.bytes("PermittedSubclasses"));
-        if (ps.isZero() || k < 0L || k >= u2(ps))         // u2 number_of_classes, then u2 class indices
-        {
-            return 0L;
-        }
-        Address base = gAttrBase;
-        int ci = u2(ps.plus(2L + 2L * k));
-        return utf8ToString(base, gcp[u2(base.plus(gcp[ci]))]);   // CONSTANT_Class -> its name Utf8
-    }
-
-    /**
-     * {@code Class.sealed0}: 1 when the class carries a {@code PermittedSubclasses} attribute (JVMS 4.7.31),
-     * else 0. That is exactly when stock's {@code getPermittedSubclasses()} is non-null, which is stock's whole
-     * definition of {@code isSealed()} for a non-array, non-primitive class.
-     */
-    static long classSealed(ObjectReference mirror)
-    {
-        if (mirror.toLong() <= 0x1000L)
-        {
-            return 0L;
-        }
-        int reg = regOfType(mirror.toAddress().plus(16L).loadAddress());
-        if (reg < 0)
-        {
-            return 0L;
-        }
-        Address base = clTab[reg].base;
-        Address ap = classAttrsPos(base);
-        if (ap.isZero())
-        {
-            return 0L;
-        }
-        return !classAttrNamed(base, ap.plus(2L), u2(ap), Magic.bytes("PermittedSubclasses")).isZero() ? 1L : 0L;
-    }
-
-    /** Position of the body of the attribute named {@code name} in an attribute list, or 0 if absent. */
-    static Address classAttrNamed(Address base, Address p, int attrs, byte[] name)
-    {
-        int a = 0;
-        while (a < attrs)
-        {
-            int anIdx = u2(p);
-            p = p.plus(2);
-            int alen = u4(p);
-            p = p.plus(4);
-            if (Utf8.utf8IsAtBase(base, gcp[anIdx], name))
-            {
-                return p;
-            }
-            p = p.plus(alen);
-            a += 1;
-        }
-        return Address.zero();
-    }
-
-    /** The class-level {@code attributes_count} position: past every method, which is where they begin. */
-    static Address classAttrsPos(Address base)
-    {
-        parseForMethods(base, blobLenOf(base));
-        Address p = gMethodsStart;
-        int mcount = u2(p);
-        p = p.plus(2);
-        int m = 0;
-        while (m < mcount)
-        {
-            p = skipAttributes(p.plus(8), u2(p.plus(6)));
-            m += 1;
-        }
-        return p;
-    }
-
-
-    /**
-     * {@code Field.type0}: the {@code Class} mirror of the declared type of field {@code nameArr}, or 0.
-     *
-     * <p>Recoverable now in a way it was not when {@code getDeclaredFields} landed: the field's DESCRIPTOR is
-     * in the classfile, and the annotation runtime already resolves a descriptor to a mirror
-     * ({@code annoClassValue}), primitives included. Previously only the type CHAR was kept, which cannot name
-     * a reference type -- so the method was left out rather than answering {@code Object} for everything.
-     *
-     * <p>The descriptor's ABSOLUTE address is taken before resolving: resolving may demand-load, which
-     * re-parses a blob and moves the {@code gcp}/{@code gbase} cursor. Blobs themselves do not move, so an
-     * absolute Utf8 pointer survives it -- the same property {@code applyAnnoDefaults} relies on.
-     */
-    static long fieldTypeMirror(ObjectReference mirror, ObjectReference nameArr)
-    {
-        if (mirror.toLong() <= 0x1000L || nameArr.toLong() <= 0x1000L)
-        {
-            return 0L;
-        }
-        int ci = classRegByType(mirror.toAddress().plus(16L).loadAddress());
-        if (ci < 0)
-        {
-            return 0L;
-        }
-        Address base = clTab[ci].base;
-        parseConstPool(base, blobLenOf(base));
-        Address p = gp.plus(6L);
-        p = p.plus(2L + u2(p) * 2L);                           // past the interfaces list
-        int fcount = u2(p);
-        p = p.plus(2);
-        int nlen = (int) nameArr.toAddress().plus(16L).loadLong();
-        Address nbase = nameArr.toAddress().plus(24L);
-        Address descU = Address.zero();
-        int f = 0;
-        while (f < fcount)
-        {
-            int attrs = u2(p.plus(6));
-            if (Utf8.rawEqUtf8(nbase, nlen, base, gcp[u2(p.plus(2))]))
-            {
-                descU = base.plus(gcp[u2(p.plus(4))]);          // absolute: survives the re-parse a resolve may cause
-                break;
-            }
-            p = skipAttributes(p.plus(8), attrs);
-            f += 1;
-        }
-        return descU.isZero() ? 0L : AnnotationInstances.annoClassValue(descU);
-    }
-
-    /**
-     * {@code Method.paramTypes0}: a {@code Class[]} of the parameter types of the method registered at
-     * {@code rgIndex}, resolved from its DESCRIPTOR.
-     *
-     * <p>The stored {@code paramChars} cannot answer this -- it keeps only the first descriptor character, so
-     * every reference parameter looks alike. The descriptor has the real names, and the annotation runtime
-     * already turns a descriptor into a mirror.
-     *
-     * <p>An ARRAY parameter resolves to null rather than to something plausible: joe-ng's array Types are
-     * interned per element type and reaching one from a descriptor slice is a separate piece of work. A null
-     * element is visibly wrong at the caller; {@code Object.class} would be quietly wrong.
-     */
-    static long methodParamTypes(int rgIndex)
-    {
-        if (reflEntry(rgIndex) == null)
-        {
-            return 0L;
-        }
-        Address base = reflEntry(rgIndex).base;
-        int off = reflEntry(rgIndex).descOff;
-        int len = u2(base.plus(off));
-        Address d = base.plus(off + 2);                        // the descriptor bytes: "(...)ret"
-        int n = countDescParams(d, len);
-        Address arr = Heap.allocArray(n, 8);
-        Address at = refArrayTib(classMirrorTypeAddr());
-        if (!at.isZero())
-        {
-            arr.plus(ObjectModel.TIB_OFFSET).store(at);
-        }
-        int i = 1;                                      // past '('
-        int k = 0;
-        while (i < len && u1(d.plus(i)) != 0x29)            // ')'
-        {
-            int start = i;
-            while (i < len && u1(d.plus(i)) == 0x5B)        // '[' -- array prefixes
-            {
-                i += 1;
-            }
-            long mirror;
-            if (u1(d.plus(i)) == 0x4C)                      // 'L' <name> ';'
-            {
-                int nameStart = i + 1;
-                while (i < len && u1(d.plus(i)) != 0x3B)
-                {
-                    i += 1;
-                }
-                mirror = arrayOf(mirrorOfInternalName(d.plus(nameStart), i - nameStart), nameStart - 1 - start);
-                i += 1;                                 // past ';'
-            }
-            else
-            {
-                mirror = start == i ? primitiveMirror(u1(d.plus(i))) : primArrayMirror(u1(d.plus(i)), i - start);
-                i += 1;
-            }
-            arr.plus(24L).plus(k * 8L).store(mirror);
-            k += 1;
-        }
-        return arr.toLong();
-    }
-
-    /** {@code Method.returnType0}: the declared return type's mirror, resolved from the descriptor. */
-    static long methodReturnType(int rgIndex)
-    {
-        if (reflEntry(rgIndex) == null)
-        {
-            return 0L;
-        }
-        Address base = reflEntry(rgIndex).base;
-        int off = reflEntry(rgIndex).descOff;
-        int len = u2(base.plus(off));
-        Address d = base.plus(off + 2);
-        int i = 1;
-        while (i < len && u1(d.plus(i)) != 0x29)            // skip to just past ')'
-        {
-            i += 1;
-        }
-        i += 1;
-        int start = i;
-        while (i < len && u1(d.plus(i)) == 0x5B)            // array prefixes: resolved by arrayOf/primArrayMirror
-        {
-            i += 1;
-        }
-        if (u1(d.plus(i)) == 0x4C)
-        {
-            int nameStart = i + 1;
-            while (i < len && u1(d.plus(i)) != 0x3B)
-            {
-                i += 1;
-            }
-            return arrayOf(mirrorOfInternalName(d.plus(nameStart), i - nameStart), nameStart - 1 - start);
-        }
-        return start == i ? primitiveMirror(u1(d.plus(i))) : primArrayMirror(u1(d.plus(i)), i - start);   // 'V' too
-    }
-
-    /**
-     * The mirror of {@code dims}-dimensional array of the class whose mirror is {@code elemMirror}, or
-     * {@code elemMirror} itself for 0 dimensions. Each level is the element Type's reference-array TIB, whose
-     * word 0 is the array Type -- the same node {@code getClass()} on such an array answers, so
-     * {@code getParameterTypes()[i] == String[].class} holds.
-     *
-     * <p>ARRAY PARAMETER AND RETURN TYPES USED TO RESOLVE TO NULL ("not modelled"). A null element in a
-     * {@code Class[]} is a wrong answer a caller cannot tell from a missing class: re-looking a method up by its
-     * own {@code getParameterTypes()} failed for any array parameter (MemberGenericsProbe, through stock
-     * {@code TypeVariableImpl.getGenericDeclaration}).
-     */
-    static long arrayOf(long elemMirror, int dims)
-    {
-        if (elemMirror == 0L)
-        {
-            return 0L;
-        }
-        Address type = Address.fromLong(elemMirror).plus(16L).loadAddress();
-        int k = 0;
-        while (k < dims)
-        {
-            Address tib = refArrayTib(type);
-            if (tib.isZero())
-            {
-                return 0L;
-            }
-            type = tib.loadAddress();
-            k += 1;
-        }
-        return classMirror(type);
-    }
-
-    /** As {@link #arrayOf}, for an array of the primitive with descriptor char {@code c}: {@code [I}, {@code [[J}. */
-    static long primArrayMirror(int c, int dims)
-    {
-        Address tib = primArrayTib(atypeForDescChar(c));
-        if (tib.isZero())
-        {
-            return 0L;
-        }
-        Address type = tib.loadAddress();
-        int k = 1;
-        while (k < dims)
-        {
-            tib = refArrayTib(type);
-            if (tib.isZero())
-            {
-                return 0L;
-            }
-            type = tib.loadAddress();
-            k += 1;
-        }
-        return classMirror(type);
-    }
-
-    /** Parameter count of the descriptor bytes at {@code d} (arrays fold into their element). */
-    private static int countDescParams(Address d, int len)
-    {
-        int i = 1;
-        int n = 0;
-        while (i < len && u1(d.plus(i)) != 0x29)
-        {
-            while (i < len && u1(d.plus(i)) == 0x5B)
-            {
-                i += 1;
-            }
-            if (u1(d.plus(i)) == 0x4C)
-            {
-                while (i < len && u1(d.plus(i)) != 0x3B)
-                {
-                    i += 1;
-                }
-            }
-            i += 1;
-            n += 1;
-        }
-        return n;
-    }
-
-    /** The Class mirror of the internal name of {@code len} bytes at {@code p}, demand-loading it if needed. */
-    private static long mirrorOfInternalName(Address p, int len)
-    {
-        byte[] name = new byte[len];
-        int i = 0;
-        while (i < len)
-        {
-            name[i] = (byte) u1(p.plus(i));
-            i += 1;
-        }
-        int ci = classIndexByName(name);
-        if (ci < 0)
-        {
-            loadClassIncremental(name);
-            ci = classIndexByName(name);
-        }
-        return ci < 0 ? 0L : classMirror(clTab[ci].type);
-    }
-
-    /** The Type of {@code java/lang/Class}, for typing a {@code Class[]}. */
-    private static Address classMirrorTypeAddr()
-    {
-        int i = classIndexByName(Magic.bytes("java/lang/Class"));
-        return i < 0 ? objectTypeAddr() : clTab[i].type;
-    }
-
-
-    /**
-     * This class's DIRECTLY DECLARED interfaces, as Class mirrors, in declaration order.
-     *
-     * <p>Read from {@code clIfaceReg}, which the loader fills from the classfile's {@code interfaces} array --
-     * so it is the declared set, not the transitive closure. That is what stock returns, and what JUnit's
-     * {@code AnnotationUtils.findAnnotation} needs: it recurses into each interface itself, so handing it a
-     * flattened closure would make it walk the same interfaces repeatedly.
-     */
-    static long classInterfaces(ObjectReference mirror)
-    {
-        Address elemType = classMirrorTypeAddr();
-        if (mirror.toLong() <= 0x1000L)
-        {
-            return 0L;
-        }
-        int reg = regOfType(mirror.toAddress().plus(16L).loadAddress());
-        int n = reg >= 0 ? clIfaceRegN[reg] : 0;
-        Address arr = Heap.allocArray(n, 8);
-        arr.plus(ObjectModel.TIB_OFFSET).store(refArrayTib(elemType));
-        int i = 0;
-        while (i < n)
-        {
-            arr.plus(ObjectModel.ARRAY_BASE_OFFSET).plus(i * 8L).store(
-                    classMirror(clTab[clIfaceReg[reg * MAX_DIRECT_IF + i]].type));
-            i += 1;
-        }
-        return arr.toLong();
-    }
-
-
-    /** Cap on member classes enumerated per class -- fixed so the two passes below stay on plain locals. */
-    private static final int MAXDECLCLASS = 64;
-
-    /**
-     * {@code Class.declaredClasses0}: the MEMBER classes this class declares, as a fresh {@code Class[]}.
-     * Never 0 for a registered class; one that declares none answers a zero-length array.
-     *
-     * <p>Read from the {@code InnerClasses} attribute (JVMS 4.7.6), which is where the relationship is
-     * actually written down -- NOT from the binary name. The nesting PREDICATES on {@code Class} do use the
-     * name, and can: they ask "is THIS class a member", which {@code Outer$Inner} answers. This asks the
-     * reverse question, "which classes are members of this one", and a name cannot answer it without scanning
-     * the whole classDir and assuming javac's naming, which the spec does not mandate.
-     *
-     * <p>A class's own {@code InnerClasses} table lists every nested class it MENTIONS -- including itself
-     * when it is nested, and others' nested classes it merely references -- so filtering on
-     * {@code outer_class_info_index} naming THIS class is what makes the answer "declared by me". That
-     * filter also excludes local and anonymous classes for free, which stock excludes too: JVMS 4.7.6
-     * requires {@code outer_class_info_index} to be ZERO for both, and {@code inner_name_index} to be zero
-     * for an anonymous class. Both are checked.
-     *
-     * <p>TWO PASSES OVER ABSOLUTE ADDRESSES, for the reason {@link Annotations#classAnnotationsAll} records: pass 2
-     * RESOLVES, a resolve may demand-load, and a load re-parses a blob and moves the {@code gcp} cursor that
-     * pass 1 reads. Blob addresses survive that; parse state does not.
-     *
-     * <p>A member class that cannot be loaded is OMITTED and named on the console, rather than left as a null
-     * element -- a null reads to the caller as a class that exists but is broken.
-     */
-    static long classDeclaredClasses(ObjectReference mirror)
-    {
-        if (mirror.toLong() <= 0x1000L)
-        {
-            return 0L;                                  // boot force-compile guard passes 0; allocates nothing
-        }
-        int reg = regOfType(mirror.toAddress().plus(16L).loadAddress());
-        if (reg < 0)
-        {
-            return emptyClassArray();
-        }
-        Address base = clTab[reg].base;
-        Address ap = classAttrsPos(base);
-        if (ap.isZero())
-        {
-            return emptyClassArray();
-        }
-        Address lp = innerClassesPos(base, ap.plus(2L), u2(ap));
-        if (lp.isZero())
-        {
-            return emptyClassArray();                   // no InnerClasses attribute: declares no member class
-        }
-        int thisIdx = u2(base.plus(gAfterCp + 2));          // this_class, per the ClassReader.afterCp layout
-        if (thisIdx == 0)
-        {
-            return emptyClassArray();
-        }
-        int thisNameOff = gcp[u2(base.plus(gcp[thisIdx]))]; // CONSTANT_Class -> name_index -> Utf8
-        AddressArray nameAbs = AddressArray.create(MAXDECLCLASS);
-        int n = u2(lp);
-        Address p = lp.plus(2L);
-        int found = 0;
-        int i = 0;
-        while (i < n && found < MAXDECLCLASS)            // PASS 1: addresses only, nothing resolved
-        {
-            int innerIdx = u2(p);
-            int outerIdx = u2(p.plus(2));
-            int simpleIdx = u2(p.plus(4));
-            if (innerIdx != 0 && outerIdx != 0 && simpleIdx != 0)
-            {
-                int outerNameOff = gcp[u2(base.plus(gcp[outerIdx]))];
-                if (utf8EqAt(base, outerNameOff, base, thisNameOff))
-                {
-                    nameAbs.set(found, base.plus(gcp[u2(base.plus(gcp[innerIdx]))]));
-                    found += 1;
-                }
-            }
-            p = p.plus(8);                                      // inner, outer, simple name, access flags
-            i += 1;
-        }
-        long[] mirrors = new long[found];                // PASS 2: resolve, which may demand-load
-        int built = 0;
-        int k = 0;
-        while (k < found)
-        {
-            long m = mirrorForNameAt(nameAbs.get(k));
-            if (m != 0L)
-            {
-                mirrors[built] = m;
-                built += 1;
-            }
-            k += 1;
-        }
-        Address arr = Heap.allocArray(built, 8);
-        arr.plus(ObjectModel.TIB_OFFSET).store(refArrayTib(classMirrorTypeAddr()));
-        int j = 0;
-        while (j < built)
-        {
-            arr.plus(ObjectModel.ARRAY_BASE_OFFSET).plus(j * 8L).store(mirrors[j]);
-            j += 1;
-        }
-        return arr.toLong();
-    }
-
-    /**
-     * The mirror for the class whose internal name is the Utf8 at {@code utf8Addr}, demand-loading it if
-     * needed, or 0 when it cannot be loaded (denied, or absent from the classDir).
-     *
-     * <p>It does NOT initialize. Obtaining a mirror is not one of JVMS 5.5's active uses -- {@code forName}
-     * initializes because the specification says so, and {@code getDeclaredClasses} does not. Running the
-     * initializer of every nested class a caller merely LOOKS at would be both wrong and, on this VM,
-     * expensive: it is exactly the "an initializer pulled a whole subsystem in" hazard.
-     */
-    private static long mirrorForNameAt(Address utf8Addr)
-    {
-        int len = u2(utf8Addr);
-        if (len <= 0 || len > 4096)
-        {
-            return 0L;
-        }
-        byte[] name = new byte[len];
-        int i = 0;
-        while (i < len)
-        {
-            name[i] = (byte) u1(utf8Addr.plus(2 + i));
-            i += 1;
-        }
-        int ci = classIndexByName(name);
-        if (ci >= 0)
-        {
-            return classMirror(clTab[ci].type);
-        }
-        if (isDenylisted(utf8Blob(name), 0))
-        {
-            reportNestedNotLoaded(name);
-            return 0L;
-        }
-        Address type = loadClassIncremental(name);
-        if (type.isZero())
-        {
-            reportNestedNotLoaded(name);
-            return 0L;
-        }
-        return classMirror(type);
-    }
-
-    /** Names a member class that could not be loaded, so an omission from getDeclaredClasses is never silent. */
-    private static void reportNestedNotLoaded(byte[] name)
-    {
-        Uart.write(Magic.bytes("\n  MEMBER CLASS NOT LOADED (omitted from getDeclaredClasses): "));
-        Uart.write(name);
-        Uart.write(Magic.bytes("\n"));
-    }
-
-    /**
-     * Position of the {@code InnerClasses} list ({@code u2 number_of_classes} first), or 0 if absent.
-     *
-     * <p>{@link #innerAccessOf} scans the same attribute, but asks the opposite question -- "what are THIS
-     * class's own inner-class access flags", keyed on {@code inner_class_info_index} -- and works off the
-     * current parse state rather than a {@code base}. The two are different queries over one table, not
-     * redundant copies.
-     */
-    private static Address innerClassesPos(Address base, Address p, int attrs)
-    {
-        int a = 0;
-        while (a < attrs)
-        {
-            int anIdx = u2(p);
-            p = p.plus(2);
-            int alen = u4(p);
-            p = p.plus(4);
-            if (Utf8.utf8IsAtBase(base, gcp[anIdx], Magic.bytes("InnerClasses")))
-            {
-                return p;
-            }
-            p = p.plus(alen);
-            a += 1;
-        }
-        return Address.zero();
-    }
 
     /** Registry index of {@code obj}'s class, or -1 (null, or a raw array carrying no Type). */
     static int regOfObject(ObjectReference obj)
@@ -22723,7 +20259,7 @@ public final class Loader
         }
         int coder = maxCh < 256 ? 0 : 1;
         Address arr = Heap.allocArray(coder == 0 ? n : n * 2, 1);
-        Address bt = byteArrayTib();
+        Address bt = ArrayTypes.byteArrayTib();
         if (!bt.isZero())
         {
             arr.plus(ObjectModel.TIB_OFFSET).store(bt);   // type it as [B so `checkcast [B` resolves
@@ -22747,14 +20283,6 @@ public final class Loader
         obj.plus(16L).store(arr);
         obj.plus(24L).store((long) coder);
         return obj.toLong();
-    }
-
-    /** A zero-length {@code Class[]} -- what a class declaring no member classes answers. */
-    private static long emptyClassArray()
-    {
-        Address arr = Heap.allocArray(0, 8);
-        arr.plus(ObjectModel.TIB_OFFSET).store(refArrayTib(classMirrorTypeAddr()));
-        return arr.toLong();
     }
 
 
@@ -23126,27 +20654,8 @@ public final class Loader
         return out;
     }
 
-    /** A PRIMITIVE array Type's element descriptor char ('I' for {@code int[]}), or 0 for any other Type. */
-    static int primArrayElemChar(Address type)
-    {
-        return primElemCharOf(type);
-    }
-
-    /** {@code c}'s primitive name ("int" for 'I') as raw ASCII. */
-    static byte[] primName(int c)
-    {
-        return primNameBytes(c);
-    }
-
 
     // ----- multianewarray (JVMS 6.5) ---------------------------------------
-
-    /** Absolute address of the ARRAY DESCRIPTOR Utf8 ({@code {u2 len}{bytes}}) named by {@code classCp} --
-     *  what {@link RuntimeEntrypoints#multiNewArray} walks. Blobs do not move, so this address outlives the compile. */
-    static long arrayDescAddr(int classCp)
-    {
-        return gbase.plus((long) gcp[u2(gbase.plus(gcp[classCp]))]).toLong();
-    }
 
 
     /**
@@ -23175,7 +20684,7 @@ public final class Loader
         // `writeClassName` already renders arrays (nested and primitive elements included), so this reuses it
         // rather than adding a second walk over the same relation -- two walks disagreeing is a trap this
         // file has paid for more than once.
-        if (isArrayType(type))
+        if (ArrayTypes.isArrayType(type))
         {
             return writeClassName(type, Magic.addrOf(out) + 24L, p);   // elements at +24; descriptor form
         }
@@ -23476,7 +20985,7 @@ public final class Loader
         int nameOff = gcp[u2(gbase.plus(gcp[classIdx]))];
         if (u1(gbase.plus(nameOff + 2)) == 0x5B)            // '[' : an array class ("[B", "[Ljava/...;", "[[I")
         {
-            Address tib = arrayTibOfDesc(gbase, nameOff);
+            Address tib = ArrayTypes.arrayTibOfDesc(gbase, nameOff);
             return tib.isZero() ? Address.zero() : tib.loadAddress();  // the array Type (checkcast/instanceof target)
         }
         if (utf8EqAt(gbase, nameOff, gbase, gThisNameOff))
@@ -23487,64 +20996,6 @@ public final class Loader
         return r >= 0 ? clTab[r].type : Address.zero();
     }
 
-    // ----- array Types -----------------------------------------------------
-    // An array carries a real Type (via a 1-word array TIB in its header @0) so checkcast/instanceof against an
-    // array class resolve precisely and `arr instanceof Object` walks the super chain. Primitive-array Types are
-    // cached by atype; reference-array Types by element Type. All live in the per-batch demand heap (recreated
-    // after each resetLoader). A raw array (VM-internal byte buffers, boot-time) keeps a small element size in
-    // @0 instead — untyped, never checkcast, distinguished by magnitude (<= MAX_RAW_ARRAY_TIB).
-
-    /** java/lang/Object's Type (array super), or 0 if Object isn't loaded yet. */
-    /** Cached Types of the two interfaces every array implements; 0 until each is found (Types never move). */
-    private static Address cloneableTypeCache;
-    private static Address serializableTypeCache;
-    /** {@code clTab[0, arrayIfaceScanned)} has been searched for those two names. */
-    private static int arrayIfaceScanned;
-
-    /**
-     * Is {@code type} {@code java/lang/Cloneable} or {@code java/io/Serializable} -- the two interfaces every array
-     * type implements (JLS 4.10.3)? Allocation- and lock-free, because {@code VM.typeAssignable} asks it from
-     * checkcast and instanceof.
-     *
-     * <p>EACH REGISTRY ENTRY IS SEARCHED ONCE. This used to scan ALL of {@code clTab} on every call while either
-     * Type was still unfound -- and a program that never loads one of them (no class it runs implements
-     * Cloneable) never finds it, so every array-against-interface type check paid O(classes loaded) for ever.
-     * MEASURED by qprof on SslEngineProbe: 76% of 273 samples in this method, under instanceOf/castOk, with the
-     * TLS handshake starved. A Type can only be one of these two if its class is REGISTERED, and {@code clTab}
-     * is append-only ({@code type} is written once, before {@code clCount} moves -- see the ctProbe note), so
-     * the entries added since the last call are the only ones that can change the answer.
-     */
-    static boolean isArrayInterface(Address type)
-    {
-        if (type.isZero())
-        {
-            return false;
-        }
-        if (cloneableTypeCache.isZero() || serializableTypeCache.isZero())
-        {
-            int n = clCount;
-            int i = arrayIfaceScanned;
-            while (i < n)
-            {
-                if (clTab[i] != null)
-                {
-                    if (cloneableTypeCache.isZero()
-                            && Utf8.utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/Cloneable")))
-                    {
-                        cloneableTypeCache = clTab[i].type;
-                    }
-                    else if (serializableTypeCache.isZero()
-                            && Utf8.utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/io/Serializable")))
-                    {
-                        serializableTypeCache = clTab[i].type;
-                    }
-                }
-                i += 1;
-            }
-            arrayIfaceScanned = n;
-        }
-        return type.EQ(cloneableTypeCache) || type.EQ(serializableTypeCache);
-    }
 
     static Address objectTypeAddr()
     {
@@ -23560,30 +21011,6 @@ public final class Loader
         return Address.zero();
     }
 
-    /** Allocate an array Type {tag|elemSize, super=Object, itableDir=0, elementType} + a 1-word TIB; return the TIB. */
-    private static Address makeArrayTib(int elemSize, Address elementType)
-    {
-        Address type = Heap.allocData(ObjectModel.ARRAY_TYPE_SIZE);
-        Address objType = objectTypeAddr();
-        type.plus(ObjectModel.TYPE_INSTANCE_SIZE_OFFSET).store(ObjectModel.ARRAY_TYPE_TAG | (long) elemSize);
-        type.plus(ObjectModel.TYPE_SUPER_OFFSET).store(objType);            // arr instanceof Object
-        type.plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).store(0L);            // Cloneable/Serializable: later
-        type.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).store(elementType);
-        type.plus(ObjectModel.TYPE_DEPTH_OFFSET).store(0L);
-        type.plus(ObjectModel.TYPE_DISPLAY_OFFSET).store(0L);
-        type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).store(1L);   // empty-but-computed bitmap
-        type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).store(0L);
-        buildDisplay(type, objType);                     // depth 1, display [Object, self]
-        // The array TIB carries java/lang/Object's vtable so an invokevirtual on an array works. An array's static
-        // type is Object at a dispatch site (e.g. Arrays.deepEquals0's `e1.equals(e2)`, or `element.toString()` in
-        // String.valueOf/join), so the receiver's TIB must resolve equals/hashCode/toString to Object's impls.
-        // Without the vtable the dispatch read past a 1-word TIB and BLR'd garbage (a wild branch to the image entry).
-        int nv = objectVtableCount();
-        Address tib = Heap.allocData(8 + nv * 8);
-        tib.plus(ObjectModel.TIB_TYPE_SLOT * 8).store(type);                // TIB[0] = Type
-        fillObjectVtable(tib);                                                   // TIB[1..] = Object's vtable slots
-        return tib;
-    }
 
     /** Number of vtable slots a SYNTHESISED TIB reserves (= java/lang/Object's flattened vtable count), or 0.
      *  Used by array, lambda and annotation TIBs alike -- none of them has a classfile, and all of them are
@@ -23597,7 +21024,7 @@ public final class Loader
     /** Copy java/lang/Object's vtable slots into the array TIB {@code tib} (after its Type slot). Object's slots
      *  are only FILLED when Object's body is compiled (fillTib), which can happen AFTER an array TIB is first
      *  created (e.g. a string literal interns a byte[] before Object compiles) -- so a freshly-made array TIB may
-     *  copy zeros. {@link #refillArrayTibVtables} re-runs this over every cached array TIB once Object is done. */
+     *  copy zeros. {@link ArrayTypes#refillArrayTibVtables} re-runs this over every cached array TIB once Object is done. */
     /** {@link #fillObjectVtable} bounded by the TIB's own slot capacity (see {@code lambdaTibVtCap}). */
     /**
      * {@link #fillObjectVtable} bounded by the TIB's own slot capacity. Answers whether the TIB is now FULL
@@ -23630,7 +21057,7 @@ public final class Loader
     }
 
     /** Re-copy Object's (now-filled) vtable into every synthesised lambda/annotation TIB, bounded by the
-     *  capacity each was built with. Same repair as {@link #refillArrayTibVtables} and for the same reason:
+     *  capacity each was built with. Same repair as {@link ArrayTypes#refillArrayTibVtables} and for the same reason:
      *  a TIB built before Object's body was compiled copied zeros, and a 0 slot is a wild branch from baked
      *  code (which carries no dispatch guard) rather than a named trap. */
     private static void refillSynthTibVtables()
@@ -23678,33 +21105,6 @@ public final class Loader
         }
     }
 
-    /** Re-copy Object's (now-filled) vtable into every cached array TIB. Called at the end of {@link #loadAll},
-     *  after Object's body is compiled, to repair any array TIB that was created with a still-empty Object vtable
-     *  (else an invokevirtual on that array reads a 0 slot and the null-vtable guard throws AIOOBE). */
-    private static void refillArrayTibVtables()
-    {
-        if (primArrTib != null)
-        {
-            int a = 0;
-            while (a < primArrTib.length())
-            {
-                if (!primArrTib.get(a).isZero() && !primArrAdopted[a])
-                {
-                    fillObjectVtable(primArrTib.get(a));                 // adopted (baked) TIBs keep their writer impls
-                }
-                a += 1;
-            }
-        }
-        int r = 0;
-        while (r < refArrCount)
-        {
-            if (!refArrTib.get(r).isZero() && !refArrAdopted[r])
-            {
-                fillObjectVtable(refArrTib.get(r));                      // adopted (baked) TIBs keep their writer impls
-            }
-            r += 1;
-        }
-    }
 
     /** Class-registry index of {@code java/lang/Object}, or -1 if it isn't loaded yet. */
     static int objectClassIndex()
@@ -23722,55 +21122,12 @@ public final class Loader
         return -1;
     }
 
-    /** newarray atype (4=bool..11=long) -> element size in bytes. */
-    private static int primElemSize(int atype)
-    {
-        return atype == 4 || atype == 8 ? 1              // boolean, byte
-             : atype == 5 || atype == 9 ? 2              // char, short
-             : atype == 6 || atype == 10 ? 4             // float, int
-             : 8;                                        // double, long
-    }
-
-    /** The array TIB for a primitive array of the given newarray {@code atype}; adopted or created on demand. */
-    static Address primArrayTib(int atype)
-    {
-        if (atype < 0 || atype >= 12)
-        {
-            return Address.zero();
-        }
-        if (primArrTib.get(atype).isZero())
-        {
-            // M8 array-Type unification: ADOPT the writer-baked canonical array TIB (VM.primArrayTibs,
-            // 8 longs indexed atype-4) so byte[] is ONE class across both worlds -- writer-tagged
-            // arrays and loader arrays carry the same Type node, and instanceof/checkcast targets
-            // resolve to it on both sides. Metal-built only if the image predates the table.
-            Address tab = VM.primArrayTibs;
-            Address baked = tab.isZero() || atype < 4 ? Address.zero() : tab.plus((long) (atype - 4) * 8L).loadAddress();
-            if (!baked.isZero())
-            {
-                primArrTib.set(atype, baked);
-                primArrAdopted[atype] = true;
-                if (LOAD_LOG)
-                {
-                    Uart.write(Magic.bytes("  arrayadopt "));
-                    Uart.putc(0x5B);                        // '['
-                    Uart.putc(primDescChar(atype));
-                    Uart.putc(0x0A);
-                }
-            }
-            else
-            {
-                primArrTib.set(atype, makeArrayTib(primElemSize(atype), Address.zero()));
-            }
-        }
-        return primArrTib.get(atype);
-    }
 
     /** O(1) type checks: give {@code type} a depth + superclass display (depth+1 Type addrs,
      *  display[d] = ancestor at depth d, display[depth] = self). Copies the super's display, so it
      *  requires the super's Type to be complete (supers register first; adopted supers carry the
      *  writer's). A super without a display leaves this one without too (the walk fallback holds). */
-    private static void buildDisplay(Address type, Address superType)
+    static void buildDisplay(Address type, Address superType)
     {
         long d = 0L;
         Address sd = Address.zero();
@@ -23844,24 +21201,6 @@ public final class Loader
         type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).store(b1);
     }
 
-    /** JVMS descriptor char for a newarray atype (4..11). */
-    private static int primDescChar(int atype)
-    {
-        if (atype == 4)  { return 0x5A; }   // 'Z'
-        if (atype == 5)  { return 0x43; }   // 'C'
-        if (atype == 6)  { return 0x46; }   // 'F'
-        if (atype == 7)  { return 0x44; }   // 'D'
-        if (atype == 8)  { return 0x42; }   // 'B'
-        if (atype == 9)  { return 0x53; }   // 'S'
-        if (atype == 10) { return 0x49; }   // 'I'
-        return 0x4A;                        // 'J'
-    }
-
-    /** Array TIB for a byte[] (newarray atype 8) — used to type String value arrays / interned literals. */
-    static Address byteArrayTib()
-    {
-        return primArrayTib(8);
-    }
 
     /**
      * The Type of {@code java/lang/String}, or 0 if it is not registered. Read ONCE per batch into
@@ -23878,371 +21217,7 @@ public final class Loader
         return i < 0 ? Address.zero() : clTab[i].type;
     }
 
-    /** JVMS field-descriptor char -> newarray atype (Z/B/C/S/I/J/F/D), or -1 for a reference/array element. */
-    static int atypeForDescChar(int c)
-    {
-        if (c == 0x5A) { return 4; }    // 'Z' boolean
-        if (c == 0x43) { return 5; }    // 'C' char
-        if (c == 0x46) { return 6; }    // 'F' float
-        if (c == 0x44) { return 7; }    // 'D' double
-        if (c == 0x42) { return 8; }    // 'B' byte
-        if (c == 0x53) { return 9; }    // 'S' short
-        if (c == 0x49) { return 10; }   // 'I' int
-        if (c == 0x4A) { return 11; }   // 'J' long
-        return -1;                      // 'L' reference or '[' nested array
-    }
 
-    /** Array TIB for the array descriptor at {@code base+nameOff} (a Utf8 like "[B" / "[Ljava/lang/String;" /
-     *  "[[I"), or 0. */
-    private static Address arrayTibOfDesc(Address base, int nameOff)
-    {
-        return arrayTibOfDescN(base, nameOff + 2, u2(base.plus(nameOff)));   // skip the u2 length prefix
-    }
-
-    /** Array TIB for the {@code n}-byte descriptor at {@code base+off}. Nested descriptors recurse: the
-     *  element of "[[I" is "[I", whose Type keys the ref-array cache -- so int[][] shares the SAME canonical
-     *  "[I" element node both worlds bake/adopt, and the covariance walk discriminates nested arrays. */
-    static Address arrayTibOfDescN(Address base, int off, int n)
-    {
-        int c = u1(base.plus(off + 1));                     // char after the leading '['
-        int atype = atypeForDescChar(c);
-        if (atype >= 0)
-        {
-            return primArrayTib(atype);                 // "[<primitive>"
-        }
-        if (c == 0x5B)                                  // '[': nested -- element desc is this minus one '['
-        {
-            Address elTib = arrayTibOfDescN(base, off + 1, n - 1);
-            return refArrayTib(elTib.isZero() ? Address.zero() : elTib.loadAddress());
-        }
-        return refArrayTib(elementTypeOfArrayDescN(base, off, n));   // "[L<class>;"
-    }
-
-    /** Element Type of the {@code n}-byte reference-array descriptor "[L<class>;" at {@code base+off}
-     *  (the class's Type, or 0 when unresolved). */
-    static Address elementTypeOfArrayDescN(Address base, int off, int n)
-    {
-        if (u1(base.plus(off + 1)) != 0x4C)                 // not 'L'
-        {
-            return Address.zero();
-        }
-        int i = 0;                                      // strip the leading "[L" and trailing ';' -> class name
-        while (i < clCount)
-        {
-            if (Utf8.utf8SliceEq(base, off + 2, n - 3, clTab[i].base, clTab[i].nameOff))
-            {
-                return clTab[i].type;
-            }
-            i += 1;
-        }
-        return Address.zero();
-    }
-
-
-    /** Array TIB for a reference array with the given element Type; created + cached (keyed by element Type). */
-    static Address refArrayTib(Address elementType)
-    {
-        int i = 0;
-        while (i < refArrCount)
-        {
-            if (refArrElem.get(i).EQ(elementType))
-            {
-                return refArrTib.get(i);
-            }
-            i += 1;
-        }
-        // M8 ref-array unification: ADOPT the writer-baked ref-array TIB whose element Type matches.
-        // The table (VM.refArrayTibs: {elementType, tib} pairs) is keyed by the SAME adopted element
-        // Type nodes both worlds share, so a writer-tagged Integer[] and a loader Integer[] carry one
-        // TIB -- and the covariance walk compares one set of nodes. Metal-built when not baked.
-        Address tib = Address.zero();
-        boolean adopted = false;
-        if (!elementType.isZero())
-        {
-            Address tab = VM.refArrayTibs;
-            long n = VM.refArrayTibCount;
-            long k = 0;
-            while (k < n)
-            {
-                if (tab.plus(k * 16L).loadAddress().EQ(elementType))
-                {
-                    tib = tab.plus(k * 16L).plus(8L).loadAddress();
-                    adopted = true;
-                    int r = regOfType(elementType);
-                    if (r >= 0)
-                    {
-                        Uart.write(Magic.bytes("  arrayadopt [L"));
-                        writeName(clTab[r].base.plus(clTab[r].nameOff + 2), u2(clTab[r].base.plus(clTab[r].nameOff)));
-                        Uart.putc(0x3B);                // ';'
-                    }
-                    else
-                    {
-                        Uart.write(Magic.bytes("  arrayadopt [[ (nested)"));   // element is itself an array Type
-                    }
-                    Uart.putc(0x0A);
-                    break;
-                }
-                k += 1;
-            }
-        }
-        if (tib.isZero())
-        {
-            tib = makeArrayTib(ObjectModel.WORD, elementType);   // reference elements are 8-byte pointers
-        }
-        if (refArrCount >= refArrTib.length())
-        {
-            growRefArrCache();
-        }
-        refArrElem.set(refArrCount, elementType);
-        refArrTib.set(refArrCount, tib);
-        refArrAdopted[refArrCount] = adopted;
-        refArrCount += 1;
-        return tib;
-    }
-
-    /**
-     * Double the reference-array cache. It used to stop at 64 and SILENTLY stop caching, so every array Type
-     * asked for after that was minted afresh: two `Object[][]` nodes, two mirrors, and `Object[][].class`
-     * answering false against the erased parameter type of a method -- MemberGenericsProbe after sixteen
-     * probes in one batch had filled it. An array Type must be unique like a class Type; identity, covariance
-     * and the mirror cache all key on it. Copied by hand: java.util.Arrays is a bake stub here.
-     */
-    private static void growRefArrCache()
-    {
-        int n = refArrTib.length() * 2;
-        AddressArray elem = AddressArray.create(n);
-        AddressArray tibs = AddressArray.create(n);
-        boolean[] adopted = new boolean[n];
-        int i = 0;
-        while (i < refArrCount)
-        {
-            elem.set(i, refArrElem.get(i));
-            tibs.set(i, refArrTib.get(i));
-            adopted[i] = refArrAdopted[i];
-            i += 1;
-        }
-        refArrElem = elem;
-        refArrTib = tibs;
-        refArrAdopted = adopted;
-    }
-
-    /**
-     * Array TIB for an {@code anewarray} whose element class is Class-entry {@code classCp}.
-     *
-     * <p>THE ELEMENT CLASS MAY NOT BE REGISTERED YET, and answering that with a typed array Type whose
-     * element is 0 is the silent-wrong-answer shape. `tagArray` bakes this TIB as an IMMEDIATE, so -- exactly
-     * as for a class literal -- there is no reloc for a later batch to patch: the array carries an element of
-     * 0 for the rest of the boot. Nothing then proves `Parameter[] <: Object[]`, and the covariance check
-     * fails far from here. The launcher hit it as
-     * `ClassCastException: class [ cannot be cast to class [Ljava.lang.Object;` inside
-     * `Arrays.stream(getParameters())` -- an array whose element could not even be NAMED.
-     *
-     * <p>Two responses, in order, and neither invents an element type:
-     * <ol>
-     *   <li>PULL AND RECOMPILE, the route a class literal and an unresolved static already take. A late
-     *       compile can note the class and be retried once with it loaded, which gives the array its real
-     *       element Type rather than a substitute.</li>
-     *   <li>Failing that (a batch compile, or the retry is spent), type it as {@code Object[]}, which is TRUE
-     *       of every reference array (JLS 10.1) even when the exact element class is unknown. That restores
-     *       the covariance this bug broke and keeps the elements TRACED.</li>
-     * </ol>
-     *
-     * <p>LEAVING IT RAW WAS TRIED AND IS WRONG, and the reason is recorded elsewhere in this file: a raw
-     * array carries no Type, and <b>a raw 8-byte-element array is not traced as references</b> -- the
-     * elements would be reachable from nothing the collector follows and swept out from under the caller.
-     * {@code castOk} does trust the verifier for a raw array, so the cast would have passed; trading a failed
-     * cast for a swept object is a far worse bargain, and the failure it produces is a wild reference rather
-     * than a named exception.
-     *
-     * <p>The residual divergence is stated rather than hidden: an {@code Object[]}-typed array answers FALSE
-     * to {@code instanceof Parameter[]}, where stock answers true. That is visible at the caller and only
-     * arises on the fallback, which the report below names every time it is taken.
-     * <ol>
-     * </ol>
-     */
-    static Address refArrayTibForClass(int classCp)
-    {
-        Address type = typeOfClass(classCp);
-        if (type.isZero())
-        {
-            int nameOff = gcp[u2(gbase.plus(gcp[classCp]))];
-            if (u1(gbase.plus(nameOff + 2)) != 0x5B                     // an array-of-array builds its own Type
-                    && lzCompiling && !lzRetried && notePullNeeded(gbase.plus(nameOff)))
-            {
-                return Address.zero();                              // discarded compile: retried with it loaded
-            }
-            reportUntypedArray(gbase.plus(nameOff));
-            Address obj = objectTypeAddr();
-            return obj.isZero() ? Address.zero() : refArrayTib(obj);   // Object[]: covariance holds, elements traced
-        }
-        return refArrayTib(type);
-    }
-
-    /**
-     * Name an {@code anewarray} whose element class could not be resolved, ONCE per element class.
-     *
-     * <p>Reported rather than left silent for the reason this file keeps relearning: the consequence shows up
-     * as a failed cast in unrelated library code, and an array that cannot name its own element is not
-     * something any caller can diagnose from there. Deduped through the same table the unresolved-static and
-     * null-class-literal reports use, because a hot path would otherwise repeat it per compile.
-     */
-    private static void reportUntypedArray(Address clsU)
-    {
-        if (unresStaticSeen == null)
-        {
-            unresStaticSeen = new long[64];
-            unresStaticSeenN = 0;
-        }
-        int k = 0;
-        while (k < unresStaticSeenN)
-        {
-            if (unresStaticSeen[k] == clsU.toLong())
-            {
-                return;
-            }
-            k += 1;
-        }
-        if (unresStaticSeenN < unresStaticSeen.length)
-        {
-            unresStaticSeen[unresStaticSeenN] = clsU.toLong();
-            unresStaticSeenN += 1;
-        }
-        Uart.write(Magic.bytes("\n  ARRAY ELEMENT UNRESOLVED (typed Object[] -- `instanceof X[]` answers false): "));
-        printNameAt(clsU, 0);
-        Uart.write(Magic.bytes(" -- "));
-        printWhyUnpulled(clsU);
-        Uart.putc(0x0A);
-    }
-
-    // ----- java.lang.Class mirrors -----------------------------------------
-    // A Class object per VM Type, materialised once and cached, so `X.class` (ldc class-literal) and
-    // `obj.getClass()` return the SAME identity for the same Type -- which is what stock code compares
-    // (e.g. Arrays.copyOf: `newType == Object[].class`). The mirror carries the Type node pointer in its sole
-    // field (@16); Class methods (getName/getComponentType/isInstance/...) are added on demand. It is typed as
-    // the guest java/lang/Class when loaded, else a bare identity object (TIB 0) -- enough for `==`.
-
-    /** guest java/lang/Class's TIB, or 0 if it isn't loaded in this batch. */
-    private static Address classTib()
-    {
-        if (classTibCache.isZero())
-        {
-            int i = 0;
-            while (i < clCount)
-            {
-                if (Utf8.utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/Class")))
-                {
-                    classTibCache = clTab[i].tib;
-                    break;
-                }
-                i += 1;
-            }
-        }
-        return classTibCache;
-    }
-
-    /** The Class mirror for VM Type {@code type}, materialised + cached (identity stable across ldc/getClass). */
-    static long classMirror(Address type)
-    {
-        if (type.isZero())
-        {
-            return 0L;
-        }
-        int i = 0;
-        while (i < mirN)
-        {
-            if (mirType.get(i).EQ(type))
-            {
-                return mirObj.get(i).toLong();
-            }
-            i += 1;
-        }
-        // header(16) + typeAddr(@16) + classValueMap(@24) + classLoader(@32) + protectionDomain(@40) +
-        // signers(@48). Class mirrors are allocated HERE rather than by a constructor, so this size must track the
-        // overlay's field count by hand: a field declared in guestsrc/java/lang/Class.java but not counted here is
-        // written PAST the object.
-        Address obj = Heap.alloc(56);
-        Address ctib = classTib();
-        if (mirN >= mirType.length())
-        {
-            reportMirrorCacheFull(type, ctib);              // past here getClass() mints a NEW mirror each ask
-        }
-        if (ctib.isZero())
-        {
-            reportMirrorNoTib(type);                        // a TIB-0 mirror is a WILD DISPATCH, not an identity
-        }
-        obj.plus(0L).store(ctib);                      // TIB (0 -> a bare identity object; see the report)
-        obj.plus(16L).store(type);                     // the VM Type this Class mirrors
-        if (mirN < mirType.length())
-        {
-            mirType.set(mirN, type);
-            mirObj.set(mirN, obj.toObjectReference());
-            mirN += 1;
-        }
-        return obj.toLong();
-    }
-
-    /** Print each loader reset: it clears the Class-mirror table, so mirrors minted before it go stale. */
-    private static final boolean MIRROR_RESET_WATCH = false;
-
-    private static boolean mirFullReported;
-
-    /**
-     * Report the Class-mirror cache filling up, ONCE.
-     *
-     * <p>The cache is what makes {@code X.class} and {@code obj.getClass()} the same object. Past its end
-     * every ask mints a fresh mirror, so {@code getClass() == getClass()} can still hold by luck while
-     * {@code getClass() == X.class} does not -- and stock code compares mirrors constantly.
-     */
-    private static void reportMirrorCacheFull(Address type, Address ctib)
-    {
-        if (mirFullReported)
-        {
-            return;
-        }
-        mirFullReported = true;
-        Uart.write(Magic.bytes("\n  CLASS MIRROR CACHE FULL at "));
-        VM.printHex(mirN);
-        Uart.write(Magic.bytes(" -- getClass() identity is no longer stable; first overflow is "));
-        int r = regOfType(type);
-        if (r < 0)
-        {
-            Uart.write(Magic.bytes("<type not registered>"));
-        }
-        else
-        {
-            printNameAt(clTab[r].base.plus(clTab[r].nameOff), 0);
-        }
-        Uart.write(Magic.bytes(" classTib="));
-        VM.printHex(ctib);
-        Uart.putc(0x0A);
-    }
-
-    /**
-     * Report a Class mirror built with NO TIB, naming the class it mirrors.
-     *
-     * <p>The old comment called a TIB-0 mirror "a bare identity object, fine for ==", and that is true only
-     * until someone calls a method on it. {@code instanceof Class} reads {@code [[obj]]}, i.e. address 0 --
-     * the firmware's low-memory shim -- and a virtual call loads its target from there too, so the dispatch
-     * lands on a plausible-looking address in unrelated code. That is the "reads firmware memory" family
-     * again, and it destroys the evidence: the failure surfaces inside whatever method it happened to reach.
-     *
-     * <p>{@code getClass()} is called on everything, so this is worth a line even though it costs one.
-     */
-    private static void reportMirrorNoTib(Address type)
-    {
-        Uart.write(Magic.bytes("\n  CLASS MIRROR WITHOUT A TIB (getClass/instanceof will misdispatch): "));
-        int r = regOfType(type);
-        if (r < 0)
-        {
-            Uart.write(Magic.bytes("<type not registered> type="));
-            VM.printHex(type);
-        }
-        else
-        {
-            printNameAt(clTab[r].base.plus(clTab[r].nameOff), 0);
-        }
-        Uart.write(Magic.bytes(" -- java/lang/Class is not registered in this batch\n"));
-    }
 
     /** {@code ldc} of a CONSTANT_Class (a class literal {@code X.class}) at cp {@code classCp} -> its Class mirror. */
     /**
@@ -24259,10 +21234,6 @@ public final class Loader
      * <p>{@code classMirror} caches per Type, so this is the SAME object {@code Foo.class} yields.
      */
 
-    static long selfClassMirror()
-    {
-        return classMirror(gType);
-    }
 
     /**
      * The target Type of an {@code instanceof} / {@code checkcast}, which the compiler bakes as an IMMEDIATE --
@@ -24292,7 +21263,7 @@ public final class Loader
                 d += 1;
             }
             if (d < len && u1(gbase.plus(nameOff0 + 2 + d)) == 0x4C
-                    && elementTypeOfArrayDescN(gbase, nameOff0 + 2 + d - 1, len - d + 1).isZero())
+                    && ArrayTypes.elementTypeOfArrayDescN(gbase, nameOff0 + 2 + d - 1, len - d + 1).isZero())
             {
                 int elOff = nameOff0 + 2 + d + 1;       // past the '['s and the 'L'
                 int elLen = len - d - 2;                // minus the trailing ';'
@@ -24365,67 +21336,6 @@ public final class Loader
     private static long[] unresTypeSeen;
     private static int unresTypeSeenN;
 
-    static long classLiteral(int classCp)
-    {
-        Address type = typeOfClass(classCp);
-        if (type.isZero())
-        {
-            // A CLASS LITERAL FOR A CLASS NOTHING PULLED. `emitAddr` bakes the mirror as an IMMEDIATE, so
-            // unlike a call there is no reloc for a later batch to patch -- 0 here means the literal is null
-            // for ever, and the first use is an NPE somewhere else entirely. `Foo.class` compiled before Foo
-            // is loaded is the ordinary way to get here: `assertThrows(IllegalThreadStateException.class, ...)`
-            // in a lazily compiled test body, where the class is not pulled until something THROWS one --
-            // long after the literal was baked. Note it and let lazyCompileLocked pull and recompile, the
-            // same route a static of an unpulled class takes.
-            int nameOff = gcp[u2(gbase.plus(gcp[classCp]))];
-            if (u1(gbase.plus(nameOff + 2)) != 0x5B                     // an array literal builds its own Type
-                    && lzCompiling && !lzRetried && notePullNeeded(gbase.plus(nameOff)))
-            {
-                return 0L;                                          // discarded compile: retried with it loaded
-            }
-            reportNullClassLiteral(gbase.plus(nameOff));
-        }
-        return classMirror(type);
-    }
-
-    /** Name a class literal that stayed null -- silence here surfaces as an NPE in unrelated code. */
-    private static void reportNullClassLiteral(Address clsU)
-    {
-        if (unresStaticSeen == null)
-        {
-            unresStaticSeen = new long[64];
-            unresStaticSeenN = 0;
-        }
-        int k = 0;
-        while (k < unresStaticSeenN)
-        {
-            if (unresStaticSeen[k] == clsU.toLong())
-            {
-                return;                                             // once per class, as for a static
-            }
-            k += 1;
-        }
-        if (unresStaticSeenN < 64)
-        {
-            unresStaticSeen[unresStaticSeenN] = clsU.toLong();
-            unresStaticSeenN += 1;
-        }
-        Uart.write(Magic.bytes("\n  NULL CLASS LITERAL: "));
-        printNameAt(clsU, 0);
-        Uart.write(Magic.bytes(".class -- "));
-        printWhyUnpulled(clsU);                         // the CHECKED cause, not "class never pulled"
-        if (!lzCompiling)
-        {
-            Uart.write(Magic.bytes(", and OUTSIDE the retry window"));
-        }
-        else if (lzRetried)
-        {
-            Uart.write(Magic.bytes(", and the body's single retry was already spent"));
-        }
-        Uart.write(Magic.bytes("; needed by "));
-        printCompiling();
-        Uart.putc(0x0A);
-    }
 
     /** The Type of {@code java/lang/Throwable}, or 0 if it is not loaded. Cached: this is asked on a fault path. */
     static Address throwableTypeAddr()
@@ -24440,62 +21350,6 @@ public final class Loader
 
     private static Address thrTypeCache;
 
-    /**
-     * The Class mirror of the JIT'd method containing machine PC {@code pc} (getCallerClass), or 0.
-     *
-     * <p>THE CONTAINING CODE BLOCK IS MATCHED EXACTLY, not guessed at. This used to take the registered
-     * method with the greatest buffer address AT OR BELOW the pc, with no upper bound -- so a pc inside a
-     * body the method registry does not hold answered with whatever registered method happened to sit
-     * nearest below it in the code arena. That is a silent wrong class, and `MhUtil.findVarHandle` then
-     * built a handle against it: on hardware {@code java/net/Socket} got a handle whose receiverType was
-     * {@code jdk/internal/access/SharedSecrets}, and the generated accessor's
-     * {@code receiverType.cast(holder)} threw a ClassCastException naming two classes with nothing to do
-     * with each other. {@code Heap.codeBlockStartAt} answers which block CONTAINS the pc (its own doc:
-     * "a pc lying in a DIFFERENT block cannot belong to the method registered at addr, however close the
-     * two are"), which is the same bound {@code printFrameAt} had to learn.
-     *
-     * <p>AND INITIALIZER BODIES ARE SEARCHED TOO, which is the half that makes the common case work rather
-     * than merely fail loudly. {@code clinitEntryOfLocked} compiles a {@code <clinit>} into its own buffer
-     * and memoizes it in {@code clinitEntry[]} -- it calls {@code register} NOWHERE, so an initializer is in
-     * no method registry and the scan above could never have found it. Every one of the 30 java.base sites
-     * that reach the caller-sensitive {@code MhUtil.findVarHandle} calls it from a {@code <clinit>}, so that
-     * omission was the whole defect; a probe calling the same form from {@code main} passes either way,
-     * because {@code main} IS registered and genuinely contains the pc.
-     *
-     * <p>A miss returns 0 and the caller must REFUSE rather than guess -- image/baked code owns no code
-     * block at all, so 0 is also the honest answer for a pc that never came from JIT'd guest code.
-     */
-    static long classMirrorAtPc(long pc)
-    {
-        long blk = Heap.codeBlockStartAt(Address.fromLong(pc)).toLong();
-        if (blk == 0L)
-        {
-            return 0L;                                  // not in any JIT'd block (image/baked code)
-        }
-        int i = 0;
-        while (i < rgCount)
-        {
-            if (rgTab[i].buf == blk)
-            {
-                return classMirrorByName(rgTab[i].base, rgTab[i].classOff);
-            }
-            i += 1;
-        }
-        // Not a registered method: try the initializers, which are registered nowhere.
-        if (clinitEntry != null)
-        {
-            int c = 0;
-            while (c < clinitN)
-            {
-                if (clinitEntry[c] == blk)
-                {
-                    return classMirrorByName(clinitBase.get(c), clinitNameOff[c]);
-                }
-                c += 1;
-            }
-        }
-        return 0L;
-    }
 
     /** {@link #ctorFrameKind}: a frame stock keeps in a construction-time trace. */
     static final int FRAME_KEEP = 0;
@@ -24596,36 +21450,6 @@ public final class Loader
         return Address.zero();
     }
 
-
-    /** Class mirror of the registered class whose name Utf8 is {@code base + off}, or 0. */
-    private static long classMirrorByName(Address base, int off)
-    {
-        int ci = 0;
-        while (ci < clCount)
-        {
-            if (clTab[ci] != null && utf8EqAt(clTab[ci].base, clTab[ci].nameOff, base, off))
-            {
-                return classMirror(clTab[ci].type);
-            }
-            ci += 1;
-        }
-        return 0L;
-    }
-
-    /** {@code Object.getClass()}: object header -> TIB -> Type -> its Class mirror. */
-    static long getClassOf(ObjectReference obj)
-    {
-        if (obj.isNull())
-        {
-            return 0L;
-        }
-        long tib = obj.toAddress().plus(0L).loadLong();
-        if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
-        {
-            return 0L;                                      // a raw array (no Type) — no mirror
-        }
-        return classMirror(Address.fromLong(tib).loadAddress());              // TIB[0] = Type (class Type or array Type)
-    }
 
     /**
      * Watch the RECEIVER of one method name's dispatch sites.
@@ -25382,7 +22206,7 @@ public final class Loader
         }
         lastLiteralCoder = maxCh < 256 ? 0 : 1;
         Address arr = Heap.allocArray(lastLiteralCoder == 0 ? nchars : nchars * 2, 1);
-        Address bt = byteArrayTib();
+        Address bt = ArrayTypes.byteArrayTib();
         if (!bt.isZero())
         {
             arr.plus(ObjectModel.TIB_OFFSET).store(bt);   // type it as [B so `checkcast [B` on String.value resolves

@@ -66,7 +66,7 @@ final class ArrayCopy
             return NOT_ARRAY;
         }
         Address type = tib.loadAddress();
-        if (!Loader.isArrayType(type))
+        if (!ArrayTypes.isArrayType(type))
         {
             return NOT_ARRAY;
         }
@@ -74,7 +74,7 @@ final class ArrayCopy
         {
             return REF;
         }
-        return Loader.primArrayElemChar(type) != 0 ? PRIM : REF;   // no element and no primitive: unresolved ref
+        return Primitives.primArrayElemChar(type) != 0 ? PRIM : REF;   // no element and no primitive: unresolved ref
     }
 
     private static Address typeOf(ObjectReference obj)
@@ -100,7 +100,7 @@ final class ArrayCopy
     {
         if (kind == PRIM)
         {
-            return Loader.primName(Loader.primArrayElemChar(typeOf(arr)));
+            return Primitives.primName(Primitives.primArrayElemChar(typeOf(arr)));
         }
         return Magic.bytes("object array");
     }
@@ -167,7 +167,7 @@ final class ArrayCopy
             throwAse(cat(Magic.bytes("arraycopy: type mismatch: can not copy object array[] into "),
                     kindName(dst, dk), Magic.bytes("[]")));
         }
-        if (sk == PRIM && Loader.primArrayElemChar(typeOf(src)) != Loader.primArrayElemChar(typeOf(dst)))
+        if (sk == PRIM && Primitives.primArrayElemChar(typeOf(src)) != Primitives.primArrayElemChar(typeOf(dst)))
         {
             throwAse(cat(cat(Magic.bytes("arraycopy: type mismatch: can not copy "), kindName(src, sk),
                     Magic.bytes("[] into ")), kindName(dst, dk), Magic.bytes("[]")));

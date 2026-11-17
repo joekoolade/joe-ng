@@ -359,7 +359,7 @@ final class AnnotationInstances
         // same two-instruction thunk shape as every element accessor -- see annoTibFor.
         Address obj = Heap.alloc(16 + (n + 1) * 8);
         obj.plus(ObjectModel.TIB_OFFSET).store(tib);
-        obj.plus(16L).plus(n * 8L).store(Loader.classMirror(Loader.clTab[ifaceReg].type));
+        obj.plus(16L).plus(n * 8L).store(ClassMirrors.classMirror(Loader.clTab[ifaceReg].type));
         int start = Loader.clTab[ifaceReg].ifmStart;
         int pendMark = annoPendN;                       // a NESTED build drains only what it adds past here
         int pairs = u2(pairsPos);
@@ -525,7 +525,7 @@ final class AnnotationInstances
             // followed by `checkcast [Ljava/lang/String;`, and an Object[] fails that cast. Falling back to
             // Object[] only when the element type is unresolvable keeps the GC tracing either way -- what must
             // never happen is a RAW array, whose elements are not traced as references at all.
-            Address at = !annoArrayTib.isZero() ? annoArrayTib : Loader.refArrayTib(Loader.objectTypeAddr());
+            Address at = !annoArrayTib.isZero() ? annoArrayTib : ArrayTypes.refArrayTib(Loader.objectTypeAddr());
             if (!at.isZero())
             {
                 arr.plus(ObjectModel.TIB_OFFSET).store(at);
@@ -569,10 +569,10 @@ final class AnnotationInstances
     private static long annoPrimArray(Address base, Address p)
     {
         int count = u2(p.plus(1));
-        int atype = Loader.atypeForDescChar(annoArrayPrim);
+        int atype = Primitives.atypeForDescChar(annoArrayPrim);
         int esz = RuntimeEntrypoints.arrayElemSizeOfAtype(atype);
         Address arr = Heap.allocArray(count, esz);
-        arr.plus(ObjectModel.TIB_OFFSET).store(Loader.primArrayTib(atype));
+        arr.plus(ObjectModel.TIB_OFFSET).store(ArrayTypes.primArrayTib(atype));
         Address q = p.plus(3L);
         int i = 0;
         while (i < count)
@@ -679,8 +679,8 @@ final class AnnotationInstances
         {
             return Address.zero();
         }
-        Address et = Loader.elementTypeOfArrayDescN(base, ret, len - (ret - descOff - 2));
-        return et.isZero() ? Address.zero() : Loader.refArrayTib(et);
+        Address et = ArrayTypes.elementTypeOfArrayDescN(base, ret, len - (ret - descOff - 2));
+        return et.isZero() ? Address.zero() : ArrayTypes.refArrayTib(et);
     }
 
     private static void noteAnnoPending(int kind, Address a, Address b)
@@ -780,7 +780,7 @@ final class AnnotationInstances
         int len = u2(descU);
         if (len == 1)
         {
-            return Loader.primitiveMirror(u1(descU.plus(2)));      // I J Z C B S F D V
+            return Primitives.primitiveMirror(u1(descU.plus(2)));      // I J Z C B S F D V
         }
         int dims = 0;                                   // an ARRAY class literal -- int[].class, String[][].class
         while (dims < len && u1(descU.plus(2 + dims)) == 0x5B)  // -- read null before; '[' counts the dimensions
@@ -789,7 +789,7 @@ final class AnnotationInstances
         }
         if (dims > 0 && dims == len - 1)
         {
-            return Loader.primArrayMirror(u1(descU.plus(2 + dims)), dims);
+            return ArrayTypes.primArrayMirror(u1(descU.plus(2 + dims)), dims);
         }
         if (len - dims < 3 || u1(descU.plus(2 + dims)) != 0x4C)
         {
@@ -812,8 +812,8 @@ final class AnnotationInstances
         {
             return 0L;
         }
-        long m = Loader.classMirror(Loader.clTab[ci].type);
-        return dims == 0 ? m : Loader.arrayOf(m, dims);
+        long m = ClassMirrors.classMirror(Loader.clTab[ci].type);
+        return dims == 0 ? m : ArrayTypes.arrayOf(m, dims);
     }
 
     /** An {@code 'e'} element: enum type descriptor + constant name -> the constant object, or 0. */
@@ -859,7 +859,7 @@ final class AnnotationInstances
     {
         int len = u2(base.plus(off));
         Address bytes = Heap.allocArray(len, 1);
-        Address bt = Loader.byteArrayTib();
+        Address bt = ArrayTypes.byteArrayTib();
         if (!bt.isZero())
         {
             bytes.plus(ObjectModel.TIB_OFFSET).store(bt);

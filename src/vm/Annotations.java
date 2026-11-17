@@ -52,12 +52,12 @@ final class Annotations
      *  {@code descLen} bytes at the {@code byte[]} payload {@code descArr} (e.g. "Lorg/junit/jupiter/api/Test;"). */
     static boolean methodAnnoPresent(int rgIndex, ObjectReference descArr, int descLen)
     {
-        Address p = Loader.methodInfoPos(rgIndex);
+        Address p = ClassAttributes.methodInfoPos(rgIndex);
         if (p.isZero())
         {
             return false;
         }
-        return annoInAttrs(Loader.reflEntry(rgIndex).base, p.plus(8), u2(p.plus(6)), descArr, descLen);
+        return annoInAttrs(Reflection.reflEntry(rgIndex).base, p.plus(8), u2(p.plus(6)), descArr, descLen);
     }
 
     /**
@@ -67,19 +67,19 @@ final class Annotations
      */
     static long methodAnnotation(int rgIndex, ObjectReference descArr, int descLen)
     {
-        Address p = Loader.methodInfoPos(rgIndex);
+        Address p = ClassAttributes.methodInfoPos(rgIndex);
         if (p.isZero())
         {
             return 0L;
         }
-        return annoFromAttrs(Loader.reflEntry(rgIndex).base, p.plus(8), u2(p.plus(6)), descArr, descLen);
+        return annoFromAttrs(Reflection.reflEntry(rgIndex).base, p.plus(8), u2(p.plus(6)), descArr, descLen);
     }
 
     /**
      * {@code Method.annoDefaults0}: an instance of annotation type {@code mirror} with NO element written, so
      * that every element carries its {@code AnnotationDefault} -- built by {@link AnnotationInstances#buildAnnoObject} like any
      * annotation, from an empty element-value-pair list. An element with no default reads null/0, which is why
-     * {@code Method.getDefaultValue} asks {@link #methodParamMeta} for the attribute first. 0 when the type is
+     * {@code Method.getDefaultValue} asks {@link ClassAttributes#methodParamMeta} for the attribute first. 0 when the type is
      * not a loaded class.
      */
     static long annoDefaultInstance(ObjectReference mirror)
@@ -101,17 +101,17 @@ final class Annotations
      * {@code Executable.paramAnnoRow0}: row {@code k} of the method's {@code RuntimeVisibleParameterAnnotations}
      * as a fresh {@code Annotation[]}, or 0 when the attribute is absent or {@code k} is out of range. Rows
      * are numbered as the ATTRIBUTE numbers them, which is not always the descriptor's numbering (see
-     * {@link #methodParamMeta}); {@code Executable.getParameterAnnotations} does stock's realignment.
+     * {@link ClassAttributes#methodParamMeta}); {@code Executable.getParameterAnnotations} does stock's realignment.
      */
     static long methodParamAnnoRow(int rgIndex, long k)
     {
-        Address p = Loader.methodInfoPos(rgIndex);
+        Address p = ClassAttributes.methodInfoPos(rgIndex);
         if (p.isZero())
         {
             return 0L;
         }
-        Address base = Loader.reflEntry(rgIndex).base;
-        Address q = Loader.classAttrNamed(base, p.plus(8L), u2(p.plus(6L)), Magic.bytes("RuntimeVisibleParameterAnnotations"));
+        Address base = Reflection.reflEntry(rgIndex).base;
+        Address q = ClassAttributes.classAttrNamed(base, p.plus(8L), u2(p.plus(6L)), Magic.bytes("RuntimeVisibleParameterAnnotations"));
         if (q.isZero() || k < 0L || k >= u1(q))
         {
             return 0L;
@@ -247,7 +247,7 @@ final class Annotations
             return 0L;
         }
         Address base = Loader.clTab[reg].base;
-        Address p = Loader.classAttrsPos(base);
+        Address p = ClassAttributes.classAttrsPos(base);
         if (p.isZero())
         {
             return 0L;
@@ -314,7 +314,7 @@ final class Annotations
             return emptyAnnoArray();
         }
         Address base = Loader.clTab[reg].base;
-        Address ap = Loader.classAttrsPos(base);
+        Address ap = ClassAttributes.classAttrsPos(base);
         if (ap.isZero())
         {
             return emptyAnnoArray();
@@ -345,16 +345,16 @@ final class Annotations
      */
     static long methodAnnotationsAll(int rgIndex)
     {
-        if (Loader.reflEntry(rgIndex) == null)
+        if (Reflection.reflEntry(rgIndex) == null)
         {
             return 0L;                                  // no such registration; the guest answers an empty
         }                                               // array. ALLOCATION-FREE, because VM.forceCompile
-        Address mp = Loader.methodInfoPos(rgIndex);               // probes this native with rgIndex -1 during boot.
+        Address mp = ClassAttributes.methodInfoPos(rgIndex);               // probes this native with rgIndex -1 during boot.
         if (mp.isZero())
         {
             return emptyAnnoArray();                    // registered but not declared here: none to read
         }
-        Address base = Loader.reflEntry(rgIndex).base;
+        Address base = Reflection.reflEntry(rgIndex).base;
         Address lp = annoListPos(base, mp.plus(8L), u2(mp.plus(6)));
         if (lp.isZero())
         {
@@ -410,7 +410,7 @@ final class Annotations
             k += 1;
         }
         Address arr = Heap.allocArray(built, 8);
-        arr.plus(ObjectModel.TIB_OFFSET).store(Loader.refArrayTib(annotationTypeAddr()));
+        arr.plus(ObjectModel.TIB_OFFSET).store(ArrayTypes.refArrayTib(annotationTypeAddr()));
         int j = 0;
         while (j < built)
         {
@@ -424,7 +424,7 @@ final class Annotations
     static long emptyAnnoArray()
     {
         Address arr = Heap.allocArray(0, 8);
-        arr.plus(ObjectModel.TIB_OFFSET).store(Loader.refArrayTib(annotationTypeAddr()));
+        arr.plus(ObjectModel.TIB_OFFSET).store(ArrayTypes.refArrayTib(annotationTypeAddr()));
         return arr.toLong();
     }
 

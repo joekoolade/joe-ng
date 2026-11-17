@@ -184,18 +184,18 @@ final class Indy
                 byte[] desc = kind == DYN_INDY ? Magic.bytes("(Ljava/lang/Class;I)Ljava/lang/invoke/CallSite;")
                         : kind == DYN_CONST ? Magic.bytes("(Ljava/lang/Class;I)Ljava/lang/Object;")
                         : Magic.bytes("(Ljava/lang/Class;I)J");
-                li = Loader.methodResolveExact(Loader.clTab[reg].type, ObjectReference.fromLong(Loader.guestBytes(name)),
+                li = Reflection.methodResolveExact(Loader.clTab[reg].type, ObjectReference.fromLong(Loader.guestBytes(name)),
                         ObjectReference.fromLong(Loader.guestBytes(desc)));
                 dynLinkerIdx[kind] = li;
             }
         }
-        RVMMethod m = li < 0 ? null : Loader.reflEntry(li);
+        RVMMethod m = li < 0 ? null : Reflection.reflEntry(li);
         if (m == null || m.buf == 0L)
         {
             Uart.write(Magic.bytes("\n  INDY LINK: no MethodHandleNatives linker\n"));
             return 0L;
         }
-        return Magic.call2(m.buf, Loader.classMirror(dsType.get(idx)), (long) dsCp[idx]);
+        return Magic.call2(m.buf, ClassMirrors.classMirror(dsType.get(idx)), (long) dsCp[idx]);
     }
 
     /** Locate the class-level {@code BootstrapMethods} attribute (after the methods table); set gBsmOff (0 if none). */
