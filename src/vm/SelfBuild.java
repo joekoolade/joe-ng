@@ -2376,12 +2376,12 @@ final class SelfBuild
         if (bytesEqual(nm, Magic.bytes("pcScheduleAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("pcSchedule"), Magic.bytes("(J)J")); }
         if (bytesEqual(nm, Magic.bytes("pcTask1Addr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("pcTask1"), Magic.bytes("(I)V")); }
         if (bytesEqual(nm, Magic.bytes("startThreadAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("startThread"), Magic.bytes("(J)V")); }
-        if (bytesEqual(nm, Magic.bytes("objWaitAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("objWait"), Magic.bytes("(JJ)V")); }
-        if (bytesEqual(nm, Magic.bytes("objNotifyAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("objNotify"), Magic.bytes("(J)V")); }
-        if (bytesEqual(nm, Magic.bytes("objNotifyAllAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("objNotifyAll"), Magic.bytes("(J)V")); }
+        if (bytesEqual(nm, Magic.bytes("objWaitAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("objWait"), Magic.bytes("(Lmagic/ObjectReference;J)V")); }
+        if (bytesEqual(nm, Magic.bytes("objNotifyAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("objNotify"), Magic.bytes("(Lmagic/ObjectReference;)V")); }
+        if (bytesEqual(nm, Magic.bytes("objNotifyAllAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("objNotifyAll"), Magic.bytes("(Lmagic/ObjectReference;)V")); }
         if (bytesEqual(nm, Magic.bytes("monEnterAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("monEnter"), Magic.bytes("(Lmagic/ObjectReference;)V")); }
         if (bytesEqual(nm, Magic.bytes("monExitAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("monExit"), Magic.bytes("(Lmagic/ObjectReference;)V")); }
-        if (bytesEqual(nm, Magic.bytes("holdsLockAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("holdsLock"), Magic.bytes("(J)I")); }
+        if (bytesEqual(nm, Magic.bytes("holdsLockAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("holdsLock"), Magic.bytes("(Lmagic/ObjectReference;)I")); }
         if (bytesEqual(nm, Magic.bytes("interruptAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("interrupt"), Magic.bytes("(J)V")); }
         if (bytesEqual(nm, Magic.bytes("isInterruptedAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("isInterrupted"), Magic.bytes("(J)I")); }
         if (bytesEqual(nm, Magic.bytes("checkIntrAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("checkClearInterrupt"), Magic.bytes("()I")); }

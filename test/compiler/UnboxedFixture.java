@@ -15,6 +15,7 @@ import magic.Address;
 import magic.AddressArray;
 import magic.Magic;
 import magic.ObjectReference;
+import magic.ObjectReferenceArray;
 import magic.Offset;
 import magic.Word;
 
@@ -369,5 +370,32 @@ final class UnboxedFixture
     static ObjectReference nullRef()
     {
         return ObjectReference.nullReference();
+    }
+
+    // ObjectReferenceArray IS a long[] too: the same words as AddressArray's and long[]'s ops.
+
+    static long getRefArr(ObjectReferenceArray a, int i)
+    {
+        return a.get(i).toLong();
+    }
+
+    static void setRefArr(ObjectReferenceArray a, int i, ObjectReference v)
+    {
+        a.set(i, v);
+    }
+
+    static int lenRefArr(ObjectReferenceArray a)
+    {
+        return a.length();
+    }
+
+    static boolean nullAtRefArr(ObjectReferenceArray a, int i)
+    {
+        return a.get(i).isNull();
+    }
+
+    static boolean zeroAtAddr(AddressArray a, int i)
+    {
+        return a.get(i).isZero();
     }
 }

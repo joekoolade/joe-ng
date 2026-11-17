@@ -4246,9 +4246,9 @@ public final class Loader
                 int tt = 0;
                 while (tt < VM.taskCount && RECLAIM_BY_GC == false)
                 {
-                    if (VM.taskThreadObj[tt] >= demandHeapMark)
+                    if (VM.taskThreadObj.get(tt).toLong() >= demandHeapMark)
                     {
-                        VM.taskThreadObj[tt] = 0L;
+                        VM.taskThreadObj.set(tt, ObjectReference.nullReference());
                     }
                     tt += 1;
                 }

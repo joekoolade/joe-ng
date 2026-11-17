@@ -1459,12 +1459,12 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.pcSchedule(J)J",    "vm/VM.pcScheduleAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.pcTask1(I)V",       "vm/VM.pcTask1Addr");
         stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.startThread(J)V",   "vm/VM.startThreadAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.objWait(JJ)V",      "vm/VM.objWaitAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.objNotify(J)V",     "vm/VM.objNotifyAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.objNotifyAll(J)V",  "vm/VM.objNotifyAllAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.objWait(Lmagic/ObjectReference;J)V",      "vm/VM.objWaitAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.objNotify(Lmagic/ObjectReference;)V",     "vm/VM.objNotifyAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.objNotifyAll(Lmagic/ObjectReference;)V",  "vm/VM.objNotifyAllAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.monEnter(Lmagic/ObjectReference;)V",      "vm/VM.monEnterAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.monExit(Lmagic/ObjectReference;)V",       "vm/VM.monExitAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.holdsLock(J)I",     "vm/VM.holdsLockAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.holdsLock(Lmagic/ObjectReference;)I",     "vm/VM.holdsLockAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.interrupt(J)V",     "vm/VM.interruptAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.isInterrupted(J)I", "vm/VM.isInterruptedAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.checkClearInterrupt()I", "vm/VM.checkIntrAddr");

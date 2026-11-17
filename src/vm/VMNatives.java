@@ -1478,13 +1478,13 @@ final class VMNatives
     static long currentThreadObj()
     {
         int me = curTask();
-        long t = taskThreadObj[me];
-        if (t == 0L)
+        ObjectReference t = taskThreadObj.get(me);
+        if (t.isNull())
         {
-            t = Loader.allocThreadObj();                   // 0 if java/lang/Thread isn't in the loaded batch
-            taskThreadObj[me] = t;
+            t = ObjectReference.fromLong(Loader.allocThreadObj());   // 0 if java/lang/Thread isn't in the loaded batch
+            taskThreadObj.set(me, t);
         }
-        return t;
+        return t.toLong();
     }
 
     /**
@@ -1890,13 +1890,13 @@ final class VMNatives
         int t = 0;
         while (t < taskCount)
         {
-            if (ObjectReference.fromLong(taskThreadObj[t]).EQ(threadObj) && taskDone[t] == 0)
+            if (taskThreadObj.get(t).EQ(threadObj) && taskDone[t] == 0)
             {
-                if (taskStopExc[t] == 0L)
+                if (taskStopExc.get(t).isNull())
                 {
                     taskStopFirst[t] = 0L;             // the kill clock starts at its first poll from now
                 }
-                taskStopExc[t] = exc.toLong();
+                taskStopExc.set(t, exc);
                 found = 1L;
             }
             t += 1;

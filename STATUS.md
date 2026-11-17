@@ -4,6 +4,33 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 30: `magic.ObjectReferenceArray`; the task and monitor tables use it (2026-11-16).**
+  Pi-validated (build 7b276e9469b7541a).
+  - **The type:** Jikes RVM's `ObjectReferenceArray` -- like AddressArray it IS a `long[]` at run time;
+    `create`/`get`/`set`/`length` map to the SAME intrinsic ids (AA_NEW..AA_LENGTH), so Baseline's array lowering,
+    leaf decision and computeDepths apply unchanged; `get` answers an ObjectReference. `Unboxed.OBJECT_REFERENCE_ARRAY`
+    shares `arrayOp`. **GC (read, not assumed):** `VMGc.scanArray` decides by element SIZE alone, so a `long[]` is
+    scanned like an `Object[]` -- the elements keep their objects alive, conservatively, exactly as the `long[]`
+    tables did. (My first draft of the doc comment said the opposite; reading scanArray corrected it.)
+  - **Tests:** UnboxedTest 86 -> **97** (157 methods classify; get/set/length compile to long[]'s words, get+isNull
+    to AddressArray's get+isZero); AddressFieldProbe 51 -> **58** (create/length/null start, set/get identity, IS a
+    long[], an ObjectReferenceArray static as its array's only reference across 3 collections, out-of-bounds get
+    throws).
+  - **Adopted:** VM's `taskWaitObj`, `taskThreadObj`, `taskStopExc`, `taskMonWait`, `monObj`, `syncObj` (created
+    where the long[] was; every slot a reference or 0). VMScheduler's `monSlotOf`, `monAlloc`, `wakeMonWaiter`,
+    `holdsLock`, `objWait`, `objNotify(All)`, `requireOwner` take ObjectReference -- increment 29's `obj.toLong()`
+    boundary in `monEnter`/`monExit` is gone; VMNatives `runStop`/`currentThreadObj`, VMGc's reaper, VMStats.
+    Left long: `threadTaskOf` and `startThread`/`spawnWith` (seven callers hold a long Thread; converted once).
+    Descriptor ABI for `objWait`/`objNotify`/`objNotifyAll`/`holdsLock`: 4 stash keys, 4 SelfBuild strings, 4
+    reachability calls, comments; no `helper-stash MISS`.
+  - **Measured:** every removed `laload`/`lastore`/`newarray long` on these tables reappears 1:1 as a get/set/create
+    (VMScheduler 16+15, VM 4+3+6, VMNatives 3+2, VMStats 2, VMGc 1); load/store mix otherwise identical but for one
+    64-bit `store(ObjectReference)`; 11 `lcmp` -> `EQ`/`isNull`. **Code:** VMScheduler -44 words, VM -20, VMNatives
+    -10, VMStats -4.
+  - **Validation:** `make test` (unboxed 97/0) + overlaycheck; full regression **209/209**. Pi: AddressFieldProbe
+    **58/0** compiled on the board, every page 200 (incl. `/threads`), hello x2, Boom, bench unchanged, the Spin
+    forced stop (taskThreadObj/taskStopExc), DnsCheck, ConcatCheck identical to a host JVM, SHA-256, 39 MB PUT,
+    `/net` errors 0.
 - **UNBOXED TYPES, INCREMENT 29: the JIT runtime helpers take an ObjectReference receiver (2026-11-16).**
   Pi-validated (build 9954e3c669bc8203). The cast, monitor and late-dispatch helpers -- the hot path of every
   cast, instanceof, `synchronized` and late-bound virtual call.
