@@ -23,6 +23,7 @@ import magic.Address;
 import magic.AddressArray;
 import magic.Magic;
 import magic.ObjectReference;
+import magic.ObjectReferenceArray;
 
 /**
  * A minimal classfile loader that runs <em>on the metal</em> (compiled into the
@@ -148,7 +149,7 @@ public final class Loader
     // java.lang.Class mirrors: one Class object per VM Type (identity stable), materialised on ldc class-literal
     // or Object.getClass(). Per batch (they live in the reclaimed demand heap, like array Types).
     private static long[] mirType;        // VM Type addr key
-    private static long[] mirObj;         // its Class mirror object
+    private static ObjectReferenceArray mirObj;   // its Class mirror object (no initializer: created per batch)
     private static int mirN;
     private static long classTibCache;    // guest java/lang/Class's TIB (0 = not loaded)
     // Directly-declared interfaces per registered class/interface, as registry indices, flat:
@@ -4392,7 +4393,7 @@ public final class Loader
         // can still hold by luck, and stock code compares mirrors constantly. Sized for a launcher-scale
         // closure with room over: the cost is two words per entry, and only for classes actually asked.
         mirType = new long[MAXMIRROR];     // Class mirrors: also per batch (reclaimed heap)
-        mirObj = new long[MAXMIRROR];
+        mirObj = ObjectReferenceArray.create(MAXMIRROR);
         mirN = 0;
         classTibCache = 0L;
         clTab = new RVMClass[MAXCLASS];
@@ -16741,7 +16742,7 @@ public final class Loader
             r -= 1;
         }
         Address.fromLong(save).store(target);
-        return lambdaFormTarget(target);
+        return lambdaFormTarget(ObjectReference.fromLong(target));
     }
 
     /** The LDC_CONST helper: a loadable dynamic constant's value -- an object, or a primitive's raw bits. */
@@ -16919,14 +16920,14 @@ public final class Loader
         Address nameU = vsName.get(idx);
         if (utf8IsAtBase(nameU, 0, Magic.bytes("invokeBasic")))
         {
-            return lambdaFormTarget(Address.fromLong(save).loadLong());
+            return lambdaFormTarget(Address.fromLong(save).loadObjectReference());
         }
         boolean exact = utf8IsAtBase(nameU, 0, Magic.bytes("invokeExact"));
         if (exact || utf8IsAtBase(nameU, 0, Magic.bytes("invoke")))
         {
             long linked = mhLink(Address.fromLong(save).loadLong(), vsDesc.get(idx), exact);
             Address.fromLong(save).store(linked);                // invoke may have adapted the handle: run the adapted one
-            return lambdaFormTarget(linked);
+            return lambdaFormTarget(ObjectReference.fromLong(linked));
         }
         int last = descParamCountAt(vsDesc.get(idx)) - 1;   // linkTo* is static: the MemberName is the last argument
         if (last < 0 || last > STUB_SAVE_HI - 1)
@@ -16937,12 +16938,12 @@ public final class Loader
             Uart.putc(0x0A);
             return 0L;
         }
-        long mn = Address.fromLong(save).plus(last * 8L).loadLong();
+        ObjectReference mn = Address.fromLong(save).plus(last * 8L).loadObjectReference();
         if (memberNameEntryQuiet(mn) == -10L)
         {
             // The MemberName IS MethodHandle.invokeBasic (a handle whose target is that intrinsic): run
             // invokeBasic on the receiver, which is the handle in x0 -- the trailing MemberName is dropped.
-            return lambdaFormTarget(Address.fromLong(save).loadLong());
+            return lambdaFormTarget(Address.fromLong(save).loadObjectReference());
         }
         if (utf8IsAtBase(nameU, 0, Magic.bytes("linkToStatic")) || utf8IsAtBase(nameU, 0, Magic.bytes("linkToSpecial")))
         {
@@ -16952,9 +16953,9 @@ public final class Loader
     }
 
     /** The code of {@code mh}'s LambdaForm: {@code mh.form.vmentry}'s method. */
-    private static long lambdaFormTarget(long mh)
+    private static long lambdaFormTarget(ObjectReference mh)
     {
-        if (mh == 0L)
+        if (mh.isNull())
         {
             return 0L;
         }
@@ -16963,17 +16964,17 @@ public final class Loader
             mhOffForm = declaredFieldOffset(Magic.bytes("java/lang/invoke/MethodHandle"), Magic.bytes("form"));
             mhOffVmentry = declaredFieldOffset(Magic.bytes("java/lang/invoke/LambdaForm"), Magic.bytes("vmentry"));
         }
-        long form = Address.fromLong(mh).plus(mhOffForm).loadLong();
-        if (form == 0L)
+        ObjectReference form = mh.toAddress().plus(mhOffForm).loadObjectReference();
+        if (form.isNull())
         {
             Uart.write(Magic.bytes("\n  MH LINK: a method handle with no LambdaForm\n"));
             return 0L;
         }
-        return memberNameTarget(Address.fromLong(form).plus(mhOffVmentry).loadLong());
+        return memberNameTarget(form.toAddress().plus(mhOffVmentry).loadObjectReference());
     }
 
     /** The current body of the method a resolved MemberName names: its ResolvedMethodName's registry index. */
-    private static long memberNameTarget(long mn)
+    private static long memberNameTarget(ObjectReference mn)
     {
         long e = memberNameEntry(mn);
         if (e < 0L)
@@ -16998,15 +16999,15 @@ public final class Loader
     }
 
     /** The reflection index a MemberName's ResolvedMethodName carries, or -1 after naming why there is none. */
-    private static long memberNameEntry(long mn)
+    private static long memberNameEntry(ObjectReference mn)
     {
         if (mhOffMethod < 0L)
         {
             mhOffMethod = declaredFieldOffset(Magic.bytes("java/lang/invoke/MemberName"), Magic.bytes("method"));
             mhOffVmtarget = declaredFieldOffset(Magic.bytes("java/lang/invoke/ResolvedMethodName"), Magic.bytes("vmtarget"));
         }
-        long rmn = mn == 0L ? 0L : Address.fromLong(mn).plus(mhOffMethod).loadLong();
-        long vt = rmn == 0L ? -1L : Address.fromLong(rmn).plus(mhOffVmtarget).loadLong();
+        ObjectReference rmn = mn.isNull() ? ObjectReference.nullReference() : mn.toAddress().plus(mhOffMethod).loadObjectReference();
+        long vt = rmn.isNull() ? -1L : rmn.toAddress().plus(mhOffVmtarget).loadLong();
         if (vt < 0L)
         {
             Uart.write(Magic.bytes("\n  MH LINK: an unresolved MemberName (no vmtarget)\n"));
@@ -17016,19 +17017,19 @@ public final class Loader
     }
 
     /** A MemberName's vmtarget without any report: a registry index, a negative intrinsic code, or -1. */
-    private static long memberNameEntryQuiet(long mn)
+    private static long memberNameEntryQuiet(ObjectReference mn)
     {
         if (mhOffMethod < 0L)
         {
             mhOffMethod = declaredFieldOffset(Magic.bytes("java/lang/invoke/MemberName"), Magic.bytes("method"));
             mhOffVmtarget = declaredFieldOffset(Magic.bytes("java/lang/invoke/ResolvedMethodName"), Magic.bytes("vmtarget"));
         }
-        long rmn = mn == 0L ? 0L : Address.fromLong(mn).plus(mhOffMethod).loadLong();
-        return rmn == 0L ? -1L : Address.fromLong(rmn).plus(mhOffVmtarget).loadLong();
+        ObjectReference rmn = mn.isNull() ? ObjectReference.nullReference() : mn.toAddress().plus(mhOffMethod).loadObjectReference();
+        return rmn.isNull() ? -1L : rmn.toAddress().plus(mhOffVmtarget).loadLong();
     }
 
     /** linkToVirtual/linkToInterface: the MemberName's method as the RECEIVER's class runs it. */
-    private static long memberNameDispatch(ObjectReference recv, long mn)
+    private static long memberNameDispatch(ObjectReference recv, ObjectReference mn)
     {
         long e = memberNameEntry(mn);
         RVMMethod m = e < 0L ? null : reflEntry((int) e);
@@ -28920,7 +28921,7 @@ public final class Loader
         {
             if (mirType[i] == type)
             {
-                return mirObj[i];
+                return mirObj.get(i).toLong();
             }
             i += 1;
         }
@@ -28943,7 +28944,7 @@ public final class Loader
         if (mirN < mirType.length)
         {
             mirType[mirN] = type;
-            mirObj[mirN] = obj.toLong();
+            mirObj.set(mirN, obj.toObjectReference());
             mirN += 1;
         }
         return obj.toLong();

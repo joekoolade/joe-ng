@@ -1801,13 +1801,13 @@ public final class VM
         Loader.ctorRefInit((int) reg);
     }
 
-    static int arrayStoreOk(long array, long value)
+    static int arrayStoreOk(ObjectReference array, ObjectReference value)
     {
-        if (value == 0L)
+        if (value.isNull())
         {
             return 1;                                      // null stores are always allowed
         }
-        long tib = Address.fromLong(array).loadLong();
+        long tib = array.toAddress().loadLong();
         if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
         {
             return 1;                                      // untyped/raw array (no element Type to check against)
@@ -1817,7 +1817,7 @@ public final class VM
         {
             return 1;                                      // primitive-element array (shouldn't reach aastore) / unknown
         }
-        return instanceOf(ObjectReference.fromLong(value), elemType);                // 1 if value's Type <: element Type, else 0
+        return instanceOf(value, elemType);                // 1 if value's Type <: element Type, else 0
     }
 
     /** {@code java/lang/InternalError} — the fault handler's catch-all for an unexpected hardware trap. */
@@ -2074,7 +2074,7 @@ public final class VM
         if (newAioobeAddr == 0L) { long u = newAioobe(); }
         if (newAioobeIndexAddr == 0L) { long u = newAioobeIndex(0L, 0L); }
         if (newAseAddr == 0L) { long u = newAse(0L); }                // ArrayStoreException (aastore mismatch)
-        if (arrayStoreOkAddr == 0L) { int u = arrayStoreOk(0L, 0L); } // aastore covariant check
+        if (arrayStoreOkAddr == 0L) { int u = arrayStoreOk(ObjectReference.nullReference(), ObjectReference.nullReference()); } // aastore covariant check
         if (newCceAddr == 0L) { long u = newCce(ObjectReference.nullReference(), 0L); }            // ClassCastException (failed checkcast)
         if (castOkAddr == 0L) { int u = castOk(ObjectReference.nullReference(), 0L); }             // checkcast predicate
         if (newUnresolvedAddr == 0L) { long u = newUnresolved(-1L); } // `new` the loader cannot resolve early
@@ -3913,7 +3913,7 @@ public final class VM
     static long multiNewArrayAddr;     // VM.multiNewArray(JIIIII)J — multianewarray (JVMS 6.5)
     static long monEnterSyncAddr;      // VM.monEnterSync(Lmagic/ObjectReference;J)V — a synchronized METHOD's implicit monitorenter
     static long monExitSyncAddr;       // VM.monExitSync()V    — ... and its release on normal return
-    static long arrayStoreOkAddr;      // VM.arrayStoreOk(JJ)I — aastore covariant type check
+    static long arrayStoreOkAddr;      // VM.arrayStoreOk(Lmagic/ObjectReference;Lmagic/ObjectReference;)I — aastore covariant type check
     static long newCceAddr;            // VM.newCce(Lmagic/ObjectReference;J)J  — a java/lang/ClassCastException (failed checkcast)
     static long castOkAddr;            // VM.castOk(Lmagic/ObjectReference;J)I  — checkcast predicate (1 = holds, 0 = throw)
     static long newUnresolvedAddr;     // VM.newUnresolved(J)J — an executed `new` the loader resolves late

@@ -2414,7 +2414,7 @@ final class SelfBuild
         if (bytesEqual(nm, Magic.bytes("newAioobeIndexAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("newAioobeIndex"), Magic.bytes("(JJ)J")); }
         if (bytesEqual(nm, Magic.bytes("newArithAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("newArith"), Magic.bytes("()J")); }
         if (bytesEqual(nm, Magic.bytes("newAseAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("newAse"), Magic.bytes("(J)J")); }
-        if (bytesEqual(nm, Magic.bytes("arrayStoreOkAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("arrayStoreOk"), Magic.bytes("(JJ)I")); }
+        if (bytesEqual(nm, Magic.bytes("arrayStoreOkAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("arrayStoreOk"), Magic.bytes("(Lmagic/ObjectReference;Lmagic/ObjectReference;)I")); }
         if (bytesEqual(nm, Magic.bytes("newCceAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("newCce"), Magic.bytes("(Lmagic/ObjectReference;J)J")); }
         if (bytesEqual(nm, Magic.bytes("castOkAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("castOk"), Magic.bytes("(Lmagic/ObjectReference;J)I")); }
         if (bytesEqual(nm, Magic.bytes("printStackTraceAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("printStackTrace"), Magic.bytes("(J)V")); }
