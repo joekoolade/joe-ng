@@ -109,7 +109,7 @@ final class ArrayCopy
     {
         if (src.isNull() || dst.isNull())
         {
-            throw (NullPointerException) Magic.fromAddr(Loader.newExcWithMessage(
+            throw (NullPointerException) Magic.fromAddr(RuntimeEntrypoints.newExcWithMessage(
                     Magic.bytes("java/lang/NullPointerException"), null));
         }
         int sk = kindOf(src);
@@ -283,13 +283,13 @@ final class ArrayCopy
 
     private static void throwAse(byte[] msg)
     {
-        throw (ArrayStoreException) Magic.fromAddr(Loader.newExcWithMessage(
+        throw (ArrayStoreException) Magic.fromAddr(RuntimeEntrypoints.newExcWithMessage(
                 Magic.bytes("java/lang/ArrayStoreException"), msg));
     }
 
     private static void throwAioobe(byte[] msg)
     {
-        throw (ArrayIndexOutOfBoundsException) Magic.fromAddr(Loader.newExcWithMessage(
+        throw (ArrayIndexOutOfBoundsException) Magic.fromAddr(RuntimeEntrypoints.newExcWithMessage(
                 Magic.bytes("java/lang/ArrayIndexOutOfBoundsException"), msg));
     }
 

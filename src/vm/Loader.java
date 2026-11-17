@@ -25,6 +25,12 @@ import magic.Magic;
 import magic.ObjectReference;
 import magic.ObjectReferenceArray;
 
+import static vm.ClassBytes.insnLen;
+import static vm.ClassBytes.opLen;
+import static vm.ClassBytes.u1;
+import static vm.ClassBytes.u2;
+import static vm.ClassBytes.u4;
+
 /**
  * A minimal classfile loader that runs <em>on the metal</em> (compiled into the
  * image by our own baseline compiler): it parses raw {@code .class} bytes it has
@@ -135,7 +141,7 @@ public final class Loader
     // vtable SLOT numbering, interface slots) in super/interface-first order (acyclic); phase B compiles all
     // method bodies + builds the TIBs, by which point every cross-class new/field/vtable/itable/cast target is
     // registered -> load order no longer matters (only method-CALL cycles remain, handled by patchRelocs).
-    private static RVMClass[] clTab;
+    static RVMClass[] clTab;
     private static int clCount;
     // Array Type cache (per demand-load batch, since resetLoader reclaims the heap under them). primArrTib is
     // indexed by newarray atype (4..11); refArr* is a small element-Type-keyed registry for reference arrays.
@@ -328,10 +334,6 @@ public final class Loader
                                          //   DESCRIPTOR, so its name is copied into indyNameBuf instead
     private static int dpCount;
 
-    private static int u1(long p)
-    {
-        return Address.fromLong(p).loadUnsignedByte() & 0xFF;
-    }
 
     /**
      * A registry entry whose blob pointer is 0 — the shape a batch-reclaimed entry takes, since the reclaim
@@ -431,32 +433,7 @@ public final class Loader
             Magic.wfe();
         }
     }
-    private static int u2(long p)
-    {
-        return (u1(p) << 8) | u1(p + 1);
-    }
-    private static int u4(long p)
-    {
-        return (u2(p) << 16) | u2(p + 2);
-    }
 
-    /** {@link #u1(long)} at an {@link Address}: the same zero-extending 8-bit read. */
-    private static int u1(Address p)
-    {
-        return p.loadUnsignedByte() & 0xFF;
-    }
-
-    /** {@link #u2(long)} at an {@link Address}: big-endian, as the classfile stores it. */
-    private static int u2(Address p)
-    {
-        return (u1(p) << 8) | u1(p.plus(1L));
-    }
-
-    /** {@link #u4(long)} at an {@link Address}: big-endian, as the classfile stores it. */
-    private static int u4(Address p)
-    {
-        return (u2(p) << 16) | u2(p.plus(2L));
-    }
 
     private static void seek(long nameP, int nameLen, long descP, int descLen)
     {
@@ -516,7 +493,7 @@ public final class Loader
             clinitNameOff[clinitN] = gThisNameOff;
             clinitOwner[clinitN] = 0;                   // explicit: allocArray does not zero on this VM
             clinitDone[clinitN] = 0;
-            if (utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/io/FileDescriptor")))
+            if (Utf8.utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/io/FileDescriptor")))
             {
                 clinitFdFirst = clinitN;   // run FIRST in runClinits: it registers the JavaIOFileDescriptorAccess
             }                              // that NativeDispatcher/NioSocketImpl <clinit>s read via SharedSecrets
@@ -784,21 +761,21 @@ public final class Loader
         // SliceNode.study. Class literals are supported (Milestone 0d) + desiredAssertionStatus() returns false.
         // Kept as a targeted allow (not a blanket tag-7 allow) because many other <clinit>s use the same idiom but
         // are intentionally skipped-and-seeded (String/ArraysSupport/Unsafe...) and hang if actually run.
-        if (utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/regex/Pattern")))
+        if (Utf8.utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/regex/Pattern")))
         {
             return true;
         }
         // java/net/Socket.<clinit> ldc's InputStream.class/OutputStream.class (tag-7 Class literals, supported)
         // to bind its STATE/IN/OUT VarHandles via the overlaid MethodHandles/MhUtil/VarHandle shim. It is
         // runnable and MUST run -- an unbound STATE -> NullPointerException in getAndBitwiseOrState during connect.
-        if (utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/net/Socket")))
+        if (Utf8.utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/net/Socket")))
         {
             return true;
         }
         // sun/nio/ch/NioSocketImpl.<clinit> ldc's NioSocketImpl.class for the desiredAssertionStatus() idiom
         // (it uses `assert`), which the tag-7 gate rejects. It MUST run: it binds `nd = new SocketDispatcher()`
         // (an unbound nd -> read/write dispatch on null) and disables assertions (desiredAssertionStatus()=false).
-        if (utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("sun/nio/ch/NioSocketImpl")))
+        if (Utf8.utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("sun/nio/ch/NioSocketImpl")))
         {
             return true;
         }
@@ -808,14 +785,14 @@ public final class Loader
         // It MUST run -- CLQ drives its ENTIRE structure through those handles, so a skipped initializer is a
         // null ITEM and an NPE in Node.<init> on the first offer(), which is where the console launcher
         // stopped (ConcurrentLinkedQueue.java:193).
-        if (utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/concurrent/ConcurrentLinkedQueue")))
+        if (Utf8.utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/concurrent/ConcurrentLinkedQueue")))
         {
             return true;
         }
         // java/net/StandardSocketOptions.<clinit> creates its option constants with Integer.class/Boolean.class
         // (tag-7 Class literals, supported). It MUST run: close() reads SO_LINGER, and an unbound (null) option
         // makes Net.getSocketOption(fd, null) NPE on name.type().
-        if (utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/net/StandardSocketOptions")))
+        if (Utf8.utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/net/StandardSocketOptions")))
         {
             return true;
         }
@@ -824,7 +801,7 @@ public final class Loader
         // the tag-7 gate. It MUST run: it builds KNOWN_NAMES, the map every manifest attribute name is looked
         // up in, and Name.of dereferences it unguarded -- a skipped initializer is an NPE on the first
         // manifest header. The rest of the body is plain `new Name(...)` + HashMap + Map.copyOf.
-        if (utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/jar/Attributes$Name")))
+        if (Utf8.utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/jar/Attributes$Name")))
         {
             return true;
         }
@@ -834,7 +811,7 @@ public final class Loader
         // EMPTY singletons stay null, and Map.copyOf(...) -- which java.util.jar.Attributes$Name's initializer
         // calls -- spins in MapN's probe loop instead of failing. Everything it needs is wired: nanoTime is a
         // provided native, CDS is overlaid.
-        if (utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/ImmutableCollections")))
+        if (Utf8.utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/ImmutableCollections")))
         {
             return true;
         }
@@ -845,7 +822,7 @@ public final class Loader
         // seeded with a MetalJavaLangAccess (seedJavaLangAccess), the digit tables are plain newarray/bastore,
         // and the singletons are `new HexFormat(...)` over String literals. `jla` is only dereferenced by the
         // FORMATTING methods (uncheckedNewStringWithLatin1Bytes), not by parseHex.
-        if (utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/HexFormat")))
+        if (Utf8.utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/HexFormat")))
         {
             return true;
         }
@@ -862,7 +839,7 @@ public final class Loader
         // VM deliberately does not carry. That is a correctness cost, not the speed cost I wrongly recorded
         // the first time: the earlier "stall" was this rule being slow, and the LOADER LOCK watchdog that
         // looked like a hang said `state 1` (TASK_READY) and recovered on its own.
-        if (utf8IsAtBase(gbase, gThisNameOff,
+        if (Utf8.utf8IsAtBase(gbase, gThisNameOff,
                 Magic.bytes("org/junit/jupiter/engine/config/DefaultJupiterConfiguration")))
         {
             return true;
@@ -879,17 +856,17 @@ public final class Loader
         //
         // All three are runnable here now: static interface methods resolve, Class.getName works, and
         // String.formatted has a real Formatter behind it.
-        if (utf8IsAtBase(gbase, gThisNameOff,
+        if (Utf8.utf8IsAtBase(gbase, gThisNameOff,
                 Magic.bytes("org/junit/jupiter/engine/descriptor/DisplayNameUtils")))
         {
             return true;
         }
-        if (utf8IsAtBase(gbase, gThisNameOff,
+        if (Utf8.utf8IsAtBase(gbase, gThisNameOff,
                 Magic.bytes("org/junit/jupiter/api/IndicativeSentencesGeneration")))
         {
             return true;
         }
-        if (utf8IsAtBase(gbase, gThisNameOff,
+        if (Utf8.utf8IsAtBase(gbase, gThisNameOff,
                 Magic.bytes("org/junit/jupiter/engine/discovery/predicates/IsTestFactoryMethod")))
         {
             return true;
@@ -902,7 +879,7 @@ public final class Loader
         // Skipped, `abortedExecutionPredicate` stays null and Jupiter's ThrowableCollector.<init> rejects it
         // through its own Preconditions.notNull -- which is how the launcher reported it, naming the
         // parameter: "abortedExecutionPredicate must not be null".
-        if (utf8IsAtBase(gbase, gThisNameOff,
+        if (Utf8.utf8IsAtBase(gbase, gThisNameOff,
                 Magic.bytes("org/junit/jupiter/engine/support/OpenTest4JAndJUnit4AwareThrowableCollector")))
         {
             return true;
@@ -915,7 +892,7 @@ public final class Loader
         // EXECUTION -- which is exactly where the console launcher stopped
         // (LauncherStoreFacade.java:48). Nothing new is pulled: Namespace is an inner class of
         // ExtensionContext, already in the closure, and the literal is an annotation type.
-        if (utf8IsAtBase(gbase, gThisNameOff,
+        if (Utf8.utf8IsAtBase(gbase, gThisNameOff,
                 Magic.bytes("org/junit/jupiter/engine/extension/TimeoutExtension")))
         {
             return true;
@@ -927,7 +904,7 @@ public final class Loader
         // and a skipped initializer makes that null at the first line of test output. Its body is an EnumMap
         // plus `new ColorPalette(...)` over Style constants -- no denied subsystem, unlike the four converters
         // below.
-        if (utf8IsAtBase(gbase, gThisNameOff,
+        if (Utf8.utf8IsAtBase(gbase, gThisNameOff,
                 Magic.bytes("org/junit/platform/console/output/ColorPalette")))
         {
             return true;
@@ -966,7 +943,7 @@ public final class Loader
         // (stalled at the same log position for 10 minutes at full CPU): running every application
         // initializer in a ~900-class closure is a different cost class. The narrowing may still be right,
         // but it needs its own increment with that cost understood.
-        if (utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("org/junit/platform/commons/util/ReflectionUtils")))
+        if (Utf8.utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("org/junit/platform/commons/util/ReflectionUtils")))
         {
             return true;
         }
@@ -1082,7 +1059,7 @@ public final class Loader
             return false;
         }
         int idx = u2(code + pc + 1);
-        return utf8IsAtBase(gbase, mrefNameOff(idx), Magic.bytes("desiredAssertionStatus"));
+        return Utf8.utf8IsAtBase(gbase, mrefNameOff(idx), Magic.bytes("desiredAssertionStatus"));
     }
 
     /**
@@ -1419,7 +1396,7 @@ public final class Loader
         int r = 0;
         while (r < clCount)
         {
-            if (clTab[r] != null && utf8IsAtBase(clTab[r].base, clTab[r].nameOff, name))
+            if (clTab[r] != null && Utf8.utf8IsAtBase(clTab[r].base, clTab[r].nameOff, name))
             {
                 return r;
             }
@@ -1995,7 +1972,7 @@ public final class Loader
             Address superU = clTab[reg].base.plus(clTab[reg].absentSuperOff);
             byte[] msg = new byte[u2(superU)];
             putUtf8(msg, 0, superU);
-            throw (Error) Magic.fromAddr(newExcWithMessage(Magic.bytes("java/lang/NoClassDefFoundError"), msg));
+            throw (Error) Magic.fromAddr(RuntimeEntrypoints.newExcWithMessage(Magic.bytes("java/lang/NoClassDefFoundError"), msg));
         }
     }
 
@@ -2018,9 +1995,9 @@ public final class Loader
         byte[] pre = Magic.bytes("Could not initialize class ");
         Address nameU = clTab[reg].base.plus(clTab[reg].nameOff);
         byte[] msg = new byte[pre.length + u2(nameU)];
-        int p = putAsciiAt(msg, 0, pre);
+        int p = RuntimeEntrypoints.putAsciiAt(msg, 0, pre);
         putDotted(msg, p, nameU);
-        return (Error) Magic.fromAddr(newExcWithMessage(Magic.bytes("java/lang/NoClassDefFoundError"), msg));
+        return (Error) Magic.fromAddr(RuntimeEntrypoints.newExcWithMessage(Magic.bytes("java/lang/NoClassDefFoundError"), msg));
     }
 
     /**
@@ -2033,11 +2010,11 @@ public final class Loader
         {
             return (Error) t;
         }
-        long e = newExc(Magic.bytes("java/lang/ExceptionInInitializerError"));
-        thrCauseOff = throwableFieldOff(thrCauseOff, Magic.bytes("cause"));
-        if (thrCauseOff > 0L)
+        long e = RuntimeEntrypoints.newExc(Magic.bytes("java/lang/ExceptionInInitializerError"));
+        RuntimeEntrypoints.thrCauseOff = RuntimeEntrypoints.throwableFieldOff(RuntimeEntrypoints.thrCauseOff, Magic.bytes("cause"));
+        if (RuntimeEntrypoints.thrCauseOff > 0L)
         {
-            Address.fromLong(e).plus(thrCauseOff).store(Magic.addrOf(t));
+            Address.fromLong(e).plus(RuntimeEntrypoints.thrCauseOff).store(Magic.addrOf(t));
         }
         return (Error) Magic.fromAddr(e);
     }
@@ -2343,8 +2320,6 @@ public final class Loader
     }
 
 
-
-
     // Classes a lazily-compiling method was seen to touch (cross-class getstatic/putstatic owner, `new`
     // target). Collected DURING the compile and initialized right after it, which is still strictly before
     // the method can run -- so those two triggers need no emitted runtime barrier at all. Recording is gated
@@ -2641,14 +2616,14 @@ public final class Loader
         // to be exactly the silent wrong answer rule 2 forbids: every handle's vform stayed null, so
         // isAccessModeSupported reached a null receiver (MemberNameProbe). The byte-array-view family's outer
         // <clinit> (NIO_ACCESS, SCOPED_MEMORY_ACCESS, ALIGN) runs too.
-        return utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/System"))
-                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Integer$IntegerCache"))
+        return Utf8.utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/System"))
+                || Utf8.utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Integer$IntegerCache"))
                 // primitive wrappers: <clinit> sets TYPE = Class.getPrimitiveClass(...) (a native)
-                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Integer"))
-                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Long"))
-                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Float"))
-                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Double"))
-                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Character"))
+                || Utf8.utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Integer"))
+                || Utf8.utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Long"))
+                || Utf8.utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Float"))
+                || Utf8.utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Double"))
+                || Utf8.utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Character"))
                 // NOTE: java/lang/Boolean is NOT blocked -- the metal OVERLAY replaces the stock class, and its
                 // <clinit> only sets TRUE/FALSE (no native primitive TYPE), so it is safe (and needed) to run.
                 // NOTE: Byte/Short ARE OVERLAID, and those overlays have NO <clinit> of their own (TYPE is
@@ -2674,8 +2649,8 @@ public final class Loader
                 // class is a different name, and these entries match by EXACT name -- so the cache's
                 // initializer was never blocked by them in the first place. The premise was true of the shape
                 // the lazy fill chose, not of the problem.
-                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Byte"))
-                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Short"))
+                || Utf8.utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Byte"))
+                || Utf8.utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Short"))
                 // M3 sockets: these <clinit>s call natives (initIDs/poll consts/SharedSecrets). Skipping is
                 // sound for the blocking connect/read/write/close path -- none of the skipped statics are read
                 // there (IPv4-only, no poll consts).
@@ -2704,7 +2679,7 @@ public final class Loader
                 // continuations, so skipping it leaves SUPPORTED=false -- which is correct, and makes
                 // pinIfSupported/unpinIfSupported no-ops that never touch the denied Continuation class.
                 // (Reached via collection iterators / Thread.isVirtual checks in several java.util closures.)
-                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("jdk/internal/vm/ContinuationSupport"))
+                || Utf8.utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("jdk/internal/vm/ContinuationSupport"))
                 // jdk/internal/misc/VM.<clinit> is NO LONGER SKIPPED: it assigns `lock` and the 64 MB default
                 // `directMemory` and calls the native initialize(), which only RegisterNatives for JNI
                 // (share/native/libjava/VM.c) and is wired empty. Skipped, directMemory stayed 0 and stock
@@ -2713,23 +2688,23 @@ public final class Loader
                 // Arrays$LegacyMergeSort.<clinit> reads the java.util.Arrays.useLegacyMergeSort property via
                 // AccessController/GetBooleanAction (denied). Skipping leaves userRequested=false -- correct,
                 // so Arrays.sort takes the modern TimSort path (reached by any object Arrays.sort/Collections.sort).
-                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/Arrays$LegacyMergeSort"))
+                || Utf8.utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/Arrays$LegacyMergeSort"))
                 // java/util/stream/AbstractTask.<clinit> sets LEAF_TARGET = ForkJoinPool.getCommonPoolParallelism()
                 // << 2. The common pool is never set up on metal (no ForkJoin), so getCommonPoolParallelism NPEs.
                 // LEAF_TARGET is read ONLY by parallel task splitting (AbstractTask.compute/getLeafTarget), which a
                 // SEQUENTIAL stream never reaches -- so skipping the <clinit> (LEAF_TARGET=0, never read) is sound.
-                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/stream/AbstractTask"))
+                || Utf8.utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/stream/AbstractTask"))
                 // java/util/stream/Tripwire.<clinit> sets ENABLED = Boolean.getBoolean(<debug property>) (reads
                 // System props -> denied on metal). ENABLED is a debug-only assert flag, read solely in
                 // `if (Tripwire.ENABLED) trip(...)`; skipping leaves it false (correct), never taken.
-                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/stream/Tripwire"))
+                || Utf8.utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/stream/Tripwire"))
                 // java/util/Tripwire is the same debug-flag class as the stream one (ENABLED = Boolean.getBoolean),
                 // pulled by the java.util.stream spliterator machinery. Same safe skip (ENABLED false, never taken).
-                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/Tripwire"))
+                || Utf8.utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/Tripwire"))
                 // java/util/zip/ZipOutputStream.<clinit> is one field: inhibitZip64 = Boolean.getBoolean(
                 // "jdk.util.zip.inhibitZip64"), a system-property read (denied on metal). Skipping leaves it
                 // FALSE, which is the correct default -- Zip64 stays enabled. Same shape as Tripwire above.
-                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/zip/ZipOutputStream"));
+                || Utf8.utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/zip/ZipOutputStream"));
     }
 
     /** Compile+run a two-int-arg static method matching the seek key, with args {@code a,b}. */
@@ -2805,9 +2780,9 @@ public final class Loader
         int i = 0;
         while (i < rgCount)
         {
-            if (utf8IsAtBase(rgTab[i].base, rgTab[i].classOff, cls)
-                    && utf8IsAtBase(rgTab[i].base, rgTab[i].nameOff, name)
-                    && utf8IsAtBase(rgTab[i].base, rgTab[i].descOff, desc))
+            if (Utf8.utf8IsAtBase(rgTab[i].base, rgTab[i].classOff, cls)
+                    && Utf8.utf8IsAtBase(rgTab[i].base, rgTab[i].nameOff, name)
+                    && Utf8.utf8IsAtBase(rgTab[i].base, rgTab[i].descOff, desc))
             {
                 return rgTab[i].buf;
             }
@@ -2830,9 +2805,9 @@ public final class Loader
         while (k < dlN)
         {
             DynLink d = dlTab[k];
-            if (utf8IsAtBase(d.blob, d.classOff, cls)
-                    && utf8IsAtBase(d.blob, d.nameOff, name)
-                    && utf8IsAtBase(d.blob, d.descOff, desc))
+            if (Utf8.utf8IsAtBase(d.blob, d.classOff, cls)
+                    && Utf8.utf8IsAtBase(d.blob, d.nameOff, name)
+                    && Utf8.utf8IsAtBase(d.blob, d.descOff, desc))
             {
                 return Address.fromLong(d.cell).loadLong();
             }
@@ -2840,14 +2815,6 @@ public final class Loader
         }
         return 0L;
     }
-
-
-
-
-
-
-
-
 
 
     /**
@@ -3299,9 +3266,6 @@ public final class Loader
     }
 
 
-
-
-
     /**
      * Evidence line for the code-arena rewind. {@code peak} is the real high-water; {@code zeroBound} is
      * {@code codeHeapHigh}, which is NOT a peak -- it is seeded to {@code mark + CODE_ZERO_SPAN} (8 MiB)
@@ -3730,7 +3694,7 @@ public final class Loader
      */
     private static long thrBacktraceOff;
 
-    private static long throwableBacktraceOff()
+    static long throwableBacktraceOff()
     {
         if (thrBacktraceOff == 0L && clTab != null)
         {
@@ -3829,7 +3793,7 @@ public final class Loader
         {
             int access = u2(p);
             int attrs = u2(p.plus(6));                      // access, name, descriptor, attrs
-            if (utf8IsAtBase(base, gcp[u2(p.plus(2))], name) && utf8IsAtBase(base, gcp[u2(p.plus(4))], desc))
+            if (Utf8.utf8IsAtBase(base, gcp[u2(p.plus(2))], name) && Utf8.utf8IsAtBase(base, gcp[u2(p.plus(4))], desc))
             {
                 long code = findCode(base, p.plus(8), attrs);
                 if (code != 0L)
@@ -5561,8 +5525,8 @@ public final class Loader
             {
                 int fidx = u2(code + pc + 1);
                 int nextOp = u1(code + pc + 3);
-                if ((nextOp == 0x99 && utf8IsAtBase(base, mrefNameOff(fidx), Magic.bytes("jfrTracing")))
-                        || (nextOp == 0x9a && utf8IsAtBase(base, mrefNameOff(fidx), Magic.bytes("$assertionsDisabled"))))
+                if ((nextOp == 0x99 && Utf8.utf8IsAtBase(base, mrefNameOff(fidx), Magic.bytes("jfrTracing")))
+                        || (nextOp == 0x9a && Utf8.utf8IsAtBase(base, mrefNameOff(fidx), Magic.bytes("$assertionsDisabled"))))
                 {
                     int off = u2(code + pc + 4);
                     if (off >= 0x8000) { off -= 0x10000; }
@@ -5713,9 +5677,9 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("java/security/UnresolvedPermission"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/security/Guard"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/security/Principal"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/security/ProtectionDomain"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/security/CodeSource"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/security/CodeSigner"))
+                || Utf8.utf8IsAtBase(base, off, Magic.bytes("java/security/ProtectionDomain"))
+                || Utf8.utf8IsAtBase(base, off, Magic.bytes("java/security/CodeSource"))
+                || Utf8.utf8IsAtBase(base, off, Magic.bytes("java/security/CodeSigner"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/security/SecureClassLoader"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/security/Privileged"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/security/GeneralSecurityException"))
@@ -5730,8 +5694,8 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("java/security/ProviderException"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/security/Security"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/security/util/SecurityConstants"))
-                || utf8IsAtBase(base, off, Magic.bytes("sun/security/util/Debug"))
-                || utf8IsAtBase(base, off, Magic.bytes("sun/security/util/SecurityProperties"))
+                || Utf8.utf8IsAtBase(base, off, Magic.bytes("sun/security/util/Debug"))
+                || Utf8.utf8IsAtBase(base, off, Magic.bytes("sun/security/util/SecurityProperties"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/security/util/PropertyExpander"));
     }
 
@@ -5764,7 +5728,7 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("java/util/spi/"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/util/spi/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/Character$Unicode"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/lang/CharacterName"))
+                || Utf8.utf8IsAtBase(base, off, Magic.bytes("java/lang/CharacterName"))
                 // ... and the date/time, generic-signature and logger subsystems (2026-10-25): reached in every
                 // first batch only through Formatter's %t arm (java/time, Calendar/Date/TimeZone and their
                 // sun/util/calendar engine), generic-signature reflection (sun/reflect/generics) and
@@ -5795,7 +5759,7 @@ public final class Loader
                 // takes. ServicesCatalog and Resources were here already (built-in loaders).
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/module/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/security/SecureClassLoader"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/security/CodeSource"))
+                || Utf8.utf8IsAtBase(base, off, Magic.bytes("java/security/CodeSource"))
                 || (utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/"))
                         && !utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/VarHandle")));
     }
@@ -5840,7 +5804,7 @@ public final class Loader
         // resolveVirtuals (RTA over instantiated types), NOT "mark in every class carrying the name+desc".
         // Reached through the class-name index rather than by scanning every pend per blob -- that guard was
         // a string compare per (blob, pend), which is pdCount x pendN of them per round.
-        int r = psBucket[utf8Hash(gbase, gThisNameOff) & (PVTAB - 1)];
+        int r = psBucket[Utf8.utf8Hash(gbase, gThisNameOff) & (PVTAB - 1)];
         while (r >= 0)
         {
             if (r >= virtFrom && utf8EqAt(pendBase.get(r), pendClass[r], gbase, gThisNameOff))
@@ -5877,7 +5841,7 @@ public final class Loader
         {
             return findMethodByRef(refBase, nameOff, descOff);
         }
-        int h = sigHash(refBase, nameOff, descOff);
+        int h = Utf8.sigHash(refBase, nameOff, descOff);
         Address blob = pdBase.get(b);
         int i = mtStart[b];
         int end = i + mtLen[b];
@@ -5989,7 +5953,7 @@ public final class Loader
             return -1;
         }
         int best = -1;
-        int k = pnBucket[utf8Hash(base, off) & (PVTAB - 1)];
+        int k = pnBucket[Utf8.utf8Hash(base, off) & (PVTAB - 1)];
         while (k >= 0)
         {
             fpSteps += 1;
@@ -6074,10 +6038,10 @@ public final class Loader
         int from = 0;
         if (pnBucket != null)
         {
-            int k = pnBucket[bytesHash(name) & (PVTAB - 1)];
+            int k = pnBucket[Utf8.bytesHash(name) & (PVTAB - 1)];
             while (k >= 0)
             {
-                if ((best < 0 || k < best) && !pdInstantiated[k] && utf8IsAtBase(pdBase.get(k), pdNameOff[k], name))
+                if ((best < 0 || k < best) && !pdInstantiated[k] && Utf8.utf8IsAtBase(pdBase.get(k), pdNameOff[k], name))
                 {
                     best = k;
                 }
@@ -6088,7 +6052,7 @@ public final class Loader
         int i = from;
         while (best < 0 && i < pdCount)
         {
-            if (!pdInstantiated[i] && utf8IsAtBase(pdBase.get(i), pdNameOff[i], name))
+            if (!pdInstantiated[i] && Utf8.utf8IsAtBase(pdBase.get(i), pdNameOff[i], name))
             {
                 best = i;
             }
@@ -6102,18 +6066,6 @@ public final class Loader
         return true;
     }
 
-    /** {@link #utf8Hash} of a name given as bytes: the same FNV-1a fold, so it lands in the same bucket. */
-    private static int bytesHash(byte[] name)
-    {
-        int h = 0x811C9DC5;
-        int i = 0;
-        while (i < name.length)
-        {
-            h = (h ^ (name[i] & 0xFF)) * 0x01000193;
-            i += 1;
-        }
-        return h;
-    }
 
     /** pd index of {@code pd}'s superclass, or -1 (Object / super not loaded). */
     private static int superPdOf(int pd)
@@ -6282,7 +6234,7 @@ public final class Loader
             int descOff = gcp[u2(p.plus(4))];
             mtName[mtN] = nameOff;
             mtDesc[mtN] = descOff;
-            mtHash[mtN] = sigHash(gbase, nameOff, descOff);
+            mtHash[mtN] = Utf8.sigHash(gbase, nameOff, descOff);
             mtCode[mtN] = findCode(gbase, p.plus(8), attrs);
             mtN += 1;
             p = skipAttributes(p.plus(8), attrs);
@@ -6455,7 +6407,7 @@ public final class Loader
             int attrs = u2(p.plus(6));
             int nameOff = gcp[u2(p.plus(2))];
             int descOff = gcp[u2(p.plus(4))];
-            int q = pvBucket[sigHash(gbase, nameOff, descOff) & (PVTAB - 1)];
+            int q = pvBucket[Utf8.sigHash(gbase, nameOff, descOff) & (PVTAB - 1)];
             while (q >= 0)
             {
                 if (q >= virtFrom && virtResolved[q] != virtStamp
@@ -6494,7 +6446,7 @@ public final class Loader
             int attrs = u2(p.plus(6));
             int nameOff = gcp[u2(p.plus(2))];
             int descOff = gcp[u2(p.plus(4))];
-            int q = pvBucket[sigHash(gbase, nameOff, descOff) & (PVTAB - 1)];
+            int q = pvBucket[Utf8.sigHash(gbase, nameOff, descOff) & (PVTAB - 1)];
             while (q >= 0)
             {
                 if (q >= virtFrom
@@ -6624,7 +6576,7 @@ public final class Loader
             int p = psIndexed;
             if (pendKind[p] == 0)
             {
-                int h = utf8Hash(pendBase.get(p), pendClass[p]) & (PVTAB - 1);
+                int h = Utf8.utf8Hash(pendBase.get(p), pendClass[p]) & (PVTAB - 1);
                 psNext[p] = psBucket[h];
                 psBucket[h] = p;
                 psSlot[p] = h;
@@ -6653,7 +6605,7 @@ public final class Loader
             int p = pvIndexed;
             if (pendKind[p] == 1)
             {
-                int h = sigHash(pendBase.get(p), pendName[p], pendDesc[p]) & (PVTAB - 1);
+                int h = Utf8.sigHash(pendBase.get(p), pendName[p], pendDesc[p]) & (PVTAB - 1);
                 pvNext[p] = pvBucket[h];
                 pvBucket[h] = p;
                 pvSlot[p] = h;
@@ -6667,77 +6619,6 @@ public final class Loader
         }
     }
 
-    /** FNV-1a over a name Utf8 and a descriptor Utf8 -- the key {@link #matchLevel} probes on. */
-    private static int sigHash(Address base, int nameOff, int descOff)
-    {
-        return utf8Hash(base, nameOff) * 31 + utf8Hash(base, descOff);
-    }
-
-    /** FNV-1a over the bytes of the length-prefixed Utf8 at {@code base + off}. */
-    /**
-     * Hash of TWO Utf8 runs, for an index keyed on class+name rather than name alone. Folding the class in
-     * is what makes the registry bucket narrow: keyed on the NAME only, a hot name chains one entry per
-     * class that declares it, so `<init>`/`run`/`get` grow a chain as long as the registry -- MEASURED at
-     * ~60 entries per resolve on a 192-blob suite, and the dominant term in `lookT` (t1 steps 17k -> 156k
-     * tracked lookT 12.1 -> 96.0ms across batches 40-65, while the blob scan I first suspected grew 1.6x).
-     * Continuing the FNV chain across both runs costs one extra pass over a class name and removes the walk.
-     */
-    private static int utf8Hash2(Address b1, int o1, Address b2, int o2)
-    {
-        int len = u2(b1.plus(o1));
-        Address q = b1.plus(o1 + 2L);
-        int h = 0x811C9DC5;
-        int i = 0;
-        while (i < len)
-        {
-            h = (h ^ u1(q.plus(i))) * 0x01000193;
-            i += 1;
-        }
-        len = u2(b2.plus(o2));
-        q = b2.plus(o2 + 2L);
-        i = 0;
-        while (i < len)
-        {
-            h = (h ^ u1(q.plus(i))) * 0x01000193;
-            i += 1;
-        }
-        return h;
-    }
-
-    private static int utf8Hash(Address base, int off)
-    {
-        int len = u2(base.plus(off));
-        Address q = base.plus(off + 2L);
-        int h = 0x811C9DC5;
-        int i = 0;
-        while (i < len)
-        {
-            h = (h ^ u1(q.plus(i))) * 0x01000193;
-            i += 1;
-        }
-        return h;
-    }
-
-    /**
-     * Continue an FNV-1a fold over one more Utf8 run. FNV IS A FOLD, so
-     * {@code utf8HashFrom(utf8Hash(b1, o1), b2, o2)} is BIT-IDENTICAL to {@code utf8Hash2(b1, o1, b2, o2)} --
-     * which is the whole point: the class half of a class+name key can be cached ({@link RVMClass#nameHash})
-     * without changing the key, so every existing probe of the same index still lands in the same bucket.
-     * Changing the key function instead would have meant changing all four sites that probe {@code rgBucket}
-     * at once, and a site left behind would silently find nothing.
-     */
-    private static int utf8HashFrom(int h, Address base, int off)
-    {
-        int len = u2(base.plus(off));
-        Address q = base.plus(off + 2L);
-        int i = 0;
-        while (i < len)
-        {
-            h = (h ^ u1(q.plus(i))) * 0x01000193;
-            i += 1;
-        }
-        return h;
-    }
 
     /**
      * Classes the VM instantiates ITSELF, outside the call graph, and then hands to arbitrary code. Their
@@ -6762,7 +6643,7 @@ public final class Loader
      */
     private static boolean nativelyInstantiated(Address base, int nameOff)
     {
-        return utf8IsAtBase(base, nameOff, Magic.bytes("java/lang/StackTraceElement"));
+        return Utf8.utf8IsAtBase(base, nameOff, Magic.bytes("java/lang/StackTraceElement"));
     }
 
     /**
@@ -6956,8 +6837,6 @@ public final class Loader
         }
         return 0L;
     }
-
-
 
 
     /**
@@ -7245,7 +7124,7 @@ public final class Loader
     {
         if (pnBucket != null)
         {
-            int j = pnBucket[utf8Hash(base, off) & (PVTAB - 1)];
+            int j = pnBucket[Utf8.utf8Hash(base, off) & (PVTAB - 1)];
             while (j >= 0)
             {
                 if (utf8EqAt(base, off, pdBase.get(j), pdNameOff[j]))
@@ -7336,7 +7215,7 @@ public final class Loader
         }
         while (pnIndexed < pdCount)
         {
-            int h = utf8Hash(pdBase.get(pnIndexed), pdNameOff[pnIndexed]) & (PVTAB - 1);
+            int h = Utf8.utf8Hash(pdBase.get(pnIndexed), pdNameOff[pnIndexed]) & (PVTAB - 1);
             pnNext[pnIndexed] = pnBucket[h];
             pnBucket[h] = pnIndexed;
             pnIndexed += 1;
@@ -7351,7 +7230,7 @@ public final class Loader
         // java/lang/Object is every class's superclass, so auto-pulling it from the dir would drag it into
         // EVERY closure (changing every vtable). It's an implicit root: loaded only when a demo explicitly
         // seeds it (the HashMap closure does, so String there inherits its hashCode/equals slots).
-        if (utf8IsAtBase(base, off, Magic.bytes("java/lang/Object")))
+        if (Utf8.utf8IsAtBase(base, off, Magic.bytes("java/lang/Object")))
         {
             return 0L;
         }
@@ -7788,7 +7667,7 @@ public final class Loader
             int atype = atypeForDescChar(primTypeChar(compType));
             if (atype >= 0)
             {
-                Address arr = Heap.allocArray(length, arrayElemSizeOfAtype(atype));
+                Address arr = Heap.allocArray(length, RuntimeEntrypoints.arrayElemSizeOfAtype(atype));
                 arr.store(primArrayTib(atype));  // the SAME interned TIB `new int[]` uses
                 return arr.toLong();
             }
@@ -7802,7 +7681,7 @@ public final class Loader
     }
 
     /** Length of {@code type}'s dotted binary name, or 0 if it has none (unregistered / unresolved element). */
-    private static int classNameLen(Address type)
+    static int classNameLen(Address type)
     {
         if (isPrimitiveType(type))
         {
@@ -8636,7 +8515,7 @@ public final class Loader
         int i = 0;
         while (i < clCount)
         {
-            if (utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/MetalThreadEntry")))
+            if (Utf8.utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/MetalThreadEntry")))
             {
                 return clTab[i].type;
             }
@@ -8703,7 +8582,7 @@ public final class Loader
         int i = 0;
         while (i < clCount)
         {
-            if (utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/Runnable")))
+            if (Utf8.utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/Runnable")))
             {
                 return clTab[i].type;
             }
@@ -8718,14 +8597,14 @@ public final class Loader
         int i = 0;
         while (i < clCount)
         {
-            if (utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/Runnable")))
+            if (Utf8.utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/Runnable")))
             {
                 int s = 0;
                 while (s < clTab[i].ifmCount)
                 {
                     int k = clTab[i].ifmStart + s;
-                    if (isName(ifBase.get(k), ifNameOff[k], 0x72756EL, 3)
-                            && isName(ifBase.get(k), ifDescOff[k], 0x282956L, 3))
+                    if (Utf8.isName(ifBase.get(k), ifNameOff[k], 0x72756EL, 3)
+                            && Utf8.isName(ifBase.get(k), ifDescOff[k], 0x282956L, 3))
                     {
                         return s;
                     }
@@ -8759,11 +8638,6 @@ public final class Loader
     }
 
 
-
-
-
-
-
     /**
      * Attempt a FULL load of real {@code java/lang/Integer} (all methods + {@code <clinit>}), to map where
      * the loader's reach ends on unmodified java.base bytecode: the first unsupported opcode/intrinsic is
@@ -8791,7 +8665,7 @@ public final class Loader
                 {
                     k += 1;
                 }
-                if (k == seenN && seenN < 64 && !utf8IsAtBase(gbase, classOff, Magic.bytes("java/lang/Integer")))
+                if (k == seenN && seenN < 64 && !Utf8.utf8IsAtBase(gbase, classOff, Magic.bytes("java/lang/Integer")))
                 {
                     seen[seenN] = classOff;
                     seenN += 1;
@@ -9080,7 +8954,7 @@ public final class Loader
         }
         while (vtIndexed < vtCount)
         {
-            int h = utf8Hash(vtClassBase.get(vtIndexed), vtClassOff[vtIndexed]) & (VTTAB - 1);
+            int h = Utf8.utf8Hash(vtClassBase.get(vtIndexed), vtClassOff[vtIndexed]) & (VTTAB - 1);
             vtNextIdx[vtIndexed] = -1;
             if (vtBucketTail[h] < 0)
             {
@@ -9109,7 +8983,7 @@ public final class Loader
     private static int vtEntryOf(Address clsBase, int clsOff, Address nameBase, int nameOff, Address descBase, int descOff)
     {
         buildVtIndex();
-        int i = vtBucket[utf8Hash(clsBase, clsOff) & (VTTAB - 1)];
+        int i = vtBucket[Utf8.utf8Hash(clsBase, clsOff) & (VTTAB - 1)];
         while (i >= 0)
         {
             // NAME FIRST, CLASS LAST. The chain is this class's own entries plus hash neighbours, so the class
@@ -9132,7 +9006,7 @@ public final class Loader
     private static void inheritVtable(int superOff)
     {
         buildVtIndex();                                  // incremental: only entries added since last time
-        int i = vtBucket[utf8Hash(gbase, superOff) & (VTTAB - 1)];
+        int i = vtBucket[Utf8.utf8Hash(gbase, superOff) & (VTTAB - 1)];
         while (i >= 0)
         {
             // The SAME predicate the scan used -- the index only narrows which entries it is applied to, so
@@ -9217,7 +9091,7 @@ public final class Loader
             return clTab[r].fieldCount;
         }
         superUnregistered = gSuperNameOff != 0
-                && !utf8IsAtBase(gbase, gSuperNameOff, Magic.bytes("java/lang/Object"));
+                && !Utf8.utf8IsAtBase(gbase, gSuperNameOff, Magic.bytes("java/lang/Object"));
         if (superUnregistered && absentSupertype(gSuperNameOff))
         {
             gAbsentSuperOff = gSuperNameOff;
@@ -9232,11 +9106,11 @@ public final class Loader
         {
             return false;                               // static
         }
-        if (isName(gbase, nameOff, 0x3C696E69743EL, 6))
+        if (Utf8.isName(gbase, nameOff, 0x3C696E69743EL, 6))
         {
             return false;                               // "<init>"
         }
-        if (isName(gbase, nameOff, 0x3C636C696E69743EL, 8))
+        if (Utf8.isName(gbase, nameOff, 0x3C636C696E69743EL, 8))
         {
             return false;                               // "<clinit>"
         }
@@ -9433,27 +9307,6 @@ public final class Loader
         }
     }
 
-    /**
-     * Two byte[]s with equal contents. Written out because java.util.Arrays is not usable from here: its
-     * initializer is a bake stub, and a baked Loader method that reaches it halts the boot (bakeresolve-early).
-     */
-    private static boolean sameBytes(byte[] a, byte[] b)
-    {
-        if (a.length != b.length)
-        {
-            return false;
-        }
-        int i = 0;
-        while (i < a.length)
-        {
-            if (a[i] != b[i])
-            {
-                return false;
-            }
-            i += 1;
-        }
-        return true;
-    }
 
     /** {@link #isDenylisted} for a class name that is an {@code n}-byte slice at {@code base+off}, not a Utf8 entry. */
     private static boolean isDenylistedSlice(Address base, int off, int n)
@@ -9501,7 +9354,7 @@ public final class Loader
         int j = 0;
         while (j < lzPullKeepN)                         // the same element noted twice: reuse its name
         {
-            if (sameBytes(lzPullKeep[j], b))
+            if (Utf8.sameBytes(lzPullKeep[j], b))
             {
                 return notePullNeeded(Address.fromObject(lzPullKeep[j]).plus(24L));
             }
@@ -9708,8 +9561,8 @@ public final class Loader
             p = p.plus(4);
             int attrs = u2(p);
             p = p.plus(2);
-            if (isName(base, gcp[nameIdx], gnameP, gnameLen)
-                    && isName(base, gcp[descIdx], gdescP, gdescLen))
+            if (Utf8.isName(base, gcp[nameIdx], gnameP, gnameLen)
+                    && Utf8.isName(base, gcp[descIdx], gdescP, gdescLen))
             {
                 long code = findCode(base, p, attrs);
                 if (code != 0L)
@@ -9739,7 +9592,7 @@ public final class Loader
             p = p.plus(2);
             int alen = u4(p);
             p = p.plus(4);
-            if (isName(base, gcp[anIdx], 0x436f6465L, 4))              // "Code"
+            if (Utf8.isName(base, gcp[anIdx], 0x436f6465L, 4))              // "Code"
             {
                 gMaxLocals = u2(p.plus(2));                 // after max_stack(2)
                 gcodeLen = u4(p.plus(4));
@@ -9771,25 +9624,6 @@ public final class Loader
         return gbase.toLong();
     }
 
-    private static boolean isName(Address base, int off, long expected, int len)
-    {
-        if (off == 0)
-        {
-            return false;
-        }
-        if (u2(base.plus(off)) != len)
-        {
-            return false;
-        }
-        long got = 0L;
-        int j = 0;
-        while (j < len)
-        {
-            got = (got << 8) | u1(base.plus(off + 2 + j));
-            j += 1;
-        }
-        return got == expected;
-    }
 
     // ----- on-metal JIT: drive the shared compiler/Baseline core over each method --
     // A method and its callees form a small program; we assign every reachable
@@ -9813,9 +9647,6 @@ public final class Loader
 
     /** The on-metal symbol seam: resolves the shared Baseline core's references to addresses. */
     private static final MetalSymbols METAL_SYMBOLS = new MetalSymbols();
-
-
-
 
 
     /**
@@ -10680,7 +10511,7 @@ public final class Loader
             parseConstPool(pdBase.get(i), pdLen[i]);
             pdNameOff[i] = gcp[u2(gbase.plus(gcp[u2(gp.plus(2))]))];   // this_class -> name
             probeInheritance(i);                               // super + direct interfaces (phase-A ordering edges)
-            if (utf8IsAtBase(pdBase.get(i), pdNameOff[i], Magic.bytes("java/lang/String")))
+            if (Utf8.utf8IsAtBase(pdBase.get(i), pdNameOff[i], Magic.bytes("java/lang/String")))
             {
                 stringPdIndex = i;
             }
@@ -10868,7 +10699,7 @@ public final class Loader
         int e = 0;
         while (e < indyNameUsed)
         {
-            if (rawNameEq(indyNameBuf, e, raw, len))
+            if (Utf8.rawNameEq(indyNameBuf, e, raw, len))
             {
                 return e;                               // one interface, many lambdas: intern rather than repeat
             }
@@ -11007,7 +10838,7 @@ public final class Loader
             clTab[clCount].state = RVMClass.ST_LOADED;
             clTab[clCount].base = gbase;
             clTab[clCount].nameOff = gThisNameOff;
-            clTab[clCount].nameHash = utf8Hash(gbase, gThisNameOff);   // folded once; see RVMClass.nameHash
+            clTab[clCount].nameHash = Utf8.utf8Hash(gbase, gThisNameOff);   // folded once; see RVMClass.nameHash
             clTab[clCount].tib = Address.zero();
             clTab[clCount].type = gType;
             clTab[clCount].fieldCount = 0;
@@ -11113,7 +10944,7 @@ public final class Loader
      */
     private static void provideKnownStatics()
     {
-        if (utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/String")))
+        if (Utf8.utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/String")))
         {
             long cs = staticSlotByName(Magic.bytes("COMPACT_STRINGS"));
             if (cs != 0L)
@@ -11122,7 +10953,7 @@ public final class Loader
             }
             return;
         }
-        if (utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/StringUTF16")))
+        if (Utf8.utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/StringUTF16")))
         {
             // Its <clinit> sets the UTF-16 byte-order shifts via Unsafe.isBigEndian (unrunnable, skipped),
             // leaving BOTH shifts 0 -- putChar then stores the LOW byte twice and a char > 0xFF truncates
@@ -11134,7 +10965,7 @@ public final class Loader
             }
             return;
         }
-        if (!utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Integer")))
+        if (!Utf8.utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Integer")))
         {
             return;
         }
@@ -11159,7 +10990,7 @@ public final class Loader
         int s = 0;
         while (s < gsfCount)
         {
-            if (utf8IsAtBase(gbase, gsfName[s], name))
+            if (Utf8.utf8IsAtBase(gbase, gsfName[s], name))
             {
                 return gStatics.plus(s * 8L).toLong();
             }
@@ -11185,7 +11016,7 @@ public final class Loader
                 while (i < sgCount)
                 {
                     if (utf8EqAt(sgTab[i].base, sgTab[i].classOff, clTab[ci].base, clTab[ci].nameOff)
-                            && rawEqUtf8(fnBase, fnLen, sgTab[i].base, sgTab[i].nameOff))
+                            && Utf8.rawEqUtf8(fnBase, fnLen, sgTab[i].base, sgTab[i].nameOff))
                     {
                         return sgTab[i].addr;
                     }
@@ -11197,14 +11028,14 @@ public final class Loader
         return 0L;
     }
 
-    private static long staticSlotOf(byte[] cls, byte[] name)
+    static long staticSlotOf(byte[] cls, byte[] name)
     {
         sgScanCalls += 1;
         int i = 0;
         while (i < sgCount)
         {
             sgScanSteps += 1;
-            if (utf8IsAtBase(sgTab[i].base, sgTab[i].classOff, cls) && utf8IsAtBase(sgTab[i].base, sgTab[i].nameOff, name))
+            if (Utf8.utf8IsAtBase(sgTab[i].base, sgTab[i].classOff, cls) && Utf8.utf8IsAtBase(sgTab[i].base, sgTab[i].nameOff, name))
             {
                 return sgTab[i].addr;
             }
@@ -11212,7 +11043,6 @@ public final class Loader
         }
         return 0L;
     }
-
 
 
     /**
@@ -11718,13 +11548,13 @@ public final class Loader
 
     /** Byte offset of instance field {@code fname} declared by registered class {@code classIdx}, or -1.
      *  The byte[]-name sibling of {@link #vhFieldOffset} (which keys on a raw pointer + a TIB). */
-    private static long instanceFieldOffset(int classIdx, byte[] fname)
+    static long instanceFieldOffset(int classIdx, byte[] fname)
     {
         int j = 0;
         while (j < fldCount)
         {
             if (utf8EqAt(clTab[classIdx].base, clTab[classIdx].nameOff, fldTab[j].base, fldTab[j].classOff)
-                    && utf8IsAtBase(fldTab[j].base, fldTab[j].nameOff, fname))
+                    && Utf8.utf8IsAtBase(fldTab[j].base, fldTab[j].nameOff, fname))
             {
                 return 16L + fldTab[j].slot * 8L;
             }
@@ -12575,7 +12405,7 @@ public final class Loader
         // remove. resetLoader zeroes rgCount and rgIndexed together (see there).
         while (rgIndexed < rgCount)
         {
-            int h = utf8Hash2(rgTab[rgIndexed].base, rgTab[rgIndexed].classOff,
+            int h = Utf8.utf8Hash2(rgTab[rgIndexed].base, rgTab[rgIndexed].classOff,
                               rgTab[rgIndexed].base, rgTab[rgIndexed].nameOff) & (RGTAB - 1);
             rgNext[rgIndexed] = rgBucket[h];
             rgBucket[h] = rgIndexed;
@@ -12635,7 +12465,7 @@ public final class Loader
         // The scan was 4.0% of the busy core on InvokeGapProbe after #450 (qprof-tally.pl caller view).
         buildRegIndex();
         int best = -1;
-        int i = rgBucket[utf8Hash2(gbase, classOff, gbase, nameOff) & (RGTAB - 1)];
+        int i = rgBucket[Utf8.utf8Hash2(gbase, classOff, gbase, nameOff) & (RGTAB - 1)];
         while (i >= 0)
         {
             if (utf8EqAt(gbase, classOff, rgTab[i].base, rgTab[i].classOff)
@@ -13529,7 +13359,7 @@ public final class Loader
         // CLASS+NAME keys the index. Tier 2 wants the SAME name under an ANCESTOR class, so it re-hashes per
         // level rather than sharing this bucket -- which is the point: sharing a name-only bucket is what made
         // both tiers walk a chain one entry long per class declaring that name.
-        int h = utf8Hash2(refBase, classOff, refBase, nameOff) & (RGTAB - 1);
+        int h = Utf8.utf8Hash2(refBase, classOff, refBase, nameOff) & (RGTAB - 1);
         boolean fits = gateRg(h);
         int i = rgBucket[h];
         while (i >= 0)
@@ -13559,7 +13389,7 @@ public final class Loader
         // `String.formatted` produced a Formatter whose buffer was null, and the NPE surfaced far away, deep
         // inside JUnit's message formatting. Falling through to the stub tier instead gives it a link stub,
         // which resolves the actual constructor on first call.
-        if (utf8IsAtBase(refBase, nameOff, Magic.bytes("<init>")))
+        if (Utf8.utf8IsAtBase(refBase, nameOff, Magic.bytes("<init>")))
         {
             long ib = gatedCell(refBase, classOff, refBase, nameOff, descOff, fits);
             bufResolveLog(refBase, classOff, nameOff, descOff, ib, 3);
@@ -13596,7 +13426,7 @@ public final class Loader
             // every batch: MEASURED at 98% of the whole call-site loop (lookT 11,949ms of callT 12,169ms),
             // which is itself ~95% of `patch`. The wanted name is the same one tier 1 hashed, so the bucket
             // is reused and only the CLASS comparison differs -- the predicate is otherwise identical.
-            int hs = utf8Hash2(pdBase.get(spd), pdNameOff[spd], refBase, nameOff) & (RGTAB - 1);
+            int hs = Utf8.utf8Hash2(pdBase.get(spd), pdNameOff[spd], refBase, nameOff) & (RGTAB - 1);
             fits = fits && gateRg(hs);
             int j = rgBucket[hs];
             while (j >= 0)
@@ -13675,7 +13505,7 @@ public final class Loader
         }
         while (dlIndexed < dlN)
         {
-            int hh = utf8Hash2(dlTab[dlIndexed].blob, dlTab[dlIndexed].classOff,
+            int hh = Utf8.utf8Hash2(dlTab[dlIndexed].blob, dlTab[dlIndexed].classOff,
                                dlTab[dlIndexed].blob, dlTab[dlIndexed].nameOff) & (DLTAB - 1);
             dlNext[dlIndexed] = dlBucket[hh];
             dlBucket[hh] = dlIndexed;
@@ -13706,7 +13536,7 @@ public final class Loader
         // had never registered (DISPATCH ON UNREGISTERED TYPE at the next late-resolved call). A stale cell is
         // skipped, so the caller resolves as for an unloaded class and pulls it; anything ALREADY holding the
         // cell's address keeps working, because the cell itself is untouched.
-        int hd = utf8Hash2(clsBase, clsOff, nameBase, nameOff) & (DLTAB - 1);
+        int hd = Utf8.utf8Hash2(clsBase, clsOff, nameBase, nameOff) & (DLTAB - 1);
         int k = dlBucket[hd];
         dlLastProbe = ((long) hd << 32) | (k & 0xFFFFFFFFL);   // for rcGate
         while (k >= 0)
@@ -13852,7 +13682,7 @@ public final class Loader
         }
         while (sgIndexed < sgCount)
         {
-            int hh = utf8Hash2(sgTab[sgIndexed].base, sgTab[sgIndexed].classOff,
+            int hh = Utf8.utf8Hash2(sgTab[sgIndexed].base, sgTab[sgIndexed].classOff,
                                sgTab[sgIndexed].base, sgTab[sgIndexed].nameOff) & (SGTAB - 1);
             sgNext[sgIndexed] = sgBucket[hh];
             sgBucket[hh] = sgIndexed;
@@ -13884,7 +13714,7 @@ public final class Loader
         // The SAME predicate the scan used -- the index only narrows what it is applied to, so a hit is the
         // same entry the scan would have found and a miss still answers 0.
         int best = -1;
-        int k = sgBucket[utf8Hash2(clsBase, clsOff, nameBase, nameOff) & (SGTAB - 1)];
+        int k = sgBucket[Utf8.utf8Hash2(clsBase, clsOff, nameBase, nameOff) & (SGTAB - 1)];
         while (k >= 0)
         {
             psSteps += 1;
@@ -14028,88 +13858,88 @@ public final class Loader
         // jdk/internal/misc/CDS.getRandomSeedForDumping() -- stock declares it NATIVE, and its ONE caller in
         // all of java.base is ImmutableCollections.<clinit>. Answering the writer-baked build seed (rather
         // than the overlay's old hardcoded 0) is what stops that initializer falling through to nanoTime.
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/CDS")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/CDS")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getRandomSeedForDumping"))) { return VM.cdsSeedAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("getRandomSeedForDumping"))) { return VM.cdsSeedAddr; }
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/System")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/System")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("nanoTime")))          { return VM.nanoTimeAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("currentTimeMillis"))) { return VM.currentTimeMillisAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("arraycopy")))         { return VM.arraycopyAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("identityHashCode")))  { return VM.identityAddr; }  // ref IS its address -> identity hash
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("setOut0")))           { return VM.setOut0Addr; }   // (PrintStream)V
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("setErr0")))           { return VM.setErr0Addr; }   // (PrintStream)V
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("setIn0")))            { return VM.setIn0Addr; }    // (InputStream)V
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("nanoTime")))          { return VM.nanoTimeAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("currentTimeMillis"))) { return VM.currentTimeMillisAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("arraycopy")))         { return VM.arraycopyAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("identityHashCode")))  { return VM.identityAddr; }  // ref IS its address -> identity hash
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("setOut0")))           { return VM.setOut0Addr; }   // (PrintStream)V
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("setErr0")))           { return VM.setErr0Addr; }   // (PrintStream)V
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("setIn0")))            { return VM.setIn0Addr; }    // (InputStream)V
         }
         // NullPointerException.getExtendedNPEMessage() -> NULL: HotSpot's own answer with
         // -XX:-ShowCodeDetailsInExceptionMessages, and for every NPE not raised at an NPE-ing bytecode. The
         // "helpful" text is computed from the bytecode at the faulting BCI, and this VM maps a pc to a line, not
         // to a bci. Reached only after fillInStackTrace() (state 1); the VM's own implicit NPEs are allocated
         // without a constructor and stay at state 0, so getMessage() answers null without calling it.
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/NullPointerException")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/NullPointerException")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getExtendedNPEMessage"))) { return VM.sockZeroAddr; } // ()String -> null
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("getExtendedNPEMessage"))) { return VM.sockZeroAddr; } // ()String -> null
         }
         // TimeZone.getSystemTimeZoneID(javaHome) -> NULL, the answer TimeZone_md.c's findJavaTZ_md gives with no
         // TZ variable and no /etc/timezone or /etc/localtime -- none of which exists here. setDefaultZone then
         // falls back to "GMT", stock's own default. getSystemGMTOffsetID is NOT mapped: it is reached only when
         // that ID fails to resolve, and it should throw if it ever is.
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/util/TimeZone")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/util/TimeZone")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getSystemTimeZoneID"))) { return VM.sockZeroAddr; } // (String)String -> null
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("getSystemTimeZoneID"))) { return VM.sockZeroAddr; } // (String)String -> null
         }
         // java.lang.ref: see VMNatives.refGet0. PhantomReference declares its OWN refersTo0/clear0 natives,
         // and this table is keyed by the DECLARING class, so both classes are listed.
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/ref/Reference"))
-                || utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/ref/PhantomReference")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/ref/Reference"))
+                || Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/ref/PhantomReference")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("get0")))      { return VM.refGet0Addr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("refersTo0"))) { return VM.refRefersTo0Addr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("clear0")))    { return VM.refClear0Addr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("get0")))      { return VM.refGet0Addr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("refersTo0"))) { return VM.refRefersTo0Addr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("clear0")))    { return VM.refClear0Addr; }
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/Unsafe")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/Unsafe")))
         {
             // One full barrier for all three: see VMNatives.unsafeFence. Reached from Hashtable/Properties
             // and the JUnit launcher's lazy holders.
             // Unsafe.objectFieldOffset(Class,String) -> the field registry, keyed on the CLASS (no instance
             // exists at initializer time, so the TIB-keyed VarHandle path cannot serve it).
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldOffsetOfClass0"))) { return VM.unsafeFieldOffsetAddr; } // (Class,byte[])J
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldOffsetOfClass0"))) { return VM.unsafeFieldOffsetAddr; } // (Class,byte[])J
             // Every ordered mode shares ONE full barrier: there is no one-way form to emit here, and
             // stronger than required is always correct where weaker could only be wrong invisibly.
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fence0")))             { return VM.unsafeFenceAddr; }  // ()V
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("parkNanos0")))         { return VM.parkNanosAddr; }    // (J)V timed park
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("staticFieldAddr0")))  { return VM.unsafeStaticAddrAddr; } // (Class,byte[])J
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("storeFence")))         { return VM.unsafeFenceAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("loadFence")))          { return VM.unsafeFenceAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fullFence")))          { return VM.unsafeFenceAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("fence0")))             { return VM.unsafeFenceAddr; }  // ()V
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("parkNanos0")))         { return VM.parkNanosAddr; }    // (J)V timed park
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("staticFieldAddr0")))  { return VM.unsafeStaticAddrAddr; } // (Class,byte[])J
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("storeFence")))         { return VM.unsafeFenceAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("loadFence")))          { return VM.unsafeFenceAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("fullFence")))          { return VM.unsafeFenceAddr; }
             // A narrow accessor must know whether it is addressing a FIELD (one 8-byte slot) or an ARRAY
             // ELEMENT (its natural width), and the bulk moves must refuse a non-PRIMITIVE array as stock does;
             // see VMNatives.arrayKindOf for why Class.getComponentType cannot answer either question here.
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("arrayKind0")))          { return VM.arrayKindAddr; } // (Object)J: 0 none, 1 primitive, 2 reference
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("arrayKind0")))          { return VM.arrayKindAddr; } // (Object)J: 0 none, 1 primitive, 2 reference
             // The same native Constructor.allocInstance0 runs on -- zeroed fields, the class's TIB, and
             // ensureClinit first. nativeBuf keys on the DECLARING class, so it needs registering under both.
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("allocInstance0")))      { return VM.allocInstanceAddr; } // (Class)Object
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("ensureClassInitialized0"))) { return VM.ensureMirrorInitAddr; } // (Class)V
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("shouldBeInitialized0"))) { return VM.shouldBeInitAddr; } // (Class)J
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("allocInstance0")))      { return VM.allocInstanceAddr; } // (Class)Object
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("ensureClassInitialized0"))) { return VM.ensureMirrorInitAddr; } // (Class)V
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("shouldBeInitialized0"))) { return VM.shouldBeInitAddr; } // (Class)J
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/String")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/String")))
         {
             // The VM-wide string pool (see poolIntern). This was IDENTITY, on the premise that "no reached
             // java.base code" compares interned strings with ==. Stock StringLatin1/StringUTF16 do exactly that
             // -- `lang == "tr"` against Locale's interned language -- so Turkish case mapping was silently wrong.
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("intern")))             { return VM.stringInternAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("intern")))             { return VM.stringInternAddr; }
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Throwable")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Throwable")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("printStackTrace0")))  { return VM.printStackTraceAddr; }   // (this)V
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("printStackTrace0")))  { return VM.printStackTraceAddr; }   // (this)V
         }
         // java/io/UnixFileSystem.initIDs caches a JNI fieldID for File.path and does nothing else
         // (unix/native/libjava/UnixFileSystem_md.c). No JNI here, so the empty stub is exactly right. This is
         // what stopped the FIRST run-all-clinits boot, in UnixFileSystem.<clinit> itself.
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/io/UnixFileSystem")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/io/UnixFileSystem")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("initIDs")))           { return VM.noopNativeAddr; }  // ()V
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("initIDs")))           { return VM.noopNativeAddr; }  // ()V
         }
         // jdk/internal/misc/ScopedMemoryAccess.registerNatives does ONE thing: RegisterNatives binds closeScope0
         // for JNI (hotspot share/prims/scopedMemoryAccess.cpp, JVM_RegisterJDKInternalMiscScopedMemoryAccessMethods).
@@ -14119,114 +13949,114 @@ public final class Loader
         // jdk/internal/misc/VM.initialize: RegisterNatives for JNI and nothing else (share/native/libjava/VM.c), so
         // empty is exactly right. The natives it would register (getNanoTimeAdjustment, ...) are wired or fail on
         // their own.
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/VM")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/VM")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("initialize")))        { return VM.noopNativeAddr; }  // ()V
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getNanoTimeAdjustment"))) { return VM.nanoTimeAdjAddr; } // (J)J
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("initialize")))        { return VM.noopNativeAddr; }  // ()V
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("getNanoTimeAdjustment"))) { return VM.nanoTimeAdjAddr; } // (J)J
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/ScopedMemoryAccess")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/ScopedMemoryAccess")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("registerNatives")))   { return VM.noopNativeAddr; }  // ()V
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("registerNatives")))   { return VM.noopNativeAddr; }  // ()V
         }
         // java/io/ObjectStreamClass.initNative caches a JNI global ref to NoSuchMethodError's class, read only
         // by other natives in the same C file (share/native/libjava/ObjectStreamClass.c). No JNI here, so
         // empty is exactly right. Its SIBLING native hasStaticInitializer(Class)Z is deliberately NOT wired:
         // that one does real work (does this class declare its OWN <clinit>?), and answering a plausible
         // `false` would be a silent wrong answer -- it must be implemented or fail loudly.
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/io/ObjectStreamClass")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/io/ObjectStreamClass")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("initNative")))        { return VM.noopNativeAddr; }  // ()V
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("initNative")))        { return VM.noopNativeAddr; }  // ()V
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalBoard")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalBoard")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("buildId0")))          { return VM.boardBuildIdAddr; }     // ()J
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("setRebootFlags0")))   { return VM.boardRebootFlagsAddr; } // (I)I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("reboot0")))           { return VM.boardRebootAddr; }      // ()V
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("buildId0")))          { return VM.boardBuildIdAddr; }     // ()J
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("setRebootFlags0")))   { return VM.boardRebootFlagsAddr; } // (I)I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("reboot0")))           { return VM.boardRebootAddr; }      // ()V
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalBlock")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalBlock")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("init0")))             { return VM.blockInitAddr; }  // ()I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("read0")))             { return VM.blockReadAddr; }  // (J[BII)I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("write0")))            { return VM.blockWriteAddr; } // (J[BII)I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("init0")))             { return VM.blockInitAddr; }  // ()I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("read0")))             { return VM.blockReadAddr; }  // (J[BII)I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("write0")))            { return VM.blockWriteAddr; } // (J[BII)I
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalConsoleIn")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalConsoleIn")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("read0")))             { return VM.consoleReadAddr; }  // ([BII)I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("available0")))        { return VM.consoleAvailAddr; } // ()I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("read0")))             { return VM.consoleReadAddr; }  // ([BII)I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("available0")))        { return VM.consoleAvailAddr; } // ()I
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalRamfs")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalRamfs")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("table0")))            { return VM.ramfsTableAddr; } // (J)J
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("table0")))            { return VM.ramfsTableAddr; } // (J)J
             // The BCM2711 hardware RNG, behind /dev/random and /dev/urandom. Keyed by DECLARING CLASS like every
             // native here -- registering one under the wrong class is the LINK FAILED this file paid for once.
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("hwEntropy0")))        { return VM.hwEntropyAddr; }  // ([BI)I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("hwEntropy0")))        { return VM.hwEntropyAddr; }  // ([BI)I
         }
         // Atomic*FieldUpdater overlays resolve the target field's byte offset the same way as VarHandle, and
         // resolve their caller's class (getCallerClass) for the field-access check.
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/util/concurrent/atomic/AtomicIntegerFieldUpdater"))
-                || utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/util/concurrent/atomic/AtomicLongFieldUpdater"))
-                || utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/util/concurrent/atomic/AtomicReferenceFieldUpdater")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/util/concurrent/atomic/AtomicIntegerFieldUpdater"))
+                || Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/util/concurrent/atomic/AtomicLongFieldUpdater"))
+                || Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/util/concurrent/atomic/AtomicReferenceFieldUpdater")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldOffset0")))     { return VM.vhFieldOffsetAddr; }    // (byte[],Object)J
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldOffset0")))     { return VM.vhFieldOffsetAddr; }    // (byte[],Object)J
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/util/concurrent/atomic/FieldUpdaterCheck"))
-                || utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/AccessibleObject"))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/util/concurrent/atomic/FieldUpdaterCheck"))
+                || Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/AccessibleObject"))
                 // Class.newInstance checks access against ITS caller, as stock's ensureMemberAccess does.
-                || utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Class"))
+                || Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Class"))
                 // MhUtil's no-receiver findVarHandle: stock resolves the field against lookup.lookupClass(),
                 // and joe-ng's Lookup carries none, so the DECLARING class comes from the caller's frame.
                 // Keyed by DECLARING CLASS like every entry here -- registering a native under one of two
                 // classes that declare it is the recorded `LINK FAILED ... no body for that name+descriptor`.
-                || utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/invoke/MhUtil")))
+                || Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/invoke/MhUtil")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("callerClass0")))     { return VM.classAtPcAddr; }        // (J)Class
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("callerClass0")))     { return VM.classAtPcAddr; }        // (J)Class
         }
         // Reflective Field.get/set: resolve the field's byte offset from its DECLARING class, the lookup
         // Unsafe.objectFieldOffset uses. Keyed on the receiver's class instead, a subclass's same-named field won.
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Field")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Field")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("signature0")))        { return VM.fieldSignatureAddr; } // (Class,byte[])String
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldOffsetOfClass0"))) { return VM.unsafeFieldOffsetAddr; } // (Class,byte[])J
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldAnnoGet0")))    { return VM.fieldAnnoGetAddr; }     // (Class,byte[],byte[])
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldAnnoAll0")))    { return VM.fieldAnnoAllAddr; }     // (Class,byte[])[Annotation
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldType0")))       { return VM.fieldTypeAddr; }        // (Class,byte[])Class
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("signature0")))        { return VM.fieldSignatureAddr; } // (Class,byte[])String
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldOffsetOfClass0"))) { return VM.unsafeFieldOffsetAddr; } // (Class,byte[])J
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldAnnoGet0")))    { return VM.fieldAnnoGetAddr; }     // (Class,byte[],byte[])
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldAnnoAll0")))    { return VM.fieldAnnoAllAddr; }     // (Class,byte[])[Annotation
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldType0")))       { return VM.fieldTypeAddr; }        // (Class,byte[])Class
         }
         // Reflective Method.invoke: resolve a method-registry index by name, then its buffer/access/descriptor.
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Throwable")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Throwable")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("stackTrace0")))       { return VM.stackTraceAddr; }    // (Throwable)[STE
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fillInStackTrace0"))) { return VM.fillTraceAddr; }     // (Throwable)V
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("stackTrace0")))       { return VM.stackTraceAddr; }    // (Throwable)[STE
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("fillInStackTrace0"))) { return VM.fillTraceAddr; }     // (Throwable)V
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Field")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Field")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("staticCell0")))       { return VM.staticCellAddr; }    // (Class,byte[])J
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("staticCell0")))       { return VM.staticCellAddr; }    // (Class,byte[])J
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Method")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Method")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoDefaults0")))    { return VM.annoDefaultInstanceAddr; } // (Class)Object
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("methodResolve0")))   { return VM.methodResolveAddr; }    // (Class,byte[])I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("methodResolveDesc0"))) { return VM.methodResolveDescAddr; } // (Class,byte[],byte[])I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("methodInfo0")))      { return VM.methodInfoAddr; }       // (I,byte[],long[])I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("exact0")))           { return VM.methodResolveExactAddr; } // (Class,byte[],byte[])I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("itableTarget0")))    { return VM.methodItableTargetAddr; } // (Object,I)J
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoDefaults0")))    { return VM.annoDefaultInstanceAddr; } // (Class)Object
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("methodResolve0")))   { return VM.methodResolveAddr; }    // (Class,byte[])I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("methodResolveDesc0"))) { return VM.methodResolveDescAddr; } // (Class,byte[],byte[])I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("methodInfo0")))      { return VM.methodInfoAddr; }       // (I,byte[],long[])I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("exact0")))           { return VM.methodResolveExactAddr; } // (Class,byte[],byte[])I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("itableTarget0")))    { return VM.methodItableTargetAddr; } // (Object,I)J
         }
         // java.lang.invoke arc: MemberName resolution (the MethodHandleNatives overlay) walks JVMS 5.4.3 in Java
         // over these -- one class's own declaration per call, plus the reflection natives' methodInfo0.
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/invoke/MethodHandleNatives")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/invoke/MethodHandleNatives")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("classBytes0")))      { return VM.classBytesAddr; }        // (Class)byte[]
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoPresent0")))     { return VM.annoPresentAddr; }       // (I,byte[])I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declared0")))        { return VM.mhDeclaredAddr; }        // (Class,byte[],byte[])I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("methodInfo0")))      { return VM.methodInfoAddr; }        // (I,byte[],long[])I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("classBytes0")))      { return VM.classBytesAddr; }        // (Class)byte[]
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoPresent0")))     { return VM.annoPresentAddr; }       // (I,byte[])I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("declared0")))        { return VM.mhDeclaredAddr; }        // (Class,byte[],byte[])I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("methodInfo0")))      { return VM.methodInfoAddr; }        // (I,byte[],long[])I
         }
         // Reflective Constructor.newInstance: resolve <init> by arity, read its descriptor (shared methodInfo0),
         // and allocate the instance.
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Constructor")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Constructor")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("ctorResolve0")))     { return VM.constructorResolveAddr; }  // (Class,I)I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("ctorResolveDesc0"))) { return VM.ctorResolveDescAddr; }   // (Class,byte[])I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("methodInfo0")))      { return VM.methodInfoAddr; }          // (I,byte[],long[])I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("allocInstance0")))   { return VM.allocInstanceAddr; }       // (Class)Object
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("ctorResolve0")))     { return VM.constructorResolveAddr; }  // (Class,I)I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("ctorResolveDesc0"))) { return VM.ctorResolveDescAddr; }   // (Class,byte[])I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("methodInfo0")))      { return VM.methodInfoAddr; }          // (I,byte[],long[])I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("allocInstance0")))   { return VM.allocInstanceAddr; }       // (Class)Object
         }
         // FileDescriptor.<clinit> runs (to register the JavaIOFileDescriptorAccess); its 3 natives are inert
         // on metal -- initIDs is a no-op, and handle/append are Windows/append-mode fields unused by sockets.
@@ -14239,196 +14069,196 @@ public final class Loader
         // jdk/internal/misc/PreviewFeatures.isPreviewEnabled() -> FALSE: JVM_IsPreviewEnabled answers
         // Arguments::enable_preview(), the --enable-preview flag, which this VM never has. Reached from
         // SwitchBootstraps.<clinit> (pattern switches linked through the generic invokedynamic path).
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/PreviewFeatures")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/PreviewFeatures")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isPreviewEnabled"))) { return VM.sockZeroAddr; } // ()Z -> false
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("isPreviewEnabled"))) { return VM.sockZeroAddr; } // ()Z -> false
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalHiddenClasses")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalHiddenClasses")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("defineClass0"))) { return VM.defineClassAddr; } // (String,byte[],int,int)Class
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("defineClass0"))) { return VM.defineClassAddr; } // (String,byte[],int,int)Class
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/loader/BootLoader")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/loader/BootLoader")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("setBootLoaderUnnamedModule0"))) { return VM.sockNoopAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("setBootLoaderUnnamedModule0"))) { return VM.sockNoopAddr; }
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/io/FileDescriptor")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/io/FileDescriptor")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("initIDs")))           { return VM.sockNoopAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getHandle")))         { return VM.sockZeroAddr; }    // (I)J -> 0
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getAppend")))         { return VM.sockZeroAddr; }    // (I)Z -> false
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("initIDs")))           { return VM.sockNoopAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("getHandle")))         { return VM.sockZeroAddr; }    // (I)J -> 0
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("getAppend")))         { return VM.sockZeroAddr; }    // (I)Z -> false
         }
         // java.net: STOCK InetAddress/Inet4Address/Inet6Address. The three init()s only cache JNI class/field IDs
         // (share/native/libnet/Inet{,4,6}Address.c), so empty is the correct semantics. Address families: IPv4
         // only -- the WiFi stack has no IPv6 -- so isIPv6Supported answers false, which makes InetAddress pick
         // Inet4AddressImpl, as a JDK built without IPv6 does.
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/net/InetAddress")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/net/InetAddress")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("init")))              { return VM.sockNoopAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isIPv4Available")))   { return VM.nativeTrueAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isIPv6Supported")))   { return VM.sockZeroAddr; }   // -> false
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("init")))              { return VM.sockNoopAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("isIPv4Available")))   { return VM.nativeTrueAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("isIPv6Supported")))   { return VM.sockZeroAddr; }   // -> false
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/net/Inet4Address"))
-                || utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/net/Inet6Address")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/net/Inet4Address"))
+                || Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/net/Inet6Address")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("init")))              { return VM.sockNoopAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("init")))              { return VM.sockNoopAddr; }
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/net/Inet4AddressImpl")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/net/Inet4AddressImpl")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("resolve0")))          { return VM.dnsResolveAddr; }  // (byte[])I -> WiFi DNS
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("resolve0")))          { return VM.dnsResolveAddr; }  // (byte[])I -> WiFi DNS
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/net/NetworkInterface")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/net/NetworkInterface")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("wifi0")))             { return VM.netifStateAddr; }  // (J)J -> the lease
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("wifi0")))             { return VM.netifStateAddr; }  // (J)J -> the lease
         }
         // M3 socket natives: stock sun.nio.ch backed by net.Tcp (fd int = the net.Tcp handle).
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("sun/nio/ch/Net")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("sun/nio/ch/Net")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("socket0")))           { return VM.sockSocket0Addr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("connect0")))          { return VM.sockConnect0Addr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("available")))         { return VM.sockAvailableAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("shutdown0")))         { return VM.sockShutdown0Addr; } // (FD,I)I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("poll")))              { return VM.sockPollAddr; }     // (FD,I,J)I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("localPort")))         { return VM.sockLocalPortAddr; } // (FD)I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("bindPort0")))         { return VM.sockBindAddr; }     // (FD,I)I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("listen0")))           { return VM.sockListenAddr; }   // (FD,I)I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("accept0")))           { return VM.sockAcceptAddr; }   // (FD)I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("remoteIp0")))         { return VM.sockRemoteIpAddr; } // (I)I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("remotePort0")))       { return VM.sockRemotePortAddr; } // (I)I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getIntOption0")))     { return VM.sockZeroAddr; }     // -> 0 (SO_LINGER)
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("localInetAddress")))  { return VM.sockZeroAddr; }     // -> null wildcard
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("socket0")))           { return VM.sockSocket0Addr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("connect0")))          { return VM.sockConnect0Addr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("available")))         { return VM.sockAvailableAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("shutdown0")))         { return VM.sockShutdown0Addr; } // (FD,I)I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("poll")))              { return VM.sockPollAddr; }     // (FD,I,J)I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("localPort")))         { return VM.sockLocalPortAddr; } // (FD)I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("bindPort0")))         { return VM.sockBindAddr; }     // (FD,I)I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("listen0")))           { return VM.sockListenAddr; }   // (FD,I)I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("accept0")))           { return VM.sockAcceptAddr; }   // (FD)I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("remoteIp0")))         { return VM.sockRemoteIpAddr; } // (I)I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("remotePort0")))       { return VM.sockRemotePortAddr; } // (I)I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("getIntOption0")))     { return VM.sockZeroAddr; }     // -> 0 (SO_LINGER)
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("localInetAddress")))  { return VM.sockZeroAddr; }     // -> null wildcard
             // Net.<clinit> natives, answered as unix/native/libnio/ch/Net.c answers them on Linux: the <poll.h>
             // event bits (pollconnValue is POLLOUT there), isExclusiveBindAvailable -1, and the two capability
             // probes false -- this stack is IPv4-only and has no SO_REUSEPORT. initIDs only caches JNI class and
             // method IDs (InetSocketAddress, InetAddress), so empty is right.
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("pollinValue")))       { return VM.pollInAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("polloutValue")))      { return VM.pollOutAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("pollerrValue")))      { return VM.pollErrAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("pollhupValue")))      { return VM.pollHupAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("pollnvalValue")))     { return VM.pollNvalAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("pollconnValue")))     { return VM.pollOutAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isIPv6Available0")))  { return VM.sockZeroAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isReusePortAvailable0"))) { return VM.sockZeroAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("initIDs")))           { return VM.sockNoopAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isExclusiveBindAvailable"))) { return VM.exclusiveBindNoneAddr; }  // -> -1
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("shouldShutdownWriteBeforeClose0"))) { return VM.sockZeroAddr; } // -> false
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("pollinValue")))       { return VM.pollInAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("polloutValue")))      { return VM.pollOutAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("pollerrValue")))      { return VM.pollErrAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("pollhupValue")))      { return VM.pollHupAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("pollnvalValue")))     { return VM.pollNvalAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("pollconnValue")))     { return VM.pollOutAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("isIPv6Available0")))  { return VM.sockZeroAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("isReusePortAvailable0"))) { return VM.sockZeroAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("initIDs")))           { return VM.sockNoopAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("isExclusiveBindAvailable"))) { return VM.exclusiveBindNoneAddr; }  // -> -1
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("shouldShutdownWriteBeforeClose0"))) { return VM.sockZeroAddr; } // -> false
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("sun/nio/ch/SocketDispatcher")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("sun/nio/ch/SocketDispatcher")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("read0")))             { return VM.sockRead0Addr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("write0")))            { return VM.sockWrite0Addr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("read0")))             { return VM.sockRead0Addr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("write0")))            { return VM.sockWrite0Addr; }
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("sun/nio/ch/UnixDispatcher")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("sun/nio/ch/UnixDispatcher")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("close0")))            { return VM.sockClose0Addr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("preClose0")))         { return VM.sockNoopAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("init")))              { return VM.sockNoopAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("close0")))            { return VM.sockClose0Addr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("preClose0")))         { return VM.sockNoopAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("init")))              { return VM.sockNoopAddr; }
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("sun/nio/ch/IOUtil")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("sun/nio/ch/IOUtil")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fdVal")))             { return VM.fdValAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("setfdVal")))          { return VM.setFdValAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("configureBlocking"))) { return VM.sockConfigureBlockingAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("initIDs")))           { return VM.sockNoopAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("iovMax")))            { return VM.iovMaxAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("writevMax")))         { return VM.writevMaxAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("fdVal")))             { return VM.fdValAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("setfdVal")))          { return VM.setFdValAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("configureBlocking"))) { return VM.sockConfigureBlockingAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("initIDs")))           { return VM.sockNoopAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("iovMax")))            { return VM.iovMaxAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("writevMax")))         { return VM.writevMaxAddr; }
         }
         // BootLoader.loadLibrary(String) is not a native, but its class stays DENIED (jdk/internal/loader), so it is
         // PROVIDED here like one. What it does on a stock JVM is dlopen a library so that library's JNI natives can
         // bind; on this VM every native is bound by THIS table, so there is no library and nothing to load --
         // empty is the correct semantics, decided the same way as initIDs. Its callers are the <clinit>s of
         // IOUtil, Net, NetworkInterface, InetAddress, ZipUtils and DefaultProxySelector.
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/loader/BootLoader")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/loader/BootLoader")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("loadLibrary")))       { return VM.sockNoopAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("loadLibrary")))       { return VM.sockNoopAddr; }
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("sun/nio/ch/NativeThread")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("sun/nio/ch/NativeThread")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("current0")))          { return VM.sockZeroAddr; }     // -> 0
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("init")))              { return VM.sockNoopAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("supportPendingSignals0"))) { return VM.sockZeroAddr; } // -> false
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("signal0")))           { return VM.sockNoopAddr; }      // no thread to wake
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("current0")))          { return VM.sockZeroAddr; }     // -> 0
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("init")))              { return VM.sockNoopAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("supportPendingSignals0"))) { return VM.sockZeroAddr; } // -> false
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("signal0")))           { return VM.sockNoopAddr; }      // no thread to wake
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Object")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Object")))
         {
             // The stock Object's natives (the overlay is the JDK 26 source). Each instance native takes its
             // receiver in x0, which is the one argument every helper here reads.
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getClass")))          { return VM.getClassAddr; }      // (obj) -> mirror
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("hashCode")))          { return VM.identityAddr; }      // = identityHashCode
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("notify")))            { return VM.objNotifyAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("notifyAll")))         { return VM.objNotifyAllAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("wait0")))             { return VM.objWaitAddr; }       // (obj, ms)
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("clone")))             { return objectCloneHelper(); }  // Cloneable check, then copy
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("getClass")))          { return VM.getClassAddr; }      // (obj) -> mirror
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("hashCode")))          { return VM.identityAddr; }      // = identityHashCode
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("notify")))            { return VM.objNotifyAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("notifyAll")))         { return VM.objNotifyAllAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("wait0")))             { return VM.objWaitAddr; }       // (obj, ms)
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("clone")))             { return objectCloneHelper(); }  // Cloneable check, then copy
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalObjects")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalObjects")))
         {
             // Object.clone's shallow copy: the same block copy as the [T.clone() intrinsic (TIB + body, sized by
             // the status word). Cloneable collections super.clone() and then fix their own links.
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("copy")))              { return VM.arrayCloneAddr; }    // (Object)Object
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("copy")))              { return VM.arrayCloneAddr; }    // (Object)Object
         }
         // JavaLangAccess.classFileVersion/getClassFileAccessFlags: the same classfile-header reader Class uses,
         // registered under the overlay that declares its own copy (a native binds by DECLARING class).
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Proxy")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Proxy")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("proxyType0")))         { return VM.proxyTypeAddr; }   // ([Class,[Object,[Object,[Object,[Object)Class
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("proxyAlloc0")))        { return VM.proxyAllocAddr; }  // (Class)Object
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("proxyType0")))         { return VM.proxyTypeAddr; }   // ([Class,[Object,[Object,[Object,[Object)Class
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("proxyAlloc0")))        { return VM.proxyAllocAddr; }  // (Class)Object
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/RecordComponent")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/RecordComponent")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("recordInfo0")))        { return VM.classRecordInfoAddr; }  // (Class,J)J
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("recordPart0")))        { return VM.classRecordPartAddr; }  // (Class,J)String
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("recordAnnos0")))       { return VM.classRecordAnnosAddr; } // (Class,J)[Annotation
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("recordInfo0")))        { return VM.classRecordInfoAddr; }  // (Class,J)J
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("recordPart0")))        { return VM.classRecordPartAddr; }  // (Class,J)String
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("recordAnnos0")))       { return VM.classRecordAnnosAddr; } // (Class,J)[Annotation
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/access/MetalJavaLangAccess")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/access/MetalJavaLangAccess")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("classFileWord0")))     { return VM.classFileWordAddr; } // (Class,J)J
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("classFileWord0")))     { return VM.classFileWordAddr; } // (Class,J)J
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Array")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Array")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("newArray0")))         { return VM.newReflectArrayAddr; } // (Class,I)Object
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("newArray0")))         { return VM.newReflectArrayAddr; } // (Class,I)Object
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Class")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Class")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getName0")))          { return VM.classNameAddr; }     // (Class)String
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoGet0")))          { return VM.classAnnoGetAddr; }  // (Class,byte[]) -> instance
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoAll0")))          { return VM.classAnnoAllAddr; }   // (Class)[Annotation
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredClasses0")))  { return VM.classDeclClassesAddr; } // (Class)[Class
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("interfaces0")))       { return VM.classIfacesAddr; }   // (Class)[Class
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("genericSignature0"))) { return VM.classSignatureAddr; } // (Class)String
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("enclosingPart0")))    { return VM.classEnclosingPartAddr; } // (Class,J)String
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("nestPart0")))    { return VM.classNestPartAddr; } // (Class,J)String
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("classFileWord0")))    { return VM.classFileWordAddr; } // (Class,J)String
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("innerPart0")))        { return VM.classInnerPartAddr; }     // (Class,J)String
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("sealed0")))           { return VM.classSealedAddr; }   // (Class)J
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("permitted0")))           { return VM.classPermittedAddr; }   // (Class,J)String
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("forName0")))          { return VM.forNameAddr; }       // (byte[])Class
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("classModifiers0")))   { return VM.classModifiersAddr; } // (Class)I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isInstance0")))       { return VM.instanceOfAddr; }    // (Object,J)Z == VM.instanceOf(Lmagic/ObjectReference;Lmagic/Address;)I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("assignable0")))       { return VM.assignableAddr; }    // (J,J)Z -- interfaces too
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("superclass0")))       { return VM.superclassAddr; }    // (Class)Class
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldMods0")))        { return VM.fieldModsAddr; }     // (Class,byte[])I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldTypeChar0")))    { return VM.fieldTypeCharAddr; } // (Class,byte[])I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getComponentType0")))  { return VM.componentTypeAddr; } // (Class)Class
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isArray0")))          { return VM.isArrayClassAddr; }  // (Class)J
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isPrimitive0")))      { return VM.isPrimClassAddr; }   // (Class)J
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("primitiveClass0")))   { return VM.primClassAddr; }     // (J)Class
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredMethodAt0")))  { return VM.declMethodAddr; }      // (Class,I)String
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredMethodDescAt0"))) { return VM.declMethodDescAddr; } // (Class,I)String
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredMethodCount0"))) { return VM.declMethodCountAddr; } // (Class)J
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredCtorCount0")))  { return VM.declCtorCountAddr; }  // (Class)J
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredCtorDescAt0"))) { return VM.declCtorDescAddr; }   // (Class,int)String
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredFieldAt0")))   { return VM.declFieldAddr; }       // (Class,I)String
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredFieldDescAt0"))) { return VM.declFieldDescAddr; }  // (Class,I)String
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredFieldCount0"))) { return VM.declFieldCountAddr; }  // (Class)J
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("getName0")))          { return VM.classNameAddr; }     // (Class)String
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoGet0")))          { return VM.classAnnoGetAddr; }  // (Class,byte[]) -> instance
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoAll0")))          { return VM.classAnnoAllAddr; }   // (Class)[Annotation
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredClasses0")))  { return VM.classDeclClassesAddr; } // (Class)[Class
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("interfaces0")))       { return VM.classIfacesAddr; }   // (Class)[Class
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("genericSignature0"))) { return VM.classSignatureAddr; } // (Class)String
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("enclosingPart0")))    { return VM.classEnclosingPartAddr; } // (Class,J)String
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("nestPart0")))    { return VM.classNestPartAddr; } // (Class,J)String
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("classFileWord0")))    { return VM.classFileWordAddr; } // (Class,J)String
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("innerPart0")))        { return VM.classInnerPartAddr; }     // (Class,J)String
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("sealed0")))           { return VM.classSealedAddr; }   // (Class)J
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("permitted0")))           { return VM.classPermittedAddr; }   // (Class,J)String
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("forName0")))          { return VM.forNameAddr; }       // (byte[])Class
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("classModifiers0")))   { return VM.classModifiersAddr; } // (Class)I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("isInstance0")))       { return VM.instanceOfAddr; }    // (Object,J)Z == VM.instanceOf(Lmagic/ObjectReference;Lmagic/Address;)I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("assignable0")))       { return VM.assignableAddr; }    // (J,J)Z -- interfaces too
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("superclass0")))       { return VM.superclassAddr; }    // (Class)Class
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldMods0")))        { return VM.fieldModsAddr; }     // (Class,byte[])I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldTypeChar0")))    { return VM.fieldTypeCharAddr; } // (Class,byte[])I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("getComponentType0")))  { return VM.componentTypeAddr; } // (Class)Class
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("isArray0")))          { return VM.isArrayClassAddr; }  // (Class)J
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("isPrimitive0")))      { return VM.isPrimClassAddr; }   // (Class)J
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("primitiveClass0")))   { return VM.primClassAddr; }     // (J)Class
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredMethodAt0")))  { return VM.declMethodAddr; }      // (Class,I)String
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredMethodDescAt0"))) { return VM.declMethodDescAddr; } // (Class,I)String
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredMethodCount0"))) { return VM.declMethodCountAddr; } // (Class)J
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredCtorCount0")))  { return VM.declCtorCountAddr; }  // (Class)J
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredCtorDescAt0"))) { return VM.declCtorDescAddr; }   // (Class,int)String
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredFieldAt0")))   { return VM.declFieldAddr; }       // (Class,I)String
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredFieldDescAt0"))) { return VM.declFieldDescAddr; }  // (Class,I)String
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredFieldCount0"))) { return VM.declFieldCountAddr; }  // (Class)J
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Throwable")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Throwable")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("stackTrace0")))       { return VM.stackTraceAddr; }    // (Throwable)[STE
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fillInStackTrace0"))) { return VM.fillTraceAddr; }     // (Throwable)V
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("stackTrace0")))       { return VM.stackTraceAddr; }    // (Throwable)[STE
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("fillInStackTrace0"))) { return VM.fillTraceAddr; }     // (Throwable)V
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Method")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Method")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("paramTypes0")))       { return VM.paramTypesAddr; }    // (I)Class[]
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("returnType0")))       { return VM.returnTypeAddr; }    // (I)Class
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("paramTypes0")))       { return VM.paramTypesAddr; }    // (I)Class[]
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("returnType0")))       { return VM.returnTypeAddr; }    // (I)Class
         }
         // Executable.getParameterTypes serves a CONSTRUCTOR as well as a Method -- the registry holds `<init>`
         // like any other method -- so the same native is registered under both declaring classes. A native is
@@ -14436,75 +14266,75 @@ public final class Loader
         // paid for once (ClassLoader.resourceExists0 under java/lang/Class).
         // The annotation readers moved up from Method for the same reason: a constructor's annotations are keyed
         // by its registry slot exactly as a method's are.
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Executable")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Executable")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("paramTypes0")))       { return VM.paramTypesAddr; }    // (I)Class[]
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoPresent0")))      { return VM.annoPresentAddr; }   // (I,byte[])I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoGet0")))          { return VM.annoGetAddr; }       // (I,byte[]) -> instance
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoAll0")))          { return VM.methodAnnoAllAddr; } // (I)[Annotation
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("signature0")))        { return VM.methodSignatureAddr; } // (I)String
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("exceptionName0")))    { return VM.methodExceptionNameAddr; } // (I,J)String
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("paramMeta0")))    { return VM.methodParamMetaAddr; } // (I,J)J
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("paramName0")))    { return VM.methodParamNameAddr; } // (I,J)String
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("paramAnnoRow0")))    { return VM.methodParamAnnoRowAddr; } // (I,J)[Annotation
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("paramTypes0")))       { return VM.paramTypesAddr; }    // (I)Class[]
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoPresent0")))      { return VM.annoPresentAddr; }   // (I,byte[])I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoGet0")))          { return VM.annoGetAddr; }       // (I,byte[]) -> instance
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoAll0")))          { return VM.methodAnnoAllAddr; } // (I)[Annotation
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("signature0")))        { return VM.methodSignatureAddr; } // (I)String
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("exceptionName0")))    { return VM.methodExceptionNameAddr; } // (I,J)String
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("paramMeta0")))    { return VM.methodParamMetaAddr; } // (I,J)J
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("paramName0")))    { return VM.methodParamNameAddr; } // (I,J)String
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("paramAnnoRow0")))    { return VM.methodParamAnnoRowAddr; } // (I,J)[Annotation
         }
         // The VM's one class namespace, under stock java.lang.ClassLoader (whose natives are Java over these).
         // Keyed by the helper, not ClassLoader: stock declares its own defineClass0 with another signature.
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalLoaders")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalLoaders")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("defineClass0")))      { return VM.defineClassAddr; }   // (String,byte[],II)Class
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("lookup0")))           { return VM.forNameNoInitAddr; } // (byte[])Class
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("defineClass0")))      { return VM.defineClassAddr; }   // (String,byte[],II)Class
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("lookup0")))           { return VM.forNameNoInitAddr; } // (byte[])Class
         }
         // The VM's run-time counters (VMStats), read by the web server's statistics pages.
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalStats")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalStats")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fill0")))             { return VM.statsFillAddr; }       // (I,long[])J
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("taskThread0")))       { return VM.statsTaskThreadAddr; } // (I)Thread
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("fill0")))             { return VM.statsFillAddr; }       // (I,long[])J
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("taskThread0")))       { return VM.statsTaskThreadAddr; } // (I)Thread
         }
         // A /run program's stop (jdk.internal.misc.MetalRunExit): mark a thread's task, and the defining phase.
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalRunExit")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalRunExit")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("stop0")))             { return VM.runStopAddr; }      // (Thread,Throwable)I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("defining0")))         { return VM.runDefiningAddr; }  // (Z)V
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("stop0")))             { return VM.runStopAddr; }      // (Thread,Throwable)I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("defining0")))         { return VM.runDefiningAddr; }  // (Z)V
         }
         // System.exit -> Runtime.exit -> Shutdown.exit -> beforeHalt(); runHooks(); halt(status) -> halt0.
         // Both ends are NATIVE, so the class loaded fine and the calls resolved nowhere -- reported as
         // `LINK FAILED: java/lang/Shutdown.beforeHalt()V -- class OK but no body`, then a denylist trap.
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Shutdown")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Shutdown")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("beforeHalt")))        { return VM.shutdownBeforeHaltAddr; } // ()V
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("halt0")))             { return VM.shutdownHalt0Addr; }      // (I)V
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("beforeHalt")))        { return VM.shutdownBeforeHaltAddr; } // ()V
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("halt0")))             { return VM.shutdownHalt0Addr; }      // (I)V
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Thread")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Thread")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("currentThread0")))    { return VM.currentThreadAddr; } // ()Thread
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("yield0")))            { return VM.threadYieldAddr; }   // ()V
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("currentThread0")))    { return VM.currentThreadAddr; } // ()Thread
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("yield0")))            { return VM.threadYieldAddr; }   // ()V
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Runtime")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Runtime")))
         {
             // Four A72s on a BCM2711, and this VM brings all four up. Read by ForkJoinPool's initializer to
             // fix the common pool's parallelism.
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("availableProcessors"))) { return VM.availProcsAddr; } // ()I
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("gc")))                  { return VM.runtimeGcAddr; }    // ()V
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("freeMemory")))          { return VM.runtimeFreeAddr; }  // ()J
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("totalMemory")))         { return VM.runtimeTotalAddr; } // ()J
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("maxMemory")))           { return VM.runtimeMaxAddr; }   // ()J
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("availableProcessors"))) { return VM.availProcsAddr; } // ()I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("gc")))                  { return VM.runtimeGcAddr; }    // ()V
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("freeMemory")))          { return VM.runtimeFreeAddr; }  // ()J
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("totalMemory")))         { return VM.runtimeTotalAddr; } // ()J
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("maxMemory")))           { return VM.runtimeMaxAddr; }   // ()J
         }
         // Read once, by Finalizer's own initializer (`static final boolean ENABLED`), so every Finalizer path --
         // register, runFinalization, the finalizer thread's start -- follows this one answer.
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/ref/Finalizer")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/ref/Finalizer")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isFinalizationEnabled"))) { return VM.finalizationEnabledAddr; } // ()Z
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("isFinalizationEnabled"))) { return VM.finalizationEnabledAddr; } // ()Z
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Float")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Float")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("floatToRawIntBits"))) { return VM.identityAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("intBitsToFloat")))    { return VM.identityAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("floatToRawIntBits"))) { return VM.identityAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("intBitsToFloat")))    { return VM.identityAddr; }
         }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Double")))
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Double")))
         {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("doubleToRawLongBits"))) { return VM.identityAddr; }
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("longBitsToDouble")))    { return VM.identityAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("doubleToRawLongBits"))) { return VM.identityAddr; }
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("longBitsToDouble")))    { return VM.identityAddr; }
         }
         return 0L;
     }
@@ -14856,7 +14686,7 @@ public final class Loader
         clTab[clCount].state = RVMClass.ST_LOADED;
         clTab[clCount].base = gbase;
         clTab[clCount].nameOff = gThisNameOff;
-        clTab[clCount].nameHash = utf8Hash(gbase, gThisNameOff);       // folded once; see RVMClass.nameHash
+        clTab[clCount].nameHash = Utf8.utf8Hash(gbase, gThisNameOff);       // folded once; see RVMClass.nameHash
         clTab[clCount].tib = gTib;
         clTab[clCount].type = gType;
         clTab[clCount].absentSuperOff = gAbsentSuperOff;
@@ -15032,7 +14862,7 @@ public final class Loader
 
     private static int ifKey(Address nameBase, int nameOff, Address descBase, int descOff, int runStart)
     {
-        return (utf8Hash2(nameBase, nameOff, descBase, descOff) ^ (runStart * 0x9E3779B1)) & (IFTAB - 1);
+        return (Utf8.utf8Hash2(nameBase, nameOff, descBase, descOff) ^ (runStart * 0x9E3779B1)) & (IFTAB - 1);
     }
 
     /** Link entry {@code i}, in the run starting at {@code runStart}, into the index. */
@@ -15313,7 +15143,7 @@ public final class Loader
         // The SAME predicate the scan used -- the index only narrows what it is applied to, so a hit is the
         // same entry the scan would have found and a miss still answers -1.
         int best = -1;
-        int k = clBucket[utf8Hash(base, nameOff) & (CLTAB - 1)];
+        int k = clBucket[Utf8.utf8Hash(base, nameOff) & (CLTAB - 1)];
         while (k >= 0)
         {
             rbSteps += 1;
@@ -15672,7 +15502,7 @@ public final class Loader
     private static int lazyVhTargetReg(ObjectReference recv, int ci)
     {
         byte[] lazy = Magic.bytes("java/lang/invoke/LazyInitializingVarHandle");
-        if (!utf8IsAtBase(clTab[ci].base, clTab[ci].nameOff, lazy))
+        if (!Utf8.utf8IsAtBase(clTab[ci].base, clTab[ci].nameOff, lazy))
         {
             return -1;
         }
@@ -15706,7 +15536,7 @@ public final class Loader
         while (c >= 0 && hops < MAXCHAIN)
         {
             Address clsU = clTab[c].base.plus(clTab[c].nameOff);
-            if (utf8IsAtBase(clTab[c].base, clTab[c].nameOff, vh))
+            if (Utf8.utf8IsAtBase(clTab[c].base, clTab[c].nameOff, vh))
             {
                 return declaresMethod(clsU, nameU, Address.zero(), true);   // the mode IS an access mode
             }
@@ -16086,7 +15916,7 @@ public final class Loader
                 }
             }
         }
-        if (buf == 0L && vsCls != null && utf8IsAtBase(vsCls.get(idx), 0, Magic.bytes("java/lang/invoke/VarHandle")))
+        if (buf == 0L && vsCls != null && Utf8.utf8IsAtBase(vsCls.get(idx), 0, Magic.bytes("java/lang/invoke/VarHandle")))
         {
             // A SIGNATURE-POLYMORPHIC VarHandle OP. The site's declared owner is VarHandle and nothing in
             // the receiver's chain matches its descriptor -- which is expected, not a failure: the site
@@ -16543,18 +16373,18 @@ public final class Loader
     /** True if the *ref at {@code idx} is a MethodHandle signature-polymorphic method the VM links itself. */
     static boolean isMhSigPoly(int idx)
     {
-        if (!utf8IsAtBase(gbase, refClassNameOff(idx), Magic.bytes("java/lang/invoke/MethodHandle")))
+        if (!Utf8.utf8IsAtBase(gbase, refClassNameOff(idx), Magic.bytes("java/lang/invoke/MethodHandle")))
         {
             return false;
         }
         int n = mrefNameOff(idx);
-        return utf8IsAtBase(gbase, n, Magic.bytes("invokeExact"))
-                || utf8IsAtBase(gbase, n, Magic.bytes("invoke"))
-                || utf8IsAtBase(gbase, n, Magic.bytes("invokeBasic"))
-                || utf8IsAtBase(gbase, n, Magic.bytes("linkToStatic"))
-                || utf8IsAtBase(gbase, n, Magic.bytes("linkToSpecial"))
-                || utf8IsAtBase(gbase, n, Magic.bytes("linkToVirtual"))
-                || utf8IsAtBase(gbase, n, Magic.bytes("linkToInterface"));
+        return Utf8.utf8IsAtBase(gbase, n, Magic.bytes("invokeExact"))
+                || Utf8.utf8IsAtBase(gbase, n, Magic.bytes("invoke"))
+                || Utf8.utf8IsAtBase(gbase, n, Magic.bytes("invokeBasic"))
+                || Utf8.utf8IsAtBase(gbase, n, Magic.bytes("linkToStatic"))
+                || Utf8.utf8IsAtBase(gbase, n, Magic.bytes("linkToSpecial"))
+                || Utf8.utf8IsAtBase(gbase, n, Magic.bytes("linkToVirtual"))
+                || Utf8.utf8IsAtBase(gbase, n, Magic.bytes("linkToInterface"));
     }
 
     /**
@@ -16920,12 +16750,12 @@ public final class Loader
             return 0L;                                  // boot force-compile passes 0
         }
         Address nameU = vsName.get(idx);
-        if (utf8IsAtBase(nameU, 0, Magic.bytes("invokeBasic")))
+        if (Utf8.utf8IsAtBase(nameU, 0, Magic.bytes("invokeBasic")))
         {
             return lambdaFormTarget(Address.fromLong(save).loadObjectReference());
         }
-        boolean exact = utf8IsAtBase(nameU, 0, Magic.bytes("invokeExact"));
-        if (exact || utf8IsAtBase(nameU, 0, Magic.bytes("invoke")))
+        boolean exact = Utf8.utf8IsAtBase(nameU, 0, Magic.bytes("invokeExact"));
+        if (exact || Utf8.utf8IsAtBase(nameU, 0, Magic.bytes("invoke")))
         {
             long linked = mhLink(Address.fromLong(save).loadLong(), vsDesc.get(idx), exact);
             Address.fromLong(save).store(linked);                // invoke may have adapted the handle: run the adapted one
@@ -16947,7 +16777,7 @@ public final class Loader
             // invokeBasic on the receiver, which is the handle in x0 -- the trailing MemberName is dropped.
             return lambdaFormTarget(Address.fromLong(save).loadObjectReference());
         }
-        if (utf8IsAtBase(nameU, 0, Magic.bytes("linkToStatic")) || utf8IsAtBase(nameU, 0, Magic.bytes("linkToSpecial")))
+        if (Utf8.utf8IsAtBase(nameU, 0, Magic.bytes("linkToStatic")) || Utf8.utf8IsAtBase(nameU, 0, Magic.bytes("linkToSpecial")))
         {
             return memberNameTarget(mn);
         }
@@ -17162,7 +16992,7 @@ public final class Loader
             while (j < fldCount)
             {
                 if (utf8EqAt(clTab[chain].base, clTab[chain].nameOff, fldTab[j].base, fldTab[j].classOff)
-                        && rawEqUtf8(fnBase, fnLen, fldTab[j].base, fldTab[j].nameOff))
+                        && Utf8.rawEqUtf8(fnBase, fnLen, fldTab[j].base, fldTab[j].nameOff))
                 {
                     return 16L + fldTab[j].slot * 8L;
                 }
@@ -17186,7 +17016,7 @@ public final class Loader
                 while (j < fldCount)
                 {
                     if (utf8EqAt(clTab[ci].base, clTab[ci].nameOff, fldTab[j].base, fldTab[j].classOff)
-                            && rawEqUtf8(fnBase, fnLen, fldTab[j].base, fldTab[j].nameOff))
+                            && Utf8.rawEqUtf8(fnBase, fnLen, fldTab[j].base, fldTab[j].nameOff))
                     {
                         return j;
                     }
@@ -17232,7 +17062,7 @@ public final class Loader
         int f = 0;
         while (f < fcount)
         {
-            if (rawEqUtf8(fnBase, fnLen, base, gcp[u2(p.plus(2))]))
+            if (Utf8.rawEqUtf8(fnBase, fnLen, base, gcp[u2(p.plus(2))]))
             {
                 cfFieldAccess = u2(p);
                 cfFieldDescChar = u1(base.plus(gcp[u2(p.plus(4))] + 2L));
@@ -17264,7 +17094,7 @@ public final class Loader
         while (i < sgCount)
         {
             if (utf8EqAt(sgTab[i].base, sgTab[i].classOff, clTab[ci].base, clTab[ci].nameOff)
-                    && rawEqUtf8(fnBase, fnLen, sgTab[i].base, sgTab[i].nameOff))
+                    && Utf8.rawEqUtf8(fnBase, fnLen, sgTab[i].base, sgTab[i].nameOff))
             {
                 if (STATIC_ADDR_LOG)
                 {
@@ -17585,7 +17415,7 @@ public final class Loader
         while (m < mcount)
         {
             int attrs = u2(p.plus(6));
-            if (rawEqUtf8(nbase, nlen, blob, gcp[u2(p.plus(2))]) && rawEqUtf8(dbase, dlen, blob, gcp[u2(p.plus(4))]))
+            if (Utf8.rawEqUtf8(nbase, nlen, blob, gcp[u2(p.plus(2))]) && Utf8.rawEqUtf8(dbase, dlen, blob, gcp[u2(p.plus(4))]))
             {
                 if (findCode(blob, p.plus(8), attrs) != 0L)
                 {
@@ -17719,8 +17549,8 @@ public final class Loader
         while (m < mcount)
         {
             int attrs = u2(p.plus(6));
-            if (rawEqUtf8(nbase, nlen, blob, gcp[u2(p.plus(2))])
-                    && (dlen == 0 || rawEqUtf8(dbase, dlen, blob, gcp[u2(p.plus(4))])))
+            if (Utf8.rawEqUtf8(nbase, nlen, blob, gcp[u2(p.plus(2))])
+                    && (dlen == 0 || Utf8.rawEqUtf8(dbase, dlen, blob, gcp[u2(p.plus(4))])))
             {
                 long c = findCode(blob, p.plus(8), attrs);     // sets gcodeLen + gMaxLocals for this method
                 if (c != 0L)
@@ -17824,7 +17654,7 @@ public final class Loader
     {
         if (!ctorWantDesc.isNull())
         {
-            return rawEqUtf8(ctorWantDesc.toAddress().plus(24L), (int) ctorWantDesc.toAddress().plus(16L).loadLong(), base, descOff);
+            return Utf8.rawEqUtf8(ctorWantDesc.toAddress().plus(24L), (int) ctorWantDesc.toAddress().plus(16L).loadLong(), base, descOff);
         }
         return descParamCountRaw(base.plus(descOff)) == paramCount;
     }
@@ -17908,59 +17738,18 @@ public final class Loader
         return ci;
     }
 
-    /** utf8Hash2 of (the Utf8 at {@code b1 + o1}, then the raw bytes {@code [raw, raw + rawLen)}). */
-    private static int utf8HashThenRaw(Address b1, int o1, Address raw, int rawLen)
-    {
-        int len = u2(b1.plus(o1));
-        Address q = b1.plus(o1 + 2L);
-        int h = 0x811C9DC5;
-        int i = 0;
-        while (i < len)
-        {
-            h = (h ^ u1(q.plus(i))) * 0x01000193;
-            i += 1;
-        }
-        i = 0;
-        while (i < rawLen)
-        {
-            h = (h ^ u1(raw.plus(i))) * 0x01000193;
-            i += 1;
-        }
-        return h;
-    }
-
-    /** utf8Hash2 of (the Utf8 at {@code b1 + o1}, then the bytes of {@code name}). */
-    private static int utf8HashThenBytes(Address b1, int o1, byte[] name)
-    {
-        int len = u2(b1.plus(o1));
-        Address q = b1.plus(o1 + 2L);
-        int h = 0x811C9DC5;
-        int i = 0;
-        while (i < len)
-        {
-            h = (h ^ u1(q.plus(i))) * 0x01000193;
-            i += 1;
-        }
-        i = 0;
-        while (i < name.length)
-        {
-            h = (h ^ (name[i] & 0xFF)) * 0x01000193;
-            i += 1;
-        }
-        return h;
-    }
 
     /** Constructor of clTab[ci] by arity (or ctorWantDesc): registry index, or -1. Caller holds the loader lock. */
     private static int ctorResolveRegistry(int ci, int paramCount)
     {
         buildRegIndex();
         int best = -1;
-        int i = rgBucket[utf8HashThenBytes(clTab[ci].base, clTab[ci].nameOff, Magic.bytes("<init>")) & (RGTAB - 1)];
+        int i = rgBucket[Utf8.utf8HashThenBytes(clTab[ci].base, clTab[ci].nameOff, Magic.bytes("<init>")) & (RGTAB - 1)];
         while (i >= 0)
         {
             if ((best < 0 || i < best)
                     && utf8EqAt(clTab[ci].base, clTab[ci].nameOff, rgTab[i].base, rgTab[i].classOff)
-                    && utf8IsAtBase(rgTab[i].base, rgTab[i].nameOff, Magic.bytes("<init>"))
+                    && Utf8.utf8IsAtBase(rgTab[i].base, rgTab[i].nameOff, Magic.bytes("<init>"))
                     && ctorMatches(rgTab[i].base, rgTab[i].descOff, paramCount))
             {
                 best = i;
@@ -17987,12 +17776,12 @@ public final class Loader
             Address nbase = nameArr.toAddress().plus(24L);
             buildRegIndex();
             int best = -1;
-            int i = rgBucket[utf8HashThenRaw(clTab[ci].base, clTab[ci].nameOff, nbase, nlen) & (RGTAB - 1)];
+            int i = rgBucket[Utf8.utf8HashThenRaw(clTab[ci].base, clTab[ci].nameOff, nbase, nlen) & (RGTAB - 1)];
             while (i >= 0)
             {
                 if ((best < 0 || i < best)
                         && utf8EqAt(clTab[ci].base, clTab[ci].nameOff, rgTab[i].base, rgTab[i].classOff)
-                        && rawEqUtf8(nbase, nlen, rgTab[i].base, rgTab[i].nameOff))
+                        && Utf8.rawEqUtf8(nbase, nlen, rgTab[i].base, rgTab[i].nameOff))
                 {
                     best = i;
                 }
@@ -18023,13 +17812,13 @@ public final class Loader
             Address dbase = descArr.toAddress().plus(24L);
             buildRegIndex();
             int best = -1;
-            int i = rgBucket[utf8HashThenRaw(clTab[ci].base, clTab[ci].nameOff, nbase, nlen) & (RGTAB - 1)];
+            int i = rgBucket[Utf8.utf8HashThenRaw(clTab[ci].base, clTab[ci].nameOff, nbase, nlen) & (RGTAB - 1)];
             while (i >= 0)
             {
                 if ((best < 0 || i < best)
                         && utf8EqAt(clTab[ci].base, clTab[ci].nameOff, rgTab[i].base, rgTab[i].classOff)
-                        && rawEqUtf8(nbase, nlen, rgTab[i].base, rgTab[i].nameOff)
-                        && rawEqUtf8(dbase, dlen, rgTab[i].base, rgTab[i].descOff))
+                        && Utf8.rawEqUtf8(nbase, nlen, rgTab[i].base, rgTab[i].nameOff)
+                        && Utf8.rawEqUtf8(dbase, dlen, rgTab[i].base, rgTab[i].descOff))
                 {
                     best = i;
                 }
@@ -18119,7 +17908,7 @@ public final class Loader
         {
             int attrs = u2(p.plus(6));
             int dOff = gcp[u2(p.plus(4))];
-            if (utf8IsAtBase(blob, gcp[u2(p.plus(2))], Magic.bytes("<init>")) && ctorMatches(blob, dOff, paramCount))
+            if (Utf8.utf8IsAtBase(blob, gcp[u2(p.plus(2))], Magic.bytes("<init>")) && ctorMatches(blob, dOff, paramCount))
             {
                 long c = findCode(blob, p.plus(8), attrs);
                 if (c != 0L)
@@ -18303,24 +18092,6 @@ public final class Loader
         return classfileFieldInfo(typeAddr, fnBase, fnLen) ? cfFieldDescChar : -1;
     }
 
-    /** True if the raw byte range {@code rawBase..+rawLen} equals the Utf8 (u2 length + bytes) at {@code utBase+utOff}. */
-    private static boolean rawEqUtf8(Address rawBase, int rawLen, Address utBase, int utOff)
-    {
-        if (u2(utBase.plus(utOff)) != rawLen)
-        {
-            return false;
-        }
-        int k = 0;
-        while (k < rawLen)
-        {
-            if ((rawBase.plus(k).loadUnsignedByte() & 0xFF) != u1(utBase.plus(utOff + 2 + k)))
-            {
-                return false;
-            }
-            k += 1;
-        }
-        return true;
-    }
 
     /** Watch the vtable slot chosen for two named methods, whatever the slot number (see logVtableSlot). */
     private static final boolean METHOD_WATCH_ON = false;
@@ -18329,8 +18100,8 @@ public final class Loader
     private static void logVtableSlot(int classOff, int nameOff, int descOff, int slot, int path)
     {
         if (METHOD_WATCH_ON
-                && (utf8IsAtBase(gbase, nameOff, Magic.bytes("success"))
-                    || utf8IsAtBase(gbase, nameOff, Magic.bytes("blockingFailure"))))
+                && (Utf8.utf8IsAtBase(gbase, nameOff, Magic.bytes("success"))
+                    || Utf8.utf8IsAtBase(gbase, nameOff, Magic.bytes("blockingFailure"))))
         {
             // Watch two SPECIFIC methods regardless of slot. picocli's GroupMatchContainer.validate calls
             // `validationResult.success()`; reflection proves success() answers TRUE on both SUCCESS
@@ -18389,8 +18160,8 @@ public final class Loader
      */
     static boolean isRealSpecial(int idx)
     {
-        if (utf8IsAtBase(gbase, refClassNameOff(idx), Magic.bytes("java/lang/Object"))
-                && utf8IsAtBase(gbase, mrefNameOff(idx), Magic.bytes("<init>")))
+        if (Utf8.utf8IsAtBase(gbase, refClassNameOff(idx), Magic.bytes("java/lang/Object"))
+                && Utf8.utf8IsAtBase(gbase, mrefNameOff(idx), Magic.bytes("<init>")))
         {
             return false;
         }
@@ -18479,7 +18250,7 @@ public final class Loader
 
     private static void fieldOffsetLog(int classOff, int nameOff, int off, int tier)
     {
-        if (!FIELD_WATCH_ON || !utf8IsAtBase(gbase, nameOff, FIELD_WATCH))
+        if (!FIELD_WATCH_ON || !Utf8.utf8IsAtBase(gbase, nameOff, FIELD_WATCH))
         {
             return;
         }
@@ -18526,7 +18297,7 @@ public final class Loader
         }
         while (fldIndexed < fldCount)                    // INCREMENTAL: the registry only grows
         {
-            int hh = utf8Hash2(fldTab[fldIndexed].base, fldTab[fldIndexed].classOff,
+            int hh = Utf8.utf8Hash2(fldTab[fldIndexed].base, fldTab[fldIndexed].classOff,
                                fldTab[fldIndexed].base, fldTab[fldIndexed].nameOff) & (FLDTAB - 1);
             fldNext[fldIndexed] = fldBucket[hh];
             fldBucket[hh] = fldIndexed;
@@ -18540,7 +18311,7 @@ public final class Loader
     {
         buildFldIndex();
         int best = -1;
-        int k = fldBucket[utf8Hash2(clsBase, clsOff, nameBase, nameOff) & (FLDTAB - 1)];
+        int k = fldBucket[Utf8.utf8Hash2(clsBase, clsOff, nameBase, nameOff) & (FLDTAB - 1)];
         while (k >= 0)
         {
             if (utf8EqAt(clsBase, clsOff, fldTab[k].base, fldTab[k].classOff)
@@ -18746,9 +18517,9 @@ public final class Loader
         Address b = gvTab[s].base;
         int n = gvTab[s].name;
         int d = gvTab[s].desc;
-        return (utf8IsAtBase(b, n, Magic.bytes("hashCode")) && utf8IsAtBase(b, d, Magic.bytes("()I")))
-                || (utf8IsAtBase(b, n, Magic.bytes("equals")) && utf8IsAtBase(b, d, Magic.bytes("(Ljava/lang/Object;)Z")))
-                || (utf8IsAtBase(b, n, Magic.bytes("toString")) && utf8IsAtBase(b, d, Magic.bytes("()Ljava/lang/String;")));
+        return (Utf8.utf8IsAtBase(b, n, Magic.bytes("hashCode")) && Utf8.utf8IsAtBase(b, d, Magic.bytes("()I")))
+                || (Utf8.utf8IsAtBase(b, n, Magic.bytes("equals")) && Utf8.utf8IsAtBase(b, d, Magic.bytes("(Ljava/lang/Object;)Z")))
+                || (Utf8.utf8IsAtBase(b, n, Magic.bytes("toString")) && Utf8.utf8IsAtBase(b, d, Magic.bytes("()Ljava/lang/String;")));
     }
 
     /** Fill the vtable slots (this class's + inherited impl code) and the itable directory. */
@@ -19930,10 +19701,10 @@ public final class Loader
         int k = 0;
         while (k < mnCount)
         {
-            if (clsU.isZero() ? mnCls.get(k).isZero() && utf8Same(mnName.get(k), nameU)
-                    : !mnCls.get(k).isZero() && utf8Same(mnCls.get(k), clsU)
-                            && utf8Same(mnName.get(k), nameU)
-                            && utf8Same(mnDesc.get(k), descU))
+            if (clsU.isZero() ? mnCls.get(k).isZero() && Utf8.utf8Same(mnName.get(k), nameU)
+                    : !mnCls.get(k).isZero() && Utf8.utf8Same(mnCls.get(k), clsU)
+                            && Utf8.utf8Same(mnName.get(k), nameU)
+                            && Utf8.utf8Same(mnDesc.get(k), descU))
             {
                 return mnThunk[k];
             }
@@ -20013,7 +19784,7 @@ public final class Loader
         }
         byte[] msg = new byte[u2(mnName.get(k))];
         putUtf8(msg, 0, mnName.get(k));
-        return newExcWithMessage(name, msg);
+        return RuntimeEntrypoints.newExcWithMessage(name, msg);
     }
 
     /**
@@ -20065,7 +19836,7 @@ public final class Loader
             p += 1;
             i += 1;
         }
-        return newExcWithMessage(name, msg);
+        return RuntimeEntrypoints.newExcWithMessage(name, msg);
     }
 
     /** Append the Utf8 at {@code utf8Addr} as it is. */
@@ -20082,31 +19853,6 @@ public final class Loader
         return p;
     }
 
-    /** Two Utf8s, each at an absolute address (u2 len + bytes), are byte-equal. */
-    private static boolean utf8Same(Address a, Address b)
-    {
-        int len = u2(a);
-        if (len != u2(b))
-        {
-            return false;
-        }
-        int i = 0;
-        while (i < len)
-        {
-            if (u1(a.plus(2L + i)) != u1(b.plus(2L + i)))
-            {
-                return false;
-            }
-            i += 1;
-        }
-        return true;
-    }
-
-    /** The Utf8 entry at blob offset {@code off} (u2 len + bytes) equals the Utf8 at absolute address {@code u}. */
-    private static boolean utf8BlobSame(Address base, int off, Address u)
-    {
-        return utf8Same(base.plus(off), u);
-    }
 
     /**
      * Whether class {@code clsU} itself DECLARES {@code name desc} as a native method. Reads the classfile bytes
@@ -20181,8 +19927,8 @@ public final class Loader
         while (m < mcount)
         {
             int access = u2(p);
-            if ((!nativeOnly || (access & 0x0100) != 0) && utf8BlobSame(base, off[u2(p.plus(2L))], nameU)
-                    && (descU.isZero() || utf8BlobSame(base, off[u2(p.plus(4L))], descU)))
+            if ((!nativeOnly || (access & 0x0100) != 0) && Utf8.utf8BlobSame(base, off[u2(p.plus(2L))], nameU)
+                    && (descU.isZero() || Utf8.utf8BlobSame(base, off[u2(p.plus(4L))], descU)))
             {
                 return true;
             }
@@ -21015,7 +20761,7 @@ public final class Loader
     {
         buildRegIndex();
         int best = -1;
-        int i = rgBucket[utf8Hash2(blob, gThisNameOff, blob, nameOff) & (RGTAB - 1)];
+        int i = rgBucket[Utf8.utf8Hash2(blob, gThisNameOff, blob, nameOff) & (RGTAB - 1)];
         while (i >= 0)
         {
             if ((best < 0 || i < best) && rgTab[i].base.EQ(blob) && rgTab[i].nameOff == nameOff
@@ -21227,7 +20973,7 @@ public final class Loader
         // buffer, and those chains are newest-first, so walk the whole chain and keep the oldest hit.
         buildRegIndex();
         int best = -1;
-        int k = rgBucket[utf8Hash2(clsU, 0, nameU, 0) & (RGTAB - 1)];
+        int k = rgBucket[Utf8.utf8Hash2(clsU, 0, nameU, 0) & (RGTAB - 1)];
         while (k >= 0)
         {
             if (rgTab[k].buf != 0L
@@ -21702,7 +21448,7 @@ public final class Loader
             int descOff = gcp[u2(p.plus(4))];
             long code = findCode(gbase, p.plus(8), attrs);  // sets gcodeLen + gMaxLocals
             if (code != 0L && (access & 0x0008) != 0    // static methods only (Objects is all-static)
-                    && !utf8IsAtBase(gbase, nameOff, Magic.bytes("<clinit>")) && lzN < MAXLAZY && dlN < MAXLAZY)
+                    && !Utf8.utf8IsAtBase(gbase, nameOff, Magic.bytes("<clinit>")) && lzN < MAXLAZY && dlN < MAXLAZY)
             {
                 int idx = lzN;
                 lzTab[idx] = new LazyMethod();
@@ -21815,7 +21561,7 @@ public final class Loader
         // the class its own cells are filed under; the answer is only whether one exists, so chain order is moot.
         buildDlIndex();
         boolean hit = false;
-        int k = dlBucket[utf8Hash2(gbase, gThisNameOff, gbase, nameOff) & (DLTAB - 1)];
+        int k = dlBucket[Utf8.utf8Hash2(gbase, gThisNameOff, gbase, nameOff) & (DLTAB - 1)];
         while (k >= 0 && !hit)
         {
             DynLink d = dlTab[k];
@@ -22081,7 +21827,7 @@ public final class Loader
             // boot the class-name bytes were 916k of the refill's 1,420k steps, the method-name bytes 415k,
             // and the slot reads 61k -- while `chain` read 0k, i.e. these probes reach an EMPTY bucket and
             // computing the key was the entire cost of a search that is expected to fail.
-            int k = rgBucket[utf8HashFrom(clTab[ir].nameHash, base, nameOff) & (RGTAB - 1)];
+            int k = rgBucket[Utf8.utf8HashFrom(clTab[ir].nameHash, base, nameOff) & (RGTAB - 1)];
             while (k >= 0)
             {
                 rfChainSteps += 1;
@@ -22102,7 +21848,7 @@ public final class Loader
     private static long regBodyIn(int ir, Address base, int nameOff, int descOff)
     {
         Address ibase = clTab[ir].base;
-        int k = rgBucket[utf8HashFrom(clTab[ir].nameHash, base, nameOff) & (RGTAB - 1)];
+        int k = rgBucket[Utf8.utf8HashFrom(clTab[ir].nameHash, base, nameOff) & (RGTAB - 1)];
         while (k >= 0)
         {
             if (rgTab[k].base.EQ(ibase) && rgTab[k].buf != 0L
@@ -22281,7 +22027,7 @@ public final class Loader
         {
             int attrs = u2(p.plus(6));
             int nameOff = gcp[u2(p.plus(2))];
-            if (utf8IsAtBase(base, nameOff, Magic.bytes("<init>")))   // constructors ONLY; <clinit> is not one
+            if (Utf8.utf8IsAtBase(base, nameOff, Magic.bytes("<init>")))   // constructors ONLY; <clinit> is not one
             {
                 if (want >= 0 && seen == want)
                 {
@@ -22318,8 +22064,8 @@ public final class Loader
         {
             int attrs = u2(p.plus(6));
             int nameOff = gcp[u2(p.plus(2))];
-            if (!utf8IsAtBase(base, nameOff, Magic.bytes("<init>"))
-                    && !utf8IsAtBase(base, nameOff, Magic.bytes("<clinit>")))
+            if (!Utf8.utf8IsAtBase(base, nameOff, Magic.bytes("<init>"))
+                    && !Utf8.utf8IsAtBase(base, nameOff, Magic.bytes("<clinit>")))
             {
                 if (want >= 0 && seen == want)
                 {
@@ -22713,7 +22459,7 @@ public final class Loader
         while (f < fcount)
         {
             int attrs = u2(p.plus(6));
-            if (rawEqUtf8(nbase, nlen, base, gcp[u2(p.plus(2))]))
+            if (Utf8.rawEqUtf8(nbase, nlen, base, gcp[u2(p.plus(2))]))
             {
                 Address q = classAttrNamed(base, p.plus(8L), attrs, Magic.bytes("Signature"));
                 if (q.isZero())
@@ -23024,7 +22770,7 @@ public final class Loader
             p = p.plus(2);
             int alen = u4(p);
             p = p.plus(4);
-            if (utf8IsAtBase(base, gcp[anIdx], name))
+            if (Utf8.utf8IsAtBase(base, gcp[anIdx], name))
             {
                 return p;
             }
@@ -23100,7 +22846,7 @@ public final class Loader
         while (f < fcount)
         {
             int attrs = u2(p.plus(6));
-            if (rawEqUtf8(nbase, nlen, base, gcp[u2(p.plus(2))]))
+            if (Utf8.rawEqUtf8(nbase, nlen, base, gcp[u2(p.plus(2))]))
             {
                 lp = annoListPos(base, p.plus(8L), attrs);
                 f = fcount;                             // found it; stop walking
@@ -23141,7 +22887,7 @@ public final class Loader
         while (f < fcount)
         {
             int attrs = u2(p.plus(6));
-            if (rawEqUtf8(nbase, nlen, base, gcp[u2(p.plus(2))]))
+            if (Utf8.rawEqUtf8(nbase, nlen, base, gcp[u2(p.plus(2))]))
             {
                 return annoFromAttrs(base, p.plus(8), attrs, descArr, descLen);
             }
@@ -23187,7 +22933,7 @@ public final class Loader
         while (f < fcount)
         {
             int attrs = u2(p.plus(6));
-            if (rawEqUtf8(nbase, nlen, base, gcp[u2(p.plus(2))]))
+            if (Utf8.rawEqUtf8(nbase, nlen, base, gcp[u2(p.plus(2))]))
             {
                 descU = base.plus(gcp[u2(p.plus(4))]);          // absolute: survives the re-parse a resolve may cause
                 break;
@@ -23428,7 +23174,7 @@ public final class Loader
             p = p.plus(2);
             int alen = u4(p);
             p = p.plus(4);
-            if (utf8IsAtBase(base, gcp[anIdx], Magic.bytes("RuntimeVisibleAnnotations")))
+            if (Utf8.utf8IsAtBase(base, gcp[anIdx], Magic.bytes("RuntimeVisibleAnnotations")))
             {
                 Address pairs = annoListFind(base, p, descArr, descLen);
                 if (pairs.isZero())
@@ -23784,7 +23530,7 @@ public final class Loader
             p = p.plus(2);
             int alen = u4(p);
             p = p.plus(4);
-            if (utf8IsAtBase(base, gcp[anIdx], Magic.bytes("InnerClasses")))
+            if (Utf8.utf8IsAtBase(base, gcp[anIdx], Magic.bytes("InnerClasses")))
             {
                 return p;
             }
@@ -24207,7 +23953,7 @@ public final class Loader
      * with no measured defect behind it -- {@code guestStringUtf8}, which it shares the shape of, has the
      * same latent gap and the same reason to leave it alone.
      */
-    private static int putUtf8Bytes(byte[] out, int p, byte[] b)
+    static int putUtf8Bytes(byte[] out, int p, byte[] b)
     {
         int i = 0;
         while (i < b.length && p < out.length)
@@ -24376,7 +24122,7 @@ public final class Loader
             p = p.plus(2);
             int alen = u4(p);
             p = p.plus(4);
-            if (utf8IsAtBase(base, gcp[anIdx], Magic.bytes("RuntimeVisibleAnnotations")))
+            if (Utf8.utf8IsAtBase(base, gcp[anIdx], Magic.bytes("RuntimeVisibleAnnotations")))
             {
                 return p;
             }
@@ -24499,7 +24245,7 @@ public final class Loader
             p = p.plus(2);
             int alen = u4(p);
             p = p.plus(4);
-            if (utf8IsAtBase(base, gcp[anIdx], Magic.bytes("RuntimeVisibleAnnotations")))
+            if (Utf8.utf8IsAtBase(base, gcp[anIdx], Magic.bytes("RuntimeVisibleAnnotations")))
             {
                 return annoListHas(base, p, descArr, descLen);
             }
@@ -24519,7 +24265,7 @@ public final class Loader
         {
             int typeIdx = u2(p);
             p = p.plus(2);
-            if (utf8EqArr(base, gcp[typeIdx], descArr, descLen))
+            if (Utf8.utf8EqArr(base, gcp[typeIdx], descArr, descLen))
             {
                 return true;
             }
@@ -24672,15 +24418,15 @@ public final class Loader
             int no = vtNameOff[st + k];
             int dof = vtDescOff[st + k];
             long thunk = 0L;
-            if (utf8IsAtBase(b, no, Magic.bytes("hashCode")) && utf8IsAtBase(b, dof, Magic.bytes("()I")))
+            if (Utf8.utf8IsAtBase(b, no, Magic.bytes("hashCode")) && Utf8.utf8IsAtBase(b, dof, Magic.bytes("()I")))
             {
                 thunk = proxyObjThunks[i * 3];
             }
-            else if (utf8IsAtBase(b, no, Magic.bytes("equals")) && utf8IsAtBase(b, dof, Magic.bytes("(Ljava/lang/Object;)Z")))
+            else if (Utf8.utf8IsAtBase(b, no, Magic.bytes("equals")) && Utf8.utf8IsAtBase(b, dof, Magic.bytes("(Ljava/lang/Object;)Z")))
             {
                 thunk = proxyObjThunks[i * 3 + 1];
             }
-            else if (utf8IsAtBase(b, no, Magic.bytes("toString")) && utf8IsAtBase(b, dof, Magic.bytes("()Ljava/lang/String;")))
+            else if (Utf8.utf8IsAtBase(b, no, Magic.bytes("toString")) && Utf8.utf8IsAtBase(b, dof, Magic.bytes("()Ljava/lang/String;")))
             {
                 thunk = proxyObjThunks[i * 3 + 2];
             }
@@ -24759,8 +24505,8 @@ public final class Loader
                 {
                     Address nb = Address.fromLong(namesArr).plus(24L).plus(j * 8L).loadAddress();
                     Address db = Address.fromLong(descsArr).plus(24L).plus(j * 8L).loadAddress();
-                    if (rawEqUtf8(nb.plus(24L), (int) nb.plus(16L).loadLong(), ifBase.get(m), ifNameOff[m])
-                            && rawEqUtf8(db.plus(24L), (int) db.plus(16L).loadLong(), ifBase.get(m), ifDescOff[m]))
+                    if (Utf8.rawEqUtf8(nb.plus(24L), (int) nb.plus(16L).loadLong(), ifBase.get(m), ifNameOff[m])
+                            && Utf8.rawEqUtf8(db.plus(24L), (int) db.plus(16L).loadLong(), ifBase.get(m), ifDescOff[m]))
                     {
                         thunk = proxyThunk(Address.fromLong(methodsArr).plus(24L).plus(j * 8L).loadLong(), helper);
                     }
@@ -24927,7 +24673,7 @@ public final class Loader
         {
             int r = classRegByType(e.loadAddress());
             Address it = e.plus(8L).loadAddress();
-            if (r >= 0 && !it.isZero() && utf8IsAtBase(clTab[r].base, clTab[r].nameOff, Magic.bytes("java/lang/annotation/Annotation")))
+            if (r >= 0 && !it.isZero() && Utf8.utf8IsAtBase(clTab[r].base, clTab[r].nameOff, Magic.bytes("java/lang/annotation/Annotation")))
             {
                 int z = 0;
                 while (z < clTab[r].ifmCount)
@@ -24948,15 +24694,15 @@ public final class Loader
     /** The contract helper for a method named and typed as {@code equals}/{@code hashCode}/{@code toString}, or 0. */
     private static long annoContractBufFor(Address base, int nameOff, int descOff)
     {
-        if (utf8IsAtBase(base, nameOff, Magic.bytes("equals")) && utf8IsAtBase(base, descOff, Magic.bytes("(Ljava/lang/Object;)Z")))
+        if (Utf8.utf8IsAtBase(base, nameOff, Magic.bytes("equals")) && Utf8.utf8IsAtBase(base, descOff, Magic.bytes("(Ljava/lang/Object;)Z")))
         {
             return annoEqBuf;
         }
-        if (utf8IsAtBase(base, nameOff, Magic.bytes("hashCode")) && utf8IsAtBase(base, descOff, Magic.bytes("()I")))
+        if (Utf8.utf8IsAtBase(base, nameOff, Magic.bytes("hashCode")) && Utf8.utf8IsAtBase(base, descOff, Magic.bytes("()I")))
         {
             return annoHashBuf;
         }
-        if (utf8IsAtBase(base, nameOff, Magic.bytes("toString")) && utf8IsAtBase(base, descOff, Magic.bytes("()Ljava/lang/String;")))
+        if (Utf8.utf8IsAtBase(base, nameOff, Magic.bytes("toString")) && Utf8.utf8IsAtBase(base, descOff, Magic.bytes("()Ljava/lang/String;")))
         {
             return annoStrBuf;
         }
@@ -25006,7 +24752,7 @@ public final class Loader
             // which the dispatch guard turns into a resolution, not a branch.
             Address thunk = Address.zero();
             boolean own = ifBase.get(clTab[ifaceReg].ifmStart + s).EQ(ownBase);
-            boolean isAnnoType = utf8IsAtBase(ifBase.get(clTab[ifaceReg].ifmStart + s),
+            boolean isAnnoType = Utf8.utf8IsAtBase(ifBase.get(clTab[ifaceReg].ifmStart + s),
                     ifNameOff[clTab[ifaceReg].ifmStart + s], Magic.bytes("annotationType"));
             if (own || isAnnoType)
             {
@@ -25046,7 +24792,7 @@ public final class Loader
                 // word. Leaving it zero cost a launcher boot -- JUnit's findRepeatableAnnotations calls it on
                 // every annotation it walks, and a null flowed through isInJavaLangAnnotationPackage's own
                 // null guard to NPE one line later, naming a JUnit method rather than this gap.
-                boolean isAnnoType = utf8IsAtBase(ifBase.get(clTab[cr].ifmStart + z),
+                boolean isAnnoType = Utf8.utf8IsAtBase(ifBase.get(clTab[cr].ifmStart + z),
                         ifNameOff[clTab[cr].ifmStart + z], Magic.bytes("annotationType"));
                 if (isAnnoType)
                 {
@@ -25234,7 +24980,7 @@ public final class Loader
                     q = q.plus(2);
                     int alen = u4(q);
                     q = q.plus(4);
-                    if (utf8IsAtBase(ibase, gcp[anIdx], Magic.bytes("AnnotationDefault")))
+                    if (Utf8.utf8IsAtBase(ibase, gcp[anIdx], Magic.bytes("AnnotationDefault")))
                     {
                         annoPendSlot = slot;
                         annoArrayTib = defArrayTib.get(slot);   // computed BEFORE this parse: see applyAnnoDefaults
@@ -25339,7 +25085,7 @@ public final class Loader
     {
         int count = u2(p.plus(1));
         int atype = atypeForDescChar(annoArrayPrim);
-        int esz = arrayElemSizeOfAtype(atype);
+        int esz = RuntimeEntrypoints.arrayElemSizeOfAtype(atype);
         Address arr = Heap.allocArray(count, esz);
         arr.plus(ObjectModel.TIB_OFFSET).store(primArrayTib(atype));
         Address q = p.plus(3L);
@@ -25676,7 +25422,7 @@ public final class Loader
         {
             int typeIdx = u2(p);
             p = p.plus(2);
-            if (utf8EqArr(base, gcp[typeIdx], descArr, descLen))
+            if (Utf8.utf8EqArr(base, gcp[typeIdx], descArr, descLen))
             {
                 return p;
             }
@@ -25728,24 +25474,6 @@ public final class Loader
         return p.plus(2);                                    // B C D F I J S Z s c: one u2 constant-pool index
     }
 
-    /** True if the Utf8 at {@code base+off} equals the {@code n} bytes of the byte[] payload at {@code arr}. */
-    private static boolean utf8EqArr(Address base, int off, ObjectReference arr, int n)
-    {
-        if (u2(base.plus(off)) != n)
-        {
-            return false;
-        }
-        int k = 0;
-        while (k < n)
-        {
-            if (u1(base.plus(off + 2 + k)) != (arr.toAddress().plus(24L).plus(k).loadUnsignedByte() & 0xFF))
-            {
-                return false;
-            }
-            k += 1;
-        }
-        return true;
-    }
 
     /** Compiled buffer for flattened slot {@code s}: inherited (pre-resolved) or this class's own. */
     private static long slotBuf(int s)
@@ -25877,7 +25605,7 @@ public final class Loader
         int i = 0;
         while (i < vtCount)
         {
-            if (utf8IsAtBase(vtClassBase.get(i), vtClassOff[i], Magic.bytes("java/lang/Object"))
+            if (Utf8.utf8IsAtBase(vtClassBase.get(i), vtClassOff[i], Magic.bytes("java/lang/Object"))
                     && utf8EqAt(gbase, nameOff, vtNameBase.get(i), vtNameOff[i])
                     && utf8EqAt(gbase, descOff, vtNameBase.get(i), vtDescOff[i]))
             {
@@ -25887,9 +25615,6 @@ public final class Loader
         }
         return -1;
     }
-
-
-
 
 
     /** Instance-field byte offset for the field named by {@code *ref} index. */
@@ -26042,7 +25767,7 @@ public final class Loader
     /** True if the Utf8 at {@code off} in the current class equals the literal {@code want} (raw bytes). */
     private static boolean utf8IsStr(int off, byte[] want)
     {
-        return utf8IsAtBase(gbase, off, want);
+        return Utf8.utf8IsAtBase(gbase, off, want);
     }
 
     /** Locate the class-level {@code BootstrapMethods} attribute (after the methods table); set gBsmOff (0 if none). */
@@ -26115,24 +25840,6 @@ public final class Loader
         return ClassReader.stringUtf8Off(gbytes, gcp, arg0Idx);
     }
 
-    /** True if the Utf8 at {@code off} in blob {@code base} equals the literal {@code want}. */
-    private static boolean utf8IsAtBase(Address base, int off, byte[] want)
-    {
-        if (u2(base.plus(off)) != want.length)
-        {
-            return false;
-        }
-        int j = 0;
-        while (j < want.length)
-        {
-            if (u1(base.plus(off + 2 + j)) != (want[j] & 0xFF))
-            {
-                return false;
-            }
-            j += 1;
-        }
-        return true;
-    }
 
     /**
      * Loaded-class-registry index of the class named {@code want}, or -1 if it isn't loaded.
@@ -26141,10 +25848,10 @@ public final class Loader
      * TLS program) with a byte compare at each, and it is on per-EXECUTION paths: resolveUnresolvedNew (a
      * deferred `new`) and resolveLinkTarget both called it twice every time. MEASURED (qprof, SslEngineProbe,
      * 2026-11-06): those two were the top callers of the byte-compare leaves in a warm TLS session. The hash is
-     * the FNV-1a fold {@link #utf8Hash} applies to a Utf8 run, so it lands in the bucket {@link RVMClass#nameHash}
+     * the FNV-1a fold {@link Utf8#utf8Hash} applies to a Utf8 run, so it lands in the bucket {@link RVMClass#nameHash}
      * filed the class in, and the chain walk keeps the LOWEST matching index -- the entry the scan returned.
      */
-    private static int classIndexByName(byte[] want)
+    static int classIndexByName(byte[] want)
     {
         if (clTab == null || clCount == 0)
         {
@@ -26162,7 +25869,7 @@ public final class Loader
         int k = clBucket[h & (CLTAB - 1)];
         while (k >= 0)
         {
-            if ((best < 0 || k < best) && utf8IsAtBase(clTab[k].base, clTab[k].nameOff, want))
+            if ((best < 0 || k < best) && Utf8.utf8IsAtBase(clTab[k].base, clTab[k].nameOff, want))
             {
                 best = k;
             }
@@ -26177,165 +25884,14 @@ public final class Loader
         return classIndexByName(Magic.bytes("java/lang/String"));
     }
 
-    /** True if {@code exc}'s TIB is java/lang/NullPointerException's -- the JIT's implicit null check. */
-    static boolean isNpe(ObjectReference exc)
-    {
-        int i = classIndexByName(Magic.bytes("java/lang/NullPointerException"));
-        if (i < 0 || exc.isNull())
-        {
-            return false;
-        }
-        return exc.toAddress().plus(0L).loadAddress().EQ(clTab[i].tib);
-    }
-
-    /** Allocate a mini {@code java/lang/NullPointerException} (TIB set, field-free) — the JIT's null-check helper. */
-    static long newNpe()
-    {
-        return newExc(Magic.bytes("java/lang/NullPointerException"));
-    }
-
-    /** Allocate a mini {@code java/lang/ArrayIndexOutOfBoundsException} — the JIT's bounds-check helper. */
-    static long newAioobe()
-    {
-        return newExc(Magic.bytes("java/lang/ArrayIndexOutOfBoundsException"));
-    }
-
-    /**
-     * The JIT bounds check's exception: an AIOOBE whose {@code detailMessage} is stock's
-     * {@code "Index i out of bounds for length n"} ({@code Preconditions.outOfBoundsCheckIndex}). The implicit
-     * throw used to carry NO message, so {@code getMessage()} answered null where every stock JVM names the index
-     * and the length -- OobMessageProbe printed that arm's class only. Set directly at {@code Throwable}'s field,
-     * as {@link #newExc} allocates without running a constructor.
-     */
-    static long newAioobeIndex(long index, long length)
-    {
-        long exc = newAioobe();
-        if (exc == 0L)
-        {
-            return exc;
-        }
-        byte[] msg = new byte[64];
-        int n = putAsciiAt(msg, 0, Magic.bytes("Index "));
-        n = putDecAt(msg, n, (int) index);
-        n = putAsciiAt(msg, n, Magic.bytes(" out of bounds for length "));
-        n = putDecAt(msg, n, (int) length);
-        byte[] text = new byte[n];
-        int k = 0;
-        while (k < n)
-        {
-            text[k] = msg[k];
-            k += 1;
-        }
-        setDetailMessage(ObjectReference.fromLong(exc), text);
-        return exc;
-    }
-
-    /**
-     * Store a fresh guest {@code String} holding {@code ascii} as {@code exc}'s {@code Throwable.detailMessage}.
-     * VM code cannot pass a message to a constructor: a string literal in {@code vm/} code compiles to a raw
-     * {@code byte[]} (the {@code Magic.bytes} contract), so {@code new X("msg")} there hands the constructor a
-     * byte array where a String belongs, and {@code getMessage()} answered null (MonitorStateProbe). Left unset
-     * if Throwable or its field cannot be named.
-     */
-    static void setDetailMessage(ObjectReference exc, byte[] ascii)
-    {
-        if (exc.isNull())
-        {
-            return;
-        }
-        setThrowableMessage(exc, guestString(ascii));
-    }
-
-    /** Copy {@code s} into {@code out} at {@code p}; returns the new position. */
-    private static int putAsciiAt(byte[] out, int p, byte[] s)
-    {
-        int i = 0;
-        while (i < s.length)
-        {
-            out[p] = s[i];
-            p += 1;
-            i += 1;
-        }
-        return p;
-    }
-
-    /** Write {@code v} in decimal into {@code out} at {@code p}; returns the new position. Long math: -MIN fits. */
-    private static int putDecAt(byte[] out, int p, int v)
-    {
-        long m = v;
-        if (m < 0L)
-        {
-            out[p] = 0x2D;
-            p += 1;
-            m = -m;
-        }
-        byte[] tmp = new byte[12];
-        int n = 0;
-        do
-        {
-            tmp[n] = (byte) (0x30 + (int) (m % 10L));
-            n += 1;
-            m = m / 10L;
-        }
-        while (m > 0L);
-        while (n > 0)
-        {
-            n -= 1;
-            out[p] = tmp[n];
-            p += 1;
-        }
-        return p;
-    }
-
-    /**
-     * Allocate a {@code java/lang/ArithmeticException} — the JIT's divide-by-zero helper — with stock's message,
-     * {@code "/ by zero"}, which HotSpot gives every integer divide and remainder alike.
-     */
-    static long newArith()
-    {
-        return newExcWithMessage(Magic.bytes("java/lang/ArithmeticException"), Magic.bytes("/ by zero"));
-    }
-
-    /**
-     * Allocate a {@code java/lang/ArrayStoreException} — the JIT's aastore type-mismatch helper — carrying the
-     * message stock gives it: the stored value's class name, as {@code getClass().getName()} spells it
-     * ({@code java.lang.String}, {@code [I}). It used to carry none, so the one fact a reader needs -- what was
-     * being stored -- was missing; a value whose Type cannot be read leaves the message out rather than guess.
-     *
-     * <p>The JIT passes the VALUE. It used to be recorded in a static by the failing check and read back here,
-     * which another core's failing store could overwrite or clear in between (ExcMessageRaceProbe).
-     */
-    static long newArrayStoreException(long value)
-    {
-        long e = newExc(Magic.bytes("java/lang/ArrayStoreException"));
-        Address valueType = value == 0L ? Address.zero() : typeOfObject(ObjectReference.fromLong(value));
-        if (e != 0L && !valueType.isZero() && classNameLen(valueType) > 0)   // a lambda has no name: omit
-        {
-            setThrowableMessage(ObjectReference.fromLong(e), classNameString(valueType));
-        }
-        return e;
-    }
 
     /** {@code obj}'s Type, or 0 for a RAW array, whose TIB slot holds a small tag rather than a Type pointer. */
-    private static Address typeOfObject(ObjectReference obj)
+    static Address typeOfObject(ObjectReference obj)
     {
         long tib = obj.toAddress().loadLong();
         return tib > ObjectModel.MAX_RAW_ARRAY_TIB ? Address.fromLong(tib).loadAddress() : Address.zero();
     }
 
-    /**
-     * A {@code java/lang/<name>} exception whose detail message is {@code msg} (left null when {@code msg} is
-     * null) -- for a VM native that must throw with stock's text, {@link ArrayCopy} first.
-     */
-    static long newExcWithMessage(byte[] name, byte[] msg)
-    {
-        long e = newExc(name);
-        if (e != 0L && msg != null)
-        {
-            setDetailMessage(ObjectReference.fromLong(e), msg);
-        }
-        return e;
-    }
 
     /** {@code type}'s name as {@code Class.getName()} spells it, as raw ASCII; empty if it has none (a lambda). */
     static byte[] typeNameBytes(Address type)
@@ -26361,31 +25917,6 @@ public final class Loader
         return primNameBytes(c);
     }
 
-    /**
-     * Allocate a mini {@code java/lang/NegativeArraySizeException} — the JIT's newarray/anewarray/multianewarray
-     * length helper — whose message is the length in decimal, as stock's is ({@code "-1"}). It used to carry
-     * none. The class is already force-loaded by {@link #pullSupportClasses} and flagged instantiated, so this
-     * needs no seeding of its own.
-     */
-    static long newNase(long length)
-    {
-        long exc = newExc(Magic.bytes("java/lang/NegativeArraySizeException"));
-        if (exc == 0L)
-        {
-            return exc;
-        }
-        byte[] msg = new byte[12];
-        int n = putDecAt(msg, 0, (int) length);
-        byte[] text = new byte[n];
-        int k = 0;
-        while (k < n)
-        {
-            text[k] = msg[k];
-            k += 1;
-        }
-        setDetailMessage(ObjectReference.fromLong(exc), text);
-        return exc;
-    }
 
     // ----- multianewarray (JVMS 6.5) ---------------------------------------
 
@@ -26396,110 +25927,6 @@ public final class Loader
         return gbase.plus((long) gcp[u2(gbase.plus(gcp[classCp]))]).toLong();
     }
 
-    /** Element size in bytes for the component named by the descriptor char after a '[': a reference
-     *  ({@code '['} or {@code 'L'}) is a pointer, everything else is a primitive of its own width. */
-    private static int descElemSize(int c)
-    {
-        if (c == 0x5B || c == 0x4C)
-        {
-            return ObjectModel.WORD;                     // '[' or 'L': the elements are references
-        }
-        int atype = atypeForDescChar(c);
-        return atype < 0 ? ObjectModel.WORD : arrayElemSizeOfAtype(atype);
-    }
-
-    /** Bytes per element for a {@code newarray} atype (JVMS Table 6.5.newarray-A). */
-    private static int arrayElemSizeOfAtype(int atype)
-    {
-        if (atype == 4 || atype == 8) { return 1; }      // boolean, byte
-        if (atype == 5 || atype == 9) { return 2; }      // char, short
-        if (atype == 6 || atype == 10) { return 4; }     // float, int
-        return 8;                                        // double, long
-    }
-
-    /**
-     * {@code multianewarray}: build the first {@code dims} levels of the array type named by the descriptor
-     * at {@code desc} ({@code {u2 len}{bytes}}), with {@code c0..c3} as the per-level counts.
-     *
-     * <p>THE DESCRIPTOR DRIVES EVERYTHING, which is what makes the awkward form fall out instead of needing a
-     * case: {@code dims} may be FEWER than the type's rank ({@code new short[a][b][]} is {@code [[[S} with
-     * dims 2), and then the innermost level allocated is an array OF REFERENCES whose elements stay null.
-     * Stripping one '[' per level gives both the level's own TIB and its element size, and the size question
-     * answers itself -- a level whose next char is '[' or 'L' holds pointers, anything else a primitive.
-     *
-     * <p>The counts are NOT range-checked here: {@code Baseline} emits a {@code NegativeArraySizeException}
-     * check on every one of them BEFORE the call, which is both the JVMS order (all dimensions are checked
-     * before anything is allocated) and the only way to throw from the caller's frame rather than this one.
-     */
-    static long multiNewArray(long desc, int dims, int c0, int c1, int c2, int c3)
-    {
-        Address d = Address.fromLong(desc);              // VM.multiNewArray's raw word: the descriptor's address
-        int n = u2(d);                                   // descriptor length, then its bytes at desc+2
-        return multiLevel(d, 2, n, dims, 0, c0, c1, c2, c3);
-    }
-
-    private static long multiLevel(Address desc, int off, int n, int dims, int level,
-                                   int c0, int c1, int c2, int c3)
-    {
-        int cnt = level == 0 ? c0 : level == 1 ? c1 : level == 2 ? c2 : c3;
-        Address arr = Heap.allocArray(cnt, descElemSize(u1(desc.plus(off + 1))));
-        Address tib = arrayTibOfDescN(desc, off, n);
-        if (!tib.isZero())
-        {
-            arr.plus(ObjectModel.TIB_OFFSET).store(tib);   // else leave the raw element size, as tagArray does
-        }
-        if (level + 1 < dims)
-        {
-            int k = 0;
-            while (k < cnt)
-            {
-                long sub = multiLevel(desc, off + 1, n - 1, dims, level + 1, c0, c1, c2, c3);
-                arr.plus(ObjectModel.ARRAY_BASE_OFFSET).plus((long) k * ObjectModel.WORD).store(sub);
-                k += 1;
-            }
-        }
-        return arr.toLong();
-    }
-
-    /**
-     * A {@code ClassCastException} that SAYS WHAT COULD NOT BE CAST TO WHAT, as stock does.
-     *
-     * <p>A bare ClassCastException names neither side, so the only way to find out is to disassemble the
-     * method and work out which {@code checkcast} it was -- which is exactly what the console launcher's
-     * failure in {@code EngineExecutionOrchestrator} cost. The JIT passes the object and the target Type; with
-     * no target the message is simply omitted, so this can never turn a cast failure into a different failure.
-     *
-     * <p>They used to be recorded in statics by {@code castOk}'s failing path and read back here, which another
-     * core's failing cast could overwrite or clear in between (ExcMessageRaceProbe).
-     */
-    static long newCce(ObjectReference ref, Address targetType)
-    {
-        long e = newExc(Magic.bytes("java/lang/ClassCastException"));
-        if (e != 0L && !ref.isNull() && !targetType.isZero())
-        {
-            long tib = ref.toAddress().loadLong();
-            setThrowableMessage(ObjectReference.fromLong(e), guestString(castFailureMessage(tib, typeOfObject(ref), targetType)));
-        }
-        return e;
-    }
-
-    /** "class a.B cannot be cast to class c.D", or null when either Type cannot be named. */
-    private static byte[] castFailureMessage(long fromTib, Address fromType, Address toType)
-    {
-        byte[] out = new byte[512];
-        int p = putUtf8Bytes(out, 0, Magic.bytes("class "));
-        p = putTypeName(out, p, fromType, fromTib);
-        p = putUtf8Bytes(out, p, Magic.bytes(" cannot be cast to class "));
-        p = putTypeName(out, p, toType, 0L);
-        byte[] exact = new byte[p];
-        int q = 0;
-        while (q < p)
-        {
-            exact[q] = out[q];
-            q += 1;
-        }
-        return exact;
-    }
 
     /**
      * Append the name of {@code type}, or a description when it has none.
@@ -26509,14 +25936,14 @@ public final class Loader
      * binary name, mirroring a hidden class), so a message that bailed out on one would omit itself exactly
      * when the cast failed for the most surprising reason.
      */
-    private static int putTypeName(byte[] out, int p, Address type, long tib)
+    static int putTypeName(byte[] out, int p, Address type, long tib)
     {
         if (type.toLong() <= 0x1000L)
         {
             // No Type node. Say what was actually READ rather than guessing which kind of object it is --
             // inferring from an absence is what produced two wrong readings of this very failure.
             p = putUtf8Bytes(out, p, Magic.bytes("<no Type; tib="));
-            p = putHex(out, p, tib);
+            p = RuntimeEntrypoints.putHex(out, p, tib);
             return putUtf8Bytes(out, p, Magic.bytes(">"));
         }
         // AN ARRAY TYPE IS NOT SYNTHESISED, AND SAYING SO WAS COSTING A DIAGNOSIS. Array Types carry no
@@ -26580,28 +26007,6 @@ public final class Loader
         return putUtf8Bytes(out, p, Magic.bytes(">"));
     }
 
-    /** Append {@code v} as 0x-prefixed hex -- a measured address, for when a name is not available. */
-    private static int putHex(byte[] out, int p, long v)
-    {
-        p = putUtf8Bytes(out, p, Magic.bytes("0x"));
-        int sh = 60;
-        boolean lead = true;
-        while (sh >= 0)
-        {
-            int d = (int) ((v >>> sh) & 0xFL);
-            if (d != 0 || !lead || sh == 0)
-            {
-                lead = false;
-                if (p < out.length)
-                {
-                    out[p] = (byte) (d < 10 ? '0' + d : 'a' + d - 10);
-                    p += 1;
-                }
-            }
-            sh -= 4;
-        }
-        return p;
-    }
 
     /** Append an internal class name with '/' rendered as '.', the form a Java programmer reads. */
     private static int putDotted(byte[] out, int p, Address utf8Addr)
@@ -26618,141 +26023,6 @@ public final class Loader
         return p;
     }
 
-    /** Allocate a mini {@code java/lang/InternalError} — the fault handler's catch-all for an unexpected trap. */
-    static long newInternalError()
-    {
-        return newExc(Magic.bytes("java/lang/InternalError"));
-    }
-
-    /**
-     * Allocate a loaded exception class by name: header + fields, with its TIB stored so {@code catch}
-     * dispatch can walk its Type chain. No constructor runs — the mini exceptions are field-free, and the
-     * JIT synthesises these (there is no {@code new} bytecode to invoke {@code <init>}).
-     */
-    private static long newExc(byte[] name)
-    {
-        int i = classIndexByName(name);
-        if (i < 0)
-        {
-            // NAME IT. A missing exception class yields a bare header with TIB 0: no Type, so `instanceOf`
-            // cannot walk it (uncatchable), `getClass()` answers null, and it has no detailMessage slot --
-            // an exception carrying NOTHING, reported by library code as an identity hash. Silent until now,
-            // and indistinguishable at the catch site from an exception that simply says little.
-            excMissing(name);
-        }
-        Address tib = i >= 0 ? clTab[i].tib : Address.zero();
-        long obj = Heap.alloc(i >= 0 ? (16 + clTab[i].fieldCount * 8) : 16).toLong();
-        Address.fromLong(obj).plus(0L).store(tib);
-        if (i >= 0)
-        {
-            initVmThrowable(ObjectReference.fromLong(obj));
-        }
-        return obj;
-    }
-
-    /** Throwable's instance-field offsets, found by name once: 0 until known, -1 when absent. */
-    private static long thrCauseOff;
-    private static long thrStackTraceOff;
-    private static long thrSuppressedOff;
-    private static long thrMessageOff;
-
-    /** Slot addresses of Throwable's two sentinel statics, once found (0 until then). */
-    private static long thrUnassignedSlot;
-    private static long thrSentinelSlot;
-
-    private static long throwableFieldOff(long cached, byte[] name)
-    {
-        if (cached != 0L || clTab == null)
-        {
-            return cached;
-        }
-        int ti = classIndexByName(Magic.bytes("java/lang/Throwable"));
-        return ti >= 0 ? instanceFieldOffset(ti, name) : 0L;    // -1 if absent: cached by the caller
-    }
-
-    /**
-     * Give a VM-allocated exception the state stock's field initializers give a constructed one. No constructor
-     * runs ({@link #newExc}), so {@code cause = this}, {@code stackTrace = UNASSIGNED_STACK} and
-     * {@code suppressedExceptions = SUPPRESSED_SENTINEL} were never set: stock's {@code initCause} then throws
-     * IllegalStateException ("Can't overwrite cause") and {@code addSuppressed} drops every exception -- on an
-     * implicit NPE, a try-with-resources whose close() also throws lost the close() failure. The sentinels are
-     * Throwable's statics and are read once Throwable has initialized; until then those two fields stay null,
-     * which stock reads as suppression disabled. {@code backtrace = this} marks the exception for
-     * {@code VMUnwind.captureTrace}, which fills its trace at the throw.
-     */
-    private static void initVmThrowable(ObjectReference exc)
-    {
-        thrCauseOff = throwableFieldOff(thrCauseOff, Magic.bytes("cause"));
-        thrStackTraceOff = throwableFieldOff(thrStackTraceOff, Magic.bytes("stackTrace"));
-        thrSuppressedOff = throwableFieldOff(thrSuppressedOff, Magic.bytes("suppressedExceptions"));
-        long btOff = throwableBacktraceOff();
-        if (btOff > 0L)
-        {
-            exc.toAddress().plus(btOff).store(exc);
-        }
-        if (thrCauseOff > 0L)
-        {
-            exc.toAddress().plus(thrCauseOff).store(exc);
-        }
-        if (thrUnassignedSlot == 0L)
-        {
-            thrUnassignedSlot = staticSlotOf(Magic.bytes("java/lang/Throwable"), Magic.bytes("UNASSIGNED_STACK"));
-        }
-        if (thrSentinelSlot == 0L)
-        {
-            thrSentinelSlot = staticSlotOf(Magic.bytes("java/lang/Throwable"), Magic.bytes("SUPPRESSED_SENTINEL"));
-        }
-        if (thrStackTraceOff > 0L && thrUnassignedSlot != 0L)
-        {
-            exc.toAddress().plus(thrStackTraceOff).store(Address.fromLong(thrUnassignedSlot).loadLong());
-        }
-        if (thrSuppressedOff > 0L && thrSentinelSlot != 0L)
-        {
-            exc.toAddress().plus(thrSuppressedOff).store(Address.fromLong(thrSentinelSlot).loadLong());
-        }
-    }
-
-    /** {@code exc}'s {@code Throwable.detailMessage} (a guest String reference), or 0. */
-    static long throwableMessage(ObjectReference exc)
-    {
-        thrMessageOff = throwableFieldOff(thrMessageOff, Magic.bytes("detailMessage"));
-        return thrMessageOff > 0L ? exc.toAddress().plus(thrMessageOff).loadLong() : 0L;
-    }
-
-    /** Store the guest String {@code msg} as {@code exc}'s {@code Throwable.detailMessage}. */
-    private static void setThrowableMessage(ObjectReference exc, long msg)
-    {
-        thrMessageOff = throwableFieldOff(thrMessageOff, Magic.bytes("detailMessage"));
-        if (thrMessageOff > 0L)
-        {
-            exc.toAddress().plus(thrMessageOff).store(msg);
-        }
-    }
-
-    private static final byte[][] excMissed = new byte[16][];
-    private static int excMissedN;
-
-    /** Report an exception class the VM had to throw but could not find, once per name. */
-    private static void excMissing(byte[] name)
-    {
-        int k = 0;
-        while (k < excMissedN)
-        {
-            if (excMissed[k] == name)
-            {
-                return;
-            }
-            k += 1;
-        }
-        if (excMissedN < excMissed.length)
-        {
-            excMissed[excMissedN] = name;
-            excMissedN += 1;
-        }
-        Uart.write(Magic.bytes("\n  EXCEPTION CLASS NOT LOADED (thrown object has no Type): "));
-        Uart.write(name);
-        Uart.putc(0x0A);
-    }
 
     /** TIB of the loaded mini {@code java/lang/String} (for the concat's {@code VMConcat.scEnd}), or 0. */
     static Address stringTib()
@@ -27189,7 +26459,7 @@ public final class Loader
         int i = 0;
         while (i < clCount)
         {
-            if (rawNameEq(clTab[i].base, clTab[i].nameOff, nameStart, nameLen))
+            if (Utf8.rawNameEq(clTab[i].base, clTab[i].nameOff, nameStart, nameLen))
             {
                 return clTab[i].type;
             }
@@ -28154,25 +27424,6 @@ public final class Loader
         return it.toLong();
     }
 
-    /** True if the Utf8 at {@code off} in {@code base} equals the {@code len} raw bytes at {@code raw}. */
-    private static boolean rawNameEq(Address base, int off, Address raw, int len)
-    {
-        if (u2(base.plus(off)) != len)
-        {
-            return false;
-        }
-        int i = 0;
-        while (i < len)
-        {
-            if (u1(base.plus(off + 2 + i)) != u1(raw.plus(i)))
-            {
-                return false;
-            }
-            i += 1;
-        }
-        return true;
-    }
-
 
     /** Compare two Utf8 entries in the current class by length + bytes. */
     private static boolean utf8Eq(int offA, int offB)
@@ -28207,18 +27458,6 @@ public final class Loader
         }
         return true;
     }
-
-    /** STR Xt, [Xn, #off] — off a multiple of 8 (rn=31 = SP, rt=31 = xzr). */
-    private static int strx(int rt, int rn, int off)
-    {
-        return A64Enc.strx(rt, rn, off);
-    }
-    /** LDR Xt, [Xn, #off] — off a multiple of 8 (rn=31 = SP). */
-    private static int ldrx(int rt, int rn, int off)
-    {
-        return A64Enc.ldrx(rt, rn, off);
-    }
-
 
 
     /** Type node of the class named by {@code Class} entry {@code classIdx}, or 0 if unloaded. */
@@ -28283,12 +27522,12 @@ public final class Loader
                 if (clTab[i] != null)
                 {
                     if (cloneableTypeCache.isZero()
-                            && utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/Cloneable")))
+                            && Utf8.utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/Cloneable")))
                     {
                         cloneableTypeCache = clTab[i].type;
                     }
                     else if (serializableTypeCache.isZero()
-                            && utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/io/Serializable")))
+                            && Utf8.utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/io/Serializable")))
                     {
                         serializableTypeCache = clTab[i].type;
                     }
@@ -28305,7 +27544,7 @@ public final class Loader
         int i = 0;
         while (i < clCount)
         {
-            if (utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/Object")))
+            if (Utf8.utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/Object")))
             {
                 return clTab[i].type;
             }
@@ -28467,7 +27706,7 @@ public final class Loader
         while (i < clCount)
         {
             syObjSteps += 1;
-            if (utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/Object")))
+            if (Utf8.utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/Object")))
             {
                 return i;
             }
@@ -28633,7 +27872,7 @@ public final class Loader
     }
 
     /** JVMS field-descriptor char -> newarray atype (Z/B/C/S/I/J/F/D), or -1 for a reference/array element. */
-    private static int atypeForDescChar(int c)
+    static int atypeForDescChar(int c)
     {
         if (c == 0x5A) { return 4; }    // 'Z' boolean
         if (c == 0x43) { return 5; }    // 'C' char
@@ -28656,7 +27895,7 @@ public final class Loader
     /** Array TIB for the {@code n}-byte descriptor at {@code base+off}. Nested descriptors recurse: the
      *  element of "[[I" is "[I", whose Type keys the ref-array cache -- so int[][] shares the SAME canonical
      *  "[I" element node both worlds bake/adopt, and the covariance walk discriminates nested arrays. */
-    private static Address arrayTibOfDescN(Address base, int off, int n)
+    static Address arrayTibOfDescN(Address base, int off, int n)
     {
         int c = u1(base.plus(off + 1));                     // char after the leading '['
         int atype = atypeForDescChar(c);
@@ -28683,7 +27922,7 @@ public final class Loader
         int i = 0;                                      // strip the leading "[L" and trailing ';' -> class name
         while (i < clCount)
         {
-            if (utf8SliceEq(base, off + 2, n - 3, clTab[i].base, clTab[i].nameOff))
+            if (Utf8.utf8SliceEq(base, off + 2, n - 3, clTab[i].base, clTab[i].nameOff))
             {
                 return clTab[i].type;
             }
@@ -28692,24 +27931,6 @@ public final class Loader
         return Address.zero();
     }
 
-    /** True if the {@code n}-byte slice at {@code aBase+aOff} equals the Utf8 name at {@code bBase+bNameOff}. */
-    private static boolean utf8SliceEq(Address aBase, int aOff, int n, Address bBase, int bNameOff)
-    {
-        if (u2(bBase.plus(bNameOff)) != n)
-        {
-            return false;
-        }
-        int j = 0;
-        while (j < n)
-        {
-            if (u1(aBase.plus(aOff + j)) != u1(bBase.plus(bNameOff + 2 + j)))
-            {
-                return false;
-            }
-            j += 1;
-        }
-        return true;
-    }
 
     /** Array TIB for a reference array with the given element Type; created + cached (keyed by element Type). */
     static Address refArrayTib(Address elementType)
@@ -28901,7 +28122,7 @@ public final class Loader
             int i = 0;
             while (i < clCount)
             {
-                if (utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/Class")))
+                if (Utf8.utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/Class")))
                 {
                     classTibCache = clTab[i].tib;
                     break;
@@ -29340,35 +28561,17 @@ public final class Loader
     /** {@link #FRAME_FILL} for the name {@code fillInStackTrace}, {@link #FRAME_INIT} for {@code <init>}, else keep. */
     private static int ctorNameKind(Address p, int len)
     {
-        if (bytesAt(p, len, Magic.bytes("<init>")))
+        if (Utf8.bytesAt(p, len, Magic.bytes("<init>")))
         {
             return FRAME_INIT;
         }
-        if (bytesAt(p, len, Magic.bytes("fillInStackTrace")))
+        if (Utf8.bytesAt(p, len, Magic.bytes("fillInStackTrace")))
         {
             return FRAME_FILL;
         }
         return FRAME_KEEP;
     }
 
-    /** Whether the {@code len} bytes at {@code p} are exactly {@code want}. */
-    private static boolean bytesAt(Address p, int len, byte[] want)
-    {
-        if (len != want.length)
-        {
-            return false;
-        }
-        int j = 0;
-        while (j < len)
-        {
-            if (u1(p.plus(j)) != (want[j] & 0xFF))
-            {
-                return false;
-            }
-            j += 1;
-        }
-        return true;
-    }
 
     /** The Type of the registered class whose internal name is the {@code len} bytes at {@code p}, or 0. */
     private static Address typeByName(Address p, int len)
@@ -29377,7 +28580,7 @@ public final class Loader
         while (ci < clCount)
         {
             RVMClass c = clTab[ci];
-            if (c != null && u2(c.base.plus(c.nameOff)) == len && sameBytesAt(c.base.plus(c.nameOff + 2L), p, len))
+            if (c != null && u2(c.base.plus(c.nameOff)) == len && Utf8.sameBytesAt(c.base.plus(c.nameOff + 2L), p, len))
             {
                 return c.type;
             }
@@ -29386,20 +28589,6 @@ public final class Loader
         return Address.zero();
     }
 
-    /** Whether the {@code len} bytes at {@code a} and at {@code b} are equal. */
-    private static boolean sameBytesAt(Address a, Address b, int len)
-    {
-        int j = 0;
-        while (j < len)
-        {
-            if (u1(a.plus(j)) != u1(b.plus(j)))
-            {
-                return false;
-            }
-            j += 1;
-        }
-        return true;
-    }
 
     /** Class mirror of the registered class whose name Utf8 is {@code base + off}, or 0. */
     private static long classMirrorByName(Address base, int off)
@@ -29451,14 +28640,14 @@ public final class Loader
             return false;
         }
         int n = mrefNameOff(idx);
-        if (!utf8IsAtBase(gbase, n, RECV_WATCH))
+        if (!Utf8.utf8IsAtBase(gbase, n, RECV_WATCH))
         {
             return false;
         }
         // NARROWED TO THE CALLER, not just the callee: `iterator` is dispatched all over the suite, and an
         // unfiltered watch floods the UART and starves the run it is meant to diagnose -- already paid for
         // once by the COMPILE_WATCH arc. The failing dispatch is Map.forEach's, so that is the only one armed.
-        if (!utf8IsAtBase(gbase, gThisNameOff,
+        if (!Utf8.utf8IsAtBase(gbase, gThisNameOff,
                 Magic.bytes("org/junit/platform/engine/discovery/ClassSelector")))
         {
             return false;
@@ -29538,7 +28727,7 @@ public final class Loader
      *  are different bugs and an address alone cannot tell them apart. */
     private static void bufResolveLog(Address refBase, int classOff, int nameOff, int descOff, long buf, int tier)
     {
-        if (!BUF_WATCH_ON || !utf8IsAtBase(refBase, classOff, BUF_WATCH_CLASS))
+        if (!BUF_WATCH_ON || !Utf8.utf8IsAtBase(refBase, classOff, BUF_WATCH_CLASS))
         {
             return;
         }
@@ -29566,7 +28755,7 @@ public final class Loader
      *  compileSigOnDemand; 0 marks an EARLY return, where lnkFailWhy says which guard refused. */
     private static void linkResolveLog(Address clsU, Address nameU, Address descU, long buf, int tier)
     {
-        if (!BUF_WATCH_ON || !utf8IsAtBase(clsU, 0, BUF_WATCH_CLASS))
+        if (!BUF_WATCH_ON || !Utf8.utf8IsAtBase(clsU, 0, BUF_WATCH_CLASS))
         {
             return;
         }
@@ -29706,9 +28895,9 @@ public final class Loader
         }
         // The constructor that loses the value, and the callee the bisect named. Two exact names rather than
         // a prefix: every nested picocli class would bury the reading in noise.
-        return utf8IsAtBase(gbase, gThisNameOff,
+        return Utf8.utf8IsAtBase(gbase, gThisNameOff,
                         Magic.bytes("org/junit/platform/console/shadow/picocli/CommandLine"))
-                || utf8IsAtBase(gbase, gThisNameOff,
+                || Utf8.utf8IsAtBase(gbase, gThisNameOff,
                         Magic.bytes("org/junit/platform/console/shadow/picocli/CommandLine$Interpreter"));
     }
 
@@ -29719,7 +28908,7 @@ public final class Loader
             return false;
         }
         int n = mrefNameOff(idx);
-        if (!utf8IsAtBase(gbase, n, Magic.bytes("forAnnotatedObject")))
+        if (!Utf8.utf8IsAtBase(gbase, n, Magic.bytes("forAnnotatedObject")))
         {
             return false;
         }
@@ -29734,8 +28923,8 @@ public final class Loader
         // ClassSelector, ClassSource AND ObjectStreamClass$ExceptionInfo, and cp index 7 is not unique
         // across them -- an ambiguous line is an instrument that invites the wrong conclusion.
         return FIELD_STORE_WATCH
-                && utf8IsAtBase(gbase, mrefNameOff(idx), Magic.bytes("className"))
-                && utf8IsAtBase(gbase, refClassNameOff(idx),
+                && Utf8.utf8IsAtBase(gbase, mrefNameOff(idx), Magic.bytes("className"))
+                && Utf8.utf8IsAtBase(gbase, refClassNameOff(idx),
                         Magic.bytes("org/junit/platform/engine/discovery/ClassSelector"));
     }
 
@@ -29746,13 +28935,13 @@ public final class Loader
             return false;
         }
         int n = mrefNameOff(idx);
-        if (!utf8IsAtBase(gbase, n, Magic.bytes("getName")))
+        if (!Utf8.utf8IsAtBase(gbase, n, Magic.bytes("getName")))
         {
             return false;
         }
         // Only the ONE call site under investigation, or every `getName` in a 2371-class closure prints and
         // the UART traffic starves the run it exists to diagnose -- a cost this file records paying once.
-        if (!utf8IsAtBase(gbase, gThisNameOff,
+        if (!Utf8.utf8IsAtBase(gbase, gThisNameOff,
                 Magic.bytes("org/junit/platform/engine/discovery/ClassSelector")))
         {
             return false;
@@ -29764,16 +28953,16 @@ public final class Loader
     /** True if the *ref at {@code idx} is {@code jdk/internal/reflect/Reflection.getCallerClass()} (intrinsified). */
     static boolean isGetCallerClass(int idx)
     {
-        return utf8IsAtBase(gbase, mrefNameOff(idx), Magic.bytes("getCallerClass"))
-                && utf8IsAtBase(gbase, mrefDescOff(idx), Magic.bytes("()Ljava/lang/Class;"))
-                && utf8IsAtBase(gbase, refClassNameOff(idx), Magic.bytes("jdk/internal/reflect/Reflection"));
+        return Utf8.utf8IsAtBase(gbase, mrefNameOff(idx), Magic.bytes("getCallerClass"))
+                && Utf8.utf8IsAtBase(gbase, mrefDescOff(idx), Magic.bytes("()Ljava/lang/Class;"))
+                && Utf8.utf8IsAtBase(gbase, refClassNameOff(idx), Magic.bytes("jdk/internal/reflect/Reflection"));
     }
 
     /** True if the *ref at {@code idx} is a {@code getClass()Ljava/lang/Class;} call (intrinsified to a helper). */
     static boolean isGetClass(int idx)
     {
-        return isName(gbase, mrefNameOff(idx), 0x676574436C617373L, 8)   // "getClass"
-                && utf8IsAtBase(gbase, mrefDescOff(idx), Magic.bytes("()Ljava/lang/Class;"));
+        return Utf8.isName(gbase, mrefNameOff(idx), 0x676574436C617373L, 8)   // "getClass"
+                && Utf8.utf8IsAtBase(gbase, mrefDescOff(idx), Magic.bytes("()Ljava/lang/Class;"));
     }
 
     /**
@@ -29794,12 +28983,12 @@ public final class Loader
         }
         int n = mrefNameOff(idx);
         int d = mrefDescOff(idx);
-        return (utf8IsAtBase(gbase, n, Magic.bytes("hashCode"))
-                        && utf8IsAtBase(gbase, d, Magic.bytes("()I")))
-                || (utf8IsAtBase(gbase, n, Magic.bytes("toString"))
-                        && utf8IsAtBase(gbase, d, Magic.bytes("()Ljava/lang/String;")))
-                || (utf8IsAtBase(gbase, n, Magic.bytes("equals"))
-                        && utf8IsAtBase(gbase, d, Magic.bytes("(Ljava/lang/Object;)Z")));
+        return (Utf8.utf8IsAtBase(gbase, n, Magic.bytes("hashCode"))
+                        && Utf8.utf8IsAtBase(gbase, d, Magic.bytes("()I")))
+                || (Utf8.utf8IsAtBase(gbase, n, Magic.bytes("toString"))
+                        && Utf8.utf8IsAtBase(gbase, d, Magic.bytes("()Ljava/lang/String;")))
+                || (Utf8.utf8IsAtBase(gbase, n, Magic.bytes("equals"))
+                        && Utf8.utf8IsAtBase(gbase, d, Magic.bytes("(Ljava/lang/Object;)Z")));
     }
 
     /** {@code invokevirtual "[T".clone()} — a virtual call on an ARRAY receiver (owner Utf8 starts '[').
@@ -29808,15 +28997,15 @@ public final class Loader
     {
         Address p = gbase.plus(ClassReader.refClassNameOff(gbytes, gcp, idx));
         return u2(p) >= 1 && u1(p.plus(2)) == 0x5B                            // owner "[..." (an array class)
-                && utf8IsAtBase(gbase, mrefNameOff(idx), Magic.bytes("clone"));
+                && Utf8.utf8IsAtBase(gbase, mrefNameOff(idx), Magic.bytes("clone"));
     }
 
     /** {@code Class.desiredAssertionStatus()Z} -- intrinsified to {@code false} (assertions are off on metal), so
      *  a stock {@code <clinit>}'s `$assertionsDisabled` idiom needs neither the mirror's vtable nor the method. */
     static boolean isDesiredAssertionStatus(int idx)
     {
-        return utf8IsAtBase(gbase, mrefNameOff(idx), Magic.bytes("desiredAssertionStatus"))
-                && utf8IsAtBase(gbase, mrefDescOff(idx), Magic.bytes("()Z"));
+        return Utf8.utf8IsAtBase(gbase, mrefNameOff(idx), Magic.bytes("desiredAssertionStatus"))
+                && Utf8.utf8IsAtBase(gbase, mrefDescOff(idx), Magic.bytes("()Z"));
     }
 
     /**
@@ -29835,17 +29024,17 @@ public final class Loader
         // dispatch into whatever the directory's slot happened to hold.
         int n = mrefNameOff(idx);
         int d = mrefDescOff(idx);
-        if (utf8IsAtBase(gbase, n, Magic.bytes("wait")))
+        if (Utf8.utf8IsAtBase(gbase, n, Magic.bytes("wait")))
         {
-            if (utf8IsAtBase(gbase, d, Magic.bytes("()V")))  { return 1; }
-            if (utf8IsAtBase(gbase, d, Magic.bytes("(J)V"))) { return 2; }
+            if (Utf8.utf8IsAtBase(gbase, d, Magic.bytes("()V")))  { return 1; }
+            if (Utf8.utf8IsAtBase(gbase, d, Magic.bytes("(J)V"))) { return 2; }
             return 0;                                        // wait(JI)V etc.: unused, fall back to vtable
         }
-        if (utf8IsAtBase(gbase, n, Magic.bytes("notify")) && utf8IsAtBase(gbase, d, Magic.bytes("()V")))
+        if (Utf8.utf8IsAtBase(gbase, n, Magic.bytes("notify")) && Utf8.utf8IsAtBase(gbase, d, Magic.bytes("()V")))
         {
             return 3;
         }
-        if (utf8IsAtBase(gbase, n, Magic.bytes("notifyAll")) && utf8IsAtBase(gbase, d, Magic.bytes("()V")))
+        if (Utf8.utf8IsAtBase(gbase, n, Magic.bytes("notifyAll")) && Utf8.utf8IsAtBase(gbase, d, Magic.bytes("()V")))
         {
             return 4;
         }
@@ -30070,7 +29259,7 @@ public final class Loader
             return;
         }
         int nameOff = gcp[u2(gbase.plus(gcp[classIdx]))];
-        if (!utf8IsAtBase(gbase, nameOff, BUF_WATCH_CLASS))
+        if (!Utf8.utf8IsAtBase(gbase, nameOff, BUF_WATCH_CLASS))
         {
             return;
         }
@@ -30425,17 +29614,17 @@ public final class Loader
     /** {@link compiler.Symbols#mathIntrinsicId} in the current compile context. */
     static int mathIntrinsicId(int idx)
     {
-        if (!utf8IsAtBase(gbase, ClassReader.refClassNameOff(gbytes, gcp, idx), Magic.bytes("java/lang/Math"))
-                || !utf8IsAtBase(gbase, ClassReader.refDescOff(gbytes, gcp, idx), Magic.bytes("(JJ)J")))
+        if (!Utf8.utf8IsAtBase(gbase, ClassReader.refClassNameOff(gbytes, gcp, idx), Magic.bytes("java/lang/Math"))
+                || !Utf8.utf8IsAtBase(gbase, ClassReader.refDescOff(gbytes, gcp, idx), Magic.bytes("(JJ)J")))
         {
             return -1;
         }
         int n = ClassReader.refNameOff(gbytes, gcp, idx);
-        if (utf8IsAtBase(gbase, n, Magic.bytes("multiplyHigh")))
+        if (Utf8.utf8IsAtBase(gbase, n, Magic.bytes("multiplyHigh")))
         {
             return compiler.Intrinsics.SMULH;
         }
-        if (utf8IsAtBase(gbase, n, Magic.bytes("unsignedMultiplyHigh")))
+        if (Utf8.utf8IsAtBase(gbase, n, Magic.bytes("unsignedMultiplyHigh")))
         {
             return compiler.Intrinsics.UMULH;
         }
@@ -30477,140 +29666,45 @@ public final class Loader
     static int magicId(int idx)
     {
         int n = mrefNameOff(idx);
-        if (isName(gbase, n, 0x6279746573L, 5))    { return Intrinsics.BYTES; }    // "bytes"
-        if (isName(gbase, n, 0x6C6F616438L, 5))    { return Intrinsics.LOAD8; }    // "load8"
-        if (isName(gbase, n, 0x6C6F61643332L, 6))  { return Intrinsics.LOAD32; }   // "load32"
-        if (isName(gbase, n, 0x6C6F61643634L, 6))  { return Intrinsics.LOAD64; }   // "load64"
-        if (isName(gbase, n, 0x73746F726538L, 6))  { return Intrinsics.STORE8; }   // "store8"
-        if (isName(gbase, n, 0x73746F72653332L, 7)) { return Intrinsics.STORE32; } // "store32"
-        if (isName(gbase, n, 0x73746F72653634L, 7)) { return Intrinsics.STORE64; } // "store64"
-        if (isName(gbase, n, 0x6361733634L, 5))      { return Intrinsics.CAS64; }    // "cas64"
-        if (isName(gbase, n, 0x737061776EL, 5))      { return Intrinsics.SPAWN; }    // "spawn"
-        if (isName(gbase, n, 0x73656D57616974L, 7))  { return Intrinsics.SEM_WAIT; } // "semWait"
-        if (isName(gbase, n, 0x73656D506F7374L, 7))  { return Intrinsics.SEM_POST; } // "semPost"
-        if (isName(gbase, n, 0x736C6565704D73L, 7))  { return Intrinsics.SLEEP_MS; } // "sleepMs"
-        if (isName(gbase, n, 0x6E657753656DL, 6))    { return Intrinsics.NEW_SEM; }  // "newSem"
-        if (isName(gbase, n, 0x7265706F7274L, 6))    { return Intrinsics.REPORT; }   // "report"
-        if (isName(gbase, n, 0x7072696E74537472L, 8)) { return Intrinsics.PRINT_STR; } // "printStr"
-        if (isName(gbase, n, 0x616464724F66L, 6))    { return Intrinsics.ADDR_OF; }   // "addrOf"
-        if (isName(gbase, n, 0x66726F6D41646472L, 8)) { return Intrinsics.FROM_ADDR; } // "fromAddr"
-        if (isName(gbase, n, 0x63616C6C4EL, 5))      { return Intrinsics.CALL_N; }    // "callN"
-        if (isName(gbase, n, 0x6D77616974L, 5))      { return Intrinsics.MON_WAIT; }    // "mwait"
-        if (isName(gbase, n, 0x6D6E6F74696679L, 7))  { return Intrinsics.MON_NOTIFY; }  // "mnotify"
-        if (isName(gbase, n, 0x6D6E6F74616C6CL, 7))  { return Intrinsics.MON_NOTALL; }  // "mnotall"
-        if (isName(gbase, n, 0x746A6F696EL, 5))      { return Intrinsics.THREAD_JOIN; } // "tjoin"
-        if (isName(gbase, n, 0x737461636B7472L, 7))  { return Intrinsics.STACK_TRACE; } // "stacktr"
-        if (isName(gbase, n, 0x616C6C746872L, 6))    { return Intrinsics.ALL_THREADS; } // "allthr"
-        if (isName(gbase, n, 0x686C646C6F636BL, 7))  { return Intrinsics.HOLDS_LOCK; }  // "hldlock"
-        if (isName(gbase, n, 0x696E7472L, 4))        { return Intrinsics.INTR; }        // "intr"
-        if (isName(gbase, n, 0x6973696E7472L, 6))    { return Intrinsics.IS_INTR; }     // "isintr"
-        if (isName(gbase, n, 0x776173696E7472L, 7))  { return Intrinsics.WAS_INTR; }    // "wasintr"
-        if (isName(gbase, n, 0x6973616C697665L, 7))  { return Intrinsics.IS_ALIVE; }    // "isalive"
-        if (isName(gbase, n, 0x6A6F696E6D73L, 6))    { return Intrinsics.JOIN_TIMED; }  // "joinms"
-        if (isName(gbase, n, 0x7061726BL, 4))        { return Intrinsics.PARK; }        // "park"
-        if (isName(gbase, n, 0x756E7061726BL, 6))    { return Intrinsics.UNPARK; }      // "unpark"
-        if (isName(gbase, n, 0x726561644C52L, 6))    { return Intrinsics.READ_LR; }     // "readLR" (getCallerClass)
-        if (isName(gbase, n, 0x72656164583136L, 7))  { return Intrinsics.READ_X16; }   // "readX16" (wild-branch target)
-        if (isName(gbase, n, 0x6D70696472L, 5))      { return Intrinsics.READ_MPIDR; }  // "mpidr" (which core am I?)
-        if (isName(gbase, n, 0x7365747072696FL, 7))  { return Intrinsics.SET_PRIO; }    // "setprio"
-        if (isName(gbase, n, 0x6765747072696FL, 7))  { return Intrinsics.GET_PRIO; }    // "getprio"
+        if (Utf8.isName(gbase, n, 0x6279746573L, 5))    { return Intrinsics.BYTES; }    // "bytes"
+        if (Utf8.isName(gbase, n, 0x6C6F616438L, 5))    { return Intrinsics.LOAD8; }    // "load8"
+        if (Utf8.isName(gbase, n, 0x6C6F61643332L, 6))  { return Intrinsics.LOAD32; }   // "load32"
+        if (Utf8.isName(gbase, n, 0x6C6F61643634L, 6))  { return Intrinsics.LOAD64; }   // "load64"
+        if (Utf8.isName(gbase, n, 0x73746F726538L, 6))  { return Intrinsics.STORE8; }   // "store8"
+        if (Utf8.isName(gbase, n, 0x73746F72653332L, 7)) { return Intrinsics.STORE32; } // "store32"
+        if (Utf8.isName(gbase, n, 0x73746F72653634L, 7)) { return Intrinsics.STORE64; } // "store64"
+        if (Utf8.isName(gbase, n, 0x6361733634L, 5))      { return Intrinsics.CAS64; }    // "cas64"
+        if (Utf8.isName(gbase, n, 0x737061776EL, 5))      { return Intrinsics.SPAWN; }    // "spawn"
+        if (Utf8.isName(gbase, n, 0x73656D57616974L, 7))  { return Intrinsics.SEM_WAIT; } // "semWait"
+        if (Utf8.isName(gbase, n, 0x73656D506F7374L, 7))  { return Intrinsics.SEM_POST; } // "semPost"
+        if (Utf8.isName(gbase, n, 0x736C6565704D73L, 7))  { return Intrinsics.SLEEP_MS; } // "sleepMs"
+        if (Utf8.isName(gbase, n, 0x6E657753656DL, 6))    { return Intrinsics.NEW_SEM; }  // "newSem"
+        if (Utf8.isName(gbase, n, 0x7265706F7274L, 6))    { return Intrinsics.REPORT; }   // "report"
+        if (Utf8.isName(gbase, n, 0x7072696E74537472L, 8)) { return Intrinsics.PRINT_STR; } // "printStr"
+        if (Utf8.isName(gbase, n, 0x616464724F66L, 6))    { return Intrinsics.ADDR_OF; }   // "addrOf"
+        if (Utf8.isName(gbase, n, 0x66726F6D41646472L, 8)) { return Intrinsics.FROM_ADDR; } // "fromAddr"
+        if (Utf8.isName(gbase, n, 0x63616C6C4EL, 5))      { return Intrinsics.CALL_N; }    // "callN"
+        if (Utf8.isName(gbase, n, 0x6D77616974L, 5))      { return Intrinsics.MON_WAIT; }    // "mwait"
+        if (Utf8.isName(gbase, n, 0x6D6E6F74696679L, 7))  { return Intrinsics.MON_NOTIFY; }  // "mnotify"
+        if (Utf8.isName(gbase, n, 0x6D6E6F74616C6CL, 7))  { return Intrinsics.MON_NOTALL; }  // "mnotall"
+        if (Utf8.isName(gbase, n, 0x746A6F696EL, 5))      { return Intrinsics.THREAD_JOIN; } // "tjoin"
+        if (Utf8.isName(gbase, n, 0x737461636B7472L, 7))  { return Intrinsics.STACK_TRACE; } // "stacktr"
+        if (Utf8.isName(gbase, n, 0x616C6C746872L, 6))    { return Intrinsics.ALL_THREADS; } // "allthr"
+        if (Utf8.isName(gbase, n, 0x686C646C6F636BL, 7))  { return Intrinsics.HOLDS_LOCK; }  // "hldlock"
+        if (Utf8.isName(gbase, n, 0x696E7472L, 4))        { return Intrinsics.INTR; }        // "intr"
+        if (Utf8.isName(gbase, n, 0x6973696E7472L, 6))    { return Intrinsics.IS_INTR; }     // "isintr"
+        if (Utf8.isName(gbase, n, 0x776173696E7472L, 7))  { return Intrinsics.WAS_INTR; }    // "wasintr"
+        if (Utf8.isName(gbase, n, 0x6973616C697665L, 7))  { return Intrinsics.IS_ALIVE; }    // "isalive"
+        if (Utf8.isName(gbase, n, 0x6A6F696E6D73L, 6))    { return Intrinsics.JOIN_TIMED; }  // "joinms"
+        if (Utf8.isName(gbase, n, 0x7061726BL, 4))        { return Intrinsics.PARK; }        // "park"
+        if (Utf8.isName(gbase, n, 0x756E7061726BL, 6))    { return Intrinsics.UNPARK; }      // "unpark"
+        if (Utf8.isName(gbase, n, 0x726561644C52L, 6))    { return Intrinsics.READ_LR; }     // "readLR" (getCallerClass)
+        if (Utf8.isName(gbase, n, 0x72656164583136L, 7))  { return Intrinsics.READ_X16; }   // "readX16" (wild-branch target)
+        if (Utf8.isName(gbase, n, 0x6D70696472L, 5))      { return Intrinsics.READ_MPIDR; }  // "mpidr" (which core am I?)
+        if (Utf8.isName(gbase, n, 0x7365747072696FL, 7))  { return Intrinsics.SET_PRIO; }    // "setprio"
+        if (Utf8.isName(gbase, n, 0x6765747072696FL, 7))  { return Intrinsics.GET_PRIO; }    // "getprio"
         return -1;
     }
 
 
-
-
-    // encodings (pure int math — JDK-free)
-    private static int movz(int rd, int imm)
-    {
-        return A64Enc.movz(rd, imm, 0);
-    }
-    private static int mov(int rd, int rm)
-    {
-        return A64Enc.movReg(rd, rm);
-    }
-
-    // condition codes (EQ=0 NE=1 GE=10 LT=11 GT=12 LE=13)
-    private static int ifCond(int op)
-    {
-        return code6(op - 0x99);
-    }
-    private static int icmpCond(int op)
-    {
-        return code6(op - 0x9f);
-    }
-    private static int code6(int k)
-    {
-        if (k == 0)
-        {
-            return 0;    // eq
-        }
-        if (k == 1)
-        {
-            return 1;    // ne
-        }
-        if (k == 2)
-        {
-            return 11;    // lt
-        }
-        if (k == 3)
-        {
-            return 10;    // ge
-        }
-        if (k == 4)
-        {
-            return 12;    // gt
-        }
-        return 13;              // le
-    }
-
-
-    private static int opLen(int op)
-    {
-        if (op == 0x10 || op == 0x12 || op == 0x15 || op == 0x16 || op == 0x17 || op == 0x18 || op == 0x19
-                || op == 0x36 || op == 0x37 || op == 0x38 || op == 0x39 || op == 0x3a || op == 0xa9 || op == 0xbc)
-        {
-            return 2;    // bipush/ldc/iload/lload/fload/dload/aload/istore/lstore/fstore/dstore/astore/ret/newarray
-        }
-        if (op == 0xb9 || op == 0xba)
-        {
-            return 5;    // invokeinterface: index(2)+count(1)+zero(1) / invokedynamic: index(2)+zero(2)
-        }
-        if (op == 0x11 || op == 0x13 || op == 0x14 || op == 0x84 || (op >= 0x99 && op <= 0xa8) || op == 0xc6 || op == 0xc7
-                || op == 0xb2 || op == 0xb3 || op == 0xb4 || op == 0xb5 || op == 0xb6 || op == 0xb7 || op == 0xb8
-                || op == 0xbb || op == 0xbd || op == 0xc0 || op == 0xc1)
-        {
-            return 3;    // sipush/ldc_w/ldc2_w/iinc/if*/goto/jsr/get-put(static|field)/invoke*/new/anewarray/cast/instanceof
-        }
-        return 1;
-    }
-
-    /**
-     * Full instruction length at {@code pc} in the bytecode at memory {@code code} — position-aware, so the
-     * variable-length {@code tableswitch}/{@code lookupswitch}/{@code wide}/{@code multianewarray} (present in
-     * real java.base) don't misalign the scanners. Falls back to the fixed table {@link #opLen(int)}.
-     */
-    private static int insnLen(long code, int pc)
-    {
-        int op = u1(code + pc);
-        if (op == 0xAA)                                    // tableswitch
-        {
-            int p = pc + 1 + ((4 - ((pc + 1) & 3)) & 3);
-            return (p + 12 + (u4(code + p + 8) - u4(code + p + 4) + 1) * 4) - pc;
-        }
-        if (op == 0xAB)                                    // lookupswitch
-        {
-            int p = pc + 1 + ((4 - ((pc + 1) & 3)) & 3);
-            return (p + 8 + u4(code + p + 4) * 8) - pc;
-        }
-        if (op == 0xC4)                                    // wide (iinc = 6, else 4)
-        {
-            return u1(code + pc + 1) == 0x84 ? 6 : 4;
-        }
-        if (op == 0xC5)                                    // multianewarray
-        {
-            return 4;
-        }
-        return opLen(op);
-    }
 }

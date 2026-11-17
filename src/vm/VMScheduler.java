@@ -1540,7 +1540,7 @@ public final class VMScheduler
         if (ms < 0L)
         {
             IllegalArgumentException e = new IllegalArgumentException();
-            Loader.setDetailMessage(ObjectReference.fromObject(e), Magic.bytes("timeout value is negative"));
+            RuntimeEntrypoints.setDetailMessage(ObjectReference.fromObject(e), Magic.bytes("timeout value is negative"));
             throw e;
         }
         long daif = schedLock();
@@ -1668,7 +1668,7 @@ public final class VMScheduler
     private static IllegalMonitorStateException notOwner()
     {
         IllegalMonitorStateException e = new IllegalMonitorStateException();
-        Loader.setDetailMessage(ObjectReference.fromObject(e), Magic.bytes("current thread is not owner"));
+        RuntimeEntrypoints.setDetailMessage(ObjectReference.fromObject(e), Magic.bytes("current thread is not owner"));
         return e;
     }
 

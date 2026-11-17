@@ -2034,7 +2034,7 @@ final class VMNatives
         {
             Loader.printClassName(Address.fromLong(tib).loadAddress());      // TIB[0] = Type -> the exception's class name
         }
-        long msg = Loader.throwableMessage(self);          // Throwable.detailMessage, by name
+        long msg = RuntimeEntrypoints.throwableMessage(self);          // Throwable.detailMessage, by name
         if (msg > 0x1000L)
         {
             Uart.write(Magic.bytes(": "));

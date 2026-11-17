@@ -4,6 +4,30 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **LOADER REFACTOR, INCREMENT 1: three leaf classes out of `vm/Loader` (2026-11-17).** The first step of
+  reorganising the 30,616-line Loader along JikesRVM's `org.jikesrvm.classloader` lines (one responsibility per
+  class; phase 1 moves code WITHOUT changing it, phase 2 replaces the `g*` "current class" parse statics with a
+  per-class object). Pure move: no method body changed except call-site qualification.
+  - **`ClassBytes`** (JikesRVM `BytecodeStream`): `u1`/`u2`/`u4` at a `long` and at an `Address`, `opLen`,
+    `insnLen`. ~730 call sites, so Loader, `Utf8` and `RuntimeEntrypoints` reach them by `import static`.
+  - **`Utf8`** (the name half of JikesRVM's `Atom`, without interning): the 18 stateless compare/FNV-1a helpers
+    (`utf8IsAtBase`, `utf8Hash`, `utf8Hash2`, `rawEqUtf8`, `isName`, ...). Callers say `Utf8.x(...)`. Left in Loader
+    on purpose: `utf8Eq`/`utf8IsStr` (read the `gbase` parse context), `utf8EqAt` (`badRead`), `utf8HasPrefix`
+    (`pcDenySteps` counter), `decodeUtf8At` (outputs through `decCh`/`decNext`, which the string pool reads).
+  - **`RuntimeEntrypoints`** (same name in JikesRVM): the implicit-exception factories (`newNpe`, `newAioobe*`,
+    `newCce`, `newArith`, `newNase`, `newArrayStoreException`, `newExc*`, `newInternalError`), Throwable field
+    access (`initVmThrowable`, `throwableMessage`, the `thr*` offset caches), `excMissing`, and `multiNewArray`.
+    Still reaches the class registry as `Loader.clTab`/`Loader.classIndexByName`. External callers in VM,
+    VMNatives, VMScheduler, VMUnwind, ArrayCopy requalified; the writer's name-keyed helpers all go through `vm/VM`
+    wrappers, so no stash key changed.
+  - **Deleted (no callers):** `movz`, `mov`, `ifCond`, `icmpCond`, `code6`, `strx`, `ldrx`.
+  - **Loader 30,616 -> 29,710 lines.** Image 39,532,944 -> 39,533,888 bytes (+944: three more class/method name
+    sets). Eleven Loader members lost `private` (now read from `RuntimeEntrypoints`).
+  - **Validation:** `make test` + overlaycheck clean; targeted QEMU probes (exceptions, arrays, casts, initializer
+    failure, missing natives, stack traces) **16/16 pass** (ArithMessage, ArrayAllocDepth, ArrayCovariance,
+    ArraycopyCheck, ArrayElem, ArrayTypeIdentity, ThrowableStock, StockException, ThrowableToString, CtorChainTrace,
+    DeepTrace, ClinitFail, ExcMessageRace, NativeMissing, NullDispatch, Trace). Not run: full regression, suite, Pi.
+
 - **UNBOXED TYPES, INCREMENT 36: Type/TIB pointers, stage 4 -- the descriptor-reached helpers (2026-11-17).**
   Pi-validated (build 0ac3ea1ce7ac7629). Closes the Type/TIB sub-arc.
   - **Retyped (the Type argument -> Address, with every descriptor site):** `VM.instanceOf`/`checkCast`

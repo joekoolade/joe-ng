@@ -65,7 +65,7 @@ final class VMUnwind
             return;                                          //   is filled here (a constructed one has its trace or none)
         }
         Address e = exc.toAddress();
-        if (NPE_TRACE && Loader.isNpe(exc))
+        if (NPE_TRACE && RuntimeEntrypoints.isNpe(exc))
         {
             // A MESSAGELESS NPE is the JIT's own null check, so it names no cause and picocli can only report
             // that one happened. Its throw SITE is the missing fact, and it is already in hand here: this is
@@ -444,7 +444,7 @@ final class VMUnwind
                 {
                     Uart.write(Magic.bytes("\nException in thread \"main\" "));
                     Loader.printClassName(Address.fromLong(xt).loadAddress());
-                    long msg = Loader.throwableMessage(exc);     // Throwable.detailMessage, by name
+                    long msg = RuntimeEntrypoints.throwableMessage(exc);     // Throwable.detailMessage, by name
                     if (msg > 0x1000L)
                     {
                         Uart.write(Magic.bytes(": "));
