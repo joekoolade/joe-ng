@@ -1552,7 +1552,7 @@ public final class VM
         {
             return 1;
         }
-        if (ref.toAddress().loadLong() <= ObjectModel.MAX_RAW_ARRAY_TIB && isArrayType(targetType))
+        if (ref.toAddress().loadLong() <= ObjectModel.MAX_RAW_ARRAY_TIB && isArrayType(Address.fromLong(targetType)))
         {
             return 1;      // a RAW array (no Type node) cast to an array class: trust the verifier, as checkCast does
         }
@@ -3187,14 +3187,14 @@ public final class VM
         {
             return 0;    // a raw array (element size in @0, no Type): not an instance of any class/interface type
         }
-        long type = Address.fromLong(tib).loadLong();                 // TIB→Type (@0); for a typed array, the array Type
-        return typeAssignable(type, targetType) ? 1 : 0;
+        Address type = Address.fromLong(tib).loadAddress();           // TIB→Type (@0); for a typed array, the array Type
+        return typeAssignable(type, Address.fromLong(targetType)) ? 1 : 0;
     }
 
     /** True if an array Type (its instanceSize slot carries the tag). */
-    private static boolean isArrayType(long type)
+    private static boolean isArrayType(Address type)
     {
-        return (Address.fromLong(type).loadLong() & ObjectModel.ARRAY_TYPE_TAG_MASK) == ObjectModel.ARRAY_TYPE_TAG;
+        return (type.loadLong() & ObjectModel.ARRAY_TYPE_TAG_MASK) == ObjectModel.ARRAY_TYPE_TAG;
     }
 
     /**
@@ -3218,11 +3218,11 @@ public final class VM
      * covariance, and takes the O(1) display fast path for class targets. This just makes the mirror ask it
      * instead of keeping a second, weaker copy of the rule.
      */
-    static int typesAssignable(long fromType, long targetType)
+    static int typesAssignable(Address fromType, Address targetType)
     {
-        if (fromType == 0L || targetType == 0L)
+        if (fromType.isZero() || targetType.isZero())
         {
-            return fromType == targetType ? 1 : 0;      // a mirror with no Type answers only about itself
+            return fromType.EQ(targetType) ? 1 : 0;     // a mirror with no Type answers only about itself
         }
         if (typeAssignable(fromType, targetType))
         {
@@ -3233,13 +3233,13 @@ public final class VM
         return Loader.ifaceExtends(fromType, targetType);
     }
 
-    private static boolean typeAssignable(long type, long targetType)
+    private static boolean typeAssignable(Address type, Address targetType)
     {
-        if (type != targetType && targetType != 0L && isArrayType(type) && isArrayType(targetType))
+        if (type.NE(targetType) && !targetType.isZero() && isArrayType(type) && isArrayType(targetType))
         {
-            long elemType = Address.fromLong(type).plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong();
-            long elemTarget = Address.fromLong(targetType).plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong();
-            if (elemType != 0L && elemTarget != 0L)    // both reference-element arrays: covariant on the element
+            Address elemType = type.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadAddress();
+            Address elemTarget = targetType.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadAddress();
+            if (!elemType.isZero() && !elemTarget.isZero())   // both reference-element arrays: covariant on the element
             {
                 if (typeAssignable(elemType, elemTarget))
                 {
@@ -3259,7 +3259,7 @@ public final class VM
                 // no display, no superclass link), so it never reaches Object. Map.Entry[] -> Object[] is
                 // the live case -- AbstractCollection.toArray(T[]) casts exactly that, which is how
                 // Map.copyOf(...) (java.util.jar.Attributes$Name's initializer) reached a checkCast spin.
-                return elemTarget == Loader.objectTypeAddr().toLong();
+                return elemTarget.EQ(Loader.objectTypeAddr());
             }
             // a primitive element on either side is invariant: only the exact-match below can succeed
         }
@@ -3268,7 +3268,7 @@ public final class VM
         // instanceof Cloneable answered false, and through the element recursion int[][] was no Cloneable[]
         // (ArrayCovarianceProbe). Ahead of the fast paths, because an array Type's implements-bitmap answers
         // the interface-ID test without either bit.
-        if (isArrayType(type) && Loader.isArrayInterface(Address.fromLong(targetType)))
+        if (isArrayType(type) && Loader.isArrayInterface(targetType))
         {
             return true;
         }
@@ -3276,18 +3276,18 @@ public final class VM
         // question is one bounds check + one compare (S is a T iff S.display[T.depth] == T).
         // Interface targets carry depth -1 and NO display -- their answers live in itable dirs,
         // handled by the walk below; a Type without a display (lambda, self-build) also falls back.
-        if (targetType != 0L)
+        if (!targetType.isZero())
         {
-            long tDisp = Address.fromLong(targetType).plus(ObjectModel.TYPE_DISPLAY_OFFSET).loadLong();
-            Address disp = Address.fromLong(type).plus(ObjectModel.TYPE_DISPLAY_OFFSET).loadAddress();
+            long tDisp = targetType.plus(ObjectModel.TYPE_DISPLAY_OFFSET).loadLong();
+            Address disp = type.plus(ObjectModel.TYPE_DISPLAY_OFFSET).loadAddress();
             if (tDisp != 0L && !disp.isZero())
             {
-                long tDepth = Address.fromLong(targetType).plus(ObjectModel.TYPE_DEPTH_OFFSET).loadLong();
-                if (Address.fromLong(type).plus(ObjectModel.TYPE_DEPTH_OFFSET).loadLong() < tDepth)
+                long tDepth = targetType.plus(ObjectModel.TYPE_DEPTH_OFFSET).loadLong();
+                if (type.plus(ObjectModel.TYPE_DEPTH_OFFSET).loadLong() < tDepth)
                 {
                     return false;
                 }
-                return disp.plus(tDepth * 8L).loadLong() == targetType;
+                return disp.plus(tDepth * 8L).loadAddress().EQ(targetType);
             }
             // O(1) interface fast path: a NUMBERED interface target (depth -1, ID 1..127) against a
             // receiver with a COMPUTED doesImplement bitmap is one bit test. Unnumbered interfaces
@@ -3300,48 +3300,48 @@ public final class VM
             // Class.isAssignableFrom and the array-element recursion above both pass interface Types. MEASURED:
             // System.Logger.class.isAssignableFrom(System.Logger.class) answered FALSE, so SimpleConsoleLogger
             // named the System$Logger.log default method as its caller (DefaultFrameProbe).
-            if (type == targetType)
+            if (type.EQ(targetType))
             {
                 return true;
             }
-            if (tDisp == 0L && Address.fromLong(targetType).plus(ObjectModel.TYPE_DEPTH_OFFSET).loadLong() == -1L
-                    && Address.fromLong(type).plus(ObjectModel.TYPE_DEPTH_OFFSET).loadLong() != -1L)
+            if (tDisp == 0L && targetType.plus(ObjectModel.TYPE_DEPTH_OFFSET).loadLong() == -1L
+                    && type.plus(ObjectModel.TYPE_DEPTH_OFFSET).loadLong() != -1L)
             {
-                long id = Address.fromLong(targetType).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).loadLong();
-                long b0 = Address.fromLong(type).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).loadLong();
+                long id = targetType.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).loadLong();
+                long b0 = type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).loadLong();
                 if (id > 0L && id < 128L && (b0 & 1L) != 0L)
                 {
                     if (id < 64L)
                     {
                         return ((b0 >>> (int) id) & 1L) != 0L;
                     }
-                    long b1 = Address.fromLong(type).plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET + 8L).loadLong();
+                    long b1 = type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET + 8L).loadLong();
                     return ((b1 >>> (int) (id - 64L)) & 1L) != 0L;
                 }
             }
         }
-        while (type != 0L)
+        while (!type.isZero())
         {
-            if (type == targetType)
+            if (type.EQ(targetType))
             {
                 return true;
             }
-            Address dir = Address.fromLong(type).plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).loadAddress();
+            Address dir = type.plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).loadAddress();
             if (!dir.isZero())
             {
                 Address entry = dir;
-                long iface = entry.plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadLong();
-                while (iface != 0L)                    // 0 interfaceType terminates the directory
+                Address iface = entry.plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadAddress();
+                while (!iface.isZero())                // 0 interfaceType terminates the directory
                 {
-                    if (iface == targetType)
+                    if (iface.EQ(targetType))
                     {
                         return true;
                     }
                     entry = entry.plus(ObjectModel.ITABLE_ENTRY_SIZE);
-                    iface = entry.plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadLong();
+                    iface = entry.plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadAddress();
                 }
             }
-            type = Address.fromLong(type).plus(ObjectModel.TYPE_SUPER_OFFSET).loadLong();
+            type = type.plus(ObjectModel.TYPE_SUPER_OFFSET).loadAddress();
         }
         return false;
     }
@@ -3357,7 +3357,7 @@ public final class VM
         }
         if (!ref.isNull() && instanceOf(ref, targetType) == 0)
         {
-            if (ref.toAddress().loadLong() <= ObjectModel.MAX_RAW_ARRAY_TIB && isArrayType(targetType))
+            if (ref.toAddress().loadLong() <= ObjectModel.MAX_RAW_ARRAY_TIB && isArrayType(Address.fromLong(targetType)))
             {
                 // A RAW array (writer/boot alloc: element size in @0, no Type node) cast to an array class:
                 // there is no Type to walk, so trust the verifier-proved cast — the mirror of instanceOf's

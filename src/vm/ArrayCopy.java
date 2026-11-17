@@ -84,10 +84,10 @@ final class ArrayCopy
     }
 
     /** A reference array's element Type, or 0 if it is raw or the element never resolved. */
-    private static long elemTypeOf(ObjectReference arr)
+    private static Address elemTypeOf(ObjectReference arr)
     {
         Address type = typeOf(arr);
-        return type.isZero() ? 0L : type.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong();
+        return type.isZero() ? Address.zero() : type.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadAddress();
     }
 
     private static int lengthOf(ObjectReference arr)
@@ -125,9 +125,9 @@ final class ArrayCopy
         Address to = dst.toAddress().plus((long) ObjectModel.ARRAY_BASE_OFFSET + (long) dstPos * es);
         if (sk == REF && dk == REF && src.NE(dst))
         {
-            long bound = elemTypeOf(dst);
-            long stype = elemTypeOf(src);
-            if (bound != 0L && stype != 0L && VM.typesAssignable(stype, bound) == 0)
+            Address bound = elemTypeOf(dst);
+            Address stype = elemTypeOf(src);
+            if (!bound.isZero() && !stype.isZero() && VM.typesAssignable(stype, bound) == 0)
             {
                 copyChecked(from, to, len, stype, bound);
                 return;
@@ -215,16 +215,16 @@ final class ArrayCopy
      * The element-by-element copy between reference arrays of unrelated element types: each non-null element must
      * be an instance of the destination's element type, and the ones before the first that is not stay copied.
      */
-    private static void copyChecked(Address from, Address to, int len, long stype, long bound)
+    private static void copyChecked(Address from, Address to, int len, Address stype, Address bound)
     {
         long i = 0L;
         while (i < (long) len)
         {
             ObjectReference v = from.plus(i * 8L).loadObjectReference();
-            if (!v.isNull() && VM.instanceOf(v, bound) == 0)
+            if (!v.isNull() && VM.instanceOf(v, bound.toLong()) == 0)
             {
-                byte[] s = Loader.typeNameBytes(Address.fromLong(stype));
-                byte[] b = Loader.typeNameBytes(Address.fromLong(bound));
+                byte[] s = Loader.typeNameBytes(stype);
+                byte[] b = Loader.typeNameBytes(bound);
                 if (VM.typesAssignable(bound, stype) == 0)
                 {
                     throwAse(cat(cat(Magic.bytes("arraycopy: type mismatch: can not copy "), s,

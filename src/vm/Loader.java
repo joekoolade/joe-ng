@@ -11252,7 +11252,7 @@ public final class Loader
             reportPropsGap(Magic.bytes("java/util/Properties could not be allocated"));
             return;
         }
-        int ctor = constructorResolve(clTab[pi].type.toLong(), 0);
+        int ctor = constructorResolve(clTab[pi].type, 0);
         if (ctor < 0 || rgTab[ctor].buf == 0L)
         {
             reportPropsGap(Magic.bytes("java/util/Properties.<init>() has no compiled body"));
@@ -11353,7 +11353,7 @@ public final class Loader
             return;
         }
         long obj = allocInstance(clTab[pi].type);
-        int ctor = constructorResolve(clTab[pi].type.toLong(), 0);
+        int ctor = constructorResolve(clTab[pi].type, 0);
         if (obj == 0L || ctor < 0 || rgTab[ctor].buf == 0L)
         {
             reportPropsGap(Magic.bytes("VM.savedProps: java/util/Properties could not be constructed"));
@@ -14529,13 +14529,13 @@ public final class Loader
      * whose Type is a class, so they never ask this question -- putting a registry walk in that hot,
      * dispatch-critical routine would buy nothing and risk everything.
      */
-    static int ifaceExtends(long fromType, long targetType)
+    static int ifaceExtends(Address fromType, Address targetType)
     {
-        if (fromType == 0L || targetType == 0L || clTab == null)
+        if (fromType.isZero() || targetType.isZero() || clTab == null)
         {
             return 0;
         }
-        int reg = classRegByType(Address.fromLong(fromType));
+        int reg = classRegByType(fromType);
         if (reg < 0)
         {
             return 0;
@@ -14544,7 +14544,7 @@ public final class Loader
     }
 
     /** Depth-bounded so a malformed (cyclic) interface graph cannot hang the reflection path. */
-    private static boolean extendsIfaceFrom(int reg, long targetType, int depth)
+    private static boolean extendsIfaceFrom(int reg, Address targetType, int depth)
     {
         if (depth > 8)
         {
@@ -14557,7 +14557,7 @@ public final class Loader
             int r = clIfaceReg[reg * MAX_DIRECT_IF + i];
             if (r >= 0 && clTab[r] != null)
             {
-                if (clTab[r].type.toLong() == targetType)
+                if (clTab[r].type.EQ(targetType))
                 {
                     return true;
                 }
@@ -14592,15 +14592,15 @@ public final class Loader
     /** Trace every resolution the itable-directory tier makes: which interface, which member, what address. */
     private static final boolean ITABLE_DIR_WATCH = false;
 
-    private static long resolveViaItableDir(long type, Address nameOff, Address descOff)
+    private static long resolveViaItableDir(Address type, Address nameOff, Address descOff)
     {
-        long dir = Address.fromLong(type).plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).loadLong();
-        if (dir == 0L)
+        Address dir = type.plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).loadAddress();
+        if (dir.isZero())
         {
             return 0L;
         }
         int decl = -2;                                  // the maximally specific declarer, found on first need
-        Address entry = Address.fromLong(dir);
+        Address entry = dir;
         Address iface = entry.plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadAddress();
         while (!iface.isZero())                             // 0 interfaceType terminates the directory
         {
@@ -14689,11 +14689,11 @@ public final class Loader
      * {@link #mostSpecificDeclarer} over the interfaces an itable directory lists -- the receiver's TRANSITIVE
      * interface set, so no closure needs recomputing (and the shared closure scratch is not touched).
      */
-    private static int dirDeclarer(long dir, Address nameU, Address descU)
+    private static int dirDeclarer(Address dir, Address nameU, Address descU)
     {
         int[] regs = new int[MAXIFACEFALLBACK];
         int n = 0;
-        Address entry = Address.fromLong(dir);
+        Address entry = dir;
         Address iface = entry.plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadAddress();
         while (!iface.isZero() && n < regs.length)
         {
@@ -15541,13 +15541,13 @@ public final class Loader
     }
 
     /** Publish a site's first resolution, once: body, then a barrier, then the Type a lock-free reader keys on. */
-    private static void publishSiteMemo(int idx, long type, long buf)
+    private static void publishSiteMemo(int idx, Address type, long buf)
     {
         if (vsSiteType != null && vsSiteType[idx] == 0L)
         {
             vsSiteBuf[idx] = buf;
             Magic.dsb();
-            vsSiteType[idx] = type;
+            vsSiteType[idx] = type.toLong();
         }
     }
 
@@ -16002,13 +16002,13 @@ public final class Loader
                 // itable directory naming the interface it satisfies -- and that interface is where the
                 // default body lives. Try it before reporting; this is the whole reason a stream pipeline
                 // could not call Sink.begin on a lambda downstream.
-                long ib = resolveViaItableDir(type.toLong(), vsName.get(idx), vsDesc.get(idx));
+                long ib = resolveViaItableDir(type, vsName.get(idx), vsDesc.get(idx));
                 if (ib != 0L && plausibleCode(Address.fromLong(ib)))
                 {
                     vsMemoIdx = idx;
                     vsMemoType = type;
                     vsMemoBuf = ib;
-                    publishSiteMemo(idx, type.toLong(), ib);
+                    publishSiteMemo(idx, type, ib);
                     return ib;
                 }
                 Uart.write(Magic.bytes("\n  DISPATCH ON UNREGISTERED TYPE (receiver's class not in the registry): "));
@@ -16146,7 +16146,7 @@ public final class Loader
         vsMemoIdx = idx;
         vsMemoType = type;
         vsMemoBuf = buf;
-        publishSiteMemo(idx, type.toLong(), buf);
+        publishSiteMemo(idx, type, buf);
         return buf;
     }
 
@@ -16785,7 +16785,7 @@ public final class Loader
                 byte[] desc = kind == DYN_INDY ? Magic.bytes("(Ljava/lang/Class;I)Ljava/lang/invoke/CallSite;")
                         : kind == DYN_CONST ? Magic.bytes("(Ljava/lang/Class;I)Ljava/lang/Object;")
                         : Magic.bytes("(Ljava/lang/Class;I)J");
-                li = methodResolveExact(clTab[reg].type.toLong(), ObjectReference.fromLong(guestBytes(name)),
+                li = methodResolveExact(clTab[reg].type, ObjectReference.fromLong(guestBytes(name)),
                         ObjectReference.fromLong(guestBytes(desc)));
                 dynLinkerIdx[kind] = li;
             }
@@ -17063,7 +17063,7 @@ public final class Loader
                 Uart.write(Magic.bytes("\n  MH LINK: java/lang/invoke/MethodHandleNatives is not loaded\n"));
                 return 0L;
             }
-            li = methodResolveExact(clTab[reg].type.toLong(),
+            li = methodResolveExact(clTab[reg].type,
                     ObjectReference.fromLong(guestBytes(exact ? Magic.bytes("linkExact") : Magic.bytes("linkGeneric"))),
                     ObjectReference.fromLong(guestBytes(Magic.bytes("(Ljava/lang/invoke/MethodHandle;Ljava/lang/String;)Ljava/lang/invoke/MethodHandle;"))));
             if (exact)
@@ -17396,13 +17396,13 @@ public final class Loader
      * {@code nameArr} (a raw {@code byte[]}) declared by the class whose Type is {@code type}, or -1. Matches
      * class name + method name (no overload/param-type resolution yet — first match wins).
      */
-    static int methodResolve(long type, ObjectReference nameArr)
+    static int methodResolve(Address type, ObjectReference nameArr)
     {
-        if (type == 0L || nameArr.toLong() <= 0x1000L)
+        if (type.isZero() || nameArr.toLong() <= 0x1000L)
         {
             return -1;
         }
-        ensureClinit(classRegByType(Address.fromLong(type)));             // reflective invoke is an active use (JVMS 5.5) --
+        ensureClinit(classRegByType(type));             // reflective invoke is an active use (JVMS 5.5) --
                                                         // Class.getEnumConstants reaches values() this way, and
                                                         // values() reads $VALUES, which only <clinit> sets
         int idx = methodResolveRegistry(type, nameArr);
@@ -17418,17 +17418,17 @@ public final class Loader
      * back to the name-only answer when the descriptor matches nothing, so a caller that has no descriptor (or
      * one this VM spells differently) is never made worse off than {@link #methodResolve}.
      */
-    static int methodResolveDesc(long type, ObjectReference nameArr, ObjectReference descArr)
+    static int methodResolveDesc(Address type, ObjectReference nameArr, ObjectReference descArr)
     {
         if (descArr.toLong() <= 0x1000L)
         {
             return methodResolve(type, nameArr);
         }
-        if (type == 0L || nameArr.toLong() <= 0x1000L)
+        if (type.isZero() || nameArr.toLong() <= 0x1000L)
         {
             return -1;
         }
-        ensureClinit(classRegByType(Address.fromLong(type)));             // reflective invoke is an active use (JVMS 5.5)
+        ensureClinit(classRegByType(type));             // reflective invoke is an active use (JVMS 5.5)
         int idx = methodResolveRegistryDesc(type, nameArr, descArr);
         if (idx >= 0)
         {
@@ -17462,9 +17462,9 @@ public final class Loader
      * step of reflective VIRTUAL dispatch, where a same-named method with another descriptor is not an
      * override and must not be called. Not an active use of the class: the receiver's class is initialized.
      */
-    static int methodResolveExact(long type, ObjectReference nameArr, ObjectReference descArr)
+    static int methodResolveExact(Address type, ObjectReference nameArr, ObjectReference descArr)
     {
-        if (type == 0L || nameArr.toLong() <= 0x1000L || descArr.toLong() <= 0x1000L)
+        if (type.isZero() || nameArr.toLong() <= 0x1000L || descArr.toLong() <= 0x1000L)
         {
             return -1;
         }
@@ -17488,10 +17488,10 @@ public final class Loader
      * a NAME-ONLY match, where resolution that finds no exact descriptor must fail -- the JVMS 5.4.3.3 walk over
      * superclasses and superinterfaces is the caller's, one class at a time.
      */
-    static int mhDeclaredIndex(long type, ObjectReference nameArr, ObjectReference descArr)
+    static int mhDeclaredIndex(Address type, ObjectReference nameArr, ObjectReference descArr)
     {
         int idx = methodResolveExact(type, nameArr, descArr);
-        if (idx >= 0 || type == 0L || nameArr.toLong() <= 0x1000L || descArr.toLong() <= 0x1000L)
+        if (idx >= 0 || type.isZero() || nameArr.toLong() <= 0x1000L || descArr.toLong() <= 0x1000L)
         {
             return idx;
         }
@@ -17525,8 +17525,8 @@ public final class Loader
         {
             return 0L;
         }
-        long type = Address.fromLong(tib).loadLong();
-        if (type <= 0x1000L)
+        Address type = Address.fromLong(tib).loadAddress();
+        if (type.toLong() <= 0x1000L)
         {
             return 0L;
         }
@@ -17560,13 +17560,13 @@ public final class Loader
      * reflection natives read this table, through {@link #reflEntry}. One entry per method: a repeat lookup
      * answers the same index.
      */
-    private static int bodylessIndex(long type, ObjectReference nameArr, ObjectReference descArr)
+    private static int bodylessIndex(Address type, ObjectReference nameArr, ObjectReference descArr)
     {
         if (descArr.toLong() <= 0x1000L)
         {
             return -1;
         }
-        int ci = classIndexByType(Address.fromLong(type));
+        int ci = classIndexByType(type);
         if (ci >= clCount)
         {
             return -1;
@@ -17641,7 +17641,7 @@ public final class Loader
      * index, or -1. Limitation: the method's cross-class callees must already be compiled (no dep pull here); a
      * same-class callee it needs is compiled alongside it (they share this compile batch).
      */
-    private static int compileMethodOnDemand(long type, ObjectReference nameArr)
+    private static int compileMethodOnDemand(Address type, ObjectReference nameArr)
     {
         return compileMethodOnDemand(type, nameArr, ObjectReference.nullReference());
     }
@@ -17659,7 +17659,7 @@ public final class Loader
      * on a monitor or spawn threads, and holding the loader lock across that would deadlock any task that
      * needs to compile before it can release.
      */
-    private static int compileMethodOnDemand(long type, ObjectReference nameArr, ObjectReference descArr)
+    private static int compileMethodOnDemand(Address type, ObjectReference nameArr, ObjectReference descArr)
     {
         VM.loaderLock(VM.LOCK_ON_DEMAND);
         int r;
@@ -17676,9 +17676,9 @@ public final class Loader
 
     /** {@link #compileMethodOnDemand} restricted to one DESCRIPTOR ({@code descArr} 0 = any). Without it the walk
      *  stops at the first method of that name, which for an overloaded class is a coin toss between two bodies. */
-    private static int compileMethodOnDemandLocked(long type, ObjectReference nameArr, ObjectReference descArr)
+    private static int compileMethodOnDemandLocked(Address type, ObjectReference nameArr, ObjectReference descArr)
     {
-        int ci = classIndexByType(Address.fromLong(type));
+        int ci = classIndexByType(type);
         // AN INTERFACE IS NOT REFUSED any more. It was, for having no TIB to reuse -- but this path compiles with
         // compileReuseTib, which never touches one (the reason compileSigOnDemand already compiles interface
         // STATICS). The refusal left every not-yet-called DEFAULT method unresolvable by reflection:
@@ -17829,7 +17829,7 @@ public final class Loader
     }
 
     /** {@link #constructorResolve} matched by DESCRIPTOR (see {@link #ctorWantDesc}); -1 if none. */
-    static int constructorResolveDesc(long type, ObjectReference descArr)
+    static int constructorResolveDesc(Address type, ObjectReference descArr)
     {
         if (descArr.toLong() <= 0x1000L)
         {
@@ -17972,12 +17972,12 @@ public final class Loader
     /** Method-registry index of the method named {@code nameArr} declared by the class whose Type is {@code type}
      *  (class name + method name match), or -1 if it is not currently compiled/registered. Takes the loader
      *  lock: it is reached unlocked, and buildRegIndex extends the index a compiling task also extends. */
-    private static int methodResolveRegistry(long type, ObjectReference nameArr)
+    private static int methodResolveRegistry(Address type, ObjectReference nameArr)
     {
         VM.loaderLock(VM.LOCK_REFLECT);                 // buildRegIndex mutates the index a compiling task extends
         try
         {
-            int ci = classIndexByType(Address.fromLong(type));
+            int ci = classIndexByType(type);
             if (ci >= clCount)
             {
                 return -1;
@@ -18006,12 +18006,12 @@ public final class Loader
     }
 
     /** {@link #methodResolveRegistry} with the descriptor compared too. Takes the loader lock, likewise. */
-    private static int methodResolveRegistryDesc(long type, ObjectReference nameArr, ObjectReference descArr)
+    private static int methodResolveRegistryDesc(Address type, ObjectReference nameArr, ObjectReference descArr)
     {
         VM.loaderLock(VM.LOCK_REFLECT);
         try
         {
-            int ci = classIndexByType(Address.fromLong(type));
+            int ci = classIndexByType(type);
             if (ci >= clCount)
             {
                 return -1;
@@ -18056,7 +18056,7 @@ public final class Loader
      * on a monitor or spawn threads, and holding the loader lock across that would deadlock any task that
      * needs to compile before it can release.
      */
-    static int constructorResolve(long type, int paramCount)
+    static int constructorResolve(Address type, int paramCount)
     {
         VM.loaderLock(VM.LOCK_DEFERRED_CT);
         int r;
@@ -18076,13 +18076,13 @@ public final class Loader
      * Type is {@code type} taking {@code paramCount} parameters (matched by ARITY — no param-type resolution yet),
      * compiling it on demand if it was never RTA-reached. Returns -1 if none.
      */
-    static int constructorResolveLocked(long type, int paramCount)
+    static int constructorResolveLocked(Address type, int paramCount)
     {
-        if (type == 0L)
+        if (type.isZero())
         {
             return -1;
         }
-        int ci = classIndexByType(Address.fromLong(type));
+        int ci = classIndexByType(type);
         if (ci >= clCount || clTab[ci].isIface)
         {
             return -1;
