@@ -4,6 +4,22 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 32: method-local pointers are Address (2026-11-16).** Pi-validated (build
+  31e34e5d181f1ca5). No signature, field or return-type changes -- so no descriptor work.
+  - **The rule, applied strictly per local:** a `long` local that holds an address becomes `Address` only if its
+    method's conversion count strictly DROPS (every use left needing a long -- a long API, a signed ordering compare,
+    arithmetic into a long -- costs a `.toLong()`). 50 locals passed in VM, Loader, VMNatives and VMGc: VM's
+    self-test `argBase` (32 wraps), `printJavaString`'s argument block, the fault path's `elr`/`lr`, the
+    fault-stack walk's `cpc`/`csp`, itable `dir`/`entry` walks, line tables, the proxy and annotation thunk
+    builders, the implements bitmap, the string-pool `poolHash`/`poolSame` values, the backtrace printers,
+    `recheckStaleSlots`' `slot`/`was`. Rejected examples (no strict gain): vector-stub `stub`s, most `tib`/`type`
+    locals (each passed on to `long`-typed Loader APIs -- the Type/TIB API is the remaining, larger, item).
+    Three `Magic.addrOf(o)` became `ObjectReference.fromObject(o).toAddress()` (same ADDR_OF lowering).
+  - **Measured:** conversions VM 203 -> **170**, Loader 668 -> **578**, VMNatives 74 -> 70, VMGc 91 -> 89 (-129).
+    Loads/stores only 64-bit swaps (`loadLong` -> `loadAddress`, 3 `store(J)` -> `store(Address)`); 31 `lcmp` ->
+    `isZero`/`EQ`, no new ordering compare. **Code:** Loader -151 words, VM -45, VMNatives -25, VMGc -6.
+  - **Validation:** `make test` + overlaycheck; full regression **209/209**. Pi: the usual set incl. AddressFieldProbe
+    58/0, ConcatCheck identical to a host JVM, Boom trace, bench unchanged.
 - **UNBOXED TYPES, INCREMENT 31: the last reference stragglers -- aastore's check, the MemberName path, the mirror
   cache (2026-11-16).** Pi-validated (build 59729bc7e83f5df2).
   - **`VM.arrayStoreOk(ObjectReference array, ObjectReference value)`** -- the covariant `aastore` check -- now passes

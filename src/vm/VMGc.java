@@ -1159,9 +1159,9 @@ final class VMGc
         while (i < staleTabN)
         {
             Address s = Address.fromLong(STALE_TAB + i * 16L);
-            long slot = s.loadLong();
-            long was = s.plus(8).loadLong();
-            if (Address.fromLong(slot).loadLong() == was)
+            Address slot = s.loadAddress();
+            Address was = s.plus(8).loadAddress();
+            if (slot.loadAddress().EQ(was))
             {
                 stalePersisted = stalePersisted + 1L;  // still pointing at code the collector freed
                 if (stalePersisted <= 4L)              // name the first few: which slot, and what it was
@@ -1171,11 +1171,11 @@ final class VMGc
                     Uart.write(Magic.bytes(" target="));
                     printHex(was);
                     Uart.write(Magic.bytes(" nowFree="));
-                    printHex((long) Heap.codeBlockFreeAt(Address.fromLong(was)));
+                    printHex((long) Heap.codeBlockFreeAt(was));
                     Uart.write(Magic.bytes(" stubIdx="));
-                    printHex(Loader.stubIdxAt(Address.fromLong(was)));
+                    printHex(Loader.stubIdxAt(was));
                     Uart.putc(0x0A);
-                    reportSweptPc(was);                // ... and which buffer it was, from the swept log
+                    reportSweptPc(was.toLong());       // ... and which buffer it was, from the swept log
                 }
             }
             else
