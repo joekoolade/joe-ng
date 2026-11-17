@@ -43,8 +43,8 @@ public interface Symbols
     int HEAP_ALLOC = 0;         // vm/Heap.alloc(I)Lmagic/Address;
     int HEAP_ALLOC_ARRAY = 1;   // vm/Heap.allocArray(II)Lmagic/Address;
     int GC_COLLECT = 2;         // vm/VM.gcCollect(J)V
-    int INSTANCE_OF = 3;        // vm/VM.instanceOf(JJ)I
-    int CHECK_CAST = 4;         // vm/VM.checkCast(JJ)J
+    int INSTANCE_OF = 3;        // vm/VM.instanceOf(Lmagic/ObjectReference;J)I
+    int CHECK_CAST = 4;         // vm/VM.checkCast(Lmagic/ObjectReference;J)J
     int UNWIND = 5;             // vm/VMUnwind.unwind(Lmagic/ObjectReference;Lmagic/Address;Lmagic/Address;)V
     // Scheduler helpers reachable from JIT-loaded guest code (the mini java.base runtime).
     int SPAWN = 6;              // vm/VM.startThread(J)V  — start a task running a Runnable
@@ -71,7 +71,7 @@ public interface Symbols
     // Object monitors + Thread.join: the mini java.base runtime's wait/notify/join lower to VM scheduler helpers.
     int MON_WAIT = 25;          // vm/VM.objWait(JJ)V      — park the current task on an object until notified
     int WATCH_RET = 49;         // vm/VM.watchRet(J)V — DEBUG: print the value a watched call returned
-    int WATCH_RECV = 52;        // vm/VM.watchRecv(JJ)V — DEBUG: describe a watched call's RECEIVER — its
+    int WATCH_RECV = 52;        // vm/VM.watchRecv(Lmagic/ObjectReference;J)V — DEBUG: describe a watched call's RECEIVER — its
                                 // TIB, Type, class NAME and first field slots. WATCH_ARG prints a VALUE;
                                 // when the question is "is this object the class we think it is", a value
                                 // cannot answer it and a wrongly-typed receiver prints as a plausible number.
@@ -87,8 +87,8 @@ public interface Symbols
     int THREAD_JOIN = 28;       // vm/VM.threadJoin(J)V    — block until a Thread's task has exited
     int STACK_TRACE = 29;       // vm/VM.threadStackTrace(JJJ)J — a StackTraceElement[] for a Thread's stack
     int ALL_THREADS = 30;       // vm/VM.allThreads()J          — a Thread[] of every live task's Thread object
-    int MON_ENTER = 31;         // vm/VM.monEnter(J)V           — monitorenter (real, blocking, recursive)
-    int MON_EXIT = 32;          // vm/VM.monExit(J)V            — monitorexit
+    int MON_ENTER = 31;         // vm/VMScheduler.monEnter(Lmagic/ObjectReference;)V — monitorenter (real, blocking, recursive)
+    int MON_EXIT = 32;          // vm/VMScheduler.monExit(Lmagic/ObjectReference;)V  — monitorexit
     int HOLDS_LOCK = 33;        // vm/VM.holdsLock(J)I          — Thread.holdsLock
     int INTERRUPT = 34;         // vm/VM.interrupt(J)V          — Thread.interrupt
     int IS_INTERRUPTED = 35;    // vm/VM.isInterrupted(J)I      — Thread.isInterrupted
@@ -100,8 +100,8 @@ public interface Symbols
     int NEW_ASE = 41;           // vm/VM.newAse(J)J   — a java/lang/ArrayStoreException (aastore type mismatch)
     int ARRAY_STORE_OK = 42;    // vm/VM.arrayStoreOk(JJ)I — 1 if a value may be aastore'd into an array, else 0
     int NEW_UNRESOLVED = 43;    // vm/VM.newUnresolved(J)J — `new` the loader cannot resolve at compile time
-    int CAST_OK = 44;           // vm/VM.castOk(JJ)I  — 1 if a checkcast holds, else 0 (the JIT then throws)
-    int NEW_CCE = 45;           // vm/VM.newCce(JJ)J   — a java/lang/ClassCastException (failed checkcast)
+    int CAST_OK = 44;           // vm/VM.castOk(Lmagic/ObjectReference;J)I  — 1 if a checkcast holds, else 0 (the JIT then throws)
+    int NEW_CCE = 45;           // vm/VM.newCce(Lmagic/ObjectReference;J)J   — a java/lang/ClassCastException (failed checkcast)
     int SET_PRIO = 46;          // vm/VMScheduler.setPriority(JI)V — Thread.setPriority (0..1024 scale)
     int GET_PRIO = 47;          // vm/VMScheduler.getPriority(J)I  — Thread.getPriority (0..1024 scale)
     // NOTE FOR THE NEXT HELPER ADDED: these ids are ONE namespace (everything MetalSymbols.helperAddr
@@ -114,7 +114,7 @@ public interface Symbols
     int NEW_NASE = 53;          // vm/VM.newNase(J)J   — a java/lang/NegativeArraySizeException (newarray/anewarray)
     int DREM = 54;              // vm/VM.drem(DD)D    — frem/drem (no AArch64 remainder instruction)
     int MULTI_NEW_ARRAY = 55;   // vm/VM.multiNewArray(JIIIII)J — multianewarray (JVMS 6.5)
-    int MON_ENTER_SYNC = 56;    // vm/VM.monEnterSync(JJ)V — a SYNCHRONIZED METHOD's implicit monitorenter
+    int MON_ENTER_SYNC = 56;    // vm/VM.monEnterSync(Lmagic/ObjectReference;J)V — a SYNCHRONIZED METHOD's implicit monitorenter
     int MON_EXIT_SYNC = 57;     // vm/VM.monExitSync()V    — ... and its release on normal return
     int SC_BOOL = 58;           // vm/VMConcat.scBool(Lmagic/Address;I)V — append "true"/"false" (JLS 15.18.1), NOT 1/0
     int SC_DOUBLE = 59;         // vm/VMConcat.scDouble(Lmagic/Address;J)V — append a double (raw BITS in), JLS 15.18.1

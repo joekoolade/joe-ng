@@ -201,7 +201,7 @@ final class VMUnwind
         {
             if (phase != Loader.FRAME_KEEP)
             {
-                int kind = Loader.ctorFrameKind(cpc, exc.toLong());
+                int kind = Loader.ctorFrameKind(cpc, exc);
                 if (kind == Loader.FRAME_INIT)
                 {
                     phase = Loader.FRAME_INIT;                 // fillInStackTrace frames end at the first <init>
@@ -260,7 +260,7 @@ final class VMUnwind
         {
             long t = ea.loadLong();
             long thrType = Loader.throwableTypeAddr();
-            if (t > 0x1000L && thrType != 0L && VM.instanceOf(excWord, thrType) == 0)
+            if (t > 0x1000L && thrType != 0L && VM.instanceOf(exc, thrType) == 0)
             {
                 badThrowReported = true;
                 Uart.write(Magic.bytes("\n  BAD THROW: not a Throwable -- "));
@@ -397,7 +397,7 @@ final class VMUnwind
                 // wild branch that had never happened. Say what the object IS instead.
                 long thrType = Loader.throwableTypeAddr();
                 boolean isThrowable = xt > 0x1000L
-                        && (thrType == 0L || VM.instanceOf(excWord, thrType) != 0);
+                        && (thrType == 0L || VM.instanceOf(exc, thrType) != 0);
                 if (xt > 0x1000L && !isThrowable)
                 {
                     Uart.write(Magic.bytes("\nUNWIND: THROWN OBJECT IS NOT A THROWABLE -- "));
@@ -627,7 +627,7 @@ final class VMUnwind
                     // (see Loader.catchTypeByName) -- never "catch everything", which is what 0 used to say.
                     catchType = Loader.catchTypeByName(catchType & ~CATCH_BY_NAME);
                 }
-                if (catchType != 0L && instanceOf(exc.toLong(), catchType) != 0)
+                if (catchType != 0L && instanceOf(exc, catchType) != 0)
                 {
                     return e.plus(16L).loadLong();
                 }

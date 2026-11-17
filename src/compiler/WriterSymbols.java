@@ -47,8 +47,8 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         HELPER_KEY[Symbols.HEAP_ALLOC]       = "vm/Heap.alloc(I)Lmagic/Address;";
         HELPER_KEY[Symbols.HEAP_ALLOC_ARRAY] = "vm/Heap.allocArray(II)Lmagic/Address;";
         HELPER_KEY[Symbols.GC_COLLECT]       = "vm/VMGc.gcCollect(J)V";
-        HELPER_KEY[Symbols.INSTANCE_OF]      = "vm/VM.instanceOf(JJ)I";
-        HELPER_KEY[Symbols.CHECK_CAST]       = "vm/VM.checkCast(JJ)J";
+        HELPER_KEY[Symbols.INSTANCE_OF]      = "vm/VM.instanceOf(Lmagic/ObjectReference;J)I";
+        HELPER_KEY[Symbols.CHECK_CAST]       = "vm/VM.checkCast(Lmagic/ObjectReference;J)J";
         HELPER_KEY[Symbols.UNWIND]           = "vm/VMUnwind.unwind(Lmagic/ObjectReference;Lmagic/Address;Lmagic/Address;)V";
         // frem/drem and multianewarray are METAL-JIT only today (arrayDescAddr refuses in the host writer),
         // but naming them costs nothing and keeps the table a statement about capability.
@@ -58,7 +58,7 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         // asks for these -- naming them is a statement about capability, like DREM above, and NOT a claim
         // that a baked synchronized method locks. It does not: see the gate's comment in compileBody for
         // why (guestsrc Throwable.fillInStackTrace is baked, synchronized, and ON THE UNWIND PATH).
-        HELPER_KEY[Symbols.MON_ENTER_SYNC]   = "vm/VM.monEnterSync(JJ)V";
+        HELPER_KEY[Symbols.MON_ENTER_SYNC]   = "vm/VM.monEnterSync(Lmagic/ObjectReference;J)V";
         HELPER_KEY[Symbols.MON_EXIT_SYNC]    = "vm/VM.monExitSync()V";
         // Unlike DREM/MULTI_NEW_ARRAY/MON_*_SYNC above, this one is REACHED: the writer lowers string
         // concat too, so a baked `"x" + aBoolean` resolves through here. It is why the self-hosting

@@ -1441,15 +1441,15 @@ public final class VMScheduler
     }
 
     /** monitorenter {@code obj}: acquire its monitor -- recursive for the owner, blocking while another task holds it. */
-    static void monEnter(long obj)
+    static void monEnter(ObjectReference obj)
     {
-        if (obj == 0L)
+        if (obj.isNull())
         {
             return;                                        // the JIT null-checked before the call
         }
         long daif = schedLock();
         int me = curTask();
-        int s = monSlotOf(obj);
+        int s = monSlotOf(obj.toLong());
         VMStats.monEnters = VMStats.monEnters + 1L;
         if (s >= 0 && monOwner[s] != me)
         {
@@ -1457,19 +1457,19 @@ public final class VMScheduler
         }
         while (s >= 0 && monOwner[s] != me)                // held by another task: block until it is released
         {
-            taskMonWait[me] = obj;
+            taskMonWait[me] = obj.toLong();
             taskWaitOn[me] = -2;                            // a monitor-acquire waiter
             taskState[me] = TASK_BLOCKED;
             inherit(monOwner[s], taskPrio[me]);             // lend our urgency to the holder, and down its chain
             schedUnlock(daif);
             taskYield();
             daif = schedLock();
-            s = monSlotOf(obj);
+            s = monSlotOf(obj.toLong());
         }
         taskMonWait[me] = 0L;
         if (s < 0)                                         // unowned: take a fresh slot
         {
-            s = monAlloc(obj);
+            s = monAlloc(obj.toLong());
             monOwner[s] = me;
             monCount[s] = 0;
         }
@@ -1479,16 +1479,16 @@ public final class VMScheduler
     }
 
     /** monitorexit {@code obj}: release one level; on the final release free the slot and wake one acquire-waiter. */
-    static void monExit(long obj)
+    static void monExit(ObjectReference obj)
     {
-        if (obj == 0L)
+        if (obj.isNull())
         {
             return;
         }
         long daif = schedLock();
         int woken = -1;
         int me = curTask();
-        int s = monSlotOf(obj);
+        int s = monSlotOf(obj.toLong());
         if (s >= 0)
         {
             monCount[s] -= 1;
@@ -1497,7 +1497,7 @@ public final class VMScheduler
                 monObj[s] = 0L;                            // cleared BEFORE the recompute, so the monitor we
                 monOwner[s] = -1;                          //   just released no longer counts as lent-to
                 monCount[s] = 0;
-                woken = wakeMonWaiter(obj);
+                woken = wakeMonWaiter(obj.toLong());
                 if (taskPrio[me] != taskBasePrio[me])      // only a boosted task can owe anything back, and
                 {                                          //   that guard keeps the common exit free
                     recomputePrio(me);
@@ -1589,7 +1589,7 @@ public final class VMScheduler
         schedUnlock(woke);
         if (saved > 0)                                     // reacquire the monitor (blocks if the notifier still holds it)
         {
-            monEnter(obj);
+            monEnter(ObjectReference.fromLong(obj));
             monCount[monSlotOf(obj)] = saved;              // restore the recursion depth
         }
         daif = schedLock();

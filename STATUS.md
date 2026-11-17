@@ -4,6 +4,31 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **UNBOXED TYPES, INCREMENT 29: the JIT runtime helpers take an ObjectReference receiver (2026-11-16).**
+  Pi-validated (build 9954e3c669bc8203). The cast, monitor and late-dispatch helpers -- the hot path of every
+  cast, instanceof, `synchronized` and late-bound virtual call.
+  - **Retyped (the object/receiver parameter only; Type ids, indices, `sp` and return values stay long):** VM
+    `instanceOf`, `checkCast` (still returns the ref as long), `castOk`, `newCce`, `monEnterSync`, `watchRecv`;
+    VMScheduler `monEnter`/`monExit` (what `monEnterAddr`/`monExitAddr` point at); VMNatives `virtualResolve`,
+    `methodItableTarget`; Loader `newCce`, `virtualResolve`, `virtualResolveLocked`, `siteMemoHit`, `resolveRun`,
+    `runFromItable`, `ifaceMethodFromItable`, `reportReceiverAt`, `lazyVhTargetReg`, `memberNameDispatch`,
+    `reflectItableTarget`, `describeRecv`, `ctorFrameKind`. VMUnwind's and ArrayCopy's `instanceOf(x.toLong(), ..)`
+    pass the reference directly.
+  - **Left long:** the monitor tables (`monObj`, `taskMonWait`, `syncObj`) and the helpers keyed on them
+    (`monSlotOf`, `monAlloc`, `objWait`, ...) -- `monEnter`/`monExit` pass `obj.toLong()` into them;
+    `receiverAddress` (an address-range predicate); `arrayStoreOk` (two references, its own change); the
+    MemberName `mn`.
+  - **Descriptor ABI:** 11 `stashHelper` keys, 3 `WriterSymbols.HELPER_KEY` (INSTANCE_OF, CHECK_CAST, MON_ENTER_SYNC),
+    14 SelfBuild descriptor strings, 9 `VM.boot` reachability calls, the `Symbols`/`xxxAddr` comments. No
+    `helper-stash MISS`. (SelfBuild looks `monEnter`/`monExit` up under `vm/VM`, though they live in VMScheduler --
+    pre-existing, like its `checkCast`/`unwind` lookups; that path is retired.)
+  - **Measured:** load/store mix identical to main in every class but one 64-bit `loadLong` -> `loadObjectReference`
+    (Loader's `memberNameDispatch` call). 9 `lcmp` -> `isNull` (a CBZ each). **Code:** VM -34 words, Loader -57,
+    VMScheduler -14, VMNatives -5; nothing grew. Conversions rise where the code meets long-keyed tables (VM +6,
+    VMScheduler +7; free register moves), VMUnwind 28 -> 26, ArrayCopy 6 -> 5.
+  - **Validation:** `make test` + overlaycheck; full regression **209/209**. Pi: every page 200, hello x2, Boom,
+    bench **4.002 / 4.669 ns -- unchanged**, forced stop, AddressFieldProbe 51/0, DnsCheck, ConcatCheck identical
+    to a host JVM, SHA-256, 39 MB PUT, `/net` errors 0.
 - **UNBOXED TYPES, INCREMENT 28: the unwinder's entry points carry their real types (2026-11-16).** Pi-validated
   (build fed1392b1d07ffae). Increment 19 left `unwind(JJJ)V`, `captureTrace(JJJ)V` and `fillInTrace(J)V` long
   because they are reached BY DESCRIPTOR; increments 23-27 made that routine, so they now take
