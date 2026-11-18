@@ -2958,12 +2958,12 @@ public final class VM
     {
         long lr = Magic.readLR();                              // FIRST op: x30 = caller's return addr (the bl site + 4)
         long mysp = Magic.readSP();                            // denylistTrap's own frame base (SP is stable post-prologue)
-        int k = Loader.trapIndexFor(lr);                       // #43: match against the TRAPWIRE table printed at patch time
+        int k = Relocator.trapIndexFor(lr);                       // #43: match against the TRAPWIRE table printed at patch time
         // SAY WHICH TRAP THIS IS. Every unresolvable call lands here, and a callee whose class is NOT denied --
         // a method with no body, a missing native the thunk table could not serve -- was reported as a denylist
         // trap, sending the reader to a list that had nothing to do with it. Only a known, non-denied callee
         // changes the wording; an unknown site (k < 0) keeps it, because that is not measured.
-        if (k >= 0 && !Loader.trapCalleeDenied(k))
+        if (k >= 0 && !Relocator.trapCalleeDenied(k))
         {
             Uart.write(Magic.bytes("\nLINK TRAP: call to a method this VM could not link -- its class is NOT denied"
                     + " (the LINK FAILED line above says why)\n"));
@@ -2973,7 +2973,7 @@ public final class VM
             Uart.write(Magic.bytes("\nDENYLIST TRAP: call into a pruned (metal-absent) class -- see Loader.isDenylisted\n"));
         }
         Uart.write(Magic.bytes("  callee:"));
-        Loader.printTrapCallee(k);                             // WHAT was denied, not just which slot said so
+        Relocator.printTrapCallee(k);                             // WHAT was denied, not just which slot said so
         Uart.write(Magic.bytes("\n  fired TRAPWIRE index="));
         printDec(k);
         Uart.write(Magic.bytes(" (lr="));

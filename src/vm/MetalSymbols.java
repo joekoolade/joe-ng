@@ -46,7 +46,7 @@ final class MetalSymbols implements Symbols
         long target = Loader.resolveCallBuf(methodCp);
         if (target == 0L)                               // callee's class not loaded yet (dependency cycle):
         {                                               // record the bl for patchRelocs to fix after loadAll
-            Loader.recordCallReloc(cb.base() + (long) cb.wordCount() * 4L, methodCp);
+            Relocator.recordCallReloc(cb.base() + (long) cb.wordCount() * 4L, methodCp);
         }
         else
         {
@@ -197,7 +197,7 @@ final class MetalSymbols implements Symbols
         long addr = Statics.staticAddr(fieldCp);
         if (addr == 0L)                                 // cross-class static in a not-yet-loaded class:
         {                                               // record the movz/movk for patchRelocs
-            Loader.recordStaticReloc(cb.base() + (long) cb.wordCount() * 4L, reg, fieldCp);
+            Relocator.recordStaticReloc(cb.base() + (long) cb.wordCount() * 4L, reg, fieldCp);
         }
         emitAddr(cb, reg, addr);
     }
@@ -788,7 +788,7 @@ final class MetalSymbols implements Symbols
     @Override
     public boolean stopPolls()
     {
-        return Loader.compilingStoppable();
+        return Closure.compilingStoppable();
     }
 
     public long stopCellAddr()

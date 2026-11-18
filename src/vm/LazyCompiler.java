@@ -264,8 +264,8 @@ final class LazyCompiler
         }
         boolean reuseWas = Loader.compileReuseTib;              // a nested load resets it: restore, never clear
         Loader.compileReuseTib = true;                            // do NOT rebuild/refill the class's TIB
-        int rcMark = Loader.rcCount;                              // this compile's own reloc sites start here
-        int rsMark = Loader.rsCount;
+        int rcMark = Relocator.rcCount;                              // this compile's own reloc sites start here
+        int rsMark = Relocator.rsCount;
         boolean outerCompiling = Loader.lzCompiling;              // a drain re-enters the compiler: save the whole note state
         boolean outerRetried = Loader.lzRetried;
         int outerPullN = Loader.lzPullN;
@@ -279,8 +279,8 @@ final class LazyCompiler
         if (pulled)
         {
             Loader.drainPendingPulls();
-            Loader.truncateRelocs(rcMark);                        // drop the doomed body's reloc sites: patching them later
-            Loader.rsCount = rsMark;                              //   would write into a buffer the sweep may have reused
+            Relocator.truncateRelocs(rcMark);                        // drop the doomed body's reloc sites: patching them later
+            Relocator.rsCount = rsMark;                              //   would write into a buffer the sweep may have reused
         }
         Loader.lzRetried = outerRetried;
         Loader.lzPullN = outerPullN;
@@ -297,7 +297,7 @@ final class LazyCompiler
             return r;
         }
         MethodRegistry.registerAll();                                     // register the just-compiled method(s) -> globalBuf
-        Loader.patchRelocs();                                     // resolve its cross-class calls (idempotent over prior relocs)
+        Relocator.patchRelocs();                                     // resolve its cross-class calls (idempotent over prior relocs)
         if (dlen != 0)
         {
             return Reflection.methodResolveRegistryDesc(type, nameArr, descArr);
@@ -582,8 +582,8 @@ final class LazyCompiler
         {
             return 0L;                                  // no such signature, or abstract/native (no Code)
         }
-        int rcMark = Loader.rcCount;                           // patch only THIS compile's relocs (see patchRelocsFrom)
-        int rsMark = Loader.rsCount;
+        int rcMark = Relocator.rcCount;                           // patch only THIS compile's relocs (see patchRelocsFrom)
+        int rsMark = Relocator.rsCount;
         boolean reuseWas = Loader.compileReuseTib;              // a nested load resets it: restore, never clear
         Loader.compileReuseTib = true;
         boolean outerCompiling = Loader.lzCompiling;
@@ -599,8 +599,8 @@ final class LazyCompiler
         if (pulled)
         {
             Loader.drainPendingPulls();
-            Loader.truncateRelocs(rcMark);
-            Loader.rsCount = rsMark;
+            Relocator.truncateRelocs(rcMark);
+            Relocator.rsCount = rsMark;
         }
         Loader.lzRetried = outerRetried;
         Loader.lzPullN = outerPullN;
@@ -612,7 +612,7 @@ final class LazyCompiler
             return r;
         }
         MethodRegistry.registerAll();
-        Loader.patchRelocsFrom(rcMark, rsMark);                // its own callees, including further link stubs
+        Relocator.patchRelocsFrom(rcMark, rsMark);                // its own callees, including further link stubs
         // INITIALIZE WHAT THIS BODY TOUCHES, before it can run -- what lazyCompileLocked does and this path
         // did not. The compile above recorded every cross-class getstatic/new site it contains (JVMS 5.5
         // active uses); without the drain they are noted and never acted on, so the body reads those classes'
@@ -686,7 +686,7 @@ final class LazyCompiler
         // registerNameFromDir, not pullClass: it dedupes by blob ADDRESS (addBlob does), skips
         // java/lang/Object, and -- the part that matters -- honours the DENYLIST. pullClass(byte[]) goes
         // straight to the classDir, which is how the deferred-`new` path once pulled a denylisted class.
-        long pulled = Loader.registerNameFromDir(Loader.indyNameBuf, off);
+        long pulled = Closure.registerNameFromDir(Loader.indyNameBuf, off);
     }
 
     /**
@@ -859,8 +859,8 @@ final class LazyCompiler
         }
         boolean reuseWas = Loader.compileReuseTib;              // a nested load resets it: restore, never clear
         Loader.compileReuseTib = true;                         // keep this class's TIB (already filled)
-        int rcMark = Loader.rcCount;                           // this compile's own reloc sites start here
-        int rsMark = Loader.rsCount;
+        int rcMark = Relocator.rcCount;                           // this compile's own reloc sites start here
+        int rsMark = Relocator.rsCount;
         Loader.lzCompiling = true;                             // collect the classes this body actively uses
         Loader.lzPullN = 0;
         Loader.lzRetried = false;
@@ -876,8 +876,8 @@ final class LazyCompiler
             // whole reason to retry HERE rather than one level up: nothing has registered it, cached it, or
             // stored it into a TIB slot yet, so no caller can ever have run the doomed code.
             Loader.drainPendingPulls();
-            Loader.truncateRelocs(rcMark);                     // and drop its reloc sites: patching them later would
-            Loader.rsCount = rsMark;                           //   write into a buffer the sweep may already have reused
+            Relocator.truncateRelocs(rcMark);                     // and drop its reloc sites: patching them later would
+            Relocator.rsCount = rsMark;                           //   write into a buffer the sweep may already have reused
             Loader.lzRetried = true;                           // once only -- a class that is still missing reads null
             restoreCtxForCompile(lzTab[idx].blob, lzTab[idx].len, lzTab[idx].reg);   // the pull clobbered g*
             if (lzTab[idx].code != 0L)
@@ -898,7 +898,7 @@ final class LazyCompiler
         }
         Loader.compileReuseTib = reuseWas;
         registerCoCompiled();                           // the same-class callees compile() built beside it
-        Loader.patchRelocsFrom(rcMark, rsMark);                // batch-end patchRelocs is long past: resolve OUR sites now,
+        Relocator.patchRelocsFrom(rcMark, rsMark);                // batch-end patchRelocs is long past: resolve OUR sites now,
         if (buf == 0L)                                  // or a `bl 0` wild-branches to address 0 (see patchRelocsFrom)
         {
             // An index alone is unchaseable -- it is a slot number in a table rebuilt every batch. Name the
@@ -1006,7 +1006,7 @@ final class LazyCompiler
         if (i >= 0)
         {
             MethodRegistry.rgTab[i].buf = buf;
-            Loader.markRegDirty(i);                             // its memoised call sites now want the body
+            Relocator.markRegDirty(i);                             // its memoised call sites now want the body
             MethodRegistry.rgTab[i].line = Loader.mLine[0];
             MethodRegistry.rgTab[i].src = Loader.mSrc.get(0);
             return;

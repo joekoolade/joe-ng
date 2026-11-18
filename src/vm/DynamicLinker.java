@@ -126,7 +126,7 @@ final class DynamicLinker
         // level rather than sharing this bucket -- which is the point: sharing a name-only bucket is what made
         // both tiers walk a chain one entry long per class declaring that name.
         int h = Utf8.utf8Hash2(refBase, classOff, refBase, nameOff) & (MethodRegistry.RGTAB - 1);
-        boolean fits = Loader.gateRg(h);
+        boolean fits = Relocator.gateRg(h);
         int i = MethodRegistry.rgBucket[h];
         while (i >= 0)
         {
@@ -157,7 +157,7 @@ final class DynamicLinker
         // which resolves the actual constructor on first call.
         if (Utf8.utf8IsAtBase(refBase, nameOff, Magic.bytes("<init>")))
         {
-            long ib = Loader.gatedCell(refBase, classOff, refBase, nameOff, descOff, fits);
+            long ib = Relocator.gatedCell(refBase, classOff, refBase, nameOff, descOff, fits);
             Loader.bufResolveLog(refBase, classOff, nameOff, descOff, ib, 3);
             return ib;
         }
@@ -174,7 +174,7 @@ final class DynamicLinker
         int dec = pd >= 0 ? blobDeclares(Loader.pdBase.get(pd), refBase, nameOff, refBase, descOff) : -1;
         if (dec == 1)
         {
-            long own = Loader.gatedCell(refBase, classOff, refBase, nameOff, descOff, fits);
+            long own = Relocator.gatedCell(refBase, classOff, refBase, nameOff, descOff, fits);
             Loader.bufResolveLog(refBase, classOff, nameOff, descOff, own, 5);
             return own;
         }
@@ -193,7 +193,7 @@ final class DynamicLinker
             // which is itself ~95% of `patch`. The wanted name is the same one tier 1 hashed, so the bucket
             // is reused and only the CLASS comparison differs -- the predicate is otherwise identical.
             int hs = Utf8.utf8Hash2(Loader.pdBase.get(spd), Loader.pdNameOff[spd], refBase, nameOff) & (MethodRegistry.RGTAB - 1);
-            fits = fits && Loader.gateRg(hs);
+            fits = fits && Relocator.gateRg(hs);
             int j = MethodRegistry.rgBucket[hs];
             while (j >= 0)
             {
@@ -210,7 +210,7 @@ final class DynamicLinker
             int sdec = blobDeclares(Loader.pdBase.get(spd), refBase, nameOff, refBase, descOff);
             if (sdec == 1)
             {
-                long declared = Loader.gatedCell(Loader.pdBase.get(spd), Loader.pdNameOff[spd], refBase, nameOff, descOff, fits);
+                long declared = Relocator.gatedCell(Loader.pdBase.get(spd), Loader.pdNameOff[spd], refBase, nameOff, descOff, fits);
                 Loader.bufResolveLog(refBase, classOff, nameOff, descOff, declared, 5);
                 return declared;                         // this ancestor declares it: never climb past it
             }
