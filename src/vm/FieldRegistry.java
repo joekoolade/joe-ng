@@ -164,9 +164,9 @@ final class FieldRegistry
         {
             int nameOff = Loader.mrefNameOff(idx);                // Fieldref layout == Methodref layout
             int s = 0;
-            while (s < Loader.gifCount)
+            while (s < Loader.gBuild.ifCount)
             {
-                if (Loader.gifName[s] == nameOff)
+                if (Loader.gBuild.ifName[s] == nameOff)
                 {
                     Loader.fieldOffsetLog(Loader.refClassNameOff(idx), nameOff, 16 + s * 8, 0);   // 0 = same-class fast path
                     return 16 + s * 8;                     // this class's own field (ObjectModel: +16)
@@ -192,13 +192,13 @@ final class FieldRegistry
         if (Loader.utf8Eq(classOff, Loader.gView.thisNameOff))
         {
             int s = 0;
-            int n = isStatic ? Loader.gsfCount : Loader.gifCount;
+            int n = isStatic ? Loader.gBuild.sfCount : Loader.gBuild.ifCount;
             while (s < n)
             {
-                int nm = isStatic ? Loader.gsfName[s] : Loader.gifName[s];
+                int nm = isStatic ? Loader.gBuild.sfName[s] : Loader.gBuild.ifName[s];
                 if (nm == nameOff)
                 {
-                    return ((isStatic ? Loader.gsfAccess[s] : Loader.gifAccess[s]) & 0x0040) != 0;   // ACC_VOLATILE
+                    return ((isStatic ? Loader.gBuild.sfAccess[s] : Loader.gBuild.ifAccess[s]) & 0x0040) != 0;   // ACC_VOLATILE
                 }
                 s += 1;
             }

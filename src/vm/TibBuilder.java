@@ -155,7 +155,7 @@ final class TibBuilder
         {
             Loader.gType = Heap.allocData(ObjectModel.TYPE_SIZE);
         }
-        Loader.gType.plus(0).store((long) (16 + Loader.gifCount * 8));       // TYPE_INSTANCE_SIZE_OFFSET
+        Loader.gType.plus(0).store((long) (16 + Loader.gBuild.ifCount * 8));       // TYPE_INSTANCE_SIZE_OFFSET
         Loader.gType.plus(8).store(sr >= 0 ? ClassRegistry.clTab[sr].type : Address.zero());   // TYPE_SUPER_OFFSET (0 at Object)
         if (Loader.gAdoptType.isZero())
         {
@@ -199,7 +199,7 @@ final class TibBuilder
             }
         }
         int s = Loader.superFieldCount();                      // own fields start after the inherited ones
-        while (s < Loader.gifCount)
+        while (s < Loader.gBuild.ifCount)
         {
             if (s > ObjectModel.TYPE_REFMAP_MAX_SLOT)
             {
@@ -207,7 +207,7 @@ final class TibBuilder
                 type.plus(ObjectModel.TYPE_REFMAP_OFFSET).plus(8L).store(0L);
                 return;
             }
-            if (mayHoldPointer(Loader.gifDescOff[s]))
+            if (mayHoldPointer(Loader.gBuild.ifDescOff[s]))
             {
                 if (s < 63)
                 {
