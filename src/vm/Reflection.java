@@ -768,8 +768,8 @@ final class Reflection
         // picocli's CommandLine.<init> is exactly that: it reads Help.Ansi.AUTO, and reflective construction
         // compiled it here, so the read bound to the zero cell and `defaultColorScheme` NPE'd on a null ansi
         // ("in the classDir, but resolved outside the retry window" -- the report named the cause precisely).
-        int rcMark = Loader.rcCount;                              // patch only THIS compile's relocs
-        int rsMark = Loader.rsCount;
+        int rcMark = Relocator.rcCount;                              // patch only THIS compile's relocs
+        int rsMark = Relocator.rsCount;
         boolean reuseWas = Loader.compileReuseTib;              // a nested load resets it: restore, never clear
         Loader.compileReuseTib = true;
         boolean outerCompiling = Loader.lzCompiling;
@@ -786,8 +786,8 @@ final class Reflection
         if (pulled)
         {
             Loader.drainPendingPulls();
-            Loader.truncateRelocs(rcMark);                        // drop the doomed body's reloc sites: patching them
-            Loader.rsCount = rsMark;                              //   later would write into reused memory
+            Relocator.truncateRelocs(rcMark);                        // drop the doomed body's reloc sites: patching them
+            Relocator.rsCount = rsMark;                              //   later would write into reused memory
         }
         Loader.lzRetried = outerRetried;
         Loader.lzPullN = outerPullN;
@@ -799,7 +799,7 @@ final class Reflection
             return again;
         }
         MethodRegistry.registerAll();
-        Loader.patchRelocs();
+        Relocator.patchRelocs();
         return ctorResolveRegistry(ci, paramCount);
     }
 

@@ -4,6 +4,28 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **LOADER REFACTOR, INCREMENT 8c: relocation and the demand-load closure out of `vm/Loader` (2026-11-17).** Pure
+  move. Closes phase 1 of the refactor.
+  - **`Relocator`**: recording unresolved call / tail / static sites (`rc*`, `rs*`, `relocRecording`), `patchRelocs`
+    (`From`), the incremental batch patch (`patchIncremental`, `patchSite`, the `pc*` dirty lists and timers), the
+    phase-A gate (`recordGate`, `gatedCell`), and the trap-wired sites (`trapWire*`).
+  - **`Closure`**: the demand-load RTA closure -- `markReachable` and its reach table, roots/entry/stub blobs, the
+    pending-reference queue + indexes (`pend*`, `pv*`/`ps*`), the instantiated set, `resolveVirtuals`, default
+    methods, the `seed*` roots, the name index (`pnBucket` stays: `findPdByName` uses it), the `mr*`/`v*` counters.
+  - **`MethodTableCache`**: the per-blob method tables (`mt*`) and override hit tables (`hv*`): `ensureMethodTable`,
+    `matchLevel(Cached)`, `matchDefaults`, `findDeclaredCached`, `resetMethodTables`.
+  - **Field ownership was decided by writers:** a field moved only when every method that touches it (other than
+    the `batchCostLine`/`resetLoader` reporting) moved too, so the per-phase load timers (`lb*`, `cc*`, `cum*`,
+    `p*T`) stay with `loadAllLocked`/`compileClass` in Loader.
+  - **Loader 12,013 -> 9,122 lines** (30,616 when phase 1 began; 34 new classes hold the rest). Image
+    39,542,536 -> 39,543,104 bytes (+568).
+  - **Validation:** `make test` + overlaycheck clean; 50 probes pass (every 4th non-solo probe at offset 0 + GvrProbe,
+    LinkTrap, ReflectUndeny, CatchDenied, demo/RunProbe, demo/ExitProbe). ZipFileProbe differed in its batch only:
+    JarVerifyProbe earlier in the batch leaves `jarverify-*.jar` in the RAM filesystem and ZipFileProbe's cleanup
+    lists them -- ORDER-dependent (ZipFile first matches) and PRE-EXISTING (the same `--batch JarVerifyProbe
+    ZipFileProbe` differs on main). **Speed** (bare boot timed to 0.5 s, SslEngineProbe, ABBA x2): **test 103.6 /
+    106.7 / 106.2 / 103.1 s, ctl 112.3 / 111.3 / 108.8 / 112.4 s** -- no slowdown. Not run: full regression, suite,
+    JUnit, Pi.
 - **LOADER REFACTOR, INCREMENT 8b: lazy compile, dynamic linking and late virtual dispatch out of `vm/Loader`
   (2026-11-17).** Pure move, plus the two writer stash keys that name the moved entry points.
   - **`LazyCompiler`** (JikesRVM `LazyCompilationTrampoline`): `lazyCompile(Locked)`, the deferral stubs and their

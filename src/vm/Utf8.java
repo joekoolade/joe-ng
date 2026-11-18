@@ -43,7 +43,7 @@ final class Utf8
         return h;
     }
 
-    /** FNV-1a over a name Utf8 and a descriptor Utf8 -- the key {@link Loader#matchLevel} probes on. */
+    /** FNV-1a over a name Utf8 and a descriptor Utf8 -- the key {@link MethodTableCache#matchLevel} probes on. */
     static int sigHash(Address base, int nameOff, int descOff)
     {
         return utf8Hash(base, nameOff) * 31 + utf8Hash(base, descOff);

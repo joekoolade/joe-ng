@@ -384,8 +384,8 @@ final class ClassInitializer
         Loader.gMaxLocals = clinitLocals[i];                   // AFTER the restore: parseFields/parseVtable clobber it
         boolean reuseWas = Loader.compileReuseTib;              // a nested load resets it: restore, never clear
         Loader.compileReuseTib = true;                         // the class's TIB exists and is filled -- do not rebuild it
-        int rcMark = Loader.rcCount;                           // this compile's own reloc sites start here
-        int rsMark = Loader.rsCount;
+        int rcMark = Relocator.rcCount;                           // this compile's own reloc sites start here
+        int rsMark = Relocator.rsCount;
         // BRACKET THE COMPILE WITH lzCompiling, like the other two on-demand paths. A getstatic whose class is
         // not registered yet resolves to the PERMANENTLY-ZERO cell, and the note-pull-recompile that fixes
         // that is gated on lzCompiling -- so without this an initializer compiled here binds its statics to
@@ -412,8 +412,8 @@ final class ClassInitializer
         if (pulled)
         {
             Loader.drainPendingPulls();
-            Loader.truncateRelocs(rcMark);                     // drop the doomed body's reloc sites: patching them
-            Loader.rsCount = rsMark;                           //   later would write into reused memory
+            Relocator.truncateRelocs(rcMark);                     // drop the doomed body's reloc sites: patching them
+            Relocator.rsCount = rsMark;                           //   later would write into reused memory
         }
         Loader.lzRetried = outerRetried;
         Loader.lzPullN = outerPullN;
@@ -428,7 +428,7 @@ final class ClassInitializer
             return again;
         }
         LazyCompiler.registerCoCompiled();                           // a private static helper the initializer calls
-        Loader.patchRelocsFrom(rcMark, rsMark);                // resolve OUR sites: batch patchRelocs is long past
+        Relocator.patchRelocsFrom(rcMark, rsMark);                // resolve OUR sites: batch patchRelocs is long past
         if (buf == 0L)
         {
             Loader.capHalt(Magic.bytes("clinit-compile-null"), i);  // about to call address 0 -- halt with an index instead
@@ -498,14 +498,14 @@ final class ClassInitializer
             }
             else if (op == 0xBB || op == 0xBD)                 // new / anewarray: the class is initialized
             {
-                cnOff = Loader.classCpNameOff(u2(code + pc + 1));
+                cnOff = Closure.classCpNameOff(u2(code + pc + 1));
             }
             else if (op == 0x12)                               // ldc: a Class literal feeds reflective init
             {
                 int ci = u1(code + pc + 1);
                 if (Loader.gcpTag[ci] == 7)
                 {
-                    cnOff = Loader.classCpNameOff(ci);
+                    cnOff = Closure.classCpNameOff(ci);
                 }
             }
             else if (op == 0x13)                               // ldc_w
@@ -513,7 +513,7 @@ final class ClassInitializer
                 int ci = u2(code + pc + 1);
                 if (Loader.gcpTag[ci] == 7)
                 {
-                    cnOff = Loader.classCpNameOff(ci);
+                    cnOff = Closure.classCpNameOff(ci);
                 }
             }
             if (cnOff >= 0 && cnOff != Loader.gThisNameOff)            // skip self-references
