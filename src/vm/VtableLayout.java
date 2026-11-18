@@ -81,6 +81,14 @@ final class VtableLayout
     /** Name every {@code invokevirtual} whose vtable slot could not be resolved at compile time (debug). Each
      *  one is a silent wrong dispatch through slot 0 -- see {@link #globalVtableSlot}. */
     private static final boolean VT_TRACE = false;
+    // Flattened vtable of the class being built: superclass slots first, overrides replacing in place, new methods
+    // appended. Each slot's signature may live in a superclass's blob (gvBase), and its implementation is either an
+    // inherited compiled buffer (gvImplBuf) or one of this class's own methods (gvImplCode). SCRATCH, reused per
+    // class: MAXMV slot objects are allocated once per loader reset, which is why it is not on ClassBuild. Moved
+    // here from Loader in increment P2-4c; parseVtable builds it, TibBuilder and compileClass read it.
+    static final int MAXMV = 512;
+    static VtSlot[] gvTab;  // the building class's flattened vtable (reified; reused per class)
+    static int gvCount;     // flattened vtable size
     static long gVtSigSlots;    // matched vtSig entry's slot-pair table (0 = class not baked)
     static int gVtSigCount;     // ... its slot count
 
@@ -93,7 +101,7 @@ final class VtableLayout
      */
     static void parseVtable(Address bytes)
     {
-        Loader.gvCount = 0;
+        gvCount = 0;
         int superReg = ClassRegistry.classRegByName(Loader.gView.superNameOff);
         if (superReg >= 0)
         {
@@ -111,16 +119,16 @@ final class VtableLayout
                 int slot = findVtSlot(Loader.gView.cp[u2(p.plus(2))], Loader.gView.cp[u2(p.plus(4))]);   // override an inherited slot?
                 if (slot < 0)
                 {
-                    if (Loader.gvCount >= Loader.MAXMV) { Loader.capHalt(Magic.bytes("Loader.MAXMV-vt"), Loader.gvCount); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
-                    slot = Loader.gvCount;                     // else append a new slot
-                    Loader.gvCount += 1;
+                    if (gvCount >= MAXMV) { Loader.capHalt(Magic.bytes("Loader.MAXMV-vt"), gvCount); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
+                    slot = gvCount;                     // else append a new slot
+                    gvCount += 1;
                 }
-                Loader.gvTab[slot].base = Loader.gView.base;
-                Loader.gvTab[slot].name = Loader.gView.cp[u2(p.plus(2))];
-                Loader.gvTab[slot].desc = Loader.gView.cp[u2(p.plus(4))];
-                Loader.gvTab[slot].implCode = Loader.findCode(bytes, p.plus(8), attrs);   // this class's own impl
-                Loader.gvTab[slot].isSync = (u2(p) & 0x0020) != 0 ? 1 : 0;     // ACC_SYNCHRONIZED (for mintPrunedStub)
-                Loader.gvTab[slot].implBuf = 0L;
+                gvTab[slot].base = Loader.gView.base;
+                gvTab[slot].name = Loader.gView.cp[u2(p.plus(2))];
+                gvTab[slot].desc = Loader.gView.cp[u2(p.plus(4))];
+                gvTab[slot].implCode = Loader.findCode(bytes, p.plus(8), attrs);   // this class's own impl
+                gvTab[slot].isSync = (u2(p) & 0x0020) != 0 ? 1 : 0;     // ACC_SYNCHRONIZED (for mintPrunedStub)
+                gvTab[slot].implBuf = 0L;
             }
             p = Loader.skipAttributes(p.plus(8), attrs);
             m += 1;
@@ -205,15 +213,15 @@ final class VtableLayout
             if (Loader.utf8EqAt(Loader.gView.base, superOff, vtClassBase.get(i), vtClassOff[i]))
             {
                 int slot = vtSlot[i];
-                Loader.gvTab[slot].base = vtNameBase.get(i);
-                Loader.gvTab[slot].name = vtNameOff[i];
-                Loader.gvTab[slot].desc = vtDescOff[i];
-                Loader.gvTab[slot].implBuf = vtBuf[i];             // inherited (already-compiled) impl
-                Loader.gvTab[slot].implCode = 0L;
-                Loader.gvTab[slot].isSync = 0;                     // inherited: the buffer is already compiled
-                if (slot + 1 > Loader.gvCount)
+                gvTab[slot].base = vtNameBase.get(i);
+                gvTab[slot].name = vtNameOff[i];
+                gvTab[slot].desc = vtDescOff[i];
+                gvTab[slot].implBuf = vtBuf[i];             // inherited (already-compiled) impl
+                gvTab[slot].implCode = 0L;
+                gvTab[slot].isSync = 0;                     // inherited: the buffer is already compiled
+                if (slot + 1 > gvCount)
                 {
-                    Loader.gvCount = slot + 1;
+                    gvCount = slot + 1;
                 }
             }
             i = vtNextIdx[i];
@@ -224,10 +232,10 @@ final class VtableLayout
     private static int findVtSlot(int nameOff, int descOff)
     {
         int s = 0;
-        while (s < Loader.gvCount)
+        while (s < gvCount)
         {
-            if (Loader.utf8EqAt(Loader.gView.base, nameOff, Loader.gvTab[s].base, Loader.gvTab[s].name)
-                    && Loader.utf8EqAt(Loader.gView.base, descOff, Loader.gvTab[s].base, Loader.gvTab[s].desc))
+            if (Loader.utf8EqAt(Loader.gView.base, nameOff, gvTab[s].base, gvTab[s].name)
+                    && Loader.utf8EqAt(Loader.gView.base, descOff, gvTab[s].base, gvTab[s].desc))
             {
                 return s;
             }
@@ -257,10 +265,10 @@ final class VtableLayout
     static int findVtSlotAt(Address base, int nameOff, int descOff)
     {
         int s = 0;
-        while (s < Loader.gvCount)
+        while (s < gvCount)
         {
-            if (Loader.utf8EqAt(base, nameOff, Loader.gvTab[s].base, Loader.gvTab[s].name)
-                    && Loader.utf8EqAt(base, descOff, Loader.gvTab[s].base, Loader.gvTab[s].desc))
+            if (Loader.utf8EqAt(base, nameOff, gvTab[s].base, gvTab[s].name)
+                    && Loader.utf8EqAt(base, descOff, gvTab[s].base, gvTab[s].desc))
             {
                 return s;
             }
@@ -377,14 +385,14 @@ final class VtableLayout
         Uart.putc(0x0A);
     }
 
-    /** Find the current class's vtSig/adoption entry: sets gAdoptType/gAdoptStatics + parity data. */
+    /** Find the current class's vtSig/adoption entry: sets gBuild.adoptType/adoptStatics + parity data. */
     static void findVtSig()
     {
-        Loader.gAdoptType = Address.zero();
+        Loader.gBuild.adoptType = Address.zero();
         gVtSigSlots = 0L;
         gVtSigCount = 0;
-        Loader.gAdoptStatics = Address.zero();
-        Loader.gAdoptStaticCount = 0;
+        Loader.gBuild.adoptStatics = Address.zero();
+        Loader.gBuild.adoptStaticCount = 0;
         int n = (int) VM.vtSigCount;
         int i = 0;
         while (i < n)
@@ -394,9 +402,9 @@ final class VtableLayout
             {
                 gVtSigSlots = e.plus(8L).loadLong();
                 gVtSigCount = (int) e.plus(16L).loadLong();
-                Loader.gAdoptType = e.plus(24L).loadAddress();
-                Loader.gAdoptStatics = e.plus(32L).loadAddress();
-                Loader.gAdoptStaticCount = (int) e.plus(40L).loadLong();
+                Loader.gBuild.adoptType = e.plus(24L).loadAddress();
+                Loader.gBuild.adoptStatics = e.plus(32L).loadAddress();
+                Loader.gBuild.adoptStaticCount = (int) e.plus(40L).loadLong();
                 return;
             }
             i += 1;
@@ -420,13 +428,13 @@ final class VtableLayout
             Uart.write(Magic.bytes("  vtparity "));
             Loader.printNameAt(Loader.gView.base, Loader.gView.thisNameOff);
         }
-        if (count != Loader.gvCount)
+        if (count != gvCount)
         {
             vtParityHeader();
             Uart.write(Magic.bytes(" DIFF count "));
             VM.printDec(count);
             Uart.putc(0x2F);
-            VM.printDec(Loader.gvCount);
+            VM.printDec(gvCount);
             Uart.putc(0x0A);
             int w = 0;                                  // name the writer slots the loader lacks: a bare count
                                                         //   mismatch says nothing, and the missing names ARE
@@ -436,13 +444,13 @@ final class VtableLayout
                 Address q = Address.fromLong(slots + (long) w * 16L);
                 int f = 0;
                 int found = 0;
-                while (f < Loader.gvCount)
+                while (f < gvCount)
                 {
-                    if (Loader.utf8EqAt(Loader.gvTab[f].base, Loader.gvTab[f].name, q.loadAddress(), 0)
-                            && Loader.utf8EqAt(Loader.gvTab[f].base, Loader.gvTab[f].desc, q.plus(8L).loadAddress(), 0))
+                    if (Loader.utf8EqAt(gvTab[f].base, gvTab[f].name, q.loadAddress(), 0)
+                            && Loader.utf8EqAt(gvTab[f].base, gvTab[f].desc, q.plus(8L).loadAddress(), 0))
                     {
                         found = 1;
-                        f = Loader.gvCount;
+                        f = gvCount;
                     }
                     f += 1;
                 }
@@ -463,8 +471,8 @@ final class VtableLayout
         while (s < count)
         {
             Address p = Address.fromLong(slots + (long) s * 16L);
-            if (!Loader.utf8EqAt(Loader.gvTab[s].base, Loader.gvTab[s].name, p.loadAddress(), 0)
-                    || !Loader.utf8EqAt(Loader.gvTab[s].base, Loader.gvTab[s].desc, p.plus(8L).loadAddress(), 0))
+            if (!Loader.utf8EqAt(gvTab[s].base, gvTab[s].name, p.loadAddress(), 0)
+                    || !Loader.utf8EqAt(gvTab[s].base, gvTab[s].desc, p.plus(8L).loadAddress(), 0))
             {
                 vtParityHeader();
                 Uart.write(Magic.bytes(" DIFF slot "));

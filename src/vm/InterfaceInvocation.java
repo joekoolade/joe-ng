@@ -406,7 +406,7 @@ final class InterfaceInvocation
      */
     static void registerInterface()
     {
-        Loader.gIfmStart = ifCount;
+        Loader.gBuild.ifmStart = ifCount;
         int k = 0;
         while (k < Loader.gView.implIfName.length)                        // super-interfaces' flattened runs first
         {
@@ -437,7 +437,7 @@ final class InterfaceInvocation
             p = Loader.skipAttributes(p.plus(8), attrs);
             m += 1;
         }
-        Loader.gIfmCount = ifCount - Loader.gIfmStart;
+        Loader.gBuild.ifmCount = ifCount - Loader.gBuild.ifmStart;
     }
 
     /**
@@ -448,7 +448,7 @@ final class InterfaceInvocation
      */
     private static void ifmAppendUnique(Address base, int nameOff, int descOff, Address decl)
     {
-        int i = Loader.gIfmStart;
+        int i = Loader.gBuild.ifmStart;
         while (i < ifCount)
         {
             if (Loader.utf8EqAt(base, nameOff, ifBase.get(i), ifNameOff[i])
@@ -467,7 +467,7 @@ final class InterfaceInvocation
         ifNameOff[ifCount] = nameOff;
         ifDescOff[ifCount] = descOff;
         ifDecl.set(ifCount, decl);
-        ifIndexEntry(ifCount, Loader.gIfmStart);
+        ifIndexEntry(ifCount, Loader.gBuild.ifmStart);
         ifCount += 1;
     }
 
