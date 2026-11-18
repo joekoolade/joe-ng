@@ -46,8 +46,8 @@ final class StackTrace
      */
     private static long thrBacktraceOff;
     /**
-     * Build method {@code i}'s persistent line table from {@code gBcToWord} (bci -> machine word offset, just
-     * compiled) and the method's LineNumberTable. Layout: {@code {u32 count, (u32 wordOffset, u32 line) * count}}
+     * Build method {@code i}'s persistent line table from {@code bcToWord} (bci -> machine word offset, from
+     * the compile just done) and the method's LineNumberTable. Layout: {@code {u32 count, (u32 wordOffset, u32 line) * count}}
      * -- one entry per source-line transition, in code-heap memory (persists, like the method buffer). The
      * frame resolver finds the largest {@code wordOffset <= (pc-base)/4} and reads its line. Returns 0 if the
      * class was compiled without line info (no {@code -g}).
@@ -580,9 +580,9 @@ final class StackTrace
         return off < 0 ? Address.zero() : Loader.gView.base.plus(off);
     }
 
-    static long buildLineTable(int i)
+    static long buildLineTable(int i, int[] bcToWord)
     {
-        if (Loader.gBcToWord == null)
+        if (bcToWord == null)
         {
             return 0L;
         }
@@ -592,7 +592,7 @@ final class StackTrace
         {
             return 0L;
         }
-        int len = Loader.gBcToWord.length;
+        int len = bcToWord.length;
         if (lnAt == null || lnAt.length < len)
         {
             lnAt = new int[len < 4096 ? 4096 : len];      // scratch, reused: compiles hold the loader lock
@@ -603,7 +603,7 @@ final class StackTrace
         int bci = 0;
         while (bci < len)                                 // pass 1: count line transitions
         {
-            if (Loader.gBcToWord[bci] >= 0)
+            if (bcToWord[bci] >= 0)
             {
                 int line = lnAt[bci];
                 if (line != prev)
@@ -629,12 +629,12 @@ final class StackTrace
         bci = 0;
         while (bci < len)                                 // pass 2: emit (wordOffset, line) at each transition
         {
-            if (Loader.gBcToWord[bci] >= 0)
+            if (bcToWord[bci] >= 0)
             {
                 int line = lnAt[bci];
                 if (line != prev)
                 {
-                    w.store(Loader.gBcToWord[bci]);
+                    w.store(bcToWord[bci]);
                     w.plus(4).store(line);
                     w = w.plus(8);
                     prev = line;

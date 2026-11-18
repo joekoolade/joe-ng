@@ -4,6 +4,18 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **LOADER REFACTOR PHASE 2, INCREMENT P2-5: compile results are a `CompileResult` (2026-11-18).** Completes phase 2.
+  - **`compileMethod` returns a `CompileResult`** (words, frame size, register-local count, the four handler-range
+    arrays, `bcToWord`) instead of leaving eight statics behind (`gFrameSize`, `gRegLocals`, `gHN`, `gHStartW`,
+    `gHEndW`, `gHandlerW`, `gHCatchCp`, `gBcToWord`). `emitMethod` reads the result it got;
+    `StackTrace.buildLineTable(i, bcToWord)` takes the map as an argument. The sizing pass's dry-run compile no
+    longer writes the cells the real emit reads.
+  - **`calleeCodeOf` -> `calleeOf`, returning a `FoundMethod`** (P2-3's result type), which carries the
+    ACC_SYNCHRONIZED bit `scanCallees` used to read from `gCalleeSync`.
+  - Untouched: `SelfBuild.fFrameSize` (writer-side self-build, not the loader's compile path).
+  - **Image** 39,548,376 bytes (+240); Loader 9,074 lines.
+  - **Validation:** `make test` + overlaycheck clean, no helper-stash MISS; the same 41 probes as P2-4c pass
+    (DeepTrace, CtorChainTrace and HighLocalThrow exercise the line table and the handler ranges).
 - **LOADER REFACTOR PHASE 2, INCREMENT P2-4c: Type/TIB on `ClassBuild`, `RVMClass.resumeBuild` (2026-11-18).**
   Completes P2-4.
   - **Onto `ClassBuild`:** `gType`, `gTib`, `gAdoptType`, `gAdoptStatics`, `gAdoptStaticCount`, `gIfmStart`,
