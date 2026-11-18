@@ -71,11 +71,6 @@ public final class Loader
      */
     static ClassFileView gView;
     private static int gClassModifiers;   // current class's access_flags (ACC_SUPER stripped) — cached into clModifiers
-    static int gcodeLen;    // length of the located method's bytecode
-    static int gMaxLocals;  // ... and its max_locals (frame sizing)
-    static int gFoundDescOff;  // descriptor Utf8 offset of the last findMethod hit
-    static int gFoundStatic;   // 1 if that method is static
-    static int gFoundSync;     // 1 if ACC_SYNCHRONIZED (the implicit method monitor, JVMS 2.11.10)
     private static int gFrameSize;     // frame size of the last method the core compiled
     private static int gRegLocals;     // its callee-saved local count (x19..) — for unwind's pre-try local restore
     // Try/catch ranges of the last method the core compiled (machine word offsets + catch-type cp),
@@ -298,12 +293,12 @@ public final class Loader
         Address base = Address.fromLong(bytes);
         parseConstPool(base, len);
         parseFields();
-        long code = findMethod(base);
-        if (code == 0L)
+        FoundMethod f = findMethod(base);
+        if (f == null)
         {
             return 0L;
         }
-        long buf = compile(code, gcodeLen, gFoundDescOff, gFoundStatic, gFoundSync);   // two int args
+        long buf = compile(f.code, ClassBytes.codeLength(f.code), f.descOff, f.isStatic, f.isSync);   // two int args
         return Magic.call2(buf, a, b);
     }
 
@@ -320,14 +315,14 @@ public final class Loader
     {
         parseConstPool(Address.fromLong(bytes), len);
         parseFields();
-        long code = findMethodByBytes(gView.base, name, desc);
-        if (code == 0L)
+        FoundMethod f = findMethodByBytes(gView.base, name, desc);
+        if (f == null)
         {
             probeFound = 0;
             return 0L;
         }
         probeFound = 1;
-        long buf = compile(code, gcodeLen, gFoundDescOff, gFoundStatic, gFoundSync);
+        long buf = compile(f.code, ClassBytes.codeLength(f.code), f.descOff, f.isStatic, f.isSync);
         return Magic.call2(buf, a, b);
     }
 
@@ -1020,7 +1015,7 @@ public final class Loader
     }
 
     /** Like {@link #findMethod} but matches name+descriptor by byte content (for names &gt; 8 chars). */
-    static long findMethodByBytes(Address base, byte[] name, byte[] desc)
+    static FoundMethod findMethodByBytes(Address base, byte[] name, byte[] desc)
     {
         Address p = gp;
         gMethodsStart = p;
@@ -1036,16 +1031,13 @@ public final class Loader
                 long code = findCode(base, p.plus(8), attrs);
                 if (code != 0L)
                 {
-                    gFoundDescOff = gView.cp[u2(p.plus(4))];
-                    gFoundStatic = (access & 0x0008) != 0 ? 1 : 0;
-                    gFoundSync = (access & 0x0020) != 0 ? 1 : 0;
-                    return code;
+                    return new FoundMethod(code, gView.cp[u2(p.plus(4))], access);
                 }
             }
             p = skipAttributes(p.plus(8), attrs);
             m += 1;
         }
-        return 0L;
+        return null;
     }
 
     /**
@@ -1066,12 +1058,12 @@ public final class Loader
         addBlob(VM.myExcBytes, (int) VM.myExcLen);
         loadAll();
         seek(0x616e73776572L, 6, 0x282949L, 3);        // "answer" "()I"
-        long code = findMethod(Address.fromLong(VM.guestBytes));
-        if (code == 0L)
+        FoundMethod f = findMethod(Address.fromLong(VM.guestBytes));
+        if (f == null)
         {
             return 0;
         }
-        return (int) Magic.call0(bufOf(code));
+        return (int) Magic.call0(bufOf(f.code));
     }
 
     /**
@@ -1532,7 +1524,6 @@ public final class Loader
         ClassInitializer.clinitCodeLen = new int[MAXBLOB];
         ClassInitializer.clinitDescOff = new int[MAXBLOB];
         ClassInitializer.clinitStatic = new int[MAXBLOB];
-        ClassInitializer.clinitLocals = new int[MAXBLOB];
         ClassInitializer.clinitPd = new int[MAXBLOB];
         ClassInitializer.clinitBase = AddressArray.create(MAXBLOB);
         ClassInitializer.clinitNameOff = new int[MAXBLOB];
@@ -3782,8 +3773,8 @@ public final class Loader
         }
     }
 
-    /** From {@code gp} (at the methods), return the bytecode address of the sought method. */
-    static long findMethod(Address base)
+    /** From {@code gp} (at the methods), find the sought method (the {@code seek} key); null if absent. */
+    static FoundMethod findMethod(Address base)
     {
         Address p = gp;
         gMethodsStart = p;                              // remember for on-demand callee lookup
@@ -3805,10 +3796,7 @@ public final class Loader
                 long code = findCode(base, p, attrs);
                 if (code != 0L)
                 {
-                    gFoundDescOff = gView.cp[descIdx];       // for the shared core's prologue
-                    gFoundStatic = (access & 0x0008) != 0 ? 1 : 0;
-                    gFoundSync = (access & 0x0020) != 0 ? 1 : 0;
-                    return code;
+                    return new FoundMethod(code, gView.cp[descIdx], access);
                 }
             }
             else
@@ -3817,10 +3805,11 @@ public final class Loader
             }
             m += 1;
         }
-        return 0L;
+        return null;
     }
 
-    /** Find the Code attribute among {@code attrs} at {@code p}; return the bytecode address. */
+    /** Find the Code attribute among {@code attrs} at {@code p}; return the bytecode address (0 if none). Its
+     *  length and max_locals are read back from that address: {@link ClassBytes#codeLength}, {@link ClassBytes#maxLocals}. */
     static long findCode(Address base, Address p, int attrs)
     {
         int a = 0;
@@ -3832,8 +3821,6 @@ public final class Loader
             p = p.plus(4);
             if (Utf8.isName(base, gView.cp[anIdx], 0x436f6465L, 4))              // "Code"
             {
-                gMaxLocals = u2(p.plus(2));                 // after max_stack(2)
-                gcodeLen = u4(p.plus(4));
                 return p.plus(8).toLong();
             }
             p = p.plus(alen);
@@ -3903,7 +3890,7 @@ public final class Loader
      * Report if the compiler is entered WITHOUT the loader lock. Ungated: this is silent cross-task
      * corruption, not a degraded answer.
      *
-     * <p>The entire compile context is STATIC -- {@code g*}, the {@code m*} tables, {@code gMaxLocals} --
+     * <p>The entire compile context is STATIC -- {@code g*}, the {@code m*} tables --
      * so two tasks inside {@code compile()} at once interleave into each other's state. The first symptom
      * is a body compiled against SOMEBODY ELSE'S max_locals (`LOCALS UNDERSIZED`), or a report printing raw
      * constant-pool bytes where a class name should be, because {@code gView.base} moved under it. This VM has
@@ -4152,7 +4139,7 @@ public final class Loader
         allocMethodTables();
         ClassInitializer.resetInitGuardMemo();                           // the guard decision is per COMPILE: both passes below
                                                         //   must agree, and sizeMethod can demand-load
-        addMethod(code, len, gMaxLocals, descOff, isStatic, isSync);
+        addMethod(code, len, ClassBytes.maxLocals(code), descOff, isStatic, isSync);
         int i = 0;
         while (i < mCount)                              // discover
         {
@@ -4224,7 +4211,7 @@ public final class Loader
                 }
                 else
                 {
-                    addMethod(code, gcodeLen, gMaxLocals, gView.cp[u2(p.plus(4))], isStatic,
+                    addMethod(code, ClassBytes.codeLength(code), ClassBytes.maxLocals(code), gView.cp[u2(p.plus(4))], isStatic,
                               (u2(p) & 0x0020) != 0 ? 1 : 0);   // ACC_SYNCHRONIZED
                     // Everything else takes the other route to the same engine: a deferral stub standing in
                     // for the body (statics went the cell way above). EVERY method kind defers now,
@@ -4395,7 +4382,7 @@ public final class Loader
     /**
      * A demand-load BATCH is one critical section, and the lock lives HERE rather than at each caller.
      *
-     * <p>The compile context is STATIC -- {@code g*}, the {@code m*} method tables, {@code gMaxLocals} --
+     * <p>The compile context is STATIC -- {@code g*}, the {@code m*} method tables --
      * so two tasks inside the compiler at once interleave into each other's state. `lazyCompile` has always
      * taken the lock; the BATCH path had no lock of its own, and reached `compileClass` through five callers
      * that do not take one: `mirrorOfInternalName` and `mirrorForNameAt` ({@code Class.forName}),
@@ -5478,10 +5465,10 @@ public final class Loader
             if (op == 0xb8 || op == 0xb7)                   // invokestatic / invokespecial
             {
                 int idx = u2(code + pc + 1);
-                long c = calleeCodeOf(idx);                 // sets gcodeLen / gMaxLocals
+                long c = calleeCodeOf(idx);                 // sets gCalleeSync
                 if (c != 0L)
                 {
-                    addMethod(c, gcodeLen, gMaxLocals, mrefDescOff(idx), op == 0xb8 ? 1 : 0, gCalleeSync);
+                    addMethod(c, ClassBytes.codeLength(c), ClassBytes.maxLocals(c), mrefDescOff(idx), op == 0xb8 ? 1 : 0, gCalleeSync);
                 }
             }
             pc += insnLen(code, pc);
@@ -7241,9 +7228,9 @@ public final class Loader
         return 0;
     }
 
-    /** Find a method in the current blob by its (name, descriptor) Utf8 offsets; sets gcodeLen/gFoundDescOff/
-     *  gFoundStatic like {@link #findMethod}. Returns its Code address, or 0. */
-    static long findMethodByOffsets(int nameOff, int descOff)
+    /** Find a method in the current blob by its (name, descriptor) Utf8 offsets, like {@link #findMethod};
+     *  null if the class has no such method with a body. */
+    static FoundMethod findMethodByOffsets(int nameOff, int descOff)
     {
         Address p = gp;
         gMethodsStart = p;
@@ -7259,16 +7246,13 @@ public final class Loader
                 long code = findCode(gView.base, p.plus(8), attrs);
                 if (code != 0L)
                 {
-                    gFoundDescOff = gView.cp[u2(p.plus(4))];
-                    gFoundStatic = (access & 0x0008) != 0 ? 1 : 0;
-                    gFoundSync = (access & 0x0020) != 0 ? 1 : 0;
-                    return code;
+                    return new FoundMethod(code, gView.cp[u2(p.plus(4))], access);
                 }
             }
             p = skipAttributes(p.plus(8), attrs);
             m += 1;
         }
-        return 0L;
+        return null;
     }
 
 
@@ -7603,10 +7587,9 @@ public final class Loader
         {
             LazyCompiler.lzNHigh = LazyCompiler.lzN + 1;                      // high-water across reclaims
         }
-        LazyCompiler.lzTab[idx].codeLen = u4(code - 4L);                 // Code attr: {u2 maxStack}{u2 maxLocals}{u4 len}
+        LazyCompiler.lzTab[idx].codeLen = ClassBytes.codeLength(code);
         LazyCompiler.lzTab[idx].isStatic = 0;
         LazyCompiler.lzTab[idx].isSync = gvTab[s].isSync;                // else this body compiles with NO monitor
-        LazyCompiler.lzTab[idx].maxLocals = u2(code - 6L);
         LazyCompiler.lzTab[idx].cache = 0L;
         LazyCompiler.lzN += 1;
         Address buf = Heap.allocCode(32);
@@ -7618,7 +7601,7 @@ public final class Loader
     }
 
 
-    /** Resolve Methodref {@code idx} to its (same-class) method's bytecode; set {@code gcodeLen}. */
+    /** Resolve Methodref {@code idx} to its (same-class) method's bytecode; set {@code gCalleeSync}. */
     private static int gCalleeSync;    // ACC_SYNCHRONIZED of the method calleeCodeOf last found
 
     private static long calleeCodeOf(int idx)

@@ -4,6 +4,20 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **LOADER REFACTOR PHASE 2, INCREMENT P2-3: method lookups return their answer (2026-11-18).** Five statics a
+  lookup used to leave behind are deleted: `gcodeLen`, `gMaxLocals`, `gFoundDescOff`, `gFoundStatic`, `gFoundSync`.
+  - **Length and max_locals are read back from the bytecode address**: `ClassBytes.codeLength(code)` (`u4(code-4)`)
+    and `ClassBytes.maxLocals(code)` (`u2(code-6)`), the Code attribute header (JVMS 4.7.3). Every bytecode address
+    the loader holds comes from `findCode`, so this is exact; `findCode` no longer has side effects.
+  - **`compile()` no longer reads an implicit `gMaxLocals`.** Three callers re-set it "AFTER the restore:
+    parseFields/parseVtable clobber it" before every compile; those lines are gone, and so are the copies kept only
+    for them (`ClassInitializer.clinitLocals`, `LazyMethod.maxLocals`).
+  - **`FoundMethod`** (new, `vm/`, immutable): `findMethod` / `findMethodByBytes` / `findMethodByOffsets` return
+    `{code, descOff, isStatic, isSync}` or null. `Closure`'s 11 code-only callers use `FoundMethod.codeOf`.
+  - **Image** 39,546,784 bytes (P2-2: 39,545,864).
+  - **Validation:** `make test` + overlaycheck clean, no helper-stash MISS; 30 probes pass (P2-2's 24 + ClinitFail,
+    CtorRefField, HighLocalThrow, Lock, DefaultFrame, LongBranch). Speed A/B was still running at merge time.
+    Not run: full regression, suite, JUnit, Pi.
 - **LOADER REFACTOR PHASE 2, INCREMENT P2-2: `gView` is the current class; the seven copied globals are gone
   (2026-11-18).** `gbase`, `gcp`, `gbytes`, `gcpTag`, `gcpCount`, `gAfterCp` and `litObjByCp` are deleted; all 765
   reads (26 classes) now go through `Loader.gView` (`.base`, `.cp`, `.bytes`, ...). The user chose the FULL replacement

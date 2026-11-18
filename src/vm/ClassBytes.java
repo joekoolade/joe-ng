@@ -57,6 +57,24 @@ final class ClassBytes
         return (u2(p) << 16) | u2(p.plus(2L));
     }
 
+    /**
+     * {@code code_length} of the method whose bytecode starts at {@code code}. A Code attribute body is
+     * {@code {u2 max_stack}{u2 max_locals}{u4 code_length}{code[]}} (JVMS 4.7.3), and every bytecode address the
+     * loader holds is the start of {@code code[]} inside a blob ({@code Loader.findCode}), so the length sits in
+     * the four bytes before it. Replaces the {@code gcodeLen} static that the last lookup used to leave behind.
+     */
+    static int codeLength(long code)
+    {
+        return u4(code - 4L);
+    }
+
+    /** {@code max_locals} of the method whose bytecode starts at {@code code}: six bytes before it (see
+     *  {@link #codeLength}). Replaces the {@code gMaxLocals} static. */
+    static int maxLocals(long code)
+    {
+        return u2(code - 6L);
+    }
+
     static int opLen(int op)
     {
         if (op == 0x10 || op == 0x12 || op == 0x15 || op == 0x16 || op == 0x17 || op == 0x18 || op == 0x19

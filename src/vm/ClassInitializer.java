@@ -54,7 +54,6 @@ final class ClassInitializer
     static int[] clinitCodeLen;
     static int[] clinitDescOff;
     static int[] clinitStatic;
-    static int[] clinitLocals;
     static int[] clinitPd;       // pd-blob index of each enqueued <clinit> (for dependency-ordered running)
     // The record's OWN blob identity. clinitPd indexes the pending-blob list, which resetLoader rebuilds every
     // batch and which never re-lists a SETTLED blob -- so pd is meaningless to anything that outlives the batch
@@ -279,8 +278,9 @@ final class ClassInitializer
             return;    // unrunnable <clinit> (calls natives / reads properties): its statics are seeded instead
         }
         Loader.seek(0x3C636C696E69743EL, 8, 0x282956L, 3);    // "<clinit>" "()V"
-        long code = Loader.findMethod(bytes);
-        if (code != 0L && !clinitCompilable(code, Loader.gcodeLen))
+        FoundMethod f = Loader.findMethod(bytes);
+        long code = FoundMethod.codeOf(f);
+        if (code != 0L && !clinitCompilable(code, ClassBytes.codeLength(code)))
         {
             // SAY SO. A REJECTED initializer is indistinguishable from one that ran: the class loads, gets
             // its static cells, and the batch-end sweep marks it INITIALIZED because no record is pending --
@@ -289,13 +289,13 @@ final class ClassInitializer
             // like a resolution bug rather than an initializer that was never run.
             reportClinitRejected();
         }
-        if (code != 0L && clinitCompilable(code, Loader.gcodeLen))
+        if (code != 0L && clinitCompilable(code, ClassBytes.codeLength(code)))
         {
             if (clinitN >= Loader.MAXBLOB) { Loader.capHalt(Magic.bytes("Loader.MAXBLOB-clinit"), clinitN); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
             // Record the initializer's PRECISE dependencies (from its bytecode) BEFORE compile — compile uses the
             // same gView, but scanning first keeps the cp-parse state pristine for the walk.
                 clDepStart[clinitN] = clDepTop;
-            scanClinitDeps(code, Loader.gcodeLen);
+            scanClinitDeps(code, ClassBytes.codeLength(code));
                 clDepN[clinitN] = clDepTop - clDepStart[clinitN];
             // CAPTURE the body; do not compile it. Initialization already happens on demand (JVMS 5.5, the
             // lazy-init arc), but the COMPILE stayed here at load time, so an initializer the program never
@@ -305,10 +305,9 @@ final class ClassInitializer
             // clinitEntryOf compiles on the first ACTUAL run, and its own relocs are patched there (the
             // batch-wide patchRelocs is long past by then) exactly as lazyCompile does for deferred bodies.
             clinitCode[clinitN] = code;
-            clinitCodeLen[clinitN] = Loader.gcodeLen;
-            clinitDescOff[clinitN] = Loader.gFoundDescOff;
-            clinitStatic[clinitN] = Loader.gFoundStatic;
-            clinitLocals[clinitN] = Loader.gMaxLocals;
+            clinitCodeLen[clinitN] = ClassBytes.codeLength(code);
+            clinitDescOff[clinitN] = f.descOff;
+            clinitStatic[clinitN] = f.isStatic;
             clinitEntry[clinitN] = 0L;              // uncompiled: clinitCode[] is now the "enqueued" marker
                 clinitPd[clinitN] = Loader.findPdByName(Loader.gView.base, Loader.gThisNameOff);   // which blob (for dependency-ordered running)
             clinitBase.set(clinitN, Loader.gView.base);                // batch-independent identity (see the declarations)
@@ -381,7 +380,6 @@ final class ClassInitializer
             Loader.capHalt(Magic.bytes("clinit-compile-ctx"), i);   // no class to compile against -- name it, don't guess
         }
         LazyCompiler.restoreCtxForCompile(clinitBase.get(i), Loader.blobLenOf(clinitBase.get(i)), reg);
-        Loader.gMaxLocals = clinitLocals[i];                   // AFTER the restore: parseFields/parseVtable clobber it
         boolean reuseWas = Loader.compileReuseTib;              // a nested load resets it: restore, never clear
         Loader.compileReuseTib = true;                         // the class's TIB exists and is filled -- do not rebuild it
         int rcMark = Relocator.rcCount;                           // this compile's own reloc sites start here

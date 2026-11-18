@@ -779,7 +779,7 @@ final class Reflection
         Loader.lzPullN = 0;
         Loader.lzRetried = false;
         // JLS 8.8.3 forbids `synchronized` on a constructor, so isSync is 0 by the language, not by omission.
-        Loader.compile(code, Loader.gcodeLen, descOff, 0, 0);           // <init> is an instance method (receiver = the new object)
+        Loader.compile(code, ClassBytes.codeLength(code), descOff, 0, 0);           // <init> is an instance method (receiver = the new object)
         Loader.lzCompiling = outerCompiling;
         Loader.compileReuseTib = reuseWas;
         boolean pulled = Loader.lzPullN > 0;
