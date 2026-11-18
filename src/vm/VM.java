@@ -1772,7 +1772,7 @@ public final class VM
      */
     static void ensureInitByName(Address clsU)
     {
-        Loader.ensureInitFor(clsU);
+        ClassInitializer.ensureInitFor(clsU);
     }
 
     static long newUnresolved(long site)

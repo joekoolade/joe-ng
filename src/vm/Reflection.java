@@ -139,7 +139,7 @@ final class Reflection
         {
             return 0L;
         }
-        Loader.ensureClinit(ci);
+        ClassInitializer.ensureClinit(ci);
         int i = 0;
         while (i < Statics.sgCount)
         {
@@ -283,7 +283,7 @@ final class Reflection
         {
             return -1;
         }
-        Loader.ensureClinit(ClassRegistry.classRegByType(type));             // reflective invoke is an active use (JVMS 5.5) --
+        ClassInitializer.ensureClinit(ClassRegistry.classRegByType(type));             // reflective invoke is an active use (JVMS 5.5) --
                                                         // Class.getEnumConstants reaches values() this way, and
                                                         // values() reads $VALUES, which only <clinit> sets
         int idx = methodResolveRegistry(type, nameArr);
@@ -309,7 +309,7 @@ final class Reflection
         {
             return -1;
         }
-        Loader.ensureClinit(ClassRegistry.classRegByType(type));             // reflective invoke is an active use (JVMS 5.5)
+        ClassInitializer.ensureClinit(ClassRegistry.classRegByType(type));             // reflective invoke is an active use (JVMS 5.5)
         int idx = methodResolveRegistryDesc(type, nameArr, descArr);
         if (idx >= 0)
         {
@@ -816,7 +816,7 @@ final class Reflection
         {
             return 0L;
         }
-        Loader.ensureClinit(ci);                               // reflective instantiation is an active use, like `new`
+        ClassInitializer.ensureClinit(ci);                               // reflective instantiation is an active use, like `new`
         Address obj = Heap.alloc(16 + ClassRegistry.clTab[ci].fieldCount * 8);  // header(16) + instance fields (incl. inherited)
         obj.plus(ObjectModel.TIB_OFFSET).store(ClassRegistry.clTab[ci].tib);
         return obj.toLong();

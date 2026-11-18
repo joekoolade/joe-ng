@@ -93,10 +93,10 @@ final class ClassMirrors
         int ci = ClassRegistry.classIndexByName(slash);
         if (ci >= 0)
         {
-            Loader.linkable(ci);                                   // loaded or not, initialized or not: no class at all
+            ClassInitializer.linkable(ci);                                   // loaded or not, initialized or not: no class at all
             if (init)
             {
-                Loader.ensureClinit(ci);                           // JVMS 5.5: Class.forName(name) INITIALIZES the class
+                ClassInitializer.ensureClinit(ci);                           // JVMS 5.5: Class.forName(name) INITIALIZES the class
             }
             return classMirror(ClassRegistry.clTab[ci].type);             // already loaded: cached mirror (identity-stable)
         }
@@ -115,11 +115,11 @@ final class ClassMirrors
         Address type = Loader.loadClassIncremental(slash);
         if (!type.isZero())
         {
-            Loader.linkable(ClassRegistry.classRegByType(type));
+            ClassInitializer.linkable(ClassRegistry.classRegByType(type));
         }
         if (init)
         {
-            Loader.ensureClinit(ClassRegistry.classRegByType(type));         // JVMS 5.5: forName INITIALIZES, and this batch's
+            ClassInitializer.ensureClinit(ClassRegistry.classRegByType(type));         // JVMS 5.5: forName INITIALIZES, and this batch's
         }                                               // runClinits left a gated initializer pending
         return type.isZero() ? 0L : classMirror(type);
     }
@@ -419,14 +419,14 @@ final class ClassMirrors
             i += 1;
         }
         // Not a registered method: try the initializers, which are registered nowhere.
-        if (Loader.clinitEntry != null)
+        if (ClassInitializer.clinitEntry != null)
         {
             int c = 0;
-            while (c < Loader.clinitN)
+            while (c < ClassInitializer.clinitN)
             {
-                if (Loader.clinitEntry[c] == blk)
+                if (ClassInitializer.clinitEntry[c] == blk)
                 {
-                    return classMirrorByName(Loader.clinitBase.get(c), Loader.clinitNameOff[c]);
+                    return classMirrorByName(ClassInitializer.clinitBase.get(c), ClassInitializer.clinitNameOff[c]);
                 }
                 c += 1;
             }

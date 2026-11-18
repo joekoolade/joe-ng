@@ -1441,7 +1441,7 @@ final class VMNatives
         {
             return 0L;                                     // boot force-compile passes 0
         }
-        Loader.ensureInitOfType(mirrorRef.toAddress().plus(16L).loadAddress());
+        ClassInitializer.ensureInitOfType(mirrorRef.toAddress().plus(16L).loadAddress());
         return 0L;
     }
 
@@ -1453,7 +1453,7 @@ final class VMNatives
         {
             return 0L;                                     // boot force-compile passes 0
         }
-        return Loader.typeNeedsInit(mirrorRef.toAddress().plus(16L).loadAddress()) ? 1L : 0L;
+        return ClassInitializer.typeNeedsInit(mirrorRef.toAddress().plus(16L).loadAddress()) ? 1L : 0L;
     }
 
     /**

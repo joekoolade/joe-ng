@@ -153,7 +153,7 @@ final class MethodHandles
             Address t = Loader.loadClassIncremental(Magic.bytes("java/lang/invoke/MethodHandleNatives"));
             if (!t.isZero())
             {
-                Loader.ensureInitOfType(t);
+                ClassInitializer.ensureInitOfType(t);
             }
         }
         finally

@@ -233,7 +233,7 @@ final class DynamicTypeCheck
     static long tibOfClass(int classIdx)
     {
         int r = ClassRegistry.classRegOf(classIdx);
-        Loader.noteInitNeeded(r);                              // `new C` is an active use of C (JVMS 5.5)
+        ClassInitializer.noteInitNeeded(r);                              // `new C` is an active use of C (JVMS 5.5)
         return (r >= 0 ? ClassRegistry.clTab[r].tib : Loader.gTib).toLong();            // unregistered => the SELF case (objectSizeOf traps the rest)
     }
 }

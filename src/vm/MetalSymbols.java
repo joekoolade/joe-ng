@@ -225,12 +225,12 @@ final class MetalSymbols implements Symbols
 
     public boolean needsInitGuard(int refCp)
     {
-        return Loader.initGuardNeeded(Loader.initTargetNameAddr(refCp));   // the SAME class initGuard emits
+        return ClassInitializer.initGuardNeeded(Loader.initTargetNameAddr(refCp));   // the SAME class initGuard emits
     }
 
     public boolean needsInitGuardClass(int classCp)
     {
-        return Loader.initGuardNeeded(Loader.classNameAddr(classCp));
+        return ClassInitializer.initGuardNeeded(Loader.classNameAddr(classCp));
     }
 
     /** x0 = the class-name Utf8 address, then the helper. Shared so the two seams cannot drift apart. */
@@ -240,7 +240,7 @@ final class MetalSymbols implements Symbols
         {
             return;                                     // no resolvable name: the late paths still cover it
         }
-        Loader.logInitGuard(Magic.bytes("  IG-emit "), Address.fromLong(clsU));
+        ClassInitializer.logInitGuard(Magic.bytes("  IG-emit "), Address.fromLong(clsU));
         emitAddr(cb, 0, clsU);
         callHelper(cb, Symbols.ENSURE_INIT);
     }
