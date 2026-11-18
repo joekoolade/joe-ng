@@ -54,7 +54,7 @@ final class ClassRegistry
     // Counted for ALL callers (there are nine); this loop is the one that runs per site per batch.
     static long rbCalls;                                // regBySigU calls (all callers)
     static long rbSteps;                                // ... class-registry entries compared inside them
-    /** Class-registry index of the class whose name Utf8 is at {@code nameOff} in gbase, or -1. */
+    /** Class-registry index of the class whose name Utf8 is at {@code nameOff} in gView.base, or -1. */
     /** {@link #classRegByName} for a name in an ARBITRARY blob, not the one the parse cursor happens to be on.
      *  A clinit dependency is named in the DEPENDENT's constant pool, so its offset is against that blob. */
     /**
@@ -69,7 +69,7 @@ final class ClassRegistry
      * what is left in `statT` is a diagnostic gate.** Over all eight callers: `rb:n=5316 steps=3926k`.
      *
      * <p>THREE SPELLINGS OF ONE QUERY, and they each carried their own copy of the scan: {@code regBySigU}
-     * (an absolute {@code {u2 len}{bytes}} run), {@code classRegByName} (an offset into {@code gbase}) and
+     * (an absolute {@code {u2 len}{bytes}} run), {@code classRegByName} (an offset into {@code gView.base}) and
      * this one (base + offset). They differ only in how the key bytes are addressed, so all three are now
      * this body -- the same "one call site's fix, several timers" shape the phase-B publish and the static
      * index both had. ({@code classRegByNameBytes}, keyed on a VM-side {@code byte[]}, is left alone: a
@@ -235,7 +235,7 @@ final class ClassRegistry
         {
             return -1;
         }
-        return classRegAt(Loader.gbase, nameOff);               // Loader.gbase + offset: the same query, one spelling of three
+        return classRegAt(Loader.gView.base, nameOff);               // Loader.gView.base + offset: the same query, one spelling of three
     }
 
     /**
@@ -283,11 +283,11 @@ final class ClassRegistry
     /** Class-registry index of the class named by a {@code new}/type {@code Class} entry, or -1. */
     static int classRegOf(int classIdx)
     {
-        int nameOff = Loader.gcp[u2(Loader.gbase.plus(Loader.gcp[classIdx]))];   // Class entry -> name Utf8 offset
+        int nameOff = Loader.gView.cp[u2(Loader.gView.base.plus(Loader.gView.cp[classIdx]))];   // Class entry -> name Utf8 offset
         // The class-name index (classRegAt): the same predicate as the scan this was, and the LOWEST matching
         // index, which is what the scan's first match answered. Profiled on InvokeGapProbe after #450 with
         // scripts/qprof-tally.pl's caller view: the scan was 6.1% of the busy core.
-        return classRegAt(Loader.gbase, nameOff);
+        return classRegAt(Loader.gView.base, nameOff);
     }
 
     /**

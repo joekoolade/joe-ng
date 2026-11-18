@@ -147,7 +147,7 @@ final class TibBuilder
             if (Loader.LOAD_LOG)
             {
                 Uart.write(Magic.bytes("  typeadopt "));
-                Loader.printNameAt(Loader.gbase, Loader.gThisNameOff);
+                Loader.printNameAt(Loader.gView.base, Loader.gThisNameOff);
                 Uart.putc(0x0A);
             }
         }
@@ -230,7 +230,7 @@ final class TibBuilder
      *  live metadata. A stored Utf8 offset points at the length {@code u2}, so the text starts at +2. */
     private static boolean mayHoldPointer(int descOff)
     {
-        int k = u1(Loader.gbase.plus(descOff + 2));
+        int k = u1(Loader.gView.base.plus(descOff + 2));
         return k == 0x4C || k == 0x5B || k == 0x4A;     // 'L' object, '[' array, 'J' long
     }
 

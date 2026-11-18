@@ -430,9 +430,9 @@ final class InterfaceInvocation
         while (m < mcount)
         {
             int attrs = u2(p.plus(6));
-            if (Loader.isVirtual(u2(p), Loader.gcp[u2(p.plus(2))]))
+            if (Loader.isVirtual(u2(p), Loader.gView.cp[u2(p.plus(2))]))
             {
-                ifmAppendUnique(Loader.gbase, Loader.gcp[u2(p.plus(2))], Loader.gcp[u2(p.plus(4))], Loader.gbase);
+                ifmAppendUnique(Loader.gView.base, Loader.gView.cp[u2(p.plus(2))], Loader.gView.cp[u2(p.plus(4))], Loader.gView.base);
             }
             p = Loader.skipAttributes(p.plus(8), attrs);
             m += 1;
@@ -443,7 +443,7 @@ final class InterfaceInvocation
     /**
      * Append (base, name, desc) to the current interface's run unless the signature is in it, recording
      * {@code decl} as the declaring interface's blob. A signature already in the run keeps its entry (and so its
-     * slot), but when the interface being registered declares it ITSELF ({@code decl == gbase}) that entry's
+     * slot), but when the interface being registered declares it ITSELF ({@code decl == gView.base}) that entry's
      * declarer becomes this interface: an override of an inherited default must be visible as one.
      */
     private static void ifmAppendUnique(Address base, int nameOff, int descOff, Address decl)
@@ -454,9 +454,9 @@ final class InterfaceInvocation
             if (Loader.utf8EqAt(base, nameOff, ifBase.get(i), ifNameOff[i])
                     && Loader.utf8EqAt(base, descOff, ifBase.get(i), ifDescOff[i]))
             {
-                if (decl.EQ(Loader.gbase))
+                if (decl.EQ(Loader.gView.base))
                 {
-                    ifDecl.set(i, Loader.gbase);
+                    ifDecl.set(i, Loader.gView.base);
                 }
                 return;
             }
@@ -596,7 +596,7 @@ final class InterfaceInvocation
         {
             return 0;
         }
-        int s = ifmSlotIn(r, Loader.gbase, Loader.mrefNameOff(idx), Loader.mrefDescOff(idx));
+        int s = ifmSlotIn(r, Loader.gView.base, Loader.mrefNameOff(idx), Loader.mrefDescOff(idx));
         return s >= 0 ? s : 0;
     }
 
@@ -677,7 +677,7 @@ final class InterfaceInvocation
         while (i < n)
         {
             int ir = ifClosureBuf[i];
-            if (ifmSlotIn(ir, Loader.gbase, Loader.mrefNameOff(idx), Loader.mrefDescOff(idx)) >= 0)
+            if (ifmSlotIn(ir, Loader.gView.base, Loader.mrefNameOff(idx), Loader.mrefDescOff(idx)) >= 0)
             {
                 return ir;
             }
@@ -703,7 +703,7 @@ final class InterfaceInvocation
     static int defaultIfaceSlotOf(int idx)
     {
         int ir = defaultIfaceRegOf(idx);
-        return ir < 0 ? 0 : ifmSlotIn(ir, Loader.gbase, Loader.mrefNameOff(idx), Loader.mrefDescOff(idx));
+        return ir < 0 ? 0 : ifmSlotIn(ir, Loader.gView.base, Loader.mrefNameOff(idx), Loader.mrefDescOff(idx));
     }
 
     /** M8 itables: verify interface {@code reg}'s flattened per-interface slot numbering against
@@ -719,7 +719,7 @@ final class InterfaceInvocation
         if (Loader.LOAD_LOG)                                   // the header; a DIFF prints its own below, so a
         {                                               //   parity failure is never silenced by the flag
             Uart.write(Magic.bytes("  itparity "));
-            Loader.printNameAt(Loader.gbase, Loader.gThisNameOff);
+            Loader.printNameAt(Loader.gView.base, Loader.gThisNameOff);
         }
         if (VtableLayout.gVtSigCount != ClassRegistry.clTab[reg].ifmCount)
         {
@@ -761,7 +761,7 @@ final class InterfaceInvocation
         if (!Loader.LOAD_LOG)
         {
             Uart.write(Magic.bytes("  itparity "));
-            Loader.printNameAt(Loader.gbase, Loader.gThisNameOff);
+            Loader.printNameAt(Loader.gView.base, Loader.gThisNameOff);
         }
     }
 
@@ -1139,7 +1139,7 @@ final class InterfaceInvocation
     /** Type node of the interface owning InterfaceMethodref {@code idx}. */
     static long ifaceTypeOfMethod(int idx)
     {
-        int classIdx = u2(Loader.gbase.plus(Loader.gcp[idx]));            // *ref.class_index -> Class entry
+        int classIdx = u2(Loader.gView.base.plus(Loader.gView.cp[idx]));            // *ref.class_index -> Class entry
         return DynamicTypeCheck.typeOfClass(classIdx).toLong();
     }
 }

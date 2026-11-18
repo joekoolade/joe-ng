@@ -339,7 +339,7 @@ final class AnnotationInstances
      *
      * <p>ELEMENT TYPES: primitives, {@code String} and arrays of those. {@code Class} ('c'), enum ('e') and
      * nested annotation ('@') elements are left NULL and reported by name -- deliberately, because resolving
-     * one demand-loads a class, and a load re-parses a blob and clobbers {@code gcp}/{@code gbase} underneath
+     * one demand-loads a class, and a load re-parses a blob and clobbers {@code gView} underneath
      * this walk. That is the same hazard recorded for {@code buildLambdaTib}; the fix is the note-and-retry
      * route the static/class-literal paths already use, and it belongs in its own increment rather than
      * bolted into the first one.
@@ -352,7 +352,7 @@ final class AnnotationInstances
             return 0L;
         }
         Loader.parseForMethods(base, Loader.blobLenOf(base));         // a first TIB compiles the contract helpers, which
-                                                        //   re-parses; phase 1 reads names through gcp
+                                                        //   re-parses; phase 1 reads names through gView.cp
         int n = ClassRegistry.clTab[ifaceReg].ifmCount;
         // ONE EXTRA TRAILING WORD holds this annotation's own Class mirror, which is what
         // Annotation.annotationType() answers. Keeping it IN THE INSTANCE is what lets that method reuse the
@@ -373,7 +373,7 @@ final class AnnotationInstances
             while (k < pairs)
             {
                 int nameIdx = u2(p);
-                if (Loader.utf8EqAt(base, Loader.gcp[nameIdx], InterfaceInvocation.ifBase.get(start + s), InterfaceInvocation.ifNameOff[start + s]))
+                if (Loader.utf8EqAt(base, Loader.gView.cp[nameIdx], InterfaceInvocation.ifBase.get(start + s), InterfaceInvocation.ifNameOff[start + s]))
                 {
                     annoPendSlot = s;                   // a 'c'/'e' value notes ITS slot, not a global one
                     annoArrayTib = annoArrayTibFor(InterfaceInvocation.ifBase.get(start + s), InterfaceInvocation.ifDescOff[start + s]);
@@ -392,7 +392,7 @@ final class AnnotationInstances
         }
         // PHASE 2 -- DEFAULTS, for every element the use omitted. Strictly after phase 1 and never interleaved
         // with it: the defaults live in the ANNOTATION TYPE's classfile, and reading them re-parses that blob,
-        // which clobbers the gcp/gbase cursor phase 1 is walking. Two passes cost one extra parse and make the
+        // which clobbers the gView cursor phase 1 is walking. Two passes cost one extra parse and make the
         // ordering impossible to get wrong.
         //
         // Not optional. An annotation use writes only the elements it overrides -- picocli's
@@ -401,7 +401,7 @@ final class AnnotationInstances
         applyAnnoDefaults(obj.toObjectReference(), ifaceReg, filled, n);
         // PHASE 3 -- the elements that need a CLASS RESOLVED ('c' and 'e'). Deferred to here for the reason
         // phases 1 and 2 are separated at all: resolving demand-loads, a load re-parses a blob, and that
-        // clobbers the gcp/gbase cursor a walk is standing on. Nothing is walking now.
+        // clobbers the gView cursor a walk is standing on. Nothing is walking now.
         //
         // The pending entries hold ABSOLUTE Utf8 addresses, which survive a re-parse because blobs do not move
         // -- only the parse STATE does. That is the same property applyAnnoDefaults relies on.
@@ -430,7 +430,7 @@ final class AnnotationInstances
         {
             want.set(s, filled[s] ? Address.zero() : InterfaceInvocation.ifBase.get(start + s).plus(InterfaceInvocation.ifNameOff[start + s]));
             // Computed HERE, before the re-parse: annoArrayTibFor reads the element method's descriptor
-            // through gcp/clTab, and the parse below moves that cursor to a different blob.
+            // through gView.cp/clTab, and the parse below moves that cursor to a different blob.
             defArrayTib.set(s, filled[s] ? Address.zero() : annoArrayTibFor(InterfaceInvocation.ifBase.get(start + s), InterfaceInvocation.ifDescOff[start + s]));
             defArrayPrim[s] = filled[s] ? 0 : annoArrayPrimFor(InterfaceInvocation.ifBase.get(start + s), InterfaceInvocation.ifDescOff[start + s]);
             s += 1;
@@ -443,7 +443,7 @@ final class AnnotationInstances
         while (m < mcount)
         {
             int attrs = u2(p.plus(6));
-            int nameOff = Loader.gcp[u2(p.plus(2))];
+            int nameOff = Loader.gView.cp[u2(p.plus(2))];
             int slot = -1;
             int j = 0;
             while (j < n)
@@ -465,7 +465,7 @@ final class AnnotationInstances
                     q = q.plus(2);
                     int alen = u4(q);
                     q = q.plus(4);
-                    if (Utf8.utf8IsAtBase(ibase, Loader.gcp[anIdx], Magic.bytes("AnnotationDefault")))
+                    if (Utf8.utf8IsAtBase(ibase, Loader.gView.cp[anIdx], Magic.bytes("AnnotationDefault")))
                     {
                         annoPendSlot = slot;
                         annoArrayTib = defArrayTib.get(slot);   // computed BEFORE this parse: see applyAnnoDefaults
@@ -492,19 +492,19 @@ final class AnnotationInstances
         int idx = u2(p.plus(1));
         if (tag == 0x73)                                // 's' -- a String
         {
-            return internUtf8Obj(base, Loader.gcp[idx]);
+            return internUtf8Obj(base, Loader.gView.cp[idx]);
         }
         if (tag == 0x42 || tag == 0x43 || tag == 0x49 || tag == 0x53 || tag == 0x5A)
         {
-            return (long) u4(base.plus(Loader.gcp[idx]));          // B C I S Z -- all CONSTANT_Integer
+            return (long) u4(base.plus(Loader.gView.cp[idx]));          // B C I S Z -- all CONSTANT_Integer
         }
         if (tag == 0x4A || tag == 0x44)                 // 'J' / 'D' -- CONSTANT_Long/Double, two u4 halves; a
         {                                               //   double's raw bits, as the slot keeps them
-            return ((long) u4(base.plus(Loader.gcp[idx])) << 32) | ((long) u4(base.plus(Loader.gcp[idx] + 4)) & 0xFFFFFFFFL);
+            return ((long) u4(base.plus(Loader.gView.cp[idx])) << 32) | ((long) u4(base.plus(Loader.gView.cp[idx] + 4)) & 0xFFFFFFFFL);
         }
         if (tag == 0x46)                                // 'F' -- CONSTANT_Float: its raw bits, zero-extended,
         {                                               //   as a compiled putfield leaves a float. Unhandled, a
-            return (long) u4(base.plus(Loader.gcp[idx])) & 0xFFFFFFFFL;   // float or double element read 0.0
+            return (long) u4(base.plus(Loader.gView.cp[idx])) & 0xFFFFFFFFL;   // float or double element read 0.0
         }
         if (tag == 0x40)                                // '@' -- a nested annotation
         {
@@ -549,12 +549,12 @@ final class AnnotationInstances
         }
         if (tag == 0x63)                                // 'c' -- a Class literal; descriptor Utf8
         {
-            noteAnnoPending(0, base.plus(Loader.gcp[idx]), Address.zero());
+            noteAnnoPending(0, base.plus(Loader.gView.cp[idx]), Address.zero());
             return 0L;                                  // filled by drainAnnoPending
         }
         if (tag == 0x65)                                // 'e' -- an enum constant: type descriptor + name
         {
-            noteAnnoPending(1, base.plus(Loader.gcp[idx]), base.plus(Loader.gcp[u2(p.plus(3))]));
+            noteAnnoPending(1, base.plus(Loader.gView.cp[idx]), base.plus(Loader.gView.cp[u2(p.plus(3))]));
             return 0L;
         }
         return 0L;
@@ -619,13 +619,13 @@ final class AnnotationInstances
      */
     private static long annoNestedValue(Address base, Address at)
     {
-        int nreg = Annotations.loadAnnoTypeByDescAbs(base.plus(Loader.gcp[u2(at)]));
+        int nreg = Annotations.loadAnnoTypeByDescAbs(base.plus(Loader.gView.cp[u2(at)]));
         if (nreg < 0)
         {
             Loader.parseForMethods(base, Loader.blobLenOf(base));
             return 0L;
         }
-        Loader.parseForMethods(base, Loader.blobLenOf(base));         // a load re-parses: the build reads names through gcp
+        Loader.parseForMethods(base, Loader.blobLenOf(base));         // a load re-parses: the build reads names through gView.cp
         int sSlot = annoPendSlot;
         int sElem = annoPendElem;
         Address sTib = annoArrayTib;

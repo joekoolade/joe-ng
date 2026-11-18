@@ -30,7 +30,7 @@ import objectmodel.ObjectModel;
  * {@code Baseline} core drives this exactly as it drives the writer's version.
  *
  * <p>This runs while {@code Loader} is compiling a class, so its resolvers read
- * {@code Loader}'s current-class state (gbase/gcp) and the loaded-class tables.
+ * {@code Loader}'s current-class state (gView) and the loaded-class tables.
  */
 final class MetalSymbols implements Symbols
 {

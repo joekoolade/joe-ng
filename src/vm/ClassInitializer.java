@@ -95,7 +95,7 @@ final class ClassInitializer
     private static int bootInitedN;
     // PRECISE per-<clinit> init dependencies: the classes the initializer BODY actively touches
     // (getstatic/putstatic/invokestatic owner, new/anewarray class, ldc Class literal), name Utf8 offsets in the
-    // owning blob's gbase. Used by clinitDepBlocked INSTEAD of the whole-constant-pool dp table, whose field-type /
+    // owning blob's gView.base. Used by clinitDepBlocked INSTEAD of the whole-constant-pool dp table, whose field-type /
     // signature / enclosing-class refs create spurious cycles (e.g. an inner enum's cp names its outer class, so
     // the outer's <clinit> and the inner's appear mutually dependent). The <clinit> bytecode names exactly the
     // classes whose initialization it needs.
@@ -293,7 +293,7 @@ final class ClassInitializer
         {
             if (clinitN >= Loader.MAXBLOB) { Loader.capHalt(Magic.bytes("Loader.MAXBLOB-clinit"), clinitN); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
             // Record the initializer's PRECISE dependencies (from its bytecode) BEFORE compile — compile uses the
-            // same gcp/gbase, but scanning first keeps the cp-parse state pristine for the walk.
+            // same gView, but scanning first keeps the cp-parse state pristine for the walk.
                 clDepStart[clinitN] = clDepTop;
             scanClinitDeps(code, Loader.gcodeLen);
                 clDepN[clinitN] = clDepTop - clDepStart[clinitN];
@@ -310,12 +310,12 @@ final class ClassInitializer
             clinitStatic[clinitN] = Loader.gFoundStatic;
             clinitLocals[clinitN] = Loader.gMaxLocals;
             clinitEntry[clinitN] = 0L;              // uncompiled: clinitCode[] is now the "enqueued" marker
-                clinitPd[clinitN] = Loader.findPdByName(Loader.gbase, Loader.gThisNameOff);   // which blob (for dependency-ordered running)
-            clinitBase.set(clinitN, Loader.gbase);                // batch-independent identity (see the declarations)
+                clinitPd[clinitN] = Loader.findPdByName(Loader.gView.base, Loader.gThisNameOff);   // which blob (for dependency-ordered running)
+            clinitBase.set(clinitN, Loader.gView.base);                // batch-independent identity (see the declarations)
             clinitNameOff[clinitN] = Loader.gThisNameOff;
             clinitOwner[clinitN] = 0;                   // explicit: allocArray does not zero on this VM
             clinitDone[clinitN] = 0;
-            if (Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff, Magic.bytes("java/io/FileDescriptor")))
+            if (Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff, Magic.bytes("java/io/FileDescriptor")))
             {
                 clinitFdFirst = clinitN;   // run FIRST in runClinits: it registers the JavaIOFileDescriptorAccess
             }                              // that NativeDispatcher/NioSocketImpl <clinit>s read via SharedSecrets
@@ -326,8 +326,8 @@ final class ClassInitializer
     /**
      * THE COMPILE CONTEXT IS STATIC, so exactly one task may be inside the compiler at a time. {@code
      * lazyCompile} has always taken {@link VM#loaderLock} for that reason; this path reached {@code compile}
-     * without it, so a second task compiling here while another compiled elsewhere clobbered {@code gbytes}/
-     * {@code gcp} mid-compile -- which surfaces as a NULL bytecode array inside the compiler
+     * without it, so a second task compiling here while another compiled elsewhere clobbered {@code gView.bytes}/
+     * {@code gView.cp} mid-compile -- which surfaces as a NULL bytecode array inside the compiler
      * ({@code NullPointerException} in {@code Baseline.s4}, lowering a switch) rather than as anything
      * resembling a locking bug. The lock is RECURSIVE and owned by TASK, so nesting inside an
      * already-locked path costs nothing.
@@ -503,7 +503,7 @@ final class ClassInitializer
             else if (op == 0x12)                               // ldc: a Class literal feeds reflective init
             {
                 int ci = u1(code + pc + 1);
-                if (Loader.gcpTag[ci] == 7)
+                if (Loader.gView.cpTag[ci] == 7)
                 {
                     cnOff = Closure.classCpNameOff(ci);
                 }
@@ -511,7 +511,7 @@ final class ClassInitializer
             else if (op == 0x13)                               // ldc_w
             {
                 int ci = u2(code + pc + 1);
-                if (Loader.gcpTag[ci] == 7)
+                if (Loader.gView.cpTag[ci] == 7)
                 {
                     cnOff = Closure.classCpNameOff(ci);
                 }
@@ -528,7 +528,7 @@ final class ClassInitializer
     private static void reportClinitRejected()
     {
         Uart.write(Magic.bytes("\n  CLINIT REJECTED (statics stay null): "));
-        Loader.printNameAt(Loader.gbase, Loader.gThisNameOff);
+        Loader.printNameAt(Loader.gView.base, Loader.gThisNameOff);
         Uart.putc(0x0A);
     }
 
@@ -572,21 +572,21 @@ final class ClassInitializer
         // SliceNode.study. Class literals are supported (Milestone 0d) + desiredAssertionStatus() returns false.
         // Kept as a targeted allow (not a blanket tag-7 allow) because many other <clinit>s use the same idiom but
         // are intentionally skipped-and-seeded (String/ArraysSupport/Unsafe...) and hang if actually run.
-        if (Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff, Magic.bytes("java/util/regex/Pattern")))
+        if (Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff, Magic.bytes("java/util/regex/Pattern")))
         {
             return true;
         }
         // java/net/Socket.<clinit> ldc's InputStream.class/OutputStream.class (tag-7 Class literals, supported)
         // to bind its STATE/IN/OUT VarHandles via the overlaid MethodHandles/MhUtil/VarHandle shim. It is
         // runnable and MUST run -- an unbound STATE -> NullPointerException in getAndBitwiseOrState during connect.
-        if (Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff, Magic.bytes("java/net/Socket")))
+        if (Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff, Magic.bytes("java/net/Socket")))
         {
             return true;
         }
         // sun/nio/ch/NioSocketImpl.<clinit> ldc's NioSocketImpl.class for the desiredAssertionStatus() idiom
         // (it uses `assert`), which the tag-7 gate rejects. It MUST run: it binds `nd = new SocketDispatcher()`
         // (an unbound nd -> read/write dispatch on null) and disables assertions (desiredAssertionStatus()=false).
-        if (Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff, Magic.bytes("sun/nio/ch/NioSocketImpl")))
+        if (Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff, Magic.bytes("sun/nio/ch/NioSocketImpl")))
         {
             return true;
         }
@@ -596,14 +596,14 @@ final class ClassInitializer
         // It MUST run -- CLQ drives its ENTIRE structure through those handles, so a skipped initializer is a
         // null ITEM and an NPE in Node.<init> on the first offer(), which is where the console launcher
         // stopped (ConcurrentLinkedQueue.java:193).
-        if (Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff, Magic.bytes("java/util/concurrent/ConcurrentLinkedQueue")))
+        if (Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff, Magic.bytes("java/util/concurrent/ConcurrentLinkedQueue")))
         {
             return true;
         }
         // java/net/StandardSocketOptions.<clinit> creates its option constants with Integer.class/Boolean.class
         // (tag-7 Class literals, supported). It MUST run: close() reads SO_LINGER, and an unbound (null) option
         // makes Net.getSocketOption(fd, null) NPE on name.type().
-        if (Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff, Magic.bytes("java/net/StandardSocketOptions")))
+        if (Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff, Magic.bytes("java/net/StandardSocketOptions")))
         {
             return true;
         }
@@ -612,7 +612,7 @@ final class ClassInitializer
         // the tag-7 gate. It MUST run: it builds KNOWN_NAMES, the map every manifest attribute name is looked
         // up in, and Name.of dereferences it unguarded -- a skipped initializer is an NPE on the first
         // manifest header. The rest of the body is plain `new Name(...)` + HashMap + Map.copyOf.
-        if (Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff, Magic.bytes("java/util/jar/Attributes$Name")))
+        if (Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff, Magic.bytes("java/util/jar/Attributes$Name")))
         {
             return true;
         }
@@ -622,7 +622,7 @@ final class ClassInitializer
         // EMPTY singletons stay null, and Map.copyOf(...) -- which java.util.jar.Attributes$Name's initializer
         // calls -- spins in MapN's probe loop instead of failing. Everything it needs is wired: nanoTime is a
         // provided native, CDS is overlaid.
-        if (Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff, Magic.bytes("java/util/ImmutableCollections")))
+        if (Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff, Magic.bytes("java/util/ImmutableCollections")))
         {
             return true;
         }
@@ -633,7 +633,7 @@ final class ClassInitializer
         // seeded with a MetalJavaLangAccess (seedJavaLangAccess), the digit tables are plain newarray/bastore,
         // and the singletons are `new HexFormat(...)` over String literals. `jla` is only dereferenced by the
         // FORMATTING methods (uncheckedNewStringWithLatin1Bytes), not by parseHex.
-        if (Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff, Magic.bytes("java/util/HexFormat")))
+        if (Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff, Magic.bytes("java/util/HexFormat")))
         {
             return true;
         }
@@ -650,7 +650,7 @@ final class ClassInitializer
         // VM deliberately does not carry. That is a correctness cost, not the speed cost I wrongly recorded
         // the first time: the earlier "stall" was this rule being slow, and the LOADER LOCK watchdog that
         // looked like a hang said `state 1` (TASK_READY) and recovered on its own.
-        if (Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff,
+        if (Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff,
                 Magic.bytes("org/junit/jupiter/engine/config/DefaultJupiterConfiguration")))
         {
             return true;
@@ -667,17 +667,17 @@ final class ClassInitializer
         //
         // All three are runnable here now: static interface methods resolve, Class.getName works, and
         // String.formatted has a real Formatter behind it.
-        if (Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff,
+        if (Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff,
                 Magic.bytes("org/junit/jupiter/engine/descriptor/DisplayNameUtils")))
         {
             return true;
         }
-        if (Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff,
+        if (Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff,
                 Magic.bytes("org/junit/jupiter/api/IndicativeSentencesGeneration")))
         {
             return true;
         }
-        if (Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff,
+        if (Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff,
                 Magic.bytes("org/junit/jupiter/engine/discovery/predicates/IsTestFactoryMethod")))
         {
             return true;
@@ -690,7 +690,7 @@ final class ClassInitializer
         // Skipped, `abortedExecutionPredicate` stays null and Jupiter's ThrowableCollector.<init> rejects it
         // through its own Preconditions.notNull -- which is how the launcher reported it, naming the
         // parameter: "abortedExecutionPredicate must not be null".
-        if (Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff,
+        if (Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff,
                 Magic.bytes("org/junit/jupiter/engine/support/OpenTest4JAndJUnit4AwareThrowableCollector")))
         {
             return true;
@@ -703,7 +703,7 @@ final class ClassInitializer
         // EXECUTION -- which is exactly where the console launcher stopped
         // (LauncherStoreFacade.java:48). Nothing new is pulled: Namespace is an inner class of
         // ExtensionContext, already in the closure, and the literal is an annotation type.
-        if (Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff,
+        if (Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff,
                 Magic.bytes("org/junit/jupiter/engine/extension/TimeoutExtension")))
         {
             return true;
@@ -715,7 +715,7 @@ final class ClassInitializer
         // and a skipped initializer makes that null at the first line of test output. Its body is an EnumMap
         // plus `new ColorPalette(...)` over Style constants -- no denied subsystem, unlike the four converters
         // below.
-        if (Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff,
+        if (Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff,
                 Magic.bytes("org/junit/platform/console/output/ColorPalette")))
         {
             return true;
@@ -754,7 +754,7 @@ final class ClassInitializer
         // (stalled at the same log position for 10 minutes at full CPU): running every application
         // initializer in a ~900-class closure is a different cost class. The narrowing may still be right,
         // but it needs its own increment with that cost understood.
-        if (Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff, Magic.bytes("org/junit/platform/commons/util/ReflectionUtils")))
+        if (Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff, Magic.bytes("org/junit/platform/commons/util/ReflectionUtils")))
         {
             return true;
         }
@@ -783,7 +783,7 @@ final class ClassInitializer
             }
             if (cpi >= 0)
             {
-                int tag = Loader.gcpTag[cpi];
+                int tag = Loader.gView.cpTag[cpi];
                 if (tag == 7)                            // Class literal: OK as the assertion idiom...
                 {
                     if (isAssertionIdiom(code, pc))
@@ -844,14 +844,14 @@ final class ClassInitializer
      */
     private static boolean selfClassLiteral(int cpi)
     {
-        if (Loader.utf8HasPrefix(Loader.gbase, Loader.gThisNameOff, Magic.bytes("java/"))
-                || Loader.utf8HasPrefix(Loader.gbase, Loader.gThisNameOff, Magic.bytes("jdk/"))
-                || Loader.utf8HasPrefix(Loader.gbase, Loader.gThisNameOff, Magic.bytes("sun/")))
+        if (Loader.utf8HasPrefix(Loader.gView.base, Loader.gThisNameOff, Magic.bytes("java/"))
+                || Loader.utf8HasPrefix(Loader.gView.base, Loader.gThisNameOff, Magic.bytes("jdk/"))
+                || Loader.utf8HasPrefix(Loader.gView.base, Loader.gThisNameOff, Magic.bytes("sun/")))
         {
             return false;
         }
-        int nameOff = Loader.gcp[u2(Loader.gbase.plus(Loader.gcp[cpi]))];         // CONSTANT_Class -> its name Utf8 offset
-        return Loader.utf8EqAt(Loader.gbase, nameOff, Loader.gbase, Loader.gThisNameOff);
+        int nameOff = Loader.gView.cp[u2(Loader.gView.base.plus(Loader.gView.cp[cpi]))];         // CONSTANT_Class -> its name Utf8 offset
+        return Loader.utf8EqAt(Loader.gView.base, nameOff, Loader.gView.base, Loader.gThisNameOff);
     }
 
     /** True if the {@code ldc} at {@code pc} is immediately followed by {@code invokevirtual Class
@@ -870,7 +870,7 @@ final class ClassInitializer
             return false;
         }
         int idx = u2(code + pc + 1);
-        return Utf8.utf8IsAtBase(Loader.gbase, Loader.mrefNameOff(idx), Magic.bytes("desiredAssertionStatus"));
+        return Utf8.utf8IsAtBase(Loader.gView.base, Loader.mrefNameOff(idx), Magic.bytes("desiredAssertionStatus"));
     }
 
     private static void warnClinitUnderLock(int i)
@@ -1097,9 +1097,9 @@ final class ClassInitializer
         Uart.write(tag);
         Loader.printNameAt(clsU, 0);
         Uart.write(Magic.bytes(" [in "));
-        if (!Loader.gbase.isZero())
+        if (Loader.gView != null)
         {
-            Loader.printNameAt(Loader.gbase, Loader.gThisNameOff);
+            Loader.printNameAt(Loader.gView.base, Loader.gThisNameOff);
         }
         Uart.write(Magic.bytes("]"));
         Uart.putc(0x0A);
@@ -1247,7 +1247,7 @@ final class ClassInitializer
         // of its OWN fields -- thirteen bytecodes -- and ConcatDemo hung inside its compiled body with the
         // initializer-start trace showing no cycle and the guard-fire counter under its threshold. Every one
         // of those three sites was a self-reference.
-        if (!Loader.gbase.isZero() && Loader.utf8EqAt(clsU, 0, Loader.gbase, Loader.gThisNameOff))
+        if (Loader.gView != null && Loader.utf8EqAt(clsU, 0, Loader.gView.base, Loader.gThisNameOff))
         {
             return false;
         }
@@ -2129,14 +2129,14 @@ final class ClassInitializer
         // to be exactly the silent wrong answer rule 2 forbids: every handle's vform stayed null, so
         // isAccessModeSupported reached a null receiver (MemberNameProbe). The byte-array-view family's outer
         // <clinit> (NIO_ACCESS, SCOPED_MEMORY_ACCESS, ALIGN) runs too.
-        return Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff, Magic.bytes("java/lang/System"))
-                || Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff, Magic.bytes("java/lang/Integer$IntegerCache"))
+        return Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff, Magic.bytes("java/lang/System"))
+                || Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff, Magic.bytes("java/lang/Integer$IntegerCache"))
                 // primitive wrappers: <clinit> sets TYPE = Class.getPrimitiveClass(...) (a native)
-                || Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff, Magic.bytes("java/lang/Integer"))
-                || Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff, Magic.bytes("java/lang/Long"))
-                || Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff, Magic.bytes("java/lang/Float"))
-                || Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff, Magic.bytes("java/lang/Double"))
-                || Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff, Magic.bytes("java/lang/Character"))
+                || Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff, Magic.bytes("java/lang/Integer"))
+                || Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff, Magic.bytes("java/lang/Long"))
+                || Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff, Magic.bytes("java/lang/Float"))
+                || Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff, Magic.bytes("java/lang/Double"))
+                || Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff, Magic.bytes("java/lang/Character"))
                 // NOTE: java/lang/Boolean is NOT blocked -- the metal OVERLAY replaces the stock class, and its
                 // <clinit> only sets TRUE/FALSE (no native primitive TYPE), so it is safe (and needed) to run.
                 // NOTE: Byte/Short ARE OVERLAID, and those overlays have NO <clinit> of their own (TYPE is
@@ -2162,8 +2162,8 @@ final class ClassInitializer
                 // class is a different name, and these entries match by EXACT name -- so the cache's
                 // initializer was never blocked by them in the first place. The premise was true of the shape
                 // the lazy fill chose, not of the problem.
-                || Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff, Magic.bytes("java/lang/Byte"))
-                || Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff, Magic.bytes("java/lang/Short"))
+                || Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff, Magic.bytes("java/lang/Byte"))
+                || Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff, Magic.bytes("java/lang/Short"))
                 // M3 sockets: these <clinit>s call natives (initIDs/poll consts/SharedSecrets). Skipping is
                 // sound for the blocking connect/read/write/close path -- none of the skipped statics are read
                 // there (IPv4-only, no poll consts).
@@ -2192,7 +2192,7 @@ final class ClassInitializer
                 // continuations, so skipping it leaves SUPPORTED=false -- which is correct, and makes
                 // pinIfSupported/unpinIfSupported no-ops that never touch the denied Continuation class.
                 // (Reached via collection iterators / Thread.isVirtual checks in several java.util closures.)
-                || Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff, Magic.bytes("jdk/internal/vm/ContinuationSupport"))
+                || Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff, Magic.bytes("jdk/internal/vm/ContinuationSupport"))
                 // jdk/internal/misc/VM.<clinit> is NO LONGER SKIPPED: it assigns `lock` and the 64 MB default
                 // `directMemory` and calls the native initialize(), which only RegisterNatives for JNI
                 // (share/native/libjava/VM.c) and is wired empty. Skipped, directMemory stayed 0 and stock
@@ -2201,23 +2201,23 @@ final class ClassInitializer
                 // Arrays$LegacyMergeSort.<clinit> reads the java.util.Arrays.useLegacyMergeSort property via
                 // AccessController/GetBooleanAction (denied). Skipping leaves userRequested=false -- correct,
                 // so Arrays.sort takes the modern TimSort path (reached by any object Arrays.sort/Collections.sort).
-                || Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff, Magic.bytes("java/util/Arrays$LegacyMergeSort"))
+                || Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff, Magic.bytes("java/util/Arrays$LegacyMergeSort"))
                 // java/util/stream/AbstractTask.<clinit> sets LEAF_TARGET = ForkJoinPool.getCommonPoolParallelism()
                 // << 2. The common pool is never set up on metal (no ForkJoin), so getCommonPoolParallelism NPEs.
                 // LEAF_TARGET is read ONLY by parallel task splitting (AbstractTask.compute/getLeafTarget), which a
                 // SEQUENTIAL stream never reaches -- so skipping the <clinit> (LEAF_TARGET=0, never read) is sound.
-                || Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff, Magic.bytes("java/util/stream/AbstractTask"))
+                || Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff, Magic.bytes("java/util/stream/AbstractTask"))
                 // java/util/stream/Tripwire.<clinit> sets ENABLED = Boolean.getBoolean(<debug property>) (reads
                 // System props -> denied on metal). ENABLED is a debug-only assert flag, read solely in
                 // `if (Tripwire.ENABLED) trip(...)`; skipping leaves it false (correct), never taken.
-                || Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff, Magic.bytes("java/util/stream/Tripwire"))
+                || Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff, Magic.bytes("java/util/stream/Tripwire"))
                 // java/util/Tripwire is the same debug-flag class as the stream one (ENABLED = Boolean.getBoolean),
                 // pulled by the java.util.stream spliterator machinery. Same safe skip (ENABLED false, never taken).
-                || Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff, Magic.bytes("java/util/Tripwire"))
+                || Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff, Magic.bytes("java/util/Tripwire"))
                 // java/util/zip/ZipOutputStream.<clinit> is one field: inhibitZip64 = Boolean.getBoolean(
                 // "jdk.util.zip.inhibitZip64"), a system-property read (denied on metal). Skipping leaves it
                 // FALSE, which is the correct default -- Zip64 stays enabled. Same shape as Tripwire above.
-                || Utf8.utf8IsAtBase(Loader.gbase, Loader.gThisNameOff, Magic.bytes("java/util/zip/ZipOutputStream"));
+                || Utf8.utf8IsAtBase(Loader.gView.base, Loader.gThisNameOff, Magic.bytes("java/util/zip/ZipOutputStream"));
     }
 
     /** Initialize the loaded class whose Type node is {@code type} (VMNatives.ensureMirrorInit); a Type the

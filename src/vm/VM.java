@@ -599,7 +599,7 @@ public final class VM
                                             //   that core reports where it was when it next reaches pickNext
     static long[] faultRegs;                // index = core * 40 + r: x0..x30 at that core's latest fault, slot 31 =
                                             //   1 when the copy is real, 32 = task, 33 = loaderOwner, 34 = Loader's
-                                            //   gbase -- see stashFaultRegs
+                                            //   gView.base -- see stashFaultRegs
     /** The scheduler's cross-core lock (a {@link Magic#spinLock} word). Held only with IRQs masked, and only
      *  across task-table updates -- never across a UART write or an allocation. A different cache line from
      *  {@link #LOCK_ADDR} so the SMP job-queue demo and the scheduler don't false-share. */
@@ -777,7 +777,7 @@ public final class VM
                 Uart.write(Magic.bytes(" rel "));
                 printDec(loaderReleases);
                 // The owner's compile context, READ WITHOUT THE LOCK: the owner may be mid-update, so this
-                // is a hint and not a measurement, and is labelled as one. gbase is always a blob base or 0
+                // is a hint and not a measurement, and is labelled as one. gView.base is always a blob base or 0
                 // and printCurrentClass guards both, so a torn read misnames a class rather than faulting.
                 Uart.write(Magic.bytes(" ctx~"));
                 Loader.printCurrentClass();
@@ -2807,7 +2807,7 @@ public final class VM
         printDec((int) faultRegs[c * 40 + 32]);
         Uart.write(Magic.bytes(" loaderOwner="));
         printDec((int) faultRegs[c * 40 + 33]);
-        Uart.write(Magic.bytes(" Loader.gbase="));
+        Uart.write(Magic.bytes(" Loader.gView.base="));
         printHex(faultRegs[c * 40 + 34]);
         if (faultRegs[c * 40 + 31] == 0L)
         {
@@ -2868,7 +2868,7 @@ public final class VM
         printDec(curTask());                                   //   on the same core means the first was preempted
         Uart.write(Magic.bytes(" loaderOwner="));
         printDec(loaderOwner);
-        Uart.write(Magic.bytes(" Loader.gbase="));
+        Uart.write(Magic.bytes(" Loader.gView.base="));
         printHex(Loader.gbaseForReport());
         if (me != fault0Core)
         {

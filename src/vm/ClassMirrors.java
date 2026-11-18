@@ -327,13 +327,13 @@ final class ClassMirrors
             // in a lazily compiled test body, where the class is not pulled until something THROWS one --
             // long after the literal was baked. Note it and let lazyCompileLocked pull and recompile, the
             // same route a static of an unpulled class takes.
-            int nameOff = Loader.gcp[u2(Loader.gbase.plus(Loader.gcp[classCp]))];
-            if (u1(Loader.gbase.plus(nameOff + 2)) != 0x5B                     // an array literal builds its own Type
-                    && Loader.lzCompiling && !Loader.lzRetried && Loader.notePullNeeded(Loader.gbase.plus(nameOff)))
+            int nameOff = Loader.gView.cp[u2(Loader.gView.base.plus(Loader.gView.cp[classCp]))];
+            if (u1(Loader.gView.base.plus(nameOff + 2)) != 0x5B                     // an array literal builds its own Type
+                    && Loader.lzCompiling && !Loader.lzRetried && Loader.notePullNeeded(Loader.gView.base.plus(nameOff)))
             {
                 return 0L;                                          // discarded compile: retried with it loaded
             }
-            reportNullClassLiteral(Loader.gbase.plus(nameOff));
+            reportNullClassLiteral(Loader.gView.base.plus(nameOff));
         }
         return classMirror(type);
     }

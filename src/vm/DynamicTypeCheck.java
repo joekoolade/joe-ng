@@ -39,13 +39,13 @@ final class DynamicTypeCheck
         // Self-reference (a class doing `x instanceof Self` / `(Self) x`): the current class isn't in the
         // registry until AFTER its own compile, but its Type node (gType) is already built by buildTib —
         // and it's the very node the class's own instances carry, so instanceof/checkcast resolve correctly.
-        int nameOff = Loader.gcp[u2(Loader.gbase.plus(Loader.gcp[classIdx]))];
-        if (u1(Loader.gbase.plus(nameOff + 2)) == 0x5B)            // '[' : an array class ("[B", "[Ljava/...;", "[[I")
+        int nameOff = Loader.gView.cp[u2(Loader.gView.base.plus(Loader.gView.cp[classIdx]))];
+        if (u1(Loader.gView.base.plus(nameOff + 2)) == 0x5B)            // '[' : an array class ("[B", "[Ljava/...;", "[[I")
         {
-            Address tib = ArrayTypes.arrayTibOfDesc(Loader.gbase, nameOff);
+            Address tib = ArrayTypes.arrayTibOfDesc(Loader.gView.base, nameOff);
             return tib.isZero() ? Address.zero() : tib.loadAddress();  // the array Type (checkcast/instanceof target)
         }
-        if (Loader.utf8EqAt(Loader.gbase, nameOff, Loader.gbase, Loader.gThisNameOff))
+        if (Loader.utf8EqAt(Loader.gView.base, nameOff, Loader.gView.base, Loader.gThisNameOff))
         {
             return Loader.gType;
         }
@@ -144,47 +144,47 @@ final class DynamicTypeCheck
     static long typeOfCheckedClass(int classCp)
     {
         long type = typeOfClass(classCp).toLong();
-        int nameOff0 = Loader.gcp[u2(Loader.gbase.plus(Loader.gcp[classCp]))];
-        if (u1(Loader.gbase.plus(nameOff0 + 2)) == 0x5B)
+        int nameOff0 = Loader.gView.cp[u2(Loader.gView.base.plus(Loader.gView.cp[classCp]))];
+        if (u1(Loader.gView.base.plus(nameOff0 + 2)) == 0x5B)
         {
             // AN ARRAY OF A CLASS NOTHING PULLED. typeOfClass does not answer 0 for it: it answers the array Type
             // keyed by element Type 0 -- ONE shared "array of ?" node -- so `(Parameter[]) x` compiled before
             // Parameter was registered cast against that node and threw `cannot be cast to class [?` for ever
             // (AccessFlagsProbe in a batch: Executable.getParameters' clone() checkcast, compiled lazily). Same
             // route as a class: pull the ELEMENT and redo the compile.
-            int len = u2(Loader.gbase.plus(nameOff0));
+            int len = u2(Loader.gView.base.plus(nameOff0));
             int d = 0;
-            while (d < len && u1(Loader.gbase.plus(nameOff0 + 2 + d)) == 0x5B)
+            while (d < len && u1(Loader.gView.base.plus(nameOff0 + 2 + d)) == 0x5B)
             {
                 d += 1;
             }
-            if (d < len && u1(Loader.gbase.plus(nameOff0 + 2 + d)) == 0x4C
-                    && ArrayTypes.elementTypeOfArrayDescN(Loader.gbase, nameOff0 + 2 + d - 1, len - d + 1).isZero())
+            if (d < len && u1(Loader.gView.base.plus(nameOff0 + 2 + d)) == 0x4C
+                    && ArrayTypes.elementTypeOfArrayDescN(Loader.gView.base, nameOff0 + 2 + d - 1, len - d + 1).isZero())
             {
                 int elOff = nameOff0 + 2 + d + 1;       // past the '['s and the 'L'
                 int elLen = len - d - 2;                // minus the trailing ';'
-                if (Loader.lzCompiling && !Loader.lzRetried && Loader.notePullNeededElement(Loader.gbase, elOff, elLen))
+                if (Loader.lzCompiling && !Loader.lzRetried && Loader.notePullNeededElement(Loader.gView.base, elOff, elLen))
                 {
                     return 0L;                          // discarded compile: retried with the element loaded
                 }
-                if (!Loader.isDenylistedSlice(Loader.gbase, elOff, elLen))
+                if (!Loader.isDenylistedSlice(Loader.gView.base, elOff, elLen))
                 {
-                    reportUnresolvedTypeCheck(Loader.gbase.plus(nameOff0));
+                    reportUnresolvedTypeCheck(Loader.gView.base.plus(nameOff0));
                 }
             }
             return type;
         }
         if (type == 0L)
         {
-            int nameOff = Loader.gcp[u2(Loader.gbase.plus(Loader.gcp[classCp]))];
-            if (u1(Loader.gbase.plus(nameOff + 2)) != 0x5B
-                    && Loader.lzCompiling && !Loader.lzRetried && Loader.notePullNeeded(Loader.gbase.plus(nameOff)))
+            int nameOff = Loader.gView.cp[u2(Loader.gView.base.plus(Loader.gView.cp[classCp]))];
+            if (u1(Loader.gView.base.plus(nameOff + 2)) != 0x5B
+                    && Loader.lzCompiling && !Loader.lzRetried && Loader.notePullNeeded(Loader.gView.base.plus(nameOff)))
             {
                 return 0L;                                          // discarded compile: retried with it loaded
             }
-            if (!Loader.isDenylisted(Loader.gbase.plus(nameOff), 0))
+            if (!Loader.isDenylisted(Loader.gView.base.plus(nameOff), 0))
             {
-                reportUnresolvedTypeCheck(Loader.gbase.plus(nameOff));
+                reportUnresolvedTypeCheck(Loader.gView.base.plus(nameOff));
             }
         }
         return type;

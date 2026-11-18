@@ -397,17 +397,17 @@ final class DynamicLinker
     static Address initTargetNameAddr(int refCp)
     {
         Address named = Loader.refClassNameAddr(refCp);
-        if (named.isZero() || Loader.gcpTag[refCp] != 9) // 9 = CONSTANT_Fieldref
+        if (named.isZero() || Loader.gView.cpTag[refCp] != 9) // 9 = CONSTANT_Fieldref
         {
             return named;
         }
         int classOff = Loader.refClassNameOff(refCp);
         int nameOff = Loader.mrefNameOff(refCp);
-        if (Statics.sgIndexOf(Loader.gbase, classOff, Loader.gbase, nameOff) >= 0)
+        if (Statics.sgIndexOf(Loader.gView.base, classOff, Loader.gView.base, nameOff) >= 0)
         {
             return named;                               // declared by the named class itself
         }
-        int k = Statics.inheritedStaticIndex(Loader.gbase, classOff, Loader.gbase, nameOff, 0);
+        int k = Statics.inheritedStaticIndex(Loader.gView.base, classOff, Loader.gView.base, nameOff, 0);
         return k < 0 ? named : Statics.sgTab[k].base.plus((long) Statics.sgTab[k].classOff);
     }
 
@@ -1198,7 +1198,7 @@ final class DynamicLinker
 
     /**
      * The writer-baked, loader-linkable compiled buffer for the CURRENT class's method with the given
-     * (name, descriptor) Utf8 offsets in {@code gbase} -- or 0 (compile our own copy). Table entries are
+     * (name, descriptor) Utf8 offsets in {@code gView.base} -- or 0 (compile our own copy). Table entries are
      * {classUtf8, nameUtf8, descUtf8, code} quadruples of image addresses; the name runs are
      * {u2 len}{bytes}, the same shape as classfile Utf8s, so {@link Loader#utf8EqAt} compares them directly
      * (each run's own address with offset 0).
@@ -1214,9 +1214,9 @@ final class DynamicLinker
         while (i < n)
         {
             Address e = Address.fromLong(VM.bakedTable + (long) i * 32L);
-            if (Loader.utf8EqAt(Loader.gbase, Loader.gThisNameOff, e.loadAddress(), 0)
-                    && Loader.utf8EqAt(Loader.gbase, nameOff, e.plus(8L).loadAddress(), 0)
-                    && Loader.utf8EqAt(Loader.gbase, descOff, e.plus(16L).loadAddress(), 0))
+            if (Loader.utf8EqAt(Loader.gView.base, Loader.gThisNameOff, e.loadAddress(), 0)
+                    && Loader.utf8EqAt(Loader.gView.base, nameOff, e.plus(8L).loadAddress(), 0)
+                    && Loader.utf8EqAt(Loader.gView.base, descOff, e.plus(16L).loadAddress(), 0))
             {
                 return e.plus(24L).loadLong();
             }

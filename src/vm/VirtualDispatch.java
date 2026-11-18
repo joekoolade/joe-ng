@@ -81,7 +81,7 @@ final class VirtualDispatch
      * recursion or a worklist. A default inherited three interfaces deep still fails, and says so by name.
      *
      * <p>The interface NAME ADDRESSES are collected BEFORE any resolving: {@link DynamicLinker#resolveLinkTarget} parses
-     * whatever class it is handed, which clobbers {@code gcp}/{@code gbase}, so an offset read afterwards
+     * whatever class it is handed, which clobbers {@code gView}, so an offset read afterwards
      * would be against the wrong blob. Absolute addresses survive that; offsets do not.
      */
     /** What the LAST {@link #resolveViaInterfaces} walk saw -- printed only on a terminal failure. */
@@ -186,8 +186,8 @@ final class VirtualDispatch
                 z += 1;
             }
         }
-        return siteIndexFor(Loader.gbase.plus(Loader.mrefNameOff(methodCp)), Loader.gbase.plus(Loader.mrefDescOff(methodCp)),
-                Loader.gbase.plus(Loader.refClassNameOff(methodCp)));
+        return siteIndexFor(Loader.gView.base.plus(Loader.mrefNameOff(methodCp)), Loader.gView.base.plus(Loader.mrefDescOff(methodCp)),
+                Loader.gView.base.plus(Loader.refClassNameOff(methodCp)));
     }
 
     /** {@link #virtualSiteIndex} keyed by absolute Utf8 addresses -- also how a linkToVirtual site is made. */
@@ -465,14 +465,14 @@ final class VirtualDispatch
         // lock anywhere on the path -- essentially the whole Field/Method/Class reflection surface, and
         // `VMNatives` itself contains not one `loaderLock` call. `fieldTypeMirror` IS the native behind
         // `Field.getType`, which this file records picocli calling for every option field; it re-points
-        // gbase/gcp/gbytes and then walks the cursor with nothing holding it still. See
+        // gView and then walks the cursor with nothing holding it still. See
         // /tmp/joe-ng-handoff/FINDING-reflection-natives-unlocked.md and the CLAUDE.md card.
         //
         // The correction matters because the wrong number was the reassuring one: "sixth of six" says the
         // surface is closed, and it is not. What follows is still right for THIS path.
         // This is entered straight from the late-virtual dispatch trampoline via VMNatives, and it reuses
-        // resolveLinkTarget -- which demand-loads the class and calls parseConstPool, re-pointing gbase /
-        // gcp / gbytes at a different blob. Every sibling trampoline already locks (lazyCompile LOCK_LAZY,
+        // resolveLinkTarget -- which demand-loads the class and calls parseConstPool, re-pointing gView.base /
+        // gView.cp / gView.bytes at a different blob. Every sibling trampoline already locks (lazyCompile LOCK_LAZY,
         // resolveLinkStub LOCK_DEMAND_LOAD, resolveUnresolvedNew LOCK_NEW_RESOLVE, bakeResolve
         // LOCK_BAKE_RESOLVE); this one never did, so a task resolving a virtual call could re-point the
         // parse context under a task walking it. CLAUDE.md hypothesises exactly this shape -- "a FIFTH
@@ -861,14 +861,14 @@ final class VirtualDispatch
         }
         Address base = ClassRegistry.clTab[ci].base;
         Loader.parseConstPool(base, Loader.blobLenOf(base));
-        int count = u2(base.plus(Loader.gAfterCp + 6));            // interfaces_count (ClassReader.afterInterfaces layout)
+        int count = u2(base.plus(Loader.gView.afterCp + 6));            // interfaces_count (ClassReader.afterInterfaces layout)
         int k = 0;
         while (k < count && n < InterfaceInvocation.MAXIFACEFALLBACK)
         {
-            int cpi = u2(base.plus(Loader.gAfterCp + 8 + k * 2));
+            int cpi = u2(base.plus(Loader.gView.afterCp + 8 + k * 2));
             if (cpi > 0)
             {
-                out.set(n, base.plus(Loader.gcp[u2(base.plus(Loader.gcp[cpi]))]));   // CONSTANT_Class -> name_index -> Utf8 offset
+                out.set(n, base.plus(Loader.gView.cp[u2(base.plus(Loader.gView.cp[cpi]))]));   // CONSTANT_Class -> name_index -> Utf8 offset
                 n += 1;
             }
             k += 1;

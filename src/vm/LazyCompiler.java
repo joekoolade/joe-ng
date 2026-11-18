@@ -130,9 +130,9 @@ final class LazyCompiler
         if (lzN >= MAXLAZY) { Loader.capHalt(Magic.bytes("MAXLAZY-defer"), lzN); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
         int idx = lzN;
         int reg = ClassRegistry.classRegByName(Loader.gThisNameOff);
-        int pd = Loader.findPdByName(Loader.gbase, Loader.gThisNameOff);
+        int pd = Loader.findPdByName(Loader.gView.base, Loader.gThisNameOff);
         lzTab[idx] = new LazyMethod();
-        lzTab[idx].blob = Loader.gbase;
+        lzTab[idx].blob = Loader.gView.base;
         lzTab[idx].len = Loader.pdLen[pd];
         lzTab[idx].reg = reg;
         lzTab[idx].nameOff = 0;
@@ -173,8 +173,8 @@ final class LazyCompiler
     /**
      * THE COMPILE CONTEXT IS STATIC, so exactly one task may be inside the compiler at a time. {@code
      * lazyCompile} has always taken {@link VM#loaderLock} for that reason; this path reached {@code compile}
-     * without it, so a second task compiling here while another compiled elsewhere clobbered {@code gbytes}/
-     * {@code gcp} mid-compile -- which surfaces as a NULL bytecode array inside the compiler
+     * without it, so a second task compiling here while another compiled elsewhere clobbered {@code gView.bytes}/
+     * {@code gView.cp} mid-compile -- which surfaces as a NULL bytecode array inside the compiler
      * ({@code NullPointerException} in {@code Baseline.s4}, lowering a switch) rather than as anything
      * resembling a locking bug. The lock is RECURSIVE and owned by TASK, so nesting inside an
      * already-locked path costs nothing.
@@ -242,14 +242,14 @@ final class LazyCompiler
         while (m < mcount)
         {
             int attrs = u2(p.plus(6));
-            if (Utf8.rawEqUtf8(nbase, nlen, blob, Loader.gcp[u2(p.plus(2))])
-                    && (dlen == 0 || Utf8.rawEqUtf8(dbase, dlen, blob, Loader.gcp[u2(p.plus(4))])))
+            if (Utf8.rawEqUtf8(nbase, nlen, blob, Loader.gView.cp[u2(p.plus(2))])
+                    && (dlen == 0 || Utf8.rawEqUtf8(dbase, dlen, blob, Loader.gView.cp[u2(p.plus(4))])))
             {
                 long c = Loader.findCode(blob, p.plus(8), attrs);     // sets gcodeLen + gMaxLocals for this method
                 if (c != 0L)
                 {
                     code = c;
-                    descOff = Loader.gcp[u2(p.plus(4))];
+                    descOff = Loader.gView.cp[u2(p.plus(4))];
                     isStatic = (u2(p) & 0x0008) != 0 ? 1 : 0;
                     isSync = (u2(p) & 0x0020) != 0 ? 1 : 0;   // ACC_SYNCHRONIZED: the implicit monitor
                     break;
@@ -492,8 +492,8 @@ final class LazyCompiler
     /**
      * THE COMPILE CONTEXT IS STATIC, so exactly one task may be inside the compiler at a time. {@code
      * lazyCompile} has always taken {@link VM#loaderLock} for that reason; this path reached {@code compile}
-     * without it, so a second task compiling here while another compiled elsewhere clobbered {@code gbytes}/
-     * {@code gcp} mid-compile -- which surfaces as a NULL bytecode array inside the compiler
+     * without it, so a second task compiling here while another compiled elsewhere clobbered {@code gView.bytes}/
+     * {@code gView.cp} mid-compile -- which surfaces as a NULL bytecode array inside the compiler
      * ({@code NullPointerException} in {@code Baseline.s4}, lowering a switch) rather than as anything
      * resembling a locking bug. The lock is RECURSIVE and owned by TASK, so nesting inside an
      * already-locked path costs nothing.
@@ -562,14 +562,14 @@ final class LazyCompiler
         while (m < mcount)
         {
             int attrs = u2(p.plus(6));
-            if (Loader.utf8EqAt(blob, Loader.gcp[u2(p.plus(2))], nameU, 0)
-                    && Loader.utf8EqAt(blob, Loader.gcp[u2(p.plus(4))], descU, 0))
+            if (Loader.utf8EqAt(blob, Loader.gView.cp[u2(p.plus(2))], nameU, 0)
+                    && Loader.utf8EqAt(blob, Loader.gView.cp[u2(p.plus(4))], descU, 0))
             {
                 long c = Loader.findCode(blob, p.plus(8), attrs);  // sets gcodeLen + gMaxLocals
                 if (c != 0L)
                 {
                     code = c;
-                    descOff = Loader.gcp[u2(p.plus(4))];
+                    descOff = Loader.gView.cp[u2(p.plus(4))];
                     isStatic = (u2(p) & 0x0008) != 0 ? 1 : 0;
                     isSync = (u2(p) & 0x0020) != 0 ? 1 : 0;   // ACC_SYNCHRONIZED: the implicit monitor
                     break;
@@ -649,9 +649,9 @@ final class LazyCompiler
     {
         Loader.parseConstPool(blob, Loader.blobLenOf(blob));
         int c = 1;
-        while (c < Loader.gcpCount)
+        while (c < Loader.gView.cpCount)
         {
-            if (Loader.gcpTag[c] == 18)
+            if (Loader.gView.cpTag[c] == 18)
             {
                 pullIndyIface(c);
             }
@@ -662,8 +662,8 @@ final class LazyCompiler
     /** Pull the class named by the return type of the indy descriptor at cp index {@code c}, if any. */
     private static void pullIndyIface(int c)
     {
-        int nt = u2(Loader.gbase.plus(Loader.gcp[c] + 2));                // InvokeDynamic { u2 bsmAttrIdx, u2 nameAndTypeIdx }
-        Address p = Loader.gbase.plus(Loader.gcp[u2(Loader.gbase.plus(Loader.gcp[nt] + 2))] + 2);   // NameAndType -> descriptor Utf8 body
+        int nt = u2(Loader.gView.base.plus(Loader.gView.cp[c] + 2));                // InvokeDynamic { u2 bsmAttrIdx, u2 nameAndTypeIdx }
+        Address p = Loader.gView.base.plus(Loader.gView.cp[u2(Loader.gView.base.plus(Loader.gView.cp[nt] + 2))] + 2);   // NameAndType -> descriptor Utf8 body
         while (u1(p) != ')')
         {
             p = p.plus(1);
@@ -829,9 +829,9 @@ final class LazyCompiler
                 if (Loader.LOAD_LOG)
                 {
                     Uart.write(Magic.bytes("  baked "));
-                    Loader.printNameAt(Loader.gbase, Loader.gThisNameOff);
+                    Loader.printNameAt(Loader.gView.base, Loader.gThisNameOff);
                     Uart.putc(0x2E);
-                    Loader.printNameAt(Loader.gbase, bkName);
+                    Loader.printNameAt(Loader.gView.base, bkName);
                     Uart.putc(0x0A);
                 }
                 lzTab[idx].cache = baked;
@@ -846,7 +846,7 @@ final class LazyCompiler
         if (LAZY_TRACE)                                  // per-method compile trace (debug; off by default)
         {
             Uart.write(Magic.bytes("  jitc "));
-            Loader.printNameAt(Loader.gbase, Loader.gThisNameOff);
+            Loader.printNameAt(Loader.gView.base, Loader.gThisNameOff);
             Uart.putc(0x2E);
             int trName = lzTab[idx].nameOff;            // deferral entries capture bytecode, not the name
             if (trName == 0)
@@ -902,9 +902,9 @@ final class LazyCompiler
         if (buf == 0L)                                  // or a `bl 0` wild-branches to address 0 (see patchRelocsFrom)
         {
             // An index alone is unchaseable -- it is a slot number in a table rebuilt every batch. Name the
-            // method the same way LAZY_TRACE does; the context is restored, so gbase/gThisNameOff are valid.
+            // method the same way LAZY_TRACE does; the context is restored, so gView/gThisNameOff are valid.
             Uart.write(Magic.bytes("  compile returned null for "));
-            Loader.printNameAt(Loader.gbase, Loader.gThisNameOff);
+            Loader.printNameAt(Loader.gView.base, Loader.gThisNameOff);
             Uart.putc(0x2E);
             int nullName = lzTab[idx].nameOff;
             if (nullName == 0)
@@ -954,8 +954,8 @@ final class LazyCompiler
                 int nameOff = Loader.findNameByCode(Loader.mCode[i]);
                 if (nameOff != 0)
                 {
-                    MethodRegistry.register(Loader.gbase, Loader.gThisNameOff, nameOff, Loader.mDescOff[i], Loader.mBuf[i], Loader.mLine[i], Loader.mSrc.get(i),
-                             accessInContext(Loader.gbase, nameOff, Loader.mDescOff[i]));
+                    MethodRegistry.register(Loader.gView.base, Loader.gThisNameOff, nameOff, Loader.mDescOff[i], Loader.mBuf[i], Loader.mLine[i], Loader.mSrc.get(i),
+                             accessInContext(Loader.gView.base, nameOff, Loader.mDescOff[i]));
                 }
             }
             i += 1;
@@ -1035,7 +1035,7 @@ final class LazyCompiler
      */
     private static int accessInContext(Address blob, int nameOff, int descOff)
     {
-        if (blob.NE(Loader.gbase) || Loader.gMethodsStart.isZero())
+        if (blob.NE(Loader.gView.base) || Loader.gMethodsStart.isZero())
         {
             return 0;
         }
@@ -1046,8 +1046,8 @@ final class LazyCompiler
         while (m < mcount)
         {
             int attrs = u2(p.plus(6));
-            if (Loader.utf8EqAt(Loader.gbase, Loader.gcp[u2(p.plus(2))], Loader.gbase, nameOff)
-                    && Loader.utf8EqAt(Loader.gbase, Loader.gcp[u2(p.plus(4))], Loader.gbase, descOff))
+            if (Loader.utf8EqAt(Loader.gView.base, Loader.gView.cp[u2(p.plus(2))], Loader.gView.base, nameOff)
+                    && Loader.utf8EqAt(Loader.gView.base, Loader.gView.cp[u2(p.plus(4))], Loader.gView.base, descOff))
             {
                 return u2(p);
             }
@@ -1101,12 +1101,12 @@ final class LazyCompiler
      */
     private static long dlCellFor(int classOff, int nameOff, int descOff)
     {
-        long cell = dlCellAt(Loader.gbase, classOff, nameOff, descOff);
+        long cell = dlCellAt(Loader.gView.base, classOff, nameOff, descOff);
         if (cell != 0L)
         {
             return cell;
         }
-        int pd = Loader.findPdByName(Loader.gbase, classOff);
+        int pd = Loader.findPdByName(Loader.gView.base, classOff);
         while (pd >= 0 && Loader.pdSuperOff[pd] != 0)
         {
             int spd = Loader.findPdByName(Loader.pdBase.get(pd), Loader.pdSuperOff[pd]);
@@ -1124,11 +1124,11 @@ final class LazyCompiler
         return 0L;
     }
 
-    /** Cell for the method (name, desc in gbase) declared by the class named at {@code classOff} in
+    /** Cell for the method (name, desc in gView.base) declared by the class named at {@code classOff} in
      *  {@code clsBase}, or 0 if that exact class has no such phase-A cell. */
     private static long dlCellAt(Address clsBase, int classOff, int nameOff, int descOff)
     {
-        return DynamicLinker.dlCellOf(clsBase, classOff, Loader.gbase, nameOff, Loader.gbase, descOff);
+        return DynamicLinker.dlCellOf(clsBase, classOff, Loader.gView.base, nameOff, Loader.gView.base, descOff);
     }
 
     /** M8 phase-A: at structure registration of the gated class, allocate an offset cell + lazy stub for each
@@ -1137,7 +1137,7 @@ final class LazyCompiler
      *  order; each carries an lz entry that compiles the body on first call and data-patches the cell. */
     static void armPhaseACells()
     {
-        if (!stage2Gated(Loader.gbase, Loader.gThisNameOff))
+        if (!stage2Gated(Loader.gView.base, Loader.gThisNameOff))
         {
             return;
         }
@@ -1148,7 +1148,7 @@ final class LazyCompiler
             DynamicLinker.dlN = 0;
         }
         int reg = ClassRegistry.clCount - 1;                          // this class's registry index (registerClassStructure did ClassRegistry.clCount++)
-        int pd = Loader.findPdByName(Loader.gbase, Loader.gThisNameOff);
+        int pd = Loader.findPdByName(Loader.gView.base, Loader.gThisNameOff);
         int blobLen = Loader.pdLen[pd];
         Address p = Loader.gMethodsStart;
         int mcount = u2(p);
@@ -1159,15 +1159,15 @@ final class LazyCompiler
         {
             int access = u2(p);
             int attrs = u2(p.plus(6));
-            int nameOff = Loader.gcp[u2(p.plus(2))];
-            int descOff = Loader.gcp[u2(p.plus(4))];
-            long code = Loader.findCode(Loader.gbase, p.plus(8), attrs);  // sets gcodeLen + gMaxLocals
+            int nameOff = Loader.gView.cp[u2(p.plus(2))];
+            int descOff = Loader.gView.cp[u2(p.plus(4))];
+            long code = Loader.findCode(Loader.gView.base, p.plus(8), attrs);  // sets gcodeLen + gMaxLocals
             if (code != 0L && (access & 0x0008) != 0    // static methods only (Objects is all-static)
-                    && !Utf8.utf8IsAtBase(Loader.gbase, nameOff, Magic.bytes("<clinit>")) && lzN < MAXLAZY && DynamicLinker.dlN < MAXLAZY)
+                    && !Utf8.utf8IsAtBase(Loader.gView.base, nameOff, Magic.bytes("<clinit>")) && lzN < MAXLAZY && DynamicLinker.dlN < MAXLAZY)
             {
                 int idx = lzN;
                 lzTab[idx] = new LazyMethod();
-                lzTab[idx].blob = Loader.gbase;
+                lzTab[idx].blob = Loader.gView.base;
                 lzTab[idx].len = blobLen;
                 lzTab[idx].reg = reg;
                 lzTab[idx].nameOff = nameOff;
@@ -1187,7 +1187,7 @@ final class LazyCompiler
                 Address.fromLong(cell).store(buildLazyCompileStub(idx));
                 lzN += 1;
                 DynLink d = new DynLink();
-                if (Loader.gbase.isZero())                            // PROBE: born zero, or zeroed later? This is the
+                if (Loader.gView == null)                            // PROBE: born zero, or zeroed later? This is the
                 {                                            //   write site, so the class is still in hand.
                     Uart.write(Magic.bytes("\nDL BORN ZERO at dlN="));
                     VM.printDec(DynamicLinker.dlN);
@@ -1196,7 +1196,7 @@ final class LazyCompiler
                     Uart.putc(0x0A);
                     while (true) { Magic.wfe(); }
                 }
-                d.blob = Loader.gbase;
+                d.blob = Loader.gView.base;
                 d.gen = Loader.loaderGen;
                 d.classOff = Loader.gThisNameOff;
                 d.nameOff = nameOff;
@@ -1215,7 +1215,7 @@ final class LazyCompiler
             Uart.write(Magic.bytes("  phaseA: "));
             VM.printDec(armed);
             Uart.write(Magic.bytes(" cells at structure time for "));
-            Loader.printNameAt(Loader.gbase, Loader.gThisNameOff);
+            Loader.printNameAt(Loader.gView.base, Loader.gThisNameOff);
             Uart.putc(0x0A);
         }
     }
@@ -1276,11 +1276,11 @@ final class LazyCompiler
         // the class its own cells are filed under; the answer is only whether one exists, so chain order is moot.
         DynamicLinker.buildDlIndex();
         boolean hit = false;
-        int k = DynamicLinker.dlBucket[Utf8.utf8Hash2(Loader.gbase, Loader.gThisNameOff, Loader.gbase, nameOff) & (DynamicLinker.DLTAB - 1)];
+        int k = DynamicLinker.dlBucket[Utf8.utf8Hash2(Loader.gView.base, Loader.gThisNameOff, Loader.gView.base, nameOff) & (DynamicLinker.DLTAB - 1)];
         while (k >= 0 && !hit)
         {
             DynLink d = DynamicLinker.dlTab[k];
-            if (d.blob.EQ(Loader.gbase) && d.nameOff == nameOff && d.descOff == descOff)
+            if (d.blob.EQ(Loader.gView.base) && d.nameOff == nameOff && d.descOff == descOff)
             {
                 hit = true;
             }

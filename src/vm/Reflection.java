@@ -112,10 +112,10 @@ final class Reflection
         int f = 0;
         while (f < fcount)
         {
-            if (Utf8.rawEqUtf8(fnBase, fnLen, base, Loader.gcp[u2(p.plus(2))]))
+            if (Utf8.rawEqUtf8(fnBase, fnLen, base, Loader.gView.cp[u2(p.plus(2))]))
             {
                 cfFieldAccess = u2(p);
-                cfFieldDescChar = u1(base.plus(Loader.gcp[u2(p.plus(4))] + 2L));
+                cfFieldDescChar = u1(base.plus(Loader.gView.cp[u2(p.plus(4))] + 2L));
                 return true;
             }
             p = Loader.skipAttributes(p.plus(8), u2(p.plus(6)));
@@ -252,7 +252,7 @@ final class Reflection
         {
             return Address.zero();
         }
-        int thisIdx = u2(base.plus(Loader.gAfterCp + 2));          // this_class, per the ClassReader.afterCp layout
+        int thisIdx = u2(base.plus(Loader.gView.afterCp + 2));          // this_class, per the ClassReader.afterCp layout
         if (thisIdx == 0)
         {
             return Address.zero();
@@ -465,14 +465,14 @@ final class Reflection
         while (m < mcount)
         {
             int attrs = u2(p.plus(6));
-            if (Utf8.rawEqUtf8(nbase, nlen, blob, Loader.gcp[u2(p.plus(2))]) && Utf8.rawEqUtf8(dbase, dlen, blob, Loader.gcp[u2(p.plus(4))]))
+            if (Utf8.rawEqUtf8(nbase, nlen, blob, Loader.gView.cp[u2(p.plus(2))]) && Utf8.rawEqUtf8(dbase, dlen, blob, Loader.gView.cp[u2(p.plus(4))]))
             {
                 if (Loader.findCode(blob, p.plus(8), attrs) != 0L)
                 {
                     return -1;                          // it HAS a body: not this table's business
                 }
-                int nameOff = Loader.gcp[u2(p.plus(2))];
-                int descOff = Loader.gcp[u2(p.plus(4))];
+                int nameOff = Loader.gView.cp[u2(p.plus(2))];
+                int descOff = Loader.gView.cp[u2(p.plus(4))];
                 int k = 0;
                 while (k < MethodRegistry.bdCount)
                 {
@@ -670,8 +670,8 @@ final class Reflection
     /**
      * THE COMPILE CONTEXT IS STATIC, so exactly one task may be inside the compiler at a time. {@code
      * lazyCompile} has always taken {@link VM#loaderLock} for that reason; this path reached {@code compile}
-     * without it, so a second task compiling here while another compiled elsewhere clobbered {@code gbytes}/
-     * {@code gcp} mid-compile -- which surfaces as a NULL bytecode array inside the compiler
+     * without it, so a second task compiling here while another compiled elsewhere clobbered {@code gView.bytes}/
+     * {@code gView.cp} mid-compile -- which surfaces as a NULL bytecode array inside the compiler
      * ({@code NullPointerException} in {@code Baseline.s4}, lowering a switch) rather than as anything
      * resembling a locking bug. The lock is RECURSIVE and owned by TASK, so nesting inside an
      * already-locked path costs nothing.
@@ -741,8 +741,8 @@ final class Reflection
         while (m < mcount)
         {
             int attrs = u2(p.plus(6));
-            int dOff = Loader.gcp[u2(p.plus(4))];
-            if (Utf8.utf8IsAtBase(blob, Loader.gcp[u2(p.plus(2))], Magic.bytes("<init>")) && ctorMatches(blob, dOff, paramCount))
+            int dOff = Loader.gView.cp[u2(p.plus(4))];
+            if (Utf8.utf8IsAtBase(blob, Loader.gView.cp[u2(p.plus(2))], Magic.bytes("<init>")) && ctorMatches(blob, dOff, paramCount))
             {
                 long c = Loader.findCode(blob, p.plus(8), attrs);
                 if (c != 0L)
@@ -870,7 +870,7 @@ final class Reflection
     /**
      * Scan the class-level {@code InnerClasses} attribute for the entry whose {@code inner_class_info_index}
      * equals {@code thisClass}; return its {@code inner_class_access_flags}, or -1 if this class is not listed
-     * (a top-level class). Assumes {@code gMethodsStart}/{@code gcp} are current (post {@code parseForMethods}).
+     * (a top-level class). Assumes {@code gMethodsStart}/{@code gView.cp} are current (post {@code parseForMethods}).
      */
     private static int innerAccessOf(int thisClass)
     {
@@ -891,7 +891,7 @@ final class Reflection
         {
             int nameIdx = u2(p);
             int alen = u4(p.plus(2));
-            if (Loader.utf8IsStr(Loader.gcp[nameIdx], want))
+            if (Loader.utf8IsStr(Loader.gView.cp[nameIdx], want))
             {
                 Address q = p.plus(6);                           // attribute body: number_of_classes
                 int nc = u2(q);
@@ -985,12 +985,12 @@ final class Reflection
         while (m < mcount)
         {
             int attrs = u2(p.plus(6));
-            int nameOff = Loader.gcp[u2(p.plus(2))];
+            int nameOff = Loader.gView.cp[u2(p.plus(2))];
             if (Utf8.utf8IsAtBase(base, nameOff, Magic.bytes("<init>")))   // constructors ONLY; <clinit> is not one
             {
                 if (want >= 0 && seen == want)
                 {
-                    return Loader.utf8ToString(base, part == 0 ? nameOff : Loader.gcp[u2(p.plus(4))]);
+                    return Loader.utf8ToString(base, part == 0 ? nameOff : Loader.gView.cp[u2(p.plus(4))]);
                 }
                 seen += 1;
             }
@@ -1022,13 +1022,13 @@ final class Reflection
         while (m < mcount)
         {
             int attrs = u2(p.plus(6));
-            int nameOff = Loader.gcp[u2(p.plus(2))];
+            int nameOff = Loader.gView.cp[u2(p.plus(2))];
             if (!Utf8.utf8IsAtBase(base, nameOff, Magic.bytes("<init>"))
                     && !Utf8.utf8IsAtBase(base, nameOff, Magic.bytes("<clinit>")))
             {
                 if (want >= 0 && seen == want)
                 {
-                    return Loader.utf8ToString(base, part == 0 ? nameOff : Loader.gcp[u2(p.plus(4))]);
+                    return Loader.utf8ToString(base, part == 0 ? nameOff : Loader.gView.cp[u2(p.plus(4))]);
                 }
                 seen += 1;
             }
@@ -1083,7 +1083,7 @@ final class Reflection
         {
             if (want >= 0 && f == want)
             {
-                return Loader.utf8ToString(base, Loader.gcp[u2(p.plus((part == 0 ? 2 : 4)))]);
+                return Loader.utf8ToString(base, Loader.gView.cp[u2(p.plus((part == 0 ? 2 : 4)))]);
             }
             p = Loader.skipAttributes(p.plus(8), u2(p.plus(6)));       // access, name, desc, attr_count, then attributes
             f += 1;
@@ -1100,7 +1100,7 @@ final class Reflection
      * a reference type -- so the method was left out rather than answering {@code Object} for everything.
      *
      * <p>The descriptor's ABSOLUTE address is taken before resolving: resolving may demand-load, which
-     * re-parses a blob and moves the {@code gcp}/{@code gbase} cursor. Blobs themselves do not move, so an
+     * re-parses a blob and moves the {@code gView} cursor. Blobs themselves do not move, so an
      * absolute Utf8 pointer survives it -- the same property {@code applyAnnoDefaults} relies on.
      */
     static long fieldTypeMirror(ObjectReference mirror, ObjectReference nameArr)
@@ -1127,9 +1127,9 @@ final class Reflection
         while (f < fcount)
         {
             int attrs = u2(p.plus(6));
-            if (Utf8.rawEqUtf8(nbase, nlen, base, Loader.gcp[u2(p.plus(2))]))
+            if (Utf8.rawEqUtf8(nbase, nlen, base, Loader.gView.cp[u2(p.plus(2))]))
             {
-                descU = base.plus(Loader.gcp[u2(p.plus(4))]);          // absolute: survives the re-parse a resolve may cause
+                descU = base.plus(Loader.gView.cp[u2(p.plus(4))]);          // absolute: survives the re-parse a resolve may cause
                 break;
             }
             p = Loader.skipAttributes(p.plus(8), attrs);
