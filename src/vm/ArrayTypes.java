@@ -262,7 +262,7 @@ final class ArrayTypes
      *  what {@link RuntimeEntrypoints#multiNewArray} walks. Blobs do not move, so this address outlives the compile. */
     static long arrayDescAddr(int classCp)
     {
-        return Loader.gbase.plus((long) Loader.gcp[u2(Loader.gbase.plus(Loader.gcp[classCp]))]).toLong();
+        return Loader.gView.base.plus((long) Loader.gView.cp[u2(Loader.gView.base.plus(Loader.gView.cp[classCp]))]).toLong();
     }
 
     /**
@@ -576,13 +576,13 @@ final class ArrayTypes
         Address type = DynamicTypeCheck.typeOfClass(classCp);
         if (type.isZero())
         {
-            int nameOff = Loader.gcp[u2(Loader.gbase.plus(Loader.gcp[classCp]))];
-            if (u1(Loader.gbase.plus(nameOff + 2)) != 0x5B                     // an array-of-array builds its own Type
-                    && Loader.lzCompiling && !Loader.lzRetried && Loader.notePullNeeded(Loader.gbase.plus(nameOff)))
+            int nameOff = Loader.gView.cp[u2(Loader.gView.base.plus(Loader.gView.cp[classCp]))];
+            if (u1(Loader.gView.base.plus(nameOff + 2)) != 0x5B                     // an array-of-array builds its own Type
+                    && Loader.lzCompiling && !Loader.lzRetried && Loader.notePullNeeded(Loader.gView.base.plus(nameOff)))
             {
                 return Address.zero();                              // discarded compile: retried with it loaded
             }
-            reportUntypedArray(Loader.gbase.plus(nameOff));
+            reportUntypedArray(Loader.gView.base.plus(nameOff));
             Address obj = TibBuilder.objectTypeAddr();
             return obj.isZero() ? Address.zero() : refArrayTib(obj);   // Object[]: covariance holds, elements traced
         }

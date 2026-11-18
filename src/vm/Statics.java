@@ -81,7 +81,7 @@ final class Statics
         {
             Loader.checkParseCtxOwned(5);
         }
-        int nameOff = ClassReader.refNameOff(Loader.gbytes, Loader.gcp, idx);  // Fieldref -> name Utf8 offset
+        int nameOff = ClassReader.refNameOff(Loader.gView.bytes, Loader.gView.cp, idx);  // Fieldref -> name Utf8 offset
         // THE FAST PATH IS ONLY VALID FOR A REFERENCE TO THIS CLASS. It matches on the field NAME alone, and a
         // classfile's constant pool DEDUPES Utf8 -- so `OtherClass.foo` and this class's own `foo` share one
         // name entry and compare equal here. Without the class check a class that declares a static and reads
@@ -92,7 +92,7 @@ final class Statics
         // still-null static it was in the middle of assigning, so every instance's `type` was null -- and
         // blockingFailure() compares `type` to those constants, so `null == null` reported a BLOCKING FAILURE
         // on a SUCCESS and handed the console launcher a null exception to throw.
-        if (Loader.utf8EqAt(Loader.gbase, Loader.refClassNameOff(idx), Loader.gbase, Loader.gThisNameOff))
+        if (Loader.utf8EqAt(Loader.gView.base, Loader.refClassNameOff(idx), Loader.gView.base, Loader.gThisNameOff))
         {
             int s = 0;
             while (s < Loader.gsfCount)                        // same class: match by name Utf8 offset
@@ -102,9 +102,9 @@ final class Statics
                     if (Loader.STATIC_ADDR_LOG)
                     {
                         Uart.write(Magic.bytes("  ownstatic "));
-                        Loader.printNameAt(Loader.gbase, Loader.gThisNameOff);
+                        Loader.printNameAt(Loader.gView.base, Loader.gThisNameOff);
                         Uart.putc(0x2E);
-                        Loader.printNameAt(Loader.gbase, nameOff);
+                        Loader.printNameAt(Loader.gView.base, nameOff);
                         Uart.write(Magic.bytes(" -> "));
                         VM.printHex(Loader.gStatics.plus(s * 8));
                         Uart.putc(0x0A);
@@ -114,7 +114,7 @@ final class Statics
                 s += 1;
             }
         }
-        ClassInitializer.noteInitNeeded(ClassRegistry.classRegOf(u2(Loader.gbase.plus(Loader.gcp[idx]))));   // cross-class static access = an active use
+        ClassInitializer.noteInitNeeded(ClassRegistry.classRegOf(u2(Loader.gView.base.plus(Loader.gView.cp[idx]))));   // cross-class static access = an active use
         return globalStaticAddr(idx);                   // another class (e.g. Long -> Integer.digits)
     }
 
@@ -125,26 +125,26 @@ final class Statics
         // The COMPILE-TIME twin of globalStaticByRef: identical key, identical predicate, identical answer,
         // and it carried its own copy of the same linear scan. One index serves both -- the same "one call
         // site's fix, two timers" shape the phase-B publish had.
-        long hit = sgCellOf(Loader.gbase, classOff, nameOff);
+        long hit = sgCellOf(Loader.gView.base, classOff, nameOff);
         if (hit == 0L)
         {
-            hit = inheritedStaticCell(Loader.gbase, classOff, Loader.gbase, nameOff, 0);   // declared by a supertype (JVMS 5.4.3.2)
+            hit = inheritedStaticCell(Loader.gView.base, classOff, Loader.gView.base, nameOff, 0);   // declared by a supertype (JVMS 5.4.3.2)
         }
         if (hit != 0L)
         {
             if (Loader.STATIC_ADDR_LOG)
             {
                 Uart.write(Magic.bytes("  staticaddr "));
-                Loader.printNameAt(Loader.gbase, classOff);
+                Loader.printNameAt(Loader.gView.base, classOff);
                 Uart.putc(0x2E);
-                Loader.printNameAt(Loader.gbase, nameOff);
+                Loader.printNameAt(Loader.gView.base, nameOff);
                 Uart.write(Magic.bytes(" -> "));
                 VM.printHex(hit);
                 Uart.putc(0x0A);
             }
             return hit;
         }
-        if (Loader.lzCompiling && !Loader.lzRetried && Loader.notePullNeeded(Loader.gbase.plus(Loader.refClassNameOff(idx))))
+        if (Loader.lzCompiling && !Loader.lzRetried && Loader.notePullNeeded(Loader.gView.base.plus(Loader.refClassNameOff(idx))))
         {
             // A LATE compile named a static of a class RTA never pulled. Do NOT load it here: a load parses
             // every blob and can collect, and the code buffer being compiled is not reachable yet -- it would
@@ -175,7 +175,7 @@ final class Statics
         int s = 0;
         while (s < Loader.gsfCount)
         {
-            if (Utf8.utf8IsAtBase(Loader.gbase, Loader.gsfName[s], name))
+            if (Utf8.utf8IsAtBase(Loader.gView.base, Loader.gsfName[s], name))
             {
                 return Loader.gStatics.plus(s * 8L).toLong();
             }
@@ -374,7 +374,7 @@ final class Statics
         while (st < Loader.gsfCount)
         {
             sgTab[sgCount] = new RVMField();
-            sgTab[sgCount].base = Loader.gbase;
+            sgTab[sgCount].base = Loader.gView.base;
             sgTab[sgCount].classOff = Loader.gThisNameOff;
             sgTab[sgCount].nameOff = Loader.gsfName[st];
             sgTab[sgCount].addr = Loader.gStatics.plus(st * 8L).toLong();

@@ -79,7 +79,7 @@ final class Indy
             dsVal = new long[MAXDSITE];
             dsDone = new int[MAXDSITE];
         }
-        int reg = ClassRegistry.classRegByNameAt(Loader.gbase, Loader.gThisNameOff);
+        int reg = ClassRegistry.classRegByNameAt(Loader.gView.base, Loader.gThisNameOff);
         Address type = reg >= 0 ? ClassRegistry.clTab[reg].type : Address.zero();
         int i = 0;
         while (i < dsCount)                             // dedup: the compiler visits each site in both passes
@@ -94,10 +94,10 @@ final class Indy
         {
             Loader.capHalt(Magic.bytes("MAXDSITE"), dsCount);
         }
-        int tag = u1(Loader.gbase.plus(Loader.gcp[cpIndex] - 1L));         // Loader.gcp points just PAST an entry's tag byte
+        int tag = u1(Loader.gView.base.plus(Loader.gView.cp[cpIndex] - 1L));         // Loader.gView.cp points just PAST an entry's tag byte
         dsType.set(dsCount, type);
         dsCp[dsCount] = cpIndex;
-        dsDesc.set(dsCount, (tag == 17 || tag == 18) ? Loader.gbase.plus(Loader.mrefDescOff(cpIndex)) : Address.zero());
+        dsDesc.set(dsCount, (tag == 17 || tag == 18) ? Loader.gView.base.plus(Loader.mrefDescOff(cpIndex)) : Address.zero());
         dsVal[dsCount] = 0L;
         dsDone[dsCount] = 0;
         dsCount += 1;
@@ -220,7 +220,7 @@ final class Indy
         {
             int nameIdx = u2(p);
             int alen = u4(p.plus(2));
-            if (Loader.utf8IsStr(Loader.gcp[nameIdx], want))
+            if (Loader.utf8IsStr(Loader.gView.cp[nameIdx], want))
             {
                 Loader.gBsmOff = p.plus(6);                        // attribute body: num_bootstrap_methods
                 return;
@@ -251,10 +251,10 @@ final class Indy
         {
             return false;
         }
-        int bmIdx = u2(Loader.gbase.plus(Loader.gcp[idx]));               // invokedynamic.bootstrap_method_attr_index
+        int bmIdx = u2(Loader.gView.base.plus(Loader.gView.cp[idx]));               // invokedynamic.bootstrap_method_attr_index
         Address e = bsmEntryOff(bmIdx);
         int mhIdx = u2(e);                              // bootstrap_method_ref -> CONSTANT_MethodHandle
-        int mrefIdx = u2(Loader.gbase.plus(Loader.gcp[mhIdx] + 1));       // MethodHandle{ kind(u1), reference_index(u2) }
+        int mrefIdx = u2(Loader.gView.base.plus(Loader.gView.cp[mhIdx] + 1));       // MethodHandle{ kind(u1), reference_index(u2) }
         return Loader.utf8IsStr(Loader.refClassNameOff(mrefIdx), Magic.bytes("java/lang/invoke/StringConcatFactory"))
             && Loader.utf8IsStr(Loader.mrefNameOff(mrefIdx), Magic.bytes("makeConcatWithConstants"));
     }
@@ -262,10 +262,10 @@ final class Indy
     /** Utf8 body offset of the concat recipe (bootstrap_arguments[0], a String) for indy {@code idx}. */
     static int concatRecipeOff(int idx)
     {
-        int bmIdx = u2(Loader.gbase.plus(Loader.gcp[idx]));
+        int bmIdx = u2(Loader.gView.base.plus(Loader.gView.cp[idx]));
         Address e = bsmEntryOff(bmIdx);
         int arg0Idx = u2(e.plus(4));                        // bootstrap_arguments[0] = String cp index (the recipe)
-        return ClassReader.stringUtf8Off(Loader.gbytes, Loader.gcp, arg0Idx);
+        return ClassReader.stringUtf8Off(Loader.gView.bytes, Loader.gView.cp, arg0Idx);
     }
 
     /**
@@ -275,8 +275,8 @@ final class Indy
      */
     static int recordIndyKind(int idx)
     {
-        int nat = u2(Loader.gbase.plus(Loader.gcp[idx] + 2));             // invokedynamic.name_and_type_index
-        int off = Loader.gcp[u2(Loader.gbase.plus(Loader.gcp[nat]))];            // NameAndType.name_index -> Utf8
+        int nat = u2(Loader.gView.base.plus(Loader.gView.cp[idx] + 2));             // invokedynamic.name_and_type_index
+        int off = Loader.gView.cp[u2(Loader.gView.base.plus(Loader.gView.cp[nat]))];            // NameAndType.name_index -> Utf8
         if (Loader.utf8IsStr(off, Magic.bytes("hashCode")))
         {
             return 1;
@@ -294,7 +294,7 @@ final class Indy
 
     static int indyBsmIndex(int idx)
     {
-        return u2(Loader.gbase.plus(Loader.gcp[idx]));                    // invokedynamic.bootstrap_method_attr_index
+        return u2(Loader.gView.base.plus(Loader.gView.cp[idx]));                    // invokedynamic.bootstrap_method_attr_index
     }
 
     /** {@code bootstrap_arguments[k]} of the indy at {@code idx}, as a constant-pool index. */
@@ -312,15 +312,15 @@ final class Indy
     /**
      * The {@code int} value of a {@code CONSTANT_Integer} at cp index {@code c}.
      *
-     * <p>NO {@code +1} FOR THE TAG: {@code gcp[]} holds the offset of an entry's BODY, the tag already
+     * <p>NO {@code +1} FOR THE TAG: {@code gView.cp[]} holds the offset of an entry's BODY, the tag already
      * consumed -- which is why {@code lambdaSamDescOff} reads a MethodType's descriptor_index at
-     * {@code gcp[mtIdx]} and a MethodHandle's reference_index at {@code gcp[mhIdx] + 1} (past the
+     * {@code gView.cp[mtIdx]} and a MethodHandle's reference_index at {@code gView.cp[mhIdx] + 1} (past the
      * 1-byte reference_kind, not past a tag). Adding one here read the flags word one byte high, so every
      * {@code altMetafactory} site was refused as if it carried unknown bits.
      */
     static int cpIntAt(int c)
     {
-        return u4(Loader.gbase.plus(Loader.gcp[c]));
+        return u4(Loader.gView.base.plus(Loader.gView.cp[c]));
     }
 
     /**
@@ -342,7 +342,7 @@ final class Indy
         }
         Address e = bsmEntryOff(indyBsmIndex(idx));
         int mhIdx = u2(e);                              // bootstrap_method_ref -> MethodHandle
-        int mrefIdx = u2(Loader.gbase.plus(Loader.gcp[mhIdx] + 1));       // MethodHandle.reference_index -> Methodref
+        int mrefIdx = u2(Loader.gView.base.plus(Loader.gView.cp[mhIdx] + 1));       // MethodHandle.reference_index -> Methodref
         if (!Loader.utf8IsStr(Loader.refClassNameOff(mrefIdx), Magic.bytes("java/lang/invoke/LambdaMetafactory")))
         {
             return false;
@@ -370,7 +370,7 @@ final class Indy
         }
         Address e = bsmEntryOff(indyBsmIndex(idx));
         int mhIdx = u2(e);
-        int mrefIdx = u2(Loader.gbase.plus(Loader.gcp[mhIdx] + 1));
+        int mrefIdx = u2(Loader.gView.base.plus(Loader.gView.cp[mhIdx] + 1));
         return Loader.utf8IsStr(Loader.refClassNameOff(mrefIdx), Magic.bytes("java/lang/runtime/ObjectMethods"));
     }
 
@@ -387,7 +387,7 @@ final class Indy
         }
         Address e = bsmEntryOff(indyBsmIndex(idx));
         int mhIdx = u2(e);
-        int mrefIdx = u2(Loader.gbase.plus(Loader.gcp[mhIdx] + 1));
+        int mrefIdx = u2(Loader.gView.base.plus(Loader.gView.cp[mhIdx] + 1));
         return Loader.utf8IsStr(Loader.refClassNameOff(mrefIdx), Magic.bytes("java/lang/runtime/SwitchBootstraps"))
                 && Loader.utf8IsStr(Loader.mrefNameOff(mrefIdx), Magic.bytes("typeSwitch"));
     }
@@ -403,7 +403,7 @@ final class Indy
     static int typeSwitchLabelClass(int idx, int k)
     {
         int c = bsmArg(idx, k);
-        if (Loader.gcpTag[c] == 7)
+        if (Loader.gView.cpTag[c] == 7)
         {
             return c;
         }
@@ -413,7 +413,7 @@ final class Indy
     /** Kind of the typeSwitch selector: the first parameter of the indy's descriptor ({@code (II)I} -> 'I'). */
     static int typeSwitchSelectorKind(int idx)
     {
-        return ClassReader.descParamKind(Loader.gbytes, Loader.mrefDescOff(idx), 0);
+        return ClassReader.descParamKind(Loader.gView.bytes, Loader.mrefDescOff(idx), 0);
     }
 
     /** Primitive descriptor char of label {@code k} if it is a primitive-class constant, else 0. */
@@ -430,26 +430,26 @@ final class Indy
      */
     private static int primitiveLabelKind(int c)
     {
-        if (Loader.gcpTag[c] != 17 || Loader.gBsmOff.isZero())
+        if (Loader.gView.cpTag[c] != 17 || Loader.gBsmOff.isZero())
         {
             return 0;
         }
-        Address body = Loader.gbase.plus(Loader.gcp[c]);
+        Address body = Loader.gView.base.plus(Loader.gView.cp[c]);
         int bsm = u2(body);                             // bootstrap_method_attr_index
         int nat = u2(body.plus(2));                         // name_and_type_index
         Address e = bsmEntryOff(bsm);
-        int mrefIdx = u2(Loader.gbase.plus(Loader.gcp[u2(e)] + 1));
+        int mrefIdx = u2(Loader.gView.base.plus(Loader.gView.cp[u2(e)] + 1));
         if (!Loader.utf8IsStr(Loader.refClassNameOff(mrefIdx), Magic.bytes("java/lang/invoke/ConstantBootstraps"))
                 || !Loader.utf8IsStr(Loader.mrefNameOff(mrefIdx), Magic.bytes("primitiveClass")))
         {
             return 0;
         }
-        int nameOff = Loader.gcp[u2(Loader.gbase.plus(Loader.gcp[nat]))];        // NameAndType.name -> Utf8 offset
-        if (u2(Loader.gbase.plus(nameOff)) != 1)
+        int nameOff = Loader.gView.cp[u2(Loader.gView.base.plus(Loader.gView.cp[nat]))];        // NameAndType.name -> Utf8 offset
+        if (u2(Loader.gView.base.plus(nameOff)) != 1)
         {
             return 0;
         }
-        int ch = u1(Loader.gbase.plus(nameOff + 2));
+        int ch = u1(Loader.gView.base.plus(nameOff + 2));
         return (ch == 'Z' || ch == 'B' || ch == 'C' || ch == 'S' || ch == 'I' || ch == 'J' || ch == 'F' || ch == 'D')
                 ? ch : 0;
     }

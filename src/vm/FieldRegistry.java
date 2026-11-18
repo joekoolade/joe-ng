@@ -114,7 +114,7 @@ final class FieldRegistry
     {
         int classOff = Loader.refClassNameOff(idx);
         int nameOff = Loader.mrefNameOff(idx);
-        int i = fldIndexOf(Loader.gbase, classOff, Loader.gbase, nameOff);   // class-qualified
+        int i = fldIndexOf(Loader.gView.base, classOff, Loader.gView.base, nameOff);   // class-qualified
         if (i >= 0)
         {
             Loader.fieldOffsetLog(classOff, nameOff, 16 + fldTab[i].slot * 8, 1);
@@ -125,10 +125,10 @@ final class FieldRegistry
         // classes can declare a same-named field at different slots (e.g. Pattern.buffer @72 vs
         // Pattern$SliceNode.buffer): a name-only match on `Slice.buffer` wrongly returned Pattern's slot, so the
         // getfield read a bogus field off a Slice object -> null -> the #43 NPE in Pattern$BnM.optimize.
-        int pd = Loader.findPdByName(Loader.gbase, classOff);
+        int pd = Loader.findPdByName(Loader.gView.base, classOff);
         while (pd >= 0)
         {
-            int i2 = fldIndexOf(Loader.pdBase.get(pd), Loader.pdNameOff[pd], Loader.gbase, nameOff);   // declared by THIS ancestor
+            int i2 = fldIndexOf(Loader.pdBase.get(pd), Loader.pdNameOff[pd], Loader.gView.base, nameOff);   // declared by THIS ancestor
             if (i2 >= 0)
             {
                 Loader.fieldOffsetLog(classOff, nameOff, 16 + fldTab[i2].slot * 8, 2);
@@ -147,13 +147,13 @@ final class FieldRegistry
         // the referencing body compiled -- a privately nested class the enclosing method touches, pulled
         // late by `newresolve` -- so take the same note-pull-recompile route a static and a class literal
         // take, and name it if it is still missing on the retry.
-        if (Loader.lzCompiling && !Loader.lzRetried && Loader.notePullNeeded(Loader.gbase.plus(classOff)))
+        if (Loader.lzCompiling && !Loader.lzRetried && Loader.notePullNeeded(Loader.gView.base.plus(classOff)))
         {
             Loader.fieldOffsetLog(classOff, nameOff, 16, 3);   // 3 = pull noted, compile to be discarded and redone
             return 16;                                  // this compile is discarded and redone with it loaded
         }
         Loader.fieldOffsetLog(classOff, nameOff, 16, 4);       // 4 = gave up: slot 0, and it is NOT necessarily right
-        Loader.reportUnresolvedField(Loader.gbase.plus(classOff), Loader.gbase.plus(nameOff));
+        Loader.reportUnresolvedField(Loader.gView.base.plus(classOff), Loader.gView.base.plus(nameOff));
         return 16;
     }
 
@@ -203,7 +203,7 @@ final class FieldRegistry
                 s += 1;
             }
         }
-        Address clsBase = Loader.gbase;
+        Address clsBase = Loader.gView.base;
         int clsOff = classOff;
         int hops = 0;
         while (hops < 64)
@@ -225,16 +225,16 @@ final class FieldRegistry
         return false;
     }
 
-    /** access_flags of the registered field {@code nameOff} (in gbase) DECLARED by the class named at
+    /** access_flags of the registered field {@code nameOff} (in gView.base) DECLARED by the class named at
      *  {@code clsBase+clsOff}, or -1. */
     private static int registeredFieldAccess(Address clsBase, int clsOff, int nameOff, boolean isStatic)
     {
         if (isStatic)
         {
-            int k = Statics.sgIndexOf(clsBase, clsOff, Loader.gbase, nameOff);   // the static registry's hash index
+            int k = Statics.sgIndexOf(clsBase, clsOff, Loader.gView.base, nameOff);   // the static registry's hash index
             return k < 0 ? -1 : Statics.sgTab[k].access;
         }
-        int i = fldIndexOf(clsBase, clsOff, Loader.gbase, nameOff);   // the same lookup globalFieldOffset makes
+        int i = fldIndexOf(clsBase, clsOff, Loader.gView.base, nameOff);   // the same lookup globalFieldOffset makes
         return i < 0 ? -1 : fldTab[i].access;
     }
 }

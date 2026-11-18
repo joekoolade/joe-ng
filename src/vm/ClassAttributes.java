@@ -65,8 +65,8 @@ final class ClassAttributes
         while (m < mcount)
         {
             int attrs = u2(p.plus(6));
-            if (Loader.utf8EqAt(base, Loader.gcp[u2(p.plus(2))], base, nameOff)
-                    && Loader.utf8EqAt(base, Loader.gcp[u2(p.plus(4))], base, descOff))
+            if (Loader.utf8EqAt(base, Loader.gView.cp[u2(p.plus(2))], base, nameOff)
+                    && Loader.utf8EqAt(base, Loader.gView.cp[u2(p.plus(4))], base, descOff))
             {
                 return p;
             }
@@ -107,7 +107,7 @@ final class ClassAttributes
         {
             return 0L;
         }
-        return Loader.utf8ToString(base, Loader.gcp[u2(p)]);
+        return Loader.utf8ToString(base, Loader.gView.cp[u2(p)]);
     }
 
     /**
@@ -129,7 +129,7 @@ final class ClassAttributes
         {
             return 0L;
         }
-        return Loader.utf8ToString(base, Loader.gcp[u2(q)]);
+        return Loader.utf8ToString(base, Loader.gView.cp[u2(q)]);
     }
 
     /**
@@ -156,7 +156,7 @@ final class ClassAttributes
             return 0L;
         }
         int ci = u2(q.plus(2L + 2L * i));
-        return Loader.utf8ToString(base, Loader.gcp[u2(base.plus(Loader.gcp[ci]))]);  // CONSTANT_Class -> its name Utf8
+        return Loader.utf8ToString(base, Loader.gView.cp[u2(base.plus(Loader.gView.cp[ci]))]);  // CONSTANT_Class -> its name Utf8
     }
 
     /**
@@ -224,7 +224,7 @@ final class ClassAttributes
             return 0L;
         }
         int nameIdx = u2(q.plus(1L + 4L * k));
-        return nameIdx == 0 ? 0L : Loader.utf8ToString(base, Loader.gcp[nameIdx]);
+        return nameIdx == 0 ? 0L : Loader.utf8ToString(base, Loader.gView.cp[nameIdx]);
     }
 
     /**
@@ -254,14 +254,14 @@ final class ClassAttributes
         while (f < fcount)
         {
             int attrs = u2(p.plus(6));
-            if (Utf8.rawEqUtf8(nbase, nlen, base, Loader.gcp[u2(p.plus(2))]))
+            if (Utf8.rawEqUtf8(nbase, nlen, base, Loader.gView.cp[u2(p.plus(2))]))
             {
                 Address q = classAttrNamed(base, p.plus(8L), attrs, Magic.bytes("Signature"));
                 if (q.isZero())
                 {
                     return 0L;
                 }
-                return Loader.utf8ToString(base, Loader.gcp[u2(q)]);
+                return Loader.utf8ToString(base, Loader.gView.cp[u2(q)]);
             }
             p = Loader.skipAttributes(p.plus(8), attrs);
             f += 1;
@@ -301,15 +301,15 @@ final class ClassAttributes
         }
         if (part == 0L)
         {
-            return Loader.utf8ToString(base, Loader.gcp[u2(base.plus(Loader.gcp[u2(p)]))]);  // CONSTANT_Class -> its name Utf8
+            return Loader.utf8ToString(base, Loader.gView.cp[u2(base.plus(Loader.gView.cp[u2(p)]))]);  // CONSTANT_Class -> its name Utf8
         }
         int nat = u2(p.plus(2L));                           // u2 class_index, u2 method_index
         if (nat == 0)
         {
             return 0L;
         }
-        Address natPos = base.plus(Loader.gcp[nat]);                  // CONSTANT_NameAndType: u2 name, u2 descriptor
-        return Loader.utf8ToString(base, Loader.gcp[u2(natPos.plus((part == 1L ? 0L : 2L)))]);
+        Address natPos = base.plus(Loader.gView.cp[nat]);                  // CONSTANT_NameAndType: u2 name, u2 descriptor
+        return Loader.utf8ToString(base, Loader.gView.cp[u2(natPos.plus((part == 1L ? 0L : 2L)))]);
     }
 
     /**
@@ -366,7 +366,7 @@ final class ClassAttributes
         if (k < 0L)
         {
             Address p = classAttrNamed(base, ap.plus(2L), u2(ap), Magic.bytes("NestHost"));
-            return p.isZero() ? 0L : Loader.utf8ToString(base, Loader.gcp[u2(base.plus(Loader.gcp[u2(p)]))]);  // CONSTANT_Class -> name
+            return p.isZero() ? 0L : Loader.utf8ToString(base, Loader.gView.cp[u2(base.plus(Loader.gView.cp[u2(p)]))]);  // CONSTANT_Class -> name
         }
         Address p = classAttrNamed(base, ap.plus(2L), u2(ap), Magic.bytes("NestMembers"));
         if (p.isZero() || k >= u2(p))                      // u2 number_of_classes, then u2 class indices
@@ -374,7 +374,7 @@ final class ClassAttributes
             return 0L;
         }
         int ci = u2(p.plus(2L + 2L * k));
-        return Loader.utf8ToString(base, Loader.gcp[u2(base.plus(Loader.gcp[ci]))]);
+        return Loader.utf8ToString(base, Loader.gView.cp[u2(base.plus(Loader.gView.cp[ci]))]);
     }
 
     /**
@@ -408,9 +408,9 @@ final class ClassAttributes
         }
         if (part == 0L)
         {
-            return Loader.utf8ToString(base, Loader.gcp[u2(base.plus(Loader.gcp[idx]))]);    // CONSTANT_Class -> its name Utf8
+            return Loader.utf8ToString(base, Loader.gView.cp[u2(base.plus(Loader.gView.cp[idx]))]);    // CONSTANT_Class -> its name Utf8
         }
-        return Loader.utf8ToString(base, Loader.gcp[idx]);
+        return Loader.utf8ToString(base, Loader.gView.cp[idx]);
     }
 
     /**
@@ -487,14 +487,14 @@ final class ClassAttributes
         int part = (int) (code & 3L);
         if (part == 0)
         {
-            return Loader.utf8ToString(base, Loader.gcp[u2(p)]);
+            return Loader.utf8ToString(base, Loader.gView.cp[u2(p)]);
         }
         if (part == 1)
         {
-            return Loader.utf8ToString(base, Loader.gcp[u2(p.plus(2L))]);
+            return Loader.utf8ToString(base, Loader.gView.cp[u2(p.plus(2L))]);
         }
         Address q = classAttrNamed(base, p.plus(6L), u2(p.plus(4L)), Magic.bytes("Signature"));
-        return q.isZero() ? 0L : Loader.utf8ToString(base, Loader.gcp[u2(q)]);
+        return q.isZero() ? 0L : Loader.utf8ToString(base, Loader.gView.cp[u2(q)]);
     }
 
     /** {@code RecordComponent.recordAnnos0}: the annotations written on component {@code idx}, as an Annotation[]. */
@@ -525,7 +525,7 @@ final class ClassAttributes
         }
         Address base = gAttrBase;
         int ci = u2(ps.plus(2L + 2L * k));
-        return Loader.utf8ToString(base, Loader.gcp[u2(base.plus(Loader.gcp[ci]))]);   // CONSTANT_Class -> its name Utf8
+        return Loader.utf8ToString(base, Loader.gView.cp[u2(base.plus(Loader.gView.cp[ci]))]);   // CONSTANT_Class -> its name Utf8
     }
 
     /**
@@ -563,7 +563,7 @@ final class ClassAttributes
             p = p.plus(2);
             int alen = u4(p);
             p = p.plus(4);
-            if (Utf8.utf8IsAtBase(base, Loader.gcp[anIdx], name))
+            if (Utf8.utf8IsAtBase(base, Loader.gView.cp[anIdx], name))
             {
                 return p;
             }
@@ -636,7 +636,7 @@ final class ClassAttributes
      * for an anonymous class. Both are checked.
      *
      * <p>TWO PASSES OVER ABSOLUTE ADDRESSES, for the reason {@link Annotations#classAnnotationsAll} records: pass 2
-     * RESOLVES, a resolve may demand-load, and a load re-parses a blob and moves the {@code gcp} cursor that
+     * RESOLVES, a resolve may demand-load, and a load re-parses a blob and moves the {@code gView.cp} cursor that
      * pass 1 reads. Blob addresses survive that; parse state does not.
      *
      * <p>A member class that cannot be loaded is OMITTED and named on the console, rather than left as a null
@@ -664,12 +664,12 @@ final class ClassAttributes
         {
             return Reflection.emptyClassArray();                   // no InnerClasses attribute: declares no member class
         }
-        int thisIdx = u2(base.plus(Loader.gAfterCp + 2));          // this_class, per the ClassReader.afterCp layout
+        int thisIdx = u2(base.plus(Loader.gView.afterCp + 2));          // this_class, per the ClassReader.afterCp layout
         if (thisIdx == 0)
         {
             return Reflection.emptyClassArray();
         }
-        int thisNameOff = Loader.gcp[u2(base.plus(Loader.gcp[thisIdx]))]; // CONSTANT_Class -> name_index -> Utf8
+        int thisNameOff = Loader.gView.cp[u2(base.plus(Loader.gView.cp[thisIdx]))]; // CONSTANT_Class -> name_index -> Utf8
         AddressArray nameAbs = AddressArray.create(MAXDECLCLASS);
         int n = u2(lp);
         Address p = lp.plus(2L);
@@ -682,10 +682,10 @@ final class ClassAttributes
             int simpleIdx = u2(p.plus(4));
             if (innerIdx != 0 && outerIdx != 0 && simpleIdx != 0)
             {
-                int outerNameOff = Loader.gcp[u2(base.plus(Loader.gcp[outerIdx]))];
+                int outerNameOff = Loader.gView.cp[u2(base.plus(Loader.gView.cp[outerIdx]))];
                 if (Loader.utf8EqAt(base, outerNameOff, base, thisNameOff))
                 {
-                    nameAbs.set(found, base.plus(Loader.gcp[u2(base.plus(Loader.gcp[innerIdx]))]));
+                    nameAbs.set(found, base.plus(Loader.gView.cp[u2(base.plus(Loader.gView.cp[innerIdx]))]));
                     found += 1;
                 }
             }
@@ -741,7 +741,7 @@ final class ClassAttributes
             p = p.plus(2);
             int alen = u4(p);
             p = p.plus(4);
-            if (Utf8.utf8IsAtBase(base, Loader.gcp[anIdx], Magic.bytes("InnerClasses")))
+            if (Utf8.utf8IsAtBase(base, Loader.gView.cp[anIdx], Magic.bytes("InnerClasses")))
             {
                 return p;
             }

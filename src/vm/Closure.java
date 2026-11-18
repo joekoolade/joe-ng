@@ -495,7 +495,7 @@ final class Closure
         long ts2 = Magic.readCNTPCT_EL0();
         Address entryBlob = Address.fromLong(Loader.gEntryBlob);
         Loader.parseForMethods(entryBlob, Loader.blobLenOf(entryBlob));
-        addReach(Loader.findMethodByBytes(Loader.gbase, gEntryName, gEntryDesc));
+        addReach(Loader.findMethodByBytes(Loader.gView.base, gEntryName, gEntryDesc));
         Loader.mrEntry += Magic.readCNTPCT_EL0() - ts2;
         long ts3 = Magic.readCNTPCT_EL0();
         seedRootBlob();                                 // a defineClass'd class: all of it is a root
@@ -680,8 +680,8 @@ final class Closure
         int superIdx = u2(p.plus(4));
         if (superIdx != 0)
         {
-            int nameOff = Loader.gcp[u2(Loader.gbase.plus(Loader.gcp[superIdx]))];
-            if (!nameRegistered(Loader.gbase, nameOff) && registerNameFromDir(Loader.gbase, nameOff) != 0L)
+            int nameOff = Loader.gView.cp[u2(Loader.gView.base.plus(Loader.gView.cp[superIdx]))];
+            if (!nameRegistered(Loader.gView.base, nameOff) && registerNameFromDir(Loader.gView.base, nameOff) != 0L)
             {
                 grew = true;
             }
@@ -690,8 +690,8 @@ final class Closure
         int k = 0;
         while (k < ifCount)
         {
-            int nameOff = Loader.gcp[u2(Loader.gbase.plus(Loader.gcp[u2(p.plus(8 + k * 2))]))];
-            if (!nameRegistered(Loader.gbase, nameOff) && registerNameFromDir(Loader.gbase, nameOff) != 0L)
+            int nameOff = Loader.gView.cp[u2(Loader.gView.base.plus(Loader.gView.cp[u2(p.plus(8 + k * 2))]))];
+            if (!nameRegistered(Loader.gView.base, nameOff) && registerNameFromDir(Loader.gView.base, nameOff) != 0L)
             {
                 grew = true;
             }
@@ -727,7 +727,7 @@ final class Closure
      * Record every class a reachable method references, so reachability-gated closure pulls only what a
      * reached method actually touches (not the whole class's constant pool): invoke targets (mark the method
      * + pull its class), field owners, and {@code new}/{@code checkcast}/{@code instanceof}/{@code anewarray}
-     * types (pull-only). {@code gcp}/{@code gbase} are parsed for {@code base} by the caller.
+     * types (pull-only). {@code gView} are parsed for {@code base} by the caller.
      */
     private static void collectRefs(Address base, long code, int len)
     {
@@ -778,11 +778,11 @@ final class Closure
                     addInst(base, cnOff);
                 }
             }
-            else if (op == 0x12 && Loader.gcpTag[u1(code + pc + 1)] == 7)           // ldc of a CONSTANT_Class (X.class
+            else if (op == 0x12 && Loader.gView.cpTag[u1(code + pc + 1)] == 7)           // ldc of a CONSTANT_Class (X.class
             {                                                               // literal): pull the class so its Type/
                 addPend(base, classCpNameOff(u1(code + pc + 1)), 0, 0, PEND_PULL);   // mirror exists for reflection
             }
-            else if (op == 0x13 && Loader.gcpTag[u2(code + pc + 1)] == 7)           // ldc_w of a CONSTANT_Class literal
+            else if (op == 0x13 && Loader.gView.cpTag[u2(code + pc + 1)] == 7)           // ldc_w of a CONSTANT_Class literal
             {
                 addPend(base, classCpNameOff(u2(code + pc + 1)), 0, 0, PEND_PULL);
             }
@@ -816,7 +816,7 @@ final class Closure
      */
     static void pendIndyIface(int idx)
     {
-        Address p = Loader.gbase.plus(Loader.mrefDescOff(idx) + 2);
+        Address p = Loader.gView.base.plus(Loader.mrefDescOff(idx) + 2);
         while (u1(p) != ')')
         {
             p = p.plus(1);
@@ -846,10 +846,10 @@ final class Closure
         addPend(Loader.indyNameBuf, off, 0, 0, PEND_PULL);
     }
 
-    /** Name Utf8 offset of a {@code CONSTANT_Class} at cp index {@code idx} (for the current {@code gcp}/{@code gbase}). */
+    /** Name Utf8 offset of a {@code CONSTANT_Class} at cp index {@code idx} (for the current {@code gView}). */
     static int classCpNameOff(int idx)
     {
-        return Loader.gcp[u2(Loader.gbase.plus(Loader.gcp[idx]))];
+        return Loader.gView.cp[u2(Loader.gView.base.plus(Loader.gView.cp[idx]))];
     }
 
     /**
@@ -1017,10 +1017,10 @@ final class Closure
         // resolveVirtuals (RTA over instantiated types), NOT "mark in every class carrying the name+desc".
         // Reached through the class-name index rather than by scanning every pend per blob -- that guard was
         // a string compare per (blob, pend), which is pdCount x pendN of them per round.
-        int r = psBucket[Utf8.utf8Hash(Loader.gbase, Loader.gThisNameOff) & (Loader.PVTAB - 1)];
+        int r = psBucket[Utf8.utf8Hash(Loader.gView.base, Loader.gThisNameOff) & (Loader.PVTAB - 1)];
         while (r >= 0)
         {
-            if (r >= virtFrom && Loader.utf8EqAt(pendBase.get(r), pendClass[r], Loader.gbase, Loader.gThisNameOff))
+            if (r >= virtFrom && Loader.utf8EqAt(pendBase.get(r), pendClass[r], Loader.gView.base, Loader.gThisNameOff))
             {
                 long code = MethodTableCache.findDeclaredCached(b, pendBase.get(r), pendName[r], pendDesc[r]);
                 if (code != 0L)
@@ -1044,7 +1044,7 @@ final class Closure
     private static boolean markInheritedStatic(Address refBase, int nameOff, int descOff, Address curBase, int curLen)
     {
         boolean grew = false;
-        int pd = Loader.findPdByName(Loader.gbase, Loader.gThisNameOff);        // current blob's pd (the ref class)
+        int pd = Loader.findPdByName(Loader.gView.base, Loader.gThisNameOff);        // current blob's pd (the ref class)
         while (pd >= 0 && Loader.pdSuperOff[pd] != 0)
         {
             int spd = Loader.findPdByName(Loader.pdBase.get(pd), Loader.pdSuperOff[pd]);
@@ -1181,7 +1181,7 @@ final class Closure
         {
             return SUPER_NONE;                           // java/lang/Object
         }
-        return Loader.findPdByName(Loader.gbase, Loader.gcp[u2(Loader.gbase.plus(Loader.gcp[superIdx]))]);
+        return Loader.findPdByName(Loader.gView.base, Loader.gView.cp[u2(Loader.gView.base.plus(Loader.gView.cp[superIdx]))]);
     }
 
     /**
@@ -1444,28 +1444,28 @@ final class Closure
             if (!markSettled(b) && pdSeeded[b] == 0)
             {
                 pdSeeded[b] = 1;                         // these signatures do not change; one look each
-                // ONE parse, many scans: findMethodByBytes reads gp/gcp and never advances them, so the
+                // ONE parse, many scans: findMethodByBytes reads gp/gView.cp and never advances them, so the
                 // constant pool this sets up is good for every lookup below.
                 Loader.parseForMethods(Loader.pdBase.get(b), Loader.pdLen[b]);
-                grew = addReach(Loader.findMethodByBytes(Loader.gbase, Magic.bytes("run"), Magic.bytes("()V"))) || grew;
-                grew = addReach(Loader.findMethodByBytes(Loader.gbase, Magic.bytes("getAndBitwiseOr"),
+                grew = addReach(Loader.findMethodByBytes(Loader.gView.base, Magic.bytes("run"), Magic.bytes("()V"))) || grew;
+                grew = addReach(Loader.findMethodByBytes(Loader.gView.base, Magic.bytes("getAndBitwiseOr"),
                         Magic.bytes("(Ljava/lang/Object;I)I"))) || grew;
-                grew = addReach(Loader.findMethodByBytes(Loader.gbase, Magic.bytes("compareAndSet"),
+                grew = addReach(Loader.findMethodByBytes(Loader.gView.base, Magic.bytes("compareAndSet"),
                         Magic.bytes("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z"))) || grew;
                 // The REFERENCE accessors java.util.concurrent drives its structures through. Seeded for the
                 // same reason as the two above: their call sites are signature-polymorphic, so RTA never sees
                 // them named and would prune the bodies, leaving a 0 vtable slot behind the by-name resolve.
-                grew = addReach(Loader.findMethodByBytes(Loader.gbase, Magic.bytes("set"),
+                grew = addReach(Loader.findMethodByBytes(Loader.gView.base, Magic.bytes("set"),
                         Magic.bytes("(Ljava/lang/Object;Ljava/lang/Object;)V"))) || grew;
-                grew = addReach(Loader.findMethodByBytes(Loader.gbase, Magic.bytes("get"),
+                grew = addReach(Loader.findMethodByBytes(Loader.gView.base, Magic.bytes("get"),
                         Magic.bytes("(Ljava/lang/Object;)Ljava/lang/Object;"))) || grew;
-                grew = addReach(Loader.findMethodByBytes(Loader.gbase, Magic.bytes("setRelease"),
+                grew = addReach(Loader.findMethodByBytes(Loader.gView.base, Magic.bytes("setRelease"),
                         Magic.bytes("(Ljava/lang/Object;Ljava/lang/Object;)V"))) || grew;
-                grew = addReach(Loader.findMethodByBytes(Loader.gbase, Magic.bytes("weakCompareAndSet"),
+                grew = addReach(Loader.findMethodByBytes(Loader.gView.base, Magic.bytes("weakCompareAndSet"),
                         Magic.bytes("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z"))) || grew;
-                grew = addReach(Loader.findMethodByBytes(Loader.gbase, Magic.bytes("getMethodName"),
+                grew = addReach(Loader.findMethodByBytes(Loader.gView.base, Magic.bytes("getMethodName"),
                         Magic.bytes("()Ljava/lang/String;"))) || grew;
-                grew = addReach(Loader.findMethodByBytes(Loader.gbase, Magic.bytes("getEnumConstants"),
+                grew = addReach(Loader.findMethodByBytes(Loader.gView.base, Magic.bytes("getEnumConstants"),
                         Magic.bytes("()[Ljava/lang/Object;"))) || grew;
             }
             b += 1;
@@ -1483,7 +1483,7 @@ final class Closure
             if (!markSettled(b))
             {
                 Loader.parseForMethods(Loader.pdBase.get(b), Loader.pdLen[b]);
-                grew = addReach(Loader.findMethodByBytes(Loader.gbase, name, desc)) || grew;
+                grew = addReach(Loader.findMethodByBytes(Loader.gView.base, name, desc)) || grew;
             }
             b += 1;
         }
@@ -1513,7 +1513,7 @@ final class Closure
         while (m < mcount)
         {
             int attrs = u2(p.plus(6));
-            grew = addReach(Loader.findCode(Loader.gbase, p.plus(8), attrs)) || grew;   // 0 for a native/abstract method
+            grew = addReach(Loader.findCode(Loader.gView.base, p.plus(8), attrs)) || grew;   // 0 for a native/abstract method
             p = Loader.skipAttributes(p.plus(8), attrs);
             m += 1;
         }
@@ -1556,7 +1556,7 @@ final class Closure
                 Loader.parseForMethods(Loader.pdBase.get(b), Loader.pdLen[b]);
                 if (!ClassInitializer.clinitBlocked())
                 {
-                    long code = Loader.findMethodByBytes(Loader.gbase, Magic.bytes("<clinit>"), Magic.bytes("()V"));
+                    long code = Loader.findMethodByBytes(Loader.gView.base, Magic.bytes("<clinit>"), Magic.bytes("()V"));
                     if (code != 0L && ClassInitializer.clinitCompilable(code, Loader.gcodeLen))
                     {
                         grew = addReach(code) || grew;
@@ -1578,9 +1578,9 @@ final class Closure
         while (m < mcount)
         {
             int attrs = u2(p.plus(6));
-            if (Loader.utf8EqAt(refBase, nameOff, Loader.gbase, Loader.gcp[u2(p.plus(2))]) && Loader.utf8EqAt(refBase, descOff, Loader.gbase, Loader.gcp[u2(p.plus(4))]))
+            if (Loader.utf8EqAt(refBase, nameOff, Loader.gView.base, Loader.gView.cp[u2(p.plus(2))]) && Loader.utf8EqAt(refBase, descOff, Loader.gView.base, Loader.gView.cp[u2(p.plus(4))]))
             {
-                long code = Loader.findCode(Loader.gbase, p.plus(8), attrs);
+                long code = Loader.findCode(Loader.gView.base, p.plus(8), attrs);
                 if (code != 0L)
                 {
                     return code;

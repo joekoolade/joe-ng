@@ -30,8 +30,8 @@ import static vm.VM.*;   // strBytes/printStr/heapBytes helpers + fileDir/fileCo
  * {@code instanceOf} deliberately stayed in VM -- it is also the checkcast/instanceof/unwind JIT helper.
  *
  * <p><b>EVERY REFLECTION ENTRY POINT HERE TAKES THE LOADER LOCK, and the reason is the loader's compile
- * context rather than anything about reflection.</b> {@code gbase}/{@code gcp}/{@code gbytes} are a
- * switchable VIEW onto ONE blob, held in statics. A native that calls {@code Loader.parseConstPool}
+ * context rather than anything about reflection.</b> {@code Loader.gView} is a
+ * switchable VIEW onto ONE blob, held in a static. A native that calls {@code Loader.parseConstPool}
  * re-points that view and then walks it -- {@code fieldTypeMirror} (the native behind
  * {@code Field.getType}) parses and then reads the cursor for ~30 lines -- so a second task walking the
  * context meanwhile reads ITS offsets against the new blob's bytes. The symptom is a report printing a
@@ -413,7 +413,7 @@ final class VMNatives
      */
     static long declaredMethodAt(ObjectReference mirror, long want)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return Reflection.declaredMethodName(mirror, (int) want);
@@ -427,7 +427,7 @@ final class VMNatives
     /** {@code Class.declaredMethodDescAt0(Class,int)} native: the n-th declared method's DESCRIPTOR. */
     static long declaredMethodDescAt(ObjectReference mirror, long want)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return Reflection.declaredMethodDesc(mirror, (int) want);
@@ -457,7 +457,7 @@ final class VMNatives
     /** {@code Class.declaredFieldAt0(Class,int)} native: the NAME of the n-th field the class declares. */
     static long declaredFieldAt(ObjectReference mirror, long want)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return Reflection.declaredFieldName(mirror, (int) want);
@@ -471,7 +471,7 @@ final class VMNatives
     /** {@code Class.declaredFieldDescAt0(Class,int)} native: the n-th declared field's DESCRIPTOR. */
     static long declaredFieldDescAt(ObjectReference mirror, long want)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return Reflection.declaredFieldDesc(mirror, (int) want);
@@ -485,7 +485,7 @@ final class VMNatives
     /** {@code Class.declaredFieldCount0(Class)} native: how many fields the class declares (statics included). */
     static long declaredFieldCount(ObjectReference mirror)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return Reflection.declaredFieldName(mirror, -1);
@@ -499,7 +499,7 @@ final class VMNatives
     /** {@code Class.declaredCtorCount0(Class)}: how many CONSTRUCTORS the class declares. */
     static long declaredCtorCount(ObjectReference mirror)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return Reflection.declaredCtorPart(mirror, -1, 0);
@@ -513,7 +513,7 @@ final class VMNatives
     /** {@code Class.declaredCtorDescAt0(Class,int)}: the n-th constructor's DESCRIPTOR. */
     static long declaredCtorDescAt(ObjectReference mirror, long want)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return Reflection.declaredCtorPart(mirror, (int) want, 1);
@@ -527,7 +527,7 @@ final class VMNatives
     /** {@code Class.declaredMethodCount0(Class)} native: how many methods the class declares. */
     static long declaredMethodCount(ObjectReference mirror)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return Reflection.declaredMethodName(mirror, -1);
@@ -544,7 +544,7 @@ final class VMNatives
      */
     static long annoPresent(long rgIndex, ObjectReference descArr)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             if (descArr.toLong() <= 0x1000L)
@@ -567,7 +567,7 @@ final class VMNatives
      */
     static long annoGet(long rgIndex, ObjectReference descArr)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             if (descArr.toLong() <= 0x1000L)
@@ -714,7 +714,7 @@ final class VMNatives
     /** {@code Field.fieldAnnoAll0(Class,byte[])} -> every annotation declared on that field. */
     static long fieldAnnoAll(ObjectReference mirror, ObjectReference nameArr)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return Annotations.fieldAnnotationsAll(mirror, nameArr);
@@ -727,7 +727,7 @@ final class VMNatives
 
     static long fieldAnnoGet(ObjectReference mirror, ObjectReference nameArr, ObjectReference descArr)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             if (descArr.toLong() <= 0x1000L || mirror.toLong() <= 0x1000L || nameArr.toLong() <= 0x1000L)
@@ -746,7 +746,7 @@ final class VMNatives
     /** {@code Method.paramTypes0(int)} native: a {@code Class[]} of the method's parameter types. */
     static long methodParamTypes(long rgIndex)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return Reflection.methodParamTypes((int) rgIndex);
@@ -760,7 +760,7 @@ final class VMNatives
     /** {@code Method.returnType0(int)} native: the Class mirror of the method's declared return type. */
     static long methodReturnType(long rgIndex)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return Reflection.methodReturnType((int) rgIndex);
@@ -774,7 +774,7 @@ final class VMNatives
     /** {@code Field.type0(Class, byte[])} native: the Class mirror of a field's declared type. */
     static long fieldType(ObjectReference mirror, ObjectReference nameArr)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             if (mirror.toLong() <= 0x1000L || nameArr.toLong() <= 0x1000L)
@@ -799,7 +799,7 @@ final class VMNatives
     /** {@code Executable.annoAll0(int)} native: every annotation DECLARED on that method, as an Annotation[]. */
     static long methodAnnoAll(long rgIndex)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return Annotations.methodAnnotationsAll((int) rgIndex);
@@ -813,7 +813,7 @@ final class VMNatives
     /** {@code Class.genericSignature0(Class)} native: the class's Signature attribute as a String, or 0. */
     static long classSignature(ObjectReference mirror)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return ClassAttributes.classSignature(mirror);
@@ -827,7 +827,7 @@ final class VMNatives
     /** {@code Class.enclosingPart0(Class, long)} native: one part of the EnclosingMethod attribute as a String, or 0 -- see Loader. */
     static long classEnclosingPart(ObjectReference mirror, long part)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return ClassAttributes.classEnclosingPart(mirror, part);
@@ -841,7 +841,7 @@ final class VMNatives
     /** {@code Class.nestPart0(Class, long)} native: the nest host's name, or the k-th nest member's, or 0 -- see Loader. */
     static long classNestPart(ObjectReference mirror, long k)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return ClassAttributes.classNestPart(mirror, k);
@@ -855,7 +855,7 @@ final class VMNatives
     /** {@code Class.classFileWord0(Class, long)} native: the classfile version or raw access_flags -- see Loader. */
     static long classFileWord(ObjectReference mirror, long k)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return ClassAttributes.classFileWord(mirror, k);
@@ -869,7 +869,7 @@ final class VMNatives
     /** {@code Class.innerPart0(Class, long)} native: one part of the class's own InnerClasses entry as a String, or 0 -- see Loader. */
     static long classInnerPart(ObjectReference mirror, long part)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return ClassAttributes.classInnerPart(mirror, part);
@@ -883,7 +883,7 @@ final class VMNatives
     /** {@code Executable.signature0(int)} native: the member's Signature attribute as a String, or 0. */
     static long methodSignature(long rgIndex)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return ClassAttributes.methodSignature((int) rgIndex);
@@ -897,7 +897,7 @@ final class VMNatives
     /** {@code Executable.exceptionName0(int, long)} native: the i-th declared exception's internal name, or 0. */
     static long methodExceptionName(long rgIndex, long i)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return ClassAttributes.methodExceptionName((int) rgIndex, i);
@@ -911,7 +911,7 @@ final class VMNatives
     /** {@code Executable.paramMeta0(int, long)} native: a MethodParameters/parameter-annotation count, or an entry's flags. */
     static long methodParamMeta(long rgIndex, long k)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return ClassAttributes.methodParamMeta((int) rgIndex, k);
@@ -925,7 +925,7 @@ final class VMNatives
     /** {@code Executable.paramName0(int, long)} native: a MethodParameters entry's name, or 0. */
     static long methodParamName(long rgIndex, long k)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return ClassAttributes.methodParamName((int) rgIndex, k);
@@ -939,7 +939,7 @@ final class VMNatives
     /** {@code Executable.paramAnnoRow0(int, long)} native: one row of RuntimeVisibleParameterAnnotations, or 0. */
     static long methodParamAnnoRow(long rgIndex, long k)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return Annotations.methodParamAnnoRow((int) rgIndex, k);
@@ -953,7 +953,7 @@ final class VMNatives
     /** {@code Method.annoDefaults0(Class)} native: an instance of the annotation type with every element defaulted. */
     static long annoDefaultInstance(ObjectReference mirror)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return Annotations.annoDefaultInstance(mirror);
@@ -967,7 +967,7 @@ final class VMNatives
     /** {@code Field.signature0(Class, byte[])} native: the field's Signature attribute as a String, or 0. */
     static long fieldSignature(ObjectReference mirror, ObjectReference nameArr)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return ClassAttributes.fieldSignature(mirror, nameArr);
@@ -981,7 +981,7 @@ final class VMNatives
     /** {@code Class.sealed0(Class)} native: 1 when the class has a PermittedSubclasses attribute, else 0. */
     static long classSealed(ObjectReference mirror)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return ClassAttributes.classSealed(mirror);
@@ -995,7 +995,7 @@ final class VMNatives
     /** {@code Proxy.proxyType0} native: build a proxy class for an interface closure -- see Loader.proxyType. */
     static long proxyType(long ifaces, long methods, long names, long descs, long objMethods)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes and compiles the dispatch helper
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView and compiles the dispatch helper
         try
         {
             return ProxySupport.proxyType(ifaces, methods, names, descs, objMethods);
@@ -1015,7 +1015,7 @@ final class VMNatives
     /** {@code RecordComponent.recordInfo0} native: the Record attribute's component count, or -1. */
     static long classRecordInfo(ObjectReference mirror, long k)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return ClassAttributes.classRecordInfo(mirror, k);
@@ -1029,7 +1029,7 @@ final class VMNatives
     /** {@code RecordComponent.recordPart0} native: a record component's name, descriptor or signature. */
     static long classRecordPart(ObjectReference mirror, long k)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return ClassAttributes.classRecordPart(mirror, k);
@@ -1043,7 +1043,7 @@ final class VMNatives
     /** {@code RecordComponent.recordAnnos0} native: a record component's annotations. */
     static long classRecordAnnos(ObjectReference mirror, long k)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return ClassAttributes.classRecordAnnos(mirror, k);
@@ -1057,7 +1057,7 @@ final class VMNatives
     /** {@code Class.permitted0} native: the k-th PermittedSubclasses name, or 0. */
     static long classPermitted(ObjectReference mirror, long k)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return ClassAttributes.classPermitted(mirror, k);
@@ -1071,7 +1071,7 @@ final class VMNatives
     /** {@code Class.declaredClasses0(Class)} native: the MEMBER classes it declares, as a Class[]. */
     static long classDeclClasses(ObjectReference mirror)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return ClassAttributes.classDeclaredClasses(mirror);
@@ -1085,7 +1085,7 @@ final class VMNatives
     /** {@code Class.annoAll0(Class)} native: every annotation DECLARED on the class, as an Annotation[]. */
     static long classAnnoAll(ObjectReference mirror)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return Annotations.classAnnotationsAll(mirror);
@@ -1098,7 +1098,7 @@ final class VMNatives
 
     static long classAnnoGet(ObjectReference mirror, ObjectReference descArr)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             if (descArr.toLong() <= 0x1000L || mirror.toLong() <= 0x1000L)
@@ -1156,7 +1156,7 @@ final class VMNatives
      */
     static long forName(ObjectReference nameArr)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return ClassMirrors.forNameMirror(nameArr);
@@ -1275,7 +1275,7 @@ final class VMNatives
      */
     static long forNameNoInit(ObjectReference nameArr)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             return ClassMirrors.forNameMirror(nameArr, false);
@@ -1294,7 +1294,7 @@ final class VMNatives
      */
     static long defineClass(ObjectReference nameArr, ObjectReference byteArr, long off, long len)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             Address type = Loader.defineFromBytes(byteArr, (int) off, (int) len);
@@ -1317,7 +1317,7 @@ final class VMNatives
         {
             return 0L;                                     // boot force-compile passes 0
         }
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes: a nested class's InnerClasses entry
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView: a nested class's InnerClasses entry
         try                                  // is read from its blob -- see the class doc
         {
             return (long) Reflection.classModifiersOf(mirror.toAddress().plus(16L).loadAddress());
@@ -1677,7 +1677,7 @@ final class VMNatives
     /** Reflection: {@code Class.fieldMods0(Class,byte[])} -> the named own instance field's access_flags, or -1. */
     static int fieldMods(ObjectReference mirrorRef, ObjectReference nameArrRef)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             if (mirrorRef.toLong() <= 0x1000L || nameArrRef.toLong() <= 0x1000L)
@@ -1698,7 +1698,7 @@ final class VMNatives
     /** Reflection: {@code Class.fieldTypeChar0(Class,byte[])} -> the field's descriptor first char, or -1. */
     static int fieldTypeChar(ObjectReference mirrorRef, ObjectReference nameArrRef)
     {
-        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
             if (mirrorRef.toLong() <= 0x1000L || nameArrRef.toLong() <= 0x1000L)

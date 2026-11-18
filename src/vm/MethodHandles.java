@@ -59,18 +59,18 @@ final class MethodHandles
     /** True if the *ref at {@code idx} is a MethodHandle signature-polymorphic method the VM links itself. */
     static boolean isMhSigPoly(int idx)
     {
-        if (!Utf8.utf8IsAtBase(Loader.gbase, Loader.refClassNameOff(idx), Magic.bytes("java/lang/invoke/MethodHandle")))
+        if (!Utf8.utf8IsAtBase(Loader.gView.base, Loader.refClassNameOff(idx), Magic.bytes("java/lang/invoke/MethodHandle")))
         {
             return false;
         }
         int n = Loader.mrefNameOff(idx);
-        return Utf8.utf8IsAtBase(Loader.gbase, n, Magic.bytes("invokeExact"))
-                || Utf8.utf8IsAtBase(Loader.gbase, n, Magic.bytes("invoke"))
-                || Utf8.utf8IsAtBase(Loader.gbase, n, Magic.bytes("invokeBasic"))
-                || Utf8.utf8IsAtBase(Loader.gbase, n, Magic.bytes("linkToStatic"))
-                || Utf8.utf8IsAtBase(Loader.gbase, n, Magic.bytes("linkToSpecial"))
-                || Utf8.utf8IsAtBase(Loader.gbase, n, Magic.bytes("linkToVirtual"))
-                || Utf8.utf8IsAtBase(Loader.gbase, n, Magic.bytes("linkToInterface"));
+        return Utf8.utf8IsAtBase(Loader.gView.base, n, Magic.bytes("invokeExact"))
+                || Utf8.utf8IsAtBase(Loader.gView.base, n, Magic.bytes("invoke"))
+                || Utf8.utf8IsAtBase(Loader.gView.base, n, Magic.bytes("invokeBasic"))
+                || Utf8.utf8IsAtBase(Loader.gView.base, n, Magic.bytes("linkToStatic"))
+                || Utf8.utf8IsAtBase(Loader.gView.base, n, Magic.bytes("linkToSpecial"))
+                || Utf8.utf8IsAtBase(Loader.gView.base, n, Magic.bytes("linkToVirtual"))
+                || Utf8.utf8IsAtBase(Loader.gView.base, n, Magic.bytes("linkToInterface"));
     }
 
     /**

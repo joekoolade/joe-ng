@@ -134,13 +134,13 @@ final class MethodRegistry
         while (m < mcount)
         {
             int attrs = u2(p.plus(6));
-            long code = Loader.findCode(Loader.gbase, p.plus(8), attrs);
+            long code = Loader.findCode(Loader.gView.base, p.plus(8), attrs);
             if (code != 0L)
             {
                 int mi = methodIndexOf(code);
                 if (mi >= 0)
                 {
-                    register(Loader.gbase, Loader.gThisNameOff, Loader.gcp[u2(p.plus(2))], Loader.gcp[u2(p.plus(4))], Loader.mBuf[mi], Loader.mLine[mi], Loader.mSrc.get(mi), u2(p));
+                    register(Loader.gView.base, Loader.gThisNameOff, Loader.gView.cp[u2(p.plus(2))], Loader.gView.cp[u2(p.plus(4))], Loader.mBuf[mi], Loader.mLine[mi], Loader.mSrc.get(mi), u2(p));
                 }
             }
             p = Loader.skipAttributes(p.plus(8), attrs);
@@ -159,12 +159,12 @@ final class MethodRegistry
         // The scan was 4.0% of the busy core on InvokeGapProbe after #450 (qprof-tally.pl caller view).
         buildRegIndex();
         int best = -1;
-        int i = rgBucket[Utf8.utf8Hash2(Loader.gbase, classOff, Loader.gbase, nameOff) & (RGTAB - 1)];
+        int i = rgBucket[Utf8.utf8Hash2(Loader.gView.base, classOff, Loader.gView.base, nameOff) & (RGTAB - 1)];
         while (i >= 0)
         {
-            if (Loader.utf8EqAt(Loader.gbase, classOff, rgTab[i].base, rgTab[i].classOff)
-                    && Loader.utf8EqAt(Loader.gbase, nameOff, rgTab[i].base, rgTab[i].nameOff)
-                    && Loader.utf8EqAt(Loader.gbase, descOff, rgTab[i].base, rgTab[i].descOff))
+            if (Loader.utf8EqAt(Loader.gView.base, classOff, rgTab[i].base, rgTab[i].classOff)
+                    && Loader.utf8EqAt(Loader.gView.base, nameOff, rgTab[i].base, rgTab[i].nameOff)
+                    && Loader.utf8EqAt(Loader.gView.base, descOff, rgTab[i].base, rgTab[i].descOff))
             {
                 best = i;
             }
@@ -178,9 +178,9 @@ final class MethodRegistry
         if (Loader.reportUnresolved != 0)                      // probe mode: name the unembedded reference (surface)
         {
             Uart.write(Magic.bytes("    ? "));
-            Loader.writeName(Loader.gbase.plus(classOff + 2), u2(Loader.gbase.plus(classOff)));
+            Loader.writeName(Loader.gView.base.plus(classOff + 2), u2(Loader.gView.base.plus(classOff)));
             Uart.putc(0x2E);                            // '.'
-            Loader.writeName(Loader.gbase.plus(nameOff + 2), u2(Loader.gbase.plus(nameOff)));
+            Loader.writeName(Loader.gView.base.plus(nameOff + 2), u2(Loader.gView.base.plus(nameOff)));
             Uart.putc(0x0A);
         }
         return 0L;                                      // unresolved: an unloaded class or a native

@@ -181,12 +181,12 @@ final class MethodTableCache
         while (m < mcount)
         {
             int attrs = u2(p.plus(6));
-            int nameOff = Loader.gcp[u2(p.plus(2))];
-            int descOff = Loader.gcp[u2(p.plus(4))];
+            int nameOff = Loader.gView.cp[u2(p.plus(2))];
+            int descOff = Loader.gView.cp[u2(p.plus(4))];
             mtName[mtN] = nameOff;
             mtDesc[mtN] = descOff;
-            mtHash[mtN] = Utf8.sigHash(Loader.gbase, nameOff, descOff);
-            mtCode[mtN] = Loader.findCode(Loader.gbase, p.plus(8), attrs);
+            mtHash[mtN] = Utf8.sigHash(Loader.gView.base, nameOff, descOff);
+            mtCode[mtN] = Loader.findCode(Loader.gView.base, p.plus(8), attrs);
             mtN += 1;
             p = Loader.skipAttributes(p.plus(8), attrs);
             m += 1;
@@ -320,16 +320,16 @@ final class MethodTableCache
         while (m < mcount)
         {
             int attrs = u2(p.plus(6));
-            int nameOff = Loader.gcp[u2(p.plus(2))];
-            int descOff = Loader.gcp[u2(p.plus(4))];
-            int q = Closure.pvBucket[Utf8.sigHash(Loader.gbase, nameOff, descOff) & (Loader.PVTAB - 1)];
+            int nameOff = Loader.gView.cp[u2(p.plus(2))];
+            int descOff = Loader.gView.cp[u2(p.plus(4))];
+            int q = Closure.pvBucket[Utf8.sigHash(Loader.gView.base, nameOff, descOff) & (Loader.PVTAB - 1)];
             while (q >= 0)
             {
                 if (q >= Closure.virtFrom && Closure.virtResolved[q] != Closure.virtStamp
-                        && Loader.utf8EqAt(Closure.pendBase.get(q), Closure.pendName[q], Loader.gbase, nameOff)
-                        && Loader.utf8EqAt(Closure.pendBase.get(q), Closure.pendDesc[q], Loader.gbase, descOff))
+                        && Loader.utf8EqAt(Closure.pendBase.get(q), Closure.pendName[q], Loader.gView.base, nameOff)
+                        && Loader.utf8EqAt(Closure.pendBase.get(q), Closure.pendDesc[q], Loader.gView.base, descOff))
                 {
-                    long code = Loader.findCode(Loader.gbase, p.plus(8), attrs);
+                    long code = Loader.findCode(Loader.gView.base, p.plus(8), attrs);
                     if (code != 0L)
                     {
                         Closure.virtResolved[q] = Closure.virtStamp;     // nearest def; don't also mark a super's shadowed one
@@ -359,16 +359,16 @@ final class MethodTableCache
         while (m < mcount)
         {
             int attrs = u2(p.plus(6));
-            int nameOff = Loader.gcp[u2(p.plus(2))];
-            int descOff = Loader.gcp[u2(p.plus(4))];
-            int q = Closure.pvBucket[Utf8.sigHash(Loader.gbase, nameOff, descOff) & (Loader.PVTAB - 1)];
+            int nameOff = Loader.gView.cp[u2(p.plus(2))];
+            int descOff = Loader.gView.cp[u2(p.plus(4))];
+            int q = Closure.pvBucket[Utf8.sigHash(Loader.gView.base, nameOff, descOff) & (Loader.PVTAB - 1)];
             while (q >= 0)
             {
                 if (q >= Closure.virtFrom
-                        && Loader.utf8EqAt(Closure.pendBase.get(q), Closure.pendName[q], Loader.gbase, nameOff)
-                        && Loader.utf8EqAt(Closure.pendBase.get(q), Closure.pendDesc[q], Loader.gbase, descOff))
+                        && Loader.utf8EqAt(Closure.pendBase.get(q), Closure.pendName[q], Loader.gView.base, nameOff)
+                        && Loader.utf8EqAt(Closure.pendBase.get(q), Closure.pendDesc[q], Loader.gView.base, descOff))
                 {
-                    long code = Loader.findCode(Loader.gbase, p.plus(8), attrs);
+                    long code = Loader.findCode(Loader.gView.base, p.plus(8), attrs);
                     if (code != 0L)
                     {
                         grew = Closure.addReach(code) || grew;

@@ -576,8 +576,8 @@ final class StackTrace
     /** Address of the current class's SourceFile filename Utf8 (persists in the blob), or 0 if none. */
     static Address sourceFileAddr()
     {
-        int off = ClassReader.sourceFileNameOff(Loader.gbytes, Loader.gcp, Loader.gAfterCp, Magic.bytes("SourceFile"));
-        return off < 0 ? Address.zero() : Loader.gbase.plus(off);
+        int off = ClassReader.sourceFileNameOff(Loader.gView.bytes, Loader.gView.cp, Loader.gView.afterCp, Magic.bytes("SourceFile"));
+        return off < 0 ? Address.zero() : Loader.gView.base.plus(off);
     }
 
     static long buildLineTable(int i)
@@ -586,8 +586,8 @@ final class StackTrace
         {
             return 0L;
         }
-        int codeBodyOff = (int) (Loader.mCode[i] - Loader.gbase.toLong()) - 8;   // Code attr body (max_stack) sits 8 bytes before code[]
-        int lntOff = ClassReader.lineNumberTableOff(Loader.gbytes, Loader.gcp, codeBodyOff, Magic.bytes("LineNumberTable"));
+        int codeBodyOff = (int) (Loader.mCode[i] - Loader.gView.base.toLong()) - 8;   // Code attr body (max_stack) sits 8 bytes before code[]
+        int lntOff = ClassReader.lineNumberTableOff(Loader.gView.bytes, Loader.gView.cp, codeBodyOff, Magic.bytes("LineNumberTable"));
         if (lntOff < 0)
         {
             return 0L;
@@ -597,7 +597,7 @@ final class StackTrace
         {
             lnAt = new int[len < 4096 ? 4096 : len];      // scratch, reused: compiles hold the loader lock
         }
-        ClassReader.linesByBci(Loader.gbytes, lntOff, lnAt, len);
+        ClassReader.linesByBci(Loader.gView.bytes, lntOff, lnAt, len);
         int n = 0;
         int prev = -1;
         int bci = 0;

@@ -68,7 +68,7 @@ final class LambdaFactory
     private static boolean isAltMetafactory(int idx)
     {
         Address e = Indy.bsmEntryOff(Indy.indyBsmIndex(idx));
-        int mrefIdx = u2(Loader.gbase.plus(Loader.gcp[u2(e)] + 1));
+        int mrefIdx = u2(Loader.gView.base.plus(Loader.gView.cp[u2(e)] + 1));
         return Loader.utf8IsStr(Loader.refClassNameOff(mrefIdx), Magic.bytes("java/lang/invoke/LambdaMetafactory"))
             && Loader.utf8IsStr(Loader.mrefNameOff(mrefIdx), Magic.bytes("altMetafactory"));
     }
@@ -132,7 +132,7 @@ final class LambdaFactory
     {
         Address e = Indy.bsmEntryOff(Indy.indyBsmIndex(idx));
         int mhIdx = u2(e.plus(6));                          // bootstrap_arguments[1] = the impl MethodHandle
-        return u2(Loader.gbase.plus(Loader.gcp[mhIdx] + 1));              // MethodHandle.reference_index -> Methodref
+        return u2(Loader.gView.base.plus(Loader.gView.cp[mhIdx] + 1));              // MethodHandle.reference_index -> Methodref
     }
 
     /** reference_kind of the impl MethodHandle: 6 = invokeStatic (lambda body / static ref), 5/9 = invokeVirtual/
@@ -141,7 +141,7 @@ final class LambdaFactory
     {
         Address e = Indy.bsmEntryOff(Indy.indyBsmIndex(idx));
         int mhIdx = u2(e.plus(6));
-        return u1(Loader.gbase.plus(Loader.gcp[mhIdx]));                  // MethodHandle.reference_kind
+        return u1(Loader.gView.base.plus(Loader.gView.cp[mhIdx]));                  // MethodHandle.reference_kind
     }
 
     /** Print the functional interface named by the indy descriptor at {@code idx}. */
@@ -166,7 +166,7 @@ final class LambdaFactory
      *  descriptor returns a primitive. */
     private static Address lambdaIfaceNameU(int idx)
     {
-        Address p = Loader.gbase.plus(Loader.mrefDescOff(idx) + 2);
+        Address p = Loader.gView.base.plus(Loader.mrefDescOff(idx) + 2);
         while (u1(p) != ')')
         {
             p = p.plus(1);
@@ -196,14 +196,14 @@ final class LambdaFactory
     static void printLambdaImplName(int idx)
     {
         int mref = lambdaImplMref(idx);
-        Loader.printNameAt(Loader.gbase, Loader.refClassNameOff(mref));
+        Loader.printNameAt(Loader.gView.base, Loader.refClassNameOff(mref));
         Uart.putc(0x2E);
-        Loader.printNameAt(Loader.gbase, Loader.mrefNameOff(mref));
+        Loader.printNameAt(Loader.gView.base, Loader.mrefNameOff(mref));
     }
 
     private static void printLambdaIfaceName(int idx)
     {
-        Address p = Loader.gbase.plus(Loader.mrefDescOff(idx) + 2);
+        Address p = Loader.gView.base.plus(Loader.mrefDescOff(idx) + 2);
         while (u1(p) != ')')
         {
             p = p.plus(1);
@@ -226,7 +226,7 @@ final class LambdaFactory
     private static Address lambdaIfaceType(int idx)
     {
         int descOff = Loader.mrefDescOff(idx);
-        Address p = Loader.gbase.plus(descOff + 2);                   // skip the u2 length
+        Address p = Loader.gView.base.plus(descOff + 2);                   // skip the u2 length
         while (u1(p) != ')')
         {
             p = p.plus(1);
@@ -260,7 +260,7 @@ final class LambdaFactory
     {
         Address e = Indy.bsmEntryOff(Indy.indyBsmIndex(idx));
         int mtIdx = u2(e.plus(4));                          // bootstrap_arguments[0] = MethodType (SAM signature)
-        return Loader.gcp[u2(Loader.gbase.plus(Loader.gcp[mtIdx]))];             // MethodType.descriptor_index -> Utf8 offset
+        return Loader.gView.cp[u2(Loader.gView.base.plus(Loader.gView.cp[mtIdx]))];             // MethodType.descriptor_index -> Utf8 offset
     }
 
     /** SAM parameter count (bootstrap_arguments[0] MethodType) — slice 1c supports only 0. */
@@ -268,15 +268,15 @@ final class LambdaFactory
     {
         Address e = Indy.bsmEntryOff(Indy.indyBsmIndex(idx));
         int mtIdx = u2(e.plus(4));
-        int descOff = Loader.gcp[u2(Loader.gbase.plus(Loader.gcp[mtIdx]))];
-        return ClassReader.descParamCount(Loader.gbytes, descOff);
+        int descOff = Loader.gView.cp[u2(Loader.gView.base.plus(Loader.gView.cp[mtIdx]))];
+        return ClassReader.descParamCount(Loader.gView.bytes, descOff);
     }
 
     /** Instance size of a lambda object: header + one field per captured value. */
     /** Debug accessors for the lambda-site trace in MetalSymbols. */
     static int lambdaCaptureCount(int idx)
     {
-        return ClassReader.descParamCount(Loader.gbytes, Loader.mrefDescOff(idx));
+        return ClassReader.descParamCount(Loader.gView.bytes, Loader.mrefDescOff(idx));
     }
 
     static int lambdaSamArgcOf(int idx)
@@ -291,7 +291,7 @@ final class LambdaFactory
 
     static int lambdaSize(int idx)
     {
-        return 16 + ClassReader.descParamCount(Loader.gbytes, Loader.mrefDescOff(idx)) * 8;
+        return 16 + ClassReader.descParamCount(Loader.gView.bytes, Loader.mrefDescOff(idx)) * 8;
     }
 
     /**
@@ -329,12 +329,12 @@ final class LambdaFactory
     {
         int implDesc = Loader.mrefDescOff(lambdaImplMref(idx));
         int samDesc = lambdaSamDescOff(idx);
-        int n = ClassReader.descParamCount(Loader.gbytes, implDesc);
+        int n = ClassReader.descParamCount(Loader.gView.bytes, implDesc);
         int p = pStart;
         while (p < n)
         {
-            int ik = ClassReader.descParamKind(Loader.gbytes, implDesc, p);
-            int sk = ClassReader.descParamKind(Loader.gbytes, samDesc, sStart + (p - pStart));
+            int ik = ClassReader.descParamKind(Loader.gView.bytes, implDesc, p);
+            int sk = ClassReader.descParamKind(Loader.gView.bytes, samDesc, sStart + (p - pStart));
             if (sk == 'L' && ik != 'L' && ik != '[' && ik != 0)
             {
                 int r = regBase + p;
@@ -366,9 +366,9 @@ final class LambdaFactory
     {
         int mref = lambdaImplMref(idx);
         Uart.write(Magic.bytes("  METHOD REF ARG NOT UNBOXED "));
-        Loader.printNameAt(Loader.gbase, Loader.refClassNameOff(mref));
+        Loader.printNameAt(Loader.gView.base, Loader.refClassNameOff(mref));
         Uart.putc(0x2E);
-        Loader.printNameAt(Loader.gbase, Loader.mrefNameOff(mref));
+        Loader.printNameAt(Loader.gView.base, Loader.mrefNameOff(mref));
         Uart.write(Magic.bytes(" param="));
         VM.printDec(p);
         if (r > 7)
@@ -385,19 +385,19 @@ final class LambdaFactory
      *  the thunk must box. A constructor reference is excluded by its {@code V} return. */
     private static boolean lambdaNeedsBoxing(int idx)
     {
-        char samRet = ClassReader.descReturnKind(Loader.gbytes, lambdaSamDescOff(idx));
+        char samRet = ClassReader.descReturnKind(Loader.gView.bytes, lambdaSamDescOff(idx));
         if (samRet != 'L' && samRet != '[')
         {
             return false;
         }
-        char implRet = ClassReader.descReturnKind(Loader.gbytes, Loader.mrefDescOff(lambdaImplMref(idx)));
+        char implRet = ClassReader.descReturnKind(Loader.gView.bytes, Loader.mrefDescOff(lambdaImplMref(idx)));
         return implRet != 'V' && implRet != 'L' && implRet != '[';
     }
 
     /** Descriptor kind char of the referent's return type. */
     private static int lambdaImplRetKind(int idx)
     {
-        return ClassReader.descReturnKind(Loader.gbytes, Loader.mrefDescOff(lambdaImplMref(idx)));
+        return ClassReader.descReturnKind(Loader.gView.bytes, Loader.mrefDescOff(lambdaImplMref(idx)));
     }
 
     /** Say which method reference needs an adaptation we do not emit, instead of silently emitting a thunk
@@ -406,9 +406,9 @@ final class LambdaFactory
     {
         int mref = lambdaImplMref(idx);
         Uart.write(Magic.bytes("  UNBOXABLE METHOD REF "));
-        Loader.printNameAt(Loader.gbase, Loader.refClassNameOff(mref));
+        Loader.printNameAt(Loader.gView.base, Loader.refClassNameOff(mref));
         Uart.putc(0x2E);
-        Loader.printNameAt(Loader.gbase, Loader.mrefNameOff(mref));
+        Loader.printNameAt(Loader.gView.base, Loader.mrefNameOff(mref));
         Uart.write(Magic.bytes(" returns "));
         Uart.putc(retKind);
         Uart.write(Magic.bytes(" into a generic SAM (vm/VMBox.box not stashed)\n"));
@@ -574,7 +574,7 @@ final class LambdaFactory
             Uart.putc(0x5D);
             Uart.putc(0x0A);
         }
-        int nc = ClassReader.descParamCount(Loader.gbytes, Loader.mrefDescOff(idx));   // number of captured values
+        int nc = ClassReader.descParamCount(Loader.gView.bytes, Loader.mrefDescOff(idx));   // number of captured values
         int ia = lambdaSamArgc(idx);                                    // SAM (interface method) args
         int kind = lambdaImplKind(idx);
         boolean boxRet = lambdaNeedsBoxing(idx);
@@ -656,9 +656,9 @@ final class LambdaFactory
                 if (Loader.LOAD_LOG)
                 {
                     Uart.write(Magic.bytes("  lambdaslot late "));
-                    Loader.printNameAt(Loader.gbase, Loader.refClassNameOff(lambdaImplMref(idx)));
+                    Loader.printNameAt(Loader.gView.base, Loader.refClassNameOff(lambdaImplMref(idx)));
                     Uart.putc(0x2E);
-                    Loader.printNameAt(Loader.gbase, Loader.mrefNameOff(lambdaImplMref(idx)));
+                    Loader.printNameAt(Loader.gView.base, Loader.mrefNameOff(lambdaImplMref(idx)));
                     Uart.putc(0x0A);
                 }
                 w = Loader.emitAt(thunk, w, A64Enc.movz(17, VirtualDispatch.virtualSiteIndex(lambdaImplMref(idx)), 0));
@@ -706,7 +706,7 @@ final class LambdaFactory
                 // for any late-compiled constructor reference, and a report that fires on a run which then
                 // works is worse than none. Only a target still missing AFTER the pull is a real failure --
                 // and that one still bakes a zero TIB, so it must be said out loud.
-                Loader.notePullNeeded(Loader.gbase.plus(Loader.refClassNameOff(lambdaImplMref(idx))));
+                Loader.notePullNeeded(Loader.gView.base.plus(Loader.refClassNameOff(lambdaImplMref(idx))));
                 if (Loader.lzRetried)
                 {
                     reportLambdaCtorNoTib(cr);
@@ -1006,7 +1006,7 @@ final class LambdaFactory
             TibBuilder.lambdaTibVtCap[TibBuilder.lambdaTibRootN] = onv;   // ... and how many vtable slots it has room for
             TibBuilder.lambdaTibFilled[TibBuilder.lambdaTibRootN] = false;// ... and NOT yet filled (explicit: see the field's note --
                                                     //   allocArray leaves elements undefined on this VM)
-            TibBuilder.lambdaHostBase.set(TibBuilder.lambdaTibRootN, Loader.gbase); // ... and the class being compiled: the lambda's host
+            TibBuilder.lambdaHostBase.set(TibBuilder.lambdaTibRootN, Loader.gView.base); // ... and the class being compiled: the lambda's host
             TibBuilder.lambdaHostNameOff[TibBuilder.lambdaTibRootN] = Loader.gThisNameOff;
             TibBuilder.lambdaTibRootN += 1;
         }
@@ -1032,7 +1032,7 @@ final class LambdaFactory
             it.plus(s * 8L).store(0L);
             s += 1;
         }
-        int slot = InterfaceInvocation.ifmSlotIn(ir, Loader.gbase, samName, samDesc);
+        int slot = InterfaceInvocation.ifmSlotIn(ir, Loader.gView.base, samName, samDesc);
         it.plus((slot >= 0 ? slot : 0) * 8L).store(thunk);
         return it.toLong();
     }

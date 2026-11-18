@@ -4,6 +4,28 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **LOADER REFACTOR PHASE 2, INCREMENT P2-2: `gView` is the current class; the seven copied globals are gone
+  (2026-11-18).** `gbase`, `gcp`, `gbytes`, `gcpTag`, `gcpCount`, `gAfterCp` and `litObjByCp` are deleted; all 765
+  reads (26 classes) now go through `Loader.gView` (`.base`, `.cp`, `.bytes`, ...). The user chose the FULL replacement
+  over a narrower one that kept `gbase`/`gcp`/`gbytes` as cached copies.
+  - **Switching the current class is ONE store.** `useView` sets `gView` and the cursor `gp`; the early `gbase = base`
+    ahead of the cache scan is gone, so a reader can never see one blob's base beside another's constant pool. The
+    `PARSE_CTX_WATCH` null-view report no longer prints `gbase` (a torn view cannot exist now).
+  - **"No class yet" is `gView == null`** where it was `gbase.isZero()` (13 sites). `gbaseForReport` (fault report)
+    is null-safe, since a fault can precede the first parse. `resetLoader` does NOT clear `gView`: the old statics
+    were never reset either and kept naming the last blob until the next parse.
+  - **Comments:** ~115 mentions retargeted to `gView`; historical records (the null-`gbytes` NPE) left verbatim.
+  - **Pi timing of P2-1 (taken before this increment):** SslEngineProbe, `PI-TIMING ms=` (CNTPCT since power-on),
+    alternating x3: **ctl 42777 / 42827 / 42789 ms vs P2-1 42915 / 42887 / 42912 ms** -- +107 ms, +0.25%, every
+    P2-1 boot above every control. Real but negligible; QEMU's +2.8% overstated it.
+  - **Image** 39,545,864 bytes (P2-1: 39,543,336; the extra field loads). Loader 9,113 -> 9,125 lines (comments).
+  - **Validation:** `make test` + overlaycheck clean, no helper-stash MISS; 24 targeted probes pass (Anno* x3,
+    AbsentSuper, ClinitOrder/ClinitRace, Indy, Lambda4/LambdaAdapt, InvokeGap, InheritedStatic, InternalReflect,
+    Loader, Gvr, Generics, FieldSlot, ConstantDesc, CallerSensitive, DeepTrace, CtorChainTrace, ChmRace,
+    FirstCallRace, SslEngine, ConcatUtf16).
+  - **Speed: no cost visible.** SslEngineProbe, bare boot timer, ABBA vs `main` (P2-1): **test 98.6 / 98.7 / 103.9 /
+    102.3 s vs ctl 99.7 / 100.2 / 104.8 / 103.8 s** (test at or below control in 4/4 pairs, -1.2% mean, within
+    noise). Not run: full regression, suite, JUnit, Pi.
 - **LOADER REFACTOR PHASE 2, INCREMENT P2-1: the parse cache as `ClassFileView` objects (2026-11-17).** The first
   BEHAVIOUR change of the refactor (phase 1 only moved code). Phase 2 replaces the `g*` "current class" globals step by
   step: P2-1 parse cache -> objects; P2-2 reads of the copied `g*` -> `gView` fields; P2-3 `findMethod` returns a

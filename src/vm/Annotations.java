@@ -146,7 +146,7 @@ final class Annotations
      *
      * <p>The field-level twin of {@link #methodAnnotationsAll}, and it keeps that method's TWO PASSES OVER
      * ABSOLUTE ADDRESSES for the reason recorded there: pass 2 RESOLVES, a resolve may demand-load, and a
-     * load re-parses a blob and moves the {@code gcp} cursor pass 1 reads. Blob addresses survive that; parse
+     * load re-parses a blob and moves the {@code gView.cp} cursor pass 1 reads. Blob addresses survive that; parse
      * state does not.
      *
      * <p>The field WALK is {@link #fieldAnnotation}'s (past access_flags/this/super/interfaces, then the
@@ -183,7 +183,7 @@ final class Annotations
         while (f < fcount)
         {
             int attrs = u2(p.plus(6));
-            if (Utf8.rawEqUtf8(nbase, nlen, base, Loader.gcp[u2(p.plus(2))]))
+            if (Utf8.rawEqUtf8(nbase, nlen, base, Loader.gView.cp[u2(p.plus(2))]))
             {
                 lp = annoListPos(base, p.plus(8L), attrs);
                 f = fcount;                             // found it; stop walking
@@ -224,7 +224,7 @@ final class Annotations
         while (f < fcount)
         {
             int attrs = u2(p.plus(6));
-            if (Utf8.rawEqUtf8(nbase, nlen, base, Loader.gcp[u2(p.plus(2))]))
+            if (Utf8.rawEqUtf8(nbase, nlen, base, Loader.gView.cp[u2(p.plus(2))]))
             {
                 return annoFromAttrs(base, p.plus(8), attrs, descArr, descLen);
             }
@@ -265,7 +265,7 @@ final class Annotations
             p = p.plus(2);
             int alen = u4(p);
             p = p.plus(4);
-            if (Utf8.utf8IsAtBase(base, Loader.gcp[anIdx], Magic.bytes("RuntimeVisibleAnnotations")))
+            if (Utf8.utf8IsAtBase(base, Loader.gView.cp[anIdx], Magic.bytes("RuntimeVisibleAnnotations")))
             {
                 Address pairs = annoListFind(base, p, descArr, descLen);
                 if (pairs.isZero())
@@ -294,7 +294,7 @@ final class Annotations
      *
      * <p>TWO PASSES, over ABSOLUTE addresses. Pass 1 records each entry's type descriptor and element-pair
      * position as addresses into the blob; pass 2 builds. That split is not tidiness: {@code buildAnnoObject}
-     * reads {@code gcp[nameIdx]}, the parse CURSOR, and anything that resolves during a build re-parses a
+     * reads {@code gView.cp[nameIdx]}, the parse CURSOR, and anything that resolves during a build re-parses a
      * blob and moves it. Blob addresses do not move; the parse state does -- the same reason the written-pair
      * and default phases are kept apart, and the reason a 'c'/'e' element defers.
      *
@@ -332,7 +332,7 @@ final class Annotations
      * {@code Annotation[]}. Never 0; a method with none answers a zero-length array.
      *
      * <p>The method-level twin of {@link #classAnnotationsAll}, and it keeps that method's TWO PASSES OVER
-     * ABSOLUTE ADDRESSES for the same non-negotiable reason: {@code buildAnnoObject} reads {@code gcp[..]},
+     * ABSOLUTE ADDRESSES for the same non-negotiable reason: {@code buildAnnoObject} reads {@code gView.cp[..]},
      * the parse CURSOR, and anything that resolves during a build re-parses a blob and moves it. Blob
      * addresses survive that; the parse state does not. Pass 1 therefore records addresses only -- and
      * {@code methodInfoPos} must run BEFORE pass 1 for the same reason, since it parses too.
@@ -381,7 +381,7 @@ final class Annotations
         {
             int typeIdx = u2(p);
             p = p.plus(2);
-            descAbs.set(found, base.plus(Loader.gcp[typeIdx]));
+            descAbs.set(found, base.plus(Loader.gView.cp[typeIdx]));
             pairsAbs.set(found, p);
             found += 1;
             p = skipElementPairs(p);
@@ -396,7 +396,7 @@ final class Annotations
             if (ifaceReg >= 0)
             {
                 // RE-POINT THE CURSOR at the annotated class first. buildAnnoObject matches element names through
-                // gcp, and building the PREVIOUS annotation re-parsed its annotation type's blob to read the
+                // gView.cp, and building the PREVIOUS annotation re-parsed its annotation type's blob to read the
                 // defaults (as resolving one may), so without this every annotation after the first in a list
                 // matched no written element and answered its defaults: `@Mark @Num(3)` read `@Num(7)`.
                 Loader.parseForMethods(base, Loader.blobLenOf(base));
@@ -445,7 +445,7 @@ final class Annotations
             p = p.plus(2);
             int alen = u4(p);
             p = p.plus(4);
-            if (Utf8.utf8IsAtBase(base, Loader.gcp[anIdx], Magic.bytes("RuntimeVisibleAnnotations")))
+            if (Utf8.utf8IsAtBase(base, Loader.gView.cp[anIdx], Magic.bytes("RuntimeVisibleAnnotations")))
             {
                 return p;
             }
@@ -565,7 +565,7 @@ final class Annotations
             p = p.plus(2);
             int alen = u4(p);
             p = p.plus(4);
-            if (Utf8.utf8IsAtBase(base, Loader.gcp[anIdx], Magic.bytes("RuntimeVisibleAnnotations")))
+            if (Utf8.utf8IsAtBase(base, Loader.gView.cp[anIdx], Magic.bytes("RuntimeVisibleAnnotations")))
             {
                 return annoListHas(base, p, descArr, descLen);
             }
@@ -585,7 +585,7 @@ final class Annotations
         {
             int typeIdx = u2(p);
             p = p.plus(2);
-            if (Utf8.utf8EqArr(base, Loader.gcp[typeIdx], descArr, descLen))
+            if (Utf8.utf8EqArr(base, Loader.gView.cp[typeIdx], descArr, descLen))
             {
                 return true;
             }
@@ -605,7 +605,7 @@ final class Annotations
         {
             int typeIdx = u2(p);
             p = p.plus(2);
-            if (Utf8.utf8EqArr(base, Loader.gcp[typeIdx], descArr, descLen))
+            if (Utf8.utf8EqArr(base, Loader.gView.cp[typeIdx], descArr, descLen))
             {
                 return p;
             }

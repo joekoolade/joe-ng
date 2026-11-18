@@ -190,7 +190,7 @@ final class NativeMethods
 
     /**
      * Whether class {@code clsU} itself DECLARES {@code name desc} as a native method. Reads the classfile bytes
-     * directly -- its own constant-pool walk, never the shared parse context ({@code gbase}/{@code gcp}), which a
+     * directly -- its own constant-pool walk, never the shared parse context ({@code gView.base}/{@code gView.cp}), which a
      * failing link must not disturb. Only the named class is consulted: a native inherited from a superclass
      * keeps the trap.
      */
