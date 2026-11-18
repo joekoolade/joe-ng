@@ -726,11 +726,7 @@ final class Reflection
         {
             return -1;
         }
-        Loader.gBuild.statics = ClassRegistry.clTab[reg].statics;
-        Indy.findBootstrapMethods();
-        VtableLayout.parseVtable(blob);
-        Loader.gType = ClassRegistry.clTab[reg].type;
-        Loader.gTib = ClassRegistry.clTab[reg].tib;
+        ClassRegistry.clTab[reg].resumeBuild(blob);
         Loader.parseForMethods(blob, len);
         Address p = Loader.gView.methodsStart;
         int mcount = u2(p);

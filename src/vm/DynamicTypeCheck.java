@@ -37,7 +37,7 @@ final class DynamicTypeCheck
     static Address typeOfClass(int classIdx)
     {
         // Self-reference (a class doing `x instanceof Self` / `(Self) x`): the current class isn't in the
-        // registry until AFTER its own compile, but its Type node (gType) is already built by buildTib —
+        // registry until AFTER its own compile, but its Type node (gBuild.type) is already built by buildTib —
         // and it's the very node the class's own instances carry, so instanceof/checkcast resolve correctly.
         int nameOff = Loader.gView.cp[u2(Loader.gView.base.plus(Loader.gView.cp[classIdx]))];
         if (u1(Loader.gView.base.plus(nameOff + 2)) == 0x5B)            // '[' : an array class ("[B", "[Ljava/...;", "[[I")
@@ -47,7 +47,7 @@ final class DynamicTypeCheck
         }
         if (Loader.utf8EqAt(Loader.gView.base, nameOff, Loader.gView.base, Loader.gView.thisNameOff))
         {
-            return Loader.gType;
+            return Loader.gBuild.type;
         }
         int r = ClassRegistry.classRegOf(classIdx);
         return r >= 0 ? ClassRegistry.clTab[r].type : Address.zero();
@@ -234,6 +234,6 @@ final class DynamicTypeCheck
     {
         int r = ClassRegistry.classRegOf(classIdx);
         ClassInitializer.noteInitNeeded(r);                              // `new C` is an active use of C (JVMS 5.5)
-        return (r >= 0 ? ClassRegistry.clTab[r].tib : Loader.gTib).toLong();            // unregistered => the SELF case (objectSizeOf traps the rest)
+        return (r >= 0 ? ClassRegistry.clTab[r].tib : Loader.gBuild.tib).toLong();            // unregistered => the SELF case (objectSizeOf traps the rest)
     }
 }

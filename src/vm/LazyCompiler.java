@@ -220,11 +220,7 @@ final class LazyCompiler
         {
             return -1;
         }
-        Loader.gBuild.statics = ClassRegistry.clTab[reg].statics;                         // reuse the phase-A statics (cross-class getstatic keys on it)
-        Indy.findBootstrapMethods();
-        VtableLayout.parseVtable(blob);                                 // gvImplBuf/gvImplCode (for any invokevirtual in the body)
-        Loader.gType = ClassRegistry.clTab[reg].type;
-        Loader.gTib = ClassRegistry.clTab[reg].tib;
+        ClassRegistry.clTab[reg].resumeBuild(blob);
         Loader.parseForMethods(blob, len);                        // gp at the methods table for the by-name method walk
         Address p = Loader.gView.methodsStart;
         int mcount = u2(p);
@@ -544,11 +540,7 @@ final class LazyCompiler
         int len = Loader.blobLenOf(blob);
         Loader.parseConstPool(blob, len);                      // rebuild this class's compile state (as loadBodies
         Loader.parseFields();                                  //   does, minus the TIB fill)
-        Loader.gBuild.statics = ClassRegistry.clTab[reg].statics;                  // reuse the phase-A statics block
-        Indy.findBootstrapMethods();
-        VtableLayout.parseVtable(blob);
-        Loader.gType = ClassRegistry.clTab[reg].type;
-        Loader.gTib = ClassRegistry.clTab[reg].tib;                          // 0 for an interface; compileReuseTib means unused
+        ClassRegistry.clTab[reg].resumeBuild(blob);              // compileReuseTib means the TIB is unused here
         Loader.parseForMethods(blob, len);
         Address p = Loader.gView.methodsStart;
         int mcount = u2(p);
@@ -1068,11 +1060,7 @@ final class LazyCompiler
         }
         Loader.parseConstPool(bytes, len);
         Loader.parseFields();
-        Loader.gBuild.statics = ClassRegistry.clTab[reg].statics;
-        Indy.findBootstrapMethods();
-        VtableLayout.parseVtable(bytes);
-        Loader.gType = ClassRegistry.clTab[reg].type;
-        Loader.gTib = ClassRegistry.clTab[reg].tib;
+        ClassRegistry.clTab[reg].resumeBuild(bytes);
         Loader.provideKnownStatics();
     }
 

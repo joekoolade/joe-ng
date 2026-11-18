@@ -67,4 +67,20 @@ final class RVMClass
     static final int ST_INSTANTIATED = 3;
     /** Queued {@code <clinit>} has run (or was deliberately skipped with seeded statics). */
     static final int ST_INITIALIZED = 4;
+
+    /**
+     * Re-enter this class's build context so one of its bodies can be compiled after phase A: the caller has just
+     * parsed {@code blob} ({@code parseConstPool} + {@code parseFields}, which leaves {@code Loader.gBuild} with a
+     * fresh field layout); this puts back what phase A made and the compiler reads -- the statics block that
+     * cross-class {@code getstatic} keys on, the BootstrapMethods location, the vtable scratch, and the Type and
+     * TIB. Before increment P2-4c this was the same five statements, copied at four on-demand compile entries.
+     */
+    void resumeBuild(Address blob)
+    {
+        Loader.gBuild.statics = statics;                // the phase-A block, not parseFields' throwaway one
+        Indy.findBootstrapMethods();
+        VtableLayout.parseVtable(blob);                 // gvImplBuf/gvImplCode (for any invokevirtual in the body)
+        Loader.gBuild.type = type;
+        Loader.gBuild.tib = tib;                        // 0 for an interface
+    }
 }

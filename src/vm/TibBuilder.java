@@ -124,9 +124,9 @@ final class TibBuilder
     /**
      * Allocate this class's Type + TIB and set the fixed parts (Type node, TIB[0]=Type). The vtable slots and
      * itable directory are filled later by {@link #fillTib} once the methods are placed. Splitting the alloc
-     * out lets loadOne register the class and pin a stable {@code gTib} address BEFORE compiling its
+     * out lets loadOne register the class and pin a stable {@code gBuild.tib} address BEFORE compiling its
      * {@code <clinit>}, so a {@code new Self()} in that initializer (e.g. {@code Unsafe.theUnsafe = new Unsafe()})
-     * bakes the correct TIB rather than the previous class's stale {@code gTib}. The <clinit> runs deferred
+     * bakes the correct TIB rather than the previous class's stale TIB. The <clinit> runs deferred
      * (after patchRelocs), by which point {@link #fillTib} has populated the vtable.
      */
     static void allocTib()
@@ -141,9 +141,9 @@ final class TibBuilder
         // (instanceSize matches by field-layout parity; superType matches because supers adopt
         // too, so clTab[sr].type IS the writer's super node); itableDir stays loader-owned
         // (buildTib overwrites it with this world's imap dir -- the writer side never reads it).
-        if (!Loader.gAdoptType.isZero())
+        if (!Loader.gBuild.adoptType.isZero())
         {
-            Loader.gType = Loader.gAdoptType;
+            Loader.gBuild.type = Loader.gBuild.adoptType;
             if (Loader.LOAD_LOG)
             {
                 Uart.write(Magic.bytes("  typeadopt "));
@@ -153,24 +153,24 @@ final class TibBuilder
         }
         else
         {
-            Loader.gType = Heap.allocData(ObjectModel.TYPE_SIZE);
+            Loader.gBuild.type = Heap.allocData(ObjectModel.TYPE_SIZE);
         }
-        Loader.gType.plus(0).store((long) (16 + Loader.gBuild.ifCount * 8));       // TYPE_INSTANCE_SIZE_OFFSET
-        Loader.gType.plus(8).store(sr >= 0 ? ClassRegistry.clTab[sr].type : Address.zero());   // TYPE_SUPER_OFFSET (0 at Object)
-        if (Loader.gAdoptType.isZero())
+        Loader.gBuild.type.plus(0).store((long) (16 + Loader.gBuild.ifCount * 8));       // TYPE_INSTANCE_SIZE_OFFSET
+        Loader.gBuild.type.plus(8).store(sr >= 0 ? ClassRegistry.clTab[sr].type : Address.zero());   // TYPE_SUPER_OFFSET (0 at Object)
+        if (Loader.gBuild.adoptType.isZero())
         {
             // O(1) type checks: metal-built class Types get a depth + display like the writer's
             // (adopted nodes already carry the writer's -- never overwrite with batch-heap arrays).
-            Loader.gType.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).store(0L);
-            Loader.gType.plus(ObjectModel.TYPE_DEPTH_OFFSET).store(0L);
-            Loader.gType.plus(ObjectModel.TYPE_DISPLAY_OFFSET).store(0L);
-            Loader.gType.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).store(0L);       // bitmap built at fillTib
-            Loader.gType.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).store(0L);
-            DynamicTypeCheck.buildDisplay(Loader.gType, sr >= 0 ? ClassRegistry.clTab[sr].type : Address.zero());
-            buildRefMap(Loader.gType, sr >= 0 ? ClassRegistry.clTab[sr].type : Address.zero());   // GC reference map (adopted nodes carry
+            Loader.gBuild.type.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).store(0L);
+            Loader.gBuild.type.plus(ObjectModel.TYPE_DEPTH_OFFSET).store(0L);
+            Loader.gBuild.type.plus(ObjectModel.TYPE_DISPLAY_OFFSET).store(0L);
+            Loader.gBuild.type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).store(0L);       // bitmap built at fillTib
+            Loader.gBuild.type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).store(0L);
+            DynamicTypeCheck.buildDisplay(Loader.gBuild.type, sr >= 0 ? ClassRegistry.clTab[sr].type : Address.zero());
+            buildRefMap(Loader.gBuild.type, sr >= 0 ? ClassRegistry.clTab[sr].type : Address.zero());   // GC reference map (adopted nodes carry
         }                                                        //   the writer's -- never overwrite it)
-        Loader.gTib = Heap.allocData((1 + Loader.gvCount) * 8);
-        Loader.gTib.store(Loader.gType);                      // TIB[0] = Type (slots filled by fillTib)
+        Loader.gBuild.tib = Heap.allocData((1 + VtableLayout.gvCount) * 8);
+        Loader.gBuild.tib.store(Loader.gBuild.type);                      // TIB[0] = Type (slots filled by fillTib)
     }
 
     /**
@@ -237,9 +237,9 @@ final class TibBuilder
     /** Whether vtable slot {@code s} of the class being built is Object's hashCode, equals or toString. */
     private static boolean isBakedDispatchSlot(int s)
     {
-        Address b = Loader.gvTab[s].base;
-        int n = Loader.gvTab[s].name;
-        int d = Loader.gvTab[s].desc;
+        Address b = VtableLayout.gvTab[s].base;
+        int n = VtableLayout.gvTab[s].name;
+        int d = VtableLayout.gvTab[s].desc;
         return (Utf8.utf8IsAtBase(b, n, Magic.bytes("hashCode")) && Utf8.utf8IsAtBase(b, d, Magic.bytes("()I")))
                 || (Utf8.utf8IsAtBase(b, n, Magic.bytes("equals")) && Utf8.utf8IsAtBase(b, d, Magic.bytes("(Ljava/lang/Object;)Z")))
                 || (Utf8.utf8IsAtBase(b, n, Magic.bytes("toString")) && Utf8.utf8IsAtBase(b, d, Magic.bytes("()Ljava/lang/String;")));
@@ -249,7 +249,7 @@ final class TibBuilder
     static void fillTib()
     {
         int s = 0;
-        while (s < Loader.gvCount)
+        while (s < VtableLayout.gvCount)
         {
             long b = Loader.slotBuf(s);
             // A HOLE IN hashCode/equals/toString IS A WILD BRANCH, not a trap. Those three are what BAKED code
@@ -277,7 +277,7 @@ final class TibBuilder
             {
                 b = Loader.mintPrunedStub(s);
             }
-            Loader.gTib.plus(8).plus(s * 8).store(b);            // TIB[1+slot] = impl code
+            Loader.gBuild.tib.plus(8).plus(s * 8).store(b);            // TIB[1+slot] = impl code
             s += 1;
         }
         long dir = InterfaceInvocation.buildItableDir();                    // M8 itables: per-interface tables (writer numbering)
@@ -287,8 +287,8 @@ final class TibBuilder
             InterfaceInvocation.instImapReg[InterfaceInvocation.instImapN] = ClassRegistry.classRegByName(Loader.gView.thisNameOff);
             InterfaceInvocation.instImapN += 1;
         }
-        Loader.gType.plus(16).store(dir);                 // TYPE_ITABLE_DIR_OFFSET
-        DynamicTypeCheck.buildImplBitmap(Loader.gType);                         // O(1) interface checks: super bits | dir bits
+        Loader.gBuild.type.plus(16).store(dir);                 // TYPE_ITABLE_DIR_OFFSET
+        DynamicTypeCheck.buildImplBitmap(Loader.gBuild.type);                         // O(1) interface checks: super bits | dir bits
     }
 
     static Address objectTypeAddr()

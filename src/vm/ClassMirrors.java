@@ -312,7 +312,7 @@ final class ClassMirrors
 
     static long selfClassMirror()
     {
-        return classMirror(Loader.gType);
+        return classMirror(Loader.gBuild.type);
     }
 
     static long classLiteral(int classCp)

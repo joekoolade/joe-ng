@@ -89,15 +89,6 @@ public final class Loader
      */
     static ClassBuild gBuild;
     static Address gBsmOff;      // address of the BootstrapMethods attr body (num_bootstrap_methods), or 0
-    // Flattened vtable of the class being built: superclass slots first, overrides
-    // replacing in place, new methods appended. Each slot's signature may live in a
-    // superclass's blob (gvBase), and its implementation is either an inherited
-    // compiled buffer (gvImplBuf) or one of this class's own methods (gvImplCode).
-    static final int MAXMV = 512;
-    static VtSlot[] gvTab;  // the building class's flattened vtable (reified; reused per class)
-    static int gvCount;     // flattened vtable size
-    static Address gTib;       // this class's TIB { Type, vtable... }, built before emit
-    static Address gType;      // this class's Type { superType } — a metal instanceof chain node
 
 
 
@@ -1632,11 +1623,11 @@ public final class Loader
         VtableLayout.vtBuf = new long[VtableLayout.MAXVT];
         VtableLayout.vtCount = 0;
         VtableLayout.vtBucket = null;                                // the class-name index is keyed by table INDEX: rebuild
-        gvTab = new VtSlot[MAXMV];
+        VtableLayout.gvTab = new VtSlot[VtableLayout.MAXMV];
         int gvi = 0;
-        while (gvi < MAXMV)                             // pre-fill: slots are overwritten (reused) per class
+        while (gvi < VtableLayout.MAXMV)                             // pre-fill: slots are overwritten (reused) per class
         {
-            gvTab[gvi] = new VtSlot();
+            VtableLayout.gvTab[gvi] = new VtSlot();
             gvi += 1;
         }
         InterfaceInvocation.ifBase = AddressArray.create(InterfaceInvocation.MAXIFM);
@@ -3367,7 +3358,7 @@ public final class Loader
         }
         gBuild.sfCount = slot;
         gBuild.ifCount = islot;                               // total: inherited + own
-        gvCount = 0;                                    // no vtable unless parseVtable runs
+        VtableLayout.gvCount = 0;                                    // no vtable unless parseVtable runs
         gBuild.statics = Heap.allocData(slot * 8 + 8);
         int z = 0;
         while (z < slot)
@@ -4165,7 +4156,7 @@ public final class Loader
         if (!compileReuseTib)                           // two-phase clinit: the class's TIB already exists (clTab[reg].tib,
         {                                               // pinned in phase A) and gets filled by loadBodies' compileClass
             TibBuilder.buildTib();                                 // -- rebuilding here would allocate a THROWAWAY TIB and leave
-        }                                               // gTib pointing at it, so compileClass fills the wrong TIB.
+        }                                               // gBuild.tib pointing at it, so compileClass fills the wrong TIB.
         i = 0;
         while (i < mCount)                              // emit
         {
@@ -4175,7 +4166,7 @@ public final class Loader
         publishEmitted();                               // the bodies this wrote, NOT the whole arena
         return mBuf[0];
     }
-    // When set, compile() reuses the caller's already-allocated gTib (two-phase clinit) instead of rebuilding it.
+    // When set, compile() reuses the caller's already-allocated gBuild.tib (two-phase clinit) instead of rebuilding it.
     //
     // Every setter RESTORES the value it found rather than clearing it, because compiles nest: lazyCompileLocked's
     // pull-and-retry drains pending pulls, each load's loadBodies used to end with `= false`, and the retry then
@@ -5043,9 +5034,9 @@ public final class Loader
             // (superType = Object's shared node; nothing reads an interface Type's instanceSize).
             VtableLayout.findVtSig();                                // adoption entry (itparity compares later, post-fill)
             adoptStatics();                             // interface constants share the writer block too
-            if (!gAdoptType.isZero())
+            if (!gBuild.adoptType.isZero())
             {
-                gType = gAdoptType;
+                gBuild.type = gBuild.adoptType;
                 if (LOAD_LOG)
                 {
                     Uart.write(Magic.bytes("  typeadopt "));
@@ -5055,19 +5046,19 @@ public final class Loader
             }
             else
             {
-                gType = Heap.allocData(ObjectModel.TYPE_SIZE);
-                gType.store(0L);           // instanceSize (not instantiated)
-                gType.plus(8).store(0L);           // superType
-                gType.plus(16).store(0L);          // no itableDir
-                gType.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).store(0L);
-                gType.plus(ObjectModel.TYPE_DEPTH_OFFSET).store(-1L);   // interface: never in a chain
-                gType.plus(ObjectModel.TYPE_DISPLAY_OFFSET).store(0L);
+                gBuild.type = Heap.allocData(ObjectModel.TYPE_SIZE);
+                gBuild.type.store(0L);           // instanceSize (not instantiated)
+                gBuild.type.plus(8).store(0L);           // superType
+                gBuild.type.plus(16).store(0L);          // no itableDir
+                gBuild.type.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).store(0L);
+                gBuild.type.plus(ObjectModel.TYPE_DEPTH_OFFSET).store(-1L);   // interface: never in a chain
+                gBuild.type.plus(ObjectModel.TYPE_DISPLAY_OFFSET).store(0L);
                 // O(1) interface checks: number this interface from the shared counter (the writer
                 // used 1..N-1; IDs >= 128 stay 0 = unnumbered -> those targets keep the dir walk).
                 long nid = VM.ifaceIdNext;
-                gType.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).store(
+                gBuild.type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).store(
                               nid > 0L && nid < 128L ? nid : 0L);
-                gType.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).store(0L);
+                gBuild.type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).store(0L);
                 if (nid > 0L && nid < 128L)
                 {
                     VM.ifaceIdNext = nid + 1L;
@@ -5079,14 +5070,14 @@ public final class Loader
             ClassRegistry.clTab[ClassRegistry.clCount].nameOff = gView.thisNameOff;
             ClassRegistry.clTab[ClassRegistry.clCount].nameHash = Utf8.utf8Hash(gView.base, gView.thisNameOff);   // folded once; see RVMClass.nameHash
             ClassRegistry.clTab[ClassRegistry.clCount].tib = Address.zero();
-            ClassRegistry.clTab[ClassRegistry.clCount].type = gType;
+            ClassRegistry.clTab[ClassRegistry.clCount].type = gBuild.type;
             ClassRegistry.clTab[ClassRegistry.clCount].fieldCount = 0;
             ClassRegistry.clTab[ClassRegistry.clCount].vtCount = 0;
             ClassRegistry.clTab[ClassRegistry.clCount].statics = gBuild.statics;              // interface constants block (reused by its phase-B bodies)
             ClassRegistry.clTab[ClassRegistry.clCount].vtStart = VtableLayout.vtCount;               // no vtable entries appended for an interface
             ClassRegistry.clTab[ClassRegistry.clCount].isIface = true;
-            ClassRegistry.clTab[ClassRegistry.clCount].ifmStart = gIfmStart;            // the flattened per-interface method run
-            ClassRegistry.clTab[ClassRegistry.clCount].ifmCount = gIfmCount;            //   = this interface's itable slot numbering
+            ClassRegistry.clTab[ClassRegistry.clCount].ifmStart = gBuild.ifmStart;            // the flattened per-interface method run
+            ClassRegistry.clTab[ClassRegistry.clCount].ifmCount = gBuild.ifmCount;            //   = this interface's itable slot numbering
             ClassRegistry.clTab[ClassRegistry.clCount].superNameOff = gView.superNameOff;
             ClassRegistry.clTab[ClassRegistry.clCount].absentSuperOff = gBuild.absentSuperOff;          // an interface extending one that cannot load
             ClassRegistry.clTab[ClassRegistry.clCount].superReg = ClassRegistry.classRegByName(gView.superNameOff);   // an interface's super is Object (-1); kept for symmetry
@@ -5106,7 +5097,7 @@ public final class Loader
         VtableLayout.parseVtable(bytes);                             // flatten against the superclass: SLOT numbering (bufs still 0)
         VtableLayout.checkVtParity();                                // M8 unification: writer/loader slot numbering must agree
         adoptStatics();                                 // M8 statics unification: ONE static block per baked class
-        TibBuilder.allocTib();                                     // allocate Type + empty TIB at a stable address (gTib)
+        TibBuilder.allocTib();                                     // allocate Type + empty TIB at a stable address (gBuild.tib)
         registerClassStructure();                       // class + fields + statics + vtable STRUCTURE (bufs 0)
         ClassRegistry.clTab[ClassRegistry.clCount - 1].modifiers = classModifiers;     // cached Class.getModifiers() (captured post-cp, no re-parse)
         ClassRegistry.clTab[ClassRegistry.clCount - 1].state = RVMClass.ST_RESOLVED;    // lifecycle: structure complete
@@ -5132,10 +5123,10 @@ public final class Loader
         Indy.findBootstrapMethods();
         if (ClassRegistry.clTab[reg].isIface)
         {
-            gType = ClassRegistry.clTab[reg].type;                        // restore the interface's phase-A Type so a default method's
-                                                        // self-reference (typeOfClass -> gType, e.g. Map.putIfAbsent
+            gBuild.type = ClassRegistry.clTab[reg].type;                        // restore the interface's phase-A Type so a default method's
+                                                        // self-reference (typeOfClass -> gBuild.type, e.g. Map.putIfAbsent
                                                         // calling this.get()) bakes the REAL interface Type -- else
-                                                        // it bakes a stale gType and the implementor's itable-dir
+                                                        // it bakes a stale Type and the implementor's itable-dir
                                                         // walk never matches (invokeinterface sentinel NPE).
             // AND ITS INITIALIZER. An interface with a constant whose value is not a compile-time constant
             // has a <clinit> exactly like a class (JVMS 4.7 / 5.5: `LauncherConfig DEFAULT = builder()
@@ -5153,16 +5144,16 @@ public final class Loader
         long lbB = Magic.readCNTPCT_EL0();
         pVtableT += lbB - lb1;
         lbParseT += lbB - lb1;
-        gType = ClassRegistry.clTab[reg].type;                            // restore this class's Type + TIB (allocated in phase A)
-        gTib = ClassRegistry.clTab[reg].tib;
+        gBuild.type = ClassRegistry.clTab[reg].type;                            // restore this class's Type + TIB (allocated in phase A)
+        gBuild.tib = ClassRegistry.clTab[reg].tib;
         boolean reuseWas = compileReuseTib;              // a nested load resets it: restore, never clear
-        compileReuseTib = true;                         // keep runClinit's compile() from reallocating gTib (would
+        compileReuseTib = true;                         // keep runClinit's compile() from reallocating gBuild.tib (would
         long lb2 = Magic.readCNTPCT_EL0();
         ClassInitializer.runClinit(bytes);                               //   leave compileClass filling a throwaway TIB, not clTab[reg].tib)
         lbClinitT += Magic.readCNTPCT_EL0() - lb2;
         compileReuseTib = reuseWas;
-        gType = ClassRegistry.clTab[reg].type;                            // (runClinit's compile leaves gType/gTib alone now, but be safe)
-        gTib = ClassRegistry.clTab[reg].tib;
+        gBuild.type = ClassRegistry.clTab[reg].type;                            // (runClinit's compile leaves gBuild.type/tib alone now, but be safe)
+        gBuild.tib = ClassRegistry.clTab[reg].tib;
         provideKnownStatics();                          // seed static tables a skipped <clinit> would have built
         long lb3 = Magic.readCNTPCT_EL0();
         compileClass(bytes);                            // compile all methods; fillTib fills the (phase-A-allocated) TIB
@@ -6372,17 +6363,17 @@ public final class Loader
         if (ClassRegistry.clCount >= ClassRegistry.MAXCLASS) { capHalt(Magic.bytes("ClassRegistry.MAXCLASS"), ClassRegistry.clCount); }              // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
         if (Statics.sgCount + gBuild.sfCount >= MethodRegistry.MAXREG) { capHalt(Magic.bytes("MethodRegistry.MAXREG"), Statics.sgCount); }       // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
         if (FieldRegistry.fldCount + gBuild.ifCount >= FieldRegistry.MAXFIELD) { capHalt(Magic.bytes("FieldRegistry.MAXFIELD"), FieldRegistry.fldCount); } // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
-        if (VtableLayout.vtCount + gvCount >= VtableLayout.MAXVT) { capHalt(Magic.bytes("VtableLayout.MAXVT"), VtableLayout.vtCount); }          // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
+        if (VtableLayout.vtCount + VtableLayout.gvCount >= VtableLayout.MAXVT) { capHalt(Magic.bytes("VtableLayout.MAXVT"), VtableLayout.vtCount); }          // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
         ClassRegistry.clTab[ClassRegistry.clCount] = new RVMClass();
         ClassRegistry.clTab[ClassRegistry.clCount].state = RVMClass.ST_LOADED;
         ClassRegistry.clTab[ClassRegistry.clCount].base = gView.base;
         ClassRegistry.clTab[ClassRegistry.clCount].nameOff = gView.thisNameOff;
         ClassRegistry.clTab[ClassRegistry.clCount].nameHash = Utf8.utf8Hash(gView.base, gView.thisNameOff);       // folded once; see RVMClass.nameHash
-        ClassRegistry.clTab[ClassRegistry.clCount].tib = gTib;
-        ClassRegistry.clTab[ClassRegistry.clCount].type = gType;
+        ClassRegistry.clTab[ClassRegistry.clCount].tib = gBuild.tib;
+        ClassRegistry.clTab[ClassRegistry.clCount].type = gBuild.type;
         ClassRegistry.clTab[ClassRegistry.clCount].absentSuperOff = gBuild.absentSuperOff;
         ClassRegistry.clTab[ClassRegistry.clCount].fieldCount = gBuild.ifCount;
-        ClassRegistry.clTab[ClassRegistry.clCount].vtCount = gvCount;
+        ClassRegistry.clTab[ClassRegistry.clCount].vtCount = VtableLayout.gvCount;
         ClassRegistry.clTab[ClassRegistry.clCount].statics = gBuild.statics;
         ClassRegistry.clTab[ClassRegistry.clCount].vtStart = VtableLayout.vtCount;                   // this class's slots occupy vt[VtableLayout.vtCount .. VtableLayout.vtCount+gvCount)
         ClassRegistry.clTab[ClassRegistry.clCount].isIface = false;
@@ -6396,7 +6387,7 @@ public final class Loader
             Uart.write(Magic.bytes("  C "));
             writeName(gView.base.plus(gView.thisNameOff + 2), u2(gView.base.plus(gView.thisNameOff)));
             Uart.putc(0x20);
-            VM.printDec(gvCount);
+            VM.printDec(VtableLayout.gvCount);
             Uart.putc(0x0A);
         }
         InterfaceInvocation.captureDirectIfaces();
@@ -6420,13 +6411,13 @@ public final class Loader
             s += 1;
         }
         int v = 0;
-        while (v < gvCount)                            // register the whole flattened vtable STRUCTURE (bufs 0 for now)
+        while (v < VtableLayout.gvCount)                            // register the whole flattened vtable STRUCTURE (bufs 0 for now)
         {
             VtableLayout.vtClassBase.set(VtableLayout.vtCount, gView.base);
             VtableLayout.vtClassOff[VtableLayout.vtCount] = gView.thisNameOff;
-            VtableLayout.vtNameBase.set(VtableLayout.vtCount, gvTab[v].base);           // signature blob (a super's, for inherited slots)
-            VtableLayout.vtNameOff[VtableLayout.vtCount] = gvTab[v].name;
-            VtableLayout.vtDescOff[VtableLayout.vtCount] = gvTab[v].desc;
+            VtableLayout.vtNameBase.set(VtableLayout.vtCount, VtableLayout.gvTab[v].base);           // signature blob (a super's, for inherited slots)
+            VtableLayout.vtNameOff[VtableLayout.vtCount] = VtableLayout.gvTab[v].name;
+            VtableLayout.vtDescOff[VtableLayout.vtCount] = VtableLayout.gvTab[v].desc;
             VtableLayout.vtSlot[VtableLayout.vtCount] = v;
             VtableLayout.vtBuf[VtableLayout.vtCount] = 0L;                        // filled by fillClassVtBuf once the bodies are compiled
             VtableLayout.vtCount += 1;
@@ -6440,10 +6431,6 @@ public final class Loader
      * index (deduped by name+descriptor). Implementors later build an imap indexed
      * by it, and {@code invokeinterface} resolves a call site to the same index.
      */
-    // M8 itables: the current interface's flattened-run bounds, left by registerInterface for the
-    // RVMClass fill (registerInterface runs before the clTab entry exists).
-    static int gIfmStart;
-    static int gIfmCount;
 
 
     static int logClinit;                                     // #43 diagnostic: when != 0, name each <clinit> as it runs
@@ -7180,13 +7167,6 @@ public final class Loader
      * slot signatures) verify OUR freshly-built flattening slot-for-slot at structure time. A
      * divergence prints loudly BEFORE any cross-world dispatch can land on the wrong slot.
      */
-    // M8 Type adoption: the writer's Type node for the class currently in phase A (0 = none) --
-    // set by checkVtParity from the signature table, consumed by allocTib so a baked class has
-    // ONE Type across both worlds (cross-world instanceof/checkcast compare equal pointers).
-    static Address gAdoptType;
-
-    static Address gAdoptStatics;  // M8 statics unification: the writer's dense per-class block (0 = none)
-    static int gAdoptStaticCount;   // ... its declared-static slot count (guard vs gBuild.sfCount)
 
 
     /** M8 statics unification: replace the freshly-allocated gBuild.statics with the writer's dense
@@ -7196,25 +7176,25 @@ public final class Loader
      *  keeps the loader block (safe degrade) and prints the divergence. */
     private static void adoptStatics()
     {
-        if (gAdoptStatics.isZero())
+        if (gBuild.adoptStatics.isZero())
         {
             return;
         }
-        if (gAdoptStaticCount != gBuild.sfCount)
+        if (gBuild.adoptStaticCount != gBuild.sfCount)
         {
             if (LOAD_LOG)
             {
                 Uart.write(Magic.bytes("  staticadopt "));
                 printNameAt(gView.base, gView.thisNameOff);
                 Uart.write(Magic.bytes(" DIFF "));
-                VM.printDec(gAdoptStaticCount);
+                VM.printDec(gBuild.adoptStaticCount);
                 Uart.putc(0x2F);
                 VM.printDec(gBuild.sfCount);
                 Uart.putc(0x0A);
             }
             return;
         }
-        gBuild.statics = gAdoptStatics;
+        gBuild.statics = gBuild.adoptStatics;
     }
 
 
@@ -7533,19 +7513,19 @@ public final class Loader
     /** Compiled buffer for flattened slot {@code s}: inherited (pre-resolved) or this class's own. */
     static long slotBuf(int s)
     {
-        if (gvTab[s].implBuf != 0L)
+        if (VtableLayout.gvTab[s].implBuf != 0L)
         {
-            return gvTab[s].implBuf;                         // inherited from a superclass
+            return VtableLayout.gvTab[s].implBuf;                         // inherited from a superclass
         }
-        if (gvTab[s].implCode == 0L)
+        if (VtableLayout.gvTab[s].implCode == 0L)
         {
             // No Code attribute: a NATIVE instance method. Its slot would stay 0 and a call through it would
             // hit the null-vtable guard (an AIOOBE with no hint of what was missing) -- which is what
             // `new Attributes$Name(...)` -> `String.intern()` did. Provided natives already have VM helpers;
             // link one here so a VIRTUAL call reaches it, as invokestatic/invokespecial already do.
-            return nativeBufAt(gView.base, gView.thisNameOff, gvTab[s].base, gvTab[s].name);
+            return nativeBufAt(gView.base, gView.thisNameOff, VtableLayout.gvTab[s].base, VtableLayout.gvTab[s].name);
         }
-        return bufOf(gvTab[s].implCode);                     // this class's own method
+        return bufOf(VtableLayout.gvTab[s].implCode);                     // this class's own method
     }
 
     /**
@@ -7558,7 +7538,7 @@ public final class Loader
      */
     static long mintPrunedStub(int s)
     {
-        long code = gvTab[s].implCode;
+        long code = VtableLayout.gvTab[s].implCode;
         if (code == 0L)
         {
             // slotBuf answers 0 from two paths, and neither has bytecode to defer to. The common one is an
@@ -7591,7 +7571,7 @@ public final class Loader
         LazyCompiler.lzTab[idx].len = pdLen[pd];
         LazyCompiler.lzTab[idx].reg = ClassRegistry.classRegByName(gView.thisNameOff);
         LazyCompiler.lzTab[idx].nameOff = 0;
-        LazyCompiler.lzTab[idx].descOff = gvTab[s].desc;
+        LazyCompiler.lzTab[idx].descOff = VtableLayout.gvTab[s].desc;
         LazyCompiler.lzTab[idx].slot = 0L;                               // shared stub buffer: no single slot to patch
         LazyCompiler.lzTab[idx].code = code;
         if (LazyCompiler.lzN >= LazyCompiler.lzNHigh)
@@ -7600,14 +7580,14 @@ public final class Loader
         }
         LazyCompiler.lzTab[idx].codeLen = ClassBytes.codeLength(code);
         LazyCompiler.lzTab[idx].isStatic = 0;
-        LazyCompiler.lzTab[idx].isSync = gvTab[s].isSync;                // else this body compiles with NO monitor
+        LazyCompiler.lzTab[idx].isSync = VtableLayout.gvTab[s].isSync;                // else this body compiles with NO monitor
         LazyCompiler.lzTab[idx].cache = 0L;
         LazyCompiler.lzN += 1;
         Address buf = Heap.allocCode(32);
         LazyCompiler.noteStub(buf, idx);
         Heap.pinCodeAt(buf);
         LazyCompiler.lzTab[idx].stubLit = LazyCompiler.writeLazyStub(buf, idx).toLong();
-        gvTab[s].implBuf = buf.toLong();                // a class implementing N interfaces that each declare
+        VtableLayout.gvTab[s].implBuf = buf.toLong();                // a class implementing N interfaces that each declare
         return buf.toLong();                            //   this method would otherwise mint N identical stubs
     }
 
@@ -7917,7 +7897,7 @@ public final class Loader
      * implicit monitor (JVMS 2.11.10). 0 when there is no Type to mirror, which is what lets the compiler
      * decline to emit an acquire it could never pair with a release.
      *
-     * <p>No constant-pool index is needed and none is wanted: {@code gType} IS this class's Type node, built
+     * <p>No constant-pool index is needed and none is wanted: {@code gBuild.type} IS this class's Type node, built
      * by {@code buildTib} in phase A and restored by {@code restoreCtxForCompile} for every lazy compile --
      * which is exactly the self-reference case {@code typeOfClass} already special-cases, because the class
      * is not in the registry until after its own compile. Going through the constant pool would ask the

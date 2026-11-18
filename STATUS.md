@@ -4,6 +4,22 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **LOADER REFACTOR PHASE 2, INCREMENT P2-4c: Type/TIB on `ClassBuild`, `RVMClass.resumeBuild` (2026-11-18).**
+  Completes P2-4.
+  - **Onto `ClassBuild`:** `gType`, `gTib`, `gAdoptType`, `gAdoptStatics`, `gAdoptStaticCount`, `gIfmStart`,
+    `gIfmCount` -- every producer runs after `parseFields` makes the build. One behaviour change, checked caller
+    by caller: `gType`/`gTib` used to SURVIVE a `parseFields` and now start at 0. Every caller sets them itself
+    except `loadBodies`' interface branch, which never set the TIB -- it inherited another class's and now reads
+    0, the right value for an interface.
+  - **`gvTab`/`gvCount`/`MAXMV` moved to `VtableLayout`, not `ClassBuild`:** `gvTab` is 512 preallocated slot
+    objects reused per class; per-build it would allocate 512 objects per parse. `VtableLayout` builds it.
+  - **`RVMClass.resumeBuild(blob)`** (first lifecycle method on the registry entry): after a reparse, put back
+    phase A's statics block, BootstrapMethods location, vtable scratch, Type and TIB. Replaces the same five
+    statements copied at four on-demand compile entries (`restoreCtxForCompile`, two more in `LazyCompiler`,
+    `Reflection`). `gBsmOff` stays a Loader static: `Closure` sets it after a peek parse with no `parseFields`.
+  - **Image** 39,548,136 bytes; Loader 9,099 lines.
+  - **Validation:** `make test` + overlaycheck clean, no helper-stash MISS; 41 probes pass (P2-4b's 39 +
+    ArrayCovariance, ArrayTypeIdentity). Not run: speed A/B, full regression, suite, JUnit, Pi.
 - **LOADER REFACTOR PHASE 2, INCREMENT P2-4b: the field layout is a `ClassBuild` (2026-11-18).** Deleted nine
   statics: `gsfName`, `gsfAccess`, `gsfCount`, `gifName`, `gifAccess`, `gifDescOff`, `gifCount`, `gStatics`,
   `gAbsentSuperOff`. New `ClassBuild` (`vm/`) holds the static and instance field tables, the statics block and an
