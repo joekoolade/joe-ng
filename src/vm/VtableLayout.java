@@ -94,12 +94,12 @@ final class VtableLayout
     static void parseVtable(Address bytes)
     {
         Loader.gvCount = 0;
-        int superReg = ClassRegistry.classRegByName(Loader.gSuperNameOff);
+        int superReg = ClassRegistry.classRegByName(Loader.gView.superNameOff);
         if (superReg >= 0)
         {
-            inheritVtable(Loader.gSuperNameOff);               // copy the super's flattened slots
+            inheritVtable(Loader.gView.superNameOff);               // copy the super's flattened slots
         }
-        Address p = Loader.gMethodsStart;
+        Address p = Loader.gView.methodsStart;
         int mcount = u2(p);
         p = p.plus(2);
         int m = 0;
@@ -277,7 +277,7 @@ final class VtableLayout
      */
     static int exactVtableSlot(int idx)
     {
-        if (Loader.utf8Eq(Loader.refClassNameOff(idx), Loader.gThisNameOff))     // the class being compiled: its own flattened vtable
+        if (Loader.utf8Eq(Loader.refClassNameOff(idx), Loader.gView.thisNameOff))     // the class being compiled: its own flattened vtable
         {
             int own = findVtSlot(Loader.mrefNameOff(idx), Loader.mrefDescOff(idx));
             if (own >= 0)
@@ -390,7 +390,7 @@ final class VtableLayout
         while (i < n)
         {
             Address e = Address.fromLong(VM.vtSigTable + (long) i * 48L);
-            if (Loader.utf8EqAt(Loader.gView.base, Loader.gThisNameOff, e.loadAddress(), 0))
+            if (Loader.utf8EqAt(Loader.gView.base, Loader.gView.thisNameOff, e.loadAddress(), 0))
             {
                 gVtSigSlots = e.plus(8L).loadLong();
                 gVtSigCount = (int) e.plus(16L).loadLong();
@@ -418,7 +418,7 @@ final class VtableLayout
         if (Loader.LOAD_LOG)                                   // header only; every DIFF below prints its own
         {
             Uart.write(Magic.bytes("  vtparity "));
-            Loader.printNameAt(Loader.gView.base, Loader.gThisNameOff);
+            Loader.printNameAt(Loader.gView.base, Loader.gView.thisNameOff);
         }
         if (count != Loader.gvCount)
         {
@@ -488,7 +488,7 @@ final class VtableLayout
         if (!Loader.LOAD_LOG)
         {
             Uart.write(Magic.bytes("  vtparity "));
-            Loader.printNameAt(Loader.gView.base, Loader.gThisNameOff);
+            Loader.printNameAt(Loader.gView.base, Loader.gView.thisNameOff);
         }
     }
 
@@ -511,7 +511,7 @@ final class VtableLayout
         // and lowerInvokeVirtual takes its existing late-resolve path -- whose register layout already
         // matches, since an invokevirtual passes (x0=handle, x1=holder, x2=value) and that IS the generated
         // static's signature. virtualResolve then resolves against the receiver's own class.
-        if (Loader.utf8Eq(Loader.refClassNameOff(idx), Loader.gThisNameOff))
+        if (Loader.utf8Eq(Loader.refClassNameOff(idx), Loader.gView.thisNameOff))
         {
             int s = findVtSlot(Loader.mrefNameOff(idx), Loader.mrefDescOff(idx));   // this class's flattened vtable
             if (s >= 0)

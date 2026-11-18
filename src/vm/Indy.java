@@ -79,7 +79,7 @@ final class Indy
             dsVal = new long[MAXDSITE];
             dsDone = new int[MAXDSITE];
         }
-        int reg = ClassRegistry.classRegByNameAt(Loader.gView.base, Loader.gThisNameOff);
+        int reg = ClassRegistry.classRegByNameAt(Loader.gView.base, Loader.gView.thisNameOff);
         Address type = reg >= 0 ? ClassRegistry.clTab[reg].type : Address.zero();
         int i = 0;
         while (i < dsCount)                             // dedup: the compiler visits each site in both passes
@@ -202,7 +202,7 @@ final class Indy
     static void findBootstrapMethods()
     {
         Loader.gBsmOff = Address.zero();
-        Address p = Loader.gMethodsStart;                         // methods_count
+        Address p = Loader.gView.methodsStart;                         // methods_count
         int mcount = u2(p);
         p = p.plus(2);
         int m = 0;

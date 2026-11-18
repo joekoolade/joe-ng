@@ -454,7 +454,7 @@ final class Reflection
         }
         Address blob = ClassRegistry.clTab[ci].base;
         Loader.parseForMethods(blob, Loader.blobLenOf(blob));
-        Address p = Loader.gMethodsStart;
+        Address p = Loader.gView.methodsStart;
         int mcount = u2(p);
         p = p.plus(2);
         int nlen = (int) nameArr.toAddress().plus(16L).loadLong();
@@ -721,7 +721,7 @@ final class Reflection
         int len = Loader.blobLenOf(blob);
         Loader.parseConstPool(blob, len);
         Loader.parseFields();
-        int reg = ClassRegistry.classRegByName(Loader.gThisNameOff);
+        int reg = ClassRegistry.classRegByName(Loader.gView.thisNameOff);
         if (reg < 0)
         {
             return -1;
@@ -732,7 +732,7 @@ final class Reflection
         Loader.gType = ClassRegistry.clTab[reg].type;
         Loader.gTib = ClassRegistry.clTab[reg].tib;
         Loader.parseForMethods(blob, len);
-        Address p = Loader.gMethodsStart;
+        Address p = Loader.gView.methodsStart;
         int mcount = u2(p);
         p = p.plus(2);
         long code = 0L;
@@ -870,11 +870,11 @@ final class Reflection
     /**
      * Scan the class-level {@code InnerClasses} attribute for the entry whose {@code inner_class_info_index}
      * equals {@code thisClass}; return its {@code inner_class_access_flags}, or -1 if this class is not listed
-     * (a top-level class). Assumes {@code gMethodsStart}/{@code gView.cp} are current (post {@code parseForMethods}).
+     * (a top-level class). Assumes {@code gView.methodsStart}/{@code gView.cp} are current (post {@code parseForMethods}).
      */
     private static int innerAccessOf(int thisClass)
     {
-        Address p = Loader.gMethodsStart;
+        Address p = Loader.gView.methodsStart;
         int mcount = u2(p);
         p = p.plus(2);
         int m = 0;
@@ -977,7 +977,7 @@ final class Reflection
         }
         Address base = ClassRegistry.clTab[ci].base;
         Loader.parseForMethods(base, Loader.blobLenOf(base));
-        Address p = Loader.gMethodsStart;
+        Address p = Loader.gView.methodsStart;
         int mcount = u2(p);
         p = p.plus(2);
         int seen = 0;
@@ -1014,7 +1014,7 @@ final class Reflection
         }
         Address base = ClassRegistry.clTab[ci].base;
         Loader.parseForMethods(base, Loader.blobLenOf(base));
-        Address p = Loader.gMethodsStart;
+        Address p = Loader.gView.methodsStart;
         int mcount = u2(p);
         p = p.plus(2);
         int seen = 0;

@@ -36,4 +36,21 @@ final class ClassFileView
     long[] litObj;    // per-entry ldc-String intern cache: the one interned object for that entry, or 0
     int cpCount;      // constant-pool entry count
     int afterCp;      // byte offset just past the constant pool
+
+    // THE CLASS HEADER, decoded once when the view is built (Loader.readHeader). Every one of these is a fixed fact
+    // about the blob, so it belongs to the view rather than to whichever parse ran last: before increment P2-4a they
+    // were the statics gClassModifiers/gIsInterface/gThisNameOff/gSuperNameOff/gImplIfName/gImplIfCount/
+    // gMethodsStart, set by parseFields/parseForMethods but NOT by parseConstPool -- so a caller that parsed another
+    // blob only to peek at it left them naming the previous class while gView named the new one.
+    int accessFlags;      // the class's access_flags, as stored (ACC_SUPER included)
+    int thisNameOff;      // Utf8 offset of this class's own name
+    int superNameOff;     // Utf8 offset of the superclass name, 0 for java/lang/Object
+    int[] implIfName;     // Utf8 offset of each directly implemented interface's name, in declaration order
+    Address methodsStart; // address of methods_count (just past the fields)
+
+    /** ACC_INTERFACE. */
+    boolean isInterface()
+    {
+        return (accessFlags & 0x0200) != 0;
+    }
 }

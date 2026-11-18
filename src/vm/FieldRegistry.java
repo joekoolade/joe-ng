@@ -160,7 +160,7 @@ final class FieldRegistry
     /** Instance-field byte offset for the field named by {@code *ref} index. */
     static int fieldOffsetOf(int idx)
     {
-        if (Loader.utf8Eq(Loader.refClassNameOff(idx), Loader.gThisNameOff))
+        if (Loader.utf8Eq(Loader.refClassNameOff(idx), Loader.gView.thisNameOff))
         {
             int nameOff = Loader.mrefNameOff(idx);                // Fieldref layout == Methodref layout
             int s = 0;
@@ -189,7 +189,7 @@ final class FieldRegistry
     {
         int classOff = Loader.refClassNameOff(idx);
         int nameOff = Loader.mrefNameOff(idx);
-        if (Loader.utf8Eq(classOff, Loader.gThisNameOff))
+        if (Loader.utf8Eq(classOff, Loader.gView.thisNameOff))
         {
             int s = 0;
             int n = isStatic ? Loader.gsfCount : Loader.gifCount;

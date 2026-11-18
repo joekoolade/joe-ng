@@ -167,7 +167,7 @@ final class MethodTableCache
             return false;
         }
         Loader.parseForMethods(Loader.pdBase.get(b), Loader.pdLen[b]);
-        Address p = Loader.gMethodsStart;
+        Address p = Loader.gView.methodsStart;
         int mcount = u2(p);
         p = p.plus(2);
         if (mtN + mcount > MAXMETH)

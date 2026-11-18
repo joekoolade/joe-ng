@@ -131,7 +131,7 @@ final class TibBuilder
      */
     static void allocTib()
     {
-        int sr = ClassRegistry.classRegByName(Loader.gSuperNameOff);
+        int sr = ClassRegistry.classRegByName(Loader.gView.superNameOff);
         // ObjectModel layout: Type = { instanceSize@0, superType@8, itableDir@16 } (24
         // bytes), so VM.instanceOf and the shared Baseline core read JIT'd objects the
         // same way they read image objects (M5.4.e). The itableDir slot currently holds
@@ -147,7 +147,7 @@ final class TibBuilder
             if (Loader.LOAD_LOG)
             {
                 Uart.write(Magic.bytes("  typeadopt "));
-                Loader.printNameAt(Loader.gView.base, Loader.gThisNameOff);
+                Loader.printNameAt(Loader.gView.base, Loader.gView.thisNameOff);
                 Uart.putc(0x0A);
             }
         }
@@ -284,7 +284,7 @@ final class TibBuilder
         if (dir != 0L && InterfaceInvocation.instImaps != null && InterfaceInvocation.instImapN < InterfaceInvocation.instImaps.length)
         {
             InterfaceInvocation.instImaps[InterfaceInvocation.instImapN] = dir;                 // capture the DIR for the post-phase-B default refill
-            InterfaceInvocation.instImapReg[InterfaceInvocation.instImapN] = ClassRegistry.classRegByName(Loader.gThisNameOff);
+            InterfaceInvocation.instImapReg[InterfaceInvocation.instImapN] = ClassRegistry.classRegByName(Loader.gView.thisNameOff);
             InterfaceInvocation.instImapN += 1;
         }
         Loader.gType.plus(16).store(dir);                 // TYPE_ITABLE_DIR_OFFSET

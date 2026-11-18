@@ -436,7 +436,7 @@ final class AnnotationInstances
             s += 1;
         }
         Loader.parseForMethods(ibase, Loader.blobLenOf(ibase));
-        Address p = Loader.gMethodsStart;
+        Address p = Loader.gView.methodsStart;
         int mcount = u2(p);
         p = p.plus(2);
         int m = 0;
