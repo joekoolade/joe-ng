@@ -4,6 +4,27 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **LOADER REFACTOR PHASE 2, INCREMENT P2-1: the parse cache as `ClassFileView` objects (2026-11-17).** The first
+  BEHAVIOUR change of the refactor (phase 1 only moved code). Phase 2 replaces the `g*` "current class" globals step by
+  step: P2-1 parse cache -> objects; P2-2 reads of the copied `g*` -> `gView` fields; P2-3 `findMethod` returns a
+  result; P2-4 per-class build state -> `ClassBuild`, lifecycle on `RVMClass`; P2-5 compile results returned.
+  - **`ClassFileView`** (new, `vm/`): one parsed blob -- `base`, `bytes`, `cp`, `cpTag`, `litObj`, `cpCount`,
+    `afterCp`. Replaces the seven parallel `pc*` arrays: the cache is now `pcBase` (kept as the flat scan key, so the
+    hot linear lookup gains no load) + `ClassFileView[] pcTab`. `gView` names the view the `g*` copies came from;
+    `useView` is the one place that sets those copies. The first reified loader object that holds ARRAYS -- safe
+    because the writer bakes a precise refMap for every image class (`ClassFile.refMap` marks `[`/`L` fields).
+  - **Publication is one reference store** of a fully built view (`pcTab[pcN] = v`, dsb, `pcN += 1`), where the
+    arrays needed six stores ordered ahead of the count. The acquire/release comments are updated to say so.
+    `DynamicLinker.blobDeclares` reads `pcTab[ci].cp` / `.afterCp`.
+  - **Image** 39,543,104 -> 39,543,336 bytes. Loader 9,122 -> 9,113 lines.
+  - **Validation:** `make test` + overlaycheck clean; 52 probes pass (every 4th non-solo probe at offset 1 + the race
+    probes ClinitRace/ChmRace/FirstCallRace/AtomicRace/SpawnRace + ConcatUtf16/RecordUtf16 for `litObj`).
+  - **Speed: a SMALL COST MAY BE REAL, cause NOT found.** SslEngineProbe, bare boot timer, ABBA, main control:
+    **test 100.4 / 103.6 / 106.1 / 105.2 s vs ctl 97.4 / 99.5 / 103.1 / 104.1 s** (test slower in 4/4 pairs, +2.8%
+    mean); with the hit path inlined (no call): **test 114.0 / 114.0 vs ctl 106.8 / 103.1 s**; under qprof at 0.25 s:
+    **test 107.84 vs ctl 106.66 s** with the same profile shape (Heap.alloc, lazyCompile, loadAll, compile within a
+    point or two; GC not in the top list). `putstatic` has no barrier, so the extra `gView` store cannot account for
+    it; inlining did not help and was reverted. Not run: full regression, suite, JUnit, Pi.
 - **LOADER REFACTOR, INCREMENT 8c: relocation and the demand-load closure out of `vm/Loader` (2026-11-17).** Pure
   move. Closes phase 1 of the refactor.
   - **`Relocator`**: recording unresolved call / tail / static sites (`rc*`, `rs*`, `relocRecording`), `patchRelocs`

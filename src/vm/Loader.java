@@ -60,16 +60,16 @@ public final class Loader
     // gcp/gcpTag/litObjByCp EVERY call; RTA (resolveVirtuals) re-parses each instantiated class's superclass
     // chain once per fixpoint iteration -> thousands of parses -> ~190 MiB of garbage byte[]/int[] copies that
     // fill the demand-load arena (blocker (e)). Cache the parse keyed by blob base so each blob is copied+parsed
-    // ONCE; later calls reuse it. The cache arrays are scanned loader statics, so the byte[]/int[] survive GC.
+    // ONCE; later calls reuse it. Each entry is one ClassFileView (reified from seven parallel arrays); pcTab is a
+    // scanned loader static, so the views -- and the byte[]/int[] they hold -- survive GC. pcBase stays a separate
+    // flat key array because the lookup is a hot linear scan, and keying it on pcTab[ci].base would add a load
+    // per step.
     private static final int MAXPARSECACHE = 2048;
-    static AddressArray pcBase; // cached blob base address (0 = empty slot)
-    private static byte[][] pcBytes; // the toBytes copy
-    static int[][] pcCp;     // cp entry offsets
-    private static int[][] pcCpTag;  // cp entry tags
-    private static long[][] pcLitObj;// per-entry ldc-String intern cache
-    private static int[] pcCpCount;  // cp entry count
-    static int[] pcAfterCp;  // offset past the constant pool
+    static AddressArray pcBase; // cached blob base address, the scan key (0 = empty slot)
+    static ClassFileView[] pcTab; // the cached view for pcBase[i]
     static int pcN;
+    /** The view the global parse context ({@code gbase}, {@code gcp}, ...) was last set from; null before any. */
+    static ClassFileView gView;
     private static int gClassModifiers;   // current class's access_flags (ACC_SUPER stripped) — cached into clModifiers
     static int gcodeLen;    // length of the located method's bytecode
     static int gMaxLocals;  // ... and its max_locals (frame sizing)
@@ -1633,13 +1633,9 @@ public final class Loader
         ArrayTypes.serializableTypeCache = Address.zero();
         ArrayTypes.arrayIfaceScanned = 0;
         pcBase = AddressArray.create(MAXPARSECACHE);
-        pcBytes = new byte[MAXPARSECACHE][];
-        pcCp = new int[MAXPARSECACHE][];
-        pcCpTag = new int[MAXPARSECACHE][];
-        pcLitObj = new long[MAXPARSECACHE][];
-        pcCpCount = new int[MAXPARSECACHE];
-        pcAfterCp = new int[MAXPARSECACHE];
+        pcTab = new ClassFileView[MAXPARSECACHE];
         pcN = 0;
+        gView = null;
         FieldRegistry.fldTab = new RVMField[FieldRegistry.MAXFIELD];
         FieldRegistry.fldIndexed = 0;                                 // beside the table it indexes, as sgIndexed is
         FieldRegistry.fldBucket = null;
@@ -3222,37 +3218,35 @@ public final class Loader
             // The scan above observed `pcN`; the reads below take the entry that count claims is filled. A
             // barrier orders accesses BEFORE it against accesses AFTER it, so one placed ahead of the scan
             // constrains neither against the other and does nothing at all. There is no dependency to fall
-            // back on either: `ci` is a local counter, so the only link from `pcN` to `&pcBytes[ci]` is a
+            // back on either: `ci` is a local counter, so the only link from `pcN` to `&pcTab[ci]` is a
             // CONTROL dependency, and AArch64 orders stores after one of those, never loads.
             //
             // Get it wrong and a task observes a PUBLISHED count with an UNPUBLISHED entry and takes
-            // `gbytes = pcBytes[ci]` as NULL -- which is the null-`gbytes` NPE inside `ClassReader.u1` this
-            // file records. **THE FIRST CUT OF THIS BARRIER WAS PLACED AHEAD OF THE SCAN**, where it could
-            // not meet the requirement its own comment stated, and it shipped through a review that quoted
-            // the placement accurately and called it correct. See the release side below.
+            // `pcTab[ci]` (before increment P2-1, `pcBytes[ci]`) as NULL -- the null-`gbytes` NPE inside
+            // `ClassReader.u1` this file records. **THE FIRST CUT OF THIS BARRIER WAS PLACED AHEAD OF THE
+            // SCAN**, where it could not meet the requirement its own comment stated, and it shipped through a
+            // review that quoted the placement accurately and called it correct. See the release side below.
             Magic.dsb();
             pcHits += 1;
-            gbytes = pcBytes[ci];
-            gcp = pcCp[ci];
-            gcpTag = pcCpTag[ci];
-            litObjByCp = pcLitObj[ci];
-            gcpCount = pcCpCount[ci];
-            gAfterCp = pcAfterCp[ci];
-            gp = base.plus(gAfterCp);
+            useView(pcTab[ci]);
             return;
         }
-        gbytes = toBytes(base, len);
-        gcpCount = ClassReader.cpCount(gbytes);
-        gcp = new int[gcpCount];
-        gcpTag = new int[gcpCount];
-        litObjByCp = new long[gcpCount];                // per-blob ldc-String intern cache (one object per cp entry)
-        gAfterCp = ClassReader.constantPool(gbytes, gcp, gcpTag);   // stable: gp is later reused as a walk cursor
-        gp = base.plus(gAfterCp);
+        ClassFileView v = new ClassFileView();
+        v.base = base;
+        v.bytes = toBytes(base, len);
+        v.cpCount = ClassReader.cpCount(v.bytes);
+        v.cp = new int[v.cpCount];
+        v.cpTag = new int[v.cpCount];
+        v.litObj = new long[v.cpCount];                 // per-blob ldc-String intern cache (one object per cp entry)
+        v.afterCp = ClassReader.constantPool(v.bytes, v.cp, v.cpTag);   // stable: gp is later reused as a walk cursor
+        useView(v);
         // RELEASE-PUBLISH, AND THE ORDER IS THE WHOLE POINT. `pcN` is incremented LAST so a reader either
         // sees the entry complete or does not see it at all -- which is correct on a machine that keeps
         // stores in program order, and this is not one. AArch64 may make the `pcN += 1` visible to another
-        // core BEFORE the `pcBytes[pcN] = ...` beside it, and a reader that lands in that window takes a
-        // NULL out of a slot whose count says it is filled.
+        // core BEFORE the `pcTab[pcN] = v` beside it, and a reader that lands in that window takes a
+        // NULL out of a slot whose count says it is filled. (Before increment P2-1 the entry was SIX stores
+        // into parallel arrays -- `pcBytes[pcN] = ...` and its siblings -- each needing that ordering; it is
+        // now one reference store of a view built completely beforehand.)
         //
         // THAT IS A CANDIDATE MECHANISM FOR A RECORDED FAILURE THIS FILE COULD NOT EXPLAIN: the contended
         // launcher arm dies at batch 21 with an NPE inside `ClassReader.u1` whose null argument is
@@ -3267,15 +3261,27 @@ public final class Loader
         if (pcN < MAXPARSECACHE)                         // remember it: RTA/phase-A/phase-B all re-parse this blob
         {
             pcBase.set(pcN, base);
-            pcBytes[pcN] = gbytes;
-            pcCp[pcN] = gcp;
-            pcCpTag[pcN] = gcpTag;
-            pcLitObj[pcN] = litObjByCp;
-            pcCpCount[pcN] = gcpCount;
-            pcAfterCp[pcN] = gAfterCp;
-            Magic.dsb();                                 // every field of the entry lands BEFORE the count
-            pcN += 1;                                    //   that makes it reachable (see above)
+            pcTab[pcN] = v;                              // the view is complete before this one store publishes it
+            Magic.dsb();                                 // the key and the view land BEFORE the count
+            pcN += 1;                                    //   that makes them reachable (see above)
         }
+    }
+
+    /**
+     * Point the global parse context at {@code v}: the {@code g*} copies the rest of the loader reads. They are
+     * still separate statics -- every one of them is read directly, from 25 classes -- so this is the one place
+     * that keeps them consistent with {@link #gView}.
+     */
+    private static void useView(ClassFileView v)
+    {
+        gView = v;
+        gbytes = v.bytes;
+        gcp = v.cp;
+        gcpTag = v.cpTag;
+        litObjByCp = v.litObj;
+        gcpCount = v.cpCount;
+        gAfterCp = v.afterCp;
+        gp = v.base.plus(v.afterCp);
     }
 
     /** Copy an embedded blob onto the heap so the shared reader can index it. */

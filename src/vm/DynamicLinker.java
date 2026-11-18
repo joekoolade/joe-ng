@@ -296,7 +296,7 @@ final class DynamicLinker
     /**
      * Whether the class whose blob is at {@code base} DECLARES a method named and typed like the Utf8 runs at
      * {@code (nameBase, nameOff)} / {@code (descBase, descOff)}: 1 yes, 0 no, -1 unknown. Read from the blob's
-     * CACHED constant-pool parse ({@code pcBase}/{@code pcCp}) so the global parse context is untouched --
+     * CACHED constant-pool parse ({@code pcBase}/{@code pcTab}) so the global parse context is untouched --
      * this is asked mid-patch, with the caller's blob current. A blob never parsed answers -1, and the
      * callers then keep their previous behaviour rather than guess.
      */
@@ -313,8 +313,9 @@ final class DynamicLinker
             return -1;
         }
         Magic.dsb();                                    // the count was read before the entry (parseConstPool)
-        int[] cp = Loader.pcCp[ci];
-        Address p = base.plus(Loader.pcAfterCp[ci]);
+        ClassFileView v = Loader.pcTab[ci];
+        int[] cp = v.cp;
+        Address p = base.plus(v.afterCp);
         p = p.plus(6);                                         // access_flags, this_class, super_class
         p = p.plus(2 + u2(p) * 2);                             // interfaces
         int fcount = u2(p);
