@@ -4,6 +4,25 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **LOADER REFACTOR, INCREMENT 8a: class initialization out of `vm/Loader` (2026-11-17).** Pure move. Increment 8
+  of the plan is split three ways because its five classes are ~8,000 lines together: **8a** `ClassInitializer`,
+  **8b** `LazyCompiler` + `DynamicLinker` (they hold the writer's name-keyed entry points), **8c** `Relocator` +
+  `Closure`.
+  - **`ClassInitializer`** (JikesRVM `RVMClass.initialize()`; JVMS 5.5, JLS 12.4.2): `<clinit>` discovery and compile
+    (`clinitEntryOf(Locked)`, `clinitCompilable`, `runClinit`), the clinit table (`clinit*`) and dependency arrays
+    (`clDep*`), `ensureClinit` with the claim/await protocol across tasks (`initClaimedByOther`,
+    `awaitOtherInitializer`, `hangDumpInits`), the guards compiled code consults (`initGuardNeeded`, `ensureInitFor`,
+    the `idMemo`/`ig*` memos), boot-inited classes (`bootInited*`, `adoptBootInit`), the pending-init queue a lazy
+    compile drains (`noteInitNeeded`, `drainPendingInit`, `runPendingClinit`), and the ERRONEOUS state
+    (`markInitFailed`, `noClassDefFound`, `initializerFailure`).
+  - No writer stash key names any of these, so none changed.
+  - **Loader 17,814 -> 15,560 lines.** Image 39,540,040 -> 39,541,088 bytes (+1,048).
+  - **Validation:** `make test` + overlaycheck clean; 23 initialization/race probes pass, 16 of them solo by design
+    (ClinitOrder, ClinitRace, NestedClinit, Lazy, ClinitFail, LocaleInit, SecurityExtra, SpawnRace, FirstCallRace,
+    AtomicRace, ChmRace, CslmRace, UpdaterRace, AssertMsg, SystemLogger, UnsafeAll, InheritedStatic, NetStatics,
+    LazyVarHandle, NestedEnum, ConstantDescOrder, AbsentSuper, CatchDenied). **Speed A/B** vs a main control,
+    SslEngineProbe solo, ABBA order: **ctl 99 / 111 s, test 101 / 105 s** -- no measurable change. Not run: full
+    regression, suite, JUnit, Pi.
 - **LOADER REFACTOR, INCREMENT 7: the registries out of `vm/Loader` (2026-11-17).** Pure move -- the most-referenced
   tables in the VM (`clTab` alone is read from 20+ files).
   - **`ClassRegistry`**: `clTab`/`clCount` (a GC root as a static, as before), the name index (`clBucket`), the

@@ -841,7 +841,7 @@ final class AnnotationInstances
         {
             return 0L;
         }
-        Loader.ensureClinit(ci);                               // the constants ARE statics, and only <clinit> sets them
+        ClassInitializer.ensureClinit(ci);                               // the constants ARE statics, and only <clinit> sets them
         int nlen = u2(nameU);
         byte[] fname = new byte[nlen];
         int k = 0;

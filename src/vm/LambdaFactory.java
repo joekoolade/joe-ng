@@ -493,7 +493,7 @@ final class LambdaFactory
      */
     static void ctorRefInit(int reg)
     {
-        Loader.ensureClinit(reg);
+        ClassInitializer.ensureClinit(reg);
     }
 
     /**

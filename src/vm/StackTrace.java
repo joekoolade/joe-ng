@@ -112,9 +112,9 @@ final class StackTrace
             i += 1;
         }
         int c = 0;
-        while (c < Loader.clinitN)
+        while (c < ClassInitializer.clinitN)
         {
-            long b = Loader.clinitEntry[c];
+            long b = ClassInitializer.clinitEntry[c];
             if (b != 0L && b <= pc.toLong() && b > bestBuf
                     && (pEnd != 0L ? b >= pStart : inSameCodeBlock(Address.fromLong(b), pc))) { bestBuf = b; bestClin = c; bestReg = -1; }
             c += 1;
@@ -133,8 +133,8 @@ final class StackTrace
         }
         else if (bestClin >= 0)
         {
-            clsStr = Loader.guestBinaryName(Loader.clinitBase.get(bestClin).plus(Loader.clinitNameOff[bestClin] + 2L),
-                    u2(Loader.clinitBase.get(bestClin).plus(Loader.clinitNameOff[bestClin])));
+            clsStr = Loader.guestBinaryName(ClassInitializer.clinitBase.get(bestClin).plus(ClassInitializer.clinitNameOff[bestClin] + 2L),
+                    u2(ClassInitializer.clinitBase.get(bestClin).plus(ClassInitializer.clinitNameOff[bestClin])));
             methStr = Loader.guestString(Magic.bytes("<clinit>"));
         }
         else
@@ -473,9 +473,9 @@ final class StackTrace
             i += 1;
         }
         int c = 0;
-        while (c < Loader.clinitN)
+        while (c < ClassInitializer.clinitN)
         {
-            long b = Loader.clinitEntry[c];
+            long b = ClassInitializer.clinitEntry[c];
             if (b != 0L && b <= addr.toLong() && b > bestBuf
                     && (aEnd != 0L ? b >= aStart : inSameCodeBlock(Address.fromLong(b), addr))) { bestBuf = b; bestClin = c; bestReg = -1; }
             c += 1;
@@ -513,8 +513,8 @@ final class StackTrace
         }
         else
         {
-            Loader.writeName(Loader.clinitBase.get(bestClin).plus(Loader.clinitNameOff[bestClin] + 2),
-                    u2(Loader.clinitBase.get(bestClin).plus(Loader.clinitNameOff[bestClin])));
+            Loader.writeName(ClassInitializer.clinitBase.get(bestClin).plus(ClassInitializer.clinitNameOff[bestClin] + 2),
+                    u2(ClassInitializer.clinitBase.get(bestClin).plus(ClassInitializer.clinitNameOff[bestClin])));
             Uart.write(Magic.bytes(".<clinit>"));
         }
         Uart.write(Magic.bytes(" [pc="));                        // debug: absolute PC + offset into the method

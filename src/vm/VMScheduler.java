@@ -953,7 +953,7 @@ public final class VMScheduler
             Uart.write(Magic.bytes(" (state 0=empty 1=ready 2=sleeping 3=blocked 4=running) loaderOwner="));
             printDec(loaderOwner);
             Uart.write(Magic.bytes("\n"));
-            Loader.hangDumpInits();                        // the claimed-initializer table
+            ClassInitializer.hangDumpInits();                        // the claimed-initializer table
             int t = 0;
             while (t < taskCount)
             {

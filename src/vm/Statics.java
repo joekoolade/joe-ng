@@ -114,7 +114,7 @@ final class Statics
                 s += 1;
             }
         }
-        Loader.noteInitNeeded(ClassRegistry.classRegOf(u2(Loader.gbase.plus(Loader.gcp[idx]))));   // cross-class static access = an active use
+        ClassInitializer.noteInitNeeded(ClassRegistry.classRegOf(u2(Loader.gbase.plus(Loader.gcp[idx]))));   // cross-class static access = an active use
         return globalStaticAddr(idx);                   // another class (e.g. Long -> Integer.digits)
     }
 

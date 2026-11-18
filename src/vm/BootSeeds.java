@@ -211,7 +211,7 @@ final class BootSeeds
             reportPropsGap(Magic.bytes("java/lang/ref/Reference is not registered (Runtime.runFinalization NPEs)"));
             return;
         }
-        Loader.ensureClinit(reg);
+        ClassInitializer.ensureClinit(reg);
     }
 
     static void seedSavedProps()
