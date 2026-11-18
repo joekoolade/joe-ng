@@ -49,7 +49,6 @@ public final class Loader
     private Loader() {}
 
     static Address gp;      // parse cursor
-    static int[] gBcToWord; // last compiled method's bci -> machine word offset (Baseline.bcToWord)
     // Per-blob constant-pool PARSE CACHE. parseConstPool used to copy the whole blob (toBytes) + allocate
     // the cp/cpTag/litObj arrays EVERY call; RTA (resolveVirtuals) re-parses each instantiated class's superclass
     // chain once per fixpoint iteration -> thousands of parses -> ~190 MiB of garbage byte[]/int[] copies that
@@ -70,15 +69,6 @@ public final class Loader
      * a reader can never see a mix of two blobs' fields. Like those statics it is guarded by the loader lock.
      */
     static ClassFileView gView;
-    private static int gFrameSize;     // frame size of the last method the core compiled
-    private static int gRegLocals;     // its callee-saved local count (x19..) — for unwind's pre-try local restore
-    // Try/catch ranges of the last method the core compiled (machine word offsets + catch-type cp),
-    // captured for emitMethod to register into VM's jit handler table (cross-method unwind).
-    private static int gHN;
-    private static int[] gHStartW;
-    private static int[] gHEndW;
-    private static int[] gHandlerW;
-    private static int[] gHCatchCp;
     private static long gnameP, gdescP;   // packed name/descriptor being searched for
     private static int gnameLen;
     private static int gdescLen;
@@ -5468,18 +5458,19 @@ public final class Loader
             if (op == 0xb8 || op == 0xb7)                   // invokestatic / invokespecial
             {
                 int idx = u2(code + pc + 1);
-                long c = calleeCodeOf(idx);                 // sets gCalleeSync
-                if (c != 0L)
+                FoundMethod f = calleeOf(idx);
+                if (f != null)
                 {
-                    addMethod(c, ClassBytes.codeLength(c), ClassBytes.maxLocals(c), mrefDescOff(idx), op == 0xb8 ? 1 : 0, gCalleeSync);
+                    long c = f.code;
+                    addMethod(c, ClassBytes.codeLength(c), ClassBytes.maxLocals(c), f.descOff, op == 0xb8 ? 1 : 0, f.isSync);
                 }
             }
             pc += insnLen(code, pc);
         }
     }
 
-    /** Compile method {@code i} with the shared core (returns its A64 at {@code base}). */
-    private static int[] compileMethod(int i, long base)
+    /** Compile method {@code i} with the shared core: its A64 at {@code base}, plus what emitMethod installs. */
+    private static CompileResult compileMethod(int i, long base)
     {
         Baseline b = new Baseline(gView.bytes, gView.cp, gView.cpTag, METAL_SYMBOLS);
         // The exception_table follows the bytecode: u2 count, then {start,end,handler,
@@ -5503,24 +5494,7 @@ public final class Loader
         b.setExceptionTable(es, ee, eh, ec, n);
         int[] words = b.compileBody(extractCode(i), mDescOff[i], mStatic[i] != 0, mSync[i] != 0,
                                     mLocals[i], base, false);
-        gFrameSize = b.frameSize();
-        gRegLocals = b.regLocals();                    // for unwind's pre-try local restore
-        gHN = b.handlerCount();                        // capture the machine-code handler ranges for emitMethod
-        gHStartW = new int[gHN];
-        gHEndW = new int[gHN];
-        gHandlerW = new int[gHN];
-        gHCatchCp = new int[gHN];
-        int h = 0;
-        while (h < gHN)
-        {
-            gHStartW[h] = b.handlerStartWord(h);
-            gHEndW[h] = b.handlerEndWord(h);
-            gHandlerW[h] = b.handlerWord(h);
-            gHCatchCp[h] = ec[h];
-            h += 1;
-        }
-        gBcToWord = b.bcToWord();                       // bci -> machine word offset, for the stack-trace line table
-        return words;
+        return new CompileResult(b, words, ec);
     }
 
     /**
@@ -5535,7 +5509,7 @@ public final class Loader
             mBuf[i] = Heap.allocCode(32).toLong();               // just the stub -> no dry-run compile at load (genuine defer)
             return;
         }
-        int sz0 = compileMethod(i, 0L).length * 4;
+        int sz0 = compileMethod(i, 0L).words.length * 4;
         if (sz0 >= 0x80000)
         {
             Uart.write(Magic.bytes("  HUGE body bytes="));
@@ -5685,10 +5659,11 @@ public final class Loader
         }
         codeRootOwner = mBuf[i];                        // roots baked by this compile belong to this buffer
         Relocator.relocRecording = 1;                             // record unresolved cross-class sites at their real address
-        int[] words = compileMethod(i, mBuf[i]);        // real base -> resolved addresses
+        CompileResult r = compileMethod(i, mBuf[i]);    // real base -> resolved addresses
         Relocator.relocRecording = 0;
         codeRootOwner = 0L;
-        mLine[i] = StackTrace.buildLineTable(i);                   // stack-trace debug info (PC-offset -> source line)
+        int[] words = r.words;
+        mLine[i] = StackTrace.buildLineTable(i, r.bcToWord);       // stack-trace debug info (PC-offset -> source line)
         mSrc.set(i, StackTrace.sourceFileAddr());
         long out = mBuf[i];
         int k = 0;
@@ -5699,20 +5674,21 @@ public final class Loader
             k += 1;
         }
         mEnd[i] = out;                                  // the MEASURED extent of this body, for publishEmitted
-        if (gFrameSize > 0)                             // let VM.unwind pop this JIT'd frame
+        if (r.frameSize > 0)                            // let VM.unwind pop this JIT'd frame
         {
-            VM.addJitFrame(Address.fromLong(mBuf[i]), Address.fromLong(out), gFrameSize, gRegLocals);
+            VM.addJitFrame(Address.fromLong(mBuf[i]), Address.fromLong(out), r.frameSize, r.regLocals);
         }
         int h = 0;                                      // register try/catch ranges: a throw in another JIT'd
-        while (h < gHN)                                 // method can unwind into this method's catch (cross-method)
+        while (h < r.handlerCount)                      // method can unwind into this method's catch (cross-method)
         {
-            long ms = mBuf[i] + (long) gHStartW[h] * 4L;
-            long me = mBuf[i] + (long) gHEndW[h] * 4L;
-            long hh = mBuf[i] + (long) gHandlerW[h] * 4L;
+            long ms = mBuf[i] + (long) r.hStartW[h] * 4L;
+            long me = mBuf[i] + (long) r.hEndW[h] * 4L;
+            long hh = mBuf[i] + (long) r.handlerW[h] * 4L;
             long ct = 0L;                                   // 0 = catch-all (a finally, or catch_type 0)
-            if (gHCatchCp[h] != 0)
+            int catchCp = r.catchCp[h];
+            if (catchCp != 0)
             {
-                ct = DynamicTypeCheck.typeOfClass(gHCatchCp[h]).toLong();
+                ct = DynamicTypeCheck.typeOfClass(catchCp).toLong();
                 if (ct == 0L)
                 {
                     // The catch class is not registered. This used to store the 0 typeOfClass answers --
@@ -5720,7 +5696,7 @@ public final class Loader
                     // Not registered NOW is not not-registered-ever either (a class pulled later can be
                     // thrown later), so record the NAME and let the unwinder resolve it when an exception
                     // actually reaches this handler -- which is when JVMS 5.4.3.1 resolves a catch class.
-                    ct = VM.CATCH_BY_NAME | (gView.base.plus(gView.cp[u2(gView.base.plus(gView.cp[gHCatchCp[h]]))]).toLong());
+                    ct = VM.CATCH_BY_NAME | (gView.base.plus(gView.cp[u2(gView.base.plus(gView.cp[catchCp]))]).toLong());
                 }
             }
             VM.addJitHandler(Address.fromLong(ms), Address.fromLong(me), Address.fromLong(hh), ct);
@@ -5752,12 +5728,12 @@ public final class Loader
     {
         if (utf8Eq(refClassNameOff(idx), gView.thisNameOff))
         {
-            long local = bufOf(calleeCodeOf(idx));      // same class: local buffer
+            long local = bufOf(FoundMethod.codeOf(calleeOf(idx)));   // same class: local buffer
             if (local != 0L)
             {
                 return local;
             }
-            // else fall through: a same-class NATIVE (no Code attr -> calleeCodeOf 0) resolves to its VM helper;
+            // else fall through: a same-class NATIVE (no Code attr -> calleeOf null) resolves to its VM helper;
             // an as-yet-uncompiled same-class method stays 0 here and is patched later by globalBufByRef.
         }
         long g = MethodRegistry.globalBuf(idx);                        // cross class: another loaded class
@@ -7592,15 +7568,15 @@ public final class Loader
     }
 
 
-    /** Resolve Methodref {@code idx} to its (same-class) method's bytecode; set {@code gCalleeSync}. */
-    private static int gCalleeSync;    // ACC_SYNCHRONIZED of the method calleeCodeOf last found
-
-    private static long calleeCodeOf(int idx)
+    /**
+     * Resolve Methodref {@code idx} to its method in THIS class, or null (another class, or no body). The result
+     * carries the ACC_SYNCHRONIZED bit scanCallees needs; it replaced the {@code gCalleeSync} static (P2-5).
+     */
+    private static FoundMethod calleeOf(int idx)
     {
-        gCalleeSync = 0;
         if (!utf8Eq(refClassNameOff(idx), gView.thisNameOff))
         {
-            return 0L;                                  // not this class (Object.<init>, JDK, ...)
+            return null;                                // not this class (Object.<init>, JDK, ...)
         }
         int nameOff = mrefNameOff(idx);
         int descOff = mrefDescOff(idx);
@@ -7616,14 +7592,13 @@ public final class Loader
                 long c = findCode(gView.base, p.plus(8), attrs);
                 if (c != 0L)
                 {
-                    gCalleeSync = (u2(p) & 0x0020) != 0 ? 1 : 0;   // ACC_SYNCHRONIZED, for scanCallees
-                    return c;
+                    return new FoundMethod(c, descOff, u2(p));
                 }
             }
             p = skipAttributes(p.plus(8), attrs);
             m += 1;
         }
-        return 0L;
+        return null;
     }
 
     /** Name Utf8 offset of Methodref {@code idx}. */
