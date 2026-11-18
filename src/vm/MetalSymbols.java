@@ -84,15 +84,15 @@ final class MetalSymbols implements Symbols
     // placement-independent, so the metal can size/place/emit in phases.
     public void tib(CodeBuffer cb, int reg, int classCp)
     {
-        emitAddr(cb, reg, Loader.tibOfClass(classCp));
+        emitAddr(cb, reg, DynamicTypeCheck.tibOfClass(classCp));
     }
     public void type(CodeBuffer cb, int reg, int classCp)
     {
-        emitAddr(cb, reg, Loader.typeOfCheckedClass(classCp));
+        emitAddr(cb, reg, DynamicTypeCheck.typeOfCheckedClass(classCp));
     }
     public void interfaceType(CodeBuffer cb, int reg, int ifaceMethodCp)
     {
-        emitAddr(cb, reg, Loader.ifaceTypeOfMethod(ifaceMethodCp));
+        emitAddr(cb, reg, InterfaceInvocation.ifaceTypeOfMethod(ifaceMethodCp));
     }
     public void arrayDescAddr(CodeBuffer cb, int reg, int classCp)
     {
@@ -283,15 +283,15 @@ final class MetalSymbols implements Symbols
     }
     public boolean defaultDispatch(int methodCp)
     {
-        return Loader.defaultDispatch(methodCp);
+        return InterfaceInvocation.defaultDispatch(methodCp);
     }
     public void defaultIfaceType(CodeBuffer cb, int reg, int methodCp)
     {
-        emitAddr(cb, reg, Loader.defaultIfaceTypeOf(methodCp));
+        emitAddr(cb, reg, InterfaceInvocation.defaultIfaceTypeOf(methodCp));
     }
     public int defaultIfaceSlot(int methodCp)
     {
-        return Loader.defaultIfaceSlotOf(methodCp);
+        return InterfaceInvocation.defaultIfaceSlotOf(methodCp);
     }
     public int objectSize(int classCp)
     {
@@ -321,11 +321,11 @@ final class MetalSymbols implements Symbols
 
     public int vtableSlot(int methodCp)
     {
-        return Loader.vtableSlotOf(methodCp);
+        return VtableLayout.vtableSlotOf(methodCp);
     }
     public int interfaceSlot(int ifaceMethodCp)
     {
-        return Loader.ifSlotOf(ifaceMethodCp);
+        return InterfaceInvocation.ifSlotOf(ifaceMethodCp);
     }
     public boolean isIntrinsicCall(int methodCp)
     {

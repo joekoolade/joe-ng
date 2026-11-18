@@ -81,7 +81,7 @@ final class ClassAttributes
      * when it has none -- which is what stock's {@code getGenericSignature0} answers, and what makes
      * {@code getGenericSuperclass} fall back to the erasure for a NON-generic class, exactly as stock does.
      *
-     * <p>The bytes are copied as Latin-1 by {@link #utf8ToString}; a signature is a modified-UTF-8 string,
+     * <p>The bytes are copied as Latin-1 by {@link Loader#utf8ToString}; a signature is a modified-UTF-8 string,
      * so a non-ASCII identifier in one would read wrongly. ALLOCATION-FREE for a bad argument, because
      * {@code VM.forceCompile} probes this native with zero.
      */
@@ -605,14 +605,14 @@ final class ClassAttributes
             return 0L;
         }
         int reg = Loader.regOfType(mirror.toAddress().plus(16L).loadAddress());
-        int n = reg >= 0 ? Loader.clIfaceRegN[reg] : 0;
+        int n = reg >= 0 ? InterfaceInvocation.clIfaceRegN[reg] : 0;
         Address arr = Heap.allocArray(n, 8);
         arr.plus(ObjectModel.TIB_OFFSET).store(ArrayTypes.refArrayTib(elemType));
         int i = 0;
         while (i < n)
         {
             arr.plus(ObjectModel.ARRAY_BASE_OFFSET).plus(i * 8L).store(
-                    ClassMirrors.classMirror(Loader.clTab[Loader.clIfaceReg[reg * Loader.MAX_DIRECT_IF + i]].type));
+                    ClassMirrors.classMirror(Loader.clTab[InterfaceInvocation.clIfaceReg[reg * InterfaceInvocation.MAX_DIRECT_IF + i]].type));
             i += 1;
         }
         return arr.toLong();

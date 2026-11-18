@@ -94,8 +94,8 @@ public final class Loader
     private static int gsfCount;
     private static int[] gifName;   // Utf8 offset of each instance field's name (index = slot)
     private static int[] gifAccess; // access_flags of each own instance field (index = slot; 0 for inherited)
-    private static int[] gifDescOff;// Utf8 offset of each own instance field's type descriptor (index = slot)
-    private static int gifCount;
+    static int[] gifDescOff;// Utf8 offset of each own instance field's type descriptor (index = slot)
+    static int gifCount;
     static int gThisNameOff;     // Utf8 offset of this class's own name
     static Address gMethodsStart;   // address of the methods_count (for callee lookup)
     static Address gBsmOff;      // address of the BootstrapMethods attr body (num_bootstrap_methods), or 0
@@ -103,14 +103,14 @@ public final class Loader
     // replacing in place, new methods appended. Each slot's signature may live in a
     // superclass's blob (gvBase), and its implementation is either an inherited
     // compiled buffer (gvImplBuf) or one of this class's own methods (gvImplCode).
-    private static final int MAXMV = 512;
-    private static VtSlot[] gvTab;  // the building class's flattened vtable (reified; reused per class)
-    private static int gvCount;     // flattened vtable size
+    static final int MAXMV = 512;
+    static VtSlot[] gvTab;  // the building class's flattened vtable (reified; reused per class)
+    static int gvCount;     // flattened vtable size
     static Address gTib;       // this class's TIB { Type, vtable... }, built before emit
     static Address gType;      // this class's Type { superType } — a metal instanceof chain node
-    private static int gSuperNameOff;  // superclass name Utf8 offset (unloaded/Object => no inherit)
-    private static int[] gImplIfName;  // name Utf8 offsets of the interfaces this class implements
-    private static int gImplIfCount;
+    static int gSuperNameOff;  // superclass name Utf8 offset (unloaded/Object => no inherit)
+    static int[] gImplIfName;  // name Utf8 offsets of the interfaces this class implements
+    static int gImplIfCount;
 
     // Global method registry across all loaded classes, so a call in one class can
     // link to a method compiled in another. Each entry captures where its class /
@@ -143,102 +143,7 @@ public final class Loader
     // registered -> load order no longer matters (only method-CALL cycles remain, handled by patchRelocs).
     static RVMClass[] clTab;
     static int clCount;
-    // Directly-declared interfaces per registered class/interface, as registry indices, flat:
-    // clIfaceReg[r*MAX_DIRECT_IF + j], j < clIfaceRegN[r]. buildItableDir transitively closes over these so
-    // an itable directory keys on the SUPER-interfaces too (e.g. ArrayList implements List extends Iterable
-    // -> its directory has both List and Iterable, so invokeinterface Iterable.iterator resolves).
-    static final int MAX_DIRECT_IF = 8;
-    static int[] clIfaceReg;
-    static int[] clIfaceRegN;
-    static int[] ifClosureBuf;   // scratch: registry indices in the current class's transitive iface closure
-    // Every instantiated class's imap (the shared itable), captured at fillTib so refillImaps can repair
-    // default-method slots that were 0 because the interface holding the default hadn't been EMITTED yet when
-    // this class's buildImap ran (phase B is superclass-first, not super-interface-first).
-    private static final int MAXIMAP = 2048;
-    private static long[] instImaps;
-    private static int[] instImapReg;    // the class registry index each imap belongs to (for its iface closure)
-    private static int instImapN;
-    /**
-     * Per-imap "nothing left to repair" flag, and it is EXACT rather than approximate.
-     *
-     * <p>{@link #refillItable} only ever writes a slot that is 0 -- it never overwrites a filled one. So an
-     * imap whose slots are all non-zero is a guaranteed NO-OP on every future pass, and skipping it loses
-     * nothing. An imap that still has a hole stays hot, because the hole may become fillable once the class
-     * declaring the default is compiled by a later batch, which is the whole reason this pass exists.
-     *
-     * <p>MEASURED: without it, {@code refillImaps} was 463 SECONDS of a 900-second launcher load -- it walked
-     * all ~830 imaps every batch and called {@code ifaceClosureOf} on each, whether or not anything needed
-     * repairing.
-     */
-    private static boolean[] instImapDone;
-    /**
-     * Per-imap memo of each slot's MAXIMALLY SPECIFIC DECLARER ({@link #mostSpecificDeclarer}), -2 = not yet
-     * computed. A hole that stays a hole is re-examined on every batch, and that pass is what it cost.
-     *
-     * <p>MEASURED on SslEngineProbe (2026-11-04): {@code refillImaps} was 20.5 s of a 283 s run, 12.2 s of the
-     * first TLS session. It called {@code defaultBySig} 1,777,957 times; EVERY call found a declarer and only
-     * 1,303 then found a body -- the slot's method is abstract in its most specific declarer, so the hole is
-     * permanent, and each batch re-asked ~4.3 closure interfaces, hashing the same name and descriptor for each,
-     * to arrive at the same declarer.
-     *
-     * <p>SOUND because the declarer is a function of two things: what each interface DECLARES (its own method
-     * run and {@code ifDecl}, fixed when the interface registers) and the class's interface CLOSURE. The closure
-     * can grow -- a superclass registered after its subclass resolves {@link #superRegOf} late and brings its
-     * interfaces -- but only by appending, so its size {@link #instImapDeclN} changes whenever it does, and a
-     * changed size discards the memo. The body lookup itself ({@link #regBodyIn}) is NOT memoised: that answer
-     * really does change, which is why the hole is revisited at all.
-     */
-    private static int[][] instImapDecl;
-    private static int[] instImapDeclN;                 // the closure size instImapDecl[m] was computed for
 
-    /**
-     * WHY refillImaps costs what it does, counted rather than inferred. The lazy-closure change measured as a
-     * no-op on hardware (imap 462,948ms -> 460,288ms at batch 165), and there are two candidate reasons that
-     * look identical from a timing line alone: the skip never fires, or the run never carried the change.
-     * These separate them -- {@code rfSkip} is the memo working, {@code rfClos} is the cost it was meant to
-     * avoid. Cumulative over the boot, printed with the per-batch cost line.
-     */
-    private static int rfSkip;
-    private static int rfVisit;
-    private static int rfClos;
-    private static int rfHoleEnd;
-    // GC ROOTS for synthesised lambda classes. A lambda's TIB/Type/itableDir/imap are built by finishLambdaClass
-    // in the GC heap [BASE,PTR) and are referenced ONLY by (a) baked immediates in JIT code (not scanned) and
-    // (b) its runtime instances' object headers (word 0, which the collector does not trace). Unlike loaded
-    // CLASSES (rooted via clTib[]), array types (refArrTib[]) and string literals (litAnchor[]), lambda metadata
-    // sat in no scanned root — so once a large closure (java.util.stream) fills the arena and GC runs during load
-    // (before any instance exists), the lambda TIB was swept and a reused block scribbled its Type to garbage,
-    // making a later Function.apply on it NPE. Holding each TIB here (a scanned static array) keeps it live.
-    static final int MAXLAMBDATIB = 8192;
-    static AddressArray lambdaTibRoots;
-    // Vtable CAPACITY of each synthesised TIB above, so refillSynthTibVtables can never write past one. The
-    // capacity is whatever java/lang/Object's vtable count was WHEN THE TIB WAS BUILT, and Object may not have
-    // been registered yet (objectVtableCount answers 0 then) -- refilling blind would then overflow an 8-byte
-    // allocation once Object arrives with nine virtuals.
-    static int[] lambdaTibVtCap;
-    // FILLED TO CAPACITY ALREADY -- one bit per synthesised TIB, and the whole of the `synth` fix.
-    //
-    // MEASURED before it was believed: `refillSynthTibVtables` walked every synthesised TIB on EVERY batch
-    // and re-copied Object's vtable into each, and the counters said **`chg=0`** -- across a whole suite
-    // boot, not ONE of those writes stored a value different from the one already in the slot. The pass was
-    // re-deriving an answer it already had, which is the `seeds` shape exactly (there: 148x).
-    //
-    // Sound by construction as well as by that measurement: `java/lang/Object` is THE ONE EAGERLY-COMPILED
-    // CLASS (its nine virtuals are the prefix of every vtable in both worlds), so its slots hold real bodies
-    // from registration and are never re-pointed by a lazy compile the way a deferred class's are. `chg=0`
-    // is the empirical half of that argument and is kept on the batch line so a future boot can refute it.
-    //
-    // LATCHED ONLY ON A COMPLETE FILL (`n >= cap`), not merely on having run -- the rule the seeds fix had
-    // to be corrected for. A TIB built while Object had fewer virtuals than the TIB has room for is filled
-    // PARTIALLY; latching there would leave the rest zero for ever, and a 0 slot reached from baked code is
-    // a wild branch rather than a named trap.
-    static boolean[] lambdaTibFilled;
-    // The HOST class of each synthesised TIB above -- the class whose method the lambda was compiled in -- as
-    // its blob base + name Utf8 offset, so getName() can answer stock's `Host$$Lambda/0x...`. 0 for the
-    // synthesised kinds that have no host (annotation instances, proxies), which keep the bare `$$Lambda/`.
-    static AddressArray lambdaHostBase;
-    static int[] lambdaHostNameOff;
-    static int lambdaTibRootN;
 
     // Field registry: per instance field of each class, its class/name (base+offset)
     // and slot, so a cross-class get/putfield can find the offset.
@@ -248,37 +153,7 @@ public final class Loader
     static RVMField[] fldTab;   // global instance-field registry (reified: reuses RVMField; slot/access/descOff)
     static int fldCount;
 
-    // Vtable-slot registry: per virtual method of each class, its class/name/desc
-    // (base+offset) and vtable slot, so a cross-class invokevirtual can find the
-    // slot in the receiver class's vtable (dispatch itself uses the object's TIB).
-    private static final int MAXVT = 65536;
-    private static AddressArray vtClassBase;   // class the vtable belongs to (base + off)
-    private static int[] vtClassOff;
-    static AddressArray vtNameBase;    // method signature blob (may be a superclass's)
-    static int[] vtNameOff;
-    static int[] vtDescOff;
-    private static int[] vtSlot;
-    private static long[] vtBuf;         // slot's implementation buffer
-    private static int vtCount;
 
-    // Interface-method registry. Every distinct interface method (name+descriptor)
-    // gets a global index; each implementing class then carries an "imap" indexed by
-    // it, holding that class's implementation. This is the itable: it decouples the
-    // call site from where the method happens to sit in a given class's vtable, so
-    // two classes implementing the same interface at different vtable slots both
-    // dispatch correctly. Interfaces are loaded before their implementors.
-    private static final int MAXIFM = 8192;   // flattened per-interface runs duplicate inherited signatures
-                                              // (2048 overflowed once the console launcher reached picocli's
-                                              //  @ArgGroup members, whose closure is interface-dense)
-    static AddressArray ifBase;        // interface blob holding the signature
-    static int[] ifNameOff;
-    static int[] ifDescOff;
-    // The blob of the interface that DECLARES this entry within its run: the run's own interface when it
-    // declares (or redeclares) the signature itself, else the ancestor whose run it was copied from. ifBase
-    // cannot answer this -- a redeclaration keeps the inherited entry (and its base) to keep the slot number.
-    // Default selection needs it: JVMS 5.4.3.3 picks the MAXIMALLY SPECIFIC declaring interface.
-    private static AddressArray ifDecl;
-    private static int ifCount;
     private static boolean gIsInterface; // is the class being loaded an interface?
 
     // Blobs handed to the loader, plus the dependencies between them, so load order
@@ -4006,28 +3881,28 @@ public final class Loader
         // SILENTLY, and a fresh clTab left beside a stale ctIndexed would answer registry indices for a
         // previous launch's classes. Nulling the bucket array is what forces the rebuild.
         ctBucket = null;
-        clIfaceReg = new int[MAXCLASS * MAX_DIRECT_IF];
-        clIfaceRegN = new int[MAXCLASS];
-        ifClosureBuf = new int[MAXIFM];
-        instImaps = new long[MAXIMAP];
-        instImapReg = new int[MAXIMAP];
-        instImapDone = new boolean[MAXIMAP];
-        instImapDecl = new int[MAXIMAP][];
-        instImapDeclN = new int[MAXIMAP];
+        InterfaceInvocation.clIfaceReg = new int[MAXCLASS * InterfaceInvocation.MAX_DIRECT_IF];
+        InterfaceInvocation.clIfaceRegN = new int[MAXCLASS];
+        InterfaceInvocation.ifClosureBuf = new int[InterfaceInvocation.MAXIFM];
+        InterfaceInvocation.instImaps = new long[InterfaceInvocation.MAXIMAP];
+        InterfaceInvocation.instImapReg = new int[InterfaceInvocation.MAXIMAP];
+        InterfaceInvocation.instImapDone = new boolean[InterfaceInvocation.MAXIMAP];
+        InterfaceInvocation.instImapDecl = new int[InterfaceInvocation.MAXIMAP][];
+        InterfaceInvocation.instImapDeclN = new int[InterfaceInvocation.MAXIMAP];
         int dm = 0;
-        while (dm < MAXIMAP)
+        while (dm < InterfaceInvocation.MAXIMAP)
         {
-            instImapDecl[dm] = null;                    // fill explicitly: see buildSgIndex
+            InterfaceInvocation.instImapDecl[dm] = null;                    // fill explicitly: see buildSgIndex
             dm += 1;
         }
-        instImapN = 0;
-        lambdaTibRoots = AddressArray.create(MAXLAMBDATIB);
-        lambdaTibVtCap = new int[MAXLAMBDATIB];
-        lambdaTibFilled = new boolean[MAXLAMBDATIB];    // beside the table it tracks: a latch that outlives
+        InterfaceInvocation.instImapN = 0;
+        TibBuilder.lambdaTibRoots = AddressArray.create(TibBuilder.MAXLAMBDATIB);
+        TibBuilder.lambdaTibVtCap = new int[TibBuilder.MAXLAMBDATIB];
+        TibBuilder.lambdaTibFilled = new boolean[TibBuilder.MAXLAMBDATIB];    // beside the table it tracks: a latch that outlives
                                                         //   its array would skip a TIB that needs filling
-        lambdaHostBase = AddressArray.create(MAXLAMBDATIB);
-        lambdaHostNameOff = new int[MAXLAMBDATIB];
-        lambdaTibRootN = 0;
+        TibBuilder.lambdaHostBase = AddressArray.create(TibBuilder.MAXLAMBDATIB);
+        TibBuilder.lambdaHostNameOff = new int[TibBuilder.MAXLAMBDATIB];
+        TibBuilder.lambdaTibRootN = 0;
         // The proxy and annotation TIB tables are rooted ONLY through lambdaTibRoots, which was just dropped,
         // and they find entries by raw Type ADDRESS. Kept, an entry outlives the Type it names: once the GC
         // frees that Type its address can come back as a different class's, and the lookup would hand out a
@@ -4055,15 +3930,15 @@ public final class Loader
         fldIndexed = 0;                                 // beside the table it indexes, as sgIndexed is
         fldBucket = null;
         fldCount = 0;
-        vtClassBase = AddressArray.create(MAXVT);
-        vtClassOff = new int[MAXVT];
-        vtNameBase = AddressArray.create(MAXVT);
-        vtNameOff = new int[MAXVT];
-        vtDescOff = new int[MAXVT];
-        vtSlot = new int[MAXVT];
-        vtBuf = new long[MAXVT];
-        vtCount = 0;
-        vtBucket = null;                                // the class-name index is keyed by table INDEX: rebuild
+        VtableLayout.vtClassBase = AddressArray.create(VtableLayout.MAXVT);
+        VtableLayout.vtClassOff = new int[VtableLayout.MAXVT];
+        VtableLayout.vtNameBase = AddressArray.create(VtableLayout.MAXVT);
+        VtableLayout.vtNameOff = new int[VtableLayout.MAXVT];
+        VtableLayout.vtDescOff = new int[VtableLayout.MAXVT];
+        VtableLayout.vtSlot = new int[VtableLayout.MAXVT];
+        VtableLayout.vtBuf = new long[VtableLayout.MAXVT];
+        VtableLayout.vtCount = 0;
+        VtableLayout.vtBucket = null;                                // the class-name index is keyed by table INDEX: rebuild
         gvTab = new VtSlot[MAXMV];
         int gvi = 0;
         while (gvi < MAXMV)                             // pre-fill: slots are overwritten (reused) per class
@@ -4071,19 +3946,19 @@ public final class Loader
             gvTab[gvi] = new VtSlot();
             gvi += 1;
         }
-        ifBase = AddressArray.create(MAXIFM);
-        ifNameOff = new int[MAXIFM];
-        ifDescOff = new int[MAXIFM];
-        ifDecl = AddressArray.create(MAXIFM);
-        ifCount = 0;
-        ifBucket = null;                                // the run index is keyed by entry INDEX: cleared with it
+        InterfaceInvocation.ifBase = AddressArray.create(InterfaceInvocation.MAXIFM);
+        InterfaceInvocation.ifNameOff = new int[InterfaceInvocation.MAXIFM];
+        InterfaceInvocation.ifDescOff = new int[InterfaceInvocation.MAXIFM];
+        InterfaceInvocation.ifDecl = AddressArray.create(InterfaceInvocation.MAXIFM);
+        InterfaceInvocation.ifCount = 0;
+        InterfaceInvocation.ifBucket = null;                                // the run index is keyed by entry INDEX: cleared with it
         pdBase = AddressArray.create(MAXBLOB);
         pdNameOff = new int[MAXBLOB];
         pdDone = new int[MAXBLOB];
         pdDoneB = new int[MAXBLOB];
         pdNeedsString = new boolean[MAXBLOB];
         pdSuperOff = new int[MAXBLOB];
-        pdIfOff = new int[MAXBLOB * MAX_DIRECT_IF];
+        pdIfOff = new int[MAXBLOB * InterfaceInvocation.MAX_DIRECT_IF];
         pdIfN = new int[MAXBLOB];
         pdCount = 0;
         // THE HIT LISTS ARE KEYED BY BLOB INDEX, and this is a per-LAUNCH reset: blob 7 of the next program
@@ -4313,7 +4188,7 @@ public final class Loader
      * instantiated. This is what {@code ClassLoader.defineClass} means -- the bytes come from the program, so
      * nothing already loaded calls into the class and RTA has no way to see who will. Marked from the entry
      * method only, the closure reaches NONE of it, {@link #compileClass} prunes every method, and
-     * {@link #fillTib} then fills a vtable of zeros: the class loads, reflection into it works (that resolves
+     * {@link TibBuilder#fillTib} then fills a vtable of zeros: the class loads, reflection into it works (that resolves
      * through the method registry), and the first virtual call inside it hits the null-vtable guard as a
      * bare {@code ArrayIndexOutOfBoundsException}.
      */
@@ -4542,8 +4417,6 @@ public final class Loader
     // (grows with everything loaded), the closure walk (bounded by the class's own hierarchy), and the
     // per-slot refill.
     static int rfTypeSteps;                             // regOfType/classRegByType registry comparisons
-    static int rfClosSteps;                             // ifaceClosureOf interface visits
-    static int rfFillSteps;                             // refillItable slot reads
     // AND THE WORK THE THREE ABOVE CANNOT SEE, which is why these exist: those tally SLOT READS, and 3.3M of
     // them over a launcher boot cannot account for `imap`'s 1,366ms (~68 cycles a read on a 166MHz core,
     // against the handful a load-compare-increment costs). What they miss is what happens INSIDE a still-0
@@ -4606,34 +4479,8 @@ public final class Loader
     // Counted for ALL callers (there are nine); this loop is the one that runs per site per batch.
     static long rbCalls;                                // regBySigU calls (all callers)
     static long rbSteps;                                // ... class-registry entries compared inside them
-    // `synth` -- `refillSynthTibVtables`, 191.718ms at batch 209 and the largest item left outside `callT`
-    // and `imap`. It has never been split, which is the same starting position `seeds` (148x) and `statT`
-    // (42.5x) were in. It walks every synthesised lambda/annotation TIB on EVERY batch and re-copies
-    // Object's vtable into each, and `n:synth` grows all boot (511 at batch 59, 2276 at batch 209).
-    //
-    // READING NAMES TWO CANDIDATES AND CANNOT ORDER THEM, which is why they are counted first:
-    //   (1) `fillObjectVtableUpTo` calls `objectClassIndex()` -- a linear walk of all `clCount` classes --
-    //       ONCE PER TIB, so 2276 scans a batch. The remedy would be hoisting the lookup out of the loop,
-    //       which is what `printFrameAt` needed in the demand-load arc.
-    //   (2) The whole pass may be IDEMPOTENT. It exists to repair a TIB built before Object's body was
-    //       compiled; once repaired, re-copying the same nine words changes nothing. That is the `seeds`
-    //       shape exactly, and there a one-shot flag was worth 148x.
-    // `syChanged` is what decides between them: it counts only the writes whose value actually DIFFERED
-    // from what the slot already held. Near zero means the pass is re-deriving an answer it already has and
-    // a watermark makes it free; large means the writes are real and only the hoist is available.
-    //
-    // The changed-check costs one extra load per slot, so this instrument slightly inflates the thing it
-    // measures -- stated rather than glossed, and it is removed or kept per whichever fix lands.
-    static long syTibs;                                 // synthesised TIBs visited (cumulative, all batches)
-    static long sySlots;                                // ... vtable slots written
-    static long syChanged;                              // ... of which actually CHANGED the stored word
     static long syObjSteps;                             // objectClassIndex scan steps (all three callers)
-    static int rfDbsCalls;                              // defaultBySig calls (one per still-0 slot per batch)
-    static int rfProbeSteps;                            // ... closure interfaces probed inside them
     static int rfHashSteps;                             // ... CLASS-name bytes still folded (0 = cache firing)
-    static int rfHashNameSteps;                         // ... METHOD-name bytes folded -- the irreducible half,
-                                                        //   since an FNV fold can only cache its PREFIX
-    static int rfChainSteps;                            // ... bucket-chain entries compared
 
     static int cumBatches;
     static long cumMark, cumProbe, cumA, cumB, cumPatch, cumClinit, cumAll;
@@ -7062,7 +6909,7 @@ public final class Loader
         Uart.putc(0x0A);
     }
 
-    /** {@link #isSynthesisedTib} keyed by TYPE: a synthesised TIB holds its Type in slot 0. */
+    /** {@link TibBuilder#isSynthesisedTib} keyed by TYPE: a synthesised TIB holds its Type in slot 0. */
     private static int isSynthesisedType(Address type)
     {
         return synthIndexOf(type) >= 0 ? 1 : 0;
@@ -7071,14 +6918,14 @@ public final class Loader
     /** The synthesised-TIB table index whose TIB carries {@code type}, or -1. */
     private static int synthIndexOf(Address type)
     {
-        if (lambdaTibRoots == null)
+        if (TibBuilder.lambdaTibRoots == null)
         {
             return -1;
         }
         int i = 0;
-        while (i < lambdaTibRootN)
+        while (i < TibBuilder.lambdaTibRootN)
         {
-            if (!lambdaTibRoots.get(i).isZero() && lambdaTibRoots.get(i).loadAddress().EQ(type))
+            if (!TibBuilder.lambdaTibRoots.get(i).isZero() && TibBuilder.lambdaTibRoots.get(i).loadAddress().EQ(type))
             {
                 return i;
             }
@@ -7091,11 +6938,11 @@ public final class Loader
     private static int synthHostLen(Address type)
     {
         int i = synthIndexOf(type);
-        if (i < 0 || lambdaHostBase.get(i).isZero())
+        if (i < 0 || TibBuilder.lambdaHostBase.get(i).isZero())
         {
             return 0;
         }
-        return u2(lambdaHostBase.get(i).plus(lambdaHostNameOff[i]));
+        return u2(TibBuilder.lambdaHostBase.get(i).plus(TibBuilder.lambdaHostNameOff[i]));
     }
 
     /** How many times {@code Class.getName()} has answered null; the report itself is capped at 8. */
@@ -7171,9 +7018,9 @@ public final class Loader
     private static int writeSynthName(Address type, long dst, int pos)
     {
         int si = synthIndexOf(type);
-        if (si >= 0 && !lambdaHostBase.get(si).isZero())
+        if (si >= 0 && !TibBuilder.lambdaHostBase.get(si).isZero())
         {
-            Address src = lambdaHostBase.get(si).plus(lambdaHostNameOff[si]);
+            Address src = TibBuilder.lambdaHostBase.get(si).plus(TibBuilder.lambdaHostNameOff[si]);
             int len = u2(src);
             int h = 0;
             while (h < len)
@@ -7560,7 +7407,7 @@ public final class Loader
         // A Thread enters through MetalThreadEntry.metalThreadEntry -- run() plus uncaught-handler dispatch -- and
         // only falls back to Runnable.run when that entry is absent, which is REPORTED: the thread still runs, but
         // a handler set on it would silently never fire.
-        long buf = ifaceMethodFromItable(recv, metalThreadEntryTypeAddr(), 0);
+        long buf = InterfaceInvocation.ifaceMethodFromItable(recv, metalThreadEntryTypeAddr(), 0);
         if (buf == 0L || !plausibleCode(Address.fromLong(buf)))
         {
             if (!metalThreadEntryTypeAddr().isZero() && !reportedNoThreadEntry)
@@ -7568,7 +7415,7 @@ public final class Loader
                 reportedNoThreadEntry = true;
                 Uart.write(Magic.bytes("\n  RUNTRAMP: no metalThreadEntry -- uncaught-exception handlers will not fire\n"));
             }
-            buf = runFromItable(recv);
+            buf = InterfaceInvocation.runFromItable(recv);
         }
         if (buf == 0L || !plausibleCode(Address.fromLong(buf)))
         {
@@ -7603,60 +7450,9 @@ public final class Loader
         return Address.zero();
     }
 
-    /** {@code run()V} via the receiver's itable entry for java/lang/Runnable, or 0. Bounded, unlike the
-     *  hand-emitted scan it replaces: it stops at the 0 terminator instead of walking past it. */
-    private static long runFromItable(ObjectReference recv)
-    {
-        return ifaceMethodFromItable(recv, runnableTypeAddr(), runnableRunSlot());
-    }
-
-    /** Slot {@code slot} of the receiver's itable run for interface {@code want}, or 0 (also 0 for want == 0). */
-    private static long ifaceMethodFromItable(ObjectReference recv, Address want, int slot)
-    {
-        if (want.isZero())
-        {
-            return 0L;
-        }
-        long tib = recv.toAddress().loadLong();
-        if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
-        {
-            return 0L;
-        }
-        long type = Address.fromLong(tib).loadLong();
-        if (type <= 0x1000L)
-        {
-            return 0L;
-        }
-        Address dir = Address.fromLong(type).plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).loadAddress();
-        if (dir.toLong() <= 0x1000L)
-        {
-            return 0L;
-        }
-        int n = 0;
-        while (n < MAXIFACEFALLBACK)
-        {
-            Address ent = dir.plus(n * (long) ObjectModel.ITABLE_ENTRY_SIZE).loadAddress();
-            if (ent.isZero())
-            {
-                return 0L;                              // the sentinel: STOP (the old scan ran past it)
-            }
-            if (ent.EQ(want))
-            {
-                long it = dir.plus(n * (long) ObjectModel.ITABLE_ENTRY_SIZE)
-                        .plus(ObjectModel.ITABLE_ENTRY_TABLE_OFFSET).loadLong();
-                if (it <= 0x1000L)
-                {
-                    return 0L;
-                }
-                return Address.fromLong(it).plus(slot * 8L).loadLong();
-            }
-            n += 1;
-        }
-        return 0L;
-    }
 
     /** java/lang/Runnable's ONE Type (0 if not loaded: no Runnables can exist yet). */
-    private static Address runnableTypeAddr()
+    static Address runnableTypeAddr()
     {
         int i = 0;
         while (i < clCount)
@@ -7671,7 +7467,7 @@ public final class Loader
     }
 
     /** run()V's slot in Runnable's flattened per-interface run (0 if Runnable isn't loaded). */
-    private static int runnableRunSlot()
+    static int runnableRunSlot()
     {
         int i = 0;
         while (i < clCount)
@@ -7682,8 +7478,8 @@ public final class Loader
                 while (s < clTab[i].ifmCount)
                 {
                     int k = clTab[i].ifmStart + s;
-                    if (Utf8.isName(ifBase.get(k), ifNameOff[k], 0x72756EL, 3)
-                            && Utf8.isName(ifBase.get(k), ifDescOff[k], 0x282956L, 3))
+                    if (Utf8.isName(InterfaceInvocation.ifBase.get(k), InterfaceInvocation.ifNameOff[k], 0x72756EL, 3)
+                            && Utf8.isName(InterfaceInvocation.ifBase.get(k), InterfaceInvocation.ifDescOff[k], 0x282956L, 3))
                     {
                         return s;
                     }
@@ -7943,186 +7739,6 @@ public final class Loader
         gp = p;
     }
 
-    /**
-     * Build this class's flattened vtable: inherit the superclass's slots (copied
-     * from the super's registered vtable — signature + already-compiled impl
-     * buffer), then walk this class's own virtual methods, an override replacing the
-     * inherited slot in place (so it keeps the super's index) and a new method
-     * appending. buildTib later fills the TIB from these slots.
-     */
-    static void parseVtable(Address bytes)
-    {
-        gvCount = 0;
-        int superReg = classRegByName(gSuperNameOff);
-        if (superReg >= 0)
-        {
-            inheritVtable(gSuperNameOff);               // copy the super's flattened slots
-        }
-        Address p = gMethodsStart;
-        int mcount = u2(p);
-        p = p.plus(2);
-        int m = 0;
-        while (m < mcount)
-        {
-            int attrs = u2(p.plus(6));                      // access, name, descriptor, attrs
-            if (isVirtual(u2(p), gcp[u2(p.plus(2))]))
-            {
-                int slot = findVtSlot(gcp[u2(p.plus(2))], gcp[u2(p.plus(4))]);   // override an inherited slot?
-                if (slot < 0)
-                {
-                    if (gvCount >= MAXMV) { capHalt(Magic.bytes("MAXMV-vt"), gvCount); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
-                    slot = gvCount;                     // else append a new slot
-                    gvCount += 1;
-                }
-                gvTab[slot].base = gbase;
-                gvTab[slot].name = gcp[u2(p.plus(2))];
-                gvTab[slot].desc = gcp[u2(p.plus(4))];
-                gvTab[slot].implCode = findCode(bytes, p.plus(8), attrs);   // this class's own impl
-                gvTab[slot].isSync = (u2(p) & 0x0020) != 0 ? 1 : 0;     // ACC_SYNCHRONIZED (for mintPrunedStub)
-                gvTab[slot].implBuf = 0L;
-            }
-            p = skipAttributes(p.plus(8), attrs);
-            m += 1;
-        }
-    }
-
-    /** Copy the registered flattened vtable of the class named {@code superOff} into gv[]. */
-    /**
-     * Name-keyed index over the vtable registry, so {@link #inheritVtable} is a PROBE rather than a scan of
-     * every entry ever registered.
-     *
-     * <p>MEASURED, and this is where `parse` actually went. Splitting phase B's parse three ways gave
-     * {@code cp=9.9ms fields=313ms vtab=4773ms} -- `parseVtable` is 94% of it -- and inside parseVtable the
-     * only thing whose cost grows is this: {@code vtCount} is cleared by {@code resetLoader} (per LAUNCH,
-     * not per class), so it holds every vtable entry of every class loaded so far. At ~1342 classes with
-     * ~20 virtuals each that is ~27,000 entries, string-compared once PER CLASS -- tens of millions of
-     * utf8EqAt calls. Seventh instance of this file's most common defect: a per-item linear scan of a table
-     * that grows all boot.
-     *
-     * <p>ASCENDING ORDER IS PRESERVED, and that is not caution for its own sake: the scan applies matching
-     * entries in index order and a later entry writes the same {@code gvTab[slot]} as an earlier one, so
-     * reversing the walk could silently install a different implementation in a slot. A bucket chain built
-     * by the usual head-insertion yields NEWEST FIRST, so this one appends at the TAIL and keeps the walk
-     * ascending -- the same care {@code defaultBySig}'s index needed for closure order.
-     *
-     * <p>Incremental like {@code rgBucket}/{@code dlBucket}: the registry only grows within a launch and an
-     * entry's class name never changes, so entries already indexed stay valid; it is rebuilt from scratch
-     * when the count is seen to go backwards (a {@code resetLoader}).
-     */
-    private static final int VTTAB = 8192;               // power of two; chained
-    private static int[] vtBucket;                       // class-name hash -> FIRST entry, -1 when empty
-    private static int[] vtBucketTail;                   // ... and the last, so appends keep the chain ascending
-    private static int[] vtNextIdx;                      // entry -> next entry with the same class-name hash
-    private static int vtIndexed;
-
-    private static void buildVtIndex()
-    {
-        if (vtBucket == null || vtIndexed > vtCount)      // resetLoader zeroed the registry: rebuild
-        {
-            vtBucket = new int[VTTAB];
-            vtBucketTail = new int[VTTAB];
-            vtNextIdx = new int[MAXVT];
-            int b = 0;
-            while (b < VTTAB)
-            {
-                vtBucket[b] = -1;
-                vtBucketTail[b] = -1;
-                b += 1;
-            }
-            vtIndexed = 0;
-        }
-        while (vtIndexed < vtCount)
-        {
-            int h = Utf8.utf8Hash(vtClassBase.get(vtIndexed), vtClassOff[vtIndexed]) & (VTTAB - 1);
-            vtNextIdx[vtIndexed] = -1;
-            if (vtBucketTail[h] < 0)
-            {
-                vtBucket[h] = vtIndexed;
-            }
-            else
-            {
-                vtNextIdx[vtBucketTail[h]] = vtIndexed;   // APPEND: keeps the chain in ascending index order
-            }
-            vtBucketTail[h] = vtIndexed;
-            vtIndexed += 1;
-        }
-    }
-
-    /**
-     * The vtable-table entry of class {@code cls} (a Utf8 run) whose name and descriptor match, or -1 -- the
-     * FIRST such entry in table order, which is what the front-to-back scans this replaces answered: the
-     * class-name chains are kept ascending, so the first hit in the chain is that entry.
-     *
-     * <p>Those scans compared class, name and descriptor byte by byte across EVERY entry of every class, and
-     * {@link #globalVtableSlot} repeated the scan once per superclass level for an inherited method. Profiled on
-     * InvokeGapProbe (QEMU, 2026-10-28): byte compares were ~60% of the busy core, under
-     * {@code lowerInvokeVirtual -> globalVtableSlot} and {@code virtualResolve -> bufBySigU}; guest code was
-     * under 4%. A class's chain is its own flattened vtable plus hash neighbours.
-     */
-    private static int vtEntryOf(Address clsBase, int clsOff, Address nameBase, int nameOff, Address descBase, int descOff)
-    {
-        buildVtIndex();
-        int i = vtBucket[Utf8.utf8Hash(clsBase, clsOff) & (VTTAB - 1)];
-        while (i >= 0)
-        {
-            // NAME FIRST, CLASS LAST. The chain is this class's own entries plus hash neighbours, so the class
-            // compare SUCCEEDS -- byte by byte, over the whole name -- on almost every step, and only then did
-            // the method name reject the entry. MEASURED (SslEngineProbe, QEMU, 2026-11-07): 109,025 calls
-            // walking 4,017,803 entries, 3,753,438 of them full successful class-name compares. A method name
-            // rejects on its length or its first bytes. The three tests are pure and ANDed, so only the order
-            // of rejection changes, never the answer.
-            if (utf8EqAt(nameBase, nameOff, vtNameBase.get(i), vtNameOff[i])
-                    && utf8EqAt(descBase, descOff, vtNameBase.get(i), vtDescOff[i])
-                    && utf8EqAt(clsBase, clsOff, vtClassBase.get(i), vtClassOff[i]))
-            {
-                return i;
-            }
-            i = vtNextIdx[i];
-        }
-        return -1;
-    }
-
-    private static void inheritVtable(int superOff)
-    {
-        buildVtIndex();                                  // incremental: only entries added since last time
-        int i = vtBucket[Utf8.utf8Hash(gbase, superOff) & (VTTAB - 1)];
-        while (i >= 0)
-        {
-            // The SAME predicate the scan used -- the index only narrows which entries it is applied to, so
-            // a hit is the entry the scan would have found and a miss still applies nothing.
-            if (utf8EqAt(gbase, superOff, vtClassBase.get(i), vtClassOff[i]))
-            {
-                int slot = vtSlot[i];
-                gvTab[slot].base = vtNameBase.get(i);
-                gvTab[slot].name = vtNameOff[i];
-                gvTab[slot].desc = vtDescOff[i];
-                gvTab[slot].implBuf = vtBuf[i];             // inherited (already-compiled) impl
-                gvTab[slot].implCode = 0L;
-                gvTab[slot].isSync = 0;                     // inherited: the buffer is already compiled
-                if (slot + 1 > gvCount)
-                {
-                    gvCount = slot + 1;
-                }
-            }
-            i = vtNextIdx[i];
-        }
-    }
-
-    /** Flattened-vtable slot whose name+descriptor match, or -1 (used for override detection). */
-    private static int findVtSlot(int nameOff, int descOff)
-    {
-        int s = 0;
-        while (s < gvCount)
-        {
-            if (utf8EqAt(gbase, nameOff, gvTab[s].base, gvTab[s].name)
-                    && utf8EqAt(gbase, descOff, gvTab[s].base, gvTab[s].desc))
-            {
-                return s;
-            }
-            s += 1;
-        }
-        return -1;
-    }
 
     /**
      * Instance-field count of the superclass -- own fields are laid out after it. 0 when the super is
@@ -8162,7 +7778,7 @@ public final class Loader
                 && !isDenylisted(gbase, nameOff);
     }
 
-    private static int superFieldCount()
+    static int superFieldCount()
     {
         int r = classRegByName(gSuperNameOff);
         if (r >= 0)
@@ -8179,7 +7795,7 @@ public final class Loader
     }
 
     /** A method goes in the vtable if it is instance, non-private, and not a constructor. */
-    private static boolean isVirtual(int access, int nameOff)
+    static boolean isVirtual(int access, int nameOff)
     {
         if ((access & 0x0008) != 0)
         {
@@ -8388,7 +8004,7 @@ public final class Loader
 
 
     /** {@link #isDenylisted} for a class name that is an {@code n}-byte slice at {@code base+off}, not a Utf8 entry. */
-    private static boolean isDenylistedSlice(Address base, int off, int n)
+    static boolean isDenylistedSlice(Address base, int off, int n)
     {
         byte[] b = new byte[n + 2];
         b[0] = (byte) (n >> 8);
@@ -8407,7 +8023,7 @@ public final class Loader
      * descriptor ({@code n} bytes at {@code base+off}) rather than a Utf8 entry of its own. The length-prefixed
      * name is built as a byte[] and held in {@link #lzPullKeep} until the drain copies it.
      */
-    private static boolean notePullNeededElement(Address base, int off, int n)
+    static boolean notePullNeededElement(Address base, int off, int n)
     {
         if (lzPullN == 0)
         {
@@ -9006,7 +8622,7 @@ public final class Loader
         }
         if (!compileReuseTib)                           // two-phase clinit: the class's TIB already exists (clTab[reg].tib,
         {                                               // pinned in phase A) and gets filled by loadBodies' compileClass
-            buildTib();                                 // -- rebuilding here would allocate a THROWAWAY TIB and leave
+            TibBuilder.buildTib();                                 // -- rebuilding here would allocate a THROWAWAY TIB and leave
         }                                               // gTib pointing at it, so compileClass fills the wrong TIB.
         i = 0;
         while (i < mCount)                              // emit
@@ -9091,7 +8707,7 @@ public final class Loader
         ccPlaceT += cc2 - cc1;
         if (!gIsInterface)                              // an interface has no instances -> no vtable/TIB to fill; its
         {                                               // concrete static/default methods are still compiled above
-            fillTib();                                  // TIB was allocated by loadOne (before <clinit>); fill slots now
+            TibBuilder.fillTib();                                  // TIB was allocated by loadOne (before <clinit>); fill slots now
         }
         long cc3 = Magic.readCNTPCT_EL0();
         ccTibT += cc3 - cc2;
@@ -9425,9 +9041,9 @@ public final class Loader
         patchRelocs();                                  // every body is compiled now: fix up the cross-class method
                                                         // CALLs left unresolved while their target compiled later
         long tRest = Magic.readCNTPCT_EL0();
-        refillImaps();                                  // repair default-method imap slots left 0 by phase-B ordering
+        InterfaceInvocation.refillImaps();                                  // repair default-method imap slots left 0 by phase-B ordering
         long tRf1 = Magic.readCNTPCT_EL0();
-        refillSynthTibVtables();                        // ... and every synthesised lambda/annotation TIB
+        TibBuilder.refillSynthTibVtables();                        // ... and every synthesised lambda/annotation TIB
         long tRf2 = Magic.readCNTPCT_EL0();
         ArrayTypes.refillArrayTibVtables();                        // Object's vtable is filled now -> repair any array TIB that
                                                         // was created (e.g. by an early string-literal byte[]) before it
@@ -9654,11 +9270,11 @@ public final class Loader
         p = p.plus(2);
         int n = 0;
         int k = 0;
-        while (k < ifc && n < MAX_DIRECT_IF)
+        while (k < ifc && n < InterfaceInvocation.MAX_DIRECT_IF)
         {
             int ifCi = u2(p.plus(k * 2));
             int ifNameIx = u2(gbase.plus(gcp[ifCi]));
-            pdIfOff[i * MAX_DIRECT_IF + n] = gcp[ifNameIx];
+            pdIfOff[i * InterfaceInvocation.MAX_DIRECT_IF + n] = gcp[ifNameIx];
             n += 1;
             k += 1;
         }
@@ -9679,7 +9295,7 @@ public final class Loader
         int k = 0;
         while (k < pdIfN[i])
         {
-            if (blocked(i, pdBase.get(i), pdIfOff[i * MAX_DIRECT_IF + k]))
+            if (blocked(i, pdBase.get(i), pdIfOff[i * InterfaceInvocation.MAX_DIRECT_IF + k]))
             {
                 return false;
             }
@@ -9874,14 +9490,14 @@ public final class Loader
         if (gIsInterface)
         {
             if (clCount >= MAXCLASS) { capHalt(Magic.bytes("MAXCLASS-iface"), clCount); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
-            registerInterface();                        // give its methods global itable indices
+            InterfaceInvocation.registerInterface();                        // give its methods global itable indices
             // Give the interface a Type and register it, so implementors' itable
             // directories can key on it and the core's interfaceType resolves (M5.4.e).
             // M8 itables: a BAKED interface ADOPTS the writer's Type node instead -- implementors'
             // dir entries then key on the shared node, so interface instanceof/checkcast in linked
             // baked code matches loader receivers. The adopted node's fields stand as written
             // (superType = Object's shared node; nothing reads an interface Type's instanceSize).
-            findVtSig();                                // adoption entry (itparity compares later, post-fill)
+            VtableLayout.findVtSig();                                // adoption entry (itparity compares later, post-fill)
             adoptStatics();                             // interface constants share the writer block too
             if (!gAdoptType.isZero())
             {
@@ -9923,16 +9539,16 @@ public final class Loader
             clTab[clCount].fieldCount = 0;
             clTab[clCount].vtCount = 0;
             clTab[clCount].statics = gStatics;              // interface constants block (reused by its phase-B bodies)
-            clTab[clCount].vtStart = vtCount;               // no vtable entries appended for an interface
+            clTab[clCount].vtStart = VtableLayout.vtCount;               // no vtable entries appended for an interface
             clTab[clCount].isIface = true;
             clTab[clCount].ifmStart = gIfmStart;            // the flattened per-interface method run
             clTab[clCount].ifmCount = gIfmCount;            //   = this interface's itable slot numbering
             clTab[clCount].superNameOff = gSuperNameOff;
             clTab[clCount].absentSuperOff = gAbsentSuperOff;          // an interface extending one that cannot load
             clTab[clCount].superReg = classRegByName(gSuperNameOff);   // an interface's super is Object (-1); kept for symmetry
-            captureDirectIfaces();                      // an interface's extended interfaces (List extends Iterable)
+            InterfaceInvocation.captureDirectIfaces();                      // an interface's extended interfaces (List extends Iterable)
             clTab[clCount].modifiers = gClassModifiers;     // cached Class.getModifiers() (captured post-cp, no re-parse)
-            checkIfParity(clCount);                     // M8 itables: writer/loader slot numbering must agree
+            InterfaceInvocation.checkIfParity(clCount);                     // M8 itables: writer/loader slot numbering must agree
             clTab[clCount].state = RVMClass.ST_RESOLVED;    // lifecycle: structure complete
             clCount += 1;
             // AN INTERFACE'S CONSTANTS NEED CELLS TOO. Interface fields are implicitly public static final,
@@ -9943,10 +9559,10 @@ public final class Loader
             registerStaticFields();
             return;                                     // bodies (default/static methods) compiled in phase B
         }
-        parseVtable(bytes);                             // flatten against the superclass: SLOT numbering (bufs still 0)
-        checkVtParity();                                // M8 unification: writer/loader slot numbering must agree
+        VtableLayout.parseVtable(bytes);                             // flatten against the superclass: SLOT numbering (bufs still 0)
+        VtableLayout.checkVtParity();                                // M8 unification: writer/loader slot numbering must agree
         adoptStatics();                                 // M8 statics unification: ONE static block per baked class
-        allocTib();                                     // allocate Type + empty TIB at a stable address (gTib)
+        TibBuilder.allocTib();                                     // allocate Type + empty TIB at a stable address (gTib)
         registerClassStructure();                       // class + fields + statics + vtable STRUCTURE (bufs 0)
         clTab[clCount - 1].modifiers = gClassModifiers;     // cached Class.getModifiers() (captured post-cp, no re-parse)
         clTab[clCount - 1].state = RVMClass.ST_RESOLVED;    // lifecycle: structure complete
@@ -9989,7 +9605,7 @@ public final class Loader
             return;
         }
         long lb1 = Magic.readCNTPCT_EL0();
-        parseVtable(bytes);                             // NOW the super's vtBuf is filled -> inherited slot bufs are real
+        VtableLayout.parseVtable(bytes);                             // NOW the super's vtBuf is filled -> inherited slot bufs are real
         long lbB = Magic.readCNTPCT_EL0();
         pVtableT += lbB - lb1;
         lbParseT += lbB - lb1;
@@ -10009,7 +9625,7 @@ public final class Loader
         long lb4 = Magic.readCNTPCT_EL0();
         lbCompileT += lb4 - lb3;
         registerAll();                                  // methods -> globalBuf
-        fillClassVtBuf(reg);                            // fill this class's registered vtable buffers (for subclasses)
+        VtableLayout.fillClassVtBuf(reg);                            // fill this class's registered vtable buffers (for subclasses)
         lbRegT += Magic.readCNTPCT_EL0() - lb4;
         clTab[reg].state = RVMClass.ST_INSTANTIATED;    // lifecycle: bodies + TIB + itables done
     }
@@ -10638,7 +10254,7 @@ public final class Loader
             long ct = 0L;                                   // 0 = catch-all (a finally, or catch_type 0)
             if (gHCatchCp[h] != 0)
             {
-                ct = typeOfClass(gHCatchCp[h]).toLong();
+                ct = DynamicTypeCheck.typeOfClass(gHCatchCp[h]).toLong();
                 if (ct == 0L)
                 {
                     // The catch class is not registered. This used to store the 0 typeOfClass answers --
@@ -10748,7 +10364,6 @@ public final class Loader
         }
         return -1;
     }
-
 
 
     // ----- method-registry hash index ---------------------------------------
@@ -12182,7 +11797,7 @@ public final class Loader
         int i = 0;
         while (i < pdIfN[pd])
         {
-            int a = inheritedStaticIndex(pdBase.get(pd), pdIfOff[pd * MAX_DIRECT_IF + i], nameBase, nameOff, depth + 1);
+            int a = inheritedStaticIndex(pdBase.get(pd), pdIfOff[pd * InterfaceInvocation.MAX_DIRECT_IF + i], nameBase, nameOff, depth + 1);
             if (a >= 0)
             {
                 return a;
@@ -12729,201 +12344,6 @@ public final class Loader
         return 0L;
     }
 
-    /**
-     * Record the current class's directly-declared interfaces (from {@code gImplIfName}) as registry indices
-     * at {@code clCount}, for {@link #buildItableDir}'s transitive closure. Interfaces this class implements
-     * are already loaded (dep ordering), so they resolve now.
-     */
-    /**
-     * Does {@code fromType} extend the INTERFACE {@code targetType}, walking direct interfaces transitively?
-     *
-     * <p>The one subtype relation a Type node cannot express. An interface Type is a chain dead end -- depth
-     * -1, no display, no superclass link, and no itable directory of its own -- so {@code VM.typeAssignable}
-     * answers class-implements-interface (from the CLASS's itable dir) but not interface-EXTENDS-interface:
-     * {@code Collection.isAssignableFrom(List.class)} came back false. The relation is recorded, just
-     * elsewhere: {@code captureDirectIfaces} puts every class's and interface's direct interfaces in the
-     * class registry.
-     *
-     * <p>Deliberately consulted ONLY from the reflection path ({@code Class.isAssignableFrom}) and not from
-     * {@code typeAssignable} itself. {@code instanceof}/{@code checkcast} always have an OBJECT receiver,
-     * whose Type is a class, so they never ask this question -- putting a registry walk in that hot,
-     * dispatch-critical routine would buy nothing and risk everything.
-     */
-    static int ifaceExtends(Address fromType, Address targetType)
-    {
-        if (fromType.isZero() || targetType.isZero() || clTab == null)
-        {
-            return 0;
-        }
-        int reg = classRegByType(fromType);
-        if (reg < 0)
-        {
-            return 0;
-        }
-        return extendsIfaceFrom(reg, targetType, 0) ? 1 : 0;
-    }
-
-    /** Depth-bounded so a malformed (cyclic) interface graph cannot hang the reflection path. */
-    private static boolean extendsIfaceFrom(int reg, Address targetType, int depth)
-    {
-        if (depth > 8)
-        {
-            return false;
-        }
-        int n = clIfaceRegN[reg];
-        int i = 0;
-        while (i < n)
-        {
-            int r = clIfaceReg[reg * MAX_DIRECT_IF + i];
-            if (r >= 0 && clTab[r] != null)
-            {
-                if (clTab[r].type.EQ(targetType))
-                {
-                    return true;
-                }
-                if (extendsIfaceFrom(r, targetType, depth + 1))
-                {
-                    return true;
-                }
-            }
-            i += 1;
-        }
-        return false;
-    }
-
-    /**
-     * Resolve {@code name+desc} through the interfaces named in a Type's ITABLE DIRECTORY, for a receiver
-     * whose class is not in the registry at all.
-     *
-     * <p>A SYNTHESISED LAMBDA is exactly that receiver: {@code finishLambdaClass} builds it a Type and an
-     * itable directory but no {@code clTab} entry, so {@code classRegByType} answers -1 and the class-chain
-     * and {@code resolveViaInterfaces} tiers -- both keyed on a registry index -- cannot run.
-     *
-     * <p>That matters because a lambda can carry DEFAULT methods. {@code java.util.stream.Sink} has one
-     * abstract method ({@code accept}, inherited from {@code Consumer}) and defaults for {@code begin},
-     * {@code end} and {@code cancellationRequested}, so javac happily makes a lambda a Sink -- and the stream
-     * pipeline then calls {@code downstream.begin(size)} on it from
-     * {@code Sink$ChainedReference.begin}. The lambda's itable holds a thunk for the SAM only; the default
-     * body lives on the interface, which the directory names and nothing else did.
-     *
-     * <p>The interface's own super-interfaces are searched too, since a default can be inherited (Sink's
-     * {@code accept} comes from Consumer).
-     */
-    /** Trace every resolution the itable-directory tier makes: which interface, which member, what address. */
-    private static final boolean ITABLE_DIR_WATCH = false;
-
-    static long resolveViaItableDir(Address type, Address nameOff, Address descOff)
-    {
-        Address dir = type.plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).loadAddress();
-        if (dir.isZero())
-        {
-            return 0L;
-        }
-        int decl = -2;                                  // the maximally specific declarer, found on first need
-        Address entry = dir;
-        Address iface = entry.plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadAddress();
-        while (!iface.isZero())                             // 0 interfaceType terminates the directory
-        {
-            int ir = classRegByType(iface);
-            if (ir >= 0 && ir < clCount && clTab[ir] != null)
-            {
-                // THE RECEIVER'S OWN ENTRY FIRST. For a lambda the sought method is usually the SAM, which is
-                // ABSTRACT on the interface -- there is no body to resolve to, and the implementation is the
-                // synthesised THUNK sitting in this very itable. Reading the slot answers that; searching the
-                // interface for a body cannot, and reported `DISPATCH ON UNREGISTERED TYPE ... get()` for
-                // every Supplier lambda whose call site missed the directory.
-                //
-                // Correct for defaults too, and preferred for them: buildItableFor already resolves a default
-                // to the implementation THIS receiver should run, which is more specific than whatever body
-                // the declaring interface happens to carry.
-                int slot = ifmSlotAbs(ir, nameOff, descOff);
-                if (slot >= 0)
-                {
-                    Address itable = entry.plus(ObjectModel.ITABLE_ENTRY_TABLE_OFFSET).loadAddress();
-                    if (!itable.isZero())
-                    {
-                        long hit = itable.plus(slot * 8L).loadLong();
-                        if (hit != 0L)
-                        {
-                            return hit;
-                        }
-                    }
-                }
-                // An EMPTY slot is resolved to the MAXIMALLY SPECIFIC declaring interface among this receiver's,
-                // not to whichever interface the directory lists first: walking in directory order answered
-                // Shape.kind for a receiver whose Polygon overrides it whenever Shape's entry came first.
-                if (decl == -2)
-                {
-                    decl = dirDeclarer(dir, nameOff, descOff);
-                }
-                if (decl >= 0)
-                {
-                    long d = resolveLinkTarget(clTab[decl].base.plus(clTab[decl].nameOff),
-                            nameOff, descOff);
-                    if (d != 0L)
-                    {
-                        return d;
-                    }
-                }
-                long b = resolveLinkTarget(clTab[ir].base.plus(clTab[ir].nameOff),
-                        nameOff, descOff);
-                if (b != 0L)
-                {
-                    if (ITABLE_DIR_WATCH)
-                    {
-                        Uart.write(Magic.bytes("  itabledir "));
-                        printNameAt(clTab[ir].base, clTab[ir].nameOff);
-                        Uart.putc(0x2E);
-                        printNameAt(nameOff, 0);
-                        printNameAt(descOff, 0);
-                        Uart.write(Magic.bytes(" -> 0x"));
-                        VM.printHex(b);
-                        Uart.putc(0x0A);
-                    }
-                    return b;
-                }
-                b = resolveViaInterfaces(ir, nameOff, descOff);
-                if (b != 0L)
-                {
-                    if (ITABLE_DIR_WATCH)
-                    {
-                        Uart.write(Magic.bytes("  itabledir(super) "));
-                        printNameAt(clTab[ir].base, clTab[ir].nameOff);
-                        Uart.putc(0x2E);
-                        printNameAt(nameOff, 0);
-                        printNameAt(descOff, 0);
-                        Uart.write(Magic.bytes(" -> 0x"));
-                        VM.printHex(b);
-                        Uart.putc(0x0A);
-                    }
-                    return b;
-                }
-            }
-            entry = entry.plus(ObjectModel.ITABLE_ENTRY_SIZE);
-            iface = entry.plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadAddress();
-        }
-        return 0L;
-    }
-
-    /**
-     * {@link #mostSpecificDeclarer} over the interfaces an itable directory lists -- the receiver's TRANSITIVE
-     * interface set, so no closure needs recomputing (and the shared closure scratch is not touched).
-     */
-    private static int dirDeclarer(Address dir, Address nameU, Address descU)
-    {
-        int[] regs = new int[MAXIFACEFALLBACK];
-        int n = 0;
-        Address entry = dir;
-        Address iface = entry.plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadAddress();
-        while (!iface.isZero() && n < regs.length)
-        {
-            regs[n] = classRegByType(iface);
-            n += 1;
-            entry = entry.plus(ObjectModel.ITABLE_ENTRY_SIZE);
-            iface = entry.plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadAddress();
-        }
-        return mostSpecificDeclarer(regs, n, nameU, descU);
-    }
 
     /** 1 if {@code tib} is one of the synthesised TIBs (lambda / annotation) held in {@code lambdaTibRoots}. */
     /**
@@ -12986,7 +12406,7 @@ public final class Loader
             vi += 1;
         }
         Uart.write(Magic.bytes("  synthesised(lambda/anno TIB)="));
-        VM.printDec(isSynthesisedTib(tibA));
+        VM.printDec(TibBuilder.isSynthesisedTib(tibA));
         Uart.write(Magic.bytes("\n    class="));
         int r = classRegByType(type);
         if (r >= 0 && clTab != null && clTab[r] != null)
@@ -13000,46 +12420,12 @@ public final class Loader
         Uart.putc(0x0A);
     }
 
-    private static int isSynthesisedTib(Address tib)
-    {
-        if (lambdaTibRoots == null)
-        {
-            return 0;
-        }
-        int i = 0;
-        while (i < lambdaTibRoots.length())
-        {
-            if (lambdaTibRoots.get(i).EQ(tib))
-            {
-                return 1;
-            }
-            i += 1;
-        }
-        return 0;
-    }
-
-    private static void captureDirectIfaces()
-    {
-        int n = 0;
-        int k = 0;
-        while (k < gImplIfCount && n < MAX_DIRECT_IF)
-        {
-            int r = classRegByName(gImplIfName[k]);
-            if (r >= 0)
-            {
-                clIfaceReg[clCount * MAX_DIRECT_IF + n] = r;
-                n += 1;
-            }
-            k += 1;
-        }
-        clIfaceRegN[clCount] = n;
-    }
 
     /** Register the current class (its TIB + instance-field layout) for cross-class new/fields. */
     /**
      * PHASE A registration: record the class's Type + TIB + field layout + statics + flattened-vtable STRUCTURE
      * (name/descriptor/slot per slot). The vtable BUFFERS are left 0 -- the method bodies aren't compiled yet;
-     * {@link #fillClassVtBuf} fills them in phase B. clVtStart pins where this class's vt entries begin.
+     * {@link VtableLayout#fillClassVtBuf} fills them in phase B. clVtStart pins where this class's vt entries begin.
      */
     /**
      * Register this class's static fields, so a cross-class {@code getstatic} can find their cells.
@@ -13071,7 +12457,7 @@ public final class Loader
         if (clCount >= MAXCLASS) { capHalt(Magic.bytes("MAXCLASS"), clCount); }              // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
         if (sgCount + gsfCount >= MAXREG) { capHalt(Magic.bytes("MAXREG"), sgCount); }       // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
         if (fldCount + gifCount >= MAXFIELD) { capHalt(Magic.bytes("MAXFIELD"), fldCount); } // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
-        if (vtCount + gvCount >= MAXVT) { capHalt(Magic.bytes("MAXVT"), vtCount); }          // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
+        if (VtableLayout.vtCount + gvCount >= VtableLayout.MAXVT) { capHalt(Magic.bytes("VtableLayout.MAXVT"), VtableLayout.vtCount); }          // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
         clTab[clCount] = new RVMClass();
         clTab[clCount].state = RVMClass.ST_LOADED;
         clTab[clCount].base = gbase;
@@ -13083,14 +12469,14 @@ public final class Loader
         clTab[clCount].fieldCount = gifCount;
         clTab[clCount].vtCount = gvCount;
         clTab[clCount].statics = gStatics;
-        clTab[clCount].vtStart = vtCount;                   // this class's slots occupy vt[vtCount .. vtCount+gvCount)
+        clTab[clCount].vtStart = VtableLayout.vtCount;                   // this class's slots occupy vt[VtableLayout.vtCount .. VtableLayout.vtCount+gvCount)
         clTab[clCount].isIface = false;
         clTab[clCount].superNameOff = gSuperNameOff;        // keep the NAME too: superReg is -1 for ever if the
                                                         //   super was not registered yet (see RVMClass)
         clTab[clCount].superReg = classRegByName(gSuperNameOff);   // superclass registry index (-1 for Object), for the
                                                         //   FULL-chain itable closure (an interface implemented N levels
                                                         //   up the superclass chain must still land in this class's dir)
-        if (logVtable != 0)                             // #43: class -> vtable slot count (spot too-short vtables)
+        if (VtableLayout.logVtable != 0)                             // #43: class -> vtable slot count (spot too-short vtables)
         {
             Uart.write(Magic.bytes("  C "));
             writeName(gbase.plus(gThisNameOff + 2), u2(gbase.plus(gThisNameOff)));
@@ -13098,7 +12484,7 @@ public final class Loader
             VM.printDec(gvCount);
             Uart.putc(0x0A);
         }
-        captureDirectIfaces();
+        InterfaceInvocation.captureDirectIfaces();
         clCount += 1;
         armPhaseACells();                               // cells for this class's statics, before any body compiles
         registerStaticFields();
@@ -13121,34 +12507,18 @@ public final class Loader
         int v = 0;
         while (v < gvCount)                            // register the whole flattened vtable STRUCTURE (bufs 0 for now)
         {
-            vtClassBase.set(vtCount, gbase);
-            vtClassOff[vtCount] = gThisNameOff;
-            vtNameBase.set(vtCount, gvTab[v].base);           // signature blob (a super's, for inherited slots)
-            vtNameOff[vtCount] = gvTab[v].name;
-            vtDescOff[vtCount] = gvTab[v].desc;
-            vtSlot[vtCount] = v;
-            vtBuf[vtCount] = 0L;                        // filled by fillClassVtBuf once the bodies are compiled
-            vtCount += 1;
+            VtableLayout.vtClassBase.set(VtableLayout.vtCount, gbase);
+            VtableLayout.vtClassOff[VtableLayout.vtCount] = gThisNameOff;
+            VtableLayout.vtNameBase.set(VtableLayout.vtCount, gvTab[v].base);           // signature blob (a super's, for inherited slots)
+            VtableLayout.vtNameOff[VtableLayout.vtCount] = gvTab[v].name;
+            VtableLayout.vtDescOff[VtableLayout.vtCount] = gvTab[v].desc;
+            VtableLayout.vtSlot[VtableLayout.vtCount] = v;
+            VtableLayout.vtBuf[VtableLayout.vtCount] = 0L;                        // filled by fillClassVtBuf once the bodies are compiled
+            VtableLayout.vtCount += 1;
             v += 1;
         }
     }
 
-    /**
-     * PHASE B: fill the vtable BUFFERS for class {@code reg}'s registered slots, now that its bodies are compiled
-     * ({@code slotBuf} = this class's own compiled buffer, or -- for an inherited slot -- the super's, which
-     * phase B filled first because it runs superclass-first). Subclasses then inherit real buffers via parseVtable.
-     */
-    private static void fillClassVtBuf(int reg)
-    {
-        int start = clTab[reg].vtStart;
-        int cnt = clTab[reg].vtCount;
-        int v = 0;
-        while (v < cnt)
-        {
-            vtBuf[start + v] = slotBuf(v);             // gv* is current (this class's phase-B parseVtable just ran)
-            v += 1;
-        }
-    }
 
     /**
      * Give every method of the interface being loaded a global interface-method
@@ -13157,303 +12527,9 @@ public final class Loader
      */
     // M8 itables: the current interface's flattened-run bounds, left by registerInterface for the
     // RVMClass fill (registerInterface runs before the clTab entry exists).
-    private static int gIfmStart;
-    private static int gIfmCount;
+    static int gIfmStart;
+    static int gIfmCount;
 
-    /**
-     * Capture this interface's FLATTENED method list as a contiguous run in the ifm registry
-     * (ifBase/ifNameOff/ifDescOff): each super-interface's flattened run first, in interfaces[]
-     * declaration order, then this interface's own virtual methods -- deduped by name+descriptor so
-     * a redeclaration keeps the inherited position. This IS the per-interface itable slot numbering,
-     * identical to the writer's {@code ClassFile.interfaceMethods} (itparity-checked at load).
-     * Flattening (not own-only lists) is what lets a call typed to a super-interface (a
-     * BinaryOperator lambda invoked as BiFunction) index the right slot.
-     */
-    private static void registerInterface()
-    {
-        gIfmStart = ifCount;
-        int k = 0;
-        while (k < gImplIfCount)                        // super-interfaces' flattened runs first
-        {
-            int r = classRegByName(gImplIfName[k]);
-            if (r >= 0)
-            {
-                int s = 0;
-                while (s < clTab[r].ifmCount)
-                {
-                    int src = clTab[r].ifmStart + s;
-                    ifmAppendUnique(ifBase.get(src), ifNameOff[src], ifDescOff[src], ifDecl.get(src));
-                    s += 1;
-                }
-            }
-            k += 1;
-        }
-        Address p = gMethodsStart;                         // then this interface's own declarations
-        int mcount = u2(p);
-        p = p.plus(2);
-        int m = 0;
-        while (m < mcount)
-        {
-            int attrs = u2(p.plus(6));
-            if (isVirtual(u2(p), gcp[u2(p.plus(2))]))
-            {
-                ifmAppendUnique(gbase, gcp[u2(p.plus(2))], gcp[u2(p.plus(4))], gbase);
-            }
-            p = skipAttributes(p.plus(8), attrs);
-            m += 1;
-        }
-        gIfmCount = ifCount - gIfmStart;
-    }
-
-    /**
-     * Append (base, name, desc) to the current interface's run unless the signature is in it, recording
-     * {@code decl} as the declaring interface's blob. A signature already in the run keeps its entry (and so its
-     * slot), but when the interface being registered declares it ITSELF ({@code decl == gbase}) that entry's
-     * declarer becomes this interface: an override of an inherited default must be visible as one.
-     */
-    private static void ifmAppendUnique(Address base, int nameOff, int descOff, Address decl)
-    {
-        int i = gIfmStart;
-        while (i < ifCount)
-        {
-            if (utf8EqAt(base, nameOff, ifBase.get(i), ifNameOff[i])
-                    && utf8EqAt(base, descOff, ifBase.get(i), ifDescOff[i]))
-            {
-                if (decl.EQ(gbase))
-                {
-                    ifDecl.set(i, gbase);
-                }
-                return;
-            }
-            i += 1;
-        }
-        if (ifCount >= MAXIFM) { capHalt(Magic.bytes("MAXIFM"), ifCount); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
-        ifBase.set(ifCount, base);
-        ifNameOff[ifCount] = nameOff;
-        ifDescOff[ifCount] = descOff;
-        ifDecl.set(ifCount, decl);
-        ifIndexEntry(ifCount, gIfmStart);
-        ifCount += 1;
-    }
-
-    /**
-     * Index over the interface-method runs, keyed on (run start, name, descriptor): chained, filled as each
-     * entry is appended (an entry's run start is known only then), and cleared with the table in resetLoader.
-     *
-     * <p>{@link #ifmSlotAbs} and {@link #ifmSlotIn} SCANNED the interface's run comparing name and descriptor
-     * byte by byte, and {@code mostSpecificDeclarer} asks once per interface of a class's closure. Profiled on
-     * InvokeGapProbe after #452 (scripts/qprof-tally.pl caller view): the top remaining caller of the byte
-     * compares, 8.2% of the busy core. A run holds each signature at most once ({@link #ifmAppendUnique}), so
-     * a hit in the right run is the one entry the scan would have found.
-     */
-    private static final int IFTAB = 8192;              // power of two >= MAXIFM; chained
-    private static int[] ifBucket;                      // (run start, name, desc) hash -> newest entry, -1 if none
-    private static int[] ifNext;                        // entry -> next older entry with the same hash
-
-    private static int ifKey(Address nameBase, int nameOff, Address descBase, int descOff, int runStart)
-    {
-        return (Utf8.utf8Hash2(nameBase, nameOff, descBase, descOff) ^ (runStart * 0x9E3779B1)) & (IFTAB - 1);
-    }
-
-    /** Link entry {@code i}, in the run starting at {@code runStart}, into the index. */
-    private static void ifIndexEntry(int i, int runStart)
-    {
-        if (ifBucket == null)
-        {
-            ifBucket = new int[IFTAB];
-            ifNext = new int[MAXIFM];
-            int b = 0;
-            while (b < IFTAB)
-            {
-                ifBucket[b] = -1;
-                b += 1;
-            }
-        }
-        int h = ifKey(ifBase.get(i), ifNameOff[i], ifBase.get(i), ifDescOff[i], runStart);
-        ifNext[i] = ifBucket[h];
-        ifBucket[h] = i;
-    }
-
-    /**
-     * Slot of the signature (name at {@code nameBase+nameOff}, descriptor at {@code descBase+descOff}) in
-     * registered interface {@code r}'s run, or -1: the entry in that run, whose names match, through the index.
-     */
-    private static int ifmSlotFind(int r, Address nameBase, int nameOff, Address descBase, int descOff)
-    {
-        int count = clTab[r].ifmCount;
-        if (count == 0 || ifBucket == null)
-        {
-            return -1;
-        }
-        int start = clTab[r].ifmStart;
-        int i = ifBucket[ifKey(nameBase, nameOff, descBase, descOff, start)];
-        while (i >= 0)
-        {
-            if (i >= start && i < start + count
-                    && utf8EqAt(nameBase, nameOff, ifBase.get(i), ifNameOff[i])
-                    && utf8EqAt(descBase, descOff, ifBase.get(i), ifDescOff[i]))
-            {
-                return i - start;
-            }
-            i = ifNext[i];
-        }
-        return -1;
-    }
-
-    /** True if registered interface {@code r} itself declares the signature at absolute Utf8 {@code nameU}/{@code descU}. */
-    private static boolean ifaceDeclares(int r, Address nameU, Address descU)
-    {
-        int s = ifmSlotAbs(r, nameU, descU);
-        return s >= 0 && ifDecl.get(clTab[r].ifmStart + s).EQ(clTab[r].base);
-    }
-
-    /**
-     * True if interface {@code sub} extends interface {@code sup}, directly or through its super-interfaces.
-     * Breadth-first over the persistent {@code clIfaceReg} lists, bounded so a malformed registry cannot spin.
-     */
-    private static boolean ifaceExtends(int sub, int sup)
-    {
-        int[] work = new int[64];
-        int n = 0;
-        work[n] = sub;
-        n += 1;
-        int i = 0;
-        while (i < n)
-        {
-            int r = work[i];
-            int j = 0;
-            while (j < clIfaceRegN[r])
-            {
-                int x = clIfaceReg[r * MAX_DIRECT_IF + j];
-                if (x == sup)
-                {
-                    return true;
-                }
-                if (x >= 0 && n < work.length)
-                {
-                    work[n] = x;
-                    n += 1;
-                }
-                j += 1;
-            }
-            i += 1;
-        }
-        return false;
-    }
-
-    /**
-     * Of the interfaces {@code regs[0..n)}, the MAXIMALLY SPECIFIC one that declares the signature (JVMS
-     * 5.4.3.3): a declaring interface that no other declaring interface in the set extends. -1 when none of
-     * them declares it. Two unrelated maximally specific declarers keep the first, in the set's order.
-     */
-    private static int mostSpecificDeclarer(int[] regs, int n, Address nameU, Address descU)
-    {
-        int best = -1;
-        int i = 0;
-        while (i < n)
-        {
-            int r = regs[i];
-            if (r >= 0 && r < clCount && clTab[r] != null && ifaceDeclares(r, nameU, descU))
-            {
-                if (best < 0 || ifaceExtends(r, best))
-                {
-                    best = r;
-                }
-            }
-            i += 1;
-        }
-        return best;
-    }
-
-    /** Per-interface itable slot for an InterfaceMethodref call site: the signature's position in
-     *  the ref'd interface's flattened run -- the writer's numbering (0 if the interface isn't
-     *  registered or lacks the signature: a denylist-fringe site whose entry is never taken). */
-    static int ifSlotOf(int idx)
-    {
-        int r = classRegByName(refClassNameOff(idx));
-        if (r < 0)
-        {
-            return 0;
-        }
-        int s = ifmSlotIn(r, gbase, mrefNameOff(idx), mrefDescOff(idx));
-        return s >= 0 ? s : 0;
-    }
-
-    /**
-     * As {@link #ifmSlotIn}, but with the name and descriptor at two INDEPENDENT absolute Utf8 addresses --
-     * which is how a dispatch site carries them ({@code vsName}/{@code vsDesc}), one per blob.
-     */
-    private static int ifmSlotAbs(int r, Address nameU, Address descU)
-    {
-        return ifmSlotFind(r, nameU, 0, descU, 0);
-    }
-
-    /** Slot of (name, desc in {@code base}) within registered interface {@code r}'s run, or -1. */
-    static int ifmSlotIn(int r, Address base, int nameOff, int descOff)
-    {
-        return ifmSlotFind(r, base, nameOff, base, descOff);
-    }
-
-    /** Per-interface itable for interface {@code ir} on the CURRENT class: slot s = the class's
-     *  impl of the interface's s-th flattened method (vtable match), else a DEFAULT declared by an
-     *  interface in this class's own closure ({@code n} entries of {@link #ifClosureBuf} -- not the
-     *  arbitrary declaring interface: two unrelated interfaces can share a signature), else 0
-     *  (refilled after phase B compiles late defaults). */
-    private static long buildItableFor(int ir, int n)
-    {
-        int count = clTab[ir].ifmCount;
-        Address it = Heap.allocData(count > 0 ? count * 8 : 8);
-        int s = 0;
-        while (s < count)
-        {
-            int i = clTab[ir].ifmStart + s;
-            long buf = 0L;
-            int vs = findVtSlotAt(ifBase.get(i), ifNameOff[i], ifDescOff[i]);
-            if (vs >= 0)
-            {
-                buf = slotBuf(vs);
-                if (buf == 0L)
-                {
-                    // The impl has a Code attribute but no buffer: RTA PRUNED it -- nothing statically
-                    // reachable called it, so it was never pulled into the batch and never given a deferral
-                    // stub, and this itable entry would stay 0. An interface call reaching it later then hits
-                    // dispatchTargetGuard as a bare AIOOBE with no hint of what was missing -- which is
-                    // exactly what `SharedSecrets.getJavaLangAccess().getEnumConstantsShared(...)` inside
-                    // EnumMap does once its caller arrives through demand-loaded code.
-                    //
-                    // Minting here rather than in slotBuf is deliberate. Doing it for every vtable slot costs
-                    // 3-4x the code arena per batch (measured: 8K->31K, 20K->64K, 23K->89K), and buys nothing
-                    // for plain virtual dispatch: RTA marks all virtuals of an INSTANTIATED class, and a class
-                    // that is never instantiated can never be a receiver. Interface entries are the case that
-                    // actually goes empty, and they are a small fraction of the methods.
-                    buf = mintPrunedStub(vs);
-                }
-            }
-            else
-            {
-                buf = defaultBySig(n, ifBase.get(i), ifNameOff[i], ifDescOff[i]);
-            }
-            it.plus(s * 8).store(buf);
-            s += 1;
-        }
-        return it.toLong();
-    }
-
-    /** Like {@link #findVtSlot} but for a name+descriptor living in another blob. */
-    private static int findVtSlotAt(Address base, int nameOff, int descOff)
-    {
-        int s = 0;
-        while (s < gvCount)
-        {
-            if (utf8EqAt(base, nameOff, gvTab[s].base, gvTab[s].name)
-                    && utf8EqAt(base, descOff, gvTab[s].base, gvTab[s].desc))
-            {
-                return s;
-            }
-            s += 1;
-        }
-        return -1;
-    }
 
     /** Class-registry index of the class whose name Utf8 is at {@code nameOff} in gbase, or -1. */
     /** {@link #classRegByName} for a name in an ARBITRARY blob, not the one the parse cursor happens to be on.
@@ -13567,136 +12643,9 @@ public final class Loader
         return classRegAt(gbase, nameOff);               // gbase + offset: the same query, one spelling of three
     }
 
-    /**
-     * Vtable slot of a cross-class virtual/interface method. For invokevirtual the
-     * ref's class is the (loaded) declaring class, so a class+name+descriptor match
-     * finds the slot. For invokeinterface the ref's class is the interface (not a
-     * loaded class), so that match fails and we fall back to name+descriptor — sound
-     * while a single loaded class implements it.
-     */
-    static int logVtable;                               // #43 diagnostic: when != 0, log high-slot vtable resolutions
     static int logClinit;                                     // #43 diagnostic: when != 0, name each <clinit> as it runs
     static int logTrapWire;                                  // #43 diagnostic: when != 0, dump each patchRelocs trap-wired callee
 
-    /**
-     * The vtable slot for Methodref {@code idx} resolved ONLY against the class the ref names — no name+
-     * descriptor fallback. -1 when that class has no such slot, which is the question
-     * {@link #defaultDispatch} needs answered honestly: {@link #globalVtableSlot}'s fallback would hand back
-     * an unrelated class's slot rather than admit the miss.
-     */
-    private static int exactVtableSlot(int idx)
-    {
-        if (utf8Eq(refClassNameOff(idx), gThisNameOff))     // the class being compiled: its own flattened vtable
-        {
-            int own = findVtSlot(mrefNameOff(idx), mrefDescOff(idx));
-            if (own >= 0)
-            {
-                return own;
-            }
-        }
-        int i = vtEntryOf(gbase, refClassNameOff(idx), gbase, mrefNameOff(idx), gbase, mrefDescOff(idx));
-        return i >= 0 ? vtSlot[i] : -1;
-    }
-
-    /**
-     * Registry index of the interface in the ref CLASS's transitive closure that declares Methodref
-     * {@code idx}'s name+descriptor, or -1. Only consulted once {@link #exactVtableSlot} has missed, so the
-     * closure walk costs nothing on the ordinary path.
-     */
-    private static int defaultIfaceRegOf(int idx)
-    {
-        int rc = classRegByName(refClassNameOff(idx));
-        if (rc < 0 || clTab[rc] == null || clTab[rc].isIface)
-        {
-            return -1;
-        }
-        int n = ifaceClosureOf(rc);
-        int i = 0;
-        while (i < n)
-        {
-            int ir = ifClosureBuf[i];
-            if (ifmSlotIn(ir, gbase, mrefNameOff(idx), mrefDescOff(idx)) >= 0)
-            {
-                return ir;
-            }
-            i += 1;
-        }
-        return -1;
-    }
-
-    /** True if this {@code invokevirtual} must go through the itable -- see {@link Symbols#defaultDispatch}. */
-    static boolean defaultDispatch(int idx)
-    {
-        return exactVtableSlot(idx) < 0 && defaultIfaceRegOf(idx) >= 0;
-    }
-
-    /** Type node of the interface declaring the inherited default named by Methodref {@code idx}, or 0. */
-    static long defaultIfaceTypeOf(int idx)
-    {
-        int ir = defaultIfaceRegOf(idx);
-        return ir < 0 ? 0L : clTab[ir].type.toLong();
-    }
-
-    /** Slot of Methodref {@code idx} within that interface's flattened method list. */
-    static int defaultIfaceSlotOf(int idx)
-    {
-        int ir = defaultIfaceRegOf(idx);
-        return ir < 0 ? 0 : ifmSlotIn(ir, gbase, mrefNameOff(idx), mrefDescOff(idx));
-    }
-
-    static int globalVtableSlot(int idx)
-    {
-        int classOff = refClassNameOff(idx);
-        int nameOff = mrefNameOff(idx);
-        int descOff = mrefDescOff(idx);
-        int i = vtEntryOf(gbase, classOff, gbase, nameOff, gbase, descOff);   // class-qualified (invokevirtual)
-        if (i >= 0)
-        {
-            logVtableSlot(classOff, nameOff, descOff, vtSlot[i], 0x51);   // 'Q' class-qualified
-            return vtSlot[i];
-        }
-        // INHERITED: walk the referenced class's OWN SUPERCLASS CHAIN, most-derived first. That is what
-        // virtual dispatch means, and the slot is only meaningful within this chain's flattened numbering.
-        int reg = classRegByName(classOff);
-        int chain = reg;
-        while (chain >= 0)
-        {
-            i = vtEntryOf(clTab[chain].base, clTab[chain].nameOff, gbase, nameOff, gbase, descOff);
-            if (i >= 0)
-            {
-                logVtableSlot(classOff, nameOff, descOff, vtSlot[i], 0x48);   // 'H' cHain
-                return vtSlot[i];
-            }
-            chain = superRegOf(chain);
-        }
-        // NO name+descriptor fallback over unrelated classes. A slot number is an index into ONE class's
-        // flattened vtable, so matching some other class's method and returning ITS slot indexes whatever
-        // happens to sit at that position in the receiver. That was a live bug: `ZipInputStream.close()V` and
-        // `ZipOutputStream.close()V` both resolved to slot 18 -- at most one can be right, and in
-        // ZipOutputStream slot 18 is setMethod(I)V, so closing the stream called setMethod with a header
-        // value and threw "invalid compression method".
-        //
-        // This path serves invokevirtual ONLY (Baseline calls symbols.vtableSlot there; invokeinterface goes
-        // through ifSlotOf), so nothing needs the cross-class guess. Falling through to -1 costs nothing: the
-        // caller lowers a late-dispatch site that resolves against the RECEIVER's own class -- which is the
-        // right answer precisely when the referenced class is not registered yet (a deferred `new`, a
-        // reflectively reached body), the case the old fallback was silently guessing at.
-        // A MISS IS ALWAYS A BUG: returning 0 dispatches through vtable slot 0 of whatever the receiver
-        // happens to be -- one of java/lang/Object's nine virtuals -- so the call silently returns the wrong
-        // thing instead of failing. It happens when the referenced class is not registered at COMPILE time,
-        // which is routine for a method reached only reflectively: it is compiled on demand, and its callees'
-        // classes were never pulled. Static call sites got late resolution (link stubs) in PR #192; virtual
-        // ones still need it. VT_TRACE names the sites meanwhile.
-        if (VT_TRACE)
-        {
-            Uart.write(Magic.bytes("  VTMISS "));
-            writeName(gbase.plus(classOff + 2), u2(gbase.plus(classOff)));
-            Uart.putc(0x2E);
-            writeName(gbase.plus(nameOff + 2), u2(gbase.plus(nameOff)));
-            Uart.putc(0x0A);
-        }
-        return -1;                                      // unresolved -> the caller lowers a late-dispatch site
-    }
 
     // ----- late virtual dispatch ------------------------------------------------------------------------
     // A virtual call whose class is not registered at compile time has no slot to bake into the instruction.
@@ -14223,7 +13172,7 @@ public final class Loader
                 // itable directory naming the interface it satisfies -- and that interface is where the
                 // default body lives. Try it before reporting; this is the whole reason a stream pipeline
                 // could not call Sink.begin on a lambda downstream.
-                long ib = resolveViaItableDir(type, vsName.get(idx), vsDesc.get(idx));
+                long ib = InterfaceInvocation.resolveViaItableDir(type, vsName.get(idx), vsDesc.get(idx));
                 if (ib != 0L && plausibleCode(Address.fromLong(ib)))
                 {
                     vsMemoIdx = idx;
@@ -14259,9 +13208,9 @@ public final class Loader
                 Uart.write(Magic.bytes(" elem="));
                 VM.printHex(type.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong());
                 Uart.write(Magic.bytes(" objectType="));
-                VM.printHex(objectTypeAddr());
+                VM.printHex(TibBuilder.objectTypeAddr());
                 Uart.write(Magic.bytes("\n    synthesised(lambda/anno TIB)="));
-                VM.printDec(isSynthesisedTib(Address.fromLong(tib)));
+                VM.printDec(TibBuilder.isSynthesisedTib(Address.fromLong(tib)));
                 Uart.putc(0x0A);
             }
             return VM.denylistTrapAddr;
@@ -14388,9 +13337,9 @@ public final class Loader
     private static int viIfaceN;
     private static AddressArray viNames;
 
-    private static long resolveViaInterfaces(int ci, Address nameU, Address descU)
+    static long resolveViaInterfaces(int ci, Address nameU, Address descU)
     {
-        AddressArray names = AddressArray.create(MAXIFACEFALLBACK);
+        AddressArray names = AddressArray.create(InterfaceInvocation.MAXIFACEFALLBACK);
         // WALK THE SUPERCLASS CHAIN, not just the receiver's own interfaces. A default method is declared by
         // an interface that ANY class in the chain may implement, and the receiver itself often implements
         // nothing: SuiteEngineDescriptor extends EngineDescriptor extends AbstractTestDescriptor implements
@@ -14416,7 +13365,7 @@ public final class Loader
         // LoadableConstantEntry, whose default typeKind() failed late dispatch (VIRTUALRESOLVE FAILED) inside
         // SwitchBootstraps' generated switch (IndyDbg). Each interface is expanded once: names are per-blob
         // addresses, so the same interface can appear twice and is told apart by its registry index.
-        int[] expanded = new int[MAXIFACEFALLBACK];
+        int[] expanded = new int[InterfaceInvocation.MAXIFACEFALLBACK];
         int ne = 0;
         int i = 0;
         while (i < n)
@@ -14429,7 +13378,7 @@ public final class Loader
                 seen = expanded[e] == r;
                 e += 1;
             }
-            if (!seen && ne < MAXIFACEFALLBACK)
+            if (!seen && ne < InterfaceInvocation.MAXIFACEFALLBACK)
             {
                 expanded[ne] = r;
                 ne += 1;
@@ -14450,7 +13399,7 @@ public final class Loader
             regs[q] = regBySigU(names.get(q));
             q += 1;
         }
-        int decl = mostSpecificDeclarer(regs, n, nameU, descU);
+        int decl = InterfaceInvocation.mostSpecificDeclarer(regs, n, nameU, descU);
         if (decl >= 0)
         {
             long d = resolveLinkTarget(clTab[decl].base.plus(clTab[decl].nameOff),
@@ -14488,7 +13437,7 @@ public final class Loader
         parseConstPool(base, blobLenOf(base));
         int count = u2(base.plus(gAfterCp + 6));            // interfaces_count (ClassReader.afterInterfaces layout)
         int k = 0;
-        while (k < count && n < MAXIFACEFALLBACK)
+        while (k < count && n < InterfaceInvocation.MAXIFACEFALLBACK)
         {
             int cpi = u2(base.plus(gAfterCp + 8 + k * 2));
             if (cpi > 0)
@@ -14820,7 +13769,7 @@ public final class Loader
         }
         gStatics = clTab[reg].statics;                         // reuse the phase-A statics (cross-class getstatic keys on it)
         Indy.findBootstrapMethods();
-        parseVtable(blob);                                 // gvImplBuf/gvImplCode (for any invokevirtual in the body)
+        VtableLayout.parseVtable(blob);                                 // gvImplBuf/gvImplCode (for any invokevirtual in the body)
         gType = clTab[reg].type;
         gTib = clTab[reg].tib;
         parseForMethods(blob, len);                        // fresh gMethodsStart for the by-name method walk
@@ -14950,44 +13899,11 @@ public final class Loader
 
 
     /** Watch the vtable slot chosen for two named methods, whatever the slot number (see logVtableSlot). */
-    private static final boolean METHOD_WATCH_ON = false;
+    static final boolean METHOD_WATCH_ON = false;
 
-    /** #43: print a high-slot vtable resolution (class.name slot [Q|F]) so a garbage-slot wild-branch is traceable. */
-    private static void logVtableSlot(int classOff, int nameOff, int descOff, int slot, int path)
-    {
-        if (METHOD_WATCH_ON
-                && (Utf8.utf8IsAtBase(gbase, nameOff, Magic.bytes("success"))
-                    || Utf8.utf8IsAtBase(gbase, nameOff, Magic.bytes("blockingFailure"))))
-        {
-            // Watch two SPECIFIC methods regardless of slot. picocli's GroupMatchContainer.validate calls
-            // `validationResult.success()`; reflection proves success() answers TRUE on both SUCCESS
-            // constants, while the direct invokevirtual behaves as though it answered false. If these two
-            // no-arg booleans resolve to the SAME slot, success() is really running blockingFailure() --
-            // which returns false for a SUCCESS and produces exactly the observed maybeThrow(null).
-            Uart.write(Magic.bytes("  VW "));
-            writeName(gbase.plus(classOff + 2), u2(gbase.plus(classOff)));
-            Uart.putc(0x2E);
-            writeName(gbase.plus(nameOff + 2), u2(gbase.plus(nameOff)));
-            Uart.write(Magic.bytes(" slot "));
-            VM.printDec(slot);
-            Uart.putc(0x20);
-            Uart.putc((byte) path);
-            Uart.putc(0x0A);
-        }
-        if (logVtable == 0 || slot < 20) { return; }
-        Uart.write(Magic.bytes("  V "));
-        writeName(gbase.plus(classOff + 2), u2(gbase.plus(classOff)));
-        Uart.putc(0x2E);
-        writeName(gbase.plus(nameOff + 2), u2(gbase.plus(nameOff)));
-        Uart.putc(0x20);
-        VM.printDec(slot);
-        Uart.putc(0x20);
-        Uart.putc((byte) path);
-        Uart.putc(0x0A);
-    }
 
     /** Class-registry index of the class named by a {@code new}/type {@code Class} entry, or -1. */
-    private static int classRegOf(int classIdx)
+    static int classRegOf(int classIdx)
     {
         int nameOff = gcp[u2(gbase.plus(gcp[classIdx]))];   // Class entry -> name Utf8 offset
         // The class-name index (classRegAt): the same predicate as the scan this was, and the LOWEST matching
@@ -15242,187 +14158,6 @@ public final class Loader
         Uart.putc(0x0A);
     }
 
-    /**
-     * Build this class's Type (a one-word node holding its superclass's Type, so
-     * {@code instanceof} can walk the chain) and its TIB: slot 0 is the Type, then
-     * one vtable entry per flattened slot. {@code new} stores the TIB into each
-     * instance's header, so an object reaches both its vtable and its Type.
-     */
-    private static void buildTib()
-    {
-        allocTib();
-        fillTib();
-    }
-
-    /**
-     * Allocate this class's Type + TIB and set the fixed parts (Type node, TIB[0]=Type). The vtable slots and
-     * itable directory are filled later by {@link #fillTib} once the methods are placed. Splitting the alloc
-     * out lets loadOne register the class and pin a stable {@code gTib} address BEFORE compiling its
-     * {@code <clinit>}, so a {@code new Self()} in that initializer (e.g. {@code Unsafe.theUnsafe = new Unsafe()})
-     * bakes the correct TIB rather than the previous class's stale {@code gTib}. The <clinit> runs deferred
-     * (after patchRelocs), by which point {@link #fillTib} has populated the vtable.
-     */
-    private static void allocTib()
-    {
-        int sr = classRegByName(gSuperNameOff);
-        // ObjectModel layout: Type = { instanceSize@0, superType@8, itableDir@16 } (24
-        // bytes), so VM.instanceOf and the shared Baseline core read JIT'd objects the
-        // same way they read image objects (M5.4.e). The itableDir slot currently holds
-        // the flat imap; step 2 replaces it with a proper itable directory.
-        // M8 Type adoption: a baked class ADOPTS the writer's Type node instead of allocating its
-        // own -- one Type per class across both worlds. The two stores below are then idempotent
-        // (instanceSize matches by field-layout parity; superType matches because supers adopt
-        // too, so clTab[sr].type IS the writer's super node); itableDir stays loader-owned
-        // (buildTib overwrites it with this world's imap dir -- the writer side never reads it).
-        if (!gAdoptType.isZero())
-        {
-            gType = gAdoptType;
-            if (LOAD_LOG)
-            {
-                Uart.write(Magic.bytes("  typeadopt "));
-                printNameAt(gbase, gThisNameOff);
-                Uart.putc(0x0A);
-            }
-        }
-        else
-        {
-            gType = Heap.allocData(ObjectModel.TYPE_SIZE);
-        }
-        gType.plus(0).store((long) (16 + gifCount * 8));       // TYPE_INSTANCE_SIZE_OFFSET
-        gType.plus(8).store(sr >= 0 ? clTab[sr].type : Address.zero());   // TYPE_SUPER_OFFSET (0 at Object)
-        if (gAdoptType.isZero())
-        {
-            // O(1) type checks: metal-built class Types get a depth + display like the writer's
-            // (adopted nodes already carry the writer's -- never overwrite with batch-heap arrays).
-            gType.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).store(0L);
-            gType.plus(ObjectModel.TYPE_DEPTH_OFFSET).store(0L);
-            gType.plus(ObjectModel.TYPE_DISPLAY_OFFSET).store(0L);
-            gType.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).store(0L);       // bitmap built at fillTib
-            gType.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).store(0L);
-            buildDisplay(gType, sr >= 0 ? clTab[sr].type : Address.zero());
-            buildRefMap(gType, sr >= 0 ? clTab[sr].type : Address.zero());   // GC reference map (adopted nodes carry
-        }                                                        //   the writer's -- never overwrite it)
-        gTib = Heap.allocData((1 + gvCount) * 8);
-        gTib.store(gType);                      // TIB[0] = Type (slots filled by fillTib)
-    }
-
-    /**
-     * Build this class's GC reference map into its Type node: the superclass's map (already built — phase A
-     * runs super-first) plus one bit per OWN slot whose descriptor may hold a pointer. Same shape as
-     * {@link #buildDisplay}/{@code buildImplBitmap}, and the same numbering the writer uses, so an adopted
-     * Type and a metal-built one describe an instance identically.
-     *
-     * <p>Degrades to "no map" (both words 0, so the collector scans conservatively) when the super has no
-     * map or the class is wider than the two words can describe — never to a map that under-describes an
-     * object, which would free live data.
-     */
-    private static void buildRefMap(Address type, Address superType)
-    {
-        long w0 = 1L;                                   // bit 0: this map is computed
-        long w1 = 0L;
-        if (!superType.isZero())
-        {
-            w0 = superType.plus(ObjectModel.TYPE_REFMAP_OFFSET).loadLong();
-            w1 = superType.plus(ObjectModel.TYPE_REFMAP_OFFSET).plus(8L).loadLong();
-            if ((w0 & 1L) == 0L)
-            {
-                type.plus(ObjectModel.TYPE_REFMAP_OFFSET).store(0L);      // super is unmapped: so are we
-                type.plus(ObjectModel.TYPE_REFMAP_OFFSET).plus(8L).store(0L);
-                return;
-            }
-        }
-        int s = superFieldCount();                      // own fields start after the inherited ones
-        while (s < gifCount)
-        {
-            if (s > ObjectModel.TYPE_REFMAP_MAX_SLOT)
-            {
-                type.plus(ObjectModel.TYPE_REFMAP_OFFSET).store(0L);      // too wide to describe
-                type.plus(ObjectModel.TYPE_REFMAP_OFFSET).plus(8L).store(0L);
-                return;
-            }
-            if (mayHoldPointer(gifDescOff[s]))
-            {
-                if (s < 63)
-                {
-                    w0 = w0 | (1L << (s + 1));
-                }
-                else
-                {
-                    w1 = w1 | (1L << (s - 63));
-                }
-            }
-            s += 1;
-        }
-        type.plus(ObjectModel.TYPE_REFMAP_OFFSET).store(w0);
-        type.plus(ObjectModel.TYPE_REFMAP_OFFSET).plus(8L).store(w1);
-    }
-
-    /** Whether the field whose descriptor Utf8 sits at {@code descOff} may hold a pointer the collector
-     *  must follow: a reference ({@code L}/{@code [}) or a {@code long} — this VM keeps raw TIB/Type/
-     *  statics addresses in {@code long} fields ({@link RVMClass}), and skipping those would sweep the
-     *  live metadata. A stored Utf8 offset points at the length {@code u2}, so the text starts at +2. */
-    private static boolean mayHoldPointer(int descOff)
-    {
-        int k = u1(gbase.plus(descOff + 2));
-        return k == 0x4C || k == 0x5B || k == 0x4A;     // 'L' object, '[' array, 'J' long
-    }
-
-    /** Whether vtable slot {@code s} of the class being built is Object's hashCode, equals or toString. */
-    private static boolean isBakedDispatchSlot(int s)
-    {
-        Address b = gvTab[s].base;
-        int n = gvTab[s].name;
-        int d = gvTab[s].desc;
-        return (Utf8.utf8IsAtBase(b, n, Magic.bytes("hashCode")) && Utf8.utf8IsAtBase(b, d, Magic.bytes("()I")))
-                || (Utf8.utf8IsAtBase(b, n, Magic.bytes("equals")) && Utf8.utf8IsAtBase(b, d, Magic.bytes("(Ljava/lang/Object;)Z")))
-                || (Utf8.utf8IsAtBase(b, n, Magic.bytes("toString")) && Utf8.utf8IsAtBase(b, d, Magic.bytes("()Ljava/lang/String;")));
-    }
-
-    /** Fill the vtable slots (this class's + inherited impl code) and the itable directory. */
-    private static void fillTib()
-    {
-        int s = 0;
-        while (s < gvCount)
-        {
-            long b = slotBuf(s);
-            // A HOLE IN hashCode/equals/toString IS A WILD BRANCH, not a trap. Those three are what BAKED code
-            // dispatches on -- String.valueOf(Object) calls toString, Objects.equals calls equals, HashMap
-            // calls hashCode -- and baked code carries no dispatchTargetGuard (implicitChecks is false for the
-            // writer, by design). So a 0 there is `blr 0`, which the firmware's low-memory shim turns into
-            // re-entry of the image entry point: `BOOT RE-ENTERED`, with no exception and no name.
-            //
-            // The slot goes empty when RTA never saw the class instantiated -- a NATIVE instantiation, or a
-            // path the batch's reachability pass cannot follow -- so its overrides were pruned and never got a
-            // deferral stub. StackTraceElement was special-cased for exactly this (nativelyInstantiated); this
-            // is the general form, and it is why that comment ends "this is the list to add to".
-            //
-            // Scope is deliberate. Minting EVERY vtable slot costs 3-4x the code arena (measured), and the
-            // universal holes here are the wait/wait(J)/notify/notifyAll slots, which hole for all 891
-            // classes in a launcher closure, are final on Object, and dispatch through the monitor intrinsics
-            // rather than the vtable. Minting those would be ~3,500 stubs that can never be reached. The three
-            // hole for 55 classes in that same closure, and are the three baked code actually calls.
-            //
-            // They are matched by NAME, not by slot number. The test was `s >= 1 && s <= 3` while the
-            // hand-written Object declared hashCode, equals, toString first; the stock Object puts clone
-            // between equals and toString, so toString moved to slot 4, its hole went unminted, and baked
-            // String.valueOf branched to 0 (AtomicUpdaters, ByteViewProbe, DeflaterProbe).
-            if (b == 0L && isBakedDispatchSlot(s))
-            {
-                b = mintPrunedStub(s);
-            }
-            gTib.plus(8).plus(s * 8).store(b);            // TIB[1+slot] = impl code
-            s += 1;
-        }
-        long dir = buildItableDir();                    // M8 itables: per-interface tables (writer numbering)
-        if (dir != 0L && instImaps != null && instImapN < instImaps.length)
-        {
-            instImaps[instImapN] = dir;                 // capture the DIR for the post-phase-B default refill
-            instImapReg[instImapN] = classRegByName(gThisNameOff);
-            instImapN += 1;
-        }
-        gType.plus(16).store(dir);                 // TYPE_ITABLE_DIR_OFFSET
-        buildImplBitmap(gType);                         // O(1) interface checks: super bits | dir bits
-    }
 
     /** Print the Utf8 class name at (base, off) over the UART. */
     /** Name the class the metal JIT is compiling right now. Called from {@link VM#jitFail}: a bare reason
@@ -15541,9 +14276,6 @@ public final class Loader
      */
     static final boolean LOAD_LOG = false;
 
-    /** Name every {@code invokevirtual} whose vtable slot could not be resolved at compile time (debug). Each
-     *  one is a silent wrong dispatch through slot 0 -- see {@link #globalVtableSlot}. */
-    private static final boolean VT_TRACE = false;
 
     /** One line per batch: classes, relocs, registry size, and microseconds per {@link #loadAll} phase. */
     /**
@@ -15710,41 +14442,41 @@ public final class Loader
         printDur(ticksUs(cumRunCl));
         // The COUNTS these walk, so the growth is visible alongside the time rather than inferred from it.
         Uart.write(Magic.bytes(" n:imap="));
-        VM.printDec(instImapN);
+        VM.printDec(InterfaceInvocation.instImapN);
         Uart.write(Magic.bytes(" synth="));
-        VM.printDec(lambdaTibRootN);
+        VM.printDec(TibBuilder.lambdaTibRootN);
         Uart.write(Magic.bytes(" clinits="));
         VM.printDec(clinitN);
         // The refill memo, MEASURED: skip = the memo firing, clos = the closure walks it was meant to avoid,
         // holeEnd = imaps still short after a repair (those can never be memoised and pay in full every batch).
         Uart.write(Magic.bytes(" rf:skip="));
-        VM.printDec(rfSkip);
+        VM.printDec(InterfaceInvocation.rfSkip);
         Uart.write(Magic.bytes(" visit="));
-        VM.printDec(rfVisit);
+        VM.printDec(InterfaceInvocation.rfVisit);
         Uart.write(Magic.bytes(" clos="));
-        VM.printDec(rfClos);
+        VM.printDec(InterfaceInvocation.rfClos);
         Uart.write(Magic.bytes(" holeEnd="));
-        VM.printDec(rfHoleEnd);
+        VM.printDec(InterfaceInvocation.rfHoleEnd);
         // WHICH of the three is the growing one. `type` is the only walk that is O(everything loaded).
         Uart.write(Magic.bytes(" rfs:type="));
         VM.printDec(rfTypeSteps / 1000);
         Uart.write(Magic.bytes("k clos="));
-        VM.printDec(rfClosSteps / 1000);
+        VM.printDec(InterfaceInvocation.rfClosSteps / 1000);
         Uart.write(Magic.bytes("k fill="));
-        VM.printDec(rfFillSteps / 1000);
+        VM.printDec(InterfaceInvocation.rfFillSteps / 1000);
         // INSIDE a still-0 slot, which the three above cannot see. `hcls`/`hnam` are name BYTES folded per
         // probe -- they dwarfed the slot reads 22:1, so the refill's cost was re-deriving an immutable hash
         // rather than scanning anything. `hcls=0k` is the cached class-name prefix doing its job.
         Uart.write(Magic.bytes("k dbs="));
-        VM.printDec(rfDbsCalls / 1000);
+        VM.printDec(InterfaceInvocation.rfDbsCalls / 1000);
         Uart.write(Magic.bytes("k probe="));
-        VM.printDec(rfProbeSteps / 1000);
+        VM.printDec(InterfaceInvocation.rfProbeSteps / 1000);
         Uart.write(Magic.bytes("k hcls="));
         VM.printDec(rfHashSteps / 1000);
         Uart.write(Magic.bytes("k hnam="));
-        VM.printDec(rfHashNameSteps / 1000);
+        VM.printDec(InterfaceInvocation.rfHashNameSteps / 1000);
         Uart.write(Magic.bytes("k chain="));
-        VM.printDec(rfChainSteps / 1000);
+        VM.printDec(InterfaceInvocation.rfChainSteps / 1000);
         // THE SEED BLOCK's registry walks. `seeds` is the largest item in this phase and had never been
         // split; these say how much of it is `staticSlotOf` scanning a table that grows all boot.
         Uart.write(Magic.bytes("k sd:n="));
@@ -15804,11 +14536,11 @@ public final class Loader
         // value actually differed from what the slot held. Near zero and the pass is re-deriving an answer
         // it already has; large and only the objectClassIndex hoist (`obj`) is available.
         Uart.write(Magic.bytes(" sy:n="));
-        VM.printDec((int) syTibs);                       // RAW: this is the counter that must FREEZE once
+        VM.printDec((int) TibBuilder.syTibs);                       // RAW: this is the counter that must FREEZE once
         Uart.write(Magic.bytes(" slots="));              //   every TIB has latched, the way sd:n does
-        VM.printDec((int) (sySlots / 1000L));
+        VM.printDec((int) (TibBuilder.sySlots / 1000L));
         Uart.write(Magic.bytes("k chg="));
-        VM.printDec((int) syChanged);
+        VM.printDec((int) TibBuilder.syChanged);
         Uart.write(Magic.bytes(" obj="));
         VM.printDec((int) (syObjSteps / 1000L));
         Uart.putc(0x6B);
@@ -16963,7 +15695,7 @@ public final class Loader
         parseFields();                                  //   does, minus the TIB fill)
         gStatics = clTab[reg].statics;                  // reuse the phase-A statics block
         Indy.findBootstrapMethods();
-        parseVtable(blob);
+        VtableLayout.parseVtable(blob);
         gType = clTab[reg].type;
         gTib = clTab[reg].tib;                          // 0 for an interface; compileReuseTib means unused
         parseForMethods(blob, len);
@@ -17180,8 +15912,6 @@ public final class Loader
     // Superclass-chain hop cap for the late virtual resolve. A registry chain is acyclic by construction,
     // so this only bounds the damage if one ever is not -- a spin here would hang mid-dispatch.
     private static final int MAXCHAIN = 64;
-    /** Cap on the interface names virtualResolve's default-method tier will consider for one receiver. */
-    private static final int MAXIFACEFALLBACK = 64;
 
     // ---- unwindable stub frame layout ------------------------------------------------------------------
     // Shared by the three resolve trampolines (lazy-compile, link-resolve, late-virtual) and the lambda
@@ -17544,7 +16274,7 @@ public final class Loader
         parseFields();
         gStatics = clTab[reg].statics;
         Indy.findBootstrapMethods();
-        parseVtable(bytes);
+        VtableLayout.parseVtable(bytes);
         gType = clTab[reg].type;
         gTib = clTab[reg].tib;
         provideKnownStatics();
@@ -17682,13 +16412,13 @@ public final class Loader
         }
         // Every matching vtable entry names the same class, so regBySigU answers the same for all of them and
         // the first match decides, as it did in the scan.
-        k = vtEntryOf(clsU, 0, nameU, 0, descU, 0);
+        k = VtableLayout.vtEntryOf(clsU, 0, nameU, 0, descU, 0);
         if (k >= 0)
         {
             int r = regBySigU(clsU);
             if (r >= 0 && !clTab[r].tib.isZero())
             {
-                return clTab[r].tib.plus(8).plus(vtSlot[k] * 8L).loadLong();
+                return clTab[r].tib.plus(8).plus(VtableLayout.vtSlot[k] * 8L).loadLong();
             }
         }
         return 0L;
@@ -17758,38 +16488,11 @@ public final class Loader
     // M8 Type adoption: the writer's Type node for the class currently in phase A (0 = none) --
     // set by checkVtParity from the signature table, consumed by allocTib so a baked class has
     // ONE Type across both worlds (cross-world instanceof/checkcast compare equal pointers).
-    private static Address gAdoptType;
+    static Address gAdoptType;
 
-    private static long gVtSigSlots;    // matched vtSig entry's slot-pair table (0 = class not baked)
-    private static int gVtSigCount;     // ... its slot count
-    private static Address gAdoptStatics;  // M8 statics unification: the writer's dense per-class block (0 = none)
-    private static int gAdoptStaticCount;   // ... its declared-static slot count (guard vs gsfCount)
+    static Address gAdoptStatics;  // M8 statics unification: the writer's dense per-class block (0 = none)
+    static int gAdoptStaticCount;   // ... its declared-static slot count (guard vs gsfCount)
 
-    /** Find the current class's vtSig/adoption entry: sets gAdoptType/gAdoptStatics + parity data. */
-    private static void findVtSig()
-    {
-        gAdoptType = Address.zero();
-        gVtSigSlots = 0L;
-        gVtSigCount = 0;
-        gAdoptStatics = Address.zero();
-        gAdoptStaticCount = 0;
-        int n = (int) VM.vtSigCount;
-        int i = 0;
-        while (i < n)
-        {
-            Address e = Address.fromLong(VM.vtSigTable + (long) i * 48L);
-            if (utf8EqAt(gbase, gThisNameOff, e.loadAddress(), 0))
-            {
-                gVtSigSlots = e.plus(8L).loadLong();
-                gVtSigCount = (int) e.plus(16L).loadLong();
-                gAdoptType = e.plus(24L).loadAddress();
-                gAdoptStatics = e.plus(32L).loadAddress();
-                gAdoptStaticCount = (int) e.plus(40L).loadLong();
-                return;
-            }
-            i += 1;
-        }
-    }
 
     /** M8 statics unification: replace the freshly-allocated gStatics with the writer's dense
      *  per-class block -- ONE home per static field across both worlds (this world's <clinit>
@@ -17819,153 +16522,6 @@ public final class Loader
         gStatics = gAdoptStatics;
     }
 
-    private static void checkVtParity()
-    {
-        findVtSig();
-        if (gVtSigSlots != 0L)
-        {
-            vtParityAt(gVtSigSlots, gVtSigCount);
-        }
-    }
-
-    /** M8 itables: verify interface {@code reg}'s flattened per-interface slot numbering against
-     *  the writer's (the vtSig entry carries its flattened interfaceMethods list) -- checked at
-     *  registration, before any implementor builds an itable from the run. Uses the entry found by
-     *  the branch's earlier {@link #findVtSig} call. */
-    private static void checkIfParity(int reg)
-    {
-        if (gVtSigSlots == 0L)
-        {
-            return;                                     // not a baked interface: nothing to compare
-        }
-        if (LOAD_LOG)                                   // the header; a DIFF prints its own below, so a
-        {                                               //   parity failure is never silenced by the flag
-            Uart.write(Magic.bytes("  itparity "));
-            printNameAt(gbase, gThisNameOff);
-        }
-        if (gVtSigCount != clTab[reg].ifmCount)
-        {
-            ifParityHeader();
-            Uart.write(Magic.bytes(" DIFF count "));
-            VM.printDec(gVtSigCount);
-            Uart.putc(0x2F);
-            VM.printDec(clTab[reg].ifmCount);
-            Uart.putc(0x0A);
-            return;
-        }
-        int s = 0;
-        while (s < gVtSigCount)
-        {
-            Address p = Address.fromLong(gVtSigSlots + (long) s * 16L);
-            int i = clTab[reg].ifmStart + s;
-            if (!utf8EqAt(ifBase.get(i), ifNameOff[i], p.loadAddress(), 0)
-                    || !utf8EqAt(ifBase.get(i), ifDescOff[i], p.plus(8L).loadAddress(), 0))
-            {
-                ifParityHeader();
-                Uart.write(Magic.bytes(" DIFF slot "));
-                VM.printDec(s);
-                Uart.putc(0x0A);
-                return;
-            }
-            s += 1;
-        }
-        if (LOAD_LOG)
-        {
-            Uart.write(Magic.bytes(" OK "));
-            VM.printDec(gVtSigCount);
-            Uart.putc(0x0A);
-        }
-    }
-
-    /** Print the itparity header a DIFF needs when {@link #LOAD_LOG} left it out. */
-    private static void ifParityHeader()
-    {
-        if (!LOAD_LOG)
-        {
-            Uart.write(Magic.bytes("  itparity "));
-            printNameAt(gbase, gThisNameOff);
-        }
-    }
-
-    /** Compare the current class's gv flattening against writer slot signatures at {@code slots}. */
-    private static void vtParityAt(long slots, int count)
-    {
-        if (LOAD_LOG)                                   // header only; every DIFF below prints its own
-        {
-            Uart.write(Magic.bytes("  vtparity "));
-            printNameAt(gbase, gThisNameOff);
-        }
-        if (count != gvCount)
-        {
-            vtParityHeader();
-            Uart.write(Magic.bytes(" DIFF count "));
-            VM.printDec(count);
-            Uart.putc(0x2F);
-            VM.printDec(gvCount);
-            Uart.putc(0x0A);
-            int w = 0;                                  // name the writer slots the loader lacks: a bare count
-                                                        //   mismatch says nothing, and the missing names ARE
-                                                        //   the diagnosis (six Object virtuals = no Object)
-            while (w < count)
-            {
-                Address q = Address.fromLong(slots + (long) w * 16L);
-                int f = 0;
-                int found = 0;
-                while (f < gvCount)
-                {
-                    if (utf8EqAt(gvTab[f].base, gvTab[f].name, q.loadAddress(), 0)
-                            && utf8EqAt(gvTab[f].base, gvTab[f].desc, q.plus(8L).loadAddress(), 0))
-                    {
-                        found = 1;
-                        f = gvCount;
-                    }
-                    f += 1;
-                }
-                if (found == 0)
-                {
-                    Uart.write(Magic.bytes("    missing slot "));
-                    VM.printDec(w);
-                    Uart.putc(0x20);
-                    writeName(q.loadAddress().plus(2L), u2(q.loadLong()));
-                    writeName(q.plus(8L).loadAddress().plus(2L), u2(q.plus(8L).loadLong()));
-                    Uart.putc(0x0A);
-                }
-                w += 1;
-            }
-            return;
-        }
-        int s = 0;
-        while (s < count)
-        {
-            Address p = Address.fromLong(slots + (long) s * 16L);
-            if (!utf8EqAt(gvTab[s].base, gvTab[s].name, p.loadAddress(), 0)
-                    || !utf8EqAt(gvTab[s].base, gvTab[s].desc, p.plus(8L).loadAddress(), 0))
-            {
-                vtParityHeader();
-                Uart.write(Magic.bytes(" DIFF slot "));
-                VM.printDec(s);
-                Uart.putc(0x0A);
-                return;
-            }
-            s += 1;
-        }
-        if (LOAD_LOG)
-        {
-            Uart.write(Magic.bytes(" OK "));
-            VM.printDec(count);
-            Uart.putc(0x0A);
-        }
-    }
-
-    /** Print the vtparity header a DIFF needs when {@link #LOAD_LOG} left it out. */
-    private static void vtParityHeader()
-    {
-        if (!LOAD_LOG)
-        {
-            Uart.write(Magic.bytes("  vtparity "));
-            printNameAt(gbase, gThisNameOff);
-        }
-    }
 
     /**
      * The writer-baked, loader-linkable compiled buffer for the CURRENT class's method with the given
@@ -18274,264 +16830,8 @@ public final class Loader
         }
     }
 
-/**
-     * Repair default-method imap slots left 0 during phase B. {@link #buildImap} fills an unoverridden interface
-     * method's slot with {@link #defaultImplOf} = the interface default's COMPILED buffer, but phase B is
-     * superclass-first (not super-interface-first), so the interface holding the default may be emitted AFTER an
-     * implementor -- leaving its rgBuf (hence the slot) 0 at buildImap time (e.g. Streams$RangeIntSpliterator's
-     * slot for Spliterator.getExactSizeIfKnown -> copyInto blr'd a 0 slot). Now that every body is emitted, re-run
-     * defaultImplOf for each still-0 slot. Safe: defaultImplOf is context-free (persistent ifBase/rgBuf), returns
-     * 0 for abstract methods, and a filled slot for an interface a class doesn't implement is never dispatched
-     * (its dir lacks that interface). Mirrors fillClassVtBuf for the vtable.
-     */
-    private static void refillImaps()
-    {
-        int m = 0;
-        while (m < instImapN)
-        {
-            if (instImapDone[m])                        // no holes last time -> a no-op now; see instImapDone
-            {
-                rfSkip += 1;
-                m += 1;
-                continue;
-            }
-            rfVisit += 1;
-            Address dir = Address.fromLong(instImaps[m]);                    // the class's itable DIRECTORY (per-interface tables)
-            int reg = instImapReg[m];
-            if (reg < 0 || dir.isZero())
-            {
-                instImapDone[m] = true;                 // nothing to repair, ever
-                m += 1;
-                continue;
-            }
-            // ONE PASS OVER THE SLOTS, not three. This used to pre-scan with itableHasHole (to decide whether
-            // to compute the closure), then scan again to refill, then scan a THIRD time to ask whether a hole
-            // survived. The pre-scan bought almost nothing and the counters said so: `clos` was 1060 against
-            // 1156 visits, i.e. 92% of visited imaps had a hole somewhere anyway, so the closure was being
-            // computed regardless. refillItable already tests every slot for 0, so it can report what it saw.
-            rfClos += 1;
-            int n = ifaceClosureOf(reg);                // the class's full interface set (persistent registries)
-            int slots = imapSlotCount(dir.toLong());
-            int[] decl = instImapDecl[m];
-            if (decl == null || instImapDeclN[m] != n || decl.length != slots)
-            {
-                decl = new int[slots];                  // the closure grew (or first visit): see instImapDecl
-                int d = 0;
-                while (d < slots)
-                {
-                    decl[d] = -2;
-                    d += 1;
-                }
-                instImapDecl[m] = decl;
-                instImapDeclN[m] = n;
-            }
-            boolean holes = false;
-            int off = 0;
-            int k = 0;
-            Address t = dir.loadAddress();
-            while (!t.isZero())                             // walk entries by their TYPE key (order-independent)
-            {
-                int ir = regOfType(t);
-                if (ir >= 0)
-                {
-                    long it = dir.plus(k * 16).plus(8).loadLong();
-                    if (refillItable(n, ir, it, decl, off))   // still short after the repair: a later batch may
-                    {                                         //   compile the class that declares the default
-                        holes = true;
-                    }
-                    off += clTab[ir].ifmCount;
-                }
-                k += 1;
-                t = dir.plus(k * 16).loadAddress();
-            }
-            if (holes)
-            {
-                rfHoleEnd += 1;
-            }
-            instImapDone[m] = !holes;
-            m += 1;
-        }
-    }
-
-    /**
-     * Refill still-0 slots of interface {@code ir}'s itable {@code it} with late-compiled defaults, and report
-     * whether any slot is STILL 0 afterwards -- which is what tells {@link #refillImaps} it cannot memoise
-     * this imap yet, because a later batch may compile the class that declares the default.
-     *
-     * <p>Answering that here rather than re-scanning is the point: the caller used to walk these same slots
-     * twice more (once to decide whether to call at all, once to ask the question this now answers), and the
-     * loop already reads every slot.
-     */
-    private static boolean refillItable(int n, int ir, long it, int[] decl, int off)
-    {
-        boolean hole = false;
-        int s = 0;
-        while (s < clTab[ir].ifmCount)
-        {
-            rfFillSteps += 1;
-            if (Address.fromLong(it).plus(s * 8L).loadLong() == 0L)
-            {
-                int i = clTab[ir].ifmStart + s;
-                int d = decl[off + s];
-                if (d == -2)
-                {
-                    d = mostSpecificDeclarer(ifClosureBuf, n, ifBase.get(i).plus(ifNameOff[i]), ifBase.get(i).plus(ifDescOff[i]));
-                    decl[off + s] = d;
-                }
-                long b;
-                if (d >= 0)
-                {
-                    buildRegIndex();                    // regBodyIn probes it; incremental, as in defaultBySig
-                    b = regBodyIn(d, ifBase.get(i), ifNameOff[i], ifDescOff[i]);   // what defaultBySig returns here
-                }
-                else
-                {
-                    b = defaultBySig(n, ifBase.get(i), ifNameOff[i], ifDescOff[i]);   // no declarer: the full search
-                }
-                if (b != 0L)
-                {
-                    Address.fromLong(it).plus(s * 8L).store(b);
-                }
-                else
-                {
-                    hole = true;
-                }
-            }
-            s += 1;
-        }
-        return hole;
-    }
-
-    /** Itable slots in directory {@code dir}: the sum of its registered interfaces' run lengths, in walk order. */
-    private static int imapSlotCount(long dir)
-    {
-        int total = 0;
-        int k = 0;
-        Address t = Address.fromLong(dir).loadAddress();
-        while (!t.isZero())
-        {
-            int ir = regOfType(t);
-            if (ir >= 0)
-            {
-                total += clTab[ir].ifmCount;
-            }
-            k += 1;
-            t = Address.fromLong(dir).plus(k * 16).loadAddress();
-        }
-        return total;
-    }
-
-    /** {@link #ifaceClosure} but for an already-registered class {@code reg}, from the PERSISTENT registries
-     *  ({@code clIfaceReg}/{@code clSuperReg}) rather than the transient current-compile state -- so refillImaps
-     *  can recompute a class's interface set after phase B. Fills {@link #ifClosureBuf}; returns the count. */
-    static int ifaceClosureOf(int reg)
-    {
-        int n = 0;
-        int j = 0;
-        while (j < clIfaceRegN[reg])                    // reg's own directly-declared interfaces
-        {
-            n = addIfaceUnique(n, clIfaceReg[reg * MAX_DIRECT_IF + j]);
-            j += 1;
-        }
-        int sr = superRegOf(reg);                           // the whole superclass chain's direct interfaces
-        int guard = 0;
-        while (sr >= 0 && guard < 64)
-        {
-            j = 0;
-            while (j < clIfaceRegN[sr])
-            {
-                n = addIfaceUnique(n, clIfaceReg[sr * MAX_DIRECT_IF + j]);
-                j += 1;
-            }
-            sr = superRegOf(sr);
-            guard += 1;
-        }
-        int i = 0;
-        while (i < n)                                   // fold in each collected interface's extended interfaces
-        {
-            int r = ifClosureBuf[i];
-            j = 0;
-            while (j < clIfaceRegN[r])
-            {
-                n = addIfaceUnique(n, clIfaceReg[r * MAX_DIRECT_IF + j]);
-                j += 1;
-            }
-            i += 1;
-        }
-        return n;
-    }
-
-    /** A concrete (default) impl of interface-method global-index {@code g} declared in one of the {@code n}
-     *  interfaces in {@link #ifClosureBuf}, or 0. Unlike {@link #defaultImplOf} (which only checks the interface
-     *  the method was FIRST registered in), this finds a default an implementing SUB-interface provides for a
-     *  method declared abstract in a super-interface -- e.g. {@code Spliterator.OfInt}'s
-     *  {@code tryAdvance(Consumer)} for the abstract {@code Spliterator.tryAdvance(Consumer)}. */
-    private static long defaultBySig(int n, Address base, int nameOff, int descOff)
-    {
-        // THE REGISTRY IS PROBED BY NAME HASH, NOT SCANNED. This was a linear walk of all rgCount entries per
-        // closure interface, and refillImaps calls it for EVERY PERMANENTLY-EMPTY itable slot on EVERY batch --
-        // slots that can never be filled, because nothing in the closure declares a body for them (an abstract
-        // method the class declares itself, or a native with no VM helper). Measured on the launcher it was
-        // 97.9% of the whole imap refill (fillT=19,427ms of imap=19,852ms at batch 10) and grew with rgCount,
-        // which is why per-batch cost climbed 1.3s -> 3.6s across a boot. Same defect and same remedy as the
-        // demand-load arc's `pull` pass, where a per-item linear registry scan went 6,664ms -> 1,539ms on a
-        // name hash index.
-        //
-        // THE CLOSURE ORDER IS PRESERVED EXACTLY: this returns the first match in CLOSURE order, so the chain
-        // is walked once per closure interface rather than taking the first entry the bucket happens to yield.
-        // Two interfaces in one closure may both declare the same name+descriptor, and picking the other one
-        // would change which default body runs -- silently.
-        buildRegIndex();
-        rfDbsCalls += 1;
-        // THE MAXIMALLY SPECIFIC DECLARER, NOT THE FIRST REGISTERED BODY. Taking the first closure interface
-        // whose body happened to be registered answered by HISTORY: with Square extends Base(implements Shape)
-        // implements Polygon(extends Shape, overrides kind), Shape.kind was registered (Base's itable needed
-        // it) and Polygon.kind was not yet, so Square's itable got Shape.kind -- `shape` for a `polygon` --
-        // whenever something had registered the less specific body first (VirtualInvokeProbe in a batch). The
-        // declarer is decided from the interfaces' own declarations; if its body is not registered yet the slot
-        // stays a hole, which refill and late dispatch resolve to that declarer, never to a less specific one.
-        int decl = mostSpecificDeclarer(ifClosureBuf, n, base.plus(nameOff), base.plus(descOff));
-        if (decl >= 0)
-        {
-            return regBodyIn(decl, base, nameOff, descOff);
-        }
-        int i = 0;
-        while (i < n)
-        {
-            int ir = ifClosureBuf[i];
-            Address ibase = clTab[ir].base;                   // a closure interface's blob; its own methods registered under it
-            rfProbeSteps += 1;
-            rfHashNameSteps += u2(base.plus(nameOff));
-            // Hashed PER INTERFACE now that the index is keyed on class+name -- the interface supplies the
-            // class half. CLOSURE ORDER IS STILL EXACT: one probe per closure interface, walked in order, so
-            // the first match is the same entry the name-only chain would have yielded.
-            //
-            // THE CLASS HALF IS NOT RE-FOLDED. It is the PREFIX of the FNV key and depends only on the closure
-            // interface, so it is cached at registration; this continues the fold over the method name and
-            // lands in exactly the bucket utf8Hash2 would have. MEASURED before it was written, because the
-            // four step counters above rank only slot READS and could not see this at all: over a demo-suite
-            // boot the class-name bytes were 916k of the refill's 1,420k steps, the method-name bytes 415k,
-            // and the slot reads 61k -- while `chain` read 0k, i.e. these probes reach an EMPTY bucket and
-            // computing the key was the entire cost of a search that is expected to fail.
-            int k = rgBucket[Utf8.utf8HashFrom(clTab[ir].nameHash, base, nameOff) & (RGTAB - 1)];
-            while (k >= 0)
-            {
-                rfChainSteps += 1;
-                if (rgTab[k].base.EQ(ibase) && rgTab[k].buf != 0L
-                        && utf8EqAt(base, nameOff, rgTab[k].base, rgTab[k].nameOff)
-                        && utf8EqAt(base, descOff, rgTab[k].base, rgTab[k].descOff))
-                {
-                    return rgTab[k].buf;
-                }
-                k = rgNext[k];
-            }
-            i += 1;
-        }
-        return 0L;
-    }
-
     /** The registered body interface {@code ir} declares for (name, desc in {@code base}), or 0 if none is. */
-    private static long regBodyIn(int ir, Address base, int nameOff, int descOff)
+    static long regBodyIn(int ir, Address base, int nameOff, int descOff)
     {
         Address ibase = clTab[ir].base;
         int k = rgBucket[Utf8.utf8HashFrom(clTab[ir].nameHash, base, nameOff) & (RGTAB - 1)];
@@ -18546,105 +16846,6 @@ public final class Loader
             k = rgNext[k];
         }
         return 0L;
-    }
-
-    /**
-     * itable directory (ObjectModel): one {@code {interfaceType, itable}} entry per
-     * implemented interface — TRANSITIVELY, so a super-interface reached only through
-     * another interface (or the superclass) is keyed too. Every entry shares this class's
-     * flat imap as its itable — the metal indexes the imap by the interface method's
-     * <em>global</em> slot ({@link #ifSlotOf}), so one table serves all interfaces. The
-     * directory adds the interfaceType-keyed lookup the core's {@code invokeinterface}
-     * searches for; without the transitive entries, a call site typed to a super-interface
-     * (e.g. {@code Iterable.iterator} on an {@code ArrayList implements List extends Iterable})
-     * would miss and the search would run past the sentinel.
-     */
-    private static long buildItableDir()
-    {
-        int n = ifaceClosure();
-        if (n == 0)
-        {
-            return 0L;
-        }
-        Address dir = Heap.allocData((n + 1) * 16);             // {interfaceType@0, itable@8} + sentinel
-        int k = 0;
-        while (k < n)
-        {
-            dir.plus(k * 16).plus(0).store(clTab[ifClosureBuf[k]].type);   // interfaceType
-            dir.plus(k * 16).plus(8).store(buildItableFor(ifClosureBuf[k], n));   // PER-interface itable
-            k += 1;
-        }
-        dir.plus(k * 16).plus(0).store(0L);             // sentinel: interfaceType 0 ends the directory
-        dir.plus(k * 16).plus(8).store(0L);
-        return dir.toLong();
-    }
-
-    /**
-     * The transitive set of interfaces the current class implements, as registry indices in
-     * {@link #ifClosureBuf} (return = count). Seeds with this class's directly-declared interfaces plus the
-     * superclass's, then repeatedly folds in each collected interface's own extended interfaces
-     * ({@link #clIfaceReg}) until closed. De-duped.
-     */
-    private static int ifaceClosure()
-    {
-        int n = 0;
-        int k = 0;
-        while (k < gImplIfCount)                         // this class's directly-declared interfaces
-        {
-            int r = classRegByName(gImplIfName[k]);
-            if (r >= 0)
-            {
-                n = addIfaceUnique(n, r);
-            }
-            k += 1;
-        }
-        int sr = classRegByName(gSuperNameOff);          // interfaces inherited from the ENTIRE superclass chain --
-        int guard = 0;                                   // an interface implemented several levels up (e.g. IntPipeline$1
-        while (sr >= 0 && guard < 64)                    // -> StatelessOp -> ReferencePipeline implements Stream) must
-        {                                                // still be in this class's dir, else invokeinterface misses it
-            int j = 0;                                   // (walking only the immediate super dropped Stream 2 levels up).
-            while (j < clIfaceRegN[sr])
-            {
-                n = addIfaceUnique(n, clIfaceReg[sr * MAX_DIRECT_IF + j]);
-                j += 1;
-            }
-            sr = superRegOf(sr);
-            guard += 1;
-        }
-        int i = 0;
-        while (i < n)                                    // fold in each collected interface's extended interfaces
-        {
-            int r = ifClosureBuf[i];
-            int j = 0;
-            while (j < clIfaceRegN[r])
-            {
-                n = addIfaceUnique(n, clIfaceReg[r * MAX_DIRECT_IF + j]);
-                j += 1;
-            }
-            i += 1;
-        }
-        return n;
-    }
-
-    /** Append registry index {@code r} to {@link #ifClosureBuf} if absent; return the new count. */
-    private static int addIfaceUnique(int n, int r)
-    {
-        rfClosSteps += 1;
-        int i = 0;
-        while (i < n)
-        {
-            if (ifClosureBuf[i] == r)
-            {
-                return n;
-            }
-            i += 1;
-        }
-        if (n < ifClosureBuf.length)
-        {
-            ifClosureBuf[n] = r;
-            n += 1;
-        }
-        return n;
     }
 
 
@@ -18907,7 +17108,7 @@ public final class Loader
 
 
     /** Compiled buffer for flattened slot {@code s}: inherited (pre-resolved) or this class's own. */
-    private static long slotBuf(int s)
+    static long slotBuf(int s)
     {
         if (gvTab[s].implBuf != 0L)
         {
@@ -18932,7 +17133,7 @@ public final class Loader
      * precede the bytecode ({@code {u2 maxStack}{u2 maxLocals}{u4 codeLen}}). Non-static by construction: a
      * vtable slot only ever holds an instance method. 0 if the lazy table is full, leaving the old behaviour.
      */
-    private static long mintPrunedStub(int s)
+    static long mintPrunedStub(int s)
     {
         long code = gvTab[s].implCode;
         if (code == 0L)
@@ -18986,65 +17187,6 @@ public final class Loader
         lzTab[idx].stubLit = writeLazyStub(buf, idx).toLong();
         gvTab[s].implBuf = buf.toLong();                // a class implementing N interfaces that each declare
         return buf.toLong();                            //   this method would otherwise mint N identical stubs
-    }
-
-    /**
-     * Vtable slot of the virtual method named by Methodref {@code idx}. Same-class
-     * calls use this class's own vtable; a call whose ref names another class (a
-     * cross-class {@code invokevirtual}) or an interface resolves via the global
-     * vtable registry against the receiver class's layout.
-     */
-    static int vtableSlotOf(int idx)
-    {
-        // VarHandle ops are signature-polymorphic: the call-site descriptor is the actual arg types
-        // (e.g. getAndBitwiseOr:(Ljava/net/Socket;I)I), not any declared method's. This USED to resolve by
-        // NAME ALONE against a hand-written VarHandle overlay's vtable -- which is why one reference-typed
-        // `set` served every `set` whatever its descriptor, storing an int AS A REFERENCE.
-        //
-        // Nothing is matched here now, deliberately: with stock VarHandle the implementation is the
-        // template-generated handle's STATIC method (`set(VarHandle,Object,int)`), which is not a VarHandle
-        // virtual at all, so there is no slot to answer with. Falling through means vtableSlot answers -1
-        // and lowerInvokeVirtual takes its existing late-resolve path -- whose register layout already
-        // matches, since an invokevirtual passes (x0=handle, x1=holder, x2=value) and that IS the generated
-        // static's signature. virtualResolve then resolves against the receiver's own class.
-        if (utf8Eq(refClassNameOff(idx), gThisNameOff))
-        {
-            int s = findVtSlot(mrefNameOff(idx), mrefDescOff(idx));   // this class's flattened vtable
-            if (s >= 0)
-            {
-                logVtableSlot(refClassNameOff(idx), mrefNameOff(idx), mrefDescOff(idx), s, 0x53);   // 'S' same-class
-                return s;
-            }
-        }
-        int g = globalVtableSlot(idx);
-        if (g < 0 && isObjectPublicMethod(idx))
-        {
-            // An Object method named through an INTERFACE (`inner.hashCode()` on an annotation-typed receiver
-            // is `invokeinterface Inner.hashCode`, routed here by lowerInvokeInterface). The interface has no
-            // vtable and its chain never reaches Object's entries, so this used to answer -1 and the site went
-            // to VIRTUAL_RESOLVE -- which, against a synthesised annotation object (no registry entry), fell
-            // back to Object.hashCode: an IDENTITY hash. Object's own slot is in the prefix every vtable shares,
-            // so it dispatches to the receiver's override exactly as an Object-typed call does.
-            g = objectVtableSlot(mrefNameOff(idx), mrefDescOff(idx));
-        }
-        return g;
-    }
-
-    /** {@code java/lang/Object}'s vtable slot for name+descriptor (offsets in the current blob), or -1. */
-    private static int objectVtableSlot(int nameOff, int descOff)
-    {
-        int i = 0;
-        while (i < vtCount)
-        {
-            if (Utf8.utf8IsAtBase(vtClassBase.get(i), vtClassOff[i], Magic.bytes("java/lang/Object"))
-                    && utf8EqAt(gbase, nameOff, vtNameBase.get(i), vtNameOff[i])
-                    && utf8EqAt(gbase, descOff, vtNameBase.get(i), vtDescOff[i]))
-            {
-                return vtSlot[i];
-            }
-            i += 1;
-        }
-        return -1;
     }
 
 
@@ -19535,25 +17677,9 @@ public final class Loader
         return best;
     }
 
-    /** Wrap a built lambda thunk into a class: imap (SAM slot -> thunk), itable dir, Type, TIB; return the TIB. */
-    /** True if registry index {@code r} is already among the first {@code n} entries of {@code ifClosureBuf}. */
-    static boolean inIfaceClosure(int r, int n)
-    {
-        int i = 0;
-        while (i < n)
-        {
-            if (ifClosureBuf[i] == r)
-            {
-                return true;
-            }
-            i += 1;
-        }
-        return false;
-    }
-
 
     /** Compare two Utf8 entries in the current class by length + bytes. */
-    private static boolean utf8Eq(int offA, int offB)
+    static boolean utf8Eq(int offA, int offB)
     {
         return utf8EqAt(gbase, offA, gbase, offB);
     }
@@ -19587,136 +17713,6 @@ public final class Loader
     }
 
 
-    /** Type node of the class named by {@code Class} entry {@code classIdx}, or 0 if unloaded. */
-    static Address typeOfClass(int classIdx)
-    {
-        // Self-reference (a class doing `x instanceof Self` / `(Self) x`): the current class isn't in the
-        // registry until AFTER its own compile, but its Type node (gType) is already built by buildTib —
-        // and it's the very node the class's own instances carry, so instanceof/checkcast resolve correctly.
-        int nameOff = gcp[u2(gbase.plus(gcp[classIdx]))];
-        if (u1(gbase.plus(nameOff + 2)) == 0x5B)            // '[' : an array class ("[B", "[Ljava/...;", "[[I")
-        {
-            Address tib = ArrayTypes.arrayTibOfDesc(gbase, nameOff);
-            return tib.isZero() ? Address.zero() : tib.loadAddress();  // the array Type (checkcast/instanceof target)
-        }
-        if (utf8EqAt(gbase, nameOff, gbase, gThisNameOff))
-        {
-            return gType;
-        }
-        int r = classRegOf(classIdx);
-        return r >= 0 ? clTab[r].type : Address.zero();
-    }
-
-
-    static Address objectTypeAddr()
-    {
-        int i = 0;
-        while (i < clCount)
-        {
-            if (Utf8.utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/Object")))
-            {
-                return clTab[i].type;
-            }
-            i += 1;
-        }
-        return Address.zero();
-    }
-
-
-    /** Number of vtable slots a SYNTHESISED TIB reserves (= java/lang/Object's flattened vtable count), or 0.
-     *  Used by array, lambda and annotation TIBs alike -- none of them has a classfile, and all of them are
-     *  nonetheless ordinary objects whose equals/hashCode/toString must select Object's implementations. */
-    static int objectVtableCount()
-    {
-        int oi = objectClassIndex();
-        return oi >= 0 ? clTab[oi].vtCount : 0;
-    }
-
-    /** Copy java/lang/Object's vtable slots into the array TIB {@code tib} (after its Type slot). Object's slots
-     *  are only FILLED when Object's body is compiled (fillTib), which can happen AFTER an array TIB is first
-     *  created (e.g. a string literal interns a byte[] before Object compiles) -- so a freshly-made array TIB may
-     *  copy zeros. {@link ArrayTypes#refillArrayTibVtables} re-runs this over every cached array TIB once Object is done. */
-    /** {@link #fillObjectVtable} bounded by the TIB's own slot capacity (see {@code lambdaTibVtCap}). */
-    /**
-     * {@link #fillObjectVtable} bounded by the TIB's own slot capacity. Answers whether the TIB is now FULL
-     * -- filled to every slot it has room for -- which is the only condition under which the caller may
-     * latch it and stop revisiting.
-     */
-    private static boolean fillObjectVtableUpTo(Address tib, int cap)
-    {
-        int oi = objectClassIndex();
-        if (oi < 0)
-        {
-            return false;                                // Object not registered yet: nothing filled, no latch
-        }
-        syTibs += 1;
-        int nv = clTab[oi].vtCount;
-        int n = nv < cap ? nv : cap;
-        int k = 0;
-        while (k < n)
-        {
-            long want = clTab[oi].tib.plus(8L).plus((long) k * 8L).loadLong();
-            sySlots += 1;
-            if (tib.plus(8L).plus((long) k * 8L).loadLong() != want)
-            {
-                syChanged += 1;                          // the write that was actually NECESSARY. This read
-            }                                            //   is the evidence the latch below rests on: it
-            tib.plus(8L).plus((long) k * 8L).store(want);//   must stay ~= the first-fill count, never grow
-            k += 1;
-        }
-        return n >= cap;                                 // COMPLETE, not merely attempted -- see lambdaTibFilled
-    }
-
-    /** Re-copy Object's (now-filled) vtable into every synthesised lambda/annotation TIB, bounded by the
-     *  capacity each was built with. Same repair as {@link ArrayTypes#refillArrayTibVtables} and for the same reason:
-     *  a TIB built before Object's body was compiled copied zeros, and a 0 slot is a wild branch from baked
-     *  code (which carries no dispatch guard) rather than a named trap. */
-    private static void refillSynthTibVtables()
-    {
-        if (lambdaTibRoots == null)
-        {
-            return;
-        }
-        int i = 0;
-        while (i < lambdaTibRootN)
-        {
-            if (!lambdaTibRoots.get(i).isZero() && !lambdaTibFilled[i])
-            {
-                if (fillObjectVtableUpTo(lambdaTibRoots.get(i), lambdaTibVtCap[i]))
-                {
-                    lambdaTibFilled[i] = true;           // complete: nothing more can ever be written here
-                }
-                if (AnnotationInstances.isAnnoTib(lambdaTibRoots.get(i)))   // the refill copies Object's slots back over the
-                {                                       //   annotation contract: put it back
-                    AnnotationInstances.patchAnnoContract(lambdaTibRoots.get(i), lambdaTibVtCap[i], Address.zero());
-                }
-                int px = ProxySupport.proxyIndexOfTib(lambdaTibRoots.get(i));
-                if (px >= 0)                            // ... and over a proxy's equals/hashCode/toString
-                {
-                    ProxySupport.patchProxyObject(px);
-                }
-            }
-            i += 1;
-        }
-    }
-
-    static void fillObjectVtable(Address tib)
-    {
-        int oi = objectClassIndex();
-        if (oi < 0)
-        {
-            return;
-        }
-        int nv = clTab[oi].vtCount;
-        int k = 0;
-        while (k < nv)
-        {
-            tib.plus(8L).plus((long) k * 8L).store(clTab[oi].tib.plus(8L).plus((long) k * 8L).loadLong());
-            k += 1;
-        }
-    }
-
-
     /** Class-registry index of {@code java/lang/Object}, or -1 if it isn't loaded yet. */
     static int objectClassIndex()
     {
@@ -19731,85 +17727,6 @@ public final class Loader
             i += 1;
         }
         return -1;
-    }
-
-
-    /** O(1) type checks: give {@code type} a depth + superclass display (depth+1 Type addrs,
-     *  display[d] = ancestor at depth d, display[depth] = self). Copies the super's display, so it
-     *  requires the super's Type to be complete (supers register first; adopted supers carry the
-     *  writer's). A super without a display leaves this one without too (the walk fallback holds). */
-    static void buildDisplay(Address type, Address superType)
-    {
-        long d = 0L;
-        Address sd = Address.zero();
-        if (!superType.isZero())
-        {
-            sd = superType.plus(ObjectModel.TYPE_DISPLAY_OFFSET).loadAddress();
-            if (sd.isZero())
-            {
-                return;                                  // super has no display: stay on the walk
-            }
-            d = superType.plus(ObjectModel.TYPE_DEPTH_OFFSET).loadLong() + 1L;
-        }
-        Address disp = Heap.allocData(((int) d + 1) * 8);
-        long i = 0L;
-        while (i < d)
-        {
-            disp.plus(i * 8L).store(sd.plus(i * 8L).loadLong());
-            i += 1;
-        }
-        disp.plus(d * 8L).store(type);
-        type.plus(ObjectModel.TYPE_DEPTH_OFFSET).store(d);
-        type.plus(ObjectModel.TYPE_DISPLAY_OFFSET).store(disp);
-    }
-
-    /** O(1) interface checks: (re)build {@code type}'s doesImplement bitmap = the super's bitmap |
-     *  any bits already present (an ADOPTED node keeps its writer bits) | this type's own itable-dir
-     *  interfaces' ID bits. Unnumbered dir interfaces are simply skipped -- their targets fall back
-     *  to the dir walk, so the bitmap stays definitive for every NUMBERED interface. A super without
-     *  a computed bitmap leaves this type without one too (walk fallback). */
-    static void buildImplBitmap(Address type)
-    {
-        long b0 = 1L;                                    // bit 0 = computed marker
-        long b1 = 0L;
-        Address superType = type.plus(ObjectModel.TYPE_SUPER_OFFSET).loadAddress();
-        if (!superType.isZero())
-        {
-            long sb0 = superType.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).loadLong();
-            if ((sb0 & 1L) == 0L)
-            {
-                return;                                  // super uncomputed: stay on the walk
-            }
-            b0 |= sb0;
-            b1 |= superType.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).loadLong();
-        }
-        long own0 = type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).loadLong();
-        if ((own0 & 1L) != 0L)                           // adopted node: keep the writer's bits
-        {
-            b0 |= own0;
-            b1 |= type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).loadLong();
-        }
-        Address e = type.plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).loadAddress();
-        if (!e.isZero())
-        {
-            Address iface = e.plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadAddress();
-            while (!iface.isZero())
-            {
-                long id = iface.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).loadLong();
-                if (id > 0L && id < 64L)
-                {
-                    b0 |= 1L << (int) id;
-                }
-                else if (id >= 64L && id < 128L)
-                {
-                    b1 |= 1L << (int) (id - 64L);
-                }
-                e = e.plus(ObjectModel.ITABLE_ENTRY_SIZE);
-                iface = e.plus(ObjectModel.ITABLE_ENTRY_IFACE_OFFSET).loadAddress();
-            }
-        }
-        type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).store(b0);
-        type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).store(b1);
     }
 
 
@@ -19843,108 +17760,6 @@ public final class Loader
      *
      * <p>{@code classMirror} caches per Type, so this is the SAME object {@code Foo.class} yields.
      */
-
-
-    /**
-     * The target Type of an {@code instanceof} / {@code checkcast}, which the compiler bakes as an IMMEDIATE --
-     * so a class not registered when the body compiles was a 0 for ever, and against 0 every instanceof answers
-     * FALSE and every checkcast of a non-null throws. Measured: stock StreamZipEntriesTest's
-     * {@code zf.stream().forEach(e -> assertTrue(e instanceof ZipEntry))} printed {@code e=java.util.zip.ZipEntry
-     * inst=false}, because the lambda body compiled when the lambda was LINKED, before the first ZipEntry
-     * existed. The class-literal route, for the same reason: note the pull, let the compile be discarded and
-     * redone with the class loaded. A class that is still absent afterwards is NAMED (denylisted ones excepted,
-     * where absent is the intended state) rather than left to answer false in silence.
-     */
-    static long typeOfCheckedClass(int classCp)
-    {
-        long type = typeOfClass(classCp).toLong();
-        int nameOff0 = gcp[u2(gbase.plus(gcp[classCp]))];
-        if (u1(gbase.plus(nameOff0 + 2)) == 0x5B)
-        {
-            // AN ARRAY OF A CLASS NOTHING PULLED. typeOfClass does not answer 0 for it: it answers the array Type
-            // keyed by element Type 0 -- ONE shared "array of ?" node -- so `(Parameter[]) x` compiled before
-            // Parameter was registered cast against that node and threw `cannot be cast to class [?` for ever
-            // (AccessFlagsProbe in a batch: Executable.getParameters' clone() checkcast, compiled lazily). Same
-            // route as a class: pull the ELEMENT and redo the compile.
-            int len = u2(gbase.plus(nameOff0));
-            int d = 0;
-            while (d < len && u1(gbase.plus(nameOff0 + 2 + d)) == 0x5B)
-            {
-                d += 1;
-            }
-            if (d < len && u1(gbase.plus(nameOff0 + 2 + d)) == 0x4C
-                    && ArrayTypes.elementTypeOfArrayDescN(gbase, nameOff0 + 2 + d - 1, len - d + 1).isZero())
-            {
-                int elOff = nameOff0 + 2 + d + 1;       // past the '['s and the 'L'
-                int elLen = len - d - 2;                // minus the trailing ';'
-                if (lzCompiling && !lzRetried && notePullNeededElement(gbase, elOff, elLen))
-                {
-                    return 0L;                          // discarded compile: retried with the element loaded
-                }
-                if (!isDenylistedSlice(gbase, elOff, elLen))
-                {
-                    reportUnresolvedTypeCheck(gbase.plus(nameOff0));
-                }
-            }
-            return type;
-        }
-        if (type == 0L)
-        {
-            int nameOff = gcp[u2(gbase.plus(gcp[classCp]))];
-            if (u1(gbase.plus(nameOff + 2)) != 0x5B
-                    && lzCompiling && !lzRetried && notePullNeeded(gbase.plus(nameOff)))
-            {
-                return 0L;                                          // discarded compile: retried with it loaded
-            }
-            if (!isDenylisted(gbase.plus(nameOff), 0))
-            {
-                reportUnresolvedTypeCheck(gbase.plus(nameOff));
-            }
-        }
-        return type;
-    }
-
-    /** Name a type-check target that stayed unresolved, once per class (the NULL CLASS LITERAL report's shape). */
-    private static void reportUnresolvedTypeCheck(Address clsU)
-    {
-        if (unresTypeSeen == null)
-        {
-            unresTypeSeen = new long[64];
-            unresTypeSeenN = 0;
-        }
-        int k = 0;
-        while (k < unresTypeSeenN)
-        {
-            if (unresTypeSeen[k] == clsU.toLong())
-            {
-                return;
-            }
-            k += 1;
-        }
-        if (unresTypeSeenN < 64)
-        {
-            unresTypeSeen[unresTypeSeenN] = clsU.toLong();
-            unresTypeSeenN += 1;
-        }
-        Uart.write(Magic.bytes("\n  UNRESOLVED TYPE CHECK: "));
-        printNameAt(clsU, 0);
-        Uart.write(Magic.bytes(" -- instanceof answers false and checkcast throws; "));
-        printWhyUnpulled(clsU);
-        if (!lzCompiling)
-        {
-            Uart.write(Magic.bytes(", and OUTSIDE the retry window"));
-        }
-        else if (lzRetried)
-        {
-            Uart.write(Magic.bytes(", and the body's single retry was already spent"));
-        }
-        Uart.write(Magic.bytes("; needed by "));
-        printCompiling();
-        Uart.putc(0x0A);
-    }
-
-    private static long[] unresTypeSeen;
-    private static int unresTypeSeenN;
 
 
     /** The Type of {@code java/lang/Throwable}, or 0 if it is not loaded. Cached: this is asked on a fault path. */
@@ -20484,13 +18299,6 @@ public final class Loader
 
     // ----- resolvers the on-metal MetalSymbols shares with emit* (M5.4.c) -----
 
-    /** TIB of the class at {@code Class} entry {@code classIdx} (its own if not yet registered). */
-    static long tibOfClass(int classIdx)
-    {
-        int r = classRegOf(classIdx);
-        noteInitNeeded(r);                              // `new C` is an active use of C (JVMS 5.5)
-        return (r >= 0 ? clTab[r].tib : gTib).toLong();            // unregistered => the SELF case (objectSizeOf traps the rest)
-    }
 
     /** True if the {@code Class} entry {@code classIdx} names the class being compiled. */
     private static boolean selfClassAt(int classIdx)
@@ -20721,12 +18529,6 @@ public final class Loader
         Uart.putc(0x0A);
     }
 
-    /** Type node of the interface owning InterfaceMethodref {@code idx}. */
-    static long ifaceTypeOfMethod(int idx)
-    {
-        int classIdx = u2(gbase.plus(gcp[idx]));            // *ref.class_index -> Class entry
-        return typeOfClass(classIdx).toLong();
-    }
 
     // ----- the on-metal MetalSymbols stubs made real: strings + magic intrinsics -----
 

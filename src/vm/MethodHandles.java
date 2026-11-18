@@ -74,7 +74,7 @@ final class MethodHandles
     }
 
     /**
-     * The MH trampoline: {@link #virtualTramp}'s shape, with the resolver handed the SAVE AREA (x0 = the address
+     * The MH trampoline: {@link Loader#virtualTramp}'s shape, with the resolver handed the SAVE AREA (x0 = the address
      * of the saved x0) rather than the receiver, because a linkTo* target is named by the LAST argument and an
      * invoke's handle may be REPLACED (invoke adapts it), so mhResolve has to read and write the saved registers.
      */

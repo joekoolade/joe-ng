@@ -3230,7 +3230,7 @@ public final class VM
         }
         // ...and the one relation a Type node cannot express: interface EXTENDS interface. An interface Type
         // is a chain dead end, so typeAssignable answers class-implements-interface and stops there.
-        return Loader.ifaceExtends(fromType, targetType);
+        return InterfaceInvocation.ifaceExtends(fromType, targetType);
     }
 
     private static boolean typeAssignable(Address type, Address targetType)
@@ -3250,7 +3250,7 @@ public final class VM
                 // (an interface Type is a chain dead end), so Sub[] -> Base[] failed checkcast -- MEASURED:
                 // AnnotationSupport's cast of a repeated annotation's Tag[] to Annotation[] threw
                 // ClassCastException, and getAnnotationsByType with it (RepeatableProbe, ArrayCovarianceProbe).
-                if (Loader.ifaceExtends(elemType, elemTarget) != 0)
+                if (InterfaceInvocation.ifaceExtends(elemType, elemTarget) != 0)
                 {
                     return true;
                 }
@@ -3259,7 +3259,7 @@ public final class VM
                 // no display, no superclass link), so it never reaches Object. Map.Entry[] -> Object[] is
                 // the live case -- AbstractCollection.toArray(T[]) casts exactly that, which is how
                 // Map.copyOf(...) (java.util.jar.Attributes$Name's initializer) reached a checkCast spin.
-                return elemTarget.EQ(Loader.objectTypeAddr());
+                return elemTarget.EQ(TibBuilder.objectTypeAddr());
             }
             // a primitive element on either side is invariant: only the exact-match below can succeed
         }

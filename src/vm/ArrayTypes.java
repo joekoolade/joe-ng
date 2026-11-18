@@ -95,7 +95,7 @@ final class ArrayTypes
      * null is not an error a caller sees: it is the answer for "not an array", so every caller branching on it
      * took the not-an-array path for a real array. The element SIZE cannot stand in either
      * ({@code byte[]}/{@code boolean[]} are both 1, {@code int[]}/{@code float[]} both 4), so the descriptor
-     * char is recovered by IDENTITY against the per-atype TIB cache -- the same trick {@link #classNameLen}
+     * char is recovered by IDENTITY against the per-atype TIB cache -- the same trick {@link Loader#classNameLen}
      * already uses to render {@code "[I"}, and one that also works for a writer-BAKED array Type the loader
      * merely adopted, which no metal-side field would have been filled in for.
      */
@@ -314,7 +314,7 @@ final class ArrayTypes
     private static Address makeArrayTib(int elemSize, Address elementType)
     {
         Address type = Heap.allocData(ObjectModel.ARRAY_TYPE_SIZE);
-        Address objType = Loader.objectTypeAddr();
+        Address objType = TibBuilder.objectTypeAddr();
         type.plus(ObjectModel.TYPE_INSTANCE_SIZE_OFFSET).store(ObjectModel.ARRAY_TYPE_TAG | (long) elemSize);
         type.plus(ObjectModel.TYPE_SUPER_OFFSET).store(objType);            // arr instanceof Object
         type.plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).store(0L);            // Cloneable/Serializable: later
@@ -323,19 +323,19 @@ final class ArrayTypes
         type.plus(ObjectModel.TYPE_DISPLAY_OFFSET).store(0L);
         type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).store(1L);   // empty-but-computed bitmap
         type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).store(0L);
-        Loader.buildDisplay(type, objType);                     // depth 1, display [Object, self]
+        DynamicTypeCheck.buildDisplay(type, objType);                     // depth 1, display [Object, self]
         // The array TIB carries java/lang/Object's vtable so an invokevirtual on an array works. An array's static
         // type is Object at a dispatch site (e.g. Arrays.deepEquals0's `e1.equals(e2)`, or `element.toString()` in
         // String.valueOf/join), so the receiver's TIB must resolve equals/hashCode/toString to Object's impls.
         // Without the vtable the dispatch read past a 1-word TIB and BLR'd garbage (a wild branch to the image entry).
-        int nv = Loader.objectVtableCount();
+        int nv = TibBuilder.objectVtableCount();
         Address tib = Heap.allocData(8 + nv * 8);
         tib.plus(ObjectModel.TIB_TYPE_SLOT * 8).store(type);                // TIB[0] = Type
-        Loader.fillObjectVtable(tib);                                                   // TIB[1..] = Object's vtable slots
+        TibBuilder.fillObjectVtable(tib);                                                   // TIB[1..] = Object's vtable slots
         return tib;
     }
 
-    /** Re-copy Object's (now-filled) vtable into every cached array TIB. Called at the end of {@link #loadAll},
+    /** Re-copy Object's (now-filled) vtable into every cached array TIB. Called at the end of {@link Loader#loadAll},
      *  after Object's body is compiled, to repair any array TIB that was created with a still-empty Object vtable
      *  (else an invokevirtual on that array reads a 0 slot and the null-vtable guard throws AIOOBE). */
     static void refillArrayTibVtables()
@@ -347,7 +347,7 @@ final class ArrayTypes
             {
                 if (!primArrTib.get(a).isZero() && !primArrAdopted[a])
                 {
-                    Loader.fillObjectVtable(primArrTib.get(a));                 // adopted (baked) TIBs keep their writer impls
+                    TibBuilder.fillObjectVtable(primArrTib.get(a));                 // adopted (baked) TIBs keep their writer impls
                 }
                 a += 1;
             }
@@ -357,7 +357,7 @@ final class ArrayTypes
         {
             if (!refArrTib.get(r).isZero() && !refArrAdopted[r])
             {
-                Loader.fillObjectVtable(refArrTib.get(r));                      // adopted (baked) TIBs keep their writer impls
+                TibBuilder.fillObjectVtable(refArrTib.get(r));                      // adopted (baked) TIBs keep their writer impls
             }
             r += 1;
         }
@@ -573,7 +573,7 @@ final class ArrayTypes
      */
     static Address refArrayTibForClass(int classCp)
     {
-        Address type = Loader.typeOfClass(classCp);
+        Address type = DynamicTypeCheck.typeOfClass(classCp);
         if (type.isZero())
         {
             int nameOff = Loader.gcp[u2(Loader.gbase.plus(Loader.gcp[classCp]))];
@@ -583,7 +583,7 @@ final class ArrayTypes
                 return Address.zero();                              // discarded compile: retried with it loaded
             }
             reportUntypedArray(Loader.gbase.plus(nameOff));
-            Address obj = Loader.objectTypeAddr();
+            Address obj = TibBuilder.objectTypeAddr();
             return obj.isZero() ? Address.zero() : refArrayTib(obj);   // Object[]: covariance holds, elements traced
         }
         return refArrayTib(type);

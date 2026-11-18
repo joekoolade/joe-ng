@@ -146,9 +146,9 @@ final class ProxySupport
         int k = 0;
         while (k < nv)
         {
-            Address b = Loader.vtNameBase.get(st + k);
-            int no = Loader.vtNameOff[st + k];
-            int dof = Loader.vtDescOff[st + k];
+            Address b = VtableLayout.vtNameBase.get(st + k);
+            int no = VtableLayout.vtNameOff[st + k];
+            int dof = VtableLayout.vtDescOff[st + k];
             long thunk = 0L;
             if (Utf8.utf8IsAtBase(b, no, Magic.bytes("hashCode")) && Utf8.utf8IsAtBase(b, dof, Magic.bytes("()I")))
             {
@@ -237,8 +237,8 @@ final class ProxySupport
                 {
                     Address nb = Address.fromLong(namesArr).plus(24L).plus(j * 8L).loadAddress();
                     Address db = Address.fromLong(descsArr).plus(24L).plus(j * 8L).loadAddress();
-                    if (Utf8.rawEqUtf8(nb.plus(24L), (int) nb.plus(16L).loadLong(), Loader.ifBase.get(m), Loader.ifNameOff[m])
-                            && Utf8.rawEqUtf8(db.plus(24L), (int) db.plus(16L).loadLong(), Loader.ifBase.get(m), Loader.ifDescOff[m]))
+                    if (Utf8.rawEqUtf8(nb.plus(24L), (int) nb.plus(16L).loadLong(), InterfaceInvocation.ifBase.get(m), InterfaceInvocation.ifNameOff[m])
+                            && Utf8.rawEqUtf8(db.plus(24L), (int) db.plus(16L).loadLong(), InterfaceInvocation.ifBase.get(m), InterfaceInvocation.ifDescOff[m]))
                     {
                         thunk = proxyThunk(Address.fromLong(methodsArr).plus(24L).plus(j * 8L).loadLong(), helper);
                     }
@@ -257,10 +257,10 @@ final class ProxySupport
         type.plus(0L).store((long) (16 + Loader.clTab[pr].fieldCount * 8));   // Proxy's instance: header + h
         type.plus(ObjectModel.TYPE_SUPER_OFFSET).store(Loader.clTab[pr].type);
         type.plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).store(dir);
-        int onv = Loader.objectVtableCount();
+        int onv = TibBuilder.objectVtableCount();
         Address tib = Heap.allocData(8 + onv * 8);
         tib.plus(0L).store(type);
-        Loader.fillObjectVtable(tib);
+        TibBuilder.fillObjectVtable(tib);
         int i = proxyN;
         proxyTypes.set(i, type);
         proxyTibs.set(i, tib);
@@ -272,14 +272,14 @@ final class ProxySupport
         }
         proxyN += 1;
         patchProxyObject(i);
-        if (Loader.lambdaTibRoots != null && Loader.lambdaTibRootN < Loader.MAXLAMBDATIB)
+        if (TibBuilder.lambdaTibRoots != null && TibBuilder.lambdaTibRootN < TibBuilder.MAXLAMBDATIB)
         {
-            Loader.lambdaTibRoots.set(Loader.lambdaTibRootN, tib);             // the same GC root a lambda's TIB has: nothing scanned
-            Loader.lambdaTibVtCap[Loader.lambdaTibRootN] = onv;       //   would otherwise reach it
-            Loader.lambdaTibFilled[Loader.lambdaTibRootN] = false;
-            Loader.lambdaHostBase.set(Loader.lambdaTibRootN, Address.zero());        // a proxy has no host class
-            Loader.lambdaHostNameOff[Loader.lambdaTibRootN] = 0;
-            Loader.lambdaTibRootN += 1;
+            TibBuilder.lambdaTibRoots.set(TibBuilder.lambdaTibRootN, tib);             // the same GC root a lambda's TIB has: nothing scanned
+            TibBuilder.lambdaTibVtCap[TibBuilder.lambdaTibRootN] = onv;       //   would otherwise reach it
+            TibBuilder.lambdaTibFilled[TibBuilder.lambdaTibRootN] = false;
+            TibBuilder.lambdaHostBase.set(TibBuilder.lambdaTibRootN, Address.zero());        // a proxy has no host class
+            TibBuilder.lambdaHostNameOff[TibBuilder.lambdaTibRootN] = 0;
+            TibBuilder.lambdaTibRootN += 1;
         }
         return ClassMirrors.classMirror(type);
     }

@@ -200,7 +200,7 @@ final class RuntimeEntrypoints
     /**
      * Allocate a mini {@code java/lang/NegativeArraySizeException} — the JIT's newarray/anewarray/multianewarray
      * length helper — whose message is the length in decimal, as stock's is ({@code "-1"}). It used to carry
-     * none. The class is already force-loaded by {@link #pullSupportClasses} and flagged instantiated, so this
+     * none. The class is already force-loaded by {@link Loader#pullSupportClasses} and flagged instantiated, so this
      * needs no seeding of its own.
      */
     static long newNase(long length)
