@@ -530,11 +530,11 @@ final class CodeCompact
     private static long tibSlots()
     {
         long t = 0L;
-        int n = Loader.classRegCount();
+        int n = ClassRegistry.classRegCount();
         int i = 0;
         while (i < n)
         {
-            RVMClass c = Loader.classRegAt(i);
+            RVMClass c = ClassRegistry.classRegAt(i);
             if (c != null && !c.tib.isZero())
             {
                 t += c.vtCount;
@@ -557,11 +557,11 @@ final class CodeCompact
      */
     private static int explainedTib(long slot)
     {
-        int n = Loader.classRegCount();
+        int n = ClassRegistry.classRegCount();
         int i = 0;
         while (i < n)
         {
-            RVMClass c = Loader.classRegAt(i);
+            RVMClass c = ClassRegistry.classRegAt(i);
             if (c != null && !c.tib.isZero())
             {
                 long lo = c.tib.toLong() + 8L;
@@ -814,7 +814,7 @@ final class CodeCompact
         Uart.write(Magic.bytes(" lazyN="));
         VM.printDec(Loader.lazyCount());
         Uart.write(Magic.bytes(" classes="));
-        VM.printDec(Loader.classRegCount());
+        VM.printDec(ClassRegistry.classRegCount());
         Uart.write(Magic.bytes(" tibSlots="));
         VM.printDec((int) tibSlots());
         Uart.putc(0x0A);

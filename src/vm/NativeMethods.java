@@ -97,12 +97,12 @@ final class NativeMethods
         int hops = 0;
         while (c >= 0 && hops < 64)
         {
-            Address clsU = Loader.clTab[c].base.plus(Loader.clTab[c].nameOff);
+            Address clsU = ClassRegistry.clTab[c].base.plus(ClassRegistry.clTab[c].nameOff);
             if (declaredNative(clsU, nameU, descU))
             {
                 return missingNativeThunk(clsU, nameU, descU);
             }
-            c = Loader.superRegOf(c);
+            c = ClassRegistry.superRegOf(c);
             hops += 1;
         }
         return 0L;
@@ -122,7 +122,7 @@ final class NativeMethods
         VM.loaderLock(VM.LOCK_REFLECT);
         try
         {
-            if (Loader.classIndexByName(name) < 0)
+            if (ClassRegistry.classIndexByName(name) < 0)
             {
                 Loader.loadClassIncremental(name);
             }
@@ -152,7 +152,7 @@ final class NativeMethods
         VM.loaderLock(VM.LOCK_REFLECT);
         try
         {
-            if (Loader.classIndexByName(name) < 0)
+            if (ClassRegistry.classIndexByName(name) < 0)
             {
                 Loader.loadClassIncremental(name);
             }

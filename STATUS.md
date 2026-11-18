@@ -4,6 +4,27 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **LOADER REFACTOR, INCREMENT 7: the registries out of `vm/Loader` (2026-11-17).** Pure move -- the most-referenced
+  tables in the VM (`clTab` alone is read from 20+ files).
+  - **`ClassRegistry`**: `clTab`/`clCount` (a GC root as a static, as before), the name index (`clBucket`), the
+    Type -> registry index (`ctBucket` + its comment), `classIndexByName`/`ByType` + `ctMemo`, `classRegAt`/
+    `ByName`/`ByType`/`ByBlob`, `regOfType`, `regOfObject`, `superRegOf`.
+  - **`MethodRegistry`**: `rgTab`/`rgCount`, the BODYLESS side table (`bdTab`), the (class, name) index
+    (`rgBucket`), `register`/`registerAll`, `globalBuf`, `methodIndexOf`.
+  - **`Statics`** (JikesRVM `runtime/Statics`): the static-field registry `sgTab` + index, `staticAddr`,
+    `globalStaticAddr`, inherited statics, `staticSlotOf*`, `registerStaticFields`.
+  - **`FieldRegistry`** (added; the plan had three classes): the instance-field registry `fldTab` + index,
+    `globalFieldOffset`, `instanceFieldOffset`, `fieldOffsetOf`, `fieldIsVolatile`.
+  - **Also:** `MAXMIRROR` (missed in increment 4) moved to `ClassMirrors`; the counters each lookup bumps
+    (`rbCalls`, `rfTypeSteps`, `psSteps`, `sgScan*`) moved with it.
+  - **Stays:** resolution by constant-pool reference (`globalBufByRef`, `globalStaticByRef`) -> DynamicLinker;
+    `registerClassStructure` (phase-A load).
+  - **Loader 18,953 -> 17,814 lines.** Image 39,539,504 -> 39,540,040 bytes (+536).
+  - **Validation:** `make test` + overlaycheck clean; 49 probes (every 4th non-solo probe in the list + field/static
+    probes) pass. **Speed A/B** vs a main control, SslEngineProbe solo, 4 pairs with the order reversed for the last
+    two: **ctl 99/103/107/107 (mean 104 s), test 103/107/105/109 (mean 106 s)**. The run second in a pair tends to be
+    slower and times drift upward through the session, so the ~2% is not separable from noise; the four new classes
+    have no `<clinit>`, ruling out an init guard on their statics. Not run: full regression, suite, JUnit, Pi.
 - **LOADER REFACTOR, INCREMENT 6: vtables, interface dispatch, TIBs and type checks out of `vm/Loader`
   (2026-11-17).** Pure move -- the first increment on the hot dispatch paths.
   - **`VtableLayout`**: the flattened vtable layout (`parseVtable`, `inheritVtable`), the global slot registry

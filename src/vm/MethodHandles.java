@@ -165,12 +165,12 @@ final class MethodHandles
     /** {@code MethodHandleNatives.classBytes0}: a guest copy of the class file the class was loaded from, or 0. */
     static long classFileCopy(Address type)
     {
-        int reg = Loader.regOfType(type);
-        if (reg < 0 || Loader.clTab[reg] == null)
+        int reg = ClassRegistry.regOfType(type);
+        if (reg < 0 || ClassRegistry.clTab[reg] == null)
         {
             return 0L;
         }
-        Address base = Loader.clTab[reg].base;
+        Address base = ClassRegistry.clTab[reg].base;
         if (base.isZero() || u4(base) != 0xCAFEBABE)
         {
             return 0L;
@@ -391,13 +391,13 @@ final class MethodHandles
         int li = exact ? mhLinkExactIdx : mhLinkGenericIdx;
         if (li < 0)
         {
-            int reg = Loader.classRegByNameBytes(Magic.bytes("java/lang/invoke/MethodHandleNatives"));
+            int reg = ClassRegistry.classRegByNameBytes(Magic.bytes("java/lang/invoke/MethodHandleNatives"));
             if (reg < 0)
             {
                 Uart.write(Magic.bytes("\n  MH LINK: java/lang/invoke/MethodHandleNatives is not loaded\n"));
                 return 0L;
             }
-            li = Reflection.methodResolveExact(Loader.clTab[reg].type,
+            li = Reflection.methodResolveExact(ClassRegistry.clTab[reg].type,
                     ObjectReference.fromLong(Loader.guestBytes(exact ? Magic.bytes("linkExact") : Magic.bytes("linkGeneric"))),
                     ObjectReference.fromLong(Loader.guestBytes(Magic.bytes("(Ljava/lang/invoke/MethodHandle;Ljava/lang/String;)Ljava/lang/invoke/MethodHandle;"))));
             if (exact)
@@ -422,13 +422,13 @@ final class MethodHandles
     /** Byte offset of the instance field the named class itself declares, or -1. */
     static long declaredFieldOffset(byte[] cls, byte[] field)
     {
-        int reg = Loader.classRegByNameBytes(cls);
+        int reg = ClassRegistry.classRegByNameBytes(cls);
         if (reg < 0)
         {
             return -1L;
         }
         long g = Loader.guestBytes(field);
-        return Reflection.fieldOffsetOfType(Loader.clTab[reg].type, Address.fromLong(g).plus(24L), field.length);
+        return Reflection.fieldOffsetOfType(ClassRegistry.clTab[reg].type, Address.fromLong(g).plus(24L), field.length);
     }
 
     /** The number of parameters in the absolute {@code {u2 len}(...)ret} descriptor at {@code descU}. */
@@ -473,12 +473,12 @@ final class MethodHandles
     {
         int start = -1;
         int ci = 0;
-        while (ci < Loader.clCount)
+        while (ci < ClassRegistry.clCount)
         {
-            if (Loader.clTab[ci] != null && Loader.clTab[ci].tib.EQ(tib))
+            if (ClassRegistry.clTab[ci] != null && ClassRegistry.clTab[ci].tib.EQ(tib))
             {
                 start = ci;
-                ci = Loader.clCount;
+                ci = ClassRegistry.clCount;
             }
             else
             {
@@ -486,19 +486,19 @@ final class MethodHandles
             }
         }
         int chain = start;
-        while (chain >= 0 && Loader.clTab[chain] != null)
+        while (chain >= 0 && ClassRegistry.clTab[chain] != null)
         {
             int j = 0;
-            while (j < Loader.fldCount)
+            while (j < FieldRegistry.fldCount)
             {
-                if (Loader.utf8EqAt(Loader.clTab[chain].base, Loader.clTab[chain].nameOff, Loader.fldTab[j].base, Loader.fldTab[j].classOff)
-                        && Utf8.rawEqUtf8(fnBase, fnLen, Loader.fldTab[j].base, Loader.fldTab[j].nameOff))
+                if (Loader.utf8EqAt(ClassRegistry.clTab[chain].base, ClassRegistry.clTab[chain].nameOff, FieldRegistry.fldTab[j].base, FieldRegistry.fldTab[j].classOff)
+                        && Utf8.rawEqUtf8(fnBase, fnLen, FieldRegistry.fldTab[j].base, FieldRegistry.fldTab[j].nameOff))
                 {
-                    return 16L + Loader.fldTab[j].slot * 8L;
+                    return 16L + FieldRegistry.fldTab[j].slot * 8L;
                 }
                 j += 1;
             }
-            chain = Loader.superRegOf(chain);
+            chain = ClassRegistry.superRegOf(chain);
         }
         return -1L;
     }

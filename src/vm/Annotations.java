@@ -88,13 +88,13 @@ final class Annotations
         {
             return 0L;
         }
-        int reg = Loader.regOfType(mirror.toAddress().plus(16L).loadAddress());
+        int reg = ClassRegistry.regOfType(mirror.toAddress().plus(16L).loadAddress());
         if (reg < 0)
         {
             return 0L;
         }
         Address zero = Heap.allocArray(2, 1);                    // u2 num_element_value_pairs = 0, zeroed by the allocator
-        return AnnotationInstances.buildAnnoObject(Loader.clTab[reg].base, zero.plus(ObjectModel.ARRAY_BASE_OFFSET), reg);
+        return AnnotationInstances.buildAnnoObject(ClassRegistry.clTab[reg].base, zero.plus(ObjectModel.ARRAY_BASE_OFFSET), reg);
     }
 
     /**
@@ -165,12 +165,12 @@ final class Annotations
         {
             return 0L;
         }
-        int ci = Loader.classRegByType(mirror.toAddress().plus(16L).loadAddress());
+        int ci = ClassRegistry.classRegByType(mirror.toAddress().plus(16L).loadAddress());
         if (ci < 0)
         {
             return 0L;
         }
-        Address base = Loader.clTab[ci].base;
+        Address base = ClassRegistry.clTab[ci].base;
         Loader.parseConstPool(base, Loader.blobLenOf(base));
         Address p = Loader.gp.plus(6L);                               // past access_flags, this_class, super_class
         p = p.plus(2L + u2(p) * 2L);                           // past the interfaces list
@@ -207,12 +207,12 @@ final class Annotations
         {
             return 0L;
         }
-        int ci = Loader.classRegByType(mirror.toAddress().plus(16L).loadAddress());
+        int ci = ClassRegistry.classRegByType(mirror.toAddress().plus(16L).loadAddress());
         if (ci < 0)
         {
             return 0L;
         }
-        Address base = Loader.clTab[ci].base;
+        Address base = ClassRegistry.clTab[ci].base;
         Loader.parseConstPool(base, Loader.blobLenOf(base));
         Address p = Loader.gp.plus(6L);                               // past access_flags, this_class, super_class
         p = p.plus(2L + u2(p) * 2L);                           // past the interfaces list
@@ -241,12 +241,12 @@ final class Annotations
         {
             return 0L;
         }
-        int reg = Loader.regOfType(mirror.toAddress().plus(16L).loadAddress());
+        int reg = ClassRegistry.regOfType(mirror.toAddress().plus(16L).loadAddress());
         if (reg < 0)
         {
             return 0L;
         }
-        Address base = Loader.clTab[reg].base;
+        Address base = ClassRegistry.clTab[reg].base;
         Address p = ClassAttributes.classAttrsPos(base);
         if (p.isZero())
         {
@@ -308,12 +308,12 @@ final class Annotations
         {
             return 0L;
         }
-        int reg = Loader.regOfType(mirror.toAddress().plus(16L).loadAddress());
+        int reg = ClassRegistry.regOfType(mirror.toAddress().plus(16L).loadAddress());
         if (reg < 0)
         {
             return emptyAnnoArray();
         }
-        Address base = Loader.clTab[reg].base;
+        Address base = ClassRegistry.clTab[reg].base;
         Address ap = ClassAttributes.classAttrsPos(base);
         if (ap.isZero())
         {
@@ -431,8 +431,8 @@ final class Annotations
     /** {@code java/lang/annotation/Annotation}'s Type, or Object's if it is not loaded. */
     private static Address annotationTypeAddr()
     {
-        int i = Loader.classIndexByName(Magic.bytes("java/lang/annotation/Annotation"));
-        return i >= 0 ? Loader.clTab[i].type : TibBuilder.objectTypeAddr();
+        int i = ClassRegistry.classIndexByName(Magic.bytes("java/lang/annotation/Annotation"));
+        return i >= 0 ? ClassRegistry.clTab[i].type : TibBuilder.objectTypeAddr();
     }
 
     /** Position of the {@code RuntimeVisibleAnnotations} list ({@code u2 count} first), or 0 if absent. */
@@ -481,7 +481,7 @@ final class Annotations
             i += 1;
         }
         Loader.loadClassIncremental(name);
-        return Loader.classIndexByName(name);
+        return ClassRegistry.classIndexByName(name);
     }
 
     /** As {@link #regOfAnnoDesc}, for a descriptor at an ABSOLUTE length-prefixed Utf8 address. */
@@ -499,7 +499,7 @@ final class Annotations
             name[i] = (byte) u1(utf8Addr.plus(2 + 1 + i));
             i += 1;
         }
-        return Loader.classIndexByName(name);
+        return ClassRegistry.classIndexByName(name);
     }
 
     /** {@code "Lcom/x/Foo;"} -> the class-registry index of {@code com/x/Foo}, or -1 if it is not loaded. */
@@ -516,7 +516,7 @@ final class Annotations
             name[i] = (byte) u1(descArr.toAddress().plus(24 + 1 + i));  // byte[] elements start at +24
             i += 1;
         }
-        return Loader.classIndexByName(name);
+        return ClassRegistry.classIndexByName(name);
     }
 
     /**

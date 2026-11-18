@@ -94,7 +94,7 @@ final class VtableLayout
     static void parseVtable(Address bytes)
     {
         Loader.gvCount = 0;
-        int superReg = Loader.classRegByName(Loader.gSuperNameOff);
+        int superReg = ClassRegistry.classRegByName(Loader.gSuperNameOff);
         if (superReg >= 0)
         {
             inheritVtable(Loader.gSuperNameOff);               // copy the super's flattened slots
@@ -243,8 +243,8 @@ final class VtableLayout
      */
     static void fillClassVtBuf(int reg)
     {
-        int start = Loader.clTab[reg].vtStart;
-        int cnt = Loader.clTab[reg].vtCount;
+        int start = ClassRegistry.clTab[reg].vtStart;
+        int cnt = ClassRegistry.clTab[reg].vtCount;
         int v = 0;
         while (v < cnt)
         {
@@ -302,17 +302,17 @@ final class VtableLayout
         }
         // INHERITED: walk the referenced class's OWN SUPERCLASS CHAIN, most-derived first. That is what
         // virtual dispatch means, and the slot is only meaningful within this chain's flattened numbering.
-        int reg = Loader.classRegByName(classOff);
+        int reg = ClassRegistry.classRegByName(classOff);
         int chain = reg;
         while (chain >= 0)
         {
-            i = vtEntryOf(Loader.clTab[chain].base, Loader.clTab[chain].nameOff, Loader.gbase, nameOff, Loader.gbase, descOff);
+            i = vtEntryOf(ClassRegistry.clTab[chain].base, ClassRegistry.clTab[chain].nameOff, Loader.gbase, nameOff, Loader.gbase, descOff);
             if (i >= 0)
             {
                 logVtableSlot(classOff, nameOff, descOff, vtSlot[i], 0x48);   // 'H' cHain
                 return vtSlot[i];
             }
-            chain = Loader.superRegOf(chain);
+            chain = ClassRegistry.superRegOf(chain);
         }
         // NO name+descriptor fallback over unrelated classes. A slot number is an index into ONE class's
         // flattened vtable, so matching some other class's method and returning ITS slot indexes whatever

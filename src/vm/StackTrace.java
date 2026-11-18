@@ -58,7 +58,7 @@ final class StackTrace
     /** TIB of {@code java/lang/StackTraceElement}, pulling the class if it is not loaded yet (0 only if absent). */
     private static Address steTib()
     {
-        int i = Loader.classIndexByName(Magic.bytes("java/lang/StackTraceElement"));
+        int i = ClassRegistry.classIndexByName(Magic.bytes("java/lang/StackTraceElement"));
         if (i < 0)
         {
             // PULL IT, do not answer 0. The stack-trace natives build StackTraceElements whatever the program's
@@ -70,7 +70,7 @@ final class StackTrace
             VM.loaderLock(VM.LOCK_REFLECT);
             try
             {
-                if (Loader.classIndexByName(Magic.bytes("java/lang/StackTraceElement")) < 0)
+                if (ClassRegistry.classIndexByName(Magic.bytes("java/lang/StackTraceElement")) < 0)
                 {
                     Loader.loadClassIncremental(Magic.bytes("java/lang/StackTraceElement"));
                 }
@@ -79,9 +79,9 @@ final class StackTrace
             {
                 VM.loaderUnlock();
             }
-            i = Loader.classIndexByName(Magic.bytes("java/lang/StackTraceElement"));
+            i = ClassRegistry.classIndexByName(Magic.bytes("java/lang/StackTraceElement"));
         }
-        return i >= 0 ? Loader.clTab[i].tib : Address.zero();
+        return i >= 0 ? ClassRegistry.clTab[i].tib : Address.zero();
     }
 
     /**
@@ -104,9 +104,9 @@ final class StackTrace
         int bestReg = -1;
         int bestClin = -1;
         int i = 0;
-        while (i < Loader.rgCount)
+        while (i < MethodRegistry.rgCount)
         {
-            long b = Loader.rgTab[i].buf;
+            long b = MethodRegistry.rgTab[i].buf;
             if (b != 0L && b <= pc.toLong() && b > bestBuf
                     && (pEnd != 0L ? b >= pStart : inSameCodeBlock(Address.fromLong(b), pc))) { bestBuf = b; bestReg = i; bestClin = -1; }
             i += 1;
@@ -125,11 +125,11 @@ final class StackTrace
         long line = 0L;
         if (bestReg >= 0)
         {
-            clsStr = Loader.guestBinaryName(Loader.rgTab[bestReg].base.plus(Loader.rgTab[bestReg].classOff + 2L),
-                    u2(Loader.rgTab[bestReg].base.plus(Loader.rgTab[bestReg].classOff)));
-            methStr = Loader.guestStringUtf8(Loader.rgTab[bestReg].base, Loader.rgTab[bestReg].nameOff);
-            fileStr = Loader.guestStringUtf8(Loader.rgTab[bestReg].src, 0);
-            line = lineAtOffset(Loader.rgTab[bestReg].line, (int) ((pc.toLong() - bestBuf) >> 2));
+            clsStr = Loader.guestBinaryName(MethodRegistry.rgTab[bestReg].base.plus(MethodRegistry.rgTab[bestReg].classOff + 2L),
+                    u2(MethodRegistry.rgTab[bestReg].base.plus(MethodRegistry.rgTab[bestReg].classOff)));
+            methStr = Loader.guestStringUtf8(MethodRegistry.rgTab[bestReg].base, MethodRegistry.rgTab[bestReg].nameOff);
+            fileStr = Loader.guestStringUtf8(MethodRegistry.rgTab[bestReg].src, 0);
+            line = lineAtOffset(MethodRegistry.rgTab[bestReg].line, (int) ((pc.toLong() - bestBuf) >> 2));
         }
         else if (bestClin >= 0)
         {
@@ -202,12 +202,12 @@ final class StackTrace
         // stock's "show all", and toString prints no loader or module for a null name.
         if (steTib.NE(steFieldsTib))
         {
-            int si = Loader.classIndexByName(Magic.bytes("java/lang/StackTraceElement"));
-            steSize = 16L + Loader.clTab[si].fieldCount * 8L;
-            steClassOff = Loader.instanceFieldOffset(si, Magic.bytes("declaringClass"));
-            steMethodOff = Loader.instanceFieldOffset(si, Magic.bytes("methodName"));
-            steFileOff = Loader.instanceFieldOffset(si, Magic.bytes("fileName"));
-            steLineOff = Loader.instanceFieldOffset(si, Magic.bytes("lineNumber"));
+            int si = ClassRegistry.classIndexByName(Magic.bytes("java/lang/StackTraceElement"));
+            steSize = 16L + ClassRegistry.clTab[si].fieldCount * 8L;
+            steClassOff = FieldRegistry.instanceFieldOffset(si, Magic.bytes("declaringClass"));
+            steMethodOff = FieldRegistry.instanceFieldOffset(si, Magic.bytes("methodName"));
+            steFileOff = FieldRegistry.instanceFieldOffset(si, Magic.bytes("fileName"));
+            steLineOff = FieldRegistry.instanceFieldOffset(si, Magic.bytes("lineNumber"));
             steFieldsTib = steTib;
         }
         Address ste = Heap.alloc((int) steSize);
@@ -314,12 +314,12 @@ final class StackTrace
 
     static long throwableBacktraceOff()
     {
-        if (thrBacktraceOff == 0L && Loader.clTab != null)
+        if (thrBacktraceOff == 0L && ClassRegistry.clTab != null)
         {
-            int ti = Loader.classIndexByName(Magic.bytes("java/lang/Throwable"));
+            int ti = ClassRegistry.classIndexByName(Magic.bytes("java/lang/Throwable"));
             if (ti >= 0)
             {
-                thrBacktraceOff = Loader.instanceFieldOffset(ti, Magic.bytes("backtrace"));   // -1 if absent: cached
+                thrBacktraceOff = FieldRegistry.instanceFieldOffset(ti, Magic.bytes("backtrace"));   // -1 if absent: cached
             }
         }
         return thrBacktraceOff;
@@ -421,11 +421,11 @@ final class StackTrace
         long best = 0L;
         int bestReg = -1;
         int i = 0;
-        while (i < Loader.rgCount)
+        while (i < MethodRegistry.rgCount)
         {
-            if (Loader.rgTab[i].buf != 0L && Loader.rgTab[i].buf <= addr.toLong() && Loader.rgTab[i].buf > best)
+            if (MethodRegistry.rgTab[i].buf != 0L && MethodRegistry.rgTab[i].buf <= addr.toLong() && MethodRegistry.rgTab[i].buf > best)
             {
-                best = Loader.rgTab[i].buf;
+                best = MethodRegistry.rgTab[i].buf;
                 bestReg = i;
             }
             i += 1;
@@ -435,9 +435,9 @@ final class StackTrace
             return;
         }
         Uart.write(Magic.bytes(" after "));
-        Loader.writeName(Loader.rgTab[bestReg].base.plus(Loader.rgTab[bestReg].classOff + 2), u2(Loader.rgTab[bestReg].base.plus(Loader.rgTab[bestReg].classOff)));
+        Loader.writeName(MethodRegistry.rgTab[bestReg].base.plus(MethodRegistry.rgTab[bestReg].classOff + 2), u2(MethodRegistry.rgTab[bestReg].base.plus(MethodRegistry.rgTab[bestReg].classOff)));
         Uart.putc(0x2E);
-        Loader.writeName(Loader.rgTab[bestReg].base.plus(Loader.rgTab[bestReg].nameOff + 2), u2(Loader.rgTab[bestReg].base.plus(Loader.rgTab[bestReg].nameOff)));
+        Loader.writeName(MethodRegistry.rgTab[bestReg].base.plus(MethodRegistry.rgTab[bestReg].nameOff + 2), u2(MethodRegistry.rgTab[bestReg].base.plus(MethodRegistry.rgTab[bestReg].nameOff)));
         Uart.write(Magic.bytes(" +"));
         VM.printHex(addr.toLong() - best);
         Uart.write(Magic.bytes(" end="));
@@ -465,9 +465,9 @@ final class StackTrace
         int bestReg = -1;
         int bestClin = -1;
         int i = 0;
-        while (i < Loader.rgCount)
+        while (i < MethodRegistry.rgCount)
         {
-            long b = Loader.rgTab[i].buf;
+            long b = MethodRegistry.rgTab[i].buf;
             if (b != 0L && b <= addr.toLong() && b > bestBuf
                     && (aEnd != 0L ? b >= aStart : inSameCodeBlock(Address.fromLong(b), addr))) { bestBuf = b; bestReg = i; bestClin = -1; }
             i += 1;
@@ -494,15 +494,15 @@ final class StackTrace
         }
         if (bestReg >= 0)
         {
-            Loader.writeName(Loader.rgTab[bestReg].base.plus(Loader.rgTab[bestReg].classOff + 2),
-                    u2(Loader.rgTab[bestReg].base.plus(Loader.rgTab[bestReg].classOff)));
+            Loader.writeName(MethodRegistry.rgTab[bestReg].base.plus(MethodRegistry.rgTab[bestReg].classOff + 2),
+                    u2(MethodRegistry.rgTab[bestReg].base.plus(MethodRegistry.rgTab[bestReg].classOff)));
             Uart.putc(0x2E);
-            Loader.writeName(Loader.rgTab[bestReg].base.plus(Loader.rgTab[bestReg].nameOff + 2), u2(Loader.rgTab[bestReg].base.plus(Loader.rgTab[bestReg].nameOff)));
-            int line = lineAtOffset(Loader.rgTab[bestReg].line, (int) ((addr.toLong() - bestBuf) >> 2)); // (pc-base)/4 = word offset
-            if (!Loader.rgTab[bestReg].src.isZero())
+            Loader.writeName(MethodRegistry.rgTab[bestReg].base.plus(MethodRegistry.rgTab[bestReg].nameOff + 2), u2(MethodRegistry.rgTab[bestReg].base.plus(MethodRegistry.rgTab[bestReg].nameOff)));
+            int line = lineAtOffset(MethodRegistry.rgTab[bestReg].line, (int) ((addr.toLong() - bestBuf) >> 2)); // (pc-base)/4 = word offset
+            if (!MethodRegistry.rgTab[bestReg].src.isZero())
             {
                 Uart.putc(0x28);                                 // '('
-                Loader.writeName(Loader.rgTab[bestReg].src.plus(2), u2(Loader.rgTab[bestReg].src));   // SourceFile filename
+                Loader.writeName(MethodRegistry.rgTab[bestReg].src.plus(2), u2(MethodRegistry.rgTab[bestReg].src));   // SourceFile filename
                 if (line >= 0)
                 {
                     Uart.putc(0x3A);                             // ':'

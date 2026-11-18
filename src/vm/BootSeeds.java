@@ -110,7 +110,7 @@ final class BootSeeds
      */
     static void seedSystemProps()
     {
-        Address slot = Address.fromLong(Loader.staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("props")));
+        Address slot = Address.fromLong(Statics.staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("props")));
         if (slot.isZero())
         {
             reportPropsGap(Magic.bytes("java/lang/System.props has no static cell"));
@@ -120,25 +120,25 @@ final class BootSeeds
         {
             return;                                     // already seeded: not a failure, say nothing
         }
-        int pi = Loader.classIndexByName(Magic.bytes("java/util/Properties"));
+        int pi = ClassRegistry.classIndexByName(Magic.bytes("java/util/Properties"));
         if (pi < 0)
         {
             reportPropsGap(Magic.bytes("java/util/Properties is not registered"));
             return;
         }
-        long obj = Reflection.allocInstance(Loader.clTab[pi].type);
+        long obj = Reflection.allocInstance(ClassRegistry.clTab[pi].type);
         if (obj == 0L)
         {
             reportPropsGap(Magic.bytes("java/util/Properties could not be allocated"));
             return;
         }
-        int ctor = Reflection.constructorResolve(Loader.clTab[pi].type, 0);
-        if (ctor < 0 || Loader.rgTab[ctor].buf == 0L)
+        int ctor = Reflection.constructorResolve(ClassRegistry.clTab[pi].type, 0);
+        if (ctor < 0 || MethodRegistry.rgTab[ctor].buf == 0L)
         {
             reportPropsGap(Magic.bytes("java/util/Properties.<init>() has no compiled body"));
             return;                                     // no runnable <init>: leaving props null is honest
         }
-        Magic.call2(Loader.rgTab[ctor].buf, obj, 0L);          // receiver in x0; a no-arg ctor reads nothing else
+        Magic.call2(MethodRegistry.rgTab[ctor].buf, obj, 0L);          // receiver in x0; a no-arg ctor reads nothing else
         slot.store(obj);
         seedStandardProps(obj, pi);
         seedLineSeparator();
@@ -177,7 +177,7 @@ final class BootSeeds
      */
     static void seedBooted()
     {
-        long slot = Loader.staticSlotOf(Magic.bytes("jdk/internal/misc/VM"), Magic.bytes("initLevel"));
+        long slot = Statics.staticSlotOf(Magic.bytes("jdk/internal/misc/VM"), Magic.bytes("initLevel"));
         if (slot == 0L)
         {
             reportPropsGap(Magic.bytes("jdk/internal/misc/VM.initLevel has no static cell (isBooted stays false)"));
@@ -205,7 +205,7 @@ final class BootSeeds
      */
     static void seedRefAccess()
     {
-        int reg = Loader.classRegByNameBytes(Magic.bytes("java/lang/ref/Reference"));
+        int reg = ClassRegistry.classRegByNameBytes(Magic.bytes("java/lang/ref/Reference"));
         if (reg < 0)
         {
             reportPropsGap(Magic.bytes("java/lang/ref/Reference is not registered (Runtime.runFinalization NPEs)"));
@@ -216,7 +216,7 @@ final class BootSeeds
 
     static void seedSavedProps()
     {
-        Address slot = Address.fromLong(Loader.staticSlotOf(Magic.bytes("jdk/internal/misc/VM"), Magic.bytes("savedProps")));
+        Address slot = Address.fromLong(Statics.staticSlotOf(Magic.bytes("jdk/internal/misc/VM"), Magic.bytes("savedProps")));
         if (slot.isZero())
         {
             reportPropsGap(Magic.bytes("jdk/internal/misc/VM.savedProps has no static cell (getSavedProperty throws)"));
@@ -226,20 +226,20 @@ final class BootSeeds
         {
             return;
         }
-        int pi = Loader.classIndexByName(Magic.bytes("java/util/Properties"));
+        int pi = ClassRegistry.classIndexByName(Magic.bytes("java/util/Properties"));
         if (pi < 0)
         {
             reportPropsGap(Magic.bytes("VM.savedProps: java/util/Properties is not registered"));
             return;
         }
-        long obj = Reflection.allocInstance(Loader.clTab[pi].type);
-        int ctor = Reflection.constructorResolve(Loader.clTab[pi].type, 0);
-        if (obj == 0L || ctor < 0 || Loader.rgTab[ctor].buf == 0L)
+        long obj = Reflection.allocInstance(ClassRegistry.clTab[pi].type);
+        int ctor = Reflection.constructorResolve(ClassRegistry.clTab[pi].type, 0);
+        if (obj == 0L || ctor < 0 || MethodRegistry.rgTab[ctor].buf == 0L)
         {
             reportPropsGap(Magic.bytes("VM.savedProps: java/util/Properties could not be constructed"));
             return;
         }
-        Magic.call2(Loader.rgTab[ctor].buf, obj, 0L);
+        Magic.call2(MethodRegistry.rgTab[ctor].buf, obj, 0L);
         seedStandardProps(obj, pi);
         slot.store(obj);
     }
@@ -272,7 +272,7 @@ final class BootSeeds
      */
     private static void seedLineSeparator()
     {
-        Address slot = Address.fromLong(Loader.staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("lineSeparator")));
+        Address slot = Address.fromLong(Statics.staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("lineSeparator")));
         if (!slot.isZero() && slot.loadLong() == 0L)
         {
             slot.store(Loader.guestString(Magic.bytes("\n")));   // Uart.putc makes this CRLF for the console
@@ -373,15 +373,15 @@ final class BootSeeds
      */
     static void seedSystemStreams()
     {
-        long outSlot = Loader.staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("out"));
-        long errSlot = Loader.staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("err"));
+        long outSlot = Statics.staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("out"));
+        long errSlot = Statics.staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("err"));
         boolean needOut = stdSlotNeedsSeed(outSlot, STD_OUT);
         boolean needErr = stdSlotNeedsSeed(errSlot, STD_ERR);
         if (!needOut && !needErr)
         {
             return;
         }
-        if (Loader.classIndexByName(Magic.bytes("jdk/internal/misc/MetalStdStreams")) < 0)
+        if (ClassRegistry.classIndexByName(Magic.bytes("jdk/internal/misc/MetalStdStreams")) < 0)
         {
             return;                                     // not registered yet -- a later batch seeds it
         }
@@ -425,7 +425,7 @@ final class BootSeeds
      */
     static void setStdStream(byte[] name, ObjectReference ref)
     {
-        long slot = Loader.staticSlotOf(Magic.bytes("java/lang/System"), name);
+        long slot = Statics.staticSlotOf(Magic.bytes("java/lang/System"), name);
         if (slot != 0L)
         {
             Address.fromLong(slot).store(ref);
@@ -508,38 +508,38 @@ final class BootSeeds
      */
     static void seedSystemIn()
     {
-        long inSlot = Loader.staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("in"));
+        long inSlot = Statics.staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("in"));
         if (!stdSlotNeedsSeed(inSlot, STD_IN))
         {
             return;                                     // unknown slot, or a live stream already there
         }
         if (Console.stdinOn != 0)
         {
-            int ci = Loader.classIndexByName(Magic.bytes("jdk/internal/misc/MetalConsoleIn"));
+            int ci = ClassRegistry.classIndexByName(Magic.bytes("jdk/internal/misc/MetalConsoleIn"));
             if (ci >= 0)                                // field-free: the TIB is the whole object
             {
-                Address cobj = Heap.alloc(16 + Loader.clTab[ci].fieldCount * 8);
-                cobj.store(Loader.clTab[ci].tib);
+                Address cobj = Heap.alloc(16 + ClassRegistry.clTab[ci].fieldCount * 8);
+                cobj.store(ClassRegistry.clTab[ci].tib);
                 Address.fromLong(inSlot).store(cobj);
                 setStdGen(STD_IN);
                 return;
             }
             Uart.write(Magic.bytes("\n  stdin=uart: MetalConsoleIn not loaded, System.in stays empty\n"));
         }
-        int bi = Loader.classIndexByName(Magic.bytes("java/io/ByteArrayInputStream"));
+        int bi = ClassRegistry.classIndexByName(Magic.bytes("java/io/ByteArrayInputStream"));
         if (bi < 0)
         {
             return;                                     // not in this batch: leave the slot as it was
         }
-        long bufOff = Loader.instanceFieldOffset(bi, Magic.bytes("buf"));
-        long posOff = Loader.instanceFieldOffset(bi, Magic.bytes("pos"));
-        long cntOff = Loader.instanceFieldOffset(bi, Magic.bytes("count"));
+        long bufOff = FieldRegistry.instanceFieldOffset(bi, Magic.bytes("buf"));
+        long posOff = FieldRegistry.instanceFieldOffset(bi, Magic.bytes("pos"));
+        long cntOff = FieldRegistry.instanceFieldOffset(bi, Magic.bytes("count"));
         if (bufOff < 0L || posOff < 0L || cntOff < 0L)
         {
             return;
         }
-        Address obj = Heap.alloc(16 + Loader.clTab[bi].fieldCount * 8);
-        obj.store(Loader.clTab[bi].tib);
+        Address obj = Heap.alloc(16 + ClassRegistry.clTab[bi].fieldCount * 8);
+        obj.store(ClassRegistry.clTab[bi].tib);
         obj.plus(bufOff).store(Heap.allocArray(0, 1));   // empty byte[]; never read (count == 0)
         obj.plus(posOff).store(0L);
         obj.plus(cntOff).store(0L);
@@ -553,16 +553,16 @@ final class BootSeeds
         {
             return;
         }
-        int oi = Loader.classIndexByName(Magic.bytes("java/lang/Object"));
+        int oi = ClassRegistry.classIndexByName(Magic.bytes("java/lang/Object"));
         if (oi < 0)
         {
             return;
         }
-        Address slot = Address.fromLong(Loader.staticSlotOf(Magic.bytes("jdk/internal/misc/VM"), Magic.bytes("lock")));
+        Address slot = Address.fromLong(Statics.staticSlotOf(Magic.bytes("jdk/internal/misc/VM"), Magic.bytes("lock")));
         if (!slot.isZero() && slot.loadLong() == 0L)
         {
             Address inst = Heap.alloc(16);                          // header only: a monitor needs no fields
-            inst.store(Loader.clTab[oi].tib);
+            inst.store(ClassRegistry.clTab[oi].tib);
             slot.store(inst);
             sdVmLock = true;
         }
@@ -574,16 +574,16 @@ final class BootSeeds
         {
             return;
         }
-        int mi = Loader.classIndexByName(Magic.bytes("jdk/internal/access/MetalJavaIOAccess"));
+        int mi = ClassRegistry.classIndexByName(Magic.bytes("jdk/internal/access/MetalJavaIOAccess"));
         if (mi < 0)
         {
             return;
         }
-        long slot = Loader.staticSlotOf(Magic.bytes("jdk/internal/access/SharedSecrets"), Magic.bytes("javaIOAccess"));
+        long slot = Statics.staticSlotOf(Magic.bytes("jdk/internal/access/SharedSecrets"), Magic.bytes("javaIOAccess"));
         if (slot != 0L)
         {
-            Address inst = Heap.alloc(16 + Loader.clTab[mi].fieldCount * 8);   // field-free -> header only
-            inst.store(Loader.clTab[mi].tib);                 // TIB (itable dir for the console() dispatch)
+            Address inst = Heap.alloc(16 + ClassRegistry.clTab[mi].fieldCount * 8);   // field-free -> header only
+            inst.store(ClassRegistry.clTab[mi].tib);                 // TIB (itable dir for the console() dispatch)
             Address.fromLong(slot).store(inst);
             sdJio = true;
         }
@@ -595,16 +595,16 @@ final class BootSeeds
         {
             return;
         }
-        int mi = Loader.classIndexByName(Magic.bytes("jdk/internal/access/MetalJavaLangAccess"));
+        int mi = ClassRegistry.classIndexByName(Magic.bytes("jdk/internal/access/MetalJavaLangAccess"));
         if (mi < 0)
         {
             return;
         }
-        long slot = Loader.staticSlotOf(Magic.bytes("jdk/internal/access/SharedSecrets"), Magic.bytes("javaLangAccess"));
+        long slot = Statics.staticSlotOf(Magic.bytes("jdk/internal/access/SharedSecrets"), Magic.bytes("javaLangAccess"));
         if (slot != 0L)
         {
-            Address inst = Heap.alloc(16 + Loader.clTab[mi].fieldCount * 8);   // field-free -> header only
-            inst.store(Loader.clTab[mi].tib);                 // TIB (itable dir for getEnumConstantsShared dispatch)
+            Address inst = Heap.alloc(16 + ClassRegistry.clTab[mi].fieldCount * 8);   // field-free -> header only
+            inst.store(ClassRegistry.clTab[mi].tib);                 // TIB (itable dir for getEnumConstantsShared dispatch)
             Address.fromLong(slot).store(inst);
             sdJla = true;
         }

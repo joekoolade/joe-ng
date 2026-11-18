@@ -136,7 +136,7 @@ final class Primitives
         {
             return;
         }
-        long slot = Loader.staticSlotOf(cls, Magic.bytes("TYPE"));
+        long slot = Statics.staticSlotOf(cls, Magic.bytes("TYPE"));
         if (slot == 0L)
         {
             return;                                     // the wrapper is not registered yet -- retry next batch

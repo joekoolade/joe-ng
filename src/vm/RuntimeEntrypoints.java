@@ -47,12 +47,12 @@ final class RuntimeEntrypoints
     /** True if {@code exc}'s TIB is java/lang/NullPointerException's -- the JIT's implicit null check. */
     static boolean isNpe(ObjectReference exc)
     {
-        int i = Loader.classIndexByName(Magic.bytes("java/lang/NullPointerException"));
+        int i = ClassRegistry.classIndexByName(Magic.bytes("java/lang/NullPointerException"));
         if (i < 0 || exc.isNull())
         {
             return false;
         }
-        return exc.toAddress().plus(0L).loadAddress().EQ(Loader.clTab[i].tib);
+        return exc.toAddress().plus(0L).loadAddress().EQ(ClassRegistry.clTab[i].tib);
     }
 
     /** Allocate a mini {@code java/lang/NullPointerException} (TIB set, field-free) — the JIT's null-check helper. */
@@ -364,7 +364,7 @@ final class RuntimeEntrypoints
      */
     static long newExc(byte[] name)
     {
-        int i = Loader.classIndexByName(name);
+        int i = ClassRegistry.classIndexByName(name);
         if (i < 0)
         {
             // NAME IT. A missing exception class yields a bare header with TIB 0: no Type, so `instanceOf`
@@ -373,8 +373,8 @@ final class RuntimeEntrypoints
             // and indistinguishable at the catch site from an exception that simply says little.
             excMissing(name);
         }
-        Address tib = i >= 0 ? Loader.clTab[i].tib : Address.zero();
-        long obj = Heap.alloc(i >= 0 ? (16 + Loader.clTab[i].fieldCount * 8) : 16).toLong();
+        Address tib = i >= 0 ? ClassRegistry.clTab[i].tib : Address.zero();
+        long obj = Heap.alloc(i >= 0 ? (16 + ClassRegistry.clTab[i].fieldCount * 8) : 16).toLong();
         Address.fromLong(obj).plus(0L).store(tib);
         if (i >= 0)
         {
@@ -385,12 +385,12 @@ final class RuntimeEntrypoints
 
     static long throwableFieldOff(long cached, byte[] name)
     {
-        if (cached != 0L || Loader.clTab == null)
+        if (cached != 0L || ClassRegistry.clTab == null)
         {
             return cached;
         }
-        int ti = Loader.classIndexByName(Magic.bytes("java/lang/Throwable"));
-        return ti >= 0 ? Loader.instanceFieldOffset(ti, name) : 0L;    // -1 if absent: cached by the caller
+        int ti = ClassRegistry.classIndexByName(Magic.bytes("java/lang/Throwable"));
+        return ti >= 0 ? FieldRegistry.instanceFieldOffset(ti, name) : 0L;    // -1 if absent: cached by the caller
     }
 
     /**
@@ -419,11 +419,11 @@ final class RuntimeEntrypoints
         }
         if (thrUnassignedSlot == 0L)
         {
-            thrUnassignedSlot = Loader.staticSlotOf(Magic.bytes("java/lang/Throwable"), Magic.bytes("UNASSIGNED_STACK"));
+            thrUnassignedSlot = Statics.staticSlotOf(Magic.bytes("java/lang/Throwable"), Magic.bytes("UNASSIGNED_STACK"));
         }
         if (thrSentinelSlot == 0L)
         {
-            thrSentinelSlot = Loader.staticSlotOf(Magic.bytes("java/lang/Throwable"), Magic.bytes("SUPPRESSED_SENTINEL"));
+            thrSentinelSlot = Statics.staticSlotOf(Magic.bytes("java/lang/Throwable"), Magic.bytes("SUPPRESSED_SENTINEL"));
         }
         if (thrStackTraceOff > 0L && thrUnassignedSlot != 0L)
         {

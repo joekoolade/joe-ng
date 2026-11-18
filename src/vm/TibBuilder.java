@@ -131,7 +131,7 @@ final class TibBuilder
      */
     static void allocTib()
     {
-        int sr = Loader.classRegByName(Loader.gSuperNameOff);
+        int sr = ClassRegistry.classRegByName(Loader.gSuperNameOff);
         // ObjectModel layout: Type = { instanceSize@0, superType@8, itableDir@16 } (24
         // bytes), so VM.instanceOf and the shared Baseline core read JIT'd objects the
         // same way they read image objects (M5.4.e). The itableDir slot currently holds
@@ -156,7 +156,7 @@ final class TibBuilder
             Loader.gType = Heap.allocData(ObjectModel.TYPE_SIZE);
         }
         Loader.gType.plus(0).store((long) (16 + Loader.gifCount * 8));       // TYPE_INSTANCE_SIZE_OFFSET
-        Loader.gType.plus(8).store(sr >= 0 ? Loader.clTab[sr].type : Address.zero());   // TYPE_SUPER_OFFSET (0 at Object)
+        Loader.gType.plus(8).store(sr >= 0 ? ClassRegistry.clTab[sr].type : Address.zero());   // TYPE_SUPER_OFFSET (0 at Object)
         if (Loader.gAdoptType.isZero())
         {
             // O(1) type checks: metal-built class Types get a depth + display like the writer's
@@ -166,8 +166,8 @@ final class TibBuilder
             Loader.gType.plus(ObjectModel.TYPE_DISPLAY_OFFSET).store(0L);
             Loader.gType.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).store(0L);       // bitmap built at fillTib
             Loader.gType.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).store(0L);
-            DynamicTypeCheck.buildDisplay(Loader.gType, sr >= 0 ? Loader.clTab[sr].type : Address.zero());
-            buildRefMap(Loader.gType, sr >= 0 ? Loader.clTab[sr].type : Address.zero());   // GC reference map (adopted nodes carry
+            DynamicTypeCheck.buildDisplay(Loader.gType, sr >= 0 ? ClassRegistry.clTab[sr].type : Address.zero());
+            buildRefMap(Loader.gType, sr >= 0 ? ClassRegistry.clTab[sr].type : Address.zero());   // GC reference map (adopted nodes carry
         }                                                        //   the writer's -- never overwrite it)
         Loader.gTib = Heap.allocData((1 + Loader.gvCount) * 8);
         Loader.gTib.store(Loader.gType);                      // TIB[0] = Type (slots filled by fillTib)
@@ -284,7 +284,7 @@ final class TibBuilder
         if (dir != 0L && InterfaceInvocation.instImaps != null && InterfaceInvocation.instImapN < InterfaceInvocation.instImaps.length)
         {
             InterfaceInvocation.instImaps[InterfaceInvocation.instImapN] = dir;                 // capture the DIR for the post-phase-B default refill
-            InterfaceInvocation.instImapReg[InterfaceInvocation.instImapN] = Loader.classRegByName(Loader.gThisNameOff);
+            InterfaceInvocation.instImapReg[InterfaceInvocation.instImapN] = ClassRegistry.classRegByName(Loader.gThisNameOff);
             InterfaceInvocation.instImapN += 1;
         }
         Loader.gType.plus(16).store(dir);                 // TYPE_ITABLE_DIR_OFFSET
@@ -294,11 +294,11 @@ final class TibBuilder
     static Address objectTypeAddr()
     {
         int i = 0;
-        while (i < Loader.clCount)
+        while (i < ClassRegistry.clCount)
         {
-            if (Utf8.utf8IsAtBase(Loader.clTab[i].base, Loader.clTab[i].nameOff, Magic.bytes("java/lang/Object")))
+            if (Utf8.utf8IsAtBase(ClassRegistry.clTab[i].base, ClassRegistry.clTab[i].nameOff, Magic.bytes("java/lang/Object")))
             {
-                return Loader.clTab[i].type;
+                return ClassRegistry.clTab[i].type;
             }
             i += 1;
         }
@@ -311,7 +311,7 @@ final class TibBuilder
     static int objectVtableCount()
     {
         int oi = Loader.objectClassIndex();
-        return oi >= 0 ? Loader.clTab[oi].vtCount : 0;
+        return oi >= 0 ? ClassRegistry.clTab[oi].vtCount : 0;
     }
 
     /** Copy java/lang/Object's vtable slots into the array TIB {@code tib} (after its Type slot). Object's slots
@@ -332,12 +332,12 @@ final class TibBuilder
             return false;                                // Object not registered yet: nothing filled, no latch
         }
         syTibs += 1;
-        int nv = Loader.clTab[oi].vtCount;
+        int nv = ClassRegistry.clTab[oi].vtCount;
         int n = nv < cap ? nv : cap;
         int k = 0;
         while (k < n)
         {
-            long want = Loader.clTab[oi].tib.plus(8L).plus((long) k * 8L).loadLong();
+            long want = ClassRegistry.clTab[oi].tib.plus(8L).plus((long) k * 8L).loadLong();
             sySlots += 1;
             if (tib.plus(8L).plus((long) k * 8L).loadLong() != want)
             {
@@ -389,11 +389,11 @@ final class TibBuilder
         {
             return;
         }
-        int nv = Loader.clTab[oi].vtCount;
+        int nv = ClassRegistry.clTab[oi].vtCount;
         int k = 0;
         while (k < nv)
         {
-            tib.plus(8L).plus((long) k * 8L).store(Loader.clTab[oi].tib.plus(8L).plus((long) k * 8L).loadLong());
+            tib.plus(8L).plus((long) k * 8L).store(ClassRegistry.clTab[oi].tib.plus(8L).plus((long) k * 8L).loadLong());
             k += 1;
         }
     }

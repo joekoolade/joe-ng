@@ -83,10 +83,10 @@ final class AnnotationInstances
         {
             return;
         }
-        if (Loader.classIndexByName(Magic.bytes("jdk/internal/misc/MetalAnnotations")) < 0)
+        if (ClassRegistry.classIndexByName(Magic.bytes("jdk/internal/misc/MetalAnnotations")) < 0)
         {
             Loader.loadClassIncremental(Magic.bytes("jdk/internal/misc/MetalAnnotations"));
-            if (Loader.classIndexByName(Magic.bytes("jdk/internal/misc/MetalAnnotations")) < 0)
+            if (ClassRegistry.classIndexByName(Magic.bytes("jdk/internal/misc/MetalAnnotations")) < 0)
             {
                 return;
             }
@@ -137,8 +137,8 @@ final class AnnotationInstances
         {
             return;
         }
-        int st = Loader.clTab[oi].vtStart;
-        int nv = Loader.clTab[oi].vtCount;
+        int st = ClassRegistry.clTab[oi].vtStart;
+        int nv = ClassRegistry.clTab[oi].vtCount;
         int k = 0;
         while (k < nv && k < cap)
         {
@@ -156,14 +156,14 @@ final class AnnotationInstances
         Address e = dir;
         while (e.loadLong() != 0L)
         {
-            int r = Loader.classRegByType(e.loadAddress());
+            int r = ClassRegistry.classRegByType(e.loadAddress());
             Address it = e.plus(8L).loadAddress();
-            if (r >= 0 && !it.isZero() && Utf8.utf8IsAtBase(Loader.clTab[r].base, Loader.clTab[r].nameOff, Magic.bytes("java/lang/annotation/Annotation")))
+            if (r >= 0 && !it.isZero() && Utf8.utf8IsAtBase(ClassRegistry.clTab[r].base, ClassRegistry.clTab[r].nameOff, Magic.bytes("java/lang/annotation/Annotation")))
             {
                 int z = 0;
-                while (z < Loader.clTab[r].ifmCount)
+                while (z < ClassRegistry.clTab[r].ifmCount)
                 {
-                    int m = Loader.clTab[r].ifmStart + z;
+                    int m = ClassRegistry.clTab[r].ifmStart + z;
                     long buf = annoContractBufFor(InterfaceInvocation.ifBase.get(m), InterfaceInvocation.ifNameOff[m], InterfaceInvocation.ifDescOff[m]);
                     if (buf != 0L)
                     {
@@ -197,7 +197,7 @@ final class AnnotationInstances
     /** The shared TIB for annotation interface {@code ifaceReg}, built once and GC-rooted like a lambda's. */
     private static Address annoTibFor(int ifaceReg)
     {
-        Address ifaceType = Loader.clTab[ifaceReg].type;
+        Address ifaceType = ClassRegistry.clTab[ifaceReg].type;
         if (ifaceType.isZero())
         {
             return Address.zero();
@@ -221,9 +221,9 @@ final class AnnotationInstances
         {
             return Address.zero();
         }
-        int n = Loader.clTab[ifaceReg].ifmCount;
+        int n = ClassRegistry.clTab[ifaceReg].ifmCount;
         Address it = Heap.allocData(n > 0 ? n * 8 : 8);
-        Address ownBase = Loader.clTab[ifaceReg].base;
+        Address ownBase = ClassRegistry.clTab[ifaceReg].base;
         int s = 0;
         while (s < n)
         {
@@ -236,9 +236,9 @@ final class AnnotationInstances
             // annotationType() gets the mirror thunk here too; an inherited equals/hashCode/toString stays 0,
             // which the dispatch guard turns into a resolution, not a branch.
             Address thunk = Address.zero();
-            boolean own = InterfaceInvocation.ifBase.get(Loader.clTab[ifaceReg].ifmStart + s).EQ(ownBase);
-            boolean isAnnoType = Utf8.utf8IsAtBase(InterfaceInvocation.ifBase.get(Loader.clTab[ifaceReg].ifmStart + s),
-                    InterfaceInvocation.ifNameOff[Loader.clTab[ifaceReg].ifmStart + s], Magic.bytes("annotationType"));
+            boolean own = InterfaceInvocation.ifBase.get(ClassRegistry.clTab[ifaceReg].ifmStart + s).EQ(ownBase);
+            boolean isAnnoType = Utf8.utf8IsAtBase(InterfaceInvocation.ifBase.get(ClassRegistry.clTab[ifaceReg].ifmStart + s),
+                    InterfaceInvocation.ifNameOff[ClassRegistry.clTab[ifaceReg].ifmStart + s], Magic.bytes("annotationType"));
             if (own || isAnnoType)
             {
                 thunk = Heap.allocCode(8);
@@ -268,7 +268,7 @@ final class AnnotationInstances
         while (ci < closN)
         {
             int cr = InterfaceInvocation.ifClosureBuf[ci];
-            int cn = Loader.clTab[cr].ifmCount;
+            int cn = ClassRegistry.clTab[cr].ifmCount;
             Address cit = Heap.allocData(cn > 0 ? cn * 8 : 8);
             int z = 0;
             while (z < cn)
@@ -277,8 +277,8 @@ final class AnnotationInstances
                 // word. Leaving it zero cost a launcher boot -- JUnit's findRepeatableAnnotations calls it on
                 // every annotation it walks, and a null flowed through isInJavaLangAnnotationPackage's own
                 // null guard to NPE one line later, naming a JUnit method rather than this gap.
-                boolean isAnnoType = Utf8.utf8IsAtBase(InterfaceInvocation.ifBase.get(Loader.clTab[cr].ifmStart + z),
-                        InterfaceInvocation.ifNameOff[Loader.clTab[cr].ifmStart + z], Magic.bytes("annotationType"));
+                boolean isAnnoType = Utf8.utf8IsAtBase(InterfaceInvocation.ifBase.get(ClassRegistry.clTab[cr].ifmStart + z),
+                        InterfaceInvocation.ifNameOff[ClassRegistry.clTab[cr].ifmStart + z], Magic.bytes("annotationType"));
                 if (isAnnoType)
                 {
                     Address at = Heap.allocCode(8);
@@ -294,7 +294,7 @@ final class AnnotationInstances
                 }
                 z += 1;
             }
-            dir.plus(e * 16L).plus(0L).store(Loader.clTab[cr].type);
+            dir.plus(e * 16L).plus(0L).store(ClassRegistry.clTab[cr].type);
             dir.plus(e * 16L).plus(8L).store(cit);
             e += 1;
             ci += 1;
@@ -353,14 +353,14 @@ final class AnnotationInstances
         }
         Loader.parseForMethods(base, Loader.blobLenOf(base));         // a first TIB compiles the contract helpers, which
                                                         //   re-parses; phase 1 reads names through gcp
-        int n = Loader.clTab[ifaceReg].ifmCount;
+        int n = ClassRegistry.clTab[ifaceReg].ifmCount;
         // ONE EXTRA TRAILING WORD holds this annotation's own Class mirror, which is what
         // Annotation.annotationType() answers. Keeping it IN THE INSTANCE is what lets that method reuse the
         // same two-instruction thunk shape as every element accessor -- see annoTibFor.
         Address obj = Heap.alloc(16 + (n + 1) * 8);
         obj.plus(ObjectModel.TIB_OFFSET).store(tib);
-        obj.plus(16L).plus(n * 8L).store(ClassMirrors.classMirror(Loader.clTab[ifaceReg].type));
-        int start = Loader.clTab[ifaceReg].ifmStart;
+        obj.plus(16L).plus(n * 8L).store(ClassMirrors.classMirror(ClassRegistry.clTab[ifaceReg].type));
+        int start = ClassRegistry.clTab[ifaceReg].ifmStart;
         int pendMark = annoPendN;                       // a NESTED build drains only what it adds past here
         int pairs = u2(pairsPos);
         // PHASE 1 -- every element the annotation USE writes, decoded against the annotated class's blob.
@@ -418,8 +418,8 @@ final class AnnotationInstances
      */
     private static void applyAnnoDefaults(ObjectReference obj, int ifaceReg, boolean[] filled, int n)
     {
-        int start = Loader.clTab[ifaceReg].ifmStart;
-        Address ibase = Loader.clTab[ifaceReg].base;
+        int start = ClassRegistry.clTab[ifaceReg].ifmStart;
+        Address ibase = ClassRegistry.clTab[ifaceReg].base;
         // Snapshot the element NAMES as absolute Utf8 addresses BEFORE re-parsing: ifNameOff[] is an offset
         // into ifBase[], and the parse below is what makes those offsets resolvable against a different blob.
         AddressArray want = AddressArray.create(n);
@@ -802,17 +802,17 @@ final class AnnotationInstances
             name[i] = (byte) u1(descU.plus(2 + dims + 1 + i));
             i += 1;
         }
-        int ci = Loader.classIndexByName(name);
+        int ci = ClassRegistry.classIndexByName(name);
         if (ci < 0)
         {
             Loader.loadClassIncremental(name);                 // safe here: no walk is in progress
-            ci = Loader.classIndexByName(name);
+            ci = ClassRegistry.classIndexByName(name);
         }
         if (ci < 0)
         {
             return 0L;
         }
-        long m = ClassMirrors.classMirror(Loader.clTab[ci].type);
+        long m = ClassMirrors.classMirror(ClassRegistry.clTab[ci].type);
         return dims == 0 ? m : ArrayTypes.arrayOf(m, dims);
     }
 
@@ -831,11 +831,11 @@ final class AnnotationInstances
             cls[i] = (byte) u1(typeU.plus(2 + 1 + i));
             i += 1;
         }
-        int ci = Loader.classIndexByName(cls);
+        int ci = ClassRegistry.classIndexByName(cls);
         if (ci < 0)
         {
             Loader.loadClassIncremental(cls);
-            ci = Loader.classIndexByName(cls);
+            ci = ClassRegistry.classIndexByName(cls);
         }
         if (ci < 0)
         {
@@ -850,7 +850,7 @@ final class AnnotationInstances
             fname[k] = (byte) u1(nameU.plus(2 + k));
             k += 1;
         }
-        long slot = Loader.staticSlotOf(cls, fname);
+        long slot = Statics.staticSlotOf(cls, fname);
         return slot == 0L ? 0L : Address.fromLong(slot).loadLong();
     }
 

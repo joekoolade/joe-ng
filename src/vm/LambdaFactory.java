@@ -244,11 +244,11 @@ final class LambdaFactory
         }
         int nameLen = q.diff(nameStart).toInt();
         int i = 0;
-        while (i < Loader.clCount)
+        while (i < ClassRegistry.clCount)
         {
-            if (Utf8.rawNameEq(Loader.clTab[i].base, Loader.clTab[i].nameOff, nameStart, nameLen))
+            if (Utf8.rawNameEq(ClassRegistry.clTab[i].base, ClassRegistry.clTab[i].nameOff, nameStart, nameLen))
             {
-                return Loader.clTab[i].type;
+                return ClassRegistry.clTab[i].type;
             }
             i += 1;
         }
@@ -504,9 +504,9 @@ final class LambdaFactory
     private static void reportCtorRefNoInitHelper(int cr)
     {
         Uart.write(Magic.bytes("\n  CTOR-REF CANNOT INITIALIZE (its <init> may read null statics): "));
-        if (Loader.clTab != null && cr >= 0 && cr < Loader.clCount && Loader.clTab[cr] != null)
+        if (ClassRegistry.clTab != null && cr >= 0 && cr < ClassRegistry.clCount && ClassRegistry.clTab[cr] != null)
         {
-            Loader.printNameAt(Loader.clTab[cr].base, Loader.clTab[cr].nameOff);
+            Loader.printNameAt(ClassRegistry.clTab[cr].base, ClassRegistry.clTab[cr].nameOff);
         }
         else
         {
@@ -519,9 +519,9 @@ final class LambdaFactory
     private static void reportLambdaCtorNoTib(int cr)
     {
         Uart.write(Magic.bytes("\n  CTOR-REF TARGET HAS NO TIB (the reference would build a null-TIB object): "));
-        if (Loader.clTab != null && cr >= 0 && cr < Loader.clCount && Loader.clTab[cr] != null)
+        if (ClassRegistry.clTab != null && cr >= 0 && cr < ClassRegistry.clCount && ClassRegistry.clTab[cr] != null)
         {
-            Loader.printNameAt(Loader.clTab[cr].base, Loader.clTab[cr].nameOff);
+            Loader.printNameAt(ClassRegistry.clTab[cr].base, ClassRegistry.clTab[cr].nameOff);
         }
         else
         {
@@ -687,7 +687,7 @@ final class LambdaFactory
             // CONSTRUCTOR reference (Num::new): alloc the object, set its TIB, run <init>(obj, samArgs), return
             // the object. Unlike the other thunks this makes two CALLS (Heap.alloc, <init>), so it needs a frame
             // to preserve LR and the SAM args across them. (No captures: the ctor args are all SAM args.)
-            int cr = Loader.classRegByName(Loader.refClassNameOff(lambdaImplMref(idx)));    // the class being constructed
+            int cr = ClassRegistry.classRegByName(Loader.refClassNameOff(lambdaImplMref(idx)));    // the class being constructed
             // THE TARGET MAY NOT BE LOADED YET, and this is the late-compile blind spot again: RTA marks a
             // constructor reference's class instantiated at BATCH time (collectBlob's `mk == 8` arm), so a
             // lambda in a body compiled LATER names a class nothing ever pulled. classRegByName then answers
@@ -713,8 +713,8 @@ final class LambdaFactory
                 }
                 return finishLambdaClass(thunk, ifaceType, idx, nc);            // discarded by the retry
             }
-            int size = 16 + Loader.clTab[cr].fieldCount * 8;
-            long ctib = Loader.clTab[cr].tib.toLong();
+            int size = 16 + ClassRegistry.clTab[cr].fieldCount * 8;
+            long ctib = ClassRegistry.clTab[cr].tib.toLong();
             // A ZERO TIB HERE WOULD BE BAKED AS AN IMMEDIATE AND STAY ZERO FOR EVER -- there is no reloc on
             // this store for a later batch to patch, the same trap a class literal for an unpulled class fell
             // into. The object then comes back with a null TIB, and the first thing done with it (a checkcast,
@@ -914,7 +914,7 @@ final class LambdaFactory
         // gets its OWN itable with the thunk at that interface's flattened slot of the SAM.
         int samName = Loader.mrefNameOff(idx);
         int samDesc = lambdaSamDescOff(idx);
-        int fnReg = Loader.regOfType(ifaceType);
+        int fnReg = ClassRegistry.regOfType(ifaceType);
         int n = fnReg >= 0 ? InterfaceInvocation.ifaceClosureOf(fnReg) : 0;
         // FLAG_SERIALIZABLE: an altMetafactory site whose lambda was cast to an INTERSECTION with
         // java.io.Serializable (every combinator in stock java.util.Comparator is). The marker declares no
@@ -931,7 +931,7 @@ final class LambdaFactory
         int serReg = -1;
         if ((lambdaAltFlags(idx) & LMF_SERIALIZABLE) != 0)
         {
-            serReg = Loader.classIndexByName(Magic.bytes("java/io/Serializable"));
+            serReg = ClassRegistry.classIndexByName(Magic.bytes("java/io/Serializable"));
             if (serReg >= 0 && (serReg == fnReg || InterfaceInvocation.inIfaceClosure(serReg, n)))
             {
                 serReg = -1;                            // already in the closure: one entry, not two
@@ -950,7 +950,7 @@ final class LambdaFactory
         int di = 0;
         while (di < n)
         {
-            dir.plus(e * 16L).plus(0L).store(Loader.clTab[InterfaceInvocation.ifClosureBuf[di]].type);
+            dir.plus(e * 16L).plus(0L).store(ClassRegistry.clTab[InterfaceInvocation.ifClosureBuf[di]].type);
             dir.plus(e * 16L).plus(8L).store(lambdaItableFor(InterfaceInvocation.ifClosureBuf[di], samName, samDesc, thunk));
             e += 1;
             di += 1;
@@ -959,7 +959,7 @@ final class LambdaFactory
         {
             // Serializable declares no method, so its itable is a one-word block nothing can index: the
             // directory entry exists to be FOUND by the type test, not to be dispatched through.
-            dir.plus(e * 16L).plus(0L).store(Loader.clTab[serReg].type);
+            dir.plus(e * 16L).plus(0L).store(ClassRegistry.clTab[serReg].type);
             dir.plus(e * 16L).plus(8L).store(lambdaItableFor(serReg, samName, samDesc, thunk));
             e += 1;
         }
@@ -1024,7 +1024,7 @@ final class LambdaFactory
             one.store(thunk);
             return one.toLong();
         }
-        int count = Loader.clTab[ir].ifmCount;
+        int count = ClassRegistry.clTab[ir].ifmCount;
         Address it = Heap.allocData(count > 0 ? count * 8 : 8);
         int s = 0;
         while (s < count)

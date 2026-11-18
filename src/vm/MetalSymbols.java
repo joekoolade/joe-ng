@@ -194,7 +194,7 @@ final class MetalSymbols implements Symbols
     }
     public void staticField(CodeBuffer cb, int reg, int fieldCp)
     {
-        long addr = Loader.staticAddr(fieldCp);
+        long addr = Statics.staticAddr(fieldCp);
         if (addr == 0L)                                 // cross-class static in a not-yet-loaded class:
         {                                               // record the movz/movk for patchRelocs
             Loader.recordStaticReloc(cb.base() + (long) cb.wordCount() * 4L, reg, fieldCp);
@@ -275,11 +275,11 @@ final class MetalSymbols implements Symbols
     // ----- symbol queries: resolve to a number from the loaded-class tables -----
     public int fieldOffset(int fieldCp)
     {
-        return Loader.fieldOffsetOf(fieldCp);
+        return FieldRegistry.fieldOffsetOf(fieldCp);
     }
     public boolean isVolatileField(int fieldCp, boolean isStatic)
     {
-        return Loader.fieldIsVolatile(fieldCp, isStatic);
+        return FieldRegistry.fieldIsVolatile(fieldCp, isStatic);
     }
     public boolean defaultDispatch(int methodCp)
     {
