@@ -4,6 +4,29 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **LOADER REFACTOR, INCREMENT 6: vtables, interface dispatch, TIBs and type checks out of `vm/Loader`
+  (2026-11-17).** Pure move -- the first increment on the hot dispatch paths.
+  - **`VtableLayout`**: the flattened vtable layout (`parseVtable`, `inheritVtable`), the global slot registry
+    (`vt*`) + hash index, slot lookup (`findVtSlot(At)`, `exactVtableSlot`, `globalVtableSlot`, `vtableSlotOf`), the
+    vtable parity checks.
+  - **`InterfaceInvocation`** (JikesRVM `InterfaceInvocation`): the interface method registry (`if*`) + index, direct
+    interfaces and closures (`clIfaceReg`, `ifaceClosure(Of)`), itables and the per-class imaps
+    (`instImap*`, `refillImaps`, `refillItable`, `buildItableDir`), default-method selection (`defaultBySig`,
+    `mostSpecificDeclarer`), `resolveViaItableDir`, and the `rf*` refill counters.
+  - **`TibBuilder`**: `allocTib`/`fillTib`/`buildRefMap`, java/lang/Object's vtable (`fillObjectVtable(UpTo)`,
+    `objectTypeAddr`), and the SYNTHESISED-TIB registry (`lambdaTibRoots`, `lambdaHost*`,
+    `refillSynthTibVtables`) shared by lambdas, proxies and annotation instances.
+  - **`DynamicTypeCheck`** (same name in JikesRVM): `buildDisplay`, `buildImplBitmap`, `typeOfCheckedClass`,
+    `typeOfClass`, `tibOfClass`.
+  - **Repaired in passing:** `refillImaps`' javadoc opened with `/**` at column 0, which the move tool did not
+    attach -- restored on the method in its new home; `MAXIMAP` + its comment moved next to `instImaps`, which it
+    sizes.
+  - **Loader 21,151 -> 18,953 lines.** Image 39,538,016 -> 39,539,504 bytes (+1,488).
+  - **Validation:** `make test` + overlaycheck clean; 32 targeted QEMU probes pass (dispatch, defaults, supers,
+    casts, covariance, lambdas, proxies, annotations, MH, pattern switch, records). **Speed A/B** against a same-
+    conditions control (a worktree of main, `-j 1`, alternating): SslEngineProbe solo **ctl 99 / 103 s, test 99 /
+    105 s** -- no difference beyond QEMU's run-to-run noise; InvokeGapProbe 21 / 23 s (one run each). Not run: full
+    regression, suite, JUnit, Pi.
 - **LOADER REFACTOR, INCREMENT 5: stack traces, unimplemented natives and boot seeding out of `vm/Loader`
   (2026-11-17).** Pure move.
   - **`StackTrace`** (JikesRVM `runtime/StackTrace`): `buildTrace`/`traceWalk`/`frameToElement` and the

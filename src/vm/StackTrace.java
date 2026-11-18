@@ -390,7 +390,7 @@ final class StackTrace
     }
 
     /** Print the ONE demand-compiled method (or {@code <clinit>}) containing {@code addr} as a single line
-     *  "class.method +0xoff" -- the printStackTrace frame formatter (compact vs {@link #reportMethodAt}). */
+     *  "class.method +0xoff" -- the printStackTrace frame formatter (compact vs {@link Loader#reportMethodAt}). */
     /**
      * Whether {@code pc} lies in the same code block as the compiled buffer {@code buf}.
      *

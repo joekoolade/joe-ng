@@ -296,7 +296,7 @@ final class LambdaFactory
 
     /**
      * Primitive kinds a thunk can box: all eight. Float and double are boxed through the GUEST
-     * {@code Float/Double.valueOf}, resolved by name at run time ({@link #boxFloating}): the boxer is image code
+     * {@code Float/Double.valueOf}, resolved by name at run time ({@link Loader#boxFloating}): the boxer is image code
      * and naming those classes there pulled their boot-hostile initializers into the image.
      */
     private static boolean boxableKind(int k)
@@ -646,7 +646,7 @@ final class LambdaFactory
                 }
                 w = emitUnboxArgs(thunk, w, idx, nc - 1, 0, 1, boxRet);            // params past the captured ones
             }
-            int slot = Loader.globalVtableSlot(lambdaImplMref(idx));                 // vtable slot of the referenced method
+            int slot = VtableLayout.globalVtableSlot(lambdaImplMref(idx));                 // vtable slot of the referenced method
             if (slot < 0)
             {
                 // The referent's class has no vtable numbering yet -- it was pulled AFTER this method was
@@ -915,7 +915,7 @@ final class LambdaFactory
         int samName = Loader.mrefNameOff(idx);
         int samDesc = lambdaSamDescOff(idx);
         int fnReg = Loader.regOfType(ifaceType);
-        int n = fnReg >= 0 ? Loader.ifaceClosureOf(fnReg) : 0;
+        int n = fnReg >= 0 ? InterfaceInvocation.ifaceClosureOf(fnReg) : 0;
         // FLAG_SERIALIZABLE: an altMetafactory site whose lambda was cast to an INTERSECTION with
         // java.io.Serializable (every combinator in stock java.util.Comparator is). The marker declares no
         // method, so honouring it is one more DIRECTORY entry and nothing else -- and the entry is what makes
@@ -932,7 +932,7 @@ final class LambdaFactory
         if ((lambdaAltFlags(idx) & LMF_SERIALIZABLE) != 0)
         {
             serReg = Loader.classIndexByName(Magic.bytes("java/io/Serializable"));
-            if (serReg >= 0 && (serReg == fnReg || Loader.inIfaceClosure(serReg, n)))
+            if (serReg >= 0 && (serReg == fnReg || InterfaceInvocation.inIfaceClosure(serReg, n)))
             {
                 serReg = -1;                            // already in the closure: one entry, not two
             }
@@ -950,8 +950,8 @@ final class LambdaFactory
         int di = 0;
         while (di < n)
         {
-            dir.plus(e * 16L).plus(0L).store(Loader.clTab[Loader.ifClosureBuf[di]].type);
-            dir.plus(e * 16L).plus(8L).store(lambdaItableFor(Loader.ifClosureBuf[di], samName, samDesc, thunk));
+            dir.plus(e * 16L).plus(0L).store(Loader.clTab[InterfaceInvocation.ifClosureBuf[di]].type);
+            dir.plus(e * 16L).plus(8L).store(lambdaItableFor(InterfaceInvocation.ifClosureBuf[di], samName, samDesc, thunk));
             e += 1;
             di += 1;
         }
@@ -975,14 +975,14 @@ final class LambdaFactory
         // stock BasicGZIPInputStreamTest, whose argument array is an Object[].
         Address type = Heap.allocData(ObjectModel.TYPE_SIZE);
         type.plus(0L).store((long) (16 + nc * 8));
-        type.plus(ObjectModel.TYPE_SUPER_OFFSET).store(Loader.objectTypeAddr());
+        type.plus(ObjectModel.TYPE_SUPER_OFFSET).store(TibBuilder.objectTypeAddr());
         type.plus(16L).store(dir);
         type.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).store(0L);
         type.plus(ObjectModel.TYPE_DEPTH_OFFSET).store(0L);
         type.plus(ObjectModel.TYPE_DISPLAY_OFFSET).store(0L);
         type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).store(0L);
         type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).store(0L);
-        Loader.buildImplBitmap(type);                           // a lambda's dir interfaces ARE numbered
+        DynamicTypeCheck.buildImplBitmap(type);                           // a lambda's dir interfaces ARE numbered
         // TIB { Type, Object's vtable }. The lambda declares no virtual method of its OWN -- its SAM is
         // reached through the itable directory above -- but it is still an ordinary object, and
         // equals/hashCode/toString on it must select java/lang/Object's implementations (JVMS 5.4.6: the
@@ -995,20 +995,20 @@ final class LambdaFactory
         // launcher hit it as `DISPATCH ON UNREGISTERED TYPE ... equals(Ljava/lang/Object;)Z` from
         // Stream.sorted(). Identity semantics inherited from Object are exactly right here --
         // LambdaMetafactory specifies the identity of a captured function object as unpredictable.
-        int onv = Loader.objectVtableCount();
+        int onv = TibBuilder.objectVtableCount();
         Address tib = Heap.allocData(8 + onv * 8);
         tib.plus(0L).store(type);
-        Loader.fillObjectVtable(tib);                           // may copy zeros if Object is not compiled yet;
+        TibBuilder.fillObjectVtable(tib);                           // may copy zeros if Object is not compiled yet;
                                                          //   refillSynthTibVtables repairs that at loadAll's end
-        if (Loader.lambdaTibRoots != null && Loader.lambdaTibRootN < Loader.lambdaTibRoots.length())
+        if (TibBuilder.lambdaTibRoots != null && TibBuilder.lambdaTibRootN < TibBuilder.lambdaTibRoots.length())
         {
-            Loader.lambdaTibRoots.set(Loader.lambdaTibRootN, tib);         // keep this TIB (and, via its trace, Type/dir/itables) a GC root
-            Loader.lambdaTibVtCap[Loader.lambdaTibRootN] = onv;   // ... and how many vtable slots it has room for
-            Loader.lambdaTibFilled[Loader.lambdaTibRootN] = false;// ... and NOT yet filled (explicit: see the field's note --
+            TibBuilder.lambdaTibRoots.set(TibBuilder.lambdaTibRootN, tib);         // keep this TIB (and, via its trace, Type/dir/itables) a GC root
+            TibBuilder.lambdaTibVtCap[TibBuilder.lambdaTibRootN] = onv;   // ... and how many vtable slots it has room for
+            TibBuilder.lambdaTibFilled[TibBuilder.lambdaTibRootN] = false;// ... and NOT yet filled (explicit: see the field's note --
                                                     //   allocArray leaves elements undefined on this VM)
-            Loader.lambdaHostBase.set(Loader.lambdaTibRootN, Loader.gbase); // ... and the class being compiled: the lambda's host
-            Loader.lambdaHostNameOff[Loader.lambdaTibRootN] = Loader.gThisNameOff;
-            Loader.lambdaTibRootN += 1;
+            TibBuilder.lambdaHostBase.set(TibBuilder.lambdaTibRootN, Loader.gbase); // ... and the class being compiled: the lambda's host
+            TibBuilder.lambdaHostNameOff[TibBuilder.lambdaTibRootN] = Loader.gThisNameOff;
+            TibBuilder.lambdaTibRootN += 1;
         }
         return tib.toLong();
     }
@@ -1032,7 +1032,7 @@ final class LambdaFactory
             it.plus(s * 8L).store(0L);
             s += 1;
         }
-        int slot = Loader.ifmSlotIn(ir, Loader.gbase, samName, samDesc);
+        int slot = InterfaceInvocation.ifmSlotIn(ir, Loader.gbase, samName, samDesc);
         it.plus((slot >= 0 ? slot : 0) * 8L).store(thunk);
         return it.toLong();
     }

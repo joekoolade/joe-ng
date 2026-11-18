@@ -432,7 +432,7 @@ final class Annotations
     private static Address annotationTypeAddr()
     {
         int i = Loader.classIndexByName(Magic.bytes("java/lang/annotation/Annotation"));
-        return i >= 0 ? Loader.clTab[i].type : Loader.objectTypeAddr();
+        return i >= 0 ? Loader.clTab[i].type : TibBuilder.objectTypeAddr();
     }
 
     /** Position of the {@code RuntimeVisibleAnnotations} list ({@code u2 count} first), or 0 if absent. */

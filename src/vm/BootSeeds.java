@@ -30,7 +30,7 @@ final class BootSeeds
     {
     }
 
-    /** The {@link #loaderGen} each standard stream was installed in (seeded, or set by the program); -1 none. */
+    /** The {@link Loader#loaderGen} each standard stream was installed in (seeded, or set by the program); -1 none. */
     private static int outGen = -1;
     private static int errGen = -1;
     private static int inGen = -1;
@@ -357,7 +357,7 @@ final class BootSeeds
 
     /**
      * Install {@code System.out} / {@code System.err} as STOCK {@link java.io.PrintStream}s over the UART,
-     * built by {@code jdk.internal.misc.MetalStdStreams.newStream()} (pulled by {@link #pullSupportClasses}).
+     * built by {@code jdk.internal.misc.MetalStdStreams.newStream()} (pulled by {@link Loader#pullSupportClasses}).
      *
      * <p>Stock {@code System.initPhase1} that builds them is native-heavy and unrunnable, so the VM calls the
      * helper once per empty slot and stores what it returns. It used to drop a BARE instance of a
@@ -366,7 +366,7 @@ final class BootSeeds
      *
      * <p>An ENSURE, not a set: a slot already holding a LIVE stream keeps its identity (a launched program, or
      * JUnit's {@code System.setOut}, may have replaced it), and nothing happens if the helper is not
-     * registered yet. A stream built before a {@link #resetLoader} is NOT live -- see {@link #stdSlotNeedsSeed}.
+     * registered yet. A stream built before a {@link Loader#resetLoader} is NOT live -- see {@link #stdSlotNeedsSeed}.
      *
      * <p>It COMPILES a method, so it runs after {@link #seedSystemProps} for the reason recorded there: a
      * compile rebuilds the loader's cursor, and a seed after it would stand on the wrong class's state.
@@ -474,7 +474,7 @@ final class BootSeeds
      * True if a {@code System.out}/{@code err}/{@code in} slot must be (re)seeded: it is empty, or what it
      * holds was installed under an EARLIER loader generation.
      *
-     * <p>The second case is a stream built before a {@link #resetLoader}. The static cell survives the reset
+     * <p>The second case is a stream built before a {@link Loader#resetLoader}. The static cell survives the reset
      * (it is the baked {@code System} block), so the object does too -- built from classes of a registry
      * that no longer exists. Ordinary vtable calls through it still work, which is why it went unnoticed for
      * programs at a time; the first call site needing LATE resolution asks the new registry about an old Type

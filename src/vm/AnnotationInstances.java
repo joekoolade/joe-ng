@@ -142,7 +142,7 @@ final class AnnotationInstances
         int k = 0;
         while (k < nv && k < cap)
         {
-            long buf = annoContractBufFor(Loader.vtNameBase.get(st + k), Loader.vtNameOff[st + k], Loader.vtDescOff[st + k]);
+            long buf = annoContractBufFor(VtableLayout.vtNameBase.get(st + k), VtableLayout.vtNameOff[st + k], VtableLayout.vtDescOff[st + k]);
             if (buf != 0L)
             {
                 tib.plus(8L).plus((long) k * 8L).store(buf);
@@ -164,7 +164,7 @@ final class AnnotationInstances
                 while (z < Loader.clTab[r].ifmCount)
                 {
                     int m = Loader.clTab[r].ifmStart + z;
-                    long buf = annoContractBufFor(Loader.ifBase.get(m), Loader.ifNameOff[m], Loader.ifDescOff[m]);
+                    long buf = annoContractBufFor(InterfaceInvocation.ifBase.get(m), InterfaceInvocation.ifNameOff[m], InterfaceInvocation.ifDescOff[m]);
                     if (buf != 0L)
                     {
                         it.plus(z * 8L).store(buf);
@@ -236,9 +236,9 @@ final class AnnotationInstances
             // annotationType() gets the mirror thunk here too; an inherited equals/hashCode/toString stays 0,
             // which the dispatch guard turns into a resolution, not a branch.
             Address thunk = Address.zero();
-            boolean own = Loader.ifBase.get(Loader.clTab[ifaceReg].ifmStart + s).EQ(ownBase);
-            boolean isAnnoType = Utf8.utf8IsAtBase(Loader.ifBase.get(Loader.clTab[ifaceReg].ifmStart + s),
-                    Loader.ifNameOff[Loader.clTab[ifaceReg].ifmStart + s], Magic.bytes("annotationType"));
+            boolean own = InterfaceInvocation.ifBase.get(Loader.clTab[ifaceReg].ifmStart + s).EQ(ownBase);
+            boolean isAnnoType = Utf8.utf8IsAtBase(InterfaceInvocation.ifBase.get(Loader.clTab[ifaceReg].ifmStart + s),
+                    InterfaceInvocation.ifNameOff[Loader.clTab[ifaceReg].ifmStart + s], Magic.bytes("annotationType"));
             if (own || isAnnoType)
             {
                 thunk = Heap.allocCode(8);
@@ -259,7 +259,7 @@ final class AnnotationInstances
         // The extra entries get CORRECTLY SIZED but ZERO-FILLED itables: nothing here implements
         // Annotation.annotationType()/equals/hashCode, and a zero slot meets the dispatch guard (a named trap)
         // rather than branching into whatever a short table would have run off into.
-        int closN = Loader.ifaceClosureOf(ifaceReg);
+        int closN = InterfaceInvocation.ifaceClosureOf(ifaceReg);
         Address dir = Heap.allocData((closN + 2) * 16);
         dir.plus(0L).store(ifaceType);
         dir.plus(8L).store(it);
@@ -267,7 +267,7 @@ final class AnnotationInstances
         int ci = 0;
         while (ci < closN)
         {
-            int cr = Loader.ifClosureBuf[ci];
+            int cr = InterfaceInvocation.ifClosureBuf[ci];
             int cn = Loader.clTab[cr].ifmCount;
             Address cit = Heap.allocData(cn > 0 ? cn * 8 : 8);
             int z = 0;
@@ -277,8 +277,8 @@ final class AnnotationInstances
                 // word. Leaving it zero cost a launcher boot -- JUnit's findRepeatableAnnotations calls it on
                 // every annotation it walks, and a null flowed through isInJavaLangAnnotationPackage's own
                 // null guard to NPE one line later, naming a JUnit method rather than this gap.
-                boolean isAnnoType = Utf8.utf8IsAtBase(Loader.ifBase.get(Loader.clTab[cr].ifmStart + z),
-                        Loader.ifNameOff[Loader.clTab[cr].ifmStart + z], Magic.bytes("annotationType"));
+                boolean isAnnoType = Utf8.utf8IsAtBase(InterfaceInvocation.ifBase.get(Loader.clTab[cr].ifmStart + z),
+                        InterfaceInvocation.ifNameOff[Loader.clTab[cr].ifmStart + z], Magic.bytes("annotationType"));
                 if (isAnnoType)
                 {
                     Address at = Heap.allocCode(8);
@@ -303,32 +303,32 @@ final class AnnotationInstances
         dir.plus(e * 16L).plus(8L).store(0L);
         Address type = Heap.allocData(ObjectModel.TYPE_SIZE);
         type.plus(0L).store((long) (16 + n * 8));
-        type.plus(ObjectModel.TYPE_SUPER_OFFSET).store(Loader.objectTypeAddr());   // NOT 0 -- see finishLambdaClass
+        type.plus(ObjectModel.TYPE_SUPER_OFFSET).store(TibBuilder.objectTypeAddr());   // NOT 0 -- see finishLambdaClass
         type.plus(16L).store(dir);
         // TIB { Type, Object's vtable } -- see finishLambdaClass. An annotation instance is synthesised the
         // same way and has the same gap: unregistered, itable-only, so equals/hashCode/toString on one had
         // nowhere to resolve. It also has to be the same SHAPE as a lambda TIB, because both live in
         // lambdaTibRoots and refillSynthTibVtables walks that one array.
-        int onv2 = Loader.objectVtableCount();
+        int onv2 = TibBuilder.objectVtableCount();
         Address tib = Heap.allocData(8 + onv2 * 8);
         tib.plus(0L).store(type);
-        Loader.fillObjectVtable(tib);
+        TibBuilder.fillObjectVtable(tib);
         patchAnnoContract(tib, onv2, dir);
         annoTibKey.set(annoTibN, ifaceType);
         annoTibVal.set(annoTibN, tib);
         annoTibN += 1;
-        if (Loader.lambdaTibRoots != null && Loader.lambdaTibRootN < Loader.MAXLAMBDATIB)
+        if (TibBuilder.lambdaTibRoots != null && TibBuilder.lambdaTibRootN < TibBuilder.MAXLAMBDATIB)
         {
-            Loader.lambdaTibRoots.set(Loader.lambdaTibRootN, tib);    // same GC root as a lambda TIB, for the same reason:
-            Loader.lambdaTibVtCap[Loader.lambdaTibRootN] = onv2;      //   nothing scanned would otherwise reference it
-            Loader.lambdaHostBase.set(Loader.lambdaTibRootN, Address.zero());        // an annotation instance has no host class
-            Loader.lambdaHostNameOff[Loader.lambdaTibRootN] = 0;
-            Loader.lambdaTibFilled[Loader.lambdaTibRootN] = false;    // EXPLICIT: allocArray does not zero its elements on
+            TibBuilder.lambdaTibRoots.set(TibBuilder.lambdaTibRootN, tib);    // same GC root as a lambda TIB, for the same reason:
+            TibBuilder.lambdaTibVtCap[TibBuilder.lambdaTibRootN] = onv2;      //   nothing scanned would otherwise reference it
+            TibBuilder.lambdaHostBase.set(TibBuilder.lambdaTibRootN, Address.zero());        // an annotation instance has no host class
+            TibBuilder.lambdaHostNameOff[TibBuilder.lambdaTibRootN] = 0;
+            TibBuilder.lambdaTibFilled[TibBuilder.lambdaTibRootN] = false;    // EXPLICIT: allocArray does not zero its elements on
                                                         //   this VM, so a garbage `true` here would skip a TIB
                                                         //   that still needs filling -- a 0 vtable slot, i.e.
                                                         //   a wild branch from baked code. Same trap the SMP
                                                         //   arc hit with taskIdle/coreSched/gcParked.
-            Loader.lambdaTibRootN += 1;
+            TibBuilder.lambdaTibRootN += 1;
         }
         return tib;
     }
@@ -373,11 +373,11 @@ final class AnnotationInstances
             while (k < pairs)
             {
                 int nameIdx = u2(p);
-                if (Loader.utf8EqAt(base, Loader.gcp[nameIdx], Loader.ifBase.get(start + s), Loader.ifNameOff[start + s]))
+                if (Loader.utf8EqAt(base, Loader.gcp[nameIdx], InterfaceInvocation.ifBase.get(start + s), InterfaceInvocation.ifNameOff[start + s]))
                 {
                     annoPendSlot = s;                   // a 'c'/'e' value notes ITS slot, not a global one
-                    annoArrayTib = annoArrayTibFor(Loader.ifBase.get(start + s), Loader.ifDescOff[start + s]);
-                    annoArrayPrim = annoArrayPrimFor(Loader.ifBase.get(start + s), Loader.ifDescOff[start + s]);
+                    annoArrayTib = annoArrayTibFor(InterfaceInvocation.ifBase.get(start + s), InterfaceInvocation.ifDescOff[start + s]);
+                    annoArrayPrim = annoArrayPrimFor(InterfaceInvocation.ifBase.get(start + s), InterfaceInvocation.ifDescOff[start + s]);
                     obj.plus(16L).plus(s * 8L).store(annoElementValue(base, p.plus(2L)));
                     annoPendSlot = -1;
                     annoArrayTib = Address.zero();
@@ -428,11 +428,11 @@ final class AnnotationInstances
         int s = 0;
         while (s < n)
         {
-            want.set(s, filled[s] ? Address.zero() : Loader.ifBase.get(start + s).plus(Loader.ifNameOff[start + s]));
+            want.set(s, filled[s] ? Address.zero() : InterfaceInvocation.ifBase.get(start + s).plus(InterfaceInvocation.ifNameOff[start + s]));
             // Computed HERE, before the re-parse: annoArrayTibFor reads the element method's descriptor
             // through gcp/clTab, and the parse below moves that cursor to a different blob.
-            defArrayTib.set(s, filled[s] ? Address.zero() : annoArrayTibFor(Loader.ifBase.get(start + s), Loader.ifDescOff[start + s]));
-            defArrayPrim[s] = filled[s] ? 0 : annoArrayPrimFor(Loader.ifBase.get(start + s), Loader.ifDescOff[start + s]);
+            defArrayTib.set(s, filled[s] ? Address.zero() : annoArrayTibFor(InterfaceInvocation.ifBase.get(start + s), InterfaceInvocation.ifDescOff[start + s]));
+            defArrayPrim[s] = filled[s] ? 0 : annoArrayPrimFor(InterfaceInvocation.ifBase.get(start + s), InterfaceInvocation.ifDescOff[start + s]);
             s += 1;
         }
         Loader.parseForMethods(ibase, Loader.blobLenOf(ibase));
@@ -525,7 +525,7 @@ final class AnnotationInstances
             // followed by `checkcast [Ljava/lang/String;`, and an Object[] fails that cast. Falling back to
             // Object[] only when the element type is unresolvable keeps the GC tracing either way -- what must
             // never happen is a RAW array, whose elements are not traced as references at all.
-            Address at = !annoArrayTib.isZero() ? annoArrayTib : ArrayTypes.refArrayTib(Loader.objectTypeAddr());
+            Address at = !annoArrayTib.isZero() ? annoArrayTib : ArrayTypes.refArrayTib(TibBuilder.objectTypeAddr());
             if (!at.isZero())
             {
                 arr.plus(ObjectModel.TIB_OFFSET).store(at);

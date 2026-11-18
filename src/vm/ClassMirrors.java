@@ -144,7 +144,7 @@ final class ClassMirrors
     static Address classMirrorTypeAddr()
     {
         int i = Loader.classIndexByName(Magic.bytes("java/lang/Class"));
-        return i < 0 ? Loader.objectTypeAddr() : Loader.clTab[i].type;
+        return i < 0 ? TibBuilder.objectTypeAddr() : Loader.clTab[i].type;
     }
 
     /**
@@ -314,7 +314,7 @@ final class ClassMirrors
 
     static long classLiteral(int classCp)
     {
-        Address type = Loader.typeOfClass(classCp);
+        Address type = DynamicTypeCheck.typeOfClass(classCp);
         if (type.isZero())
         {
             // A CLASS LITERAL FOR A CLASS NOTHING PULLED. `emitAddr` bakes the mirror as an IMMEDIATE, so

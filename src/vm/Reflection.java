@@ -389,7 +389,7 @@ final class Reflection
 
     /**
      * {@code Method.itableTarget0}: the body the RECEIVER's itable directory answers for the method at reflection
-     * index {@code rgIndex}, or 0 -- {@link #resolveViaItableDir}, the tier the JIT's late interface dispatch
+     * index {@code rgIndex}, or 0 -- {@link InterfaceInvocation#resolveViaItableDir}, the tier the JIT's late interface dispatch
      * uses. It is the only route to a receiver the VM SYNTHESISED (a lambda, an annotation instance), which has
      * a Type and an itable but no class file for a class-chain walk to read, and it answers a default method
      * with the implementation THIS receiver runs.
@@ -411,7 +411,7 @@ final class Reflection
         {
             return 0L;
         }
-        return Loader.resolveViaItableDir(type, e.base.plus(e.nameOff), e.base.plus(e.descOff));
+        return InterfaceInvocation.resolveViaItableDir(type, e.base.plus(e.nameOff), e.base.plus(e.descOff));
     }
 
     /** The entry a reflection index names: a registry slot, or {@code BODYLESS + k} for a bodyless method. */
@@ -728,7 +728,7 @@ final class Reflection
         }
         Loader.gStatics = Loader.clTab[reg].statics;
         Indy.findBootstrapMethods();
-        Loader.parseVtable(blob);
+        VtableLayout.parseVtable(blob);
         Loader.gType = Loader.clTab[reg].type;
         Loader.gTib = Loader.clTab[reg].tib;
         Loader.parseForMethods(blob, len);
