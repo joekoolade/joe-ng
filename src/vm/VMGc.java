@@ -1016,7 +1016,7 @@ final class VMGc
                 if (sidx >= 0L)
                 {
                     Uart.write(Magic.bytes("\n  it was the deferral stub for "));
-                    Loader.printLazyName(sidx);        // the method whose stub this was
+                    LazyCompiler.printLazyName(sidx);        // the method whose stub this was
                 }
                 Uart.putc(0x0A);
                 return;
@@ -1076,7 +1076,7 @@ final class VMGc
                 Uart.write(Magic.bytes(" target="));
                 printHex(w);
                 Uart.write(Magic.bytes(" stub="));
-                printHex(Loader.stubIdxAt(Address.fromLong(w)));
+                printHex(LazyCompiler.stubIdxAt(Address.fromLong(w)));
                 Uart.putc(0x0A);
                 rawStaleSeen = rawStaleSeen + 1L;      // report and CONTINUE: halting here hides whether the
                 if (staleTabN < 64L)                   //   fix downstream actually works. Remember the slot
@@ -1173,7 +1173,7 @@ final class VMGc
                     Uart.write(Magic.bytes(" nowFree="));
                     printHex((long) Heap.codeBlockFreeAt(was));
                     Uart.write(Magic.bytes(" stubIdx="));
-                    printHex(Loader.stubIdxAt(was));
+                    printHex(LazyCompiler.stubIdxAt(was));
                     Uart.putc(0x0A);
                     reportSweptPc(was.toLong());       // ... and which buffer it was, from the swept log
                 }
@@ -1266,7 +1266,7 @@ final class VMGc
                     log.store(start);
                     log.plus(8).store(start + size);
                     log.plus(16).store(collections);
-                    log.plus(24).store(Loader.stubIdxAt(Address.fromLong(start)));
+                    log.plus(24).store(LazyCompiler.stubIdxAt(Address.fromLong(start)));
                     sweptLogN = sweptLogN + 1L;         // ... and WHICH stub, if it is one
                 }
                 if (freedN2 < 32L)                     // remember this sweep's freed ranges, so the probe

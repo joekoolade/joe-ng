@@ -366,7 +366,7 @@ final class VMNatives
      */
     static long virtualResolve(ObjectReference recv, long idx)
     {
-        return Loader.virtualResolve(recv, (int) idx);
+        return VirtualDispatch.virtualResolve(recv, (int) idx);
     }
 
     /**

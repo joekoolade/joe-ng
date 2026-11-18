@@ -291,7 +291,7 @@ final class Reflection
         {
             return idx;                                    // already compiled + registered
         }
-        return Loader.compileMethodOnDemand(type, nameArr);       // reflectively-only method: JIT it now, then resolve
+        return LazyCompiler.compileMethodOnDemand(type, nameArr);       // reflectively-only method: JIT it now, then resolve
     }
 
     /**
@@ -315,7 +315,7 @@ final class Reflection
         {
             return idx;
         }
-        idx = Loader.compileMethodOnDemand(type, nameArr, descArr);   // reflectively-only method: JIT exactly THIS one
+        idx = LazyCompiler.compileMethodOnDemand(type, nameArr, descArr);   // reflectively-only method: JIT exactly THIS one
         if (idx >= 0)
         {
             return idx;
@@ -354,7 +354,7 @@ final class Reflection
         {
             return idx;
         }
-        return Loader.compileMethodOnDemand(type, nameArr, descArr);
+        return LazyCompiler.compileMethodOnDemand(type, nameArr, descArr);
     }
 
     /**

@@ -114,7 +114,7 @@ final class ObjectMethods
         {
             return 0L;
         }
-        return Loader.resolveLinkTarget(ClassRegistry.clTab[reg].base.plus(ClassRegistry.clTab[reg].nameOff), Loader.utf8Blob(name),
+        return DynamicLinker.resolveLinkTarget(ClassRegistry.clTab[reg].base.plus(ClassRegistry.clTab[reg].nameOff), Loader.utf8Blob(name),
                 Loader.utf8Blob(desc));
     }
 

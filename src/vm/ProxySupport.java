@@ -87,7 +87,7 @@ final class ProxySupport
         objectCloneCls = Loader.utf8Blob(Magic.bytes("jdk/internal/misc/MetalObjects"));
         objectCloneName = Loader.utf8Blob(Magic.bytes("clone"));
         objectCloneDesc = Loader.utf8Blob(Magic.bytes("(Ljava/lang/Object;)Ljava/lang/Object;"));
-        objectCloneBuf = Loader.linkStubFor(objectCloneCls, objectCloneName,
+        objectCloneBuf = DynamicLinker.linkStubFor(objectCloneCls, objectCloneName,
                 objectCloneDesc);
         return objectCloneBuf;
     }
@@ -112,21 +112,21 @@ final class ProxySupport
         Address t = Heap.allocCode(32 * 4);
         Heap.pinCodeAt(t);                                                // only an itable or vtable names it
         int w = 0;
-        w = Loader.emitAt(t, w, A64Enc.subImm(Loader.STUB_SP, Loader.STUB_SP, PROXY_FRAME));
-        w = Loader.emitAt(t, w, A64Enc.strx(Loader.STUB_LR, Loader.STUB_SP, Loader.STUB_LR_OFF));
+        w = Loader.emitAt(t, w, A64Enc.subImm(StubFrames.STUB_SP, StubFrames.STUB_SP, PROXY_FRAME));
+        w = Loader.emitAt(t, w, A64Enc.strx(StubFrames.STUB_LR, StubFrames.STUB_SP, StubFrames.STUB_LR_OFF));
         int r = 1;
         while (r <= 15)
         {
-            w = Loader.emitAt(t, w, A64Enc.strx(r, Loader.STUB_SP, 8 + r * 8));
+            w = Loader.emitAt(t, w, A64Enc.strx(r, StubFrames.STUB_SP, 8 + r * 8));
             r += 1;
         }
         w = emitMov48(t, w, 1, method);
-        w = Loader.emitAt(t, w, A64Enc.addImm(2, Loader.STUB_SP, 16));
+        w = Loader.emitAt(t, w, A64Enc.addImm(2, StubFrames.STUB_SP, 16));
         w = emitMov48(t, w, 16, helper);
         w = Loader.emitAt(t, w, A64Enc.blr(16));
-        w = Loader.emitAt(t, w, A64Enc.ldrx(Loader.STUB_LR, Loader.STUB_SP, Loader.STUB_LR_OFF));
+        w = Loader.emitAt(t, w, A64Enc.ldrx(StubFrames.STUB_LR, StubFrames.STUB_SP, StubFrames.STUB_LR_OFF));
         Address thi = t.plus(w * 4L);
-        w = Loader.emitAt(t, w, A64Enc.addImm(Loader.STUB_SP, Loader.STUB_SP, PROXY_FRAME));
+        w = Loader.emitAt(t, w, A64Enc.addImm(StubFrames.STUB_SP, StubFrames.STUB_SP, PROXY_FRAME));
         w = Loader.emitAt(t, w, A64Enc.ret());
         Heap.publishCode(t, t.plus(w * 4L));
         VM.addJitFrame(t.plus(4L), thi, PROXY_FRAME, 0L);                                  // live from just after the `sub sp`

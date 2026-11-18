@@ -355,7 +355,7 @@ final class ClassInitializer
      * The compiled entry of initializer {@code i}, compiling its captured body on first request.
      *
      * <p>This is the whole point of deferring: an initializer that never runs never gets an A64 body. The
-     * shape mirrors {@link Loader#lazyCompile} because the situation is identical — a body captured during one
+     * shape mirrors {@link LazyCompiler#lazyCompile} because the situation is identical — a body captured during one
      * batch, compiled at an arbitrary later moment when the batch's compile context is long gone. So it
      * restores that context from the class registry, keeps the class's already-filled TIB, and patches its
      * OWN reloc sites, since the batch-wide {@code patchRelocs} has already run and will not run again for
@@ -380,7 +380,7 @@ final class ClassInitializer
         {
             Loader.capHalt(Magic.bytes("clinit-compile-ctx"), i);   // no class to compile against -- name it, don't guess
         }
-        Loader.restoreCtxForCompile(clinitBase.get(i), Loader.blobLenOf(clinitBase.get(i)), reg);
+        LazyCompiler.restoreCtxForCompile(clinitBase.get(i), Loader.blobLenOf(clinitBase.get(i)), reg);
         Loader.gMaxLocals = clinitLocals[i];                   // AFTER the restore: parseFields/parseVtable clobber it
         boolean reuseWas = Loader.compileReuseTib;              // a nested load resets it: restore, never clear
         Loader.compileReuseTib = true;                         // the class's TIB exists and is filled -- do not rebuild it
@@ -427,7 +427,7 @@ final class ClassInitializer
             Loader.odRetried = false;
             return again;
         }
-        Loader.registerCoCompiled();                           // a private static helper the initializer calls
+        LazyCompiler.registerCoCompiled();                           // a private static helper the initializer calls
         Loader.patchRelocsFrom(rcMark, rsMark);                // resolve OUR sites: batch patchRelocs is long past
         if (buf == 0L)
         {
@@ -1023,7 +1023,7 @@ final class ClassInitializer
     /**
      * The classes whose {@code <clinit>} is run on FIRST ACTIVE USE (JVMS 5.5) instead of at batch end.
      * Deliberately small to start: correctness rests on the trigger set being complete for the class, and
-     * today the only barrier is {@link Loader#lazyCompile} — a call to one of the class's own methods. That is
+     * today the only barrier is {@link LazyCompiler#lazyCompile} — a call to one of the class's own methods. That is
      * sound exactly when nothing reads the class's statics from OUTSIDE it, since a cross-class
      * {@code getstatic} compiles to a direct address load with no barrier to fire.
      *
@@ -1119,7 +1119,7 @@ final class ClassInitializer
         {
             return;
         }
-        int reg = Loader.regBySigU(clsU);
+        int reg = DynamicLinker.regBySigU(clsU);
         if (INIT_GUARD_LOG)
         {
             logInitGuard(Magic.bytes("  IG-fire "), clsU);
@@ -1260,7 +1260,7 @@ final class ClassInitializer
             }
             k += 1;
         }
-        int reg = Loader.regBySigU(clsU);
+        int reg = DynamicLinker.regBySigU(clsU);
         boolean need = reg < 0 || ClassRegistry.clTab[reg] == null || ClassRegistry.clTab[reg].state < RVMClass.ST_INITIALIZED;
         if (igN < IGMEMO)
         {

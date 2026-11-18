@@ -4,6 +4,35 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **LOADER REFACTOR, INCREMENT 8b: lazy compile, dynamic linking and late virtual dispatch out of `vm/Loader`
+  (2026-11-17).** Pure move, plus the two writer stash keys that name the moved entry points.
+  - **`LazyCompiler`** (JikesRVM `LazyCompilationTrampoline`): `lazyCompile(Locked)`, the deferral stubs and their
+    trampoline (`emitDeferredStub`, `buildLazyTramp`, `lzTab`), the stub table (`STUB_TAB`, `stubIdxAt`), the
+    phase-A cells (`armPhaseACells`, `dlCellFor`, `lazyStaticCell`), compile-on-demand (`compileMethodOnDemand*`,
+    `compileSigOnDemand*`), `registerCoCompiled`, `restoreCtxForCompile`.
+  - **`VirtualDispatch`**: the late-virtual site table (`vs*`), its trampoline and per-site memo, `virtualResolve`
+    (+ `Locked`), VarHandle accessor sites (`resolveVhAccessor`, `vh*`), `resolveViaInterfaces`, bake-memo repair.
+  - **`DynamicLinker`** (JikesRVM `DynamicLinker`): link stubs (`lk*`, `linkStubFor`, `resolveLinkStub`),
+    `resolveLinkTarget`, `resolveBakeStub`/`bufBySigU`, the dynamic-link cell index (`dlTab`, `DLTAB`), and
+    resolution from a constant-pool ref (`globalBufByRef`, `globalStaticByRef`).
+  - **`StubFrames`**: the `STUB_*` unwindable frame layout + `registerTrampFrames` (lambda/proxy thunks and the MH/indy
+    trampolines use it too).
+  - **Writer:** `ImageBuilder` stashes `vm/LazyCompiler.lazyCompile(I)J` and `vm/DynamicLinker.resolveLinkStub(I)J`
+    (were `vm/Loader.*`); the image build reports no `helper-stash MISS`.
+  - **Comments re-homed:** the retired-`notInit` note (onto `emitDeferredStub`), the late-link-resolution banner
+    (into `DynamicLinker`'s header), `STUB_FRAME`'s continuation line.
+  - **Loader 15,560 -> 12,013 lines.** Image 39,541,088 -> 39,542,536 bytes (+1,448).
+  - **Validation:** `make test` + overlaycheck clean; 50 probes pass (every 4th non-solo probe at offset 3 + link /
+    first-call / VarHandle probes). LazyVarHandleProbe DIFFERED in that batch only because I listed it twice: the
+    second run saw the first run's statics (`now=e`); batched once it matches.
+  - **Speed -- measured four ways, one of them disagrees.** SslEngineProbe on QEMU against a main control: in-guest
+    timestamps (qprof at 0.25 s sampling: **test 103.3, ctl 102.7 s**; at 60 s sampling: **test 106.1 / 114.8, ctl
+    115.1 / 105.8 s**) and a bare boot timed to 0.5 s with file output (**test 107.1 / 114.9, ctl 117.1 / 107.2 s**)
+    show NO difference -- every run lands in one of two clusters, ~107 s or ~116 s, independent of the image. The
+    Regress harness's per-probe timer put the test at **117-119 s in 6 of 6 runs** against ctl 99-115 s; the image
+    and init are identical across harnesses, and that disagreement is UNEXPLAINED, not explained away. A Pi
+    timing is the deciding measurement if it matters. (The control worktree image is ~3 MB smaller than the real
+    tree's: it lacks the gitignored ramfs files -- true of every A/B in this arc.)
 - **LOADER REFACTOR, INCREMENT 8a: class initialization out of `vm/Loader` (2026-11-17).** Pure move. Increment 8
   of the plan is split three ways because its five classes are ~8,000 lines together: **8a** `ClassInitializer`,
   **8b** `LazyCompiler` + `DynamicLinker` (they hold the writer's name-keyed entry points), **8c** `Relocator` +

@@ -311,14 +311,14 @@ final class InterfaceInvocation
                 }
                 if (decl >= 0)
                 {
-                    long d = Loader.resolveLinkTarget(ClassRegistry.clTab[decl].base.plus(ClassRegistry.clTab[decl].nameOff),
+                    long d = DynamicLinker.resolveLinkTarget(ClassRegistry.clTab[decl].base.plus(ClassRegistry.clTab[decl].nameOff),
                             nameOff, descOff);
                     if (d != 0L)
                     {
                         return d;
                     }
                 }
-                long b = Loader.resolveLinkTarget(ClassRegistry.clTab[ir].base.plus(ClassRegistry.clTab[ir].nameOff),
+                long b = DynamicLinker.resolveLinkTarget(ClassRegistry.clTab[ir].base.plus(ClassRegistry.clTab[ir].nameOff),
                         nameOff, descOff);
                 if (b != 0L)
                 {
@@ -335,7 +335,7 @@ final class InterfaceInvocation
                     }
                     return b;
                 }
-                b = Loader.resolveViaInterfaces(ir, nameOff, descOff);
+                b = VirtualDispatch.resolveViaInterfaces(ir, nameOff, descOff);
                 if (b != 0L)
                 {
                     if (ITABLE_DIR_WATCH)

@@ -255,7 +255,7 @@ final class Statics
 
     /**
      * Static-slot address for a field ref given as blob base + Utf8 offsets, or 0. The shared body of the
-     * compile-time path ({@link #globalStaticAddr}) and the patch-time one ({@link Loader#globalStaticByRef}),
+     * compile-time path ({@link #globalStaticAddr}) and the patch-time one ({@link DynamicLinker#globalStaticByRef}),
      * which carried the identical scan over the identical key.
      *
      * <p>Counted rather than timed, for the reason this arc has now paid for three times: the loop body is

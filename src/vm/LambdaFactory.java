@@ -348,7 +348,7 @@ final class LambdaFactory
                     w = Loader.emitAt(thunk, w, A64Enc.cbnz(r, 1 + nullLen));           // non-null -> the load
                     if (framed)
                     {
-                        w = Loader.emitAt(thunk, w, A64Enc.addImm(Loader.STUB_SP, Loader.STUB_SP, BOX_FRAME));
+                        w = Loader.emitAt(thunk, w, A64Enc.addImm(StubFrames.STUB_SP, StubFrames.STUB_SP, BOX_FRAME));
                     }
                     w = Loader.emitAt(thunk, w, A64Enc.movz(0, 1, 0));                  // unboxNull's "really throw"
                     long at = thunk.toLong() + w * 4L;
@@ -417,8 +417,8 @@ final class LambdaFactory
     /** Frame prologue for a thunk that must CALL rather than tail-branch. */
     private static int emitBoxPrologue(Address thunk, int w)
     {
-        w = Loader.emitAt(thunk, w, A64Enc.subImm(Loader.STUB_SP, Loader.STUB_SP, BOX_FRAME));
-        w = Loader.emitAt(thunk, w, A64Enc.strx(Loader.STUB_LR, Loader.STUB_SP, Loader.STUB_LR_OFF));
+        w = Loader.emitAt(thunk, w, A64Enc.subImm(StubFrames.STUB_SP, StubFrames.STUB_SP, BOX_FRAME));
+        w = Loader.emitAt(thunk, w, A64Enc.strx(StubFrames.STUB_LR, StubFrames.STUB_SP, StubFrames.STUB_LR_OFF));
         return w;
     }
 
@@ -436,9 +436,9 @@ final class LambdaFactory
         Address at = thunk.plus(w * 4L);
         at.store(A64Enc.bl((int) ((VM.boxPrimAddr - at.toLong()) / 4L)));
         w += 1;
-        w = Loader.emitAt(thunk, w, A64Enc.ldrx(Loader.STUB_LR, Loader.STUB_SP, Loader.STUB_LR_OFF));
+        w = Loader.emitAt(thunk, w, A64Enc.ldrx(StubFrames.STUB_LR, StubFrames.STUB_SP, StubFrames.STUB_LR_OFF));
         Address thi = thunk.plus(w * 4L);                               // at the `add sp`: the frame dies here
-        w = Loader.emitAt(thunk, w, A64Enc.addImm(Loader.STUB_SP, Loader.STUB_SP, BOX_FRAME));
+        w = Loader.emitAt(thunk, w, A64Enc.addImm(StubFrames.STUB_SP, StubFrames.STUB_SP, BOX_FRAME));
         w = Loader.emitAt(thunk, w, A64Enc.ret());
         VM.addJitFrame(thunk.plus(4L), thi, BOX_FRAME, 0L);                                                 // live from just after the `sub sp`
         return w;
@@ -469,13 +469,13 @@ final class LambdaFactory
      */
     private static int emitThunkTargetGuard(Address thunk, int w, int mref)
     {
-        Address tramp = Loader.virtualTramp();
+        Address tramp = VirtualDispatch.virtualTramp();
         if (tramp.isZero())
         {
             return w;                                   // no trampoline to route to: leave the thunk as it was
         }
         w = Loader.emitAt(thunk, w, A64Enc.cbnz(16, 5));       // target non-zero -> skip the four words below
-        w = Loader.emitAt(thunk, w, A64Enc.movz(17, Loader.virtualSiteIndex(mref), 0));   // x17 = site (name+descriptor)
+        w = Loader.emitAt(thunk, w, A64Enc.movz(17, VirtualDispatch.virtualSiteIndex(mref), 0));   // x17 = site (name+descriptor)
         w = Loader.emitTrampAddr(thunk, w, tramp);             // x16 = the late-dispatch trampoline (3 words)
         return w;
     }
@@ -661,8 +661,8 @@ final class LambdaFactory
                     Loader.printNameAt(Loader.gbase, Loader.mrefNameOff(lambdaImplMref(idx)));
                     Uart.putc(0x0A);
                 }
-                w = Loader.emitAt(thunk, w, A64Enc.movz(17, Loader.virtualSiteIndex(lambdaImplMref(idx)), 0));
-                w = Loader.emitTrampAddr(thunk, w, Loader.virtualTramp());
+                w = Loader.emitAt(thunk, w, A64Enc.movz(17, VirtualDispatch.virtualSiteIndex(lambdaImplMref(idx)), 0));
+                w = Loader.emitTrampAddr(thunk, w, VirtualDispatch.virtualTramp());
             }
             else
             {
@@ -732,7 +732,7 @@ final class LambdaFactory
             int frame = ((2 + ia + 1) & ~1) * 8;                            // LR + obj + ia args, 16-byte aligned
             thunk.plus(w * 4L).store(A64Enc.subImm(31, 31, frame)); // sub sp, #frame
             w += 1;
-            thunk.plus(w * 4L).store(A64Enc.strx(Loader.STUB_LR, Loader.STUB_SP, Loader.STUB_LR_OFF)); // str x30,[sp] (LR)
+            thunk.plus(w * 4L).store(A64Enc.strx(StubFrames.STUB_LR, StubFrames.STUB_SP, StubFrames.STUB_LR_OFF)); // str x30,[sp] (LR)
             w += 1;
             int k = 0;
             while (k < ia)
@@ -828,7 +828,7 @@ final class LambdaFactory
             w += 1;
             thunk.plus(w * 4L).store(A64Enc.ldrx(0, 31, 8)); // x0 = obj (return)
             w += 1;
-            thunk.plus(w * 4L).store(A64Enc.ldrx(Loader.STUB_LR, Loader.STUB_SP, Loader.STUB_LR_OFF)); // restore LR
+            thunk.plus(w * 4L).store(A64Enc.ldrx(StubFrames.STUB_LR, StubFrames.STUB_SP, StubFrames.STUB_LR_OFF)); // restore LR
             w += 1;
             Address tlo = thunk.plus(4L);                                                               // after `sub sp`
             Address thi = thunk.plus(w * 4L);                                                           // at `add sp`

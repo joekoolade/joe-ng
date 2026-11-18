@@ -37,7 +37,7 @@ final class MetalSymbols implements Symbols
     // ----- calls: emit a BL/BLR-free BL straight to the resolved code address -----
     public void call(CodeBuffer cb, int methodCp)
     {
-        long cell = Loader.lazyStaticCell(methodCp);    // M8 1c: 0 unless LAZY_STATIC && gated && registered
+        long cell = LazyCompiler.lazyStaticCell(methodCp);    // M8 1c: 0 unless LAZY_STATIC && gated && registered
         if (cell != 0L)
         {
             emitIndirectCall(cb, cell);                 // ldr x16,[cell]; blr x16 -> lazy on first call
@@ -214,7 +214,7 @@ final class MetalSymbols implements Symbols
      */
     public void initGuard(CodeBuffer cb, int refCp)
     {
-        emitInitGuard(cb, Loader.initTargetNameAddr(refCp).toLong());   // a field's DECLARING class (JVMS 5.5)
+        emitInitGuard(cb, DynamicLinker.initTargetNameAddr(refCp).toLong());   // a field's DECLARING class (JVMS 5.5)
     }
 
     /** {@link #initGuard} for {@code new}, whose operand is a CONSTANT_Class rather than a {@code *ref}. */
@@ -225,7 +225,7 @@ final class MetalSymbols implements Symbols
 
     public boolean needsInitGuard(int refCp)
     {
-        return ClassInitializer.initGuardNeeded(Loader.initTargetNameAddr(refCp));   // the SAME class initGuard emits
+        return ClassInitializer.initGuardNeeded(DynamicLinker.initTargetNameAddr(refCp));   // the SAME class initGuard emits
     }
 
     public boolean needsInitGuardClass(int classCp)
@@ -304,7 +304,7 @@ final class MetalSymbols implements Symbols
 
     public void virtualSite(CodeBuffer cb, int methodCp)
     {
-        int idx = Loader.virtualSiteIndex(methodCp);
+        int idx = VirtualDispatch.virtualSiteIndex(methodCp);
         cb.emit(A64Enc.movz(17, idx & 0xFFFF, 0));               // x17 = site index; the trampoline reads it
         cb.emit(A64Enc.movk(17, (idx >> 16) & 0xFFFF, 1));       // fixed width: sizing must not depend on idx
     }
@@ -316,7 +316,7 @@ final class MetalSymbols implements Symbols
 
     public void virtualSiteMemo(CodeBuffer cb, int reg, int methodCp, boolean body)
     {
-        emitAddr(cb, reg, Loader.siteMemoAddr(Loader.virtualSiteIndex(methodCp), body));
+        emitAddr(cb, reg, VirtualDispatch.siteMemoAddr(VirtualDispatch.virtualSiteIndex(methodCp), body));
     }
 
     public int vtableSlot(int methodCp)
@@ -515,7 +515,7 @@ final class MetalSymbols implements Symbols
     {
         if (helper == Symbols.VIRTUAL_RESOLVE)
         {
-            return Loader.virtualTramp().toLong();      // built on first use, like the link trampoline
+            return VirtualDispatch.virtualTramp().toLong();      // built on first use, like the link trampoline
         }
         if (helper == Symbols.MH_INVOKE)
         {

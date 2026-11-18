@@ -478,7 +478,7 @@ final class VMUnwind
                 // which happened -- and say it only when the evidence is there. A code-looking word under the
                 // stopped frame means there WAS a caller and these frames are INCOMPLETE; at the true top
                 // (frameless VM.boot) that word is not a return address, so a healthy trace stays silent.
-                if (fi > 0 && !traceStopPc.isZero() && Loader.plausibleCode(traceStopWord))
+                if (fi > 0 && !traceStopPc.isZero() && DynamicLinker.plausibleCode(traceStopWord))
                 {
                     Uart.write(Magic.bytes("  ... TRACE TRUNCATED -- no frame-table entry for pc="));
                     printHex(traceStopPc);
