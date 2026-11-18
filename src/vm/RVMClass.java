@@ -32,7 +32,7 @@ final class RVMClass
                          //   1,420k steps inside the refill were exactly this, against 38k of actual slot reads.
     Address tib;         // its TIB { Type, vtable... }
     Address type;        // its Type node (for instanceof/checkcast)
-    Address statics;     // its static block base (gStatics), reused across load phases
+    Address statics;     // its static block base (gBuild.statics), reused across load phases
     int     fieldCount;  // instance-field count (for subclass field layout)
     int     vtCount;     // flattened vtable size (for subclass vtable copy)
     int     vtStart;     // start index of its slots in the vt registry

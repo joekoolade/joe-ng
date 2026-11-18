@@ -4,6 +4,18 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **LOADER REFACTOR PHASE 2, INCREMENT P2-4b: the field layout is a `ClassBuild` (2026-11-18).** Deleted nine
+  statics: `gsfName`, `gsfAccess`, `gsfCount`, `gifName`, `gifAccess`, `gifDescOff`, `gifCount`, `gStatics`,
+  `gAbsentSuperOff`. New `ClassBuild` (`vm/`) holds the static and instance field tables, the statics block and an
+  absent supertype; `Loader.gBuild` is the current one.
+  - **`parseFields` builds one per call** and publishes it FIRST (`superFieldCount` records an absent super on it);
+    nothing inside `parseFields` parses or loads another class, so it cannot be replaced mid-build. The layout
+    depends on the registered superclass, so it is per class, not cached per blob like the header (P2-4a).
+  - **`statics` is the one field reassigned later**, where `gStatics` was: the context restores in `LazyCompiler` /
+    `Reflection`, phase B, and `adoptStatics` (the writer's dense block).
+  - **Image** 39,548,128 bytes. 71 references rewritten (6 classes).
+  - **Validation:** `make test` + overlaycheck clean, no helper-stash MISS; 39 probes pass (P2-4a's 36 +
+    FieldSemantics, FieldPrim, AtomicUpdaters). Not run: speed A/B, full regression, suite, JUnit, Pi.
 - **LOADER REFACTOR PHASE 2, INCREMENT P2-4a: the class header lives on the view (2026-11-18).** P2-4 is split in
   three: (a) blob header facts -> `ClassFileView`; (b) field layout (`gsf*`, `gif*`, `gStatics`) -> `ClassBuild`;
   (c) Type/TIB/vtable state -> `ClassBuild`, lifecycle onto `RVMClass`.

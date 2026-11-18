@@ -726,7 +726,7 @@ final class Reflection
         {
             return -1;
         }
-        Loader.gStatics = ClassRegistry.clTab[reg].statics;
+        Loader.gBuild.statics = ClassRegistry.clTab[reg].statics;
         Indy.findBootstrapMethods();
         VtableLayout.parseVtable(blob);
         Loader.gType = ClassRegistry.clTab[reg].type;

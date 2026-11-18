@@ -220,7 +220,7 @@ final class LazyCompiler
         {
             return -1;
         }
-        Loader.gStatics = ClassRegistry.clTab[reg].statics;                         // reuse the phase-A statics (cross-class getstatic keys on it)
+        Loader.gBuild.statics = ClassRegistry.clTab[reg].statics;                         // reuse the phase-A statics (cross-class getstatic keys on it)
         Indy.findBootstrapMethods();
         VtableLayout.parseVtable(blob);                                 // gvImplBuf/gvImplCode (for any invokevirtual in the body)
         Loader.gType = ClassRegistry.clTab[reg].type;
@@ -544,7 +544,7 @@ final class LazyCompiler
         int len = Loader.blobLenOf(blob);
         Loader.parseConstPool(blob, len);                      // rebuild this class's compile state (as loadBodies
         Loader.parseFields();                                  //   does, minus the TIB fill)
-        Loader.gStatics = ClassRegistry.clTab[reg].statics;                  // reuse the phase-A statics block
+        Loader.gBuild.statics = ClassRegistry.clTab[reg].statics;                  // reuse the phase-A statics block
         Indy.findBootstrapMethods();
         VtableLayout.parseVtable(blob);
         Loader.gType = ClassRegistry.clTab[reg].type;
@@ -1068,7 +1068,7 @@ final class LazyCompiler
         }
         Loader.parseConstPool(bytes, len);
         Loader.parseFields();
-        Loader.gStatics = ClassRegistry.clTab[reg].statics;
+        Loader.gBuild.statics = ClassRegistry.clTab[reg].statics;
         Indy.findBootstrapMethods();
         VtableLayout.parseVtable(bytes);
         Loader.gType = ClassRegistry.clTab[reg].type;

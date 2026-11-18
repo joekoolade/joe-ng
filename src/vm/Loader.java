@@ -82,14 +82,12 @@ public final class Loader
     private static long gnameP, gdescP;   // packed name/descriptor being searched for
     private static int gnameLen;
     private static int gdescLen;
-    static Address gStatics;   // this class's statics block
-    static int[] gsfName;   // Utf8 offset of each static field's name (index = slot)
-    static int[] gsfAccess; // access_flags of each static field (index = slot): ACC_VOLATILE for the JIT
-    static int gsfCount;
-    static int[] gifName;   // Utf8 offset of each instance field's name (index = slot)
-    static int[] gifAccess; // access_flags of each own instance field (index = slot; 0 for inherited)
-    static int[] gifDescOff;// Utf8 offset of each own instance field's type descriptor (index = slot)
-    static int gifCount;
+    /**
+     * The field layout of the class being built or compiled (static and instance field tables, the statics block,
+     * an absent supertype): one object made by {@link #parseFields}, which replaced nine statics in increment
+     * P2-4b. Null until the first {@code parseFields} of a boot.
+     */
+    static ClassBuild gBuild;
     static Address gBsmOff;      // address of the BootstrapMethods attr body (num_bootstrap_methods), or 0
     // Flattened vtable of the class being built: superclass slots first, overrides
     // replacing in place, new methods appended. Each slot's signature may live in a
@@ -600,7 +598,7 @@ public final class Loader
         BootSeeds.seedSystemIn();                                     // System.in -> an empty stream (never null)
         buildRunTramp();                                    // enable Thread.start() (needs Runnable loaded)
         // seedSystemProps runs LAST of the seeds, because it is the only one that COMPILES a method:
-        // resolving Properties.setProperty rebuilds the loader's compile cursor (gView/gStatics) for
+        // resolving Properties.setProperty rebuilds the loader's compile cursor (gView/gBuild) for
         // java/util/Properties, and every seed after it would then be standing on the wrong class's state.
         // That is the hazard already recorded for demand-loading inside buildLambdaTib, reached from a
         // different direction.
@@ -755,7 +753,7 @@ public final class Loader
                                                             //   trampoline (needs Runnable loaded by loadAll;
                                                             //   harmless if the program spawns no threads)
         // seedSystemProps runs LAST of the seeds, because it is the only one that COMPILES a method:
-        // resolving Properties.setProperty rebuilds the loader's compile cursor (gView/gStatics) for
+        // resolving Properties.setProperty rebuilds the loader's compile cursor (gView/gBuild) for
         // java/util/Properties, and every seed after it would then be standing on the wrong class's state.
         // That is the hazard already recorded for demand-loading inside buildLambdaTib, reached from a
         // different direction.
@@ -3306,17 +3304,18 @@ public final class Loader
     static void parseFields()
     {
         Address p = gp;
+        gBuild = new ClassBuild();                      // published first: superFieldCount records an absent super on it
         superUnregistered = false;
-        gAbsentSuperOff = 0;
+        gBuild.absentSuperOff = 0;
         int islot = superFieldCount();                  // own instance fields sit after inherited ones
         p = p.plus(6);                                         // access_flags, this_class, super_class
         int[] implIfName = gView.implIfName;
         int ii = 0;
         while (ii < implIfName.length)
         {
-            if (gAbsentSuperOff == 0 && absentSupertype(implIfName[ii]))
+            if (gBuild.absentSuperOff == 0 && absentSupertype(implIfName[ii]))
             {
-                gAbsentSuperOff = implIfName[ii];       // a superinterface that can never load: same as a superclass
+                gBuild.absentSuperOff = implIfName[ii];       // a superinterface that can never load: same as a superclass
             }
             ii += 1;
         }
@@ -3335,11 +3334,11 @@ public final class Loader
             Uart.putc(0x0A);
         }
         p = p.plus(2);
-        gsfName = new int[fcount + 1];
-        gsfAccess = new int[fcount + 1];
-        gifName = new int[fcount + islot + 1];
-        gifAccess = new int[fcount + islot + 1];
-        gifDescOff = new int[fcount + islot + 1];
+        gBuild.sfName = new int[fcount + 1];
+        gBuild.sfAccess = new int[fcount + 1];
+        gBuild.ifName = new int[fcount + islot + 1];
+        gBuild.ifAccess = new int[fcount + islot + 1];
+        gBuild.ifDescOff = new int[fcount + islot + 1];
         int slot = 0;
         int f = 0;
         while (f < fcount)
@@ -3350,15 +3349,15 @@ public final class Loader
             p = p.plus(6);                                     // access, name, descriptor
             if ((access & 0x0008) != 0)
             {
-                gsfName[slot] = gView.cp[nameIdx];    // ACC_STATIC
-                gsfAccess[slot] = access;        // the JIT's volatile barriers read ACC_VOLATILE from here
+                gBuild.sfName[slot] = gView.cp[nameIdx];    // ACC_STATIC
+                gBuild.sfAccess[slot] = access;        // the JIT's volatile barriers read ACC_VOLATILE from here
                 slot += 1;
             }
             else
             {
-                gifName[islot] = gView.cp[nameIdx];   // instance field at the next inherited+own slot
-                gifAccess[islot] = access;       // reflection: getModifiers / access checks
-                gifDescOff[islot] = gView.cp[descIdx];// reflection: field type descriptor
+                gBuild.ifName[islot] = gView.cp[nameIdx];   // instance field at the next inherited+own slot
+                gBuild.ifAccess[islot] = access;       // reflection: getModifiers / access checks
+                gBuild.ifDescOff[islot] = gView.cp[descIdx];// reflection: field type descriptor
                 islot += 1;
             }
             int attrs = u2(p);
@@ -3366,14 +3365,14 @@ public final class Loader
             p = skipAttributes(p, attrs);
             f += 1;
         }
-        gsfCount = slot;
-        gifCount = islot;                               // total: inherited + own
+        gBuild.sfCount = slot;
+        gBuild.ifCount = islot;                               // total: inherited + own
         gvCount = 0;                                    // no vtable unless parseVtable runs
-        gStatics = Heap.allocData(slot * 8 + 8);
+        gBuild.statics = Heap.allocData(slot * 8 + 8);
         int z = 0;
         while (z < slot)
         {
-            gStatics.plus(z * 8).store(0L);    // statics default to 0
+            gBuild.statics.plus(z * 8).store(0L);    // statics default to 0
             z += 1;
         }
         gp = p;
@@ -3404,12 +3403,11 @@ public final class Loader
      * HttpsURLConnectionImpl, whose javax/net/ssl superclass the image does not ship.
      *
      * <p>The same holds for a direct SUPERINTERFACE (see {@link #absentSupertype}): a class implementing an interface
-     * that cannot load was constructed with {@code getInterfaces().length == 0}. Holds the absent name's offset in
-     * {@code gView.base}, or 0.
+     * that cannot load was constructed with {@code getInterfaces().length == 0}. The absent name's offset in
+     * {@code gView.base} is recorded as {@link ClassBuild#absentSuperOff} (0 if none).
+     *
+     * <p>Answers whether the supertype named at {@code nameOff} in {@code gView.base} can never load.
      */
-    private static int gAbsentSuperOff;
-
-    /** Whether the supertype named at {@code nameOff} in {@code gView.base} can never load (see {@link #gAbsentSuperOff}). */
     private static boolean absentSupertype(int nameOff)
     {
         return nameOff != 0
@@ -3429,7 +3427,7 @@ public final class Loader
                 && !Utf8.utf8IsAtBase(gView.base, gView.superNameOff, Magic.bytes("java/lang/Object"));
         if (superUnregistered && absentSupertype(gView.superNameOff))
         {
-            gAbsentSuperOff = gView.superNameOff;
+            gBuild.absentSuperOff = gView.superNameOff;
         }
         return 0;
     }
@@ -5031,7 +5029,7 @@ public final class Loader
                                                         //   a local: the parses below can switch gView to another blob.
                                                         //   A nested class's InnerClasses flags are read at REFLECTION
                                                         //   time instead (innerClassFlags, under the loader lock).
-        parseFields();                                  // hierarchy-aware field layout (allocates gStatics)
+        parseFields();                                  // hierarchy-aware field layout (allocates gBuild.statics)
         Indy.findBootstrapMethods();                         // locate BootstrapMethods (for invokedynamic), if any
         if (gView.isInterface())
         {
@@ -5084,13 +5082,13 @@ public final class Loader
             ClassRegistry.clTab[ClassRegistry.clCount].type = gType;
             ClassRegistry.clTab[ClassRegistry.clCount].fieldCount = 0;
             ClassRegistry.clTab[ClassRegistry.clCount].vtCount = 0;
-            ClassRegistry.clTab[ClassRegistry.clCount].statics = gStatics;              // interface constants block (reused by its phase-B bodies)
+            ClassRegistry.clTab[ClassRegistry.clCount].statics = gBuild.statics;              // interface constants block (reused by its phase-B bodies)
             ClassRegistry.clTab[ClassRegistry.clCount].vtStart = VtableLayout.vtCount;               // no vtable entries appended for an interface
             ClassRegistry.clTab[ClassRegistry.clCount].isIface = true;
             ClassRegistry.clTab[ClassRegistry.clCount].ifmStart = gIfmStart;            // the flattened per-interface method run
             ClassRegistry.clTab[ClassRegistry.clCount].ifmCount = gIfmCount;            //   = this interface's itable slot numbering
             ClassRegistry.clTab[ClassRegistry.clCount].superNameOff = gView.superNameOff;
-            ClassRegistry.clTab[ClassRegistry.clCount].absentSuperOff = gAbsentSuperOff;          // an interface extending one that cannot load
+            ClassRegistry.clTab[ClassRegistry.clCount].absentSuperOff = gBuild.absentSuperOff;          // an interface extending one that cannot load
             ClassRegistry.clTab[ClassRegistry.clCount].superReg = ClassRegistry.classRegByName(gView.superNameOff);   // an interface's super is Object (-1); kept for symmetry
             InterfaceInvocation.captureDirectIfaces();                      // an interface's extended interfaces (List extends Iterable)
             ClassRegistry.clTab[ClassRegistry.clCount].modifiers = classModifiers;     // cached Class.getModifiers() (captured post-cp, no re-parse)
@@ -5126,11 +5124,11 @@ public final class Loader
         parseConstPool(bytes, len);
         long lbA = Magic.readCNTPCT_EL0();
         pParseCpT += lbA - lb0;
-        parseFields();                                  // re-derive the field layout; gStatics is throwaway
+        parseFields();                                  // re-derive the field layout; its fresh statics block is throwaway
         pFieldsT += Magic.readCNTPCT_EL0() - lbA;
         lbParseT += Magic.readCNTPCT_EL0() - lb0;
         int reg = ClassRegistry.classRegByName(gView.thisNameOff);
-        gStatics = ClassRegistry.clTab[reg].statics;                      // REUSE the phase-A static block (cross-class getstatic keys on it)
+        gBuild.statics = ClassRegistry.clTab[reg].statics;                      // REUSE the phase-A static block (cross-class getstatic keys on it)
         Indy.findBootstrapMethods();
         if (ClassRegistry.clTab[reg].isIface)
         {
@@ -5180,7 +5178,7 @@ public final class Loader
      * Seed the static tables a skipped {@code <clinit>} would have built, for known real java.base classes.
      * Currently {@code java/lang/Integer.digits} (the radix digit chars {@code Integer.toHexString} /
      * {@code formatUnsignedInt} index) — its real {@code <clinit>} also calls {@code Class.getPrimitiveClass}
-     * (a native), so we provide just the table. gStatics is this class's block; the compiled getstatic reads
+     * (a native), so we provide just the table. gBuild.statics is this class's block; the compiled getstatic reads
      * the same slot address.
      */
     static void provideKnownStatics()
@@ -6372,8 +6370,8 @@ public final class Loader
     private static void registerClassStructure()
     {
         if (ClassRegistry.clCount >= ClassRegistry.MAXCLASS) { capHalt(Magic.bytes("ClassRegistry.MAXCLASS"), ClassRegistry.clCount); }              // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
-        if (Statics.sgCount + gsfCount >= MethodRegistry.MAXREG) { capHalt(Magic.bytes("MethodRegistry.MAXREG"), Statics.sgCount); }       // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
-        if (FieldRegistry.fldCount + gifCount >= FieldRegistry.MAXFIELD) { capHalt(Magic.bytes("FieldRegistry.MAXFIELD"), FieldRegistry.fldCount); } // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
+        if (Statics.sgCount + gBuild.sfCount >= MethodRegistry.MAXREG) { capHalt(Magic.bytes("MethodRegistry.MAXREG"), Statics.sgCount); }       // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
+        if (FieldRegistry.fldCount + gBuild.ifCount >= FieldRegistry.MAXFIELD) { capHalt(Magic.bytes("FieldRegistry.MAXFIELD"), FieldRegistry.fldCount); } // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
         if (VtableLayout.vtCount + gvCount >= VtableLayout.MAXVT) { capHalt(Magic.bytes("VtableLayout.MAXVT"), VtableLayout.vtCount); }          // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
         ClassRegistry.clTab[ClassRegistry.clCount] = new RVMClass();
         ClassRegistry.clTab[ClassRegistry.clCount].state = RVMClass.ST_LOADED;
@@ -6382,10 +6380,10 @@ public final class Loader
         ClassRegistry.clTab[ClassRegistry.clCount].nameHash = Utf8.utf8Hash(gView.base, gView.thisNameOff);       // folded once; see RVMClass.nameHash
         ClassRegistry.clTab[ClassRegistry.clCount].tib = gTib;
         ClassRegistry.clTab[ClassRegistry.clCount].type = gType;
-        ClassRegistry.clTab[ClassRegistry.clCount].absentSuperOff = gAbsentSuperOff;
-        ClassRegistry.clTab[ClassRegistry.clCount].fieldCount = gifCount;
+        ClassRegistry.clTab[ClassRegistry.clCount].absentSuperOff = gBuild.absentSuperOff;
+        ClassRegistry.clTab[ClassRegistry.clCount].fieldCount = gBuild.ifCount;
         ClassRegistry.clTab[ClassRegistry.clCount].vtCount = gvCount;
-        ClassRegistry.clTab[ClassRegistry.clCount].statics = gStatics;
+        ClassRegistry.clTab[ClassRegistry.clCount].statics = gBuild.statics;
         ClassRegistry.clTab[ClassRegistry.clCount].vtStart = VtableLayout.vtCount;                   // this class's slots occupy vt[VtableLayout.vtCount .. VtableLayout.vtCount+gvCount)
         ClassRegistry.clTab[ClassRegistry.clCount].isIface = false;
         ClassRegistry.clTab[ClassRegistry.clCount].superNameOff = gView.superNameOff;        // keep the NAME too: superReg is -1 for ever if the
@@ -6406,17 +6404,17 @@ public final class Loader
         LazyCompiler.armPhaseACells();                               // cells for this class's statics, before any body compiles
         Statics.registerStaticFields();
         int s = 0;
-        while (s < gifCount)
+        while (s < gBuild.ifCount)
         {
-            if (gifName[s] != 0)                        // skip inherited slots (registered by the super)
+            if (gBuild.ifName[s] != 0)                        // skip inherited slots (registered by the super)
             {
                 FieldRegistry.fldTab[FieldRegistry.fldCount] = new RVMField();
                 FieldRegistry.fldTab[FieldRegistry.fldCount].base = gView.base;
                 FieldRegistry.fldTab[FieldRegistry.fldCount].classOff = gView.thisNameOff;
-                FieldRegistry.fldTab[FieldRegistry.fldCount].nameOff = gifName[s];
+                FieldRegistry.fldTab[FieldRegistry.fldCount].nameOff = gBuild.ifName[s];
                 FieldRegistry.fldTab[FieldRegistry.fldCount].slot = s;
-                FieldRegistry.fldTab[FieldRegistry.fldCount].access = gifAccess[s];
-                FieldRegistry.fldTab[FieldRegistry.fldCount].descOff = gifDescOff[s];
+                FieldRegistry.fldTab[FieldRegistry.fldCount].access = gBuild.ifAccess[s];
+                FieldRegistry.fldTab[FieldRegistry.fldCount].descOff = gBuild.ifDescOff[s];
                 FieldRegistry.fldCount += 1;
             }
             s += 1;
@@ -7188,10 +7186,10 @@ public final class Loader
     static Address gAdoptType;
 
     static Address gAdoptStatics;  // M8 statics unification: the writer's dense per-class block (0 = none)
-    static int gAdoptStaticCount;   // ... its declared-static slot count (guard vs gsfCount)
+    static int gAdoptStaticCount;   // ... its declared-static slot count (guard vs gBuild.sfCount)
 
 
-    /** M8 statics unification: replace the freshly-allocated gStatics with the writer's dense
+    /** M8 statics unification: replace the freshly-allocated gBuild.statics with the writer's dense
      *  per-class block -- ONE home per static field across both worlds (this world's <clinit>
      *  run then initializes the SHARED slots; deferred classes carry the seed-JVM snapshot).
      *  Slot numbering = declared statics in declaration order on both sides; a count mismatch
@@ -7202,7 +7200,7 @@ public final class Loader
         {
             return;
         }
-        if (gAdoptStaticCount != gsfCount)
+        if (gAdoptStaticCount != gBuild.sfCount)
         {
             if (LOAD_LOG)
             {
@@ -7211,12 +7209,12 @@ public final class Loader
                 Uart.write(Magic.bytes(" DIFF "));
                 VM.printDec(gAdoptStaticCount);
                 Uart.putc(0x2F);
-                VM.printDec(gsfCount);
+                VM.printDec(gBuild.sfCount);
                 Uart.putc(0x0A);
             }
             return;
         }
-        gStatics = gAdoptStatics;
+        gBuild.statics = gAdoptStatics;
     }
 
 
@@ -8642,7 +8640,7 @@ public final class Loader
      * Scalar instance size (header + one 8-byte slot per field) of class {@code classIdx}, or
      * {@code -(site + 1)} when the class is neither registered nor the class being compiled -- see
      * {@link Symbols#objectSize}. The unregistered-but-SELF case is real (a class `new`ing itself before its
-     * own registration completes) and keeps the {@code gifCount} size; anything else used to take that same
+     * own registration completes) and keeps the {@code gBuild.ifCount} size; anything else used to take that same
      * path and silently produce an object of the wrong type.
      */
     static int objectSizeOf(int classIdx)
@@ -8654,7 +8652,7 @@ public final class Loader
             newLowerLog(classIdx, -1, site);            // DEFERRED: NEW_UNRESOLVED, allocated at first reach
             return -(site + 1);
         }
-        int fields = r >= 0 ? ClassRegistry.clTab[r].fieldCount : gifCount;
+        int fields = r >= 0 ? ClassRegistry.clTab[r].fieldCount : gBuild.ifCount;
         newLowerLog(classIdx, 16 + fields * 8, -1);     // INLINE: Heap.alloc + this class's TIB, here and now
         return 16 + fields * 8;
     }

@@ -95,9 +95,9 @@ final class Statics
         if (Loader.utf8EqAt(Loader.gView.base, Loader.refClassNameOff(idx), Loader.gView.base, Loader.gView.thisNameOff))
         {
             int s = 0;
-            while (s < Loader.gsfCount)                        // same class: match by name Utf8 offset
+            while (s < Loader.gBuild.sfCount)                        // same class: match by name Utf8 offset
             {
-                if (Loader.gsfName[s] == nameOff)
+                if (Loader.gBuild.sfName[s] == nameOff)
                 {
                     if (Loader.STATIC_ADDR_LOG)
                     {
@@ -106,10 +106,10 @@ final class Statics
                         Uart.putc(0x2E);
                         Loader.printNameAt(Loader.gView.base, nameOff);
                         Uart.write(Magic.bytes(" -> "));
-                        VM.printHex(Loader.gStatics.plus(s * 8));
+                        VM.printHex(Loader.gBuild.statics.plus(s * 8));
                         Uart.putc(0x0A);
                     }
-                    return Loader.gStatics.plus(s * 8).toLong();
+                    return Loader.gBuild.statics.plus(s * 8).toLong();
                 }
                 s += 1;
             }
@@ -173,11 +173,11 @@ final class Statics
     static long staticSlotByName(byte[] name)
     {
         int s = 0;
-        while (s < Loader.gsfCount)
+        while (s < Loader.gBuild.sfCount)
         {
-            if (Utf8.utf8IsAtBase(Loader.gView.base, Loader.gsfName[s], name))
+            if (Utf8.utf8IsAtBase(Loader.gView.base, Loader.gBuild.sfName[s], name))
             {
-                return Loader.gStatics.plus(s * 8L).toLong();
+                return Loader.gBuild.statics.plus(s * 8L).toLong();
             }
             s += 1;
         }
@@ -369,16 +369,16 @@ final class Statics
      */
     static void registerStaticFields()
     {
-        if (sgCount + Loader.gsfCount >= MethodRegistry.MAXREG) { Loader.capHalt(Magic.bytes("MethodRegistry.MAXREG-statics"), sgCount); }
+        if (sgCount + Loader.gBuild.sfCount >= MethodRegistry.MAXREG) { Loader.capHalt(Magic.bytes("MethodRegistry.MAXREG-statics"), sgCount); }
         int st = 0;
-        while (st < Loader.gsfCount)
+        while (st < Loader.gBuild.sfCount)
         {
             sgTab[sgCount] = new RVMField();
             sgTab[sgCount].base = Loader.gView.base;
             sgTab[sgCount].classOff = Loader.gView.thisNameOff;
-            sgTab[sgCount].nameOff = Loader.gsfName[st];
-            sgTab[sgCount].addr = Loader.gStatics.plus(st * 8L).toLong();
-            sgTab[sgCount].access = Loader.gsfAccess[st];
+            sgTab[sgCount].nameOff = Loader.gBuild.sfName[st];
+            sgTab[sgCount].addr = Loader.gBuild.statics.plus(st * 8L).toLong();
+            sgTab[sgCount].access = Loader.gBuild.sfAccess[st];
             sgCount += 1;
             st += 1;
         }
