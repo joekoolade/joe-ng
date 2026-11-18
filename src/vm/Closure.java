@@ -495,7 +495,7 @@ final class Closure
         long ts2 = Magic.readCNTPCT_EL0();
         Address entryBlob = Address.fromLong(Loader.gEntryBlob);
         Loader.parseForMethods(entryBlob, Loader.blobLenOf(entryBlob));
-        addReach(Loader.findMethodByBytes(Loader.gView.base, gEntryName, gEntryDesc));
+        addReach(FoundMethod.codeOf(Loader.findMethodByBytes(Loader.gView.base, gEntryName, gEntryDesc)));
         Loader.mrEntry += Magic.readCNTPCT_EL0() - ts2;
         long ts3 = Magic.readCNTPCT_EL0();
         seedRootBlob();                                 // a defineClass'd class: all of it is a root
@@ -715,7 +715,7 @@ final class Closure
             long code = Loader.findCode(base, p.plus(8), attrs);
             if (code != 0L && isReach(code) && addCollected(code))
             {
-                collectRefs(base, code, Loader.gcodeLen);      // ONCE: a method's refs never change, and the pend
+                collectRefs(base, code, ClassBytes.codeLength(code));      // ONCE: a method's refs never change, and the pend
             }                                           //   list now accumulates instead of being rebuilt
             p = Loader.skipAttributes(p.plus(8), attrs);
             m += 1;
@@ -1447,26 +1447,26 @@ final class Closure
                 // ONE parse, many scans: findMethodByBytes reads gp/gView.cp and never advances them, so the
                 // constant pool this sets up is good for every lookup below.
                 Loader.parseForMethods(Loader.pdBase.get(b), Loader.pdLen[b]);
-                grew = addReach(Loader.findMethodByBytes(Loader.gView.base, Magic.bytes("run"), Magic.bytes("()V"))) || grew;
-                grew = addReach(Loader.findMethodByBytes(Loader.gView.base, Magic.bytes("getAndBitwiseOr"),
-                        Magic.bytes("(Ljava/lang/Object;I)I"))) || grew;
-                grew = addReach(Loader.findMethodByBytes(Loader.gView.base, Magic.bytes("compareAndSet"),
-                        Magic.bytes("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z"))) || grew;
+                grew = addReach(FoundMethod.codeOf(Loader.findMethodByBytes(Loader.gView.base, Magic.bytes("run"), Magic.bytes("()V")))) || grew;
+                grew = addReach(FoundMethod.codeOf(Loader.findMethodByBytes(Loader.gView.base, Magic.bytes("getAndBitwiseOr"),
+                        Magic.bytes("(Ljava/lang/Object;I)I")))) || grew;
+                grew = addReach(FoundMethod.codeOf(Loader.findMethodByBytes(Loader.gView.base, Magic.bytes("compareAndSet"),
+                        Magic.bytes("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z")))) || grew;
                 // The REFERENCE accessors java.util.concurrent drives its structures through. Seeded for the
                 // same reason as the two above: their call sites are signature-polymorphic, so RTA never sees
                 // them named and would prune the bodies, leaving a 0 vtable slot behind the by-name resolve.
-                grew = addReach(Loader.findMethodByBytes(Loader.gView.base, Magic.bytes("set"),
-                        Magic.bytes("(Ljava/lang/Object;Ljava/lang/Object;)V"))) || grew;
-                grew = addReach(Loader.findMethodByBytes(Loader.gView.base, Magic.bytes("get"),
-                        Magic.bytes("(Ljava/lang/Object;)Ljava/lang/Object;"))) || grew;
-                grew = addReach(Loader.findMethodByBytes(Loader.gView.base, Magic.bytes("setRelease"),
-                        Magic.bytes("(Ljava/lang/Object;Ljava/lang/Object;)V"))) || grew;
-                grew = addReach(Loader.findMethodByBytes(Loader.gView.base, Magic.bytes("weakCompareAndSet"),
-                        Magic.bytes("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z"))) || grew;
-                grew = addReach(Loader.findMethodByBytes(Loader.gView.base, Magic.bytes("getMethodName"),
-                        Magic.bytes("()Ljava/lang/String;"))) || grew;
-                grew = addReach(Loader.findMethodByBytes(Loader.gView.base, Magic.bytes("getEnumConstants"),
-                        Magic.bytes("()[Ljava/lang/Object;"))) || grew;
+                grew = addReach(FoundMethod.codeOf(Loader.findMethodByBytes(Loader.gView.base, Magic.bytes("set"),
+                        Magic.bytes("(Ljava/lang/Object;Ljava/lang/Object;)V")))) || grew;
+                grew = addReach(FoundMethod.codeOf(Loader.findMethodByBytes(Loader.gView.base, Magic.bytes("get"),
+                        Magic.bytes("(Ljava/lang/Object;)Ljava/lang/Object;")))) || grew;
+                grew = addReach(FoundMethod.codeOf(Loader.findMethodByBytes(Loader.gView.base, Magic.bytes("setRelease"),
+                        Magic.bytes("(Ljava/lang/Object;Ljava/lang/Object;)V")))) || grew;
+                grew = addReach(FoundMethod.codeOf(Loader.findMethodByBytes(Loader.gView.base, Magic.bytes("weakCompareAndSet"),
+                        Magic.bytes("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z")))) || grew;
+                grew = addReach(FoundMethod.codeOf(Loader.findMethodByBytes(Loader.gView.base, Magic.bytes("getMethodName"),
+                        Magic.bytes("()Ljava/lang/String;")))) || grew;
+                grew = addReach(FoundMethod.codeOf(Loader.findMethodByBytes(Loader.gView.base, Magic.bytes("getEnumConstants"),
+                        Magic.bytes("()[Ljava/lang/Object;")))) || grew;
             }
             b += 1;
         }
@@ -1483,7 +1483,7 @@ final class Closure
             if (!markSettled(b))
             {
                 Loader.parseForMethods(Loader.pdBase.get(b), Loader.pdLen[b]);
-                grew = addReach(Loader.findMethodByBytes(Loader.gView.base, name, desc)) || grew;
+                grew = addReach(FoundMethod.codeOf(Loader.findMethodByBytes(Loader.gView.base, name, desc))) || grew;
             }
             b += 1;
         }
@@ -1556,8 +1556,8 @@ final class Closure
                 Loader.parseForMethods(Loader.pdBase.get(b), Loader.pdLen[b]);
                 if (!ClassInitializer.clinitBlocked())
                 {
-                    long code = Loader.findMethodByBytes(Loader.gView.base, Magic.bytes("<clinit>"), Magic.bytes("()V"));
-                    if (code != 0L && ClassInitializer.clinitCompilable(code, Loader.gcodeLen))
+                    long code = FoundMethod.codeOf(Loader.findMethodByBytes(Loader.gView.base, Magic.bytes("<clinit>"), Magic.bytes("()V")));
+                    if (code != 0L && ClassInitializer.clinitCompilable(code, ClassBytes.codeLength(code)))
                     {
                         grew = addReach(code) || grew;
                     }

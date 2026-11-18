@@ -142,7 +142,6 @@ final class LazyCompiler
         lzTab[idx].codeLen = Loader.mLen[i];
         lzTab[idx].isStatic = Loader.mStatic[i];
         lzTab[idx].isSync = Loader.mSync[i];
-        lzTab[idx].maxLocals = Loader.mLocals[i];
         lzTab[idx].cache = 0L;
         if (lzN >= lzNHigh)
         {
@@ -245,7 +244,7 @@ final class LazyCompiler
             if (Utf8.rawEqUtf8(nbase, nlen, blob, Loader.gView.cp[u2(p.plus(2))])
                     && (dlen == 0 || Utf8.rawEqUtf8(dbase, dlen, blob, Loader.gView.cp[u2(p.plus(4))])))
             {
-                long c = Loader.findCode(blob, p.plus(8), attrs);     // sets gcodeLen + gMaxLocals for this method
+                long c = Loader.findCode(blob, p.plus(8), attrs);
                 if (c != 0L)
                 {
                     code = c;
@@ -272,7 +271,7 @@ final class LazyCompiler
         Loader.lzCompiling = true;                                // collect the classes this body's statics NAME
         Loader.lzPullN = 0;
         Loader.lzRetried = false;
-        Loader.compile(code, Loader.gcodeLen, descOff, isStatic, isSync);
+        Loader.compile(code, ClassBytes.codeLength(code), descOff, isStatic, isSync);
         Loader.lzCompiling = outerCompiling;
         Loader.compileReuseTib = reuseWas;
         boolean pulled = Loader.lzPullN > 0;
@@ -565,7 +564,7 @@ final class LazyCompiler
             if (Loader.utf8EqAt(blob, Loader.gView.cp[u2(p.plus(2))], nameU, 0)
                     && Loader.utf8EqAt(blob, Loader.gView.cp[u2(p.plus(4))], descU, 0))
             {
-                long c = Loader.findCode(blob, p.plus(8), attrs);  // sets gcodeLen + gMaxLocals
+                long c = Loader.findCode(blob, p.plus(8), attrs);
                 if (c != 0L)
                 {
                     code = c;
@@ -592,7 +591,7 @@ final class LazyCompiler
         Loader.lzCompiling = true;                             // same deferred-pull retry as compileMethodOnDemand
         Loader.lzPullN = 0;
         Loader.lzRetried = false;
-        Loader.compile(code, Loader.gcodeLen, descOff, isStatic, isSync);
+        Loader.compile(code, ClassBytes.codeLength(code), descOff, isStatic, isSync);
         Loader.lzCompiling = outerCompiling;
         Loader.compileReuseTib = reuseWas;
         boolean pulled = Loader.lzPullN > 0;
@@ -783,12 +782,11 @@ final class LazyCompiler
             descOff = lzTab[idx].descOff;
             isStatic = lzTab[idx].isStatic;
             isSync = lzTab[idx].isSync;
-            Loader.gMaxLocals = lzTab[idx].maxLocals;
         }
         else                                            // 1b/1c: re-find the method by name+descriptor
         {
-            code = Loader.findMethodByOffsets(lzTab[idx].nameOff, lzTab[idx].descOff);
-            if (code == 0L)
+            FoundMethod f = Loader.findMethodByOffsets(lzTab[idx].nameOff, lzTab[idx].descOff);
+            if (f == null)
             {
                 // SILENT UNTIL NOW, and the silence is what made it untraceable: 0 flows back through
                 // lazyCompile (whose BAD LAZY TARGET guard only catches IMPLAUSIBLE buffers, not zero)
@@ -807,10 +805,11 @@ final class LazyCompiler
                 Uart.putc(0x0A);
                 return 0L;
             }
-            len = Loader.gcodeLen;
-            descOff = Loader.gFoundDescOff;
-            isStatic = Loader.gFoundStatic;
-            isSync = Loader.gFoundSync;
+            code = f.code;
+            len = ClassBytes.codeLength(code);
+            descOff = f.descOff;
+            isStatic = f.isStatic;
+            isSync = f.isSync;
         }
         // M8 endgame (the Loader USES baked java.base): if the writer baked this exact method and
         // listed it as loader-linkable, run the image's compiled stock code instead of compiling our
@@ -880,17 +879,17 @@ final class LazyCompiler
             Relocator.rsCount = rsMark;                           //   write into a buffer the sweep may already have reused
             Loader.lzRetried = true;                           // once only -- a class that is still missing reads null
             restoreCtxForCompile(lzTab[idx].blob, lzTab[idx].len, lzTab[idx].reg);   // the pull clobbered g*
-            if (lzTab[idx].code != 0L)
+            if (lzTab[idx].code == 0L)                    // a captured body needs nothing re-found: it is still in hand
             {
-                Loader.gMaxLocals = lzTab[idx].maxLocals;      // AFTER the restore: parseFields/parseVtable clobber it
-            }
-            else
-            {
-                code = Loader.findMethodByOffsets(lzTab[idx].nameOff, lzTab[idx].descOff);
-                len = Loader.gcodeLen;
-                descOff = Loader.gFoundDescOff;
-                isStatic = Loader.gFoundStatic;
-                isSync = Loader.gFoundSync;
+                FoundMethod f = Loader.findMethodByOffsets(lzTab[idx].nameOff, lzTab[idx].descOff);
+                code = FoundMethod.codeOf(f);
+                if (f != null)
+                {
+                    len = ClassBytes.codeLength(code);
+                    descOff = f.descOff;
+                    isStatic = f.isStatic;
+                    isSync = f.isSync;
+                }
             }
             Loader.lzCompiling = true;
             buf = Loader.compile(code, len, descOff, isStatic, isSync);
@@ -1161,7 +1160,7 @@ final class LazyCompiler
             int attrs = u2(p.plus(6));
             int nameOff = Loader.gView.cp[u2(p.plus(2))];
             int descOff = Loader.gView.cp[u2(p.plus(4))];
-            long code = Loader.findCode(Loader.gView.base, p.plus(8), attrs);  // sets gcodeLen + gMaxLocals
+            long code = Loader.findCode(Loader.gView.base, p.plus(8), attrs);
             if (code != 0L && (access & 0x0008) != 0    // static methods only (Objects is all-static)
                     && !Utf8.utf8IsAtBase(Loader.gView.base, nameOff, Magic.bytes("<clinit>")) && lzN < MAXLAZY && DynamicLinker.dlN < MAXLAZY)
             {
@@ -1173,14 +1172,13 @@ final class LazyCompiler
                 lzTab[idx].nameOff = nameOff;
                 lzTab[idx].descOff = descOff;
                 lzTab[idx].code = code;
-                lzTab[idx].codeLen = Loader.gcodeLen;
+                lzTab[idx].codeLen = ClassBytes.codeLength(code);
                 lzTab[idx].isStatic = 1;
                 lzTab[idx].isSync = (access & 0x0020) != 0 ? 1 : 0;   // ACC_SYNCHRONIZED (JVMS 2.11.10)
                 if (lzN >= lzNHigh)
                 {
                     lzNHigh = lzN + 1;                      // high-water across reclaims
                 }
-                lzTab[idx].maxLocals = Loader.gMaxLocals;
                 lzTab[idx].cache = 0L;
                 long cell = Heap.allocData(8).toLong();
                 lzTab[idx].slot = cell;                     // first call data-patches the cell -> later calls dispatch direct
