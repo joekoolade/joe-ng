@@ -73,15 +73,15 @@ final class Reflection
     private static int fieldRegIndex(Address typeAddr, Address fnBase, int fnLen)
     {
         int ci = 0;
-        while (ci < Loader.clCount)
+        while (ci < ClassRegistry.clCount)
         {
-            if (Loader.clTab[ci].type.EQ(typeAddr))
+            if (ClassRegistry.clTab[ci].type.EQ(typeAddr))
             {
                 int j = 0;
-                while (j < Loader.fldCount)
+                while (j < FieldRegistry.fldCount)
                 {
-                    if (Loader.utf8EqAt(Loader.clTab[ci].base, Loader.clTab[ci].nameOff, Loader.fldTab[j].base, Loader.fldTab[j].classOff)
-                            && Utf8.rawEqUtf8(fnBase, fnLen, Loader.fldTab[j].base, Loader.fldTab[j].nameOff))
+                    if (Loader.utf8EqAt(ClassRegistry.clTab[ci].base, ClassRegistry.clTab[ci].nameOff, FieldRegistry.fldTab[j].base, FieldRegistry.fldTab[j].classOff)
+                            && Utf8.rawEqUtf8(fnBase, fnLen, FieldRegistry.fldTab[j].base, FieldRegistry.fldTab[j].nameOff))
                     {
                         return j;
                     }
@@ -98,12 +98,12 @@ final class Reflection
      *  descriptor after a second walk would be against a re-derived cursor. */
     private static boolean classfileFieldInfo(Address typeAddr, Address fnBase, int fnLen)
     {
-        int ci = Loader.classRegByType(typeAddr);
+        int ci = ClassRegistry.classRegByType(typeAddr);
         if (ci < 0)
         {
             return false;
         }
-        Address base = Loader.clTab[ci].base;
+        Address base = ClassRegistry.clTab[ci].base;
         Loader.parseConstPool(base, Loader.blobLenOf(base));
         Address p = Loader.gp.plus(6L);                               // past access_flags, this_class, super_class
         p = p.plus(2L + u2(p) * 2L);                           // past the interfaces list
@@ -134,27 +134,27 @@ final class Reflection
      */
     static long staticCellFor(Address typeAddr, Address fnBase, int fnLen)
     {
-        int ci = Loader.classRegByType(typeAddr);
+        int ci = ClassRegistry.classRegByType(typeAddr);
         if (ci < 0)
         {
             return 0L;
         }
         Loader.ensureClinit(ci);
         int i = 0;
-        while (i < Loader.sgCount)
+        while (i < Statics.sgCount)
         {
-            if (Loader.utf8EqAt(Loader.sgTab[i].base, Loader.sgTab[i].classOff, Loader.clTab[ci].base, Loader.clTab[ci].nameOff)
-                    && Utf8.rawEqUtf8(fnBase, fnLen, Loader.sgTab[i].base, Loader.sgTab[i].nameOff))
+            if (Loader.utf8EqAt(Statics.sgTab[i].base, Statics.sgTab[i].classOff, ClassRegistry.clTab[ci].base, ClassRegistry.clTab[ci].nameOff)
+                    && Utf8.rawEqUtf8(fnBase, fnLen, Statics.sgTab[i].base, Statics.sgTab[i].nameOff))
             {
                 if (Loader.STATIC_ADDR_LOG)
                 {
                     Uart.write(Magic.bytes("  reflectcell "));
-                    Loader.printNameAt(Loader.clTab[ci].base, Loader.clTab[ci].nameOff);
+                    Loader.printNameAt(ClassRegistry.clTab[ci].base, ClassRegistry.clTab[ci].nameOff);
                     Uart.write(Magic.bytes(" -> "));
-                    VM.printHex(Loader.sgTab[i].addr);
+                    VM.printHex(Statics.sgTab[i].addr);
                     Uart.putc(0x0A);
                 }
-                return Loader.sgTab[i].addr;
+                return Statics.sgTab[i].addr;
             }
             i += 1;
         }
@@ -175,7 +175,7 @@ final class Reflection
         int j = fieldRegIndex(typeAddr, fnBase, fnLen);
         if (j >= 0)
         {
-            return 16L + Loader.fldTab[j].slot * 8L;
+            return 16L + FieldRegistry.fldTab[j].slot * 8L;
         }
         return -1L;
     }
@@ -185,7 +185,7 @@ final class Reflection
         int j = fieldRegIndex(typeAddr, fnBase, fnLen);
         if (j >= 0)
         {
-            return Loader.fldTab[j].access;
+            return FieldRegistry.fldTab[j].access;
         }
         return classfileFieldInfo(typeAddr, fnBase, fnLen) ? cfFieldAccess : -1;   // statics live only here
     }
@@ -199,16 +199,16 @@ final class Reflection
     static int classModifiersOf(Address type)
     {
         int i = 0;
-        while (i < Loader.clCount)
+        while (i < ClassRegistry.clCount)
         {
-            if (Loader.clTab[i].type.EQ(type))
+            if (ClassRegistry.clTab[i].type.EQ(type))
             {
                 int inner = innerClassFlags(i);
                 if (inner >= 0)
                 {
                     return inner & ~0x0020 & 0x7FFF;           // as HotSpot: no ACC_SUPER, written flags only
                 }
-                return Loader.clTab[i].modifiers;                     // top-level: access_flags, cached at load time
+                return ClassRegistry.clTab[i].modifiers;                     // top-level: access_flags, cached at load time
             }
             i += 1;
         }
@@ -227,7 +227,7 @@ final class Reflection
      */
     private static int innerClassFlags(int reg)
     {
-        Address e = ownInnerClassEntry(Loader.clTab[reg].base);
+        Address e = ownInnerClassEntry(ClassRegistry.clTab[reg].base);
         if (e.isZero())
         {
             return -1;
@@ -283,7 +283,7 @@ final class Reflection
         {
             return -1;
         }
-        Loader.ensureClinit(Loader.classRegByType(type));             // reflective invoke is an active use (JVMS 5.5) --
+        Loader.ensureClinit(ClassRegistry.classRegByType(type));             // reflective invoke is an active use (JVMS 5.5) --
                                                         // Class.getEnumConstants reaches values() this way, and
                                                         // values() reads $VALUES, which only <clinit> sets
         int idx = methodResolveRegistry(type, nameArr);
@@ -309,7 +309,7 @@ final class Reflection
         {
             return -1;
         }
-        Loader.ensureClinit(Loader.classRegByType(type));             // reflective invoke is an active use (JVMS 5.5)
+        Loader.ensureClinit(ClassRegistry.classRegByType(type));             // reflective invoke is an active use (JVMS 5.5)
         int idx = methodResolveRegistryDesc(type, nameArr, descArr);
         if (idx >= 0)
         {
@@ -417,16 +417,16 @@ final class Reflection
     /** The entry a reflection index names: a registry slot, or {@code BODYLESS + k} for a bodyless method. */
     static RVMMethod reflEntry(int idx)
     {
-        if (idx >= Loader.BODYLESS)
+        if (idx >= MethodRegistry.BODYLESS)
         {
-            int k = idx - Loader.BODYLESS;
-            return k < Loader.bdCount ? Loader.bdTab[k] : null;
+            int k = idx - MethodRegistry.BODYLESS;
+            return k < MethodRegistry.bdCount ? MethodRegistry.bdTab[k] : null;
         }
-        if (idx < 0 || idx >= Loader.rgCount)
+        if (idx < 0 || idx >= MethodRegistry.rgCount)
         {
             return null;
         }
-        return Loader.rgTab[idx];
+        return MethodRegistry.rgTab[idx];
     }
 
     /**
@@ -447,12 +447,12 @@ final class Reflection
         {
             return -1;
         }
-        int ci = Loader.classIndexByType(type);
-        if (ci >= Loader.clCount)
+        int ci = ClassRegistry.classIndexByType(type);
+        if (ci >= ClassRegistry.clCount)
         {
             return -1;
         }
-        Address blob = Loader.clTab[ci].base;
+        Address blob = ClassRegistry.clTab[ci].base;
         Loader.parseForMethods(blob, Loader.blobLenOf(blob));
         Address p = Loader.gMethodsStart;
         int mcount = u2(p);
@@ -474,39 +474,39 @@ final class Reflection
                 int nameOff = Loader.gcp[u2(p.plus(2))];
                 int descOff = Loader.gcp[u2(p.plus(4))];
                 int k = 0;
-                while (k < Loader.bdCount)
+                while (k < MethodRegistry.bdCount)
                 {
-                    if (Loader.bdTab[k].base.EQ(blob) && Loader.bdTab[k].nameOff == nameOff && Loader.bdTab[k].descOff == descOff)
+                    if (MethodRegistry.bdTab[k].base.EQ(blob) && MethodRegistry.bdTab[k].nameOff == nameOff && MethodRegistry.bdTab[k].descOff == descOff)
                     {
-                        return Loader.BODYLESS + k;
+                        return MethodRegistry.BODYLESS + k;
                     }
                     k += 1;
                 }
-                if (Loader.bdTab == null)
+                if (MethodRegistry.bdTab == null)
                 {
-                    Loader.bdTab = new RVMMethod[256];
+                    MethodRegistry.bdTab = new RVMMethod[256];
                 }
-                if (Loader.bdCount >= Loader.bdTab.length)
+                if (MethodRegistry.bdCount >= MethodRegistry.bdTab.length)
                 {
-                    RVMMethod[] grown = new RVMMethod[Loader.bdTab.length * 2];
+                    RVMMethod[] grown = new RVMMethod[MethodRegistry.bdTab.length * 2];
                     int j = 0;
-                    while (j < Loader.bdCount)
+                    while (j < MethodRegistry.bdCount)
                     {
-                        grown[j] = Loader.bdTab[j];
+                        grown[j] = MethodRegistry.bdTab[j];
                         j += 1;
                     }
-                    Loader.bdTab = grown;
+                    MethodRegistry.bdTab = grown;
                 }
                 RVMMethod e = new RVMMethod();
                 e.base = blob;
-                e.classOff = Loader.clTab[ci].nameOff;
+                e.classOff = ClassRegistry.clTab[ci].nameOff;
                 e.nameOff = nameOff;
                 e.descOff = descOff;
                 e.buf = 0L;                             // nothing to call: Method.invoke dispatches or throws
                 e.access = u2(p);
-                Loader.bdTab[Loader.bdCount] = e;
-                Loader.bdCount += 1;
-                return Loader.BODYLESS + Loader.bdCount - 1;
+                MethodRegistry.bdTab[MethodRegistry.bdCount] = e;
+                MethodRegistry.bdCount += 1;
+                return MethodRegistry.BODYLESS + MethodRegistry.bdCount - 1;
             }
             p = Loader.skipAttributes(p.plus(8), attrs);
             m += 1;
@@ -577,19 +577,19 @@ final class Reflection
     /** Constructor of clTab[ci] by arity (or ctorWantDesc): registry index, or -1. Caller holds the loader lock. */
     private static int ctorResolveRegistry(int ci, int paramCount)
     {
-        Loader.buildRegIndex();
+        MethodRegistry.buildRegIndex();
         int best = -1;
-        int i = Loader.rgBucket[Utf8.utf8HashThenBytes(Loader.clTab[ci].base, Loader.clTab[ci].nameOff, Magic.bytes("<init>")) & (Loader.RGTAB - 1)];
+        int i = MethodRegistry.rgBucket[Utf8.utf8HashThenBytes(ClassRegistry.clTab[ci].base, ClassRegistry.clTab[ci].nameOff, Magic.bytes("<init>")) & (MethodRegistry.RGTAB - 1)];
         while (i >= 0)
         {
             if ((best < 0 || i < best)
-                    && Loader.utf8EqAt(Loader.clTab[ci].base, Loader.clTab[ci].nameOff, Loader.rgTab[i].base, Loader.rgTab[i].classOff)
-                    && Utf8.utf8IsAtBase(Loader.rgTab[i].base, Loader.rgTab[i].nameOff, Magic.bytes("<init>"))
-                    && ctorMatches(Loader.rgTab[i].base, Loader.rgTab[i].descOff, paramCount))
+                    && Loader.utf8EqAt(ClassRegistry.clTab[ci].base, ClassRegistry.clTab[ci].nameOff, MethodRegistry.rgTab[i].base, MethodRegistry.rgTab[i].classOff)
+                    && Utf8.utf8IsAtBase(MethodRegistry.rgTab[i].base, MethodRegistry.rgTab[i].nameOff, Magic.bytes("<init>"))
+                    && ctorMatches(MethodRegistry.rgTab[i].base, MethodRegistry.rgTab[i].descOff, paramCount))
             {
                 best = i;
             }
-            i = Loader.rgNext[i];
+            i = MethodRegistry.rgNext[i];
         }
         return best;
     }
@@ -602,25 +602,25 @@ final class Reflection
         VM.loaderLock(VM.LOCK_REFLECT);                 // buildRegIndex mutates the index a compiling task extends
         try
         {
-            int ci = Loader.classIndexByType(type);
-            if (ci >= Loader.clCount)
+            int ci = ClassRegistry.classIndexByType(type);
+            if (ci >= ClassRegistry.clCount)
             {
                 return -1;
             }
             int nlen = (int) nameArr.toAddress().plus(16L).loadLong();
             Address nbase = nameArr.toAddress().plus(24L);
-            Loader.buildRegIndex();
+            MethodRegistry.buildRegIndex();
             int best = -1;
-            int i = Loader.rgBucket[Utf8.utf8HashThenRaw(Loader.clTab[ci].base, Loader.clTab[ci].nameOff, nbase, nlen) & (Loader.RGTAB - 1)];
+            int i = MethodRegistry.rgBucket[Utf8.utf8HashThenRaw(ClassRegistry.clTab[ci].base, ClassRegistry.clTab[ci].nameOff, nbase, nlen) & (MethodRegistry.RGTAB - 1)];
             while (i >= 0)
             {
                 if ((best < 0 || i < best)
-                        && Loader.utf8EqAt(Loader.clTab[ci].base, Loader.clTab[ci].nameOff, Loader.rgTab[i].base, Loader.rgTab[i].classOff)
-                        && Utf8.rawEqUtf8(nbase, nlen, Loader.rgTab[i].base, Loader.rgTab[i].nameOff))
+                        && Loader.utf8EqAt(ClassRegistry.clTab[ci].base, ClassRegistry.clTab[ci].nameOff, MethodRegistry.rgTab[i].base, MethodRegistry.rgTab[i].classOff)
+                        && Utf8.rawEqUtf8(nbase, nlen, MethodRegistry.rgTab[i].base, MethodRegistry.rgTab[i].nameOff))
                 {
                     best = i;
                 }
-                i = Loader.rgNext[i];
+                i = MethodRegistry.rgNext[i];
             }
             return best;
         }
@@ -636,8 +636,8 @@ final class Reflection
         VM.loaderLock(VM.LOCK_REFLECT);
         try
         {
-            int ci = Loader.classIndexByType(type);
-            if (ci >= Loader.clCount)
+            int ci = ClassRegistry.classIndexByType(type);
+            if (ci >= ClassRegistry.clCount)
             {
                 return -1;
             }
@@ -645,19 +645,19 @@ final class Reflection
             Address nbase = nameArr.toAddress().plus(24L);
             int dlen = (int) descArr.toAddress().plus(16L).loadLong();
             Address dbase = descArr.toAddress().plus(24L);
-            Loader.buildRegIndex();
+            MethodRegistry.buildRegIndex();
             int best = -1;
-            int i = Loader.rgBucket[Utf8.utf8HashThenRaw(Loader.clTab[ci].base, Loader.clTab[ci].nameOff, nbase, nlen) & (Loader.RGTAB - 1)];
+            int i = MethodRegistry.rgBucket[Utf8.utf8HashThenRaw(ClassRegistry.clTab[ci].base, ClassRegistry.clTab[ci].nameOff, nbase, nlen) & (MethodRegistry.RGTAB - 1)];
             while (i >= 0)
             {
                 if ((best < 0 || i < best)
-                        && Loader.utf8EqAt(Loader.clTab[ci].base, Loader.clTab[ci].nameOff, Loader.rgTab[i].base, Loader.rgTab[i].classOff)
-                        && Utf8.rawEqUtf8(nbase, nlen, Loader.rgTab[i].base, Loader.rgTab[i].nameOff)
-                        && Utf8.rawEqUtf8(dbase, dlen, Loader.rgTab[i].base, Loader.rgTab[i].descOff))
+                        && Loader.utf8EqAt(ClassRegistry.clTab[ci].base, ClassRegistry.clTab[ci].nameOff, MethodRegistry.rgTab[i].base, MethodRegistry.rgTab[i].classOff)
+                        && Utf8.rawEqUtf8(nbase, nlen, MethodRegistry.rgTab[i].base, MethodRegistry.rgTab[i].nameOff)
+                        && Utf8.rawEqUtf8(dbase, dlen, MethodRegistry.rgTab[i].base, MethodRegistry.rgTab[i].descOff))
                 {
                     best = i;
                 }
-                i = Loader.rgNext[i];
+                i = MethodRegistry.rgNext[i];
             }
             return best;
         }
@@ -706,8 +706,8 @@ final class Reflection
         {
             return -1;
         }
-        int ci = Loader.classIndexByType(type);
-        if (ci >= Loader.clCount || Loader.clTab[ci].isIface)
+        int ci = ClassRegistry.classIndexByType(type);
+        if (ci >= ClassRegistry.clCount || ClassRegistry.clTab[ci].isIface)
         {
             return -1;
         }
@@ -717,20 +717,20 @@ final class Reflection
             return idx;
         }
         // on-demand: compile the matching <init> (its declaring class is already structure-loaded)
-        Address blob = Loader.clTab[ci].base;
+        Address blob = ClassRegistry.clTab[ci].base;
         int len = Loader.blobLenOf(blob);
         Loader.parseConstPool(blob, len);
         Loader.parseFields();
-        int reg = Loader.classRegByName(Loader.gThisNameOff);
+        int reg = ClassRegistry.classRegByName(Loader.gThisNameOff);
         if (reg < 0)
         {
             return -1;
         }
-        Loader.gStatics = Loader.clTab[reg].statics;
+        Loader.gStatics = ClassRegistry.clTab[reg].statics;
         Indy.findBootstrapMethods();
         VtableLayout.parseVtable(blob);
-        Loader.gType = Loader.clTab[reg].type;
-        Loader.gTib = Loader.clTab[reg].tib;
+        Loader.gType = ClassRegistry.clTab[reg].type;
+        Loader.gTib = ClassRegistry.clTab[reg].tib;
         Loader.parseForMethods(blob, len);
         Address p = Loader.gMethodsStart;
         int mcount = u2(p);
@@ -798,7 +798,7 @@ final class Reflection
             Loader.odRetried = false;
             return again;
         }
-        Loader.registerAll();
+        MethodRegistry.registerAll();
         Loader.patchRelocs();
         return ctorResolveRegistry(ci, paramCount);
     }
@@ -811,14 +811,14 @@ final class Reflection
         {
             return 0L;
         }
-        int ci = Loader.classIndexByType(type);
-        if (ci >= Loader.clCount || Loader.clTab[ci].isIface)
+        int ci = ClassRegistry.classIndexByType(type);
+        if (ci >= ClassRegistry.clCount || ClassRegistry.clTab[ci].isIface)
         {
             return 0L;
         }
         Loader.ensureClinit(ci);                               // reflective instantiation is an active use, like `new`
-        Address obj = Heap.alloc(16 + Loader.clTab[ci].fieldCount * 8);  // header(16) + instance fields (incl. inherited)
-        obj.plus(ObjectModel.TIB_OFFSET).store(Loader.clTab[ci].tib);
+        Address obj = Heap.alloc(16 + ClassRegistry.clTab[ci].fieldCount * 8);  // header(16) + instance fields (incl. inherited)
+        obj.plus(ObjectModel.TIB_OFFSET).store(ClassRegistry.clTab[ci].tib);
         return obj.toLong();
     }
 
@@ -920,7 +920,7 @@ final class Reflection
         int j = fieldRegIndex(typeAddr, fnBase, fnLen);
         if (j >= 0)
         {
-            return u1(Loader.fldTab[j].base.plus(Loader.fldTab[j].descOff + 2L));
+            return u1(FieldRegistry.fldTab[j].base.plus(FieldRegistry.fldTab[j].descOff + 2L));
         }
         return classfileFieldInfo(typeAddr, fnBase, fnLen) ? cfFieldDescChar : -1;
     }
@@ -970,12 +970,12 @@ final class Reflection
         {
             return 0L;
         }
-        int ci = Loader.classRegByType(mirror.toAddress().plus(16L).loadAddress());
+        int ci = ClassRegistry.classRegByType(mirror.toAddress().plus(16L).loadAddress());
         if (ci < 0)
         {
             return 0L;
         }
-        Address base = Loader.clTab[ci].base;
+        Address base = ClassRegistry.clTab[ci].base;
         Loader.parseForMethods(base, Loader.blobLenOf(base));
         Address p = Loader.gMethodsStart;
         int mcount = u2(p);
@@ -1007,12 +1007,12 @@ final class Reflection
             return 0L;
         }
         Address type = mirror.toAddress().plus(16L).loadAddress();
-        int ci = Loader.classRegByType(type);
+        int ci = ClassRegistry.classRegByType(type);
         if (ci < 0)
         {
             return want < 0 ? 0L : 0L;
         }
-        Address base = Loader.clTab[ci].base;
+        Address base = ClassRegistry.clTab[ci].base;
         Loader.parseForMethods(base, Loader.blobLenOf(base));
         Address p = Loader.gMethodsStart;
         int mcount = u2(p);
@@ -1067,12 +1067,12 @@ final class Reflection
         {
             return 0L;
         }
-        int ci = Loader.classRegByType(mirror.toAddress().plus(16L).loadAddress());
+        int ci = ClassRegistry.classRegByType(mirror.toAddress().plus(16L).loadAddress());
         if (ci < 0)
         {
             return 0L;
         }
-        Address base = Loader.clTab[ci].base;
+        Address base = ClassRegistry.clTab[ci].base;
         Loader.parseConstPool(base, Loader.blobLenOf(base));
         Address p = Loader.gp.plus(6L);                               // past access_flags, this_class, super_class
         p = p.plus(2L + u2(p) * 2L);                           // past the interfaces list
@@ -1109,12 +1109,12 @@ final class Reflection
         {
             return 0L;
         }
-        int ci = Loader.classRegByType(mirror.toAddress().plus(16L).loadAddress());
+        int ci = ClassRegistry.classRegByType(mirror.toAddress().plus(16L).loadAddress());
         if (ci < 0)
         {
             return 0L;
         }
-        Address base = Loader.clTab[ci].base;
+        Address base = ClassRegistry.clTab[ci].base;
         Loader.parseConstPool(base, Loader.blobLenOf(base));
         Address p = Loader.gp.plus(6L);
         p = p.plus(2L + u2(p) * 2L);                           // past the interfaces list

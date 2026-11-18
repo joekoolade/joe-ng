@@ -91,12 +91,12 @@ final class ClassAttributes
         {
             return 0L;
         }
-        int reg = Loader.regOfType(mirror.toAddress().plus(16L).loadAddress());
+        int reg = ClassRegistry.regOfType(mirror.toAddress().plus(16L).loadAddress());
         if (reg < 0)
         {
             return 0L;
         }
-        Address base = Loader.clTab[reg].base;
+        Address base = ClassRegistry.clTab[reg].base;
         Address ap = classAttrsPos(base);
         if (ap.isZero())
         {
@@ -237,12 +237,12 @@ final class ClassAttributes
         {
             return 0L;
         }
-        int ci = Loader.classRegByType(mirror.toAddress().plus(16L).loadAddress());
+        int ci = ClassRegistry.classRegByType(mirror.toAddress().plus(16L).loadAddress());
         if (ci < 0)
         {
             return 0L;
         }
-        Address base = Loader.clTab[ci].base;
+        Address base = ClassRegistry.clTab[ci].base;
         Loader.parseConstPool(base, Loader.blobLenOf(base));
         Address p = Loader.gp.plus(6L);                               // past access_flags, this_class, super_class
         p = p.plus(2L + u2(p) * 2L);                           // past the interfaces list
@@ -283,12 +283,12 @@ final class ClassAttributes
         {
             return 0L;
         }
-        int reg = Loader.regOfType(mirror.toAddress().plus(16L).loadAddress());
+        int reg = ClassRegistry.regOfType(mirror.toAddress().plus(16L).loadAddress());
         if (reg < 0)
         {
             return 0L;
         }
-        Address base = Loader.clTab[reg].base;
+        Address base = ClassRegistry.clTab[reg].base;
         Address ap = classAttrsPos(base);
         if (ap.isZero())
         {
@@ -325,12 +325,12 @@ final class ClassAttributes
         {
             return 0L;
         }
-        int reg = Loader.regOfType(mirror.toAddress().plus(16L).loadAddress());
+        int reg = ClassRegistry.regOfType(mirror.toAddress().plus(16L).loadAddress());
         if (reg < 0)
         {
             return 0L;
         }
-        Address base = Loader.clTab[reg].base;
+        Address base = ClassRegistry.clTab[reg].base;
         if (k == 0L)
         {
             return ((long) u2(base.plus(4L)) << 16) | u2(base.plus(6L));   // u4 magic, u2 minor, u2 major
@@ -352,12 +352,12 @@ final class ClassAttributes
         {
             return 0L;
         }
-        int reg = Loader.regOfType(mirror.toAddress().plus(16L).loadAddress());
+        int reg = ClassRegistry.regOfType(mirror.toAddress().plus(16L).loadAddress());
         if (reg < 0)
         {
             return 0L;
         }
-        Address base = Loader.clTab[reg].base;
+        Address base = ClassRegistry.clTab[reg].base;
         Address ap = classAttrsPos(base);
         if (ap.isZero())
         {
@@ -390,12 +390,12 @@ final class ClassAttributes
         {
             return 0L;
         }
-        int reg = Loader.regOfType(mirror.toAddress().plus(16L).loadAddress());
+        int reg = ClassRegistry.regOfType(mirror.toAddress().plus(16L).loadAddress());
         if (reg < 0)
         {
             return 0L;
         }
-        Address base = Loader.clTab[reg].base;
+        Address base = ClassRegistry.clTab[reg].base;
         Address e = Reflection.ownInnerClassEntry(base);
         if (e.isZero())
         {
@@ -423,12 +423,12 @@ final class ClassAttributes
         {
             return Address.zero();
         }
-        int reg = Loader.regOfType(mirror.toAddress().plus(16L).loadAddress());
+        int reg = ClassRegistry.regOfType(mirror.toAddress().plus(16L).loadAddress());
         if (reg < 0)
         {
             return Address.zero();
         }
-        Address base = Loader.clTab[reg].base;
+        Address base = ClassRegistry.clTab[reg].base;
         Address ap = classAttrsPos(base);
         if (ap.isZero())
         {
@@ -539,12 +539,12 @@ final class ClassAttributes
         {
             return 0L;
         }
-        int reg = Loader.regOfType(mirror.toAddress().plus(16L).loadAddress());
+        int reg = ClassRegistry.regOfType(mirror.toAddress().plus(16L).loadAddress());
         if (reg < 0)
         {
             return 0L;
         }
-        Address base = Loader.clTab[reg].base;
+        Address base = ClassRegistry.clTab[reg].base;
         Address ap = classAttrsPos(base);
         if (ap.isZero())
         {
@@ -604,7 +604,7 @@ final class ClassAttributes
         {
             return 0L;
         }
-        int reg = Loader.regOfType(mirror.toAddress().plus(16L).loadAddress());
+        int reg = ClassRegistry.regOfType(mirror.toAddress().plus(16L).loadAddress());
         int n = reg >= 0 ? InterfaceInvocation.clIfaceRegN[reg] : 0;
         Address arr = Heap.allocArray(n, 8);
         arr.plus(ObjectModel.TIB_OFFSET).store(ArrayTypes.refArrayTib(elemType));
@@ -612,7 +612,7 @@ final class ClassAttributes
         while (i < n)
         {
             arr.plus(ObjectModel.ARRAY_BASE_OFFSET).plus(i * 8L).store(
-                    ClassMirrors.classMirror(Loader.clTab[InterfaceInvocation.clIfaceReg[reg * InterfaceInvocation.MAX_DIRECT_IF + i]].type));
+                    ClassMirrors.classMirror(ClassRegistry.clTab[InterfaceInvocation.clIfaceReg[reg * InterfaceInvocation.MAX_DIRECT_IF + i]].type));
             i += 1;
         }
         return arr.toLong();
@@ -648,12 +648,12 @@ final class ClassAttributes
         {
             return 0L;                                  // boot force-compile guard passes 0; allocates nothing
         }
-        int reg = Loader.regOfType(mirror.toAddress().plus(16L).loadAddress());
+        int reg = ClassRegistry.regOfType(mirror.toAddress().plus(16L).loadAddress());
         if (reg < 0)
         {
             return Reflection.emptyClassArray();
         }
-        Address base = Loader.clTab[reg].base;
+        Address base = ClassRegistry.clTab[reg].base;
         Address ap = classAttrsPos(base);
         if (ap.isZero())
         {

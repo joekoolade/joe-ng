@@ -1671,7 +1671,7 @@ final class VMNatives
         Address typeAddr = mirrorRef.toAddress().plus(16L).loadAddress();       // Class.typeAddr
         int fnLen = (int) nameArrRef.toAddress().plus(16L).loadLong();
         Address fnBase = nameArrRef.toAddress().plus(24L);
-        return Loader.staticSlotOfType(typeAddr, fnBase, fnLen);
+        return Statics.staticSlotOfType(typeAddr, fnBase, fnLen);
     }
 
     /** Reflection: {@code Class.fieldMods0(Class,byte[])} -> the named own instance field's access_flags, or -1. */

@@ -39,6 +39,9 @@ final class ClassMirrors
 
     // java.lang.Class mirrors: one Class object per VM Type (identity stable), materialised on ldc class-literal
     // or Object.getClass(). Per batch (they live in the reclaimed demand heap, like array Types).
+    /** Class-mirror cache entries. An overflow breaks getClass()/X.class IDENTITY, so this is sized
+     *  for the largest closure we run, not for the common case. */
+    static final int MAXMIRROR = 4096;
     static AddressArray mirType;        // VM Type addr key
     static ObjectReferenceArray mirObj;   // its Class mirror object (no initializer: created per batch)
     static int mirN;
@@ -87,7 +90,7 @@ final class ClassMirrors
         {
             return ArrayTypes.arrayForName(slash);
         }
-        int ci = Loader.classIndexByName(slash);
+        int ci = ClassRegistry.classIndexByName(slash);
         if (ci >= 0)
         {
             Loader.linkable(ci);                                   // loaded or not, initialized or not: no class at all
@@ -95,7 +98,7 @@ final class ClassMirrors
             {
                 Loader.ensureClinit(ci);                           // JVMS 5.5: Class.forName(name) INITIALIZES the class
             }
-            return classMirror(Loader.clTab[ci].type);             // already loaded: cached mirror (identity-stable)
+            return classMirror(ClassRegistry.clTab[ci].type);             // already loaded: cached mirror (identity-stable)
         }
         // A DENIED CLASS IS NOT FOUND, which is the truth: it is deliberately absent from this VM.
         //
@@ -112,11 +115,11 @@ final class ClassMirrors
         Address type = Loader.loadClassIncremental(slash);
         if (!type.isZero())
         {
-            Loader.linkable(Loader.classRegByType(type));
+            Loader.linkable(ClassRegistry.classRegByType(type));
         }
         if (init)
         {
-            Loader.ensureClinit(Loader.classRegByType(type));         // JVMS 5.5: forName INITIALIZES, and this batch's
+            Loader.ensureClinit(ClassRegistry.classRegByType(type));         // JVMS 5.5: forName INITIALIZES, and this batch's
         }                                               // runClinits left a gated initializer pending
         return type.isZero() ? 0L : classMirror(type);
     }
@@ -131,20 +134,20 @@ final class ClassMirrors
             name[i] = (byte) u1(p.plus(i));
             i += 1;
         }
-        int ci = Loader.classIndexByName(name);
+        int ci = ClassRegistry.classIndexByName(name);
         if (ci < 0)
         {
             Loader.loadClassIncremental(name);
-            ci = Loader.classIndexByName(name);
+            ci = ClassRegistry.classIndexByName(name);
         }
-        return ci < 0 ? 0L : classMirror(Loader.clTab[ci].type);
+        return ci < 0 ? 0L : classMirror(ClassRegistry.clTab[ci].type);
     }
 
     /** The Type of {@code java/lang/Class}, for typing a {@code Class[]}. */
     static Address classMirrorTypeAddr()
     {
-        int i = Loader.classIndexByName(Magic.bytes("java/lang/Class"));
-        return i < 0 ? TibBuilder.objectTypeAddr() : Loader.clTab[i].type;
+        int i = ClassRegistry.classIndexByName(Magic.bytes("java/lang/Class"));
+        return i < 0 ? TibBuilder.objectTypeAddr() : ClassRegistry.clTab[i].type;
     }
 
     /**
@@ -170,10 +173,10 @@ final class ClassMirrors
             name[i] = (byte) u1(utf8Addr.plus(2 + i));
             i += 1;
         }
-        int ci = Loader.classIndexByName(name);
+        int ci = ClassRegistry.classIndexByName(name);
         if (ci >= 0)
         {
-            return classMirror(Loader.clTab[ci].type);
+            return classMirror(ClassRegistry.clTab[ci].type);
         }
         if (Loader.isDenylisted(Loader.utf8Blob(name), 0))
         {
@@ -195,11 +198,11 @@ final class ClassMirrors
         if (classTibCache.isZero())
         {
             int i = 0;
-            while (i < Loader.clCount)
+            while (i < ClassRegistry.clCount)
             {
-                if (Utf8.utf8IsAtBase(Loader.clTab[i].base, Loader.clTab[i].nameOff, Magic.bytes("java/lang/Class")))
+                if (Utf8.utf8IsAtBase(ClassRegistry.clTab[i].base, ClassRegistry.clTab[i].nameOff, Magic.bytes("java/lang/Class")))
                 {
-                    classTibCache = Loader.clTab[i].tib;
+                    classTibCache = ClassRegistry.clTab[i].tib;
                     break;
                 }
                 i += 1;
@@ -266,14 +269,14 @@ final class ClassMirrors
         Uart.write(Magic.bytes("\n  CLASS MIRROR CACHE FULL at "));
         VM.printHex(mirN);
         Uart.write(Magic.bytes(" -- getClass() identity is no longer stable; first overflow is "));
-        int r = Loader.regOfType(type);
+        int r = ClassRegistry.regOfType(type);
         if (r < 0)
         {
             Uart.write(Magic.bytes("<type not registered>"));
         }
         else
         {
-            Loader.printNameAt(Loader.clTab[r].base.plus(Loader.clTab[r].nameOff), 0);
+            Loader.printNameAt(ClassRegistry.clTab[r].base.plus(ClassRegistry.clTab[r].nameOff), 0);
         }
         Uart.write(Magic.bytes(" classTib="));
         VM.printHex(ctib);
@@ -294,7 +297,7 @@ final class ClassMirrors
     private static void reportMirrorNoTib(Address type)
     {
         Uart.write(Magic.bytes("\n  CLASS MIRROR WITHOUT A TIB (getClass/instanceof will misdispatch): "));
-        int r = Loader.regOfType(type);
+        int r = ClassRegistry.regOfType(type);
         if (r < 0)
         {
             Uart.write(Magic.bytes("<type not registered> type="));
@@ -302,7 +305,7 @@ final class ClassMirrors
         }
         else
         {
-            Loader.printNameAt(Loader.clTab[r].base.plus(Loader.clTab[r].nameOff), 0);
+            Loader.printNameAt(ClassRegistry.clTab[r].base.plus(ClassRegistry.clTab[r].nameOff), 0);
         }
         Uart.write(Magic.bytes(" -- java/lang/Class is not registered in this batch\n"));
     }
@@ -407,11 +410,11 @@ final class ClassMirrors
             return 0L;                                  // not in any JIT'd block (image/baked code)
         }
         int i = 0;
-        while (i < Loader.rgCount)
+        while (i < MethodRegistry.rgCount)
         {
-            if (Loader.rgTab[i].buf == blk)
+            if (MethodRegistry.rgTab[i].buf == blk)
             {
-                return classMirrorByName(Loader.rgTab[i].base, Loader.rgTab[i].classOff);
+                return classMirrorByName(MethodRegistry.rgTab[i].base, MethodRegistry.rgTab[i].classOff);
             }
             i += 1;
         }
@@ -435,11 +438,11 @@ final class ClassMirrors
     private static long classMirrorByName(Address base, int off)
     {
         int ci = 0;
-        while (ci < Loader.clCount)
+        while (ci < ClassRegistry.clCount)
         {
-            if (Loader.clTab[ci] != null && Loader.utf8EqAt(Loader.clTab[ci].base, Loader.clTab[ci].nameOff, base, off))
+            if (ClassRegistry.clTab[ci] != null && Loader.utf8EqAt(ClassRegistry.clTab[ci].base, ClassRegistry.clTab[ci].nameOff, base, off))
             {
-                return classMirror(Loader.clTab[ci].type);
+                return classMirror(ClassRegistry.clTab[ci].type);
             }
             ci += 1;
         }

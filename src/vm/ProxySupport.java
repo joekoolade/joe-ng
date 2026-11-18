@@ -55,10 +55,10 @@ final class ProxySupport
         {
             return proxyHelperBuf;
         }
-        if (Loader.classIndexByName(Magic.bytes("jdk/internal/misc/MetalProxies")) < 0)
+        if (ClassRegistry.classIndexByName(Magic.bytes("jdk/internal/misc/MetalProxies")) < 0)
         {
             Loader.loadClassIncremental(Magic.bytes("jdk/internal/misc/MetalProxies"));
-            if (Loader.classIndexByName(Magic.bytes("jdk/internal/misc/MetalProxies")) < 0)
+            if (ClassRegistry.classIndexByName(Magic.bytes("jdk/internal/misc/MetalProxies")) < 0)
             {
                 return 0L;
             }
@@ -141,8 +141,8 @@ final class ProxySupport
         {
             return;
         }
-        int st = Loader.clTab[oi].vtStart;
-        int nv = Loader.clTab[oi].vtCount;
+        int st = ClassRegistry.clTab[oi].vtStart;
+        int nv = ClassRegistry.clTab[oi].vtCount;
         int k = 0;
         while (k < nv)
         {
@@ -199,7 +199,7 @@ final class ProxySupport
         {
             return 0L;
         }
-        int pr = Loader.classIndexByName(Magic.bytes("java/lang/reflect/Proxy"));
+        int pr = ClassRegistry.classIndexByName(Magic.bytes("java/lang/reflect/Proxy"));
         long helper = proxyHelper();
         if (pr < 0 || helper == 0L)
         {
@@ -224,13 +224,13 @@ final class ProxySupport
         {
             Address mirror = Address.fromLong(ifacesArr).plus(24L).plus(e * 8L).loadAddress();
             Address ity = mirror.isZero() ? Address.zero() : mirror.plus(16L).loadAddress();
-            int ir = Loader.classRegByType(ity);
-            int cn = ir >= 0 ? Loader.clTab[ir].ifmCount : 0;
+            int ir = ClassRegistry.classRegByType(ity);
+            int cn = ir >= 0 ? ClassRegistry.clTab[ir].ifmCount : 0;
             Address cit = Heap.allocData(cn > 0 ? cn * 8 : 8);
             int z = 0;
             while (z < cn)
             {
-                int m = Loader.clTab[ir].ifmStart + z;
+                int m = ClassRegistry.clTab[ir].ifmStart + z;
                 Address thunk = Address.zero();
                 int j = 0;
                 while (j < nm && thunk.isZero())
@@ -254,8 +254,8 @@ final class ProxySupport
         dir.plus(ni * 16L).store(0L);              // sentinel: interfaceType 0 ends the directory
         dir.plus(ni * 16L).plus(8L).store(0L);
         Address type = Heap.allocData(ObjectModel.TYPE_SIZE);
-        type.plus(0L).store((long) (16 + Loader.clTab[pr].fieldCount * 8));   // Proxy's instance: header + h
-        type.plus(ObjectModel.TYPE_SUPER_OFFSET).store(Loader.clTab[pr].type);
+        type.plus(0L).store((long) (16 + ClassRegistry.clTab[pr].fieldCount * 8));   // Proxy's instance: header + h
+        type.plus(ObjectModel.TYPE_SUPER_OFFSET).store(ClassRegistry.clTab[pr].type);
         type.plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).store(dir);
         int onv = TibBuilder.objectVtableCount();
         Address tib = Heap.allocData(8 + onv * 8);

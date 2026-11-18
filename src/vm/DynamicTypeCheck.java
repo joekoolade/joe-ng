@@ -49,8 +49,8 @@ final class DynamicTypeCheck
         {
             return Loader.gType;
         }
-        int r = Loader.classRegOf(classIdx);
-        return r >= 0 ? Loader.clTab[r].type : Address.zero();
+        int r = ClassRegistry.classRegOf(classIdx);
+        return r >= 0 ? ClassRegistry.clTab[r].type : Address.zero();
     }
 
     /** O(1) type checks: give {@code type} a depth + superclass display (depth+1 Type addrs,
@@ -232,8 +232,8 @@ final class DynamicTypeCheck
     /** TIB of the class at {@code Class} entry {@code classIdx} (its own if not yet registered). */
     static long tibOfClass(int classIdx)
     {
-        int r = Loader.classRegOf(classIdx);
+        int r = ClassRegistry.classRegOf(classIdx);
         Loader.noteInitNeeded(r);                              // `new C` is an active use of C (JVMS 5.5)
-        return (r >= 0 ? Loader.clTab[r].tib : Loader.gTib).toLong();            // unregistered => the SELF case (objectSizeOf traps the rest)
+        return (r >= 0 ? ClassRegistry.clTab[r].tib : Loader.gTib).toLong();            // unregistered => the SELF case (objectSizeOf traps the rest)
     }
 }

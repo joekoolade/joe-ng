@@ -89,11 +89,11 @@ public final class Loader
     private static int gnameLen;
     private static int gdescLen;
     static Address gStatics;   // this class's statics block
-    private static int[] gsfName;   // Utf8 offset of each static field's name (index = slot)
-    private static int[] gsfAccess; // access_flags of each static field (index = slot): ACC_VOLATILE for the JIT
-    private static int gsfCount;
-    private static int[] gifName;   // Utf8 offset of each instance field's name (index = slot)
-    private static int[] gifAccess; // access_flags of each own instance field (index = slot; 0 for inherited)
+    static int[] gsfName;   // Utf8 offset of each static field's name (index = slot)
+    static int[] gsfAccess; // access_flags of each static field (index = slot): ACC_VOLATILE for the JIT
+    static int gsfCount;
+    static int[] gifName;   // Utf8 offset of each instance field's name (index = slot)
+    static int[] gifAccess; // access_flags of each own instance field (index = slot; 0 for inherited)
     static int[] gifDescOff;// Utf8 offset of each own instance field's type descriptor (index = slot)
     static int gifCount;
     static int gThisNameOff;     // Utf8 offset of this class's own name
@@ -112,46 +112,7 @@ public final class Loader
     static int[] gImplIfName;  // name Utf8 offsets of the interfaces this class implements
     static int gImplIfCount;
 
-    // Global method registry across all loaded classes, so a call in one class can
-    // link to a method compiled in another. Each entry captures where its class /
-    // name / descriptor Utf8 bytes live (all in that class's blob) plus its buffer.
-    private static final int MAXREG = 24576;
-    static RVMMethod[] rgTab;   // global method registry (reified: one RVMMethod per compiled method)
-    static RVMMethod[] bdTab;   // BODYLESS methods (abstract/native, no Code): reflection-only, never linked
-    static int bdCount;
-    /** A reflection index at or above this names {@code bdTab[idx - BODYLESS]} instead of a registry slot. */
-    static final int BODYLESS = 1 << 24;
-    static int rgCount;
 
-    // Static-field registry: per loaded class, each static field's {class, name, slot address} so a
-    // cross-class getstatic/putstatic (e.g. Long.formatUnsignedLong0 reading Integer.digits) resolves.
-    static RVMField[] sgTab;   // global static-field registry (reified: one RVMField per static field)
-    static int sgCount;
-
-    // Class registry: per loaded class, what another class needs to `new` it and
-    // dispatch through it — its name (base+offset), TIB, and instance-field count.
-    private static final int MAXCLASS = 4096;
-    /** Class-mirror cache entries. An overflow breaks getClass()/X.class IDENTITY, so this is sized
-     *  for the largest closure we run, not for the common case. */
-    private static final int MAXMIRROR = 4096;
-    // The class registry, reified: one RVMClass per loaded class (base/nameOff/tib/type/statics/fieldCount/
-    // vtCount/vtStart/superReg/modifiers/isIface). The direct-interface list (clIfaceReg/clIfaceRegN) and the
-    // <clinit> dependency arrays (clDep*) stay separate.
-    // Two-phase load (structure then bodies): phase A registers every class's structure (Type, TIB, fields,
-    // vtable SLOT numbering, interface slots) in super/interface-first order (acyclic); phase B compiles all
-    // method bodies + builds the TIBs, by which point every cross-class new/field/vtable/itable/cast target is
-    // registered -> load order no longer matters (only method-CALL cycles remain, handled by patchRelocs).
-    static RVMClass[] clTab;
-    static int clCount;
-
-
-    // Field registry: per instance field of each class, its class/name (base+offset)
-    // and slot, so a cross-class get/putfield can find the offset.
-    // 16384, not 4096: the cap matched MAXCLASS, but classes average MORE than one instance field, and the TLS
-    // stack (SslEngineProbe, 2767 classes) filled 4096 first -- `CAP EXCEEDED: MAXFIELD count=4095`.
-    private static final int MAXFIELD = 16384;
-    static RVMField[] fldTab;   // global instance-field registry (reified: reuses RVMField; slot/access/descOff)
-    static int fldCount;
 
 
     private static boolean gIsInterface; // is the class being loaded an interface?
@@ -162,9 +123,9 @@ public final class Loader
     // vtable flattening and itable indices) but also anything it instantiates,
     // calls or type-tests (needed by the class/method/field registries).
     private static final int MAXBLOB = 4096;
-    private static AddressArray pdBase;        // blob address
+    static AddressArray pdBase;        // blob address
     private static int[] pdLen;          // blob length
-    private static int[] pdNameOff;      // its own this_class name Utf8 offset
+    static int[] pdNameOff;      // its own this_class name Utf8 offset
     private static int[] pdDone;         // 1 once phase-A structure is loaded
     private static int[] pdDoneB;        // 1 once phase-B bodies are compiled + TIB filled
     private static boolean[] pdNeedsString;   // blob materializes a String (CONSTANT_String or invokedynamic-concat)
@@ -172,9 +133,9 @@ public final class Loader
     // Inheritance edges (super + direct interfaces) recorded by probeAll -- an ACYCLIC graph (Java forbids cyclic
     // inheritance), so phase A can always order super/interface-first with no stall. (This is distinct from the
     // full CONSTANT_Class dep list, which IS cyclic and is what made single-phase linking load-order-fragile.)
-    private static int[] pdSuperOff;     // super name Utf8 offset (in pdBase[i]), or 0 if none (Object/interface)
-    private static int[] pdIfOff;        // pdIfOff[i*MAX_DIRECT_IF+k] = direct-interface name Utf8 offset
-    private static int[] pdIfN;          // number of direct interfaces recorded for blob i
+    static int[] pdSuperOff;     // super name Utf8 offset (in pdBase[i]), or 0 if none (Object/interface)
+    static int[] pdIfOff;        // pdIfOff[i*MAX_DIRECT_IF+k] = direct-interface name Utf8 offset
+    static int[] pdIfN;          // number of direct interfaces recorded for blob i
     private static int pdCount;
     // Blobs [0, pdProbedTo) have been through probeAll: their name/super/interfaces/needsString are set and
     // their CONSTANT_Class deps are already on the dep list. The blob table is append-only and deduped by
@@ -498,15 +459,15 @@ public final class Loader
     /** The class-registry index of initializer {@code i}'s owner, matched by blob base (as ensureClinit does). */
     private static int clinitRegOf(int i)
     {
-        if (clTab == null)
+        if (ClassRegistry.clTab == null)
         {
             return -1;
         }
         Address base = clinitBase.get(i);
         int r = 0;
-        while (r < clCount)
+        while (r < ClassRegistry.clCount)
         {
-            if (clTab[r] != null && clTab[r].base.EQ(base))
+            if (ClassRegistry.clTab[r] != null && ClassRegistry.clTab[r].base.EQ(base))
             {
                 return r;
             }
@@ -1142,7 +1103,7 @@ public final class Loader
                     warnClinitUnderLock(i);
                     long unused = Magic.call0(entry);
                     clinitRan[i] = 1;
-                    noteBootInited(classRegAt(clinitBase.get(i), clinitNameOff[i]));
+                    noteBootInited(ClassRegistry.classRegAt(clinitBase.get(i), clinitNameOff[i]));
                     done[i] = true;
                     remaining -= 1;
                     progress = 1;
@@ -1163,7 +1124,7 @@ public final class Loader
                     warnClinitUnderLock(j);
                     long unused = Magic.call0(cyEntry);
                     clinitRan[j] = 1;
-                    noteBootInited(classRegAt(clinitBase.get(j), clinitNameOff[j]));
+                    noteBootInited(ClassRegistry.classRegAt(clinitBase.get(j), clinitNameOff[j]));
                     done[j] = true;
                     remaining -= 1;
                 }
@@ -1200,7 +1161,7 @@ public final class Loader
     /** {@link #adoptBootInit} for batch initializer entry {@code i}, by its class. */
     private static boolean bootInitedEntry(int i)
     {
-        int reg = classRegAt(clinitBase.get(i), clinitNameOff[i]);
+        int reg = ClassRegistry.classRegAt(clinitBase.get(i), clinitNameOff[i]);
         return reg >= 0 && adoptBootInit(reg);
     }
 
@@ -1238,32 +1199,18 @@ public final class Loader
      */
     private static void initPrereq(int reg)
     {
-        if (!utf8HasPrefix(clTab[reg].base, clTab[reg].nameOff, Magic.bytes("sun/nio/ch/"))
-                && !utf8HasPrefix(clTab[reg].base, clTab[reg].nameOff, Magic.bytes("java/net/")))
+        if (!utf8HasPrefix(ClassRegistry.clTab[reg].base, ClassRegistry.clTab[reg].nameOff, Magic.bytes("sun/nio/ch/"))
+                && !utf8HasPrefix(ClassRegistry.clTab[reg].base, ClassRegistry.clTab[reg].nameOff, Magic.bytes("java/net/")))
         {
             return;
         }
-        int fd = classRegByNameBytes(Magic.bytes("java/io/FileDescriptor"));
+        int fd = ClassRegistry.classRegByNameBytes(Magic.bytes("java/io/FileDescriptor"));
         if (fd >= 0 && fd != reg)
         {
             ensureClinit(fd);
         }
     }
 
-    /** Class-registry index of the class with this exact name, or -1. */
-    static int classRegByNameBytes(byte[] name)
-    {
-        int r = 0;
-        while (r < clCount)
-        {
-            if (clTab[r] != null && Utf8.utf8IsAtBase(clTab[r].base, clTab[r].nameOff, name))
-            {
-                return r;
-            }
-            r += 1;
-        }
-        return -1;
-    }
 
     /**
      * Initialization barrier: run class {@code reg}'s pending {@code <clinit>} now, if it has one. Called
@@ -1376,14 +1323,14 @@ public final class Loader
             if (reg >= 0)
             {
                 Uart.write(Magic.bytes(" state="));
-                VM.printDec(clTab[reg].state);
+                VM.printDec(ClassRegistry.clTab[reg].state);
             }
             Uart.putc(0x0A);
         }
         if (reg >= 0)
         {
             ensureClinit(reg);
-            RVMClass c = clTab[reg];
+            RVMClass c = ClassRegistry.clTab[reg];
             if (c.state >= RVMClass.ST_INITIALIZED && c.superInited && !c.initFailed)
             {
                 initDoneMemoPut(clsU.toLong());
@@ -1540,7 +1487,7 @@ public final class Loader
             k += 1;
         }
         int reg = regBySigU(clsU);
-        boolean need = reg < 0 || clTab[reg] == null || clTab[reg].state < RVMClass.ST_INITIALIZED;
+        boolean need = reg < 0 || ClassRegistry.clTab[reg] == null || ClassRegistry.clTab[reg].state < RVMClass.ST_INITIALIZED;
         if (igN < IGMEMO)
         {
             igName[igN] = key;
@@ -1564,7 +1511,7 @@ public final class Loader
         int d = clDepStart[i];
         while (d < e)
         {
-            int dep = classRegByNameAt(clinitBase.get(i), clDepOff[d]);
+            int dep = ClassRegistry.classRegByNameAt(clinitBase.get(i), clDepOff[d]);
             if (dep >= 0 && dep != self)
             {
                 ensureClinit(dep);
@@ -1581,11 +1528,11 @@ public final class Loader
 
     private static void clinitCellWatch(int reg, byte[] when)
     {
-        if (!CELL_WATCH || clTab[reg] == null || clTab[reg].statics.isZero())
+        if (!CELL_WATCH || ClassRegistry.clTab[reg] == null || ClassRegistry.clTab[reg].statics.isZero())
         {
             return;
         }
-        if (!utf8HasPrefix(clTab[reg].base, clTab[reg].nameOff,
+        if (!utf8HasPrefix(ClassRegistry.clTab[reg].base, ClassRegistry.clTab[reg].nameOff,
                 Magic.bytes("org/junit/platform/console/shadow/picocli/CommandLine$ParseResult$GroupValidationResult")))
         {
             return;
@@ -1593,16 +1540,16 @@ public final class Loader
         Uart.write(Magic.bytes("  CELLS "));
         Uart.write(when);
         Uart.putc(0x20);
-        printNameAt(clTab[reg].base, clTab[reg].nameOff);
+        printNameAt(ClassRegistry.clTab[reg].base, ClassRegistry.clTab[reg].nameOff);
         Uart.write(Magic.bytes(" block="));
-        VM.printHex(clTab[reg].statics);
+        VM.printHex(ClassRegistry.clTab[reg].statics);
         int k = 0;
         while (k < 4)
         {
             Uart.write(Magic.bytes(" ["));
             VM.printDec(k);
             Uart.write(Magic.bytes("]="));
-            VM.printHex(clTab[reg].statics.plus(k * 8L).loadLong());
+            VM.printHex(ClassRegistry.clTab[reg].statics.plus(k * 8L).loadLong());
             k += 1;
         }
         Uart.putc(0x0A);
@@ -1617,7 +1564,7 @@ public final class Loader
     /** Whether the class at {@code reg} shares an image statics block whose initializer already ran. */
     private static boolean bootInitedReg(int reg)
     {
-        long st = clTab[reg].statics.toLong();
+        long st = ClassRegistry.clTab[reg].statics.toLong();
         if (!isImageStatics(st))
         {
             return false;
@@ -1643,7 +1590,7 @@ public final class Loader
      */
     private static void noteBootInited(int reg)
     {
-        if (!runtimeUp || reg < 0 || !isImageStatics(clTab[reg].statics.toLong()) || bootInitedReg(reg))
+        if (!runtimeUp || reg < 0 || !isImageStatics(ClassRegistry.clTab[reg].statics.toLong()) || bootInitedReg(reg))
         {
             return;                                     // only the RUNTIME world's initializations count: see below
         }
@@ -1662,7 +1609,7 @@ public final class Loader
             }
             bootInited = grown;
         }
-        bootInited[bootInitedN] = clTab[reg].statics.toLong();
+        bootInited[bootInitedN] = ClassRegistry.clTab[reg].statics.toLong();
         bootInitedN += 1;
     }
 
@@ -1677,11 +1624,11 @@ public final class Loader
         {
             return false;
         }
-        clTab[reg].state = RVMClass.ST_INITIALIZED;
+        ClassRegistry.clTab[reg].state = RVMClass.ST_INITIALIZED;
         int i = 0;
         while (i < clinitN)
         {
-            if (clinitBase.get(i).EQ(clTab[reg].base))
+            if (clinitBase.get(i).EQ(ClassRegistry.clTab[reg].base))
             {
                 clinitRan[i] = 1;
                 clinitDone[i] = 1;
@@ -1693,7 +1640,7 @@ public final class Loader
 
     static void ensureClinit(int reg)
     {
-        if (reg < 0 || clTab == null || clTab[reg] == null)
+        if (reg < 0 || ClassRegistry.clTab == null || ClassRegistry.clTab[reg] == null)
         {
             return;
         }
@@ -1724,9 +1671,9 @@ public final class Loader
         // initializing it, return (step 3); a superclass chain is acyclic, so the re-entry this allows is
         // bounded by its depth. The flag is set once the superclass is initialized, or has no initializer in
         // flight at all (a class this barrier never runs) -- never while one is mid-run.
-        if (!clTab[reg].superInited)
+        if (!ClassRegistry.clTab[reg].superInited)
         {
-            int sup = superRegOf(reg);
+            int sup = ClassRegistry.superRegOf(reg);
             if (sup >= 0 && sup != reg)
             {
                 try
@@ -1741,17 +1688,17 @@ public final class Loader
                     throw t;
                 }
             }
-            if (sup < 0 || sup == reg || clTab[sup].state >= RVMClass.ST_INITIALIZED || !initInFlight(sup))
+            if (sup < 0 || sup == reg || ClassRegistry.clTab[sup].state >= RVMClass.ST_INITIALIZED || !initInFlight(sup))
             {
-                clTab[reg].superInited = true;
+                ClassRegistry.clTab[reg].superInited = true;
             }
         }
         linkable(reg);
-        if (clTab[reg].initFailed)
+        if (ClassRegistry.clTab[reg].initFailed)
         {
             throw noClassDefFound(reg);                 // JVMS 12.4.2 step 5: an erroneous class never initializes
         }
-        if (clTab[reg].state >= RVMClass.ST_INITIALIZED)
+        if (ClassRegistry.clTab[reg].state >= RVMClass.ST_INITIALIZED)
         {
             return;
         }
@@ -1759,7 +1706,7 @@ public final class Loader
         {
             return;                                     // initialized once per VM, in an earlier loader world
         }
-        if (!lazyClinitGated(clTab[reg].base, clTab[reg].nameOff))
+        if (!lazyClinitGated(ClassRegistry.clTab[reg].base, ClassRegistry.clTab[reg].nameOff))
         {
             // Only a gated class initializes here. Every other initializer stays under runClinits'
             // dependency-ordered control: a lazy compile can happen DURING runClinits (an initializer calling
@@ -1783,14 +1730,14 @@ public final class Loader
         initPrereq(reg);                                // the one edge no bytecode scan can see (see below)
         if (awaitOtherInitializer(reg))
         {
-            if (clTab[reg].initFailed)
+            if (ClassRegistry.clTab[reg].initFailed)
             {
                 throw noClassDefFound(reg);             // the task we waited for FAILED it (step 2, then step 5)
             }
             return;                                     // another task ran it to completion while we waited
         }
         runPendingClinit(reg);
-        if (clTab[reg].initFailed)
+        if (ClassRegistry.clTab[reg].initFailed)
         {
             throw noClassDefFound(reg);                 // runPendingClinit waited on another task, which failed it
         }
@@ -1827,9 +1774,9 @@ public final class Loader
      */
     static void linkable(int reg)
     {
-        if (reg >= 0 && clTab != null && clTab[reg] != null && clTab[reg].absentSuperOff != 0)
+        if (reg >= 0 && ClassRegistry.clTab != null && ClassRegistry.clTab[reg] != null && ClassRegistry.clTab[reg].absentSuperOff != 0)
         {
-            Address superU = clTab[reg].base.plus(clTab[reg].absentSuperOff);
+            Address superU = ClassRegistry.clTab[reg].base.plus(ClassRegistry.clTab[reg].absentSuperOff);
             byte[] msg = new byte[u2(superU)];
             putUtf8(msg, 0, superU);
             throw (Error) Magic.fromAddr(RuntimeEntrypoints.newExcWithMessage(Magic.bytes("java/lang/NoClassDefFoundError"), msg));
@@ -1845,7 +1792,7 @@ public final class Loader
      */
     private static void markInitFailed(int reg)
     {
-        clTab[reg].initFailed = true;
+        ClassRegistry.clTab[reg].initFailed = true;
         Magic.dsb();
     }
 
@@ -1853,7 +1800,7 @@ public final class Loader
     private static Error noClassDefFound(int reg)
     {
         byte[] pre = Magic.bytes("Could not initialize class ");
-        Address nameU = clTab[reg].base.plus(clTab[reg].nameOff);
+        Address nameU = ClassRegistry.clTab[reg].base.plus(ClassRegistry.clTab[reg].nameOff);
         byte[] msg = new byte[pre.length + u2(nameU)];
         int p = RuntimeEntrypoints.putAsciiAt(msg, 0, pre);
         putDotted(msg, p, nameU);
@@ -1885,7 +1832,7 @@ public final class Loader
         int i = 0;
         while (i < clinitN)
         {
-            if (clinitBase.get(i).EQ(clTab[reg].base) && clinitBusy[i] != 0 && clinitDone[i] == 0)
+            if (clinitBase.get(i).EQ(ClassRegistry.clTab[reg].base) && clinitBusy[i] != 0 && clinitDone[i] == 0)
             {
                 return true;
             }
@@ -1897,7 +1844,7 @@ public final class Loader
     /** True if {@code reg}'s initializer is claimed by ANOTHER task and has not finished (see drainPendingInit). */
     private static boolean initClaimedByOther(int reg)
     {
-        if (reg < 0 || clTab == null || clTab[reg] == null)
+        if (reg < 0 || ClassRegistry.clTab == null || ClassRegistry.clTab[reg] == null)
         {
             return false;
         }
@@ -1905,7 +1852,7 @@ public final class Loader
         int i = 0;
         while (i < clinitN)
         {
-            if (clinitBase.get(i).EQ(clTab[reg].base) && clinitOwner[i] != 0 && clinitOwner[i] != me
+            if (clinitBase.get(i).EQ(ClassRegistry.clTab[reg].base) && clinitOwner[i] != 0 && clinitOwner[i] != me
                     && clinitDone[i] == 0)
             {
                 return true;
@@ -1930,7 +1877,7 @@ public final class Loader
         int i = 0;
         while (i < clinitN)
         {
-            if (clinitBase.get(i).EQ(clTab[reg].base) && clinitOwner[i] != 0 && clinitOwner[i] != me
+            if (clinitBase.get(i).EQ(ClassRegistry.clTab[reg].base) && clinitOwner[i] != 0 && clinitOwner[i] != me
                     && clinitDone[i] == 0)
             {
                 return awaitInitializer(i, reg);
@@ -1990,7 +1937,7 @@ public final class Loader
         int i = 0;
         while (i < clinitN)
         {
-            if (clinitRan[i] == 0 && clinitCode[i] != 0L && clinitBase.get(i).EQ(clTab[reg].base))
+            if (clinitRan[i] == 0 && clinitCode[i] != 0L && clinitBase.get(i).EQ(ClassRegistry.clTab[reg].base))
             {
                 int me = VM.curTask() + 1;
                 long daif = VMScheduler.schedLock();     // test-and-claim is ONE step: two tasks must not both
@@ -2052,7 +1999,7 @@ public final class Loader
                 if (Heap.codeBlockFreeAt(Address.fromLong(entry)) == 1)   // GUARD: about to call a SWEPT initializer.
                 {                                                //   Name it here, where the class is in hand.
                     Uart.write(Magic.bytes("  CLINIT ENTRY WAS SWEPT: "));
-                    printNameAt(clTab[reg].base, clTab[reg].nameOff);
+                    printNameAt(ClassRegistry.clTab[reg].base, ClassRegistry.clTab[reg].nameOff);
                     Uart.write(Magic.bytes(" entry="));
                     VM.printHex(entry);
                     Uart.write(Magic.bytes(" idx="));
@@ -2077,7 +2024,7 @@ public final class Loader
                 if (LOAD_LOG)
                 {
                     Uart.write(Magic.bytes("  clinit-lazy "));
-                    printNameAt(clTab[reg].base, clTab[reg].nameOff);
+                    printNameAt(ClassRegistry.clTab[reg].base, ClassRegistry.clTab[reg].nameOff);
                     Uart.putc(0x0A);
                 }
                 // BEFORE running it: initialize what the initializer ITSELF reads -- and ONLY that.
@@ -2114,7 +2061,7 @@ public final class Loader
                 try
                 {
                     long unused = Magic.call0(entry);
-                    clTab[reg].state = RVMClass.ST_INITIALIZED;
+                    ClassRegistry.clTab[reg].state = RVMClass.ST_INITIALIZED;
                     noteBootInited(reg);
                 }
                 catch (Throwable t)
@@ -2152,11 +2099,11 @@ public final class Loader
             int j = 0;
             while (j < clinitN)
             {
-                if (clinitBase.get(j) == clTab[reg].base)
+                if (clinitBase.get(j) == ClassRegistry.clTab[reg].base)
                 {
                     hits += 1;
                     Uart.write(Magic.bytes("      CL-miss "));
-                    printNameAt(clTab[reg].base, clTab[reg].nameOff);
+                    printNameAt(ClassRegistry.clTab[reg].base, ClassRegistry.clTab[reg].nameOff);
                     Uart.write(Magic.bytes(" idx="));
                     VM.printDec(j);
                     Uart.write(Magic.bytes(" ran="));
@@ -2170,7 +2117,7 @@ public final class Loader
             if (hits == 0)
             {
                 Uart.write(Magic.bytes("      CL-miss "));
-                printNameAt(clTab[reg].base, clTab[reg].nameOff);
+                printNameAt(ClassRegistry.clTab[reg].base, ClassRegistry.clTab[reg].nameOff);
                 Uart.write(Magic.bytes(" NO RECORD clinitN="));
                 VM.printDec(clinitN);
                 Uart.putc(0x0A);
@@ -2224,9 +2171,9 @@ public final class Loader
         }
         unbracketedInitSaid = true;
         Uart.write(Magic.bytes("\n  ACTIVE USE NOTED OUTSIDE A BRACKETED COMPILE (its <clinit> may not run): "));
-        if (clTab != null && reg >= 0 && clTab[reg] != null)
+        if (ClassRegistry.clTab != null && reg >= 0 && ClassRegistry.clTab[reg] != null)
         {
-            printNameAt(clTab[reg].base, clTab[reg].nameOff);
+            printNameAt(ClassRegistry.clTab[reg].base, ClassRegistry.clTab[reg].nameOff);
         }
         Uart.write(Magic.bytes(" -- a compile path is missing its lzCompiling bracket"));
         Uart.putc(0x0A);
@@ -2238,7 +2185,7 @@ public final class Loader
     {
         // NOT gated on the class's own state: a class with no <clinit> reaches ST_INITIALIZED at load, yet
         // its constructors' active uses (recorded below) still come due the first time it is instantiated.
-        if (reg < 0 || clTab == null || clTab[reg] == null)
+        if (reg < 0 || ClassRegistry.clTab == null || ClassRegistry.clTab[reg] == null)
         {
             return;
         }
@@ -2286,7 +2233,7 @@ public final class Loader
             {
                 lzInitFullSaid = true;
                 Uart.write(Magic.bytes("\n  PENDING-INIT LIST FULL: <clinit> will NOT run for "));
-                printNameAt(clTab[reg].base, clTab[reg].nameOff);
+                printNameAt(ClassRegistry.clTab[reg].base, ClassRegistry.clTab[reg].nameOff);
                 Uart.write(Magic.bytes(" -- its statics read null. MAXPENDINIT="));
                 VM.printDec(MAXPENDINIT);
                 Uart.putc(0x0A);
@@ -2381,30 +2328,6 @@ public final class Loader
         Uart.putc(0x0A);
     }
 
-    /** Class-registry index of the class whose Type node is {@code type}, or -1. */
-    static int classRegByType(Address type)
-    {
-        if (type.isZero())
-        {
-            return -1;
-        }
-        return ctProbe(type);
-    }
-
-    /** Class-registry index of the class loaded from blob {@code base}, or -1. */
-    private static int classRegByBlob(Address base)
-    {
-        int r = 0;
-        while (r < clCount)
-        {
-            if (clTab[r] != null && clTab[r].base.EQ(base))
-            {
-                return r;
-            }
-            r += 1;
-        }
-        return -1;
-    }
 
     /** True if class {@code reg} has an enqueued {@code <clinit>} that has not executed yet. */
     private static boolean clinitPendingFor(int reg)
@@ -2412,7 +2335,7 @@ public final class Loader
         int i = 0;
         while (i < clinitN)
         {
-            if (clinitRan[i] == 0 && clinitCode[i] != 0L && clinitBase.get(i).EQ(clTab[reg].base))
+            if (clinitRan[i] == 0 && clinitCode[i] != 0L && clinitBase.get(i).EQ(ClassRegistry.clTab[reg].base))
             {
                 return true;
             }
@@ -2441,7 +2364,7 @@ public final class Loader
                 // built its SUCCESS_* instances from an uninitialised Type enum, so every constant AND every
                 // instance's `type` field was null -- and `blockingFailure()` compares them, so `null == null`
                 // reported a blocking failure on a SUCCESS and handed picocli a null exception to throw.
-                int reg = classRegByNameAt(clinitBase.get(i), clDepOff[d]);
+                int reg = ClassRegistry.classRegByNameAt(clinitBase.get(i), clDepOff[d]);
                 if (reg >= 0)
                 {
                     ensureClinit(reg);
@@ -2452,7 +2375,7 @@ public final class Loader
                 // An eagerly-run initializer that touches a LAZY-INIT class is an active use of it, and
                 // runClinits has already passed that class over. Initialize it here, which is exactly the
                 // JVMS rule; otherwise this initializer would read its statics unset.
-                ensureClinit(classRegByBlob(pdBase.get(jpd)));
+                ensureClinit(ClassRegistry.classRegByBlob(pdBase.get(jpd)));
                 int k = 0;
                 while (k < clinitN)                     // does that blob have a not-yet-run <clinit>?
                 {
@@ -2638,13 +2561,13 @@ public final class Loader
     private static long globalMethodBuf(byte[] cls, byte[] name, byte[] desc)
     {
         int i = 0;
-        while (i < rgCount)
+        while (i < MethodRegistry.rgCount)
         {
-            if (Utf8.utf8IsAtBase(rgTab[i].base, rgTab[i].classOff, cls)
-                    && Utf8.utf8IsAtBase(rgTab[i].base, rgTab[i].nameOff, name)
-                    && Utf8.utf8IsAtBase(rgTab[i].base, rgTab[i].descOff, desc))
+            if (Utf8.utf8IsAtBase(MethodRegistry.rgTab[i].base, MethodRegistry.rgTab[i].classOff, cls)
+                    && Utf8.utf8IsAtBase(MethodRegistry.rgTab[i].base, MethodRegistry.rgTab[i].nameOff, name)
+                    && Utf8.utf8IsAtBase(MethodRegistry.rgTab[i].base, MethodRegistry.rgTab[i].descOff, desc))
             {
-                return rgTab[i].buf;
+                return MethodRegistry.rgTab[i].buf;
             }
             i += 1;
         }
@@ -3441,17 +3364,6 @@ public final class Loader
         return lzTab == null || i < 0 || i >= lzTab.length || lzTab[i] == null ? 0L : lzTab[i].slot;
     }
 
-    /** Registered class-record count, for {@link CodeCompact}'s precise reference enumeration. */
-    static int classRegCount()
-    {
-        return clCount;
-    }
-
-    /** The class record at {@code i}, or null. Package-visible for the same reason. */
-    static RVMClass classRegAt(int i)
-    {
-        return clTab == null || i < 0 || i >= clTab.length ? null : clTab[i];
-    }
 
     /**
      * Record a code -> code edge the JIT is about to encode, for {@link CodeEdges}. Gated exactly like
@@ -3756,18 +3668,18 @@ public final class Loader
         VM.byteArrayTibCache = Address.zero();          // the batch's [B TIB was just reclaimed with its heap
         VM.stringTypeCache = Address.zero();            // ... and so was the Type it is paired with: a STALE one
                                                         //   could be matched by a later Type at the same address
-        rgTab = new RVMMethod[MAXREG];
-        rgCount = 0;
-        bdTab = null;                                   // reflection-only entries name this launch's blobs too
-        bdCount = 0;
-        rgIndexed = 0;                                   // the index is keyed by registry INDEX, so it must
-        rgBucket = null;                                 //   be rebuilt whenever the registry is cleared
-        sgTab = new RVMField[MAXREG];
-        sgIndexed = 0;                                  // BESIDE the table it indexes: a watermark that
-        sgBucket = null;                                //   outlives its table under-marks SILENTLY, and
+        MethodRegistry.rgTab = new RVMMethod[MethodRegistry.MAXREG];
+        MethodRegistry.rgCount = 0;
+        MethodRegistry.bdTab = null;                                   // reflection-only entries name this launch's blobs too
+        MethodRegistry.bdCount = 0;
+        MethodRegistry.rgIndexed = 0;                                   // the index is keyed by registry INDEX, so it must
+        MethodRegistry.rgBucket = null;                                 //   be rebuilt whenever the registry is cleared
+        Statics.sgTab = new RVMField[MethodRegistry.MAXREG];
+        Statics.sgIndexed = 0;                                  // BESIDE the table it indexes: a watermark that
+        Statics.sgBucket = null;                                //   outlives its table under-marks SILENTLY, and
                                                         //   sgCount returning to the same value would slip
                                                         //   past the "went backwards" check in buildSgIndex
-        sgCount = 0;
+        Statics.sgCount = 0;
         // THE SEED FLAGS RESET WITH THE REGISTRY THEY GUARD. A fresh statics block reads 0 everywhere, so a
         // flag left set here would skip the seed for the whole launch and leave System.out / the Integer
         // cache / int.class null -- silently. Same rule as every other watermark in this file: it resets
@@ -3869,20 +3781,20 @@ public final class Loader
         // mints a fresh mirror, so `getClass() == X.class` answers false while `getClass() == getClass()`
         // can still hold by luck, and stock code compares mirrors constantly. Sized for a launcher-scale
         // closure with room over: the cost is two words per entry, and only for classes actually asked.
-        ClassMirrors.mirType = AddressArray.create(MAXMIRROR);     // Class mirrors: also per batch (reclaimed heap)
-        ClassMirrors.mirObj = ObjectReferenceArray.create(MAXMIRROR);
+        ClassMirrors.mirType = AddressArray.create(ClassMirrors.MAXMIRROR);     // Class mirrors: also per batch (reclaimed heap)
+        ClassMirrors.mirObj = ObjectReferenceArray.create(ClassMirrors.MAXMIRROR);
         ClassMirrors.mirN = 0;
         ClassMirrors.classTibCache = Address.zero();
-        clTab = new RVMClass[MAXCLASS];
-        clCount = 0;
-        clIndexed = 0;                                  // BESIDE the table it indexes: a watermark that
-        clBucket = null;                                //   outlives its table under-marks SILENTLY
+        ClassRegistry.clTab = new RVMClass[ClassRegistry.MAXCLASS];
+        ClassRegistry.clCount = 0;
+        ClassRegistry.clIndexed = 0;                                  // BESIDE the table it indexes: a watermark that
+        ClassRegistry.clBucket = null;                                //   outlives its table under-marks SILENTLY
         // BESIDE the table it indexes, deliberately: a watermark that outlives its table under-marks
         // SILENTLY, and a fresh clTab left beside a stale ctIndexed would answer registry indices for a
         // previous launch's classes. Nulling the bucket array is what forces the rebuild.
-        ctBucket = null;
-        InterfaceInvocation.clIfaceReg = new int[MAXCLASS * InterfaceInvocation.MAX_DIRECT_IF];
-        InterfaceInvocation.clIfaceRegN = new int[MAXCLASS];
+        ClassRegistry.ctBucket = null;
+        InterfaceInvocation.clIfaceReg = new int[ClassRegistry.MAXCLASS * InterfaceInvocation.MAX_DIRECT_IF];
+        InterfaceInvocation.clIfaceRegN = new int[ClassRegistry.MAXCLASS];
         InterfaceInvocation.ifClosureBuf = new int[InterfaceInvocation.MAXIFM];
         InterfaceInvocation.instImaps = new long[InterfaceInvocation.MAXIMAP];
         InterfaceInvocation.instImapReg = new int[InterfaceInvocation.MAXIMAP];
@@ -3926,10 +3838,10 @@ public final class Loader
         pcCpCount = new int[MAXPARSECACHE];
         pcAfterCp = new int[MAXPARSECACHE];
         pcN = 0;
-        fldTab = new RVMField[MAXFIELD];
-        fldIndexed = 0;                                 // beside the table it indexes, as sgIndexed is
-        fldBucket = null;
-        fldCount = 0;
+        FieldRegistry.fldTab = new RVMField[FieldRegistry.MAXFIELD];
+        FieldRegistry.fldIndexed = 0;                                 // beside the table it indexes, as sgIndexed is
+        FieldRegistry.fldBucket = null;
+        FieldRegistry.fldCount = 0;
         VtableLayout.vtClassBase = AddressArray.create(VtableLayout.MAXVT);
         VtableLayout.vtClassOff = new int[VtableLayout.MAXVT];
         VtableLayout.vtNameBase = AddressArray.create(VtableLayout.MAXVT);
@@ -4411,12 +4323,6 @@ public final class Loader
      * passes ahead of it -- each of which walks everything accumulated so far, every batch.
      */
     static long cumRfImap, cumRfSynth, cumRfArr, cumSeeds, cumRunCl;
-    // WHERE the refill's time goes, as plain int counters rather than timers -- two readCNTPCT_EL0 per
-    // itable entry was measured as noise against 19s and a visible share of 613ms, the lesson this file
-    // already paid for once. These rank the three candidates inside a visit: the registry scan
-    // (grows with everything loaded), the closure walk (bounded by the class's own hierarchy), and the
-    // per-slot refill.
-    static int rfTypeSteps;                             // regOfType/classRegByType registry comparisons
     // AND THE WORK THE THREE ABOVE CANNOT SEE, which is why these exist: those tally SLOT READS, and 3.3M of
     // them over a launcher boot cannot account for `imap`'s 1,366ms (~68 cycles a read on a 166MHz core,
     // against the handful a load-compare-increment costs). What they miss is what happens INSIDE a still-0
@@ -4446,8 +4352,6 @@ public final class Loader
     static int pcUnresDeny;                             // ... and sites that still ran the full arm
     static int pcDenySteps;                             // utf8HasPrefix calls (ALL callers; isDenylisted dominates)
     static int pcStubSteps;                             // linkStubFor scan entries compared
-    static int sgScanCalls;                             // staticSlotOf calls (ALL callers, not just the seeds)
-    static int sgScanSteps;                             // ... registry entries compared inside them
     // `statT` -- the static-reloc half of `patch`, 463.914ms cumulative at batch 209 and the one top-level
     // split that had NEVER been looked inside. The loop is short enough to read: for every static site from
     // rsStart, `globalStaticByRef` walks ALL `sgCount` registry entries with TWO utf8EqAt an entry, and
@@ -4468,17 +4372,8 @@ public final class Loader
     // measured 46.9ms, i.e. ~0.47us a compare -- the same per-compare cost the unres arm's `deny=116k`
     // showed. `statT` is these two scans and essentially nothing else.
     static long psSites;                                // static reloc sites resolved (cumulative, all batches)
-    static long psSteps;                                // ... entries compared inside sgCellOf (0k = the probe
                                                         //   lands on an EMPTY bucket, as the imap fix's chain does)
     static long psMiss;                                 // ... sites that found NOTHING (a full-table walk each)
-    // AND THE SECOND SCAN IN THE SAME LOOP, which the first cut of this instrument did not count -- exactly
-    // the mistake the unres arm made one increment ago. Every MISS falls into `reportZeroCellBind`, whose
-    // first act is `regBySigU`: a linear walk of all `clCount` classes with a utf8EqAt an entry, to decide
-    // whether the miss is worth reporting. The suite says 100% of sites miss, so that walk runs on every
-    // site of every batch -- a second growing table beside the first, and `psSteps` is blind to it.
-    // Counted for ALL callers (there are nine); this loop is the one that runs per site per batch.
-    static long rbCalls;                                // regBySigU calls (all callers)
-    static long rbSteps;                                // ... class-registry entries compared inside them
     static long syObjSteps;                             // objectClassIndex scan steps (all three callers)
     static int rfHashSteps;                             // ... CLASS-name bytes still folded (0 = cache firing)
 
@@ -5420,7 +5315,7 @@ public final class Loader
      * was built all have indices above {@code pnIndexed}, so they can only win when the indexed half misses
      * -- which is why the tail scan runs second rather than being folded in.)
      */
-    private static int findPdByName(Address base, int off)
+    static int findPdByName(Address base, int off)
     {
         fpCalls += 1;
         if (pnBucket == null)                            // no index yet (fresh resetLoader): scan, as before
@@ -6818,14 +6713,14 @@ public final class Loader
     static void reportClassOfType(Address type)
     {
         int i = 0;
-        while (i < clCount)
+        while (i < ClassRegistry.clCount)
         {
-            if (clTab[i].type.EQ(type))
+            if (ClassRegistry.clTab[i].type.EQ(type))
             {
                 Uart.write(Magic.bytes(" class="));
-                writeName(clTab[i].base.plus(clTab[i].nameOff + 2), u2(clTab[i].base.plus(clTab[i].nameOff)));
+                writeName(ClassRegistry.clTab[i].base.plus(ClassRegistry.clTab[i].nameOff + 2), u2(ClassRegistry.clTab[i].base.plus(ClassRegistry.clTab[i].nameOff)));
                 Uart.write(Magic.bytes(" gvCount="));
-                VM.printDec(clTab[i].vtCount);
+                VM.printDec(ClassRegistry.clTab[i].vtCount);
                 return;
             }
             i += 1;
@@ -6838,11 +6733,11 @@ public final class Loader
     static void printClassName(Address type)
     {
         int i = 0;
-        while (i < clCount)
+        while (i < ClassRegistry.clCount)
         {
-            if (clTab[i].type.EQ(type))
+            if (ClassRegistry.clTab[i].type.EQ(type))
             {
-                writeName(clTab[i].base.plus(clTab[i].nameOff + 2), u2(clTab[i].base.plus(clTab[i].nameOff)));
+                writeName(ClassRegistry.clTab[i].base.plus(ClassRegistry.clTab[i].nameOff + 2), u2(ClassRegistry.clTab[i].base.plus(ClassRegistry.clTab[i].nameOff)));
                 return;
             }
             i += 1;
@@ -6967,11 +6862,11 @@ public final class Loader
             return n == 0 ? 0 : 1 + n;
         }
         int i = 0;
-        while (i < clCount)
+        while (i < ClassRegistry.clCount)
         {
-            if (clTab[i].type.EQ(type))
+            if (ClassRegistry.clTab[i].type.EQ(type))
             {
-                return u2(clTab[i].base.plus(clTab[i].nameOff));
+                return u2(ClassRegistry.clTab[i].base.plus(ClassRegistry.clTab[i].nameOff));
             }
             i += 1;
         }
@@ -7094,12 +6989,12 @@ public final class Loader
             return pos + 1;
         }
         int i = 0;
-        while (i < clCount)
+        while (i < ClassRegistry.clCount)
         {
-            if (clTab[i].type.EQ(type))
+            if (ClassRegistry.clTab[i].type.EQ(type))
             {
-                int len = u2(clTab[i].base.plus(clTab[i].nameOff));
-                Address src = clTab[i].base.plus(clTab[i].nameOff + 2);
+                int len = u2(ClassRegistry.clTab[i].base.plus(ClassRegistry.clTab[i].nameOff));
+                Address src = ClassRegistry.clTab[i].base.plus(ClassRegistry.clTab[i].nameOff + 2);
                 int k = 0;
                 while (k < len)
                 {
@@ -7149,8 +7044,8 @@ public final class Loader
         stubBlob(blob);                                 // vtable-complete without pulling its closure (see stubBlob)
         entryPoint(blob, Magic.bytes("<clinit>"), Magic.bytes("()V"));   // may be absent (addReach(0) is a no-op)
         loadAll();
-        int ci = classIndexByName(slash);
-        return ci < 0 ? Address.zero() : clTab[ci].type;
+        int ci = ClassRegistry.classIndexByName(slash);
+        return ci < 0 ? Address.zero() : ClassRegistry.clTab[ci].type;
     }
 
     /**
@@ -7192,11 +7087,11 @@ public final class Loader
         entryPoint(blobKey, Magic.bytes("<clinit>"), Magic.bytes("()V"));   // enables the mark; <clinit> may be absent
         loadAll();
         int ci = 0;                                     // find the class we just added by its unique blob base
-        while (ci < clCount)
+        while (ci < ClassRegistry.clCount)
         {
-            if (clTab[ci].base.toLong() == blobKey)
+            if (ClassRegistry.clTab[ci].base.toLong() == blobKey)
             {
-                return clTab[ci].type;
+                return ClassRegistry.clTab[ci].type;
             }
             ci += 1;
         }
@@ -7207,13 +7102,13 @@ public final class Loader
      *  wrapping a VM-created task, or 0 if Thread isn't in the loaded batch. */
     static long allocThreadObj()
     {
-        int i = classIndexByName(Magic.bytes("java/lang/Thread"));
+        int i = ClassRegistry.classIndexByName(Magic.bytes("java/lang/Thread"));
         if (i < 0)
         {
             return 0L;
         }
-        Address obj = Heap.alloc(16 + clTab[i].fieldCount * 8);
-        obj.store(clTab[i].tib);
+        Address obj = Heap.alloc(16 + ClassRegistry.clTab[i].fieldCount * 8);
+        obj.store(ClassRegistry.clTab[i].tib);
         return obj.toLong();
     }
 
@@ -7290,11 +7185,11 @@ public final class Loader
             int bestReg = -1;
             int bestClin = -1;
             int i = 0;
-            while (i < rgCount)                            // registered cross-class methods
+            while (i < MethodRegistry.rgCount)                            // registered cross-class methods
             {
-                if (rgTab[i].buf != 0L && rgTab[i].buf < ceil && rgTab[i].buf > bestBuf)
+                if (MethodRegistry.rgTab[i].buf != 0L && MethodRegistry.rgTab[i].buf < ceil && MethodRegistry.rgTab[i].buf > bestBuf)
                 {
-                    bestBuf = rgTab[i].buf; bestReg = i; bestClin = -1;
+                    bestBuf = MethodRegistry.rgTab[i].buf; bestReg = i; bestClin = -1;
                 }
                 i += 1;
             }
@@ -7315,11 +7210,11 @@ public final class Loader
             Uart.write(Magic.bytes(") "));
             if (bestReg >= 0)
             {
-                writeName(rgTab[bestReg].base.plus(rgTab[bestReg].classOff + 2),
-                        u2(rgTab[bestReg].base.plus(rgTab[bestReg].classOff)));
+                writeName(MethodRegistry.rgTab[bestReg].base.plus(MethodRegistry.rgTab[bestReg].classOff + 2),
+                        u2(MethodRegistry.rgTab[bestReg].base.plus(MethodRegistry.rgTab[bestReg].classOff)));
                 Uart.putc(0x2E);
-                writeName(rgTab[bestReg].base.plus(rgTab[bestReg].nameOff + 2),
-                        u2(rgTab[bestReg].base.plus(rgTab[bestReg].nameOff)));
+                writeName(MethodRegistry.rgTab[bestReg].base.plus(MethodRegistry.rgTab[bestReg].nameOff + 2),
+                        u2(MethodRegistry.rgTab[bestReg].base.plus(MethodRegistry.rgTab[bestReg].nameOff)));
             }
             else
             {
@@ -7439,11 +7334,11 @@ public final class Loader
     private static Address metalThreadEntryTypeAddr()
     {
         int i = 0;
-        while (i < clCount)
+        while (i < ClassRegistry.clCount)
         {
-            if (Utf8.utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/MetalThreadEntry")))
+            if (Utf8.utf8IsAtBase(ClassRegistry.clTab[i].base, ClassRegistry.clTab[i].nameOff, Magic.bytes("java/lang/MetalThreadEntry")))
             {
-                return clTab[i].type;
+                return ClassRegistry.clTab[i].type;
             }
             i += 1;
         }
@@ -7455,11 +7350,11 @@ public final class Loader
     static Address runnableTypeAddr()
     {
         int i = 0;
-        while (i < clCount)
+        while (i < ClassRegistry.clCount)
         {
-            if (Utf8.utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/Runnable")))
+            if (Utf8.utf8IsAtBase(ClassRegistry.clTab[i].base, ClassRegistry.clTab[i].nameOff, Magic.bytes("java/lang/Runnable")))
             {
-                return clTab[i].type;
+                return ClassRegistry.clTab[i].type;
             }
             i += 1;
         }
@@ -7470,14 +7365,14 @@ public final class Loader
     static int runnableRunSlot()
     {
         int i = 0;
-        while (i < clCount)
+        while (i < ClassRegistry.clCount)
         {
-            if (Utf8.utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/Runnable")))
+            if (Utf8.utf8IsAtBase(ClassRegistry.clTab[i].base, ClassRegistry.clTab[i].nameOff, Magic.bytes("java/lang/Runnable")))
             {
                 int s = 0;
-                while (s < clTab[i].ifmCount)
+                while (s < ClassRegistry.clTab[i].ifmCount)
                 {
-                    int k = clTab[i].ifmStart + s;
+                    int k = ClassRegistry.clTab[i].ifmStart + s;
                     if (Utf8.isName(InterfaceInvocation.ifBase.get(k), InterfaceInvocation.ifNameOff[k], 0x72756EL, 3)
                             && Utf8.isName(InterfaceInvocation.ifBase.get(k), InterfaceInvocation.ifDescOff[k], 0x282956L, 3))
                     {
@@ -7773,17 +7668,17 @@ public final class Loader
     private static boolean absentSupertype(int nameOff)
     {
         return nameOff != 0
-                && classRegByName(nameOff) < 0
+                && ClassRegistry.classRegByName(nameOff) < 0
                 && VM.dirBytes(gbase.plus(nameOff + 2L), u2(gbase.plus(nameOff))).isZero()
                 && !isDenylisted(gbase, nameOff);
     }
 
     static int superFieldCount()
     {
-        int r = classRegByName(gSuperNameOff);
+        int r = ClassRegistry.classRegByName(gSuperNameOff);
         if (r >= 0)
         {
-            return clTab[r].fieldCount;
+            return ClassRegistry.clTab[r].fieldCount;
         }
         superUnregistered = gSuperNameOff != 0
                 && !Utf8.utf8IsAtBase(gbase, gSuperNameOff, Magic.bytes("java/lang/Object"));
@@ -7815,49 +7710,6 @@ public final class Loader
         return true;
     }
 
-    /** Absolute address of the static field referenced by constant-pool Fieldref {@code idx}. */
-    static long staticAddr(int idx)
-    {
-        if (PARSE_CTX_WATCH)
-        {
-            checkParseCtxOwned(5);
-        }
-        int nameOff = ClassReader.refNameOff(gbytes, gcp, idx);  // Fieldref -> name Utf8 offset
-        // THE FAST PATH IS ONLY VALID FOR A REFERENCE TO THIS CLASS. It matches on the field NAME alone, and a
-        // classfile's constant pool DEDUPES Utf8 -- so `OtherClass.foo` and this class's own `foo` share one
-        // name entry and compare equal here. Without the class check a class that declares a static and reads
-        // a same-named static of another class silently gets its OWN cell.
-        //
-        // picocli's GroupValidationResult is exactly that: it declares SUCCESS_PRESENT/SUCCESS_ABSENT and its
-        // <clinit> reads Type.SUCCESS_PRESENT/Type.SUCCESS_ABSENT to build them. Each read returned the
-        // still-null static it was in the middle of assigning, so every instance's `type` was null -- and
-        // blockingFailure() compares `type` to those constants, so `null == null` reported a BLOCKING FAILURE
-        // on a SUCCESS and handed the console launcher a null exception to throw.
-        if (utf8EqAt(gbase, refClassNameOff(idx), gbase, gThisNameOff))
-        {
-            int s = 0;
-            while (s < gsfCount)                        // same class: match by name Utf8 offset
-            {
-                if (gsfName[s] == nameOff)
-                {
-                    if (STATIC_ADDR_LOG)
-                    {
-                        Uart.write(Magic.bytes("  ownstatic "));
-                        printNameAt(gbase, gThisNameOff);
-                        Uart.putc(0x2E);
-                        printNameAt(gbase, nameOff);
-                        Uart.write(Magic.bytes(" -> "));
-                        VM.printHex(gStatics.plus(s * 8));
-                        Uart.putc(0x0A);
-                    }
-                    return gStatics.plus(s * 8).toLong();
-                }
-                s += 1;
-            }
-        }
-        noteInitNeeded(classRegOf(u2(gbase.plus(gcp[idx]))));   // cross-class static access = an active use
-        return globalStaticAddr(idx);                   // another class (e.g. Long -> Integer.digits)
-    }
 
     /** Slot address of a static field declared in another loaded class, matched by class+name, or 0. */
     // Print the CELL a static reference binds to, from both the compiled path (`staticaddr`) and the
@@ -7866,56 +7718,6 @@ public final class Loader
     // cells, and no amount of reading either path alone distinguishes that from a value that really is null.
     static final boolean STATIC_ADDR_LOG = false;
 
-    private static long globalStaticAddr(int idx)
-    {
-        int classOff = refClassNameOff(idx);
-        int nameOff = mrefNameOff(idx);
-        // The COMPILE-TIME twin of globalStaticByRef: identical key, identical predicate, identical answer,
-        // and it carried its own copy of the same linear scan. One index serves both -- the same "one call
-        // site's fix, two timers" shape the phase-B publish had.
-        long hit = sgCellOf(gbase, classOff, nameOff);
-        if (hit == 0L)
-        {
-            hit = inheritedStaticCell(gbase, classOff, gbase, nameOff, 0);   // declared by a supertype (JVMS 5.4.3.2)
-        }
-        if (hit != 0L)
-        {
-            if (STATIC_ADDR_LOG)
-            {
-                Uart.write(Magic.bytes("  staticaddr "));
-                printNameAt(gbase, classOff);
-                Uart.putc(0x2E);
-                printNameAt(gbase, nameOff);
-                Uart.write(Magic.bytes(" -> "));
-                VM.printHex(hit);
-                Uart.putc(0x0A);
-            }
-            return hit;
-        }
-        if (lzCompiling && !lzRetried && notePullNeeded(gbase.plus(refClassNameOff(idx))))
-        {
-            // A LATE compile named a static of a class RTA never pulled. Do NOT load it here: a load parses
-            // every blob and can collect, and the code buffer being compiled is not reachable yet -- it would
-            // be swept out from under us (the hazard recorded for buildLambdaTib). Note it instead; the
-            // caller pulls it once the compile is over and compiles this body AGAIN, with the class present.
-            // The doomed first body reads the zero cell, and is discarded before anything can call it.
-            return unresolvedStaticCell();
-        }
-        if (compileReuseTib)
-        {
-            // A LATE compile (lazy body, on-demand method, deferred <clinit>) -- there is no later batch
-            // patchRelocs to fill this in, so 0 is not "patch me", it is the final answer. Emitted as-is the
-            // access reads ADDRESS 0: the firmware's low-memory shim, whose instructions come back as a
-            // plausible-looking 64-bit value. Handed to a dispatch that is exactly a wild branch to a pc no
-            // table claims, on whatever stack happens to be running -- which is how `CharacterDataLatin1
-            // .instance` (never pulled, because StringLatin1.toUpperCase compiled after its batch) crashed
-            // String.toUpperCase. Point it at a permanently-zero cell instead: the field reads NULL and the
-            // use throws an ordinary NPE with a real stack, at the site that actually needs the class.
-            reportUnresolvedStatic(idx);
-            return unresolvedStaticCell();
-        }
-        return 0L;                                      // batch compile: the reloc pass patches it later
-    }
 
     // ---- deferred class pulls: collect during a lazy compile, load AFTER it, recompile once -------------
     // The twin of lzInitReg/drainPendingInit above, for the class a getstatic NAMES rather than the class it
@@ -7988,7 +7790,7 @@ public final class Loader
         while (i < n)
         {
             byte[] slash = names[i];
-            if (classIndexByName(slash) < 0)
+            if (ClassRegistry.classIndexByName(slash) < 0)
             {
                 if (LOAD_LOG)
                 {
@@ -8061,7 +7863,7 @@ public final class Loader
     }
 
     /** One permanently-zero word, shared by every static a late compile could not resolve. */
-    private static long unresolvedStaticCell()
+    static long unresolvedStaticCell()
     {
         if (unresStaticCell == 0L)
         {
@@ -8158,7 +7960,7 @@ public final class Loader
      * ONCE per field: the same unresolved static is re-reported on every method that reads it (88 lines for
      * two fields on one boot), and a log nobody reads is the state this bug lived in.
      */
-    private static void reportUnresolvedStatic(int idx)
+    static void reportUnresolvedStatic(int idx)
     {
         long key = gbase.plus(refClassNameOff(idx) + (long) mrefNameOff(idx)).toLong();
         if (unresStaticSeen == null)
@@ -8328,17 +8130,17 @@ public final class Loader
     private static final int MAXM = 512;
     static long[] mCode;      // each reachable method's bytecode address
     private static int[] mLen;        // ... and its length
-    private static long[] mBuf;       // ... and the buffer assigned to it
+    static long[] mBuf;       // ... and the buffer assigned to it
     private static long[] mEnd;       // ... and the END of what emitMethod actually wrote there (0 = nothing,
                                       //     either deferred -- the stub publishes itself -- or not emitted)
-    private static long[] mLine;      // ... its line table addr (built in emitMethod; registerAll copies -> rgLine)
-    private static AddressArray mSrc; // ... its class's SourceFile filename Utf8 addr (-> rgSrc)
+    static long[] mLine;      // ... its line table addr (built in emitMethod; registerAll copies -> rgLine)
+    static AddressArray mSrc; // ... its class's SourceFile filename Utf8 addr (-> rgSrc)
     private static int[] mLocals;     // ... its max_locals
     private static int[] mDescOff;    // ... its descriptor Utf8 offset (for the shared core's prologue)
     private static int[] mStatic;     // ... 1 if static
     private static int[] mSync;       // ... 1 if ACC_SYNCHRONIZED
     private static int[] mDefer;      // M8 defer: 1 if this method's compile is deferred to first call (gated)
-    private static int mCount;
+    static int mCount;
 
     /** The on-metal symbol seam: resolves the shared Baseline core's references to addresses. */
     private static final MetalSymbols METAL_SYMBOLS = new MetalSymbols();
@@ -8480,7 +8282,7 @@ public final class Loader
     // inflater paid a non-inlined call per BIT and it was worth 16.2x). `PARSE_CTX_WATCH` is `static final`,
     // so javac's conditional compilation (JLS 14.21) emits NOTHING for a guarded body and RTA never marks
     // this method reachable: an ARMED boot pays for it and a shipped one cannot.
-    private static final boolean PARSE_CTX_WATCH = false;
+    static final boolean PARSE_CTX_WATCH = false;
     private static int parseCtxNullSaid;
     private static int parseCtxUnlockedSaid;
     private static int parseCtxCollideSaid;
@@ -8494,7 +8296,7 @@ public final class Loader
      * Fieldref name read in the static-resolution path. 2 and 5 are the two that reach
      * {@code ClassReader.refNameOff}, which is the frame the failing arm named.
      */
-    private static void checkParseCtxOwned(int where)
+    static void checkParseCtxOwned(int where)
     {
         // THE NULL COMES FIRST, AHEAD OF THE OWNERSHIP RETURN, because a null view is the recorded CRASH
         // rather than a hazard: the caller is about to hand it to ClassReader and take the NPE inside `u1`.
@@ -8845,7 +8647,7 @@ public final class Loader
      * CYCLE (real java.base is a cyclic graph — e.g. {@code Integer} <-> {@code Math}); break it by
      * force-loading the first pending blob. A class's superclass/interfaces are still laid out first by
      * the dependency order; a still-unloaded cross-class METHOD reference in the force-loaded class simply
-     * compiles to an unresolved call ({@link #globalBuf} -> 0), and later blobs resolve back to it.
+     * compiles to an unresolved call ({@link MethodRegistry#globalBuf} -> 0), and later blobs resolve back to it.
      */
     /**
      * A demand-load BATCH is one critical section, and the lock lives HERE rather than at each caller.
@@ -9102,9 +8904,9 @@ public final class Loader
         int lcOk = 0;
         int lcPend = 0;
         int lc = 0;
-        while (lc < clCount)
+        while (lc < ClassRegistry.clCount)
         {
-            if (clTab[lc].state >= RVMClass.ST_INITIALIZED)
+            if (ClassRegistry.clTab[lc].state >= RVMClass.ST_INITIALIZED)
             {
                 // ALREADY INITIALIZED: nothing below can change it -- `state` only advances, and the branches
                 // that leave a class short of INITIALIZED only bump the LOAD_LOG counters. What it cost was
@@ -9115,26 +8917,26 @@ public final class Loader
                 lc += 1;
                 continue;
             }
-            if (clTab[lc].state >= RVMClass.ST_INSTANTIATED
-                    && lazyClinitGated(clTab[lc].base, clTab[lc].nameOff) && clinitPendingFor(lc))
+            if (ClassRegistry.clTab[lc].state >= RVMClass.ST_INSTANTIATED
+                    && lazyClinitGated(ClassRegistry.clTab[lc].base, ClassRegistry.clTab[lc].nameOff) && clinitPendingFor(lc))
             {
                 lcPend += 1;
             }
-            else if (clTab[lc].absentSuperOff != 0)
+            else if (ClassRegistry.clTab[lc].absentSuperOff != 0)
             {
                 lcPend += 1;                            // never INITIALIZED: its guards must keep reaching
             }                                           //   ensureClinit, which throws (RVMClass.absentSuperOff)
-            else if (clTab[lc].state >= RVMClass.ST_INSTANTIATED)
+            else if (ClassRegistry.clTab[lc].state >= RVMClass.ST_INSTANTIATED)
             {
-                clTab[lc].state = RVMClass.ST_INITIALIZED;
+                ClassRegistry.clTab[lc].state = RVMClass.ST_INITIALIZED;
                 lcOk += 1;
             }
             else
             {
                 Uart.write(Magic.bytes("  lifecycle DIFF "));
-                writeName(clTab[lc].base.plus(clTab[lc].nameOff + 2), u2(clTab[lc].base.plus(clTab[lc].nameOff)));
+                writeName(ClassRegistry.clTab[lc].base.plus(ClassRegistry.clTab[lc].nameOff + 2), u2(ClassRegistry.clTab[lc].base.plus(ClassRegistry.clTab[lc].nameOff)));
                 Uart.write(Magic.bytes(" state="));
-                VM.printDec(clTab[lc].state);
+                VM.printDec(ClassRegistry.clTab[lc].state);
                 Uart.putc(0x0A);
             }
             lc += 1;
@@ -9489,7 +9291,7 @@ public final class Loader
         Indy.findBootstrapMethods();                         // locate BootstrapMethods (for invokedynamic), if any
         if (gIsInterface)
         {
-            if (clCount >= MAXCLASS) { capHalt(Magic.bytes("MAXCLASS-iface"), clCount); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
+            if (ClassRegistry.clCount >= ClassRegistry.MAXCLASS) { capHalt(Magic.bytes("ClassRegistry.MAXCLASS-iface"), ClassRegistry.clCount); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
             InterfaceInvocation.registerInterface();                        // give its methods global itable indices
             // Give the interface a Type and register it, so implementors' itable
             // directories can key on it and the core's interfaceType resolves (M5.4.e).
@@ -9529,34 +9331,34 @@ public final class Loader
                     VM.ifaceIdNext = nid + 1L;
                 }
             }
-            clTab[clCount] = new RVMClass();
-            clTab[clCount].state = RVMClass.ST_LOADED;
-            clTab[clCount].base = gbase;
-            clTab[clCount].nameOff = gThisNameOff;
-            clTab[clCount].nameHash = Utf8.utf8Hash(gbase, gThisNameOff);   // folded once; see RVMClass.nameHash
-            clTab[clCount].tib = Address.zero();
-            clTab[clCount].type = gType;
-            clTab[clCount].fieldCount = 0;
-            clTab[clCount].vtCount = 0;
-            clTab[clCount].statics = gStatics;              // interface constants block (reused by its phase-B bodies)
-            clTab[clCount].vtStart = VtableLayout.vtCount;               // no vtable entries appended for an interface
-            clTab[clCount].isIface = true;
-            clTab[clCount].ifmStart = gIfmStart;            // the flattened per-interface method run
-            clTab[clCount].ifmCount = gIfmCount;            //   = this interface's itable slot numbering
-            clTab[clCount].superNameOff = gSuperNameOff;
-            clTab[clCount].absentSuperOff = gAbsentSuperOff;          // an interface extending one that cannot load
-            clTab[clCount].superReg = classRegByName(gSuperNameOff);   // an interface's super is Object (-1); kept for symmetry
+            ClassRegistry.clTab[ClassRegistry.clCount] = new RVMClass();
+            ClassRegistry.clTab[ClassRegistry.clCount].state = RVMClass.ST_LOADED;
+            ClassRegistry.clTab[ClassRegistry.clCount].base = gbase;
+            ClassRegistry.clTab[ClassRegistry.clCount].nameOff = gThisNameOff;
+            ClassRegistry.clTab[ClassRegistry.clCount].nameHash = Utf8.utf8Hash(gbase, gThisNameOff);   // folded once; see RVMClass.nameHash
+            ClassRegistry.clTab[ClassRegistry.clCount].tib = Address.zero();
+            ClassRegistry.clTab[ClassRegistry.clCount].type = gType;
+            ClassRegistry.clTab[ClassRegistry.clCount].fieldCount = 0;
+            ClassRegistry.clTab[ClassRegistry.clCount].vtCount = 0;
+            ClassRegistry.clTab[ClassRegistry.clCount].statics = gStatics;              // interface constants block (reused by its phase-B bodies)
+            ClassRegistry.clTab[ClassRegistry.clCount].vtStart = VtableLayout.vtCount;               // no vtable entries appended for an interface
+            ClassRegistry.clTab[ClassRegistry.clCount].isIface = true;
+            ClassRegistry.clTab[ClassRegistry.clCount].ifmStart = gIfmStart;            // the flattened per-interface method run
+            ClassRegistry.clTab[ClassRegistry.clCount].ifmCount = gIfmCount;            //   = this interface's itable slot numbering
+            ClassRegistry.clTab[ClassRegistry.clCount].superNameOff = gSuperNameOff;
+            ClassRegistry.clTab[ClassRegistry.clCount].absentSuperOff = gAbsentSuperOff;          // an interface extending one that cannot load
+            ClassRegistry.clTab[ClassRegistry.clCount].superReg = ClassRegistry.classRegByName(gSuperNameOff);   // an interface's super is Object (-1); kept for symmetry
             InterfaceInvocation.captureDirectIfaces();                      // an interface's extended interfaces (List extends Iterable)
-            clTab[clCount].modifiers = gClassModifiers;     // cached Class.getModifiers() (captured post-cp, no re-parse)
-            InterfaceInvocation.checkIfParity(clCount);                     // M8 itables: writer/loader slot numbering must agree
-            clTab[clCount].state = RVMClass.ST_RESOLVED;    // lifecycle: structure complete
-            clCount += 1;
+            ClassRegistry.clTab[ClassRegistry.clCount].modifiers = gClassModifiers;     // cached Class.getModifiers() (captured post-cp, no re-parse)
+            InterfaceInvocation.checkIfParity(ClassRegistry.clCount);                     // M8 itables: writer/loader slot numbering must agree
+            ClassRegistry.clTab[ClassRegistry.clCount].state = RVMClass.ST_RESOLVED;    // lifecycle: structure complete
+            ClassRegistry.clCount += 1;
             // AN INTERFACE'S CONSTANTS NEED CELLS TOO. Interface fields are implicitly public static final,
             // and this branch never reaches registerClassStructure -- so until now no interface constant was
             // ever entered in sgTab, and every cross-class `getstatic` on one resolved to nothing. The report
             // said so in as many words: "class IS REGISTERED but has no static cell (registration gap)", for
             // org/junit/platform/launcher/core/LauncherConfig.DEFAULT.
-            registerStaticFields();
+            Statics.registerStaticFields();
             return;                                     // bodies (default/static methods) compiled in phase B
         }
         VtableLayout.parseVtable(bytes);                             // flatten against the superclass: SLOT numbering (bufs still 0)
@@ -9564,8 +9366,8 @@ public final class Loader
         adoptStatics();                                 // M8 statics unification: ONE static block per baked class
         TibBuilder.allocTib();                                     // allocate Type + empty TIB at a stable address (gTib)
         registerClassStructure();                       // class + fields + statics + vtable STRUCTURE (bufs 0)
-        clTab[clCount - 1].modifiers = gClassModifiers;     // cached Class.getModifiers() (captured post-cp, no re-parse)
-        clTab[clCount - 1].state = RVMClass.ST_RESOLVED;    // lifecycle: structure complete
+        ClassRegistry.clTab[ClassRegistry.clCount - 1].modifiers = gClassModifiers;     // cached Class.getModifiers() (captured post-cp, no re-parse)
+        ClassRegistry.clTab[ClassRegistry.clCount - 1].state = RVMClass.ST_RESOLVED;    // lifecycle: structure complete
     }
 
     /**
@@ -9583,12 +9385,12 @@ public final class Loader
         parseFields();                                  // re-derive layout (gImplIf*, gMethodsStart); gStatics is throwaway
         pFieldsT += Magic.readCNTPCT_EL0() - lbA;
         lbParseT += Magic.readCNTPCT_EL0() - lb0;
-        int reg = classRegByName(gThisNameOff);
-        gStatics = clTab[reg].statics;                      // REUSE the phase-A static block (cross-class getstatic keys on it)
+        int reg = ClassRegistry.classRegByName(gThisNameOff);
+        gStatics = ClassRegistry.clTab[reg].statics;                      // REUSE the phase-A static block (cross-class getstatic keys on it)
         Indy.findBootstrapMethods();
-        if (clTab[reg].isIface)
+        if (ClassRegistry.clTab[reg].isIface)
         {
-            gType = clTab[reg].type;                        // restore the interface's phase-A Type so a default method's
+            gType = ClassRegistry.clTab[reg].type;                        // restore the interface's phase-A Type so a default method's
                                                         // self-reference (typeOfClass -> gType, e.g. Map.putIfAbsent
                                                         // calling this.get()) bakes the REAL interface Type -- else
                                                         // it bakes a stale gType and the implementor's itable-dir
@@ -9600,8 +9402,8 @@ public final class Loader
             // CAPTURES the body -- ensureClinit compiles and runs it on the first active use.
             runClinit(bytes);
             compileClass(bytes);                        // interface CONCRETE methods (static like List.of + defaults)
-            registerAll();
-            clTab[reg].state = RVMClass.ST_INSTANTIATED;    // lifecycle: bodies done
+            MethodRegistry.registerAll();
+            ClassRegistry.clTab[reg].state = RVMClass.ST_INSTANTIATED;    // lifecycle: bodies done
             return;
         }
         long lb1 = Magic.readCNTPCT_EL0();
@@ -9609,25 +9411,25 @@ public final class Loader
         long lbB = Magic.readCNTPCT_EL0();
         pVtableT += lbB - lb1;
         lbParseT += lbB - lb1;
-        gType = clTab[reg].type;                            // restore this class's Type + TIB (allocated in phase A)
-        gTib = clTab[reg].tib;
+        gType = ClassRegistry.clTab[reg].type;                            // restore this class's Type + TIB (allocated in phase A)
+        gTib = ClassRegistry.clTab[reg].tib;
         boolean reuseWas = compileReuseTib;              // a nested load resets it: restore, never clear
         compileReuseTib = true;                         // keep runClinit's compile() from reallocating gTib (would
         long lb2 = Magic.readCNTPCT_EL0();
         runClinit(bytes);                               //   leave compileClass filling a throwaway TIB, not clTab[reg].tib)
         lbClinitT += Magic.readCNTPCT_EL0() - lb2;
         compileReuseTib = reuseWas;
-        gType = clTab[reg].type;                            // (runClinit's compile leaves gType/gTib alone now, but be safe)
-        gTib = clTab[reg].tib;
+        gType = ClassRegistry.clTab[reg].type;                            // (runClinit's compile leaves gType/gTib alone now, but be safe)
+        gTib = ClassRegistry.clTab[reg].tib;
         provideKnownStatics();                          // seed static tables a skipped <clinit> would have built
         long lb3 = Magic.readCNTPCT_EL0();
         compileClass(bytes);                            // compile all methods; fillTib fills the (phase-A-allocated) TIB
         long lb4 = Magic.readCNTPCT_EL0();
         lbCompileT += lb4 - lb3;
-        registerAll();                                  // methods -> globalBuf
+        MethodRegistry.registerAll();                                  // methods -> globalBuf
         VtableLayout.fillClassVtBuf(reg);                            // fill this class's registered vtable buffers (for subclasses)
         lbRegT += Magic.readCNTPCT_EL0() - lb4;
-        clTab[reg].state = RVMClass.ST_INSTANTIATED;    // lifecycle: bodies + TIB + itables done
+        ClassRegistry.clTab[reg].state = RVMClass.ST_INSTANTIATED;    // lifecycle: bodies + TIB + itables done
     }
 
     /**
@@ -9641,7 +9443,7 @@ public final class Loader
     {
         if (Utf8.utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/String")))
         {
-            long cs = staticSlotByName(Magic.bytes("COMPACT_STRINGS"));
+            long cs = Statics.staticSlotByName(Magic.bytes("COMPACT_STRINGS"));
             if (cs != 0L)
             {
                 Address.fromLong(cs).store(1L);                  // LATIN1 world: stock getstatic COMPACT_STRINGS -> true
@@ -9653,7 +9455,7 @@ public final class Loader
             // Its <clinit> sets the UTF-16 byte-order shifts via Unsafe.isBigEndian (unrunnable, skipped),
             // leaving BOTH shifts 0 -- putChar then stores the LOW byte twice and a char > 0xFF truncates
             // (the euro U+20AC read back as 0xAC). AArch64 runs little-endian: HI=0 (default), LO=8.
-            long lo = staticSlotByName(Magic.bytes("LO_BYTE_SHIFT"));
+            long lo = Statics.staticSlotByName(Magic.bytes("LO_BYTE_SHIFT"));
             if (lo != 0L)
             {
                 Address.fromLong(lo).store(8L);
@@ -9664,7 +9466,7 @@ public final class Loader
         {
             return;
         }
-        long slot = staticSlotByName(Magic.bytes("digits"));
+        long slot = Statics.staticSlotByName(Magic.bytes("digits"));
         if (slot == 0L)
         {
             return;
@@ -9677,66 +9479,6 @@ public final class Loader
             i += 1;
         }
         Address.fromLong(slot).store(tab);
-    }
-
-    /** Address of the current class's static field named {@code name}, or 0 if it has none. */
-    private static long staticSlotByName(byte[] name)
-    {
-        int s = 0;
-        while (s < gsfCount)
-        {
-            if (Utf8.utf8IsAtBase(gbase, gsfName[s], name))
-            {
-                return gStatics.plus(s * 8L).toLong();
-            }
-            s += 1;
-        }
-        return 0L;
-    }
-
-    /** Slot address of a static field {@code cls.name} from the global registry (any loaded class), or 0. */
-    /**
-     * Absolute address of the static {@code fnBase/fnLen} declared by the class whose Type is
-     * {@code typeAddr}, or 0. The Type-keyed sibling of {@link #staticSlotOf} (which keys on a name pair),
-     * for {@code Unsafe.staticFieldOffset(Field)}, whose caller holds a Class rather than a name.
-     */
-    static long staticSlotOfType(Address typeAddr, Address fnBase, int fnLen)
-    {
-        int ci = 0;
-        while (ci < clCount)
-        {
-            if (clTab[ci].type.EQ(typeAddr))
-            {
-                int i = 0;
-                while (i < sgCount)
-                {
-                    if (utf8EqAt(sgTab[i].base, sgTab[i].classOff, clTab[ci].base, clTab[ci].nameOff)
-                            && Utf8.rawEqUtf8(fnBase, fnLen, sgTab[i].base, sgTab[i].nameOff))
-                    {
-                        return sgTab[i].addr;
-                    }
-                    i += 1;
-                }
-            }
-            ci += 1;
-        }
-        return 0L;
-    }
-
-    static long staticSlotOf(byte[] cls, byte[] name)
-    {
-        sgScanCalls += 1;
-        int i = 0;
-        while (i < sgCount)
-        {
-            sgScanSteps += 1;
-            if (Utf8.utf8IsAtBase(sgTab[i].base, sgTab[i].classOff, cls) && Utf8.utf8IsAtBase(sgTab[i].base, sgTab[i].nameOff, name))
-            {
-                return sgTab[i].addr;
-            }
-            i += 1;
-        }
-        return 0L;
     }
 
 
@@ -9822,7 +9564,7 @@ public final class Loader
         }
         if (buf != 0L)
         {
-            int reg = classRegByNameBytes(cls);
+            int reg = ClassRegistry.classRegByNameBytes(cls);
             if (reg >= 0)
             {
                 ensureClinit(reg);
@@ -9866,12 +9608,12 @@ public final class Loader
         // because it was ever observed to repair anything.
         if (buf != 0L)
         {
-            int reg = classRegByNameBytes(cls);
+            int reg = ClassRegistry.classRegByNameBytes(cls);
             if (reg >= 0)
             {
                 ensureClinit(reg);
             }
-            int dec = classRegByNameBytes(helperOf(cls));
+            int dec = ClassRegistry.classRegByNameBytes(helperOf(cls));
             if (dec >= 0)
             {
                 ensureClinit(dec);
@@ -9890,23 +9632,6 @@ public final class Loader
         return Magic.bytes("jdk/internal/math/FloatToDecimal");
     }
 
-
-    /** Byte offset of instance field {@code fname} declared by registered class {@code classIdx}, or -1.
-     *  The byte[]-name sibling of {@link MethodHandles#vhFieldOffset} (which keys on a raw pointer + a TIB). */
-    static long instanceFieldOffset(int classIdx, byte[] fname)
-    {
-        int j = 0;
-        while (j < fldCount)
-        {
-            if (utf8EqAt(clTab[classIdx].base, clTab[classIdx].nameOff, fldTab[j].base, fldTab[j].classOff)
-                    && Utf8.utf8IsAtBase(fldTab[j].base, fldTab[j].nameOff, fname))
-            {
-                return 16L + fldTab[j].slot * 8L;
-            }
-            j += 1;
-        }
-        return -1L;
-    }
 
     /** Bumped by every {@link #resetLoader}: objects built before it belong to a registry that is gone. */
     static int loaderGen;
@@ -10307,7 +10032,7 @@ public final class Loader
         lazyEnsureTables();
         if (lzN >= MAXLAZY) { capHalt(Magic.bytes("MAXLAZY-defer"), lzN); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
         int idx = lzN;
-        int reg = classRegByName(gThisNameOff);
+        int reg = ClassRegistry.classRegByName(gThisNameOff);
         int pd = findPdByName(gbase, gThisNameOff);
         lzTab[idx] = new LazyMethod();
         lzTab[idx].blob = gbase;
@@ -10350,155 +10075,8 @@ public final class Loader
         return 0L;                                       // not one of this class's compiled methods
     }
 
-    /** Index into m*[] of the method whose bytecode is at {@code code}, or -1. */
-    private static int methodIndexOf(long code)
-    {
-        int i = 0;
-        while (i < mCount)
-        {
-            if (mCode[i] == code)
-            {
-                return i;
-            }
-            i += 1;
-        }
-        return -1;
-    }
-
-
-    // ----- method-registry hash index ---------------------------------------
-    /**
-     * Name-keyed hash index over the method registry, so {@link #globalBufByRef} is a PROBE rather than a
-     * linear scan of every registered method.
-     *
-     * <p>MEASURED, not guessed: {@code patchRelocs} re-walks every reloc site at the end of every batch, and
-     * each site called {@code globalBufByRef}, which compared three Utf8 strings against all {@code rgCount}
-     * entries. Both factors grow with every class loaded, so the cost is quadratic in the load -- on a
-     * launcher boot it went 0.49s -> 2.10s per batch between batches 25 and 100, by which point `patch` was
-     * 130s of a 445s load for 1595 classes.
-     *
-     * <p>Keyed on the method NAME alone, and chained: names repeat ({@code <init>}, {@code run}, {@code get}),
-     * so a chain walk still compares class+name+descriptor exactly as the scan did. The predicate is
-     * UNCHANGED -- this only narrows what it is applied to, so a hit is the same entry the scan would have
-     * found and a miss still falls through to the super-chain and stub tiers below.
-     *
-     * <p>Same fix, and the same reasoning, as the name index that took {@code pull} from 6,664ms to 1,539ms
-     * in the demand-load arc.
-     */
-    static final int RGTAB = 32768;              // power of two > MAXREG; chained, so a full table only lengthens chains
-    static int[] rgBucket;                       // name hash -> first registry index, -1 when empty
-    static int[] rgNext;                         // registry index -> next entry with the same name hash
-    private static int rgIndexed;                        // entries already linked in (the registry only grows)
-
-    /** Link every registry entry added since the last call into the name index. */
-    static void buildRegIndex()
-    {
-        if (rgBucket == null)
-        {
-            rgBucket = new int[RGTAB];
-            rgNext = new int[MAXREG];
-            int i = 0;
-            while (i < RGTAB)
-            {
-                rgBucket[i] = -1;
-                i += 1;
-            }
-            rgIndexed = 0;
-        }
-        // INCREMENTAL: the registry only ever grows and an entry's name never changes, so already-indexed
-        // entries stay valid. Rebuilding from 0 each batch would re-introduce the linear pass this exists to
-        // remove. resetLoader zeroes rgCount and rgIndexed together (see there).
-        while (rgIndexed < rgCount)
-        {
-            int h = Utf8.utf8Hash2(rgTab[rgIndexed].base, rgTab[rgIndexed].classOff,
-                              rgTab[rgIndexed].base, rgTab[rgIndexed].nameOff) & (RGTAB - 1);
-            rgNext[rgIndexed] = rgBucket[h];
-            rgBucket[h] = rgIndexed;
-            rgIndexed += 1;
-        }
-    }
-
-    // ----- cross-class linking (global method registry) --------------------
-    /** Register a compiled method so other classes can link to it by class+name+descriptor. */
-    private static void register(Address base, int classOff, int nameOff, int descOff, long buf, long lineTab, Address srcAddr, int access)
-    {
-        if (rgCount >= MAXREG) { capHalt(Magic.bytes("MAXREG-method"), rgCount); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
-        rgTab[rgCount] = new RVMMethod();
-        rgTab[rgCount].base = base;
-        rgTab[rgCount].classOff = classOff;
-        rgTab[rgCount].nameOff = nameOff;
-        rgTab[rgCount].descOff = descOff;
-        rgTab[rgCount].buf = buf;
-        rgTab[rgCount].line = lineTab;
-        rgTab[rgCount].src = srcAddr;
-        rgTab[rgCount].access = access;
-        rgCount += 1;
-    }
-
-    /** Register every compiled method of the current class (walk its methods table). */
-    static void registerAll()
-    {
-        Address p = gMethodsStart;
-        int mcount = u2(p);
-        p = p.plus(2);
-        int m = 0;
-        while (m < mcount)
-        {
-            int attrs = u2(p.plus(6));
-            long code = findCode(gbase, p.plus(8), attrs);
-            if (code != 0L)
-            {
-                int mi = methodIndexOf(code);
-                if (mi >= 0)
-                {
-                    register(gbase, gThisNameOff, gcp[u2(p.plus(2))], gcp[u2(p.plus(4))], mBuf[mi], mLine[mi], mSrc.get(mi), u2(p));
-                }
-            }
-            p = skipAttributes(p.plus(8), attrs);
-            m += 1;
-        }
-    }
-
-    /** Buffer of the method named by Methodref {@code idx} in another loaded class (registry lookup). */
-    private static long globalBuf(int idx)
-    {
-        int classOff = refClassNameOff(idx);
-        int nameOff = mrefNameOff(idx);
-        int descOff = mrefDescOff(idx);
-        // The registry through its class+name index (rgBucket), as bufBySigU: the scan answered the LOWEST
-        // matching index, and those chains are newest-first, so walk the whole chain and keep the oldest hit.
-        // The scan was 4.0% of the busy core on InvokeGapProbe after #450 (qprof-tally.pl caller view).
-        buildRegIndex();
-        int best = -1;
-        int i = rgBucket[Utf8.utf8Hash2(gbase, classOff, gbase, nameOff) & (RGTAB - 1)];
-        while (i >= 0)
-        {
-            if (utf8EqAt(gbase, classOff, rgTab[i].base, rgTab[i].classOff)
-                    && utf8EqAt(gbase, nameOff, rgTab[i].base, rgTab[i].nameOff)
-                    && utf8EqAt(gbase, descOff, rgTab[i].base, rgTab[i].descOff))
-            {
-                best = i;
-            }
-            i = rgNext[i];
-        }
-        if (best >= 0)
-        {
-            return rgTab[best].buf;
-        }
-        gbMiss += 1;
-        if (reportUnresolved != 0)                      // probe mode: name the unembedded reference (surface)
-        {
-            Uart.write(Magic.bytes("    ? "));
-            writeName(gbase.plus(classOff + 2), u2(gbase.plus(classOff)));
-            Uart.putc(0x2E);                            // '.'
-            writeName(gbase.plus(nameOff + 2), u2(gbase.plus(nameOff)));
-            Uart.putc(0x0A);
-        }
-        return 0L;                                      // unresolved: an unloaded class or a native
-    }
 
     static int reportUnresolved;                        // when != 0, globalBuf prints each unresolved reference
-    static int gbMiss;                                  // count of unresolved cross-class calls (debug)
 
     /** Buffer to BL for a static/special call: this class's own method, else the registry. */
     static long resolveCallBuf(int idx)
@@ -10513,7 +10091,7 @@ public final class Loader
             // else fall through: a same-class NATIVE (no Code attr -> calleeCodeOf 0) resolves to its VM helper;
             // an as-yet-uncompiled same-class method stays 0 here and is patched later by globalBufByRef.
         }
-        long g = globalBuf(idx);                        // cross class: another loaded class
+        long g = MethodRegistry.globalBuf(idx);                        // cross class: another loaded class
         return g != 0L ? g : nativeBuf(idx);            // else a provided java.base native, or 0
     }
 
@@ -10986,16 +10564,16 @@ public final class Loader
     /** After a FULL walk: file every site on the non-memo list or its registry entry's list. */
     private static void rebuildPatchLists()
     {
-        if (pcRegHead.length != MAXREG)
+        if (pcRegHead.length != MethodRegistry.MAXREG)
         {
-            pcRegHead = new int[MAXREG];
+            pcRegHead = new int[MethodRegistry.MAXREG];
             pcRegNext = new int[MAXRELOC];
             pcNm = new int[MAXRELOC];
-            pcDirty = new int[MAXREG];
-            pcIsDirty = new boolean[MAXREG];
+            pcDirty = new int[MethodRegistry.MAXREG];
+            pcIsDirty = new boolean[MethodRegistry.MAXREG];
         }
         int r = 0;
-        while (r < MAXREG)
+        while (r < MethodRegistry.MAXREG)
         {
             pcRegHead[r] = -1;
             pcIsDirty[r] = false;
@@ -11117,7 +10695,7 @@ public final class Loader
         if (rcReg[i] >= 0)
         {
             pcMemo += 1;
-            target = rgTab[rcReg[i]].buf;
+            target = MethodRegistry.rgTab[rcReg[i]].buf;
         }
         else if (gateStands(i))
         {
@@ -11283,7 +10861,7 @@ public final class Loader
         {
             return false;
         }
-        buildRegIndex();
+        MethodRegistry.buildRegIndex();
         buildDlIndex();
         long dl = rcGateDl[i];
         if (dlBucket[(int) (dl >>> 32)] != (int) dl)
@@ -11296,7 +10874,7 @@ public final class Loader
         while (k < n)
         {
             long rg = rcGateRg[b + k];
-            if (rgBucket[(int) (rg >>> 32)] != (int) rg)
+            if (MethodRegistry.rgBucket[(int) (rg >>> 32)] != (int) rg)
             {
                 return false;
             }
@@ -11332,7 +10910,7 @@ public final class Loader
         {
             return false;
         }
-        gwRg[gwRgN] = ((long) h << 32) | (rgBucket[h] & 0xFFFFFFFFL);
+        gwRg[gwRgN] = ((long) h << 32) | (MethodRegistry.rgBucket[h] & 0xFFFFFFFFL);
         gwRgN += 1;
         return true;
     }
@@ -11357,31 +10935,31 @@ public final class Loader
     /** Method buffer for a call ref given as blob base + Utf8 offsets (patchRelocs re-resolution), or 0. */
     private static long globalBufByRef(Address refBase, int classOff, int nameOff, int descOff)
     {
-        buildRegIndex();                                 // incremental: only entries added since last time
+        MethodRegistry.buildRegIndex();                                 // incremental: only entries added since last time
         rgHitIdx = -1;
         gwOk = false;                                    // see rcGate: only the tiers below that set it stand
         gwRgN = 0;
         // CLASS+NAME keys the index. Tier 2 wants the SAME name under an ANCESTOR class, so it re-hashes per
         // level rather than sharing this bucket -- which is the point: sharing a name-only bucket is what made
         // both tiers walk a chain one entry long per class declaring that name.
-        int h = Utf8.utf8Hash2(refBase, classOff, refBase, nameOff) & (RGTAB - 1);
+        int h = Utf8.utf8Hash2(refBase, classOff, refBase, nameOff) & (MethodRegistry.RGTAB - 1);
         boolean fits = gateRg(h);
-        int i = rgBucket[h];
+        int i = MethodRegistry.rgBucket[h];
         while (i >= 0)
         {
             t1Steps += 1;
             // The SAME predicate the linear scan used -- the index only narrows which entries it is applied
             // to. Name-keyed, so the chain still has to check class and descriptor: `<init>`/`run`/`get`
             // repeat across the registry constantly.
-            if (utf8EqAt(refBase, classOff, rgTab[i].base, rgTab[i].classOff)
-                    && utf8EqAt(refBase, nameOff, rgTab[i].base, rgTab[i].nameOff)
-                    && utf8EqAt(refBase, descOff, rgTab[i].base, rgTab[i].descOff))
+            if (utf8EqAt(refBase, classOff, MethodRegistry.rgTab[i].base, MethodRegistry.rgTab[i].classOff)
+                    && utf8EqAt(refBase, nameOff, MethodRegistry.rgTab[i].base, MethodRegistry.rgTab[i].nameOff)
+                    && utf8EqAt(refBase, descOff, MethodRegistry.rgTab[i].base, MethodRegistry.rgTab[i].descOff))
             {
                 rgHitIdx = i;                            // memoisable: a single registry entry answered
-                bufResolveLog(refBase, classOff, nameOff, descOff, rgTab[i].buf, 1);
-                return rgTab[i].buf;
+                bufResolveLog(refBase, classOff, nameOff, descOff, MethodRegistry.rgTab[i].buf, 1);
+                return MethodRegistry.rgTab[i].buf;
             }
-            i = rgNext[i];
+            i = MethodRegistry.rgNext[i];
         }
         // Class-qualified miss: an INHERITED static/special method (invokestatic/invokespecial to a method the ref
         // names via a subclass but that is declared in a SUPERclass, e.g. `ArrayList.subListRangeCheck` really
@@ -11431,20 +11009,20 @@ public final class Loader
             // every batch: MEASURED at 98% of the whole call-site loop (lookT 11,949ms of callT 12,169ms),
             // which is itself ~95% of `patch`. The wanted name is the same one tier 1 hashed, so the bucket
             // is reused and only the CLASS comparison differs -- the predicate is otherwise identical.
-            int hs = Utf8.utf8Hash2(pdBase.get(spd), pdNameOff[spd], refBase, nameOff) & (RGTAB - 1);
+            int hs = Utf8.utf8Hash2(pdBase.get(spd), pdNameOff[spd], refBase, nameOff) & (MethodRegistry.RGTAB - 1);
             fits = fits && gateRg(hs);
-            int j = rgBucket[hs];
+            int j = MethodRegistry.rgBucket[hs];
             while (j >= 0)
             {
                 t2Steps += 1;
-                if (utf8EqAt(pdBase.get(spd), pdNameOff[spd], rgTab[j].base, rgTab[j].classOff)
-                        && utf8EqAt(refBase, nameOff, rgTab[j].base, rgTab[j].nameOff)
-                        && utf8EqAt(refBase, descOff, rgTab[j].base, rgTab[j].descOff))
+                if (utf8EqAt(pdBase.get(spd), pdNameOff[spd], MethodRegistry.rgTab[j].base, MethodRegistry.rgTab[j].classOff)
+                        && utf8EqAt(refBase, nameOff, MethodRegistry.rgTab[j].base, MethodRegistry.rgTab[j].nameOff)
+                        && utf8EqAt(refBase, descOff, MethodRegistry.rgTab[j].base, MethodRegistry.rgTab[j].descOff))
                 {
-                    bufResolveLog(refBase, classOff, nameOff, descOff, rgTab[j].buf, 2);
-                    return rgTab[j].buf;
+                    bufResolveLog(refBase, classOff, nameOff, descOff, MethodRegistry.rgTab[j].buf, 2);
+                    return MethodRegistry.rgTab[j].buf;
                 }
-                j = rgNext[j];
+                j = MethodRegistry.rgNext[j];
             }
             int sdec = blobDeclares(pdBase.get(spd), refBase, nameOff, refBase, descOff);
             if (sdec == 1)
@@ -11633,117 +11211,15 @@ public final class Loader
         return cell == 0L ? 0L : Address.fromLong(cell).loadLong();
     }
 
-    /**
-     * Class+name hash index over the static registry, so a static-field lookup is a PROBE rather than a
-     * linear walk of all {@code sgCount} entries comparing TWO Utf8 strings against each.
-     *
-     * <p>MEASURED FIRST, and the counters said two things reading had not. `statT` was 463.914ms cumulative
-     * at batch 209 -- the third-largest item in a launcher boot and the one top-level split never looked
-     * inside -- and on the demo suite it is **136 sites, every one of them a MISS**: `ps:n=136 miss=136
-     * tab=280`, i.e. every call walks the whole table to answer "not here", and {@code patchRelocs} asks
-     * again on the next batch because a class loaded later must still resolve. That is why the unres arm's
-     * memo does not transfer here: the negative answer is NOT immutable. What an index does instead is make
-     * the negative CHEAP -- a probe that lands on an empty bucket, the shape the imap refill already took
-     * ({@code chain=0k}).
-     *
-     * <p>Sound by construction rather than by a claim about when work may be skipped: {@code sgTab[sgCount]}
-     * is written and {@code sgCount} incremented immediately after, at the ONE site that appends
-     * ({@link #registerStaticFields}) -- no entry is ever re-pointed, so an append-only index cannot go
-     * stale. Incremental like {@code dlBucket}.
-     *
-     * <p>THE LOWEST MATCHING INDEX STILL WINS. The scan returned the first match, head-insertion makes the
-     * chain descending, so the chain is searched for the MINIMUM rather than stopped at the first hit -- the
-     * same care the Type index and {@code findPdByName}'s index needed. Two entries can share a class+name
-     * only if a class reached {@code registerStaticFields} twice, and silently preferring the later cell
-     * would be a static read binding to different memory than the {@code <clinit>} wrote through.
-     *
-     * <p>The watermark resets BESIDE the table in {@code resetLoader} as well as being checked here: a
-     * watermark that outlives the table it indexes under-marks SILENTLY, and {@code sgCount} returning to
-     * the same value after a reset would make the "went backwards" check alone miss it.
-     */
-    // 8192, NOT a power of two above MAXREG. The bucket array is refilled with -1 on every rebuild, and
-    // `resetLoader` triggers one per LAUNCH -- so an oversized table is 30 x SGTAB stores across the demo
-    // suite's 30 programs, paid to hold chains that are already short. sgCount reaches ~280 on the suite and
-    // a few thousand on the launcher, so 8192 keeps the average chain under one there and bounds it at 3
-    // even at the MAXREG ceiling; `psSteps` reports the truth if that estimate is ever wrong.
-    private static final int SGTAB = 8192;               // power of two; chained
-    private static int[] sgBucket;                       // class+name hash -> first entry index, -1 when empty
-    private static int[] sgNext;                         // entry index -> next entry with the same hash
-    static int sgIndexed;
-
-    private static void buildSgIndex()
-    {
-        if (sgBucket == null || sgIndexed > sgCount)      // rebuilt when resetLoader zeroes the table
-        {
-            sgBucket = new int[SGTAB];
-            sgNext = new int[MAXREG];
-            int b = 0;
-            while (b < SGTAB)
-            {
-                sgBucket[b] = -1;                        // allocArray does NOT zero its elements on this VM,
-                b += 1;                                  //   and 0 is a valid entry index -- fill explicitly
-            }
-            sgIndexed = 0;
-        }
-        while (sgIndexed < sgCount)
-        {
-            int hh = Utf8.utf8Hash2(sgTab[sgIndexed].base, sgTab[sgIndexed].classOff,
-                               sgTab[sgIndexed].base, sgTab[sgIndexed].nameOff) & (SGTAB - 1);
-            sgNext[sgIndexed] = sgBucket[hh];
-            sgBucket[hh] = sgIndexed;
-            sgIndexed += 1;
-        }
-    }
-
-    /**
-     * Static-slot address for a field ref given as blob base + Utf8 offsets, or 0. The shared body of the
-     * compile-time path ({@link #globalStaticAddr}) and the patch-time one ({@link #globalStaticByRef}),
-     * which carried the identical scan over the identical key.
-     *
-     * <p>Counted rather than timed, for the reason this arc has now paid for three times: the loop body is
-     * two Utf8 compares, so two {@code readCNTPCT_EL0} around it would be a visible share of what they
-     * measure.
-     */
-    private static long sgCellOf(Address refBase, int classOff, int nameOff)
-    {
-        int best = sgIndexOf(refBase, classOff, refBase, nameOff);
-        return best < 0 ? 0L : sgTab[best].addr;
-    }
-
-    /** The static-registry entry for class {@code clsBase+clsOff} and field {@code nameBase+nameOff} (the two
-     *  names may live in different blobs), or -1. The index of {@link #sgCellOf}, shared with
-     *  {@link #fieldIsVolatile}. */
-    private static int sgIndexOf(Address clsBase, int clsOff, Address nameBase, int nameOff)
-    {
-        buildSgIndex();
-        // The SAME predicate the scan used -- the index only narrows what it is applied to, so a hit is the
-        // same entry the scan would have found and a miss still answers 0.
-        int best = -1;
-        int k = sgBucket[Utf8.utf8Hash2(clsBase, clsOff, nameBase, nameOff) & (SGTAB - 1)];
-        while (k >= 0)
-        {
-            psSteps += 1;
-            if (utf8EqAt(clsBase, clsOff, sgTab[k].base, sgTab[k].classOff)
-                    && utf8EqAt(nameBase, nameOff, sgTab[k].base, sgTab[k].nameOff))
-            {
-                if (best < 0 || k < best)
-                {
-                    best = k;                            // lowest index wins, as the scan's first match did
-                }
-            }
-            k = sgNext[k];
-        }
-        return best;
-    }
 
     /** Static-slot address for a field ref given as blob base + Utf8 offsets, or 0. */
     private static long globalStaticByRef(Address refBase, int classOff, int nameOff)
     {
         psSites += 1;
-        long addr = sgCellOf(refBase, classOff, nameOff);
+        long addr = Statics.sgCellOf(refBase, classOff, nameOff);
         if (addr == 0L)
         {
-            addr = inheritedStaticCell(refBase, classOff, refBase, nameOff, 0);
+            addr = Statics.inheritedStaticCell(refBase, classOff, refBase, nameOff, 0);
         }
         if (addr == 0L)
         {
@@ -11752,64 +11228,6 @@ public final class Loader
         return addr;
     }
 
-    /**
-     * JVMS 5.4.3.2 FIELD RESOLUTION for a static the named class does not declare itself: search its direct
-     * SUPERINTERFACES (recursively), then its SUPERCLASS (recursively, the same way), and answer the first
-     * declaring class's cell -- or 0.
-     *
-     * <p>Static lookup was CLASS-QUALIFIED ONLY, and javac names an inherited static through the class the source
-     * wrote: stock {@code CharBuffer.<clinit>} reads {@code getstatic CharBuffer.UNSAFE}, a static DECLARED by
-     * {@code java.nio.Buffer}. The miss was not reported on the batch path (it is left for the reloc pass, which
-     * looked up the same name and missed again), so the read was a SILENT NULL -- an NPE in CharBuffer.<clinit>
-     * with no unresolved-static line anywhere. Instance fields got this walk long ago ({@code globalFieldOffset});
-     * statics never did.
-     *
-     * <p>{@code depth} bounds a malformed or cyclic hierarchy. A declaring class not registered yet answers 0, and
-     * the caller's existing unresolved paths (pull-and-retry, reloc) apply.
-     */
-    private static long inheritedStaticCell(Address clsBase, int clsOff, Address nameBase, int nameOff, int depth)
-    {
-        int k = inheritedStaticIndex(clsBase, clsOff, nameBase, nameOff, depth);
-        return k < 0 ? 0L : sgTab[k].addr;
-    }
-
-    /** The static-registry entry {@link #inheritedStaticCell} resolves to, or -1: the DECLARING class's cell, so
-     *  {@code sgTab[k].base + sgTab[k].classOff} also names the class JVMS 5.5 says to initialize. */
-    private static int inheritedStaticIndex(Address clsBase, int clsOff, Address nameBase, int nameOff, int depth)
-    {
-        if (depth > 32)
-        {
-            return -1;
-        }
-        if (depth > 0)
-        {
-            int k = sgIndexOf(clsBase, clsOff, nameBase, nameOff);
-            if (k >= 0)
-            {
-                return k;
-            }
-        }
-        int pd = findPdByName(clsBase, clsOff);
-        if (pd < 0)
-        {
-            return -1;
-        }
-        int i = 0;
-        while (i < pdIfN[pd])
-        {
-            int a = inheritedStaticIndex(pdBase.get(pd), pdIfOff[pd * InterfaceInvocation.MAX_DIRECT_IF + i], nameBase, nameOff, depth + 1);
-            if (a >= 0)
-            {
-                return a;
-            }
-            i += 1;
-        }
-        if (pdSuperOff[pd] == 0)
-        {
-            return -1;
-        }
-        return inheritedStaticIndex(pdBase.get(pd), pdSuperOff[pd], nameBase, nameOff, depth + 1);
-    }
 
     /**
      * The class an active use of {@code refCp} must INITIALIZE (JVMS 5.5). For a {@code getstatic}/{@code putstatic}
@@ -11831,12 +11249,12 @@ public final class Loader
         }
         int classOff = refClassNameOff(refCp);
         int nameOff = mrefNameOff(refCp);
-        if (sgIndexOf(gbase, classOff, gbase, nameOff) >= 0)
+        if (Statics.sgIndexOf(gbase, classOff, gbase, nameOff) >= 0)
         {
             return named;                               // declared by the named class itself
         }
-        int k = inheritedStaticIndex(gbase, classOff, gbase, nameOff, 0);
-        return k < 0 ? named : sgTab[k].base.plus((long) sgTab[k].classOff);
+        int k = Statics.inheritedStaticIndex(gbase, classOff, gbase, nameOff, 0);
+        return k < 0 ? named : Statics.sgTab[k].base.plus((long) Statics.sgTab[k].classOff);
     }
 
     /**
@@ -12408,10 +11826,10 @@ public final class Loader
         Uart.write(Magic.bytes("  synthesised(lambda/anno TIB)="));
         VM.printDec(TibBuilder.isSynthesisedTib(tibA));
         Uart.write(Magic.bytes("\n    class="));
-        int r = classRegByType(type);
-        if (r >= 0 && clTab != null && clTab[r] != null)
+        int r = ClassRegistry.classRegByType(type);
+        if (r >= 0 && ClassRegistry.clTab != null && ClassRegistry.clTab[r] != null)
         {
-            printNameAt(clTab[r].base, clTab[r].nameOff);
+            printNameAt(ClassRegistry.clTab[r].base, ClassRegistry.clTab[r].nameOff);
         }
         else
         {
@@ -12421,59 +11839,28 @@ public final class Loader
     }
 
 
-    /** Register the current class (its TIB + instance-field layout) for cross-class new/fields. */
-    /**
-     * PHASE A registration: record the class's Type + TIB + field layout + statics + flattened-vtable STRUCTURE
-     * (name/descriptor/slot per slot). The vtable BUFFERS are left 0 -- the method bodies aren't compiled yet;
-     * {@link VtableLayout#fillClassVtBuf} fills them in phase B. clVtStart pins where this class's vt entries begin.
-     */
-    /**
-     * Register this class's static fields, so a cross-class {@code getstatic} can find their cells.
-     *
-     * <p>Split out of {@link #registerClassStructure} because an INTERFACE needs it too and never reaches
-     * that method -- {@code loadStructure} builds an interface's registry entry itself and returns early.
-     * Interface fields are implicitly {@code public static final}, so an interface that declares any
-     * constant at all depends on this.
-     */
-    private static void registerStaticFields()
-    {
-        if (sgCount + gsfCount >= MAXREG) { capHalt(Magic.bytes("MAXREG-statics"), sgCount); }
-        int st = 0;
-        while (st < gsfCount)
-        {
-            sgTab[sgCount] = new RVMField();
-            sgTab[sgCount].base = gbase;
-            sgTab[sgCount].classOff = gThisNameOff;
-            sgTab[sgCount].nameOff = gsfName[st];
-            sgTab[sgCount].addr = gStatics.plus(st * 8L).toLong();
-            sgTab[sgCount].access = gsfAccess[st];
-            sgCount += 1;
-            st += 1;
-        }
-    }
-
     private static void registerClassStructure()
     {
-        if (clCount >= MAXCLASS) { capHalt(Magic.bytes("MAXCLASS"), clCount); }              // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
-        if (sgCount + gsfCount >= MAXREG) { capHalt(Magic.bytes("MAXREG"), sgCount); }       // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
-        if (fldCount + gifCount >= MAXFIELD) { capHalt(Magic.bytes("MAXFIELD"), fldCount); } // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
+        if (ClassRegistry.clCount >= ClassRegistry.MAXCLASS) { capHalt(Magic.bytes("ClassRegistry.MAXCLASS"), ClassRegistry.clCount); }              // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
+        if (Statics.sgCount + gsfCount >= MethodRegistry.MAXREG) { capHalt(Magic.bytes("MethodRegistry.MAXREG"), Statics.sgCount); }       // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
+        if (FieldRegistry.fldCount + gifCount >= FieldRegistry.MAXFIELD) { capHalt(Magic.bytes("FieldRegistry.MAXFIELD"), FieldRegistry.fldCount); } // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
         if (VtableLayout.vtCount + gvCount >= VtableLayout.MAXVT) { capHalt(Magic.bytes("VtableLayout.MAXVT"), VtableLayout.vtCount); }          // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
-        clTab[clCount] = new RVMClass();
-        clTab[clCount].state = RVMClass.ST_LOADED;
-        clTab[clCount].base = gbase;
-        clTab[clCount].nameOff = gThisNameOff;
-        clTab[clCount].nameHash = Utf8.utf8Hash(gbase, gThisNameOff);       // folded once; see RVMClass.nameHash
-        clTab[clCount].tib = gTib;
-        clTab[clCount].type = gType;
-        clTab[clCount].absentSuperOff = gAbsentSuperOff;
-        clTab[clCount].fieldCount = gifCount;
-        clTab[clCount].vtCount = gvCount;
-        clTab[clCount].statics = gStatics;
-        clTab[clCount].vtStart = VtableLayout.vtCount;                   // this class's slots occupy vt[VtableLayout.vtCount .. VtableLayout.vtCount+gvCount)
-        clTab[clCount].isIface = false;
-        clTab[clCount].superNameOff = gSuperNameOff;        // keep the NAME too: superReg is -1 for ever if the
+        ClassRegistry.clTab[ClassRegistry.clCount] = new RVMClass();
+        ClassRegistry.clTab[ClassRegistry.clCount].state = RVMClass.ST_LOADED;
+        ClassRegistry.clTab[ClassRegistry.clCount].base = gbase;
+        ClassRegistry.clTab[ClassRegistry.clCount].nameOff = gThisNameOff;
+        ClassRegistry.clTab[ClassRegistry.clCount].nameHash = Utf8.utf8Hash(gbase, gThisNameOff);       // folded once; see RVMClass.nameHash
+        ClassRegistry.clTab[ClassRegistry.clCount].tib = gTib;
+        ClassRegistry.clTab[ClassRegistry.clCount].type = gType;
+        ClassRegistry.clTab[ClassRegistry.clCount].absentSuperOff = gAbsentSuperOff;
+        ClassRegistry.clTab[ClassRegistry.clCount].fieldCount = gifCount;
+        ClassRegistry.clTab[ClassRegistry.clCount].vtCount = gvCount;
+        ClassRegistry.clTab[ClassRegistry.clCount].statics = gStatics;
+        ClassRegistry.clTab[ClassRegistry.clCount].vtStart = VtableLayout.vtCount;                   // this class's slots occupy vt[VtableLayout.vtCount .. VtableLayout.vtCount+gvCount)
+        ClassRegistry.clTab[ClassRegistry.clCount].isIface = false;
+        ClassRegistry.clTab[ClassRegistry.clCount].superNameOff = gSuperNameOff;        // keep the NAME too: superReg is -1 for ever if the
                                                         //   super was not registered yet (see RVMClass)
-        clTab[clCount].superReg = classRegByName(gSuperNameOff);   // superclass registry index (-1 for Object), for the
+        ClassRegistry.clTab[ClassRegistry.clCount].superReg = ClassRegistry.classRegByName(gSuperNameOff);   // superclass registry index (-1 for Object), for the
                                                         //   FULL-chain itable closure (an interface implemented N levels
                                                         //   up the superclass chain must still land in this class's dir)
         if (VtableLayout.logVtable != 0)                             // #43: class -> vtable slot count (spot too-short vtables)
@@ -12485,22 +11872,22 @@ public final class Loader
             Uart.putc(0x0A);
         }
         InterfaceInvocation.captureDirectIfaces();
-        clCount += 1;
+        ClassRegistry.clCount += 1;
         armPhaseACells();                               // cells for this class's statics, before any body compiles
-        registerStaticFields();
+        Statics.registerStaticFields();
         int s = 0;
         while (s < gifCount)
         {
             if (gifName[s] != 0)                        // skip inherited slots (registered by the super)
             {
-                fldTab[fldCount] = new RVMField();
-                fldTab[fldCount].base = gbase;
-                fldTab[fldCount].classOff = gThisNameOff;
-                fldTab[fldCount].nameOff = gifName[s];
-                fldTab[fldCount].slot = s;
-                fldTab[fldCount].access = gifAccess[s];
-                fldTab[fldCount].descOff = gifDescOff[s];
-                fldCount += 1;
+                FieldRegistry.fldTab[FieldRegistry.fldCount] = new RVMField();
+                FieldRegistry.fldTab[FieldRegistry.fldCount].base = gbase;
+                FieldRegistry.fldTab[FieldRegistry.fldCount].classOff = gThisNameOff;
+                FieldRegistry.fldTab[FieldRegistry.fldCount].nameOff = gifName[s];
+                FieldRegistry.fldTab[FieldRegistry.fldCount].slot = s;
+                FieldRegistry.fldTab[FieldRegistry.fldCount].access = gifAccess[s];
+                FieldRegistry.fldTab[FieldRegistry.fldCount].descOff = gifDescOff[s];
+                FieldRegistry.fldCount += 1;
             }
             s += 1;
         }
@@ -12530,118 +11917,6 @@ public final class Loader
     static int gIfmStart;
     static int gIfmCount;
 
-
-    /** Class-registry index of the class whose name Utf8 is at {@code nameOff} in gbase, or -1. */
-    /** {@link #classRegByName} for a name in an ARBITRARY blob, not the one the parse cursor happens to be on.
-     *  A clinit dependency is named in the DEPENDENT's constant pool, so its offset is against that blob. */
-    /**
-     * Name hash index over the CLASS registry, so "which registry entry is this class" is a PROBE rather
-     * than a linear walk of all {@code clCount} entries with a Utf8 compare against each.
-     *
-     * <p>MEASURED, and by the increment that could not finish without it. `statT`'s residue after the static
-     * registry was indexed is 189.764ms across 580 sites -- 327us a site, absurd for a hash probe -- because
-     * every one of those misses calls {@link #reportZeroCellBind}, whose FIRST act is this scan, run purely
-     * to decide whether the miss is worth PRINTING. 580 sites x 1782 classes is ~1,034k utf8EqAt calls,
-     * which at this boot's own measured ~0.18us a call is ~186ms against that 189.764ms. **The whole of
-     * what is left in `statT` is a diagnostic gate.** Over all eight callers: `rb:n=5316 steps=3926k`.
-     *
-     * <p>THREE SPELLINGS OF ONE QUERY, and they each carried their own copy of the scan: {@code regBySigU}
-     * (an absolute {@code {u2 len}{bytes}} run), {@code classRegByName} (an offset into {@code gbase}) and
-     * this one (base + offset). They differ only in how the key bytes are addressed, so all three are now
-     * this body -- the same "one call site's fix, several timers" shape the phase-B publish and the static
-     * index both had. ({@code classRegByNameBytes}, keyed on a VM-side {@code byte[]}, is left alone: a
-     * different key shape, and its callers are the seeds, which latch.)
-     *
-     * <p>THE KEY IS ALREADY IN HAND AND COSTS NOTHING TO BUILD: {@code RVMClass.nameHash} is folded once at
-     * registration -- it exists because the imap refill was re-folding it per probe -- so the index is built
-     * from a field rather than by re-walking any name. The PROBE still folds its key, once, where the scan
-     * folded nothing and compared everything.
-     *
-     * <p>Sound by construction rather than by a claim about when work may be skipped: {@code clTab[clCount]}
-     * is written and {@code clCount} incremented immediately after, at BOTH registration sites (checked --
-     * the interface path and {@code registerClassStructure}), and no entry is ever re-pointed. **THE LOWEST
-     * MATCHING INDEX STILL WINS**: the scan returned the first match, head-insertion makes the chain
-     * descending, so it is searched for the MINIMUM. Two entries can share a name only when a class is
-     * registered twice -- the `lifecycle DIFF` shape this file already records -- and silently preferring
-     * the later one would change which class every caller of this resolves to.
-     *
-     * <p>The watermark resets BESIDE the table in {@code resetLoader}, not only via the "went backwards"
-     * check here: a watermark that outlives the table it indexes under-marks SILENTLY, and {@code clCount}
-     * returning to the same value after a reset would slip past that check alone.
-     */
-    private static final int CLTAB = 8192;               // power of two > MAXCLASS; chained
-    private static int[] clBucket;                       // name hash -> first entry index, -1 when empty
-    private static int[] clNext;                         // entry index -> next entry with the same hash
-    static int clIndexed;
-
-    private static void buildClIndex()
-    {
-        if (clBucket == null || clIndexed > clCount)     // rebuilt when resetLoader zeroes the table
-        {
-            clBucket = new int[CLTAB];
-            clNext = new int[MAXCLASS];
-            int b = 0;
-            while (b < CLTAB)
-            {
-                clBucket[b] = -1;                        // allocArray does NOT zero its elements on this VM,
-                b += 1;                                  //   and 0 is a valid entry index -- fill explicitly
-            }
-            clIndexed = 0;
-        }
-        while (clIndexed < clCount)
-        {
-            int hh = clTab[clIndexed].nameHash & (CLTAB - 1);   // folded once at registration; see RVMClass
-            clNext[clIndexed] = clBucket[hh];
-            clBucket[hh] = clIndexed;
-            clIndexed += 1;
-        }
-    }
-
-    /** Registry index of the class named at {@code base + nameOff}, or -1. The one body behind all three. */
-    private static int classRegAt(Address base, int nameOff)
-    {
-        if (nameOff == 0 && base.isZero())
-        {
-            return -1;
-        }
-        rbCalls += 1;
-        buildClIndex();
-        // The SAME predicate the scan used -- the index only narrows what it is applied to, so a hit is the
-        // same entry the scan would have found and a miss still answers -1.
-        int best = -1;
-        int k = clBucket[Utf8.utf8Hash(base, nameOff) & (CLTAB - 1)];
-        while (k >= 0)
-        {
-            rbSteps += 1;
-            if (utf8EqAt(base, nameOff, clTab[k].base, clTab[k].nameOff))
-            {
-                if (best < 0 || k < best)
-                {
-                    best = k;                            // lowest index wins, as the scan's first match did
-                }
-            }
-            k = clNext[k];
-        }
-        return best;
-    }
-
-    static int classRegByNameAt(Address base, int nameOff)
-    {
-        if (nameOff == 0)
-        {
-            return -1;
-        }
-        return classRegAt(base, nameOff);
-    }
-
-    static int classRegByName(int nameOff)
-    {
-        if (nameOff == 0)
-        {
-            return -1;
-        }
-        return classRegAt(gbase, nameOff);               // gbase + offset: the same query, one spelling of three
-    }
 
     static int logClinit;                                     // #43 diagnostic: when != 0, name each <clinit> as it runs
     static int logTrapWire;                                  // #43 diagnostic: when != 0, dump each patchRelocs trap-wired callee
@@ -12841,11 +12116,11 @@ public final class Loader
     private static int lazyVhTargetReg(ObjectReference recv, int ci)
     {
         byte[] lazy = Magic.bytes("java/lang/invoke/LazyInitializingVarHandle");
-        if (!Utf8.utf8IsAtBase(clTab[ci].base, clTab[ci].nameOff, lazy))
+        if (!Utf8.utf8IsAtBase(ClassRegistry.clTab[ci].base, ClassRegistry.clTab[ci].nameOff, lazy))
         {
             return -1;
         }
-        long off = instanceFieldOffset(ci, Magic.bytes("target"));
+        long off = FieldRegistry.instanceFieldOffset(ci, Magic.bytes("target"));
         if (off < 0L)
         {
             return -1;
@@ -12860,7 +12135,7 @@ public final class Loader
         {
             return -1;
         }
-        return regOfType(Address.fromLong(tib).loadAddress());
+        return ClassRegistry.regOfType(Address.fromLong(tib).loadAddress());
     }
 
     /**
@@ -12874,8 +12149,8 @@ public final class Loader
         int hops = 0;
         while (c >= 0 && hops < MAXCHAIN)
         {
-            Address clsU = clTab[c].base.plus(clTab[c].nameOff);
-            if (Utf8.utf8IsAtBase(clTab[c].base, clTab[c].nameOff, vh))
+            Address clsU = ClassRegistry.clTab[c].base.plus(ClassRegistry.clTab[c].nameOff);
+            if (Utf8.utf8IsAtBase(ClassRegistry.clTab[c].base, ClassRegistry.clTab[c].nameOff, vh))
             {
                 return declaresMethod(clsU, nameU, Address.zero(), true);   // the mode IS an access mode
             }
@@ -12883,7 +12158,7 @@ public final class Loader
             {
                 return false;
             }
-            c = superRegOf(c);
+            c = ClassRegistry.superRegOf(c);
             hops += 1;
         }
         return false;
@@ -12898,12 +12173,12 @@ public final class Loader
         int hops = 0;
         while (c >= 0 && buf == 0L && hops < MAXCHAIN)
         {
-            if (clTab[c] != null)
+            if (ClassRegistry.clTab[c] != null)
             {
-                buf = resolveLinkTarget(clTab[c].base.plus(clTab[c].nameOff),
+                buf = resolveLinkTarget(ClassRegistry.clTab[c].base.plus(ClassRegistry.clTab[c].nameOff),
                         vsName.get(idx), descU);
             }
-            c = superRegOf(c);
+            c = ClassRegistry.superRegOf(c);
             hops += 1;
         }
         return buf;
@@ -13111,7 +12386,7 @@ public final class Loader
 
     private static long virtualResolveLocked(ObjectReference recv, int idx)
     {
-        if (recv.isNull() || idx < 0 || idx >= vsCount || clTab == null)
+        if (recv.isNull() || idx < 0 || idx >= vsCount || ClassRegistry.clTab == null)
         {
             return VM.denylistTrapAddr;
         }
@@ -13144,8 +12419,8 @@ public final class Loader
         {
             return vsMemoBuf;                           // monomorphic site: skip the whole lookup
         }
-        int ci = classRegByType(type);
-        if (ci < 0 || ci >= clCount || clTab[ci] == null || vsName == null)
+        int ci = ClassRegistry.classRegByType(type);
+        if (ci < 0 || ci >= ClassRegistry.clCount || ClassRegistry.clTab[ci] == null || vsName == null)
         {
             // A receiver whose Type is not in the class registry -- a writer-baked class the loader never
             // adopted, say -- has no blob to resolve against. Image code carries no implicit null check, so
@@ -13226,12 +12501,12 @@ public final class Loader
         int hops = 0;
         while (c >= 0 && buf == 0L && hops < MAXCHAIN)
         {
-            if (clTab[c] != null)
+            if (ClassRegistry.clTab[c] != null)
             {
-                buf = resolveLinkTarget(clTab[c].base.plus(clTab[c].nameOff),
+                buf = resolveLinkTarget(ClassRegistry.clTab[c].base.plus(ClassRegistry.clTab[c].nameOff),
                         vsName.get(idx), vsDesc.get(idx));
             }
-            c = superRegOf(c);
+            c = ClassRegistry.superRegOf(c);
             hops += 1;
         }
         if (buf == 0L)
@@ -13248,7 +12523,7 @@ public final class Loader
                 if (LOAD_LOG)
                 {
                     Uart.write(Magic.bytes("  ifaceresolve "));
-                    printNameAt(clTab[ci].base, clTab[ci].nameOff);
+                    printNameAt(ClassRegistry.clTab[ci].base, ClassRegistry.clTab[ci].nameOff);
                     Uart.putc(0x2E);
                     printNameAt(vsName.get(idx), 0);
                     Uart.putc(0x0A);
@@ -13300,7 +12575,7 @@ public final class Loader
             // Name it. A bare denylistTrap from here reports TRAPWIRE index=-1 (no patch-time site was
             // recorded for a late-resolved call), which says nothing at all about what failed.
             Uart.write(Magic.bytes("  VIRTUALRESOLVE FAILED "));
-            printNameAt(clTab[ci].base, clTab[ci].nameOff);
+            printNameAt(ClassRegistry.clTab[ci].base, ClassRegistry.clTab[ci].nameOff);
             Uart.putc(0x2E);
             printNameAt(vsName.get(idx), 0);
             printNameAt(vsDesc.get(idx), 0);
@@ -13309,7 +12584,7 @@ public final class Loader
         }
         if (!plausibleCode(Address.fromLong(buf)))
         {
-            reportBadTarget(clTab[ci].base.plus(clTab[ci].nameOff), vsName.get(idx),
+            reportBadTarget(ClassRegistry.clTab[ci].base.plus(ClassRegistry.clTab[ci].nameOff), vsName.get(idx),
                     vsDesc.get(idx), buf, 0);
             return VM.denylistTrapAddr;                 // and do NOT memoize it
         }
@@ -13356,7 +12631,7 @@ public final class Loader
         while (c >= 0 && hops < MAXIFACECHAIN)
         {
             n = collectIfaceNames(c, names, n);
-            c = superRegOf(c);
+            c = ClassRegistry.superRegOf(c);
             hops += 1;
         }
         // The superinterface CLOSURE, every level (JVMS 5.4.3.3 searches all superinterfaces). This walked ONE
@@ -13402,7 +12677,7 @@ public final class Loader
         int decl = InterfaceInvocation.mostSpecificDeclarer(regs, n, nameU, descU);
         if (decl >= 0)
         {
-            long d = resolveLinkTarget(clTab[decl].base.plus(clTab[decl].nameOff),
+            long d = resolveLinkTarget(ClassRegistry.clTab[decl].base.plus(ClassRegistry.clTab[decl].nameOff),
                     nameU, descU);
             if (d != 0L)
             {
@@ -13429,11 +12704,11 @@ public final class Loader
     /** Append class {@code ci}'s directly-declared interface name Utf8 ADDRESSES to {@code out}; new length. */
     private static int collectIfaceNames(int ci, AddressArray out, int n)
     {
-        if (clTab == null || ci < 0 || ci >= clCount || clTab[ci] == null)
+        if (ClassRegistry.clTab == null || ci < 0 || ci >= ClassRegistry.clCount || ClassRegistry.clTab[ci] == null)
         {
             return n;
         }
-        Address base = clTab[ci].base;
+        Address base = ClassRegistry.clTab[ci].base;
         parseConstPool(base, blobLenOf(base));
         int count = u2(base.plus(gAfterCp + 6));            // interfaces_count (ClassReader.afterInterfaces layout)
         int k = 0;
@@ -13748,30 +13023,30 @@ public final class Loader
      *  stops at the first method of that name, which for an overloaded class is a coin toss between two bodies. */
     private static int compileMethodOnDemandLocked(Address type, ObjectReference nameArr, ObjectReference descArr)
     {
-        int ci = classIndexByType(type);
+        int ci = ClassRegistry.classIndexByType(type);
         // AN INTERFACE IS NOT REFUSED any more. It was, for having no TIB to reuse -- but this path compiles with
         // compileReuseTib, which never touches one (the reason compileSigOnDemand already compiles interface
         // STATICS). The refusal left every not-yet-called DEFAULT method unresolvable by reflection:
         // getDeclaredMethods on an interface answered EMPTY and getMethods/getMethod never saw its defaults
         // (ReflectLookupProbe: a one-method interface declared 0).
-        if (ci >= clCount)
+        if (ci >= ClassRegistry.clCount)
         {
             return -1;
         }
-        Address blob = clTab[ci].base;
+        Address blob = ClassRegistry.clTab[ci].base;
         int len = blobLenOf(blob);
         parseConstPool(blob, len);                         // set up the class's compile state (as loadBodies does,
         parseFields();                                     //   minus the TIB fill): statics block + vtable scratch
-        int reg = classRegByName(gThisNameOff);
+        int reg = ClassRegistry.classRegByName(gThisNameOff);
         if (reg < 0)
         {
             return -1;
         }
-        gStatics = clTab[reg].statics;                         // reuse the phase-A statics (cross-class getstatic keys on it)
+        gStatics = ClassRegistry.clTab[reg].statics;                         // reuse the phase-A statics (cross-class getstatic keys on it)
         Indy.findBootstrapMethods();
         VtableLayout.parseVtable(blob);                                 // gvImplBuf/gvImplCode (for any invokevirtual in the body)
-        gType = clTab[reg].type;
-        gTib = clTab[reg].tib;
+        gType = ClassRegistry.clTab[reg].type;
+        gTib = ClassRegistry.clTab[reg].tib;
         parseForMethods(blob, len);                        // fresh gMethodsStart for the by-name method walk
         Address p = gMethodsStart;
         int mcount = u2(p);
@@ -13842,7 +13117,7 @@ public final class Loader
             odRetried = false;
             return r;
         }
-        registerAll();                                     // register the just-compiled method(s) -> globalBuf
+        MethodRegistry.registerAll();                                     // register the just-compiled method(s) -> globalBuf
         patchRelocs();                                     // resolve its cross-class calls (idempotent over prior relocs)
         if (dlen != 0)
         {
@@ -13852,70 +13127,14 @@ public final class Loader
     }
 
 
-    private static final int CTMEMO = 4096;
-    private static int[] ctMemo;                         // type hash -> clTab index, validated on every read
-
-    /**
-     * The clTab index of the class whose Type is {@code type}, or {@code clCount} if none -- what the linear
-     * scans it replaces left in {@code ci}. A validated memo: an entry is used only if that class's type IS
-     * {@code type}, so a stale or torn slot costs a scan, never a wrong answer while each Type names one class.
-     */
-    static int classIndexByType(Address type)
-    {
-        long bits = type.toLong();
-        int h = (int) ((bits >>> 4) ^ (bits >>> 16)) & (CTMEMO - 1);
-        int[] m = ctMemo;
-        if (m != null)
-        {
-            int c = m[h];
-            if (c >= 0 && c < clCount && clTab[c].type.EQ(type))
-            {
-                return c;
-            }
-        }
-        int ci = 0;
-        while (ci < clCount && clTab[ci].type.NE(type))
-        {
-            ci += 1;
-        }
-        if (ci < clCount)
-        {
-            if (m == null)
-            {
-                int[] fresh = new int[CTMEMO];
-                int k = 0;
-                while (k < CTMEMO)
-                {
-                    fresh[k] = -1;
-                    k += 1;
-                }
-                ctMemo = fresh;
-                m = fresh;
-            }
-            m[h] = ci;
-        }
-        return ci;
-    }
-
-
     /** Watch the vtable slot chosen for two named methods, whatever the slot number (see logVtableSlot). */
     static final boolean METHOD_WATCH_ON = false;
 
 
-    /** Class-registry index of the class named by a {@code new}/type {@code Class} entry, or -1. */
-    static int classRegOf(int classIdx)
-    {
-        int nameOff = gcp[u2(gbase.plus(gcp[classIdx]))];   // Class entry -> name Utf8 offset
-        // The class-name index (classRegAt): the same predicate as the scan this was, and the LOWEST matching
-        // index, which is what the scan's first match answered. Profiled on InvokeGapProbe after #450 with
-        // scripts/qprof-tally.pl's caller view: the scan was 6.1% of the busy core.
-        return classRegAt(gbase, nameOff);
-    }
-
     /** True if the class of {@code *ref} {@code idx} is a loaded (registered) class. */
     private static boolean refClassRegistered(int idx)
     {
-        return classRegAt(gbase, refClassNameOff(idx)) >= 0;   // the class-name index, as classRegOf
+        return ClassRegistry.classRegAt(gbase, refClassNameOff(idx)) >= 0;   // the class-name index, as classRegOf
     }
 
     /**
@@ -14020,7 +13239,7 @@ public final class Loader
     private static final byte[] FIELD_WATCH = Magic.bytes("className");
     private static final boolean FIELD_WATCH_ON = false;
 
-    private static void fieldOffsetLog(int classOff, int nameOff, int off, int tier)
+    static void fieldOffsetLog(int classOff, int nameOff, int off, int tier)
     {
         if (!FIELD_WATCH_ON || !Utf8.utf8IsAtBase(gbase, nameOff, FIELD_WATCH))
         {
@@ -14037,117 +13256,9 @@ public final class Loader
         Uart.putc(0x0A);
     }
 
-    /**
-     * Class+name hash index over the instance-field registry, so {@link #fldIndexOf} is a PROBE rather than a
-     * scan comparing two Utf8 strings against every instance field of every loaded class.
-     *
-     * <p>MEASURED, not guessed: in the first TLS session of SslEngineProbe (QEMU qprof, 53-176 s) 115 of 541
-     * busy samples had the compiler on the stack, and about 6 of them were the compiler itself. The rest were
-     * {@code getfield}/{@code putfield} compiles resolving a field: {@code fieldIsVolatile} ->
-     * {@code registeredFieldAccess} and {@code fieldOffsetOf} -> {@code globalFieldOffset}, each scanning all
-     * {@code fldCount} entries -- once per SUPERCLASS LEVEL for an inherited field -- on every field access
-     * compiled. Same defect and same remedy as the static registry's {@link #sgIndexOf}.
-     */
-    private static final int FLDTAB = 8192;              // power of two; chained
-    private static int[] fldBucket;                      // class+name hash -> first entry index, -1 when empty
-    private static int[] fldNext;                        // entry index -> next entry with the same hash
-    private static int fldIndexed;
-
-    private static void buildFldIndex()
-    {
-        if (fldBucket == null || fldIndexed > fldCount)   // rebuilt when resetLoader zeroes the table
-        {
-            fldBucket = new int[FLDTAB];
-            fldNext = new int[MAXFIELD];
-            int b = 0;
-            while (b < FLDTAB)
-            {
-                fldBucket[b] = -1;                       // allocArray does NOT zero its elements on this VM,
-                b += 1;                                  //   and 0 is a valid entry index -- fill explicitly
-            }
-            fldIndexed = 0;
-        }
-        while (fldIndexed < fldCount)                    // INCREMENTAL: the registry only grows
-        {
-            int hh = Utf8.utf8Hash2(fldTab[fldIndexed].base, fldTab[fldIndexed].classOff,
-                               fldTab[fldIndexed].base, fldTab[fldIndexed].nameOff) & (FLDTAB - 1);
-            fldNext[fldIndexed] = fldBucket[hh];
-            fldBucket[hh] = fldIndexed;
-            fldIndexed += 1;
-        }
-    }
-
-    /** The instance-field registry entry DECLARED by class {@code clsBase+clsOff} as field
-     *  {@code nameBase+nameOff}, or -1. The predicate the scans used, so a hit is the entry they found. */
-    private static int fldIndexOf(Address clsBase, int clsOff, Address nameBase, int nameOff)
-    {
-        buildFldIndex();
-        int best = -1;
-        int k = fldBucket[Utf8.utf8Hash2(clsBase, clsOff, nameBase, nameOff) & (FLDTAB - 1)];
-        while (k >= 0)
-        {
-            if (utf8EqAt(clsBase, clsOff, fldTab[k].base, fldTab[k].classOff)
-                    && utf8EqAt(nameBase, nameOff, fldTab[k].base, fldTab[k].nameOff))
-            {
-                if (best < 0 || k < best)
-                {
-                    best = k;                            // lowest index wins, as the scan's first match did
-                }
-            }
-            k = fldNext[k];
-        }
-        return best;
-    }
-
-    private static int globalFieldOffset(int idx)
-    {
-        int classOff = refClassNameOff(idx);
-        int nameOff = mrefNameOff(idx);
-        int i = fldIndexOf(gbase, classOff, gbase, nameOff);   // class-qualified
-        if (i >= 0)
-        {
-            fieldOffsetLog(classOff, nameOff, 16 + fldTab[i].slot * 8, 1);
-            return 16 + fldTab[i].slot * 8;
-        }
-        // Class-qualified miss: the field is INHERITED. Resolve it by walking the ref class's SUPERCLASS chain
-        // and matching a field DECLARED by each ancestor -- NOT a blind name-only match. Multiple unrelated
-        // classes can declare a same-named field at different slots (e.g. Pattern.buffer @72 vs
-        // Pattern$SliceNode.buffer): a name-only match on `Slice.buffer` wrongly returned Pattern's slot, so the
-        // getfield read a bogus field off a Slice object -> null -> the #43 NPE in Pattern$BnM.optimize.
-        int pd = findPdByName(gbase, classOff);
-        while (pd >= 0)
-        {
-            int i2 = fldIndexOf(pdBase.get(pd), pdNameOff[pd], gbase, nameOff);   // declared by THIS ancestor
-            if (i2 >= 0)
-            {
-                fieldOffsetLog(classOff, nameOff, 16 + fldTab[i2].slot * 8, 2);
-                return 16 + fldTab[i2].slot * 8;
-            }
-            if (pdSuperOff[pd] == 0)
-            {
-                break;
-            }
-            pd = findPdByName(pdBase.get(pd), pdSuperOff[pd]);   // ascend to the superclass
-        }
-        // NOTHING MATCHED. `return 16` is slot 0 -- the object's FIRST field -- so an unresolved reference
-        // silently reads and writes a field of some other name and type. On a subclass that is exactly an
-        // inherited REFERENCE, and an int counter then reads back a heap address (DeflaterClose's nested
-        // counters printed 67885768 for an expected 3). The ordinary cause is a class not registered when
-        // the referencing body compiled -- a privately nested class the enclosing method touches, pulled
-        // late by `newresolve` -- so take the same note-pull-recompile route a static and a class literal
-        // take, and name it if it is still missing on the retry.
-        if (lzCompiling && !lzRetried && notePullNeeded(gbase.plus(classOff)))
-        {
-            fieldOffsetLog(classOff, nameOff, 16, 3);   // 3 = pull noted, compile to be discarded and redone
-            return 16;                                  // this compile is discarded and redone with it loaded
-        }
-        fieldOffsetLog(classOff, nameOff, 16, 4);       // 4 = gave up: slot 0, and it is NOT necessarily right
-        reportUnresolvedField(gbase.plus(classOff), gbase.plus(nameOff));
-        return 16;
-    }
 
     /** Name a field reference that resolved to nothing -- it is about to alias slot 0. */
-    private static void reportUnresolvedField(Address clsU, Address nameU)
+    static void reportUnresolvedField(Address clsU, Address nameU)
     {
         Uart.write(Magic.bytes("\n  UNRESOLVED FIELD (aliases slot 0): "));
         printNameAt(clsU, 0);
@@ -14459,7 +13570,7 @@ public final class Loader
         VM.printDec(InterfaceInvocation.rfHoleEnd);
         // WHICH of the three is the growing one. `type` is the only walk that is O(everything loaded).
         Uart.write(Magic.bytes(" rfs:type="));
-        VM.printDec(rfTypeSteps / 1000);
+        VM.printDec(ClassRegistry.rfTypeSteps / 1000);
         Uart.write(Magic.bytes("k clos="));
         VM.printDec(InterfaceInvocation.rfClosSteps / 1000);
         Uart.write(Magic.bytes("k fill="));
@@ -14480,9 +13591,9 @@ public final class Loader
         // THE SEED BLOCK's registry walks. `seeds` is the largest item in this phase and had never been
         // split; these say how much of it is `staticSlotOf` scanning a table that grows all boot.
         Uart.write(Magic.bytes("k sd:n="));
-        VM.printDec(sgScanCalls);
+        VM.printDec(Statics.sgScanCalls);
         Uart.write(Magic.bytes(" steps="));
-        VM.printDec(sgScanSteps / 1000);
+        VM.printDec(Statics.sgScanSteps / 1000);
         Uart.putc(0x6B);
         // allocCode, the difference between `place` and `emit`: calls, and the free-list scan under them.
         Uart.write(Magic.bytes(" ac:n="));
@@ -14521,17 +13632,17 @@ public final class Loader
         Uart.write(Magic.bytes(" ps:n="));
         VM.printDec((int) psSites);                      // RAW: the first cut printed these in thousands and
         Uart.write(Magic.bytes(" steps="));              //   both read 0k, which says nothing at all
-        VM.printDec((int) (psSteps / 1000L));
+        VM.printDec((int) (Statics.psSteps / 1000L));
         Uart.write(Magic.bytes("k miss="));
         VM.printDec((int) psMiss);
         Uart.write(Magic.bytes(" tab="));                // ... and the table they walk, so steps/n can be
-        VM.printDec(sgCount);                            //   read against the depth a full walk would cost
+        VM.printDec(Statics.sgCount);                            //   read against the depth a full walk would cost
         Uart.write(Magic.bytes(" rb:n="));               // the OTHER scan in the same loop: regBySigU, run on
-        VM.printDec((int) rbCalls);                      //   every miss, over a SECOND table that also grows
+        VM.printDec((int) ClassRegistry.rbCalls);                      //   every miss, over a SECOND table that also grows
         Uart.write(Magic.bytes(" steps="));
-        VM.printDec((int) (rbSteps / 1000L));
+        VM.printDec((int) (ClassRegistry.rbSteps / 1000L));
         Uart.write(Magic.bytes("k cl="));
-        VM.printDec(clCount);
+        VM.printDec(ClassRegistry.clCount);
         // WHAT IS INSIDE `synth`, which nothing has ever split. `chg` is the decisive one: writes whose
         // value actually differed from what the slot held. Near zero and the pass is re-deriving an answer
         // it already has; large and only the objectClassIndex hoist (`obj`) is available.
@@ -14631,7 +13742,7 @@ public final class Loader
         Uart.write(Magic.bytes(" total="));
         printDur(ticksUs(cumAll));
         Uart.write(Magic.bytes("\n           classes="));
-        VM.printDec(clCount);
+        VM.printDec(ClassRegistry.clCount);
         Uart.write(Magic.bytes(" blobs="));
         VM.printDec(pdCount);
         Uart.write(Magic.bytes(" markTables="));
@@ -14648,7 +13759,7 @@ public final class Loader
         Uart.write(Magic.bytes(" rc="));
         VM.printDec(rcCount);
         Uart.write(Magic.bytes(" rg="));
-        VM.printDec(rgCount);
+        VM.printDec(MethodRegistry.rgCount);
         Uart.write(Magic.bytes(" mark="));
         printDur(spanUs(tMark, tProbe));
         Uart.write(Magic.bytes(" probe="));
@@ -14786,7 +13897,7 @@ public final class Loader
             Uart.write(Magic.bytes("<idx out of range>"));
             return;
         }
-        printNameAt(clTab[lzTab[k].reg].base, clTab[lzTab[k].reg].nameOff);
+        printNameAt(ClassRegistry.clTab[lzTab[k].reg].base, ClassRegistry.clTab[lzTab[k].reg].nameOff);
         Uart.putc(0x2E);
         writeName(lzTab[k].blob.plus(lzTab[k].nameOff + 2), u2(lzTab[k].blob.plus(lzTab[k].nameOff)));
     }
@@ -15169,18 +14280,18 @@ public final class Loader
             // virtualResolve already walks the chain this way for the late-VIRTUAL path; the link stub, which
             // is what an invokespecial/invokestatic site gets, never had one. Walking most-derived-first IS
             // what inheritance means.
-            int c = ireg >= 0 ? superRegOf(ireg) : -1;
+            int c = ireg >= 0 ? ClassRegistry.superRegOf(ireg) : -1;
             int hops = 0;
             while (buf == 0L && c >= 0 && hops < MAXIFACECHAIN)
             {
                 int why = lnkFailWhy;
-                buf = resolveLinkTarget(clTab[c].base.plus(clTab[c].nameOff),
+                buf = resolveLinkTarget(ClassRegistry.clTab[c].base.plus(ClassRegistry.clTab[c].nameOff),
                         lkNameU.get(idx), lkDescU.get(idx));
                 if (buf == 0L)
                 {
                     lnkFailWhy = why;                   // a miss at one level is "try the super", not a verdict
                 }
-                c = superRegOf(c);
+                c = ClassRegistry.superRegOf(c);
                 hops += 1;
             }
             if (buf == 0L && ireg >= 0)
@@ -15453,7 +14564,7 @@ public final class Loader
      */
     static long resolveLinkTarget(Address clsU, Address nameU, Address descU)
     {
-        if (clTab == null)
+        if (ClassRegistry.clTab == null)
         {
             return 0L;
         }
@@ -15523,7 +14634,7 @@ public final class Loader
             }
             reg = regBySigU(clsU);
         }
-        if (reg >= 0 && clTab[reg].state < RVMClass.ST_INSTANTIATED)
+        if (reg >= 0 && ClassRegistry.clTab[reg].state < RVMClass.ST_INSTANTIATED)
         {
             // Loaded but not brought all the way up: its <clinit> was blocked or its structure never
             // registered. Branching in would run against half-built statics and a possibly empty vtable.
@@ -15580,11 +14691,11 @@ public final class Loader
      */
     private static long inheritedLinkTarget(int reg, Address nameU, Address descU)
     {
-        int sreg = superRegOf(reg);
+        int sreg = ClassRegistry.superRegOf(reg);
         int guard = 0;
         while (sreg >= 0 && guard < 64)
         {
-            Address sU = clTab[sreg].base.plus(clTab[sreg].nameOff);
+            Address sU = ClassRegistry.clTab[sreg].base.plus(ClassRegistry.clTab[sreg].nameOff);
             long b = bufBySigU(sU, nameU, descU);
             if (b == 0L)
             {
@@ -15598,11 +14709,11 @@ public final class Loader
             {
                 return b;
             }
-            if (blobDeclares(clTab[sreg].base, nameU, 0, descU, 0) == 1)
+            if (blobDeclares(ClassRegistry.clTab[sreg].base, nameU, 0, descU, 0) == 1)
             {
                 return 0L;                              // declared here and still not callable: report, do not climb
             }
-            sreg = superRegOf(sreg);
+            sreg = ClassRegistry.superRegOf(sreg);
             guard += 1;
         }
         return 0L;
@@ -15689,15 +14800,15 @@ public final class Loader
         {
             return 0L;
         }
-        Address blob = clTab[reg].base;
+        Address blob = ClassRegistry.clTab[reg].base;
         int len = blobLenOf(blob);
         parseConstPool(blob, len);                      // rebuild this class's compile state (as loadBodies
         parseFields();                                  //   does, minus the TIB fill)
-        gStatics = clTab[reg].statics;                  // reuse the phase-A statics block
+        gStatics = ClassRegistry.clTab[reg].statics;                  // reuse the phase-A statics block
         Indy.findBootstrapMethods();
         VtableLayout.parseVtable(blob);
-        gType = clTab[reg].type;
-        gTib = clTab[reg].tib;                          // 0 for an interface; compileReuseTib means unused
+        gType = ClassRegistry.clTab[reg].type;
+        gTib = ClassRegistry.clTab[reg].tib;                          // 0 for an interface; compileReuseTib means unused
         parseForMethods(blob, len);
         Address p = gMethodsStart;
         int mcount = u2(p);
@@ -15759,7 +14870,7 @@ public final class Loader
             odRetried = false;
             return r;
         }
-        registerAll();
+        MethodRegistry.registerAll();
         patchRelocsFrom(rcMark, rsMark);                // its own callees, including further link stubs
         // INITIALIZE WHAT THIS BODY TOUCHES, before it can run -- what lazyCompileLocked does and this path
         // did not. The compile above recorded every cross-class getstatic/new site it contains (JVMS 5.5
@@ -16142,7 +15253,7 @@ public final class Loader
      * every NetDemo boot carried one unclaimed pc in {@code Socket.<init>} (MEASURED, CtorChainTraceProbe:
      * the {@code this(...)} target compiled through {@code sizeMethod} with no lazy compile of its own).
      *
-     * <p>APPENDED, as {@link #registerAll} does on the other on-demand paths: an entry already pointing at
+     * <p>APPENDED, as {@link MethodRegistry#registerAll} does on the other on-demand paths: an entry already pointing at
      * the method's deferral stub stays valid (the stub still compiles a copy on its own first call), and the
      * new one claims the body that is actually running. Called right after the final compile, before
      * {@code patchRelocsFrom} can start anything that reuses the {@code m[]} tables.
@@ -16157,7 +15268,7 @@ public final class Loader
                 int nameOff = findNameByCode(mCode[i]);
                 if (nameOff != 0)
                 {
-                    register(gbase, gThisNameOff, nameOff, mDescOff[i], mBuf[i], mLine[i], mSrc.get(i),
+                    MethodRegistry.register(gbase, gThisNameOff, nameOff, mDescOff[i], mBuf[i], mLine[i], mSrc.get(i),
                              accessInContext(gbase, nameOff, mDescOff[i]));
                 }
             }
@@ -16175,17 +15286,17 @@ public final class Loader
      */
     private static int lazyBodyEntry(Address blob, int nameOff, int descOff)
     {
-        buildRegIndex();
+        MethodRegistry.buildRegIndex();
         int best = -1;
-        int i = rgBucket[Utf8.utf8Hash2(blob, gThisNameOff, blob, nameOff) & (RGTAB - 1)];
+        int i = MethodRegistry.rgBucket[Utf8.utf8Hash2(blob, gThisNameOff, blob, nameOff) & (MethodRegistry.RGTAB - 1)];
         while (i >= 0)
         {
-            if ((best < 0 || i < best) && rgTab[i].base.EQ(blob) && rgTab[i].nameOff == nameOff
-                    && rgTab[i].descOff == descOff)
+            if ((best < 0 || i < best) && MethodRegistry.rgTab[i].base.EQ(blob) && MethodRegistry.rgTab[i].nameOff == nameOff
+                    && MethodRegistry.rgTab[i].descOff == descOff)
             {
                 best = i;
             }
-            i = rgNext[i];
+            i = MethodRegistry.rgNext[i];
         }
         return best;
     }
@@ -16208,13 +15319,13 @@ public final class Loader
         int i = lazyBodyEntry(lzTab[idx].blob, nameOff, lzTab[idx].descOff);
         if (i >= 0)
         {
-            rgTab[i].buf = buf;
+            MethodRegistry.rgTab[i].buf = buf;
             markRegDirty(i);                             // its memoised call sites now want the body
-            rgTab[i].line = mLine[0];
-            rgTab[i].src = mSrc.get(0);
+            MethodRegistry.rgTab[i].line = mLine[0];
+            MethodRegistry.rgTab[i].src = mSrc.get(0);
             return;
         }
-        register(lzTab[idx].blob, gThisNameOff, nameOff, lzTab[idx].descOff, buf, mLine[0], mSrc.get(0),
+        MethodRegistry.register(lzTab[idx].blob, gThisNameOff, nameOff, lzTab[idx].descOff, buf, mLine[0], mSrc.get(0),
                  accessInContext(lzTab[idx].blob, nameOff, lzTab[idx].descOff));
     }
 
@@ -16232,7 +15343,7 @@ public final class Loader
      *
      * <p>NO RE-PARSE, deliberately. {@code methodInfoPos} answers the same question by calling
      * {@code parseForMethods}, which moves the {@code g*} cursor -- and this runs INSIDE a lazy compile, whose
-     * context that would clobber. The walk is the one {@link #registerAll} already does per method, over the
+     * context that would clobber. The walk is the one {@link MethodRegistry#registerAll} already does per method, over the
      * table this compile is standing on; it is guarded on the blob matching so a caller in some other context
      * gets 0 (today's answer) rather than another class's flags.
      */
@@ -16263,7 +15374,7 @@ public final class Loader
     /** Re-establish the g* compile context for an already-structure-registered class (loadBodies' preamble). */
     private static void restoreCtxForCompile(Address bytes, int len, int reg)
     {
-        if (reg >= 0 && clTab[reg].state < RVMClass.ST_RESOLVED)
+        if (reg >= 0 && ClassRegistry.clTab[reg].state < RVMClass.ST_RESOLVED)
         {
             // Lifecycle guard: a lazy compile needs the class's STRUCTURE (field layout, statics,
             // vtable numbering, Type/TIB). Firing before phase A completes would compile against a
@@ -16272,11 +15383,11 @@ public final class Loader
         }
         parseConstPool(bytes, len);
         parseFields();
-        gStatics = clTab[reg].statics;
+        gStatics = ClassRegistry.clTab[reg].statics;
         Indy.findBootstrapMethods();
         VtableLayout.parseVtable(bytes);
-        gType = clTab[reg].type;
-        gTib = clTab[reg].tib;
+        gType = ClassRegistry.clTab[reg].type;
+        gTib = ClassRegistry.clTab[reg].tib;
         provideKnownStatics();
     }
 
@@ -16293,7 +15404,7 @@ public final class Loader
      */
     static long resolveBakeStub(Address clsU, Address nameU, Address descU)
     {
-        if (clTab == null)
+        if (ClassRegistry.clTab == null)
         {
             // Name the stub: which method fired is the whole diagnosis, and the halt alone does not say.
             Uart.write(Magic.bytes("\n  bake stub fired before the loader exists: "));
@@ -16319,7 +15430,7 @@ public final class Loader
             slash[i] = (byte) u1(clsU.plus(2 + i));
             i += 1;
         }
-        if (classIndexByName(slash) < 0)
+        if (ClassRegistry.classIndexByName(slash) < 0)
         {
             if (loadClassIncremental(slash).isZero())
             {
@@ -16338,8 +15449,8 @@ public final class Loader
                 capHalt(Magic.bytes("bakeresolve-load"), 0);
             }
         }
-        int lreg = classIndexByName(slash);
-        if (lreg >= 0 && clTab[lreg].state < RVMClass.ST_INSTANTIATED)
+        int lreg = ClassRegistry.classIndexByName(slash);
+        if (lreg >= 0 && ClassRegistry.clTab[lreg].state < RVMClass.ST_INSTANTIATED)
         {
             // Lifecycle guard: baked code is about to CALL into this class, so its bodies/cells and
             // TIB must be in place (phase B). A short state here means the incremental load pipeline
@@ -16387,23 +15498,23 @@ public final class Loader
     {
         // The registry through its class+name index (rgBucket). The scan answered the LOWEST index with a
         // buffer, and those chains are newest-first, so walk the whole chain and keep the oldest hit.
-        buildRegIndex();
+        MethodRegistry.buildRegIndex();
         int best = -1;
-        int k = rgBucket[Utf8.utf8Hash2(clsU, 0, nameU, 0) & (RGTAB - 1)];
+        int k = MethodRegistry.rgBucket[Utf8.utf8Hash2(clsU, 0, nameU, 0) & (MethodRegistry.RGTAB - 1)];
         while (k >= 0)
         {
-            if (rgTab[k].buf != 0L
-                    && utf8EqAt(rgTab[k].base, rgTab[k].classOff, clsU, 0)
-                    && utf8EqAt(rgTab[k].base, rgTab[k].nameOff, nameU, 0)
-                    && utf8EqAt(rgTab[k].base, rgTab[k].descOff, descU, 0))
+            if (MethodRegistry.rgTab[k].buf != 0L
+                    && utf8EqAt(MethodRegistry.rgTab[k].base, MethodRegistry.rgTab[k].classOff, clsU, 0)
+                    && utf8EqAt(MethodRegistry.rgTab[k].base, MethodRegistry.rgTab[k].nameOff, nameU, 0)
+                    && utf8EqAt(MethodRegistry.rgTab[k].base, MethodRegistry.rgTab[k].descOff, descU, 0))
             {
                 best = k;
             }
-            k = rgNext[k];
+            k = MethodRegistry.rgNext[k];
         }
         if (best >= 0)
         {
-            return rgTab[best].buf;
+            return MethodRegistry.rgTab[best].buf;
         }
         long cell = dlCellOf(clsU, 0, nameU, 0, descU, 0);   // tier 2: a celled static, callable via its cell
         if (cell != 0L)
@@ -16416,47 +15527,14 @@ public final class Loader
         if (k >= 0)
         {
             int r = regBySigU(clsU);
-            if (r >= 0 && !clTab[r].tib.isZero())
+            if (r >= 0 && !ClassRegistry.clTab[r].tib.isZero())
             {
-                return clTab[r].tib.plus(8).plus(VtableLayout.vtSlot[k] * 8L).loadLong();
+                return ClassRegistry.clTab[r].tib.plus(8).plus(VtableLayout.vtSlot[k] * 8L).loadLong();
             }
         }
         return 0L;
     }
 
-    /**
-     * The superclass registry index of {@code reg}, RE-RESOLVED BY NAME when registration left it -1.
-     *
-     * <p>{@code superReg} is resolved ONCE, at registration, and is -1 for ever if the superclass was not
-     * registered yet -- the ordinary case for a demand-loaded pair, where the subclass arrives first. Every
-     * walker that read the field raw therefore STOPPED AT THE FIRST SUCH LINK, and a chain walk that stops
-     * early fails exactly like one that was never written: it reports the member missing.
-     *
-     * <p>THIS HAD BEEN FIXED IN ONE PLACE AND LEFT EVERYWHERE ELSE. `ensureClinit` grew the by-name
-     * re-resolution when a skipped superclass initializer was traced to it; the other seven chain walks --
-     * vtable slot numbering, the late-virtual walk, the interface collection, field offsets, the clinit-dep
-     * drain and both interface-closure walks -- kept the raw read. It surfaced as
-     * `LINK FAILED MethodBasedTestDescriptor.cleanUp`: the interface walk collected that class's OWN
-     * interfaces, stopped at a stale -1, and never reached `Node` on its superclass, where the default body
-     * lives. A lookup that does not walk the whole chain has now been the bug FOUR times in this file.
-     *
-     * <p>The blob does not move, so the stored name offset stays valid; the result is cached, so a chain is
-     * re-resolved at most once per class. Self-reference answers -1 rather than looping.
-     */
-    static int superRegOf(int reg)
-    {
-        if (clTab == null || reg < 0 || reg >= clCount || clTab[reg] == null)
-        {
-            return -1;
-        }
-        int sup = clTab[reg].superReg;
-        if (sup < 0 && clTab[reg].superNameOff != 0)
-        {
-            sup = classRegByNameAt(clTab[reg].base, clTab[reg].superNameOff);
-            clTab[reg].superReg = sup;
-        }
-        return sup == reg ? -1 : sup;
-    }
 
     /** Registry index of the loaded class named by the absolute utf8 run {@code clsU}, or -1. */
     /**
@@ -16470,12 +15548,12 @@ public final class Loader
     static long catchTypeByName(long clsU)
     {
         int r = regBySigU(Address.fromLong(clsU));
-        return r < 0 ? 0L : clTab[r].type.toLong();
+        return r < 0 ? 0L : ClassRegistry.clTab[r].type.toLong();
     }
 
     private static int regBySigU(Address clsU)
     {
-        return classRegAt(clsU, 0);                      // an absolute {u2 len}{bytes} run: offset 0 of clsU
+        return ClassRegistry.classRegAt(clsU, 0);                      // an absolute {u2 len}{bytes} run: offset 0 of clsU
     }
 
     /**
@@ -16674,7 +15752,7 @@ public final class Loader
             dlTab = new DynLink[MAXLAZY];
             dlN = 0;
         }
-        int reg = clCount - 1;                          // this class's registry index (registerClassStructure did clCount++)
+        int reg = ClassRegistry.clCount - 1;                          // this class's registry index (registerClassStructure did ClassRegistry.clCount++)
         int pd = findPdByName(gbase, gThisNameOff);
         int blobLen = pdLen[pd];
         Address p = gMethodsStart;
@@ -16833,17 +15911,17 @@ public final class Loader
     /** The registered body interface {@code ir} declares for (name, desc in {@code base}), or 0 if none is. */
     static long regBodyIn(int ir, Address base, int nameOff, int descOff)
     {
-        Address ibase = clTab[ir].base;
-        int k = rgBucket[Utf8.utf8HashFrom(clTab[ir].nameHash, base, nameOff) & (RGTAB - 1)];
+        Address ibase = ClassRegistry.clTab[ir].base;
+        int k = MethodRegistry.rgBucket[Utf8.utf8HashFrom(ClassRegistry.clTab[ir].nameHash, base, nameOff) & (MethodRegistry.RGTAB - 1)];
         while (k >= 0)
         {
-            if (rgTab[k].base.EQ(ibase) && rgTab[k].buf != 0L
-                    && utf8EqAt(base, nameOff, rgTab[k].base, rgTab[k].nameOff)
-                    && utf8EqAt(base, descOff, rgTab[k].base, rgTab[k].descOff))
+            if (MethodRegistry.rgTab[k].base.EQ(ibase) && MethodRegistry.rgTab[k].buf != 0L
+                    && utf8EqAt(base, nameOff, MethodRegistry.rgTab[k].base, MethodRegistry.rgTab[k].nameOff)
+                    && utf8EqAt(base, descOff, MethodRegistry.rgTab[k].base, MethodRegistry.rgTab[k].descOff))
             {
-                return rgTab[k].buf;
+                return MethodRegistry.rgTab[k].buf;
             }
-            k = rgNext[k];
+            k = MethodRegistry.rgNext[k];
         }
         return 0L;
     }
@@ -16864,22 +15942,6 @@ public final class Loader
         obj.plus(0L).store(stringTib());
         obj.plus(16L).store(arr);
         return obj.toLong();
-    }
-
-
-    /** Registry index of {@code obj}'s class, or -1 (null, or a raw array carrying no Type). */
-    static int regOfObject(ObjectReference obj)
-    {
-        if (obj.isNull())
-        {
-            return -1;
-        }
-        long tib = obj.toAddress().plus(0L).loadLong();
-        if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
-        {
-            return -1;                                  // raw array: no Type node to key on
-        }
-        return regOfType(Address.fromLong(tib).loadAddress());            // TIB[0] = Type
     }
 
 
@@ -17166,7 +16228,7 @@ public final class Loader
         lzTab[idx] = new LazyMethod();
         lzTab[idx].blob = gbase;
         lzTab[idx].len = pdLen[pd];
-        lzTab[idx].reg = classRegByName(gThisNameOff);
+        lzTab[idx].reg = ClassRegistry.classRegByName(gThisNameOff);
         lzTab[idx].nameOff = 0;
         lzTab[idx].descOff = gvTab[s].desc;
         lzTab[idx].slot = 0L;                               // shared stub buffer: no single slot to patch
@@ -17189,87 +16251,6 @@ public final class Loader
         return buf.toLong();                            //   this method would otherwise mint N identical stubs
     }
 
-
-    /** Instance-field byte offset for the field named by {@code *ref} index. */
-    static int fieldOffsetOf(int idx)
-    {
-        if (utf8Eq(refClassNameOff(idx), gThisNameOff))
-        {
-            int nameOff = mrefNameOff(idx);                // Fieldref layout == Methodref layout
-            int s = 0;
-            while (s < gifCount)
-            {
-                if (gifName[s] == nameOff)
-                {
-                    fieldOffsetLog(refClassNameOff(idx), nameOff, 16 + s * 8, 0);   // 0 = same-class fast path
-                    return 16 + s * 8;                     // this class's own field (ObjectModel: +16)
-                }
-                s += 1;
-            }
-            fieldOffsetLog(refClassNameOff(idx), nameOff, -1, 9);  // 9 = same-class MISS, fell through
-        }
-        return globalFieldOffset(idx);                     // another class, or an inherited field
-    }
-
-    /**
-     * Whether Fieldref {@code idx} names a {@code volatile} field -- the JIT then fences the access (see
-     * {@code Baseline.getfield}). Resolved the way {@link #fieldOffsetOf} and the static lookup resolve the
-     * field itself: this class's own fields, then the registries class-qualified, then the superclass chain.
-     * Compile-safe: it walks tables and never re-parses a constant pool. An unresolvable field answers false;
-     * the access it guards is then unresolved anyway, and takes that path's own retry or report.
-     */
-    static boolean fieldIsVolatile(int idx, boolean isStatic)
-    {
-        int classOff = refClassNameOff(idx);
-        int nameOff = mrefNameOff(idx);
-        if (utf8Eq(classOff, gThisNameOff))
-        {
-            int s = 0;
-            int n = isStatic ? gsfCount : gifCount;
-            while (s < n)
-            {
-                int nm = isStatic ? gsfName[s] : gifName[s];
-                if (nm == nameOff)
-                {
-                    return ((isStatic ? gsfAccess[s] : gifAccess[s]) & 0x0040) != 0;   // ACC_VOLATILE
-                }
-                s += 1;
-            }
-        }
-        Address clsBase = gbase;
-        int clsOff = classOff;
-        int hops = 0;
-        while (hops < 64)
-        {
-            int a = registeredFieldAccess(clsBase, clsOff, nameOff, isStatic);
-            if (a >= 0)
-            {
-                return (a & 0x0040) != 0;
-            }
-            int pd = findPdByName(clsBase, clsOff);
-            if (pd < 0 || pdSuperOff[pd] == 0)
-            {
-                return false;
-            }
-            clsBase = pdBase.get(pd);
-            clsOff = pdSuperOff[pd];
-            hops += 1;
-        }
-        return false;
-    }
-
-    /** access_flags of the registered field {@code nameOff} (in gbase) DECLARED by the class named at
-     *  {@code clsBase+clsOff}, or -1. */
-    private static int registeredFieldAccess(Address clsBase, int clsOff, int nameOff, boolean isStatic)
-    {
-        if (isStatic)
-        {
-            int k = sgIndexOf(clsBase, clsOff, gbase, nameOff);   // the static registry's hash index
-            return k < 0 ? -1 : sgTab[k].access;
-        }
-        int i = fldIndexOf(clsBase, clsOff, gbase, nameOff);   // the same lookup globalFieldOffset makes
-        return i < 0 ? -1 : fldTab[i].access;
-    }
 
     /** Resolve Methodref {@code idx} to its (same-class) method's bytecode; set {@code gcodeLen}. */
     private static int gCalleeSync;    // ACC_SYNCHRONIZED of the method calleeCodeOf last found
@@ -17343,47 +16324,10 @@ public final class Loader
     }
 
 
-    /**
-     * Loaded-class-registry index of the class named {@code want}, or -1 if it isn't loaded.
-     *
-     * <p>THROUGH THE CLASS-NAME INDEX, not a scan. This was a linear walk of every registered class (~3,000 in a
-     * TLS program) with a byte compare at each, and it is on per-EXECUTION paths: resolveUnresolvedNew (a
-     * deferred `new`) and resolveLinkTarget both called it twice every time. MEASURED (qprof, SslEngineProbe,
-     * 2026-11-06): those two were the top callers of the byte-compare leaves in a warm TLS session. The hash is
-     * the FNV-1a fold {@link Utf8#utf8Hash} applies to a Utf8 run, so it lands in the bucket {@link RVMClass#nameHash}
-     * filed the class in, and the chain walk keeps the LOWEST matching index -- the entry the scan returned.
-     */
-    static int classIndexByName(byte[] want)
-    {
-        if (clTab == null || clCount == 0)
-        {
-            return -1;
-        }
-        buildClIndex();
-        int h = 0x811C9DC5;
-        int j = 0;
-        while (j < want.length)
-        {
-            h = (h ^ (want[j] & 0xFF)) * 0x01000193;
-            j += 1;
-        }
-        int best = -1;
-        int k = clBucket[h & (CLTAB - 1)];
-        while (k >= 0)
-        {
-            if ((best < 0 || k < best) && Utf8.utf8IsAtBase(clTab[k].base, clTab[k].nameOff, want))
-            {
-                best = k;
-            }
-            k = clNext[k];
-        }
-        return best;
-    }
-
     /** Loaded-class-registry index of {@code java/lang/String}, or -1 if it isn't loaded. */
     private static int stringClassIndex()
     {
-        return classIndexByName(Magic.bytes("java/lang/String"));
+        return ClassRegistry.classIndexByName(Magic.bytes("java/lang/String"));
     }
 
 
@@ -17441,10 +16385,10 @@ public final class Loader
         {
             return writeClassName(type, Magic.addrOf(out) + 24L, p);   // elements at +24; descriptor form
         }
-        int r = regOfType(type);
-        if (r >= 0 && clTab != null && clTab[r] != null)
+        int r = ClassRegistry.regOfType(type);
+        if (r >= 0 && ClassRegistry.clTab != null && ClassRegistry.clTab[r] != null)
         {
-            return putDotted(out, p, clTab[r].base.plus(clTab[r].nameOff));
+            return putDotted(out, p, ClassRegistry.clTab[r].base.plus(ClassRegistry.clTab[r].nameOff));
         }
         // No binary name, so say what it SATISFIES instead: the itable directory lists the interfaces, and
         // for a lambda that is its functional interface -- which is what distinguishes "the factory object
@@ -17469,11 +16413,11 @@ public final class Loader
             {
                 break;                                   // sentinel ends the directory
             }
-            int ir = regOfType(ifType);
+            int ir = ClassRegistry.regOfType(ifType);
             p = putUtf8Bytes(out, p, Magic.bytes(" "));
-            if (ir >= 0 && clTab != null && clTab[ir] != null)
+            if (ir >= 0 && ClassRegistry.clTab != null && ClassRegistry.clTab[ir] != null)
             {
-                p = putDotted(out, p, clTab[ir].base.plus(clTab[ir].nameOff));
+                p = putDotted(out, p, ClassRegistry.clTab[ir].base.plus(ClassRegistry.clTab[ir].nameOff));
             }
             else
             {
@@ -17511,14 +16455,14 @@ public final class Loader
     static Address stringTib()
     {
         int i = stringClassIndex();
-        return i >= 0 ? clTab[i].tib : Address.zero();
+        return i >= 0 ? ClassRegistry.clTab[i].tib : Address.zero();
     }
 
     /** Instance size (bytes) of the loaded mini {@code java/lang/String} (header + fields). */
     static int stringSize()
     {
         int i = stringClassIndex();
-        return i >= 0 ? (16 + clTab[i].fieldCount * 8) : 24;
+        return i >= 0 ? (16 + ClassRegistry.clTab[i].fieldCount * 8) : 24;
     }
 
 
@@ -17547,7 +16491,7 @@ public final class Loader
         {
             return;
         }
-        int reg = regOfType(type);
+        int reg = ClassRegistry.regOfType(type);
         if (reg >= 0)
         {
             ensureClinit(reg);
@@ -17571,19 +16515,19 @@ public final class Loader
         {
             return false;
         }
-        int reg = regOfType(type);
+        int reg = ClassRegistry.regOfType(type);
         int steps = 0;
-        while (reg >= 0 && clTab[reg] != null && steps < 64)
+        while (reg >= 0 && ClassRegistry.clTab[reg] != null && steps < 64)
         {
-            if (clTab[reg].state < RVMClass.ST_INITIALIZED)
+            if (ClassRegistry.clTab[reg].state < RVMClass.ST_INITIALIZED)
             {
                 return true;
             }
-            if (clTab[reg].superInited)
+            if (ClassRegistry.clTab[reg].superInited)
             {
                 return false;
             }
-            int sup = superRegOf(reg);
+            int sup = ClassRegistry.superRegOf(reg);
             if (sup == reg)
             {
                 return false;
@@ -17592,89 +16536,6 @@ public final class Loader
             steps += 1;                                 // a superclass chain is acyclic; this only bounds a bad one
         }
         return false;
-    }
-
-    /** Registry index of the loaded class/interface whose Type node is {@code type}, or -1. */
-    static int regOfType(Address type)
-    {
-        return ctProbe(type);
-    }
-
-    // ---- Type -> class-registry index ---------------------------------------------------------------
-    // Both spellings of this query (`regOfType` and `classRegByType`) walked all `clCount` entries, and
-    // `clCount` grows with every class loaded all boot. `refillImaps` asks it once per itable-directory
-    // ENTRY, per visited imap, per batch -- so it was O(everything loaded) on a path that runs every batch.
-    // TENTH instance of this file's most common defect, and the FIRST one ranked by counters before being
-    // believed: over a 65-batch suite the refill's four step counters read **type=264k against fill=39k,
-    // hole=23k and clos=4k**, so this walk is 81% of the refill and the only one of the four that grows
-    // with the registry.
-    //
-    // SOUND BY CONSTRUCTION, not by a claim about when work may be skipped -- the distinction that separates
-    // this from the `virt` attempt that silently under-marked half a closure. `clTab[i].type` is written
-    // exactly ONCE, at index `clCount`, immediately BEFORE `clCount` is incremented (checked at both
-    // registration sites, the interface arm and the class arm). No entry is ever re-pointed at a different
-    // Type, so an append-only index can never answer for bytes that have changed underneath it.
-    private static final int CTTAB = 8192;              // power of two, > MAXCLASS so chains stay short
-    private static int[] ctBucket;                      // hash -> newest entry with that hash, -1 = empty
-    private static int[] ctNext;                        // chain link, parallel to clTab
-    private static int ctIndexed;                       // clTab[0, ctIndexed) is in the index
-
-    /** Hash a Type NODE ADDRESS. Types come from {@code allocData}, so the low bits are always 0 -- hashing
-     *  the raw address would drop every entry into a handful of buckets. */
-    private static int typeHashOf(Address type)
-    {
-        int h = (int) (type.toLong() >> 3);
-        h = h * 0x9E3779B1;
-        h = h ^ (h >>> 15);
-        return h & (CTTAB - 1);
-    }
-
-    /** Bring the index up to {@code clCount}. Append-only: a class is indexed once, when it is first seen. */
-    private static void ctIndexTo()
-    {
-        if (ctBucket == null)
-        {
-            ctBucket = new int[CTTAB];
-            ctNext = new int[MAXCLASS];
-            // allocArray does NOT zero its elements on this VM (QEMU hands out zeroed DRAM and a Pi at cold
-            // power-on does not), so the empty marker is written explicitly -- garbage here would send a
-            // probe down a chain of arbitrary indices rather than reporting an empty bucket.
-            int b = 0;
-            while (b < CTTAB)
-            {
-                ctBucket[b] = -1;
-                b += 1;
-            }
-            ctIndexed = 0;
-        }
-        while (ctIndexed < clCount)
-        {
-            int h = typeHashOf(clTab[ctIndexed] != null ? clTab[ctIndexed].type : Address.zero());
-            ctNext[ctIndexed] = ctBucket[h];
-            ctBucket[h] = ctIndexed;
-            ctIndexed += 1;
-        }
-    }
-
-    /** The registry index the linear scan would have returned for {@code type}, or -1. */
-    private static int ctProbe(Address type)
-    {
-        ctIndexTo();
-        int best = -1;
-        int i = ctBucket[typeHashOf(type)];
-        while (i >= 0)
-        {
-            rfTypeSteps += 1;
-            // The LOWEST matching index still wins, which the scan gave for free and a chain does not:
-            // head-insertion makes the chain DESCENDING, so it is searched for the minimum rather than
-            // stopped at the first hit. Same care `findPdByName`'s index needed.
-            if (clTab[i] != null && clTab[i].type.EQ(type) && (best < 0 || i < best))
-            {
-                best = i;
-            }
-            i = ctNext[i];
-        }
-        return best;
     }
 
 
@@ -17717,10 +16578,10 @@ public final class Loader
     static int objectClassIndex()
     {
         int i = 0;
-        while (i < clCount)
+        while (i < ClassRegistry.clCount)
         {
             syObjSteps += 1;
-            if (Utf8.utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/Object")))
+            if (Utf8.utf8IsAtBase(ClassRegistry.clTab[i].base, ClassRegistry.clTab[i].nameOff, Magic.bytes("java/lang/Object")))
             {
                 return i;
             }
@@ -17741,8 +16602,8 @@ public final class Loader
      */
     static Address stringTypeAddr()
     {
-        int i = classIndexByName(Magic.bytes("java/lang/String"));
-        return i < 0 ? Address.zero() : clTab[i].type;
+        int i = ClassRegistry.classIndexByName(Magic.bytes("java/lang/String"));
+        return i < 0 ? Address.zero() : ClassRegistry.clTab[i].type;
     }
 
 
@@ -17767,8 +16628,8 @@ public final class Loader
     {
         if (thrTypeCache.isZero())
         {
-            int i = classIndexByName(Magic.bytes("java/lang/Throwable"));
-            thrTypeCache = i < 0 ? Address.zero() : clTab[i].type;
+            int i = ClassRegistry.classIndexByName(Magic.bytes("java/lang/Throwable"));
+            thrTypeCache = i < 0 ? Address.zero() : ClassRegistry.clTab[i].type;
         }
         return thrTypeCache;
     }
@@ -17797,16 +16658,16 @@ public final class Loader
         if (blk != 0L)
         {
             int i = 0;
-            while (i < rgCount)
+            while (i < MethodRegistry.rgCount)
             {
-                if (rgTab[i].buf == blk)
+                if (MethodRegistry.rgTab[i].buf == blk)
                 {
-                    int kind = ctorNameKind(rgTab[i].base.plus(rgTab[i].nameOff + 2L), u2(rgTab[i].base.plus(rgTab[i].nameOff)));
+                    int kind = ctorNameKind(MethodRegistry.rgTab[i].base.plus(MethodRegistry.rgTab[i].nameOff + 2L), u2(MethodRegistry.rgTab[i].base.plus(MethodRegistry.rgTab[i].nameOff)));
                     if (kind == FRAME_KEEP)
                     {
                         return FRAME_KEEP;
                     }
-                    Address type = typeByName(rgTab[i].base.plus(rgTab[i].classOff + 2L), u2(rgTab[i].base.plus(rgTab[i].classOff)));
+                    Address type = typeByName(MethodRegistry.rgTab[i].base.plus(MethodRegistry.rgTab[i].classOff + 2L), u2(MethodRegistry.rgTab[i].base.plus(MethodRegistry.rgTab[i].classOff)));
                     return !type.isZero() && VM.instanceOf(exc, type) != 0 ? kind : FRAME_KEEP;
                 }
                 i += 1;
@@ -17863,9 +16724,9 @@ public final class Loader
     private static Address typeByName(Address p, int len)
     {
         int ci = 0;
-        while (ci < clCount)
+        while (ci < ClassRegistry.clCount)
         {
-            RVMClass c = clTab[ci];
+            RVMClass c = ClassRegistry.clTab[ci];
             if (c != null && u2(c.base.plus(c.nameOff)) == len && Utf8.sameBytesAt(c.base.plus(c.nameOff + 2L), p, len))
             {
                 return c.type;
@@ -17943,10 +16804,10 @@ public final class Loader
         Uart.write(Magic.bytes(" type="));
         VM.printHex(type);
         Uart.write(Magic.bytes(" class="));
-        int reg = classRegByType(type);
+        int reg = ClassRegistry.classRegByType(type);
         if (reg >= 0)
         {
-            printNameAt(clTab[reg].base, clTab[reg].nameOff);
+            printNameAt(ClassRegistry.clTab[reg].base, ClassRegistry.clTab[reg].nameOff);
         }
         else
         {
@@ -18375,7 +17236,7 @@ public final class Loader
     static long resolveUnresolvedNew(long site, long pc)
     {
         int i = (int) site;
-        if (unresBase == null || i < 0 || i >= unresN || clTab == null)
+        if (unresBase == null || i < 0 || i >= unresN || ClassRegistry.clTab == null)
         {
             reportUnresolvedNew(site, pc);              // does not return
         }
@@ -18419,10 +17280,10 @@ public final class Loader
         }
         tib = Address.zero();
         fields = 0;
-        if (reg >= 0 && clTab[reg].state >= RVMClass.ST_INSTANTIATED)
+        if (reg >= 0 && ClassRegistry.clTab[reg].state >= RVMClass.ST_INSTANTIATED)
         {
-            tib = clTab[reg].tib;                       // a half-lifecycle class has no filled TIB: do not use it
-            fields = clTab[reg].fieldCount;
+            tib = ClassRegistry.clTab[reg].tib;                       // a half-lifecycle class has no filled TIB: do not use it
+            fields = ClassRegistry.clTab[reg].fieldCount;
         }
         }
         finally
@@ -18480,14 +17341,14 @@ public final class Loader
      */
     static int objectSizeOf(int classIdx)
     {
-        int r = classRegOf(classIdx);
+        int r = ClassRegistry.classRegOf(classIdx);
         if (r < 0 && !selfClassAt(classIdx))
         {
             int site = unresolvedNewSite(classIdx);
             newLowerLog(classIdx, -1, site);            // DEFERRED: NEW_UNRESOLVED, allocated at first reach
             return -(site + 1);
         }
-        int fields = r >= 0 ? clTab[r].fieldCount : gifCount;
+        int fields = r >= 0 ? ClassRegistry.clTab[r].fieldCount : gifCount;
         newLowerLog(classIdx, 16 + fields * 8, -1);     // INLINE: Heap.alloc + this class's TIB, here and now
         return 16 + fields * 8;
     }

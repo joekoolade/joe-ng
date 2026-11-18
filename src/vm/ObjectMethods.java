@@ -51,10 +51,10 @@ final class ObjectMethods
     {
         int seen = 0;
         int j = 0;
-        while (j < Loader.fldCount)
+        while (j < FieldRegistry.fldCount)
         {
-            if (Loader.fldTab[j] != null
-                    && Loader.utf8EqAt(Loader.clTab[reg].base, Loader.clTab[reg].nameOff, Loader.fldTab[j].base, Loader.fldTab[j].classOff))
+            if (FieldRegistry.fldTab[j] != null
+                    && Loader.utf8EqAt(ClassRegistry.clTab[reg].base, ClassRegistry.clTab[reg].nameOff, FieldRegistry.fldTab[j].base, FieldRegistry.fldTab[j].classOff))
             {
                 if (seen == want)
                 {
@@ -72,10 +72,10 @@ final class ObjectMethods
     {
         int n = 0;
         int j = 0;
-        while (j < Loader.fldCount)
+        while (j < FieldRegistry.fldCount)
         {
-            if (Loader.fldTab[j] != null
-                    && Loader.utf8EqAt(Loader.clTab[reg].base, Loader.clTab[reg].nameOff, Loader.fldTab[j].base, Loader.fldTab[j].classOff))
+            if (FieldRegistry.fldTab[j] != null
+                    && Loader.utf8EqAt(ClassRegistry.clTab[reg].base, ClassRegistry.clTab[reg].nameOff, FieldRegistry.fldTab[j].base, FieldRegistry.fldTab[j].classOff))
             {
                 n += 1;
             }
@@ -109,12 +109,12 @@ final class ObjectMethods
     /** The compiled body of {@code name desc} for {@code obj}'s class, or 0 (null, a raw array, unresolvable). */
     private static long resolveOn(ObjectReference obj, byte[] name, byte[] desc)
     {
-        int reg = Loader.regOfObject(obj);
+        int reg = ClassRegistry.regOfObject(obj);
         if (reg < 0)
         {
             return 0L;
         }
-        return Loader.resolveLinkTarget(Loader.clTab[reg].base.plus(Loader.clTab[reg].nameOff), Loader.utf8Blob(name),
+        return Loader.resolveLinkTarget(ClassRegistry.clTab[reg].base.plus(ClassRegistry.clTab[reg].nameOff), Loader.utf8Blob(name),
                 Loader.utf8Blob(desc));
     }
 
@@ -163,7 +163,7 @@ final class ObjectMethods
     /** {@code Record.hashCode}: a fold over the components. See the note above on why 31 is free to choose. */
     static long recordHash(ObjectReference obj)
     {
-        int reg = Loader.regOfObject(obj);
+        int reg = ClassRegistry.regOfObject(obj);
         if (reg < 0)
         {
             return 0L;
@@ -174,8 +174,8 @@ final class ObjectMethods
         while (i < n)
         {
             int j = recordComponent(reg, i);
-            long v = obj.toAddress().plus(16L).plus(Loader.fldTab[j].slot * 8L).loadLong();
-            h = h * 31 + componentHash(v, u1(Loader.fldTab[j].base.plus(Loader.fldTab[j].descOff + 2L)));
+            long v = obj.toAddress().plus(16L).plus(FieldRegistry.fldTab[j].slot * 8L).loadLong();
+            h = h * 31 + componentHash(v, u1(FieldRegistry.fldTab[j].base.plus(FieldRegistry.fldTab[j].descOff + 2L)));
             i += 1;
         }
         return h;
@@ -192,8 +192,8 @@ final class ObjectMethods
         {
             return 0L;
         }
-        int ra = Loader.regOfObject(a);
-        int rb = Loader.regOfObject(b);
+        int ra = ClassRegistry.regOfObject(a);
+        int rb = ClassRegistry.regOfObject(b);
         if (ra < 0 || ra != rb)
         {
             return 0L;                                  // a different class is never equal to a record
@@ -203,10 +203,10 @@ final class ObjectMethods
         while (i < n)
         {
             int j = recordComponent(ra, i);
-            long off = 16L + Loader.fldTab[j].slot * 8L;
+            long off = 16L + FieldRegistry.fldTab[j].slot * 8L;
             long va = a.toAddress().plus(off).loadLong();
             long vb = b.toAddress().plus(off).loadLong();
-            int tc = u1(Loader.fldTab[j].base.plus(Loader.fldTab[j].descOff + 2L));
+            int tc = u1(FieldRegistry.fldTab[j].base.plus(FieldRegistry.fldTab[j].descOff + 2L));
             if (tc == 'L' || tc == '[')
             {
                 if (va != vb)                           // reference components compare with equals()
@@ -294,7 +294,7 @@ final class ObjectMethods
      */
     static long recordToString(ObjectReference obj)
     {
-        int reg = Loader.regOfObject(obj);
+        int reg = ClassRegistry.regOfObject(obj);
         if (reg < 0)
         {
             return Loader.guestString(Magic.bytes("null"));
@@ -303,7 +303,7 @@ final class ObjectMethods
         // the whole rendering could only carry code points 0..255 however each component was appended.
         char[] out = new char[MAXRECSTR];
         int p = 0;
-        Address nm = Loader.clTab[reg].base.plus(Loader.clTab[reg].nameOff);  // the binary name, as a Utf8
+        Address nm = ClassRegistry.clTab[reg].base.plus(ClassRegistry.clTab[reg].nameOff);  // the binary name, as a Utf8
         int nlen = u2(nm);
         int start = 0;
         int i = 0;
@@ -337,10 +337,10 @@ final class ObjectMethods
                 p = Loader.putAscii(out, p, Magic.bytes(", "));
             }
             int j = recordComponent(reg, k);
-            p = Loader.putUtf8(out, p, Loader.fldTab[j].base.plus(Loader.fldTab[j].nameOff));
+            p = Loader.putUtf8(out, p, FieldRegistry.fldTab[j].base.plus(FieldRegistry.fldTab[j].nameOff));
             p = Loader.putAscii(out, p, Magic.bytes("="));
-            p = putComponent(out, p, obj.toAddress().plus(16L).plus(Loader.fldTab[j].slot * 8L).loadLong(),
-                    u1(Loader.fldTab[j].base.plus(Loader.fldTab[j].descOff + 2L)));
+            p = putComponent(out, p, obj.toAddress().plus(16L).plus(FieldRegistry.fldTab[j].slot * 8L).loadLong(),
+                    u1(FieldRegistry.fldTab[j].base.plus(FieldRegistry.fldTab[j].descOff + 2L)));
             k += 1;
         }
         p = Loader.putAscii(out, p, Magic.bytes("]"));

@@ -187,7 +187,7 @@ final class ArrayTypes
                 el[k] = (byte) b;
                 k += 1;
             }
-            if (Loader.classIndexByName(el) < 0)
+            if (ClassRegistry.classIndexByName(el) < 0)
             {
                 if (Loader.isDenylisted(Loader.utf8Blob(el), 0) || Loader.loadClassIncremental(el).isZero())
                 {
@@ -286,21 +286,21 @@ final class ArrayTypes
         }
         if (cloneableTypeCache.isZero() || serializableTypeCache.isZero())
         {
-            int n = Loader.clCount;
+            int n = ClassRegistry.clCount;
             int i = arrayIfaceScanned;
             while (i < n)
             {
-                if (Loader.clTab[i] != null)
+                if (ClassRegistry.clTab[i] != null)
                 {
                     if (cloneableTypeCache.isZero()
-                            && Utf8.utf8IsAtBase(Loader.clTab[i].base, Loader.clTab[i].nameOff, Magic.bytes("java/lang/Cloneable")))
+                            && Utf8.utf8IsAtBase(ClassRegistry.clTab[i].base, ClassRegistry.clTab[i].nameOff, Magic.bytes("java/lang/Cloneable")))
                     {
-                        cloneableTypeCache = Loader.clTab[i].type;
+                        cloneableTypeCache = ClassRegistry.clTab[i].type;
                     }
                     else if (serializableTypeCache.isZero()
-                            && Utf8.utf8IsAtBase(Loader.clTab[i].base, Loader.clTab[i].nameOff, Magic.bytes("java/io/Serializable")))
+                            && Utf8.utf8IsAtBase(ClassRegistry.clTab[i].base, ClassRegistry.clTab[i].nameOff, Magic.bytes("java/io/Serializable")))
                     {
-                        serializableTypeCache = Loader.clTab[i].type;
+                        serializableTypeCache = ClassRegistry.clTab[i].type;
                     }
                 }
                 i += 1;
@@ -439,11 +439,11 @@ final class ArrayTypes
             return Address.zero();
         }
         int i = 0;                                      // strip the leading "[L" and trailing ';' -> class name
-        while (i < Loader.clCount)
+        while (i < ClassRegistry.clCount)
         {
-            if (Utf8.utf8SliceEq(base, off + 2, n - 3, Loader.clTab[i].base, Loader.clTab[i].nameOff))
+            if (Utf8.utf8SliceEq(base, off + 2, n - 3, ClassRegistry.clTab[i].base, ClassRegistry.clTab[i].nameOff))
             {
-                return Loader.clTab[i].type;
+                return ClassRegistry.clTab[i].type;
             }
             i += 1;
         }
@@ -479,11 +479,11 @@ final class ArrayTypes
                 {
                     tib = tab.plus(k * 16L).plus(8L).loadAddress();
                     adopted = true;
-                    int r = Loader.regOfType(elementType);
+                    int r = ClassRegistry.regOfType(elementType);
                     if (r >= 0)
                     {
                         Uart.write(Magic.bytes("  arrayadopt [L"));
-                        Loader.writeName(Loader.clTab[r].base.plus(Loader.clTab[r].nameOff + 2), u2(Loader.clTab[r].base.plus(Loader.clTab[r].nameOff)));
+                        Loader.writeName(ClassRegistry.clTab[r].base.plus(ClassRegistry.clTab[r].nameOff + 2), u2(ClassRegistry.clTab[r].base.plus(ClassRegistry.clTab[r].nameOff)));
                         Uart.putc(0x3B);                // ';'
                     }
                     else

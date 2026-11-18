@@ -79,8 +79,8 @@ final class Indy
             dsVal = new long[MAXDSITE];
             dsDone = new int[MAXDSITE];
         }
-        int reg = Loader.classRegByNameAt(Loader.gbase, Loader.gThisNameOff);
-        Address type = reg >= 0 ? Loader.clTab[reg].type : Address.zero();
+        int reg = ClassRegistry.classRegByNameAt(Loader.gbase, Loader.gThisNameOff);
+        Address type = reg >= 0 ? ClassRegistry.clTab[reg].type : Address.zero();
         int i = 0;
         while (i < dsCount)                             // dedup: the compiler visits each site in both passes
         {
@@ -171,11 +171,11 @@ final class Indy
         int li = dynLinkerIdx[kind];
         if (li < 0)
         {
-            int reg = Loader.classRegByNameBytes(Magic.bytes("java/lang/invoke/MethodHandleNatives"));
+            int reg = ClassRegistry.classRegByNameBytes(Magic.bytes("java/lang/invoke/MethodHandleNatives"));
             if (reg < 0)
             {
                 MethodHandles.ensureMhnLoaded();
-                reg = Loader.classRegByNameBytes(Magic.bytes("java/lang/invoke/MethodHandleNatives"));
+                reg = ClassRegistry.classRegByNameBytes(Magic.bytes("java/lang/invoke/MethodHandleNatives"));
             }
             if (reg >= 0)
             {
@@ -184,7 +184,7 @@ final class Indy
                 byte[] desc = kind == DYN_INDY ? Magic.bytes("(Ljava/lang/Class;I)Ljava/lang/invoke/CallSite;")
                         : kind == DYN_CONST ? Magic.bytes("(Ljava/lang/Class;I)Ljava/lang/Object;")
                         : Magic.bytes("(Ljava/lang/Class;I)J");
-                li = Reflection.methodResolveExact(Loader.clTab[reg].type, ObjectReference.fromLong(Loader.guestBytes(name)),
+                li = Reflection.methodResolveExact(ClassRegistry.clTab[reg].type, ObjectReference.fromLong(Loader.guestBytes(name)),
                         ObjectReference.fromLong(Loader.guestBytes(desc)));
                 dynLinkerIdx[kind] = li;
             }
@@ -472,7 +472,7 @@ final class Indy
                 : ch == 'J' ? Magic.bytes("java/lang/Long")
                 : ch == 'F' ? Magic.bytes("java/lang/Float")
                 : Magic.bytes("java/lang/Double");
-        int ci = Loader.classIndexByName(name);
-        return ci < 0 ? 0L : Loader.clTab[ci].type.toLong();
+        int ci = ClassRegistry.classIndexByName(name);
+        return ci < 0 ? 0L : ClassRegistry.clTab[ci].type.toLong();
     }
 }
