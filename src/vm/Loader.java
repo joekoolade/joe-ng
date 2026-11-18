@@ -55,27 +55,27 @@ public final class Loader
     static int[] gBcToWord; // last compiled method's bci -> machine word offset (Baseline.bcToWord)
     static int gAfterCp;    // offset just past the constant pool (stable; gp gets reused as a cursor)
     static int[] gcpTag;    // tag of each entry (7 = Class — used for dependencies)
-    private static int gcpCount;
+    static int gcpCount;
     // Per-blob constant-pool PARSE CACHE. parseConstPool used to copy the whole blob (toBytes) + allocate
     // gcp/gcpTag/litObjByCp EVERY call; RTA (resolveVirtuals) re-parses each instantiated class's superclass
     // chain once per fixpoint iteration -> thousands of parses -> ~190 MiB of garbage byte[]/int[] copies that
     // fill the demand-load arena (blocker (e)). Cache the parse keyed by blob base so each blob is copied+parsed
     // ONCE; later calls reuse it. The cache arrays are scanned loader statics, so the byte[]/int[] survive GC.
     private static final int MAXPARSECACHE = 2048;
-    private static AddressArray pcBase; // cached blob base address (0 = empty slot)
+    static AddressArray pcBase; // cached blob base address (0 = empty slot)
     private static byte[][] pcBytes; // the toBytes copy
-    private static int[][] pcCp;     // cp entry offsets
+    static int[][] pcCp;     // cp entry offsets
     private static int[][] pcCpTag;  // cp entry tags
     private static long[][] pcLitObj;// per-entry ldc-String intern cache
     private static int[] pcCpCount;  // cp entry count
-    private static int[] pcAfterCp;  // offset past the constant pool
-    private static int pcN;
+    static int[] pcAfterCp;  // offset past the constant pool
+    static int pcN;
     private static int gClassModifiers;   // current class's access_flags (ACC_SUPER stripped) — cached into clModifiers
     static int gcodeLen;    // length of the located method's bytecode
     static int gMaxLocals;  // ... and its max_locals (frame sizing)
     static int gFoundDescOff;  // descriptor Utf8 offset of the last findMethod hit
     static int gFoundStatic;   // 1 if that method is static
-    private static int gFoundSync;     // 1 if ACC_SYNCHRONIZED (the implicit method monitor, JVMS 2.11.10)
+    static int gFoundSync;     // 1 if ACC_SYNCHRONIZED (the implicit method monitor, JVMS 2.11.10)
     private static int gFrameSize;     // frame size of the last method the core compiled
     private static int gRegLocals;     // its callee-saved local count (x19..) — for unwind's pre-try local restore
     // Try/catch ranges of the last method the core compiled (machine word offsets + catch-type cp),
@@ -122,7 +122,7 @@ public final class Loader
     // calls or type-tests (needed by the class/method/field registries).
     static final int MAXBLOB = 4096;
     static AddressArray pdBase;        // blob address
-    private static int[] pdLen;          // blob length
+    static int[] pdLen;          // blob length
     static int[] pdNameOff;      // its own this_class name Utf8 offset
     private static int[] pdDone;         // 1 once phase-A structure is loaded
     private static int[] pdDoneB;        // 1 once phase-B bodies are compiled + TIB filled
@@ -163,11 +163,11 @@ public final class Loader
     public static void verifyCells()
     {
         int k = 0;
-        while (k < dlN)
+        while (k < DynamicLinker.dlN)
         {
-            if (dlTab[k] != null && dlTab[k].cell != 0L)
+            if (DynamicLinker.dlTab[k] != null && DynamicLinker.dlTab[k].cell != 0L)
             {
-                long target = Address.fromLong(dlTab[k].cell).loadLong();
+                long target = Address.fromLong(DynamicLinker.dlTab[k].cell).loadLong();
                 if (target >= Heap.CODE_BASE && target < Heap.CODE_LIMIT
                         && Heap.codeBlockFreeAt(Address.fromLong(target)) == 1)
                 {
@@ -176,7 +176,7 @@ public final class Loader
                     Uart.write(Magic.bytes(" target="));
                     VM.printHex(target);
                     Uart.write(Magic.bytes(" cell="));
-                    VM.printHex(dlTab[k].cell);
+                    VM.printHex(DynamicLinker.dlTab[k].cell);
                     Uart.write(Magic.bytes("\n  method: "));
                     StackTrace.printFrameAt(Address.fromLong(target));
                     Uart.putc(0x0A);
@@ -187,19 +187,19 @@ public final class Loader
         }
     }
 
-    private static void verifyDlTab()
+    static void verifyDlTab()
     {
         int k = 0;
-        while (k < dlN)
+        while (k < DynamicLinker.dlN)
         {
-            if (dlTab[k] == null || dlTab[k].blob.isZero())
+            if (DynamicLinker.dlTab[k] == null || DynamicLinker.dlTab[k].blob.isZero())
             {
                 Uart.write(Magic.bytes("\nDL WENT ZERO at k="));
                 VM.printDec(k);
                 Uart.write(Magic.bytes(" of "));
-                VM.printDec(dlN);
+                VM.printDec(DynamicLinker.dlN);
                 Uart.write(Magic.bytes(" null="));
-                VM.printDec(dlTab[k] == null ? 1 : 0);
+                VM.printDec(DynamicLinker.dlTab[k] == null ? 1 : 0);
                 Uart.write(Magic.bytes(" while compiling "));
                 printCurrentClass();
                 Uart.putc(0x0A);
@@ -236,7 +236,7 @@ public final class Loader
 
     /**
      * Initialization barrier: run class {@code reg}'s pending {@code <clinit>} now, if it has one. Called
-     * from {@link #lazyCompile} BEFORE the compile context is restored — the initializer's own calls can
+     * from {@link LazyCompiler#lazyCompile} BEFORE the compile context is restored — the initializer's own calls can
      * re-enter lazyCompile, and each nested compile clobbers the {@code g*} context, so it must not run
      * inside ours.
      */
@@ -382,14 +382,14 @@ public final class Loader
      *  the compiled body once first-called. */
     private static long dlStubByName(byte[] cls, byte[] name, byte[] desc)
     {
-        if (dlTab == null)
+        if (DynamicLinker.dlTab == null)
         {
             return 0L;
         }
         int k = 0;
-        while (k < dlN)
+        while (k < DynamicLinker.dlN)
         {
-            DynLink d = dlTab[k];
+            DynLink d = DynamicLinker.dlTab[k];
             if (Utf8.utf8IsAtBase(d.blob, d.classOff, cls)
                     && Utf8.utf8IsAtBase(d.blob, d.nameOff, name)
                     && Utf8.utf8IsAtBase(d.blob, d.descOff, desc))
@@ -558,11 +558,11 @@ public final class Loader
         runtimeUp = true;
         if (VM.lazyCompileAddr == 0L)                       // dead at runtime (writer stashes the address);
         {                                                  //   makes lazyCompile reachable so the writer
-            long u = lazyCompile(-1);                       //   compiles + stashes it for the 1b trampoline
+            long u = LazyCompiler.lazyCompile(-1);                       //   compiles + stashes it for the 1b trampoline
         }
         if (VM.resolveLinkStubAddr == 0L)                   // same trick for the link-stub trampoline's target
         {
-            long u = resolveLinkStub(-1);
+            long u = DynamicLinker.resolveLinkStub(-1);
         }
         resetLoader();                                      // the only one: it ALLOCATES the loader tables
         addBlob(VM.objectBytes, (int) VM.objectLen);        // Object first: canonical hashCode/equals/toString slots
@@ -739,11 +739,11 @@ public final class Loader
         stubTabCheck(className);
         if (VM.lazyCompileAddr == 0L)                       // dead at runtime (writer stashes the address);
         {                                                  //   makes lazyCompile reachable so the writer
-            long u = lazyCompile(-1);                       //   compiles + stashes it for the 1b trampoline
+            long u = LazyCompiler.lazyCompile(-1);                       //   compiles + stashes it for the 1b trampoline
         }
         if (VM.resolveLinkStubAddr == 0L)                   // same trick for the link-stub trampoline's target
         {
-            long u = resolveLinkStub(-1);
+            long u = DynamicLinker.resolveLinkStub(-1);
         }
         resetLoader();
         addBlob(VM.objectBytes, (int) VM.objectLen);        // Object first: canonical hashCode/equals/toString slots
@@ -1158,12 +1158,12 @@ public final class Loader
     /** Lazy-method count and the dispatch cell of entry {@code i} (0 if it has none), for CodeCompact. */
     static int lazyCount()
     {
-        return lzN;
+        return LazyCompiler.lzN;
     }
 
     static long lazyCellAt(int i)
     {
-        return lzTab == null || i < 0 || i >= lzTab.length || lzTab[i] == null ? 0L : lzTab[i].slot;
+        return LazyCompiler.lzTab == null || i < 0 || i >= LazyCompiler.lzTab.length || LazyCompiler.lzTab[i] == null ? 0L : LazyCompiler.lzTab[i].slot;
     }
 
 
@@ -1451,22 +1451,22 @@ public final class Loader
                 // "class named by the empty string"; before the zero pass it would have matched stale text.)
                 // They are dropped here, inside the reclaim, so a batch that runs BEFORE reclaim is armed
                 // keeps its still-valid cells: the philosophers' surviving tasks dispatch through them.
-                dlTab = null;
-                dlN = 0;
-                dlBucket = null;                        // the name index goes with the table it indexes
-                lzTab = null;
-                lzN = 0;
+                DynamicLinker.dlTab = null;
+                DynamicLinker.dlN = 0;
+                DynamicLinker.dlBucket = null;                        // the name index goes with the table it indexes
+                LazyCompiler.lzTab = null;
+                LazyCompiler.lzN = 0;
                 // ... and the IMAGE-side memos that point into the code just rewound. bakeResolve caches into
                 // the writer-emitted bake-stub table, which no reclaim can reach, so without this a memo
                 // keeps handing out a deferral stub whose lazy index belongs to the table being dropped.
-                invalidateBakeMemos();
+                VirtualDispatch.invalidateBakeMemos();
             }
         }
         litAnchor = null;                               // per-batch GC anchor for interned literals: the rewind
         litAnchorN = 0;                                 //   reclaimed both the literals and the anchor array
         strPool = null;                                 // ... and the string pool those anchors keep alive
         strPoolN = 0;
-        clearSiteMemos();                               // a (site, Type) answer holds within a launch only
+        VirtualDispatch.clearSiteMemos();                               // a (site, Type) answer holds within a launch only
         VM.byteArrayTibCache = Address.zero();          // the batch's [B TIB was just reclaimed with its heap
         VM.stringTypeCache = Address.zero();            // ... and so was the Type it is paired with: a STALE one
                                                         //   could be matched by a later Type at the same address
@@ -1492,8 +1492,8 @@ public final class Loader
         BootSeeds.sdPrim = false;
         BootSeeds.sdPrimMask = 0;
         relocRecording = 0;
-        lkCount = 0;                                    // link stubs name utf8 inside THIS batch's blobs
-        linkTrampAddr = 0L;                             //   (and the trampoline lives in reclaimable code)
+        DynamicLinker.lkCount = 0;                                    // link stubs name utf8 inside THIS batch's blobs
+        DynamicLinker.linkTrampAddr = 0L;                             //   (and the trampoline lives in reclaimable code)
         // FILLED WITH -1, because the zero default is a VALID REGISTRY INDEX. recordTailReloc (lambda and
         // method-reference thunks) did not set this field, so every such site memoised to rgTab[0] and
         // dispatched into an unrelated method -- the suite caught it as `reflective lambda thread = 0
@@ -1726,7 +1726,7 @@ public final class Loader
                                                          // jitFrameCount, so a stale jitLocalCount would keep growing past
                                                          // JIT_FRAME_MAX and overrun jitLocalTable into adjacent heap.
         VM.jitHandlerCount = 0L;                         // resetting per batch stops them accumulating past the caps
-        registerTrampFrames();                           // ... but the trampolines outlive the table (see there)
+        StubFrames.registerTrampFrames();                           // ... but the trampolines outlive the table (see there)
         if (RECLAIM_BY_GC != false && reclaimArmed != 0)
         {
             // Every registry above has just been replaced, so the previous batch's classes, TIBs, Types,
@@ -1975,7 +1975,7 @@ public final class Loader
      * <p>Seeding them reachable instead, as {@code rootBlob} does, is what an earlier attempt did and it
      * "pulled a huge closure into the 2nd (incremental) batch and corrupted the heap" — an arbitrary
      * java.base class named at runtime drags in everything it mentions. A deferral stub pulls NOTHING: it is
-     * a few instructions that route the first call into {@link #lazyCompile}, which compiles the body then
+     * a few instructions that route the first call into {@link LazyCompiler#lazyCompile}, which compiles the body then
      * and resolves its own relocs, exactly as reflection's on-demand path already does.
      */
     static void stubBlob(long blobBytes)
@@ -2794,7 +2794,7 @@ public final class Loader
             q = q.plus(1);
         }
         int off = internIndyNameAt(start, q.diff(start).toInt());
-        if (regBySigU(indyNameBuf.plus(off)) >= 0)
+        if (DynamicLinker.regBySigU(indyNameBuf.plus(off)) >= 0)
         {
             return;                                      // already registered: re-pending it every round
         }                                                //   would grow the pend list for nothing
@@ -3093,13 +3093,13 @@ public final class Loader
     // both registry tiers walk a NAME-keyed bucket, and a hot name (`<init>`, `run`, `get`) chains one entry
     // per class that declares it -- so the chain grows with the registry all boot, exactly like the scans
     // this file has already had to index seven times.
-    private static long t1Steps, t2Steps, dlSteps;
+    static long t1Steps, t2Steps, dlSteps;
 
     /**
      * The pd index of the blob named at {@code (base, off)}, or -1.
      *
      * <p>PROBED, not scanned. This was a linear walk of all {@code pdCount} blobs, and
-     * {@link #globalBufByRef}'s super-chain tier calls it once for the ref class plus once per superclass
+     * {@link DynamicLinker#globalBufByRef}'s super-chain tier calls it once for the ref class plus once per superclass
      * LEVEL, for every site that misses the direct tier -- and those sites never memoise, so they re-resolve
      * on every batch while {@code pdCount} grows all boot. Eighth instance of this file's most common defect.
      *
@@ -4405,7 +4405,7 @@ public final class Loader
     }
 
     /** Register the class named at Utf8 offset {@code off} in {@code base} if it's embedded; returns its base or 0. */
-    private static long registerNameFromDir(Address base, int off)
+    static long registerNameFromDir(Address base, int off)
     {
         Address namePtr = base.plus(off + 2);                 // skip the u2 length prefix
         int len = u2(base.plus(off));
@@ -4838,7 +4838,7 @@ public final class Loader
         {
             return Address.zero();                                  // not embedded in the classDir
         }
-        pullIndyIfaces(Address.fromLong(blob));         // its lambdas' interfaces: named in no CONSTANT_Class
+        LazyCompiler.pullIndyIfaces(Address.fromLong(blob));         // its lambdas' interfaces: named in no CONSTANT_Class
         // Seed the class's <clinit> as the reachability root: it (and everything it transitively calls) gets
         // compiled + run, and the class's structure/Type/mirror is registered by loadStructure regardless. The
         // class's OTHER methods are compiled LAZILY when reflectively invoked (M2) — eagerly seeding them all
@@ -4882,7 +4882,7 @@ public final class Loader
         {
             addStoppableBlob(blob, len);                // a /run program's class: its loops poll for a stop
         }
-        pullIndyIfaces(blob);                           // as loadClassIncremental: a lambda's interface is named
+        LazyCompiler.pullIndyIfaces(blob);                           // as loadClassIncremental: a lambda's interface is named
                                                         //   in no CONSTANT_Class, so nothing else pulls it
         rootBlob(blobKey);                              // EVERY method is a root: nothing loaded calls into a
                                                         //   class the program just handed us (see rootBlob)
@@ -5105,7 +5105,7 @@ public final class Loader
         // only falls back to Runnable.run when that entry is absent, which is REPORTED: the thread still runs, but
         // a handler set on it would silently never fire.
         long buf = InterfaceInvocation.ifaceMethodFromItable(recv, metalThreadEntryTypeAddr(), 0);
-        if (buf == 0L || !plausibleCode(Address.fromLong(buf)))
+        if (buf == 0L || !DynamicLinker.plausibleCode(Address.fromLong(buf)))
         {
             if (!metalThreadEntryTypeAddr().isZero() && !reportedNoThreadEntry)
             {
@@ -5114,7 +5114,7 @@ public final class Loader
             }
             buf = InterfaceInvocation.runFromItable(recv);
         }
-        if (buf == 0L || !plausibleCode(Address.fromLong(buf)))
+        if (buf == 0L || !DynamicLinker.plausibleCode(Address.fromLong(buf)))
         {
             Uart.write(Magic.bytes("\n  RUNTRAMP: no run()V for "));
             long tib = recv.toAddress().loadLong();
@@ -5721,7 +5721,7 @@ public final class Loader
      */
     private static void reportZeroCellBind(Address refBase, int classOff, int nameOff)
     {
-        if (regBySigU(refBase.plus(classOff)) < 0)
+        if (DynamicLinker.regBySigU(refBase.plus(classOff)) < 0)
         {
             return;                                     // class not loaded yet: a later batch resolves it
         }
@@ -5810,7 +5810,7 @@ public final class Loader
             Uart.write(Magic.bytes("DENYLISTED (reading null is intended)"));
             return;
         }
-        boolean registered = regBySigU(clsU) >= 0;
+        boolean registered = DynamicLinker.regBySigU(clsU) >= 0;
         // Ask the IMAGE DIRECTORY, not classIndexByName -- that searches the LOADED registry (clTab), so it
         // answers "not loaded", which is the question we are already asking with regBySigU. The first cut of
         // this instrument used it and reported "absent from the classDir" for a class the image plainly
@@ -5931,17 +5931,17 @@ public final class Loader
     // the writer-side 10-local ceiling both make on-the-fly recursion awkward).
     private static final int MAXM = 512;
     static long[] mCode;      // each reachable method's bytecode address
-    private static int[] mLen;        // ... and its length
+    static int[] mLen;        // ... and its length
     static long[] mBuf;       // ... and the buffer assigned to it
     private static long[] mEnd;       // ... and the END of what emitMethod actually wrote there (0 = nothing,
                                       //     either deferred -- the stub publishes itself -- or not emitted)
     static long[] mLine;      // ... its line table addr (built in emitMethod; registerAll copies -> rgLine)
     static AddressArray mSrc; // ... its class's SourceFile filename Utf8 addr (-> rgSrc)
-    private static int[] mLocals;     // ... its max_locals
-    private static int[] mDescOff;    // ... its descriptor Utf8 offset (for the shared core's prologue)
-    private static int[] mStatic;     // ... 1 if static
-    private static int[] mSync;       // ... 1 if ACC_SYNCHRONIZED
-    private static int[] mDefer;      // M8 defer: 1 if this method's compile is deferred to first call (gated)
+    static int[] mLocals;     // ... its max_locals
+    static int[] mDescOff;    // ... its descriptor Utf8 offset (for the shared core's prologue)
+    static int[] mStatic;     // ... 1 if static
+    static int[] mSync;       // ... 1 if ACC_SYNCHRONIZED
+    static int[] mDefer;      // M8 defer: 1 if this method's compile is deferred to first call (gated)
     static int mCount;
 
     /** The on-metal symbol seam: resolves the shared Baseline core's references to addresses. */
@@ -6276,7 +6276,7 @@ public final class Loader
             if (code != 0L && (markActive == 0 || isReach(code) || stubOnly))
             {
                 int isStatic = (u2(p) & 0x0008) != 0 ? 1 : 0;
-                if (phaseACelled(gcp[u2(p.plus(2))], gcp[u2(p.plus(4))]))
+                if (LazyCompiler.phaseACelled(gcp[u2(p.plus(2))], gcp[u2(p.plus(4))]))
                 {
                     // Metadata-only: this static already has a structure-time cell (armPhaseACells), so it is
                     // never sized, emitted or registered here -- it compiles on first call through that cell.
@@ -6289,7 +6289,7 @@ public final class Loader
                     // for the body (statics went the cell way above). EVERY method kind defers now,
                     // `<init>` included -- see notInit, which is retired.
                     boolean defer = stubOnly                    // a stub-blob virtual: NEVER compile the body here
-                            || stage2Gated(gbase, gThisNameOff);
+                            || LazyCompiler.stage2Gated(gbase, gThisNameOff);
                     if (defer && mCount > 0 && mCode[mCount - 1] == code)
                     {
                         mDefer[mCount - 1] = 1;         // compile this method on first call, not now
@@ -7241,7 +7241,7 @@ public final class Loader
      * (a native), so we provide just the table. gStatics is this class's block; the compiled getstatic reads
      * the same slot address.
      */
-    private static void provideKnownStatics()
+    static void provideKnownStatics()
     {
         if (Utf8.utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/String")))
         {
@@ -7359,10 +7359,10 @@ public final class Loader
      *  calling a raw buffer is not an active use (see {@link #fmtBuf}). */
     private static long boxValueOfBuf(byte[] cls, byte[] desc)
     {
-        long buf = bufBySigU(utf8Blob(cls), utf8Blob(Magic.bytes("valueOf")), utf8Blob(desc));
+        long buf = DynamicLinker.bufBySigU(utf8Blob(cls), utf8Blob(Magic.bytes("valueOf")), utf8Blob(desc));
         if (buf == 0L)
         {
-            buf = compileSigOnDemand(utf8Blob(cls), utf8Blob(Magic.bytes("valueOf")), utf8Blob(desc));
+            buf = LazyCompiler.compileSigOnDemand(utf8Blob(cls), utf8Blob(Magic.bytes("valueOf")), utf8Blob(desc));
         }
         if (buf != 0L)
         {
@@ -7389,16 +7389,16 @@ public final class Loader
      * Resolve {@code cls.toString(desc)} to a compiled buffer, compiling it if nothing has called it yet.
      *
      * <p>THE SECOND STEP IS NOT OPTIONAL, and seedStandardProps records why: {@code rgTab} holds one entry
-     * per COMPILED method and bodies compile on FIRST CALL, so a zero from {@link #bufBySigU} means "not
+     * per COMPILED method and bodies compile on FIRST CALL, so a zero from {@link DynamicLinker#bufBySigU} means "not
      * yet", not "unavailable". Treating those alike is the "works in one closure, broken in another"
      * signature this file keeps paying for.
      */
     private static long fmtBuf(byte[] cls, byte[] desc)
     {
-        long buf = bufBySigU(utf8Blob(cls), utf8Blob(Magic.bytes("toString")), utf8Blob(desc));
+        long buf = DynamicLinker.bufBySigU(utf8Blob(cls), utf8Blob(Magic.bytes("toString")), utf8Blob(desc));
         if (buf == 0L)
         {
-            buf = compileSigOnDemand(utf8Blob(cls), utf8Blob(Magic.bytes("toString")), utf8Blob(desc));
+            buf = LazyCompiler.compileSigOnDemand(utf8Blob(cls), utf8Blob(Magic.bytes("toString")), utf8Blob(desc));
         }
         // INITIALIZE BEFORE CALLING, because calling a compiled buffer raw is not an ACTIVE USE and so
         // skips JVMS 5.5 entirely.
@@ -7456,7 +7456,7 @@ public final class Loader
         // nobody prints is the same defect as an instrument that cannot fire, and this one must not be
         // hidden behind an unrelated condition. 0 on a boot that reclaims would mean the repair is misplaced.
         Uart.write(Magic.bytes("\n  bakeMemosDropped="));
-        VM.printDec(bakeMemosDropped);
+        VM.printDec(VirtualDispatch.bakeMemosDropped);
         if (compiler.Baseline.syncStaticSeen == 0 && compiler.Baseline.syncStaticSkipped == 0)
         {
             return;                                     // no static synchronized method in this program
@@ -7745,7 +7745,7 @@ public final class Loader
                 reportCompile(i, true);
             }
             mEnd[i] = 0L;                               // emitDeferredStub publishes its own buffer
-            emitDeferredStub(i);
+            LazyCompiler.emitDeferredStub(i);
             return;
         }
         if (COMPILE_WATCH)
@@ -7797,70 +7797,7 @@ public final class Loader
         }
     }
 
-    /* RETIRED PREDICATE -- `notInit`. Kept as a note because it records why two method kinds were once
-     * excluded from the deferral route, and both exclusions turned out to be wrong.
-     *
-     * <p>{@code <clinit>} USED to be excluded too, on the stated grounds that "loading a class runs them".
-     * The lazy-initialization arc (#114-#117) retired that premise: classes now initialize on first active
-     * use, the eager list is empty, and initializers reach the engine through {@code ensureClinit} like any
-     * other call. An eagerly compiled initializer for a class that never initializes is pure waste, and it
-     * was expensive waste -- {@code java/lang/Character$UnicodeScript.<clinit>} compiles to 1.17 MB, was
-     * emitted once per batch that loaded the class, and NEVER RAN. Four instances, ~4.7 MB, in an 8 MB
-     * arena: roughly 70% of every code byte the VM emitted.
-     *
-     * <p>{@code <init>} DEFERS NOW TOO, and this predicate is retired. It had said constructors "are reached
-     * through {@code invokespecial} on paths that assume a compiled body" -- a claim with no mechanism behind
-     * it, and the deferral stub IS a compiled body as far as any caller can tell: the buffer is the method's
-     * registered address AND its TIB slot, so a direct BL and a virtual blr both land on it either way.
-     *
-     * <p>ONE ENTRY PER METHOD, WHOSE CONTENTS CHANGE -- which is what HotSpot does and what this VM had
-     * already built everywhere except here. {@code Method::_from_compiled_entry} is "Cache of: _code ?
-     * _code->entry_point() : _adapter->c2i_entry()", one word that always holds a valid callable address, and
-     * {@code Method::set_code} merely stores the new entry into it; call sites never change. joe-ng's
-     * equivalent is this buffer, holding a deferral stub until the body exists. Leaving `<init>` eager kept a
-     * SECOND shape alive, and the constructor-cell arc (reverted in 9e030aa) is what that cost: a cell was
-     * added as a third, and it shadowed the registry.
-     */
 
-    /**
-     * Install method {@code i}'s deferral stub into its (stub-sized) buffer instead of compiling the body:
-     * capture everything {@code compile()} needs (blob/context/bytecode) into an lz entry, then emit a stub
-     * that routes the first call through the shared trampoline. Because the buffer IS the method's registered
-     * address AND its TIB vtable slot, every caller -- direct BL or virtual blr -- hits the stub, so the body
-     * is compiled exactly once, on first use (memoized in {@link #lazyCompile}).
-     */
-    private static void emitDeferredStub(int i)
-    {
-        lazyEnsureTables();
-        if (lzN >= MAXLAZY) { capHalt(Magic.bytes("MAXLAZY-defer"), lzN); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
-        int idx = lzN;
-        int reg = ClassRegistry.classRegByName(gThisNameOff);
-        int pd = findPdByName(gbase, gThisNameOff);
-        lzTab[idx] = new LazyMethod();
-        lzTab[idx].blob = gbase;
-        lzTab[idx].len = pdLen[pd];
-        lzTab[idx].reg = reg;
-        lzTab[idx].nameOff = 0;
-        lzTab[idx].descOff = mDescOff[i];
-        lzTab[idx].slot = 0L;                               // no single slot to patch: the stub buffer is shared
-        lzTab[idx].code = mCode[i];                         // compile straight from the captured bytecode
-        lzTab[idx].codeLen = mLen[i];
-        lzTab[idx].isStatic = mStatic[i];
-        lzTab[idx].isSync = mSync[i];
-        lzTab[idx].maxLocals = mLocals[i];
-        lzTab[idx].cache = 0L;
-        if (lzN >= lzNHigh)
-        {
-            lzNHigh = lzN + 1;                      // high-water across reclaims
-        }
-        lzN += 1;
-        Address buf = Address.fromLong(mBuf[i]);        // stub-sized buffer allocated by sizeMethod
-        noteStub(buf, idx);                             // ... and make it NAMEABLE: without this a fault landing
-                                                        //   here reports stubIdx -1 and reads as an ordinary body
-        Heap.pinCodeAt(buf);                                              // the batch-path twin of buildLazyCompileStub: same stub,
-                                                        //   same lifetime problem, same fix (see the note there)
-        lzTab[idx].stubLit = writeLazyStub(buf, idx).toLong();
-    }
 
     /** Buffer assigned to the method whose bytecode is at {@code code}. */
     private static long bufOf(long code)
@@ -7913,10 +7850,10 @@ public final class Loader
      * {@code patchRelocs} revisits every reloc site from 0 at each batch end -- deliberately, so a callee
      * that loads later resolves for real -- but a site that is STILL unresolved re-derives two things that
      * are fixed: whether its callee's class is denylisted (a pure function of the name bytes) and which link
-     * stub serves that callee ({@link #linkStubFor} already dedups by callee identity, so it can only return
+     * stub serves that callee ({@link DynamicLinker#linkStubFor} already dedups by callee identity, so it can only return
      * the same stub). Recording the stub turns both into one array read.
      *
-     * <p>{@link #linkStubFor}'s own comment asked for exactly this and named the condition: "indexed during
+     * <p>{@link DynamicLinker#linkStubFor}'s own comment asked for exactly this and named the condition: "indexed during
      * the patch arc on the theory that this was hot; MEASURED, the index bought NOTHING ... Revisit only if a
      * measurement puts time here." A measurement does now -- `unresT` is 507.742ms of a 1,300.917ms `callT`,
      * 39% -- which is the third time this file has recorded that a function measuring cold is a statement
@@ -7945,7 +7882,7 @@ public final class Loader
      * Per-site memo: the method-registry index that resolved this site last time, or -1.
      *
      * <p>{@code patchRelocs} re-walks EVERY site at the end of EVERY batch, and it genuinely has to: a site
-     * unresolved in one batch may resolve in the next, and {@link #rememberLazyBody} MUTATES
+     * unresolved in one batch may resolve in the next, and {@link LazyCompiler#rememberLazyBody} MUTATES
      * {@code rgTab[i].buf} when a method is lazily compiled -- so a site's correct target really does change
      * over time and cannot simply be left alone once patched.
      *
@@ -7978,12 +7915,12 @@ public final class Loader
     private static int pcMemo;
     private static int pcResolve;
     private static int pcUnres;
-    /** Registry index {@link #globalBufByRef} resolved through, or -1 when it did not use the direct tier. */
-    private static int rgHitIdx;
+    /** Registry index {@link DynamicLinker#globalBufByRef} resolved through, or -1 when it did not use the direct tier. */
+    static int rgHitIdx;
 
     /**
      * A STANDING LOOKUP: per site, 1 while {@code rcGateRg}/{@code rcGateDl}/{@code rcGateCell} describe the
-     * answer {@link #globalBufByRef} last gave it through the constructor tier or a declaring-class cell, 0
+     * answer {@link DynamicLinker#globalBufByRef} last gave it through the constructor tier or a declaring-class cell, 0
      * otherwise. Cleared when a site is recorded, as {@code rcReg} is.
      *
      * <p>MEASURED (SslEngineProbe, 2026-11-04): of 819,614 batch-end re-resolves, 670,117 were constructor
@@ -8002,13 +7939,13 @@ public final class Loader
     private static long[] rcGateRg;                     // GATE_RG per site: rgBucket index << 32 | head, by level
     private static final int GATE_RG = 3;               // class levels a gated lookup may have probed
 
-    /** What the last {@link #globalBufByRef} walked: valid only when {@code gwOk} (see {@code rcGate}). */
-    private static boolean gwOk;
-    private static int gwRgN;
+    /** What the last {@link DynamicLinker#globalBufByRef} walked: valid only when {@code gwOk} (see {@code rcGate}). */
+    static boolean gwOk;
+    static int gwRgN;
     private static final long[] gwRg = new long[GATE_RG];
     private static long gwCell;
-    /** The {@code dlBucket} probe the last {@link #dlCellOf} walked, as {@code rcGateDl} records it. */
-    private static long dlLastProbe;
+    /** The {@code dlBucket} probe the last {@link DynamicLinker#dlCellOf} walked, as {@code rcGateDl} records it. */
+    static long dlLastProbe;
     private static long[] rsAddr;                       // static sites: address-load site, ref blob base,
     private static AddressArray rsBase;
     private static int[] rsReg, rsClass, rsName;        //   destination reg, class/name Utf8 offsets
@@ -8167,7 +8104,7 @@ public final class Loader
      * own unresolved sites would otherwise stay {@code bl 0} forever and branch to address 0 — which the
      * firmware's low-memory shim turns into a re-entry of the image entry point ("BOOT RE-ENTERED"). The
      * eager path never hit this because every body was emitted before the batch-end patch. Re-resolution here
-     * is also what supplies {@link #globalBufByRef}'s super-chain walk for an INHERITED static/special call
+     * is also what supplies {@link DynamicLinker#globalBufByRef}'s super-chain walk for an INHERITED static/special call
      * (e.g. {@code ArrayList.subList} calling {@code subListRangeCheck}, declared on {@code AbstractList}),
      * which the compile-time {@link #resolveCallBuf} cannot see.
      */
@@ -8199,7 +8136,7 @@ public final class Loader
         int j = rsStart;
         while (j < rsCount)
         {
-            long addr = globalStaticByRef(rsBase.get(j), rsClass[j], rsName[j]);
+            long addr = DynamicLinker.globalStaticByRef(rsBase.get(j), rsClass[j], rsName[j]);
             if (addr == 0L)
             {
                 // Unresolved: the class is not loaded YET. Point it at the permanently-zero cell rather than
@@ -8345,7 +8282,7 @@ public final class Loader
     }
 
     /** rememberLazyBody moved registry entry {@code rg}'s buf: its memoised sites must be revisited. */
-    private static void markRegDirty(int rg)
+    static void markRegDirty(int rg)
     {
         if (!pcListsValid || rg < 0 || rg >= pcIsDirty.length || pcIsDirty[rg])
         {
@@ -8507,7 +8444,7 @@ public final class Loader
         else
         {
             pcResolve += 1;
-            target = globalBufByRef(rcBase.get(i), rcClass[i], rcName[i], rcDesc[i]);
+            target = DynamicLinker.globalBufByRef(rcBase.get(i), rcClass[i], rcName[i], rcDesc[i]);
             if (target != 0L)
             {
                 rcReg[i] = rgHitIdx;                 // -1 for the super-chain/stub tiers: re-resolve those
@@ -8566,7 +8503,7 @@ public final class Loader
             pcUnresDeny += 1;
             if (!isDenylisted(rcBase.get(i), rcClass[i]))
             {
-                long stub = linkStubFor(rcBase.get(i).plus(rcClass[i]), rcBase.get(i).plus(rcName[i]),
+                long stub = DynamicLinker.linkStubFor(rcBase.get(i).plus(rcClass[i]), rcBase.get(i).plus(rcName[i]),
                         rcBase.get(i).plus(rcDesc[i]));
                 if (stub != 0L)
                 {
@@ -8659,14 +8596,14 @@ public final class Loader
      */
     private static boolean gateStands(int i)
     {
-        if (rcGate[i] == 0 || dlTab == null)
+        if (rcGate[i] == 0 || DynamicLinker.dlTab == null)
         {
             return false;
         }
         MethodRegistry.buildRegIndex();
-        buildDlIndex();
+        DynamicLinker.buildDlIndex();
         long dl = rcGateDl[i];
-        if (dlBucket[(int) (dl >>> 32)] != (int) dl)
+        if (DynamicLinker.dlBucket[(int) (dl >>> 32)] != (int) dl)
         {
             return false;
         }
@@ -8685,7 +8622,7 @@ public final class Loader
         return true;
     }
 
-    /** Keep what the {@link #globalBufByRef} just made for site {@code i} walked, if it can stand. */
+    /** Keep what the {@link DynamicLinker#globalBufByRef} just made for site {@code i} walked, if it can stand. */
     private static void recordGate(int i)
     {
         if (!gwOk)
@@ -8706,7 +8643,7 @@ public final class Loader
     }
 
     /** Note an {@code rgBucket} probe for the gate; false once there are more levels than a gate holds. */
-    private static boolean gateRg(int h)
+    static boolean gateRg(int h)
     {
         if (gwRgN >= GATE_RG)
         {
@@ -8718,346 +8655,22 @@ public final class Loader
     }
 
     /**
-     * The callable contents of the cell {@link #dlCellOf} finds, or 0 -- {@link #cellStubAt} with the cell
+     * The callable contents of the cell {@link DynamicLinker#dlCellOf} finds, or 0 -- {@link DynamicLinker#cellStubAt} with the cell
      * kept for the gate, which stands only if {@code fits} (every probe so far was recorded and every
      * level skipped was decided, not unknown).
      */
-    private static long gatedCell(Address clsBase, int clsOff, Address refBase, int nameOff, int descOff, boolean fits)
+    static long gatedCell(Address clsBase, int clsOff, Address refBase, int nameOff, int descOff, boolean fits)
     {
-        if (dlTab == null)
+        if (DynamicLinker.dlTab == null)
         {
             return 0L;
         }
-        long cell = dlCellOf(clsBase, clsOff, refBase, nameOff, refBase, descOff);
+        long cell = DynamicLinker.dlCellOf(clsBase, clsOff, refBase, nameOff, refBase, descOff);
         gwCell = cell;
         gwOk = fits;
         return cell == 0L ? 0L : Address.fromLong(cell).loadLong();
     }
 
-    /** Method buffer for a call ref given as blob base + Utf8 offsets (patchRelocs re-resolution), or 0. */
-    private static long globalBufByRef(Address refBase, int classOff, int nameOff, int descOff)
-    {
-        MethodRegistry.buildRegIndex();                                 // incremental: only entries added since last time
-        rgHitIdx = -1;
-        gwOk = false;                                    // see rcGate: only the tiers below that set it stand
-        gwRgN = 0;
-        // CLASS+NAME keys the index. Tier 2 wants the SAME name under an ANCESTOR class, so it re-hashes per
-        // level rather than sharing this bucket -- which is the point: sharing a name-only bucket is what made
-        // both tiers walk a chain one entry long per class declaring that name.
-        int h = Utf8.utf8Hash2(refBase, classOff, refBase, nameOff) & (MethodRegistry.RGTAB - 1);
-        boolean fits = gateRg(h);
-        int i = MethodRegistry.rgBucket[h];
-        while (i >= 0)
-        {
-            t1Steps += 1;
-            // The SAME predicate the linear scan used -- the index only narrows which entries it is applied
-            // to. Name-keyed, so the chain still has to check class and descriptor: `<init>`/`run`/`get`
-            // repeat across the registry constantly.
-            if (utf8EqAt(refBase, classOff, MethodRegistry.rgTab[i].base, MethodRegistry.rgTab[i].classOff)
-                    && utf8EqAt(refBase, nameOff, MethodRegistry.rgTab[i].base, MethodRegistry.rgTab[i].nameOff)
-                    && utf8EqAt(refBase, descOff, MethodRegistry.rgTab[i].base, MethodRegistry.rgTab[i].descOff))
-            {
-                rgHitIdx = i;                            // memoisable: a single registry entry answered
-                bufResolveLog(refBase, classOff, nameOff, descOff, MethodRegistry.rgTab[i].buf, 1);
-                return MethodRegistry.rgTab[i].buf;
-            }
-            i = MethodRegistry.rgNext[i];
-        }
-        // Class-qualified miss: an INHERITED static/special method (invokestatic/invokespecial to a method the ref
-        // names via a subclass but that is declared in a SUPERclass, e.g. `ArrayList.subListRangeCheck` really
-        // AbstractList.subListRangeCheck). Walk the ref class's super chain and match each ancestor's registration.
-        //
-        // A CONSTRUCTOR is never inherited, so it must not walk: `<init>()V` on an unregistered class would
-        // match `java/lang/Object.<init>()V` -- always registered, since Object is the one eagerly compiled
-        // class -- and Object's <init> is a NO-OP. The call then resolves silently to it and the real
-        // constructor never runs, leaving every field 0. That is how `new Formatter()` in a lazily compiled
-        // `String.formatted` produced a Formatter whose buffer was null, and the NPE surfaced far away, deep
-        // inside JUnit's message formatting. Falling through to the stub tier instead gives it a link stub,
-        // which resolves the actual constructor on first call.
-        if (Utf8.utf8IsAtBase(refBase, nameOff, Magic.bytes("<init>")))
-        {
-            long ib = gatedCell(refBase, classOff, refBase, nameOff, descOff, fits);
-            bufResolveLog(refBase, classOff, nameOff, descOff, ib, 3);
-            return ib;
-        }
-        // THE NAMED CLASS FIRST, and every level after it the same way: a class that DECLARES the method
-        // answers it even when its body is not registered yet (JVMS 5.4.3.3 -- resolution stops at the first
-        // class declaring name+descriptor). The walk below used to test only the REGISTRY at each level, so a
-        // declared but not-yet-compiled method was skipped and the call bound SILENTLY to the nearest compiled
-        // ancestor: `super.close()` in ZipFile$ZipFileInflaterInputStream, naming InflaterInputStream.close,
-        // ran FilterInputStream.close -- so `closed` was never set, the stream's Inflater was ended under it,
-        // and the next read() spun for ever on an Inflater answering 0. A declaring level answers with its
-        // static's phase-A cell, or 0, which sends the site to the link-stub tier: resolveLinkTarget compiles
-        // the declared body on first call. (<init> above is the same rule, special-cased before this existed.)
-        int pd = findPdByName(refBase, classOff);
-        int dec = pd >= 0 ? blobDeclares(pdBase.get(pd), refBase, nameOff, refBase, descOff) : -1;
-        if (dec == 1)
-        {
-            long own = gatedCell(refBase, classOff, refBase, nameOff, descOff, fits);
-            bufResolveLog(refBase, classOff, nameOff, descOff, own, 5);
-            return own;
-        }
-        fits = fits && dec == 0;                         // -1 (unparsed) may read 1 next pass: no gate
-        while (pd >= 0 && pdSuperOff[pd] != 0)
-        {
-            int spd = findPdByName(pdBase.get(pd), pdSuperOff[pd]);
-            if (spd < 0)
-            {
-                break;
-            }
-            // PROBE, NOT SCAN -- and this tier, not tier 1, is where the time went. Tier 1 was indexed in
-            // an earlier increment and this was left scanning ALL rgCount entries PER SUPERCLASS LEVEL, for
-            // every site that misses tier 1. Those sites never memoise (see rcReg), so they re-resolve on
-            // every batch: MEASURED at 98% of the whole call-site loop (lookT 11,949ms of callT 12,169ms),
-            // which is itself ~95% of `patch`. The wanted name is the same one tier 1 hashed, so the bucket
-            // is reused and only the CLASS comparison differs -- the predicate is otherwise identical.
-            int hs = Utf8.utf8Hash2(pdBase.get(spd), pdNameOff[spd], refBase, nameOff) & (MethodRegistry.RGTAB - 1);
-            fits = fits && gateRg(hs);
-            int j = MethodRegistry.rgBucket[hs];
-            while (j >= 0)
-            {
-                t2Steps += 1;
-                if (utf8EqAt(pdBase.get(spd), pdNameOff[spd], MethodRegistry.rgTab[j].base, MethodRegistry.rgTab[j].classOff)
-                        && utf8EqAt(refBase, nameOff, MethodRegistry.rgTab[j].base, MethodRegistry.rgTab[j].nameOff)
-                        && utf8EqAt(refBase, descOff, MethodRegistry.rgTab[j].base, MethodRegistry.rgTab[j].descOff))
-                {
-                    bufResolveLog(refBase, classOff, nameOff, descOff, MethodRegistry.rgTab[j].buf, 2);
-                    return MethodRegistry.rgTab[j].buf;
-                }
-                j = MethodRegistry.rgNext[j];
-            }
-            int sdec = blobDeclares(pdBase.get(spd), refBase, nameOff, refBase, descOff);
-            if (sdec == 1)
-            {
-                long declared = gatedCell(pdBase.get(spd), pdNameOff[spd], refBase, nameOff, descOff, fits);
-                bufResolveLog(refBase, classOff, nameOff, descOff, declared, 5);
-                return declared;                         // this ancestor declares it: never climb past it
-            }
-            fits = fits && sdec == 0;
-            pd = spd;
-        }
-        // Last tier: a METADATA-ONLY class's celled static is never eagerly compiled or registered, so both
-        // scans above miss it. Its phase-A cell holds callable code -- the lazy stub, or the compiled body
-        // once first-called -- so a `bl` may target that directly (the same tier bufBySigU uses for bake
-        // stubs). Without this a reloc into a celled method traps: NioSocketImpl's `lambda$closerFor$0` is
-        // the one that bites, since the lambda IS the Cleaner action run by close().
-        long fb = dlStubByRef(refBase, classOff, nameOff, descOff);
-        bufResolveLog(refBase, classOff, nameOff, descOff, fb, 4);
-        return fb;
-    }
-
-    /**
-     * The phase-A cell for a method whose class, name and descriptor each live at a {@code (base, offset)}
-     * pair, or 0. The three offset-keyed lookups differ only in where those runs come from — a reloc's ref
-     * blob, the compile context plus a walked superclass, or the absolute utf8 runs of a bake stub — so they
-     * all funnel through here. Returns the CELL address; callers read it for callable code (the lazy stub,
-     * or the body once first-called) or hand it to an emitter to indirect through.
-     */
-    /**
-     * Name-keyed hash index over the phase-A cell table, so {@link #dlCellOf} is a PROBE rather than a linear
-     * scan comparing THREE Utf8 strings against every cell.
-     *
-     * <p>MEASURED, and this is where `patch` actually went. {@code dlStubByRef} is the LAST tier of
-     * {@link #globalBufByRef}, so it catches every site that misses the direct and super-chain tiers -- AND
-     * every {@code <init>}, which short-circuits straight to it because a constructor is never inherited.
-     * Constructor call sites are everywhere. Those sites never memoise (see {@code rcReg}), so they
-     * re-resolve on EVERY batch, and {@code dlN} grows with every class loaded: the scan is quadratic in the
-     * load. Splitting the call-site loop three ways put 98% of it in the LOOKUP (lookT 11,949ms of callT
-     * 12,169ms), which is itself ~95% of `patch` -- 1,542ms/batch at batch 165 on hardware.
-     *
-     * <p>Incremental like {@code rgBucket}: the table only ever grows within a batch and a cell's name never
-     * changes, so entries already indexed stay valid. {@code resetLoader} nulls {@code dlTab} and zeroes
-     * {@code dlN} together, and the index is rebuilt from scratch when it sees the count go backwards.
-     */
-    private static final int DLTAB = 32768;              // power of two > MAXLAZY; chained
-    private static int[] dlBucket;                       // name hash -> first cell index, -1 when empty
-    private static int[] dlNext;                         // cell index -> next entry with the same name hash
-    private static int dlIndexed;
-
-    private static void buildDlIndex()
-    {
-        if (dlBucket == null || dlIndexed > dlN)         // rebuilt when resetLoader zeroes the table
-        {
-            dlBucket = new int[DLTAB];
-            dlNext = new int[MAXLAZY];
-            int b = 0;
-            while (b < DLTAB)
-            {
-                dlBucket[b] = -1;
-                b += 1;
-            }
-            dlIndexed = 0;
-        }
-        while (dlIndexed < dlN)
-        {
-            int hh = Utf8.utf8Hash2(dlTab[dlIndexed].blob, dlTab[dlIndexed].classOff,
-                               dlTab[dlIndexed].blob, dlTab[dlIndexed].nameOff) & (DLTAB - 1);
-            dlNext[dlIndexed] = dlBucket[hh];
-            dlBucket[hh] = dlIndexed;
-            dlIndexed += 1;
-        }
-    }
-
-    private static long dlCellOf(Address clsBase, int clsOff, Address nameBase, int nameOff, Address descBase, int descOff)
-    {
-        buildDlIndex();
-        // The SAME predicate the scan used -- the index only narrows what it is applied to, so a hit is the
-        // same cell the scan would have found and a miss still answers 0.
-        //
-        // CLASS+NAME, not name alone. This is the tier every `<init>` short-circuits into (a constructor is
-        // never inherited, so it skips the super-chain walk and lands here), and keyed on the name a bucket
-        // held one cell per class declaring that name -- so the `<init>` chain was as long as the loaded
-        // world. The identical defect the registry index had one tier up, still in place below it:
-        // MEASURED at 259k chain steps on a launcher boot, the largest term left in `lookT` once that was
-        // fixed. Any two cells matching this predicate share a class AND a name, so they stay in the same
-        // bucket under either key and head-insertion order is unchanged -- the same cell still wins.
-        //
-        // AND OF THIS LOADER GENERATION. The table outlives a reset that does not rewind (the first one after
-        // reclaim is armed only takes the watermark), so it can still hold cells for bodies compiled against
-        // the registry that reset discarded -- with that registry's TIBs baked into them as immediates. Found
-        // BY NAME, such a cell links a new caller into the old world, and the class is then never loaded
-        // into the new one: stock OutputStreamWriter.<init> reached the previous generation's
-        // StreamEncoder.forOutputStreamWriter, whose StreamEncoders belonged to a class the current registry
-        // had never registered (DISPATCH ON UNREGISTERED TYPE at the next late-resolved call). A stale cell is
-        // skipped, so the caller resolves as for an unloaded class and pulls it; anything ALREADY holding the
-        // cell's address keeps working, because the cell itself is untouched.
-        int hd = Utf8.utf8Hash2(clsBase, clsOff, nameBase, nameOff) & (DLTAB - 1);
-        int k = dlBucket[hd];
-        dlLastProbe = ((long) hd << 32) | (k & 0xFFFFFFFFL);   // for rcGate
-        while (k >= 0)
-        {
-            dlSteps += 1;
-            if (dlTab[k].gen == loaderGen
-                    && utf8EqAt(clsBase, clsOff, dlTab[k].blob, dlTab[k].classOff)
-                    && utf8EqAt(nameBase, nameOff, dlTab[k].blob, dlTab[k].nameOff)
-                    && utf8EqAt(descBase, descOff, dlTab[k].blob, dlTab[k].descOff))
-            {
-                return dlTab[k].cell;
-            }
-            k = dlNext[k];
-        }
-        return 0L;
-    }
-
-    /** Current contents of the phase-A cell for a method ref given as blob base + Utf8 offsets, or 0. */
-    /**
-     * Whether the class whose blob is at {@code base} DECLARES a method named and typed like the Utf8 runs at
-     * {@code (nameBase, nameOff)} / {@code (descBase, descOff)}: 1 yes, 0 no, -1 unknown. Read from the blob's
-     * CACHED constant-pool parse ({@code pcBase}/{@code pcCp}) so the global parse context is untouched --
-     * this is asked mid-patch, with the caller's blob current. A blob never parsed answers -1, and the
-     * callers then keep their previous behaviour rather than guess.
-     */
-    private static int blobDeclares(Address base, Address nameBase, int nameOff, Address descBase, int descOff)
-    {
-        int n = pcN;
-        int ci = 0;
-        while (ci < n && pcBase.get(ci).NE(base))
-        {
-            ci += 1;
-        }
-        if (ci >= n)
-        {
-            return -1;
-        }
-        Magic.dsb();                                    // the count was read before the entry (parseConstPool)
-        int[] cp = pcCp[ci];
-        Address p = base.plus(pcAfterCp[ci]);
-        p = p.plus(6);                                         // access_flags, this_class, super_class
-        p = p.plus(2 + u2(p) * 2);                             // interfaces
-        int fcount = u2(p);
-        p = p.plus(2);
-        int f = 0;
-        while (f < fcount)
-        {
-            p = skipAttributes(p.plus(8), u2(p.plus(6)));
-            f += 1;
-        }
-        int mcount = u2(p);
-        p = p.plus(2);
-        int m = 0;
-        while (m < mcount)
-        {
-            if (utf8EqAt(base, cp[u2(p.plus(2))], nameBase, nameOff) && utf8EqAt(base, cp[u2(p.plus(4))], descBase, descOff))
-            {
-                return 1;
-            }
-            p = skipAttributes(p.plus(8), u2(p.plus(6)));
-            m += 1;
-        }
-        return 0;
-    }
-
-    /**
-     * The callable contents of the phase-A cell for {@code name+desc} DECLARED by the class named at
-     * {@code (clsBase, clsOff)}, or 0 if that class declares no such method (or has no cell table yet). Unlike
-     * {@link #dlStubByRef} the class and the name/descriptor may live in different blobs -- the super-chain walk
-     * names an ancestor out of its own blob while the method still comes from the call site's.
-     */
-    private static long cellStubAt(Address clsBase, int clsOff, Address refBase, int nameOff, int descOff)
-    {
-        if (dlTab == null)
-        {
-            return 0L;
-        }
-        long cell = dlCellOf(clsBase, clsOff, refBase, nameOff, refBase, descOff);
-        return cell == 0L ? 0L : Address.fromLong(cell).loadLong();
-    }
-
-    private static long dlStubByRef(Address refBase, int classOff, int nameOff, int descOff)
-    {
-        if (dlTab == null)
-        {
-            return 0L;
-        }
-        long cell = dlCellOf(refBase, classOff, refBase, nameOff, refBase, descOff);
-        return cell == 0L ? 0L : Address.fromLong(cell).loadLong();
-    }
-
-
-    /** Static-slot address for a field ref given as blob base + Utf8 offsets, or 0. */
-    private static long globalStaticByRef(Address refBase, int classOff, int nameOff)
-    {
-        psSites += 1;
-        long addr = Statics.sgCellOf(refBase, classOff, nameOff);
-        if (addr == 0L)
-        {
-            addr = Statics.inheritedStaticCell(refBase, classOff, refBase, nameOff, 0);
-        }
-        if (addr == 0L)
-        {
-            psMiss += 1;
-        }
-        return addr;
-    }
-
-
-    /**
-     * The class an active use of {@code refCp} must INITIALIZE (JVMS 5.5). For a {@code getstatic}/{@code putstatic}
-     * that is the class that DECLARES the resolved field -- not the class the reference names. They differ for an
-     * inherited static: {@code getstatic Impl.NAMES}, where interface {@code Holder} declares NAMES. Initializing
-     * Impl initializes its superCLASSES but never its superinterfaces, so Holder.<clinit> never ran and the
-     * (correctly resolved) cell read null. Any other reference -- and a field not resolvable yet -- keeps the
-     * named class.
-     *
-     * <p>STATED LIMIT: an inherited static METHOD ({@code invokestatic Sub.m()}, declared by Base) still guards
-     * the named class, which initializes Sub as well as Base -- an over-initialization, not a missed one.
-     */
-    static Address initTargetNameAddr(int refCp)
-    {
-        Address named = refClassNameAddr(refCp);
-        if (named.isZero() || gcpTag[refCp] != 9) // 9 = CONSTANT_Fieldref
-        {
-            return named;
-        }
-        int classOff = refClassNameOff(refCp);
-        int nameOff = mrefNameOff(refCp);
-        if (Statics.sgIndexOf(gbase, classOff, gbase, nameOff) >= 0)
-        {
-            return named;                               // declared by the named class itself
-        }
-        int k = Statics.inheritedStaticIndex(gbase, classOff, gbase, nameOff, 0);
-        return k < 0 ? named : Statics.sgTab[k].base.plus((long) Statics.sgTab[k].classOff);
-    }
 
     /**
      * Resolve an {@code invokestatic}/{@code invokespecial} to a PROVIDED java.base native — a real
@@ -9072,7 +8685,7 @@ public final class Loader
     /**
      * The provided-native table, keyed by a class name and a method name each given as a
      * {@code (base, offset)} pair. Compile-time resolution passes the current blob's constant-pool
-     * offsets ({@link #nativeBuf}); {@link #resolveBakeStub} passes absolute {@code {u2 len}{bytes}}
+     * offsets ({@link #nativeBuf}); {@link DynamicLinker#resolveBakeStub} passes absolute {@code {u2 len}{bytes}}
      * runs at offset 0, so a BAKED body calling a native (its stub can't be compiled, so it fires
      * the resolver) reaches the same VM helper the loader would have linked. Before this, only the
      * compile-time path could see the table, so a metadata-only class whose baked body called a
@@ -9675,7 +9288,7 @@ public final class Loader
         }
         InterfaceInvocation.captureDirectIfaces();
         ClassRegistry.clCount += 1;
-        armPhaseACells();                               // cells for this class's statics, before any body compiles
+        LazyCompiler.armPhaseACells();                               // cells for this class's statics, before any body compiles
         Statics.registerStaticFields();
         int s = 0;
         while (s < gifCount)
@@ -9724,1209 +9337,11 @@ public final class Loader
     static int logTrapWire;                                  // #43 diagnostic: when != 0, dump each patchRelocs trap-wired callee
 
 
-    // ----- late virtual dispatch ------------------------------------------------------------------------
-    // A virtual call whose class is not registered at compile time has no slot to bake into the instruction.
-    // Static call sites solved this with link stubs (PR #192); a virtual site cannot, because the target
-    // depends on the RECEIVER. So the site records its (class,name,desc) here, emits the index in x17, and
-    // calls a trampoline that resolves against the receiver's actual type at first execution.
-    private static final int MAXVSITE = 16384;
-    private static final int VSHASH = 32768;             // power of two, > 2x MAXVSITE (open addressing)
-    static AddressArray vsName;
-    static AddressArray vsDesc;                // Utf8 ADDRESSES (blob base + offset), not offsets
-    // The site's OWNER class, recorded for the same reason: a native has no bytecode and no vtable slot, so
-    // when the receiver's Type is not in the class registry the native table is the only thing that can
-    // answer -- and nativeBufAt is keyed by CLASS + name.
-    private static AddressArray vsCls;
-    static int vsCount;
-    private static int[] vsBucket;                       // hash -> site index + 1 (0 = empty)
-    private static long virtualTrampAddr;
-    private static long virtualTrampLo, virtualTrampHi;   // the range over which its frame is live
-    private static Address vsMemoType;                   // one-entry memo: the same site is usually monomorphic
-    private static long vsMemoBuf;
-    private static int vsMemoIdx = -1;
-    // PER-SITE, WRITE-ONCE memo: the first receiver Type a site resolved for, and the body it resolved to.
-    // The one-entry memo above is shared by EVERY site, so a loop alternating two late sites -- a VarHandle
-    // `get` and `compareAndSet`, which is every CAS loop over an AtomicReference/Atomic*Array -- thrashed it
-    // and paid a full lookup UNDER THE LOADER LOCK on every call. Four cores doing that serialised on the
-    // lock: measured, a 4-thread x 20,000-iteration CAS loop did not finish in 180 s on QEMU, where the
-    // Unsafe-backed AtomicInteger loop beside it finished at once.
-    //
-    // Read WITHOUT the lock (virtualResolve), which is the point. Sound because (1) an entry is written ONCE
-    // per launch -- body first, a barrier, then the Type -- so a reader that sees the Type sees the body; and
-    // (2) within a launch a (site, receiver Type) pair cannot change its answer: registered classes keep their
-    // Types and registered bodies stay reachable. Cleared in resetLoader, where both of those stop holding.
-    private static long[] vsSiteType;
-    private static long[] vsSiteBuf;
-
-    /** Empty the per-site memo (allocation, and every resetLoader). Type is cleared first: a reader keys on it. */
-    static void clearSiteMemos()
-    {
-        if (vsSiteType == null)
-        {
-            return;
-        }
-        int z = 0;
-        while (z < MAXVSITE)
-        {
-            vsSiteType[z] = 0L;
-            vsSiteBuf[z] = 0L;
-            z += 1;
-        }
-        vsMemoIdx = -1;
-    }
-
-    /**
-     * The address of site {@code idx}'s memo word -- {@code vsSiteType[idx]}, or {@code vsSiteBuf[idx]} when
-     * {@code body} -- for the INLINE CACHE a compiled late-virtual call site reads (Baseline.lateVirtualCall).
-     * The arrays are allocated once, before the first site index is handed out, and never reallocated; the
-     * collector does not move objects; so the address is good for the life of the image.
-     */
-    static long siteMemoAddr(int idx, boolean body)
-    {
-        long[] a = body ? vsSiteBuf : vsSiteType;
-        return Magic.addrOf(a) + (long) ObjectModel.ARRAY_BASE_OFFSET + (long) idx * 8L;
-    }
-
-    /** Publish a site's first resolution, once: body, then a barrier, then the Type a lock-free reader keys on. */
-    private static void publishSiteMemo(int idx, Address type, long buf)
-    {
-        if (vsSiteType != null && vsSiteType[idx] == 0L)
-        {
-            vsSiteBuf[idx] = buf;
-            Magic.dsb();
-            vsSiteType[idx] = type.toLong();
-        }
-    }
-
-    /** Record an unresolved virtual site; returns its index (what the emitted code puts in x17). */
-    static int virtualSiteIndex(int methodCp)
-    {
-        if (vsName == null)
-        {
-            vsName = AddressArray.create(MAXVSITE);
-            vsDesc = AddressArray.create(MAXVSITE);
-            vsCls = AddressArray.create(MAXVSITE);
-            vsBucket = new int[VSHASH];                  // allocArray does NOT zero: fill it explicitly
-            vsSiteType = new long[MAXVSITE];
-            vsSiteBuf = new long[MAXVSITE];
-            clearSiteMemos();
-            int z = 0;
-            while (z < VSHASH)
-            {
-                vsBucket[z] = 0;
-                z += 1;
-            }
-        }
-        return siteIndexFor(gbase.plus(mrefNameOff(methodCp)), gbase.plus(mrefDescOff(methodCp)),
-                gbase.plus(refClassNameOff(methodCp)));
-    }
-
-    /** {@link #virtualSiteIndex} keyed by absolute Utf8 addresses -- also how a linkToVirtual site is made. */
-    static int siteIndexFor(Address nameAddr, Address descAddr, Address clsAddr)
-    {
-        if (vsName == null)
-        {
-            return -1;
-        }
-        // Dedup, because a site is now allocated for EVERY dispatch guard, and the compiler visits each site
-        // more than once (size pass then emit pass). Without this the table would fill with duplicates and
-        // the two passes would bake different indices for the same call.
-        long nameKey = nameAddr.toLong();               // the dedup KEY is the three addresses, compared as longs
-        long descKey = descAddr.toLong();
-        long clsKey = clsAddr.toLong();
-        int h = (int) ((nameKey * 31L + descKey) >> 3) & (VSHASH - 1);
-        while (vsBucket[h] != 0)
-        {
-            int cand = vsBucket[h] - 1;
-            if (vsName.get(cand).toLong() == nameKey && vsDesc.get(cand).toLong() == descKey && vsCls.get(cand).toLong() == clsKey)
-            {
-                return cand;                            // the CLASS joins the key: two classes can declare
-            }                                           //   the same name+descriptor, and the native lookup
-                                                        //   below would then use the wrong owner
-            h = (h + 1) & (VSHASH - 1);
-        }
-        if (vsCount >= MAXVSITE)
-        {
-            capHalt(Magic.bytes("MAXVSITE"), vsCount);   // returning a stale index would MIS-RESOLVE silently
-        }
-        int idx = vsCount;
-        vsName.set(idx, nameAddr);
-        vsDesc.set(idx, descAddr);
-        vsCls.set(idx, clsAddr);
-        vsBucket[h] = idx + 1;
-        vsCount += 1;
-        return idx;
-    }
-
-    /**
-     * Resolve an unresolved virtual site against the RECEIVER's dynamic type. Reuses
-     * {@link #resolveLinkTarget}, which demand-loads the class and walks the same tiers a link stub does --
-     * the only difference is that the class name comes from the receiver rather than from the call site,
-     * which is what makes it virtual dispatch.
-     */
-    /**
-     * The template-generated accessor a signature-polymorphic VarHandle site resolves to, searched up the
-     * RECEIVER's class chain -- which is where it has to be searched, because the access modes are split
-     * across the generated hierarchy ({@code get} on {@code FieldInstanceReadOnly}, {@code set} on
-     * {@code FieldInstanceReadWrite}).
-     *
-     * <p>The NAME is the site's unchanged: it IS the access mode. Only the descriptor is rebuilt.
-     */
-    private static long resolveVhAccessor(int ci, int idx)
-    {
-        byte[] d = vhAccessorDesc(vsDesc.get(idx));
-        if (d == null)
-        {
-            return 0L;
-        }
-        long buf = vhChainResolve(ci, idx, d);
-        if (buf == 0L && d.length > 2 && d[d.length - 2] == 0x29 && d[d.length - 1] == 0x56)
-        {
-            // A site that DISCARDS the result: javac types `vh.getAndAdd(a, i, v);` as returning void, while the
-            // accessor returns the old value (VarHandleLongs$Array.getAndAdd is (LVarHandle;LObject;IJ)J). Stock
-            // invocation lets a void site drop any return, and here dropping it costs nothing -- the value is
-            // left in x0/d0 unread -- so the same parameters are tried with each return an accessor can have.
-            // A class declares at most one accessor per name and parameter list, so the first hit is THE one.
-            // MEASURED (InvokeGapProbe "array VarHandle"): VIRTUALRESOLVE FAILED ...getAndAdd([JIJ)V, a TRAP.
-            byte[][] rets = { Magic.bytes("I"), Magic.bytes("J"), Magic.bytes("Z"), Magic.bytes("B"), Magic.bytes("S"),
-                              Magic.bytes("C"), Magic.bytes("F"), Magic.bytes("D"), Magic.bytes("Ljava/lang/Object;") };
-            int r = 0;
-            while (buf == 0L && r < rets.length)
-            {
-                byte[] alt = new byte[d.length - 1 + rets[r].length];
-                int k = 0;
-                while (k < d.length - 1)
-                {
-                    alt[k] = d[k];
-                    k += 1;
-                }
-                int j = 0;
-                while (j < rets[r].length)
-                {
-                    alt[k + j] = rets[r][j];
-                    j += 1;
-                }
-                buf = vhChainResolve(ci, idx, alt);
-                r += 1;
-            }
-        }
-        return buf;
-    }
-
-    /** The registry index of the TARGET handle's class when {@code recv} (of registered class {@code ci}) is a
-     *  LazyInitializingVarHandle, else -1. */
-    private static int lazyVhTargetReg(ObjectReference recv, int ci)
-    {
-        byte[] lazy = Magic.bytes("java/lang/invoke/LazyInitializingVarHandle");
-        if (!Utf8.utf8IsAtBase(ClassRegistry.clTab[ci].base, ClassRegistry.clTab[ci].nameOff, lazy))
-        {
-            return -1;
-        }
-        long off = FieldRegistry.instanceFieldOffset(ci, Magic.bytes("target"));
-        if (off < 0L)
-        {
-            return -1;
-        }
-        long target = recv.toAddress().plus(off).loadLong();
-        if (target == 0L || !receiverAddress(target))
-        {
-            return -1;
-        }
-        long tib = Address.fromLong(target).plus(ObjectModel.TIB_OFFSET).loadLong();
-        if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
-        {
-            return -1;
-        }
-        return ClassRegistry.regOfType(Address.fromLong(tib).loadAddress());
-    }
-
-    /**
-     * Whether {@code nameU} is a VarHandle ACCESS MODE (one of VarHandle's own signature-polymorphic natives) that
-     * no class of handle class {@code hc}'s chain below VarHandle declares under ANY descriptor.
-     */
-    private static boolean vhModeUnsupported(int hc, Address nameU)
-    {
-        byte[] vh = Magic.bytes("java/lang/invoke/VarHandle");
-        int c = hc;
-        int hops = 0;
-        while (c >= 0 && hops < MAXCHAIN)
-        {
-            Address clsU = ClassRegistry.clTab[c].base.plus(ClassRegistry.clTab[c].nameOff);
-            if (Utf8.utf8IsAtBase(ClassRegistry.clTab[c].base, ClassRegistry.clTab[c].nameOff, vh))
-            {
-                return declaresMethod(clsU, nameU, Address.zero(), true);   // the mode IS an access mode
-            }
-            if (declaresMethod(clsU, nameU, Address.zero(), false))
-            {
-                return false;
-            }
-            c = ClassRegistry.superRegOf(c);
-            hops += 1;
-        }
-        return false;
-    }
-
-    /** The VarHandle accessor named by site {@code idx} with descriptor {@code d}, up {@code ci}'s chain, or 0. */
-    private static long vhChainResolve(int ci, int idx, byte[] d)
-    {
-        Address descU = utf8Blob(d);
-        long buf = 0L;
-        int c = ci;
-        int hops = 0;
-        while (c >= 0 && buf == 0L && hops < MAXCHAIN)
-        {
-            if (ClassRegistry.clTab[c] != null)
-            {
-                buf = resolveLinkTarget(ClassRegistry.clTab[c].base.plus(ClassRegistry.clTab[c].nameOff),
-                        vsName.get(idx), descU);
-            }
-            c = ClassRegistry.superRegOf(c);
-            hops += 1;
-        }
-        return buf;
-    }
-
-    /**
-     * Rebuild a polymorphic VarHandle site's descriptor as the generated accessor's. ONE uniform rule,
-     * verified against the generated classes rather than assumed: prepend the handle, generalise EVERY
-     * reference AND array to {@code Ljava/lang/Object;}, and keep primitives verbatim.
-     *
-     * <pre>
-     *   site (Lfoo/Bar;I)V  -&gt;  (Ljava/lang/invoke/VarHandle;Ljava/lang/Object;I)V   field int set
-     *   site (Lfoo/Bar;)I   -&gt;  (Ljava/lang/invoke/VarHandle;Ljava/lang/Object;)I    field int get
-     *   site ([II)I         -&gt;  (Ljava/lang/invoke/VarHandle;Ljava/lang/Object;I)I   int[] view get
-     * </pre>
-     *
-     * <p>THE ARRAY COORDINATE GENERALISES TOO, which is why one rule covers field and array-view handles
-     * alike -- {@code VarHandleInts$Array.get} really is {@code (LVarHandle;LObject;I)I}, read off the
-     * generated class with {@code javap -s}, not inferred from the field case.
-     *
-     * <p>KEEPING PRIMITIVES VERBATIM IS THE WHOLE POINT: it is what makes the resolve WIDTH-TYPED, so a
-     * site storing an {@code int} cannot bind to the {@code long} or reference accessor. The retired
-     * hand-written overlay resolved these by NAME ALONE, which is how one reference-typed {@code set} came
-     * to serve every width and stored an int as a reference.
-     */
-    private static byte[] vhAccessorDesc(Address siteDesc)
-    {
-        int len = u2(siteDesc);
-        if (len < 3 || u1(siteDesc.plus(2)) != 0x28)        // must start '('
-        {
-            return null;
-        }
-        byte[] out = new byte[40 + 20 * len];           // worst case: every token becomes Ljava/lang/Object;
-        int n = vhPut(out, 0, Magic.bytes("(Ljava/lang/invoke/VarHandle;"));
-        int i = 1;                                      // past the site's own '('
-        while (i < len && u1(siteDesc.plus(2 + i)) != 0x29) // up to ')'
-        {
-            int ch = u1(siteDesc.plus(2 + i));
-            if (ch == 0x5B || ch == 0x4C)               // '[' or 'L' -> a reference, whatever its shape
-            {
-                i = vhSkipType(siteDesc, len, i);
-                n = vhPut(out, n, Magic.bytes("Ljava/lang/Object;"));
-            }
-            else                                        // a primitive: verbatim, which is what types the resolve
-            {
-                out[n] = (byte) ch;
-                n += 1;
-                i += 1;
-            }
-        }
-        if (i >= len)
-        {
-            return null;                                // no ')': not a method descriptor
-        }
-        out[n] = 0x29;                                  // ')'
-        n += 1;
-        i += 1;
-        int r = u1(siteDesc.plus(2 + i));
-        if (r == 0x5B || r == 0x4C)
-        {
-            n = vhPut(out, n, Magic.bytes("Ljava/lang/Object;"));
-        }
-        else
-        {
-            out[n] = (byte) r;                          // a primitive, or 'V'
-            n += 1;
-        }
-        byte[] res = new byte[n];
-        int k = 0;
-        while (k < n)
-        {
-            res[k] = out[k];
-            k += 1;
-        }
-        return res;
-    }
-
-    /** Index just past the type token starting at {@code i} in a descriptor ({@code [[Lfoo/Bar;}, {@code I}). */
-    private static int vhSkipType(Address base, int len, int i)
-    {
-        while (i < len && u1(base.plus(2 + i)) == 0x5B)     // '['
-        {
-            i += 1;
-        }
-        if (i < len && u1(base.plus(2 + i)) == 0x4C)        // 'L' ... ';'
-        {
-            while (i < len && u1(base.plus(2 + i)) != 0x3B)
-            {
-                i += 1;
-            }
-        }
-        return i + 1;
-    }
-
-    /** Append {@code src} to {@code dst} at {@code at}; returns the new end. */
-    private static int vhPut(byte[] dst, int at, byte[] src)
-    {
-        int i = 0;
-        while (i < src.length)
-        {
-            dst[at + i] = src[i];
-            i += 1;
-        }
-        return at + src.length;
-    }
-
-    static long virtualResolve(ObjectReference recv, int idx)
-    {
-        // THE LAST TRAMPOLINE WITHOUT A LOCK -- AND NOT, AS THIS COMMENT FIRST CLAIMED, THE LAST UNLOCKED
-        // PATH. It called this "the SIXTH unlocked path into the loader's static context", which reads as a
-        // closed enumeration and is wrong by a factor of four: a reachability pass over the natives finds
-        // TWENTY MORE `Loader.X` entry points called from `VMNatives` that reach `parseConstPool` with no
-        // lock anywhere on the path -- essentially the whole Field/Method/Class reflection surface, and
-        // `VMNatives` itself contains not one `loaderLock` call. `fieldTypeMirror` IS the native behind
-        // `Field.getType`, which this file records picocli calling for every option field; it re-points
-        // gbase/gcp/gbytes and then walks the cursor with nothing holding it still. See
-        // /tmp/joe-ng-handoff/FINDING-reflection-natives-unlocked.md and the CLAUDE.md card.
-        //
-        // The correction matters because the wrong number was the reassuring one: "sixth of six" says the
-        // surface is closed, and it is not. What follows is still right for THIS path.
-        // This is entered straight from the late-virtual dispatch trampoline via VMNatives, and it reuses
-        // resolveLinkTarget -- which demand-loads the class and calls parseConstPool, re-pointing gbase /
-        // gcp / gbytes at a different blob. Every sibling trampoline already locks (lazyCompile LOCK_LAZY,
-        // resolveLinkStub LOCK_DEMAND_LOAD, resolveUnresolvedNew LOCK_NEW_RESOLVE, bakeResolve
-        // LOCK_BAKE_RESOLVE); this one never did, so a task resolving a virtual call could re-point the
-        // parse context under a task walking it. CLAUDE.md hypothesises exactly this shape -- "a FIFTH
-        // unlocked path, or a lock that does not cover the whole context" -- for the contended failure the
-        // compile-side fix did not close.
-        //
-        // THE BODY IS A SEPARATE METHOD because the wrapper must stay SHALLOW: this file's build-time guard
-        // forbids an exception handler in a method whose operand stack passes OP_MAX, and virtualResolve is
-        // large. Same shape as clinitEntryOf and compileMethodOnDemand, for the same reason.
-        //
-        // AND IT WIDENS A DEBT RATHER THAN CREATING ONE, stated because it should not be discovered later:
-        // this path can run a <clinit> (its own doc below says so), so the lock is now held across guest
-        // code here too -- exactly as it already is for lazyCompile's drain and loadAll's batch.
-        long hit = siteMemoHit(recv, idx);              // FAST PATH, NO LOCK -- see vsSiteType
-        if (hit != 0L)
-        {
-            return hit;
-        }
-        VM.loaderLock(VM.LOCK_VIRT_RESOLVE);
-        long r;
-        try
-        {
-            r = virtualResolveLocked(recv, idx);
-        }
-        finally
-        {
-            VM.loaderUnlock();   // see the note in lazyCompile: a throw here used to strand the lock
-        }
-        return r;
-    }
-
-    /**
-     * The site's write-once memo, read without the loader lock (see {@code vsSiteType}); 0 = miss. A helper
-     * rather than inline so {@link #virtualResolve}, which carries a try/finally, stays SHALLOW. The receiver
-     * checks are the ones virtualResolveLocked makes, so a garbage receiver still reaches its reporting path.
-     */
-    private static long siteMemoHit(ObjectReference recv, int idx)
-    {
-        if (vsSiteType == null || idx < 0 || idx >= vsCount)
-        {
-            return 0L;
-        }
-        if (!receiverAddress(recv.toLong()))
-        {
-            return 0L;
-        }
-        long memoType = vsSiteType[idx];
-        if (memoType == 0L)
-        {
-            return 0L;
-        }
-        Magic.dsb();                                    // the Type was read before the body
-        long memoBuf = vsSiteBuf[idx];
-        long tib = recv.toAddress().plus(ObjectModel.TIB_OFFSET).loadLong();
-        if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB || Address.fromLong(tib).loadLong() != memoType)
-        {
-            return 0L;
-        }
-        return memoBuf;
-    }
-
-    /**
-     * Whether {@code a} can be a dispatch receiver: 8-aligned, and in the managed heap OR in the boot IMAGE. The
-     * image half was missing, so a writer-BAKED object -- the Integer cache, a string literal -- was reported as
-     * "BAD RECEIVER" and dispatched to the denylist trap. MEASURED: one linkToVirtual handle on Object.toString
-     * worked for a heap object and trapped for Integer.valueOf(5) (MhInvokeProbe). Before method handles a baked
-     * receiver reached this resolver only through a vtable slot found null at dispatch; linkToVirtual sends it
-     * every receiver.
-     */
-    private static boolean receiverAddress(long a)
-    {
-        if ((a & 7L) != 0L)
-        {
-            return false;
-        }
-        if (a >= Heap.BASE && a < Heap.managedTop().toLong())
-        {
-            return true;
-        }
-        return a >= VM.STACK_TOP && a < Heap.IMAGE_CEILING;
-    }
-
-    private static long virtualResolveLocked(ObjectReference recv, int idx)
-    {
-        if (recv.isNull() || idx < 0 || idx >= vsCount || ClassRegistry.clTab == null)
-        {
-            return VM.denylistTrapAddr;
-        }
-        if (!receiverAddress(recv.toLong()))
-        {
-            // NOT AN OBJECT AT ALL. The bound is managedTop(), NOT LARGE_LIMIT: that is only where the
-            // SECONDARIES' arenas begin, so LARGE_LIMIT rejects every object cores 1-3 allocate -- which is
-            // most of what a spawned thread touches, and it turned a WORKING call into a denylist trap. Image code carries no implicit checks, so dereferencing this would data-
-            // abort INSIDE the fault handler's own unwind -- a NESTED FAULT report naming only this method,
-            // with the caller nowhere in it. The site's name+descriptor is right here, so say which dispatch
-            // was handed the garbage; that is the one fact the fault report cannot recover.
-            Uart.write(Magic.bytes("\n  BAD RECEIVER at dispatch: recv="));
-            VM.printHex(recv.toLong());
-            if (vsName != null && idx >= 0 && idx < vsCount)
-            {
-                Uart.write(Magic.bytes(" site="));
-                printNameAt(vsName.get(idx), 0);
-                printNameAt(vsDesc.get(idx), 0);
-            }
-            Uart.putc(0x0A);
-            return VM.denylistTrapAddr;
-        }
-        long tib = recv.toAddress().plus(ObjectModel.TIB_OFFSET).loadLong();
-        if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
-        {
-            return VM.denylistTrapAddr;                 // a raw array has no Type to dispatch through
-        }
-        Address type = Address.fromLong(tib).loadAddress();
-        if (idx == vsMemoIdx && type.EQ(vsMemoType) && vsMemoBuf != 0L)
-        {
-            return vsMemoBuf;                           // monomorphic site: skip the whole lookup
-        }
-        int ci = ClassRegistry.classRegByType(type);
-        if (ci < 0 || ci >= ClassRegistry.clCount || ClassRegistry.clTab[ci] == null || vsName == null)
-        {
-            // A receiver whose Type is not in the class registry -- a writer-baked class the loader never
-            // adopted, say -- has no blob to resolve against. Image code carries no implicit null check, so
-            // the missing entry has to be tested here or the dereference reads from a wild address.
-            //
-            // NAME IT. Silent, this is the worst report the VM produces: `DENYLIST TRAP` with an EMPTY callee
-            // and `TRAPWIRE index=-1`, blaming a denylist that has nothing to do with it, because no
-            // patch-time site was ever recorded for a late-resolved call. The method and descriptor are in
-            // hand here and cost one line to print.
-            // A PROVIDED NATIVE needs no registry entry: it has no bytecode and no vtable slot, so the
-            // class registry has nothing to say about it and the native table is the only thing that can
-            // answer. `Properties.<init>` calling `Unsafe.storeFence()` is exactly that -- the UNSAFE
-            // receiver is a writer-BAKED object whose Type the loader never adopted, so the chain walk below
-            // could never run, and the call surfaced as a DENYLIST TRAP with an EMPTY callee blaming a
-            // denylist that has nothing to do with a native.
-            if (vsCls != null && idx >= 0 && idx < vsCount)
-            {
-                long nb = nativeBufAt(vsCls.get(idx), 0, vsName.get(idx), 0);
-                if (nb != 0L)
-                {
-                    return nb;
-                }
-                // A DEFAULT METHOD ON A LAMBDA. The receiver has no registry entry, but its Type carries an
-                // itable directory naming the interface it satisfies -- and that interface is where the
-                // default body lives. Try it before reporting; this is the whole reason a stream pipeline
-                // could not call Sink.begin on a lambda downstream.
-                long ib = InterfaceInvocation.resolveViaItableDir(type, vsName.get(idx), vsDesc.get(idx));
-                if (ib != 0L && plausibleCode(Address.fromLong(ib)))
-                {
-                    vsMemoIdx = idx;
-                    vsMemoType = type;
-                    vsMemoBuf = ib;
-                    publishSiteMemo(idx, type, ib);
-                    return ib;
-                }
-                Uart.write(Magic.bytes("\n  DISPATCH ON UNREGISTERED TYPE (receiver's class not in the registry): "));
-                printNameAt(vsName.get(idx), 0);
-                printNameAt(vsDesc.get(idx), 0);
-                // WHAT the receiver is, not just what was called on it. Unregistered means the name is not
-                // recoverable from the class registry, so print the SHAPE instead: a synthesised lambda or
-                // annotation Type has superType == Object and no display, a writer-baked adopted Type has a
-                // real display, and an array Type carries an element type. Those are distinguishable, and
-                // without them this report says only "something".
-                Uart.write(Magic.bytes("\n    recv="));
-                VM.printHex(recv.toLong());
-                Uart.write(Magic.bytes(" tib="));
-                VM.printHex(tib);
-                Uart.write(Magic.bytes(" type="));
-                VM.printHex(type);
-                Uart.write(Magic.bytes("\n    size="));
-                VM.printHex(type.plus(0).loadLong());
-                Uart.write(Magic.bytes(" super="));
-                VM.printHex(type.plus(ObjectModel.TYPE_SUPER_OFFSET).loadLong());
-                Uart.write(Magic.bytes(" itableDir="));
-                VM.printHex(type.plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).loadLong());
-                Uart.write(Magic.bytes("\n    depth="));
-                VM.printHex(type.plus(ObjectModel.TYPE_DEPTH_OFFSET).loadLong());
-                Uart.write(Magic.bytes(" display="));
-                VM.printHex(type.plus(ObjectModel.TYPE_DISPLAY_OFFSET).loadLong());
-                Uart.write(Magic.bytes(" elem="));
-                VM.printHex(type.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong());
-                Uart.write(Magic.bytes(" objectType="));
-                VM.printHex(TibBuilder.objectTypeAddr());
-                Uart.write(Magic.bytes("\n    synthesised(lambda/anno TIB)="));
-                VM.printDec(TibBuilder.isSynthesisedTib(Address.fromLong(tib)));
-                Uart.putc(0x0A);
-            }
-            return VM.denylistTrapAddr;
-        }
-        // Walk the receiver's superclass chain, most-derived first -- which IS virtual dispatch: the
-        // implementation is whichever class nearest the receiver declares it. resolveLinkTarget answers only
-        // for the class it is handed (bufBySigU, nativeBufAt and compileSigOnDemand all work off that class's
-        // own blob), so an INHERITED method resolves nowhere without this. `AssertionFailedError` inheriting
-        // `getStackTrace` from `Throwable` is the case that found it: the dispatch guard fired on the pruned
-        // slot, the resolve looked only at AssertionFailedError, and the call landed in denylistTrap.
-        long buf = 0L;
-        int c = ci;
-        int hops = 0;
-        while (c >= 0 && buf == 0L && hops < MAXCHAIN)
-        {
-            if (ClassRegistry.clTab[c] != null)
-            {
-                buf = resolveLinkTarget(ClassRegistry.clTab[c].base.plus(ClassRegistry.clTab[c].nameOff),
-                        vsName.get(idx), vsDesc.get(idx));
-            }
-            c = ClassRegistry.superRegOf(c);
-            hops += 1;
-        }
-        if (buf == 0L)
-        {
-            // Nothing in the receiver's CLASS chain declares it, which for an interface call is the DEFAULT
-            // METHOD case: the body lives on an interface, and a class gets one without declaring anything.
-            // (Reached both from an itable directory miss and from a null vtable slot -- neither can see a
-            // default, which is exactly why defaultDispatch routes such a call through the itable at all.)
-            buf = resolveViaInterfaces(ci, vsName.get(idx), vsDesc.get(idx));
-            if (buf != 0L)
-            {
-                // The line whose ABSENCE hid this whole class of bug: an interface reached only from a body
-                // compiled after its batch is never pulled, and every trace of the call vanished with it.
-                if (LOAD_LOG)
-                {
-                    Uart.write(Magic.bytes("  ifaceresolve "));
-                    printNameAt(ClassRegistry.clTab[ci].base, ClassRegistry.clTab[ci].nameOff);
-                    Uart.putc(0x2E);
-                    printNameAt(vsName.get(idx), 0);
-                    Uart.putc(0x0A);
-                }
-            }
-        }
-        if (buf == 0L && vsCls != null && Utf8.utf8IsAtBase(vsCls.get(idx), 0, Magic.bytes("java/lang/invoke/VarHandle")))
-        {
-            // A SIGNATURE-POLYMORPHIC VarHandle OP. The site's declared owner is VarHandle and nothing in
-            // the receiver's chain matches its descriptor -- which is expected, not a failure: the site
-            // descriptor is the ACTUAL argument types (set:(Lfoo/Bar;I)V) while the implementation is the
-            // template-generated handle's STATIC accessor (set:(LVarHandle;LObject;I)V). In HotSpot the 31
-            // access-mode methods are natives the JVM intrinsifies and never actually invokes; here the
-            // call site is redirected to the generated static instead, which needs no argument shuffling --
-            // an invokevirtual already passes (x0=handle, x1=holder, x2=value), and that IS its signature.
-            buf = resolveVhAccessor(ci, idx);
-            int ti = buf == 0L ? lazyVhTargetReg(recv, ci) : -1;
-            int hc = ti >= 0 ? ti : ci;
-            if (ti >= 0)
-            {
-                // A LazyInitializingVarHandle: what findStaticVarHandle answers for a class not initialized yet
-                // (SSLContext's VH_DEFAULT_CONTEXT). It shares its TARGET's vform and declares no accessor, so
-                // the access mode resolves against the TARGET's class -- and the handle passed stays the
-                // WRAPPER, because every static accessor opens with `(FieldStaticReadWrite) ob.target()`, which
-                // is the wrapper's hook for running the class's initializer on first access. Resolving against
-                // the target and passing the target instead would skip that initializer.
-                //
-                // The site memo below stays right: the accessor is chosen by the descriptor alone (its
-                // primitives pick the VarHandleX family; read modes live on FieldStaticReadOnly, which
-                // FieldStaticReadWrite extends), so every wrapper reaching this site resolves the same way.
-                buf = resolveVhAccessor(ti, idx);
-            }
-            if (buf == 0L && vhModeUnsupported(hc, vsName.get(idx)))
-            {
-                // An ACCESS MODE this handle does not support -- `set` on a final static's FieldStaticReadOnly.
-                // Stock throws UnsupportedOperationException naming the mode (VarForm.getMemberName), and so
-                // does this. Only when NO accessor of that name exists anywhere up the handle's chain: one that
-                // exists under another descriptor is a resolution gap in this VM, and keeps the named trap.
-                buf = NativeMethods.missingNativeThunk(Address.zero(), vsName.get(idx), Address.zero());
-            }
-        }
-        if (buf == 0L)
-        {
-            buf = NativeMethods.missingNativeOnChain(ci, vsName.get(idx),
-                    vsDesc.get(idx));   // an unimplemented native THROWS
-        }
-        if (buf == 0L)
-        {
-            // Name it. A bare denylistTrap from here reports TRAPWIRE index=-1 (no patch-time site was
-            // recorded for a late-resolved call), which says nothing at all about what failed.
-            Uart.write(Magic.bytes("  VIRTUALRESOLVE FAILED "));
-            printNameAt(ClassRegistry.clTab[ci].base, ClassRegistry.clTab[ci].nameOff);
-            Uart.putc(0x2E);
-            printNameAt(vsName.get(idx), 0);
-            printNameAt(vsDesc.get(idx), 0);
-            Uart.putc(0x0A);
-            return VM.denylistTrapAddr;
-        }
-        if (!plausibleCode(Address.fromLong(buf)))
-        {
-            reportBadTarget(ClassRegistry.clTab[ci].base.plus(ClassRegistry.clTab[ci].nameOff), vsName.get(idx),
-                    vsDesc.get(idx), buf, 0);
-            return VM.denylistTrapAddr;                 // and do NOT memoize it
-        }
-        vsMemoIdx = idx;
-        vsMemoType = type;
-        vsMemoBuf = buf;
-        publishSiteMemo(idx, type, buf);
-        return buf;
-    }
-
-    /**
-     * Last tier of {@link #virtualResolve}: look for {@code nameU}/{@code descU} on the INTERFACES of the
-     * receiver's class chain -- an interface default, which no class declares and so no chain walk can find.
-     *
-     * <p>Two levels (a class's own interfaces, then each of those interfaces' own), which covers the shapes
-     * that occur in practice ({@code ArrayList -> List -> Collection}, {@code LinkedHashMap -> Map}) without
-     * recursion or a worklist. A default inherited three interfaces deep still fails, and says so by name.
-     *
-     * <p>The interface NAME ADDRESSES are collected BEFORE any resolving: {@link #resolveLinkTarget} parses
-     * whatever class it is handed, which clobbers {@code gcp}/{@code gbase}, so an offset read afterwards
-     * would be against the wrong blob. Absolute addresses survive that; offsets do not.
-     */
-    /** What the LAST {@link #resolveViaInterfaces} walk saw -- printed only on a terminal failure. */
-    private static int viHops;
-    private static int viIfaceN;
-    private static AddressArray viNames;
-
-    static long resolveViaInterfaces(int ci, Address nameU, Address descU)
-    {
-        AddressArray names = AddressArray.create(InterfaceInvocation.MAXIFACEFALLBACK);
-        // WALK THE SUPERCLASS CHAIN, not just the receiver's own interfaces. A default method is declared by
-        // an interface that ANY class in the chain may implement, and the receiver itself often implements
-        // nothing: SuiteEngineDescriptor extends EngineDescriptor extends AbstractTestDescriptor implements
-        // TestDescriptor, and `accept` is a DEFAULT on TestDescriptor -- two classes up. Collecting only the
-        // receiver's own interfaces searched an EMPTY list and reported the method missing.
-        //
-        // A lookup that does not walk the chain has now been the bug three times here (globalVtableSlot's
-        // slot numbering, vhFieldOffset's field offsets, and this). The names collected are ABSOLUTE Utf8
-        // addresses, which is what makes the walk safe: collectIfaceNames re-parses each class's constant
-        // pool and moves the cursor, and an offset would then be read against the wrong blob.
-        int n = 0;
-        int c = ci;
-        int hops = 0;
-        while (c >= 0 && hops < MAXIFACECHAIN)
-        {
-            n = collectIfaceNames(c, names, n);
-            c = ClassRegistry.superRegOf(c);
-            hops += 1;
-        }
-        // The superinterface CLOSURE, every level (JVMS 5.4.3.3 searches all superinterfaces). This walked ONE
-        // level above the class chain's own interfaces, so a default declared three interfaces up was never
-        // found. MEASURED: java.lang.classfile's StringEntryImpl -> StringEntry -> ConstantValueEntry ->
-        // LoadableConstantEntry, whose default typeKind() failed late dispatch (VIRTUALRESOLVE FAILED) inside
-        // SwitchBootstraps' generated switch (IndyDbg). Each interface is expanded once: names are per-blob
-        // addresses, so the same interface can appear twice and is told apart by its registry index.
-        int[] expanded = new int[InterfaceInvocation.MAXIFACEFALLBACK];
-        int ne = 0;
-        int i = 0;
-        while (i < n)
-        {
-            int r = regBySigU(names.get(i));
-            boolean seen = r < 0;
-            int e = 0;
-            while (!seen && e < ne)
-            {
-                seen = expanded[e] == r;
-                e += 1;
-            }
-            if (!seen && ne < InterfaceInvocation.MAXIFACEFALLBACK)
-            {
-                expanded[ne] = r;
-                ne += 1;
-                n = collectIfaceNames(r, names, n);
-            }
-            i += 1;
-        }
-        viHops = hops;
-        viIfaceN = n;
-        viNames = names;
-        // The MAXIMALLY SPECIFIC declarer first (JVMS 5.4.3.3): the collection order is the receiver's own
-        // interfaces before its superclasses', which picks the less specific default whenever a class
-        // implements the super-interface directly and inherits the overriding sub-interface.
-        int[] regs = new int[n];
-        int q = 0;
-        while (q < n)
-        {
-            regs[q] = regBySigU(names.get(q));
-            q += 1;
-        }
-        int decl = InterfaceInvocation.mostSpecificDeclarer(regs, n, nameU, descU);
-        if (decl >= 0)
-        {
-            long d = resolveLinkTarget(ClassRegistry.clTab[decl].base.plus(ClassRegistry.clTab[decl].nameOff),
-                    nameU, descU);
-            if (d != 0L)
-            {
-                return d;
-            }
-        }
-        int k = 0;
-        while (k < n)
-        {
-            long buf = resolveLinkTarget(names.get(k), nameU,
-                    descU);
-            if (buf != 0L)
-            {
-                return buf;
-            }
-            k += 1;
-        }
-        return 0L;
-    }
-
-    /** Hop cap on the superclass walk above -- a malformed or cyclic chain must not spin. */
-    private static final int MAXIFACECHAIN = 32;
-
-    /** Append class {@code ci}'s directly-declared interface name Utf8 ADDRESSES to {@code out}; new length. */
-    private static int collectIfaceNames(int ci, AddressArray out, int n)
-    {
-        if (ClassRegistry.clTab == null || ci < 0 || ci >= ClassRegistry.clCount || ClassRegistry.clTab[ci] == null)
-        {
-            return n;
-        }
-        Address base = ClassRegistry.clTab[ci].base;
-        parseConstPool(base, blobLenOf(base));
-        int count = u2(base.plus(gAfterCp + 6));            // interfaces_count (ClassReader.afterInterfaces layout)
-        int k = 0;
-        while (k < count && n < InterfaceInvocation.MAXIFACEFALLBACK)
-        {
-            int cpi = u2(base.plus(gAfterCp + 8 + k * 2));
-            if (cpi > 0)
-            {
-                out.set(n, base.plus(gcp[u2(base.plus(gcp[cpi]))]));   // CONSTANT_Class -> name_index -> Utf8 offset
-                n += 1;
-            }
-            k += 1;
-        }
-        return n;
-    }
-
-    /**
-     * Name the BAKE-STUB MEMO, if any, that is still handing out a stub carrying {@code idx}.
-     *
-     * <p>{@code VM.bakeResolve} memoizes its answer into the bake-stub table -- which lives in the IMAGE and
-     * is therefore never reclaimed -- while {@code lzTab}/{@code lzN} ARE dropped and rebuilt by the reclaim.
-     * A memo taken before a reclaim keeps returning a deferral stub whose baked index belongs to a table
-     * generation that no longer exists. This walks the table and decodes each memo's first word: a deferral
-     * stub opens {@code movz x17,<idx>}, so an entry whose memo carries the failing index IS the source, and
-     * the entry's own class/name/descriptor names the baked method it belongs to.
-     *
-     * <p>Evidence, not inference: silence here means the stale index came from somewhere else.
-     */
-    /**
-     * Drop every bake-stub memo that points at loader-emitted code, as part of the reclaim.
-     *
-     * <p>{@code VM.bakeResolve} caches its answer in the bake-stub table -- which the WRITER emits into the
-     * IMAGE, so the memo is immortal -- while everything it can point at is mortal: the deferral stub, the
-     * compiled body, and the {@code lzTab} entry that stub's baked index refers to are all dropped and
-     * rebuilt by this reclaim. The two have independent lifetimes, and nothing reconciled them.
-     *
-     * <p>MEASURED, not argued: bake-stub entry 11, {@code java/lang/Integer.toString()}, kept returning a
-     * stub carrying lazy index 3138 long after the table had been rebuilt to 2274 entries. {@code
-     * lazyCompile} then rejected the index and returned 0, and the trampoline tail-branched to address 0 --
-     * which, because {@code br} writes no x30, surfaced as a BOOT RE-ENTERED naming a healthy call in
-     * {@code String.valueOf(Object)} rather than anything to do with this.
-     *
-     * <p>Only memos into the CODE ARENA are cleared. A memo naming a BAKED body points into image memory,
-     * which no reclaim touches, so re-resolving those would be pure cost. Clearing is safe either way: the
-     * next call re-resolves through the same three tiers and memoizes again.
-     */
-    /** The repair below, switchable so it has a NEGATIVE CONTROL: false restores the pre-fix behaviour
-     *  exactly, and the suite must then die again at LispDemo. A fix whose control was never run is a
-     *  change that correlates with a passing boot, not a demonstrated cause. */
-    static final boolean BAKE_MEMO_REPAIR = true;
-
-    private static void invalidateBakeMemos()
-    {
-        if (!BAKE_MEMO_REPAIR)
-        {
-            return;
-        }
-        if (VM.bakeStubTable == 0L || VM.bakeStubCount <= 0L)
-        {
-            return;
-        }
-        long i = 0L;
-        while (i < VM.bakeStubCount)
-        {
-            if (Address.fromLong(VM.bakeStubTable).plus(i * 32L).plus(24L).loadLong() >= Heap.CODE_BASE)
-            {
-                Address.fromLong(VM.bakeStubTable).plus(i * 32L).plus(24L).store(0L);
-                bakeMemosDropped += 1;
-            }
-            i += 1L;
-        }
-    }
-
-    /** How many bake-stub memos the reclaim has had to drop -- 0 would mean this repair never fires. */
-    static int bakeMemosDropped;
-
-    /** High-water mark of {@code lzN}: the deepest the lazy table has EVER been, across reclaims. The one
-     *  fact that separates "a stale index from a previous table generation" from "an index that was never
-     *  an lzTab index at all" -- and those want opposite fixes. */
-    static int lzNHigh;
-
-    private static void reportBakeMemoFor(int idx)
-    {
-        if (VM.bakeStubTable == 0L || VM.bakeStubCount <= 0L)
-        {
-            return;
-        }
-        long i = 0L;
-        while (i < VM.bakeStubCount)
-        {
-            Address memo = Address.fromLong(VM.bakeStubTable).plus(i * 32L).plus(24L).loadAddress();
-            if (!memo.isZero() && stubIdxAt(memo) == (long) idx)
-            {
-                Uart.write(Magic.bytes("  ... and the BAKE-STUB MEMO still returns it: entry="));
-                VM.printDec((int) i);
-                Uart.write(Magic.bytes(" stub=0x"));
-                VM.printHex(memo);
-                Uart.write(Magic.bytes(" for "));
-                printUtf8Capped(Address.fromLong(VM.bakeStubTable).plus(i * 32L).loadAddress());
-                Uart.putc(0x2E);
-                printUtf8Capped(Address.fromLong(VM.bakeStubTable).plus(i * 32L).plus(8L).loadAddress());
-                printUtf8Capped(Address.fromLong(VM.bakeStubTable).plus(i * 32L).plus(16L).loadAddress());
-                Uart.putc(0x0A);
-            }
-            i += 1L;
-        }
-    }
-
-
-    /**
-     * Refuse to bake a stub whose tail-branch target is ZERO.
-     *
-     * <p>Four stub emitters read a trampoline address straight out of a static and {@code movz/movk} it into
-     * x16 ahead of {@code br x16}. Nothing checked it. A zero there bakes {@code br 0} into the stub, and
-     * because {@code br} does not write x30 the failure is invisible until that stub is finally entered --
-     * at which point the firmware shim re-enters the image entry and the fault report names whatever healthy
-     * call ran last. Two arcs of this project have been spent inside reports built that way.
-     *
-     * <p>So the check goes at EMIT time, not at branch time: the stub is permanently broken the moment it is
-     * written, and here the method it stands for is still in hand. A report thousands of batches later is
-     * not the same information.
-     *
-     * @param kind 1 = a lazy/deferral stub (idx indexes lzTab), 2 = a link stub
-     */
-    private static void checkTramp(Address tramp, int idx, int kind)
-    {
-        if (!tramp.isZero())
-        {
-            return;
-        }
-        Uart.write(Magic.bytes("\n*** STUB WOULD BRANCH TO 0: the "));
-        if (kind == 1)
-        {
-            Uart.write(Magic.bytes("lazy-compile"));
-        }
-        else
-        {
-            Uart.write(Magic.bytes("link"));
-        }
-        Uart.write(Magic.bytes(" trampoline is not built yet ***\n    stub idx="));
-        VM.printDec(idx);
-        if (kind == 1 && lzTab != null && idx >= 0 && idx < lzTab.length
-                && lzTab[idx] != null && !lzTab[idx].blob.isZero() && lzTab[idx].nameOff != 0)
-        {
-            Uart.write(Magic.bytes(" for "));
-            printUtf8Capped(lzTab[idx].blob.plus(lzTab[idx].nameOff));   // Utf8-shaped: u2 length, then bytes
-        }
-        Uart.write(Magic.bytes("\n    Halting HERE, where the stub is still nameable. `br` does not write x30,"));
-        Uart.write(Magic.bytes("\n    so a 0 baked now is an untraceable reboot whenever this stub is entered.\n"));
-        while (true)
-        {
-            Magic.wfe();
-        }
-    }
-
-    /**
-     * Emit the zero-target guard that must precede a resolve trampoline's {@code br x16}.
-     *
-     * <p>All three trampolines end by tail-branching to whatever the resolver handed back. A {@code br} does
-     * NOT write x30, so a zero target branches to address 0 and the firmware shim re-enters the image entry
-     * carrying a STALE x30 -- the wild branch erases its own provenance, and every frame the fault report
-     * then derives is an artifact. This project has lost two arcs to exactly that, the second one to a report
-     * that named a perfectly healthy {@code blr} in {@code String.valueOf(Object)}.
-     *
-     * <p>Emitted HERE, immediately after {@code x16 = target} and while the frame is still up, because that
-     * is the only point where the caller's return address is still on the stack at {@code STUB_LR_OFF}: the
-     * guard can therefore name the CALL SITE exactly instead of guessing it from a register the branch
-     * destroys. Costs one {@code cbnz} on the path that works.
-     *
-     * <p>Emits nothing if the helper was never stashed -- a call to address 0 is the very failure this
-     * exists to prevent, and an instrument that causes it would be worse than none (see the {@code watchRecv}
-     * stash that shipped emitting exactly that).
-     *
-     * @param kind 1 = lazy-compile, 2 = link-stub, 3 = late-virtual
-     */
-    static int emitTailGuard(Address buf, int w, int kind)
-    {
-        long ha = VM.badTailTargetAddr;
-        if (ha == 0L)
-        {
-            return w;
-        }
-        buf.plus(w * 4L).store(A64Enc.cbnz(16, 7));                   // target ok: skip
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.movz(0, kind, 0));                   // x0 = which trampoline
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.ldrx(1, STUB_SP, STUB_LR_OFF));                   // x1 = the call site
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.movz(16, (int) (ha & 0xFFFF), 0));
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.movk(16, (int) ((ha >> 16) & 0xFFFF), 1));
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.movk(16, (int) ((ha >> 32) & 0xFFFF), 2));
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.blr(16));                   // halts; no return
-        w += 1;
-        return w;
-    }
-
-    /**
-     * The late-dispatch trampoline: the twin of {@link #buildLinkTramp}, but the receiver is already in x0 and
-     * the site index arrives in x17. Saves x0..x15 + LR so the resolve cannot disturb the arguments, then
-     * tail-branches to the target -- so the callee returns straight to the original call site.
-     */
-    static Address virtualTramp()
-    {
-        if (virtualTrampAddr != 0L)
-        {
-            return Address.fromLong(virtualTrampAddr);
-        }
-        Address buf = Heap.allocCode(256);
-        long ra = VM.virtualResolveAddr;
-        int w = 0;
-        buf.plus(w * 4L).store(A64Enc.subImm(STUB_SP, STUB_SP, STUB_FRAME));
-        w += 1;
-        int r = 0;
-        while (r <= STUB_SAVE_HI)
-        {
-            buf.plus(w * 4L).store(A64Enc.strx(r, STUB_SP, STUB_SAVE0 + r * ObjectModel.WORD));
-            w += 1;
-            r += 1;
-        }
-        buf.plus(w * 4L).store(A64Enc.strx(STUB_LR, STUB_SP, STUB_LR_OFF)); // LR at [sp+0]: what VM.unwind reads to pop this frame
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.movReg(1, 17)); // x1 = site idx (x0 IS the receiver)
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.movz(16, (int) (ra & 0xFFFF), 0));
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.movk(16, (int) ((ra >> 16) & 0xFFFF), 1));
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.movk(16, (int) ((ra >> 32) & 0xFFFF), 2));
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.blr(16)); // x0 = resolved target
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.movReg(16, 0)); // x16 = target (outside the restore set)
-        w += 1;
-        // A zero target here would `br` to address 0 -- and `br` does not write x30, so the wild
-        // branch would erase its own provenance. Check while the frame is still up: the call site
-        // is on it (late-virtual trampoline).
-        w = emitTailGuard(buf, w, 3);
-        r = 0;
-        while (r <= STUB_SAVE_HI)
-        {
-            buf.plus(w * 4L).store(A64Enc.ldrx(r, STUB_SP, STUB_SAVE0 + r * ObjectModel.WORD));
-            w += 1;
-            r += 1;
-        }
-        buf.plus(w * 4L).store(A64Enc.ldrx(STUB_LR, STUB_SP, STUB_LR_OFF));
-        w += 1;
-        virtualTrampHi = buf.toLong() + w * 4L;                  // the `add sp` below tears the frame down
-        buf.plus(w * 4L).store(A64Enc.addImm(STUB_SP, STUB_SP, STUB_FRAME));
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.br(16)); // tail-call: returns to the call site
-        w += 1;
-        Heap.publishCode(buf, buf.plus(w * 4L));
-        virtualTrampAddr = buf.toLong();
-        virtualTrampLo = buf.toLong() + 4L;                      // the `sub sp` above establishes it
-        registerTrampFrames();
-        return buf;
-    }
-
-
     /** VarHandle overlay: vtable slot of an op by NAME only (its op names are unique), regardless of the
      *  signature-polymorphic call-site descriptor. Returns -1 if the VarHandle overlay isn't registered yet. */
 
 
     /** Reflection: access_flags of the instance field, or -1 if the class declares no such own field. */
-
-
-    /**
-     * On-demand compile: a method invoked ONLY reflectively was never RTA-reached, so it isn't compiled. Compile
-     * JUST that method (its declaring class is already structure-loaded) into the code arena and register it, so
-     * {@code Method.invoke} can call its buffer. Uses {@code compileReuseTib} so the class's already-filled TIB is
-     * left alone (invoke dispatches to the buffer directly, not through the vtable). Returns the new registry
-     * index, or -1. Limitation: the method's cross-class callees must already be compiled (no dep pull here); a
-     * same-class callee it needs is compiled alongside it (they share this compile batch).
-     */
-    static int compileMethodOnDemand(Address type, ObjectReference nameArr)
-    {
-        return compileMethodOnDemand(type, nameArr, ObjectReference.nullReference());
-    }
-
-    /**
-     * THE COMPILE CONTEXT IS STATIC, so exactly one task may be inside the compiler at a time. {@code
-     * lazyCompile} has always taken {@link VM#loaderLock} for that reason; this path reached {@code compile}
-     * without it, so a second task compiling here while another compiled elsewhere clobbered {@code gbytes}/
-     * {@code gcp} mid-compile -- which surfaces as a NULL bytecode array inside the compiler
-     * ({@code NullPointerException} in {@code Baseline.s4}, lowering a switch) rather than as anything
-     * resembling a locking bug. The lock is RECURSIVE and owned by TASK, so nesting inside an
-     * already-locked path costs nothing.
-     *
-     * <p>The lock covers the COMPILE only, never the running of an initializer: a {@code <clinit>} can block
-     * on a monitor or spawn threads, and holding the loader lock across that would deadlock any task that
-     * needs to compile before it can release.
-     */
-    static int compileMethodOnDemand(Address type, ObjectReference nameArr, ObjectReference descArr)
-    {
-        VM.loaderLock(VM.LOCK_ON_DEMAND);
-        int r;
-        try
-        {
-            r = compileMethodOnDemandLocked(type, nameArr, descArr);
-        }
-        finally
-        {
-            VM.loaderUnlock();   // see the note in lazyCompile: a throw here used to strand the lock
-        }
-        return r;
-    }
-
-    /** {@link #compileMethodOnDemand} restricted to one DESCRIPTOR ({@code descArr} 0 = any). Without it the walk
-     *  stops at the first method of that name, which for an overloaded class is a coin toss between two bodies. */
-    private static int compileMethodOnDemandLocked(Address type, ObjectReference nameArr, ObjectReference descArr)
-    {
-        int ci = ClassRegistry.classIndexByType(type);
-        // AN INTERFACE IS NOT REFUSED any more. It was, for having no TIB to reuse -- but this path compiles with
-        // compileReuseTib, which never touches one (the reason compileSigOnDemand already compiles interface
-        // STATICS). The refusal left every not-yet-called DEFAULT method unresolvable by reflection:
-        // getDeclaredMethods on an interface answered EMPTY and getMethods/getMethod never saw its defaults
-        // (ReflectLookupProbe: a one-method interface declared 0).
-        if (ci >= ClassRegistry.clCount)
-        {
-            return -1;
-        }
-        Address blob = ClassRegistry.clTab[ci].base;
-        int len = blobLenOf(blob);
-        parseConstPool(blob, len);                         // set up the class's compile state (as loadBodies does,
-        parseFields();                                     //   minus the TIB fill): statics block + vtable scratch
-        int reg = ClassRegistry.classRegByName(gThisNameOff);
-        if (reg < 0)
-        {
-            return -1;
-        }
-        gStatics = ClassRegistry.clTab[reg].statics;                         // reuse the phase-A statics (cross-class getstatic keys on it)
-        Indy.findBootstrapMethods();
-        VtableLayout.parseVtable(blob);                                 // gvImplBuf/gvImplCode (for any invokevirtual in the body)
-        gType = ClassRegistry.clTab[reg].type;
-        gTib = ClassRegistry.clTab[reg].tib;
-        parseForMethods(blob, len);                        // fresh gMethodsStart for the by-name method walk
-        Address p = gMethodsStart;
-        int mcount = u2(p);
-        p = p.plus(2);
-        int nlen = (int) nameArr.toAddress().plus(16L).loadLong();
-        Address nbase = nameArr.toAddress().plus(24L);
-        int dlen = descArr.toLong() <= 0x1000L ? 0 : (int) descArr.toAddress().plus(16L).loadLong();
-        Address dbase = descArr.toAddress().plus(24L);
-        long code = 0L;
-        int descOff = 0;
-        int isStatic = 0;
-        int isSync = 0;
-        int m = 0;
-        while (m < mcount)
-        {
-            int attrs = u2(p.plus(6));
-            if (Utf8.rawEqUtf8(nbase, nlen, blob, gcp[u2(p.plus(2))])
-                    && (dlen == 0 || Utf8.rawEqUtf8(dbase, dlen, blob, gcp[u2(p.plus(4))])))
-            {
-                long c = findCode(blob, p.plus(8), attrs);     // sets gcodeLen + gMaxLocals for this method
-                if (c != 0L)
-                {
-                    code = c;
-                    descOff = gcp[u2(p.plus(4))];
-                    isStatic = (u2(p) & 0x0008) != 0 ? 1 : 0;
-                    isSync = (u2(p) & 0x0020) != 0 ? 1 : 0;   // ACC_SYNCHRONIZED: the implicit monitor
-                    break;
-                }
-            }
-            p = skipAttributes(p.plus(8), attrs);
-            m += 1;
-        }
-        if (code == 0L)
-        {
-            return -1;                                     // no such method, or abstract/native (no Code)
-        }
-        boolean reuseWas = compileReuseTib;              // a nested load resets it: restore, never clear
-        compileReuseTib = true;                            // do NOT rebuild/refill the class's TIB
-        int rcMark = rcCount;                              // this compile's own reloc sites start here
-        int rsMark = rsCount;
-        boolean outerCompiling = lzCompiling;              // a drain re-enters the compiler: save the whole note state
-        boolean outerRetried = lzRetried;
-        int outerPullN = lzPullN;
-        lzCompiling = true;                                // collect the classes this body's statics NAME
-        lzPullN = 0;
-        lzRetried = false;
-        compile(code, gcodeLen, descOff, isStatic, isSync);
-        lzCompiling = outerCompiling;
-        compileReuseTib = reuseWas;
-        boolean pulled = lzPullN > 0;
-        if (pulled)
-        {
-            drainPendingPulls();
-            truncateRelocs(rcMark);                        // drop the doomed body's reloc sites: patching them later
-            rsCount = rsMark;                              //   would write into a buffer the sweep may have reused
-        }
-        lzRetried = outerRetried;
-        lzPullN = outerPullN;
-        if (pulled && !odRetried)
-        {
-            // Everything above is re-derived from (type, nameArr, descArr), so the retry is just this method
-            // again -- with the pulled classes present, so the getstatic resolves to the real cell. The first
-            // buffer is abandoned: nothing has registered it or stored it in a TIB slot, so no caller can have
-            // run it. `odRetried` bounds it to one attempt, since a class that is still missing after the pull
-            // would otherwise re-note and recurse for ever.
-            odRetried = true;
-            int r = compileMethodOnDemand(type, nameArr, descArr);
-            odRetried = false;
-            return r;
-        }
-        MethodRegistry.registerAll();                                     // register the just-compiled method(s) -> globalBuf
-        patchRelocs();                                     // resolve its cross-class calls (idempotent over prior relocs)
-        if (dlen != 0)
-        {
-            return Reflection.methodResolveRegistryDesc(type, nameArr, descArr);
-        }
-        return Reflection.methodResolveRegistry(type, nameArr);
-    }
 
 
     /** Watch the vtable slot chosen for two named methods, whatever the slot number (see logVtableSlot). */
@@ -11127,19 +9542,6 @@ public final class Loader
         }
     }
 
-    // ----- the lazy-compile engine: every method body compiles on its first call -----
-    // A method is reached one of two ways, both landing in the same engine. A STATIC gets a phase-A cell at
-    // structure registration (armPhaseACells) and its callers emit `ldr x16,[cell]; blr x16`; a VIRTUAL (or
-    // any non-static) gets a deferral stub as both its registered buffer and its TIB slot (emitDeferredStub).
-    // Either way the first call routes through the shared trampoline into lazyCompile, which compiles the one
-    // method and data-patches the cell/slot, so later calls dispatch straight to the body.
-    private static final int MAXLAZY = 32768;
-    private static LazyMethod[] lzTab;     // deferred/lazy methods (reified: one LazyMethod per entry)
-    private static int    lzN;
-    private static long   lazyTrampAddr;   // the shared arg-preserving trampoline
-    private static long   lazyTrampLo, lazyTrampHi;    // the range over which its frame is live
-
-    private static final boolean LAZY_TRACE  = false;   // per-method "jitc" compile trace over the UART (debug)
 
     /**
      * Per-batch phase timing for {@link #loadAll} over the UART (debug). A demand-load's cost is invisible in
@@ -11174,7 +9576,7 @@ public final class Loader
      * <p>Kept INDEPENDENT of {@link #LOAD_PROFILE} on purpose: a profiling boot wants the phase timings
      * WITHOUT the serial traffic those lines add to the very phases being timed.
      */
-    private static final boolean LOAD_TRACE = false;
+    static final boolean LOAD_TRACE = false;
 
     /**
      * Per-resolution chatter -- `linkresolve`/`newresolve`/`staticresolve`/`ifaceresolve`/`baked`/
@@ -11625,560 +10027,7 @@ public final class Loader
         }
         return (t1 - t0) * 1000000L / f;
     }
-    private static DynLink[] dlTab;    // phase-A dynamic-linking table (reified: one DynLink per method cell)
-    private static int    dlN;
 
-    /** Per-method stub: x9 = deferred index, then branch to the shared trampoline. */
-    /**
-     * Stubs, by address: {stub, lazy index}. A stub is 32 bytes of movz/movk/br — its whole purpose is to
-     * be branched to from somewhere else, which is exactly the reference the collector cannot see. Recording
-     * them lets the sweep say WHICH stub it is freeing, and the fault reporter say which method's stub the
-     * PC landed in. 64 KiB = 4,096 entries; recording stops rather than wrapping.
-     */
-    // Placed in the free 256 KiB between CODE_INDEX's end (0x0374_0000) and CODE_PIN_BITMAP (0x0378_0000).
-    // It used to be "64 KiB below the swept log" -- 0x037B_0000 -- which is INSIDE CODE_PIN_BITMAP
-    // [0x0378_0000, 0x037C_0000): the two overlapped exactly, so stub-table writes clobbered the pin bits
-    // for the arena's top 4 MiB and pin writes clobbered stub entries. Nothing detected it because a lost
-    // pin only matters if that code is later swept, and a corrupted stub entry only makes stubIdxAt lie.
-    // The new region is also 4x larger: at 16 bytes an entry the old 64 KiB held 4,096 stubs while a suite
-    // run creates 10,000+, so stubIdxAt silently returned -1 for most of them -- which is why the
-    // "it was the deferral stub for ..." diagnostics and the stub-mislink check kept coming back empty.
-    // Fixed scratch at 0x0306_0000, in the free band between Bcm2711.MBOX_BUFFER (0x0305_0000, a few
-    // hundred bytes) and Loader.CODE_ROOTS (0x0310_0000); 0x030A_0000..0x0310_0000 stays free after it.
-    //
-    // TWO homes were wrong before this one, both from picking an address that LOOKED unused:
-    //   0x0374_0000 (#145) overlays THREE tables -- Heap.STATS (histograms; STATS+128 is stub entry 8),
-    //     VMGc.STALE_TAB (STATS+0x400 = entry 64) and VMGc.FREED_RANGES (0x0376_0000 = entry 8192). A suite
-    //     run creates 10,000+ stubs, so all three were overwritten with stub buffer addresses. Visible in
-    //     every boot log since as `reqCode: 16=33563776` -- 0x2002480, a code-arena pointer sitting where an
-    //     allocation count belongs.
-    //   0x0380_0000 is NOT the free hole below MARK_BITMAP it appears to be: VM.SEC_STACK_HI puts the
-    //     secondary core stacks there, tops at 0x0390/0x03A0/0x03B0_0000 growing DOWN, so core 1's stack
-    //     occupies exactly that address.
-    // These are diagnostic tables, so nothing miscomputes -- but FREED_RANGES is what makes a swept-pc fault
-    // readable (it is what diagnosed #146) and the histograms are the measurement the arena work is steered
-    // by, so a corrupted one costs a whole investigation. Check a candidate address against EVERY table in
-    // the 0x0300_0000+ band, not just the one being cleared.
-    public static final long STUB_TAB = 0x0306_0000L;
-    private static final long STUB_TAB_END = 0x030A_0000L;         // 256 KiB = 16,384 stubs
-    public static long stubTabN;
-
-    /** Note that {@code buf} is the deferral stub for lazy method {@code idx}. */
-    static void noteStub(Address buf, int idx)
-    {
-        if (STUB_TAB + stubTabN * 16L + 16L <= STUB_TAB_END)
-        {
-            Address.fromLong(STUB_TAB).plus(stubTabN * 16L).store(buf);
-            Address.fromLong(STUB_TAB).plus(stubTabN * 16L).plus(8L).store((long) idx);
-            stubTabN = stubTabN + 1L;
-        }
-    }
-
-    /** The lazy index of the stub containing {@code addr}, or -1. Stubs are 32 bytes. */
-    public static long stubIdxAt(Address addr)
-    {
-        long i = 0;
-        while (i < stubTabN)
-        {
-            long b = Address.fromLong(STUB_TAB).plus(i * 16L).loadLong();
-            if (addr.toLong() >= b && addr.toLong() < b + 32L)
-            {
-                return Address.fromLong(STUB_TAB).plus(i * 16L).plus(8L).loadLong();
-            }
-            i += 1L;
-        }
-        return -1L;
-    }
-
-    /** Name the method a lazy index belongs to, for a diagnostic. */
-    public static void printLazyName(long idx)
-    {
-        int k = (int) idx;
-        if (k < 0 || k >= lzN || lzTab[k] == null)
-        {
-            Uart.write(Magic.bytes("<idx out of range>"));
-            return;
-        }
-        printNameAt(ClassRegistry.clTab[lzTab[k].reg].base, ClassRegistry.clTab[lzTab[k].reg].nameOff);
-        Uart.putc(0x2E);
-        writeName(lzTab[k].blob.plus(lzTab[k].nameOff + 2), u2(lzTab[k].blob.plus(lzTab[k].nameOff)));
-    }
-
-    /**
-     * Write the deferral stub for lazy method {@code idx} into {@code buf} (32 bytes) and return the address of
-     * its TARGET LITERAL, or 0 if this stub has none:
-     * <pre>
-     *   +0   movz x17, #idx          the trampoline reads the index here
-     *   +4   ldr  x16, [pc, #12]     the literal at +16
-     *   +8   br   x16
-     *   +12  nop                     pad: keeps the literal 8-byte aligned
-     *   +16  .quad lazyTrampAddr     -> the compiled body, once there is one (see patchLazyStub)
-     * </pre>
-     * x17/x16, NOT x9/x10: x0.. are the argument registers, so a stub that scratches x9/x10 destroys the 10th
-     * and 11th arguments of the very call it stands in for (this is what broke demo deep10); x16/x17 are the
-     * architectural intra-procedure scratch pair and never arguments. A 0 trampoline would bake {@code br 0},
-     * which writes no x30 and surfaces as an untraceable reboot, so checkTramp fails first.
-     *
-     * <p>THE TARGET IS DATA, NOT AN INSTRUCTION. This stub used to be {@code movz/movk x16, tramp; br x16} and
-     * was never rewritten, so every call through it -- every caller of a method whose deferral stub IS its
-     * registered address -- went stub -> trampoline (16 registers saved and restored) -> lazyCompile -> cache
-     * hit -> branch, for the life of the VM. MEASURED (QEMU, SslEngineProbe, 2026-11-06): 58,174,133
-     * lazyCompile calls, 99.99% cache hits, against 20,731 deferred methods; on the Pi, 3.83M calls and 19.3 s
-     * inside lazyCompile over one HTTPS GET. Patching a 64-bit aligned literal is single-copy atomic, so another
-     * core sees the trampoline or the body -- both correct -- and since no instruction changes there is no
-     * cross-core I-cache maintenance and none of the ARM ARM's concurrent-modification-of-code rules apply
-     * (MOVZ -> B is not in their permitted set). A misaligned buffer keeps the old, unpatchable form.
-     */
-    private static Address writeLazyStub(Address buf, int idx)
-    {
-        checkTramp(Address.fromLong(lazyTrampAddr), idx, 1);
-        buf.store(A64Enc.movz(17, idx & 0xFFFF, 0));                                  // x17 = idx
-        if ((buf.toLong() & 7L) != 0L)
-        {
-            buf.plus(4L).store(A64Enc.movz(16, (int) (lazyTrampAddr & 0xFFFF), 0));
-            buf.plus(8L).store(A64Enc.movk(16, (int) ((lazyTrampAddr >> 16) & 0xFFFF), 1));
-            buf.plus(12L).store(A64Enc.movk(16, (int) ((lazyTrampAddr >> 32) & 0xFFFF), 2));
-            buf.plus(16L).store(A64Enc.br(16));
-            Heap.publishCode(buf, buf.plus(20L));
-            return Address.zero();
-        }
-        buf.plus(4L).store(A64Enc.ldrLitX(16, 12));                                      // x16 = [buf + 16]
-        buf.plus(8L).store(A64Enc.br(16));
-        buf.plus(12L).store(A64Enc.nop());
-        buf.plus(16L).store(lazyTrampAddr);
-        Heap.publishCode(buf, buf.plus(24L));
-        return buf.plus(16L);
-    }
-
-    /**
-     * Point lazy method {@code idx}'s deferral stub straight at {@code body}, so later calls through it skip the
-     * trampoline. Called where the TIB slot / offset cell is patched, with the same body, so a caller sees what
-     * the cache-hit path of lazyCompile would have returned. The body is pinned (a CODE->CODE edge whose only
-     * holder is this literal), and the DSB orders its publication before the literal can be observed.
-     */
-    private static void patchLazyStub(int idx, long body)
-    {
-        long lit = lzTab[idx].stubLit;
-        if (lit == 0L || body == 0L)
-        {
-            return;
-        }
-        Heap.pinCodeAt(Address.fromLong(body));
-        Magic.dsb();
-        Address.fromLong(lit).store(body);
-    }
-
-    private static Address buildLazyCompileStub(int idx)
-    {
-        Address buf = Heap.allocCode(32);
-        noteStub(buf, idx);
-        // A deferral stub outlives its own dispatch cell. Once the first call patches the cell to the compiled
-        // body the stub looks unreferenced, and the sweep frees it -- correctly, by reachability. But the cell
-        // is not its only caller: stale dispatch copies (an inherited TIB slot, an itable entry) still name the
-        // stub, and calling one is HARMLESS by design -- it re-enters lazyCompile and returns the real body.
-        // It turns fatal only once the stub has been swept: the space is reused and the branch lands in
-        // whatever data now lives there. So pin it. 32 bytes each, and it is the safety net that makes every
-        // stale dispatch copy correct.
-        Heap.pinCodeAt(buf);
-        lzTab[idx].stubLit = writeLazyStub(buf, idx).toLong();
-        return buf;
-    }
-
-    /**
-     * The shared arg-preserving trampoline. Entered with x9 = deferred index, x0..x7 = the call's args, x30 =
-     * caller return. Saves the arg registers + LR, calls {@code lazyCompile(idx)} (via the writer-stashed
-     * {@code VM.lazyCompileAddr}) which returns the freshly-compiled buffer, restores the args + LR, and
-     * tail-branches into the method so it sees the exact original call state.
-     */
-    private static void buildLazyTramp()
-    {
-        Address buf = Heap.allocCode(256);
-        long ca = VM.lazyCompileAddr;
-        int w = 0;
-        // Preserve x0..x15, not x0..x7. lazyCompile runs the WHOLE compiler between the entry to this
-        // trampoline and the tail-branch, so every argument register the callee will read must survive it.
-        // Saving only x0..x7 silently dropped the 9th argument onward -- garbage that shifted whenever
-        // compilation order changed, which is exactly how demo deep10 printed a different wrong answer each
-        // time the loader changed. The 16 extra loads/stores happen once per method, on its first call.
-        buf.plus(w * 4L).store(A64Enc.subImm(STUB_SP, STUB_SP, STUB_FRAME)); // sub sp,sp,#144
-        w += 1;
-        int r = 0;
-        while (r <= STUB_SAVE_HI)
-        {
-            buf.plus(w * 4L).store(A64Enc.strx(r, STUB_SP, STUB_SAVE0 + r * ObjectModel.WORD));
-            w += 1;
-            r += 1;
-        }
-        buf.plus(w * 4L).store(A64Enc.strx(STUB_LR, STUB_SP, STUB_LR_OFF)); // LR at [sp+0]: what VM.unwind reads to pop this frame
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.movReg(0, 17)); // x0 = idx (the stub put it in x17)
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.movz(16, (int) (ca & 0xFFFF), 0)); // x16 = lazyCompile
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.movk(16, (int) ((ca >> 16) & 0xFFFF), 1));
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.movk(16, (int) ((ca >> 32) & 0xFFFF), 2));
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.blr(16)); // x0 = fresh buffer
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.movReg(16, 0)); // x16 = target (outside the restore set)
-        w += 1;
-        // A zero target here would `br` to address 0 -- and `br` does not write x30, so the wild
-        // branch would erase its own provenance. Check while the frame is still up: the call site
-        // is on it (lazy-compile trampoline).
-        w = emitTailGuard(buf, w, 1);
-        r = 0;
-        while (r <= STUB_SAVE_HI)
-        {
-            buf.plus(w * 4L).store(A64Enc.ldrx(r, STUB_SP, STUB_SAVE0 + r * ObjectModel.WORD));
-            w += 1;
-            r += 1;
-        }
-        buf.plus(w * 4L).store(A64Enc.ldrx(STUB_LR, STUB_SP, STUB_LR_OFF)); // (see registerTrampFrames)
-        w += 1;
-        lazyTrampHi = buf.toLong() + w * 4L;
-        buf.plus(w * 4L).store(A64Enc.addImm(STUB_SP, STUB_SP, STUB_FRAME)); // add sp,sp,#144
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.br(16)); // tail-call the fresh method
-        w += 1;
-        Heap.publishCode(buf, buf.plus(w * 4L));
-        lazyTrampAddr = buf.toLong();
-        lazyTrampLo = buf.toLong() + 4L;
-        registerTrampFrames();
-    }
-
-    // ---- late link resolution: the call sites RTA cannot see -------------------------------------------
-    // RTA marks a method reachable, then walks its body to mark what IT calls. A method reached ONLY through
-    // Method.invoke breaks that chain: it compiles on demand (the method registry has it), but nothing
-    // statically reachable names it, so its OWN callees are never marked and their classes are never pulled.
-    // patchRelocs then finds no target for each of its call sites. Those sites used to go straight to
-    // denylistTrap -- correct for a genuinely pruned class, wrong for a class that is merely absent from a
-    // closure computed without ever reading this body. So an unresolved site whose callee is NOT denylisted
-    // gets a link stub instead: on the FIRST call (i.e. only if the site is actually reached) it demand-loads
-    // the class and resolves the method, exactly as resolveBakeStub does for the baked world, and memoizes.
-    // A cold site costs one 32-byte stub and never runs; a genuinely unresolvable one still lands in
-    // denylistTrap, with the trapwire index intact because the trampoline restores LR before tail-branching.
-
-    // 256 was enough for every closure until the console launcher, whose picocli+JUnit graph exhausts it --
-    // and running out is NOT a cap that merely limits an optimisation: the caller leaves the site pointing at
-    // denylistTrap, so the program dies blaming a denylist the class is not on.
-    private static final int MAXLINKSTUB = 4096;
-    private static AddressArray lkClsU  = AddressArray.create(MAXLINKSTUB);   // absolute {u2 len}{bytes} runs, as resolveBakeStub takes
-    private static AddressArray lkNameU = AddressArray.create(MAXLINKSTUB);
-    private static AddressArray lkDescU = AddressArray.create(MAXLINKSTUB);
-    private static long[] lkMemo  = new long[MAXLINKSTUB];   // resolved target, filled on first call
-    private static long[] lkStub  = new long[MAXLINKSTUB];
-    private static int    lkCount;
-    private static long   linkTrampAddr;
-
-    /**
-     * The stub every unresolved-but-not-denylisted call site is patched to, deduped by callee identity so N
-     * sites calling the same method share one. Returns 0 if the table is full, and the caller falls back to
-     * the trap.
-     */
-    static long linkStubFor(Address clsU, Address nameU, Address descU)
-    {
-        // A LINEAR SCAN, and deliberately left one. It was indexed during the `patch` arc on the theory that
-        // this was hot; MEASURED, the index bought NOTHING, and the cost turned out to be `dlCellOf` two
-        // tiers away. This path is the `unres` arm, 541ms cumulative of an 11s callT on a launcher boot --
-        // so the scan is not worth the table it would take to avoid. Revisit only if a measurement puts time
-        // here.
-        int k = 0;
-        while (k < lkCount)
-        {
-            pcStubSteps += 1;
-            if (utf8EqAt(lkClsU.get(k), 0, clsU, 0)
-                    && utf8EqAt(lkNameU.get(k), 0, nameU, 0)
-                    && utf8EqAt(lkDescU.get(k), 0, descU, 0))
-            {
-                return lkStub[k];
-            }
-            k += 1;
-        }
-        if (lkCount >= MAXLINKSTUB)
-        {
-            // SAY SO. Returning 0 here leaves patchRelocsFrom's target as denylistTrap, and the runtime then
-            // reports `denied callee: <class>.<method>` for a class on NO denylist -- the exact
-            // misattribution that has cost this project several debugging sessions. `java/util/LinkedHashSet
-            // .<init>`, reached from picocli's CommandSpec.aliases, was one: shipped, allowed, and trapped.
-            linkStubFull(clsU, nameU, descU);
-            return 0L;
-        }
-        if (linkTrampAddr == 0L)
-        {
-            buildLinkTramp();
-        }
-        lkClsU.set(lkCount, clsU);
-        lkNameU.set(lkCount, nameU);
-        lkDescU.set(lkCount, descU);
-        lkMemo[lkCount] = 0L;
-        lkStub[lkCount] = buildLinkStub(lkCount).toLong();
-        lkCount += 1;
-        return lkStub[lkCount - 1];
-    }
-
-    /** Report the link-stub table overflowing, once -- the site it could not serve becomes a denylist trap. */
-    private static void linkStubFull(Address clsU, Address nameU, Address descU)
-    {
-        if (lkFullReported)
-        {
-            return;
-        }
-        lkFullReported = true;
-        Uart.write(Magic.bytes("\n  LINK STUB TABLE FULL at "));
-        VM.printDec(MAXLINKSTUB);
-        Uart.write(Magic.bytes(" -- this site becomes a DENYLIST TRAP for a class that is NOT denied: "));
-        printUtf8Capped(clsU);
-        Uart.putc(0x2E);
-        printUtf8Capped(nameU);
-        Uart.putc(0x20);
-        printUtf8Capped(descU);
-        Uart.putc(0x0A);
-    }
-
-    private static boolean lkFullReported;
-
-    /** x17 = stub index, then jump to the shared link trampoline. Same shape as the lazy deferral stub, and
-     *  x16/x17 for the same reason: x0.. are the call's arguments and must survive untouched. */
-    private static Address buildLinkStub(int idx)
-    {
-        Address buf = Heap.allocCode(32);
-        Heap.pinCodeAt(buf);                                 // only a patched `bl` displacement names it
-        int w = 0;
-        // A 0 here bakes `br 0` into the stub, and `br` writes no x30 -- so the failure would
-        // surface as an untraceable reboot whenever this stub is finally entered. Fail now.
-        checkTramp(Address.fromLong(linkTrampAddr), idx, 2);
-        buf.plus(w * 4L).store(A64Enc.movz(17, idx & 0xFFFF, 0));
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.movz(16, (int) (linkTrampAddr & 0xFFFF), 0));
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.movk(16, (int) ((linkTrampAddr >> 16) & 0xFFFF), 1));
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.movk(16, (int) ((linkTrampAddr >> 32) & 0xFFFF), 2));
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.br(16));
-        w += 1;
-        Heap.publishCode(buf, buf.plus(w * 4L));
-        return buf;
-    }
-
-    /**
-     * The shared arg-preserving trampoline for link stubs — the twin of {@link #buildLazyTramp}, resolving
-     * through {@code resolveLinkStub} instead of compiling. Preserving x0..x15 matters for the same reason it
-     * does there: a whole demand-load runs between entry and the tail-branch, so every argument register the
-     * callee will read must survive it. Restoring LR before the branch is what keeps the callee's return —
-     * and, when resolution fails and the target is denylistTrap, what keeps that trap's x30-keyed trapwire
-     * lookup and stack walk reading exactly as they do for a direct call.
-     */
-    private static void buildLinkTramp()
-    {
-        Address buf = Heap.allocCode(256);
-        long ra = VM.resolveLinkStubAddr;
-        int w = 0;
-        buf.plus(w * 4L).store(A64Enc.subImm(STUB_SP, STUB_SP, STUB_FRAME)); // sub sp,sp,#144
-        w += 1;
-        int r = 0;
-        while (r <= STUB_SAVE_HI)
-        {
-            buf.plus(w * 4L).store(A64Enc.strx(r, STUB_SP, STUB_SAVE0 + r * ObjectModel.WORD));
-            w += 1;
-            r += 1;
-        }
-        buf.plus(w * 4L).store(A64Enc.strx(STUB_LR, STUB_SP, STUB_LR_OFF)); // LR at [sp+0]: what VM.unwind reads to pop this frame
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.movReg(0, 17)); // x0 = idx (the stub put it in x17)
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.movz(16, (int) (ra & 0xFFFF), 0));
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.movk(16, (int) ((ra >> 16) & 0xFFFF), 1));
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.movk(16, (int) ((ra >> 32) & 0xFFFF), 2));
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.blr(16)); // x0 = resolved target
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.movReg(16, 0)); // x16 = target (outside the restore set)
-        w += 1;
-        // A zero target here would `br` to address 0 -- and `br` does not write x30, so the wild
-        // branch would erase its own provenance. Check while the frame is still up: the call site
-        // is on it (link-stub trampoline).
-        w = emitTailGuard(buf, w, 2);
-        r = 0;
-        while (r <= STUB_SAVE_HI)
-        {
-            buf.plus(w * 4L).store(A64Enc.ldrx(r, STUB_SP, STUB_SAVE0 + r * ObjectModel.WORD));
-            w += 1;
-            r += 1;
-        }
-        buf.plus(w * 4L).store(A64Enc.ldrx(STUB_LR, STUB_SP, STUB_LR_OFF)); // (see registerTrampFrames)
-        w += 1;
-        Address lo = buf.plus(4L);
-        Address hi = buf.plus(w * 4L);
-        buf.plus(w * 4L).store(A64Enc.addImm(STUB_SP, STUB_SP, STUB_FRAME)); // add sp,sp,#144
-        w += 1;
-        buf.plus(w * 4L).store(A64Enc.br(16)); // tail-call the resolved method
-        w += 1;
-        Heap.publishCode(buf, buf.plus(w * 4L));
-        linkTrampAddr = buf.toLong();
-        // Registered here only: linkTrampAddr is cleared by resetLoader, so this runs again every batch --
-        // unlike the lazy/virtual trampolines, which outlive the table and are re-registered by resetLoader.
-        VM.addJitFrame(lo, hi, STUB_FRAME, 0L);
-    }
-
-    /**
-     * A link stub fired: the site really is reached, so resolve it now. Memoized, so the demand-load happens
-     * once however many times the site is called. Returns {@code VM.denylistTrapAddr} when the callee cannot
-     * be resolved after all — the site then behaves exactly as it did before this path existed, trap message
-     * and backtrace included. Called only from the trampoline (via the stashed address).
-     */
-    static long resolveLinkStub(int idx)
-    {
-        if (idx < 0 || idx >= lkCount)
-        {
-            return VM.denylistTrapAddr;                 // dead force-reference (writer) / bad index
-        }
-        if (lkMemo[idx] != 0L)
-        {
-            return lkMemo[idx];
-        }
-        VM.loaderLock(VM.LOCK_DEMAND_LOAD);                                // demand-loads a class: one compiler at a time
-        long buf;
-        try
-        {
-        lnkFailWhy = 0;
-        buf = resolveLinkTarget(lkClsU.get(idx), lkNameU.get(idx),
-                lkDescU.get(idx));
-        if (buf == 0L)
-        {
-            // JVMS 5.4.3.3 searches C, then C's SUPERCLASSES, then its maximally-specific SUPERINTERFACES.
-            // The tiers inside resolveLinkTarget cover the first two -- bufBySigU's third tier resolves
-            // through the class's FLATTENED vtable, which carries inherited methods -- but they cannot cover
-            // the third, because a DEFAULT method has no vtable slot in any class: a class-typed receiver
-            // reaches a default THROUGH THE ITABLE precisely because there is no slot for it.
-            //
-            // `super.cleanUp(context)` in JUnit's TestMethodTestDescriptor is exactly that shape. It is an
-            // invokespecial naming MethodBasedTestDescriptor, which does NOT declare cleanUp; the method is a
-            // `public default` on Node, implemented two classes up by JupiterTestDescriptor. Every tier
-            // answered 0 and the call trapped as `LINK FAILED ... class OK but no body for that
-            // name+descriptor` -- accurate about the CLASS and silent about where the body really lives.
-            //
-            // resolveViaInterfaces already performs this search for the late-VIRTUAL path (it walks the
-            // superclass chain collecting interfaces, then their super-interfaces). Reusing it is what keeps
-            // the two paths agreeing; a second walk over the same relation is the trap this file has paid for
-            // repeatedly. It cannot be called from INSIDE resolveLinkTarget -- it calls resolveLinkTarget per
-            // interface, so that would recurse -- which is why it belongs here, at the terminal caller.
-            int ireg = regBySigU(lkClsU.get(idx));
-            viHops = 0;
-            viIfaceN = -1;                              // -1 distinguishes "tier skipped" from "walk found none"
-            // STEP 2 OF JVMS 5.4.3.3: C's SUPERCLASSES, most-derived first. This is where the body usually is,
-            // and it was the step missing here -- I added step 3 (superinterfaces) first on a reading that
-            // `javap -s` then disproved. JUnit's `super.cleanUp(context)` is an invokespecial naming
-            // MethodBasedTestDescriptor, which declares no cleanUp; JupiterTestDescriptor, its SUPERCLASS,
-            // declares `cleanUp(JupiterEngineExecutionContext)V` with exactly the call site's descriptor.
-            // Node.cleanUp is a red herring: being generic it erases to (EngineExecutionContext)V, a
-            // DIFFERENT descriptor, so no interface search could ever have matched.
-            //
-            // resolveLinkTarget answers for ONE class -- bufBySigU, nativeBufAt and compileSigOnDemand all
-            // work off that class's own blob and registry rows -- so an inherited method resolves nowhere.
-            // virtualResolve already walks the chain this way for the late-VIRTUAL path; the link stub, which
-            // is what an invokespecial/invokestatic site gets, never had one. Walking most-derived-first IS
-            // what inheritance means.
-            int c = ireg >= 0 ? ClassRegistry.superRegOf(ireg) : -1;
-            int hops = 0;
-            while (buf == 0L && c >= 0 && hops < MAXIFACECHAIN)
-            {
-                int why = lnkFailWhy;
-                buf = resolveLinkTarget(ClassRegistry.clTab[c].base.plus(ClassRegistry.clTab[c].nameOff),
-                        lkNameU.get(idx), lkDescU.get(idx));
-                if (buf == 0L)
-                {
-                    lnkFailWhy = why;                   // a miss at one level is "try the super", not a verdict
-                }
-                c = ClassRegistry.superRegOf(c);
-                hops += 1;
-            }
-            if (buf == 0L && ireg >= 0)
-            {
-                int why = lnkFailWhy;                   // the CLASS's reason; the walk below overwrites it
-                buf = resolveViaInterfaces(ireg, lkNameU.get(idx), lkDescU.get(idx));
-                if (buf == 0L)
-                {
-                    lnkFailWhy = why;                   // report why the CLASS failed, not the last interface
-                }
-            }
-            if (buf == 0L)
-            {
-                // WHAT THE WALK ACTUALLY SAW. Two fixes for this failure were shipped on plausible readings
-                // and neither moved it, which is this project's recorded way of saying the reading was never
-                // checked. `ireg < 0` means the tier never ran (the callee class is not in the registry under
-                // that name); `ifaces=0` means the chain walk collected nothing; a list that omits the
-                // expected interface means the chain stopped before reaching the class that declares it.
-                // Off-cost: this runs only where the call is already about to trap.
-                reportIfaceWalk(ireg);
-            }
-        }
-        if (buf == 0L)
-        {
-            // TERMINAL: this stub has no other tier to try, so the call really is about to trap. (The chain
-            // walkers that also call resolveLinkTarget report through VIRTUALRESOLVE FAILED when THEIR whole
-            // walk is over -- not per level.)
-            //
-            // A NATIVE THIS VM DOES NOT IMPLEMENT is checked first. CLAUDE.md rule 3: it THROWS, naming itself,
-            // instead of halting the task on the trap -- which also reported it as a DENYLIST TRAP for a class
-            // that is not denied (Net.setIntOption0, 2026-10-29). The throw makes it catchable and turns the
-            // missing native into a worklist entry the program writes; the UnsatisfiedLinkError IS the report,
-            // so nothing is printed.
-            //
-            // The named class can only INHERIT the native -- javac emits `invokestatic Sub.missing` for a call
-            // through a subclass -- so the declaring class is searched up the chain, as virtualResolve does
-            // (NativeMissingProbe "inherited static"; before this the call halted on LINK FAILED).
-            long thunk = 0L;
-            if (lnkFailWhy == 3)
-            {
-                int nreg = regBySigU(lkClsU.get(idx));
-                if (nreg >= 0)
-                {
-                    thunk = NativeMethods.missingNativeOnChain(nreg, lkNameU.get(idx),
-                            lkDescU.get(idx));
-                }
-                else if (NativeMethods.declaredNative(lkClsU.get(idx), lkNameU.get(idx),
-                        lkDescU.get(idx)))
-                {
-                    thunk = NativeMethods.missingNativeThunk(lkClsU.get(idx), lkNameU.get(idx),
-                            lkDescU.get(idx));
-                }
-            }
-            if (thunk != 0L)
-            {
-                buf = thunk;
-            }
-            else if (lnkFailWhy == 1)
-            {
-                reportLinkFail(lkClsU.get(idx), lkNameU.get(idx), lkDescU.get(idx),
-                        Magic.bytes("class not in the classDir (nothing can load it)"));
-            }
-            else if (lnkFailWhy == 2)
-            {
-                reportLinkFail(lkClsU.get(idx), lkNameU.get(idx), lkDescU.get(idx),
-                        Magic.bytes("class loaded but NOT INSTANTIATED (half lifecycle)"));
-            }
-            else
-            {
-                reportLinkFail(lkClsU.get(idx), lkNameU.get(idx), lkDescU.get(idx),
-                        Magic.bytes("class OK but no body for that name+descriptor"));
-            }
-            if (thunk == 0L)
-            {
-                buf = VM.denylistTrapAddr;
-            }
-        }
-        lkMemo[idx] = buf;
-        }
-        finally
-        {
-            VM.loaderUnlock();   // see the note in lazyCompile: a throw here used to strand the lock
-        }
-        return buf;
-    }
 
 
     /** Append the Utf8 at {@code utf8Addr} as it is. */
@@ -12196,1146 +10045,6 @@ public final class Loader
     }
 
 
-    /** Whether class {@code clsU} itself declares a method {@code name desc} -- any descriptor when {@code descU}
-     *  is 0, and only a NATIVE one when {@code nativeOnly}. The classfile walk {@link NativeMethods#declaredNative} describes. */
-    static boolean declaresMethod(Address clsU, Address nameU, Address descU, boolean nativeOnly)
-    {
-        int pd = findPdByName(clsU, 0);
-        if (pd < 0)
-        {
-            return false;
-        }
-        Address base = pdBase.get(pd);
-        int n = u2(base.plus(8L));                                // constant_pool_count
-        int[] off = new int[n];
-        Address p = base.plus(10L);
-        int i = 1;
-        while (i < n)
-        {
-            int tag = u1(p);
-            off[i] = p.diff(base).toInt() + 1;                   // a Utf8's offset is its u2 length
-            if (tag == 1)
-            {
-                p = p.plus(3L + u2(p.plus(1L)));
-            }
-            else if (tag == 5 || tag == 6)
-            {
-                p = p.plus(9L);
-                i += 1;                                        // long/double take two slots
-            }
-            else if (tag == 7 || tag == 8 || tag == 16 || tag == 19 || tag == 20)
-            {
-                p = p.plus(3L);
-            }
-            else if (tag == 15)
-            {
-                p = p.plus(4L);
-            }
-            else if (tag == 3 || tag == 4 || tag == 9 || tag == 10 || tag == 11 || tag == 12 || tag == 17
-                    || tag == 18)
-            {
-                p = p.plus(5L);
-            }
-            else
-            {
-                return false;                                  // not a classfile we can read: keep the trap
-            }
-            i += 1;
-        }
-        p = p.plus(6L);                                               // access_flags, this_class, super_class
-        p = p.plus(2L + u2(p) * 2L);                                  // interfaces
-        int fcount = u2(p);
-        p = p.plus(2L);
-        int f = 0;
-        while (f < fcount)
-        {
-            p = skipMemberAttrs(p.plus(8L), u2(p.plus(6L)));
-            f += 1;
-        }
-        int mcount = u2(p);
-        p = p.plus(2L);
-        int m = 0;
-        while (m < mcount)
-        {
-            int access = u2(p);
-            if ((!nativeOnly || (access & 0x0100) != 0) && Utf8.utf8BlobSame(base, off[u2(p.plus(2L))], nameU)
-                    && (descU.isZero() || Utf8.utf8BlobSame(base, off[u2(p.plus(4L))], descU)))
-            {
-                return true;
-            }
-            p = skipMemberAttrs(p.plus(8L), u2(p.plus(6L)));
-            m += 1;
-        }
-        return false;
-    }
-
-    /** Skip {@code count} attributes starting at {@code p} (each u2 name, u4 length, then the bytes). */
-    private static Address skipMemberAttrs(Address p, int count)
-    {
-        int a = 0;
-        while (a < count)
-        {
-            long alen = ((long) u2(p.plus(2L)) << 16) | u2(p.plus(4L));
-            p = p.plus(6L + alen);
-            a += 1;
-        }
-        return p;
-    }
-
-    /**
-     * Say WHY a link stub could not resolve, ONCE per class+method. Three very different failures shared one
-     * silent {@code return 0} -- absent class, half-built class, and "loaded fine but no callable body" -- and
-     * all three surface identically as a DENYLIST TRAP, whose message then blames a denylist that may have
-     * nothing to do with it (ConcurrentHashMap is not denylisted at all). Each arm needs a different fix, so
-     * each says which it is.
-     */
-    /**
-     * The reason the LAST {@link #resolveLinkTarget} answered 0: 1 = class absent from the classDir, 2 = class
-     * loaded but not instantiated, 3 = class fine but no body for that name+descriptor.
-     *
-     * <p>Recorded rather than printed at the point of failure because {@code resolveLinkTarget} IS CALLED IN A
-     * LOOP: the late-virtual path walks the receiver's superclass chain and a 0 at one level is the normal way
-     * of saying "not declared here, try the super". Printing there reported 26 failures on a boot where all 44
-     * tests PASS -- a report that cries wolf on a green run is worse than none. Only the caller knows the walk
-     * is over, so only the caller prints.
-     */
-    private static int lnkFailWhy;
-
-    /** Name what the interface tier saw for a link stub that is about to trap -- see its call site. */
-    private static void reportIfaceWalk(int ireg)
-    {
-        Uart.write(Magic.bytes("\n  iface tier: ireg="));
-        VM.printDec(ireg);
-        Uart.write(Magic.bytes(" chainHops="));
-        VM.printDec(viHops);
-        Uart.write(Magic.bytes(" ifaces="));
-        VM.printDec(viIfaceN);
-        int k = 0;
-        while (k < viIfaceN && k < 12 && viNames != null)
-        {
-            Uart.write(Magic.bytes("\n    tried "));
-            printNameAt(viNames.get(k), 0);
-            k += 1;
-        }
-        Uart.putc(0x0A);
-    }
-
-    private static void reportLinkFail(Address clsU, Address nameU, Address descU, byte[] why)
-    {
-        long key = clsU.plus((long) u2(nameU)).toLong();
-        if (lnkFailSeen == null)
-        {
-            lnkFailSeen = new long[64];
-            lnkFailSeenN = 0;
-        }
-        int k = 0;
-        while (k < lnkFailSeenN)
-        {
-            if (lnkFailSeen[k] == key)
-            {
-                return;
-            }
-            k += 1;
-        }
-        if (lnkFailSeenN < 64)
-        {
-            lnkFailSeen[lnkFailSeenN] = key;
-            lnkFailSeenN += 1;
-        }
-        Uart.write(Magic.bytes("\n  LINK FAILED: "));
-        printNameAt(clsU, 0);
-        Uart.putc(0x2E);
-        printNameAt(nameU, 0);
-        if (!descU.isZero())
-        {
-            printNameAt(descU, 0);                      // WHICH overload -- "no body for that descriptor"
-        }                                               //   is unactionable without saying which descriptor
-        Uart.write(Magic.bytes(" -- "));
-        Uart.write(why);
-        Uart.putc(0x0A);
-    }
-
-    private static long[] lnkFailSeen;
-    private static int lnkFailSeenN;
-
-    /**
-     * Demand-load the callee's class and find its callable buffer — the same three-tier lookup
-     * {@link #resolveBakeStub} uses (registered body, celled static, TIB slot), plus the provided-native
-     * fallback. Returns 0 rather than halting: an unresolvable callee here is a legitimate outcome (the class
-     * is genuinely absent), and the caller turns it back into the denylist trap.
-     */
-    static long resolveLinkTarget(Address clsU, Address nameU, Address descU)
-    {
-        if (ClassRegistry.clTab == null)
-        {
-            return 0L;
-        }
-        if (LOAD_LOG)
-        {
-            Uart.write(Magic.bytes("  linkresolve "));
-            printNameAt(clsU, 0);
-            Uart.putc(0x2E);
-            printNameAt(nameU, 0);
-            Uart.putc(0x0A);
-        }
-        // VALIDATE BEFORE RENDERING ANYTHING AS TEXT. A stub firing with a bad clsU gives a garbage length,
-        // and every attempt to name the subject from it -- printNameAt, or even `new byte[len]` filled and
-        // written out -- streams the stub table onto the console and buries the failure. A class name is
-        // never 512 bytes; a longer one means the POINTER is wrong, which is a different bug from a class
-        // that will not load, and only hex can say so safely.
-        int len = u2(clsU);
-        // Length AND content. 512 was still far too generous: a garbage entry whose length happened to be a
-        // few hundred sailed through and printed a few hundred bytes of the stub table. A class name is short
-        // and entirely printable ASCII, so anything else means the POINTER is wrong -- a different bug from a
-        // class that will not load, and one that must be reported in hex rather than rendered.
-        boolean sane = len > 0 && len <= 255;
-        int c = 0;
-        while (sane && c < len)
-        {
-            int b = u1(clsU.plus(2 + c));
-            if (b < 0x20 || b > 0x7E)
-            {
-                sane = false;
-            }
-            c += 1;
-        }
-        if (!sane)
-        {
-            Uart.write(Magic.bytes("\nBAD BAKE STUB ENTRY (pointer, not a missing class)\n  clsU="));
-            VM.printHex(clsU.toLong());
-            Uart.write(Magic.bytes(" nameU="));
-            VM.printHex(nameU.toLong());
-            Uart.write(Magic.bytes(" descU="));
-            VM.printHex(descU.toLong());
-            Uart.write(Magic.bytes("\n  u2(clsU)="));
-            VM.printHex((long) len);
-            Uart.write(Magic.bytes(" table="));
-            VM.printHex(VM.bakeStubTable);
-            Uart.write(Magic.bytes(" count="));
-            VM.printHex(VM.bakeStubCount);
-            Uart.putc(0x0A);
-            capHalt(Magic.bytes("bakestub-entry"), len);
-        }
-        // The name is already a Utf8 run at clsU: ask the index directly, and build the byte[] copy only when
-        // the class has to be LOADED -- this runs per execution of an unmemoised site.
-        int reg = regBySigU(clsU);
-        if (reg < 0)
-        {
-            byte[] slash = new byte[len];
-            int i = 0;
-            while (i < len)
-            {
-                slash[i] = (byte) u1(clsU.plus(2 + i));
-                i += 1;
-            }
-            if (loadClassIncremental(slash).isZero())
-            {
-                lnkFailWhy = 1;                         // RECORD, do not print: see reportLinkFail
-                linkResolveLog(clsU, nameU, descU, 0L, 0);
-                return 0L;
-            }
-            reg = regBySigU(clsU);
-        }
-        if (reg >= 0 && ClassRegistry.clTab[reg].state < RVMClass.ST_INSTANTIATED)
-        {
-            // Loaded but not brought all the way up: its <clinit> was blocked or its structure never
-            // registered. Branching in would run against half-built statics and a possibly empty vtable.
-            lnkFailWhy = 2;
-            linkResolveLog(clsU, nameU, descU, 0L, 0);
-            return 0L;
-        }
-        long buf = bufBySigU(clsU, nameU, descU);
-        int tier = 1;
-        if (buf == 0L)
-        {
-            buf = nativeBufAt(clsU, 0, nameU, 0);       // a PROVIDED NATIVE has no bytecode to find
-            tier = 2;
-        }
-        if (buf == 0L)
-        {
-            buf = compileSigOnDemand(clsU, nameU, descU);   // never compiled AND not dispatchable: JIT it now
-            tier = 3;
-        }
-        if (buf == 0L && reg >= 0)
-        {
-            buf = inheritedLinkTarget(reg, nameU, descU);  // the named class only INHERITS it
-            tier = 4;
-        }
-        if (buf != 0L && !plausibleCode(Address.fromLong(buf)))
-        {
-            // THE LATE PATHS WERE THE ONE UNGUARDED DISPATCH. Every inline call site gets
-            // Baseline.dispatchTargetGuard, but a late-resolved target is TAIL-BRANCHED to by the trampoline
-            // with nothing checking it -- so a tier that answers with a non-code word (tier 1 reads a static
-            // cell's CONTENTS and a TIB slot; either can hold a stale or out-of-range value) branches straight
-            // into whatever that word is. Read as an address, two adjacent instruction words look exactly like
-            // one: that is how this surfaced, as a bare instruction abort at a pc no table claims, with the
-            // caller nowhere in the report. Trap it by name instead.
-            reportBadTarget(clsU, nameU, descU, buf, tier);
-            return 0L;                                  // -> the caller substitutes denylistTrap
-        }
-        if (buf == 0L)
-        {
-            // Class is present and fully built, yet no tier produced a body: not registered, not a provided
-            // native, and compileSigOnDemand found no Code for this exact name+descriptor. Usually an
-            // abstract/native method with no VM helper, or a descriptor mismatch.
-            lnkFailWhy = 3;
-        }
-        linkResolveLog(clsU, nameU, descU, buf, tier);
-        return buf;
-    }
-
-    /**
-     * A link-stub target the named class INHERITS: the first superclass that DECLARES name+descriptor (JVMS
-     * 5.4.3.3), through the same three tiers {@link #resolveLinkTarget} tries on the named class. globalBufByRef
-     * hands a site here when an ancestor declares the method but has not compiled it; the tiers above ask only
-     * about the named class, so without this such a site could not resolve at all. Stops at the first
-     * declaring class whatever it answers -- climbing past one is the silent mis-binding this exists to avoid.
-     */
-    private static long inheritedLinkTarget(int reg, Address nameU, Address descU)
-    {
-        int sreg = ClassRegistry.superRegOf(reg);
-        int guard = 0;
-        while (sreg >= 0 && guard < 64)
-        {
-            Address sU = ClassRegistry.clTab[sreg].base.plus(ClassRegistry.clTab[sreg].nameOff);
-            long b = bufBySigU(sU, nameU, descU);
-            if (b == 0L)
-            {
-                b = nativeBufAt(sU, 0, nameU, 0);
-            }
-            if (b == 0L)
-            {
-                b = compileSigOnDemand(sU, nameU, descU);
-            }
-            if (b != 0L)
-            {
-                return b;
-            }
-            if (blobDeclares(ClassRegistry.clTab[sreg].base, nameU, 0, descU, 0) == 1)
-            {
-                return 0L;                              // declared here and still not callable: report, do not climb
-            }
-            sreg = ClassRegistry.superRegOf(sreg);
-            guard += 1;
-        }
-        return 0L;
-    }
-
-    /**
-     * A callable target must be 4-aligned and below the code ceiling -- exactly the test the JIT's inline
-     * {@link compiler.Baseline#dispatchTargetGuard} applies, which the late-resolution paths never had.
-     *
-     * <p>The range is IMAGE **and** code arena, not the arena alone: a lazily compiled body routinely links to
-     * a BAKED java.base body, which lives in the image below {@code Heap.CODE_BASE}. Testing for the arena
-     * only rejected `java/lang/String.getBytes` on its first real use -- an instrument that broke the boot it
-     * was added to diagnose.
-     */
-    static boolean plausibleCode(Address buf)
-    {
-        return buf.toLong() > 0x1000L && (buf.toLong() >> 24) <= (long) Symbols.CODE_TOP_BYTE_MAX && (buf.toLong() & 3L) == 0L;
-    }
-
-    /** Name a late-resolved target that is not code, and which of the tiers produced it. */
-    private static void reportBadTarget(Address clsU, Address nameU, Address descU, long buf, int tier)
-    {
-        Uart.write(Magic.bytes("\n  BAD LINK TARGET tier="));
-        VM.printDec(tier);
-        Uart.write(Magic.bytes(" buf="));
-        VM.printHex(buf);
-        Uart.write(Magic.bytes(" for "));
-        printNameAt(clsU, 0);
-        Uart.putc(0x2E);
-        printNameAt(nameU, 0);
-        printNameAt(descU, 0);
-        Uart.putc(0x0A);
-    }
-
-    /**
-     * THE COMPILE CONTEXT IS STATIC, so exactly one task may be inside the compiler at a time. {@code
-     * lazyCompile} has always taken {@link VM#loaderLock} for that reason; this path reached {@code compile}
-     * without it, so a second task compiling here while another compiled elsewhere clobbered {@code gbytes}/
-     * {@code gcp} mid-compile -- which surfaces as a NULL bytecode array inside the compiler
-     * ({@code NullPointerException} in {@code Baseline.s4}, lowering a switch) rather than as anything
-     * resembling a locking bug. The lock is RECURSIVE and owned by TASK, so nesting inside an
-     * already-locked path costs nothing.
-     *
-     * <p>The lock covers the COMPILE only, never the running of an initializer: a {@code <clinit>} can block
-     * on a monitor or spawn threads, and holding the loader lock across that would deadlock any task that
-     * needs to compile before it can release.
-     */
-    static long compileSigOnDemand(Address clsU, Address nameU, Address descU)
-    {
-        VM.loaderLock(VM.LOCK_SIG_DEMAND);
-        long r;
-        try
-        {
-            r = compileSigOnDemandLocked(clsU, nameU, descU);
-        }
-        finally
-        {
-            VM.loaderUnlock();   // see the note in lazyCompile: a throw here used to strand the lock
-        }
-        return r;
-    }
-
-    /**
-     * Compile one method of an already structure-loaded class, chosen by name AND descriptor, and return its
-     * buffer. The last resort for a link stub: {@link #bufBySigU}'s three tiers all answer through a DISPATCH
-     * table (a registered buffer, a static cell, a vtable slot), and a method can be perfectly callable while
-     * appearing in none of them.
-     *
-     * <p>The case that forced this is a <b>static method on an interface</b>. {@code registerInterface} walks
-     * only {@code isVirtual} methods, to give them itable indices; a static one gets no itable index, no
-     * vtable slot and no static cell, so it is registered nowhere at all. {@code Arguments.of} in the JUnit
-     * shim is exactly that, and it is what a reflectively-reached {@code @MethodSource} factory calls. The
-     * older reflective path ({@link #compileMethodOnDemand}) refuses interfaces outright for the same reason
-     * it has no TIB to reuse — but {@code compileReuseTib} already means we never touch one.
-     *
-     * <p>Matching on the DESCRIPTOR as well as the name is not optional here: {@code of(T)} and the varargs
-     * {@code of(T...)} are different methods at the same name, and compiling the wrong one links the call
-     * site to a body with the wrong signature. Returns 0 if there is no such method or it has no Code.
-     */
-    private static long compileSigOnDemandLocked(Address clsU, Address nameU, Address descU)
-    {
-        int reg = regBySigU(clsU);
-        if (reg < 0)
-        {
-            return 0L;
-        }
-        Address blob = ClassRegistry.clTab[reg].base;
-        int len = blobLenOf(blob);
-        parseConstPool(blob, len);                      // rebuild this class's compile state (as loadBodies
-        parseFields();                                  //   does, minus the TIB fill)
-        gStatics = ClassRegistry.clTab[reg].statics;                  // reuse the phase-A statics block
-        Indy.findBootstrapMethods();
-        VtableLayout.parseVtable(blob);
-        gType = ClassRegistry.clTab[reg].type;
-        gTib = ClassRegistry.clTab[reg].tib;                          // 0 for an interface; compileReuseTib means unused
-        parseForMethods(blob, len);
-        Address p = gMethodsStart;
-        int mcount = u2(p);
-        p = p.plus(2);
-        long code = 0L;
-        int descOff = 0;
-        int isStatic = 0;
-        int isSync = 0;
-        int m = 0;
-        while (m < mcount)
-        {
-            int attrs = u2(p.plus(6));
-            if (utf8EqAt(blob, gcp[u2(p.plus(2))], nameU, 0)
-                    && utf8EqAt(blob, gcp[u2(p.plus(4))], descU, 0))
-            {
-                long c = findCode(blob, p.plus(8), attrs);  // sets gcodeLen + gMaxLocals
-                if (c != 0L)
-                {
-                    code = c;
-                    descOff = gcp[u2(p.plus(4))];
-                    isStatic = (u2(p) & 0x0008) != 0 ? 1 : 0;
-                    isSync = (u2(p) & 0x0020) != 0 ? 1 : 0;   // ACC_SYNCHRONIZED: the implicit monitor
-                    break;
-                }
-            }
-            p = skipAttributes(p.plus(8), attrs);
-            m += 1;
-        }
-        if (code == 0L)
-        {
-            return 0L;                                  // no such signature, or abstract/native (no Code)
-        }
-        int rcMark = rcCount;                           // patch only THIS compile's relocs (see patchRelocsFrom)
-        int rsMark = rsCount;
-        boolean reuseWas = compileReuseTib;              // a nested load resets it: restore, never clear
-        compileReuseTib = true;
-        boolean outerCompiling = lzCompiling;
-        boolean outerRetried = lzRetried;
-        int outerPullN = lzPullN;
-        lzCompiling = true;                             // same deferred-pull retry as compileMethodOnDemand
-        lzPullN = 0;
-        lzRetried = false;
-        compile(code, gcodeLen, descOff, isStatic, isSync);
-        lzCompiling = outerCompiling;
-        compileReuseTib = reuseWas;
-        boolean pulled = lzPullN > 0;
-        if (pulled)
-        {
-            drainPendingPulls();
-            truncateRelocs(rcMark);
-            rsCount = rsMark;
-        }
-        lzRetried = outerRetried;
-        lzPullN = outerPullN;
-        if (pulled && !odRetried)
-        {
-            odRetried = true;                           // re-derived from (clsU, nameU, descU), like the twin above
-            long r = compileSigOnDemand(clsU, nameU, descU);
-            odRetried = false;
-            return r;
-        }
-        MethodRegistry.registerAll();
-        patchRelocsFrom(rcMark, rsMark);                // its own callees, including further link stubs
-        // INITIALIZE WHAT THIS BODY TOUCHES, before it can run -- what lazyCompileLocked does and this path
-        // did not. The compile above recorded every cross-class getstatic/new site it contains (JVMS 5.5
-        // active uses); without the drain they are noted and never acted on, so the body reads those classes'
-        // statics while they are still 0. A null that looks exactly like a value.
-        //
-        // This tier is the one that compiles a STATIC INTERFACE METHOD, which is registered nowhere else, and
-        // that is where it bit: JUnit's `CancellationToken.disabled()` is `getstatic
-        // DisabledCancellationToken.INSTANCE; areturn`. With that class never initialized the cell read 0, so
-        // `disabled()` returned null, and `Objects.requireNonNullElseGet(x, CancellationToken::disabled)`
-        // threw `NullPointerException: supplier.get()` -- three frames and one lambda away from the cause.
-        ClassInitializer.drainPendingInit();
-        return bufBySigU(clsU, nameU, descU);
-    }
-
-    /**
-     * Pull the functional interface of every {@code invokedynamic} in a just-pulled blob.
-     *
-     * <p>A lambda's interface is named ONLY as the return type inside the indy's own descriptor -- never as a
-     * {@code CONSTANT_Class} -- so no dependency scan sees it. Normally it arrives with the lambda's CONSUMER,
-     * which does name it (an {@code invokeinterface} on the SAM), and that is why lambdas work at all. A class
-     * pulled INCREMENTALLY has no such guarantee: a test method reached through {@code Method.invoke} compiles
-     * on demand and its {@code Assertions} call is resolved later still through a link stub, so when the
-     * lambda class is built neither the consumer nor the interface exists.
-     *
-     * <p>{@code buildLambdaTib} then resolves the interface to Type 0 -- which is also the itable directory's
-     * END SENTINEL, so the lambda satisfies NO interface and every dispatch on it throws NPE from the
-     * directory miss, inside whatever library received it.
-     *
-     * <p>Here rather than at the lambda's compile: a demand-load parses every blob and can collect, and the
-     * in-progress code buffer is not reachable yet -- doing this mid-compile swept it, and the method ran off
-     * a zeroed buffer ({@code ec=0} at offset +0).
-     */
-    private static void pullIndyIfaces(Address blob)
-    {
-        parseConstPool(blob, blobLenOf(blob));
-        int c = 1;
-        while (c < gcpCount)
-        {
-            if (gcpTag[c] == 18)
-            {
-                pullIndyIface(c);
-            }
-            c += 1;
-        }
-    }
-
-    /** Pull the class named by the return type of the indy descriptor at cp index {@code c}, if any. */
-    private static void pullIndyIface(int c)
-    {
-        int nt = u2(gbase.plus(gcp[c] + 2));                // InvokeDynamic { u2 bsmAttrIdx, u2 nameAndTypeIdx }
-        Address p = gbase.plus(gcp[u2(gbase.plus(gcp[nt] + 2))] + 2);   // NameAndType -> descriptor Utf8 body
-        while (u1(p) != ')')
-        {
-            p = p.plus(1);
-        }
-        p = p.plus(1);
-        if (u1(p) != 'L')
-        {
-            return;                                     // a primitive return names no class
-        }
-        Address q = p.plus(1);
-        while (u1(q) != ';')
-        {
-            q = q.plus(1);
-        }
-        int off = internIndyNameAt(p.plus(1), q.diff(p).toInt() - 1);
-        if (regBySigU(indyNameBuf.plus(off)) >= 0)
-        {
-            return;                                     // already a REGISTERED class -- re-adding its blob
-        }                                               //   re-registers it (lifecycle DIFF, then a wild branch)
-        // registerNameFromDir, not pullClass: it dedupes by blob ADDRESS (addBlob does), skips
-        // java/lang/Object, and -- the part that matters -- honours the DENYLIST. pullClass(byte[]) goes
-        // straight to the classDir, which is how the deferred-`new` path once pulled a denylisted class.
-        long pulled = registerNameFromDir(indyNameBuf, off);
-    }
-
-
-    /**
-     * Compile deferred method {@code idx} at call time: restore its class's compile context, re-find the
-     * method, compile just it, install the fresh buffer into the TIB slot, and return it. Called only from
-     * the trampoline (via the stashed address). Guarded so the writer's dead force-reference is a no-op.
-     */
-    static long lazyCompile(int idx)
-    {
-        if (idx < 0 || lzTab == null || idx >= lzN)
-        {
-            // SILENT UNTIL NOW. On the WRITER this is a dead force-reference and 0 is right; on METAL it is
-            // reached only from a deferral stub, whose idx was baked at emit time -- so a miss here means a
-            // stub outlived the table it indexes, and the 0 becomes `br 0` in the trampoline. Note the stub
-            // carries idx as a SINGLE movz, i.e. truncated to 16 bits.
-            if (lzTab != null)
-            {
-                Uart.write(Magic.bytes("\n  LAZY INDEX OUT OF RANGE (stub outlived its table): idx="));
-                VM.printDec(idx);
-                Uart.write(Magic.bytes(" lzN="));
-                VM.printDec(lzN);
-                Uart.write(Magic.bytes(" cap="));
-                VM.printDec(lzTab.length);
-                Uart.write(Magic.bytes(" everDeepest="));
-                VM.printDec(lzNHigh);
-                Uart.putc(0x0A);
-                reportBakeMemoFor(idx);       // who is still handing this index out?
-            }
-            return 0L;                                  // dead force-reference (writer) / bad index
-        }
-        if (lzTab[idx].cache != 0L)
-        {
-            return lzTab[idx].cache;                         // memoized: compile once, however many callers hit the stub
-        }
-        VM.loaderLock(VM.LOCK_LAZY);                                // SMP: the compile context is static -- one compiler at a time
-        long done;
-        try
-        {
-            done = lazyCompileLocked(idx);
-        }
-        finally
-        {
-            // A THROW INSIDE THE LOCKED REGION MUST NOT STRAND THE LOCK, and it did. Neither call was
-            // inside a try/finally and VM.unwind touches none of loaderOwner/loaderDepth/loaderUnlock, so
-            // an exception exiting non-locally skipped the unlock and the lock was never handed back --
-            // every other thread then blocked on it for the rest of the boot. MEASURED on the launcher:
-            // three waiters, `held` growing 29,282ms -> 229,224ms -> 299,053ms while the completed-release
-            // counter sat at `rel 12865` for ALL THREE -- not one outermost release in 270 seconds -- and
-            // `depth` stuck at 3/3/2 rather than unwinding to 0. Deterministic: QEMU stops at the same
-            // `rel 12865`.
-            //
-            // This path genuinely can throw: lazyCompile -> drainPendingPulls -> loadClassIncremental ->
-            // loadAll, whose tail RUNS QUEUED <clinit>s through Magic.call0 -- guest code, and JUnit throws
-            // as ordinary control flow. (That the lock is held across guest code at all violates the
-            // invariant clinitEntryOf states and observes; this fixes the leak, not that.)
-            VM.loaderUnlock();
-        }
-        if (done != 0L && !plausibleCode(Address.fromLong(done)))
-        {
-            // The third and last tail-branching path (with the link stub and the late-virtual resolve). Its
-            // trampoline branches to whatever comes back with nothing checking it, so a bogus buffer here is a
-            // wild branch at a pc no table claims -- and if it happens on a freshly spawned task there is not
-            // even a caller on the stack to name. Say what was being compiled instead.
-            Uart.write(Magic.bytes("\n  BAD LAZY TARGET buf="));
-            VM.printHex(done);
-            Uart.write(Magic.bytes(" for "));
-            printCompiling();
-            Uart.putc(0x0A);
-            return 0L;
-        }
-        return done;
-    }
-
-    // Superclass-chain hop cap for the late virtual resolve. A registry chain is acyclic by construction,
-    // so this only bounds the damage if one ever is not -- a spin here would hang mid-dispatch.
-    private static final int MAXCHAIN = 64;
-
-    // ---- unwindable stub frame layout ------------------------------------------------------------------
-    // Shared by the three resolve trampolines (lazy-compile, link-resolve, late-virtual) and the lambda
-    // thunk -- every stub that establishes a frame and then CALLS, so an exception can unwind through it.
-    // The LR offset is not a free choice: VM.unwind reads a frame's saved LR from [sp+0] (and a handler's
-    // callee-saved locals from [sp+8]), so putting it anywhere else makes the walk treat a saved argument
-    // register as the return address. STUB_FRAME is the trampolines' size specifically; the lambda thunk
-    // sizes its own frame from the ctor's arity.
-    static final int STUB_SP      = 31;                      // SP in the load/store encodings
-    static final int STUB_LR      = 30;                      // x30
-    static final int STUB_LR_OFF  = 0;                       // ... saved where the unwinder looks
-    static final int STUB_SAVE0   = 8;                       // x0 here; x_r at STUB_SAVE0 + r*WORD
-    static final int STUB_SAVE_HI = 15;                      // x0..x15: every register a callee can
-                                                                     //   read as an argument (see buildLazyTramp)
-    static final int STUB_FRAME   = 144;                     // LR + 16 saved = 136, rounded up to the
-                                                                     //   16-byte SP alignment AArch64 requires
-
-    /**
-     * Re-publish the persistent trampolines' frames into the JIT unwind table.
-     *
-     * <p>These trampolines establish a real frame and then CALL — {@code lazyCompile} runs the whole
-     * compiler, {@code virtualResolve} demand-loads classes and can run a {@code <clinit>} — so an exception
-     * thrown underneath one has to unwind THROUGH it. Without an entry the walk cannot size the frame: it
-     * stops there, and the frames it prints below are stale stack words rather than callers. That is what made
-     * a MetalJUnit failure report a NullPointerException at a bare {@code Magic.load64} in check-free image
-     * code, which cannot throw one.
-     *
-     * <p>Called after every {@link #resetLoader} as well as at build time, because the trampolines are built
-     * ONCE and cached for the life of the VM while {@code jitFrameCount} is zeroed per batch — registering
-     * only at build time would leave every batch after the first unwalkable again.
-     */
-    static void registerTrampFrames()
-    {
-        if (lazyTrampAddr != 0L)
-        {
-            VM.addJitFrame(Address.fromLong(lazyTrampLo), Address.fromLong(lazyTrampHi), STUB_FRAME, 0L);
-        }
-        if (virtualTrampAddr != 0L)
-        {
-            VM.addJitFrame(Address.fromLong(virtualTrampLo), Address.fromLong(virtualTrampHi), STUB_FRAME, 0L);
-        }
-        if (MethodHandles.mhTrampAddr != 0L)
-        {
-            VM.addJitFrame(Address.fromLong(MethodHandles.mhTrampLo), Address.fromLong(MethodHandles.mhTrampHi), STUB_FRAME, 0L);
-        }
-        if (Indy.indyTrampAddr != 0L)
-        {
-            VM.addJitFrame(Address.fromLong(Indy.indyTrampLo), Address.fromLong(Indy.indyTrampHi), STUB_FRAME, 0L);
-        }
-    }
-
-    /** {@link #lazyCompile}'s body, run under the loader lock. */
-    private static long lazyCompileLocked(int idx)
-    {
-        if (lzTab[idx].cache != 0L)
-        {
-            return lzTab[idx].cache;                    // another core compiled it while we waited for the lock
-        }
-        ClassInitializer.ensureClinit(lzTab[idx].reg);                   // JVMS 5.5 barrier: first call into the class initializes it.
-                                                        // BEFORE restoreCtxForCompile -- the initializer re-enters here
-                                                        // and each nested compile clobbers the g* context.
-        restoreCtxForCompile(lzTab[idx].blob, lzTab[idx].len, lzTab[idx].reg);
-        long code;
-        int len;
-        int descOff;
-        int isStatic;
-        int isSync;
-        if (lzTab[idx].code != 0L)                           // genuine deferral: the body was captured, compile it
-        {
-            code = lzTab[idx].code;
-            len = lzTab[idx].codeLen;
-            descOff = lzTab[idx].descOff;
-            isStatic = lzTab[idx].isStatic;
-            isSync = lzTab[idx].isSync;
-            gMaxLocals = lzTab[idx].maxLocals;
-        }
-        else                                            // 1b/1c: re-find the method by name+descriptor
-        {
-            code = findMethodByOffsets(lzTab[idx].nameOff, lzTab[idx].descOff);
-            if (code == 0L)
-            {
-                // SILENT UNTIL NOW, and the silence is what made it untraceable: 0 flows back through
-                // lazyCompile (whose BAD LAZY TARGET guard only catches IMPLAUSIBLE buffers, not zero)
-                // into the trampoline, which tail-branches to address 0 -- and `br` writes no x30, so the
-                // fault report then names whatever healthy call ran last.
-                Uart.write(Magic.bytes("\n  LAZY RE-FIND FAILED (method not in its blob): idx="));
-                VM.printDec(idx);
-                Uart.write(Magic.bytes(" name="));
-                printUtf8Capped(lzTab[idx].blob.plus(lzTab[idx].nameOff));
-                Uart.write(Magic.bytes(" desc="));
-                printUtf8Capped(lzTab[idx].blob.plus(lzTab[idx].descOff));
-                Uart.write(Magic.bytes(" blob=0x"));
-                VM.printHex(lzTab[idx].blob.toLong());
-                Uart.write(Magic.bytes(" reg="));
-                VM.printDec(lzTab[idx].reg);
-                Uart.putc(0x0A);
-                return 0L;
-            }
-            len = gcodeLen;
-            descOff = gFoundDescOff;
-            isStatic = gFoundStatic;
-            isSync = gFoundSync;
-        }
-        // M8 endgame (the Loader USES baked java.base): if the writer baked this exact method and
-        // listed it as loader-linkable, run the image's compiled stock code instead of compiling our
-        // own copy -- the JikesRVM boot-image contract. Field offsets and direct calls inside baked
-        // code are world-independent; the link table already excludes anything that isn't.
-        if (BAKED_LINK)
-        {
-            int bkName = lzTab[idx].nameOff;
-            if (bkName == 0)
-            {
-                bkName = findNameByCode(lzTab[idx].code);    // deferral entries capture only bytecode
-            }
-            long baked = bakedBuf(bkName, descOff);
-            if (baked != 0L)
-            {
-                if (LOAD_LOG)
-                {
-                    Uart.write(Magic.bytes("  baked "));
-                    printNameAt(gbase, gThisNameOff);
-                    Uart.putc(0x2E);
-                    printNameAt(gbase, bkName);
-                    Uart.putc(0x0A);
-                }
-                lzTab[idx].cache = baked;
-                if (lzTab[idx].slot != 0L)
-                {
-                    Address.fromLong(lzTab[idx].slot).store(baked);
-                }
-                patchLazyStub(idx, baked);
-                return baked;
-            }
-        }
-        if (LAZY_TRACE)                                  // per-method compile trace (debug; off by default)
-        {
-            Uart.write(Magic.bytes("  jitc "));
-            printNameAt(gbase, gThisNameOff);
-            Uart.putc(0x2E);
-            int trName = lzTab[idx].nameOff;            // deferral entries capture bytecode, not the name
-            if (trName == 0)
-            {
-                trName = findNameByCode(lzTab[idx].code);
-            }
-            printNameAt(lzTab[idx].blob, trName);
-            printNameAt(lzTab[idx].blob, lzTab[idx].descOff);
-            Uart.putc(0x0A);
-        }
-        boolean reuseWas = compileReuseTib;              // a nested load resets it: restore, never clear
-        compileReuseTib = true;                         // keep this class's TIB (already filled)
-        int rcMark = rcCount;                           // this compile's own reloc sites start here
-        int rsMark = rsCount;
-        lzCompiling = true;                             // collect the classes this body actively uses
-        lzPullN = 0;
-        lzRetried = false;
-        long buf = compile(code, len, descOff, isStatic, isSync);
-        lzCompiling = false;
-        if (lzPullN > 0)
-        {
-            // This body reads a static of a class nothing pulled. The compile is OVER, so loading is safe now
-            // (mid-compile it would collect the in-progress buffer). Load, then compile the SAME body again
-            // with the class present, so its getstatic resolves to the real cell instead of the zero one.
-            //
-            // The first buffer is simply abandoned -- unreachable, so the next sweep takes it. That is the
-            // whole reason to retry HERE rather than one level up: nothing has registered it, cached it, or
-            // stored it into a TIB slot yet, so no caller can ever have run the doomed code.
-            drainPendingPulls();
-            truncateRelocs(rcMark);                     // and drop its reloc sites: patching them later would
-            rsCount = rsMark;                           //   write into a buffer the sweep may already have reused
-            lzRetried = true;                           // once only -- a class that is still missing reads null
-            restoreCtxForCompile(lzTab[idx].blob, lzTab[idx].len, lzTab[idx].reg);   // the pull clobbered g*
-            if (lzTab[idx].code != 0L)
-            {
-                gMaxLocals = lzTab[idx].maxLocals;      // AFTER the restore: parseFields/parseVtable clobber it
-            }
-            else
-            {
-                code = findMethodByOffsets(lzTab[idx].nameOff, lzTab[idx].descOff);
-                len = gcodeLen;
-                descOff = gFoundDescOff;
-                isStatic = gFoundStatic;
-                isSync = gFoundSync;
-            }
-            lzCompiling = true;
-            buf = compile(code, len, descOff, isStatic, isSync);
-            lzCompiling = false;
-        }
-        compileReuseTib = reuseWas;
-        registerCoCompiled();                           // the same-class callees compile() built beside it
-        patchRelocsFrom(rcMark, rsMark);                // batch-end patchRelocs is long past: resolve OUR sites now,
-        if (buf == 0L)                                  // or a `bl 0` wild-branches to address 0 (see patchRelocsFrom)
-        {
-            // An index alone is unchaseable -- it is a slot number in a table rebuilt every batch. Name the
-            // method the same way LAZY_TRACE does; the context is restored, so gbase/gThisNameOff are valid.
-            Uart.write(Magic.bytes("  compile returned null for "));
-            printNameAt(gbase, gThisNameOff);
-            Uart.putc(0x2E);
-            int nullName = lzTab[idx].nameOff;
-            if (nullName == 0)
-            {
-                nullName = findNameByCode(lzTab[idx].code);
-            }
-            printNameAt(lzTab[idx].blob, nullName);
-            printNameAt(lzTab[idx].blob, lzTab[idx].descOff);
-            Uart.putc(0x0A);
-            capHalt(Magic.bytes("lazy-compile-null"), idx);   // the trampoline would `br 0` -- halt with a name instead
-        }
-        rememberLazyBody(idx, buf);
-        lzTab[idx].cache = buf;                         // memoize BEFORE draining: an initializer we are about
-                                                        // to run may call straight back into this method
-        ClassInitializer.drainPendingInit();                             // initialize what the body touches -- still before it runs
-        if (lzTab[idx].slot != 0L)                           // 1b/1c: point the TIB slot / offset cell at the buffer
-        {
-            Address.fromLong(lzTab[idx].slot).store(buf);
-        }
-        patchLazyStub(idx, buf);                         // ... and the deferral stub itself, for every other caller
-        return buf;
-    }
-
-    /**
-     * Register the SAME-CLASS CALLEES that {@link #compile} built beside the method it was asked for. Its
-     * discover pass ({@code scanCallees}) adds every same-class {@code invokestatic}/{@code invokespecial}
-     * target as {@code m[1..]}, each in its own buffer, and the caller BLs straight to them -- so they run.
-     * The lazy and {@code <clinit>} paths registered only {@code m[0]}, leaving every other body in a code
-     * block no registry entry claimed: a frame there printed as {@code <unclaimed pc ... after X.<init>>}, a
-     * {@code StackTraceElement} for it was {@code <vm>.<unknown>}, and the uncaught-exception walk stopped at
-     * it. The constructor a public one reaches by {@code this(...)} is exactly such a callee, which is why
-     * every NetDemo boot carried one unclaimed pc in {@code Socket.<init>} (MEASURED, CtorChainTraceProbe:
-     * the {@code this(...)} target compiled through {@code sizeMethod} with no lazy compile of its own).
-     *
-     * <p>APPENDED, as {@link MethodRegistry#registerAll} does on the other on-demand paths: an entry already pointing at
-     * the method's deferral stub stays valid (the stub still compiles a copy on its own first call), and the
-     * new one claims the body that is actually running. Called right after the final compile, before
-     * {@code patchRelocsFrom} can start anything that reuses the {@code m[]} tables.
-     */
-    static void registerCoCompiled()
-    {
-        int i = 1;
-        while (i < mCount)
-        {
-            if (mDefer[i] == 0 && mBuf[i] != 0L)
-            {
-                int nameOff = findNameByCode(mCode[i]);
-                if (nameOff != 0)
-                {
-                    MethodRegistry.register(gbase, gThisNameOff, nameOff, mDescOff[i], mBuf[i], mLine[i], mSrc.get(i),
-                             accessInContext(gbase, nameOff, mDescOff[i]));
-                }
-            }
-            i += 1;
-        }
-    }
-
-    /**
-     * The registry entry for the method {@code blob} declares as {@code nameOff}+{@code descOff}, or -1 -- the
-     * LOWEST such index, which is the entry the linear scan this replaces returned. Through the class+name index
-     * (rgBucket): every entry of the class being compiled is filed under utf8Hash2(its name, the method name), and
-     * the compile context is restored here, so gThisNameOff names that class. MEASURED (qprof, SslEngineProbe,
-     * QEMU 2026-11-06): the scan of every registry entry, once per lazy compile, was 27 of the 40 samples of
-     * lazyCompile's OWN work -- the Pi's ~1.9 ms per call of it outside compile/load/clinit/GC.
-     */
-    private static int lazyBodyEntry(Address blob, int nameOff, int descOff)
-    {
-        MethodRegistry.buildRegIndex();
-        int best = -1;
-        int i = MethodRegistry.rgBucket[Utf8.utf8Hash2(blob, gThisNameOff, blob, nameOff) & (MethodRegistry.RGTAB - 1)];
-        while (i >= 0)
-        {
-            if ((best < 0 || i < best) && MethodRegistry.rgTab[i].base.EQ(blob) && MethodRegistry.rgTab[i].nameOff == nameOff
-                    && MethodRegistry.rgTab[i].descOff == descOff)
-            {
-                best = i;
-            }
-            i = MethodRegistry.rgNext[i];
-        }
-        return best;
-    }
-
-    /**
-     * Point the method registry at a freshly lazy-compiled body. {@link StackTrace#printFrameAt} names a PC by the
-     * nearest registered buffer at-or-below it, so an unregistered fresh buffer makes every frame in that
-     * method report as whatever unrelated method happens to sit below it (the socket stack traced as
-     * {@code InternalError.<init>} until this landed). A celled static has no registry entry at all, so it
-     * gets one here; a deferred method has one pointing at its stub, which is updated in place — which also
-     * lets later direct calls link straight to the body instead of through the stub.
-     */
-    private static void rememberLazyBody(int idx, long buf)
-    {
-        int nameOff = lzTab[idx].nameOff;
-        if (nameOff == 0)
-        {
-            nameOff = findNameByCode(lzTab[idx].code);   // deferral entries capture bytecode, not the name
-        }
-        int i = lazyBodyEntry(lzTab[idx].blob, nameOff, lzTab[idx].descOff);
-        if (i >= 0)
-        {
-            MethodRegistry.rgTab[i].buf = buf;
-            markRegDirty(i);                             // its memoised call sites now want the body
-            MethodRegistry.rgTab[i].line = mLine[0];
-            MethodRegistry.rgTab[i].src = mSrc.get(0);
-            return;
-        }
-        MethodRegistry.register(lzTab[idx].blob, gThisNameOff, nameOff, lzTab[idx].descOff, buf, mLine[0], mSrc.get(0),
-                 accessInContext(lzTab[idx].blob, nameOff, lzTab[idx].descOff));
-    }
-
-    /**
-     * The real {@code access_flags} of the method {@code blob} declares as {@code nameOff}+{@code descOff},
-     * read from the methods table ALREADY IN THE COMPILE CONTEXT, or 0 if it declares no such method.
-     *
-     * <p>THIS EXISTS BECAUSE {@link #rememberLazyBody} USED TO PASS A LITERAL 0, and a registry entry's access
-     * word is what {@code Method.getModifiers} answers and what {@code AccessibleObject.checkAccess} tests. A
-     * 0 there reads as PACKAGE-PRIVATE -- no {@code ACC_PUBLIC} bit -- so a reflective call on a method that
-     * is plainly {@code public} was refused with {@code IllegalAccessException} whenever the caller sat in a
-     * different package. It reached only methods registered HERE, i.e. a celled static whose body compiled on
-     * first call, which is why it survived: a method already registered by {@code registerAll} has the real
-     * flags and {@code rememberLazyBody} only updates its buffer.
-     *
-     * <p>NO RE-PARSE, deliberately. {@code methodInfoPos} answers the same question by calling
-     * {@code parseForMethods}, which moves the {@code g*} cursor -- and this runs INSIDE a lazy compile, whose
-     * context that would clobber. The walk is the one {@link MethodRegistry#registerAll} already does per method, over the
-     * table this compile is standing on; it is guarded on the blob matching so a caller in some other context
-     * gets 0 (today's answer) rather than another class's flags.
-     */
-    private static int accessInContext(Address blob, int nameOff, int descOff)
-    {
-        if (blob.NE(gbase) || gMethodsStart.isZero())
-        {
-            return 0;
-        }
-        Address p = gMethodsStart;
-        int mcount = u2(p);
-        p = p.plus(2);
-        int m = 0;
-        while (m < mcount)
-        {
-            int attrs = u2(p.plus(6));
-            if (utf8EqAt(gbase, gcp[u2(p.plus(2))], gbase, nameOff)
-                    && utf8EqAt(gbase, gcp[u2(p.plus(4))], gbase, descOff))
-            {
-                return u2(p);
-            }
-            p = skipAttributes(p.plus(8), attrs);
-            m += 1;
-        }
-        return 0;
-    }
-
-    /** Re-establish the g* compile context for an already-structure-registered class (loadBodies' preamble). */
-    static void restoreCtxForCompile(Address bytes, int len, int reg)
-    {
-        if (reg >= 0 && ClassRegistry.clTab[reg].state < RVMClass.ST_RESOLVED)
-        {
-            // Lifecycle guard: a lazy compile needs the class's STRUCTURE (field layout, statics,
-            // vtable numbering, Type/TIB). Firing before phase A completes would compile against a
-            // half-built context and corrupt silently -- halt loudly instead.
-            capHalt(Magic.bytes("lifecycle-compile"), reg);
-        }
-        parseConstPool(bytes, len);
-        parseFields();
-        gStatics = ClassRegistry.clTab[reg].statics;
-        Indy.findBootstrapMethods();
-        VtableLayout.parseVtable(bytes);
-        gType = ClassRegistry.clTab[reg].type;
-        gTib = ClassRegistry.clTab[reg].tib;
-        provideKnownStatics();
-    }
-
-    // M8 endgame: consult the writer's baked-method link table before lazy-compiling (default ON).
-    private static final boolean BAKED_LINK = true;
-
-    /**
-     * M8 object links: resolve a called bake stub — the writer couldn't compile this method, so
-     * demand-load its class into the running program (the loaded world shares the baked world's
-     * statics, Types, vtable numbering and itables, so the lazily-compiled code and the baked code
-     * agree on everything) and return a callable buffer for the method. The three utf8 args are
-     * absolute {u2 len}{bytes} runs from the stub table. Halts loudly if the class isn't embedded
-     * or the method can't be found — a stub fired that the system genuinely cannot satisfy.
-     */
-    static long resolveBakeStub(Address clsU, Address nameU, Address descU)
-    {
-        if (ClassRegistry.clTab == null)
-        {
-            // Name the stub: which method fired is the whole diagnosis, and the halt alone does not say.
-            Uart.write(Magic.bytes("\n  bake stub fired before the loader exists: "));
-            printNameAt(clsU, 0);
-            Uart.putc(0x2E);
-            printNameAt(nameU, 0);
-            printNameAt(descU, 0);
-            capHalt(Magic.bytes("bakeresolve-early"), 0);   // a stub fired before the loader exists
-        }
-        if (LOAD_LOG)
-        {
-            Uart.write(Magic.bytes("  bakeresolve "));
-            printNameAt(clsU, 0);
-            Uart.putc(0x2E);
-            printNameAt(nameU, 0);
-            Uart.putc(0x0A);
-        }
-        int len = u2(clsU);
-        byte[] slash = new byte[len];
-        int i = 0;
-        while (i < len)
-        {
-            slash[i] = (byte) u1(clsU.plus(2 + i));
-            i += 1;
-        }
-        if (ClassRegistry.classIndexByName(slash) < 0)
-        {
-            if (loadClassIncremental(slash).isZero())
-            {
-                // NAME THE SUBJECT. `bakeresolve-load count=0` says only that some baked stub wanted a class
-                // that would not load -- true and unactionable, and the count is not even a count.
-                //
-                // Printed from `slash`, the byte[] copied out BEFORE the load, not from the stub-table
-                // pointers. `printNameAt(clsU, 0)` is the right idiom at the TOP of this method and the wrong
-                // one here: loadClassIncremental has just run, and reading the length word afterwards gave a
-                // huge value that walked hundreds of bytes of the stub table onto the console -- an instrument
-                // that buried the failure it was added to name.
-                Uart.write(Magic.bytes("\n  BAKERESOLVE CANNOT LOAD: "));
-                Uart.write(slash);
-                Uart.putc(0x0A);
-                printWhyUnpulled(clsU);
-                capHalt(Magic.bytes("bakeresolve-load"), 0);
-            }
-        }
-        int lreg = ClassRegistry.classIndexByName(slash);
-        if (lreg >= 0 && ClassRegistry.clTab[lreg].state < RVMClass.ST_INSTANTIATED)
-        {
-            // Lifecycle guard: baked code is about to CALL into this class, so its bodies/cells and
-            // TIB must be in place (phase B). A short state here means the incremental load pipeline
-            // returned a half-lifecycle class -- halt loudly rather than branch into a 0 buffer.
-            capHalt(Magic.bytes("lifecycle-resolve"), lreg);
-        }
-        long buf = bufBySigU(clsU, nameU, descU);
-        if (buf == 0L)
-        {
-            buf = nativeBufAt(clsU, 0, nameU, 0);       // a PROVIDED NATIVE has no bytecode to find: link the VM helper
-        }
-        if (buf == 0L)
-        {
-            // THE SAME FOURTH TIER THE LINK-STUB PATH HAS. bufBySigU answers only through a DISPATCH table --
-            // a registered buffer, a static cell, or a TIB slot -- so a method RTA pruned (never compiled and
-            // never given a slot) is invisible to all three even though its bytecode is right there in the
-            // class's blob. resolveLinkTarget compiles it on demand for exactly this case; the bake path
-            // halted instead.
-            //
-            // `java/lang/String.toUpperCase(Ljava/util/Locale;)` is the shape: a baked java.base body calls
-            // it, nothing statically reachable does, so it has no buffer and no slot -- and the bake stub had
-            // nowhere left to look.
-            buf = compileSigOnDemand(clsU, nameU, descU);
-        }
-        if (buf == 0L)
-        {
-            // Class from `slash` (copied before the load); name and descriptor through the CAPPED printer,
-            // since these pointers are read after loadClassIncremental has run.
-            Uart.write(Magic.bytes("\n  BAKERESOLVE NO BODY: "));
-            Uart.write(slash);
-            Uart.putc(0x2E);
-            printUtf8Capped(nameU);
-            Uart.putc(0x20);
-            printUtf8Capped(descU);
-            Uart.putc(0x0A);
-            capHalt(Magic.bytes("bakeresolve-find"), 0);
-        }
-        return buf;
-    }
-
-    /** A callable buffer for (class, name, desc) given as absolute utf8 runs: a registered compiled
-     *  buffer, else a phase-A static cell's stub, else the class's TIB slot (virtual lazy stub) — any
-     *  of which self-compiles on entry if still lazy. 0 if unknown. */
-    static long bufBySigU(Address clsU, Address nameU, Address descU)
-    {
-        // The registry through its class+name index (rgBucket). The scan answered the LOWEST index with a
-        // buffer, and those chains are newest-first, so walk the whole chain and keep the oldest hit.
-        MethodRegistry.buildRegIndex();
-        int best = -1;
-        int k = MethodRegistry.rgBucket[Utf8.utf8Hash2(clsU, 0, nameU, 0) & (MethodRegistry.RGTAB - 1)];
-        while (k >= 0)
-        {
-            if (MethodRegistry.rgTab[k].buf != 0L
-                    && utf8EqAt(MethodRegistry.rgTab[k].base, MethodRegistry.rgTab[k].classOff, clsU, 0)
-                    && utf8EqAt(MethodRegistry.rgTab[k].base, MethodRegistry.rgTab[k].nameOff, nameU, 0)
-                    && utf8EqAt(MethodRegistry.rgTab[k].base, MethodRegistry.rgTab[k].descOff, descU, 0))
-            {
-                best = k;
-            }
-            k = MethodRegistry.rgNext[k];
-        }
-        if (best >= 0)
-        {
-            return MethodRegistry.rgTab[best].buf;
-        }
-        long cell = dlCellOf(clsU, 0, nameU, 0, descU, 0);   // tier 2: a celled static, callable via its cell
-        if (cell != 0L)
-        {
-            return Address.fromLong(cell).loadLong();
-        }
-        // Every matching vtable entry names the same class, so regBySigU answers the same for all of them and
-        // the first match decides, as it did in the scan.
-        k = VtableLayout.vtEntryOf(clsU, 0, nameU, 0, descU, 0);
-        if (k >= 0)
-        {
-            int r = regBySigU(clsU);
-            if (r >= 0 && !ClassRegistry.clTab[r].tib.isZero())
-            {
-                return ClassRegistry.clTab[r].tib.plus(8).plus(VtableLayout.vtSlot[k] * 8L).loadLong();
-            }
-        }
-        return 0L;
-    }
 
 
     /** Registry index of the loaded class named by the absolute utf8 run {@code clsU}, or -1. */
@@ -13349,14 +10058,10 @@ public final class Loader
      */
     static long catchTypeByName(long clsU)
     {
-        int r = regBySigU(Address.fromLong(clsU));
+        int r = DynamicLinker.regBySigU(Address.fromLong(clsU));
         return r < 0 ? 0L : ClassRegistry.clTab[r].type.toLong();
     }
 
-    static int regBySigU(Address clsU)
-    {
-        return ClassRegistry.classRegAt(clsU, 0);                      // an absolute {u2 len}{bytes} run: offset 0 of clsU
-    }
 
     /**
      * M8 world unification: linked baked code dispatches invokevirtual by WRITER vtable-slot number
@@ -13403,39 +10108,10 @@ public final class Loader
     }
 
 
-    /**
-     * The writer-baked, loader-linkable compiled buffer for the CURRENT class's method with the given
-     * (name, descriptor) Utf8 offsets in {@code gbase} -- or 0 (compile our own copy). Table entries are
-     * {classUtf8, nameUtf8, descUtf8, code} quadruples of image addresses; the name runs are
-     * {u2 len}{bytes}, the same shape as classfile Utf8s, so {@link #utf8EqAt} compares them directly
-     * (each run's own address with offset 0).
-     */
-    private static long bakedBuf(int nameOff, int descOff)
-    {
-        if (nameOff == 0)
-        {
-            return 0L;
-        }
-        int n = (int) VM.bakedCount;
-        int i = 0;
-        while (i < n)
-        {
-            Address e = Address.fromLong(VM.bakedTable + (long) i * 32L);
-            if (utf8EqAt(gbase, gThisNameOff, e.loadAddress(), 0)
-                    && utf8EqAt(gbase, nameOff, e.plus(8L).loadAddress(), 0)
-                    && utf8EqAt(gbase, descOff, e.plus(16L).loadAddress(), 0))
-            {
-                return e.plus(24L).loadLong();
-            }
-            i += 1;
-        }
-        return 0L;
-    }
-
     /** The name Utf8 offset of the current blob's method whose Code attribute is at {@code code} -- the
      *  inverse of {@link #findMethodByOffsets}, for deferred entries that captured only bytecode.
      *  Compile context must be established (gp at the method table). 0 if not found. */
-    private static int findNameByCode(long code)
+    static int findNameByCode(long code)
     {
         Address p = gp;
         int mcount = u2(p);
@@ -13456,7 +10132,7 @@ public final class Loader
 
     /** Find a method in the current blob by its (name, descriptor) Utf8 offsets; sets gcodeLen/gFoundDescOff/
      *  gFoundStatic like {@link #findMethod}. Returns its Code address, or 0. */
-    private static long findMethodByOffsets(int nameOff, int descOff)
+    static long findMethodByOffsets(int nameOff, int descOff)
     {
         Address p = gp;
         gMethodsStart = p;
@@ -13484,231 +10160,8 @@ public final class Loader
         return 0L;
     }
 
-    /**
-     * The offset-table cell a direct call should indirect through, or 0 for a normal `bl`. Every static is
-     * celled at structure registration, so the caller emits `ldr x16,[cell]; blr x16` and the cell resolves
-     * itself on first call. Runs at compile time in both the size and emit passes, and dedups by target, so
-     * both passes see the same fixed 5-word sequence and sizing stays consistent.
-     */
-    static long lazyStaticCell(int methodCp)
-    {
-        if (dlTab == null)
-        {
-            return 0L;                                  // no cells yet (nothing celled): normal BL path
-        }
-        return dlCellFor(refClassNameOff(methodCp), mrefNameOff(methodCp), mrefDescOff(methodCp));
-    }
-
-    /**
-     * The phase-A cell for a static/special call ref, or 0. Resolution follows JVMS order: the ref'd class
-     * first, then its superclasses — an INHERITED static is named through the subclass by javac (e.g.
-     * {@code ArrayList.subListRangeCheck}, declared on {@code AbstractList}). Without the walk such a call
-     * finds no cell, and no registry entry either (a metadata-only class's celled statics are never eagerly
-     * compiled or registered), so it would trap as an unresolved callee.
-     */
-    private static long dlCellFor(int classOff, int nameOff, int descOff)
-    {
-        long cell = dlCellAt(gbase, classOff, nameOff, descOff);
-        if (cell != 0L)
-        {
-            return cell;
-        }
-        int pd = findPdByName(gbase, classOff);
-        while (pd >= 0 && pdSuperOff[pd] != 0)
-        {
-            int spd = findPdByName(pdBase.get(pd), pdSuperOff[pd]);
-            if (spd < 0)
-            {
-                return 0L;
-            }
-            cell = dlCellAt(pdBase.get(spd), pdNameOff[spd], nameOff, descOff);
-            if (cell != 0L)
-            {
-                return cell;
-            }
-            pd = spd;
-        }
-        return 0L;
-    }
-
-    /** Cell for the method (name, desc in gbase) declared by the class named at {@code classOff} in
-     *  {@code clsBase}, or 0 if that exact class has no such phase-A cell. */
-    private static long dlCellAt(Address clsBase, int classOff, int nameOff, int descOff)
-    {
-        return dlCellOf(clsBase, classOff, gbase, nameOff, gbase, descOff);
-    }
-
-    /** M8 phase-A: at structure registration of the gated class, allocate an offset cell + lazy stub for each
-     *  of its (static) methods, captured straight from the classfile method table (available at phase A via
-     *  gMethodsStart). The cells live in the {@code dl*} table so a later caller finds them regardless of load
-     *  order; each carries an lz entry that compiles the body on first call and data-patches the cell. */
-    private static void armPhaseACells()
-    {
-        if (!stage2Gated(gbase, gThisNameOff))
-        {
-            return;
-        }
-        lazyEnsureTables();
-        if (dlTab == null)
-        {
-            dlTab = new DynLink[MAXLAZY];
-            dlN = 0;
-        }
-        int reg = ClassRegistry.clCount - 1;                          // this class's registry index (registerClassStructure did ClassRegistry.clCount++)
-        int pd = findPdByName(gbase, gThisNameOff);
-        int blobLen = pdLen[pd];
-        Address p = gMethodsStart;
-        int mcount = u2(p);
-        p = p.plus(2);
-        int m = 0;
-        int armed = 0;
-        while (m < mcount)
-        {
-            int access = u2(p);
-            int attrs = u2(p.plus(6));
-            int nameOff = gcp[u2(p.plus(2))];
-            int descOff = gcp[u2(p.plus(4))];
-            long code = findCode(gbase, p.plus(8), attrs);  // sets gcodeLen + gMaxLocals
-            if (code != 0L && (access & 0x0008) != 0    // static methods only (Objects is all-static)
-                    && !Utf8.utf8IsAtBase(gbase, nameOff, Magic.bytes("<clinit>")) && lzN < MAXLAZY && dlN < MAXLAZY)
-            {
-                int idx = lzN;
-                lzTab[idx] = new LazyMethod();
-                lzTab[idx].blob = gbase;
-                lzTab[idx].len = blobLen;
-                lzTab[idx].reg = reg;
-                lzTab[idx].nameOff = nameOff;
-                lzTab[idx].descOff = descOff;
-                lzTab[idx].code = code;
-                lzTab[idx].codeLen = gcodeLen;
-                lzTab[idx].isStatic = 1;
-                lzTab[idx].isSync = (access & 0x0020) != 0 ? 1 : 0;   // ACC_SYNCHRONIZED (JVMS 2.11.10)
-                if (lzN >= lzNHigh)
-                {
-                    lzNHigh = lzN + 1;                      // high-water across reclaims
-                }
-                lzTab[idx].maxLocals = gMaxLocals;
-                lzTab[idx].cache = 0L;
-                long cell = Heap.allocData(8).toLong();
-                lzTab[idx].slot = cell;                     // first call data-patches the cell -> later calls dispatch direct
-                Address.fromLong(cell).store(buildLazyCompileStub(idx));
-                lzN += 1;
-                DynLink d = new DynLink();
-                if (gbase.isZero())                            // PROBE: born zero, or zeroed later? This is the
-                {                                            //   write site, so the class is still in hand.
-                    Uart.write(Magic.bytes("\nDL BORN ZERO at dlN="));
-                    VM.printDec(dlN);
-                    Uart.write(Magic.bytes(" while compiling "));
-                    printCurrentClass();
-                    Uart.putc(0x0A);
-                    while (true) { Magic.wfe(); }
-                }
-                d.blob = gbase;
-                d.gen = loaderGen;
-                d.classOff = gThisNameOff;
-                d.nameOff = nameOff;
-                d.descOff = descOff;
-                d.cell = cell;
-                dlTab[dlN] = d;
-                dlN += 1;
-                armed += 1;
-            }
-            p = skipAttributes(p.plus(8), attrs);
-            m += 1;
-        }
-        verifyDlTab();                                      // ... and check none went zero since insertion
-        if (LOAD_TRACE)
-        {
-            Uart.write(Magic.bytes("  phaseA: "));
-            VM.printDec(armed);
-            Uart.write(Magic.bytes(" cells at structure time for "));
-            printNameAt(gbase, gThisNameOff);
-            Uart.putc(0x0A);
-        }
-    }
-
-    /**
-     * M8 stage 5: LAZY, FULL STOP — and it is FULL now, with no exception at all. EVERY class is
-     * metadata-only: phase-A cells for its statics, deferral stubs for its virtuals, its {@code <init>}
-     * included. Nothing is compiled at load time any more. This is the OpenJDK shape the `<init>` increment
-     * settled on, applied to the last class that was still outside it: ONE entry per method, always holding
-     * a valid callable address, whose CONTENTS change when the body compiles.
-     *
-     * <p>The `java/`/`jdk/`/`sun/` prefix went first — guest code was never the right eager exception; the
-     * prefix was scaffolding from when laziness was gated to a handful of named java.base utilities.
-     *
-     * <p>RETIRED PREDICATE — `eagerKept`. It held back {@code java/lang/Object} alone, on this stated
-     * objection: "its 9 virtuals are the prefix of EVERY vtable in both worlds, so its slots are what
-     * writer-baked code and loader-compiled code agree on. Deferring them would put stubs in that shared
-     * prefix, and a stub there is entered before the loader can be sure which world the receiver came
-     * from." That was a guess about a mechanism, not a measurement of one, and reading the mechanism
-     * refutes each half:
-     * <ul>
-     *   <li>A DEFERRAL STUB IS RECEIVER-INDEPENDENT. It is five instructions — `movz x17,idx`, the
-     *       trampoline address into x16, `br x16` — and never touches x0. It cannot ask which world the
-     *       receiver came from because it never looks at the receiver. Object's body is the same body
-     *       whoever is calling.</li>
-     *   <li>THE SHARED PREFIX IS A STABLE WORD, which is the whole point of the shape. A deferral entry
-     *       carries {@code slot = 0} ("no single slot to patch"), so {@link #lazyCompileLocked} never
-     *       re-points a TIB slot; {@link #rememberLazyBody} updates the method REGISTRY and nothing else.
-     *       The vtable word is the stub buffer's address for the life of the VM, so every copy of Object's
-     *       prefix — {@code inheritVtable}, {@code fillObjectVtableUpTo}, {@code refillArrayTibVtables} —
-     *       copies a word that never changes.</li>
-     *   <li>AND THE HOTTEST PATH DOES NOT EXIST. {@code Object.<init>} looks like the risk, since every
-     *       constructor begins with it — but {@link #isRealSpecial} lowers it to a POP in both worlds, so
-     *       it is never called at all and deferring it costs and risks nothing.</li>
-     * </ul>
-     * The synth-latch soundness note elsewhere in this file argues from "Object is the one eagerly-compiled
-     * class, so its slots are never re-pointed". The conclusion survives; the REASON is now the stub
-     * buffer's address stability rather than eagerness, and `sy:chg` on the batch line is the counter that
-     * says so empirically.
-     */
-    private static boolean stage2Gated(Address base, int off)
-    {
-        return true;
-    }
-
-    /** M8 Stage 2: true if the current class's method (name, desc) already has a structure-time phase-A cell,
-     *  so compileClass can skip its eager compile (it will compile on first call through the cell). */
-    private static boolean phaseACelled(int nameOff, int descOff)
-    {
-        if (dlTab == null)
-        {
-            return false;
-        }
-        // THROUGH THE dlTab INDEX (dlBucket, keyed utf8Hash2(class name, method name)), with the scan's own
-        // identity test. compileClass asks this once per method and it walked EVERY phase-A cell to answer --
-        // methods x cells per batch. MEASURED (qprof, SslEngineProbe, QEMU 2026-11-07): the largest single leaf
-        // of batch loading, 17% of its samples. The class being compiled is the context, so gThisNameOff names
-        // the class its own cells are filed under; the answer is only whether one exists, so chain order is moot.
-        buildDlIndex();
-        boolean hit = false;
-        int k = dlBucket[Utf8.utf8Hash2(gbase, gThisNameOff, gbase, nameOff) & (DLTAB - 1)];
-        while (k >= 0 && !hit)
-        {
-            DynLink d = dlTab[k];
-            if (d.blob.EQ(gbase) && d.nameOff == nameOff && d.descOff == descOff)
-            {
-                hit = true;
-            }
-            k = dlNext[k];
-        }
-        return hit;
-    }
 
 /** Allocate the shared lazy tables + trampoline if not yet done (shared by 1b and 1c). */
-    private static void lazyEnsureTables()
-    {
-        if (lzTab == null)
-        {
-            lzTab = new LazyMethod[MAXLAZY];
-            lzN = 0;
-        }
-        if (lazyTrampAddr == 0L)
-        {
-            buildLazyTramp();
-        }
-    }
 
     /** The registered body interface {@code ir} declares for (name, desc in {@code base}), or 0 if none is. */
     static long regBodyIn(int ir, Address base, int nameOff, int descOff)
@@ -13966,8 +10419,8 @@ public final class Loader
     {
         Address n = utf8Blob(name);
         Address d = utf8Blob(desc);
-        long buf = bufBySigU(cls, n, d);
-        return buf != 0L ? buf : compileSigOnDemand(cls, n, d);
+        long buf = DynamicLinker.bufBySigU(cls, n, d);
+        return buf != 0L ? buf : LazyCompiler.compileSigOnDemand(cls, n, d);
     }
 
 
@@ -13990,7 +10443,7 @@ public final class Loader
     }
 
     /**
-     * A deferral stub for a vtable slot whose method RTA pruned. {@link #emitDeferredStub} cannot serve here:
+     * A deferral stub for a vtable slot whose method RTA pruned. {@link LazyCompiler#emitDeferredStub} cannot serve here:
      * it works off the per-method compile arrays ({@code mCode}/{@code mLen}/...), which only exist for
      * methods that were pulled into the batch. Everything needed is in the vtable entry instead — the Code
      * attribute address, and {@code maxLocals}/{@code codeLen} read back from the two header fields that
@@ -14017,38 +10470,38 @@ public final class Loader
         {
             return 0L;
         }
-        lazyEnsureTables();
-        if (lzN >= MAXLAZY)
+        LazyCompiler.lazyEnsureTables();
+        if (LazyCompiler.lzN >= LazyCompiler.MAXLAZY)
         {
             return 0L;
         }
-        if (lazyTrampAddr == 0L)
+        if (LazyCompiler.lazyTrampAddr == 0L)
         {
-            buildLazyTramp();
+            LazyCompiler.buildLazyTramp();
         }
-        int idx = lzN;
-        lzTab[idx] = new LazyMethod();
-        lzTab[idx].blob = gbase;
-        lzTab[idx].len = pdLen[pd];
-        lzTab[idx].reg = ClassRegistry.classRegByName(gThisNameOff);
-        lzTab[idx].nameOff = 0;
-        lzTab[idx].descOff = gvTab[s].desc;
-        lzTab[idx].slot = 0L;                               // shared stub buffer: no single slot to patch
-        lzTab[idx].code = code;
-        if (lzN >= lzNHigh)
+        int idx = LazyCompiler.lzN;
+        LazyCompiler.lzTab[idx] = new LazyMethod();
+        LazyCompiler.lzTab[idx].blob = gbase;
+        LazyCompiler.lzTab[idx].len = pdLen[pd];
+        LazyCompiler.lzTab[idx].reg = ClassRegistry.classRegByName(gThisNameOff);
+        LazyCompiler.lzTab[idx].nameOff = 0;
+        LazyCompiler.lzTab[idx].descOff = gvTab[s].desc;
+        LazyCompiler.lzTab[idx].slot = 0L;                               // shared stub buffer: no single slot to patch
+        LazyCompiler.lzTab[idx].code = code;
+        if (LazyCompiler.lzN >= LazyCompiler.lzNHigh)
         {
-            lzNHigh = lzN + 1;                      // high-water across reclaims
+            LazyCompiler.lzNHigh = LazyCompiler.lzN + 1;                      // high-water across reclaims
         }
-        lzTab[idx].codeLen = u4(code - 4L);                 // Code attr: {u2 maxStack}{u2 maxLocals}{u4 len}
-        lzTab[idx].isStatic = 0;
-        lzTab[idx].isSync = gvTab[s].isSync;                // else this body compiles with NO monitor
-        lzTab[idx].maxLocals = u2(code - 6L);
-        lzTab[idx].cache = 0L;
-        lzN += 1;
+        LazyCompiler.lzTab[idx].codeLen = u4(code - 4L);                 // Code attr: {u2 maxStack}{u2 maxLocals}{u4 len}
+        LazyCompiler.lzTab[idx].isStatic = 0;
+        LazyCompiler.lzTab[idx].isSync = gvTab[s].isSync;                // else this body compiles with NO monitor
+        LazyCompiler.lzTab[idx].maxLocals = u2(code - 6L);
+        LazyCompiler.lzTab[idx].cache = 0L;
+        LazyCompiler.lzN += 1;
         Address buf = Heap.allocCode(32);
-        noteStub(buf, idx);
+        LazyCompiler.noteStub(buf, idx);
         Heap.pinCodeAt(buf);
-        lzTab[idx].stubLit = writeLazyStub(buf, idx).toLong();
+        LazyCompiler.lzTab[idx].stubLit = LazyCompiler.writeLazyStub(buf, idx).toLong();
         gvTab[s].implBuf = buf.toLong();                // a class implementing N interfaces that each declare
         return buf.toLong();                            //   this method would otherwise mint N identical stubs
     }
@@ -14584,11 +11037,11 @@ public final class Loader
     private static final byte[] BUF_WATCH_CLASS = Magic.bytes("java/util/LinkedHashMap$LinkedEntrySet");
     private static final boolean BUF_WATCH_ON = false;
 
-    /** Tier that answered a {@link #globalBufByRef}: 1 class-qualified, 2 super-chain, 3 `<init>` cell
+    /** Tier that answered a {@link DynamicLinker#globalBufByRef}: 1 class-qualified, 2 super-chain, 3 `<init>` cell
      *  (constructors short-circuit here, never walking a chain), 4 final cell tier. A 0 buffer is the
      *  interesting answer and is labelled, because "resolved to nothing" and "resolved to something wrong"
      *  are different bugs and an address alone cannot tell them apart. */
-    private static void bufResolveLog(Address refBase, int classOff, int nameOff, int descOff, long buf, int tier)
+    static void bufResolveLog(Address refBase, int classOff, int nameOff, int descOff, long buf, int tier)
     {
         if (!BUF_WATCH_ON || !Utf8.utf8IsAtBase(refBase, classOff, BUF_WATCH_CLASS))
         {
@@ -14616,7 +11069,7 @@ public final class Loader
      *  stub and is resolved again HERE, on first call, so a silent site has to be explained at both ends.
      *  Tier 1 bufBySigU (registered buffer / static cell / vtable slot), 2 provided native, 3
      *  compileSigOnDemand; 0 marks an EARLY return, where lnkFailWhy says which guard refused. */
-    private static void linkResolveLog(Address clsU, Address nameU, Address descU, long buf, int tier)
+    static void linkResolveLog(Address clsU, Address nameU, Address descU, long buf, int tier)
     {
         if (!BUF_WATCH_ON || !Utf8.utf8IsAtBase(clsU, 0, BUF_WATCH_CLASS))
         {
@@ -14633,7 +11086,7 @@ public final class Loader
         Uart.write(Magic.bytes(" tier"));
         VM.printDec(tier);
         Uart.write(Magic.bytes(" why"));
-        VM.printDec(lnkFailWhy);
+        VM.printDec(DynamicLinker.lnkFailWhy);
         Uart.putc(0x0A);
     }
 
@@ -15005,7 +11458,7 @@ public final class Loader
         {
         // The name is already a Utf8 run at clsU: ask the index directly, and build the byte[] copy only when
         // the class has to be LOADED -- these sites are NOT cold (a warm TLS session executes them repeatedly).
-        reg = regBySigU(clsU);
+        reg = DynamicLinker.regBySigU(clsU);
         if (reg < 0)
         {
             if (LOAD_LOG)
@@ -15022,7 +11475,7 @@ public final class Loader
                 k += 1;
             }
             Address pulled = loadClassIncremental(slash);
-            reg = regBySigU(clsU);
+            reg = DynamicLinker.regBySigU(clsU);
         }
         tib = Address.zero();
         fields = 0;

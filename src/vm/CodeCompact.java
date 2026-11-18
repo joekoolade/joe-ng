@@ -439,7 +439,7 @@ final class CodeCompact
         scanRange(VMGc.lastScanFrom, VM.STACK_TOP);                   // stack: return addresses
         scanRange(Heap.JIT_TABLES, Heap.JIT_TABLES + 0x50000L);       // JIT frame/handler/local tables
         scanRange(Loader.CODE_ROOTS, Loader.CODE_ROOTS_END);          // per-buffer baked heap roots
-        scanRange(Loader.STUB_TAB, CodeEdges.TAB);                    // deferral-stub table
+        scanRange(LazyCompiler.STUB_TAB, CodeEdges.TAB);                    // deferral-stub table
     }
 
     /**
@@ -456,9 +456,9 @@ final class CodeCompact
      */
     private static int explained(long slot)
     {
-        if (slot >= Loader.STUB_TAB && slot < Loader.STUB_TAB + Loader.stubTabN * 16L)
+        if (slot >= LazyCompiler.STUB_TAB && slot < LazyCompiler.STUB_TAB + LazyCompiler.stubTabN * 16L)
         {
-            return (slot - Loader.STUB_TAB) % 16L == 0L ? 1 : 0;
+            return (slot - LazyCompiler.STUB_TAB) % 16L == 0L ? 1 : 0;
         }
         if (ENUM_CELL && explainedCell(slot) != 0)
         {
@@ -498,9 +498,9 @@ final class CodeCompact
     private static void rewriteHolders()
     {
         long k = 0L;
-        while (k < Loader.stubTabN)                      // STUB_TAB rows: {buf, idx} at a 16-byte stride
+        while (k < LazyCompiler.stubTabN)                      // STUB_TAB rows: {buf, idx} at a 16-byte stride
         {
-            Address e = Address.fromLong(Loader.STUB_TAB + k * 16L);
+            Address e = Address.fromLong(LazyCompiler.STUB_TAB + k * 16L);
             long na = newAddrOf(e.loadLong());
             if (na != 0L)
             {

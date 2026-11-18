@@ -2623,7 +2623,7 @@ public final class VM
         long exc = 0L;
         if (ec == 0x24L || ec == 0x25L || ec == 0x20L || ec == 0x21L)   // data / instruction abort = address trap
         {
-            if ((ec == 0x20L || ec == 0x21L) && !Loader.plausibleCode(elr))
+            if ((ec == 0x20L || ec == 0x21L) && !DynamicLinker.plausibleCode(elr))
             {
                 reportWildBranch(Address.fromLong(sp));        // executing at a non-code address: say who branched there
             }
@@ -2742,7 +2742,7 @@ public final class VM
         long buf;
         try
         {
-            buf = Loader.resolveBakeStub(e.loadAddress(), e.plus(8L).loadAddress(), e.plus(16L).loadAddress());
+            buf = DynamicLinker.resolveBakeStub(e.loadAddress(), e.plus(8L).loadAddress(), e.plus(16L).loadAddress());
             e.plus(24L).store(buf);
         }
         finally
@@ -3052,7 +3052,7 @@ public final class VM
         while (i < 128 && shown < 12)
         {
             long w = p.loadLong();
-            if (Loader.plausibleCode(Address.fromLong(w)) || (w >= 0x80000L && w < Heap.IMAGE_CEILING))
+            if (DynamicLinker.plausibleCode(Address.fromLong(w)) || (w >= 0x80000L && w < Heap.IMAGE_CEILING))
             {
                 Uart.write(Magic.bytes("  [sp+"));
                 printDec(i * 8);

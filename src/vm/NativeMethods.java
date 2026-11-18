@@ -196,6 +196,6 @@ final class NativeMethods
      */
     static boolean declaredNative(Address clsU, Address nameU, Address descU)
     {
-        return Loader.declaresMethod(clsU, nameU, descU, true);
+        return DynamicLinker.declaresMethod(clsU, nameU, descU, true);
     }
 }

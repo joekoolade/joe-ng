@@ -41,7 +41,7 @@ final class MethodRegistry
     static int rgCount;
     // ----- method-registry hash index ---------------------------------------
     /**
-     * Name-keyed hash index over the method registry, so {@link Loader#globalBufByRef} is a PROBE rather than a
+     * Name-keyed hash index over the method registry, so {@link DynamicLinker#globalBufByRef} is a PROBE rather than a
      * linear scan of every registered method.
      *
      * <p>MEASURED, not guessed: {@code patchRelocs} re-walks every reloc site at the end of every batch, and

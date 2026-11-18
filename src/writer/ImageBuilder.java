@@ -1441,8 +1441,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMUnwind.captureTrace(Lmagic/ObjectReference;Lmagic/Address;Lmagic/Address;)V", "vm/VM.captureTraceAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.reportFault()V",    "vm/VM.reportFaultAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.throwFromFault(J)V", "vm/VM.throwFromFaultAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/Loader.lazyCompile(I)J", "vm/VM.lazyCompileAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/Loader.resolveLinkStub(I)J", "vm/VM.resolveLinkStubAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/LazyCompiler.lazyCompile(I)J", "vm/VM.lazyCompileAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/DynamicLinker.resolveLinkStub(I)J", "vm/VM.resolveLinkStubAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.irqHandler()V",     "vm/VM.irqHandlerAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.schedule(J)J",      "vm/VM.scheduleAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.yieldPick(J)J",     "vm/VM.yieldPickAddr");

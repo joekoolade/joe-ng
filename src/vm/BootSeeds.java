@@ -286,7 +286,7 @@ final class BootSeeds
         // at all. Asking the registry could therefore only ever succeed by accident, in a closure that had
         // already compiled it for some other reason. That is exactly the shape of the bug this replaced: the
         // launcher image worked and a smaller one left EVERY property null.
-        long buf = Loader.bufBySigU(Loader.utf8Blob(Magic.bytes("java/util/Properties")),
+        long buf = DynamicLinker.bufBySigU(Loader.utf8Blob(Magic.bytes("java/util/Properties")),
                 Loader.utf8Blob(Magic.bytes("setProperty")),
                 Loader.utf8Blob(Magic.bytes("(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;")));
         if (buf == 0L)
@@ -301,7 +301,7 @@ final class BootSeeds
             // The registry entry already holds the three Utf8-shaped pointers compileSigOnDemand wants
             // (`base + *Off` is a u2 length followed by bytes), so this is the method's own identity, not a
             // reconstruction of it.
-            buf = Loader.compileSigOnDemand(Loader.utf8Blob(Magic.bytes("java/util/Properties")),
+            buf = LazyCompiler.compileSigOnDemand(Loader.utf8Blob(Magic.bytes("java/util/Properties")),
                     Loader.utf8Blob(Magic.bytes("setProperty")),
                     Loader.utf8Blob(Magic.bytes("(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;")));
         }
@@ -388,10 +388,10 @@ final class BootSeeds
         Address cls = Loader.utf8Blob(Magic.bytes("jdk/internal/misc/MetalStdStreams"));
         Address name = Loader.utf8Blob(Magic.bytes("newStream"));
         Address desc = Loader.utf8Blob(Magic.bytes("()Ljava/io/PrintStream;"));
-        long buf = Loader.bufBySigU(cls, name, desc);
+        long buf = DynamicLinker.bufBySigU(cls, name, desc);
         if (buf == 0L)
         {
-            buf = Loader.compileSigOnDemand(cls, name, desc);  // bodies compile on first call; this IS the first
+            buf = LazyCompiler.compileSigOnDemand(cls, name, desc);  // bodies compile on first call; this IS the first
         }
         if (buf == 0L)
         {

@@ -63,7 +63,7 @@ final class Indy
             indyTrampLo = buf + 4L;
             indyTrampHi = MethodHandles.saveTrampHi;
             indyTrampAddr = buf;
-            Loader.registerTrampFrames();
+            StubFrames.registerTrampFrames();
         }
         return Address.fromLong(indyTrampAddr);
     }
@@ -128,7 +128,7 @@ final class Indy
         }
         long target = Address.fromLong(dsVal[idx]).plus(MethodHandles.mhOffCsTarget).loadLong();
         int n = MethodHandles.descParamCountAt(dsDesc.get(idx));
-        if (n > Loader.STUB_SAVE_HI - 1)
+        if (n > StubFrames.STUB_SAVE_HI - 1)
         {
             Uart.write(Magic.bytes("\n  INDY LINK: unsupported arity for "));
             Loader.printNameAt(dsDesc.get(idx), 0);

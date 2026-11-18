@@ -74,7 +74,7 @@ final class MethodHandles
     }
 
     /**
-     * The MH trampoline: {@link Loader#virtualTramp}'s shape, with the resolver handed the SAVE AREA (x0 = the address
+     * The MH trampoline: {@link VirtualDispatch#virtualTramp}'s shape, with the resolver handed the SAVE AREA (x0 = the address
      * of the saved x0) rather than the receiver, because a linkTo* target is named by the LAST argument and an
      * invoke's handle may be REPLACED (invoke adapts it), so mhResolve has to read and write the saved registers.
      */
@@ -86,7 +86,7 @@ final class MethodHandles
             mhTrampLo = buf + 4L;
             mhTrampHi = saveTrampHi;
             mhTrampAddr = buf;
-            Loader.registerTrampFrames();
+            StubFrames.registerTrampFrames();
         }
         return Address.fromLong(mhTrampAddr);
     }
@@ -100,18 +100,18 @@ final class MethodHandles
     {
         Address buf = Heap.allocCode(256);
         int w = 0;
-        buf.plus(w * 4L).store(A64Enc.subImm(Loader.STUB_SP, Loader.STUB_SP, Loader.STUB_FRAME));
+        buf.plus(w * 4L).store(A64Enc.subImm(StubFrames.STUB_SP, StubFrames.STUB_SP, StubFrames.STUB_FRAME));
         w += 1;
         int r = 0;
-        while (r <= Loader.STUB_SAVE_HI)
+        while (r <= StubFrames.STUB_SAVE_HI)
         {
-            buf.plus(w * 4L).store(A64Enc.strx(r, Loader.STUB_SP, Loader.STUB_SAVE0 + r * ObjectModel.WORD));
+            buf.plus(w * 4L).store(A64Enc.strx(r, StubFrames.STUB_SP, StubFrames.STUB_SAVE0 + r * ObjectModel.WORD));
             w += 1;
             r += 1;
         }
-        buf.plus(w * 4L).store(A64Enc.strx(Loader.STUB_LR, Loader.STUB_SP, Loader.STUB_LR_OFF)); // LR at [sp+0] for VM.unwind
+        buf.plus(w * 4L).store(A64Enc.strx(StubFrames.STUB_LR, StubFrames.STUB_SP, StubFrames.STUB_LR_OFF)); // LR at [sp+0] for VM.unwind
         w += 1;
-        buf.plus(w * 4L).store(A64Enc.addImm(0, Loader.STUB_SP, Loader.STUB_SAVE0)); // x0 = &saved x0
+        buf.plus(w * 4L).store(A64Enc.addImm(0, StubFrames.STUB_SP, StubFrames.STUB_SAVE0)); // x0 = &saved x0
         w += 1;
         buf.plus(w * 4L).store(A64Enc.movReg(1, 17)); // x1 = site idx
         w += 1;
@@ -125,18 +125,18 @@ final class MethodHandles
         w += 1;
         buf.plus(w * 4L).store(A64Enc.movReg(16, 0));
         w += 1;
-        w = Loader.emitTailGuard(buf, w, guardKind);
+        w = VirtualDispatch.emitTailGuard(buf, w, guardKind);
         r = 0;
-        while (r <= Loader.STUB_SAVE_HI)
+        while (r <= StubFrames.STUB_SAVE_HI)
         {
-            buf.plus(w * 4L).store(A64Enc.ldrx(r, Loader.STUB_SP, Loader.STUB_SAVE0 + r * ObjectModel.WORD));
+            buf.plus(w * 4L).store(A64Enc.ldrx(r, StubFrames.STUB_SP, StubFrames.STUB_SAVE0 + r * ObjectModel.WORD));
             w += 1;
             r += 1;
         }
-        buf.plus(w * 4L).store(A64Enc.ldrx(Loader.STUB_LR, Loader.STUB_SP, Loader.STUB_LR_OFF));
+        buf.plus(w * 4L).store(A64Enc.ldrx(StubFrames.STUB_LR, StubFrames.STUB_SP, StubFrames.STUB_LR_OFF));
         w += 1;
         saveTrampHi = buf.toLong() + w * 4L;
-        buf.plus(w * 4L).store(A64Enc.addImm(Loader.STUB_SP, Loader.STUB_SP, Loader.STUB_FRAME));
+        buf.plus(w * 4L).store(A64Enc.addImm(StubFrames.STUB_SP, StubFrames.STUB_SP, StubFrames.STUB_FRAME));
         w += 1;
         buf.plus(w * 4L).store(A64Enc.br(16)); // tail-call
         w += 1;
@@ -248,11 +248,11 @@ final class MethodHandles
      */
     static long mhResolve(long save, int idx)
     {
-        if (save == 0L || Loader.vsName == null || idx < 0 || idx >= Loader.vsCount)
+        if (save == 0L || VirtualDispatch.vsName == null || idx < 0 || idx >= VirtualDispatch.vsCount)
         {
             return 0L;                                  // boot force-compile passes 0
         }
-        Address nameU = Loader.vsName.get(idx);
+        Address nameU = VirtualDispatch.vsName.get(idx);
         if (Utf8.utf8IsAtBase(nameU, 0, Magic.bytes("invokeBasic")))
         {
             return lambdaFormTarget(Address.fromLong(save).loadObjectReference());
@@ -260,16 +260,16 @@ final class MethodHandles
         boolean exact = Utf8.utf8IsAtBase(nameU, 0, Magic.bytes("invokeExact"));
         if (exact || Utf8.utf8IsAtBase(nameU, 0, Magic.bytes("invoke")))
         {
-            long linked = mhLink(Address.fromLong(save).loadLong(), Loader.vsDesc.get(idx), exact);
+            long linked = mhLink(Address.fromLong(save).loadLong(), VirtualDispatch.vsDesc.get(idx), exact);
             Address.fromLong(save).store(linked);                // invoke may have adapted the handle: run the adapted one
             return lambdaFormTarget(ObjectReference.fromLong(linked));
         }
-        int last = descParamCountAt(Loader.vsDesc.get(idx)) - 1;   // linkTo* is static: the MemberName is the last argument
-        if (last < 0 || last > Loader.STUB_SAVE_HI - 1)
+        int last = descParamCountAt(VirtualDispatch.vsDesc.get(idx)) - 1;   // linkTo* is static: the MemberName is the last argument
+        if (last < 0 || last > StubFrames.STUB_SAVE_HI - 1)
         {
             Uart.write(Magic.bytes("\n  MH LINK: unsupported arity for "));
             Loader.printNameAt(nameU, 0);
-            Loader.printNameAt(Loader.vsDesc.get(idx), 0);
+            Loader.printNameAt(VirtualDispatch.vsDesc.get(idx), 0);
             Uart.putc(0x0A);
             return 0L;
         }
@@ -376,13 +376,13 @@ final class MethodHandles
         VM.loaderLock(VM.LOCK_REFLECT);                 // the site table is the compiler's, written under the lock
         try
         {
-            site = Loader.siteIndexFor(m.base.plus(m.nameOff), m.base.plus(m.descOff), m.base.plus(m.classOff));
+            site = VirtualDispatch.siteIndexFor(m.base.plus(m.nameOff), m.base.plus(m.descOff), m.base.plus(m.classOff));
         }
         finally
         {
             VM.loaderUnlock();
         }
-        return site < 0 ? 0L : Loader.virtualResolve(recv, site);
+        return site < 0 ? 0L : VirtualDispatch.virtualResolve(recv, site);
     }
 
     /** Run the guest linker (MethodHandleNatives.linkExact / linkGeneric) on {@code mh} and the site's descriptor. */

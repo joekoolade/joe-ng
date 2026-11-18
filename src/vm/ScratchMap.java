@@ -74,8 +74,8 @@ final class ScratchMap
         add(Uart.TX_RING, Uart.RING_END);                   // mini-UART TX + RX rings
         add(VM.PC_VBAR, VM.CORE_FLAGS);                     // secondaries' IRQ vectors
         add(VM.CORE_FLAGS, board.bcm2711.Bcm2711.MBOX_BUFFER);
-        add(board.bcm2711.Bcm2711.MBOX_BUFFER, Loader.STUB_TAB);
-        add(Loader.STUB_TAB, CodeEdges.TAB);                // deferral-stub table
+        add(board.bcm2711.Bcm2711.MBOX_BUFFER, LazyCompiler.STUB_TAB);
+        add(LazyCompiler.STUB_TAB, CodeEdges.TAB);                // deferral-stub table
         add(CodeEdges.TAB, CodeEdges.TAB_END);              // code->code edge census
         add(CodeCompact.PLAN_TAB, Loader.CODE_ROOTS);       // compaction relocation plan
         add(Loader.CODE_ROOTS, Loader.CODE_ROOTS_END);
