@@ -1007,7 +1007,7 @@ final class LambdaFactory
             TibBuilder.lambdaTibFilled[TibBuilder.lambdaTibRootN] = false;// ... and NOT yet filled (explicit: see the field's note --
                                                     //   allocArray leaves elements undefined on this VM)
             TibBuilder.lambdaHostBase.set(TibBuilder.lambdaTibRootN, Loader.gView.base); // ... and the class being compiled: the lambda's host
-            TibBuilder.lambdaHostNameOff[TibBuilder.lambdaTibRootN] = Loader.gThisNameOff;
+            TibBuilder.lambdaHostNameOff[TibBuilder.lambdaTibRootN] = Loader.gView.thisNameOff;
             TibBuilder.lambdaTibRootN += 1;
         }
         return tib.toLong();

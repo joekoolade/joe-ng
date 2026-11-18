@@ -127,7 +127,7 @@ final class MethodRegistry
     /** Register every compiled method of the current class (walk its methods table). */
     static void registerAll()
     {
-        Address p = Loader.gMethodsStart;
+        Address p = Loader.gView.methodsStart;
         int mcount = u2(p);
         p = p.plus(2);
         int m = 0;
@@ -140,7 +140,7 @@ final class MethodRegistry
                 int mi = methodIndexOf(code);
                 if (mi >= 0)
                 {
-                    register(Loader.gView.base, Loader.gThisNameOff, Loader.gView.cp[u2(p.plus(2))], Loader.gView.cp[u2(p.plus(4))], Loader.mBuf[mi], Loader.mLine[mi], Loader.mSrc.get(mi), u2(p));
+                    register(Loader.gView.base, Loader.gView.thisNameOff, Loader.gView.cp[u2(p.plus(2))], Loader.gView.cp[u2(p.plus(4))], Loader.mBuf[mi], Loader.mLine[mi], Loader.mSrc.get(mi), u2(p));
                 }
             }
             p = Loader.skipAttributes(p.plus(8), attrs);

@@ -129,8 +129,8 @@ final class LazyCompiler
         lazyEnsureTables();
         if (lzN >= MAXLAZY) { Loader.capHalt(Magic.bytes("MAXLAZY-defer"), lzN); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
         int idx = lzN;
-        int reg = ClassRegistry.classRegByName(Loader.gThisNameOff);
-        int pd = Loader.findPdByName(Loader.gView.base, Loader.gThisNameOff);
+        int reg = ClassRegistry.classRegByName(Loader.gView.thisNameOff);
+        int pd = Loader.findPdByName(Loader.gView.base, Loader.gView.thisNameOff);
         lzTab[idx] = new LazyMethod();
         lzTab[idx].blob = Loader.gView.base;
         lzTab[idx].len = Loader.pdLen[pd];
@@ -215,7 +215,7 @@ final class LazyCompiler
         int len = Loader.blobLenOf(blob);
         Loader.parseConstPool(blob, len);                         // set up the class's compile state (as loadBodies does,
         Loader.parseFields();                                     //   minus the TIB fill): statics block + vtable scratch
-        int reg = ClassRegistry.classRegByName(Loader.gThisNameOff);
+        int reg = ClassRegistry.classRegByName(Loader.gView.thisNameOff);
         if (reg < 0)
         {
             return -1;
@@ -225,8 +225,8 @@ final class LazyCompiler
         VtableLayout.parseVtable(blob);                                 // gvImplBuf/gvImplCode (for any invokevirtual in the body)
         Loader.gType = ClassRegistry.clTab[reg].type;
         Loader.gTib = ClassRegistry.clTab[reg].tib;
-        Loader.parseForMethods(blob, len);                        // fresh gMethodsStart for the by-name method walk
-        Address p = Loader.gMethodsStart;
+        Loader.parseForMethods(blob, len);                        // gp at the methods table for the by-name method walk
+        Address p = Loader.gView.methodsStart;
         int mcount = u2(p);
         p = p.plus(2);
         int nlen = (int) nameArr.toAddress().plus(16L).loadLong();
@@ -550,7 +550,7 @@ final class LazyCompiler
         Loader.gType = ClassRegistry.clTab[reg].type;
         Loader.gTib = ClassRegistry.clTab[reg].tib;                          // 0 for an interface; compileReuseTib means unused
         Loader.parseForMethods(blob, len);
-        Address p = Loader.gMethodsStart;
+        Address p = Loader.gView.methodsStart;
         int mcount = u2(p);
         p = p.plus(2);
         long code = 0L;
@@ -828,7 +828,7 @@ final class LazyCompiler
                 if (Loader.LOAD_LOG)
                 {
                     Uart.write(Magic.bytes("  baked "));
-                    Loader.printNameAt(Loader.gView.base, Loader.gThisNameOff);
+                    Loader.printNameAt(Loader.gView.base, Loader.gView.thisNameOff);
                     Uart.putc(0x2E);
                     Loader.printNameAt(Loader.gView.base, bkName);
                     Uart.putc(0x0A);
@@ -845,7 +845,7 @@ final class LazyCompiler
         if (LAZY_TRACE)                                  // per-method compile trace (debug; off by default)
         {
             Uart.write(Magic.bytes("  jitc "));
-            Loader.printNameAt(Loader.gView.base, Loader.gThisNameOff);
+            Loader.printNameAt(Loader.gView.base, Loader.gView.thisNameOff);
             Uart.putc(0x2E);
             int trName = lzTab[idx].nameOff;            // deferral entries capture bytecode, not the name
             if (trName == 0)
@@ -901,9 +901,9 @@ final class LazyCompiler
         if (buf == 0L)                                  // or a `bl 0` wild-branches to address 0 (see patchRelocsFrom)
         {
             // An index alone is unchaseable -- it is a slot number in a table rebuilt every batch. Name the
-            // method the same way LAZY_TRACE does; the context is restored, so gView/gThisNameOff are valid.
+            // method the same way LAZY_TRACE does; the context is restored, so gView (and its thisNameOff) is valid.
             Uart.write(Magic.bytes("  compile returned null for "));
-            Loader.printNameAt(Loader.gView.base, Loader.gThisNameOff);
+            Loader.printNameAt(Loader.gView.base, Loader.gView.thisNameOff);
             Uart.putc(0x2E);
             int nullName = lzTab[idx].nameOff;
             if (nullName == 0)
@@ -953,7 +953,7 @@ final class LazyCompiler
                 int nameOff = Loader.findNameByCode(Loader.mCode[i]);
                 if (nameOff != 0)
                 {
-                    MethodRegistry.register(Loader.gView.base, Loader.gThisNameOff, nameOff, Loader.mDescOff[i], Loader.mBuf[i], Loader.mLine[i], Loader.mSrc.get(i),
+                    MethodRegistry.register(Loader.gView.base, Loader.gView.thisNameOff, nameOff, Loader.mDescOff[i], Loader.mBuf[i], Loader.mLine[i], Loader.mSrc.get(i),
                              accessInContext(Loader.gView.base, nameOff, Loader.mDescOff[i]));
                 }
             }
@@ -965,7 +965,7 @@ final class LazyCompiler
      * The registry entry for the method {@code blob} declares as {@code nameOff}+{@code descOff}, or -1 -- the
      * LOWEST such index, which is the entry the linear scan this replaces returned. Through the class+name index
      * (rgBucket): every entry of the class being compiled is filed under utf8Hash2(its name, the method name), and
-     * the compile context is restored here, so gThisNameOff names that class. MEASURED (qprof, SslEngineProbe,
+     * the compile context is restored here, so gView.thisNameOff names that class. MEASURED (qprof, SslEngineProbe,
      * QEMU 2026-11-06): the scan of every registry entry, once per lazy compile, was 27 of the 40 samples of
      * lazyCompile's OWN work -- the Pi's ~1.9 ms per call of it outside compile/load/clinit/GC.
      */
@@ -973,7 +973,7 @@ final class LazyCompiler
     {
         MethodRegistry.buildRegIndex();
         int best = -1;
-        int i = MethodRegistry.rgBucket[Utf8.utf8Hash2(blob, Loader.gThisNameOff, blob, nameOff) & (MethodRegistry.RGTAB - 1)];
+        int i = MethodRegistry.rgBucket[Utf8.utf8Hash2(blob, Loader.gView.thisNameOff, blob, nameOff) & (MethodRegistry.RGTAB - 1)];
         while (i >= 0)
         {
             if ((best < 0 || i < best) && MethodRegistry.rgTab[i].base.EQ(blob) && MethodRegistry.rgTab[i].nameOff == nameOff
@@ -1010,7 +1010,7 @@ final class LazyCompiler
             MethodRegistry.rgTab[i].src = Loader.mSrc.get(0);
             return;
         }
-        MethodRegistry.register(lzTab[idx].blob, Loader.gThisNameOff, nameOff, lzTab[idx].descOff, buf, Loader.mLine[0], Loader.mSrc.get(0),
+        MethodRegistry.register(lzTab[idx].blob, Loader.gView.thisNameOff, nameOff, lzTab[idx].descOff, buf, Loader.mLine[0], Loader.mSrc.get(0),
                  accessInContext(lzTab[idx].blob, nameOff, lzTab[idx].descOff));
     }
 
@@ -1034,11 +1034,11 @@ final class LazyCompiler
      */
     private static int accessInContext(Address blob, int nameOff, int descOff)
     {
-        if (blob.NE(Loader.gView.base) || Loader.gMethodsStart.isZero())
+        if (blob.NE(Loader.gView.base) || Loader.gView.methodsStart.isZero())
         {
             return 0;
         }
-        Address p = Loader.gMethodsStart;
+        Address p = Loader.gView.methodsStart;
         int mcount = u2(p);
         p = p.plus(2);
         int m = 0;
@@ -1132,11 +1132,11 @@ final class LazyCompiler
 
     /** M8 phase-A: at structure registration of the gated class, allocate an offset cell + lazy stub for each
      *  of its (static) methods, captured straight from the classfile method table (available at phase A via
-     *  gMethodsStart). The cells live in the {@code dl*} table so a later caller finds them regardless of load
+     *  gView.methodsStart). The cells live in the {@code dl*} table so a later caller finds them regardless of load
      *  order; each carries an lz entry that compiles the body on first call and data-patches the cell. */
     static void armPhaseACells()
     {
-        if (!stage2Gated(Loader.gView.base, Loader.gThisNameOff))
+        if (!stage2Gated(Loader.gView.base, Loader.gView.thisNameOff))
         {
             return;
         }
@@ -1147,9 +1147,9 @@ final class LazyCompiler
             DynamicLinker.dlN = 0;
         }
         int reg = ClassRegistry.clCount - 1;                          // this class's registry index (registerClassStructure did ClassRegistry.clCount++)
-        int pd = Loader.findPdByName(Loader.gView.base, Loader.gThisNameOff);
+        int pd = Loader.findPdByName(Loader.gView.base, Loader.gView.thisNameOff);
         int blobLen = Loader.pdLen[pd];
-        Address p = Loader.gMethodsStart;
+        Address p = Loader.gView.methodsStart;
         int mcount = u2(p);
         p = p.plus(2);
         int m = 0;
@@ -1196,7 +1196,7 @@ final class LazyCompiler
                 }
                 d.blob = Loader.gView.base;
                 d.gen = Loader.loaderGen;
-                d.classOff = Loader.gThisNameOff;
+                d.classOff = Loader.gView.thisNameOff;
                 d.nameOff = nameOff;
                 d.descOff = descOff;
                 d.cell = cell;
@@ -1213,7 +1213,7 @@ final class LazyCompiler
             Uart.write(Magic.bytes("  phaseA: "));
             VM.printDec(armed);
             Uart.write(Magic.bytes(" cells at structure time for "));
-            Loader.printNameAt(Loader.gView.base, Loader.gThisNameOff);
+            Loader.printNameAt(Loader.gView.base, Loader.gView.thisNameOff);
             Uart.putc(0x0A);
         }
     }
@@ -1270,11 +1270,11 @@ final class LazyCompiler
         // THROUGH THE dlTab INDEX (dlBucket, keyed utf8Hash2(class name, method name)), with the scan's own
         // identity test. compileClass asks this once per method and it walked EVERY phase-A cell to answer --
         // methods x cells per batch. MEASURED (qprof, SslEngineProbe, QEMU 2026-11-07): the largest single leaf
-        // of batch loading, 17% of its samples. The class being compiled is the context, so gThisNameOff names
+        // of batch loading, 17% of its samples. The class being compiled is the context, so gView.thisNameOff names
         // the class its own cells are filed under; the answer is only whether one exists, so chain order is moot.
         DynamicLinker.buildDlIndex();
         boolean hit = false;
-        int k = DynamicLinker.dlBucket[Utf8.utf8Hash2(Loader.gView.base, Loader.gThisNameOff, Loader.gView.base, nameOff) & (DynamicLinker.DLTAB - 1)];
+        int k = DynamicLinker.dlBucket[Utf8.utf8Hash2(Loader.gView.base, Loader.gView.thisNameOff, Loader.gView.base, nameOff) & (DynamicLinker.DLTAB - 1)];
         while (k >= 0 && !hit)
         {
             DynLink d = DynamicLinker.dlTab[k];

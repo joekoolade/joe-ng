@@ -4,6 +4,23 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **LOADER REFACTOR PHASE 2, INCREMENT P2-4a: the class header lives on the view (2026-11-18).** P2-4 is split in
+  three: (a) blob header facts -> `ClassFileView`; (b) field layout (`gsf*`, `gif*`, `gStatics`) -> `ClassBuild`;
+  (c) Type/TIB/vtable state -> `ClassBuild`, lifecycle onto `RVMClass`.
+  - **Deleted:** `gThisNameOff`, `gSuperNameOff`, `gImplIfName`, `gImplIfCount`, `gIsInterface`, `gClassModifiers`,
+    `gMethodsStart`. `ClassFileView` gains `accessFlags`, `thisNameOff`, `superNameOff`, `implIfName`,
+    `methodsStart` (+ `isInterface()`), decoded ONCE by `Loader.readHeader` when the view is built, where they were
+    recomputed by every `parseFields`/`parseForMethods`. `parseForMethods` is now a cache lookup plus `gp`.
+  - **A latent mismatch is gone:** these statics changed in `parseFields`/`parseForMethods` but NOT in
+    `parseConstPool`, so a caller that parsed another blob only to peek at it left `gThisNameOff` (an offset)
+    naming the previous class while `gView` named the new one. Now they cannot disagree.
+  - **Two values a later parse could change are taken into locals:** `loadStructure`'s class modifiers (right after
+    the parse, as before) and `compileClass`'s interface flag (compiling can demand-load and re-point `gView`).
+  - **Image** 39,547,440 bytes. 169 reads rewritten (18 classes).
+  - **Validation:** `make test` + overlaycheck clean, no helper-stash MISS; 36 targeted probes (P2-3's 30 +
+    AccessFlags, Assignable, DefaultSpecific, IfaceObjectMethod, InvokeDefault, ItlInherit, ComponentType).
+  - **P2-3's speed A/B was spoiled**: this tree's `out/` was rebuilt mid-run. Three clean boots: ctl 100.8 s vs
+    P2-3 101.8 / 107.0 s -- too few to judge. Not run: full regression, suite, JUnit, Pi.
 - **LOADER REFACTOR PHASE 2, INCREMENT P2-3: method lookups return their answer (2026-11-18).** Five statics a
   lookup used to leave behind are deleted: `gcodeLen`, `gMaxLocals`, `gFoundDescOff`, `gFoundStatic`, `gFoundSync`.
   - **Length and max_locals are read back from the bytecode address**: `ClassBytes.codeLength(code)` (`u4(code-4)`)

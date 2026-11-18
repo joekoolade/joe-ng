@@ -254,12 +254,12 @@ final class Closure
 
     /**
      * Whether the method being compiled belongs to a stoppable program: its class's methods table
-     * ({@code gMethodsStart}) lies inside a blob {@link Loader#defineFromBytes} recorded for one. Asked by MetalSymbols
+     * ({@code gView.methodsStart}) lies inside a blob {@link Loader#defineFromBytes} recorded for one. Asked by MetalSymbols
      * for every compile, so it is a short scan over just those blobs.
      */
     static boolean compilingStoppable()
     {
-        long at = Loader.gMethodsStart.toLong();
+        long at = Loader.gView.methodsStart.toLong();
         int i = 0;
         while (i < stoppableCount)
         {
@@ -705,7 +705,7 @@ final class Closure
     {
         Loader.parseForMethods(base, len);
         Indy.findBootstrapMethods();                         // set gBsmOff so collectRefs can resolve lambda indys
-        Address p = Loader.gMethodsStart;
+        Address p = Loader.gView.methodsStart;
         int mcount = u2(p);
         p = p.plus(2);
         int m = 0;
@@ -1017,10 +1017,10 @@ final class Closure
         // resolveVirtuals (RTA over instantiated types), NOT "mark in every class carrying the name+desc".
         // Reached through the class-name index rather than by scanning every pend per blob -- that guard was
         // a string compare per (blob, pend), which is pdCount x pendN of them per round.
-        int r = psBucket[Utf8.utf8Hash(Loader.gView.base, Loader.gThisNameOff) & (Loader.PVTAB - 1)];
+        int r = psBucket[Utf8.utf8Hash(Loader.gView.base, Loader.gView.thisNameOff) & (Loader.PVTAB - 1)];
         while (r >= 0)
         {
-            if (r >= virtFrom && Loader.utf8EqAt(pendBase.get(r), pendClass[r], Loader.gView.base, Loader.gThisNameOff))
+            if (r >= virtFrom && Loader.utf8EqAt(pendBase.get(r), pendClass[r], Loader.gView.base, Loader.gView.thisNameOff))
             {
                 long code = MethodTableCache.findDeclaredCached(b, pendBase.get(r), pendName[r], pendDesc[r]);
                 if (code != 0L)
@@ -1044,7 +1044,7 @@ final class Closure
     private static boolean markInheritedStatic(Address refBase, int nameOff, int descOff, Address curBase, int curLen)
     {
         boolean grew = false;
-        int pd = Loader.findPdByName(Loader.gView.base, Loader.gThisNameOff);        // current blob's pd (the ref class)
+        int pd = Loader.findPdByName(Loader.gView.base, Loader.gView.thisNameOff);        // current blob's pd (the ref class)
         while (pd >= 0 && Loader.pdSuperOff[pd] != 0)
         {
             int spd = Loader.findPdByName(Loader.pdBase.get(pd), Loader.pdSuperOff[pd]);
@@ -1506,7 +1506,7 @@ final class Closure
         boolean grew = false;
         Address rootBlob = Address.fromLong(Loader.gRootBlob);
         Loader.parseForMethods(rootBlob, Loader.blobLenOf(rootBlob));
-        Address p = Loader.gMethodsStart;
+        Address p = Loader.gView.methodsStart;
         int mcount = u2(p);
         p = p.plus(2);
         int m = 0;

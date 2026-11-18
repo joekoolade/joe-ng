@@ -204,7 +204,7 @@ final class InterfaceInvocation
     }
 
     /**
-     * Record the current class's directly-declared interfaces (from {@code gImplIfName}) as registry indices
+     * Record the current class's directly-declared interfaces (from {@code gView.implIfName}) as registry indices
      * at {@code clCount}, for {@link #buildItableDir}'s transitive closure. Interfaces this class implements
      * are already loaded (dep ordering), so they resolve now.
      */
@@ -382,9 +382,9 @@ final class InterfaceInvocation
     {
         int n = 0;
         int k = 0;
-        while (k < Loader.gImplIfCount && n < MAX_DIRECT_IF)
+        while (k < Loader.gView.implIfName.length && n < MAX_DIRECT_IF)
         {
-            int r = ClassRegistry.classRegByName(Loader.gImplIfName[k]);
+            int r = ClassRegistry.classRegByName(Loader.gView.implIfName[k]);
             if (r >= 0)
             {
                 clIfaceReg[ClassRegistry.clCount * MAX_DIRECT_IF + n] = r;
@@ -408,9 +408,9 @@ final class InterfaceInvocation
     {
         Loader.gIfmStart = ifCount;
         int k = 0;
-        while (k < Loader.gImplIfCount)                        // super-interfaces' flattened runs first
+        while (k < Loader.gView.implIfName.length)                        // super-interfaces' flattened runs first
         {
-            int r = ClassRegistry.classRegByName(Loader.gImplIfName[k]);
+            int r = ClassRegistry.classRegByName(Loader.gView.implIfName[k]);
             if (r >= 0)
             {
                 int s = 0;
@@ -423,7 +423,7 @@ final class InterfaceInvocation
             }
             k += 1;
         }
-        Address p = Loader.gMethodsStart;                         // then this interface's own declarations
+        Address p = Loader.gView.methodsStart;                         // then this interface's own declarations
         int mcount = u2(p);
         p = p.plus(2);
         int m = 0;
@@ -719,7 +719,7 @@ final class InterfaceInvocation
         if (Loader.LOAD_LOG)                                   // the header; a DIFF prints its own below, so a
         {                                               //   parity failure is never silenced by the flag
             Uart.write(Magic.bytes("  itparity "));
-            Loader.printNameAt(Loader.gView.base, Loader.gThisNameOff);
+            Loader.printNameAt(Loader.gView.base, Loader.gView.thisNameOff);
         }
         if (VtableLayout.gVtSigCount != ClassRegistry.clTab[reg].ifmCount)
         {
@@ -761,7 +761,7 @@ final class InterfaceInvocation
         if (!Loader.LOAD_LOG)
         {
             Uart.write(Magic.bytes("  itparity "));
-            Loader.printNameAt(Loader.gView.base, Loader.gThisNameOff);
+            Loader.printNameAt(Loader.gView.base, Loader.gView.thisNameOff);
         }
     }
 
@@ -1062,16 +1062,16 @@ final class InterfaceInvocation
     {
         int n = 0;
         int k = 0;
-        while (k < Loader.gImplIfCount)                         // this class's directly-declared interfaces
+        while (k < Loader.gView.implIfName.length)                         // this class's directly-declared interfaces
         {
-            int r = ClassRegistry.classRegByName(Loader.gImplIfName[k]);
+            int r = ClassRegistry.classRegByName(Loader.gView.implIfName[k]);
             if (r >= 0)
             {
                 n = addIfaceUnique(n, r);
             }
             k += 1;
         }
-        int sr = ClassRegistry.classRegByName(Loader.gSuperNameOff);          // interfaces inherited from the ENTIRE superclass chain --
+        int sr = ClassRegistry.classRegByName(Loader.gView.superNameOff);          // interfaces inherited from the ENTIRE superclass chain --
         int guard = 0;                                   // an interface implemented several levels up (e.g. IntPipeline$1
         while (sr >= 0 && guard < 64)                    // -> StatelessOp -> ReferencePipeline implements Stream) must
         {                                                // still be in this class's dir, else invokeinterface misses it

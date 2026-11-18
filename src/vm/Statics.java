@@ -92,7 +92,7 @@ final class Statics
         // still-null static it was in the middle of assigning, so every instance's `type` was null -- and
         // blockingFailure() compares `type` to those constants, so `null == null` reported a BLOCKING FAILURE
         // on a SUCCESS and handed the console launcher a null exception to throw.
-        if (Loader.utf8EqAt(Loader.gView.base, Loader.refClassNameOff(idx), Loader.gView.base, Loader.gThisNameOff))
+        if (Loader.utf8EqAt(Loader.gView.base, Loader.refClassNameOff(idx), Loader.gView.base, Loader.gView.thisNameOff))
         {
             int s = 0;
             while (s < Loader.gsfCount)                        // same class: match by name Utf8 offset
@@ -102,7 +102,7 @@ final class Statics
                     if (Loader.STATIC_ADDR_LOG)
                     {
                         Uart.write(Magic.bytes("  ownstatic "));
-                        Loader.printNameAt(Loader.gView.base, Loader.gThisNameOff);
+                        Loader.printNameAt(Loader.gView.base, Loader.gView.thisNameOff);
                         Uart.putc(0x2E);
                         Loader.printNameAt(Loader.gView.base, nameOff);
                         Uart.write(Magic.bytes(" -> "));
@@ -375,7 +375,7 @@ final class Statics
         {
             sgTab[sgCount] = new RVMField();
             sgTab[sgCount].base = Loader.gView.base;
-            sgTab[sgCount].classOff = Loader.gThisNameOff;
+            sgTab[sgCount].classOff = Loader.gView.thisNameOff;
             sgTab[sgCount].nameOff = Loader.gsfName[st];
             sgTab[sgCount].addr = Loader.gStatics.plus(st * 8L).toLong();
             sgTab[sgCount].access = Loader.gsfAccess[st];

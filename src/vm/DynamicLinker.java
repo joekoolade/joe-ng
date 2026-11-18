@@ -1214,7 +1214,7 @@ final class DynamicLinker
         while (i < n)
         {
             Address e = Address.fromLong(VM.bakedTable + (long) i * 32L);
-            if (Loader.utf8EqAt(Loader.gView.base, Loader.gThisNameOff, e.loadAddress(), 0)
+            if (Loader.utf8EqAt(Loader.gView.base, Loader.gView.thisNameOff, e.loadAddress(), 0)
                     && Loader.utf8EqAt(Loader.gView.base, nameOff, e.plus(8L).loadAddress(), 0)
                     && Loader.utf8EqAt(Loader.gView.base, descOff, e.plus(16L).loadAddress(), 0))
             {

@@ -70,7 +70,6 @@ public final class Loader
      * a reader can never see a mix of two blobs' fields. Like those statics it is guarded by the loader lock.
      */
     static ClassFileView gView;
-    private static int gClassModifiers;   // current class's access_flags (ACC_SUPER stripped) — cached into clModifiers
     private static int gFrameSize;     // frame size of the last method the core compiled
     private static int gRegLocals;     // its callee-saved local count (x19..) — for unwind's pre-try local restore
     // Try/catch ranges of the last method the core compiled (machine word offsets + catch-type cp),
@@ -91,8 +90,6 @@ public final class Loader
     static int[] gifAccess; // access_flags of each own instance field (index = slot; 0 for inherited)
     static int[] gifDescOff;// Utf8 offset of each own instance field's type descriptor (index = slot)
     static int gifCount;
-    static int gThisNameOff;     // Utf8 offset of this class's own name
-    static Address gMethodsStart;   // address of the methods_count (for callee lookup)
     static Address gBsmOff;      // address of the BootstrapMethods attr body (num_bootstrap_methods), or 0
     // Flattened vtable of the class being built: superclass slots first, overrides
     // replacing in place, new methods appended. Each slot's signature may live in a
@@ -103,12 +100,8 @@ public final class Loader
     static int gvCount;     // flattened vtable size
     static Address gTib;       // this class's TIB { Type, vtable... }, built before emit
     static Address gType;      // this class's Type { superType } — a metal instanceof chain node
-    static int gSuperNameOff;  // superclass name Utf8 offset (unloaded/Object => no inherit)
-    static int[] gImplIfName;  // name Utf8 offsets of the interfaces this class implements
-    static int gImplIfCount;
 
 
-    private static boolean gIsInterface; // is the class being loaded an interface?
 
     // Blobs handed to the loader, plus the dependencies between them, so load order
     // is derived rather than hand-maintained. A class must be loaded after every
@@ -1018,7 +1011,6 @@ public final class Loader
     static FoundMethod findMethodByBytes(Address base, byte[] name, byte[] desc)
     {
         Address p = gp;
-        gMethodsStart = p;
         int mcount = u2(p);
         p = p.plus(2);
         int m = 0;
@@ -1075,17 +1067,17 @@ public final class Loader
     {
         // NO CONTEXT and BAD CONTEXT are different answers, and every caller of this is a failure path that
         // needs both. A null gView means no compile is in progress; a current view carrying a torn
-        // gThisNameOff is a pointer that LOOKS usable and is not -- and this is read from VM.loaderLock's
+        // gView.thisNameOff is a pointer that LOOKS usable and is not -- and this is read from VM.loaderLock's
         // watchdog WITHOUT the lock, i.e. deliberately while the owner may be mid-update. printNameAt loops
         // for whatever u2 it finds, so a wrong offset streams up to 65535 bytes at ~87us a character and
         // buries the report being read. That comment at the watchdog already claims a torn read here
         // "misnames a class rather than faulting"; the cap is what makes the claim true.
-        if (gView == null || gThisNameOff == 0)
+        if (gView == null || gView.thisNameOff == 0)
         {
             Uart.write(Magic.bytes("<none>"));           // no compile in progress -- distinct from a bad pointer
             return;
         }
-        printUtf8Capped(gView.base.plus(gThisNameOff));
+        printUtf8Capped(gView.base.plus(gView.thisNameOff));
     }
 
     // ----- code-embedded roots ---------------------------------------------------------------------
@@ -1841,27 +1833,14 @@ public final class Loader
 
 
     /**
-     * Parse a blob's constant pool and advance {@code gp}/{@code gMethodsStart} to its methods table (and set
-     * {@code gThisNameOff}) — the lightweight parse the reachability mark needs, without {@link #parseFields}'
+     * Parse a blob's constant pool and advance {@code gp} to its methods table ({@code gView.methodsStart}, which
+     * the view decoded with the rest of the header) — the lightweight parse the reachability mark needs, without {@link #parseFields}'
      * field-layout + statics allocation.
      */
     static void parseForMethods(Address base, int len)
     {
         parseConstPool(base, len);
-        Address p = gp;
-        gThisNameOff = gView.cp[u2(gView.base.plus(gView.cp[u2(p.plus(2))]))];   // this_class -> name (for class-qualified call matching)
-        p = p.plus(6);                                           // access_flags, this_class, super_class
-        p = p.plus(2 + u2(p) * 2);                               // interfaces
-        int fcount = u2(p);
-        p = p.plus(2);
-        int f = 0;
-        while (f < fcount)
-        {
-            p = skipAttributes(p.plus(8), u2(p.plus(6)));         // field: access(2) name(2) desc(2) count(2), then attributes
-            f += 1;
-        }
-        gMethodsStart = p;
-        gp = p;
+        gp = gView.methodsStart;                        // the view decoded the header and skipped the fields once
     }
 
 
@@ -3231,6 +3210,7 @@ public final class Loader
         v.cpTag = new int[v.cpCount];
         v.litObj = new long[v.cpCount];                 // per-blob ldc-String intern cache (one object per cp entry)
         v.afterCp = ClassReader.constantPool(v.bytes, v.cp, v.cpTag);   // stable: gp is later reused as a walk cursor
+        readHeader(v);
         useView(v);
         // RELEASE-PUBLISH, AND THE ORDER IS THE WHOLE POINT. `pcN` is incremented LAST so a reader either
         // sees the entry complete or does not see it at all -- which is correct on a machine that keeps
@@ -3269,6 +3249,46 @@ public final class Loader
         gp = v.base.plus(v.afterCp);
     }
 
+    /**
+     * Decode {@code v}'s class header once, as the view is built: access_flags, this/super names, the direct
+     * interfaces, and where the methods table starts (past the fields). Reads the blob only -- no loader state.
+     */
+    private static void readHeader(ClassFileView v)
+    {
+        Address p = v.base.plus(v.afterCp);
+        v.accessFlags = u2(p);
+        v.thisNameOff = v.cp[u2(v.base.plus(v.cp[u2(p.plus(2))]))];   // this_class -> Class -> name Utf8 offset
+        int superIdx = u2(p.plus(4));
+        if (superIdx == 0)
+        {
+            v.superNameOff = 0;                         // java/lang/Object
+        }
+        else
+        {
+            v.superNameOff = v.cp[u2(v.base.plus(v.cp[superIdx]))];
+        }
+        p = p.plus(6);                                  // access_flags, this_class, super_class
+        int icount = u2(p);
+        v.implIfName = new int[icount];
+        int ii = 0;
+        while (ii < icount)
+        {
+            int ci = u2(p.plus(2 + ii * 2));            // Class entry index
+            v.implIfName[ii] = v.cp[u2(v.base.plus(v.cp[ci]))];   // -> interface name Utf8 offset
+            ii += 1;
+        }
+        p = p.plus(2 + icount * 2);
+        int fcount = u2(p);
+        p = p.plus(2);
+        int f = 0;
+        while (f < fcount)
+        {
+            p = skipAttributes(p.plus(8), u2(p.plus(6)));   // field: access(2) name(2) desc(2) count(2), then attributes
+            f += 1;
+        }
+        v.methodsStart = p;
+    }
+
     /** Copy an embedded blob onto the heap so the shared reader can index it. */
     private static byte[] toBytes(Address addr, int len)
     {
@@ -3286,27 +3306,21 @@ public final class Loader
     static void parseFields()
     {
         Address p = gp;
-        gIsInterface = (u2(p) & 0x0200) != 0;             // ACC_INTERFACE
-        gThisNameOff = gView.cp[u2(gView.base.plus(gView.cp[u2(p.plus(2))]))];   // this_class -> Class -> name Utf8 offset
-        gSuperNameOff = u2(p.plus(4)) == 0 ? 0 : gView.cp[u2(gView.base.plus(gView.cp[u2(p.plus(4))]))];   // super_class -> name
         superUnregistered = false;
         gAbsentSuperOff = 0;
         int islot = superFieldCount();                  // own instance fields sit after inherited ones
         p = p.plus(6);                                         // access_flags, this_class, super_class
-        gImplIfCount = u2(p);                           // interfaces this class implements
-        gImplIfName = new int[gImplIfCount];
+        int[] implIfName = gView.implIfName;
         int ii = 0;
-        while (ii < gImplIfCount)
+        while (ii < implIfName.length)
         {
-            int ci = u2(p.plus(2 + ii * 2));                // Class entry index
-            gImplIfName[ii] = gView.cp[u2(gView.base.plus(gView.cp[ci]))]; // -> interface name Utf8 offset
-            if (gAbsentSuperOff == 0 && absentSupertype(gImplIfName[ii]))
+            if (gAbsentSuperOff == 0 && absentSupertype(implIfName[ii]))
             {
-                gAbsentSuperOff = gImplIfName[ii];      // a superinterface that can never load: same as a superclass
+                gAbsentSuperOff = implIfName[ii];       // a superinterface that can never load: same as a superclass
             }
             ii += 1;
         }
-        p = p.plus(2 + gImplIfCount * 2);                      // interfaces
+        p = p.plus(2 + implIfName.length * 2);                 // interfaces
         int fcount = u2(p);
         if (superUnregistered && fcount != 0)
         {
@@ -3315,9 +3329,9 @@ public final class Loader
             // counts STATIC fields too, so a statics-only subclass warns spuriously -- erring toward saying
             // something, since the failure this catches is invisible.
             Uart.write(Magic.bytes("\n  UNREGISTERED SUPER (fields alias): "));
-            printNameAt(gView.base, gThisNameOff);
+            printNameAt(gView.base, gView.thisNameOff);
             Uart.write(Magic.bytes(" extends "));
-            printNameAt(gView.base, gSuperNameOff);
+            printNameAt(gView.base, gView.superNameOff);
             Uart.putc(0x0A);
         }
         p = p.plus(2);
@@ -3355,7 +3369,6 @@ public final class Loader
         gsfCount = slot;
         gifCount = islot;                               // total: inherited + own
         gvCount = 0;                                    // no vtable unless parseVtable runs
-        gMethodsStart = p;                              // methods_count follows the fields
         gStatics = Heap.allocData(slot * 8 + 8);
         int z = 0;
         while (z < slot)
@@ -3407,16 +3420,16 @@ public final class Loader
 
     static int superFieldCount()
     {
-        int r = ClassRegistry.classRegByName(gSuperNameOff);
+        int r = ClassRegistry.classRegByName(gView.superNameOff);
         if (r >= 0)
         {
             return ClassRegistry.clTab[r].fieldCount;
         }
-        superUnregistered = gSuperNameOff != 0
-                && !Utf8.utf8IsAtBase(gView.base, gSuperNameOff, Magic.bytes("java/lang/Object"));
-        if (superUnregistered && absentSupertype(gSuperNameOff))
+        superUnregistered = gView.superNameOff != 0
+                && !Utf8.utf8IsAtBase(gView.base, gView.superNameOff, Magic.bytes("java/lang/Object"));
+        if (superUnregistered && absentSupertype(gView.superNameOff))
         {
-            gAbsentSuperOff = gSuperNameOff;
+            gAbsentSuperOff = gView.superNameOff;
         }
         return 0;
     }
@@ -3777,7 +3790,6 @@ public final class Loader
     static FoundMethod findMethod(Address base)
     {
         Address p = gp;
-        gMethodsStart = p;                              // remember for on-demand callee lookup
         int mcount = u2(p);
         p = p.plus(2);
         int m = 0;
@@ -3969,7 +3981,7 @@ public final class Loader
         // the blob, burying the failure this exists to name. Not hypothetical: printUtf8Capped's own doc
         // records a diagnostic that streamed several hundred bytes of the stub table onto the console for
         // exactly this reason. It prints <null>/<bad utf8 ptr> itself, which says more than printing nothing.
-        printUtf8Capped(gView != null ? gView.base.plus(gThisNameOff) : Address.zero());
+        printUtf8Capped(gView != null ? gView.base.plus(gView.thisNameOff) : Address.zero());
         Uart.write(Magic.bytes(" at="));
         VM.printDec(where);
         Uart.write(Magic.bytes(" task="));
@@ -4128,7 +4140,7 @@ public final class Loader
         // this line runs in the one state where the length word cannot be trusted -- the condition being
         // reported IS "gView.base moved under a reader" -- so a garbage u2 of 65535 is ~5.7 SECONDS of blocking
         // UART plus a read far past the blob, burying the failure this exists to name.
-        printUtf8Capped(gView != null ? gView.base.plus(gThisNameOff) : Address.zero());
+        printUtf8Capped(gView != null ? gView.base.plus(gView.thisNameOff) : Address.zero());
     }
 
     /** {@code isSync} is MANDATORY rather than defaulted: dropping it compiles a synchronized method with no
@@ -4186,7 +4198,8 @@ public final class Loader
         long cc0 = Magic.readCNTPCT_EL0();
         checkCompileLockHeld(2);
         allocMethodTables();
-        Address p = gMethodsStart;
+        boolean isInterface = gView.isInterface();      // taken once: compiling below can demand-load and re-point gView
+        Address p = gView.methodsStart;
         int mcount = u2(p);
         p = p.plus(2);
         int m = 0;
@@ -4198,7 +4211,7 @@ public final class Loader
             // no holes -- but STUB ONLY, so nothing of theirs is pulled into this batch (see stubBlob). A
             // NATIVELY INSTANTIATED class needs the same treatment for a different reason (see there).
             boolean holeFree = (gView.base.toLong() == gStubBlob && gStubBlob != 0L)
-                    || Closure.nativelyInstantiated(gView.base, gThisNameOff);
+                    || Closure.nativelyInstantiated(gView.base, gView.thisNameOff);
             boolean stubOnly = holeFree && code != 0L
                     && !Closure.isReach(code) && isVirtual(u2(p), gView.cp[u2(p.plus(2))]);
             if (code != 0L && (markActive == 0 || Closure.isReach(code) || stubOnly))
@@ -4217,7 +4230,7 @@ public final class Loader
                     // for the body (statics went the cell way above). EVERY method kind defers now,
                     // `<init>` included -- see notInit, which is retired.
                     boolean defer = stubOnly                    // a stub-blob virtual: NEVER compile the body here
-                            || LazyCompiler.stage2Gated(gView.base, gThisNameOff);
+                            || LazyCompiler.stage2Gated(gView.base, gView.thisNameOff);
                     if (defer && mCount > 0 && mCode[mCount - 1] == code)
                     {
                         mDefer[mCount - 1] = 1;         // compile this method on first call, not now
@@ -4237,7 +4250,7 @@ public final class Loader
         }
         long cc2 = Magic.readCNTPCT_EL0();
         ccPlaceT += cc2 - cc1;
-        if (!gIsInterface)                              // an interface has no instances -> no vtable/TIB to fill; its
+        if (!isInterface)                               // an interface has no instances -> no vtable/TIB to fill; its
         {                                               // concrete static/default methods are still compiled above
             TibBuilder.fillTib();                                  // TIB was allocated by loadOne (before <clinit>); fill slots now
         }
@@ -5012,14 +5025,15 @@ public final class Loader
     private static void loadStructure(Address bytes, int len)
     {
         parseConstPool(bytes, len);
-        gClassModifiers = u2(gp) & ~0x0020;             // class access_flags (gp is here, post-cp), ACC_SUPER stripped;
-                                                        //   cached for Class.getModifiers() with NO extra parse (an
-                                                        //   extra runtime/load re-parse corrupted the heap). A nested
-                                                        //   class's InnerClasses flags are read at REFLECTION time
-                                                        //   instead (innerClassFlags, under the loader lock).
+        int classModifiers = gView.accessFlags & ~0x0020;   // class access_flags, ACC_SUPER stripped; cached for
+                                                        //   Class.getModifiers() with NO extra parse (an extra
+                                                        //   runtime/load re-parse corrupted the heap). Taken HERE, into
+                                                        //   a local: the parses below can switch gView to another blob.
+                                                        //   A nested class's InnerClasses flags are read at REFLECTION
+                                                        //   time instead (innerClassFlags, under the loader lock).
         parseFields();                                  // hierarchy-aware field layout (allocates gStatics)
         Indy.findBootstrapMethods();                         // locate BootstrapMethods (for invokedynamic), if any
-        if (gIsInterface)
+        if (gView.isInterface())
         {
             if (ClassRegistry.clCount >= ClassRegistry.MAXCLASS) { capHalt(Magic.bytes("ClassRegistry.MAXCLASS-iface"), ClassRegistry.clCount); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
             InterfaceInvocation.registerInterface();                        // give its methods global itable indices
@@ -5037,7 +5051,7 @@ public final class Loader
                 if (LOAD_LOG)
                 {
                     Uart.write(Magic.bytes("  typeadopt "));
-                    printNameAt(gView.base, gThisNameOff);
+                    printNameAt(gView.base, gView.thisNameOff);
                     Uart.putc(0x0A);
                 }
             }
@@ -5064,8 +5078,8 @@ public final class Loader
             ClassRegistry.clTab[ClassRegistry.clCount] = new RVMClass();
             ClassRegistry.clTab[ClassRegistry.clCount].state = RVMClass.ST_LOADED;
             ClassRegistry.clTab[ClassRegistry.clCount].base = gView.base;
-            ClassRegistry.clTab[ClassRegistry.clCount].nameOff = gThisNameOff;
-            ClassRegistry.clTab[ClassRegistry.clCount].nameHash = Utf8.utf8Hash(gView.base, gThisNameOff);   // folded once; see RVMClass.nameHash
+            ClassRegistry.clTab[ClassRegistry.clCount].nameOff = gView.thisNameOff;
+            ClassRegistry.clTab[ClassRegistry.clCount].nameHash = Utf8.utf8Hash(gView.base, gView.thisNameOff);   // folded once; see RVMClass.nameHash
             ClassRegistry.clTab[ClassRegistry.clCount].tib = Address.zero();
             ClassRegistry.clTab[ClassRegistry.clCount].type = gType;
             ClassRegistry.clTab[ClassRegistry.clCount].fieldCount = 0;
@@ -5075,11 +5089,11 @@ public final class Loader
             ClassRegistry.clTab[ClassRegistry.clCount].isIface = true;
             ClassRegistry.clTab[ClassRegistry.clCount].ifmStart = gIfmStart;            // the flattened per-interface method run
             ClassRegistry.clTab[ClassRegistry.clCount].ifmCount = gIfmCount;            //   = this interface's itable slot numbering
-            ClassRegistry.clTab[ClassRegistry.clCount].superNameOff = gSuperNameOff;
+            ClassRegistry.clTab[ClassRegistry.clCount].superNameOff = gView.superNameOff;
             ClassRegistry.clTab[ClassRegistry.clCount].absentSuperOff = gAbsentSuperOff;          // an interface extending one that cannot load
-            ClassRegistry.clTab[ClassRegistry.clCount].superReg = ClassRegistry.classRegByName(gSuperNameOff);   // an interface's super is Object (-1); kept for symmetry
+            ClassRegistry.clTab[ClassRegistry.clCount].superReg = ClassRegistry.classRegByName(gView.superNameOff);   // an interface's super is Object (-1); kept for symmetry
             InterfaceInvocation.captureDirectIfaces();                      // an interface's extended interfaces (List extends Iterable)
-            ClassRegistry.clTab[ClassRegistry.clCount].modifiers = gClassModifiers;     // cached Class.getModifiers() (captured post-cp, no re-parse)
+            ClassRegistry.clTab[ClassRegistry.clCount].modifiers = classModifiers;     // cached Class.getModifiers() (captured post-cp, no re-parse)
             InterfaceInvocation.checkIfParity(ClassRegistry.clCount);                     // M8 itables: writer/loader slot numbering must agree
             ClassRegistry.clTab[ClassRegistry.clCount].state = RVMClass.ST_RESOLVED;    // lifecycle: structure complete
             ClassRegistry.clCount += 1;
@@ -5096,7 +5110,7 @@ public final class Loader
         adoptStatics();                                 // M8 statics unification: ONE static block per baked class
         TibBuilder.allocTib();                                     // allocate Type + empty TIB at a stable address (gTib)
         registerClassStructure();                       // class + fields + statics + vtable STRUCTURE (bufs 0)
-        ClassRegistry.clTab[ClassRegistry.clCount - 1].modifiers = gClassModifiers;     // cached Class.getModifiers() (captured post-cp, no re-parse)
+        ClassRegistry.clTab[ClassRegistry.clCount - 1].modifiers = classModifiers;     // cached Class.getModifiers() (captured post-cp, no re-parse)
         ClassRegistry.clTab[ClassRegistry.clCount - 1].state = RVMClass.ST_RESOLVED;    // lifecycle: structure complete
     }
 
@@ -5112,10 +5126,10 @@ public final class Loader
         parseConstPool(bytes, len);
         long lbA = Magic.readCNTPCT_EL0();
         pParseCpT += lbA - lb0;
-        parseFields();                                  // re-derive layout (gImplIf*, gMethodsStart); gStatics is throwaway
+        parseFields();                                  // re-derive the field layout; gStatics is throwaway
         pFieldsT += Magic.readCNTPCT_EL0() - lbA;
         lbParseT += Magic.readCNTPCT_EL0() - lb0;
-        int reg = ClassRegistry.classRegByName(gThisNameOff);
+        int reg = ClassRegistry.classRegByName(gView.thisNameOff);
         gStatics = ClassRegistry.clTab[reg].statics;                      // REUSE the phase-A static block (cross-class getstatic keys on it)
         Indy.findBootstrapMethods();
         if (ClassRegistry.clTab[reg].isIface)
@@ -5171,7 +5185,7 @@ public final class Loader
      */
     static void provideKnownStatics()
     {
-        if (Utf8.utf8IsAtBase(gView.base, gThisNameOff, Magic.bytes("java/lang/String")))
+        if (Utf8.utf8IsAtBase(gView.base, gView.thisNameOff, Magic.bytes("java/lang/String")))
         {
             long cs = Statics.staticSlotByName(Magic.bytes("COMPACT_STRINGS"));
             if (cs != 0L)
@@ -5180,7 +5194,7 @@ public final class Loader
             }
             return;
         }
-        if (Utf8.utf8IsAtBase(gView.base, gThisNameOff, Magic.bytes("java/lang/StringUTF16")))
+        if (Utf8.utf8IsAtBase(gView.base, gView.thisNameOff, Magic.bytes("java/lang/StringUTF16")))
         {
             // Its <clinit> sets the UTF-16 byte-order shifts via Unsafe.isBigEndian (unrunnable, skipped),
             // leaving BOTH shifts 0 -- putChar then stores the LOW byte twice and a char > 0xFF truncates
@@ -5192,7 +5206,7 @@ public final class Loader
             }
             return;
         }
-        if (!Utf8.utf8IsAtBase(gView.base, gThisNameOff, Magic.bytes("java/lang/Integer")))
+        if (!Utf8.utf8IsAtBase(gView.base, gView.thisNameOff, Magic.bytes("java/lang/Integer")))
         {
             return;
         }
@@ -5580,16 +5594,16 @@ public final class Loader
     /** One COMPILE_WATCH line for method {@code i}: who it is, and whether it was emitted or deferred. */
     private static void reportCompile(int i, boolean deferred)
     {
-        if (gView == null || gThisNameOff == 0)
+        if (gView == null || gView.thisNameOff == 0)
         {
             return;                                     // no context to name it with; say nothing rather than guess
         }
-        if (!utf8HasPrefix(gView.base, gThisNameOff, compileWatchClass()))
+        if (!utf8HasPrefix(gView.base, gView.thisNameOff, compileWatchClass()))
         {
             return;
         }
         Uart.write(Magic.bytes("  compilewatch "));
-        printNameAt(gView.base, gThisNameOff);
+        printNameAt(gView.base, gView.thisNameOff);
         Uart.putc(0x2E);
         // The work set records a method by its BYTECODE ADDRESS and its descriptor, never its name -- so the
         // name is recovered the same way LAZY_TRACE recovers it for a deferral entry. A 0 means the walk
@@ -5747,7 +5761,7 @@ public final class Loader
     /** Buffer to BL for a static/special call: this class's own method, else the registry. */
     static long resolveCallBuf(int idx)
     {
-        if (utf8Eq(refClassNameOff(idx), gThisNameOff))
+        if (utf8Eq(refClassNameOff(idx), gView.thisNameOff))
         {
             long local = bufOf(calleeCodeOf(idx));      // same class: local buffer
             if (local != 0L)
@@ -6364,8 +6378,8 @@ public final class Loader
         ClassRegistry.clTab[ClassRegistry.clCount] = new RVMClass();
         ClassRegistry.clTab[ClassRegistry.clCount].state = RVMClass.ST_LOADED;
         ClassRegistry.clTab[ClassRegistry.clCount].base = gView.base;
-        ClassRegistry.clTab[ClassRegistry.clCount].nameOff = gThisNameOff;
-        ClassRegistry.clTab[ClassRegistry.clCount].nameHash = Utf8.utf8Hash(gView.base, gThisNameOff);       // folded once; see RVMClass.nameHash
+        ClassRegistry.clTab[ClassRegistry.clCount].nameOff = gView.thisNameOff;
+        ClassRegistry.clTab[ClassRegistry.clCount].nameHash = Utf8.utf8Hash(gView.base, gView.thisNameOff);       // folded once; see RVMClass.nameHash
         ClassRegistry.clTab[ClassRegistry.clCount].tib = gTib;
         ClassRegistry.clTab[ClassRegistry.clCount].type = gType;
         ClassRegistry.clTab[ClassRegistry.clCount].absentSuperOff = gAbsentSuperOff;
@@ -6374,15 +6388,15 @@ public final class Loader
         ClassRegistry.clTab[ClassRegistry.clCount].statics = gStatics;
         ClassRegistry.clTab[ClassRegistry.clCount].vtStart = VtableLayout.vtCount;                   // this class's slots occupy vt[VtableLayout.vtCount .. VtableLayout.vtCount+gvCount)
         ClassRegistry.clTab[ClassRegistry.clCount].isIface = false;
-        ClassRegistry.clTab[ClassRegistry.clCount].superNameOff = gSuperNameOff;        // keep the NAME too: superReg is -1 for ever if the
+        ClassRegistry.clTab[ClassRegistry.clCount].superNameOff = gView.superNameOff;        // keep the NAME too: superReg is -1 for ever if the
                                                         //   super was not registered yet (see RVMClass)
-        ClassRegistry.clTab[ClassRegistry.clCount].superReg = ClassRegistry.classRegByName(gSuperNameOff);   // superclass registry index (-1 for Object), for the
+        ClassRegistry.clTab[ClassRegistry.clCount].superReg = ClassRegistry.classRegByName(gView.superNameOff);   // superclass registry index (-1 for Object), for the
                                                         //   FULL-chain itable closure (an interface implemented N levels
                                                         //   up the superclass chain must still land in this class's dir)
         if (VtableLayout.logVtable != 0)                             // #43: class -> vtable slot count (spot too-short vtables)
         {
             Uart.write(Magic.bytes("  C "));
-            writeName(gView.base.plus(gThisNameOff + 2), u2(gView.base.plus(gThisNameOff)));
+            writeName(gView.base.plus(gView.thisNameOff + 2), u2(gView.base.plus(gView.thisNameOff)));
             Uart.putc(0x20);
             VM.printDec(gvCount);
             Uart.putc(0x0A);
@@ -6398,7 +6412,7 @@ public final class Loader
             {
                 FieldRegistry.fldTab[FieldRegistry.fldCount] = new RVMField();
                 FieldRegistry.fldTab[FieldRegistry.fldCount].base = gView.base;
-                FieldRegistry.fldTab[FieldRegistry.fldCount].classOff = gThisNameOff;
+                FieldRegistry.fldTab[FieldRegistry.fldCount].classOff = gView.thisNameOff;
                 FieldRegistry.fldTab[FieldRegistry.fldCount].nameOff = gifName[s];
                 FieldRegistry.fldTab[FieldRegistry.fldCount].slot = s;
                 FieldRegistry.fldTab[FieldRegistry.fldCount].access = gifAccess[s];
@@ -6411,7 +6425,7 @@ public final class Loader
         while (v < gvCount)                            // register the whole flattened vtable STRUCTURE (bufs 0 for now)
         {
             VtableLayout.vtClassBase.set(VtableLayout.vtCount, gView.base);
-            VtableLayout.vtClassOff[VtableLayout.vtCount] = gThisNameOff;
+            VtableLayout.vtClassOff[VtableLayout.vtCount] = gView.thisNameOff;
             VtableLayout.vtNameBase.set(VtableLayout.vtCount, gvTab[v].base);           // signature blob (a super's, for inherited slots)
             VtableLayout.vtNameOff[VtableLayout.vtCount] = gvTab[v].name;
             VtableLayout.vtDescOff[VtableLayout.vtCount] = gvTab[v].desc;
@@ -6474,7 +6488,7 @@ public final class Loader
         {
             return false;
         }
-        if (utf8Eq(refClassNameOff(idx), gThisNameOff) || refClassRegistered(idx))
+        if (utf8Eq(refClassNameOff(idx), gView.thisNameOff) || refClassRegistered(idx))
         {
             return true;
         }
@@ -6598,7 +6612,7 @@ public final class Loader
             Uart.write(Magic.bytes("<no compile context>"));
             return;
         }
-        printNameAt(gView.base, gThisNameOff);
+        printNameAt(gView.base, gView.thisNameOff);
     }
 
     /** Print the {@code {u2 len}{bytes}} Utf8 at {@code off} in the blob at {@code base}. */
@@ -7193,7 +7207,7 @@ public final class Loader
             if (LOAD_LOG)
             {
                 Uart.write(Magic.bytes("  staticadopt "));
-                printNameAt(gView.base, gThisNameOff);
+                printNameAt(gView.base, gView.thisNameOff);
                 Uart.write(Magic.bytes(" DIFF "));
                 VM.printDec(gAdoptStaticCount);
                 Uart.putc(0x2F);
@@ -7233,7 +7247,6 @@ public final class Loader
     static FoundMethod findMethodByOffsets(int nameOff, int descOff)
     {
         Address p = gp;
-        gMethodsStart = p;
         int mcount = u2(p);
         p = p.plus(2);
         int m = 0;
@@ -7532,7 +7545,7 @@ public final class Loader
             // hit the null-vtable guard (an AIOOBE with no hint of what was missing) -- which is what
             // `new Attributes$Name(...)` -> `String.intern()` did. Provided natives already have VM helpers;
             // link one here so a VIRTUAL call reaches it, as invokestatic/invokespecial already do.
-            return nativeBufAt(gView.base, gThisNameOff, gvTab[s].base, gvTab[s].name);
+            return nativeBufAt(gView.base, gView.thisNameOff, gvTab[s].base, gvTab[s].name);
         }
         return bufOf(gvTab[s].implCode);                     // this class's own method
     }
@@ -7560,7 +7573,7 @@ public final class Loader
         // The Code attribute's header must lie INSIDE this class's blob, or those reads walk off it. findCode
         // returns the bytecode start, so maxLocals sits at code-6 and codeLen at code-4; both must be within
         // [blob, blob+len). The read is raw -- there is no bounds check under it -- so it is checked here.
-        int pd = findPdByName(gView.base, gThisNameOff);
+        int pd = findPdByName(gView.base, gView.thisNameOff);
         if (pd < 0 || code - 6L < gView.base.toLong() || code >= gView.base.plus(pdLen[pd]).toLong())
         {
             return 0L;
@@ -7578,7 +7591,7 @@ public final class Loader
         LazyCompiler.lzTab[idx] = new LazyMethod();
         LazyCompiler.lzTab[idx].blob = gView.base;
         LazyCompiler.lzTab[idx].len = pdLen[pd];
-        LazyCompiler.lzTab[idx].reg = ClassRegistry.classRegByName(gThisNameOff);
+        LazyCompiler.lzTab[idx].reg = ClassRegistry.classRegByName(gView.thisNameOff);
         LazyCompiler.lzTab[idx].nameOff = 0;
         LazyCompiler.lzTab[idx].descOff = gvTab[s].desc;
         LazyCompiler.lzTab[idx].slot = 0L;                               // shared stub buffer: no single slot to patch
@@ -7607,13 +7620,13 @@ public final class Loader
     private static long calleeCodeOf(int idx)
     {
         gCalleeSync = 0;
-        if (!utf8Eq(refClassNameOff(idx), gThisNameOff))
+        if (!utf8Eq(refClassNameOff(idx), gView.thisNameOff))
         {
             return 0L;                                  // not this class (Object.<init>, JDK, ...)
         }
         int nameOff = mrefNameOff(idx);
         int descOff = mrefDescOff(idx);
-        Address p = gMethodsStart;
+        Address p = gView.methodsStart;
         int mcount = u2(p);
         p = p.plus(2);
         int m = 0;
@@ -8057,7 +8070,7 @@ public final class Loader
         // NARROWED TO THE CALLER, not just the callee: `iterator` is dispatched all over the suite, and an
         // unfiltered watch floods the UART and starves the run it is meant to diagnose -- already paid for
         // once by the COMPILE_WATCH arc. The failing dispatch is Map.forEach's, so that is the only one armed.
-        if (!Utf8.utf8IsAtBase(gView.base, gThisNameOff,
+        if (!Utf8.utf8IsAtBase(gView.base, gView.thisNameOff,
                 Magic.bytes("org/junit/platform/engine/discovery/ClassSelector")))
         {
             return false;
@@ -8229,7 +8242,7 @@ public final class Loader
         // printNameAt trusts the u2 length it lands on, so that is unbounded output over the UART on the one
         // line a reader most needs. printUtf8Capped answers <bad utf8 ptr>, which is both short and is itself
         // the evidence that the context was clobbered rather than merely wrong.
-        printUtf8Capped(gView != null ? gView.base.plus(gThisNameOff) : Address.zero());
+        printUtf8Capped(gView != null ? gView.base.plus(gView.thisNameOff) : Address.zero());
         Uart.write(Magic.bytes(" uses slot "));
         VM.printDec(needed - 1);
         Uart.write(Magic.bytes(" but max_locals="));
@@ -8240,14 +8253,14 @@ public final class Loader
 
     private static void reportArmed(int nameOff, int site)
     {
-        if (gView == null || gThisNameOff == 0)
+        if (gView == null || gView.thisNameOff == 0)
         {
             return;                                     // no context to name it with; say nothing rather than guess
         }
         Uart.write(Magic.bytes("  ARMED site="));
         VM.printDec(site);
         Uart.putc(0x20);
-        printNameAt(gView.base, gThisNameOff);
+        printNameAt(gView.base, gView.thisNameOff);
         Uart.putc(0x2E);
         printNameAt(gView.base, nameOff);
         Uart.putc(0x0A);
@@ -8286,28 +8299,28 @@ public final class Loader
     /** Name the class each instrumented method belongs to, so a runtime id maps to something. */
     static void reportX21Site(int id)
     {
-        if (gView == null || gThisNameOff == 0)
+        if (gView == null || gView.thisNameOff == 0)
         {
             return;
         }
         Uart.write(Magic.bytes("  X21CHECK id="));
         VM.printDec(id);
         Uart.putc(0x20);
-        printNameAt(gView.base, gThisNameOff);
+        printNameAt(gView.base, gView.thisNameOff);
         Uart.putc(0x0A);
     }
 
     static boolean watchLocal2()
     {
-        if (!LOCAL2_WATCH || gView == null || gThisNameOff == 0)
+        if (!LOCAL2_WATCH || gView == null || gView.thisNameOff == 0)
         {
             return false;
         }
         // The constructor that loses the value, and the callee the bisect named. Two exact names rather than
         // a prefix: every nested picocli class would bury the reading in noise.
-        return Utf8.utf8IsAtBase(gView.base, gThisNameOff,
+        return Utf8.utf8IsAtBase(gView.base, gView.thisNameOff,
                         Magic.bytes("org/junit/platform/console/shadow/picocli/CommandLine"))
-                || Utf8.utf8IsAtBase(gView.base, gThisNameOff,
+                || Utf8.utf8IsAtBase(gView.base, gView.thisNameOff,
                         Magic.bytes("org/junit/platform/console/shadow/picocli/CommandLine$Interpreter"));
     }
 
@@ -8351,7 +8364,7 @@ public final class Loader
         }
         // Only the ONE call site under investigation, or every `getName` in a 2371-class closure prints and
         // the UART traffic starves the run it exists to diagnose -- a cost this file records paying once.
-        if (!Utf8.utf8IsAtBase(gView.base, gThisNameOff,
+        if (!Utf8.utf8IsAtBase(gView.base, gView.thisNameOff,
                 Magic.bytes("org/junit/platform/engine/discovery/ClassSelector")))
         {
             return false;
@@ -8457,7 +8470,7 @@ public final class Loader
     /** True if the {@code Class} entry {@code classIdx} names the class being compiled. */
     private static boolean selfClassAt(int classIdx)
     {
-        return utf8Eq(gView.cp[u2(gView.base.plus(gView.cp[classIdx]))], gThisNameOff);
+        return utf8Eq(gView.cp[u2(gView.base.plus(gView.cp[classIdx]))], gView.thisNameOff);
     }
 
     // Unresolved-`new` sites: a class named by a `new` that is neither registered nor the class being
@@ -8669,7 +8682,7 @@ public final class Loader
         Uart.write(Magic.bytes("  NEWWATCH new "));
         printNameAt(gView.base, nameOff);
         Uart.write(Magic.bytes(" in "));
-        printNameAt(gView.base, gThisNameOff);
+        printNameAt(gView.base, gView.thisNameOff);
         if (size >= 0)
         {
             Uart.write(Magic.bytes(" -> INLINE size="));

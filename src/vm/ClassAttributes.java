@@ -58,7 +58,7 @@ final class ClassAttributes
         int nameOff = Reflection.reflEntry(rgIndex).nameOff;
         int descOff = Reflection.reflEntry(rgIndex).descOff;
         Loader.parseForMethods(base, Loader.blobLenOf(base));
-        Address p = Loader.gMethodsStart;
+        Address p = Loader.gView.methodsStart;
         int mcount = u2(p);
         p = p.plus(2);
         int m = 0;
@@ -577,7 +577,7 @@ final class ClassAttributes
     static Address classAttrsPos(Address base)
     {
         Loader.parseForMethods(base, Loader.blobLenOf(base));
-        Address p = Loader.gMethodsStart;
+        Address p = Loader.gView.methodsStart;
         int mcount = u2(p);
         p = p.plus(2);
         int m = 0;

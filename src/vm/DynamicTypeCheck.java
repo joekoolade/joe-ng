@@ -45,7 +45,7 @@ final class DynamicTypeCheck
             Address tib = ArrayTypes.arrayTibOfDesc(Loader.gView.base, nameOff);
             return tib.isZero() ? Address.zero() : tib.loadAddress();  // the array Type (checkcast/instanceof target)
         }
-        if (Loader.utf8EqAt(Loader.gView.base, nameOff, Loader.gView.base, Loader.gThisNameOff))
+        if (Loader.utf8EqAt(Loader.gView.base, nameOff, Loader.gView.base, Loader.gView.thisNameOff))
         {
             return Loader.gType;
         }
