@@ -11,6 +11,8 @@
  */
 package board.bcm2711;
 
+import board.Uart;
+
 import magic.Address;
 import magic.Magic;
 import vm.VM;

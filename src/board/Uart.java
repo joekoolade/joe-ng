@@ -9,64 +9,49 @@
  *
  * Created: 2026-07-18
  */
-package board.bcm2711;
+package board;
 
-import board.Board;
+import board.bcm2711.Gic;
 import magic.Address;
 import magic.Magic;
 
 /**
- * Mini-UART (AUX / UART1) console driver, written as ordinary Java and compiled
- * to A64 by our baseline compiler. Interrupt-driven in both directions once
- * {@link #enableInterrupts} has run (see the TX/RX ring section); polled before. Splitting the boot's UART logic into real
- * methods (called across classes from {@code vm.VM}) is the M2 exercise: genuine
- * {@code BL} calls with arguments and returns, laid out and relocated by the
- * writer (PLAN.md §4 M2).
+ * The console: the board-neutral half of the serial driver -- CRLF, the TX/RX rings, the console and ring locks,
+ * the interrupt body. Interrupt-driven in both directions once {@link #enableInterrupts} has run (see the TX/RX
+ * ring section); polled before.
+ *
+ * <p><b>The hardware is the board's.</b> The seven register-level operations ({@code console*} in
+ * {@link Platform#OPS}: init, TX ready, RX ready, get, put, interrupt enables, interrupt number) are methods of the
+ * {@code --board} platform class -- the Pi's mini-UART ({@code board.bcm2711.MiniUart}), QEMU virt's PL011
+ * ({@code board.arm.Pl011}) -- and this class calls them through the addresses the writer stores in the
+ * {@code hw*Addr} fields below. So nothing here tests the board, and an image carries only its own UART driver.
+ * The fields are image statics, filled at build time: they are valid from the first boot instruction, before any
+ * {@code <clinit>}, which is when {@link #putc} must already work.
  */
 public final class Uart
 {
     private Uart() {}
 
-    /** Bring up the mini-UART: GPIO14/15 → ALT5, 8-bit, clear FIFOs, enable tx/rx. */
+    /** The board's console operations ({@link Platform#OPS}); filled by the writer, never written at run time. */
+    public static long hwInitAddr;        // consoleInit()V
+    public static long hwTxReadyAddr;     // consoleTxReady()J: 1 = the TX FIFO can take a byte
+    public static long hwRxReadyAddr;     // consoleRxReady()J: 1 = a received byte is waiting
+    public static long hwGetAddr;         // consoleGet()J: the received byte
+    public static long hwPutAddr;         // consolePut(J)V: send one byte
+    public static long hwSetIrqAddr;      // consoleSetIrq(J)V: interrupt enables, as IRQ_RX | IRQ_TX
+    public static long hwSpiAddr;         // consoleSpi()J: the INTID the UART raises
+
+    /** Interrupt-enable bits {@code consoleSetIrq} takes: receive, and transmit-has-room. */
+    public static final int IRQ_RX = 0x01;
+    public static final int IRQ_TX = 0x02;
+
+    /** Bring up the board's console UART, polled, interrupts off. */
     public static void init()
     {
-        if (Board.isVirt())
-        {
-            initPl011();
-            return;
-        }
-        Address.fromLong(Bcm2711.AUX_ENABLES).store(1);
-        Address.fromLong(Bcm2711.AUX_MU_CNTL_REG).store(0);
-        Address.fromLong(Bcm2711.AUX_MU_IER_REG).store(0);
-        Address.fromLong(Bcm2711.AUX_MU_LCR_REG).store(3);
-        Address.fromLong(Bcm2711.AUX_MU_MCR_REG).store(0);
-        Address.fromLong(Bcm2711.AUX_MU_IIR_REG).store(0xC6);
-        Address.fromLong(Bcm2711.AUX_MU_BAUD_REG).store(baudDivisor());
-        Address.fromLong(Bcm2711.GPFSEL1).store((Bcm2711.ALT5 << 12) | (Bcm2711.ALT5 << 15));
-        Address.fromLong(Bcm2711.GPIO_PUP_PDN_CNTRL_REG0).store(0);
-        Address.fromLong(Bcm2711.AUX_MU_CNTL_REG).store(3);
+        long u = Magic.call0(hwInitAddr);
     }
 
-    /**
-     * Baud divisor for 115200, computed from the core clock the firmware reports:
-     * mini-UART baud = core_clock / (8*(divisor+1)), so divisor = hz/921600 - 1.
-     * The core clock is not something we can assume — it differed across firmware
-     * builds and even SD cards on the same board — so we ask rather than guess. If
-     * the mailbox does not answer (or reports an implausible rate) we fall back to
-     * the compiled-in {@link Bcm2711#BAUD_115200}.
-     */
-    private static int baudDivisor()
-    {
-        int hz = Mailbox.coreClockHz();
-        coreHz = hz;                                     // kept so boot can report it
-        if (hz < 10_000_000 || hz > 1_500_000_000)
-        {
-            return Bcm2711.BAUD_115200;
-        }
-        return hz / (8 * 115200) - 1;
-    }
-
-    /** Core clock the mailbox reported at init, in Hz (0 = no answer, divisor fell back). */
+    /** Core clock the board's UART init measured, in Hz, for the boot's {@code core NNNMHz} line (0 = none). */
     public static int coreHz;
 
     /**
@@ -175,7 +160,7 @@ public final class Uart
         rxDropped = 0;
         irqCount = 0;
         Address.fromLong(RING_LOCK).store(0);            // raw scratch: nothing else zeroes it
-        ier = Bcm2711.IER_RX_ENABLE;
+        ier = IRQ_RX;
         hwSetIer(ier);
         Gic.initSpi(spi());
         irqLive = 1;
@@ -258,14 +243,10 @@ public final class Uart
         return irqLive != 0;
     }
 
-    /** LSR bit5: the TX FIFO can take a byte. */
+    /** The TX FIFO can take a byte. */
     private static boolean txReady()
     {
-        if (Board.isVirt())
-        {
-            return (Address.fromLong(Board.VIRT_PL011 + PL011_FR).loadInt() & FR_TXFF) == 0;
-        }
-        return (Address.fromLong(Bcm2711.AUX_MU_LSR_REG).loadInt() & (1 << Bcm2711.LSR_TX_EMPTY)) != 0;
+        return Magic.call0(hwTxReadyAddr) != 0L;
     }
 
     /** Move queued bytes into the TX FIFO while it has room. Ring lock held. */
@@ -312,10 +293,10 @@ public final class Uart
     /** TX interrupt on exactly while bytes are queued; RX always. Writes IER only on a change. Ring lock held. */
     private static void setIer()
     {
-        int want = Bcm2711.IER_RX_ENABLE;
+        int want = IRQ_RX;
         if (txHead != txTail)
         {
-            want = want | Bcm2711.IER_TX_ENABLE;
+            want = want | IRQ_TX;
         }
         if (want != ier)
         {
@@ -420,85 +401,32 @@ public final class Uart
         }
     }
 
-    // ----- the two UARTs: the Pi's mini-UART, and QEMU virt's PL011 -------------------------------------------------
-    // Everything above is the ring/lock/IRQ logic, shared; these are the only places that touch registers, so the
-    // board choice is made here. The PL011 runs with its FIFOs OFF (LCR_H.FEN = 0): every received character then
-    // raises RXRIS on its own, the mini-UART's behaviour the ring code was written against.
+    // ----- the board's UART: register access, through the platform's console operations -----------------------
 
-    private static final long PL011_DR = 0x00;          // data
-    private static final long PL011_FR = 0x18;          // flags
-    private static final long PL011_LCR_H = 0x2C;       // line control
-    private static final long PL011_CR = 0x30;          // control
-    private static final long PL011_IMSC = 0x38;        // interrupt mask set/clear
-    private static final long PL011_ICR = 0x44;         // interrupt clear
-    private static final int FR_RXFE = 0x10;            // receive FIFO empty
-    private static final int FR_TXFF = 0x20;            // transmit FIFO full
-    private static final int IMSC_RX = 0x50;            // RXIM | RTIM
-    private static final int IMSC_TX = 0x20;            // TXIM
-
-    /** PL011 on QEMU virt: 8N1, FIFOs off, interrupts masked; QEMU ignores the baud divisors, so none is set. */
-    private static void initPl011()
-    {
-        long b = Board.VIRT_PL011;
-        Address.fromLong(b + PL011_CR).store(0);
-        Address.fromLong(b + PL011_LCR_H).store(0x60);                // WLEN = 8 bits, FEN = 0
-        Address.fromLong(b + PL011_IMSC).store(0);
-        Address.fromLong(b + PL011_ICR).store(0x7FF);
-        Address.fromLong(b + PL011_CR).store(0x301);                  // UARTEN | TXE | RXE
-        coreHz = 0;                                                   // no VPU clock: boot prints "core 0MHz"
-    }
-
-    /** The interrupt the console UART raises: the mini-UART's AUX SPI, or the PL011's. */
+    /** The interrupt the console UART raises (the mini-UART's AUX SPI, the PL011's SPI 1, ...). */
     public static int spi()
     {
-        return Board.isVirt() ? Board.VIRT_UART_SPI : Bcm2711.AUX_SPI;
+        return (int) Magic.call0(hwSpiAddr);
     }
 
     private static boolean hwRxReady()
     {
-        if (Board.isVirt())
-        {
-            return (Address.fromLong(Board.VIRT_PL011 + PL011_FR).loadInt() & FR_RXFE) == 0;
-        }
-        return (Address.fromLong(Bcm2711.AUX_MU_LSR_REG).loadInt() & (1 << Bcm2711.LSR_RX_READY)) != 0;
+        return Magic.call0(hwRxReadyAddr) != 0L;
     }
 
     private static int hwGet()
     {
-        if (Board.isVirt())
-        {
-            return Address.fromLong(Board.VIRT_PL011 + PL011_DR).loadInt() & 0xFF;
-        }
-        return Address.fromLong(Bcm2711.AUX_MU_IO_REG).loadInt() & 0xFF;
+        return (int) Magic.call0(hwGetAddr) & 0xFF;
     }
 
     private static void hwPut(int c)
     {
-        if (Board.isVirt())
-        {
-            Address.fromLong(Board.VIRT_PL011 + PL011_DR).store(c & 0xFF);
-            return;
-        }
-        Address.fromLong(Bcm2711.AUX_MU_IO_REG).store((byte) c);
+        long u = Magic.call2(hwPutAddr, c & 0xFFL, 0L);
     }
 
-    /** Write the interrupt enables: {@code want} in the mini-UART's IER bits, translated for the PL011. */
+    /** Write the interrupt enables, {@link #IRQ_RX} | {@link #IRQ_TX}. */
     private static void hwSetIer(int want)
     {
-        if (!Board.isVirt())
-        {
-            Address.fromLong(Bcm2711.AUX_MU_IER_REG).store(want);
-            return;
-        }
-        int imsc = 0;
-        if ((want & Bcm2711.IER_RX_ENABLE) != 0)
-        {
-            imsc = imsc | IMSC_RX;
-        }
-        if ((want & Bcm2711.IER_TX_ENABLE) != 0)
-        {
-            imsc = imsc | IMSC_TX;
-        }
-        Address.fromLong(Board.VIRT_PL011 + PL011_IMSC).store(imsc);
+        long u = Magic.call2(hwSetIrqAddr, want, 0L);
     }
 }

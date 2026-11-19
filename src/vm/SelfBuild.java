@@ -17,7 +17,7 @@ import board.bcm2711.Emmc;
 import board.bcm2711.Fat32;
 import board.bcm2711.Gic;
 import board.bcm2711.Reset;
-import board.bcm2711.Uart;
+import board.Uart;
 import classfile.ClassReader;
 import compiler.Baseline;
 import magic.Address;
@@ -3329,7 +3329,7 @@ final class SelfBuild
      */
     private static boolean selfBuildClosureAndRun()
     {
-        cB = MetalClassModel.bytesOf(Magic.bytes("board/bcm2711/Uart"));
+        cB = MetalClassModel.bytesOf(Magic.bytes("board/Uart"));
         cOff = new int[ClassReader.cpCount(cB)];
         cTag = new int[cOff.length];
         cAfterCp = ClassReader.constantPool(cB, cOff, cTag);
@@ -3778,7 +3778,7 @@ final class SelfBuild
      */
     private static boolean relocatingCompileReady()
     {
-        byte[] b = MetalClassModel.bytesOf(Magic.bytes("board/bcm2711/Uart"));
+        byte[] b = MetalClassModel.bytesOf(Magic.bytes("board/Uart"));
         int[] off = new int[ClassReader.cpCount(b)];
         int[] tag = new int[off.length];
         int afterCp = ClassReader.constantPool(b, off, tag);

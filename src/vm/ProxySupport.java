@@ -12,7 +12,7 @@
 package vm;
 
 import asm.A64Enc;
-import board.bcm2711.Uart;
+import board.Uart;
 import magic.Address;
 import magic.AddressArray;
 import magic.Magic;

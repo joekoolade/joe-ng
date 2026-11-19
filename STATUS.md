@@ -4,6 +4,22 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **PLATFORM, INCREMENT P2: the console -- `board.Uart` neutral, the UART register half per board (2026-11-19).**
+  - **`board/bcm2711/Uart.java` -> `board/Uart.java`**, now board-neutral: CRLF, TX/RX rings, console and ring locks,
+    the interrupt body. Its seven register-level operations are **`console*` entries in `board.Platform.OPS`**
+    (init, TX ready, RX ready, get, put, interrupt enables, interrupt number), implemented by each platform class and
+    called through `Uart.hw*Addr` image statics the writer fills (`Magic.call0`/`call2`) -- valid from the first boot
+    instruction, before any `<clinit>`. Uart's seven `isVirt()` branches are gone.
+  - **Drivers:** `board.bcm2711.MiniUart` (the mini-UART + mailbox baud divisor) and `board.arm.Pl011` (base passed
+    in; shared Arm part, QEMU virt's console today). Interrupt-enable bits are neutral `Uart.IRQ_RX`/`IRQ_TX`.
+  - **Each image carries only its own UART** (`strings`): Pi image MiniUart 7 / Pl011 0, virt image 0 / 6.
+  - 53 files repointed `board.bcm2711.Uart` -> `board.Uart` (mechanical); `SelfBuild`'s closure tests and
+    `ClassReaderTest` name `board/Uart`.
+  - **Validated:** `make test` + overlaycheck OK; virt solo TickProbe/NetTcpProbe/SslEngineProbe/RunProbe/ExitProbe/
+    ChmRaceProbe/SpawnRaceProbe 7/7, a 20-probe virt run in 4 batches 20/20; virt `stdin=uart` StdinDemo echoes
+    typed lines and ends on `quit` (console RX through the PL011 ops); raspi4b TickProbe/SslEngineProbe/RunProbe/
+    ExitProbe/ChmRaceProbe 5/5. Not yet on a Pi.
+  - `isVirt()` sites left: `net/Link` 7 (P4), `Gic` 3 + `VMScheduler` 2 + `VM` 3 (P3), `Baseline` 4 (P5).
 - **PLATFORM, INCREMENT P1: board natives bound per board at build time -- `board.Platform` (2026-11-19).** First step
   of moving board choice out of run-time `if (Board.isVirt())` (32 sites) and into the image build, so a third board
   (a PC / x86-64 target is planned) adds a class, not a branch at every site.
@@ -23,7 +39,8 @@ Newest entries are at the top.
   - **Validated:** virt Regress TickProbe/NetTcpProbe/SslEngineProbe/RunProbe/ExitProbe 5/5; raspi4b
     TickProbe/SslEngineProbe/RunProbe/ExitProbe 4/4; virt SecureRandomDemo `/dev/random` reads differ, identical to
     main (same 8 loader-lock warnings); virt BootFsDemo `SD card init failed (step -100)`; `make test` + overlaycheck
-    OK. Not yet on a Pi.
+    OK. **PI-VALIDATED (boot):** build `68d72b1d93d5cb0b`, NetDemo HTTP 200 over WiFi, main returned normally --
+    NetDemo does not reach the entropy/block/reboot operations, so those are QEMU-validated only.
   - Not this increment: `SelfBuild` still calls `Emmc`/`Fat32` directly (so Emmc stays in a virt image); console
     (`Uart`, P2), interrupts/timer (P3), net device (P4), compiler timer lowering (P5); PSCI reset on virt.
 - **TickProbe on virt: the board's own GIC, and `MetalBoard.isVirt()` (2026-11-19).** demo/TickProbe printed its gate

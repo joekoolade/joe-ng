@@ -14,7 +14,7 @@ package vm;
 import magic.Address;
 import magic.Magic;
 import magic.ObjectReference;
-import board.bcm2711.Uart;
+import board.Uart;
 import objectmodel.ObjectModel;
 import static vm.VM.*;   // GC roots + shared state stay in VM: the task table (stale-root reaping),
                          // staticsStart/End, STACK_TOP, gcLog/reclaimed, and printHex — reached by simple name.

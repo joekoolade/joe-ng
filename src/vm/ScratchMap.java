@@ -12,7 +12,7 @@
 package vm;
 
 import magic.Magic;
-import board.bcm2711.Uart;
+import board.Uart;
 
 /**
  * The fixed-scratch memory map, and a boot-time assertion that no two regions overlap.

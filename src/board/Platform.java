@@ -13,7 +13,7 @@ package board;
 
 /**
  * The contract every board's platform class meets: the operations whose implementation depends on the machine
- * (block device, entropy, reboot, ...), as STATIC methods of one class per board -- {@code board.bcm2711.Bcm2711Platform},
+ * (block device, entropy, reboot, the console UART, ...), as STATIC methods of one class per board -- {@code board.bcm2711.Bcm2711Platform},
  * {@code board.virt.VirtPlatform}, and later a PC's.
  *
  * <p><b>The choice is made when the image is built, not when it runs.</b> {@code BuildRuntimeImage --board}
@@ -42,8 +42,10 @@ public final class Platform
     public static final long BLOCK_NO_DEVICE = -100L;
 
     /**
-     * The operations: method name + descriptor in the platform class, and the {@code vm/VM} static that holds
-     * its compiled address (what {@code Loader}'s native lookup hands out, or what the VM calls through).
+     * The operations: method name + descriptor in the platform class, and the static that holds its compiled
+     * address (what {@code Loader}'s native lookup hands out, or what the VM calls through). Every argument and
+     * result is a {@code long}: these are reached by {@code Magic.call0}/{@code call2}, which pass and return
+     * whole registers.
      */
     public static final String[][] OPS = {
         { "boardId()J",                                   "vm/VM.boardIdAddr" },            // MetalBoard.boardId0
@@ -54,6 +56,14 @@ public final class Platform
         { "blockWrite(JLmagic/ObjectReference;JJ)J",      "vm/VM.blockWriteAddr" },         // MetalBlock.write0
         { "entropy(Lmagic/ObjectReference;J)J",           "vm/VM.hwEntropyAddr" },          // MetalRamfs.hwEntropy0
         { "entropyReport()V",                             "vm/VM.entropyReportAddr" },      // the boot "hw rng:" line
+        // The console UART's register half; board.Uart (rings, locks, interrupt body) calls these.
+        { "consoleInit()V",                               "board/Uart.hwInitAddr" },
+        { "consoleTxReady()J",                            "board/Uart.hwTxReadyAddr" },
+        { "consoleRxReady()J",                            "board/Uart.hwRxReadyAddr" },
+        { "consoleGet()J",                                "board/Uart.hwGetAddr" },
+        { "consolePut(J)V",                               "board/Uart.hwPutAddr" },
+        { "consoleSetIrq(J)V",                            "board/Uart.hwSetIrqAddr" },
+        { "consoleSpi()J",                                "board/Uart.hwSpiAddr" },
     };
 
     /** The platform class (internal name) for a {@code --board} name, or null for an unknown board. */

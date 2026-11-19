@@ -36,7 +36,7 @@ public final class ClassReaderTest
         check(dir, "vm/Guest", false);
         check(dir, "vm/Beta", false);        // two methods; greet() is not at slot 0
         check(dir, "vm/Greeter", true);      // an interface: abstract methods, no code
-        check(dir, "board/bcm2711/Uart", false);
+        check(dir, "board/Uart", false);
         checkLinesByBci(dir);
         T.summary("class-reader");
     }

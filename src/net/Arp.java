@@ -61,12 +61,12 @@ public final class Arp
             int et = (eth.plus(12).loadUnsignedByte() & 0xFF) << 8 | (eth.plus(13).loadUnsignedByte() & 0xFF);
             if ((eth.loadUnsignedByte() & 0xFF) != 0xFF)       // DIAG: print only UNICAST frames (skip the bcast flood)
             {
-                board.bcm2711.Uart.write(Magic.bytes("  uni et="));
+                board.Uart.write(Magic.bytes("  uni et="));
                 VM.printHex(et);
-                board.bcm2711.Uart.write(Magic.bytes(" dst="));
+                board.Uart.write(Magic.bytes(" dst="));
                 Ip.printHex2(eth.loadUnsignedByte() & 0xFF);
                 Ip.printHex2(eth.plus(5).loadUnsignedByte() & 0xFF);
-                board.bcm2711.Uart.putc(0x0A);
+                board.Uart.putc(0x0A);
             }
             if (et != 0x0806)
             {

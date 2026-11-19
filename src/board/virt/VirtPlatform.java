@@ -11,8 +11,10 @@
  */
 package board.virt;
 
+import board.Board;
 import board.Platform;
-import board.bcm2711.Uart;
+import board.Uart;
+import board.arm.Pl011;
 import magic.Magic;
 import magic.ObjectReference;
 import objectmodel.ObjectModel;
@@ -87,5 +89,43 @@ public final class VirtPlatform
     public static void entropyReport()
     {
         VirtioRng.report();
+    }
+
+    // ----- the console: the PL011 --------------------------------------------------------------------------
+
+    public static void consoleInit()
+    {
+        Pl011.init(Board.VIRT_PL011);
+    }
+
+    public static long consoleTxReady()
+    {
+        return Pl011.txReady(Board.VIRT_PL011) ? 1L : 0L;
+    }
+
+    public static long consoleRxReady()
+    {
+        return Pl011.rxReady(Board.VIRT_PL011) ? 1L : 0L;
+    }
+
+    public static long consoleGet()
+    {
+        return Pl011.get(Board.VIRT_PL011);
+    }
+
+    public static void consolePut(long c)
+    {
+        Pl011.put(Board.VIRT_PL011, (int) c);
+    }
+
+    public static void consoleSetIrq(long want)
+    {
+        Pl011.setIrq(Board.VIRT_PL011, (int) want);
+    }
+
+    /** The PL011's SPI 1, INTID 33. */
+    public static long consoleSpi()
+    {
+        return Board.VIRT_UART_SPI;
     }
 }

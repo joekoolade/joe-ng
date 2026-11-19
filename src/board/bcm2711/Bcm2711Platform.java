@@ -12,6 +12,7 @@
 package board.bcm2711;
 
 import board.Platform;
+import board.Uart;
 import magic.ObjectReference;
 import objectmodel.ObjectModel;
 
@@ -94,5 +95,43 @@ public final class Bcm2711Platform
     public static void entropyReport()
     {
         Rng.report();
+    }
+
+    // ----- the console: the mini-UART ------------------------------------------------------------------------
+
+    public static void consoleInit()
+    {
+        MiniUart.init();
+    }
+
+    public static long consoleTxReady()
+    {
+        return MiniUart.txReady() ? 1L : 0L;
+    }
+
+    public static long consoleRxReady()
+    {
+        return MiniUart.rxReady() ? 1L : 0L;
+    }
+
+    public static long consoleGet()
+    {
+        return MiniUart.get();
+    }
+
+    public static void consolePut(long c)
+    {
+        MiniUart.put((int) c);
+    }
+
+    public static void consoleSetIrq(long want)
+    {
+        MiniUart.setIrq((int) want);
+    }
+
+    /** The AUX interrupt, SPI 125. */
+    public static long consoleSpi()
+    {
+        return Bcm2711.AUX_SPI;
     }
 }

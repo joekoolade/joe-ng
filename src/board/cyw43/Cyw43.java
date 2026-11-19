@@ -125,11 +125,11 @@ public final class Cyw43
         log(Magic.bytes("chipcommon idword="), idword);
         int chipId = idword & 0xFFFF;
         int chipRev = (idword >> 16) & 0xF;
-        board.bcm2711.Uart.write(Magic.bytes("wifi: chip id "));
+        board.Uart.write(Magic.bytes("wifi: chip id "));
         VM.printHex((long) chipId);
-        board.bcm2711.Uart.write(Magic.bytes(" rev "));
+        board.Uart.write(Magic.bytes(" rev "));
         VM.printDec(chipRev);
-        board.bcm2711.Uart.putc(0x0A);
+        board.Uart.putc(0x0A);
 
         // dumpErom();  (M1b-1 done — core map decoded: ARM CR4 wrapper 0x18102000, RAM at 0x0/0x180000/0x200000)
         // ramTest();   (M1b-2a done — TCM writable at rambase 0x198000 once the CR4 is out of reset + CPUHALT)
@@ -167,9 +167,9 @@ public final class Cyw43
             i = i + 1;
         }
         log(Magic.bytes("tcm ramsize="), ramsize);
-        board.bcm2711.Uart.write(Magic.bytes("  fw end="));
+        board.Uart.write(Magic.bytes("  fw end="));
         VM.printHex(RAMBASE + 0x94C1DL);                 // where the 609 KB firmware ends (for NVRAM-fit check)
-        board.bcm2711.Uart.putc(0x0A);
+        board.Uart.putc(0x0A);
         return ramsize;
     }
 
@@ -186,7 +186,7 @@ public final class Cyw43
         Address e = VM.fileFind(Magic.bytes("/lib/firmware/brcm/brcmfmac43455-sdio.bin"));
         if (e.isZero())
         {
-            board.bcm2711.Uart.write(Magic.bytes("  fw NOT FOUND in ramfs\n"));
+            board.Uart.write(Magic.bytes("  fw NOT FOUND in ramfs\n"));
             return 0;
         }
         Address src = e.plus(16L).loadAddress();                // firmware bytes (baked into the image)
@@ -200,12 +200,12 @@ public final class Cyw43
         int first = src.loadInt();                   // the ARM reset vector (first word)
         if (!bpWrite(RAMBASE, src, len))
         {
-            board.bcm2711.Uart.write(Magic.bytes("  fw upload FAILED\n"));
+            board.Uart.write(Magic.bytes("  fw upload FAILED\n"));
             return 0;
         }
         int rb0 = bpRead32(RAMBASE);
         log(Magic.bytes("fw[0] readback="), rb0);
-        board.bcm2711.Uart.write(rb0 == first ? Magic.bytes("  fw upload OK\n") : Magic.bytes("  fw upload MISMATCH\n"));
+        board.Uart.write(rb0 == first ? Magic.bytes("  fw upload OK\n") : Magic.bytes("  fw upload MISMATCH\n"));
         return rb0 == first ? first : 0;
     }
 
@@ -219,7 +219,7 @@ public final class Cyw43
         Address e = VM.fileFind(Magic.bytes("/lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.txt"));
         if (e.isZero())
         {
-            board.bcm2711.Uart.write(Magic.bytes("  nvram NOT FOUND\n"));
+            board.Uart.write(Magic.bytes("  nvram NOT FOUND\n"));
             return false;
         }
         Address src = e.plus(16L).loadAddress();
@@ -228,12 +228,12 @@ public final class Cyw43
         int varsz = processNvram(src, srcLen, buf);
         long addr = RAMBASE + (long) ramsize - (long) varsz;
         log(Magic.bytes("nvram varsz="), varsz);
-        board.bcm2711.Uart.write(Magic.bytes("  nvram addr="));
+        board.Uart.write(Magic.bytes("  nvram addr="));
         VM.printHex(addr);
-        board.bcm2711.Uart.putc(0x0A);
+        board.Uart.putc(0x0A);
         if (!bpWrite(addr, buf, varsz))
         {
-            board.bcm2711.Uart.write(Magic.bytes("  nvram upload FAILED\n"));
+            board.Uart.write(Magic.bytes("  nvram upload FAILED\n"));
             return false;
         }
         int varsizew = varsz / 4;
@@ -314,10 +314,10 @@ public final class Cyw43
         log(Magic.bytes("after release ior="), ior);
         if ((ior & (1 << F2)) == 0)
         {
-            board.bcm2711.Uart.write(Magic.bytes("wifi: F2 not ready (firmware did not come up)\n"));
+            board.Uart.write(Magic.bytes("wifi: F2 not ready (firmware did not come up)\n"));
             return;
         }
-        board.bcm2711.Uart.write(Magic.bytes("wifi: FIRMWARE UP (F2 ready)\n"));
+        board.Uart.write(Magic.bytes("wifi: FIRMWARE UP (F2 ready)\n"));
         requestHtClock();
         setF2Watermarks();
         readFirstFrame();                                // M1c-1: dump the firmware's first SDPCM frame
@@ -382,7 +382,7 @@ public final class Cyw43
         int flen = waitFrameIrq(rb, 256, 1000);          // block until the firmware's first SDPCM frame arrives
         if (flen == 0)
         {
-            board.bcm2711.Uart.write(Magic.bytes("  F2 first frame TIMEOUT\n"));
+            board.Uart.write(Magic.bytes("  F2 first frame TIMEOUT\n"));
             return;
         }
         int hw = rb.loadInt();                       // [len:16][~len:16]
@@ -393,7 +393,7 @@ public final class Cyw43
         log(Magic.bytes("rx hw="), hw);
         log(Magic.bytes("rx sw="), sw);
         log(Magic.bytes("rx sw2="), sw2);
-        board.bcm2711.Uart.write(((len ^ nlen) & 0xFFFF) == 0xFFFF
+        board.Uart.write(((len ^ nlen) & 0xFFFF) == 0xFFFF
                 ? Magic.bytes("  SDPCM frame valid (len/~len match)\n")
                 : Magic.bytes("  SDPCM header invalid (len/~len mismatch)\n"));
 
@@ -429,7 +429,7 @@ public final class Cyw43
         store16(tx.plus(2), ~frameLen);                      //   ~len
         if (!Sdio.cmd53Write(F2, 0, true, tx.toLong(), 1, (frameLen + 3) & ~3))
         {
-            board.bcm2711.Uart.write(Magic.bytes("  ioctl tx FAILED\n"));
+            board.Uart.write(Magic.bytes("  ioctl tx FAILED\n"));
             return;
         }
         txSeq = txSeq + 1;
@@ -439,13 +439,13 @@ public final class Cyw43
         int rlen = recvCtrl(rx, 1024, 1);                // ver uses BCDC id 1
         if (rlen == 0)
         {
-            board.bcm2711.Uart.write(Magic.bytes("  no ioctl response\n"));
+            board.Uart.write(Magic.bytes("  no ioctl response\n"));
             return;
         }
         int doff = rx.plus(7).loadUnsignedByte() & 0xFF;           // response data offset
         log(Magic.bytes("resp len="), rlen);
         log(Magic.bytes("resp doff="), doff);
-        board.bcm2711.Uart.write(Magic.bytes("wifi: ver = "));
+        board.Uart.write(Magic.bytes("wifi: ver = "));
         dumpAscii(rx.plus(doff + 16), 180);                  // value = after sdpcm(doff) + bcdc(16)
 
         readMac();                                       // now, while the firmware is idle: read after link-up
@@ -524,7 +524,7 @@ public final class Cyw43
             if (!waitFrameWarned)
             {
                 waitFrameWarned = true;
-                board.bcm2711.Uart.write(Magic.bytes("wifi: BUG waitFrameIrq called after the rx task started\n"));
+                board.Uart.write(Magic.bytes("wifi: BUG waitFrameIrq called after the rx task started\n"));
             }
             vm.VMScheduler.kernelSleep(ms);              // as if nothing arrived: callers loop on 0
             return 0;
@@ -603,7 +603,7 @@ public final class Cyw43
         Address e = VM.fileFind(Magic.bytes("/etc/wifi.conf"));
         if (e.isZero())
         {
-            board.bcm2711.Uart.write(Magic.bytes("  no /etc/wifi.conf\n"));
+            board.Uart.write(Magic.bytes("  no /etc/wifi.conf\n"));
             return;
         }
         Address conf = e.plus(16L).loadAddress();
@@ -614,24 +614,24 @@ public final class Cyw43
         int pl = confValue(conf, flen, Magic.bytes("psk"), psk);
         if (sl == 0)
         {
-            board.bcm2711.Uart.write(Magic.bytes("  wifi.conf: no ssid\n"));
+            board.Uart.write(Magic.bytes("  wifi.conf: no ssid\n"));
             return;
         }
         staSsid = ssid;                                  // kept for the WPA2 PMK (PBKDF2 salt = SSID)
         staSsidLen = sl;
         staPsk = psk;
         staPskLen = pl;
-        board.bcm2711.Uart.write(Magic.bytes("wifi: join "));
+        board.Uart.write(Magic.bytes("wifi: join "));
         dumpRaw(ssid, sl);
 
         if (pl > 0)
         {
-            board.bcm2711.Uart.write(Magic.bytes("  security: WPA2-PSK\n"));
+            board.Uart.write(Magic.bytes("  security: WPA2-PSK\n"));
             setupWpa2(psk, pl);
         }
         else
         {
-            board.bcm2711.Uart.write(Magic.bytes("  security: open\n"));
+            board.Uart.write(Magic.bytes("  security: open\n"));
             setInt(WLC_SET_INFRA, 1);
             setInt(WLC_SET_WSEC, 0);
             setInt(WLC_SET_AUTH, 0);
@@ -652,7 +652,7 @@ public final class Cyw43
         {
             if (wpaAttempts > 0)
             {
-                board.bcm2711.Uart.write(Magic.bytes("wifi: join again\n"));
+                board.Uart.write(Magic.bytes("wifi: join again\n"));
                 readCtrl(sendBcdc(WLC_DISASSOC, Address.zero(), 0, true));
                 VM.delayMs(1000);
             }
@@ -665,20 +665,20 @@ public final class Cyw43
             return;
         }
         wpaJoinMs = (int) ((Magic.readCNTPCT_EL0() - joinT) * 1000L / Magic.readCNTFRQ_EL0());
-        board.bcm2711.Uart.write(Magic.bytes("wifi: join "));
+        board.Uart.write(Magic.bytes("wifi: join "));
         VM.printDec(wpaJoinMs);
-        board.bcm2711.Uart.write(Magic.bytes(" ms, eapol msg1 x"));
+        board.Uart.write(Magic.bytes(" ms, eapol msg1 x"));
         VM.printDec(wpaMsg1);
-        board.bcm2711.Uart.write(Magic.bytes(", msg2 x"));
+        board.Uart.write(Magic.bytes(", msg2 x"));
         VM.printDec(wpaMsg2);
-        board.bcm2711.Uart.write(Magic.bytes(", kept from the join wait "));
+        board.Uart.write(Magic.bytes(", kept from the join wait "));
         VM.printDec(wpaHeld);
-        board.bcm2711.Uart.write(Magic.bytes(", attempts "));
+        board.Uart.write(Magic.bytes(", attempts "));
         VM.printDec(wpaAttempts);
-        board.bcm2711.Uart.putc(0x0A);
+        board.Uart.putc(0x0A);
         if (staPskLen > 0 && WPA2_OFFLOAD)
         {
-            board.bcm2711.Uart.write(Magic.bytes("wifi: offload link up (fw ran the 4-way)\n"));
+            board.Uart.write(Magic.bytes("wifi: offload link up (fw ran the 4-way)\n"));
         }
         VM.delayMs(500);
         dhcp();
@@ -696,7 +696,7 @@ public final class Cyw43
     {
         readCtrl(sendBcdc(WLC_SET_SSID, ss, 36, true));
         boolean linked = waitLink();
-        board.bcm2711.Uart.write(linked ? Magic.bytes("wifi: JOINED\n") : Magic.bytes("wifi: join timeout\n"));
+        board.Uart.write(linked ? Magic.bytes("wifi: JOINED\n") : Magic.bytes("wifi: join timeout\n"));
         if (!linked)
         {
             return false;
@@ -710,13 +710,13 @@ public final class Cyw43
             readMac();                                   // the boot-time read failed: once more, before fourWay
             if (!macKnown())
             {
-                board.bcm2711.Uart.write(Magic.bytes("wifi: no mac, cannot key\n"));
+                board.Uart.write(Magic.bytes("wifi: no mac, cannot key\n"));
                 return false;
             }
         }
         if (!fourWay())
         {
-            board.bcm2711.Uart.write(Magic.bytes("wifi: 4-way failed\n"));
+            board.Uart.write(Magic.bytes("wifi: 4-way failed\n"));
             return false;
         }
         return true;
@@ -784,12 +784,12 @@ public final class Cyw43
         // this and javax.crypto.SecretKeyFactory. It also builds ONE Hmac and reuses it, where the
         // one-shot it replaced re-padded the key on every one of these 4096 iterations.
         crypto.Pbkdf2.derive(crypto.Digest.SHA1, pass, pass.length, ssid, ssid.length, 4096, staPmk, 32);
-        board.bcm2711.Uart.write(Magic.bytes("wifi: pmk ready\n"));
+        board.Uart.write(Magic.bytes("wifi: pmk ready\n"));
         if (WPA2_OFFLOAD)
         {
             iovarInt(Magic.bytes("sup_wpa"), 1);         // enable the firmware supplicant (may be a no-op)
             setPmk(staPmk);                              // WLC_SET_WSEC_PMK: the chip runs the 4-way itself
-            board.bcm2711.Uart.write(Magic.bytes("wifi: offload pmk set\n"));
+            board.Uart.write(Magic.bytes("wifi: offload pmk set\n"));
         }
     }
 
@@ -829,10 +829,10 @@ public final class Cyw43
         Address m1 = recvEapol(apMac);                      // msg1
         if (m1.isZero())
         {
-            board.bcm2711.Uart.write(Magic.bytes("wifi: no eapol msg1\n"));
+            board.Uart.write(Magic.bytes("wifi: no eapol msg1\n"));
             return false;
         }
-        board.bcm2711.Uart.write(Magic.bytes("wifi: eapol msg1\n"));
+        board.Uart.write(Magic.bytes("wifi: eapol msg1\n"));
         wpaMsg1 = wpaMsg1 + 1;
 
         byte[] aNonce = heapBytes(m1.plus(17), 32);
@@ -853,7 +853,7 @@ public final class Cyw43
         byte[] kck = slice(ptk, 0, 16);
         byte[] kek = slice(ptk, 16, 16);
         byte[] tk = slice(ptk, 32, 16);
-        board.bcm2711.Uart.write(Magic.bytes("wifi: ptk derived\n"));
+        board.Uart.write(Magic.bytes("wifi: ptk derived\n"));
 
         // msg2 key data: the RSN IE we set as `wpaie`, which the association request carried. It is not read
         // back from the firmware: right after link-up the firmware can leave ioctls unanswered for ~7 s (Pi,
@@ -869,7 +869,7 @@ public final class Cyw43
         {
             sendEapol(aa, 0x010a, replay, keyLen, sNonce, ie, ieLen, kck);
             wpaMsg2 = wpaMsg2 + 1;
-            board.bcm2711.Uart.write(Magic.bytes("wifi: eapol msg2 sent\n"));
+            board.Uart.write(Magic.bytes("wifi: eapol msg2 sent\n"));
             Address f = recvEapol(apMac);
             if (f.isZero())
             {
@@ -893,7 +893,7 @@ public final class Cyw43
         }
         if (m3.isZero())
         {
-            board.bcm2711.Uart.write(Magic.bytes("wifi: no eapol msg3\n"));
+            board.Uart.write(Magic.bytes("wifi: no eapol msg3\n"));
             return false;
         }
         int eapLen3 = ((m3.plus(2).loadUnsignedByte() & 0xFF) << 8) | (m3.plus(3).loadUnsignedByte() & 0xFF);
@@ -909,37 +909,37 @@ public final class Cyw43
         crypto.Hmac.mac(crypto.Digest.SHA1, kck, 16, frame3, frame3.length, calc);
         if (cmp(calc, rxMic, 16) != 0)
         {
-            board.bcm2711.Uart.write(Magic.bytes("wifi: msg3 MIC mismatch\n"));
+            board.Uart.write(Magic.bytes("wifi: msg3 MIC mismatch\n"));
             return false;
         }
-        board.bcm2711.Uart.write(Magic.bytes("wifi: msg3 MIC ok\n"));
+        board.Uart.write(Magic.bytes("wifi: msg3 MIC ok\n"));
 
         int kdLen = ((m3.plus(97).loadUnsignedByte() & 0xFF) << 8) | (m3.plus(98).loadUnsignedByte() & 0xFF);
         byte[] wrapped = heapBytes(m3.plus(99), kdLen);
         byte[] kd = new byte[kdLen - 8];
         if (!crypto.KeyWrap.unwrap(kek, wrapped, kdLen, kd))
         {
-            board.bcm2711.Uart.write(Magic.bytes("wifi: GTK unwrap failed\n"));
+            board.Uart.write(Magic.bytes("wifi: GTK unwrap failed\n"));
             return false;
         }
         byte[] gtk = new byte[16];
         int gtkId = extractGtk(kd, kd.length, gtk);
         if (gtkId < 0)
         {
-            board.bcm2711.Uart.write(Magic.bytes("wifi: no GTK KDE\n"));
+            board.Uart.write(Magic.bytes("wifi: no GTK KDE\n"));
             return false;
         }
-        board.bcm2711.Uart.write(Magic.bytes("wifi: GTK unwrapped\n"));
+        board.Uart.write(Magic.bytes("wifi: GTK unwrapped\n"));
 
         byte[] replay3 = heapBytes(m3.plus(9), 8);           // echo msg3's replay counter in msg4
         byte[] zero32 = new byte[32];
         byte[] empty = new byte[0];
         sendEapol(apMac, 0x030a, replay3, keyLen, zero32, empty, 0, kck);   // msg4
-        board.bcm2711.Uart.write(Magic.bytes("wifi: eapol msg4 sent\n"));
+        board.Uart.write(Magic.bytes("wifi: eapol msg4 sent\n"));
 
         installKey(0, tk, 16, apMac, true);              // pairwise TK, bound to the AP
         installKey(gtkId, gtk, 16, new byte[6], false);  // group GTK
-        board.bcm2711.Uart.write(Magic.bytes("wifi: keys installed\n"));
+        board.Uart.write(Magic.bytes("wifi: keys installed\n"));
         Supplicant.established(ie, ieLen, kck, kek);     // later re-handshakes run on the RX task
         return true;
     }
@@ -1404,7 +1404,7 @@ public final class Cyw43
         ourMac = Heap.allocData(8);
         if (len == 0)
         {
-            board.bcm2711.Uart.write(Magic.bytes("  no mac\n"));
+            board.Uart.write(Magic.bytes("  no mac\n"));
             return;
         }
         int doff = rx.plus(7).loadUnsignedByte() & 0xFF;
@@ -1415,18 +1415,18 @@ public final class Cyw43
             ourMac.plus(i).store((byte) m.plus(i).loadUnsignedByte());
             i = i + 1;
         }
-        board.bcm2711.Uart.write(Magic.bytes("wifi: mac "));
+        board.Uart.write(Magic.bytes("wifi: mac "));
         i = 0;
         while (i < 6)
         {
             net.Ip.printHex2(ourMac.plus(i).loadUnsignedByte() & 0xFF);
             if (i < 5)
             {
-                board.bcm2711.Uart.putc(0x3A);           // ':'
+                board.Uart.putc(0x3A);           // ':'
             }
             i = i + 1;
         }
-        board.bcm2711.Uart.putc(0x0A);
+        board.Uart.putc(0x0A);
     }
 
     /** Send an 802.3 frame over the SDPCM data channel (2) with a 4-byte BDC header (proto ver 2, no pad). */
@@ -1601,17 +1601,17 @@ public final class Cyw43
                     return;
                 }
                 txForced = txForced + 1;
-                board.bcm2711.Uart.write(Magic.bytes("wifi: tx forced past the window seq="));
+                board.Uart.write(Magic.bytes("wifi: tx forced past the window seq="));
                 VM.printDec(txSeq & 0xFF);
-                board.bcm2711.Uart.write(Magic.bytes(" max="));
+                board.Uart.write(Magic.bytes(" max="));
                 VM.printDec(txMax);
-                board.bcm2711.Uart.write(Magic.bytes(" fc=0x"));
+                board.Uart.write(Magic.bytes(" fc=0x"));
                 VM.printHex(txFc);
                 if (txFcState)
                 {
-                    board.bcm2711.Uart.write(Magic.bytes(" FC_STATE"));
+                    board.Uart.write(Magic.bytes(" FC_STATE"));
                 }
-                board.bcm2711.Uart.putc(0x0A);
+                board.Uart.putc(0x0A);
             }
             writeFrameLocked(tx, txqLen[txqHead]);
             long w = Magic.readCNTPCT_EL0() - txqAt[txqHead];
@@ -1681,14 +1681,14 @@ public final class Cyw43
         Address ip = Heap.allocData(4);
         if (net.Dns.resolve(Magic.bytes("example.com"), ip))
         {
-            board.bcm2711.Uart.write(Magic.bytes("wifi: dns example.com = "));
+            board.Uart.write(Magic.bytes("wifi: dns example.com = "));
             net.Ip.printIp(ip);
-            board.bcm2711.Uart.putc(0x0A);
+            board.Uart.putc(0x0A);
             httpGet(ip, Magic.bytes("example.com"));      // M4: TCP connect + HTTP GET (acceptance test)
         }
         else
         {
-            board.bcm2711.Uart.write(Magic.bytes("wifi: dns no reply\n"));
+            board.Uart.write(Magic.bytes("wifi: dns no reply\n"));
         }
     }
 
@@ -1704,15 +1704,15 @@ public final class Cyw43
         int h = net.Tcp.connect(serverIp, 80);
         if (h < 0)
         {
-            board.bcm2711.Uart.write(Magic.bytes("wifi: tcp no synack\n"));
+            board.Uart.write(Magic.bytes("wifi: tcp no synack\n"));
             return;
         }
-        board.bcm2711.Uart.write(Magic.bytes("wifi: tcp connected\n"));
+        board.Uart.write(Magic.bytes("wifi: tcp connected\n"));
 
         Address req = Heap.allocData(256);
         int reqLen = buildHttpReq(req, host);
         net.Tcp.write(h, req, 0, reqLen);
-        board.bcm2711.Uart.write(Magic.bytes("wifi: GET sent -----\n"));
+        board.Uart.write(Magic.bytes("wifi: GET sent -----\n"));
 
         Address rxbuf = Heap.allocData(2048);
         int total = 0;
@@ -1727,9 +1727,9 @@ public final class Cyw43
             total = total + n;
         }
         net.Tcp.close(h);
-        board.bcm2711.Uart.write(Magic.bytes("\n----- http done, "));
+        board.Uart.write(Magic.bytes("\n----- http done, "));
         VM.printDec(total);
-        board.bcm2711.Uart.write(Magic.bytes(" bytes\n"));
+        board.Uart.write(Magic.bytes(" bytes\n"));
     }
 
     /** Build "GET / HTTP/1.0\r\nHost: <host>\r\nConnection: close\r\n\r\n"; returns its length. */
@@ -1763,11 +1763,11 @@ public final class Cyw43
             int c = addr.plus(i).loadUnsignedByte() & 0xFF;
             if (c == 0x0A || c == 0x0D || c == 0x09 || (c >= 0x20 && c < 0x7F))
             {
-                board.bcm2711.Uart.putc(c);
+                board.Uart.putc(c);
             }
             else
             {
-                board.bcm2711.Uart.putc(0x2E);
+                board.Uart.putc(0x2E);
             }
             i = i + 1;
         }
@@ -1838,13 +1838,13 @@ public final class Cyw43
         int flags = ((em.plus(2).loadUnsignedByte() & 0xFF) << 8) | (em.plus(3).loadUnsignedByte() & 0xFF);
         int et = beU32(em.plus(4));
         int status = beU32(em.plus(8));
-        board.bcm2711.Uart.write(Magic.bytes("  event "));   // print EVERY join-phase event to trace the flow
+        board.Uart.write(Magic.bytes("  event "));   // print EVERY join-phase event to trace the flow
         VM.printDec(et);
-        board.bcm2711.Uart.write(Magic.bytes(" status "));
+        board.Uart.write(Magic.bytes(" status "));
         VM.printDec(status);
-        board.bcm2711.Uart.write(Magic.bytes(" flags="));
+        board.Uart.write(Magic.bytes(" flags="));
         VM.printHex(flags);
-        board.bcm2711.Uart.putc(0x0A);
+        board.Uart.putc(0x0A);
         return et == 16 && (flags & 1) != 0;             // E_LINK, link up
     }
 
@@ -1901,10 +1901,10 @@ public final class Cyw43
         while (i < len)
         {
             int c = addr.plus(i).loadUnsignedByte() & 0xFF;
-            board.bcm2711.Uart.putc((c >= 0x20 && c < 0x7F) ? c : 0x2E);
+            board.Uart.putc((c >= 0x20 && c < 0x7F) ? c : 0x2E);
             i = i + 1;
         }
-        board.bcm2711.Uart.putc(0x0A);
+        board.Uart.putc(0x0A);
     }
 
     /**
@@ -1918,7 +1918,7 @@ public final class Cyw43
         Address e = VM.fileFind(Magic.bytes("/lib/firmware/brcm/brcmfmac43455-sdio.clm_blob"));
         if (e.isZero())
         {
-            board.bcm2711.Uart.write(Magic.bytes("  clm NOT FOUND\n"));
+            board.Uart.write(Magic.bytes("  clm NOT FOUND\n"));
             return;
         }
         Address src = e.plus(16L).loadAddress();
@@ -1956,7 +1956,7 @@ public final class Cyw43
             readCtrl(sendBcdc(WLC_SET_VAR, buf, p + 12 + n, true));
             off = off + n;
         }
-        board.bcm2711.Uart.write(Magic.bytes("  clm loaded\n"));
+        board.Uart.write(Magic.bytes("  clm loaded\n"));
     }
 
     /** Build + send a BCDC ioctl (SET or GET) with {@code dataLen} bytes at {@code dataAddr} on the control
@@ -2012,7 +2012,7 @@ public final class Cyw43
         int len = recvCtrl(rx, 1024, id);
         if (len == 0)
         {
-            board.bcm2711.Uart.write(Magic.bytes("  (no ctrl resp)\n"));
+            board.Uart.write(Magic.bytes("  (no ctrl resp)\n"));
             return;
         }
         int doff = rx.plus(7).loadUnsignedByte() & 0xFF;
@@ -2423,10 +2423,10 @@ public final class Cyw43
             {
                 break;
             }
-            board.bcm2711.Uart.putc((c >= 0x20 && c < 0x7F) ? c : 0x2E);
+            board.Uart.putc((c >= 0x20 && c < 0x7F) ? c : 0x2E);
             i = i + 1;
         }
-        board.bcm2711.Uart.putc(0x0A);
+        board.Uart.putc(0x0A);
     }
 
     /** Bring the ARM CR4 OUT of reset with the CPU RUNNING (resetcore, CPUHALT cleared) — boots the firmware. */
@@ -2465,9 +2465,9 @@ public final class Cyw43
         {
             if (!bpWrite32(bpAddr + off, src.plus(off).loadInt()))   // proven 4-byte path (setWindow cached)
             {
-                board.bcm2711.Uart.write(Magic.bytes("  bpWrite fail @off="));
+                board.Uart.write(Magic.bytes("  bpWrite fail @off="));
                 VM.printHex(off);
-                board.bcm2711.Uart.putc(0x0A);
+                board.Uart.putc(0x0A);
                 return false;
             }
             off = off + 4;
@@ -2520,11 +2520,11 @@ public final class Cyw43
     static void ramTest()
     {
         armCr4Prepare(ARMCR4_WRAP);                      // out of reset + CPU halted -> TCM accessible
-        board.bcm2711.Uart.write(Magic.bytes("  armcr4 resetctrl="));
+        board.Uart.write(Magic.bytes("  armcr4 resetctrl="));
         VM.printHex((long) (bpRead32(ARMCR4_WRAP + AI_RESETCTRL) & 0xFFFFFFFFL));
-        board.bcm2711.Uart.write(Magic.bytes(" ioctrl="));
+        board.Uart.write(Magic.bytes(" ioctrl="));
         VM.printHex((long) (bpRead32(ARMCR4_WRAP + AI_IOCTRL) & 0xFFFFFFFFL));
-        board.bcm2711.Uart.putc(0x0A);
+        board.Uart.putc(0x0A);
 
         // ARM CR4 core registers (always accessible — confirm the core base + TCM bank config).
         log(Magic.bytes("cr4 cap[0x00]="), bpRead32(ARMCR4_CORE + 0x00));
@@ -2543,11 +2543,11 @@ public final class Cyw43
         bpWrite32(addr, 0xDEADBEEF);
         int rb = bpRead32(addr);
         bpWrite32(addr, orig);                           // restore
-        board.bcm2711.Uart.write(Magic.bytes("  ram["));
+        board.Uart.write(Magic.bytes("  ram["));
         VM.printHex(addr);
-        board.bcm2711.Uart.write(Magic.bytes("] wrote DEADBEEF read "));
+        board.Uart.write(Magic.bytes("] wrote DEADBEEF read "));
         VM.printHex((long) (rb & 0xFFFFFFFFL));
-        board.bcm2711.Uart.putc(0x0A);
+        board.Uart.putc(0x0A);
     }
 
     /**
@@ -2559,19 +2559,19 @@ public final class Cyw43
     static void dumpErom()
     {
         int eromptr = bpRead32(SI_ENUM_BASE + 0xFC);     // ChipCommon EROMPTR
-        board.bcm2711.Uart.write(Magic.bytes("  eromptr="));
+        board.Uart.write(Magic.bytes("  eromptr="));
         VM.printHex((long) (eromptr & 0xFFFFFFFFL));
-        board.bcm2711.Uart.putc(0x0A);
+        board.Uart.putc(0x0A);
         long erom = eromptr & 0xFFFFFFFFL;
         int i = 0;
         while (i < 96)
         {
             int w = bpRead32(erom + i * 4L);
-            board.bcm2711.Uart.write(Magic.bytes("  erom["));
+            board.Uart.write(Magic.bytes("  erom["));
             VM.printDec(i);
-            board.bcm2711.Uart.write(Magic.bytes("]="));
+            board.Uart.write(Magic.bytes("]="));
             VM.printHex((long) (w & 0xFFFFFFFFL));
-            board.bcm2711.Uart.putc(0x0A);
+            board.Uart.putc(0x0A);
             if (w == 0x0000000F)                         // DMP_DESC_EOT
             {
                 break;
@@ -2621,10 +2621,10 @@ public final class Cyw43
      *  must be a {@code Magic.bytes("...")} literal — the BYTES intrinsic interns a String LITERAL only. */
     private static void log(byte[] label, int value)
     {
-        board.bcm2711.Uart.write(Magic.bytes("  "));
-        board.bcm2711.Uart.write(label);
+        board.Uart.write(Magic.bytes("  "));
+        board.Uart.write(label);
         VM.printHex((long) (value & 0xFFFFFFFFL));      // printHex already emits the "0x" prefix
-        board.bcm2711.Uart.putc(0x0A);
+        board.Uart.putc(0x0A);
     }
 
     public static int rxEvents;                          // firmware event frames (SDPCM channel 1)
@@ -2649,16 +2649,16 @@ public final class Cyw43
         {
             return;
         }
-        board.bcm2711.Uart.write(Magic.bytes("wifi: rx event "));
+        board.Uart.write(Magic.bytes("wifi: rx event "));
         VM.printDec(et);
-        board.bcm2711.Uart.write(Magic.bytes(" status "));
+        board.Uart.write(Magic.bytes(" status "));
         VM.printDec(beU32(em.plus(8)));
-        board.bcm2711.Uart.write(Magic.bytes(" reason "));
+        board.Uart.write(Magic.bytes(" reason "));
         VM.printDec(beU32(em.plus(12)));
-        board.bcm2711.Uart.write(Magic.bytes(" flags="));
+        board.Uart.write(Magic.bytes(" flags="));
         VM.printHex(flags);
-        board.bcm2711.Uart.write(Magic.bytes(" events="));
+        board.Uart.write(Magic.bytes(" events="));
         VM.printDec(rxEvents);
-        board.bcm2711.Uart.putc(0x0A);
+        board.Uart.putc(0x0A);
     }
 }

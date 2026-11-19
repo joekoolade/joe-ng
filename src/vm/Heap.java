@@ -526,7 +526,7 @@ public final class Heap
         Address p = codePtr.loadAddress();
         if (p.plus(aligned).GT(Address.fromLong(CODE_LIMIT)))
         {
-            board.bcm2711.Uart.write(Magic.bytes("code arena OOM\n"));
+            board.Uart.write(Magic.bytes("code arena OOM\n"));
             while (true)
             {
                 Magic.wfe();                            // the sweep + free list are what keep this from firing
@@ -709,43 +709,43 @@ public final class Heap
     /** Print the growth-age histogram: how long since a sweep, each time the arena was forced to grow. */
     public static void printGrowthAges()
     {
-        board.bcm2711.Uart.write(Magic.bytes("  growthAge(16K,64K,256K,1M,4M,16M,64M,+):"));
+        board.Uart.write(Magic.bytes("  growthAge(16K,64K,256K,1M,4M,16M,64M,+):"));
         long b = 0L;
         while (b < GROWTH_BUCKETS)
         {
-            board.bcm2711.Uart.putc(0x20);
+            board.Uart.putc(0x20);
             VM.printDec((int) Address.fromLong(GROWTH_TAB + b * 8L).loadLong());
             b += 1L;
         }
-        board.bcm2711.Uart.putc(0x0A);
-        board.bcm2711.Uart.write(Magic.bytes("  codeBytes:"));
+        board.Uart.putc(0x0A);
+        board.Uart.write(Magic.bytes("  codeBytes:"));
         long cb = 0L;
         while (cb < 16L)
         {
             long v = Address.fromLong(CODE_BYTES + cb * 8L).loadLong();
             if (v != 0L)
             {
-                board.bcm2711.Uart.putc(0x20);
+                board.Uart.putc(0x20);
                 VM.printDec((int) cb);
-                board.bcm2711.Uart.putc(0x3D);
+                board.Uart.putc(0x3D);
                 VM.printHex(v);
             }
             cb += 1L;
         }
-        board.bcm2711.Uart.putc(0x0A);
-        board.bcm2711.Uart.write(Magic.bytes("  codeGarbage sweeps="));
+        board.Uart.putc(0x0A);
+        board.Uart.write(Magic.bytes("  codeGarbage sweeps="));
         VM.printDec((int) VMGc.sweepsTotal);
-        board.bcm2711.Uart.write(Magic.bytes(" zeroFreed="));
+        board.Uart.write(Magic.bytes(" zeroFreed="));
         VM.printDec((int) VMGc.sweepsZeroFreed);
-        board.bcm2711.Uart.write(Magic.bytes(" freedTotal="));
+        board.Uart.write(Magic.bytes(" freedTotal="));
         VM.printHex(VMGc.codeFreedTotal);
-        board.bcm2711.Uart.write(Magic.bytes(" bumped="));
+        board.Uart.write(Magic.bytes(" bumped="));
         VM.printHex(codeBumpBytes);
-        board.bcm2711.Uart.write(Magic.bytes(" lateSweeps="));
+        board.Uart.write(Magic.bytes(" lateSweeps="));
         VM.printDec((int) VMGc.lateSweeps);
-        board.bcm2711.Uart.write(Magic.bytes(" lateFreed="));
+        board.Uart.write(Magic.bytes(" lateFreed="));
         VM.printHex(VMGc.lateFreed);
-        board.bcm2711.Uart.putc(0x0A);
+        board.Uart.putc(0x0A);
     }
 
     public static long codeBumpNoSpace;
@@ -896,41 +896,41 @@ public final class Heap
     /** Print the sampled large failures: the worst one, then the most recent few. */
     public static void printLargeFails()
     {
-        board.bcm2711.Uart.write(Magic.bytes("  largeFail n="));
+        board.Uart.write(Magic.bytes("  largeFail n="));
         VM.printDec((int) largeFailCount);
-        board.bcm2711.Uart.write(Magic.bytes(" worst: req="));
+        board.Uart.write(Magic.bytes(" worst: req="));
         VM.printHex(worstSize);
-        board.bcm2711.Uart.write(Magic.bytes(" free="));
+        board.Uart.write(Magic.bytes(" free="));
         VM.printHex(worstFreeTotal);
-        board.bcm2711.Uart.write(Magic.bytes(" max="));
+        board.Uart.write(Magic.bytes(" max="));
         VM.printHex(worstFreeMax);
-        board.bcm2711.Uart.write(Magic.bytes(" top="));
+        board.Uart.write(Magic.bytes(" top="));
         VM.printHex(worstTop);
-        board.bcm2711.Uart.putc(0x0A);
+        board.Uart.putc(0x0A);
         // Would merging the largest free block with its free neighbours have satisfied the request? This is
         // the question that separates a one-page allocator fix from building a compactor.
-        board.bcm2711.Uart.write(Magic.bytes("  adj samples="));
+        board.Uart.write(Magic.bytes("  adj samples="));
         VM.printDec((int) adjSamples);
-        board.bcm2711.Uart.write(Magic.bytes(" wouldFitAfterMerge="));
+        board.Uart.write(Magic.bytes(" wouldFitAfterMerge="));
         VM.printDec((int) adjWouldFit);
-        board.bcm2711.Uart.write(Magic.bytes(" mergedMax="));
+        board.Uart.write(Magic.bytes(" mergedMax="));
         VM.printHex(adjMergedMax);
-        board.bcm2711.Uart.write(Magic.bytes(" listLen="));
+        board.Uart.write(Magic.bytes(" listLen="));
         VM.printDec((int) adjListLen);
-        board.bcm2711.Uart.putc(0x0A);
+        board.Uart.putc(0x0A);
         long i = 0;
         while (i < 8L && i < largeRingN)
         {
             Address e = Address.fromLong(LARGE_RING + ((largeRingN - 1L - i) & 7L) * 32L);
-            board.bcm2711.Uart.write(Magic.bytes("    req="));
+            board.Uart.write(Magic.bytes("    req="));
             VM.printHex(e.loadLong());
-            board.bcm2711.Uart.write(Magic.bytes(" free="));
+            board.Uart.write(Magic.bytes(" free="));
             VM.printHex(e.plus(8).loadLong());
-            board.bcm2711.Uart.write(Magic.bytes(" max="));
+            board.Uart.write(Magic.bytes(" max="));
             VM.printHex(e.plus(16).loadLong());
-            board.bcm2711.Uart.write(Magic.bytes(" top="));
+            board.Uart.write(Magic.bytes(" top="));
             VM.printHex(e.plus(24).loadLong());
-            board.bcm2711.Uart.putc(0x0A);
+            board.Uart.putc(0x0A);
             i += 1L;
         }
     }
@@ -995,18 +995,18 @@ public final class Heap
             long n = Address.fromLong(base + b * 8L).loadLong();
             if (n != 0L)
             {
-                board.bcm2711.Uart.putc(0x20);
+                board.Uart.putc(0x20);
                 long label = 16L << (int) b;
                 if (label >= 1024L)
                 {
                     VM.printDec((int) (label >> 10));
-                    board.bcm2711.Uart.putc(0x4B);          // ...K, so a bucket label stays short
+                    board.Uart.putc(0x4B);          // ...K, so a bucket label stays short
                 }
                 else
                 {
                     VM.printDec((int) label);
                 }
-                board.bcm2711.Uart.putc(0x3D);
+                board.Uart.putc(0x3D);
                 VM.printDec((int) n);
             }
             b += 1L;
@@ -1258,7 +1258,7 @@ public final class Heap
             long i = lookupCodeBlock(cursor);
             if (i < 0L)
             {
-                board.bcm2711.Uart.write(Magic.bytes("code coalesce: unmapped block\n"));
+                board.Uart.write(Magic.bytes("code coalesce: unmapped block\n"));
                 runIdx = -1L;                              // an unknown block ends any run in progress
                 break;
             }
@@ -1479,7 +1479,7 @@ public final class Heap
             {
                 return big;
             }
-            board.bcm2711.Uart.write(Magic.bytes("large region OOM\n"));
+            board.Uart.write(Magic.bytes("large region OOM\n"));
             while (true)
             {
                 Magic.wfe();
@@ -1593,7 +1593,7 @@ public final class Heap
             Magic.gc();                                     //   callee-saved refs are on the scannable stack)
             attempt += 1;
         }
-        board.bcm2711.Uart.write(Magic.bytes("heap OOM\n"));
+        board.Uart.write(Magic.bytes("heap OOM\n"));
         while (true)
         {
             Magic.wfe();                                    // out of memory even after a collection: halt
@@ -1662,16 +1662,16 @@ public final class Heap
         long bytes = (long) ObjectModel.ARRAY_BASE_OFFSET + (long) length * (long) elemSize;
         if (length < 0 || bytes > (long) MAX_ARRAY_BYTES)
         {
-            board.bcm2711.Uart.write(Magic.bytes("BAD ARRAY LENGTH len="));
+            board.Uart.write(Magic.bytes("BAD ARRAY LENGTH len="));
             VM.printHex((long) length);
-            board.bcm2711.Uart.write(Magic.bytes(" elemSize="));
+            board.Uart.write(Magic.bytes(" elemSize="));
             VM.printHex((long) elemSize);
-            board.bcm2711.Uart.write(Magic.bytes(" bytes="));
+            board.Uart.write(Magic.bytes(" bytes="));
             VM.printHex(bytes);
-            board.bcm2711.Uart.write(Magic.bytes("\n  (a negative length is a BOUNDS-CHECK BYPASS -- the"));
-            board.bcm2711.Uart.write(Magic.bytes(" length is compared unsigned. JIT-compiled code throws\n"));
-            board.bcm2711.Uart.write(Magic.bytes("   NegativeArraySizeException before reaching here, so this"));
-            board.bcm2711.Uart.write(Magic.bytes(" is a WRITER-BAKED newarray or a VM caller.)\n"));
+            board.Uart.write(Magic.bytes("\n  (a negative length is a BOUNDS-CHECK BYPASS -- the"));
+            board.Uart.write(Magic.bytes(" length is compared unsigned. JIT-compiled code throws\n"));
+            board.Uart.write(Magic.bytes("   NegativeArraySizeException before reaching here, so this"));
+            board.Uart.write(Magic.bytes(" is a WRITER-BAKED newarray or a VM caller.)\n"));
             while (true)
             {
                 Magic.wfe();

@@ -74,7 +74,7 @@ public final class WlanPoll
         }
         if (entry == 0L)
         {
-            board.bcm2711.Uart.write(Magic.bytes("wifi: rx task not in the image -- staying synchronous\n"));
+            board.Uart.write(Magic.bytes("wifi: rx task not in the image -- staying synchronous\n"));
             return false;
         }
         net.RxQueues.init();
@@ -82,11 +82,11 @@ public final class WlanPoll
         busSem = VMScheduler.kernelSem(1);
         net.RxQueues.active = true;
         rxTaskId = VMScheduler.spawnKernel(entry);
-        board.bcm2711.Uart.write(Magic.bytes("wifi: rx task started (interrupt-driven poll), bring-up glom="));
+        board.Uart.write(Magic.bytes("wifi: rx task started (interrupt-driven poll), bring-up glom="));
         VM.printDec(Cyw43.bringupGlom);
-        board.bcm2711.Uart.write(Magic.bytes(" subframes="));
+        board.Uart.write(Magic.bytes(" subframes="));
         VM.printDec(Cyw43.bringupGlomSubs);
-        board.bcm2711.Uart.write(Magic.bytes("\n"));
+        board.Uart.write(Magic.bytes("\n"));
         return true;
     }
 

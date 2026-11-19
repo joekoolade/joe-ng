@@ -12,7 +12,7 @@
 package board.virt;
 
 import board.Board;
-import board.bcm2711.Uart;
+import board.Uart;
 import magic.Address;
 import magic.Magic;
 import vm.VM;
