@@ -447,7 +447,6 @@ public final class BuildRuntimeImage
                 if (which.equals("virt"))
                 {
                     ImageBuilder.boardVirt = true;
-                    board.Board.virt = 1L;          // ON THE HOST TOO: Baseline lowers the timer intrinsics by board
                 }
                 else if (!which.equals("pi4"))
                 {
@@ -489,6 +488,7 @@ public final class BuildRuntimeImage
                     + (classpath == null ? "" : " classpath=" + classpath) + ")");
         }
 
+        ImageBuilder.bindTarget();                  // before ANY compile: Baseline lowers the timer by board
         CodeBuffer code = build(classesDir);
         BootImageWriter writer = new BootImageWriter(code);
         byte[] bytes = code.toBytes();

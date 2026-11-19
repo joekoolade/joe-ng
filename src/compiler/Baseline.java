@@ -13,7 +13,6 @@ package compiler;
 
 import asm.A64Enc;
 import asm.CodeBuffer;
-import board.Board;
 import classfile.ClassReader;
 import objectmodel.ObjectModel;
 
@@ -4133,15 +4132,15 @@ public final class Baseline
         }
         else if (id == Intrinsics.READ_CNTPCT_EL0)
         {
-            cb.emit(A64Enc.mrs(pushReg(), Board.isVirt() ? A64Enc.CNTVCT_EL0 : A64Enc.CNTPCT_EL0));
+            cb.emit(A64Enc.mrs(pushReg(), Target.counter()));
         }
         else if (id == Intrinsics.WRITE_CNTP_TVAL_EL0)
         {
-            cb.emit(A64Enc.msr(Board.isVirt() ? A64Enc.CNTV_TVAL_EL0 : A64Enc.CNTP_TVAL_EL0, popReg()));
+            cb.emit(A64Enc.msr(Target.timerValue(), popReg()));
         }
         else if (id == Intrinsics.WRITE_CNTP_CTL_EL0)
         {
-            cb.emit(A64Enc.msr(Board.isVirt() ? A64Enc.CNTV_CTL_EL0 : A64Enc.CNTP_CTL_EL0, popReg()));
+            cb.emit(A64Enc.msr(Target.timerControl(), popReg()));
         }
         else if (id == Intrinsics.ENABLE_IRQ)
         {
@@ -4157,7 +4156,7 @@ public final class Baseline
         }
         else if (id == Intrinsics.READ_CNTP_CTL_EL0)
         {
-            cb.emit(A64Enc.mrs(pushReg(), Board.isVirt() ? A64Enc.CNTV_CTL_EL0 : A64Enc.CNTP_CTL_EL0));
+            cb.emit(A64Enc.mrs(pushReg(), Target.timerControl()));
         }
         else if (id == Intrinsics.GC)
         {

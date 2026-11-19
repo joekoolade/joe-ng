@@ -17,6 +17,7 @@ import board.Platform;
 import board.Uart;
 import board.arm.Gic;
 import board.arm.Pl011;
+import compiler.Target;
 import magic.Address;
 import magic.Magic;
 import magic.ObjectReference;
@@ -33,6 +34,9 @@ public final class VirtPlatform
     private VirtPlatform()
     {
     }
+
+    /** The generic timer the tick and counter use ({@code compiler.Target}): the EL1 virtual timer (PPI 27): under HVF the physical timer is not emulated. */
+    public static final long GENERIC_TIMER = Target.TIMER_VIRT;
 
     /** {@code MetalBoard.boardId0()}. */
     public static long boardId()
