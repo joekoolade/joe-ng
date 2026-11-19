@@ -70,7 +70,10 @@ public class FileProbe
         describe("/dat");
         describe("/data/sample.txt/x");
 
-        String[] top = f("/").list();
+        // /dev exists only on a board with a hardware entropy source (MetalRamfs.addEntropyDevices: the Pi's
+        // RNG200, QEMU virt's virtio-rng) and not on QEMU raspi4b, so it is left out: what this probe tests is
+        // the listing, not the board.
+        String[] top = Arrays.stream(f("/").list()).filter(n -> !n.equals("dev")).toArray(String[]::new);
         Arrays.sort(top);
         System.out.println("list / " + Arrays.toString(top));
         String[] data = f("/data").list();

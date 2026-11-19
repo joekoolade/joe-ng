@@ -47,4 +47,5 @@ if [ "$ACCEL" = hvf ]; then
 else
     MACHINE=(-M virt -cpu cortex-a72)
 fi
-exec qemu-system-aarch64 "${MACHINE[@]}" -smp 4 -m 4G -kernel "$IMG" -display none -serial mon:stdio -no-reboot
+exec qemu-system-aarch64 "${MACHINE[@]}" -smp 4 -m 4G -device virtio-rng-device \
+    -global virtio-mmio.force-legacy=false -kernel "$IMG" -display none -serial mon:stdio -no-reboot
