@@ -1453,6 +1453,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.taskR()V",          "vm/VM.taskRAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.smpTask()V",        "vm/VM.smpTaskAddr");
         stashHelper(image, staticWord, wordOffset, "board/cyw43/WlanPoll.rxTask()V",   "vm/VM.netRxTaskAddr");
+        stashHelper(image, staticWord, wordOffset, "board/virt/VirtioNet.rxTask()V",   "vm/VM.virtNetRxTaskAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.prioTask(I)V",      "vm/VM.prioTaskAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.setPriority(JI)V",  "vm/VM.setPrioAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.getPriority(J)I",   "vm/VM.getPrioAddr");

@@ -11,6 +11,7 @@
  */
 package net;
 
+import board.Board;
 import magic.Address;
 
 /**
@@ -22,7 +23,8 @@ import magic.Address;
  * <p>A received frame is kept exactly as the link delivered it. The Pi's CYW43455 wraps each one in an SDPCM header
  * and a BDC header (and also delivers control replies and firmware events that are not Ethernet at all), so
  * {@link #ethOffset} is where that envelope is unwrapped -- the same arithmetic {@code Ip}, {@code RxQueues} and
- * {@code NetStats} each used to do inline.
+ * {@code NetStats} each used to do inline. On QEMU {@code virt} the link is {@code board.virt.VirtioNet}, which
+ * delivers bare Ethernet frames: every frame is data, at offset 0.
  */
 public final class Link
 {
@@ -42,12 +44,21 @@ public final class Link
     /** Send a fully built 802.3 frame. */
     public static void send(Address frame, int len)
     {
+        if (Board.isVirt())
+        {
+            board.virt.VirtioNet.send(frame, len);
+            return;
+        }
         board.cyw43.Cyw43.txData(frame, len);
     }
 
     /** Our 6-byte MAC (heap address); the link reads it from the hardware the first time. */
     public static Address mac()
     {
+        if (Board.isVirt())
+        {
+            return board.virt.VirtioNet.mac();
+        }
         return board.cyw43.Cyw43.mac();
     }
 
@@ -57,6 +68,10 @@ public final class Link
      */
     public static int waitFrame(Address dst, int cap, int ms)
     {
+        if (Board.isVirt())
+        {
+            return board.virt.VirtioNet.waitFrame(dst, cap, ms);
+        }
         return board.cyw43.Cyw43.waitFrameIrq(dst, cap, ms);
     }
 
@@ -82,6 +97,10 @@ public final class Link
     /** The channel of the received frame at {@code rx} ({@code len} bytes). */
     public static int channel(Address rx, int len)
     {
+        if (Board.isVirt())
+        {
+            return len >= 14 ? CH_DATA : CH_OTHER;
+        }
         if (len < 12)
         {
             return CH_OTHER;
@@ -113,6 +132,10 @@ public final class Link
         {
             return -1;
         }
+        if (Board.isVirt())
+        {
+            return 0;
+        }
         int doff = rx.plus(7).loadUnsignedByte() & 0xFF;   // SDPCM data offset
         Address bdc = rx.plus(doff);
         return doff + 4 + (bdc.plus(3).loadUnsignedByte() & 0xFF) * 4;
@@ -121,6 +144,10 @@ public final class Link
     /** A link event (CH_EVENT) the queues have no consumer for: the link logs it. */
     public static void event(Address rx, int len)
     {
+        if (Board.isVirt())
+        {
+            return;
+        }
         board.cyw43.Cyw43.logRxEvent(rx, len);
     }
 
@@ -132,7 +159,7 @@ public final class Link
     public static void linkFrame(Address eth, int len)
     {
         int et = (eth.plus(12).loadUnsignedByte() & 0xFF) << 8 | (eth.plus(13).loadUnsignedByte() & 0xFF);
-        if (et == 0x888E)
+        if (et == 0x888E && !Board.isVirt())
         {
             board.cyw43.Supplicant.input(eth, len);
         }

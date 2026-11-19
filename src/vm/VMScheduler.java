@@ -1079,6 +1079,15 @@ public final class VMScheduler
             Gic.end(id);
             return pickNext(curSp);
         }
+        if (id == board.virt.VirtioNet.intid && id != 0)  // QEMU virt: virtio-net used a buffer -> its RX task
+        {
+            if (board.virt.VirtioNet.onIrq())
+            {
+                semPostRaw(WIFI_SEM);
+            }
+            Gic.end(id);
+            return pickNext(curSp);
+        }
         if (id == Bcm2711.SDIO_SPI)                        // WiFi SDIO card interrupt -> the CYW43 driver
         {
             if (board.cyw43.Cyw43.onIrq())                 // ISR: the chip has an F2 frame for us
