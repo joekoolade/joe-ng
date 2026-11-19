@@ -545,6 +545,11 @@ public final class A64Enc
     {
         return 0xD50B_7E20 | (rt & 0x1F);
     }
+    /** {@code HVC #0} -- hypervisor call: QEMU virt's PSCI conduit (CPU_ON) when the guest has no EL2. */
+    public static int hvc0()
+    {
+        return 0xD400_0002;
+    }
     /** {@code ERET} — exception return. */
     public static int eret()
     {

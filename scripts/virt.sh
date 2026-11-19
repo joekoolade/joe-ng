@@ -6,7 +6,7 @@
 # GIC and timer drivers take their `virt` paths. See src/board/Board.java and src/writer/VirtPrelude.java.
 #
 # By default it runs under HVF -- hardware virtualisation on Apple silicon (-accel hvf -cpu host), several times
-# faster than emulation. --tcg emulates a Cortex-A72 instead (any host). Single core for now (no PSCI bring-up yet).
+# faster than emulation. --tcg emulates a Cortex-A72 instead (any host). Four cores (PSCI CPU_ON).
 #
 # Usage: scripts/virt.sh [--tcg] [MAIN [ARGS...]]
 #   MAIN   the program /etc/init launches (e.g. demo/HelloDemo, SslEngineProbe); without it the image keeps the
@@ -47,4 +47,4 @@ if [ "$ACCEL" = hvf ]; then
 else
     MACHINE=(-M virt -cpu cortex-a72)
 fi
-exec qemu-system-aarch64 "${MACHINE[@]}" -m 4G -kernel "$IMG" -display none -serial mon:stdio -no-reboot
+exec qemu-system-aarch64 "${MACHINE[@]}" -smp 4 -m 4G -kernel "$IMG" -display none -serial mon:stdio -no-reboot

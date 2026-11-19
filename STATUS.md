@@ -4,6 +4,26 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **QEMU `virt` TARGET, INCREMENT V2: four cores via PSCI CPU_ON (2026-11-18).** `virt` images now run SMP, under
+  HVF (real parallel host cores) and TCG; `scripts/virt.sh` passes `-smp 4`.
+  - **Start-up:** `VMScheduler.startSecondariesPsci` issues PSCI CPU_ON (`HVC #0`, function 0xC400_0003; QEMU's
+    conduit for a guest without EL2) for cores 1-3 through a 6-word stub called with `Magic.call2`, entry =
+    `Board.phys(SEC_STUB)`, context id = core (arrives in x0). The Pi's spin-slot release moved unchanged into
+    `startSecondariesSpin`; the report-in wait is shared.
+  - **The MMU-on hand-off, again.** A secondary starts with its MMU off at a PHYSICAL address; the instruction after
+    its SCTLR write is fetched at that address read as virtual, which the normal map sends 1 GiB higher. So it turns
+    the MMU on with `PT_BOOT` tables (`buildBootTables`, 8 KiB inside the page-table scratch region): an L1 sharing
+    three normal L2s plus a copy of the fourth carrying an identity entry for the stub's 2 MiB block -- the trick
+    `VirtPrelude` plays for core 0. `secondaryMain`'s `enableMmuThisCore` then moves the core to `PT_BASE`.
+  - **Measured (HVF, 4 cores):** all **41** P2-5 probes match `test/regress/expected` (0.5-1.3 s each; three need
+    `classpath=/lib/junit.jar`, as in probes.txt) -- including ChmRace, ClinitRace, FirstCallRace, Lock and
+    AtomicUpdaters on genuinely parallel cores. Stress: ChmRace, FirstCallRace and ClinitRace 20 boots each, **60/60**.
+    `SMP: 4 of 4 cores up` under TCG and HVF.
+  - **Observation, not chased:** SslEngineProbe under HVF takes 18.3 s on 4 cores vs 13.6 s on 1 (same output,
+    `gc: collections=18`). The Pi runs it with SMP on at 42.7 s; there is no single-core Pi figure to compare.
+  - **Pi unchanged:** `make test` (+ `HVC #0` encoding test) and overlaycheck clean, image no helper-stash MISS
+    (39,558,032 bytes), 41 probes pass on raspi4b with `SMP: 4 of 4 cores up` (spin-slot path).
+  - **Next:** V3 an entropy source on virt (virtio-rng), V4 `Regress.java --board virt`.
 - **QEMU `virt` TARGET, INCREMENT V1: single-core boot, emulated Cortex-A72 AND HVF (2026-11-18).** A second board:
   `BuildRuntimeImage --board virt` builds an image for `qemu-system-aarch64 -M virt`; `scripts/virt.sh [--tcg] MAIN`
   builds and boots it (HVF on Apple silicon by default).
