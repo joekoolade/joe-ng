@@ -4190,6 +4190,22 @@ public final class Baseline
             reloadLive(cb);
             cb.emit(A64Enc.movReg(pushReg(), 0));
         }
+        else if (id == Intrinsics.CALL3)
+        // addr, a->x0, b->x1, c->x2, blr, result x0 -- CALL2's shape with one more argument
+        {
+            int c = popReg();
+            int b = popReg();
+            int a = popReg();
+            int addr = popReg();
+            cb.emit(A64Enc.movReg(16, addr));
+            cb.emit(A64Enc.movReg(0, a));
+            cb.emit(A64Enc.movReg(1, b));
+            cb.emit(A64Enc.movReg(2, c));
+            spillLive(cb);
+            cb.emit(A64Enc.blr(16));
+            reloadLive(cb);
+            cb.emit(A64Enc.movReg(pushReg(), 0));
+        }
         else if (id == Intrinsics.CALL_N)
         // (addr, argsPtr): x0..x15 <- [argsPtr..+120], blr addr, result x0 -- ALL the JIT's argument registers.
         // This loaded x0..x7 only, so a reflective call with a 9th argument (receiver included) handed the

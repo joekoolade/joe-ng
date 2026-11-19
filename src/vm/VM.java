@@ -4530,19 +4530,13 @@ public final class VM
             return;
         }
 
-        // OS networking service: if the manifest program needs the network (net=1) and we're on real HW,
-        // bring the WiFi interface UP (join + DHCP + ARP, publishing net.Ip) as an OS service BEFORE the
+        // OS networking service: if the manifest program needs the network (net=1) and the board has its link,
+        // bring it UP (the board's join, then DHCP + ARP, publishing net.Ip) as an OS service BEFORE the
         // launch -- so a program's java.net.Socket finds an established link. Connectivity only, no demo.
-        if (Uart.coreHz > 10000000 && manifestNet())
+        if (manifestNet() && net.Link.present())          // the board's link (Pi WiFi; virt virtio-net)
         {
             startWifiScheduler();                          // scheduler + IRQs (IRQ-driven RX + blocking sockets)
-            board.cyw43.Cyw43.runDemo = false;             // stop the bring-up after connectivity, no HTTP demo
-            board.bcm2711.Wifi.bringUp();
-        }
-        else if (board.Board.isVirt() && manifestNet())
-        {
-            startWifiScheduler();                          // scheduler + IRQs, as on the Pi
-            board.virt.VirtioNet.bringUp();                // QEMU -netdev user: DHCP 10.0.2.15, gateway .2, DNS .3
+            net.Link.up(false);
         }
 
         // A launched program may spawn threads (Thread.start / Object.wait / Thread.join), which need the
@@ -5037,7 +5031,7 @@ public final class VM
             Magic.writeCNTP_TVAL_EL0(timerReload);
             Magic.writeCNTP_CTL_EL0(1);                    // re-arm the periodic timer tick
             Magic.enableIrq();                             // IRQs on: SDIO SPI 158 + timer deadline wakes
-            board.bcm2711.Wifi.bringUp();
+            net.Link.up(true);                             // the Pi's link: join, DHCP, then its HTTP demo
             stopTimerTick();                               // WiFi done: disable the timer + mask IRQs before parking
         }
 

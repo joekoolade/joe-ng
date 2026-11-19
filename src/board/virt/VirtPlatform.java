@@ -17,9 +17,12 @@ import board.Platform;
 import board.Uart;
 import board.arm.Gic;
 import board.arm.Pl011;
+import magic.Address;
 import magic.Magic;
 import magic.ObjectReference;
+import net.Link;
 import objectmodel.ObjectModel;
+import vm.VMStats;
 
 /**
  * The QEMU {@code virt} platform: the {@link Platform#OPS} over virtio-rng, with no block device and no firmware.
@@ -181,4 +184,68 @@ public final class VirtPlatform
         }
         return Irq.DEV_UNKNOWN;
     }
+
+    /** virt always has the link; with no virtio-net card {@code VirtioNet.bringUp} says so and stops. */
+    public static long netPresent()
+    {
+        return 1L;
+    }
+
+    /** QEMU -netdev user: DHCP hands out 10.0.2.15, gateway .2, DNS .3. There is no link demo. */
+    public static void netUp(long demo)
+    {
+        VirtioNet.bringUp();
+    }
+
+    public static void netSend(long frame, long len)
+    {
+        VirtioNet.send(Address.fromLong(frame), (int) len);
+    }
+
+    public static long netMac()
+    {
+        return VirtioNet.mac().toLong();
+    }
+
+    public static long netWaitFrame(long dst, long cap, long ms)
+    {
+        return VirtioNet.waitFrame(Address.fromLong(dst), (int) cap, (int) ms);
+    }
+
+    /** virtio-net delivers bare Ethernet frames: anything long enough for a header is data. */
+    public static long netChannel(long rx, long len)
+    {
+        return len >= 14 ? Link.CH_DATA : Link.CH_OTHER;
+    }
+
+    public static long netEthOffset(long rx, long len)
+    {
+        return 0L;
+    }
+
+    /** No link events on virtio-net. */
+    public static void netEvent(long rx, long len)
+    {
+    }
+
+    /** No link-level protocol of its own (no EAPOL): nothing to do. */
+    public static void netLinkFrame(long eth, long len)
+    {
+    }
+
+    /** The {@code /net} page's link-driver slots: virtio-net keeps none of the WiFi counters, so they read 0. */
+    public static long netLinkStats(long arr, long len, long at)
+    {
+        int i = (int) at;
+        int n = 0;
+        while (n < WIFI_STATS)
+        {
+            i = VMStats.put(arr, len, i, 0L);
+            n = n + 1;
+        }
+        return i;
+    }
+
+    /** How many link counters the page's layout has after NetStats's (the Pi's WiFi driver's). */
+    private static final int WIFI_STATS = 14;
 }

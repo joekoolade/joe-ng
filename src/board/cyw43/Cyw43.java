@@ -2629,6 +2629,37 @@ public final class Cyw43
 
     public static int rxEvents;                          // firmware event frames (SDPCM channel 1)
 
+    /** The {@code net.Link.CH_*} channel of a received frame: the SDPCM header's channel nibble (0 control, 1 event, 2 data). */
+    public static int rxChannel(Address rx, int len)
+    {
+        if (len < 12)
+        {
+            return net.Link.CH_OTHER;
+        }
+        int ch = rx.plus(5).loadUnsignedByte() & 0x0F;
+        if (ch == 0)
+        {
+            return net.Link.CH_CTRL;
+        }
+        if (ch == 1)
+        {
+            return net.Link.CH_EVENT;
+        }
+        if (ch == 2)
+        {
+            return net.Link.CH_DATA;
+        }
+        return net.Link.CH_OTHER;
+    }
+
+    /** Where a received DATA frame's Ethernet header starts: past the SDPCM header (its data-offset byte), the 4-byte BDC header and its padding words. */
+    public static int rxEthOffset(Address rx)
+    {
+        int doff = rx.plus(7).loadUnsignedByte() & 0xFF;   // SDPCM data offset
+        Address bdc = rx.plus(doff);
+        return doff + 4 + (bdc.plus(3).loadUnsignedByte() & 0xFF) * 4;
+    }
+
     /**
      * Print a firmware event the RX task received after bring-up, when it is about the link (E_DEAUTH 5,
      * E_DEAUTH_IND 6, E_DISASSOC 11, E_DISASSOC_IND 12, E_LINK 16); count every event. {@code rx} is the

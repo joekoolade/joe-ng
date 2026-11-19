@@ -4,6 +4,25 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **PLATFORM, INCREMENT P4: the network link per board -- `net/Link` over platform ops (2026-11-19).**
+  - **`net.Link`'s seven `isVirt()` branches are gone.** Its operations -- present, up, send, MAC, wait for a frame,
+    a received frame's channel and Ethernet offset, a link event, a link-level frame (EAPOL) -- are ten `net*`
+    entries in `board.Platform.OPS`, called through `Link.hw*Addr` statics the writer fills. Pi: the CYW43455
+    (`Cyw43`, `Supplicant`, `Wifi`); the SDPCM framing moved from `Link` into `Cyw43.rxChannel`/`rxEthOffset`.
+    virt: `VirtioNet`, bare Ethernet at offset 0, no events, no EAPOL.
+  - **`VM` brings the link up as `manifestNet() && Link.present()` -> `Link.up(false)`**, replacing the
+    `coreHz > 10 MHz` / `isVirt()` pair (`Bcm2711Platform.netPresent` keeps the coreHz test: QEMU raspi4b has no
+    WiFi chip). The demo suite's WiFi tail calls `Link.up(true)` (then the Pi's HTTP demo) instead of `Wifi`.
+  - **`/net`'s WiFi counters** (14, from `Cyw43`) are the platform's `netLinkStats`; virt writes 14 zeros, what
+    those columns read on virt before. `VMStats` is public, so a platform can use `VMStats.put`.
+  - **New intrinsic `Magic.call3(addr, a, b, c)`** (Intrinsics.CALL3 = 147; `call2`'s lowering with x2) for the
+    three-argument ops; writer world only, like `call0`/`call2`.
+  - **Each image carries only its own network driver** (`strings`): virt image `board/cyw43/` 0, VirtioNet 16; Pi
+    image `board/cyw43/` 105, VirtioNet 0. (P3's Pi card: PI-VALIDATED, see below.)
+  - **Validated:** `make test` + overlaycheck OK; virt solo NetTcpProbe/TickProbe/SslEngineProbe/RunProbe/ExitProbe
+    5/5 (DHCP through `waitFrame`/`call3`, then the RX task); virt WebServerDemo `--fwd`: `/` and `/net` 200, WiFi
+    columns 0; raspi4b TickProbe/ExitProbe/RunProbe/NetStaticsProbe/NetIfProbe 5/5. Not yet on a Pi.
+  - `isVirt()` sites left: `Baseline` 4 (P5); boot-level `VMScheduler` 2 + `VM` 2.
 - **PLATFORM, INCREMENT P3: interrupts -- the GIC shared, device interrupts the board's table (2026-11-19).**
   - **`board/bcm2711/Gic.java` -> `board/arm/Gic.java`**, the GICv2 driver shared by both ARM boards: every method
     takes the distributor / CPU-interface base, like `Pl011`. Its three `isVirt()` branches (two bases, the tick PPI)
@@ -20,8 +39,9 @@ Newest entries are at the top.
     `Cyw43`, `WlanPoll`, `VirtioNet` and `Uart` enable/mask their interrupts through `Irq`.
   - **Validated:** `make test` + overlaycheck OK; virt solo TickProbe/NetTcpProbe/SslEngineProbe/RunProbe/ExitProbe
     5/5 (tick, virtio-net RX interrupt); virt `stdin=uart` StdinDemo echoes two typed lines (PL011 RX interrupt);
-    raspi4b TickProbe/ExitProbe/RunProbe/NetStaticsProbe/NetIfProbe 5/5. Not yet on a Pi -- the WiFi SDIO interrupt
-    (mask in the ISR, unmask from the RX task) runs only there.
+    raspi4b TickProbe/ExitProbe/RunProbe/NetStaticsProbe/NetIfProbe 5/5. **PI-VALIDATED:** WebServerDemo build
+    `802410d56119da0a`: WiFi joined (attempts 1), RX task interrupt-driven, a WPA2 rekey mid-run, all 8 pages
+    including `/net` and `/boot` served.
   - `isVirt()` sites left: `net/Link` 7 (P4), `Baseline` 4 (P5), and the boot-level `VMScheduler` 2 (page tables,
     PSCI vs spin-table secondaries) + `VM` 3 (the boot entry check, EL drop, the virt net bring-up).
 - **PLATFORM, INCREMENT P2: the console -- `board.Uart` neutral, the UART register half per board (2026-11-19).**

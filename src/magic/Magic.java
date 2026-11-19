@@ -159,6 +159,12 @@ public final class Magic
         throw intrinsic();
     }
 
+    /** {@link #call2} with a third argument, in x2. */
+    public static long call3(long addr, long a, long b, long c)
+    {
+        throw intrinsic();
+    }
+
     /**
      * Call JIT'd code at {@code addr} with the 16 argument registers loaded from {@code argsPtr}: x0 &lt;-
      * [argsPtr+0], x1 &lt;- [argsPtr+8], ... x15 &lt;- [argsPtr+120]; return x0. The callee reads only the args

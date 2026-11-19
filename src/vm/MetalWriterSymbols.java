@@ -308,7 +308,8 @@ final class MetalWriterSymbols implements Symbols
     public boolean intrinsicEmitsCall(int methodCp)
     {
         int n = ClassReader.refNameOff(classBytes, cpOff, methodCp);   // gc/call0/call2 emit a BL/BLR
-        return utf8Is(n, Magic.bytes("gc")) || utf8Is(n, Magic.bytes("call0")) || utf8Is(n, Magic.bytes("call2"));
+        return utf8Is(n, Magic.bytes("gc")) || utf8Is(n, Magic.bytes("call0")) || utf8Is(n, Magic.bytes("call2"))
+            || utf8Is(n, Magic.bytes("call3"));
     }
     public int intrinsicId(int methodCp)
     {
@@ -324,6 +325,7 @@ final class MetalWriterSymbols implements Symbols
         if (utf8Is(n, Magic.bytes("gc"))) { return Intrinsics.GC; }
         if (utf8Is(n, Magic.bytes("call0"))) { return Intrinsics.CALL0; }
         if (utf8Is(n, Magic.bytes("call2"))) { return Intrinsics.CALL2; }
+        if (utf8Is(n, Magic.bytes("call3"))) { return Intrinsics.CALL3; }
         if (utf8Is(n, Magic.bytes("eret"))) { return Intrinsics.ERET; }
         if (utf8Is(n, Magic.bytes("dropToEL1"))) { return Intrinsics.DROP_TO_EL1; }
         if (utf8Is(n, Magic.bytes("writeHCR_EL2"))) { return Intrinsics.WRITE_HCR_EL2; }
