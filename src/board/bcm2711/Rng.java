@@ -11,8 +11,11 @@
  */
 package board.bcm2711;
 
+import board.Board;
+import board.virt.VirtioRng;
 import magic.Address;
 import magic.Magic;
+import vm.VM;
 
 /**
  * The BCM2711's hardware random number generator -- an RNG200 block at {@code 0xFE104000}, and joe-ng's only
@@ -96,6 +99,10 @@ public final class Rng
      */
     public static boolean available()
     {
+        if (Board.isVirt())
+        {
+            return VirtioRng.available();               // QEMU virt: its entropy device stands in for the RNG200
+        }
         if (state != UNPROBED)
         {
             return state == USABLE;
@@ -180,6 +187,10 @@ public final class Rng
      */
     public static int fill(long dst, int len)
     {
+        if (Board.isVirt())
+        {
+            return VirtioRng.fill(dst, len);
+        }
         if (!available())
         {
             return 0;
@@ -222,6 +233,11 @@ public final class Rng
     public static void report()
     {
         Uart.write(Magic.bytes("hw rng: "));
+        if (Board.isVirt())
+        {
+            reportVirt();
+            return;
+        }
         if (available())
         {
             Uart.write(Magic.bytes("RNG200 at 0xFE104000, live\n"));
@@ -243,6 +259,39 @@ public final class Rng
         else
         {
             Uart.write(Magic.bytes("present but STUCK (samples did not vary) -- refusing to trust it\n"));
+        }
+    }
+
+    /** The boot report on QEMU virt: what the virtio-rng probe found. */
+    private static void reportVirt()
+    {
+        if (VirtioRng.available())
+        {
+            Uart.write(Magic.bytes("virtio-rng at 0x"));
+            VM.printHex(VirtioRng.transport() - Board.VIRT_DEV_VA);
+            Uart.write(Magic.bytes(", live\n"));
+            return;
+        }
+        int w = VirtioRng.whyUnusable();
+        if (w == VirtioRng.WHY_ABSENT)
+        {
+            Uart.write(Magic.bytes("absent (no virtio-rng device: run QEMU with -device virtio-rng-device)\n"));
+        }
+        else if (w == VirtioRng.WHY_LEGACY)
+        {
+            Uart.write(Magic.bytes("virtio-rng is LEGACY only (add -global virtio-mmio.force-legacy=false)\n"));
+        }
+        else if (w == VirtioRng.WHY_REFUSED)
+        {
+            Uart.write(Magic.bytes("virtio-rng refused setup (features or queue)\n"));
+        }
+        else if (w == VirtioRng.WHY_TIMEOUT)
+        {
+            Uart.write(Magic.bytes("virtio-rng never completed a request\n"));
+        }
+        else
+        {
+            Uart.write(Magic.bytes("virtio-rng STUCK (samples did not vary) -- refusing to trust it\n"));
         }
     }
 }

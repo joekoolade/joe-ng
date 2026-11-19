@@ -44,6 +44,10 @@ logs what informed each piece so encodings and boot facts are auditable.
   `0x0900_0000` on SPI 1 (INTID 33).
 - **ARM PrimeCell UART (PL011) Technical Reference Manual** (ARM DDI 0183) -- DR, FR (RXFE/TXFF), LCR_H, CR,
   IMSC, ICR offsets and bits used by `Uart`'s PL011 path.
+- **Virtual I/O Device (VIRTIO) Version 1.x** (OASIS spec) -- §2.1 device status, §2.6 split virtqueues
+  (descriptor table, driver/available ring, device/used ring), §4.2.2 the MMIO register layout (version 2), §5.4
+  the entropy device (ID 4) -- for `board/virt/VirtioRng.java`. QEMU virt's 32 virtio-mmio transports at
+  `0x0A00_0000` + 0x200 each; `virtio-mmio.force-legacy` defaults to true, so runners pass false.
 - **ARM ARM, generic timer** -- CNTVCT_EL0 / CNTV_CTL_EL0 / CNTV_TVAL_EL0 encodings (virtual timer, PPI 27);
   under QEMU `-accel hvf` the physical-timer registers are not emulated, so a `virt` image uses the virtual
   timer. Encodings checked against objdump in `test/asm/A64Test.java`.

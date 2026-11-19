@@ -4,6 +4,26 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **QEMU `virt` TARGET, INCREMENT V3: virtio-rng entropy (2026-11-18).** Completes the virt plan (V1-V4).
+  - **`board.virt.VirtioRng`**: finds the entropy device (ID 4) among virt's 32 virtio-mmio transports, brings it
+    to DRIVER_OK accepting only VERSION_1, and draws through one POLLED virtqueue (4 descriptors) in a fixed page,
+    `VirtioRng.PAGE` = 0x0305_8000 -- inside the Pi mailbox's scratch slot, which a virt image never uses (now
+    registered in ScratchMap as three regions). Addresses given to the device go through `Board.phys`; one draw at
+    a time under a spinlock with IRQs masked; a request waits at most ~100 ms. Same contract as the RNG200 driver:
+    `fill` never pads, and `available` refuses a device whose four probe samples do not vary.
+  - **`Rng` hands over on virt** (`available`, `fill`, `report`), so `/dev/random`, `/dev/urandom` and NativePRNG
+    appear exactly as on the Pi. MODERN interface only: the runners (`scripts/virt.sh`, `Regress --board virt`)
+    pass `-device virtio-rng-device -global virtio-mmio.force-legacy=false`.
+  - **Measured (HVF):** demo/SecureRandomDemo -- `/dev/random: present, reads 32+32 bytes, two reads differ`,
+    NativePRNG the default. Controls on the same image: no device -> `/dev/random: absent`; the device on QEMU's
+    default LEGACY interface -> refused, `/dev/random: absent`.
+  - **FileProbe:** the full virt list then failed only FileProbe, whose `list /` now showed `dev`. Not a regression:
+    `/dev` exists only on a board with entropy, and the expected output was recorded on raspi4b, which has none (the
+    real Pi would show it too). The probe now leaves `dev` out of that listing; expected output unchanged. Full virt
+    list before the fix: 208/209 (FileProbe only); after it FileProbe, NioFileProbe, ZipFileProbe pass on virt and
+    raspi4b.
+  - **Pi unchanged:** `make test` + overlaycheck clean, image no helper-stash MISS (39,564,880 bytes), raspi4b
+    FileProbe/Lambda4/ChmRace pass.
 - **QEMU `virt` TARGET, INCREMENT V4: `Regress.java --board virt` (2026-11-18).** The probe regression runs on
   QEMU virt: `java scripts/Regress.java --board virt [--tcg] [-j N] [Probe ...]` builds `--board virt` images and
   boots them under HVF (`-accel hvf -cpu host -smp 4`), or emulated Cortex-A72 with `--tcg`. Same probes.txt, same

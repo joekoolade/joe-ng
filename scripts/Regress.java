@@ -577,7 +577,9 @@ public final class Regress
         {
             cmd.addAll(List.of("-accel", "hvf", "-cpu", "host"));
         }
-        cmd.addAll(List.of("-smp", "4", "-m", "4G", "-kernel", img.toString(), "-serial", "stdio",
+        cmd.addAll(List.of("-smp", "4", "-m", "4G", "-device", "virtio-rng-device",      // entropy (board.virt.VirtioRng),
+                "-global", "virtio-mmio.force-legacy=false",                          //   modern interface only
+                "-kernel", img.toString(), "-serial", "stdio",
                 "-display", "none", "-no-reboot"));
         return cmd;
     }
