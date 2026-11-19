@@ -11,8 +11,8 @@
  */
 package net;
 
-import board.Board;
 import magic.Address;
+import magic.Magic;
 
 /**
  * The network interface as the stack sees it: send an 802.3 frame, wait for one, and -- for a frame the link
@@ -20,17 +20,30 @@ import magic.Address;
  * TCP, DHCP, DNS, the receive queues) works on Ethernet frames and asks here; nothing above parses a link's own
  * framing.
  *
- * <p>A received frame is kept exactly as the link delivered it. The Pi's CYW43455 wraps each one in an SDPCM header
- * and a BDC header (and also delivers control replies and firmware events that are not Ethernet at all), so
- * {@link #ethOffset} is where that envelope is unwrapped -- the same arithmetic {@code Ip}, {@code RxQueues} and
- * {@code NetStats} each used to do inline. On QEMU {@code virt} the link is {@code board.virt.VirtioNet}, which
- * delivers bare Ethernet frames: every frame is data, at offset 0.
+ * <p><b>The link is the board's.</b> Each operation goes through the board's platform class ({@code net*} in
+ * {@link board.Platform#OPS}), bound when the image is built: on the Pi the CYW43455 WiFi chip
+ * ({@code board.cyw43}), which wraps each frame in SDPCM and BDC headers and also delivers control replies and
+ * firmware events; on QEMU {@code virt} {@code board.virt.VirtioNet}, which delivers bare Ethernet frames. A
+ * received frame is kept exactly as the link delivered it, and {@link #ethOffset} is where its envelope is
+ * unwrapped.
  */
 public final class Link
 {
     private Link()
     {
     }
+
+    /** The board's link operations ({@link board.Platform#OPS}); filled by the writer, never written at run time. */
+    public static long hwPresentAddr;     // netPresent()J: 1 if this machine has the link's hardware
+    public static long hwUpAddr;          // netUp(J)V: bring it up (join, DHCP, ARP), publishing net.Ip; 1 = then the link's demo
+    public static long hwSendAddr;        // netSend(JJ)V: frame, length
+    public static long hwMacAddr;         // netMac()J: our MAC (heap address)
+    public static long hwWaitFrameAddr;   // netWaitFrame(JJJ)J: dst, cap, ms -> length or 0
+    public static long hwChannelAddr;     // netChannel(JJ)J: CH_* of a received frame
+    public static long hwEthOffsetAddr;   // netEthOffset(JJ)J: where a DATA frame's Ethernet header starts
+    public static long hwEventAddr;       // netEvent(JJ)V: a link event nothing consumed
+    public static long hwLinkFrameAddr;   // netLinkFrame(JJ)V: a data frame that is the link's own business
+    public static long hwLinkStatsAddr;   // netLinkStats(JJJ)J: the driver's counters into a long[] (VMStats.net)
 
     /** How long one receive wait sleeps before answering "nothing yet" (callers loop on 0). */
     public static final int RX_WAIT_MS = 200;
@@ -41,25 +54,31 @@ public final class Link
     public static final int CH_EVENT = 2;
     public static final int CH_OTHER = 3;
 
+    /** Whether this machine has the board's link (false on QEMU raspi4b, which has no WiFi chip). */
+    public static boolean present()
+    {
+        return Magic.call0(hwPresentAddr) != 0L;
+    }
+
+    /**
+     * Bring the link up: join (on WiFi), then DHCP and ARP. The scheduler and IRQs must already be running.
+     * {@code demo}: go on to the link's built-in demo afterwards (the Pi's HTTP fetch, at the demo suite's end).
+     */
+    public static void up(boolean demo)
+    {
+        long u = Magic.call2(hwUpAddr, demo ? 1L : 0L, 0L);
+    }
+
     /** Send a fully built 802.3 frame. */
     public static void send(Address frame, int len)
     {
-        if (Board.isVirt())
-        {
-            board.virt.VirtioNet.send(frame, len);
-            return;
-        }
-        board.cyw43.Cyw43.txData(frame, len);
+        long u = Magic.call2(hwSendAddr, frame.toLong(), len);
     }
 
     /** Our 6-byte MAC (heap address); the link reads it from the hardware the first time. */
     public static Address mac()
     {
-        if (Board.isVirt())
-        {
-            return board.virt.VirtioNet.mac();
-        }
-        return board.cyw43.Cyw43.mac();
+        return Address.fromLong(Magic.call0(hwMacAddr));
     }
 
     /**
@@ -68,11 +87,7 @@ public final class Link
      */
     public static int waitFrame(Address dst, int cap, int ms)
     {
-        if (Board.isVirt())
-        {
-            return board.virt.VirtioNet.waitFrame(dst, cap, ms);
-        }
-        return board.cyw43.Cyw43.waitFrameIrq(dst, cap, ms);
+        return (int) Magic.call3(hwWaitFrameAddr, dst.toLong(), cap, ms);
     }
 
     /**
@@ -97,34 +112,12 @@ public final class Link
     /** The channel of the received frame at {@code rx} ({@code len} bytes). */
     public static int channel(Address rx, int len)
     {
-        if (Board.isVirt())
-        {
-            return len >= 14 ? CH_DATA : CH_OTHER;
-        }
-        if (len < 12)
-        {
-            return CH_OTHER;
-        }
-        int ch = rx.plus(5).loadUnsignedByte() & 0x0F;     // SDPCM channel: 0 control, 1 event, 2 data
-        if (ch == 0)
-        {
-            return CH_CTRL;
-        }
-        if (ch == 1)
-        {
-            return CH_EVENT;
-        }
-        if (ch == 2)
-        {
-            return CH_DATA;
-        }
-        return CH_OTHER;
+        return (int) Magic.call2(hwChannelAddr, rx.toLong(), len);
     }
 
     /**
      * Where the Ethernet frame starts inside the received frame at {@code rx} ({@code len} bytes), or -1 when it is
-     * not a data frame. On the CYW43455: past the SDPCM header (its data-offset byte) and the 4-byte BDC header and
-     * its padding words.
+     * not a data frame.
      */
     public static int ethOffset(Address rx, int len)
     {
@@ -132,23 +125,13 @@ public final class Link
         {
             return -1;
         }
-        if (Board.isVirt())
-        {
-            return 0;
-        }
-        int doff = rx.plus(7).loadUnsignedByte() & 0xFF;   // SDPCM data offset
-        Address bdc = rx.plus(doff);
-        return doff + 4 + (bdc.plus(3).loadUnsignedByte() & 0xFF) * 4;
+        return (int) Magic.call2(hwEthOffsetAddr, rx.toLong(), len);
     }
 
     /** A link event (CH_EVENT) the queues have no consumer for: the link logs it. */
     public static void event(Address rx, int len)
     {
-        if (Board.isVirt())
-        {
-            return;
-        }
-        board.cyw43.Cyw43.logRxEvent(rx, len);
+        long u = Magic.call2(hwEventAddr, rx.toLong(), len);
     }
 
     /**
@@ -158,10 +141,6 @@ public final class Link
      */
     public static void linkFrame(Address eth, int len)
     {
-        int et = (eth.plus(12).loadUnsignedByte() & 0xFF) << 8 | (eth.plus(13).loadUnsignedByte() & 0xFF);
-        if (et == 0x888E && !Board.isVirt())
-        {
-            board.cyw43.Supplicant.input(eth, len);
-        }
+        long u = Magic.call2(hwLinkFrameAddr, eth.toLong(), len);
     }
 }

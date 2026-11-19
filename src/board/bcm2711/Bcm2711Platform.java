@@ -16,8 +16,12 @@ import board.Platform;
 import board.Uart;
 import board.arm.Gic;
 import board.cyw43.Cyw43;
+import board.cyw43.Supplicant;
+import magic.Address;
 import magic.ObjectReference;
+import net.NetStats;
 import objectmodel.ObjectModel;
+import vm.VMStats;
 
 /**
  * The Raspberry Pi 4 (BCM2711) platform: the {@link Platform#OPS} over the VideoCore mailbox, the PM watchdog,
@@ -187,5 +191,80 @@ public final class Bcm2711Platform
             return Irq.DEV_DONE;
         }
         return Irq.DEV_UNKNOWN;
+    }
+
+    /** The WiFi chip is there on a real Pi only: QEMU raspi4b has none (its mailbox reports no core clock). */
+    public static long netPresent()
+    {
+        return Uart.coreHz > 10000000 ? 1L : 0L;
+    }
+
+    /** Join the configured network, then DHCP and ARP; then the built-in HTTP demo only if {@code demo} is 1. */
+    public static void netUp(long demo)
+    {
+        Cyw43.runDemo = demo != 0L;
+        Wifi.bringUp();
+    }
+
+    public static void netSend(long frame, long len)
+    {
+        Cyw43.txData(Address.fromLong(frame), (int) len);
+    }
+
+    public static long netMac()
+    {
+        return Cyw43.mac().toLong();
+    }
+
+    public static long netWaitFrame(long dst, long cap, long ms)
+    {
+        return Cyw43.waitFrameIrq(Address.fromLong(dst), (int) cap, (int) ms);
+    }
+
+    public static long netChannel(long rx, long len)
+    {
+        return Cyw43.rxChannel(Address.fromLong(rx), (int) len);
+    }
+
+    public static long netEthOffset(long rx, long len)
+    {
+        return Cyw43.rxEthOffset(Address.fromLong(rx));
+    }
+
+    public static void netEvent(long rx, long len)
+    {
+        Cyw43.logRxEvent(Address.fromLong(rx), (int) len);
+    }
+
+    /** An EAPOL key frame (ethertype 0x888E) goes to the WPA2 supplicant: a re-handshake must be answered. */
+    public static void netLinkFrame(long eth, long len)
+    {
+        Address e = Address.fromLong(eth);
+        int et = (e.plus(12).loadUnsignedByte() & 0xFF) << 8 | (e.plus(13).loadUnsignedByte() & 0xFF);
+        if (et == 0x888E)
+        {
+            Supplicant.input(e, (int) len);
+        }
+    }
+
+    /** The WiFi driver's counters, after {@code NetStats}'s on the {@code /net} page. */
+    public static long netLinkStats(long arr, long len, long at)
+    {
+        int i = (int) at;
+        i = VMStats.put(arr, len, i, Cyw43.rxEvents);                  // WiFi: firmware events received
+        i = VMStats.put(arr, len, i, Cyw43.txQueued);                  // ... frames that waited to send
+        i = VMStats.put(arr, len, i, Cyw43.txForced);                  // ... sent past the credit window
+        i = VMStats.put(arr, len, i, Cyw43.txDropped);                 // ... dropped, queue full
+        i = VMStats.put(arr, len, i, NetStats.ms(Cyw43.txqWaitTicks)); // ... summed queue wait, ms
+        i = VMStats.put(arr, len, i, NetStats.ms(Cyw43.txqWaitMax * 1000L));   // ... longest wait, us
+        i = VMStats.put(arr, len, i, Cyw43.txqFlushes);                // ... flushes that sent something
+        i = VMStats.put(arr, len, i, Cyw43.txqWaitsOver100);           // ... frames that waited >= 100 ms
+        i = VMStats.put(arr, len, i, Cyw43.txqLongAcrossGc);           // ... long waits spanning a GC
+        i = VMStats.put(arr, len, i, Cyw43.wpaJoinMs);                 // boot join: SET_SSID to keys, ms
+        i = VMStats.put(arr, len, i, Cyw43.wpaMsg1);                   // ... EAPOL msg1s received
+        i = VMStats.put(arr, len, i, Cyw43.wpaMsg2);                   // ... msg2s sent
+        i = VMStats.put(arr, len, i, Cyw43.wpaHeld);                   // ... EAPOL kept from a non-EAPOL wait
+        i = VMStats.put(arr, len, i, Cyw43.wpaAttempts);               // ... associations tried
+        return i;
     }
 }

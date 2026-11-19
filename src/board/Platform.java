@@ -13,7 +13,7 @@ package board;
 
 /**
  * The contract every board's platform class meets: the operations whose implementation depends on the machine
- * (block device, entropy, reboot, the console UART, the interrupt controller, ...), as STATIC methods of one class per board -- {@code board.bcm2711.Bcm2711Platform},
+ * (block device, entropy, reboot, the console UART, the interrupt controller, the network link, ...), as STATIC methods of one class per board -- {@code board.bcm2711.Bcm2711Platform},
  * {@code board.virt.VirtPlatform}, and later a PC's.
  *
  * <p><b>The choice is made when the image is built, not when it runs.</b> {@code BuildRuntimeImage --board}
@@ -72,6 +72,17 @@ public final class Platform
         { "irqMask(J)V",                                  "board/Irq.hwMaskAddr" },
         { "irqUnmask(J)V",                                "board/Irq.hwUnmaskAddr" },
         { "irqDevice(J)J",                                "board/Irq.hwDeviceAddr" },
+        // The network link (Pi: the CYW43455 WiFi chip; virt: virtio-net); net.Link calls these.
+        { "netPresent()J",                                "net/Link.hwPresentAddr" },
+        { "netUp(J)V",                                    "net/Link.hwUpAddr" },
+        { "netSend(JJ)V",                                 "net/Link.hwSendAddr" },
+        { "netMac()J",                                    "net/Link.hwMacAddr" },
+        { "netWaitFrame(JJJ)J",                           "net/Link.hwWaitFrameAddr" },
+        { "netChannel(JJ)J",                              "net/Link.hwChannelAddr" },
+        { "netEthOffset(JJ)J",                            "net/Link.hwEthOffsetAddr" },
+        { "netEvent(JJ)V",                                "net/Link.hwEventAddr" },
+        { "netLinkFrame(JJ)V",                            "net/Link.hwLinkFrameAddr" },
+        { "netLinkStats(JJJ)J",                           "net/Link.hwLinkStatsAddr" },
     };
 
     /** The platform class (internal name) for a {@code --board} name, or null for an unknown board. */

@@ -13,6 +13,7 @@ package vm;
 
 import magic.Address;
 import magic.Magic;
+import net.Link;
 import net.NetStats;
 import objectmodel.ObjectModel;
 
@@ -26,7 +27,7 @@ import objectmodel.ObjectModel;
  * and the columns of one group can come from slightly different instants. That is what a statistics page means.
  * Nothing here allocates.
  */
-final class VMStats
+public final class VMStats
 {
     private VMStats()
     {
@@ -107,7 +108,7 @@ final class VMStats
     }
 
     /** Store {@code v} at index {@code i} if the array has room; answer i + 1. */
-    private static int put(long arr, long len, int i, long v)
+    public static int put(long arr, long len, int i, long v)
     {
         if ((long) i < len)
         {
@@ -277,7 +278,7 @@ final class VMStats
         return VM.taskThreadObj.get((int) t).toLong();
     }
 
-    /** {@link NetStats} in its declaration order, then the WiFi driver's counters. */
+    /** {@link NetStats} in its declaration order, then the link driver's counters ({@code netLinkStats}). */
     private static long net(long arr, long len)
     {
         int i = 0;
@@ -325,20 +326,7 @@ final class VMStats
         i = put(arr, len, i, NetStats.udpInCsumErrors);
         i = put(arr, len, i, NetStats.udpRcvbufErrors);
         i = put(arr, len, i, NetStats.udpOutDatagrams);
-        i = put(arr, len, i, board.cyw43.Cyw43.rxEvents);                  // WiFi: firmware events received
-        i = put(arr, len, i, board.cyw43.Cyw43.txQueued);                  // ... frames that waited to send
-        i = put(arr, len, i, board.cyw43.Cyw43.txForced);                  // ... sent past the credit window
-        i = put(arr, len, i, board.cyw43.Cyw43.txDropped);                 // ... dropped, queue full
-        i = put(arr, len, i, NetStats.ms(board.cyw43.Cyw43.txqWaitTicks)); // ... summed queue wait, ms
-        i = put(arr, len, i, NetStats.ms(board.cyw43.Cyw43.txqWaitMax * 1000L));   // ... longest wait, us
-        i = put(arr, len, i, board.cyw43.Cyw43.txqFlushes);                // ... flushes that sent something
-        i = put(arr, len, i, board.cyw43.Cyw43.txqWaitsOver100);           // ... frames that waited >= 100 ms
-        i = put(arr, len, i, board.cyw43.Cyw43.txqLongAcrossGc);           // ... long waits spanning a GC
-        i = put(arr, len, i, board.cyw43.Cyw43.wpaJoinMs);                 // boot join: SET_SSID to keys, ms
-        i = put(arr, len, i, board.cyw43.Cyw43.wpaMsg1);                   // ... EAPOL msg1s received
-        i = put(arr, len, i, board.cyw43.Cyw43.wpaMsg2);                   // ... msg2s sent
-        i = put(arr, len, i, board.cyw43.Cyw43.wpaHeld);                   // ... EAPOL kept from a non-EAPOL wait
-        i = put(arr, len, i, board.cyw43.Cyw43.wpaAttempts);               // ... associations tried
+        i = (int) Magic.call3(Link.hwLinkStatsAddr, arr, len, i);   // the link driver's own counters (WiFi)
         return (long) i;
     }
 }
