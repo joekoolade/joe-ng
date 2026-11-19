@@ -42,43 +42,43 @@ public final class Dhcp
         while (disc < 4)
         {
             disc = disc + 1;
-            board.bcm2711.Uart.write(Magic.bytes("net: dhcp discover\n"));
+            board.Uart.write(Magic.bytes("net: dhcp discover\n"));
             Link.send(buf, build(buf, mac, 1, Address.zero(), Address.zero()));          // DISCOVER
             if (!await(rx, 2, ipOut, serverId, Address.zero(), Address.zero(), Address.zero()))   // OFFER (type 2)
             {
-                board.bcm2711.Uart.write(Magic.bytes("net: dhcp no offer, retry\n"));
+                board.Uart.write(Magic.bytes("net: dhcp no offer, retry\n"));
                 continue;
             }
-            board.bcm2711.Uart.write(Magic.bytes("net: dhcp offer ip "));
+            board.Uart.write(Magic.bytes("net: dhcp offer ip "));
             Ip.printIp(ipOut);
-            board.bcm2711.Uart.putc(0x0A);
+            board.Uart.putc(0x0A);
 
             boolean acked = false;
             int rq = 0;
             while (rq < 3 && !acked)                      // REQUEST -> ACK, resending REQUEST on a lost ACK
             {
                 rq = rq + 1;
-                board.bcm2711.Uart.write(Magic.bytes("net: dhcp request\n"));
+                board.Uart.write(Magic.bytes("net: dhcp request\n"));
                 Link.send(buf2, build(buf2, mac, 3, ipOut, serverId));   // REQUEST (opt 50 req-ip, opt 54 server-id)
                 acked = await(rx, 5, ipOut, serverId, maskOut, gwOut, dnsOut);   // ACK (type 5)
             }
             if (!acked)
             {
-                board.bcm2711.Uart.write(Magic.bytes("net: dhcp no ack, re-discover\n"));
+                board.Uart.write(Magic.bytes("net: dhcp no ack, re-discover\n"));
                 continue;
             }
-            board.bcm2711.Uart.write(Magic.bytes("net: dhcp ACK ip "));
+            board.Uart.write(Magic.bytes("net: dhcp ACK ip "));
             Ip.printIp(ipOut);
-            board.bcm2711.Uart.write(Magic.bytes("\n  gateway "));
+            board.Uart.write(Magic.bytes("\n  gateway "));
             Ip.printIp(gwOut);
-            board.bcm2711.Uart.write(Magic.bytes("\n  subnet  "));
+            board.Uart.write(Magic.bytes("\n  subnet  "));
             Ip.printIp(maskOut);
-            board.bcm2711.Uart.write(Magic.bytes("\n  dns     "));
+            board.Uart.write(Magic.bytes("\n  dns     "));
             Ip.printIp(dnsOut);
-            board.bcm2711.Uart.putc(0x0A);
+            board.Uart.putc(0x0A);
             return true;
         }
-        board.bcm2711.Uart.write(Magic.bytes("net: dhcp FAILED after retries\n"));
+        board.Uart.write(Magic.bytes("net: dhcp FAILED after retries\n"));
         return false;
     }
 

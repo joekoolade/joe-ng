@@ -226,7 +226,7 @@ public final class Ip
             vm.VM.printDec(a.plus(i).loadUnsignedByte() & 0xFF);
             if (i < 3)
             {
-                board.bcm2711.Uart.putc(0x2E);           // '.'
+                board.Uart.putc(0x2E);           // '.'
             }
             i = i + 1;
         }
@@ -241,7 +241,7 @@ public final class Ip
             printHex2(a.plus(i).loadUnsignedByte() & 0xFF);
             if (i < 5)
             {
-                board.bcm2711.Uart.putc(0x3A);           // ':'
+                board.Uart.putc(0x3A);           // ':'
             }
             i = i + 1;
         }
@@ -250,8 +250,8 @@ public final class Ip
     /** Print a byte as two lowercase hex digits. */
     public static void printHex2(int v)
     {
-        board.bcm2711.Uart.putc(hexDigit((v >> 4) & 0x0F));
-        board.bcm2711.Uart.putc(hexDigit(v & 0x0F));
+        board.Uart.putc(hexDigit((v >> 4) & 0x0F));
+        board.Uart.putc(hexDigit(v & 0x0F));
     }
 
     private static int hexDigit(int n)

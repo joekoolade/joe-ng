@@ -12,7 +12,7 @@
 package vm;
 
 import compiler.Baseline;
-import board.bcm2711.Uart;
+import board.Uart;
 import classfile.ClassReader;
 import magic.Address;
 import magic.AddressArray;

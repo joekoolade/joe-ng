@@ -13,7 +13,7 @@ package vm;
 
 import magic.Address;
 import magic.Magic;
-import board.bcm2711.Uart;
+import board.Uart;
 
 /**
  * The code -> code edge census: every direct branch from one code-arena buffer to another, recorded as a

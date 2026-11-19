@@ -14,7 +14,7 @@ package vm;
 import magic.Address;
 import magic.Magic;
 import magic.ObjectReference;
-import board.bcm2711.Uart;
+import board.Uart;
 import static vm.VM.*;   // exception-table state + shared helpers stay in VM: handlerTable/Count, jitHandler*,
                          // unwindLog/Logged, unwindLocBufs, faultDepth, and printHex/printStr/frameSizeAt/
                          // jitRegLocalsAt/instanceOf — all reached here by simple name.

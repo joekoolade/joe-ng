@@ -18,7 +18,7 @@ import board.bcm2711.Emmc;
 import board.bcm2711.Fat32;
 import board.bcm2711.Gic;
 import board.bcm2711.Reset;
-import board.bcm2711.Uart;
+import board.Uart;
 import classfile.ClassReader;
 import compiler.Baseline;
 import magic.Address;
@@ -5031,7 +5031,7 @@ public final class VM
         // 158) instead of busy-polling. Guarded by the non-final WIFI_ENABLED flag (so the writer still
         // compiles the subsystem in) and HW-gated on coreHz: QEMU reports 0 and skips (no CYW43 there; its
         // 0xFE300000 is the SD card).
-        if (WIFI_ENABLED && board.bcm2711.Uart.coreHz > 10000000)
+        if (WIFI_ENABLED && board.Uart.coreHz > 10000000)
         {
             installSchedVectors();                         // rebuild the switch stubs the GC/JIT demos freed
             resetTaskTable();                              // fresh table: only task 0 -- no demo tasks to spew

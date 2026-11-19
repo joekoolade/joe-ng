@@ -25,7 +25,7 @@ import java.util.stream.Stream;
 /**
  * M2: build the multi-class runtime image. Starting from {@code vm.VM.boot},
  * {@link ImageBuilder} discovers and compiles every reachable method across
- * classes (here {@code VM} + {@code board.bcm2711.Uart}), lays them out, and
+ * classes (here {@code VM} + {@code board.Uart}), lays them out, and
  * relocates the calls between them — a multi-method, multi-class Java program
  * booting on bare metal (PLAN.md §4 M2). It still prints "hello from joe-ng",
  * now driven by real cross-class {@code BL} calls rather than one inlined method.

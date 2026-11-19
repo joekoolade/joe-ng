@@ -135,7 +135,7 @@ public final class Supplicant
         pendKek = Cyw43.slice(ptk, 16, 16);
         pendTk = Cyw43.slice(ptk, 32, 16);
         Cyw43.sendEapol(aa, KI_MSG2, r, pendKeyLen, sNonce, ie, ieLen, pendKck);
-        board.bcm2711.Uart.write(Magic.bytes("wifi: rekey msg1 -> msg2 sent\n"));
+        board.Uart.write(Magic.bytes("wifi: rekey msg1 -> msg2 sent\n"));
     }
 
     /** Pairwise msg3: verify with the pending PTK, unwrap the GTK, send msg4, install TK + GTK. */
@@ -170,9 +170,9 @@ public final class Supplicant
         pendReplay = null;
         sNonce = null;
         rekeys = rekeys + 1;
-        board.bcm2711.Uart.write(Magic.bytes("wifi: rekey msg3 ok -> msg4 sent, keys installed n="));
+        board.Uart.write(Magic.bytes("wifi: rekey msg3 ok -> msg4 sent, keys installed n="));
         VM.printDec(rekeys);
-        board.bcm2711.Uart.putc(0x0A);
+        board.Uart.putc(0x0A);
     }
 
     /** Group msg1: verify with the current PTK, unwrap the new GTK, send group msg2, install the GTK. */
@@ -194,9 +194,9 @@ public final class Supplicant
         Cyw43.sendEapol(aa, KI_GROUP2, replay, 0, new byte[32], new byte[0], 0, kck);
         Cyw43.installKey(gtkId, gtk, 16, new byte[6], false);
         groupRekeys = groupRekeys + 1;
-        board.bcm2711.Uart.write(Magic.bytes("wifi: group rekey -> msg2 sent, GTK installed n="));
+        board.Uart.write(Magic.bytes("wifi: group rekey -> msg2 sent, GTK installed n="));
         VM.printDec(groupRekeys);
-        board.bcm2711.Uart.putc(0x0A);
+        board.Uart.putc(0x0A);
     }
 
     /** HMAC-SHA1-128 over the EAPOL frame (MIC field zeroed) equals the frame's MIC. */
@@ -253,6 +253,6 @@ public final class Supplicant
     private static void reject(byte[] why)
     {
         rejected = rejected + 1;
-        board.bcm2711.Uart.write(why);
+        board.Uart.write(why);
     }
 }

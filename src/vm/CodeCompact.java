@@ -13,7 +13,7 @@ package vm;
 
 import magic.Address;
 import magic.Magic;
-import board.bcm2711.Uart;
+import board.Uart;
 
 /**
  * The code-arena relocation PLAN -- what compaction would move, and whether every reference to it could be

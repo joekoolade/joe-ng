@@ -131,21 +131,21 @@ public final class Dns
         {
             return true;
         }
-        board.bcm2711.Uart.write(Magic.bytes("dns: no A record for "));
-        board.bcm2711.Uart.write(host);
-        board.bcm2711.Uart.write(Magic.bytes(" in 6 s: sends="));
+        board.Uart.write(Magic.bytes("dns: no A record for "));
+        board.Uart.write(host);
+        board.Uart.write(Magic.bytes(" in 6 s: sends="));
         VM.printDec(sends);
-        board.bcm2711.Uart.write(Magic.bytes(" frames="));
+        board.Uart.write(Magic.bytes(" frames="));
         VM.printDec(frames);
-        board.bcm2711.Uart.write(Magic.bytes(" ipv4="));
+        board.Uart.write(Magic.bytes(" ipv4="));
         VM.printDec(ipv4);
-        board.bcm2711.Uart.write(Magic.bytes(" fromDns="));
+        board.Uart.write(Magic.bytes(" fromDns="));
         VM.printDec(fromDns);
-        board.bcm2711.Uart.write(Magic.bytes(" toPort="));
+        board.Uart.write(Magic.bytes(" toPort="));
         VM.printDec(toUs);
-        board.bcm2711.Uart.write(Magic.bytes(" idOk="));
+        board.Uart.write(Magic.bytes(" idOk="));
         VM.printDec(idOk);
-        board.bcm2711.Uart.putc(0x0A);
+        board.Uart.putc(0x0A);
         return false;
     }
 

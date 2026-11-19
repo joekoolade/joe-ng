@@ -126,7 +126,7 @@ public final class VirtioNet
      */
     public static void bringUp()
     {
-        board.bcm2711.Uart.write(Magic.bytes("net: virtio-net bring-up\n"));
+        board.Uart.write(Magic.bytes("net: virtio-net bring-up\n"));
         if (!init())
         {
             return;
@@ -164,12 +164,12 @@ public final class VirtioNet
         }
         if (base == 0L)
         {
-            board.bcm2711.Uart.write(Magic.bytes("net: no virtio-net device (-device virtio-net-device)\n"));
+            board.Uart.write(Magic.bytes("net: no virtio-net device (-device virtio-net-device)\n"));
             return false;
         }
         if (reg(base, REG_VERSION) != 2)
         {
-            board.bcm2711.Uart.write(Magic.bytes("net: virtio-net is legacy-only (-global virtio-mmio.force-legacy=false)\n"));
+            board.Uart.write(Magic.bytes("net: virtio-net is legacy-only (-global virtio-mmio.force-legacy=false)\n"));
             base = 0L;
             return false;
         }
@@ -182,7 +182,7 @@ public final class VirtioNet
         int lo = reg(base, REG_DEVICE_FEATURES);
         if ((hi & 1) == 0)
         {
-            board.bcm2711.Uart.write(Magic.bytes("net: virtio-net refused (no VERSION_1)\n"));
+            board.Uart.write(Magic.bytes("net: virtio-net refused (no VERSION_1)\n"));
             return false;
         }
         int accept = lo & F_MAC;
@@ -193,7 +193,7 @@ public final class VirtioNet
         setReg(REG_STATUS, ST_ACKNOWLEDGE | ST_DRIVER | ST_FEATURES_OK);
         if ((reg(base, REG_STATUS) & ST_FEATURES_OK) == 0)
         {
-            board.bcm2711.Uart.write(Magic.bytes("net: virtio-net refused FEATURES_OK\n"));
+            board.Uart.write(Magic.bytes("net: virtio-net refused FEATURES_OK\n"));
             return false;
         }
         mac = Heap.allocData(8);
@@ -217,7 +217,7 @@ public final class VirtioNet
         lockMem = Heap.allocData(16);
         if (!setupQueue(RX, rxRing, RXQ) || !setupQueue(TX, txRing, TXQ))
         {
-            board.bcm2711.Uart.write(Magic.bytes("net: virtio-net queue too small\n"));
+            board.Uart.write(Magic.bytes("net: virtio-net queue too small\n"));
             return false;
         }
         i = 0;
@@ -244,11 +244,11 @@ public final class VirtioNet
         Magic.dsb();
         setReg(REG_QUEUE_NOTIFY, RX);
         intid = MMIO_FIRST_INTID + slot;
-        board.bcm2711.Uart.write(Magic.bytes("net: virtio-net mac "));
+        board.Uart.write(Magic.bytes("net: virtio-net mac "));
         net.Ip.printMac(mac);
-        board.bcm2711.Uart.write(Magic.bytes(" irq "));
+        board.Uart.write(Magic.bytes(" irq "));
         VM.printDec(intid);
-        board.bcm2711.Uart.putc(0x0A);
+        board.Uart.putc(0x0A);
         return true;
     }
 
@@ -435,7 +435,7 @@ public final class VirtioNet
         }
         if (entry == 0L)
         {
-            board.bcm2711.Uart.write(Magic.bytes("net: rx task not in the image -- staying synchronous\n"));
+            board.Uart.write(Magic.bytes("net: rx task not in the image -- staying synchronous\n"));
             return false;
         }
         net.RxQueues.init();
@@ -443,7 +443,7 @@ public final class VirtioNet
         net.RxQueues.active = true;
         rxTaskId = VMScheduler.spawnKernel(entry);
         board.bcm2711.Gic.initSpi(intid);
-        board.bcm2711.Uart.write(Magic.bytes("net: rx task started (virtio-net, interrupt-driven)\n"));
+        board.Uart.write(Magic.bytes("net: rx task started (virtio-net, interrupt-driven)\n"));
         return true;
     }
 

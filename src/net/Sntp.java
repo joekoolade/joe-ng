@@ -11,7 +11,7 @@
  */
 package net;
 
-import board.bcm2711.Uart;
+import board.Uart;
 import magic.Address;
 import magic.Magic;
 import vm.Heap;

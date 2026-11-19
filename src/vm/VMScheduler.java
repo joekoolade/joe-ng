@@ -15,7 +15,7 @@ import asm.A64Enc;
 import board.Board;
 import board.bcm2711.Bcm2711;
 import board.bcm2711.Gic;
-import board.bcm2711.Uart;
+import board.Uart;
 import magic.Address;
 import magic.Magic;
 import magic.ObjectReference;

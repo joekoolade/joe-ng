@@ -43,7 +43,7 @@ public final class NetUp
         Address gwMac = Heap.allocData(8);
         if (!Arp.resolve(gw, gwMac, mac, ip))
         {
-            board.bcm2711.Uart.write(Magic.bytes("net: arp no reply\n"));
+            board.Uart.write(Magic.bytes("net: arp no reply\n"));
             return false;
         }
         Ip.ourMac = mac;
@@ -52,18 +52,18 @@ public final class NetUp
         Ip.gwIp = gw;
         Ip.dnsIp = dns;
         Ip.gwMac = gwMac;
-        board.bcm2711.Uart.write(Magic.bytes("net: gateway mac "));
+        board.Uart.write(Magic.bytes("net: gateway mac "));
         Ip.printMac(gwMac);
-        board.bcm2711.Uart.putc(0x0A);
+        board.Uart.putc(0x0A);
         if (Icmp.ping(gw, gwMac, mac, ip))
         {
-            board.bcm2711.Uart.write(Magic.bytes("net: ping reply from "));
+            board.Uart.write(Magic.bytes("net: ping reply from "));
             Ip.printIp(gw);
-            board.bcm2711.Uart.putc(0x0A);
+            board.Uart.putc(0x0A);
         }
         else
         {
-            board.bcm2711.Uart.write(Magic.bytes("net: ping no reply\n"));
+            board.Uart.write(Magic.bytes("net: ping no reply\n"));
         }
         return true;
     }
