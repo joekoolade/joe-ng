@@ -16,7 +16,7 @@ import board.Board;
 import board.bcm2711.Bcm2711;
 import board.bcm2711.Emmc;
 import board.bcm2711.Fat32;
-import board.bcm2711.Gic;
+import board.Irq;
 import board.bcm2711.Reset;
 import board.Uart;
 import classfile.ClassReader;
@@ -356,12 +356,12 @@ public final class VM
 
     /**
      * EL1 IRQ handler — reached (context saved) from the IRQ vector for a taken interrupt. Acknowledge
-     * it at the GIC; if it is the physical-timer PPI, count the tick and re-arm the timer; end it.
+     * it at the interrupt controller; if it is the board's tick, count it and re-arm the timer; end it.
      */
     static void irqHandler()
     {
-        int id = Gic.acknowledge();                        // GICC_IAR: which INTID the CPU interface is signalling
-        if (id == Gic.timerPpi())                          // non-secure EL1 physical timer PPI (INTID 30)
+        int id = Irq.acknowledge();                        // which interrupt the controller is signalling
+        if (id == Irq.timer)                               // this board's tick
         {
             ticks = ticks + 1L;
             Magic.writeCNTP_TVAL_EL0(timerReload);         // re-arm (deasserts the level line until it counts down)
@@ -370,7 +370,7 @@ public final class VM
         {                                                  //   here too or it re-fires for ever
             Uart.onIrq();
         }
-        Gic.end(id);                                       // GICC_EOIR: drop priority so the next one can fire
+        Irq.end(id);                                       // EOI: drop priority so the next one can fire
     }
 
     /**
@@ -424,10 +424,9 @@ public final class VM
         Heap.publishCode(Address.fromLong(e5), Address.fromLong(e6 + 4L));
         Magic.isb();
 
-        // Bring up the GIC and enable the non-secure physical-timer PPI (INTID 30). With the GIC
-        // selected (enable_gic=1), the timer wires straight to it as PPI 30; the ARM-local router is
-        // bypassed. The firmware armstub must have placed the PPIs in group 1 for this to deliver.
-        Gic.init(Gic.timerPpi());
+        // Bring up the interrupt controller and the board's tick (the Pi: the GIC-400's non-secure physical-timer
+        // PPI 30, which the armstub must have placed in group 1; virt: the virtual timer's PPI 27).
+        Irq.initTimer();
         timerReload = Magic.readCNTFRQ_EL0() / 1000L;      // ~1 ms
         Magic.writeCNTP_TVAL_EL0(timerReload);
         Magic.writeCNTP_CTL_EL0(1);                        // enable the timer (imask=0)
@@ -2234,7 +2233,7 @@ public final class VM
         VMScheduler.spawn(taskCAddr);                                  // task 3 (consumer: blocks on sem 0)
         VMScheduler.spawn(taskRAddr);                                  // task 4 (UART reader: blocks on UART_SEM)
 
-        Gic.init(Gic.timerPpi());
+        Irq.initTimer();
         Uart.enableInterrupts();                           // the console goes interrupt-driven (SPI 125)
         timerReload = Magic.readCNTFRQ_EL0() / 100L;       // ~10 ms scheduling quantum
         Magic.writeCNTP_TVAL_EL0(timerReload);
@@ -2255,7 +2254,7 @@ public final class VM
         if (yieldPickAddr == 0L) { yieldPickAddr = VMScheduler.yieldPick(0L); } // compiled + stashed for the vector stubs
         installSchedVectors();
         allocTaskTables();                                  // task 0 = the WiFi boot flow
-        Gic.init(Gic.timerPpi());
+        Irq.initTimer();
         Uart.enableInterrupts();                            // the console goes interrupt-driven (SPI 125)
         timerReload = Magic.readCNTFRQ_EL0() / 100L;        // ~10 ms tick (deadline wakes for semWaitTimeout)
         Magic.writeCNTP_TVAL_EL0(timerReload);

@@ -119,6 +119,10 @@ public final class Bcm2711
      */
     public static final int  SDIO_SPI = 158;
 
+    /** The GIC-400: base 0x4c0040000, at 0xFF840000 in Low Peripheral mode (peripherals §6.5.1). */
+    public static final long GICD = 0xFF84_1000L;      // distributor  (base + 0x1000)
+    public static final long GICC = 0xFF84_2000L;      // CPU interface (base + 0x2000)
+
     /**
      * <em>Fallback</em> baud divisor for 115200, used only if the mailbox does not
      * report a core clock. mini-UART baud = core_clock / (8*(divisor+1)), so the
@@ -139,7 +143,7 @@ public final class Bcm2711
     // Reference only — NOT the active path. The BCM2711 per-core block can route the ARM generic
     // timers straight to a core's IRQ/FIQ, but ONLY when the legacy interrupt controller is selected.
     // With the GIC selected (the default), the timer wires to the GIC as PPI 30 and this router is
-    // bypassed (IRQ_SOURCE reads 0). We take the timer through the GIC — see board.bcm2711.Gic.
+    // bypassed (IRQ_SOURCE reads 0). We take the timer through the GIC — see board.arm.Gic.
     public static final long ARM_LOCAL_BASE      = 0xFF80_0000L;
     public static final long CORE0_TIMER_IRQCNTL = ARM_LOCAL_BASE + 0x40;  // route: bit1 = CNTPNS -> IRQ
     public static final long CORE0_IRQ_SOURCE    = ARM_LOCAL_BASE + 0x60;  // pending: bit1 = CNTPNS

@@ -12,8 +12,10 @@
 package board.virt;
 
 import board.Board;
+import board.Irq;
 import board.Platform;
 import board.Uart;
+import board.arm.Gic;
 import board.arm.Pl011;
 import magic.Magic;
 import magic.ObjectReference;
@@ -127,5 +129,56 @@ public final class VirtPlatform
     public static long consoleSpi()
     {
         return Board.VIRT_UART_SPI;
+    }
+
+    /** The tick: the EL1 virtual timer, PPI 27 (Baseline lowers the timer intrinsics to CNTV here). */
+    public static long irqInitTimer()
+    {
+        Gic.init(Board.VIRT_GICD, Board.VIRT_GICC, Gic.PPI_CNTV);
+        return Gic.PPI_CNTV;
+    }
+
+    public static long irqAck()
+    {
+        int id = Gic.acknowledge(Board.VIRT_GICC);
+        if (id == Gic.SPURIOUS)
+        {
+            return Irq.NONE;
+        }
+        return id;
+    }
+
+    public static void irqEnd(long id)
+    {
+        Gic.end(Board.VIRT_GICC, (int) id);
+    }
+
+    public static void irqEnable(long id)
+    {
+        Gic.initSpi(Board.VIRT_GICD, Board.VIRT_GICC, (int) id);
+    }
+
+    public static void irqMask(long id)
+    {
+        Gic.disable(Board.VIRT_GICD, (int) id);
+    }
+
+    public static void irqUnmask(long id)
+    {
+        Gic.enable(Board.VIRT_GICD, (int) id);
+    }
+
+    /** virt's device interrupts: the virtio-net transport's (its INTID is found at probe time) wakes the net RX task. */
+    public static long irqDevice(long id)
+    {
+        if (VirtioNet.intid != 0 && id == VirtioNet.intid)
+        {
+            if (VirtioNet.onIrq())
+            {
+                return Irq.DEV_WAKE_NET;
+            }
+            return Irq.DEV_DONE;
+        }
+        return Irq.DEV_UNKNOWN;
     }
 }

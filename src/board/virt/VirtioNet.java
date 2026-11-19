@@ -442,7 +442,7 @@ public final class VirtioNet
         net.Tcp.init();
         net.RxQueues.active = true;
         rxTaskId = VMScheduler.spawnKernel(entry);
-        board.bcm2711.Gic.initSpi(intid);
+        board.Irq.enable(intid);
         board.Uart.write(Magic.bytes("net: rx task started (virtio-net, interrupt-driven)\n"));
         return true;
     }
