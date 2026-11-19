@@ -84,6 +84,7 @@ public final class A64Test
         T.eqWord("MSR SCTLR_EL1,x0", 0xD5181000, A64.msr(A64.SCTLR_EL1, 0));
         T.eqWord("MSR CPACR_EL1,x0", 0xD5181040, A64.msr(A64.CPACR_EL1, 0));
         T.eqWord("ERET",             0xD69F03E0, A64.eret());
+        T.eqWord("HVC #0",           0xD4000002, asm.A64Enc.hvc0());
         // generic timer: physical (the Pi) and virtual (QEMU virt) -- ARM ARM D23.8 encodings, as objdump prints them
         T.eqWord("MRS x0,CNTPCT_EL0",    0xD53BE020, asm.A64Enc.mrs(0, asm.A64Enc.CNTPCT_EL0));
         T.eqWord("MSR CNTP_CTL_EL0,x0",  0xD51BE220, asm.A64Enc.msr(asm.A64Enc.CNTP_CTL_EL0, 0));

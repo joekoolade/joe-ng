@@ -454,10 +454,10 @@ public final class VM
     // bring-up, when a single shared bump heap made the reclaim unsafe under the secondaries.)
     static final boolean SMP_ENABLED = true;
 
-    /** SMP is on, and this board brings up its secondaries the Pi's way (QEMU virt needs PSCI: not yet). */
+    /** SMP is on (both boards: the Pi releases its secondaries from spin slots, QEMU virt with PSCI CPU_ON). */
     static boolean smpEnabled()
     {
-        return SMP_ENABLED && !Board.isVirt();
+        return SMP_ENABLED;
     }
     /**
      * Tag on a JIT handler's catch-type word meaning "the low bits are the catch class's Utf8 NAME, resolve at
@@ -472,6 +472,7 @@ public final class VM
     static final long SEC_STUB   = 0x0300_0000L;          // secondary boot stub (fixed scratch, not GC'd)
     static final int  SEC_STACK_HI = 0x0380;              // per-core stack base 0x0380_0000 + core*1MiB
     public static final long PT_BASE = 0x0301_0000L;           // page tables: 1 L1 + 4 L2 tables (20 KiB, fixed)
+    static final long PT_BOOT = PT_BASE + 0x5000L;        // QEMU virt: a secondary's boot L1 + one L2 copy (8 KiB)
     static final long LOCK_ADDR  = 0x0302_0000L;          // shared HW-spinlock word (cacheable RAM)
     static final long PC_VBAR    = 0x0303_0000L;          // secondaries' shared IRQ vector table (2 KiB aligned)
 

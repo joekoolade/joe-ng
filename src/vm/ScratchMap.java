@@ -69,7 +69,7 @@ final class ScratchMap
         add(VMGc.CODE_BITMAP, VMGc.CODE_BITMAP_END);        // code-reachability bitmap (below the band since 2026-10-24)
         add(Heap.CODE_PIN_BITMAP, Heap.CODE_PIN_END);       // code pin bitmap (ditto)
         add(VM.SEC_STUB, VM.PT_BASE);                       // secondary boot stub
-        add(VM.PT_BASE, VM.LOCK_ADDR);                      // page tables (1 L1 + 4 L2)
+        add(VM.PT_BASE, VM.LOCK_ADDR);                      // page tables (1 L1 + 4 L2; virt boot L1 + L2 at PT_BOOT)
         add(VM.LOCK_ADDR, Uart.TX_RING);                    // spinlock words (LOCK_ADDR, SCHED/HANG/UART/RING)
         add(Uart.TX_RING, Uart.RING_END);                   // mini-UART TX + RX rings
         add(VM.PC_VBAR, VM.CORE_FLAGS);                     // secondaries' IRQ vectors
