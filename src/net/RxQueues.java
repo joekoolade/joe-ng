@@ -17,7 +17,7 @@ import vm.Heap;
 import vm.VMScheduler;
 
 /**
- * The receive side of the network stack once the WiFi RX task runs (board.cyw43.WlanPoll, the NAPI-style
+ * The receive side of the network stack once the link's RX task runs (on the Pi board.cyw43.WlanPoll, the NAPI-style
  * poller): a fixed pool of frame buffers and a table of queues, one per consumer -- the firmware's control
  * channel and each bound UDP port. The RX task drains the chip into pool buffers and {@link #dispatch}es
  * every frame to the queue it belongs to (answering ARP and running TCP itself, so TCP has no queue); a
@@ -35,7 +35,7 @@ public final class RxQueues
 {
     private RxQueues() {}
 
-    public static final int FRAME = 2048;                // one SDPCM frame (header + BDC + 802.3)
+    public static final int FRAME = 2048;                // one received frame, as the link delivered it
     private static final int POOL = 64;                  // frame buffers
     private static final int MAXQ = 12;                  // queues: control + UDP ports
     private static final int DEPTH = 32;                 // frames per queue before it drops
@@ -205,7 +205,8 @@ public final class RxQueues
 
     /**
      * Wait up to {@code ms} for the next frame on queue {@code q} and copy it (at most {@code cap} bytes) to
-     * {@code dst}, raw SDPCM framing included, as the chip delivered it. Returns its length, or 0 on timeout.
+     * {@code dst}, the link's framing included ({@link Link#ethOffset} finds the 802.3 frame). Returns its length,
+     * or 0 on timeout.
      */
     public static int recv(int q, Address dst, int cap, long ms)
     {
@@ -257,8 +258,8 @@ public final class RxQueues
     }
 
     /**
-     * Route one received SDPCM frame (in buffer {@code b}, {@code len} bytes) to its consumer, or free it.
-     * Control acks go to {@link #Q_CTRL}; data frames are 802.3. ARP is answered here (a gateway re-verifying
+     * Route one received frame (in buffer {@code b}, {@code len} bytes, as the link delivered it) to its consumer,
+     * or free it. Control replies go to {@link #Q_CTRL}; data frames are 802.3. ARP is answered here (a gateway re-verifying
      * us must be answered whoever is waiting). An IPv4 datagram is checked and counted ({@link NetStats});
      * TCP is processed right here, on the RX task, by {@link Tcp#input} -- so it is ACKed on arrival, not when
      * the application next reads -- and UDP goes to the queue bound to its destination port. Firmware events
@@ -267,23 +268,22 @@ public final class RxQueues
     public static void dispatch(int b, int len)
     {
         Address rx = bufAddr(b);
-        int ch = rx.plus(5).loadUnsignedByte() & 0x0F;
-        if (ch == 0)
+        int ch = Link.channel(rx, len);
+        if (ch == Link.CH_CTRL)
         {
             enqueue(Q_CTRL, b, len);
             return;
         }
-        if (ch != 2)
+        if (ch != Link.CH_DATA)
         {
-            if (ch == 1)
+            if (ch == Link.CH_EVENT)
             {
-                board.cyw43.Cyw43.logRxEvent(rx, len);
+                Link.event(rx, len);
             }
             freeBuf(b);
             return;
         }
-        Address eth = rx.plus(rx.plus(7).loadUnsignedByte() & 0xFF);    // SDPCM data offset
-        eth = eth.plus(4 + (eth.plus(3).loadUnsignedByte() & 0xFF) * 4);   // skip the BDC header
+        Address eth = rx.plus(Link.ethOffset(rx, len));
         int et = (eth.plus(12).loadUnsignedByte() & 0xFF) << 8 | (eth.plus(13).loadUnsignedByte() & 0xFF);
         if (et == 0x0806)
         {
@@ -293,14 +293,9 @@ public final class RxQueues
         }
         if (et != 0x0800)
         {
-            if (et == 0x888E)
-            {
-                board.cyw43.Supplicant.input(eth, len - eth.diff(rx).toInt());
-                freeBuf(b);                              // answered here: a re-handshake must be, or the AP
-                return;                                  //   deauths us (reason 15, Pi run 13)
-            }
-            freeBuf(b);
-            return;
+            Link.linkFrame(eth, len - eth.diff(rx).toInt());   // the link's own (WiFi: EAPOL -- answered here, or a
+            freeBuf(b);                                  //   re-handshake goes unanswered and the AP deauths us,
+            return;                                      //   reason 15, Pi run 13)
         }
         Address ip = eth.plus(14);
         if (!NetStats.ipIn(ip, len - ip.diff(rx).toInt()))
