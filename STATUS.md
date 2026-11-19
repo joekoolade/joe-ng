@@ -24,6 +24,12 @@ Newest entries are at the top.
     raspi4b.
   - **Pi unchanged:** `make test` + overlaycheck clean, image no helper-stash MISS (39,564,880 bytes), raspi4b
     FileProbe/Lambda4/ChmRace pass.
+  - **PI-VALIDATED after the whole virt arc (V1-V4), 2026-11-18:** `main` at `baf85f8` (build 729b0ff7364c4a04),
+    `main=demo/SecureRandomDemo`, on a Pi 4: `core 166MHz`, `mmu on`, bootstrap all PASS, `SMP: 4 of 4 cores up`
+    + `smp sched: 4 of 4` (the moved spin-slot start-up), `/dev/random: present, reads 32+32 bytes, two reads
+    differ` and NativePRNG the default (the RNG200 behind the new Board check; FIFO live, `count 16 -> 13`, distinct
+    words), `[main returned normally]`, `gc: collections=7`. Every Pi path the arc touched -- UART `hw*` helpers,
+    GIC bases, board-aware timer lowering, `startSecondariesSpin`, `Rng` -- confirmed on hardware.
 - **QEMU `virt` TARGET, INCREMENT V4: `Regress.java --board virt` (2026-11-18).** The probe regression runs on
   QEMU virt: `java scripts/Regress.java --board virt [--tcg] [-j N] [Probe ...]` builds `--board virt` images and
   boots them under HVF (`-accel hvf -cpu host -smp 4`), or emulated Cortex-A72 with `--tcg`. Same probes.txt, same
