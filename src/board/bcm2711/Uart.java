@@ -11,6 +11,7 @@
  */
 package board.bcm2711;
 
+import board.Board;
 import magic.Address;
 import magic.Magic;
 
@@ -29,6 +30,11 @@ public final class Uart
     /** Bring up the mini-UART: GPIO14/15 → ALT5, 8-bit, clear FIFOs, enable tx/rx. */
     public static void init()
     {
+        if (Board.isVirt())
+        {
+            initPl011();
+            return;
+        }
         Address.fromLong(Bcm2711.AUX_ENABLES).store(1);
         Address.fromLong(Bcm2711.AUX_MU_CNTL_REG).store(0);
         Address.fromLong(Bcm2711.AUX_MU_IER_REG).store(0);
@@ -90,7 +96,7 @@ public final class Uart
         pump();                                          // whatever the FIFO takes now, oldest first
         if (txHead == txTail && txReady())
         {
-            Address.fromLong(Bcm2711.AUX_MU_IO_REG).store((byte) c);   // idle line: no reason to queue
+            hwPut(c);                                    // idle line: no reason to queue
         }
         else
         {
@@ -117,7 +123,7 @@ public final class Uart
         while (!txReady())
         {
         }
-        Address.fromLong(Bcm2711.AUX_MU_IO_REG).store((byte) c);
+        hwPut(c);
     }
 
     // ----- interrupt-driven TX/RX -----------------------------------------------------------------
@@ -170,8 +176,8 @@ public final class Uart
         irqCount = 0;
         Address.fromLong(RING_LOCK).store(0);            // raw scratch: nothing else zeroes it
         ier = Bcm2711.IER_RX_ENABLE;
-        Address.fromLong(Bcm2711.AUX_MU_IER_REG).store(ier);
-        Gic.initSpi(Bcm2711.AUX_SPI);
+        hwSetIer(ier);
+        Gic.initSpi(spi());
         irqLive = 1;
         if ((daif & 0x80L) == 0L)
         {
@@ -214,7 +220,7 @@ public final class Uart
     {
         if (irqLive == 0)
         {
-            return (Address.fromLong(Bcm2711.AUX_MU_LSR_REG).loadInt() & (1 << Bcm2711.LSR_RX_READY)) != 0;
+            return hwRxReady();
         }
         return rxHead != rxTail;
     }
@@ -228,11 +234,11 @@ public final class Uart
     {
         if (irqLive == 0)
         {
-            if ((Address.fromLong(Bcm2711.AUX_MU_LSR_REG).loadInt() & (1 << Bcm2711.LSR_RX_READY)) == 0)
+            if (!hwRxReady())
             {
                 return -1;
             }
-            return Address.fromLong(Bcm2711.AUX_MU_IO_REG).loadInt() & 0xFF;
+            return hwGet();
         }
         long daif = ringLock();
         pullRx();
@@ -255,6 +261,10 @@ public final class Uart
     /** LSR bit5: the TX FIFO can take a byte. */
     private static boolean txReady()
     {
+        if (Board.isVirt())
+        {
+            return (Address.fromLong(Board.VIRT_PL011 + PL011_FR).loadInt() & FR_TXFF) == 0;
+        }
         return (Address.fromLong(Bcm2711.AUX_MU_LSR_REG).loadInt() & (1 << Bcm2711.LSR_TX_EMPTY)) != 0;
     }
 
@@ -263,7 +273,7 @@ public final class Uart
     {
         while (txTail != txHead && txReady())
         {
-            Address.fromLong(Bcm2711.AUX_MU_IO_REG).store((byte) Address.fromLong(TX_RING).plus(txTail).loadUnsignedByte());
+            hwPut(Address.fromLong(TX_RING).plus(txTail).loadUnsignedByte());
             txTail = (txTail + 1) & TX_MASK;
         }
     }
@@ -281,9 +291,9 @@ public final class Uart
     private static boolean pullRx()
     {
         boolean got = false;
-        while ((Address.fromLong(Bcm2711.AUX_MU_LSR_REG).loadInt() & (1 << Bcm2711.LSR_RX_READY)) != 0)
+        while (hwRxReady())
         {
-            int b = Address.fromLong(Bcm2711.AUX_MU_IO_REG).loadInt() & 0xFF;     // read even when full: clears the source
+            int b = hwGet();                                 // read even when full: clears the source
             int next = (rxHead + 1) & RX_MASK;
             if (next == rxTail)
             {
@@ -310,7 +320,7 @@ public final class Uart
         if (want != ier)
         {
             ier = want;
-            Address.fromLong(Bcm2711.AUX_MU_IER_REG).store(want);
+            hwSetIer(want);
         }
     }
 
@@ -408,5 +418,87 @@ public final class Uart
             putc(s[i]);
             i = i + 1;
         }
+    }
+
+    // ----- the two UARTs: the Pi's mini-UART, and QEMU virt's PL011 -------------------------------------------------
+    // Everything above is the ring/lock/IRQ logic, shared; these are the only places that touch registers, so the
+    // board choice is made here. The PL011 runs with its FIFOs OFF (LCR_H.FEN = 0): every received character then
+    // raises RXRIS on its own, the mini-UART's behaviour the ring code was written against.
+
+    private static final long PL011_DR = 0x00;          // data
+    private static final long PL011_FR = 0x18;          // flags
+    private static final long PL011_LCR_H = 0x2C;       // line control
+    private static final long PL011_CR = 0x30;          // control
+    private static final long PL011_IMSC = 0x38;        // interrupt mask set/clear
+    private static final long PL011_ICR = 0x44;         // interrupt clear
+    private static final int FR_RXFE = 0x10;            // receive FIFO empty
+    private static final int FR_TXFF = 0x20;            // transmit FIFO full
+    private static final int IMSC_RX = 0x50;            // RXIM | RTIM
+    private static final int IMSC_TX = 0x20;            // TXIM
+
+    /** PL011 on QEMU virt: 8N1, FIFOs off, interrupts masked; QEMU ignores the baud divisors, so none is set. */
+    private static void initPl011()
+    {
+        long b = Board.VIRT_PL011;
+        Address.fromLong(b + PL011_CR).store(0);
+        Address.fromLong(b + PL011_LCR_H).store(0x60);                // WLEN = 8 bits, FEN = 0
+        Address.fromLong(b + PL011_IMSC).store(0);
+        Address.fromLong(b + PL011_ICR).store(0x7FF);
+        Address.fromLong(b + PL011_CR).store(0x301);                  // UARTEN | TXE | RXE
+        coreHz = 0;                                                   // no VPU clock: boot prints "core 0MHz"
+    }
+
+    /** The interrupt the console UART raises: the mini-UART's AUX SPI, or the PL011's. */
+    public static int spi()
+    {
+        return Board.isVirt() ? Board.VIRT_UART_SPI : Bcm2711.AUX_SPI;
+    }
+
+    private static boolean hwRxReady()
+    {
+        if (Board.isVirt())
+        {
+            return (Address.fromLong(Board.VIRT_PL011 + PL011_FR).loadInt() & FR_RXFE) == 0;
+        }
+        return (Address.fromLong(Bcm2711.AUX_MU_LSR_REG).loadInt() & (1 << Bcm2711.LSR_RX_READY)) != 0;
+    }
+
+    private static int hwGet()
+    {
+        if (Board.isVirt())
+        {
+            return Address.fromLong(Board.VIRT_PL011 + PL011_DR).loadInt() & 0xFF;
+        }
+        return Address.fromLong(Bcm2711.AUX_MU_IO_REG).loadInt() & 0xFF;
+    }
+
+    private static void hwPut(int c)
+    {
+        if (Board.isVirt())
+        {
+            Address.fromLong(Board.VIRT_PL011 + PL011_DR).store(c & 0xFF);
+            return;
+        }
+        Address.fromLong(Bcm2711.AUX_MU_IO_REG).store((byte) c);
+    }
+
+    /** Write the interrupt enables: {@code want} in the mini-UART's IER bits, translated for the PL011. */
+    private static void hwSetIer(int want)
+    {
+        if (!Board.isVirt())
+        {
+            Address.fromLong(Bcm2711.AUX_MU_IER_REG).store(want);
+            return;
+        }
+        int imsc = 0;
+        if ((want & Bcm2711.IER_RX_ENABLE) != 0)
+        {
+            imsc = imsc | IMSC_RX;
+        }
+        if ((want & Bcm2711.IER_TX_ENABLE) != 0)
+        {
+            imsc = imsc | IMSC_TX;
+        }
+        Address.fromLong(Board.VIRT_PL011 + PL011_IMSC).store(imsc);
     }
 }

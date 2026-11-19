@@ -36,6 +36,18 @@ logs what informed each piece so encodings and boot facts are auditable.
   `board/bcm2711/Bcm2711.java`, used by M1 `vm/EmitBoot.java`. Baud divisor for
   115200 depends on the pinned core clock and needs on-silicon calibration.
 
+## QEMU `virt` target (board/Board.java, writer/VirtPrelude.java)
+
+- **QEMU `virt` machine memory map** (QEMU documentation, `docs/system/arm/virt.rst`, and observed with
+  `-d in_asm`): RAM at `0x4000_0000`, a raw `-kernel` image loaded and entered at `0x4008_0000` at EL1 with the
+  MMU off and the DTB address in x0; GICv2 distributor `0x0800_0000`, CPU interface `0x0801_0000`; PL011 UART
+  `0x0900_0000` on SPI 1 (INTID 33).
+- **ARM PrimeCell UART (PL011) Technical Reference Manual** (ARM DDI 0183) -- DR, FR (RXFE/TXFF), LCR_H, CR,
+  IMSC, ICR offsets and bits used by `Uart`'s PL011 path.
+- **ARM ARM, generic timer** -- CNTVCT_EL0 / CNTV_CTL_EL0 / CNTV_TVAL_EL0 encodings (virtual timer, PPI 27);
+  under QEMU `-accel hvf` the physical-timer registers are not emulated, so a `virt` image uses the virtual
+  timer. Encodings checked against objdump in `test/asm/A64Test.java`.
+
 ## Classfile format + bytecode (classfile/ClassFile.java, compiler/BaselineCompiler.java)
 
 - **The Java Virtual Machine Specification (JVMS), Java SE** — §4 ClassFile

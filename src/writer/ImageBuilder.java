@@ -1348,6 +1348,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         // that class's own <clinit> computes on metal AGREE -- the initializer still runs, as on OpenJDK.
         fillStatic(image, staticWord, "vm/VM.cdsDumpSeed", StaticSnapshot.CDS_DUMP_SEED);
         fillStatic(image, staticWord, "vm/VM.wallEpochMs", BuildEpoch.MILLIS);   // the wall clock's lower bound
+        fillStatic(image, staticWord, "board/Board.virt", boardVirt ? 1L : 0L);   // which machine (--board)
         fillStatic(image, staticWord, "vm/VM.imageSymTable", addr(symTableWord));
         fillStatic(image, staticWord, "vm/VM.imageSymCount", symCount);
         String launchKey = BaselineCompiler.key("vm/Loader", "launchMain", "([B[B)V");
@@ -2444,6 +2445,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     }
 
     /** Fill a (writer-initialized) static field slot with {@code value}, if the field is used. */
+    /** True for a QEMU {@code virt} image ({@code BuildRuntimeImage --board virt}); baked as {@code Board.virt}. */
+    static boolean boardVirt;
+
     private static void fillStatic(int[] image, StrIntTable staticWord, String key, long value)
     {
         int w = staticWord.get(key);
