@@ -82,6 +82,35 @@ public final class BuildRuntimeImage
      * reading the image it is about to send ({@code tail -c 16}). The image has no header (byte 0 is the first
      * instruction), so the end of the file is the one offset fixed across builds.
      */
+    /**
+     * Append {@link VirtPrelude} (16-byte aligned) and point word 0 at it: on QEMU {@code virt} the routine runs
+     * first, turns the MMU on so the image's 0x80000-based addresses hold, restores word 0 and enters the image.
+     */
+    static byte[] appendVirtPrelude(byte[] image)
+    {
+        int at = (image.length + 15) & ~15;
+        int word0 = (image[0] & 0xFF) | ((image[1] & 0xFF) << 8) | ((image[2] & 0xFF) << 16) | ((image[3] & 0xFF) << 24);
+        int[] prelude = VirtPrelude.build(at, word0);
+        byte[] out = java.util.Arrays.copyOf(image, at + prelude.length * 4);
+        int k = 0;
+        while (k < prelude.length)
+        {
+            putWord(out, at + k * 4, prelude[k]);
+            k += 1;
+        }
+        putWord(out, 0, asm.A64Enc.b(at / 4));
+        System.out.printf("board virt: start-up routine at +0x%x (%d words)%n", at, prelude.length);
+        return out;
+    }
+
+    private static void putWord(byte[] b, int at, int v)
+    {
+        b[at] = (byte) v;
+        b[at + 1] = (byte) (v >>> 8);
+        b[at + 2] = (byte) (v >>> 16);
+        b[at + 3] = (byte) (v >>> 24);
+    }
+
     static byte[] stampBuildId(byte[] image) throws IOException
     {
         java.security.MessageDigest md;
@@ -412,6 +441,20 @@ public final class BuildRuntimeImage
                 classpath = args[i + 1];
                 i += 2;
             }
+            else if (a.equals("--board") && i + 1 < args.length)
+            {
+                String which = args[i + 1];
+                if (which.equals("virt"))
+                {
+                    ImageBuilder.boardVirt = true;
+                    board.Board.virt = 1L;          // ON THE HOST TOO: Baseline lowers the timer intrinsics by board
+                }
+                else if (!which.equals("pi4"))
+                {
+                    throw new IllegalArgumentException("--board: pi4 or virt, not " + which);
+                }
+                i += 2;
+            }
             else if (a.equals("--init") && i + 1 < args.length)
             {
                 initOverride = Files.readAllBytes(Path.of(args[i + 1]));
@@ -448,7 +491,12 @@ public final class BuildRuntimeImage
 
         CodeBuffer code = build(classesDir);
         BootImageWriter writer = new BootImageWriter(code);
-        writer.writeImage(out, stampBuildId(code.toBytes()));
+        byte[] bytes = code.toBytes();
+        if (ImageBuilder.boardVirt)
+        {
+            bytes = appendVirtPrelude(bytes);
+        }
+        writer.writeImage(out, stampBuildId(bytes));
 
         System.out.printf("wrote %s (%s + reachable methods, %d bytes)%n",
                           out.toAbsolutePath(), ENTRY, code.wordCount() * 4);

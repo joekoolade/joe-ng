@@ -12,6 +12,7 @@
 package vm;
 
 import asm.A64Enc;
+import board.Board;
 import board.bcm2711.Bcm2711;
 import board.bcm2711.Gic;
 import board.bcm2711.Uart;
@@ -43,7 +44,7 @@ public final class VMScheduler
     {
         int core = (int) (Magic.readMPIDR() & 3L);
         int id = Gic.acknowledge();
-        if (id == Gic.PPI_CNTPNS)
+        if (id == Gic.timerPpi())
         {
             pcTicks[core] = pcTicks[core] + 1L;
             Magic.writeCNTP_TVAL_EL0(pcReload);           // re-arm this core's timer
@@ -91,7 +92,7 @@ public final class VMScheduler
      */
     static void pcCoreMain(int core)
     {
-        Gic.init(Gic.PPI_CNTPNS);                          // per-core banked PPI 30 + this core's GICC/PMR
+        Gic.init(Gic.timerPpi());                          // per-core banked PPI 30 + this core's GICC/PMR
         Magic.writeVBAR_EL1(PC_VBAR);
         Magic.isb();
         pcCur[core] = 0;                                   // this running flow is the core's task 0
@@ -163,17 +164,22 @@ public final class VMScheduler
      */
     static void buildPageTables()
     {
+        boolean virt = Board.isVirt();
         int i = 0;
         while (i < 4)
         {
             Address l2 = Address.fromLong(PT_BASE + (i + 1) * 0x1000L);
-            Address.fromLong(PT_BASE).plus(i * 8L).store(l2.toLong() | 3L);   // L1 table descriptor -> L2 table
+            Address.fromLong(PT_BASE).plus(i * 8L).store(Board.phys(l2.toLong()) | 3L);   // L1 -> L2 (a PHYSICAL address)
             int j = 0;
             while (j < 512)
             {
                 long a = ((long) i << 30) + ((long) j << 21);   // i*1GiB + j*2MiB (block base, 2MiB aligned)
                 long desc;
-                if (a >= 0xFC00_0000L)
+                if (virt)
+                {
+                    desc = virtBlock(a);                   // the map writer.VirtPrelude built before boot
+                }
+                else if (a >= 0xFC00_0000L)
                 {
                     desc = a | 0x405L;                     // block | AF | AttrIdx=1 (Device)
                 }
@@ -190,6 +196,24 @@ public final class VMScheduler
     }
 
     /**
+     * QEMU virt's descriptor for the 2 MiB block at virtual {@code a}: RAM at {@code a + VIRT_RAM_PHYS}, the device
+     * window at {@code a - VIRT_DEV_VA}, and the Pi's peripheral window left unmapped (a Pi-only driver then faults
+     * by name). Must agree with {@code writer.VirtPrelude}, which built the same map to turn the MMU on.
+     */
+    private static long virtBlock(long a)
+    {
+        if (a < Board.VIRT_DEV_LO)
+        {
+            return (a + Board.VIRT_RAM_PHYS) | 0x701L;   // block | AF | SH=inner | AttrIdx=0 (Normal WB)
+        }
+        if (a < Board.VIRT_DEV_HI)
+        {
+            return (a - Board.VIRT_DEV_VA) | 0x405L;     // block | AF | AttrIdx=1 (Device)
+        }
+        return 0L;
+    }
+
+    /**
      * Enable the identity-mapped MMU + caches on the current core (each core calls this): set the memory
      * attributes and translation control, point TTBR0 at the shared tables, flush the TLB, then turn on
      * SCTLR.M/C/I. After this, RAM is cacheable and coherent so HW atomics (LDXR/STXR) work.
@@ -198,7 +222,7 @@ public final class VMScheduler
     {
         Magic.writeMAIR_EL1(0xFFL);                        // idx0 = Normal WB RW-alloc (0xFF); idx1 = Device (0x00)
         Magic.writeTCR_EL1(0x2_0080_3520L);               // T0SZ=32, 4KiB, IRGN/ORGN=WB, SH0=inner, EPD1, IPS=40-bit
-        Magic.writeTTBR0_EL1(PT_BASE);
+        Magic.writeTTBR0_EL1(Board.phys(PT_BASE));        // TTBR0 holds a PHYSICAL address (differs on virt)
         Magic.dsb();
         Magic.tlbiAll();
         Magic.dsb();
@@ -266,7 +290,7 @@ public final class VMScheduler
      */
     static void smpSchedulerMain(int core)
     {
-        Gic.init(Gic.PPI_CNTPNS);                          // this core's banked PPI 30 + its GICC/PMR
+        Gic.init(Gic.timerPpi());                          // this core's banked PPI 30 + its GICC/PMR
         Magic.writeVBAR_EL1(vbarBase);                     // core 0's vectors: the shared context-switch stub
         Magic.isb();
         long daif = schedLock();
@@ -327,7 +351,7 @@ public final class VMScheduler
      */
     static void startSmpScheduling()
     {
-        if (!SMP_ENABLED || coreTask == null)
+        if (!VM.smpEnabled() || coreTask == null)
         {
             return;
         }
@@ -464,7 +488,7 @@ public final class VMScheduler
         flags.plus(0x50L).store(0L);
         flags.plus(0x58L).store(0L);
 
-        if (!SMP_ENABLED)                                  // leave cores 1-3 parked: single-core heap for reclaim
+        if (!VM.smpEnabled())                              // leave cores 1-3 parked: single-core heap for reclaim
         {
             Uart.write(Magic.bytes("SMP: 1 of 4 cores up (SMP disabled)\n"));
             return;
@@ -899,14 +923,14 @@ public final class VMScheduler
     static long schedule(long curSp)
     {
         int id = Gic.acknowledge();                        // GICC_IAR
-        if (id == Gic.PPI_CNTPNS)                          // periodic timer
+        if (id == Gic.timerPpi())                          // periodic timer
         {
             ticks = ticks + 1L;
             Magic.writeCNTP_TVAL_EL0(timerReload);         // re-arm the next tick
             Gic.end(id);
             return pickNext(curSp);
         }
-        if (id == Bcm2711.AUX_SPI)                         // mini-UART (shared RX/TX) -> the driver's rings
+        if (id == Uart.spi())                              // console UART (shared RX/TX) -> the driver's rings
         {
             if (Uart.onIrq())                              // drains RX+TX; true if RX bytes arrived
             {

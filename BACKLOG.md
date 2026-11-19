@@ -35,3 +35,15 @@ the item leaves this list; new findings that are not fixed on the spot come here
   gives launched programs no timer ticks, so it cannot validate this; every trial needs serial.
 - **41.5 MB live in the large-object region during an upload (2026-11-14).** Of ~60 MB live; the trace takes a
   steady ~413 ms. Unexplained -- measure what holds it before changing anything.
+
+## QEMU targets with Ethernet
+
+Upstream QEMU's `raspi4b` has no network (no GENET, no PCIe; USB never enumerates, so `usb-net` fails too), so
+networking cannot be tested under emulation today. Candidate machines with a working NIC (2026-11-18):
+
+- **`virt` with `-cpu cortex-a72`.** Closest to the Pi 4: same core, GICv2 (`gic-version=2`, like the GIC-400),
+  PL011 UART (at `0x0900_0000` instead of `0xFE20_1000`), generic timer. Network is `virtio-net-device` on
+  virtio-mmio, so no PCIe driver is needed. RAM starts at `0x4000_0000`, so this needs a board layer for the
+  memory map and device addresses.
+- **`xlnx-zcu102`.** Cortex-A53 with the Cadence GEM Ethernet: a real SoC NIC model, but Xilinx-specific.
+- **`sbsa-ref`.** Server-style board, e1000e NIC on PCIe; needs PCIe enumeration plus an e1000e driver.

@@ -11,6 +11,7 @@
  */
 package board.bcm2711;
 
+import board.Board;
 import magic.Address;
 import magic.Magic;
 
@@ -29,25 +30,48 @@ public final class Gic
 {
     private Gic() {}
 
-    /** Base = 0x4c0040000; in Low Peripheral mode it maps to 0xFF840000 (peripherals §6.5.1). */
-    private static final long GICD = 0xFF84_1000L;   // distributor  (base + 0x1000)
-    private static final long GICC = 0xFF84_2000L;   // CPU interface (base + 0x2000)
+    /**
+     * Base = 0x4c0040000; in Low Peripheral mode it maps to 0xFF840000 (peripherals §6.5.1). QEMU {@code virt} has
+     * a GICv2 too, programmed identically, at {@link Board#VIRT_GICD}/{@link Board#VIRT_GICC}: the two bases are
+     * the only difference, so they are chosen per board (the register offsets below are architectural).
+     */
+    private static final long PI_GICD = 0xFF84_1000L;   // distributor  (base + 0x1000)
+    private static final long PI_GICC = 0xFF84_2000L;   // CPU interface (base + 0x2000)
 
-    private static final long GICD_CTLR       = GICD + 0x000;
-    private static final long GICD_TYPER      = GICD + 0x004;   // bit 10: SecurityExtn
-    private static final long GICD_IGROUPR    = GICD + 0x080;   // 1 bit/INTID: 0 = group0, 1 = group1
-    private static final long GICD_ISENABLER  = GICD + 0x100;   // 1 bit/INTID: write 1 to enable forwarding
-    private static final long GICD_ICENABLER  = GICD + 0x180;   // 1 bit/INTID: write 1 to disable forwarding
-    private static final long GICD_IPRIORITYR = GICD + 0x400;   // 1 byte/INTID
-    private static final long GICD_ITARGETSR  = GICD + 0x800;   // 1 byte/INTID: CPU target list (SPIs only)
+    private static long gicd()
+    {
+        return Board.isVirt() ? Board.VIRT_GICD : PI_GICD;
+    }
 
-    private static final long GICC_CTLR = GICC + 0x000;
-    private static final long GICC_PMR  = GICC + 0x004;         // priority mask
-    private static final long GICC_IAR  = GICC + 0x00C;         // interrupt acknowledge (NS: group-1)
-    private static final long GICC_EOIR = GICC + 0x010;         // end of interrupt (NS: group-1)
+    private static long gicc()
+    {
+        return Board.isVirt() ? Board.VIRT_GICC : PI_GICC;
+    }
+
+    private static final long GICD_CTLR       = 0x000;
+    private static final long GICD_TYPER      = 0x004;   // bit 10: SecurityExtn
+    private static final long GICD_IGROUPR    = 0x080;   // 1 bit/INTID: 0 = group0, 1 = group1
+    private static final long GICD_ISENABLER  = 0x100;   // 1 bit/INTID: write 1 to enable forwarding
+    private static final long GICD_ICENABLER  = 0x180;   // 1 bit/INTID: write 1 to disable forwarding
+    private static final long GICD_IPRIORITYR = 0x400;   // 1 byte/INTID
+    private static final long GICD_ITARGETSR  = 0x800;   // 1 byte/INTID: CPU target list (SPIs only)
+
+    private static final long GICC_CTLR = 0x000;
+    private static final long GICC_PMR  = 0x004;         // priority mask
+    private static final long GICC_IAR  = 0x00C;         // interrupt acknowledge (NS: group-1)
+    private static final long GICC_EOIR = 0x010;         // end of interrupt (NS: group-1)
 
     /** Non-secure EL1 physical timer (CNTP_EL0). BCM2711 Figure 7. */
     public static final int PPI_CNTPNS = 30;
+
+    /** EL1 virtual timer (CNTV_EL0): the tick on QEMU virt, where Baseline lowers the timer intrinsics to CNTV. */
+    public static final int PPI_CNTV = 27;
+
+    /** The timer PPI this board ticks on: the physical timer's on the Pi, the virtual timer's on QEMU virt. */
+    public static int timerPpi()
+    {
+        return Board.isVirt() ? PPI_CNTV : PPI_CNTPNS;
+    }
 
     /**
      * The group an interrupt must be in for {@code CTLR = 1} to forward it. With the Security Extensions -- the Pi's
@@ -60,12 +84,12 @@ public final class Gic
      */
     private static void setGroup(int intid)
     {
-        if (((Address.fromLong(GICD_TYPER).loadInt() >> 10) & 1) == 0)
+        if (((Address.fromLong(gicd() + GICD_TYPER).loadInt() >> 10) & 1) == 0)
         {
             return;                                                  // no Security Extensions: group 0
         }
-        int gr = (int) word(GICD_IGROUPR, intid).loadInt();
-        word(GICD_IGROUPR, intid).store(gr | bit(intid));   // group 1 (non-secure)
+        int gr = (int) word(gicd() + GICD_IGROUPR, intid).loadInt();
+        word(gicd() + GICD_IGROUPR, intid).store(gr | bit(intid));   // group 1 (non-secure)
     }
 
     private static Address word(long base, int intid)
@@ -86,11 +110,11 @@ public final class Gic
     public static void init(int intid)
     {
         setGroup(intid);
-        Address.fromLong(GICD_IPRIORITYR).plus((intid / 4) * 4).store(0);   // priority 0 (highest) for this word
-        word(GICD_ISENABLER, intid).store(bit(intid));              // forwarding enable
-        Address.fromLong(GICD_CTLR).store(1);                        // NS view: bit0 = EnableGrp1
-        Address.fromLong(GICC_PMR).store(0xFF);                      // unmask every priority level
-        Address.fromLong(GICC_CTLR).store(1);                        // NS view: bit0 = EnableGrp1
+        Address.fromLong(gicd() + GICD_IPRIORITYR).plus((intid / 4) * 4).store(0);   // priority 0 (highest) for this word
+        word(gicd() + GICD_ISENABLER, intid).store(bit(intid));              // forwarding enable
+        Address.fromLong(gicd() + GICD_CTLR).store(1);                        // NS view: bit0 = EnableGrp1
+        Address.fromLong(gicc() + GICC_PMR).store(0xFF);                      // unmask every priority level
+        Address.fromLong(gicc() + GICC_CTLR).store(1);                        // NS view: bit0 = EnableGrp1
     }
 
     /**
@@ -100,40 +124,40 @@ public final class Gic
     public static void initSpi(int intid)
     {
         setGroup(intid);
-        Address.fromLong(GICD_IPRIORITYR).plus((intid / 4) * 4).store(0);   // priority 0 (highest) for this word
-        Address taddr = Address.fromLong(GICD_ITARGETSR).plus((intid / 4) * 4);   // route to CPU 0 (byte = 0x01)
+        Address.fromLong(gicd() + GICD_IPRIORITYR).plus((intid / 4) * 4).store(0);   // priority 0 (highest) for this word
+        Address taddr = Address.fromLong(gicd() + GICD_ITARGETSR).plus((intid / 4) * 4);   // route to CPU 0 (byte = 0x01)
         int shift = (intid % 4) * 8;
         int cur = (int) taddr.loadInt();
         taddr.store((cur & ~(0xFF << shift)) | (0x01 << shift));
-        word(GICD_ISENABLER, intid).store(bit(intid));              // forwarding enable
-        Address.fromLong(GICD_CTLR).store(1);                        // NS view: bit0 = EnableGrp1
-        Address.fromLong(GICC_PMR).store(0xFF);                      // unmask every priority level
-        Address.fromLong(GICC_CTLR).store(1);                        // NS view: bit0 = EnableGrp1
+        word(gicd() + GICD_ISENABLER, intid).store(bit(intid));              // forwarding enable
+        Address.fromLong(gicd() + GICD_CTLR).store(1);                        // NS view: bit0 = EnableGrp1
+        Address.fromLong(gicc() + GICC_PMR).store(0xFF);                      // unmask every priority level
+        Address.fromLong(gicc() + GICC_CTLR).store(1);                        // NS view: bit0 = EnableGrp1
     }
 
     /** Acknowledge the pending group-1 interrupt; returns its INTID (0x3FF = spurious). */
     public static int acknowledge()
     {
-        return Address.fromLong(GICC_IAR).loadInt() & 0x3FF;
+        return Address.fromLong(gicc() + GICC_IAR).loadInt() & 0x3FF;
     }
 
     /** Signal end-of-interrupt for {@code intid} (the value returned by {@link #acknowledge}). */
     public static void end(int intid)
     {
-        Address.fromLong(GICC_EOIR).store(intid);
+        Address.fromLong(gicc() + GICC_EOIR).store(intid);
     }
 
     /** Stop forwarding {@code intid} to any CPU (GICD_ICENABLER). Used by an ISR to prevent a level interrupt
      *  re-firing until the handler task has serviced and re-enabled it. */
     public static void disableSpi(int intid)
     {
-        word(GICD_ICENABLER, intid).store(bit(intid));
+        word(gicd() + GICD_ICENABLER, intid).store(bit(intid));
     }
 
     /** Resume forwarding {@code intid} (GICD_ISENABLER) after servicing. */
     public static void enableSpi(int intid)
     {
-        word(GICD_ISENABLER, intid).store(bit(intid));
+        word(gicd() + GICD_ISENABLER, intid).store(bit(intid));
     }
 
 }

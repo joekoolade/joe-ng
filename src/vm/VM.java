@@ -12,6 +12,7 @@
 package vm;
 
 import asm.A64Enc;
+import board.Board;
 import board.bcm2711.Bcm2711;
 import board.bcm2711.Emmc;
 import board.bcm2711.Fat32;
@@ -89,7 +90,9 @@ public final class VM
         // vtable-or-itable slot resolving to 0x80000). Silently re-running boot then looks like an endless reboot
         // loop with no diagnostic. Catch it: reset SP (the wild branch may have trashed it), name the branch
         // source from x30, and halt. The UART is already up from the first boot, so the message renders.
-        if (Magic.readCurrentEL() != 0x8L)
+        // QEMU virt enters at EL1 by design (its start-up routine has already turned the MMU on), so there the
+        // evidence is bootEntered instead, set once the first entry is past this check.
+        if (Board.isVirt() ? bootEntered != 0L : Magic.readCurrentEL() != 0x8L)
         {
             long src = Magic.readLR();
             Magic.writeSP(0x80000L);
@@ -265,7 +268,14 @@ public final class VM
                 Magic.wfe();
             }
         }
-        Magic.dropToEL1();
+        if (Board.isVirt())
+        {
+            bootEntered = 1L;
+        }
+        else
+        {
+            Magic.dropToEL1();
+        }
         Magic.writeCPACR_EL1(0x300000L);   // CPACR_EL1.FPEN = 0b11 (no FP trap)
         Magic.isb();
         Magic.writeSP(0x80000L);           // stack below the image (needed before any call)
@@ -341,6 +351,7 @@ public final class VM
     }
 
     static long vbarBase;              // base of the installed EL1 vector table
+    static long bootEntered;           // QEMU virt: 1 once boot has started (a second entry is a wild branch)
     static long timerReload;           // CNTP_TVAL reload for a periodic tick
 
     /**
@@ -350,12 +361,12 @@ public final class VM
     static void irqHandler()
     {
         int id = Gic.acknowledge();                        // GICC_IAR: which INTID the CPU interface is signalling
-        if (id == Gic.PPI_CNTPNS)                          // non-secure EL1 physical timer PPI (INTID 30)
+        if (id == Gic.timerPpi())                          // non-secure EL1 physical timer PPI (INTID 30)
         {
             ticks = ticks + 1L;
             Magic.writeCNTP_TVAL_EL0(timerReload);         // re-arm (deasserts the level line until it counts down)
         }
-        else if (id == Bcm2711.AUX_SPI)                    // mini-UART: level-triggered, so it must be serviced
+        else if (id == Uart.spi())                         // console UART: level-triggered, so it must be serviced
         {                                                  //   here too or it re-fires for ever
             Uart.onIrq();
         }
@@ -416,7 +427,7 @@ public final class VM
         // Bring up the GIC and enable the non-secure physical-timer PPI (INTID 30). With the GIC
         // selected (enable_gic=1), the timer wires straight to it as PPI 30; the ARM-local router is
         // bypassed. The firmware armstub must have placed the PPIs in group 1 for this to deliver.
-        Gic.init(Gic.PPI_CNTPNS);
+        Gic.init(Gic.timerPpi());
         timerReload = Magic.readCNTFRQ_EL0() / 1000L;      // ~1 ms
         Magic.writeCNTP_TVAL_EL0(timerReload);
         Magic.writeCNTP_CTL_EL0(1);                        // enable the timer (imask=0)
@@ -442,6 +453,12 @@ public final class VM
     // between-batch demand-load heap reclaim only rewinds ITS arena. (It was briefly off during embed-all
     // bring-up, when a single shared bump heap made the reclaim unsafe under the secondaries.)
     static final boolean SMP_ENABLED = true;
+
+    /** SMP is on, and this board brings up its secondaries the Pi's way (QEMU virt needs PSCI: not yet). */
+    static boolean smpEnabled()
+    {
+        return SMP_ENABLED && !Board.isVirt();
+    }
     /**
      * Tag on a JIT handler's catch-type word meaning "the low bits are the catch class's Utf8 NAME, resolve at
      * match time" rather than a Type. A Type node is never this high (the address space is far below 2^62), and
@@ -454,7 +471,7 @@ public final class VM
     // sit above it (below the 64 MiB heap). The MMU identity-maps the low 4 GiB, so all are valid RAM.
     static final long SEC_STUB   = 0x0300_0000L;          // secondary boot stub (fixed scratch, not GC'd)
     static final int  SEC_STACK_HI = 0x0380;              // per-core stack base 0x0380_0000 + core*1MiB
-    static final long PT_BASE    = 0x0301_0000L;          // page tables: 1 L1 + 4 L2 tables (20 KiB, fixed)
+    public static final long PT_BASE = 0x0301_0000L;           // page tables: 1 L1 + 4 L2 tables (20 KiB, fixed)
     static final long LOCK_ADDR  = 0x0302_0000L;          // shared HW-spinlock word (cacheable RAM)
     static final long PC_VBAR    = 0x0303_0000L;          // secondaries' shared IRQ vector table (2 KiB aligned)
 
@@ -1088,7 +1105,7 @@ public final class VM
      */
     static void smpThreadsDemo()
     {
-        if (!SMP_ENABLED)
+        if (!smpEnabled())
         {
             return;
         }
@@ -2222,7 +2239,7 @@ public final class VM
         VMScheduler.spawn(taskCAddr);                                  // task 3 (consumer: blocks on sem 0)
         VMScheduler.spawn(taskRAddr);                                  // task 4 (UART reader: blocks on UART_SEM)
 
-        Gic.init(Gic.PPI_CNTPNS);
+        Gic.init(Gic.timerPpi());
         Uart.enableInterrupts();                           // the console goes interrupt-driven (SPI 125)
         timerReload = Magic.readCNTFRQ_EL0() / 100L;       // ~10 ms scheduling quantum
         Magic.writeCNTP_TVAL_EL0(timerReload);
@@ -2243,7 +2260,7 @@ public final class VM
         if (yieldPickAddr == 0L) { yieldPickAddr = VMScheduler.yieldPick(0L); } // compiled + stashed for the vector stubs
         installSchedVectors();
         allocTaskTables();                                  // task 0 = the WiFi boot flow
-        Gic.init(Gic.PPI_CNTPNS);
+        Gic.init(Gic.timerPpi());
         Uart.enableInterrupts();                            // the console goes interrupt-driven (SPI 125)
         timerReload = Magic.readCNTFRQ_EL0() / 100L;        // ~10 ms tick (deadline wakes for semWaitTimeout)
         Magic.writeCNTP_TVAL_EL0(timerReload);
@@ -2493,7 +2510,7 @@ public final class VM
      */
     static boolean launchSmp()
     {
-        if (!SMP_ENABLED)
+        if (!smpEnabled())
         {
             return false;
         }
@@ -3709,7 +3726,7 @@ public final class VM
     }
 
     // ----- garbage collection (conservative mark-sweep) --------------------
-    static final long STACK_TOP = 0x80000L;   // SP init; the stack grows down from here
+    public static final long STACK_TOP = 0x80000L;   // SP init; the stack grows down from here
     static long staticsStart, staticsEnd;     // image statics region, filled by the writer
 
     static int gcLog;        // print per-collection stats (diagnostic)

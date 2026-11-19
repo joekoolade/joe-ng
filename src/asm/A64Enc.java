@@ -619,6 +619,11 @@ public final class A64Enc
     public static final int CNTPCT_EL0    = sysReg(3, 3, 14, 0, 1); // physical count (free-running)
     public static final int CNTP_CTL_EL0  = sysReg(3, 3, 14, 2, 1); // EL1 physical timer control (enable/imask/istatus)
     public static final int CNTP_TVAL_EL0 = sysReg(3, 3, 14, 2, 0); // ... its countdown timer value
+    // The VIRTUAL timer and count: what a guest under a hypervisor owns (QEMU virt with -accel hvf leaves the physical
+    // timer unemulated -- an access is UNDEFINED). Baseline lowers the CNTP intrinsics to these on a virt image.
+    public static final int CNTVCT_EL0    = sysReg(3, 3, 14, 0, 2); // virtual count
+    public static final int CNTV_CTL_EL0  = sysReg(3, 3, 14, 3, 1); // EL1 virtual timer control
+    public static final int CNTV_TVAL_EL0 = sysReg(3, 3, 14, 3, 0); // ... its countdown timer value
     public static final int DAIF          = sysReg(3, 3,  4, 2, 1); // interrupt mask state (bit7 = I)
 
     /** {@code MSR DAIFClr, #imm} — unmask the given DAIF bits (imm bit1 = IRQ). */

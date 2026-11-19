@@ -4,6 +4,33 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **QEMU `virt` TARGET, INCREMENT V1: single-core boot, emulated Cortex-A72 AND HVF (2026-11-18).** A second board:
+  `BuildRuntimeImage --board virt` builds an image for `qemu-system-aarch64 -M virt`; `scripts/virt.sh [--tcg] MAIN`
+  builds and boots it (HVF on Apple silicon by default).
+  - **The MMU moves the memory, not the addresses.** `virt` RAM starts at 0x4000_0000 and QEMU enters the raw image
+    at 0x4008_0000, EL1, MMU off. The writer appends `writer.VirtPrelude` (82 hand-encoded, PC-relative words) and
+    points word 0 at it: it learns its load offset from `BL`+x30, restores word 0, builds the page tables at
+    `PT_BASE` (virtual `va` -> physical `va + 0x4000_0000`; devices 0x0800_0000-0x0C00_0000 at `pa + 0xF000_0000`;
+    the Pi's 0xFC00_0000+ window UNMAPPED so a Pi-only driver faults by name), plus a temporary identity entry for
+    its own 2 MiB block, turns the MMU on and jumps to 0x80000. Every fixed address in the VM is unchanged; only
+    TTBR0 and table descriptors take `Board.phys(va)`.
+  - **`board.Board.virt`** is baked by the writer (`fillStatic`) and set on the HOST too, so one flag drives both
+    worlds. Board paths: `Gic` bases (same GICv2 programming), `Uart` PL011 (FIFOs off, IMSC for the IER bits; all
+    register access now in `hw*` helpers), `VM.boot` skips the EL2 check/drop (re-entry detected by `bootEntered`
+    instead), `buildPageTables` virt map, SMP off (`VM.smpEnabled()`; PSCI bring-up is V2).
+  - **HVF has no physical timer.** The first HVF boot died with an UNDEFINED `MRS CNTP_CTL_EL0` in
+    `loaderLockLive`: QEMU 9.0 does not emulate the CNTP registers under hvf. Baseline lowers the four timer
+    intrinsics to CNTVCT/CNTV_CTL/CNTV_TVAL on a virt image (encodings unit-tested) and the tick is PPI 27;
+    the Pi's code is unchanged. TickProbe under HVF: 50 ticks in a 500 ms spin.
+  - **Speed** (wall clock, boot to `[main returned normally]`): HelloDemo HVF 0.5 s vs TCG 4.0 s; SslEngineProbe
+    **HVF 13.6 s**, TCG virt 71.5 s, Pi 42.7 s, QEMU raspi4b ~100 s -- identical program output on HVF and TCG
+    (single core; the RNG200 is absent, which `Rng` already reports as no hardware source, as on raspi4b).
+    10 probes under HVF (ClinitRace, ChmRace, FirstCallRace, Lambda4, DeepTrace, Indy, FieldSemantics,
+    HighLocalThrow, AnnoProxy, InvokeGap) match `test/regress/expected`, 0.5-1.3 s each (InvokeGap: 63 s on raspi4b).
+  - **Pi unchanged:** `make test` + overlaycheck clean, image no helper-stash MISS (39,553,088 bytes), the 41
+    P2-5 probes pass on raspi4b, 5 rechecked after the last `VM.boot` edit.
+  - **Next:** V2 SMP (PSCI CPU_ON; secondaries enter through the prelude), V3 devices (an entropy source), V4
+    `Regress.java --board virt`.
 - **LOADER REFACTOR PHASE 2, INCREMENT P2-5: compile results are a `CompileResult` (2026-11-18).** Completes phase 2.
   - **`compileMethod` returns a `CompileResult`** (words, frame size, register-local count, the four handler-range
     arrays, `bcToWord`) instead of leaving eight statics behind (`gFrameSize`, `gRegLocals`, `gHN`, `gHStartW`,
