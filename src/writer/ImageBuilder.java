@@ -1602,6 +1602,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.hwEntropy(Lmagic/ObjectReference;J)J", "vm/VM.hwEntropyAddr"); // SecureRandom.hwEntropy0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.consoleRead(Lmagic/ObjectReference;JJ)J", "vm/VM.consoleReadAddr"); // MetalConsoleIn.read0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.boardBuildId()J", "vm/VM.boardBuildIdAddr"); // MetalBoard
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.boardIsVirt()J", "vm/VM.boardIsVirtAddr");   // MetalBoard
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.boardSetRebootFlags(J)J", "vm/VM.boardRebootFlagsAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.boardReboot()V", "vm/VM.boardRebootAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.blockInit()J", "vm/VM.blockInitAddr");   // MetalBlock.init0

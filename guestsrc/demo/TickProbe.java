@@ -12,6 +12,7 @@
 package demo;
 
 import jdk.internal.misc.MetalStats;
+import jdk.internal.misc.MetalBoard;
 import magic.Address;
 
 /**
@@ -34,14 +35,18 @@ public class TickProbe
         long t1 = MetalStats.read(MetalStats.THREADS)[ticksAt];
         System.out.println("TickProbe: ticks " + t0 + " -> " + t1 + " over a 500 ms spin (" + spins + " spins)");
         System.out.println(t1 - t0 >= 10 ? "TickProbe TICKS" : "TickProbe NO TICKS");
-        // The GIC as this core sees it (distributor at 0xFF841000, CPU interface at 0xFF842000).
-        int typer = Address.fromLong(0xFF84_1004L).loadInt();
+        // The GIC as this core sees it: on the Pi the GIC-400 (distributor 0xFF841000, CPU interface 0xFF842000);
+        // on QEMU virt its GICv2 (physical 0x08000000/0x08010000, mapped at +0xF0000000). The Pi addresses are
+        // unmapped on virt, and reading them there faulted.
+        long gicd = MetalBoard.isVirt() ? 0xF800_0000L : 0xFF84_1000L;
+        long gicc = MetalBoard.isVirt() ? 0xF801_0000L : 0xFF84_2000L;
+        int typer = Address.fromLong(gicd + 0x004L).loadInt();
         System.out.println("TickProbe: GICD_TYPER=0x" + Integer.toHexString(typer) + " (SecurityExtn="
-                + ((typer >> 10) & 1) + ") GICD_CTLR=0x" + Integer.toHexString(Address.fromLong(0xFF84_1000L).loadInt())
-                + " GICC_CTLR=0x" + Integer.toHexString(Address.fromLong(0xFF84_2000L).loadInt())
-                + " IGROUPR0=0x" + Integer.toHexString(Address.fromLong(0xFF84_1080L).loadInt())
-                + " ISENABLER0=0x" + Integer.toHexString(Address.fromLong(0xFF84_1100L).loadInt())
-                + " ISPENDR0=0x" + Integer.toHexString(Address.fromLong(0xFF84_1200L).loadInt()));
+                + ((typer >> 10) & 1) + ") GICD_CTLR=0x" + Integer.toHexString(Address.fromLong(gicd).loadInt())
+                + " GICC_CTLR=0x" + Integer.toHexString(Address.fromLong(gicc).loadInt())
+                + " IGROUPR0=0x" + Integer.toHexString(Address.fromLong(gicd + 0x080L).loadInt())
+                + " ISENABLER0=0x" + Integer.toHexString(Address.fromLong(gicd + 0x100L).loadInt())
+                + " ISPENDR0=0x" + Integer.toHexString(Address.fromLong(gicd + 0x200L).loadInt()));
         long linger = args.length > 0 ? Long.parseLong(args[0]) : 0L;
         if (linger > 0L)
         {
