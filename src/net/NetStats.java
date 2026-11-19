@@ -130,18 +130,18 @@ public final class NetStats
     }
 
     /**
-     * Count one frame read off the chip BEFORE the RX task runs ({@code rx}, {@code len} bytes of SDPCM):
+     * Count one frame read off the link BEFORE the RX task runs ({@code rx}, {@code len} bytes as delivered):
      * every reader then parses for itself, so this only counts what arrived -- an IPv4 datagram's checks and
      * the protocol it carries. It drops nothing.
      */
     public static void rxSync(Address rx, int len)
     {
-        if (len < 12 || (rx.plus(5).loadUnsignedByte() & 0x0F) != 2)
+        int off = Link.ethOffset(rx, len);
+        if (off < 0)
         {
-            return;                                      // no frame, or not the data channel
+            return;                                      // no frame, or not a data frame
         }
-        Address eth = rx.plus(rx.plus(7).loadUnsignedByte() & 0xFF);
-        eth = eth.plus(4 + (eth.plus(3).loadUnsignedByte() & 0xFF) * 4);
+        Address eth = rx.plus(off);
         if (((eth.plus(12).loadUnsignedByte() & 0xFF) << 8 | (eth.plus(13).loadUnsignedByte() & 0xFF)) != 0x0800)
         {
             return;

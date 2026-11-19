@@ -16,11 +16,9 @@ import magic.Magic;
 import vm.Heap;
 
 /**
- * The IP/link foundation of joe-ng's all-Java network stack, factored out of the CYW43 WiFi driver so a
- * socket layer (java.net, via VM helpers) can drive it independently of the board. Holds the interface
- * config (our MAC/IP + the gateway MAC) that the driver's DHCP/ARP bring-up publishes, the one's-complement
- * checksum + big-endian helpers, and the link glue (send an 802.3 frame / receive the next IPv4 frame) that
- * delegates to the board driver's SDPCM data path.
+ * The IP foundation of joe-ng's all-Java network stack, independent of the board: the interface config (our
+ * MAC/IP, the lease's mask, gateway and DNS server, the gateway MAC) that {@link NetUp} publishes after DHCP and
+ * ARP, the one's-complement checksum + big-endian helpers, and send/receive of IPv4 over {@link Link}.
  *
  * <p>All addresses are raw heap pointers and all packet fields are poked via {@link Magic} — this is the
  * same byte-for-byte code the WiFi HTTP-GET path used, only relocated behind a reusable API.
@@ -29,27 +27,28 @@ public final class Ip
 {
     private Ip() {}
 
-    // Interface config, published by the driver bring-up (board.cyw43.Cyw43, after DHCP + ARP).
+    // Interface config, published by NetUp after DHCP + ARP (all zero until then: the network is not up).
     public static Address ourMac;   // heap addr of our 6-byte station MAC
     public static Address ourIp;    // heap addr of our 4-byte leased IP
     public static Address netMask;  // heap addr of the lease's 4-byte subnet mask (java.net.NetworkInterface)
     public static Address gwMac;    // heap addr of the gateway's 6-byte MAC (all off-subnet traffic routes here)
+    public static Address gwIp;     // heap addr of the lease's 4-byte default gateway
+    public static Address dnsIp;    // heap addr of the lease's 4-byte DNS server
 
     // Scratch describing the last IPv4 frame recvIp() accepted.
     public static int lastIhl;      // IP header length (bytes)
     public static int lastIpTotal;  // IP total length (bytes)
 
-    /** Send a fully-built 802.3 Ethernet frame over the WiFi data path. */
+    /** Send a fully-built 802.3 Ethernet frame. */
     public static void send(Address frame, int len)
     {
-        board.cyw43.Cyw43.txData(frame, len);
+        Link.send(frame, len);
     }
 
     /**
      * Block for the next inbound IPv4 frame (up to {@code ms} ms); return the IP header address (inside
      * {@code rx}), or 0 on none/timeout/non-IPv4. Records IHL + total-length in {@link #lastIhl}/{@link
-     * #lastIpTotal}. Mirrors the driver's parse: skip the SDPCM data-offset + 4-byte BDC header to the 802.3
-     * frame, require ethertype 0x0800.
+     * #lastIpTotal}. The link says where the 802.3 frame starts ({@link Link#ethOffset}); ARP is answered here.
      */
     public static Address recvIp(Address rx, int cap, int ms)
     {
@@ -74,18 +73,18 @@ public final class Ip
         }
         else
         {
-            len = board.cyw43.Cyw43.waitFrameIrq(rx, cap, ms);
+            len = Link.waitFrame(rx, cap, ms);
         }
         if (len == 0)
         {
             return Address.zero();
         }
-        if ((rx.plus(5).loadUnsignedByte() & 0x0F) == 0)          // SDPCM control channel, not data
+        int off = Link.ethOffset(rx, len);
+        if (off < 0)
         {
-            return Address.zero();
+            return Address.zero();                       // not a data frame (a control reply, a link event)
         }
-        Address eth = rx.plus(rx.plus(7).loadUnsignedByte() & 0xFF);   // SDPCM data offset
-        eth = eth.plus(4 + (eth.plus(3).loadUnsignedByte() & 0xFF) * 4);   // skip the 4-byte BDC header
+        Address eth = rx.plus(off);
         int et = (eth.plus(12).loadUnsignedByte() & 0xFF) << 8 | (eth.plus(13).loadUnsignedByte() & 0xFF);
         if (et == 0x0806)
         {
@@ -216,6 +215,48 @@ public final class Ip
             dst.plus(i).store((byte) src.plus(i).loadUnsignedByte());
             i = i + 1;
         }
+    }
+
+    /** Print a dotted-quad IPv4 address (4 bytes at {@code a}). */
+    public static void printIp(Address a)
+    {
+        int i = 0;
+        while (i < 4)
+        {
+            vm.VM.printDec(a.plus(i).loadUnsignedByte() & 0xFF);
+            if (i < 3)
+            {
+                board.bcm2711.Uart.putc(0x2E);           // '.'
+            }
+            i = i + 1;
+        }
+    }
+
+    /** Print a 6-byte MAC address as aa:bb:cc:dd:ee:ff. */
+    public static void printMac(Address a)
+    {
+        int i = 0;
+        while (i < 6)
+        {
+            printHex2(a.plus(i).loadUnsignedByte() & 0xFF);
+            if (i < 5)
+            {
+                board.bcm2711.Uart.putc(0x3A);           // ':'
+            }
+            i = i + 1;
+        }
+    }
+
+    /** Print a byte as two lowercase hex digits. */
+    public static void printHex2(int v)
+    {
+        board.bcm2711.Uart.putc(hexDigit((v >> 4) & 0x0F));
+        board.bcm2711.Uart.putc(hexDigit(v & 0x0F));
+    }
+
+    private static int hexDigit(int n)
+    {
+        return n < 10 ? (0x30 + n) : (0x61 + n - 10);
     }
 
     /** splitmix64 state, seeded from the counter on first use (boot-to-boot timing jitter differs per boot). */

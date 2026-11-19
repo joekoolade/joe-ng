@@ -4,6 +4,32 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **NETWORK LINK SPLIT, INCREMENT N1: `net.Link`; DHCP/ARP/ping/DNS move out of the WiFi driver (2026-11-18).**
+  Groundwork for a virtio-net driver on QEMU virt (N2): the stack no longer parses the CYW43455's framing.
+  - **`net.Link`** answers what the stack used to work out inline from SDPCM: `channel` (data / control / event),
+    `ethOffset` (past the SDPCM header and the BDC header -- the arithmetic `Ip.recvIp`, `RxQueues.dispatch` and
+    `NetStats.rxSync` each repeated), `send`, `mac`, `waitFrame` (before the RX task), `recv` (queue or direct),
+    `event` and `linkFrame` (EAPOL to the supplicant). Frames are still kept exactly as the link delivered them --
+    no copy, no envelope stripping -- so the Pi's receive path is unchanged byte for byte.
+  - **`net.Dhcp`, `net.Arp`, `net.Icmp`, `net.Dns`, `net.NetUp`** take the protocol code from `Cyw43` unchanged
+    (DHCP retry policy, ARP re-ask, 6 s DNS with its failure counters). `NetUp.configure` publishes `net.Ip` only
+    after ARP succeeds, as before (a non-zero `Ip.ourIp` is "network up"); the lease's gateway and DNS server are
+    now `Ip.gwIp`/`Ip.dnsIp`. `Cyw43.dhcp` is the WiFi tail: `NetUp.configure`, then `WlanPoll.start`, SNTP, the
+    showcase. `InetAddress` and SNTP call `net.Dns.resolve`.
+  - **Removed from `Cyw43`** (3,552 -> 2,664 lines): the moved code, the lease statics, and the dead `findTcp` /
+    `sendTcp` / `tcpCksum` (no callers since net.Tcp). Boot log lines now say `net: dhcp ...`, `net: gateway mac`,
+    `net: ping ...` instead of `wifi: ...`. One diagnostic narrows: ARP's `uni et=` line no longer lists firmware
+    EVENT frames (they are not data frames now; they never matched anyway).
+  - **Measured:** `make test` + overlaycheck clean, image no helper-stash MISS (39,566,576 bytes); full probe list
+    on virt HVF 208/209 -- the miss is demo/RunProbe, which hung once after a `/run` handler's run returned (900 s
+    ceiling) and then passed 3/3 alone and 12/12 four-at-a-time. Its path has no network code; NOT attributed to N1
+    and not explained -- an open intermittent (1 in ~17 runs so far).
+  - **PI-VALIDATED 2026-11-19** (build id fbebdc35311e41f7, NetDemo example.com): join 4153 ms (1 attempt), then
+    the moved code end to end -- `net: dhcp discover/offer/request/ACK ip 192.168.1.247` (gateway/DNS
+    192.168.1.254, first exchange, no retries), `net: gateway mac bc:9a:8e:e1:ee:a1`, `net: ping reply from
+    192.168.1.254`; rx task started; SNTP via `net.Dns` set the clock; NetDemo `HTTP/1.1 200 OK`, `http done
+    bytes=890`, `[main returned normally]`, gc collections=8. One ARP diagnostic line (`uni et=0x806`, our
+    unicast reply) -- the firmware-event lines it used to list are gone, as expected.
 - **QEMU `virt` TARGET, INCREMENT V3: virtio-rng entropy (2026-11-18).** Completes the virt plan (V1-V4).
   - **`board.virt.VirtioRng`**: finds the entropy device (ID 4) among virt's 32 virtio-mmio transports, brings it
     to DRIVER_OK accepting only VERSION_1, and draws through one POLLED virtqueue (4 descriptors) in a fixed page,
