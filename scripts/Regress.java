@@ -41,6 +41,11 @@ import java.util.regex.Pattern;
  * ITS OWN, and the solo run is the verdict, so batching can never fail a probe. It can only MASK a failure through
  * shared state (a class already initialized by an earlier probe), which is what {@code solo} in the list is for.
  *
+ * <p>{@code --board virt} builds QEMU {@code virt} images ({@code BuildRuntimeImage --board virt}) and boots them under
+ * HVF ({@code -accel hvf -cpu host}, Apple silicon), where a probe runs in about a second instead of a minute;
+ * {@code --tcg} emulates a Cortex-A72 instead. The default is the Pi image on {@code -M raspi4b}. The same list and
+ * expected outputs serve both: a probe's output is the program's, not the board's.
+ *
  * <p>Images are built with {@code BuildRuntimeImage --init}, so {@code ramfs/etc/init} is never rewritten and
  * several images build from one checkout. Logs go to {@code /tmp/joeng-regress/<time>/}.
  */
@@ -85,6 +90,10 @@ public final class Regress
     private static Path runDir;
     private static final long START = System.nanoTime();
 
+    /** {@code --board virt}: QEMU virt images instead of the Pi's on raspi4b; {@code --tcg}: emulate, not HVF. */
+    private static boolean virt;
+    private static boolean tcg;
+
     public static void main(String[] args) throws Exception
     {
         int jobs = 4;
@@ -113,6 +122,23 @@ public final class Regress
             else if (args[i].equals("--batch"))
             {
                 oneBatch = true;
+                i += 1;
+            }
+            else if (args[i].equals("--board") && i + 1 < args.length)
+            {
+                if (args[i + 1].equals("virt"))
+                {
+                    virt = true;
+                }
+                else if (!args[i + 1].equals("pi4"))
+                {
+                    die("--board: pi4 or virt, not " + args[i + 1]);
+                }
+                i += 2;
+            }
+            else if (args[i].equals("--tcg"))
+            {
+                tcg = true;
                 i += 1;
             }
             else
@@ -184,7 +210,7 @@ public final class Regress
             }
         }
         log(probes.size() + " probes: " + batched + " in " + batches + " batches, " + (probes.size() - batched)
-                + " solo; " + jobs + " at a time");
+                + " solo; " + jobs + " at a time; " + (virt ? "QEMU virt, " + (tcg ? "TCG cortex-a72" : "HVF") : "raspi4b"));
 
         Map<String, String> verdict = new LinkedHashMap<>();
         for (Probe p : probes)
@@ -386,7 +412,7 @@ public final class Regress
         Files.writeString(initFile, init);
         int rc = run(List.of("java", "--add-opens", "java.base/java.lang=ALL-UNNAMED", "--add-opens",
                 "java.base/java.util=ALL-UNNAMED", "-cp", "out", "writer.BuildRuntimeImage", "out", img.toString(),
-                "--init", initFile.toString()), runDir.resolve(tag + ".build"));
+                "--init", initFile.toString(), "--board", virt ? "virt" : "pi4"), runDir.resolve(tag + ".build"));
         if (rc != 0)
         {
             for (Probe p : job.probes())
@@ -399,15 +425,14 @@ public final class Regress
 
         long ceiling = job.batch() ? 600 + 120L * job.probes().size() : 900;
         long t0 = System.nanoTime();
-        Process q = new ProcessBuilder("qemu-system-aarch64", "-M", "raspi4b", "-kernel", img.toString(),
-                "-serial", "null", "-serial", "stdio", "-display", "none", "-no-reboot")
-                .redirectErrorStream(true).redirectOutput(logFile.toFile()).start();
+        Process q = new ProcessBuilder(qemuCommand(img)).redirectErrorStream(true).redirectOutput(logFile.toFile()).start();
+        long poll = virt ? 250 : 2000;                            // a virt boot is over in about a second
         Pattern end = job.batch() ? BATCH_END : SOLO_END;
         boolean finished = false;
         String endLine = null;
         while (!finished && (System.nanoTime() - t0) / 1_000_000_000L < ceiling && q.isAlive())
         {
-            Thread.sleep(2000);
+            Thread.sleep(poll);
             for (String line : lines(logFile))
             {
                 if (end.matcher(line).find())
@@ -420,7 +445,7 @@ public final class Regress
         }
         if (finished)
         {
-            Thread.sleep(3000);                                   // let the tail (a trap's report) reach the log
+            Thread.sleep(virt ? 1000 : 3000);                    // let the tail (a trap's report) reach the log
         }
         q.destroy();
         if (!q.waitFor(5, java.util.concurrent.TimeUnit.SECONDS))
@@ -535,6 +560,28 @@ public final class Regress
     }
 
     /** A probe name as one file name: a packaged probe ({@code demo/RunProbe}) would otherwise name a directory. */
+    /** The QEMU command line for this run's board: the Pi on raspi4b (console on the second UART), or virt. */
+    private static List<String> qemuCommand(Path img)
+    {
+        if (!virt)
+        {
+            return List.of("qemu-system-aarch64", "-M", "raspi4b", "-kernel", img.toString(),
+                    "-serial", "null", "-serial", "stdio", "-display", "none", "-no-reboot");
+        }
+        List<String> cmd = new ArrayList<>(List.of("qemu-system-aarch64", "-M", "virt"));
+        if (tcg)
+        {
+            cmd.addAll(List.of("-cpu", "cortex-a72"));
+        }
+        else
+        {
+            cmd.addAll(List.of("-accel", "hvf", "-cpu", "host"));
+        }
+        cmd.addAll(List.of("-smp", "4", "-m", "4G", "-kernel", img.toString(), "-serial", "stdio",
+                "-display", "none", "-no-reboot"));
+        return cmd;
+    }
+
     private static String fileName(String probe)
     {
         return probe.replace('/', '.');
