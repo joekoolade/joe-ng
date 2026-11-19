@@ -4081,6 +4081,7 @@ public final class VM
     static long taskCAddr;             // VM.taskC()V — demo task entry (writer-stashed)
     static long taskRAddr;             // VM.taskR()V — UART reader task entry (writer-stashed)
     public static long netRxTaskAddr;  // board.cyw43.WlanPoll.rxTask()V -- the WiFi RX poller task (writer-stashed)
+    public static long virtNetRxTaskAddr;  // board.virt.VirtioNet.rxTask()V -- the virtio-net RX task (writer-stashed)
     static long secondaryMainAddr;     // VM.secondaryMain(I)V — secondary-core entry (writer-stashed)
     static long ticks;                 // periodic timer interrupts serviced so far
 
@@ -4541,6 +4542,11 @@ public final class VM
             startWifiScheduler();                          // scheduler + IRQs (IRQ-driven RX + blocking sockets)
             board.cyw43.Cyw43.runDemo = false;             // stop the bring-up after connectivity, no HTTP demo
             board.bcm2711.Wifi.bringUp();
+        }
+        else if (board.Board.isVirt() && manifestNet())
+        {
+            startWifiScheduler();                          // scheduler + IRQs, as on the Pi
+            board.virt.VirtioNet.bringUp();                // QEMU -netdev user: DHCP 10.0.2.15, gateway .2, DNS .3
         }
 
         // A launched program may spawn threads (Thread.start / Object.wait / Thread.join), which need the

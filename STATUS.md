@@ -4,6 +4,35 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **NETWORK LINK, INCREMENT N2: `board.virt.VirtioNet` -- the network on QEMU virt (2026-11-19).** A `net=1`
+  program on `--board virt` now gets the same OS network service the Pi's WiFi gives it.
+  - **`board.virt.VirtioNet`**: a modern (virtio-mmio v2) virtio-net driver. Features VERSION_1 + MAC only (no
+    offloads, no merged buffers), so every frame carries an empty 12-byte `virtio_net_hdr_v1`, stripped on receive
+    and zeroed on send. Queue 0 keeps 32 receive buffers posted (each re-posted as soon as its frame is copied
+    out); queue 1 has 16 transmit buffers, reclaimed before each send under a spinlock with IRQs masked (any task
+    sends), completion interrupts suppressed. Rings and buffers are heap blocks held by statics; the device gets
+    physical addresses through `Board.phys`.
+  - **Interrupt-driven RX**, the Pi's shape: synchronous `waitFrame` during bring-up, then an RX task woken by
+    the device's SPI (transport n -> INTID 48+n; QEMU puts the first `-device` on transport 31 -> INTID 78) via
+    `WIFI_SEM`, which is now the network RX semaphore on either board. `VMScheduler.schedule` acks the device
+    (InterruptStatus -> InterruptACK) so the level drops. Watchdog poll 100 ms. **MEASURED that the interrupt,
+    not the watchdog, moves frames:** with the watchdog at 5 s NetDemo still finished in 3.4 s.
+  - **`net.Link`** branches on `Board.isVirt()`: every frame is data at offset 0, no link events, no EAPOL.
+  - **Boot**: `VM` brings the interface up on virt when `/etc/init` says `net=1` (`startWifiScheduler`, then
+    `VirtioNet.bringUp`: device -> `NetUp` -> RX task -> SNTP). The RX task's entry is writer-stashed
+    (`VM.virtNetRxTaskAddr`), like `WlanPoll.rxTask`.
+  - **Validated (QEMU `-netdev user,id=n0 -device virtio-net-device,netdev=n0`):** NetDemo example.com under HVF
+    3.4 s and TCG 15.3 s -- `net: virtio-net mac 52:54:00:12:34:56 irq 78`, `net: dhcp ACK ip 10.0.2.15`,
+    `net: gateway mac 52:55:0a:00:02:02`, `net: ping reply from 10.0.2.2`, SNTP set the clock, `HTTP/1.1 200 OK`,
+    `http done bytes=891`. HttpsDemo example.com under HVF: `https: done, 577 bytes in 2930 ms`. Targeted virt
+    Regress (no NIC; scheduler, race and net probes) 15/15. `make test` and overlaycheck clean; Pi image builds
+    with no helper-stash MISS.
+  - **Pi:** the Pi's paths change only by a `Board.isVirt()` test in `Link` and an extra INTID compare in the IRQ
+    dispatch (`VirtioNet.intid` is 0 there). **PI-VALIDATED 2026-11-19** (build id 8f3a7d2a474b4654, NetDemo
+    example.com): join 4161 ms (1 attempt), DHCP first exchange (192.168.1.247), gateway ARP + ping reply, WiFi RX
+    task started, SNTP set the clock, `HTTP/1.1 200 OK`, `http done bytes=891`, `[main returned normally]`, gc
+    collections=8 -- the same as N1's run.
+  - Runners are N3: `virt.sh --net`, Regress with the NIC, WebServerDemo via hostfwd.
 - **NETWORK LINK SPLIT, INCREMENT N1: `net.Link`; DHCP/ARP/ping/DNS move out of the WiFi driver (2026-11-18).**
   Groundwork for a virtio-net driver on QEMU virt (N2): the stack no longer parses the CYW43455's framing.
   - **`net.Link`** answers what the stack used to work out inline from SDPCM: `channel` (data / control / event),
