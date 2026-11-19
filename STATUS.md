@@ -4,6 +4,29 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **NETWORK LINK, INCREMENT N3: runners -- `virt.sh --net`/`--fwd`, `net` probes in Regress, `NetTcpProbe` (2026-11-19).**
+  Completes the virt network arc (N1-N3).
+  - **`scripts/virt.sh --net`** gives the machine a virtio-net card on QEMU user networking and writes `net=1` into
+    the image's `/etc/init`; **`--fwd HOST:GUEST`** (repeatable, implies `--net`) adds a `hostfwd`, e.g.
+    `scripts/virt.sh --fwd 8080:80 demo/WebServerDemo`, then `http://localhost:8080/` on the Mac.
+  - **Regress**: every `--board virt` boot now carries the NIC. A probe marked **`net`** in `probes.txt` runs only on
+    virt, always solo, with `net=1` and `args=10.0.2.2 <port>` in its init, against **`NetTcpServer`** -- an HTTP/1.0
+    server Regress starts on the host loopback (`GET /blob/<n>` = n pattern bytes, `POST /sink` = CRC-32 + length).
+    On raspi4b, which has no network, `net` probes are skipped and listed. `java scripts/Regress.java --serve` runs
+    the server alone for the host control.
+  - **`NetTcpProbe`** (adversarial shapes, raw sockets): 1 KB and 600 KB downloads, a 400 KB upload in 8 KB writes
+    (fills the 16-buffer TX ring), eight connections in a row, two 250-300 KB downloads at once on two threads; each
+    checked by CRC-32, nothing host-specific printed. Host control (stock JVM, 127.0.0.1) committed as the expected
+    output.
+  - **`/boot` on virt**: `VMNatives.blockInit` answers step -100 (no block device) there instead of probing the Pi's
+    SD controller -- whose window is unmapped on virt, so the probe faulted and the NPE KILLED WebServerDemo's main
+    thread (MEASURED: `/boot` -> connection dropped, then nothing answered). Now the page renders with no files.
+  - **Validated:** `NetTcpProbe` on virt HVF 2 s, TCG 11 s, identical to the host. Full `--board virt` list
+    **210/210** in 1m39s (209 + NetTcpProbe), NIC on every boot. raspi4b run of `NetTcpProbe` -> skipped, 0 of 0.
+    WebServerDemo via `--fwd 18080:80`: `/` 200 in 21 ms, `/net` `/gc` `/memory` `/threads` `/locks` 200, a 404
+    page, 40 requests 8 at a time all 200 (`/net`: tx dropped 0); `/boot` 200 after the fix.
+  - Not this increment: demo/TickProbe reads the Pi GIC's address after printing its gate, so on virt it ends in an
+    NPE (gate passes; seen before N3 too).
 - **NETWORK LINK, INCREMENT N2: `board.virt.VirtioNet` -- the network on QEMU virt (2026-11-19).** A `net=1`
   program on `--board virt` now gets the same OS network service the Pi's WiFi gives it.
   - **`board.virt.VirtioNet`**: a modern (virtio-mmio v2) virtio-net driver. Features VERSION_1 + MAC only (no

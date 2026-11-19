@@ -173,6 +173,7 @@ SunUtilProbe
 NetLeftoversProbe
 ClinitFailProbe solo
 NetWwwProbe
+NetTcpProbe              net              # real TCP over virtio-net to the harness's NetTcpServer: 600 KB down, 400 KB up, 8 in a row, 2 at once (virt only)
 AbsentSuperProbe
 SecurityStockProbe
 LazyVarHandleProbe

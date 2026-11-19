@@ -1222,9 +1222,20 @@ final class VMNatives
         board.bcm2711.Reset.reboot();
     }
 
-    /** {@code MetalBlock.init0()} native: bring the microSD card up (EMMC2 on hardware); 0 or a negative step. */
+    /** {@link #blockInit}'s answer on a board with no block device. */
+    static final long BLOCK_NO_DEVICE = -100L;
+
+    /**
+     * {@code MetalBlock.init0()} native: bring the microSD card up (EMMC2 on hardware); 0 or a negative step. QEMU
+     * {@code virt} has no SD controller (and the Pi's device window is unmapped there, so probing it would fault):
+     * answer the step {@link #BLOCK_NO_DEVICE}, which the guest throws as an IOException naming it.
+     */
     static long blockInit()
     {
+        if (board.Board.isVirt())
+        {
+            return BLOCK_NO_DEVICE;
+        }
         return board.bcm2711.Emmc.init();
     }
 

@@ -9,7 +9,13 @@
  *
  * SPDX-License-Identifier: EPL-2.0
  */
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -24,6 +30,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.regex.Pattern;
+import java.util.zip.CRC32;
 
 /**
  * The probe regression: every probe in {@code test/regress/probes.txt} booted on QEMU and its output compared with
@@ -45,6 +52,13 @@ import java.util.regex.Pattern;
  * HVF ({@code -accel hvf -cpu host}, Apple silicon), where a probe runs in about a second instead of a minute;
  * {@code --tcg} emulates a Cortex-A72 instead. The default is the Pi image on {@code -M raspi4b}. The same list and
  * expected outputs serve both: a probe's output is the program's, not the board's.
+ *
+ * <p>A probe marked {@code net} in the list needs a network: it runs only with {@code --board virt}, always alone,
+ * with {@code net=1} in its {@code /etc/init} (the VM brings virtio-net up -- QEMU {@code -netdev user}) and
+ * {@code args=10.0.2.2 <port>}, the address of {@link NetTcpServer}, which this run starts on the host's loopback
+ * (user networking maps 10.0.2.2 to it). On raspi4b, which has no network, those probes are skipped and said so.
+ * {@code java scripts/Regress.java --serve} runs that server alone and prints its port, for the host control
+ * ({@code java NetTcpProbe 127.0.0.1 <port>}).
  *
  * <p>Images are built with {@code BuildRuntimeImage --init}, so {@code ramfs/etc/init} is never rewritten and
  * several images build from one checkout. Logs go to {@code /tmp/joeng-regress/<time>/}.
@@ -77,8 +91,9 @@ public final class Regress
     private static final String MARK = "@@@ ProbeBatch ";
     private static final int MAX_PER_BATCH = 25;
 
-    /** One line of probes.txt: the probe, whether it must boot alone, its RAMFS classpath, its pass rule. */
-    private record Probe(String name, boolean solo, String cp, String gate)
+    /** One line of probes.txt: the probe, whether it must boot alone, its RAMFS classpath, its pass rule, and
+     *  whether it needs the network. */
+    private record Probe(String name, boolean solo, String cp, String gate, boolean net)
     {
     }
 
@@ -93,6 +108,9 @@ public final class Regress
     /** {@code --board virt}: QEMU virt images instead of the Pi's on raspi4b; {@code --tcg}: emulate, not HVF. */
     private static boolean virt;
     private static boolean tcg;
+
+    /** The host server {@code net} probes talk to; its port, once started (0 = not started). */
+    private static int netPort;
 
     public static void main(String[] args) throws Exception
     {
@@ -136,6 +154,12 @@ public final class Regress
                 }
                 i += 2;
             }
+            else if (args[i].equals("--serve"))
+            {
+                int port = NetTcpServer.start();
+                System.out.println("NetTcpServer on 127.0.0.1:" + port + " -- run: java NetTcpProbe 127.0.0.1 " + port);
+                Thread.currentThread().join();
+            }
             else if (args[i].equals("--tcg"))
             {
                 tcg = true;
@@ -166,6 +190,22 @@ public final class Regress
                 probes.add(p);
             }
         }
+        List<String> skipped = new ArrayList<>();
+        for (Probe p : List.copyOf(probes))
+        {
+            if (p.net() && !virt)
+            {
+                probes.remove(p);
+                skipped.add(p.name());
+            }
+        }
+        for (Probe p : probes)
+        {
+            if (p.net() && netPort == 0)
+            {
+                netPort = NetTcpServer.start();
+            }
+        }
         for (Probe p : probes)
         {
             if (p.gate() == null && !Files.isRegularFile(expectedOf(p)))
@@ -177,6 +217,14 @@ public final class Regress
         runDir = Path.of("/tmp/joeng-regress/" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")) + "-" + ProcessHandle.current().pid());
         Files.createDirectories(runDir);
         log("logs in " + runDir);
+        if (!skipped.isEmpty())
+        {
+            log("skipped (need a network: --board virt): " + skipped);
+        }
+        if (netPort != 0)
+        {
+            log("net probes talk to NetTcpServer on 127.0.0.1:" + netPort + " (10.0.2.2:" + netPort + " in the guest)");
+        }
 
         Path init = ROOT.resolve("ramfs/etc/init");
         byte[] initBefore = Files.exists(init) ? Files.readAllBytes(init) : null;
@@ -198,7 +246,31 @@ public final class Regress
             log("WARNING: make changed ramfs/etc/init; restored it");
         }
 
-        List<Job> plan = oneBatch ? List.of(new Job("batch1", List.copyOf(probes), true)) : plan(probes, allSolo, jobs);
+        List<Job> plan;
+        if (oneBatch)
+        {
+            List<Probe> batch = new ArrayList<>();
+            plan = new ArrayList<>();
+            for (Probe p : probes)
+            {
+                if (p.net())
+                {
+                    plan.add(new Job(p.name(), List.of(p), false));   // its args cannot ride in a batch
+                }
+                else
+                {
+                    batch.add(p);
+                }
+            }
+            if (!batch.isEmpty())
+            {
+                plan.add(0, new Job("batch1", batch, true));
+            }
+        }
+        else
+        {
+            plan = plan(probes, allSolo, jobs);
+        }
         int batched = 0;
         int batches = 0;
         for (Job j : plan)
@@ -271,7 +343,7 @@ public final class Regress
         System.exit(failed.isEmpty() ? 0 : 1);
     }
 
-    /** Parse probes.txt: {@code <Probe> [solo] [cp=<ramfs path>] [gate=<line the output must contain>]}. */
+    /** Parse probes.txt: {@code <Probe> [solo] [net] [cp=<ramfs path>] [gate=<line the output must contain>]}. */
     private static Map<String, Probe> readList() throws IOException
     {
         Map<String, Probe> m = new LinkedHashMap<>();
@@ -286,13 +358,19 @@ public final class Regress
             String[] f = line.split("\\s+", 2);
             String rest = f.length > 1 ? f[1] : "";
             boolean solo = false;
+            boolean net = false;
             String cp = null;
             String gate = null;
-            for (String opt : rest.isEmpty() ? new String[0] : rest.split("\\s+(?=solo\\b|cp=|gate=)"))
+            for (String opt : rest.isEmpty() ? new String[0] : rest.split("\\s+(?=solo\\b|net\\b|cp=|gate=)"))
             {
                 if (opt.equals("solo"))
                 {
                     solo = true;
+                }
+                else if (opt.equals("net"))
+                {
+                    net = true;
+                    solo = true;                                  // its args cannot ride in a batch
                 }
                 else if (opt.startsWith("cp="))
                 {
@@ -307,7 +385,7 @@ public final class Regress
                     die("probes.txt: cannot read '" + raw + "'");
                 }
             }
-            if (m.put(f[0], new Probe(f[0], solo, cp, gate)) != null)
+            if (m.put(f[0], new Probe(f[0], solo, cp, gate, net)) != null)
             {
                 die("probes.txt lists " + f[0] + " twice");
             }
@@ -405,6 +483,10 @@ public final class Regress
         if (first.cp() != null)
         {
             init.append("classpath=").append(first.cp()).append('\n');
+        }
+        if (first.net() && !job.batch())
+        {
+            init.append("net=1\nargs=10.0.2.2 ").append(netPort).append('\n');
         }
         Path initFile = runDir.resolve(tag + ".init");
         Path img = runDir.resolve(tag + ".img");
@@ -579,6 +661,7 @@ public final class Regress
         }
         cmd.addAll(List.of("-smp", "4", "-m", "4G", "-device", "virtio-rng-device",      // entropy (board.virt.VirtioRng),
                 "-global", "virtio-mmio.force-legacy=false",                          //   modern interface only
+                "-netdev", "user,id=n0", "-device", "virtio-net-device,netdev=n0",   // board.virt.VirtioNet (net=1)
                 "-kernel", img.toString(), "-serial", "stdio",
                 "-display", "none", "-no-reboot"));
         return cmd;
@@ -643,5 +726,130 @@ public final class Regress
     {
         System.err.println("regress: " + msg);
         System.exit(2);
+    }
+}
+
+/**
+ * The host end of the {@code net} probes ({@code NetTcpProbe}): HTTP/1.0, one request per connection, a thread per
+ * connection. {@code GET /blob/<n>} answers {@code n} bytes of the pattern {@code (i * 31 + 7) & 0xFF};
+ * {@code POST /sink} reads {@code Content-Length} bytes and answers {@code crc=<crc32 hex> len=<n>}. Bound to the
+ * loopback only.
+ */
+final class NetTcpServer
+{
+    private NetTcpServer()
+    {
+    }
+
+    /** Start on an ephemeral loopback port (daemon threads); returns the port. */
+    static int start() throws IOException
+    {
+        ServerSocket ss = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
+        Thread t = new Thread(() ->
+        {
+            while (true)
+            {
+                try
+                {
+                    Socket c = ss.accept();
+                    Thread h = new Thread(() -> serve(c));
+                    h.setDaemon(true);
+                    h.start();
+                }
+                catch (IOException e)
+                {
+                    return;
+                }
+            }
+        });
+        t.setDaemon(true);
+        t.start();
+        return ss.getLocalPort();
+    }
+
+    private static void serve(Socket c)
+    {
+        try (c)
+        {
+            c.setSoTimeout(60_000);
+            InputStream in = c.getInputStream();
+            String head = readHead(in);
+            OutputStream out = c.getOutputStream();
+            String[] first = head.split("\r\n", 2)[0].split(" ");
+            byte[] body;
+            if (first.length >= 2 && first[0].equals("GET") && first[1].startsWith("/blob/"))
+            {
+                int n = Integer.parseInt(first[1].substring(6));
+                body = new byte[n];
+                int i = 0;
+                while (i < n)
+                {
+                    body[i] = (byte) (i * 31 + 7);
+                    i += 1;
+                }
+            }
+            else if (first.length >= 2 && first[0].equals("POST") && first[1].equals("/sink"))
+            {
+                int n = 0;
+                for (String h : head.split("\r\n"))
+                {
+                    if (h.toLowerCase().startsWith("content-length:"))
+                    {
+                        n = Integer.parseInt(h.substring(15).strip());
+                    }
+                }
+                CRC32 crc = new CRC32();
+                byte[] buf = new byte[8192];
+                int got = 0;
+                while (got < n)
+                {
+                    int r = in.read(buf, 0, Math.min(buf.length, n - got));
+                    if (r < 0)
+                    {
+                        break;
+                    }
+                    crc.update(buf, 0, r);
+                    got += r;
+                }
+                body = ("crc=" + Long.toHexString(crc.getValue()) + " len=" + got + "\n").getBytes(StandardCharsets.US_ASCII);
+            }
+            else
+            {
+                out.write("HTTP/1.0 404 Not Found\r\n\r\n".getBytes(StandardCharsets.US_ASCII));
+                return;
+            }
+            out.write(("HTTP/1.0 200 OK\r\nContent-Length: " + body.length + "\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+            out.write(body);
+            out.flush();
+        }
+        catch (IOException | RuntimeException e)
+        {
+            // the probe reports what it did not get
+        }
+    }
+
+    /** The request line and headers, up to the blank line. */
+    private static String readHead(InputStream in) throws IOException
+    {
+        ByteArrayOutputStream b = new ByteArrayOutputStream();
+        int state = 0;
+        while (state < 4)
+        {
+            int ch = in.read();
+            if (ch < 0)
+            {
+                break;
+            }
+            b.write(ch);
+            if ((ch == '\r' && (state == 0 || state == 2)) || (ch == '\n' && (state == 1 || state == 3)))
+            {
+                state += 1;
+            }
+            else
+            {
+                state = ch == '\r' ? 1 : 0;
+            }
+        }
+        return b.toString(StandardCharsets.US_ASCII);
     }
 }
