@@ -4,6 +4,15 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **QEMU `virt` TARGET, INCREMENT V4: `Regress.java --board virt` (2026-11-18).** The probe regression runs on
+  QEMU virt: `java scripts/Regress.java --board virt [--tcg] [-j N] [Probe ...]` builds `--board virt` images and
+  boots them under HVF (`-accel hvf -cpu host -smp 4`), or emulated Cortex-A72 with `--tcg`. Same probes.txt, same
+  expected outputs, same batching and solo reruns; the default is still the Pi image on raspi4b. On virt the log is
+  polled every 250 ms (a boot is over in about a second) instead of every 2 s.
+  - **Full list under HVF: 209 of 209 pass in 1 min 44 s**, no batch reruns (the last full raspi4b run took
+    ~24 min). The P2-5 set of 41: 37 s on HVF vs 2 min 51 s on raspi4b. demo.TickProbe passes its gate and then
+    NPEs reading the Pi's GIC addresses for diagnostics -- expected on virt, where that window is unmapped.
+  - `--tcg`: 4 probes pass (batch + solo); the default raspi4b path: 2 probes pass, `SMP: 4 of 4 cores up`.
 - **QEMU `virt` TARGET, INCREMENT V2: four cores via PSCI CPU_ON (2026-11-18).** `virt` images now run SMP, under
   HVF (real parallel host cores) and TCG; `scripts/virt.sh` passes `-smp 4`.
   - **Start-up:** `VMScheduler.startSecondariesPsci` issues PSCI CPU_ON (`HVC #0`, function 0xC400_0003; QEMU's
