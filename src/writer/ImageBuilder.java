@@ -341,6 +341,10 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         {
             worklist.add(BAKE_ROOTS[br][0]);
         }
+        for (int po = 0; po < board.Platform.OPS.length; po++)
+        {
+            worklist.add(platformKey(po));          // the --board platform's operations (board.Platform)
+        }
         for (int bs = 0; bs < BAKE_STATICS.length; bs++)
         {
             statics.add(BAKE_STATICS[bs][0]);
@@ -1599,15 +1603,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.forName(Lmagic/ObjectReference;)J",        "vm/VM.forNameAddr");    // reflection M1: Class.forName0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.assignable(Lmagic/Address;Lmagic/Address;)J",    "vm/VM.assignableAddr"); // Class.isAssignableFrom
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.forNameNoInit(Lmagic/ObjectReference;)J", "vm/VM.forNameNoInitAddr"); // MetalLoaders.lookup0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.hwEntropy(Lmagic/ObjectReference;J)J", "vm/VM.hwEntropyAddr"); // SecureRandom.hwEntropy0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.consoleRead(Lmagic/ObjectReference;JJ)J", "vm/VM.consoleReadAddr"); // MetalConsoleIn.read0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.boardBuildId()J", "vm/VM.boardBuildIdAddr"); // MetalBoard
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.boardIsVirt()J", "vm/VM.boardIsVirtAddr");   // MetalBoard
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.boardSetRebootFlags(J)J", "vm/VM.boardRebootFlagsAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.boardReboot()V", "vm/VM.boardRebootAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.blockInit()J", "vm/VM.blockInitAddr");   // MetalBlock.init0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.blockRead(JLmagic/ObjectReference;JJ)J", "vm/VM.blockReadAddr"); // MetalBlock.read0
-        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.blockWrite(JLmagic/ObjectReference;JJ)J", "vm/VM.blockWriteAddr"); // MetalBlock.write0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.consoleAvailable()J", "vm/VM.consoleAvailAddr"); // MetalConsoleIn.available0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodAnnoAll(J)J", "vm/VM.methodAnnoAllAddr"); // Executable.annoAll0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classAnnoAll(Lmagic/ObjectReference;)J", "vm/VM.classAnnoAllAddr"); // Class.annoAll0
@@ -1677,6 +1674,17 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         for (int br = 0; br < BAKE_ROOTS.length; br++)
         {
             stashHelper(image, staticWord, wordOffset, BAKE_ROOTS[br][0], BAKE_ROOTS[br][1]);
+        }
+        for (int po = 0; po < board.Platform.OPS.length; po++)
+        {
+            // An incomplete platform is a BUILD failure, never a zero address: the native would branch to 0.
+            String key = platformKey(po);
+            if (wordOffset.get(key) < 0)
+            {
+                throw new IllegalStateException("platform " + platformClass() + " has no compiled " + key
+                        + " -- every board.Platform.OPS method must be declared, at exactly that descriptor");
+            }
+            stashHelper(image, staticWord, wordOffset, key, board.Platform.OPS[po][1]);
         }
         for (int bs = 0; bs < BAKE_STATICS.length; bs++)
         {
@@ -2449,6 +2457,18 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     /** Fill a (writer-initialized) static field slot with {@code value}, if the field is used. */
     /** True for a QEMU {@code virt} image ({@code BuildRuntimeImage --board virt}); baked as {@code Board.virt}. */
     static boolean boardVirt;
+
+    /** The --board platform class (internal name) whose methods implement {@link board.Platform#OPS}. */
+    static String platformClass()
+    {
+        return board.Platform.classFor(boardVirt ? "virt" : "pi4");
+    }
+
+    /** The method key of the {@code po}-th platform operation in the --board platform class. */
+    private static String platformKey(int po)
+    {
+        return platformClass() + "." + board.Platform.OPS[po][0];
+    }
 
     private static void fillStatic(int[] image, StrIntTable staticWord, String key, long value)
     {

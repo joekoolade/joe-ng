@@ -2178,15 +2178,8 @@ public final class VM
         if (classNameAddr == 0L) { long u = VMNatives.classNameOf(ObjectReference.nullReference()); }        // Class.getName0() native (M4)
         if (forNameAddr == 0L) { long u = VMNatives.forName(ObjectReference.nullReference()); }              // Class.forName0() native (reflection M1)
         if (assignableAddr == 0L) { long u = VMNatives.assignable(Address.zero(), Address.zero()); }    // Class.assignable0 (interfaces too)
-        if (hwEntropyAddr == 0L) { long u = VMNatives.hwEntropy(ObjectReference.nullReference(), 0L); } // MetalRamfs.hwEntropy0
         if (consoleReadAddr == 0L) { long u = VMNatives.consoleRead(ObjectReference.nullReference(), 0L, 0L); } // MetalConsoleIn.read0
         if (boardBuildIdAddr == 0L) { long u = VMNatives.boardBuildId(); }              // MetalBoard.buildId0
-        if (boardIsVirtAddr == 0L) { long u = VMNatives.boardIsVirt(); }                // MetalBoard.isVirt0
-        if (boardRebootFlagsAddr == 0L) { long u = VMNatives.boardSetRebootFlags(0L); } // MetalBoard.setRebootFlags0
-        if (boardRebootAddr == 0L) { VMNatives.boardReboot(); }                         // MetalBoard.reboot0
-        if (blockInitAddr == 0L) { long u = VMNatives.blockInit(); }                    // MetalBlock.init0
-        if (blockReadAddr == 0L) { long u = VMNatives.blockRead(0L, ObjectReference.nullReference(), 0L, 0L); }      // MetalBlock.read0
-        if (blockWriteAddr == 0L) { long u = VMNatives.blockWrite(0L, ObjectReference.nullReference(), 0L, 0L); }    // MetalBlock.write0
         if (consoleAvailAddr == 0L) { long u = VMNatives.consoleAvailable(); }     // MetalConsoleIn.available0
         if (forNameNoInitAddr == 0L) { long u = VMNatives.forNameNoInit(ObjectReference.nullReference()); }  // MetalLoaders.lookup0 (no <clinit>)
         if (methodAnnoAllAddr == 0L) { long u = VMNatives.methodAnnoAll(-1L); } // Executable.annoAll0
@@ -3980,7 +3973,9 @@ public final class VM
     static long classNameAddr;         // VM.classNameOf(Lmagic/ObjectReference;)J — Class.getName0(Class) native (M4)
     static long forNameAddr;           // VM.forName(Lmagic/ObjectReference;)J — Class.forName0(byte[]) native (reflection arc M1)
     static long assignableAddr;        // VMNatives.assignable(Lmagic/Address;Lmagic/Address;)J — Class.assignable0(J,J)
-    static long hwEntropyAddr;         // VMNatives.hwEntropy(Lmagic/ObjectReference;J)J — MetalRamfs.hwEntropy0(byte[],int)
+    // The board platform's operations (board.Platform.OPS), bound by the writer to the --board platform class.
+    static long hwEntropyAddr;         // <Platform>.entropy(Lmagic/ObjectReference;J)J — MetalRamfs.hwEntropy0(byte[],int)
+    static long entropyReportAddr;     // <Platform>.entropyReport()V — the boot "hw rng:" line
     static long consoleReadAddr;       // VMNatives.consoleRead(Lmagic/ObjectReference;JJ)J — MetalConsoleIn.read0(byte[],int,int)
     /**
      * The image's build id: the first 8 bytes of the SHA-256 of {@code kernel8.img} with this cell zero and no
@@ -3988,12 +3983,12 @@ public final class VM
      */
     static long buildId;
     static long boardBuildIdAddr;      // VMNatives.boardBuildId()J — MetalBoard.buildId0()
-    static long boardIsVirtAddr;       // VMNatives.boardIsVirt()J — MetalBoard.isVirt0()
-    static long boardRebootFlagsAddr;  // VMNatives.boardSetRebootFlags(J)J — MetalBoard.setRebootFlags0(int)
-    static long boardRebootAddr;       // VMNatives.boardReboot()V — MetalBoard.reboot0()
-    static long blockInitAddr;         // VMNatives.blockInit()J — MetalBlock.init0()
-    static long blockReadAddr;         // VMNatives.blockRead(JLmagic/ObjectReference;JJ)J — MetalBlock.read0(long,byte[],int,int)
-    static long blockWriteAddr;        // VMNatives.blockWrite(JLmagic/ObjectReference;JJ)J — MetalBlock.write0(long,byte[],int,int)
+    static long boardIdAddr;           // <Platform>.boardId()J — MetalBoard.boardId0()
+    static long boardRebootFlagsAddr;  // <Platform>.setRebootFlags(J)J — MetalBoard.setRebootFlags0(int)
+    static long boardRebootAddr;       // <Platform>.reboot()V — MetalBoard.reboot0()
+    static long blockInitAddr;         // <Platform>.blockInit()J — MetalBlock.init0()
+    static long blockReadAddr;         // <Platform>.blockRead(JLmagic/ObjectReference;JJ)J — MetalBlock.read0(long,byte[],int,int)
+    static long blockWriteAddr;        // <Platform>.blockWrite(JLmagic/ObjectReference;JJ)J — MetalBlock.write0(long,byte[],int,int)
     static long consoleAvailAddr;      // VMNatives.consoleAvailable()J — MetalConsoleIn.available0()
     static long forNameNoInitAddr;     // VMNatives.forNameNoInit(Lmagic/ObjectReference;)J — MetalLoaders.lookup0(byte[]), no <clinit>
     static long methodAnnoAllAddr;     // VMNatives.methodAnnoAll(J)J — Executable.annoAll0(int)
@@ -5002,7 +4997,7 @@ public final class VM
 
         // What the BOARD has, before any demo asks for it -- one line, so a log says whether this machine
         // can seed a SecureRandom at all. The probe is read-only and degrades to "absent" under QEMU.
-        board.bcm2711.Rng.report();
+        Magic.call0(entropyReportAddr);                   // the board platform's entropyReport()
 
         // java.security.SecureRandom, the stock JCA and SUN provider: a KNOWN-ANSWER SHA1PRNG stream (a DRBG's
         // output always looks correct, so nothing weaker is a test), two self-seeded instances that must

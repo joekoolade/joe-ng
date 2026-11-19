@@ -38,8 +38,9 @@ public class TickProbe
         // The GIC as this core sees it: on the Pi the GIC-400 (distributor 0xFF841000, CPU interface 0xFF842000);
         // on QEMU virt its GICv2 (physical 0x08000000/0x08010000, mapped at +0xF0000000). The Pi addresses are
         // unmapped on virt, and reading them there faulted.
-        long gicd = MetalBoard.isVirt() ? 0xF800_0000L : 0xFF84_1000L;
-        long gicc = MetalBoard.isVirt() ? 0xF801_0000L : 0xFF84_2000L;
+        boolean virt = MetalBoard.board().equals("virt");
+        long gicd = virt ? 0xF800_0000L : 0xFF84_1000L;
+        long gicc = virt ? 0xF801_0000L : 0xFF84_2000L;
         int typer = Address.fromLong(gicd + 0x004L).loadInt();
         System.out.println("TickProbe: GICD_TYPER=0x" + Integer.toHexString(typer) + " (SecurityExtn="
                 + ((typer >> 10) & 1) + ") GICD_CTLR=0x" + Integer.toHexString(Address.fromLong(gicd).loadInt())

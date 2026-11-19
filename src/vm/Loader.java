@@ -5888,7 +5888,7 @@ public final class Loader
         if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalBoard")))
         {
             if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("buildId0")))          { return VM.boardBuildIdAddr; }     // ()J
-            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("isVirt0")))           { return VM.boardIsVirtAddr; }      // ()I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("boardId0")))          { return VM.boardIdAddr; }          // ()I
             if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("setRebootFlags0")))   { return VM.boardRebootFlagsAddr; } // (I)I
             if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("reboot0")))           { return VM.boardRebootAddr; }      // ()V
         }

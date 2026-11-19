@@ -12,7 +12,6 @@
 package vm;
 
 import board.bcm2711.Uart;
-import board.bcm2711.Rng;
 import magic.Address;
 import magic.Magic;
 import magic.ObjectReference;
@@ -1174,16 +1173,6 @@ final class VMNatives
     }
 
     /**
-     * {@code MetalRamfs.hwEntropy0(byte[], int)} native, what {@code /dev/random} and {@code /dev/urandom} read:
-     * fill the array with hardware entropy.
-     *
-     * @param arr the guest {@code byte[]} to fill
-     * @param len how many bytes are wanted
-     * @return how many were written -- 0 when this board has no usable source, and SHORT of {@code len}
-     *         when the FIFO ran dry. The caller must treat both as a failure rather than pad: partial
-     *         entropy stretched to a full seed is a weak seed that looks exactly like a strong one.
-     */
-    /**
      * {@code MetalConsoleIn.read0(byte[],int,int)} native: a canonical-mode console read into
      * {@code arr[off..off+len)} (bounds checked by the guest). The count, or -1 at end-of-file -- always -1
      * unless {@code /etc/init} said {@code stdin=uart}.
@@ -1203,85 +1192,10 @@ final class VMNatives
         return VM.buildId;
     }
 
-    /** {@code MetalBoard.isVirt0()} native: 1 on QEMU {@code virt}, 0 on the Pi 4. */
-    static long boardIsVirt()
-    {
-        return board.Board.isVirt() ? 1L : 0L;
-    }
-
-    /**
-     * {@code MetalBoard.setRebootFlags0(int)} native: firmware property SET_REBOOT_FLAGS ({@code 0x00038064}).
-     * Value 1 makes the NEXT boot a tryboot -- the firmware reads {@code tryboot.txt} instead of
-     * {@code config.txt} -- and the flag is one-shot. 0 = the firmware answered, -1 = it did not.
-     */
-    static long boardSetRebootFlags(long flags)
-    {
-        int[] w = new int[1];
-        w[0] = (int) flags;
-        return board.bcm2711.Mailbox.tag(board.bcm2711.Bcm2711.TAG_SET_REBOOT_FLAGS, w) ? 0L : -1L;
-    }
-
-    /** {@code MetalBoard.reboot0()} native: drain the console, then the PM watchdog reset. Never returns. */
-    static void boardReboot()
-    {
-        Uart.flush();
-        board.bcm2711.Reset.reboot();
-    }
-
-    /** {@link #blockInit}'s answer on a board with no block device. */
-    static final long BLOCK_NO_DEVICE = -100L;
-
-    /**
-     * {@code MetalBlock.init0()} native: bring the microSD card up (EMMC2 on hardware); 0 or a negative step. QEMU
-     * {@code virt} has no SD controller (and the Pi's device window is unmapped there, so probing it would fault):
-     * answer the step {@link #BLOCK_NO_DEVICE}, which the guest throws as an IOException naming it.
-     */
-    static long blockInit()
-    {
-        if (board.Board.isVirt())
-        {
-            return BLOCK_NO_DEVICE;
-        }
-        return board.bcm2711.Emmc.init();
-    }
-
-    /** {@code MetalBlock.read0(long,byte[],int,int)} native: bounds and alignment checked by the guest. 0 = ok. */
-    static long blockRead(long lba, ObjectReference arr, long off, long n)
-    {
-        if (arr.isNull() || n <= 0L)
-        {
-            return n == 0L ? 0L : -1L;
-        }
-        long dst = arr.toLong() + ObjectModel.ARRAY_BASE_OFFSET + off;
-        return board.bcm2711.Emmc.readBlocks(lba, dst, (int) n) ? 0L : -1L;
-    }
-
-    /** {@code MetalBlock.write0(long,byte[],int,int)} native: as {@link #blockRead}, the other way. */
-    static long blockWrite(long lba, ObjectReference arr, long off, long n)
-    {
-        if (arr.isNull() || n <= 0L)
-        {
-            return n == 0L ? 0L : -1L;
-        }
-        long src = arr.toLong() + ObjectModel.ARRAY_BASE_OFFSET + off;
-        return board.bcm2711.Emmc.writeBlocks(lba, src, (int) n) ? 0L : -1L;
-    }
-
     /** {@code MetalConsoleIn.available0()} native: bytes of the current console line not yet read. */
     static long consoleAvailable()
     {
         return Console.cookedAvailable();
-    }
-
-    static long hwEntropy(ObjectReference arr, long len)
-    {
-        if (arr.isNull() || len <= 0L)
-        {
-            return 0L;
-        }
-        long cap = arr.toAddress().plus(ObjectModel.ARRAY_LENGTH_OFFSET).loadLong();
-        long n = len < cap ? len : cap;
-        return Rng.fill(arr.toLong() + ObjectModel.ARRAY_BASE_OFFSET, (int) n);
     }
 
     /**
