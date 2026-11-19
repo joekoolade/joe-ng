@@ -2181,6 +2181,7 @@ public final class VM
         if (hwEntropyAddr == 0L) { long u = VMNatives.hwEntropy(ObjectReference.nullReference(), 0L); } // MetalRamfs.hwEntropy0
         if (consoleReadAddr == 0L) { long u = VMNatives.consoleRead(ObjectReference.nullReference(), 0L, 0L); } // MetalConsoleIn.read0
         if (boardBuildIdAddr == 0L) { long u = VMNatives.boardBuildId(); }              // MetalBoard.buildId0
+        if (boardIsVirtAddr == 0L) { long u = VMNatives.boardIsVirt(); }                // MetalBoard.isVirt0
         if (boardRebootFlagsAddr == 0L) { long u = VMNatives.boardSetRebootFlags(0L); } // MetalBoard.setRebootFlags0
         if (boardRebootAddr == 0L) { VMNatives.boardReboot(); }                         // MetalBoard.reboot0
         if (blockInitAddr == 0L) { long u = VMNatives.blockInit(); }                    // MetalBlock.init0
@@ -3987,6 +3988,7 @@ public final class VM
      */
     static long buildId;
     static long boardBuildIdAddr;      // VMNatives.boardBuildId()J — MetalBoard.buildId0()
+    static long boardIsVirtAddr;       // VMNatives.boardIsVirt()J — MetalBoard.isVirt0()
     static long boardRebootFlagsAddr;  // VMNatives.boardSetRebootFlags(J)J — MetalBoard.setRebootFlags0(int)
     static long boardRebootAddr;       // VMNatives.boardReboot()V — MetalBoard.reboot0()
     static long blockInitAddr;         // VMNatives.blockInit()J — MetalBlock.init0()

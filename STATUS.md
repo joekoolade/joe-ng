@@ -4,6 +4,16 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **TickProbe on virt: the board's own GIC, and `MetalBoard.isVirt()` (2026-11-19).** demo/TickProbe printed its gate
+  and then read the Pi GIC-400 at `0xFF84_1000`, which is unmapped on virt -- so every virt run ended in an NPE
+  after the gate passed. It now picks the GIC by board: the Pi's `0xFF84_1000`/`0xFF84_2000`, or virt's GICv2 at
+  `0xF800_0000`/`0xF801_0000` (physical `0x0800_0000`/`0x0801_0000` in the device window).
+  - A guest program cannot link to `board.Board` (MEASURED: `LINK FAILED: board/Board.isVirt()Z -- class not in the
+    classDir`), so the guest-facing **`jdk.internal.misc.MetalBoard.isVirt()`** is new, over a native `isVirt0()`
+    (`VMNatives.boardIsVirt`, stashed like `buildId0`).
+  - **Validated:** virt HVF: gate OK, `GICD_TYPER=0x68 (SecurityExtn=0) GICD_CTLR=0x1 GICC_CTLR=0x1
+    ISENABLER0=0x800ffff`, no NPE. raspi4b: gate OK, `GICD_TYPER=0x66`, same line as before. `make test` +
+    overlaycheck OK.
 - **NETWORK LINK, INCREMENT N3: runners -- `virt.sh --net`/`--fwd`, `net` probes in Regress, `NetTcpProbe` (2026-11-19).**
   Completes the virt network arc (N1-N3).
   - **`scripts/virt.sh --net`** gives the machine a virtio-net card on QEMU user networking and writes `net=1` into

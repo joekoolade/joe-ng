@@ -1203,6 +1203,12 @@ final class VMNatives
         return VM.buildId;
     }
 
+    /** {@code MetalBoard.isVirt0()} native: 1 on QEMU {@code virt}, 0 on the Pi 4. */
+    static long boardIsVirt()
+    {
+        return board.Board.isVirt() ? 1L : 0L;
+    }
+
     /**
      * {@code MetalBoard.setRebootFlags0(int)} native: firmware property SET_REBOOT_FLAGS ({@code 0x00038064}).
      * Value 1 makes the NEXT boot a tryboot -- the firmware reads {@code tryboot.txt} instead of
