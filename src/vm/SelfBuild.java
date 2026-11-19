@@ -15,7 +15,6 @@ import asm.A64Enc;
 import board.bcm2711.Bcm2711;
 import board.bcm2711.Emmc;
 import board.bcm2711.Fat32;
-import board.bcm2711.Gic;
 import board.bcm2711.Reset;
 import board.Uart;
 import classfile.ClassReader;

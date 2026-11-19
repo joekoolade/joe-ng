@@ -11,8 +11,11 @@
  */
 package board.bcm2711;
 
+import board.Irq;
 import board.Platform;
 import board.Uart;
+import board.arm.Gic;
+import board.cyw43.Cyw43;
 import magic.ObjectReference;
 import objectmodel.ObjectModel;
 
@@ -133,5 +136,56 @@ public final class Bcm2711Platform
     public static long consoleSpi()
     {
         return Bcm2711.AUX_SPI;
+    }
+
+    /** The tick: the non-secure EL1 physical timer, PPI 30, through the GIC-400. */
+    public static long irqInitTimer()
+    {
+        Gic.init(Bcm2711.GICD, Bcm2711.GICC, Gic.PPI_CNTPNS);
+        return Gic.PPI_CNTPNS;
+    }
+
+    public static long irqAck()
+    {
+        int id = Gic.acknowledge(Bcm2711.GICC);
+        if (id == Gic.SPURIOUS)
+        {
+            return Irq.NONE;
+        }
+        return id;
+    }
+
+    public static void irqEnd(long id)
+    {
+        Gic.end(Bcm2711.GICC, (int) id);
+    }
+
+    public static void irqEnable(long id)
+    {
+        Gic.initSpi(Bcm2711.GICD, Bcm2711.GICC, (int) id);
+    }
+
+    public static void irqMask(long id)
+    {
+        Gic.disable(Bcm2711.GICD, (int) id);
+    }
+
+    public static void irqUnmask(long id)
+    {
+        Gic.enable(Bcm2711.GICD, (int) id);
+    }
+
+    /** The Pi's device interrupts: the WiFi chip's SDIO card interrupt (SPI 158) wakes the net RX task. */
+    public static long irqDevice(long id)
+    {
+        if (id == Bcm2711.SDIO_SPI)
+        {
+            if (Cyw43.onIrq())
+            {
+                return Irq.DEV_WAKE_NET;
+            }
+            return Irq.DEV_DONE;
+        }
+        return Irq.DEV_UNKNOWN;
     }
 }

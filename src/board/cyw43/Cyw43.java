@@ -471,7 +471,7 @@ public final class Cyw43
      */
     public static boolean onIrq()
     {
-        board.bcm2711.Gic.disableSpi(board.bcm2711.Bcm2711.SDIO_SPI);
+        board.Irq.mask(board.bcm2711.Bcm2711.SDIO_SPI);
         irqCount = irqCount + 1;
         return true;
     }
@@ -503,7 +503,7 @@ public final class Cyw43
         bpWrite32(SDIOD_CORE + SD_INTMASK, SD_FRAMEINT | SD_MAILBOXINT | SD_FCCHANGE);
         Sdio.cmd52Write(F0, CCCR_IEN, 0x07);             // master + F1 + F2 function interrupts
         Sdio.enableCardInt();                            // IRPT_MASK bit8 (status) + IRPT_EN bit8 (armed)
-        board.bcm2711.Gic.initSpi(board.bcm2711.Bcm2711.SDIO_SPI);
+        board.Irq.enable(board.bcm2711.Bcm2711.SDIO_SPI);
     }
 
     private static boolean waitFrameWarned;              // the after-start misuse below was reported once
@@ -559,7 +559,7 @@ public final class Cyw43
         serviceInts(ints);                               // mailbox ACK + flow control, before the status is cleared
         bpWrite32(SDIOD_CORE + SD_INTSTATUS, ints & ~SD_FCSTATE);   // write-1-to-clear (FC_STATE is a level)
         Sdio.clearCardInt();                             // clear the SDHCI card-int status (de-assert DAT1)
-        board.bcm2711.Gic.enableSpi(board.bcm2711.Bcm2711.SDIO_SPI);   // re-arm the SPI the ISR disabled
+        board.Irq.unmask(board.bcm2711.Bcm2711.SDIO_SPI);   // re-arm the SPI the ISR disabled
         return len;
     }
 

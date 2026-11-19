@@ -13,8 +13,7 @@ package vm;
 
 import asm.A64Enc;
 import board.Board;
-import board.bcm2711.Bcm2711;
-import board.bcm2711.Gic;
+import board.Irq;
 import board.Uart;
 import magic.Address;
 import magic.Magic;
@@ -43,13 +42,13 @@ public final class VMScheduler
     static long pcSchedule(long curSp)
     {
         int core = (int) (Magic.readMPIDR() & 3L);
-        int id = Gic.acknowledge();
-        if (id == Gic.timerPpi())
+        int id = Irq.acknowledge();
+        if (id == Irq.timer)
         {
             pcTicks[core] = pcTicks[core] + 1L;
             Magic.writeCNTP_TVAL_EL0(pcReload);           // re-arm this core's timer
         }
-        Gic.end(id);
+        Irq.end(id);
         if (pcStop != 0)
         {
             // Demo over: stop this core's timer and resume TASK 0 -- always, whichever task we interrupted.
@@ -92,7 +91,7 @@ public final class VMScheduler
      */
     static void pcCoreMain(int core)
     {
-        Gic.init(Gic.timerPpi());                          // per-core banked PPI 30 + this core's GICC/PMR
+        Irq.initTimer();                                   // this core's banked timer PPI + its GICC/PMR
         Magic.writeVBAR_EL1(PC_VBAR);
         Magic.isb();
         pcCur[core] = 0;                                   // this running flow is the core's task 0
@@ -290,7 +289,7 @@ public final class VMScheduler
      */
     static void smpSchedulerMain(int core)
     {
-        Gic.init(Gic.timerPpi());                          // this core's banked PPI 30 + its GICC/PMR
+        Irq.initTimer();                                   // this core's banked timer PPI + its GICC/PMR
         Magic.writeVBAR_EL1(vbarBase);                     // core 0's vectors: the shared context-switch stub
         Magic.isb();
         long daif = schedLock();
@@ -1056,18 +1055,19 @@ public final class VMScheduler
 
     /**
      * IRQ path (called by the IRQ context-switch stub): acknowledge the interrupt and act on it, then
-     * pick the next task. Handles the periodic timer (PPI 30) and the mini-UART (SPI 125): the UART ISR
-     * moves received bytes into the RX ring (posting {@link Console#RX_SEM} to wake a blocked reader) and
-     * queued bytes into the TX FIFO.
+     * pick the next task. Handles the periodic timer ({@link Irq#timer}) and the console UART ({@link Uart#spi}):
+     * the UART ISR moves received bytes into the RX ring (posting {@link Console#RX_SEM} to wake a blocked reader)
+     * and queued bytes into the TX FIFO. Any other interrupt is the board's ({@link Irq#device}): its driver's
+     * ISR runs there, and a received network frame posts {@code WIFI_SEM} for the net RX task.
      */
     static long schedule(long curSp)
     {
-        int id = Gic.acknowledge();                        // GICC_IAR
-        if (id == Gic.timerPpi())                          // periodic timer
+        int id = Irq.acknowledge();
+        if (id == Irq.timer)                               // periodic timer
         {
             ticks = ticks + 1L;
             Magic.writeCNTP_TVAL_EL0(timerReload);         // re-arm the next tick
-            Gic.end(id);
+            Irq.end(id);
             return pickNext(curSp);
         }
         if (id == Uart.spi())                              // console UART (shared RX/TX) -> the driver's rings
@@ -1076,29 +1076,24 @@ public final class VMScheduler
             {
                 semPostRaw(Console.RX_SEM);                // wake a blocked reader (ISR-safe post)
             }
-            Gic.end(id);
+            Irq.end(id);
             return pickNext(curSp);
         }
-        if (id == board.virt.VirtioNet.intid && id != 0)  // QEMU virt: virtio-net used a buffer -> its RX task
+        if (id == Irq.NONE)                                // spurious: nothing to end, don't switch
         {
-            if (board.virt.VirtioNet.onIrq())
-            {
-                semPostRaw(WIFI_SEM);
-            }
-            Gic.end(id);
-            return pickNext(curSp);
+            return curSp;
         }
-        if (id == Bcm2711.SDIO_SPI)                        // WiFi SDIO card interrupt -> the CYW43 driver
+        long dev = Irq.device(id);                         // the board's drivers (virtio-net, the WiFi chip, ...)
+        Irq.end(id);
+        if (dev == Irq.DEV_UNKNOWN)                        // no driver claims it: EOI, don't switch
         {
-            if (board.cyw43.Cyw43.onIrq())                 // ISR: the chip has an F2 frame for us
-            {
-                semPostRaw(WIFI_SEM);
-            }
-            Gic.end(id);
-            return pickNext(curSp);
+            return curSp;
         }
-        if (id != 0x3FF) { Gic.end(id); }                 // other/real INTID: EOI, don't switch
-        return curSp;
+        if (dev == Irq.DEV_WAKE_NET)                       // a received frame for the net RX task
+        {
+            semPostRaw(WIFI_SEM);
+        }
+        return pickNext(curSp);
     }
 
     /**

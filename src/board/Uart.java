@@ -11,7 +11,6 @@
  */
 package board;
 
-import board.bcm2711.Gic;
 import magic.Address;
 import magic.Magic;
 
@@ -162,7 +161,7 @@ public final class Uart
         Address.fromLong(RING_LOCK).store(0);            // raw scratch: nothing else zeroes it
         ier = IRQ_RX;
         hwSetIer(ier);
-        Gic.initSpi(spi());
+        Irq.enable(spi());
         irqLive = 1;
         if ((daif & 0x80L) == 0L)
         {

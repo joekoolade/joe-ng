@@ -13,7 +13,7 @@ package board;
 
 /**
  * The contract every board's platform class meets: the operations whose implementation depends on the machine
- * (block device, entropy, reboot, the console UART, ...), as STATIC methods of one class per board -- {@code board.bcm2711.Bcm2711Platform},
+ * (block device, entropy, reboot, the console UART, the interrupt controller, ...), as STATIC methods of one class per board -- {@code board.bcm2711.Bcm2711Platform},
  * {@code board.virt.VirtPlatform}, and later a PC's.
  *
  * <p><b>The choice is made when the image is built, not when it runs.</b> {@code BuildRuntimeImage --board}
@@ -64,6 +64,14 @@ public final class Platform
         { "consolePut(J)V",                               "board/Uart.hwPutAddr" },
         { "consoleSetIrq(J)V",                            "board/Uart.hwSetIrqAddr" },
         { "consoleSpi()J",                                "board/Uart.hwSpiAddr" },
+        // The interrupt controller and the board's device interrupts; board.Irq calls these.
+        { "irqInitTimer()J",                              "board/Irq.hwInitTimerAddr" },
+        { "irqAck()J",                                    "board/Irq.hwAckAddr" },
+        { "irqEnd(J)V",                                   "board/Irq.hwEndAddr" },
+        { "irqEnable(J)V",                                "board/Irq.hwEnableAddr" },
+        { "irqMask(J)V",                                  "board/Irq.hwMaskAddr" },
+        { "irqUnmask(J)V",                                "board/Irq.hwUnmaskAddr" },
+        { "irqDevice(J)J",                                "board/Irq.hwDeviceAddr" },
     };
 
     /** The platform class (internal name) for a {@code --board} name, or null for an unknown board. */
