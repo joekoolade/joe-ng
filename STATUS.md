@@ -16,6 +16,11 @@ Newest entries are at the top.
   - **Image** 39,548,376 bytes (+240); Loader 9,074 lines.
   - **Validation:** `make test` + overlaycheck clean, no helper-stash MISS; the same 41 probes as P2-4c pass
     (DeepTrace, CtorChainTrace and HighLocalThrow exercise the line table and the handler ranges).
+  - **Speed of P2-3..P2-5 together, against `9d64a88` (the merge before P2-3).** Pi, SslEngineProbe, `PI-TIMING ms=`
+    (CNTPCT since power-on), 3 boots each: control 42758/42677/42753 (mean 42729) vs test 42608/42706/42738 (mean
+    42684) -- -45 ms (-0.1%) with overlapping ranges: NEUTRAL. `gc: collections=18` on all six. QEMU (ABBA x2) had
+    said -7.3% (98.3 vs 91.2 s, every test below every control): code layout, not the change -- QEMU overstated P2-1
+    the other way (+1-3% vs the Pi's +0.25%). Phase 2's whole measured cost is P2-1's +0.25%.
 - **LOADER REFACTOR PHASE 2, INCREMENT P2-4c: Type/TIB on `ClassBuild`, `RVMClass.resumeBuild` (2026-11-18).**
   Completes P2-4.
   - **Onto `ClassBuild`:** `gType`, `gTib`, `gAdoptType`, `gAdoptStatics`, `gAdoptStaticCount`, `gIfmStart`,
