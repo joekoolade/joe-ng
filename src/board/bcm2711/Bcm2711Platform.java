@@ -17,6 +17,7 @@ import board.Uart;
 import board.arm.Gic;
 import board.cyw43.Cyw43;
 import board.cyw43.Supplicant;
+import compiler.Target;
 import magic.Address;
 import magic.ObjectReference;
 import net.NetStats;
@@ -32,6 +33,9 @@ public final class Bcm2711Platform
     private Bcm2711Platform()
     {
     }
+
+    /** The generic timer the tick and counter use ({@code compiler.Target}): the EL1 physical timer (PPI 30 on the GIC-400). */
+    public static final long GENERIC_TIMER = Target.TIMER_PHYS;
 
     /** {@code MetalBoard.boardId0()}. */
     public static long boardId()

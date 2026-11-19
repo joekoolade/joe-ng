@@ -4,6 +4,24 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **PLATFORM, INCREMENT P5: the compiler's timer lowering from a target descriptor -- `compiler.Target` (2026-11-19).**
+  - **`Baseline`'s four `Board.isVirt()` tests are gone** (`readCNTPCT_EL0`, `writeCNTP_TVAL_EL0`,
+    `write/readCNTP_CTL_EL0`). They ask **`compiler.Target`** -- `counter()`, `timerValue()`, `timerControl()` --
+    which answers CNTP or CNTV by `Target.genericTimer`. The compiler no longer imports `board`.
+  - **The board decides:** each platform class declares `GENERIC_TIMER` (`Bcm2711Platform`: `TIMER_PHYS`;
+    `VirtPlatform`: `TIMER_VIRT`). `ImageBuilder.bindTarget()` reads it for the `--board` platform and sets
+    `Target.genericTimer` on the host BEFORE anything compiles (replacing `BuildRuntimeImage` setting `Board.virt`
+    on the host for Baseline's sake), and `fillStatic` bakes it into the image for the on-metal JIT. **A platform
+    without one stops the build** -- MEASURED by renaming virt's: `platform board.virt.VirtPlatform declares no
+    public static long GENERIC_TIMER`.
+  - **Each image's timer instructions are its own** (A64 MRS/MSR words counted): virt CNTVCT 173, CNTV_CTL 1+12,
+    CNTV_TVAL 11, no CNTP; Pi CNTPCT 187, CNTP_CTL 1+12, CNTP_TVAL 10, and one CNTV_TVAL-shaped word at +0x2205b14
+    among non-instruction data (no CNTV access in code).
+  - **Validated:** `make test` + overlaycheck OK; virt HVF solo NetTcpProbe/TickProbe/SslEngineProbe/RunProbe/
+    ExitProbe 5/5 (HVF leaves CNTP UNDEFINED, so a wrong baked value would trap at the first tick -- VM methods are
+    JIT-compiled on metal); raspi4b TickProbe/ExitProbe/RunProbe/NetStaticsProbe/NetIfProbe 5/5. Not yet on a Pi.
+  - `isVirt()` sites left: boot-level only -- `VM` 2 (the boot entry check, the EL2 -> EL1 drop) and `VMScheduler`
+    2 (page tables, PSCI vs spin-table secondaries).
 - **PLATFORM, INCREMENT P4: the network link per board -- `net/Link` over platform ops (2026-11-19).**
   - **`net.Link`'s seven `isVirt()` branches are gone.** Its operations -- present, up, send, MAC, wait for a frame,
     a received frame's channel and Ethernet offset, a link event, a link-level frame (EAPOL) -- are ten `net*`
@@ -21,7 +39,9 @@ Newest entries are at the top.
     image `board/cyw43/` 105, VirtioNet 0. (P3's Pi card: PI-VALIDATED, see below.)
   - **Validated:** `make test` + overlaycheck OK; virt solo NetTcpProbe/TickProbe/SslEngineProbe/RunProbe/ExitProbe
     5/5 (DHCP through `waitFrame`/`call3`, then the RX task); virt WebServerDemo `--fwd`: `/` and `/net` 200, WiFi
-    columns 0; raspi4b TickProbe/ExitProbe/RunProbe/NetStaticsProbe/NetIfProbe 5/5. Not yet on a Pi.
+    columns 0; raspi4b TickProbe/ExitProbe/RunProbe/NetStaticsProbe/NetIfProbe 5/5. **PI-VALIDATED:** WebServerDemo
+    build `169a48d544eb6cc3`: WiFi joined (attempts 1), DHCP/ping/SNTP, RX task, a WPA2 rekey answered (EAPOL via
+    `netLinkFrame`), seven pages including `/net` and `/boot` served.
   - `isVirt()` sites left: `Baseline` 4 (P5); boot-level `VMScheduler` 2 + `VM` 2.
 - **PLATFORM, INCREMENT P3: interrupts -- the GIC shared, device interrupts the board's table (2026-11-19).**
   - **`board/bcm2711/Gic.java` -> `board/arm/Gic.java`**, the GICv2 driver shared by both ARM boards: every method

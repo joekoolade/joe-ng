@@ -1353,6 +1353,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         fillStatic(image, staticWord, "vm/VM.cdsDumpSeed", StaticSnapshot.CDS_DUMP_SEED);
         fillStatic(image, staticWord, "vm/VM.wallEpochMs", BuildEpoch.MILLIS);   // the wall clock's lower bound
         fillStatic(image, staticWord, "board/Board.virt", boardVirt ? 1L : 0L);   // which machine (--board)
+        fillStatic(image, staticWord, "compiler/Target.genericTimer", compiler.Target.genericTimer);   // the JIT's timer
         fillStatic(image, staticWord, "vm/VM.imageSymTable", addr(symTableWord));
         fillStatic(image, staticWord, "vm/VM.imageSymCount", symCount);
         String launchKey = BaselineCompiler.key("vm/Loader", "launchMain", "([B[B)V");
@@ -2462,6 +2463,24 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     static String platformClass()
     {
         return board.Platform.classFor(boardVirt ? "virt" : "pi4");
+    }
+
+    /**
+     * Set {@link compiler.Target} on the host from the --board platform class, before anything is compiled: its
+     * {@code GENERIC_TIMER} constant says which Arm generic timer the board ticks on. A platform without one stops
+     * the build (as a missing {@code board.Platform.OPS} method does). Baked into the image by {@code fillStatic}.
+     */
+    static void bindTarget()
+    {
+        String cls = platformClass().replace('/', '.');
+        try
+        {
+            compiler.Target.genericTimer = Class.forName(cls).getField("GENERIC_TIMER").getLong(null);
+        }
+        catch (ReflectiveOperationException e)
+        {
+            throw new IllegalStateException("platform " + cls + " declares no public static long GENERIC_TIMER", e);
+        }
     }
 
     /** The method key of the {@code po}-th platform operation in the --board platform class. */
