@@ -4,6 +4,28 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **PLATFORM, INCREMENT P1: board natives bound per board at build time -- `board.Platform` (2026-11-19).** First step
+  of moving board choice out of run-time `if (Board.isVirt())` (32 sites) and into the image build, so a third board
+  (a PC / x86-64 target is planned) adds a class, not a branch at every site.
+  - **`board.Platform`** is the contract: `OPS`, eight operations (board id, reboot flags, reboot, block
+    init/read/write, entropy, the boot `hw rng:` line), each a static method name+descriptor and the `vm/VM` field
+    holding its address. **`board.bcm2711.Bcm2711Platform`** and **`board.virt.VirtPlatform`** implement them.
+  - **The writer binds them:** for `--board X` it roots `Platform.classFor(X)`'s methods into the closure and stores
+    their addresses in the `VM` fields the natives already link through (`Loader`'s MetalBoard/MetalBlock/MetalRamfs
+    lookups unchanged). No dispatch and no board test at run time; the other board's platform class is not in the
+    image (`strings`: no `Bcm2711Platform` in a virt image). **An incomplete platform stops the build** -- MEASURED by
+    renaming `VirtPlatform.entropyReport`: `no method entropyReport()V in board/virt/VirtPlatform`.
+  - Out of `VMNatives`: the reboot/reboot-flags/block/entropy natives and `BLOCK_NO_DEVICE` (now
+    `Platform.BLOCK_NO_DEVICE`). Out of `Rng`: its three virt branches; the virt report moved to `VirtioRng.report()`.
+  - Guest: **`MetalBoard.board()`** (`"bcm2711"`/`"virt"`, throws on an unknown id) replaces #594's `isVirt()`.
+  - **virt reboot** now prints `reboot: no reset on virt yet (PSCI SYSTEM_RESET not wired) -- halted` instead of
+    touching the Pi watchdog (it faulted). virt reboot flags answer -1 (no firmware).
+  - **Validated:** virt Regress TickProbe/NetTcpProbe/SslEngineProbe/RunProbe/ExitProbe 5/5; raspi4b
+    TickProbe/SslEngineProbe/RunProbe/ExitProbe 4/4; virt SecureRandomDemo `/dev/random` reads differ, identical to
+    main (same 8 loader-lock warnings); virt BootFsDemo `SD card init failed (step -100)`; `make test` + overlaycheck
+    OK. Not yet on a Pi.
+  - Not this increment: `SelfBuild` still calls `Emmc`/`Fat32` directly (so Emmc stays in a virt image); console
+    (`Uart`, P2), interrupts/timer (P3), net device (P4), compiler timer lowering (P5); PSCI reset on virt.
 - **TickProbe on virt: the board's own GIC, and `MetalBoard.isVirt()` (2026-11-19).** demo/TickProbe printed its gate
   and then read the Pi GIC-400 at `0xFF84_1000`, which is unmapped on virt -- so every virt run ended in an NPE
   after the gate passed. It now picks the GIC by board: the Pi's `0xFF84_1000`/`0xFF84_2000`, or virt's GICv2 at

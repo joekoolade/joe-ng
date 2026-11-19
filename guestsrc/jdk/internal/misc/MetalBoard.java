@@ -30,8 +30,8 @@ public final class MetalBoard
     /** VM native: the id {@code BuildRuntimeImage} stamped into this image. */
     private static native long buildId0();
 
-    /** VM native: 1 on QEMU {@code virt}, 0 on the Pi 4. */
-    private static native int isVirt0();
+    /** VM native: the board this image was built for, as {@code board.Platform}'s ids (0 = Pi 4, 1 = virt). */
+    private static native int boardId0();
 
     /** VM native: firmware SET_REBOOT_FLAGS; 0 when the firmware answered. */
     private static native int setRebootFlags0(int flags);
@@ -46,13 +46,23 @@ public final class MetalBoard
     private static final int TRAILER_BYTES = 32;
 
     /**
-     * Is this VM running on QEMU {@code virt} rather than a Pi 4? The two boards put their devices at different
-     * addresses (the Pi's {@code 0xFE00_0000} window is unmapped on {@code virt}), so a program that touches
-     * hardware directly has to ask.
+     * The board this VM runs on: {@code "bcm2711"} (Raspberry Pi 4) or {@code "virt"} (QEMU). Boards put their
+     * devices at different addresses (the Pi's {@code 0xFE00_0000} window is unmapped on {@code virt}), so a
+     * program that touches hardware directly has to ask. An id this class does not know throws rather than
+     * guess -- a new board must be named here.
      */
-    public static boolean isVirt()
+    public static String board()
     {
-        return isVirt0() != 0;
+        int id = boardId0();
+        if (id == 0)
+        {
+            return "bcm2711";
+        }
+        if (id == 1)
+        {
+            return "virt";
+        }
+        throw new IllegalStateException("MetalBoard: unknown board id " + id);
     }
 
     /** This image's build id: 16 lowercase hex digits. */

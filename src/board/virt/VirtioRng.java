@@ -12,8 +12,10 @@
 package board.virt;
 
 import board.Board;
+import board.bcm2711.Uart;
 import magic.Address;
 import magic.Magic;
+import vm.VM;
 
 /**
  * The entropy source on QEMU {@code virt}: a virtio-rng device ({@code -device virtio-rng-device}) on the machine's
@@ -310,5 +312,39 @@ public final class VirtioRng
     {
         setReg(lo, (int) pa);
         setReg(hi, (int) (pa >>> 32));
+    }
+
+    /** Print what the probe found, as one boot line. Called once from boot (through the platform). */
+    public static void report()
+    {
+        Uart.write(Magic.bytes("hw rng: "));
+        if (available())
+        {
+            Uart.write(Magic.bytes("virtio-rng at 0x"));
+            VM.printHex(transport() - Board.VIRT_DEV_VA);
+            Uart.write(Magic.bytes(", live\n"));
+            return;
+        }
+        int w = whyUnusable();
+        if (w == WHY_ABSENT)
+        {
+            Uart.write(Magic.bytes("absent (no virtio-rng device: run QEMU with -device virtio-rng-device)\n"));
+        }
+        else if (w == WHY_LEGACY)
+        {
+            Uart.write(Magic.bytes("virtio-rng is LEGACY only (add -global virtio-mmio.force-legacy=false)\n"));
+        }
+        else if (w == WHY_REFUSED)
+        {
+            Uart.write(Magic.bytes("virtio-rng refused setup (features or queue)\n"));
+        }
+        else if (w == WHY_TIMEOUT)
+        {
+            Uart.write(Magic.bytes("virtio-rng never completed a request\n"));
+        }
+        else
+        {
+            Uart.write(Magic.bytes("virtio-rng STUCK (samples did not vary) -- refusing to trust it\n"));
+        }
     }
 }
