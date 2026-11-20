@@ -19,6 +19,9 @@ Newest entries are at the top.
     NetStaticsProbe 6/6; virt TickProbe/ExitProbe/RunProbe/ChmRaceProbe/SpawnRaceProbe/NetTcpProbe/SslEngineProbe
     7/7. Throwaway on virt printing `net.Link.present()` then calling the reboot op: no card -> `present 0`, QEMU
     exits on the reset (`-no-reboot`); `--net` -> virtio-net up, DHCP, `present 1`, exits the same way. Reverted.
+  - **PI-VALIDATED 2026-11-19:** push of build `2b4d571abb1f020e` -- trial boot up in 33 s and committed; pages
+    `/`, `/net`, `/threads`, `/boot`, `/version` 200; `/threads` shows idle tasks on cores 1-3; on-card kernel sha256 =
+    host (`6064e7fd...`). WiFi joined, so the mailbox (its buffer now inside `Board.DRIVER_SCRATCH`) answered.
   - The Intel board went to BACKLOG.md ("Boards").
 - **PLATFORM, INCREMENT P7: the block device behind the platform -- `vm` imports nothing from `board.bcm2711` (2026-11-19).**
   - **New `board.Block`:** `init()`, `read(lba, addr, n)`, `write(lba, addr, n)` -- the VM's raw-address door to the
