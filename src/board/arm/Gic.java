@@ -25,7 +25,7 @@ import magic.Magic;
  * configured the secure side and placed the PPIs in group 1, so a group-1 interrupt reaches the non-secure CPU
  * interface and signals as IRQ. MMIO is plain {@link Magic#load32}/{@link Magic#store32}.
  */
-public final class Gic
+public final class Gic implements magic.Uninterruptible
 {
     private Gic()
     {

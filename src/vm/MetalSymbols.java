@@ -741,6 +741,10 @@ final class MetalSymbols implements Symbols
         {
             return VM.stopPollAddr;
         }
+        if (helper == Symbols.YIELDPOINT)
+        {
+            return VM.yieldpointAddr;
+        }
         if (helper == Symbols.NEW_ASE)
         {
             return VM.newAseAddr;
@@ -794,6 +798,11 @@ final class MetalSymbols implements Symbols
     public long stopCellAddr()
     {
         return Heap.STOP_CELL;
+    }
+
+    public long yieldCellAddr()
+    {
+        return Heap.YIELD_CELL;
     }
 
     public boolean captureTraces()

@@ -23,7 +23,7 @@ import magic.Magic;
  * is the platform's {@code irqDevice} -- so the VM's interrupt path names no driver, and an image carries only its
  * own board's. The console UART is the exception: {@link Uart} is board-neutral, so the VM services it itself.
  */
-public final class Irq
+public final class Irq implements magic.Uninterruptible
 {
     private Irq()
     {

@@ -14,6 +14,7 @@ package vm;
 import magic.Address;
 import magic.Magic;
 import magic.ObjectReference;
+import magic.Uninterruptible;
 import board.Uart;
 import objectmodel.ObjectModel;
 import static vm.VM.*;   // GC roots + shared state stay in VM: the task table (stale-root reaping),
@@ -29,7 +30,7 @@ import static vm.VM.*;   // GC roots + shared state stay in VM: the task table (
  * {@code import static}; only the collector code lives here. The {@code gcCollect} address the JIT BLs is
  * still the {@code vm/VM.gcCollect} field (writer-stashed); this class only owns the method body.
  */
-final class VMGc
+final class VMGc implements Uninterruptible
 {
 
     /**
@@ -364,6 +365,21 @@ final class VMGc
         Magic.dsb();                                  // ... PUBLISHED BEFORE gcStop: a core that saw the stop
         gcStop = 1;                                   //     but the old generation would park uncounted
         Magic.dsb();
+        long stw0 = Magic.readCNTPCT_EL0();
+        if (noSafepoints == 0 && yieldReqAt != null)
+        {
+            // S3: ask cores 1-3 to reach a yieldpoint now, instead of waiting up to a quantum for their ticks.
+            // A yieldpoint switches through pickNext, which parks the core there (gcPark).
+            int rc = 1;
+            while (rc < 4)
+            {
+                if (coreSched[rc] != 0)
+                {
+                    VMScheduler.requestYield(rc);
+                }
+                rc += 1;
+            }
+        }
         long deadline = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0();
         // Wait for the cores that are actually SCHEDULING, not a hardcoded three. A core that has left the
         // run queue (smpStop drained it, or it never joined -- "smp sched: 3 of 4") has no timer and no yield
@@ -400,8 +416,20 @@ final class VMGc
             Magic.sev();
             return false;
         }
+        long waited = Magic.readCNTPCT_EL0() - stw0;
+        stwWaitTicks += waited;
+        stwStops += 1L;
+        if (waited > stwWaitMaxTicks)
+        {
+            stwWaitMaxTicks = waited;
+        }
         return true;
     }
+
+    /** Stop-the-world waits that stopped the world: how many, their total and the longest (CNTPCT ticks). */
+    static long stwStops;
+    static long stwWaitTicks;
+    static long stwWaitMaxTicks;
 
     /** Cores scheduling from the shared run queue that have not parked for THIS collection -- compared
      *  against the generation, so a core parked for an earlier one does not count. */

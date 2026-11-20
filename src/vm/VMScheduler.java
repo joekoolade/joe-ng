@@ -18,6 +18,7 @@ import board.Uart;
 import magic.Address;
 import magic.Magic;
 import magic.ObjectReference;
+import magic.Uninterruptible;
 import static vm.VM.*;   // shared state stays in VM: the *Addr helper statics, the task/monitor/semaphore tables,
                          // TASK_* constants, MAX_TASKS/NUM_SEM/MAX_MON, WIFI_SEM, SCHED_FRAME, the SMP/pc fields,
                          // vbarBase/ticks/timerReload/runTramp, and the staying helpers (installSchedVectors,
@@ -31,7 +32,7 @@ import static vm.VM.*;   // shared state stays in VM: the *Addr helper statics, 
  * in VM, bake those addresses into the vector stubs), so nothing binds these methods by the class name except the
  * writer table (updated to vm/VMScheduler) and VM's force-compile roots. All shared state stays in VM.
  */
-public final class VMScheduler
+public final class VMScheduler implements Uninterruptible
 {
     /**
      * A secondary core's per-core preemptive context switch, run in the shared switch stub on whichever
@@ -288,7 +289,7 @@ public final class VMScheduler
         while (smpStop == 0)
         {
             taskYield();                                   // offer this core to the run queue FIRST -- a core
-            pauseMs1();                                    //   that pauses before its first ask can miss a
+            idlePause();                                   //   that pauses before its first ask can miss a
         }                                                  //   short burst of work entirely; then back off
         Magic.writeCNTP_CTL_EL0(0);                        // drained: stop this core's timer and leave the table
         Magic.disableIrq();
@@ -307,6 +308,23 @@ public final class VMScheduler
         long end = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() / 1000L;
         while (Magic.readCNTPCT_EL0() < end)
         {
+        }
+    }
+
+    /**
+     * An idle core's back-off: {@link #pauseMs1}, cut short when this core is asked to reach a yieldpoint. Scheduler
+     * code has no polls, so without the check a collection's request (S3) waits out the rest of the millisecond.
+     */
+    private static void idlePause()
+    {
+        long end = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() / 1000L;
+        Address req = Address.fromLong(Heap.YIELD_CELL).plus(Magic.readMPIDR() & 3L);
+        while (Magic.readCNTPCT_EL0() < end)
+        {
+            if (req.loadByte() != 0)
+            {
+                return;
+            }
         }
     }
 
@@ -744,6 +762,7 @@ public final class VMScheduler
     static long pickNext(long curSp)
     {
         int core = (int) (Magic.readMPIDR() & 3L);
+        clearYield(core);                                  // any switch answers this core's yieldpoint request
         // The hang dump hangs off EVERY switch, not only the timer: on QEMU the tick never reaches schedule()
         // (MEASURED, ticks=0 at main's return), so a launched program switches only when a task yields or
         // blocks -- and a hung program still has a yielder (main polls in Thread.join).
@@ -853,7 +872,7 @@ public final class VMScheduler
             ticks = ticks + 1L;
             Magic.writeCNTP_TVAL_EL0(timerReload);         // re-arm the next tick
             Irq.end(id);
-            return pickNext(curSp);
+            return switchOrRequest(curSp);
         }
         if (id == Uart.spi())                              // console UART (shared RX/TX) -> the driver's rings
         {
@@ -862,7 +881,7 @@ public final class VMScheduler
                 semPostRaw(Console.RX_SEM);                // wake a blocked reader (ISR-safe post)
             }
             Irq.end(id);
-            return pickNext(curSp);
+            return switchOrRequest(curSp);
         }
         if (id == Irq.NONE)                                // spurious: nothing to end, don't switch
         {
@@ -878,7 +897,119 @@ public final class VMScheduler
         {
             semPostRaw(WIFI_SEM);
         }
-        return pickNext(curSp);
+        return switchOrRequest(curSp);
+    }
+
+    // ----- safepoints (frames/GC arc S3) ------------------------------------------------------------------------
+    static long yieldTaken;          // yieldpoints that took this core's request (a switch through pickNext)
+    static long yieldOther;          // slow-path entries for ANOTHER core's request (the word is shared)
+    static long yieldMasked;         // ... with IRQs masked: left pending, as the timer could not switch there
+    static long ttsTicks;            // time-to-safepoint, request to yieldpoint, summed (CNTPCT ticks)
+    static long ttsMaxTicks;         // ... the longest
+    static long forcedPreempts;      // requests a task left unanswered for a whole quantum: preempted where it was
+    static long idleSwitches;        // interrupts that found a core's idle task and switched at once
+
+    /**
+     * An interrupt wants the scheduler: switch now, or ask the running task to switch at its next yieldpoint.
+     *
+     * <p>With safepoints on (the default), the running task is asked: its byte in {@link Heap#YIELD_CELL} is set,
+     * the interrupt returns to it, and its next poll -- a prologue or loop header, microseconds away in code
+     * that polls -- calls {@link #yieldpoint}, which switches through {@link #pickNext}. Its top frame is then a
+     * mapped call site instead of an arbitrary instruction.
+     *
+     * <p>Two cases switch here, as before. A core's IDLE task runs scheduler code, which has no polls (see
+     * {@link magic.Uninterruptible}), and holds nothing: it switches at once, so work woken by this interrupt
+     * does not wait for its next 1 ms ask. And a request still pending a whole quantum after it was raised:
+     * the task is in code without polls (or with IRQs masked at every poll), and it is preempted where it is,
+     * as every task was before S3. {@link #forcedPreempts} counts those -- each is a task stopped outside a
+     * safepoint, which S5's precise roots cannot walk.
+     */
+    static long switchOrRequest(long curSp)
+    {
+        int core = (int) (Magic.readMPIDR() & 3L);
+        if (noSafepoints != 0 || coreTask == null || yieldReqAt == null)
+        {
+            return pickNext(curSp);
+        }
+        if (taskIdle[coreTask[core]] != 0)
+        {
+            idleSwitches += 1L;
+            return pickNext(curSp);
+        }
+        Address cell = Address.fromLong(Heap.YIELD_CELL).plus((long) core);
+        if (cell.loadByte() == 0)
+        {
+            requestYield(core);
+            return curSp;
+        }
+        if (Magic.readCNTPCT_EL0() - yieldReqAt[core] >= timerReload)
+        {
+            forcedPreempts += 1L;
+            return pickNext(curSp);                        // pickNext clears the request
+        }
+        return curSp;                                      // already asked, less than a quantum ago
+    }
+
+    /**
+     * Ask {@code core} to reach a yieldpoint: set its byte in the request word, stamping when the request was
+     * raised unless one is already pending. Raised by that core's own interrupts and by a collection for cores
+     * 1-3; a racing clear by the core's own yieldpoint at worst loses one request, which the next tick re-raises.
+     */
+    static void requestYield(int core)
+    {
+        Address cell = Address.fromLong(Heap.YIELD_CELL).plus((long) core);
+        if (cell.loadByte() == 0)
+        {
+            yieldReqAt[core] = Magic.readCNTPCT_EL0();
+            Magic.dsb();                                   // the stamp is visible before the request is
+            cell.store((byte) 1);
+            Magic.dsb();
+        }
+    }
+
+    /** Drop this core's pending request: any switch through {@link #pickNext} answers it. */
+    private static void clearYield(int core)
+    {
+        if (yieldReqAt != null)
+        {
+            Address.fromLong(Heap.YIELD_CELL).plus((long) core).store((byte) 0);
+        }
+    }
+
+    /**
+     * A yieldpoint's slow path ({@link compiler.Symbols#YIELDPOINT}): some core's byte in the request word is set.
+     * If it is this core's, and IRQs are on, switch through the ordinary yield ({@link #taskYield}), which also
+     * parks this core when a collection is waiting. With IRQs masked the request stays pending: the timer could
+     * not have preempted here either, and the next poll with IRQs on takes it.
+     *
+     * <p>No polls of its own (this class is {@link magic.Uninterruptible}), so it cannot re-enter itself.
+     */
+    static void yieldpoint()
+    {
+        int core = (int) (Magic.readMPIDR() & 3L);
+        if (Address.fromLong(Heap.YIELD_CELL).plus((long) core).loadByte() == 0)
+        {
+            yieldOther += 1L;
+            return;
+        }
+        if (coreTask == null || yieldReqAt == null)
+        {
+            clearYield(core);                              // a stale byte before the scheduler exists
+            return;
+        }
+        if ((Magic.readDaif() & 0x80L) != 0L)
+        {
+            yieldMasked += 1L;
+            return;
+        }
+        long tts = Magic.readCNTPCT_EL0() - yieldReqAt[core];
+        ttsTicks += tts;
+        if (tts > ttsMaxTicks)
+        {
+            ttsMaxTicks = tts;
+        }
+        yieldTaken += 1L;
+        taskYield();                                       // -> pickNext, which clears the request
     }
 
     /**

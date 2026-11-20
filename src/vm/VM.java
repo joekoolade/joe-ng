@@ -81,6 +81,10 @@ public final class VM
         // that way). One word is all it takes to name the frame above.
         long sp0 = Magic.readSP();
         long tgt = Magic.readX16();
+        // The yieldpoint request word, before the first framed call: every framed method's prologue polls it, and
+        // RAM is not zeroed at power-on. A stale nonzero byte would only send polls to the helper (which ignores a
+        // request before the scheduler exists), but there is no reason to run the boot through that path.
+        Address.fromLong(Heap.YIELD_CELL).store(0L);
         // Every board's start-up routine (writer.Bcm2711Prelude, writer.VirtPrelude) enters here once, at EL1,
         // after putting back the image's word 0. A SECOND entry did not come from a reset -- execution wild-branched
         // back to the image entry (a corrupted return address / vtable-or-itable slot resolving to 0x80000).
@@ -599,6 +603,12 @@ public final class VM
     // because a value from an earlier collection simply is not this one.
     static long   gcGen;                    // bumped by stopTheWorld BEFORE it raises gcStop (ordered by dsb)
     static long[] gcParked;                 // index = core: the generation that core last parked for
+    // Safepoints (frames/GC arc S3). With safepoints on, the timer and device interrupts only REQUEST a switch
+    // (a byte in Heap.YIELD_CELL); the task takes it at its next yieldpoint, and a collection's other cores park
+    // there. yieldReqAt[c] is when core c's pending request was raised (CNTPCT), for time-to-safepoint and for the
+    // fallback that preempts a task that has not polled for a whole quantum.
+    static int    noSafepoints;             // 1 = the timer preempts at any instruction, as before S3 (/etc/init)
+    static long[] yieldReqAt;
     static long   stwTimeouts;              // collections that started with a core still unparked (a bug signal)
     static long[] stwLate;                  // index = core: CNTPCT when a stop-the-world gave up on it, 0 = none --
                                             //   that core reports where it was when it next reaches pickNext
@@ -979,6 +989,7 @@ public final class VM
         coreSched = new int[4];
         gcParked = new long[4];
         stwLate = new long[4];
+        yieldReqAt = new long[4];
         faultRegs = new long[4 * 40];
         // Initialise every element explicitly. Heap.allocArray does NOT zero its elements (a block off the
         // free list carries whatever the dead object left), and on real hardware DRAM starts full of
@@ -1001,6 +1012,7 @@ public final class VM
             coreSched[c] = 0;
             gcParked[c] = 0L;
             stwLate[c] = 0L;
+            yieldReqAt[c] = 0L;
             faultRegs[c * 40 + 31] = 0L;
             c += 1;
         }
@@ -2086,6 +2098,7 @@ public final class VM
         if (ctorRefInit0 == 0L) { ctorRefInit(-1L); }                 // a constructor reference's <clinit> (JVMS 5.5)
         if (newArithAddr == 0L) { long u = newArith(); }
         if (stopPollAddr == 0L) { long u = stopPoll(); }
+        if (yieldpointAddr == 0L) { VMScheduler.yieldpoint(); }      // every yieldpoint's slow path (S3)
         if (runStopAddr == 0L) { long u = VMNatives.runStop(ObjectReference.nullReference(), ObjectReference.nullReference()); }                // MetalRunExit.stop0
         if (runDefiningAddr == 0L) { long u = VMNatives.runDefining(0L); }            // MetalRunExit.defining0
         if (newNaseAddr == 0L) { long u = newNase(0L); }                // NegativeArraySizeException (newarray < 0)
@@ -2380,6 +2393,7 @@ public final class VM
         armHangDump(conf, flen);                            // hangdump=<secs>: report every task after that long
         armStdin(conf, flen);                               // stdin=uart: System.in reads the serial console
         armGcMaps(conf, flen);                              // gcmaps=1: the S2 reference-map shadow check
+        armSafepoints(conf, flen);                          // safepoints=0: the timer preempts anywhere (pre-S3)
         Uart.write(Magic.bytes("launch "));
         Uart.write(mainClass);
         Uart.putc(0x0A);
@@ -2449,6 +2463,17 @@ public final class VM
         if (n == 1 && v.loadUnsignedByte() == 0x31)
         {
             GcMapShadow.arm();
+        }
+    }
+
+    private static void armSafepoints(Address conf, int flen)
+    {
+        Address v = Heap.allocData(16);
+        int n = manifestValue(conf, flen, Magic.bytes("safepoints"), v, 8);
+        if (n == 1 && v.loadUnsignedByte() == 0x30)
+        {
+            noSafepoints = 1;
+            Uart.write(Magic.bytes("safepoints off: the timer preempts at any instruction\n"));
         }
     }
 
@@ -3921,6 +3946,7 @@ public final class VM
     static long newAioobeIndexAddr;    // VM.newAioobeIndex(JJ)J — ... with stock's index/length message
     static long newArithAddr;          // VM.newArith()J  — a java/lang/ArithmeticException (divide by zero)
     static long stopPollAddr;          // VM.stopPoll()J  — a stoppable program's loop-header poll (Symbols.STOP_POLL)
+    static long yieldpointAddr;        // VMScheduler.yieldpoint()V — a yieldpoint's slow path (Symbols.YIELDPOINT)
     static long runStopAddr;           // VMNatives.runStop(Lmagic/ObjectReference;Lmagic/ObjectReference;)J — MetalRunExit.stop0(Thread, Throwable)
     static long runDefiningAddr;       // VMNatives.runDefining(J)J — MetalRunExit.defining0(boolean)
     static long newAseAddr;            // VM.newAse(J)J   — a java/lang/ArrayStoreException (aastore mismatch)

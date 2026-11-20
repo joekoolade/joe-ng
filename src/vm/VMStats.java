@@ -12,6 +12,7 @@
 package vm;
 
 import magic.Address;
+import compiler.Baseline;
 import magic.Magic;
 import net.Link;
 import net.NetStats;
@@ -234,6 +235,18 @@ public final class VMStats
         i = put(arr, len, i, VM.ticks);                                    // timer ticks serviced
         i = put(arr, len, i, ctxSwitches);                                 // context switches
         i = put(arr, len, i, (long) VM.curTask());                         // the calling task
+        i = put(arr, len, i, (long) (1 - VM.noSafepoints));                // safepoints on (S3)
+        i = put(arr, len, i, VMScheduler.yieldTaken);                      // yieldpoints that switched
+        i = put(arr, len, i, ticksToUs(VMScheduler.ttsTicks / (VMScheduler.yieldTaken > 0L ? VMScheduler.yieldTaken : 1L)));
+        i = put(arr, len, i, ticksToUs(VMScheduler.ttsMaxTicks));             // longest time-to-safepoint
+        i = put(arr, len, i, VMScheduler.forcedPreempts);                  // preempted outside a safepoint
+        i = put(arr, len, i, VMScheduler.idleSwitches);                    // idle task switched at the interrupt
+        i = put(arr, len, i, VMScheduler.yieldMasked);                     // polls left pending, IRQs masked
+        i = put(arr, len, i, VMScheduler.yieldOther);                      // slow paths for another core
+        i = put(arr, len, i, Baseline.yieldPollsEmitted);                  // yieldpoints JIT-compiled this boot
+        i = put(arr, len, i, VMGc.stwStops);                               // stop-the-world waits
+        i = put(arr, len, i, ticksToUs(VMGc.stwWaitTicks / (VMGc.stwStops > 0L ? VMGc.stwStops : 1L)));
+        i = put(arr, len, i, ticksToUs(VMGc.stwWaitMaxTicks));                // longest stop-the-world wait
         return (long) i;
     }
 

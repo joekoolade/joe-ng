@@ -91,6 +91,16 @@ public final class BaselineCompiler
         this.core = new Baseline(cf.bytes(), cf.cpOff(), cf.cpTag(), syms);
     }
 
+    /**
+     * Give the compiled code yieldpoints (frames/GC arc S3); off by default. The image writer turns them on; a
+     * self-contained fixture (CompilerTest, the spin image) leaves them off, since a poll is a helper call.
+     */
+    public BaselineCompiler yieldPolls(boolean on)
+    {
+        syms.setYieldPolls(on);
+        return this;
+    }
+
     /** Method key used for call resolution: {@code owner.name+descriptor}. */
     public static String key(String owner, String name, String desc)
     {

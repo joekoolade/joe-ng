@@ -16,6 +16,7 @@ import static vm.VM.*;
 import board.Uart;
 import magic.Address;
 import magic.Magic;
+import magic.Uninterruptible;
 
 /**
  * The S2 shadow check (frames/GC arc, PLAN.md): at each collection, walk the stacks frame by frame with the
@@ -34,7 +35,7 @@ import magic.Magic;
  * frame, which a production collection should not pay for. Each new (site, slot) is printed once per boot with
  * its frame; every collection prints the totals.
  */
-final class GcMapShadow
+final class GcMapShadow implements Uninterruptible
 {
     private GcMapShadow()
     {

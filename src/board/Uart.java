@@ -27,7 +27,7 @@ import magic.Magic;
  * The fields are image statics, filled at build time: they are valid from the first boot instruction, before any
  * {@code <clinit>}, which is when {@link #putc} must already work.
  */
-public final class Uart
+public final class Uart implements magic.Uninterruptible
 {
     private Uart() {}
 

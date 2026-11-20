@@ -41,7 +41,7 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
      * null is a hard build-time failure (see helperKey) instead of an index that silently names the wrong
      * method -- the old form was a 6-element literal, so ANY id above 5 was an ArrayIndexOutOfBounds.
      */
-    private static final String[] HELPER_KEY = new String[64];
+    private static final String[] HELPER_KEY = new String[72];
     static
     {
         HELPER_KEY[Symbols.HEAP_ALLOC]       = "vm/Heap.alloc(I)Lmagic/Address;";
@@ -72,6 +72,8 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         // REACHED: every baked getClass() call site (see isGetClass).
         HELPER_KEY[Symbols.GET_CLASS]        = "vm/VM.getClassOf(Lmagic/ObjectReference;)J";
         HELPER_KEY[Symbols.CALLER_CLASS]     = "vm/VMNatives.classAtPc(J)J";
+        // REACHED: every baked yieldpoint's slow path (Baseline.emitYieldPoll).
+        HELPER_KEY[Symbols.YIELDPOINT]       = "vm/VMScheduler.yieldpoint()V";
     }
 
     /** The image method a helper id resolves to -- or a loud failure, never a silently wrong neighbour. */
@@ -606,6 +608,19 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
     public int lambdaSamArgc(int idx) { return 0; }
     public void lambdaTib(CodeBuffer cb, int reg, int idx) { throw new IllegalStateException("no invokedynamic in image code"); }
     public boolean isRecordIndy(int idx) { return false; }
+
+    private boolean yieldPolls;
+
+    void setYieldPolls(boolean on)
+    {
+        yieldPolls = on;
+    }
+
+    /** Image code polls the yieldpoint word like JIT code: the same cell, baked as an immediate. */
+    public long yieldCellAddr()
+    {
+        return yieldPolls ? Symbols.YIELD_CELL : 0L;
+    }
     public void recordTrap(CodeBuffer cb) { throw new IllegalStateException("no invokedynamic in image code"); }
 
     // ----- fatal diagnostics: the writer-side rendering of the core's fail() seam -----

@@ -13,6 +13,7 @@ package vm;
 
 import magic.Address;
 import magic.Magic;
+import magic.Uninterruptible;
 import objectmodel.ObjectModel;
 
 /**
@@ -25,7 +26,7 @@ import objectmodel.ObjectModel;
  * <p>The MMU is off (flat RAM); objects stay 8-byte aligned so unaligned 8-byte
  * accesses don't fault.
  */
-public final class Heap
+public final class Heap implements Uninterruptible
 {
     private Heap() {}
 
@@ -128,6 +129,13 @@ public final class Heap
      * fixed cell the compiled code can name, beside the allocator's.
      */
     public static final long STOP_CELL = 0x03FF_0218L;
+    /**
+     * The yieldpoint request word (frames/GC arc S3): byte {@code c} nonzero while core {@code c} is asked to reach
+     * a safepoint. Every framed method's prologue and every loop header loads it (Baseline.emitYieldPoll) and calls
+     * {@code VMScheduler.yieldpoint} only while it is nonzero. Zeroed by VM.boot before its first framed call,
+     * since a poll runs from the very first one.
+     */
+    public static final long YIELD_CELL = compiler.Symbols.YIELD_CELL;
     /**
      * One bit per 8 bytes of the code arena, marking buffers that another buffer branches to DIRECTLY.
      *

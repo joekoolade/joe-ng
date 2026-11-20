@@ -138,6 +138,16 @@ public interface Symbols
     int LDC_CONST = 66;         // vm/VMNatives.ldcConst(J)J
     // A stoppable program's loop-header poll (Baseline.emitStopPoll): this task's pending stop error, or 0.
     int STOP_POLL = 67;         // vm/VM.stopPoll()J
+    // A yieldpoint's slow path (Baseline.emitYieldPoll): this core's switch request is set -- take it here.
+    int YIELDPOINT = 68;        // vm/VMScheduler.yieldpoint()V
+
+    /**
+     * The yieldpoint request word (frames/GC arc S3): one byte per core, nonzero while that core is asked to
+     * reach a safepoint. Every poll loads the whole word, so a request on ANY core sends every core's polls to
+     * the helper, which answers only its own byte. A fixed cell beside {@code vm/Heap.STOP_CELL}, named here
+     * because the host writer bakes it into image code and cannot see {@code vm.Heap}.
+     */
+    long YIELD_CELL = 0x03FF_0220L;
 
     /**
      * The largest value a code address's top byte (bits 31..24) can take, for the dispatch-target guard.
@@ -394,6 +404,16 @@ public interface Symbols
 
     /** The word that is nonzero while any task has a stop pending ({@code vm/Heap.STOP_CELL}); 0 = none. */
     default long stopCellAddr()
+    {
+        return 0L;
+    }
+
+    /**
+     * The yieldpoint request word ({@link #YIELD_CELL}) this world's code polls, or 0 for no yieldpoints. Polls go
+     * in every framed method's prologue and at every loop header, except in a class that implements
+     * {@code magic/Uninterruptible}.
+     */
+    default long yieldCellAddr()
     {
         return 0L;
     }
