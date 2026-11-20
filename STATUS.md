@@ -4,6 +4,22 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **PLATFORM, INCREMENT P6b: the Pi's start-up routine -- no run-time board test left (2026-11-19).** Closes the
+  platform arc: `Board.virt` and `Board.isVirt()` are DELETED; nothing in the VM asks which board it is on.
+  - **`writer.Bcm2711Prelude`** (33 words), built like `VirtPrelude`: the writer appends it and puts a branch to it
+    in word 0. It restores word 0 (DC CVAU + IC IALLU), then drops EL2 -> EL1 exactly as `Baseline.lowerDropToEL1`
+    did inside `VM.boot` (HCR_EL2.RW, CPTR_EL2, CNTHCTL_EL2, CNTVOFF_EL2 = 0, SCTLR_EL1 MMU-off, SPSR_EL2 = EL1h
+    masked) and also sets **SP_EL1** = `VM.STACK_TOP` before `ERET` to 0x80000. Entered at EL1 already, it skips the
+    drop. It leaves x0..x2 (the firmware's device-tree pointer) untouched.
+  - **`VM.boot` is the same on every board:** it is always entered at EL1; `Magic.dropToEL1()` is gone from it, and
+    the wild-branch check is `bootEntered != 0` everywhere (it was `CurrentEL != EL2` on the Pi). After the first
+    entry word 0 is `VM.boot` itself, so a wild branch to 0x80000 lands there at EL1 and is reported.
+  - The writer picks the start-up routine by `--board` (`BuildRuntimeImage.appendPrelude`), a build-time choice.
+  - **Validated:** `make test` + overlaycheck OK; raspi4b TickProbe/ExitProbe/RunProbe/ChmRaceProbe/SpawnRaceProbe/
+    NetStaticsProbe 6/6 and virt HVF 7/7, every boot `SMP: 4 of 4 cores up`. raspi4b `-d int`: the first exception
+    return is `EL2 to AArch64 EL1 PC 0x80000` (the routine's ERET into `VM.boot`), then the secondaries' stub. A
+    throwaway `Magic.call0(0x80000)` after `Uart.init` printed `BOOT RE-ENTERED at EL1 ... x30=0x...808B8` and
+    halted on raspi4b (reverted). Not yet on a Pi.
 - **PLATFORM, INCREMENT P6a: the memory map and secondary-core start per board (2026-11-19).**
   - **`VMScheduler` no longer tests the board.** `buildPageTables` takes each 2 MiB block's descriptor from the
     platform's **`pageBlock`** (Pi: the identity map, Device from 0xFC00_0000; virt: RAM up by 0x4000_0000, its
@@ -17,7 +33,8 @@ Newest entries are at the top.
   - **Each image carries only its own core start** (`strings`): virt SpinTable 0 / Psci 4, Pi 1 / 0.
   - **Validated:** `make test` + overlaycheck OK; virt HVF NetTcpProbe/TickProbe/SslEngineProbe/RunProbe/ExitProbe/
     ChmRaceProbe/SpawnRaceProbe 7/7 and raspi4b TickProbe/ExitProbe/RunProbe/ChmRaceProbe/SpawnRaceProbe/
-    NetStaticsProbe 6/6, every boot `mmu on` and `SMP: 4 of 4 cores up`. Not yet on a Pi.
+    NetStaticsProbe 6/6, every boot `mmu on` and `SMP: 4 of 4 cores up`. **PI-VALIDATED:** `scripts/push.sh` build
+    `bab56eca9891a478`, up in 27 s, six pages 200, `/threads` shows idle tasks running on cores 1, 2 and 3.
   - `isVirt()` left: `VM.boot`'s entry check and EL2 -> EL1 drop (P6b: a Pi start-up routine).
 - **PLATFORM, INCREMENT P5: the compiler's timer lowering from a target descriptor -- `compiler.Target` (2026-11-19).**
   - **`Baseline`'s four `Board.isVirt()` tests are gone** (`readCNTPCT_EL0`, `writeCNTP_TVAL_EL0`,
