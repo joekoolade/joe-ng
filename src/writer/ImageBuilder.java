@@ -1352,7 +1352,6 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         // that class's own <clinit> computes on metal AGREE -- the initializer still runs, as on OpenJDK.
         fillStatic(image, staticWord, "vm/VM.cdsDumpSeed", StaticSnapshot.CDS_DUMP_SEED);
         fillStatic(image, staticWord, "vm/VM.wallEpochMs", BuildEpoch.MILLIS);   // the wall clock's lower bound
-        fillStatic(image, staticWord, "board/Board.virt", boardVirt ? 1L : 0L);   // which machine (--board)
         fillStatic(image, staticWord, "compiler/Target.genericTimer", compiler.Target.genericTimer);   // the JIT's timer
         fillStatic(image, staticWord, "board/Board.ramPhys", board.Board.ramPhys);   // RAM's physical base
         fillStatic(image, staticWord, "vm/VM.imageSymTable", addr(symTableWord));
@@ -2457,7 +2456,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     }
 
     /** Fill a (writer-initialized) static field slot with {@code value}, if the field is used. */
-    /** True for a QEMU {@code virt} image ({@code BuildRuntimeImage --board virt}); baked as {@code Board.virt}. */
+    /** True for a QEMU {@code virt} image ({@code BuildRuntimeImage --board virt}): picks the platform class. */
     static boolean boardVirt;
 
     /** The --board platform class (internal name) whose methods implement {@link board.Platform#OPS}. */

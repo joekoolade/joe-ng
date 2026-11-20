@@ -12,8 +12,9 @@
 package board;
 
 /**
- * Which machine this image was built for. One image serves one board: the writer's {@code --board} option bakes
- * {@link #virt} into the image's statics, so the choice costs a load and a compare, never a probe of the hardware.
+ * Board-wide facts the VM reads, all fixed when the image is built. There is no run-time test of which board this
+ * is: the writer's {@code --board} option binds the board's platform class ({@link Platform}) and bakes its
+ * constants ({@link #ramPhys}); everything board-specific is reached through that class.
  *
  * <p><b>QEMU {@code virt}</b> ({@code -M virt -cpu cortex-a72}, or {@code -accel hvf -cpu host}) puts RAM at
  * {@link #VIRT_RAM_PHYS} instead of 0, so the image the Pi runs at 0x80000 loads at 0x4008_0000. Rather than move
@@ -30,9 +31,6 @@ public final class Board
     {
     }
 
-    /** 1 on QEMU {@code virt}, 0 on the Raspberry Pi 4. Filled by the writer (never written at run time). */
-    public static long virt;
-
     /** Physical base of RAM on {@code virt}; virtual 0 maps here. */
     public static final long VIRT_RAM_PHYS = 0x4000_0000L;
 
@@ -48,11 +46,6 @@ public final class Board
     /** QEMU virt's PL011 UART (virtual address) and its interrupt: SPI 1 = INTID 33. */
     public static final long VIRT_PL011 = 0x0900_0000L + VIRT_DEV_VA;
     public static final int VIRT_UART_SPI = 33;
-
-    public static boolean isVirt()
-    {
-        return virt != 0L;
-    }
 
     /**
      * Where RAM's virtual 0 is physically: the platform class's {@code RAM_PHYS} (0 on the Pi, {@link #VIRT_RAM_PHYS}

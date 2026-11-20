@@ -86,11 +86,19 @@ public final class BuildRuntimeImage
      * Append {@link VirtPrelude} (16-byte aligned) and point word 0 at it: on QEMU {@code virt} the routine runs
      * first, turns the MMU on so the image's 0x80000-based addresses hold, restores word 0 and enters the image.
      */
-    static byte[] appendVirtPrelude(byte[] image)
+    static byte[] appendPrelude(byte[] image)
     {
         int at = (image.length + 15) & ~15;
         int word0 = (image[0] & 0xFF) | ((image[1] & 0xFF) << 8) | ((image[2] & 0xFF) << 16) | ((image[3] & 0xFF) << 24);
-        int[] prelude = VirtPrelude.build(at, word0);
+        int[] prelude;                                     // the board's start-up routine (raw words, before any Java)
+        if (ImageBuilder.boardVirt)
+        {
+            prelude = VirtPrelude.build(at, word0);        // MMU on at a load offset of 0x4000_0000
+        }
+        else
+        {
+            prelude = Bcm2711Prelude.build(at, word0);     // EL2 -> EL1
+        }
         byte[] out = java.util.Arrays.copyOf(image, at + prelude.length * 4);
         int k = 0;
         while (k < prelude.length)
@@ -99,7 +107,8 @@ public final class BuildRuntimeImage
             k += 1;
         }
         putWord(out, 0, asm.A64Enc.b(at / 4));
-        System.out.printf("board virt: start-up routine at +0x%x (%d words)%n", at, prelude.length);
+        System.out.printf("board %s: start-up routine at +0x%x (%d words)%n", ImageBuilder.boardVirt ? "virt" : "pi4",
+                at, prelude.length);
         return out;
     }
 
@@ -492,10 +501,7 @@ public final class BuildRuntimeImage
         CodeBuffer code = build(classesDir);
         BootImageWriter writer = new BootImageWriter(code);
         byte[] bytes = code.toBytes();
-        if (ImageBuilder.boardVirt)
-        {
-            bytes = appendVirtPrelude(bytes);
-        }
+        bytes = appendPrelude(bytes);
         writer.writeImage(out, stampBuildId(bytes));
 
         System.out.printf("wrote %s (%s + reachable methods, %d bytes)%n",

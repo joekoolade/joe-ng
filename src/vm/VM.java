@@ -85,14 +85,13 @@ public final class VM
         // that way). One word is all it takes to name the frame above.
         long sp0 = Magic.readSP();
         long tgt = Magic.readX16();
-        // Firmware enters here at EL2 (CurrentEL bits[3:2] = 0b10, value 0x8). If we RE-enter at EL1, we did not
-        // come from a reset -- execution wild-branched back to the image entry (a corrupted return address /
-        // vtable-or-itable slot resolving to 0x80000). Silently re-running boot then looks like an endless reboot
-        // loop with no diagnostic. Catch it: reset SP (the wild branch may have trashed it), name the branch
-        // source from x30, and halt. The UART is already up from the first boot, so the message renders.
-        // QEMU virt enters at EL1 by design (its start-up routine has already turned the MMU on), so there the
-        // evidence is bootEntered instead, set once the first entry is past this check.
-        if (Board.isVirt() ? bootEntered != 0L : Magic.readCurrentEL() != 0x8L)
+        // Every board's start-up routine (writer.Bcm2711Prelude, writer.VirtPrelude) enters here once, at EL1,
+        // after putting back the image's word 0. A SECOND entry did not come from a reset -- execution wild-branched
+        // back to the image entry (a corrupted return address / vtable-or-itable slot resolving to 0x80000).
+        // Silently re-running boot then looks like an endless reboot loop with no diagnostic. Catch it: reset SP
+        // (the wild branch may have trashed it), name the branch source from x30, and halt. The UART is already
+        // up from the first boot, so the message renders. bootEntered is set once the first entry is past here.
+        if (bootEntered != 0L)
         {
             long src = Magic.readLR();
             Magic.writeSP(0x80000L);
@@ -268,14 +267,7 @@ public final class VM
                 Magic.wfe();
             }
         }
-        if (Board.isVirt())
-        {
-            bootEntered = 1L;
-        }
-        else
-        {
-            Magic.dropToEL1();
-        }
+        bootEntered = 1L;                  // already at EL1: the board's start-up routine dropped there
         Magic.writeCPACR_EL1(0x300000L);   // CPACR_EL1.FPEN = 0b11 (no FP trap)
         Magic.isb();
         Magic.writeSP(0x80000L);           // stack below the image (needed before any call)
@@ -351,7 +343,7 @@ public final class VM
     }
 
     static long vbarBase;              // base of the installed EL1 vector table
-    static long bootEntered;           // QEMU virt: 1 once boot has started (a second entry is a wild branch)
+    static long bootEntered;           // 1 once boot has started (a second entry is a wild branch)
     static long timerReload;           // CNTP_TVAL reload for a periodic tick
 
     /**
