@@ -1682,7 +1682,7 @@ public final class Loader
                                                         //   other watermark here
         VM.jitFrameCount = 0L;                           // a demo's JIT'd frames/handlers are dead once it returns;
         VM.jitLocalCount = 0L;                           // reset the local table IN LOCKSTEP with the frame table (parallel
-                                                         // {codeStart,codeEnd,regLocals}); addJitFrame guards only on
+                                                         // {codeStart,codeEnd,gcMapWord}); addJitFrame guards only on
                                                          // jitFrameCount, so a stale jitLocalCount would keep growing past
                                                          // JIT_FRAME_MAX and overrun jitLocalTable into adjacent heap.
         VM.jitHandlerCount = 0L;                         // resetting per batch stops them accumulating past the caps
@@ -5492,6 +5492,11 @@ public final class Loader
             k += 1;
         }
         b.setExceptionTable(es, ee, eh, ec, n);
+        // A JIT body gets a reference map only while something reads it -- in S2 that is the gcmaps=1 shadow check
+        // alone -- and never in the sizing pass (base 0), which needs only the code's length. The maps are about a
+        // fifth of the code, and a /run program's compiles allocate on cores 1-3, whose arenas are never collected:
+        // keeping them always made RunProbe's existing raspi4b heap OOM (1 of 3 on main) happen 2 of 2.
+        b.setGcMaps(base != 0L && GcMapShadow.on != 0);
         int[] words = b.compileBody(extractCode(i), mDescOff[i], mStatic[i] != 0, mSync[i] != 0,
                                     mLocals[i], base, false);
         return new CompileResult(b, words, ec);
@@ -5509,7 +5514,8 @@ public final class Loader
             mBuf[i] = Heap.allocCode(32).toLong();               // just the stub -> no dry-run compile at load (genuine defer)
             return;
         }
-        int sz0 = compileMethod(i, 0L).words.length * 4;
+        CompileResult r0 = compileMethod(i, 0L);
+        int sz0 = r0.words.length * 4;                  // no map in the sizing pass: it goes to the heap anyway
         if (sz0 >= 0x80000)
         {
             Uart.write(Magic.bytes("  HUGE body bytes="));
@@ -5641,6 +5647,30 @@ public final class Loader
         Heap.publishEnd();
     }
 
+    /**
+     * The reference map after a JIT body's code ({@code compiler.RefMaps}), copied into a heap {@code int[]}: the
+     * address of its first element, or 0 when the body has none. Not in the code arena -- the maps are about a
+     * fifth of the code they describe, and the arena is the tighter budget -- and an {@code int[]}, which the
+     * collector does not scan. It stays alive while the JIT frame table names it ({@link VMGc}); a swept body's
+     * entry is dropped, and the map goes with the next collection.
+     */
+    private static long gcMapOf(int[] words, int codeLen)
+    {
+        int n = words.length - codeLen;
+        if (n <= 0)
+        {
+            return 0L;
+        }
+        int[] m = new int[n];
+        int k = 0;
+        while (k < n)
+        {
+            m[k] = words[codeLen + k];
+            k += 1;
+        }
+        return ObjectReference.fromObject(m).toAddress().plus(ObjectModel.ARRAY_BASE_OFFSET).toLong();
+    }
+
     private static void emitMethod(int i)
     {
         if (mDefer[i] != 0)                             // deferred: install a stub; the body compiles on first call
@@ -5666,8 +5696,9 @@ public final class Loader
         mLine[i] = StackTrace.buildLineTable(i, r.bcToWord);       // stack-trace debug info (PC-offset -> source line)
         mSrc.set(i, StackTrace.sourceFileAddr());
         long out = mBuf[i];
+        int codeLen = r.gcMapWord != 0 ? r.gcMapWord : words.length;   // the reference map rides after the code
         int k = 0;
-        while (k < words.length)
+        while (k < codeLen)
         {
             Address.fromLong(out).store(words[k]);
             out += 4;
@@ -5676,7 +5707,7 @@ public final class Loader
         mEnd[i] = out;                                  // the MEASURED extent of this body, for publishEmitted
         if (r.frameSize > 0)                            // let VM.unwind pop this JIT'd frame
         {
-            VM.addJitFrame(Address.fromLong(mBuf[i]), Address.fromLong(out), r.frameSize, r.regLocals);
+            VM.addJitFrame(Address.fromLong(mBuf[i]), Address.fromLong(out), r.frameSize, gcMapOf(words, codeLen));
         }
         int h = 0;                                      // register try/catch ranges: a throw in another JIT'd
         while (h < r.handlerCount)                      // method can unwind into this method's catch (cross-method)

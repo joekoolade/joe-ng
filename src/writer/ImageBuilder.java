@@ -832,11 +832,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         // entries {start,end,handler,catchType} (8 words).
         int frameTableWord = cur;
         cur += frameCount * 6;
-        // ... and the LOCAL table, {start,end,regLocals} (6 words), the image-side counterpart of the
-        // loader's jitLocalTable. Without it an exception unwinding past a BAKED frame cannot know how many
-        // callee-saved registers that frame saved, so it propagates NONE of them -- and the handler's
-        // CALLER's locals come back holding throw-time values. frameSizeAt already consults both tables;
-        // jitRegLocalsAt consulted only the JIT's, which is the asymmetry this closes.
+        // ... and the LOCAL table, {start,end,gcMapWord} (6 words), the image-side counterpart of the
+        // loader's jitLocalTable. Until S1 its third word was the callee-saved local count the unwinder
+        // restored; since S2 it is the word offset of the method's reference map (RefMaps), 0 for none.
         int localTableWord = cur;
         cur += frameCount * 6;
         int handlerTableWord = cur;
@@ -1049,7 +1047,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         Vec<GlobalStatic> stats = new Vec<>();
         Vec<GlobalType> types = new Vec<>();
         Vec<long[]> frameEntries = new Vec<>();       // {codeStart, codeEnd, frameSize}
-        Vec<long[]> localEntries = new Vec<>();       // {codeStart, codeEnd, regLocals} -- parallel, same order
+        Vec<long[]> localEntries = new Vec<>();       // {codeStart, codeEnd, gcMapWord} -- parallel, same order
         Vec<long[]> handlerEntries = new Vec<>();     // {machStart, machEnd, handler, catchType}
         for (int si = 0; si < sizeWords.size(); si++)
         {
@@ -1107,7 +1105,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             if (cm.frameSize() > 0)
             {
                 frameEntries.add(new long[] {addr(base), addr(base + cm.words().length), cm.frameSize()});
-                localEntries.add(new long[] {addr(base), addr(base + cm.words().length), cm.regLocals()});
+                localEntries.add(new long[] {addr(base), addr(base + cm.words().length), cm.gcMapWord()});
             }
             var _rh = cm.handlers();
             for (int _rhi = 0; _rhi < _rh.size(); _rhi++)

@@ -27,7 +27,7 @@ final class CompileResult
 {
     final int[] words;        // the A64 instruction words, placed at the base compileMethod was given
     final int frameSize;      // frame size; 0 = no frame for VM.unwind to pop
-    final int regLocals;      // callee-saved local count (x19..), for unwind's pre-try local restore
+    final int gcMapWord;      // word offset of the reference map after the code (RefMaps); 0 = none
     final int handlerCount;   // try/catch ranges, as machine word offsets into words ...
     final int[] hStartW;
     final int[] hEndW;
@@ -39,7 +39,7 @@ final class CompileResult
     {
         this.words = words;
         this.frameSize = b.frameSize();
-        this.regLocals = b.regLocals();
+        this.gcMapWord = b.gcMapWord();
         int n = b.handlerCount();
         this.handlerCount = n;
         this.hStartW = new int[n];

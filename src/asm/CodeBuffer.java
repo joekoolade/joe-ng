@@ -113,6 +113,12 @@ public final class CodeBuffer
     {
         return count;
     }
+
+    /** The word at index {@code i} (already emitted). */
+    public int get(int i)
+    {
+        return words[i];
+    }
     public long base()
     {
         return base;

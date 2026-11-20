@@ -2379,6 +2379,7 @@ public final class VM
         openClasspath(conf, flen);                          // classpath=<jar>: classes the image lacks come from it
         armHangDump(conf, flen);                            // hangdump=<secs>: report every task after that long
         armStdin(conf, flen);                               // stdin=uart: System.in reads the serial console
+        armGcMaps(conf, flen);                              // gcmaps=1: the S2 reference-map shadow check
         Uart.write(Magic.bytes("launch "));
         Uart.write(mainClass);
         Uart.putc(0x0A);
@@ -2436,6 +2437,18 @@ public final class VM
         {
             Console.stdinOn = 1;
             Uart.write(Magic.bytes("stdin: uart\n"));
+        }
+    }
+
+    /** {@code gcmaps=1} turns on {@link GcMapShadow}: every collection compares the reference maps with the
+     *  conservative stack scan and reports what only the conservative scan saw. */
+    private static void armGcMaps(Address conf, int flen)
+    {
+        Address v = Heap.allocData(16);
+        int n = manifestValue(conf, flen, Magic.bytes("gcmaps"), v, 8);
+        if (n == 1 && v.loadUnsignedByte() == 0x31)
+        {
+            GcMapShadow.arm();
         }
     }
 
@@ -3378,7 +3391,7 @@ public final class VM
     static long handlerCount;
     static Address frameTable;                // entries: {codeStart, codeEnd, frameSize}
     static long frameCount;
-    static Address localTable;                // parallel {codeStart, codeEnd, regLocals} for IMAGE methods
+    static Address localTable;                // parallel {codeStart, codeEnd, gcMapWord} for IMAGE methods
     static long localCount;
     static long imageSymTable, imageSymCount; // stack-trace symbols: {codeStart, codeEnd, nameAddr, srcAddr, lineAddr}
 
@@ -3401,7 +3414,7 @@ public final class VM
     // frame just like a compiled one.
     static Address jitFrameTable;
     static long jitFrameCount;
-    static Address jitLocalTable;               // parallel {codeStart, codeEnd, regLocals} — unwind's pre-try local restore
+    static Address jitLocalTable;               // parallel {codeStart, codeEnd, map address}: the reference map (S2)
     static long jitLocalCount;
     /** Point the JIT unwind tables (frame/local/handler) at their fixed scratch region if not yet set. These
      *  tables persist for the whole run behind these static pointers, but every JIT frame keeps writing to them,
@@ -3464,9 +3477,9 @@ public final class VM
         Uart.write(Magic.bytes("  catch above such a frame is MISSED (the exception reports as uncaught).\n"));
     }
 
-    /** Record a JIT'd method's machine-PC range, frame size, and callee-saved local count, so unwind can pop it
-     *  and restore its handler's pre-try locals (x19..x(19+regLocals-1), saved at [SP+8..]). */
-    static void addJitFrame(Address codeStart, Address codeEnd, long frameSize, long regLocals)
+    /** Record a JIT'd method's machine-PC range, frame size, and the address of its reference map ({@code
+     *  compiler.RefMaps}, a heap int[]; 0 = none), so unwind can pop it and the collector can read its slots. */
+    static void addJitFrame(Address codeStart, Address codeEnd, long frameSize, long gcMap)
     {
         ensureJitTables();
         if (jitFrameCount >= JIT_FRAME_MAX)
@@ -3481,46 +3494,56 @@ public final class VM
         Address le = jitLocalTable.plus(jitLocalCount * 24L);               // same pc-range, parallel table (tableValueIn reads it)
         le.store(codeStart);
         le.plus(8L).store(codeEnd);
-        le.plus(16L).store(regLocals);
+        le.plus(16L).store(gcMap);
         jitFrameCount = jitFrameCount + 1L;
         jitLocalCount = jitLocalCount + 1L;
     }
 
-    /** Callee-saved local count of the JIT'd method covering machine PC {@code pc} (0 = none / image method). */
     /**
-     * How many callee-saved registers the method covering {@code pc} saved -- for IMAGE methods as well as
-     * JIT'd ones, which is the whole point.
-     *
-     * <p>This consulted the JIT table ALONE while {@link #frameSizeAt} consulted both, so an exception
-     * unwinding past a baked frame answered 0 and the unwinder copied NONE of that frame's saved registers
-     * into its reconstruction. The handler then resumed with its CALLER's x19.. still holding throw-time
-     * values -- a local that was live before the call reading as null or garbage, with no fault and no trace,
-     * arbitrarily far from the throw. Guest-only unwinds never showed it because every guest frame IS in the
-     * JIT table; it needs a throw that crosses baked java.base, which is what class loading does.
+     * The reference map ({@code compiler.RefMaps}) of the method covering {@code pc}: its address, 0 when the
+     * method has none, <b>-1 when no entry covers the pc</b>. An image method's map follows its code, and the
+     * image local table holds its word offset from the code start; a JIT method's map is a heap {@code int[]}
+     * and the JIT local table holds its address. Until S1 these tables held the callee-saved local count, and the
+     * image-first order and the -1 are kept from then: a miss has to be distinguishable from an entry of 0.
      */
-    // Returns -1 when NO entry covers the pc, which is different from 0 ("this frame saved nothing"): the
-    // caller must not copy saved registers in either case, but only the -1 case is a gap worth reporting.
-    static long jitRegLocalsAt(Address pc)
+    static long gcMapAt(Address pc)
     {
-        // IMAGE FIRST, THEN JIT -- and the first attempt at this was REVERTED, for a reason that turned out
-        // to be a different bug entirely. Enabling it fixed the picocli `factory` NPE (X21 CLOBBERED 2 -> 0)
-        // and made the launcher stop EARLIER, on a Map.put against a receiver whose Type carried
-        // ARRAY_TYPE_TAG -- a measured A/B, same image layout in both arms, so the table's PRESENCE was not
-        // the cause and consulting it was. That looked like "an image frame's save area is not what this
-        // reconstruction assumes", and it was not: the JIT local table's MEMORY was being overwritten by the
-        // GC mark stack (VMGc.MARK_STACK overlapped Heap.JIT_TABLES by 0xF0000), so the JIT half of this
-        // lookup was answering with heap pointers. With that fixed the launcher runs to completion.
-        //
-        // The other half of the repair is `tableValueIn` returning -1 rather than 0 for "no entry". Asking
-        // the image table first is only sound if a MISS is distinguishable from an entry whose value is 0 --
-        // a leaf image method that saved nothing is exactly that -- or the JIT table would be consulted for
-        // pcs the image table had already answered.
-        long rl = tableValueIn(localTable, localCount, pc);          // image methods; -1 = no entry here
-        if (rl >= 0L)
+        long w = tableValueIn(localTable, localCount, pc);           // image methods; -1 = no entry here
+        if (w > 0L)
         {
-            return rl;
+            return tableStartIn(localTable, localCount, pc) + w * 4L;
+        }
+        if (w == 0L)
+        {
+            return 0L;
         }
         return tableValueIn(jitLocalTable, jitLocalCount, pc);       // runtime JIT'd methods; -1 = UNKNOWN
+    }
+
+    /** Start of the code range covering {@code pc} in the image or JIT local table, or 0 when none does. */
+    static long codeStartAt(Address pc)
+    {
+        long s = tableStartIn(localTable, localCount, pc);
+        if (s != 0L)
+        {
+            return s;
+        }
+        return tableStartIn(jitLocalTable, jitLocalCount, pc);
+    }
+
+    private static long tableStartIn(Address table, long count, Address pc)
+    {
+        long i = 0L;
+        while (i < count)
+        {
+            Address e = table.plus(i * 24L);
+            if (pc.toLong() >= e.loadLong() && pc.toLong() < e.plus(8L).loadLong())
+            {
+                return e.loadLong();
+            }
+            i = i + 1L;
+        }
+        return 0L;
     }
     static final int JIT_FRAME_MAX = 16384;    // one BATCH's framed methods must fit (compacted at each
                                                //   rewind); 512 overflowed on the ~170-class Lisp closure and

@@ -4,6 +4,59 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **FRAMES/GC ARC, INCREMENT S2: reference maps, checked in shadow (2026-11-20).** Baseline now records, at every
+  call site, which frame slots hold a reference; the collector is unchanged, and with `gcmaps=1` in `/etc/init` it
+  compares the maps against its conservative stack scan at every collection.
+  - **`compiler.RefMaps`** (Jikes RVM's `BuildReferenceMaps` as the guide): a forward dataflow over the bytecode
+    types every local and operand slot (dead / reference / raw / `ObjectReference`; a long is one operand slot, as
+    in Baseline, and two local slots). Joins merge differing types to dead; exception edges carry each try-range
+    instruction's locals (before it, and after a store) into the handler. `Address`/`Word`/`Offset`/`Extent` are
+    raw; `ObjectReference` is kept apart as the expected home of hidden references; `AddressArray` is a real
+    array, so a reference. jsr/ret or an unknown form gets no map (0 such methods in the image).
+  - **Sites:** every `BL`/`BLR` in the body, keyed by return address, attributed to the bytecode whose machine range
+    holds it. Its operand slots come from **the spill that preceded the call** (Baseline now notes each
+    spill's word and depth): slots below the bytecode's entering depth are typed from the dataflow, slots above it
+    are the lowering's own transients. The first cut used "below what the bytecode pops" instead, and the shadow
+    check showed why that is wrong both ways -- an invoke's popped arguments are dead at the call, but an input
+    popped AFTER a helper call (an init guard, a store check) is live.
+  - **Where a map lives:** after the method's last instruction, so it lives and dies with the code. The image and
+    JIT local tables (`{codeStart, codeEnd, regLocals}`, unused since S1) carry it: the image's third word is the
+    map's word offset, the JIT's the address of a heap `int[]` (`Loader.gcMapOf`), kept alive by `VMGc.markGcMaps`
+    while its frame entry exists. Format: 8-word header, 2 words a site (return word; unique-map index | live
+    operand depth << 16 | entering depth << 24), then deduplicated 2-bit-per-slot maps.
+  - **Cost.** Image: 358 KB of maps after 1,661 KB of code (+21.5%), 3,616 methods, 24,006 sites. JIT maps are
+    built **only with `gcmaps=1`**, and never in the loader's sizing pass. Two measured reasons: inside the code
+    arena they ran SslEngineProbe out of it (`code arena OOM`); on the heap, a `/run` program compiles on cores 1-3,
+    whose arenas are never collected, and RunProbe on raspi4b then hit its `heap OOM` 2 of 2 and 2 of 5 -- as did a
+    per-compile 1 KB pair of spill-note arrays with maps off (now lazy). `main` hits the same OOM intermittently
+    (1 of 13 runs here), so it is pre-existing and S2 only made it likelier; with the fixes the branch passed 5 of 5
+    and the full set. S5 needs maps for every method, so collecting cores 1-3 (BACKLOG "Collector") comes first.
+  - **`vm.GcMapShadow`** walks the collecting task's stack from `Magic.gc`'s save area, and every suspended task
+    stopped at a call (a task preempted inside a framed method is counted and skipped: its pc is no call site --
+    S3's job). Every word the conservative scan would keep alive is classified: a map reference (explained), a
+    local or operand typed raw / `ObjectReference` / dead, an operand transient, another frame word, a frame with no
+    map (stubs, trampolines), no site, or unwalked stack. A map-reference slot holding a heap address that is no
+    block base is a **MAP ERROR**. Each new (site, slot) prints once per boot as `gcmap+ <category> ... at <frame>`.
+  - **QEMU virt, `gcmaps=1`:** FrameBench, ChmRaceProbe (4 tasks walked) and SslEngineProbe -- **0 map errors**,
+    up to 728 frames walked a run, 97% with a site; every reference held on an operand slot is typed (op-temp 0,
+    except one lowering transient in `DirectCodeBuilder.build`). The hidden references, S4's worklist so far: 13
+    sites, all VM code -- `Address`/`long` locals in `VM.launchInit`, `Loader.launchMain`,
+    `VirtualDispatch.virtualResolveLocked`, `Loader.resolveUnresolvedNew`, `VMScheduler.threadJoin`,
+    `LazyCompiler.armPhaseACells`; `ObjectReference` locals in `ClassMirrors.forNameMirror`, `VMNatives.forName` /
+    `virtualResolve`, `VirtualDispatch.virtualResolve`. Most raw-local hits are `allocData` payload pointers.
+  - Tests: CompilerTest checks callVal's whole map, and a new `MapFixture` checks a join merging a reference with an
+    int to dead, an operand live across a call, and a long and an `Address` beside a reference.
+  - **Validated:** `make test` + overlaycheck OK; virt 17/17, raspi4b 16/16 (the S1 set).
+  - **Pi 4, build `88e41caf56608d2b`** (default init; on-card sha256 = host; all six pages 200; the first upload
+    timed out mid-PUT and was discarded with nothing live changed, the retry committed). FrameBench, three runs
+    each on a fresh boot, checksums identical: fib 56.4, locals 29.5, sort 90.0, tree 29.6, strings 19.9, sha256
+    213.7, bigint 36.2 ms -- sum without the bimodal dispatch kernel **475.3 vs S1's 473.0 (+0.5%)**; defining the
+    5 classes 660 ms, as S1 (maps are not built on the metal by default).
+  - **Pi 4 with `gcmaps=1`** (build `b9eac1a98e6f5a30`, then the default restored): web pages plus a FrameBench run,
+    14 shadow checks, **0 map errors**, 363 frames walked, 352 with a site; hits: 636 explained, 37 raw/`Address`
+    locals, 266 dead locals, 703 stale spill slots, 51 stub-frame words, 13 other frame words, 2 unwalked. Building
+    the JIT maps raised FrameBench's define time 660 -> 998 ms. GC pauses with the check: 14 collections, 3.14 s
+    total, longest 460 ms; without it (same build, default init, same requests): 13, 2.21 s, 413 ms.
 - **FRAMES/GC ARC, INCREMENT S1: memory-based frames in Baseline (2026-11-20).** Every local of a framed method now
   lives in a fixed frame slot (the existing overflow-local path, from slot 0); no Baseline method saves, uses or
   restores x19..x28. The one exception is the frameless image entry (`VM.boot`, `isEntry`), which has no frame:

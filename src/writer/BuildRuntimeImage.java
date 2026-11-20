@@ -158,6 +158,10 @@ public final class BuildRuntimeImage
         byte[] t = (TRAILER_MAGIC + hex).getBytes(java.nio.charset.StandardCharsets.US_ASCII);
         System.arraycopy(t, 0, out, image.length, TRAILER_BYTES);
         System.out.println("build id " + hex);
+        System.out.println("gc maps: " + (compiler.Baseline.gcMapWords * 4 / 1024) + " KB after "
+                + (compiler.Baseline.gcMapCodeWords * 4 / 1024) + " KB of code; " + compiler.Baseline.gcMapsUnsolved
+                + " methods unsolved; methods=" + compiler.RefMaps.statMethods + " sites=" + compiler.RefMaps.statSites
+                + " uniqueWords=" + compiler.RefMaps.statUniqueWords);
         return out;
     }
 
