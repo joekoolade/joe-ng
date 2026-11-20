@@ -170,7 +170,7 @@ public final class WlanPoll
                 {
                     Cyw43.flushTxLocked();               // drained and cleared: NOW send what waits (brcmfmac's
                                                          //   DPC order; see Cyw43.sendFrame)
-                    board.Irq.unmask(board.bcm2711.Bcm2711.SDIO_SPI);   // re-arm: done
+                    board.Irq.unmask(Cyw43.irq);                    // re-arm: done
                     busUnlock();
                     net.RxQueues.freeBuf(b);
                     return;

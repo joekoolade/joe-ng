@@ -222,6 +222,7 @@ public final class Bcm2711Platform
     public static void netUp(long demo)
     {
         Cyw43.runDemo = demo != 0L;
+        Cyw43.irq = Bcm2711.SDIO_SPI;                     // the chip's SDIO card interrupt: EMMC's SPI 158
         Wifi.bringUp();
     }
 
