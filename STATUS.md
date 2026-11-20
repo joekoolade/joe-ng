@@ -4,6 +4,14 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **PLATFORM, INCREMENT P9: the WiFi chip's interrupt line comes from the platform (2026-11-19).**
+  - The CYW43 driver (`board.cyw43`) no longer names `Bcm2711.SDIO_SPI`. New **`Cyw43.irq`** (default
+    `Irq.NONE`) is the line the host board wired the chip's SDIO card interrupt to; `Bcm2711Platform.netUp` sets it
+    to SPI 158 before `Wifi.bringUp`. The ISR's mask, `enableWifiIrq`'s enable and the two re-arms (`Cyw43`,
+    `WlanPoll`) use it. `Bcm2711Platform.irqDevice` still matches SPI 158 -- the board's own table.
+  - Left: `Cyw43` still imports `board.bcm2711.Sdio` (the Pi's SDHCI host controller).
+  - **Validated:** `make test` + overlaycheck OK; raspi4b TickProbe/ExitProbe/RunProbe/ChmRaceProbe/SpawnRaceProbe/
+    NetStaticsProbe 6/6. QEMU has no CYW43, so the interrupt path itself needs the Pi. Not yet on a Pi.
 - **PLATFORM, INCREMENT P8: the last board names out of the VM, and a reset on virt (2026-11-19).**
   - **`ScratchMap` names no board's buffer.** New `Board.DRIVER_SCRATCH`..`DRIVER_SCRATCH_END` (0x0305_0000..
     0x0305_9000) is the one range board drivers take fixed buffers from: `Bcm2711.MBOX_BUFFER` and

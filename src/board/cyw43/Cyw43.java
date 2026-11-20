@@ -464,19 +464,19 @@ public final class Cyw43
     static int irqCount;                                 // SDIO card interrupts serviced (IRQ-driven RX)
 
     /**
-     * ISR — called from {@link vm.VM#schedule} when SPI 158 fires: the CYW43 has an F2 frame for us. Disable
+     * ISR — called through the board's {@code irqDevice} when {@link #irq} fires: the CYW43 has an F2 frame for us. Disable
      * the interrupt at the GIC (the reliable way to stop a level interrupt re-firing — masking at the SDHCI
      * didn't de-assert it) and return true so the scheduler posts WIFI_SEM; the handler task services the
      * frame and re-enables the SPI. No SDIO work in interrupt context.
      */
     public static boolean onIrq()
     {
-        board.Irq.mask(board.bcm2711.Bcm2711.SDIO_SPI);
+        board.Irq.mask(irq);
         irqCount = irqCount + 1;
         return true;
     }
 
-    /** Route the SDHCI controller's SPI to the GIC and enable the SDIO card interrupt (SDHCI + CCCR funcs). */
+    /** Route {@link #irq} to the interrupt controller and enable the SDIO card interrupt (SDHCI + CCCR funcs). */
     // The chip only raises the SDIO card interrupt if its SDIOD-core interrupt mask is set (Plan9/Circle
     // ether4330 line 971): FrameInt = an F2 frame is ready. Without it, DAT1 is never asserted.
     private static final long SDIOD_CORE = 0x18004000L;   // SDIOD core base (from the EROM enumeration)
@@ -497,13 +497,13 @@ public final class Cyw43
     private static final int RX_WAIT_MS = 200;
 
     /** Enable IRQ-driven WiFi RX: tell the chip to assert on F2-frame/mailbox/fc events, enable the SDIO
-     *  function + card interrupts, and route the SDHCI SPI to the GIC. Leaves the card interrupt armed. */
+     *  function + card interrupts, and route {@link #irq} to the controller. Leaves the card interrupt armed. */
     static void enableWifiIrq()
     {
         bpWrite32(SDIOD_CORE + SD_INTMASK, SD_FRAMEINT | SD_MAILBOXINT | SD_FCCHANGE);
         Sdio.cmd52Write(F0, CCCR_IEN, 0x07);             // master + F1 + F2 function interrupts
         Sdio.enableCardInt();                            // IRPT_MASK bit8 (status) + IRPT_EN bit8 (armed)
-        board.Irq.enable(board.bcm2711.Bcm2711.SDIO_SPI);
+        board.Irq.enable(irq);
     }
 
     private static boolean waitFrameWarned;              // the after-start misuse below was reported once
@@ -559,7 +559,7 @@ public final class Cyw43
         serviceInts(ints);                               // mailbox ACK + flow control, before the status is cleared
         bpWrite32(SDIOD_CORE + SD_INTSTATUS, ints & ~SD_FCSTATE);   // write-1-to-clear (FC_STATE is a level)
         Sdio.clearCardInt();                             // clear the SDHCI card-int status (de-assert DAT1)
-        board.Irq.unmask(board.bcm2711.Bcm2711.SDIO_SPI);   // re-arm the SPI the ISR disabled
+        board.Irq.unmask(irq);                           // re-arm the interrupt the ISR disabled
         return len;
     }
 
@@ -1670,6 +1670,13 @@ public final class Cyw43
         }
         return ourMac;
     }
+
+    /**
+     * The interrupt the host board wired the chip's SDIO card interrupt to (a {@link board.Irq} number), set by the
+     * board's platform class before bring-up -- the Pi's is the EMMC controller's SPI 158 ({@code
+     * Bcm2711Platform.netUp}). The chip driver names no interrupt number: it only masks, enables and re-arms this.
+     */
+    public static int irq = board.Irq.NONE;
 
     /** true = the bring-up runs its built-in DNS+HTTP-GET showcase; false = bring up connectivity only (the
      *  OS launches a program that owns the sockets). Set by VM.run before Wifi.bringUp. */
