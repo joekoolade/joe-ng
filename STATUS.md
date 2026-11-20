@@ -15,7 +15,8 @@ Newest entries are at the top.
   - **Validated:** `make test` + overlaycheck OK; raspi4b TickProbe/ExitProbe/RunProbe/ChmRaceProbe/SpawnRaceProbe/
     NetStaticsProbe 6/6; virt TickProbe/ExitProbe/ChmRaceProbe/NetTcpProbe 4/4. `strings`: the Pi image carries
     `Bcm2711SdioHost`/`SdioHost`/`Cyw43`; the virt image none of them nor `Sdio`. QEMU has no CYW43: the SDIO path
-    needs the Pi. Not yet on a Pi.
+    needs the Pi. **PI-VALIDATED 2026-11-19:** push of build `8f661ee0d35c7c1e` -- trial boot up in 26 s over WiFi and
+    committed; pages 200; `/net` join 4,209 ms, 1 attempt, tx queued 35, dropped 0; on-card kernel sha256 = host.
 - **PLATFORM, INCREMENT P9: the WiFi chip's interrupt line comes from the platform (2026-11-19).**
   - The CYW43 driver (`board.cyw43`) no longer names `Bcm2711.SDIO_SPI`. New **`Cyw43.irq`** (default
     `Irq.NONE`) is the line the host board wired the chip's SDIO card interrupt to; `Bcm2711Platform.netUp` sets it
