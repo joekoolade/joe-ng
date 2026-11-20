@@ -4,6 +4,21 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **PLATFORM, INCREMENT P6a: the memory map and secondary-core start per board (2026-11-19).**
+  - **`VMScheduler` no longer tests the board.** `buildPageTables` takes each 2 MiB block's descriptor from the
+    platform's **`pageBlock`** (Pi: the identity map, Device from 0xFC00_0000; virt: RAM up by 0x4000_0000, its
+    device window, the Pi's window unmapped -- `virtBlock` moved verbatim). `bringUpSecondaries` calls the
+    platform's **`startSecondaries(entry)`**: Pi -> new **`board.bcm2711.SpinTable`** (the armstub's spin slots + SEV);
+    virt -> new **`board.arm.Psci`** (CPU_ON over HVC, with its boot tables). Both stubs moved verbatim, the entry
+    passed in instead of read from `VM.secondaryMainAddr`.
+  - **`Board.phys`** adds a baked **`Board.ramPhys`** (each platform's `RAM_PHYS`: Pi 0, virt 0x4000_0000), set and
+    baked by `ImageBuilder.bindTarget` like `GENERIC_TIMER`, instead of testing `Board.virt`.
+  - `VM.SEC_STUB`/`SEC_STACK_HI`/`PT_BOOT` and `VMScheduler.cleanToPoC` are public for the moved stubs.
+  - **Each image carries only its own core start** (`strings`): virt SpinTable 0 / Psci 4, Pi 1 / 0.
+  - **Validated:** `make test` + overlaycheck OK; virt HVF NetTcpProbe/TickProbe/SslEngineProbe/RunProbe/ExitProbe/
+    ChmRaceProbe/SpawnRaceProbe 7/7 and raspi4b TickProbe/ExitProbe/RunProbe/ChmRaceProbe/SpawnRaceProbe/
+    NetStaticsProbe 6/6, every boot `mmu on` and `SMP: 4 of 4 cores up`. Not yet on a Pi.
+  - `isVirt()` left: `VM.boot`'s entry check and EL2 -> EL1 drop (P6b: a Pi start-up routine).
 - **PLATFORM, INCREMENT P5: the compiler's timer lowering from a target descriptor -- `compiler.Target` (2026-11-19).**
   - **`Baseline`'s four `Board.isVirt()` tests are gone** (`readCNTPCT_EL0`, `writeCNTP_TVAL_EL0`,
     `write/readCNTP_CTL_EL0`). They ask **`compiler.Target`** -- `counter()`, `timerValue()`, `timerControl()` --
@@ -19,7 +34,10 @@ Newest entries are at the top.
     among non-instruction data (no CNTV access in code).
   - **Validated:** `make test` + overlaycheck OK; virt HVF solo NetTcpProbe/TickProbe/SslEngineProbe/RunProbe/
     ExitProbe 5/5 (HVF leaves CNTP UNDEFINED, so a wrong baked value would trap at the first tick -- VM methods are
-    JIT-compiled on metal); raspi4b TickProbe/ExitProbe/RunProbe/NetStaticsProbe/NetIfProbe 5/5. Not yet on a Pi.
+    JIT-compiled on metal); raspi4b TickProbe/ExitProbe/RunProbe/NetStaticsProbe/NetIfProbe 5/5. **PI-VALIDATED:**
+    `scripts/push.sh` (trial boot, then commit) build `5316d15e3fe8e16c`, up in 27 s; `/version`, `/`, `/net`,
+    `/threads`, `/boot` 200, and `/net`'s WiFi rows real (tx queued 39, join 4,213 ms, 1 attempt) -- P4's
+    `netLinkStats` on hardware too.
   - `isVirt()` sites left: boot-level only -- `VM` 2 (the boot entry check, the EL2 -> EL1 drop) and `VMScheduler`
     2 (page tables, PSCI vs spin-table secondaries).
 - **PLATFORM, INCREMENT P4: the network link per board -- `net/Link` over platform ops (2026-11-19).**

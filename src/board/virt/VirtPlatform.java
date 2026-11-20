@@ -17,6 +17,7 @@ import board.Platform;
 import board.Uart;
 import board.arm.Gic;
 import board.arm.Pl011;
+import board.arm.Psci;
 import compiler.Target;
 import magic.Address;
 import magic.Magic;
@@ -37,6 +38,9 @@ public final class VirtPlatform
 
     /** The generic timer the tick and counter use ({@code compiler.Target}): the EL1 virtual timer (PPI 27): under HVF the physical timer is not emulated. */
     public static final long GENERIC_TIMER = Target.TIMER_VIRT;
+
+    /** RAM starts at physical 0x4000_0000: virtual 0 maps there ({@code board.Board.ramPhys}). */
+    public static final long RAM_PHYS = Board.VIRT_RAM_PHYS;
 
     /** {@code MetalBoard.boardId0()}. */
     public static long boardId()
@@ -252,4 +256,28 @@ public final class VirtPlatform
 
     /** How many link counters the page's layout has after NetStats's (the Pi's WiFi driver's). */
     private static final int WIFI_STATS = 14;
+
+    /**
+     * The map for the 2 MiB block at virtual {@code a}: RAM at {@code a + VIRT_RAM_PHYS}, the device window at
+     * {@code a - VIRT_DEV_VA}, and the Pi's peripheral window left unmapped (a Pi-only driver then faults by name).
+     * Must agree with {@code writer.VirtPrelude}, which built the same map to turn the MMU on.
+     */
+    public static long pageBlock(long a)
+    {
+        if (a < Board.VIRT_DEV_LO)
+        {
+            return (a + Board.VIRT_RAM_PHYS) | 0x701L;   // block | AF | SH=inner | AttrIdx=0 (Normal WB)
+        }
+        if (a < Board.VIRT_DEV_HI)
+        {
+            return (a - Board.VIRT_DEV_VA) | 0x405L;     // block | AF | AttrIdx=1 (Device)
+        }
+        return 0L;
+    }
+
+    /** QEMU implements PSCI for its guest: CPU_ON over HVC ({@link Psci}). */
+    public static void startSecondaries(long entry)
+    {
+        Psci.startSecondaries(entry);
+    }
 }

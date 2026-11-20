@@ -155,15 +155,14 @@ public final class VMScheduler
     }
 
     /**
-     * Build a 4 KiB-granule identity map (VA=PA) of the low 4 GiB into the page tables at {@link #PT_BASE}:
-     * one L1 table of 4 entries, each pointing to an L2 table of 512 * 2 MiB block descriptors. RAM (below
-     * 0xFC00_0000) is Normal Inner-Shareable Write-Back cacheable (attr idx 0); the peripheral window
-     * (>= 0xFC00_0000: UART/mailbox regs, ARM-local, GIC) is Device-nGnRnE (attr idx 1). Built once by the
-     * primary before any core enables its MMU.
+     * Build the 4 KiB-granule map of the low 4 GiB of virtual addresses into the page tables at {@link #PT_BASE}:
+     * one L1 table of 4 entries, each pointing to an L2 table of 512 * 2 MiB block descriptors. Each block's
+     * descriptor is the board's ({@code pageBlock} in {@code board.Platform.OPS}): on the Pi an identity map, RAM
+     * Normal Write-Back and the peripheral window Device-nGnRnE; on QEMU virt RAM moved up by {@code RAM_PHYS} and
+     * its device window. Built once by the primary before any core enables its MMU.
      */
     static void buildPageTables()
     {
-        boolean virt = Board.isVirt();
         int i = 0;
         while (i < 4)
         {
@@ -173,43 +172,12 @@ public final class VMScheduler
             while (j < 512)
             {
                 long a = ((long) i << 30) + ((long) j << 21);   // i*1GiB + j*2MiB (block base, 2MiB aligned)
-                long desc;
-                if (virt)
-                {
-                    desc = virtBlock(a);                   // the map writer.VirtPrelude built before boot
-                }
-                else if (a >= 0xFC00_0000L)
-                {
-                    desc = a | 0x405L;                     // block | AF | AttrIdx=1 (Device)
-                }
-                else
-                {
-                    desc = a | 0x701L;                     // block | AF | SH=inner | AttrIdx=0 (Normal WB)
-                }
-                l2.plus(j * 8L).store(desc);
+                l2.plus(j * 8L).store(Magic.call2(pageBlockAddr, a, 0L));   // the board's map for this block
                 j = j + 1;
             }
             i = i + 1;
         }
         Magic.dsb();                                       // tables visible to every core's table walk
-    }
-
-    /**
-     * QEMU virt's descriptor for the 2 MiB block at virtual {@code a}: RAM at {@code a + VIRT_RAM_PHYS}, the device
-     * window at {@code a - VIRT_DEV_VA}, and the Pi's peripheral window left unmapped (a Pi-only driver then faults
-     * by name). Must agree with {@code writer.VirtPrelude}, which built the same map to turn the MMU on.
-     */
-    private static long virtBlock(long a)
-    {
-        if (a < Board.VIRT_DEV_LO)
-        {
-            return (a + Board.VIRT_RAM_PHYS) | 0x701L;   // block | AF | SH=inner | AttrIdx=0 (Normal WB)
-        }
-        if (a < Board.VIRT_DEV_HI)
-        {
-            return (a - Board.VIRT_DEV_VA) | 0x405L;     // block | AF | AttrIdx=1 (Device)
-        }
-        return 0L;
     }
 
     /**
@@ -232,7 +200,7 @@ public final class VMScheduler
 
     /** Clean the D-cache lines spanning [start,end) to the point of coherence, then barrier -- so an
      *  uncached agent (a secondary core with its MMU still off) sees what the primary just wrote. */
-    static void cleanToPoC(long start, long end)
+    public static void cleanToPoC(long start, long end)
     {
         long a = start & ~63L;                             // Cortex-A72 cache line = 64 bytes
         while (a < end)
@@ -493,14 +461,7 @@ public final class VMScheduler
             return;
         }
 
-        if (Board.isVirt())
-        {
-            startSecondariesPsci();
-        }
-        else
-        {
-            startSecondariesSpin();
-        }
+        long u = Magic.call2(startSecondariesAddr, secondaryMainAddr, 0L);   // the board's way: spin table, PSCI, ...
 
         int up = 0;                                        // wait (<=0.5 s) for them to report in
         long deadline = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() / 2L;
@@ -514,182 +475,6 @@ public final class VMScheduler
         Uart.write(Magic.bytes("SMP: "));
         printDec(up + 1);                                  // + the primary
         Uart.write(Magic.bytes(" of 4 cores up\n"));
-    }
-
-    /** The Pi: point the firmware's spin slots at a stub that drops each parked secondary to EL1, and wake them. */
-    private static void startSecondariesSpin()
-    {
-        // Stub (runs on each secondary at EL2): x0 = MPIDR & 3 (core id, becomes secondaryMain's arg),
-        // set the per-core EL1 stack + a sane EL1 SCTLR, then drop EL2 -> EL1 (mirroring EmitBoot) and
-        // ERET straight into secondaryMain(core). x0 survives the ERET.
-        long s = SEC_STUB;
-        int lo = (int) (secondaryMainAddr & 0xFFFFL);
-        int mid = (int) ((secondaryMainAddr >>> 16) & 0xFFFFL);
-        int hi = (int) ((secondaryMainAddr >>> 32) & 0xFFFFL);
-        Address stub = Address.fromLong(s);                // 32-bit instruction-word stores below
-        int w = 0;
-        stub.plus(w * 4L).store(A64Enc.mrs(0, A64Enc.MPIDR_EL1));      w += 1;
-        stub.plus(w * 4L).store(A64Enc.movz(9, 3, 0));                w += 1;   // x9 = 3
-        stub.plus(w * 4L).store(A64Enc.andReg(0, 0, 9));             w += 1;   // x0 = core id
-        stub.plus(w * 4L).store(A64Enc.lslImm(1, 0, 20));           w += 1;   // x1 = core * 1MiB
-        stub.plus(w * 4L).store(A64Enc.movz(2, SEC_STACK_HI, 1));    w += 1;   // x2 = 0x0200_0000
-        stub.plus(w * 4L).store(A64Enc.addReg(2, 2, 1));           w += 1;   // x2 = per-core stack top
-        stub.plus(w * 4L).store(A64Enc.msr(A64Enc.SP_EL1, 2));      w += 1;   // SP_EL1 = stack top
-        stub.plus(w * 4L).store(A64Enc.movz(3, 0x0800, 0));         w += 1;
-        stub.plus(w * 4L).store(A64Enc.movk(3, 0x30D0, 1));         w += 1;   // x3 = 0x30D0_0800
-        stub.plus(w * 4L).store(A64Enc.msr(A64Enc.SCTLR_EL1, 3));   w += 1;   // EL1 SCTLR (MMU off, RES1)
-        stub.plus(w * 4L).store(A64Enc.movz(3, 0x8000, 1));         w += 1;
-        stub.plus(w * 4L).store(A64Enc.msr(A64Enc.HCR_EL2, 3));     w += 1;   // HCR_EL2.RW = 1
-        stub.plus(w * 4L).store(A64Enc.movz(3, 0x33FF, 0));         w += 1;
-        stub.plus(w * 4L).store(A64Enc.msr(A64Enc.CPTR_EL2, 3));    w += 1;   // don't trap FP to EL2
-        // ... NOR to EL1: CPACR_EL1.FPEN = 0b11, as the boot core sets it (EmitBoot, VM.boot). Its reset value traps
-        // FP/SIMD at EL1, and without this every FP instruction a thread ran on cores 1-3 raised an InternalError
-        // (TRAP ec=0x07) -- latent while nothing doing FP math ran there; a /run benchmark's first double divide on
-        // a secondary found it (2026-11-14). QEMU does not trap, so only the Pi shows it.
-        stub.plus(w * 4L).store(A64Enc.movz(3, 0x0030, 1));         w += 1;   // x3 = 0x30_0000
-        stub.plus(w * 4L).store(A64Enc.msr(A64Enc.CPACR_EL1, 3));   w += 1;   // CPACR_EL1.FPEN = 0b11
-        stub.plus(w * 4L).store(A64Enc.movz(3, 0x03C5, 0));         w += 1;
-        stub.plus(w * 4L).store(A64Enc.msr(A64Enc.SPSR_EL2, 3));    w += 1;   // target = EL1h, DAIF masked
-        stub.plus(w * 4L).store(A64Enc.movz(3, lo, 0));             w += 1;
-        stub.plus(w * 4L).store(A64Enc.movk(3, mid, 1));            w += 1;
-        stub.plus(w * 4L).store(A64Enc.movk(3, hi, 2));            w += 1;   // x3 = &secondaryMain
-        stub.plus(w * 4L).store(A64Enc.msr(A64Enc.ELR_EL2, 3));     w += 1;
-        stub.plus(w * 4L).store(A64Enc.eret());                   w += 1;   // -> secondaryMain(core) at EL1
-        Heap.publishCode(Address.fromLong(s), Address.fromLong(s + w * 4L));
-        cleanToPoC(s, s + w * 4L);                         // secondaries fetch the stub uncached (MMU off) ...
-
-        Address.fromLong(0x00E0L).store(stub);             // spin_cpu1 -> stub
-        Address.fromLong(0x00E8L).store(stub);             // spin_cpu2 -> stub
-        Address.fromLong(0x00F0L).store(stub);             // spin_cpu3 -> stub
-        cleanToPoC(0x00C0L, 0x0100L);                      // ... and read the spin slots uncached: push both to PoC
-        Magic.sev();                                       // wake the WFE-parked cores
-    }
-
-    /**
-     * QEMU virt: start cores 1-3 with PSCI CPU_ON (an HVC; QEMU implements PSCI for a guest with no EL2). Each
-     * enters {@link #SEC_STUB} at EL1 with its MMU OFF, at a PHYSICAL address, x0 = its core id (the context id we
-     * pass). The stub turns the MMU on and branches to {@code secondaryMain}, which is a VIRTUAL address -- but the
-     * instruction after the SCTLR write is fetched at the stub's physical address read as virtual, which the normal
-     * map sends elsewhere (virtual 0x4300_0000 is RAM at 0x8300_0000). So the stub turns the MMU on with
-     * {@link #buildBootTables}: the normal map plus an identity entry for the stub's own 2 MiB block -- the trick
-     * writer.VirtPrelude plays for core 0. secondaryMain's enableMmuThisCore then moves the core to the real tables.
-     */
-    private static void startSecondariesPsci()
-    {
-        buildBootTables();
-        Address stub = Address.fromLong(SEC_STUB);
-        int w = 0;
-        w = emitConst(stub, w, 3, secondaryMainAddr);      // x3 = &secondaryMain (virtual: after the MMU is on)
-        w = emitConst(stub, w, 2, (long) SEC_STACK_HI << 16);
-        w = emit(stub, w, A64Enc.lslImm(1, 0, 20));        // x1 = core * 1 MiB
-        w = emit(stub, w, A64Enc.addReg(2, 2, 1));
-        w = emit(stub, w, A64Enc.movToSp(2));              // SP = this core's stack top (virtual, used after)
-        w = emitConst(stub, w, 4, 0x30_0000L);
-        w = emit(stub, w, A64Enc.msr(A64Enc.CPACR_EL1, 4)); // CPACR_EL1.FPEN = 0b11, as the Pi's stub sets
-        w = emit(stub, w, A64Enc.isb());
-        w = emitConst(stub, w, 4, 0xFFL);
-        w = emit(stub, w, A64Enc.msr(A64Enc.MAIR_EL1, 4)); // the attributes enableMmuThisCore uses
-        w = emitConst(stub, w, 4, 0x2_0080_3520L);
-        w = emit(stub, w, A64Enc.msr(A64Enc.TCR_EL1, 4));
-        w = emitConst(stub, w, 4, Board.phys(PT_BOOT));
-        w = emit(stub, w, A64Enc.msr(A64Enc.TTBR0_EL1, 4));
-        w = emit(stub, w, A64Enc.dsb());
-        w = emit(stub, w, A64Enc.tlbiVmalle1());
-        w = emit(stub, w, A64Enc.dsb());
-        w = emit(stub, w, A64Enc.icIallu());
-        w = emit(stub, w, A64Enc.dsb());
-        w = emit(stub, w, A64Enc.isb());
-        w = emitConst(stub, w, 4, 0x30D0_1805L);
-        w = emit(stub, w, A64Enc.msr(A64Enc.SCTLR_EL1, 4));
-        w = emit(stub, w, A64Enc.isb());
-        w = emit(stub, w, A64Enc.br(3));                   // fetched through the identity entry -> secondaryMain(core)
-        long end = SEC_STUB + w * 4L;
-
-        // The CPU_ON call itself: psci(core, entry) -> x0 = function id, x1 = target MPIDR (Aff0 = core on virt),
-        // x2 = entry (physical), x3 = context id (arrives in the new core's x0). Returns the PSCI status (0 = ok).
-        long psci = SEC_STUB + 0x200L;
-        Address call = Address.fromLong(psci);
-        int c = 0;
-        c = emit(call, c, A64Enc.movReg(3, 0));
-        c = emit(call, c, A64Enc.movReg(2, 1));
-        c = emit(call, c, A64Enc.movReg(1, 0));
-        c = emitConst(call, c, 0, PSCI_CPU_ON);
-        c = emit(call, c, A64Enc.hvc0());
-        c = emit(call, c, A64Enc.ret());
-        Heap.publishCode(Address.fromLong(SEC_STUB), Address.fromLong(end));
-        Heap.publishCode(call, Address.fromLong(psci + c * 4L));
-        cleanToPoC(SEC_STUB, end);                         // the secondaries fetch the stub with the MMU off
-
-        int core = 1;
-        while (core <= 3)
-        {
-            long r = Magic.call2(psci, core, Board.phys(SEC_STUB));
-            if (r != 0L)
-            {
-                Uart.write(Magic.bytes("SMP: PSCI CPU_ON core "));
-                printDec(core);
-                Uart.write(Magic.bytes(" failed, status "));
-                printDec((int) r);
-                Uart.putc(0x0A);
-            }
-            core += 1;
-        }
-    }
-
-    /** PSCI 0.2 CPU_ON, SMC64/HVC64 calling convention. */
-    private static final long PSCI_CPU_ON = 0xC400_0003L;
-
-    /**
-     * QEMU virt: the tables a secondary turns its MMU on with ({@link #PT_BOOT}): an L1 that shares three of the
-     * normal L2 tables and points the fourth -- the one covering the stub's physical address read as virtual -- at
-     * a copy carrying an identity entry for the stub's 2 MiB block. Built by the primary after buildPageTables.
-     */
-    private static void buildBootTables()
-    {
-        long stubPa = Board.phys(SEC_STUB);
-        int g = (int) (stubPa >>> 30);                     // which 1 GiB (stubPa < 4 GiB)
-        Address l1 = Address.fromLong(PT_BOOT);
-        Address l2 = Address.fromLong(PT_BOOT + 0x1000L);
-        Address srcL2 = Address.fromLong(PT_BASE + (g + 1) * 0x1000L);
-        int i = 0;
-        while (i < 4)
-        {
-            l1.plus(i * 8L).store(Address.fromLong(PT_BASE).plus(i * 8L).loadLong());
-            i += 1;
-        }
-        int j = 0;
-        while (j < 512)
-        {
-            l2.plus(j * 8L).store(srcL2.plus(j * 8L).loadLong());
-            j += 1;
-        }
-        l2.plus(((stubPa >>> 21) & 511L) * 8L).store((stubPa & ~0x1F_FFFFL) | 0x701L);   // identity, Normal WB
-        l1.plus(g * 8L).store(Board.phys(PT_BOOT + 0x1000L) | 3L);
-        Magic.dsb();
-        cleanToPoC(PT_BOOT, PT_BOOT + 0x2000L);
-    }
-
-    private static int emit(Address at, int w, int insn)
-    {
-        at.plus(w * 4L).store(insn);
-        return w + 1;
-    }
-
-    /** Emit MOVZ + MOVKs loading the 64-bit {@code v} into {@code rd}. */
-    private static int emitConst(Address at, int w, int rd, long v)
-    {
-        int n = emit(at, w, A64Enc.movz(rd, (int) (v & 0xFFFFL), 0));
-        int hw = 1;
-        while (hw < 4)
-        {
-            int lane = (int) ((v >>> (16 * hw)) & 0xFFFFL);
-            if (lane != 0)
-            {
-                n = emit(at, n, A64Enc.movk(rd, lane, hw));
-            }
-            hw += 1;
-        }
-        return n;
     }
 
     /**

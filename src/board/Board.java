@@ -54,13 +54,15 @@ public final class Board
         return virt != 0L;
     }
 
+    /**
+     * Where RAM's virtual 0 is physically: the platform class's {@code RAM_PHYS} (0 on the Pi, {@link #VIRT_RAM_PHYS}
+     * on virt). Filled by the writer (never written at run time).
+     */
+    public static long ramPhys;
+
     /** The physical address of virtual RAM address {@code va}: what TTBR0 and a table descriptor must hold. */
     public static long phys(long va)
     {
-        if (virt != 0L)
-        {
-            return va + VIRT_RAM_PHYS;
-        }
-        return va;
+        return va + ramPhys;
     }
 }

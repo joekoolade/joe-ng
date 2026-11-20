@@ -468,10 +468,10 @@ public final class VM
     // Fixed runtime scratch, relocated to the 48-64 MiB band. The embedded image now carries ALL of
     // java.base (~29 MiB from 0x80000), so the old 7.4 MiB cluster fell INSIDE the image; these addresses
     // sit above it (below the 64 MiB heap). The MMU identity-maps the low 4 GiB, so all are valid RAM.
-    static final long SEC_STUB   = 0x0300_0000L;          // secondary boot stub (fixed scratch, not GC'd)
-    static final int  SEC_STACK_HI = 0x0380;              // per-core stack base 0x0380_0000 + core*1MiB
+    public static final long SEC_STUB   = 0x0300_0000L;          // secondary boot stub (fixed scratch, not GC'd)
+    public static final int  SEC_STACK_HI = 0x0380;              // per-core stack base 0x0380_0000 + core*1MiB
     public static final long PT_BASE = 0x0301_0000L;           // page tables: 1 L1 + 4 L2 tables (20 KiB, fixed)
-    static final long PT_BOOT = PT_BASE + 0x5000L;        // QEMU virt: a secondary's boot L1 + one L2 copy (8 KiB)
+    public static final long PT_BOOT = PT_BASE + 0x5000L;        // QEMU virt: a secondary's boot L1 + one L2 copy (8 KiB)
     static final long LOCK_ADDR  = 0x0302_0000L;          // shared HW-spinlock word (cacheable RAM)
     static final long PC_VBAR    = 0x0303_0000L;          // secondaries' shared IRQ vector table (2 KiB aligned)
 
@@ -4079,6 +4079,8 @@ public final class VM
     public static long netRxTaskAddr;  // board.cyw43.WlanPoll.rxTask()V -- the WiFi RX poller task (writer-stashed)
     public static long virtNetRxTaskAddr;  // board.virt.VirtioNet.rxTask()V -- the virtio-net RX task (writer-stashed)
     static long secondaryMainAddr;     // VM.secondaryMain(I)V — secondary-core entry (writer-stashed)
+    public static long pageBlockAddr;         // <Platform>.pageBlock(J)J -- the board's descriptor for a 2 MiB block
+    public static long startSecondariesAddr;  // <Platform>.startSecondaries(J)V -- release cores 1-3 at an entry
     static long ticks;                 // periodic timer interrupts serviced so far
 
 

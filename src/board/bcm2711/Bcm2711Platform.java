@@ -37,6 +37,9 @@ public final class Bcm2711Platform
     /** The generic timer the tick and counter use ({@code compiler.Target}): the EL1 physical timer (PPI 30 on the GIC-400). */
     public static final long GENERIC_TIMER = Target.TIMER_PHYS;
 
+    /** RAM is at physical 0: the map is the identity ({@code board.Board.ramPhys}). */
+    public static final long RAM_PHYS = 0L;
+
     /** {@code MetalBoard.boardId0()}. */
     public static long boardId()
     {
@@ -270,5 +273,24 @@ public final class Bcm2711Platform
         i = VMStats.put(arr, len, i, Cyw43.wpaHeld);                   // ... EAPOL kept from a non-EAPOL wait
         i = VMStats.put(arr, len, i, Cyw43.wpaAttempts);               // ... associations tried
         return i;
+    }
+
+    /**
+     * The map for the 2 MiB block at virtual {@code a}: identity, RAM Normal Inner-Shareable Write-Back (attr 0),
+     * the peripheral window from 0xFC00_0000 (UART, mailbox, ARM-local, GIC) Device-nGnRnE (attr 1).
+     */
+    public static long pageBlock(long a)
+    {
+        if (a >= 0xFC00_0000L)
+        {
+            return a | 0x405L;                             // block | AF | AttrIdx=1 (Device)
+        }
+        return a | 0x701L;                                 // block | AF | SH=inner | AttrIdx=0 (Normal WB)
+    }
+
+    /** Cores 1-3 wait in the armstub's spin loop: {@link SpinTable}. */
+    public static void startSecondaries(long entry)
+    {
+        SpinTable.start(entry);
     }
 }
