@@ -105,6 +105,9 @@ logs what informed each piece so encodings and boot facts are auditable.
 - **Jikes RVM** and **JOE / bare-metal JVM** writeups — *ideas only* for the
   boot-image writer, VM magic (unboxed Address/Word), TIB / object model, and
   baseline compiler shape. No code is ported; those ISAs were IA-32/PPC anyway.
+- **Jikes RVM source** (local: `~/git/JOE/rvm/src/org/jikesrvm`, pragmas in `~/git/JOE/common/vmmagic/src/org/vmmagic/pragma`):
+  the guide for the memory-frame / precise-GC arc (PLAN.md) -- baseline frame layout, `BuildReferenceMaps`,
+  `BaselineGCMapIterator`, yieldpoints, `@Uninterruptible`. Concepts and structure only; every line is written here.
 - **Boehm–Demers–Weiser conservative GC** — *concept only* for the conservative
   mark-sweep: scan the stack/registers/statics for anything that looks like a
   heap pointer, no precise stack maps, non-moving. Our collector is written from
