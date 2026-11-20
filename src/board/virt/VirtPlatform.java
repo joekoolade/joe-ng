@@ -54,18 +54,11 @@ public final class VirtPlatform
         return -1L;
     }
 
-    /**
-     * {@code MetalBoard.reboot0()}: NOT a reset yet -- that is PSCI SYSTEM_RESET over HVC, not wired. Say so and
-     * stop this core, rather than reach for the Pi's watchdog (unmapped here, so it faulted).
-     */
+    /** {@code MetalBoard.reboot0()}: drain the console, then PSCI SYSTEM_RESET. Never returns. */
     public static void reboot()
     {
-        Uart.write(Magic.bytes("\nreboot: no reset on virt yet (PSCI SYSTEM_RESET not wired) -- halted\n"));
         Uart.flush();
-        while (true)
-        {
-            Magic.wfe();
-        }
+        Psci.systemReset();
     }
 
     /** {@code MetalBlock.init0()}: no SD controller on virt -- {@link Platform#BLOCK_NO_DEVICE}. */
@@ -205,10 +198,10 @@ public final class VirtPlatform
         return Irq.DEV_UNKNOWN;
     }
 
-    /** virt always has the link; with no virtio-net card {@code VirtioNet.bringUp} says so and stops. */
+    /** The link is there when QEMU gave the machine a virtio-net card ({@code scripts/virt.sh --net}). */
     public static long netPresent()
     {
-        return 1L;
+        return VirtioNet.present() ? 1L : 0L;
     }
 
     /** QEMU -netdev user: DHCP hands out 10.0.2.15, gateway .2, DNS .3. There is no link demo. */

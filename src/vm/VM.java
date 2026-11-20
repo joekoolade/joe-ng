@@ -58,7 +58,7 @@ public final class VM
     /**
      * M1c: the full first-light boot, compiled from this Java by our own baseline
      * compiler (the metacircular goal). Equivalent to the hand-emitted
-     * {@code vm.EmitBoot}: drop EL2→EL1, enable FP, set a stack, bring up the AUX
+     * {@code board.bcm2711.EmitBoot}: drop EL2→EL1, enable FP, set a stack, bring up the AUX
      * mini-UART, print the boot message, then park.
      */
     public static void boot()
@@ -4157,10 +4157,8 @@ public final class VM
     // retired -- gated off here rather than deleted, pending the embedding rework. See the plan file.
     private static final boolean SELF_BUILD = false;
     // NON-final on purpose: the writer's BFS compiles the WiFi subsystem (guarded call in run()) into the
-    // image regardless. Now live (M1), but the RUN is additionally gated on real hardware in run() via
-    // Uart.coreHz: QEMU's mailbox reports ~0 for the measured core clock (baud falls back, "core 0MHz"),
-    // a real Pi 4 reports ~166 MHz — so the WiFi driver only pokes the SDIO controller on real silicon,
-    // never QEMU (whose 0xFE300000 is the SD card).
+    // image regardless. The RUN is additionally gated in run() on net.Link.present(), the board's answer to
+    // "is the link there" (the Pi's: real silicon, by the measured core clock; virt's: a virtio-net card).
     static boolean WIFI_ENABLED = true;
     // true = boot straight to WiFi, skipping SMP/scheduler/all demos (fast flash cycles). false = the full
     // boot (demos + scheduler + SMP), with WiFi run at the end on real hardware (WIFI_ENABLED gate).
@@ -5011,9 +5009,9 @@ public final class VM
         // re-arm a MINIMAL scheduler -- just task 0 (this boot flow), no A/B/C demo tasks -- and turn IRQs
         // back on, so the WiFi task can block in semWaitTimeout and be woken by the SDIO card interrupt (SPI
         // 158) instead of busy-polling. Guarded by the non-final WIFI_ENABLED flag (so the writer still
-        // compiles the subsystem in) and HW-gated on coreHz: QEMU reports 0 and skips (no CYW43 there; its
-        // 0xFE300000 is the SD card).
-        if (WIFI_ENABLED && board.Uart.coreHz > 10000000)
+        // compiles the subsystem in) and by whether the board has its link (net.Link.present: the Pi's answer
+        // is real silicon -- QEMU raspi4b has no CYW43, its 0xFE300000 is the SD card; virt's is a virtio-net card).
+        if (WIFI_ENABLED && net.Link.present())
         {
             installSchedVectors();                         // rebuild the switch stubs the GC/JIT demos freed
             resetTaskTable();                              // fresh table: only task 0 -- no demo tasks to spew

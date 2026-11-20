@@ -686,7 +686,7 @@ public final class Heap
     /** Set when the arena grows more than 1 MiB after a sweep -- the windows inc 1 could not rule out. */
     public static long lateGrowthSeen;
     public static final long GROWTH_BUCKETS = 8L;
-    private static final long GROWTH_TAB = 0x0306_0000L - 128L;   // tail of the MBOX_BUFFER slot, unused
+    private static final long GROWTH_TAB = 0x0306_0000L - 128L;   // tail of the board drivers' slot (past Board.DRIVER_SCRATCH_END)
 
     /** Bucket the bytes-since-sweep at one growth event. */
     private static void noteGrowthAge()

@@ -4,6 +4,22 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **PLATFORM, INCREMENT P8: the last board names out of the VM, and a reset on virt (2026-11-19).**
+  - **`ScratchMap` names no board's buffer.** New `Board.DRIVER_SCRATCH`..`DRIVER_SCRATCH_END` (0x0305_0000..
+    0x0305_9000) is the one range board drivers take fixed buffers from: `Bcm2711.MBOX_BUFFER` and
+    `VirtioRng.PAGE` are defined inside it, and the map reserves the range instead of each board's buffer.
+  - **`EmitBoot` moved `vm` -> `board.bcm2711`** (the retired M1 first-light routine; every word is Pi-specific).
+  - **The suite's WiFi finale asks `net.Link.present()`**, not `Uart.coreHz`. virt's `netPresent` now looks for a
+    virtio-net card (`VirtioNet.present`, the slot scan `init` already did) instead of answering 1, so without
+    `--net` a `net=1` boot no longer starts the scheduler for a link that is not there.
+  - **virt reboots:** `VirtPlatform.reboot` drains the console and calls new `Psci.systemReset` -- PSCI 0.2
+    SYSTEM_RESET (0x8400_0009) over HVC, emitted at `SEC_STUB + 0x300` like the CPU_ON call. It used to print
+    "no reset on virt yet" and halt.
+  - **Validated:** `make test` + overlaycheck OK; raspi4b TickProbe/ExitProbe/RunProbe/ChmRaceProbe/SpawnRaceProbe/
+    NetStaticsProbe 6/6; virt TickProbe/ExitProbe/RunProbe/ChmRaceProbe/SpawnRaceProbe/NetTcpProbe/SslEngineProbe
+    7/7. Throwaway on virt printing `net.Link.present()` then calling the reboot op: no card -> `present 0`, QEMU
+    exits on the reset (`-no-reboot`); `--net` -> virtio-net up, DHCP, `present 1`, exits the same way. Reverted.
+  - The Intel board went to BACKLOG.md ("Boards").
 - **PLATFORM, INCREMENT P7: the block device behind the platform -- `vm` imports nothing from `board.bcm2711` (2026-11-19).**
   - **New `board.Block`:** `init()`, `read(lba, addr, n)`, `write(lba, addr, n)` -- the VM's raw-address door to the
     board's block device, over three platform ops: `blockInit()J` (its static moved from `VM.blockInitAddr` to
@@ -19,7 +35,8 @@ Newest entries are at the top.
     throwaway boot line: `P7 block init 0 mount 1 kernel 1 size 3000000 gen 0` (the card's 3,000,000-byte
     KERNEL8.IMG); demo/BlockDemo single vs multi-block `same bytes: true`, sha256 of sectors 0..4095 = host's
     (`0a835c68...`). virt: `P7 block init -100` and BlockDemo's `IOException: SD card init failed (step -100)`, the
-    existing no-device answer. Throwaway reverted. Not yet on a Pi.
+    existing no-device answer. Throwaway reverted. **PI-VALIDATED 2026-11-19:** push of build `ada9b684495cc35a` --
+    trial boot up in 29 s and committed; the 39.6 MB kernel written and read back through `Block`, on-card sha256 = host.
   - **Left:** `ScratchMap` names `Bcm2711.MBOX_BUFFER`; `EmitBoot` (retired reference) imports `Bcm2711`; the demo
     suite's WiFi finale still gates on `Uart.coreHz` rather than `net.Link.present()`.
 - **PLATFORM, INCREMENT P6b: the Pi's start-up routine -- no run-time board test left (2026-11-19).** Closes the

@@ -9,7 +9,7 @@
  *
  * Created: 2026-07-18
  */
-package vm;
+package board.bcm2711;
 
 import asm.A64;
 import asm.CodeBuffer;
@@ -34,6 +34,10 @@ import static board.bcm2711.Bcm2711.*;
  * metacircular half — compiling this same logic from {@code VM.boot}'s Java
  * bytecode via the baseline compiler — is the next step (M1c); when it lands,
  * its output should match these words.
+ *
+ * <p><b>Retired, kept for reference.</b> Nothing calls it: the Pi image's first code today is
+ * {@code writer.Bcm2711Prelude}, then {@code VM.boot}. It lives with the Pi's drivers because every word of it
+ * is Pi-specific (mini-UART, GPIO).
  */
 public final class EmitBoot
 {
@@ -153,5 +157,7 @@ public final class EmitBoot
         }
     }
 
-    private EmitBoot() {}
+    private EmitBoot()
+    {
+    }
 }

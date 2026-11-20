@@ -20,7 +20,7 @@ package board.bcm2711;
  * Source: BCM2711 ARM Peripherals (mini-UART/AUX and GPIO sections). See
  * SOURCES.md. These are plain constants; the actual MMIO access is magic
  * {@code Address} loads/stores lowered by the compiler — for M1 they are
- * emitted directly by {@code vm.EmitBoot}.
+ * emitted directly by {@link EmitBoot}.
  */
 public final class Bcm2711
 {
@@ -40,7 +40,7 @@ public final class Bcm2711
     public static final int  MBOX_EMPTY  = 0x4000_0000;   // status: nothing to read
     public static final int  MBOX_CH_PROP = 8;            // ARM -> VC property channel
     /** 16-byte-aligned scratch for the property buffer: above the image, below the heap. */
-    public static final long MBOX_BUFFER = 0x0305_0000L;   // ~48 MiB — above the all-java.base image (from 0x80000)
+    public static final long MBOX_BUFFER = board.Board.DRIVER_SCRATCH;   // a few hundred bytes, below VirtioRng's page
     /** VC bus alias of ARM physical RAM (uncached view the firmware expects). */
     public static final long MBOX_BUS_ALIAS = 0xC000_0000L;
     /**

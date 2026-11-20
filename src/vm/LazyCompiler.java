@@ -72,8 +72,8 @@ final class LazyCompiler
     // The new region is also 4x larger: at 16 bytes an entry the old 64 KiB held 4,096 stubs while a suite
     // run creates 10,000+, so stubIdxAt silently returned -1 for most of them -- which is why the
     // "it was the deferral stub for ..." diagnostics and the stub-mislink check kept coming back empty.
-    // Fixed scratch at 0x0306_0000, in the free band between Bcm2711.MBOX_BUFFER (0x0305_0000, a few
-    // hundred bytes) and Loader.CODE_ROOTS (0x0310_0000); 0x030A_0000..0x0310_0000 stays free after it.
+    // Fixed scratch at 0x0306_0000, in the free band between Board.DRIVER_SCRATCH (0x0305_0000..0x0305_9000, the
+    // board drivers' buffers) and Loader.CODE_ROOTS (0x0310_0000); 0x030A_0000..0x0310_0000 stays free after it.
     //
     // TWO homes were wrong before this one, both from picking an address that LOOKED unused:
     //   0x0374_0000 (#145) overlays THREE tables -- Heap.STATS (histograms; STATS+128 is stub entry 8),

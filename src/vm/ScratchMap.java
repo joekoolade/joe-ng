@@ -73,10 +73,9 @@ final class ScratchMap
         add(VM.LOCK_ADDR, Uart.TX_RING);                    // spinlock words (LOCK_ADDR, SCHED/HANG/UART/RING)
         add(Uart.TX_RING, Uart.RING_END);                   // mini-UART TX + RX rings
         add(VM.PC_VBAR, VM.CORE_FLAGS);                     // secondaries' IRQ vectors
-        add(VM.CORE_FLAGS, board.bcm2711.Bcm2711.MBOX_BUFFER);
-        add(board.bcm2711.Bcm2711.MBOX_BUFFER, board.virt.VirtioRng.PAGE);   // mailbox buffer (the Pi only)
-        add(board.virt.VirtioRng.PAGE, board.virt.VirtioRng.PAGE_END);      // virtio-rng queue page (virt only)
-        add(board.virt.VirtioRng.PAGE_END, LazyCompiler.STUB_TAB);           // ... the rest of that slot
+        add(VM.CORE_FLAGS, board.Board.DRIVER_SCRATCH);
+        add(board.Board.DRIVER_SCRATCH, board.Board.DRIVER_SCRATCH_END);    // the board drivers' fixed buffers
+        add(board.Board.DRIVER_SCRATCH_END, LazyCompiler.STUB_TAB);         // ... the rest of that slot (Heap.GROWTH_TAB)
         add(LazyCompiler.STUB_TAB, CodeEdges.TAB);                // deferral-stub table
         add(CodeEdges.TAB, CodeEdges.TAB_END);              // code->code edge census
         add(CodeCompact.PLAN_TAB, Loader.CODE_ROOTS);       // compaction relocation plan
