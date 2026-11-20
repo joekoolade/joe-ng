@@ -1545,6 +1545,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VM.newAioobeIndex(JJ)J", "vm/VM.newAioobeIndexAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.newArith()J",       "vm/VM.newArithAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.stopPoll()J",       "vm/VM.stopPollAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.yieldpoint()V", "vm/VM.yieldpointAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.runStop(Lmagic/ObjectReference;Lmagic/ObjectReference;)J", "vm/VM.runStopAddr");     // MetalRunExit.stop0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.runDefining(J)J", "vm/VM.runDefiningAddr"); // MetalRunExit.defining0
         stashHelper(image, staticWord, wordOffset, "vm/VM.newAse(J)J",         "vm/VM.newAseAddr");     // ArrayStoreException
@@ -2518,7 +2519,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         Resolved r = lookup(key);
         try
         {
-            return new BaselineCompiler(r.cf, this).compileMethod(r.method, base, isEntry);
+            return new BaselineCompiler(r.cf, this).yieldPolls(true).compileMethod(r.method, base, isEntry);
         }
         catch (RuntimeException e)
         {

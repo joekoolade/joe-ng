@@ -102,6 +102,18 @@ public final class MetalStats
         "timer ticks",
         "context switches",
         "this request's task",
+        "safepoints on (timer requests a switch, taken at a yieldpoint)",
+        "yieldpoints that switched",
+        "time to safepoint, average us",
+        "time to safepoint, longest us",
+        "preempted outside a safepoint (no poll for a quantum)",
+        "idle core switched at the interrupt",
+        "polls left pending with IRQs masked",
+        "poll slow paths for another core's request",
+        "yieldpoints JIT-compiled this boot",
+        "stop-the-world waits",
+        "stop-the-world wait, average us",
+        "stop-the-world wait, longest us",
     };
 
     public static final String[] NET_NAMES = {

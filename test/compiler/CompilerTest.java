@@ -144,6 +144,33 @@ public final class CompilerTest
         T.check("raw site 0: slot 3 (an Address) is raw", mapSlot(rm, 0, 3) == 2);
         T.check("raw site 0: slot 4 (m, a long) is raw", mapSlot(rm, 0, 4) == 2);
 
+        // Yieldpoints (frames/GC arc S3): a prologue poll in a framed method, one per loop header, none in a
+        // magic.Uninterruptible class. A poll is `ldr x16, [x16]` on the request word, then a cbz over the call.
+        int[] lp = polled(mf, "loop", "(Ljava/lang/Object;I)V");
+        T.check("loop: two yieldpoints (prologue + loop header)", polls(lp) == 2);
+        int ldrLr = asm.A64Enc.ldrx(30, 31, 0);
+        T.check("loop: the prologue poll reloads x30 for the body (readLR as a first op)",
+                count(lp, ldrLr) == count(new BaselineCompiler(mf).compileMethod(mf.method("loop", "(Ljava/lang/Object;I)V"),
+                        CodeBuffer.LOAD_ADDRESS, false).words(), ldrLr) + 1);
+        T.check("loop: ... and both argument registers", count(lp, asm.A64Enc.ldrx(0, 31, 8)) >= 1
+                && count(lp, asm.A64Enc.ldrx(1, 31, 16)) >= 1);
+        int[] lpm = polledMap(mf, "loop", "(Ljava/lang/Object;I)V");
+        T.check("loop: three map sites (two polls + the call)", lpm.length > 1 && lpm[1] == 3);
+        T.check("loop site 0 (prologue poll): slot 0 (o) is a reference", mapSlot(lpm, 0, 0) == 1);
+        T.check("loop site 0 (prologue poll): no operand live", mapLive(lpm, 0) == 0);
+        T.check("loop site 1 (loop poll): slot 2 (i) is an int", mapSlot(lpm, 1, 2) == 2);
+        T.check("count: two yieldpoints (framed by its loop poll, so a prologue poll too)",
+                polls(polled(mf, "count", "(I)I")) == 2);
+        T.check("count: framed by its poll, so it has a map", polledMap(mf, "count", "(I)I").length > 0);
+        T.check("count: a leaf without yieldpoints", gcMap(mf, "count", "(I)I").length == 0);
+        T.check("count: no polls unless asked", polls(compile(mf, "count", "(I)I")) == 0);
+        T.check("UNINTERRUPTIBLE_HASH is magic/Uninterruptible's",
+                Baseline.UNINTERRUPTIBLE_HASH == utf8HashOf("magic/Uninterruptible"));
+        ClassFile np = ClassFile.parse(classesDir.resolve("compiler/NoPollFixture.class"));
+        T.check("Uninterruptible loop: no yieldpoints", polls(polled(np, "loop", "(Ljava/lang/Object;I)V")) == 0);
+        T.check("Uninterruptible count: no yieldpoints", polls(polled(np, "count", "(I)I")) == 0);
+        T.check("Uninterruptible count: still a leaf", polledMap(np, "count", "(I)I").length == 0);
+
         // ---- new with a live operand stack ----------------------------------
         // `x + new FieldFixture().value` pushes x, then allocates. Heap.alloc
         // clobbers the operand registers, so x must survive across the call. This
@@ -406,6 +433,61 @@ public final class CompilerTest
     private static int mapLive(int[] m, int site)
     {
         return (m[8 + site * 2 + 1] >>> 16) & 0xFF;
+    }
+
+    /** The method's words (instructions and map) compiled WITH yieldpoints, as the image writer does. */
+    private static int[] polled(ClassFile cf, String method, String desc)
+    {
+        return new BaselineCompiler(cf).yieldPolls(true).compileMethod(cf.method(method, desc),
+                CodeBuffer.LOAD_ADDRESS, false).words();
+    }
+
+    /** The reference map of the method compiled with yieldpoints, or an empty array. */
+    private static int[] polledMap(ClassFile cf, String method, String desc)
+    {
+        BaselineCompiler.CompiledMethod cm = new BaselineCompiler(cf).yieldPolls(true)
+                .compileMethod(cf.method(method, desc), CodeBuffer.LOAD_ADDRESS, false);
+        int at = cm.gcMapWord();
+        return at == 0 ? new int[0] : java.util.Arrays.copyOfRange(cm.words(), at, cm.words().length);
+    }
+
+    /** {@link classfile.ClassReader#utf8Hash} of an ASCII name, laid out as a class-file Utf8 (u2 length, bytes). */
+    private static long utf8HashOf(String name)
+    {
+        byte[] n = name.getBytes(StandardCharsets.US_ASCII);
+        byte[] u = new byte[n.length + 2];
+        u[0] = (byte) (n.length >> 8);
+        u[1] = (byte) n.length;
+        System.arraycopy(n, 0, u, 2, n.length);
+        return classfile.ClassReader.utf8Hash(u, 0);
+    }
+
+    private static int count(int[] w, int word)
+    {
+        int n = 0;
+        for (int x : w)
+        {
+            if (x == word)
+            {
+                n += 1;
+            }
+        }
+        return n;
+    }
+
+    /** Yieldpoints in {@code w}: each loads the request word with {@code ldr x16, [x16]} followed by {@code cbz x16}. */
+    private static int polls(int[] w)
+    {
+        int ldr = asm.A64Enc.ldrx(16, 16, 0);
+        int n = 0;
+        for (int i = 0; i + 1 < w.length; i++)
+        {
+            if (w[i] == ldr && (w[i + 1] & 0xFF00001F) == 0xB4000010)
+            {
+                n += 1;
+            }
+        }
+        return n;
     }
 
     /** The method's reference map words (compiler.RefMaps), or an empty array when it has none. */

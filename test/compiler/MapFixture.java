@@ -65,6 +65,26 @@ final class MapFixture
         return two(o, sink(o));
     }
 
+    /** A loop with a call (S3): a prologue yieldpoint, one at the loop header, and the call -- three map sites. */
+    static void loop(Object o, int n)
+    {
+        for (int i = 0; i < n; i++)
+        {
+            sink(o);
+        }
+    }
+
+    /** A loop and no call: a leaf without yieldpoints, a framed method with them (S3). */
+    static int count(int n)
+    {
+        int s = 0;
+        for (int i = 0; i < n; i++)
+        {
+            s += i;
+        }
+        return s;
+    }
+
     /** A long (two slots) and an Address beside a reference (site 0): only the reference is one. */
     static void raw(Object o, long n)
     {

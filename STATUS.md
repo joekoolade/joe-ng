@@ -4,6 +4,62 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **FRAMES/GC ARC, INCREMENT S3: safepoints (2026-11-20).** The timer no longer switches tasks at an arbitrary
+  instruction: it asks, and the task switches at its next **yieldpoint**, whose call site has a reference map (S2).
+  A collection's other cores park there too.
+  - **Polls** (`Baseline.emitYieldPoll`): in every framed method's prologue (after the arguments are stored, so the
+    site's map is the entry state) and at every loop header with an empty operand stack. A poll loads the request
+    word `Symbols.YIELD_CELL` (0x03FF0220, one byte per core) and branches over a call to
+    `VMScheduler.yieldpoint` while it is 0: four instructions. Image code and JIT code alike (`yieldCellAddr()`;
+    the writer's is opt-in via `BaselineCompiler.yieldPolls`, so self-contained fixtures stay as they were). A
+    method with a loop is no longer a leaf, as with the stop polls; a loop-free leaf stays one, with no prologue poll.
+  - **No-poll pragma: `magic.Uninterruptible`**, a marker interface (Jikes RVM's early form of the pragma), read from
+    the class's own interface list by Baseline in both worlds -- by FNV hash, since a String compare in the
+    compiler wild-branched on the metal (`ClassReader.implementsDirectly` -> an unclaimed pc, first QEMU boot).
+    On `VMScheduler`, `VMGc`, `GcMapShadow` and `Heap` (the switch, the collector, the allocator), and on the
+    interrupt and console path -- `board.Uart`, `Irq`, `Gic`, `MiniUart`, `Pl011` and both platform classes -- which
+    runs with IRQs masked, where a poll can never switch. MEASURED on the Pi before that: 1.8 million slow-path
+    calls with IRQs masked in one boot; a temporary caller histogram named `Uart.pump`, `Uart.txReady` and
+    `Bcm2711Platform.consoleTxReady` (the TX drain under the ring lock). After: 34,717 (about 1 ms of calls).
+  - **The prologue poll restores the caller's registers.** Its slow path reloads x30 and the argument registers
+    from the frame after the call. Without that, `Magic.readLR()` as a method's FIRST op -- the caller-sensitive
+    idiom (`fillInTrace`, `getCallerClass`, the field updaters) -- read the poll's own return address whenever a
+    request was pending. Found by DeepTraceProbe in a batch: its trace began at `VMUnwind.fillInTrace` and stopped
+    5 frames up; the same batch on `main` passed (control), alone it passed (no request pending at that moment).
+  - **Requests** (`VMScheduler.switchOrRequest`): the timer, UART and device interrupts set the core's byte and
+    return to the task. Two cases still switch at once: the core's IDLE task (scheduler code, no polls, holds
+    nothing), and a request left unanswered for a whole quantum -- code without polls, or polling with IRQs masked
+    -- which is preempted where it is and counted (`forcedPreempts`: what S5 must drive to 0). The yieldpoint
+    does not yield with IRQs masked (the request stays pending), so it switches only where the timer could already
+    preempt. Any switch through `pickNext` clears the core's request. The collector raises cores 1-3's bytes with
+    `gcStop`; an idle core's 1 ms back-off ends early when its byte is set. `safepoints=0` in `/etc/init` restores
+    preemption at any instruction (A/B in one image).
+  - **Counters** on `/threads`: safepoints on, yieldpoints that switched, time-to-safepoint (average, longest),
+    forced preemptions, idle switches, polls left pending with IRQs masked, slow paths for another core, JIT
+    yieldpoints, stop-the-world waits (count, average, longest).
+  - **Cost:** 6,280 yieldpoints baked; image 39,722,916 -> 39,830,260 bytes (+107 KB, +0.3%). Map figures grow
+    (453 KB after 2,029 KB of mapped code, 4,168 methods) because former leaves with loops are framed now.
+  - **QEMU virt, web server + `gcmaps=1`:** 411 yieldpoint switches, **0 forced preemptions**, time-to-safepoint
+    11 us average / 4 ms longest; shadow `tasks=12/skip0` -- every suspended task stopped at a mapped site. ChmRaceProbe:
+    4 tasks walked, 0 skipped, 0 map errors. The stop-the-world wait did NOT improve on QEMU (8.0 ms average vs 4.1
+    with `safepoints=0`, 11 collections each): the idle cores park only at their timer tick, and their 1 ms idle
+    loop runs only about 1,000 times between collections seconds apart -- QEMU/HVF idle timing, measured with a
+    temporary per-core park log (removed). To be read on the Pi.
+  - **Pi 4, build `0f4fd4f9b12b4491`** (default init; sha256 = host; pages 200). FrameBench, three fresh boots,
+    checksums identical to S2; medians: fib 71.1, locals 35.8, sort 103.8, tree 29.9, strings 23.8, sha256 218.9,
+    bigint 41.5 ms -- sum without dispatch **524.8 vs S2's 475.3 (+10.4%)**: the polls' cost, largest where calls or
+    loop iterations are short (fib +26%, locals +21%, strings +20%). Accepted under the arc's rule 2; the poll is
+    four instructions (movz, movk, ldr, cbz), and a register holding the cell address would make it two.
+  - **Pi 4 with `gcmaps=1`, A/B in one image** (18 page loads + one FrameBench run each; builds `c1fbdb0e8b336115`
+    and `808353e64a0ad7df`): **stop-the-world wait 1 us average, 3 us longest, vs 515 us / 831 us with
+    `safepoints=0`**; 14 collections each, pauses equal (3.10 vs 3.13 s total), 0 map errors in both, ~355 frames
+    walked. Safepoints on: time-to-safepoint under 1 us average, 4.3 ms longest; 1 forced preemption; 35,428
+    yieldpoint switches. (`safepoints=` is read from `/etc/init` after boot, so the off arm's counters include the
+    boot before it took effect.) Default image `a79ce4a5fb171d21` restored.
+  - Tests: CompilerTest checks the poll count (prologue + loop header), the map at both poll sites, the x30 and
+    argument reload, a leaf with a loop becoming framed only with polls, no polls in an `Uninterruptible` class
+    (`NoPollFixture`), and the pragma hash. `make test` + overlaycheck OK; virt 26/26 and raspi4b 25/25 on the
+    concurrency, lock, park/interrupt, timing, trace, TLS, net and `/run` probes.
 - **FRAMES/GC ARC, INCREMENT S2: reference maps, checked in shadow (2026-11-20).** Baseline now records, at every
   call site, which frame slots hold a reference; the collector is unchanged, and with `gcmaps=1` in `/etc/init` it
   compares the maps against its conservative stack scan at every collection.

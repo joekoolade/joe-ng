@@ -28,7 +28,7 @@ import vm.VMStats;
  * The Raspberry Pi 4 (BCM2711) platform: the {@link Platform#OPS} over the VideoCore mailbox, the PM watchdog,
  * EMMC2 and the RNG200. Bound into a {@code --board pi4} image by the writer; nothing calls it by name.
  */
-public final class Bcm2711Platform
+public final class Bcm2711Platform implements magic.Uninterruptible
 {
     private Bcm2711Platform()
     {

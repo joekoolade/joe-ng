@@ -18,7 +18,7 @@ import magic.Address;
  * The BCM2711 mini-UART (AUX / UART1): the register half of the Pi's console. {@link board.Uart} holds the rings,
  * locks and interrupt logic and reaches these through {@link Bcm2711Platform}'s console operations.
  */
-public final class MiniUart
+public final class MiniUart implements magic.Uninterruptible
 {
     private MiniUart()
     {

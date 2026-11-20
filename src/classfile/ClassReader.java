@@ -265,6 +265,77 @@ public final class ClassReader
         return (u2(b, afterCp) & 0x0200) != 0;
     }
 
+    /**
+     * The offset just past the constant pool, from the entry offsets and tags {@link #constantPool} filled: the
+     * last entry's body offset plus its body length.
+     */
+    public static int afterCp(byte[] b, int[] off, int[] tag)
+    {
+        int i = off.length - 1;
+        while (i > 0 && tag[i] == 0)
+        {
+            i -= 1;                                      // the unused second slot of a trailing Long/Double
+        }
+        if (i <= 0)
+        {
+            return 10;
+        }
+        int t = tag[i];
+        int p = off[i];
+        if (t == TAG_UTF8)
+        {
+            return p + 2 + u2(b, p);
+        }
+        if (t == 5 || t == 6)
+        {
+            return p + 8;
+        }
+        if (t == 15)
+        {
+            return p + 3;
+        }
+        if (t == TAG_CLASS || t == 8 || t == 16 || t == 19 || t == 20)
+        {
+            return p + 2;
+        }
+        return p + 4;
+    }
+
+    /**
+     * True if the class directly lists an interface whose internal name has the FNV-1a hash {@code nameHash}
+     * ({@code compiler.Unboxed.hash}). A hash rather than a String: this runs inside the compiler on the metal too,
+     * where the compiler matches class names by hash (see {@code Unboxed.kindOfHash}).
+     */
+    public static boolean implementsDirectly(byte[] b, int[] off, int afterCp, long nameHash)
+    {
+        int n = u2(b, afterCp + 6);
+        int i = 0;
+        while (i < n)
+        {
+            if (utf8Hash(b, classNameOff(b, off, u2(b, afterCp + 8 + i * 2))) == nameHash)
+            {
+                return true;
+            }
+            i += 1;
+        }
+        return false;
+    }
+
+    /** FNV-1a (64-bit) over the bytes of the Utf8 at {@code utf8Off}. */
+    public static long utf8Hash(byte[] b, int utf8Off)
+    {
+        int len = u2(b, utf8Off);
+        long h = 0xcbf29ce484222325L;
+        int j = 0;
+        while (j < len)
+        {
+            h = h ^ u1(b, utf8Off + 2 + j);
+            h = h * 0x100000001b3L;
+            j += 1;
+        }
+        return h;
+    }
+
     /** Offset of {@code fields_count}, i.e. just past the interfaces table. */
     public static int fieldsStart(byte[] b, int afterCp)
     {

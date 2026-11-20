@@ -30,7 +30,7 @@ import vm.VMStats;
  * The QEMU {@code virt} platform: the {@link Platform#OPS} over virtio-rng, with no block device and no firmware.
  * Bound into a {@code --board virt} image by the writer; nothing calls it by name.
  */
-public final class VirtPlatform
+public final class VirtPlatform implements magic.Uninterruptible
 {
     private VirtPlatform()
     {

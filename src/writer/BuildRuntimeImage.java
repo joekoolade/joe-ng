@@ -162,6 +162,7 @@ public final class BuildRuntimeImage
                 + (compiler.Baseline.gcMapCodeWords * 4 / 1024) + " KB of code; " + compiler.Baseline.gcMapsUnsolved
                 + " methods unsolved; methods=" + compiler.RefMaps.statMethods + " sites=" + compiler.RefMaps.statSites
                 + " uniqueWords=" + compiler.RefMaps.statUniqueWords);
+        System.out.println("yieldpoints: " + compiler.Baseline.yieldPollsEmitted + " baked");
         return out;
     }
 

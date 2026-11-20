@@ -3213,6 +3213,82 @@ public final class Baseline
 
     /** The bytecode positions that a BACKWARD branch targets -- every loop's header -- for {@link #emitStopPoll}. */
     private boolean[] loopHeaders;
+    /** The prologue's register arguments: x{@code a} went to local slot {@code argSlot[a]}, for a < this count. */
+    private int prologueArgRegs;
+    private final int[] argSlot = new int[MAX_ARG_REGS];
+    /** This method polls the stop word at its loop headers ({@link #emitStopPoll}). */
+    private boolean stopPollsOn;
+    /** This method has yieldpoints: in its prologue (when framed) and at its loop headers ({@link #emitYieldPoll}). */
+    private boolean yieldPolls;
+    /** Whether this class implements {@code magic/Uninterruptible}: -1 not yet read, else 0 or 1. Per class. */
+    private int uninterruptibleCls = -1;
+    /** FNV-1a of {@code magic/Uninterruptible} (Unboxed.hash); CompilerTest checks it against the name. */
+    public static final long UNINTERRUPTIBLE_HASH = -7359856749976340663L;
+    /** Yieldpoints emitted, over every method this JVM or VM has compiled. */
+    public static long yieldPollsEmitted;
+
+    /** True if the class being compiled implements {@code magic/Uninterruptible}: its code gets no yieldpoints. */
+    private boolean uninterruptible()
+    {
+        if (uninterruptibleCls < 0)
+        {
+            int afterCp = ClassReader.afterCp(classBytes, cpOff, cpTag);
+            uninterruptibleCls = ClassReader.implementsDirectly(classBytes, cpOff, afterCp, UNINTERRUPTIBLE_HASH)
+                    ? 1 : 0;
+        }
+        return uninterruptibleCls != 0;
+    }
+
+    /**
+     * A yieldpoint (frames/GC arc S3): load the request word ({@link Symbols#YIELD_CELL}) and, when any core's byte
+     * is set, call {@link Symbols#YIELDPOINT}, which takes this core's request -- a task switch or a park for a
+     * collection -- and returns. Emitted with an empty operand stack (the prologue, or a loop header at depth 0),
+     * so the call preserves nothing and its reference map holds only the locals. Four instructions and a
+     * never-taken branch while nothing is requested. Like {@link #emitStopPoll}, the helper block leaves the
+     * compiler's operand model as it found it for the code that follows.
+     */
+    private void emitYieldPoll(CodeBuffer cb, boolean prologue)
+    {
+        cb.emitAll(A64Enc.loadImm64(16, symbols.yieldCellAddr()));
+        cb.emit(A64Enc.ldrx(16, 16, 0));
+        int over = cb.emit(A64Enc.cbz(16, 0));                  // nothing requested anywhere: straight on
+        int savedSp = sp;
+        int[] holds = null;
+        if (deepStack)
+        {
+            holds = new int[OP_MAX];
+            for (int i = 0; i < OP_MAX; i++)
+            {
+                holds[i] = regHolds[i];
+            }
+        }
+        emitCall(cb, 0, false, false, SYM_HELPER, Symbols.YIELDPOINT);
+        if (prologue)
+        {
+            // The body starts with the registers its caller left: x30 and the argument registers. Code reads them
+            // there -- Magic.readLR() as a method's FIRST op is the caller-sensitive idiom (getCallerClass, the
+            // trace fill), and a helper entered from a stub reads x0 -- so the slow path, whose call clobbered
+            // them, puts them back from the frame the prologue just wrote.
+            cb.emit(A64Enc.ldrx(30, 31, 0));
+            for (int a = 0; a < prologueArgRegs; a++)
+            {
+                frameLoad(cb, a, localMem(argSlot[a]));
+            }
+        }
+        sp = savedSp;
+        if (holds != null)
+        {
+            for (int i = 0; i < OP_MAX; i++)
+            {
+                regHolds[i] = holds[i];
+            }
+        }
+        cb.set(over, A64Enc.cbz(16, cb.wordCount() - over));
+        if (cb.base() != 0L)
+        {
+            yieldPollsEmitted += 1;
+        }
+    }
 
     private static boolean anyTrue(boolean[] b)
     {
@@ -5283,8 +5359,12 @@ public final class Baseline
         // gets one is no leaf either. As a leaf it saved no LR, and while no stop was pending the call never ran --
         // so it measured fine; the first time a stop was pending ANYWHERE, every polled leaf loop's helper call
         // overwrote x30 and its `ret` jumped back into its own body (the Pi went silent, 2026-11-14).
-        loopHeaders = !isEntry && symbols.implicitChecks() && symbols.stopPolls() && symbols.stopCellAddr() != 0L
-                ? loopHeaders(code) : null;
+        // Yieldpoints (S3) share the loop headers, and the same trap: a poll is a call, so a method with a loop is
+        // never a leaf while it polls. A method with no loop keeps its leaf status -- it gets no prologue poll either,
+        // since a leaf runs for a bounded time and returns.
+        this.stopPollsOn = !isEntry && symbols.implicitChecks() && symbols.stopPolls() && symbols.stopCellAddr() != 0L;
+        this.yieldPolls = !isEntry && symbols.yieldCellAddr() != 0L && !uninterruptible();
+        loopHeaders = stopPollsOn || yieldPolls ? loopHeaders(code) : null;
         if (loopHeaders != null && !anyTrue(loopHeaders))
         {
             loopHeaders = null;                  // no loop: no poll, and the method may stay a leaf
@@ -5345,6 +5425,10 @@ public final class Baseline
             emitPrologue(cb, descOff, isStatic);
         }
         emitSyncEnter(cb, isStatic);         // ACC_SYNCHRONIZED: after the prologue (slot 0 = this), before bci 0
+        if (yieldPolls && saveLR)
+        {
+            emitYieldPoll(cb, true);         // the prologue yieldpoint: arguments are in their frame slots by now
+        }
 
         farBranches = code.length > FAR_BRANCH_BYTECODE;
         fusionBlocked = fusionBlocked(code);
@@ -5409,7 +5493,14 @@ public final class Baseline
             }
             if (loopHeaders != null && loopHeaders[pos] && sp == 0)
             {
-                emitStopPoll(cb, pos);             // a stoppable program: see emitStopPoll
+                if (stopPollsOn)
+                {
+                    emitStopPoll(cb, pos);         // a stoppable program: see emitStopPoll
+                }
+                if (yieldPolls)
+                {
+                    emitYieldPoll(cb, false);      // a loop's yieldpoint: see emitYieldPoll
+                }
             }
             int op = code[pos] & 0xFF;
             curPos = pos;                          // so wide-sensitive lowerings (dup2/pop2) can read wideTop[pc]
@@ -5501,6 +5592,7 @@ public final class Baseline
         int regArgs = total > MAX_ARG_REGS ? ARG_REGS_WITH_PTR : MAX_ARG_REGS;
         int arg = 0;
         int slot = 0;
+        prologueArgRegs = 0;
         if (!isStatic)
         {
             if (inReg(0))
@@ -5511,6 +5603,8 @@ public final class Baseline
             {
                 frameStore(cb, 0, localMem(0));
             }
+            argSlot[0] = 0;
+            prologueArgRegs = 1;
             arg = 1;
             slot = 1;
         }
@@ -5530,6 +5624,11 @@ public final class Baseline
             else
             {
                 frameStore(cb, from, localMem(slot));
+            }
+            if (arg < regArgs)
+            {
+                argSlot[arg] = slot;
+                prologueArgRegs = arg + 1;
             }
             arg++;
             int q = p;

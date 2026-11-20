@@ -20,7 +20,7 @@ import magic.Address;
  * interrupt logic. Runs with its FIFOs OFF (LCR_H.FEN = 0): every received character then raises RXRIS on its own,
  * the behaviour the ring code was written against.
  */
-public final class Pl011
+public final class Pl011 implements magic.Uninterruptible
 {
     private Pl011()
     {
