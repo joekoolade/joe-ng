@@ -5894,7 +5894,7 @@ public final class Loader
         }
         if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalBlock")))
         {
-            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("init0")))             { return VM.blockInitAddr; }  // ()I
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("init0")))             { return board.Block.hwInitAddr; }  // ()I
             if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("read0")))             { return VM.blockReadAddr; }  // (J[BII)I
             if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("write0")))            { return VM.blockWriteAddr; } // (J[BII)I
         }

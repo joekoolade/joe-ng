@@ -12,10 +12,8 @@
 package vm;
 
 import asm.A64Enc;
-import board.bcm2711.Bcm2711;
-import board.bcm2711.Emmc;
-import board.bcm2711.Fat32;
-import board.bcm2711.Reset;
+import board.Block;
+import board.Fat32;
 import board.Uart;
 import classfile.ClassReader;
 import compiler.Baseline;
@@ -224,7 +222,7 @@ final class SelfBuild
             Uart.write(Magic.bytes("PST -> generation "));
             printDec(gen + 1);
             Uart.write(Magic.bytes(", rebooting into the self-written image\n"));
-            Reset.reboot();                                  // never returns
+            Magic.call0(boardRebootAddr);                    // the board's reset; never returns
         }
         Uart.write(Magic.bytes("x\n"));                      // no SD card / size mismatch: skip the reboot
     }
@@ -236,7 +234,7 @@ final class SelfBuild
     static int readGeneration()   // package-private: called by VM.run() (live generation-counter readback)
     {
         long buf = Heap.allocData(512).toLong();
-        if (!Emmc.readBlock(GEN_SECTOR, buf))
+        if (!Block.read(GEN_SECTOR, buf, 1))
         {
             return -1;
         }
@@ -253,7 +251,7 @@ final class SelfBuild
         long buf = Heap.allocData(512).toLong();                          // Heap.alloc zeroes the rest of the sector
         Magic.store32(buf, GEN_MAGIC);
         Magic.store32(buf + 4L, gen);
-        return Emmc.writeBlock(GEN_SECTOR, buf);
+        return Block.write(GEN_SECTOR, buf, 1);
     }
 
     /**
@@ -267,7 +265,7 @@ final class SelfBuild
         discoverImage();
         layoutDataRegions();
         long len = imageEndWord() * 4L;
-        if (Emmc.init() != 0 || !Fat32.mount() || !Fat32.findKernel() || Fat32.kernelSize() != len)
+        if (Block.init() != 0 || !Fat32.mount() || !Fat32.findKernel() || Fat32.kernelSize() != len)
         {
             return false;
         }
@@ -293,7 +291,7 @@ final class SelfBuild
     /** Whether KERNEL8.IMG can be located and its cluster chain rewritten + read back byte-identical. */
     private static boolean fatWriteOk()
     {
-        if (Emmc.init() != 0 || !Fat32.mount() || !Fat32.findKernel())
+        if (Block.init() != 0 || !Fat32.mount() || !Fat32.findKernel())
         {
             return false;
         }
@@ -326,8 +324,8 @@ final class SelfBuild
     private static boolean sdReadOk()
     {
         long sd = Heap.allocData(512).toLong();
-        return Emmc.init() == 0
-            && Emmc.readBlock(0L, sd)
+        return Block.init() == 0
+            && Block.read(0L, sd, 1)
             && Magic.load8(sd + 510L) == 0x55
             && Magic.load8(sd + 511L) == 0xAA;
     }
@@ -343,7 +341,7 @@ final class SelfBuild
             Magic.store32(w + i * 4L, 0x5EED1234 + i);
             i += 1;
         }
-        if (Emmc.init() != 0 || !Emmc.writeBlock(4096L, w) || !Emmc.readBlock(4096L, r))
+        if (Block.init() != 0 || !Block.write(4096L, w, 1) || !Block.read(4096L, r, 1))
         {
             return false;                                  // block 4096 = a scratch sector well past the boot area
         }

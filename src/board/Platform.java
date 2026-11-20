@@ -51,9 +51,11 @@ public final class Platform
         { "boardId()J",                                   "vm/VM.boardIdAddr" },            // MetalBoard.boardId0
         { "setRebootFlags(J)J",                           "vm/VM.boardRebootFlagsAddr" },   // MetalBoard.setRebootFlags0
         { "reboot()V",                                    "vm/VM.boardRebootAddr" },        // MetalBoard.reboot0
-        { "blockInit()J",                                 "vm/VM.blockInitAddr" },          // MetalBlock.init0
+        { "blockInit()J",                                 "board/Block.hwInitAddr" },       // MetalBlock.init0; board.Block.init
         { "blockRead(JLmagic/ObjectReference;JJ)J",       "vm/VM.blockReadAddr" },          // MetalBlock.read0
         { "blockWrite(JLmagic/ObjectReference;JJ)J",      "vm/VM.blockWriteAddr" },         // MetalBlock.write0
+        { "sectorRead(JJJ)J",                             "board/Block.hwReadAddr" },       // board.Block.read (raw address)
+        { "sectorWrite(JJJ)J",                            "board/Block.hwWriteAddr" },      // board.Block.write
         { "entropy(Lmagic/ObjectReference;J)J",           "vm/VM.hwEntropyAddr" },          // MetalRamfs.hwEntropy0
         { "entropyReport()V",                             "vm/VM.entropyReportAddr" },      // the boot "hw rng:" line
         // The console UART's register half; board.Uart (rings, locks, interrupt body) calls these.
