@@ -16,13 +16,12 @@ import magic.Magic;
 import magic.ObjectReference;
 import board.Uart;
 import static vm.VM.*;   // exception-table state + shared helpers stay in VM: handlerTable/Count, jitHandler*,
-                         // unwindLog/Logged, unwindLocBufs, faultDepth, and printHex/printStr/frameSizeAt/
+                         // unwindLog/Logged, faultDepth, and printHex/printStr/frameSizeAt/
                          // jitRegLocalsAt/instanceOf — all reached here by simple name.
 
 /**
  * Stack unwinding + backtrace capture, extracted verbatim from VM.java. {@link #unwind} is the throw engine:
- * it fills the exception's inline backtrace ({@link #captureTrace}), reconstructs the handler's callee-saved
- * locals, then walks frames via {@code VM.frameSizeAt}/{@code VM.jitRegLocalsAt}, resuming into the first
+ * it fills the exception's inline backtrace ({@link #captureTrace}), then walks frames via {@code VM.frameSizeAt}/{@code VM.jitRegLocalsAt}, resuming into the first
  * covering handler ({@link #findHandler}, matching catch types with {@code VM.instanceOf}) or reporting an
  * uncaught exception at the top. It is reached only by address: image {@code athrow} lowers to the UNWIND
  * helper (WriterSymbols), the metal JIT and the fault path ({@code VM.throwFromFault}) call the writer-stashed
@@ -326,30 +325,11 @@ final class VMUnwind
             }
         }
         captureTrace(exc, pc, sp);                     // fill exc's backtrace if not already captured at the throw site
-        if (unwindLocBufs.isZero())
-        {
-            unwindLocBufs = Heap.allocData(MAX_TASKS * 16 * 8);    // 16 callee-saved local slots per task
-        }
-        // this task's own, never another's
-        Address unwindLocBuf = unwindLocBufs.plus((long) curTask() * 16L * 8L);
-        // Seed with the register snapshot AT THE THROW: this method's OWN prologue saved the throwing frame's
-        // x19..x28 (10 slots) at [our_sp + 8 + k*8]. That captures every handler local a shallow-regLocals callee
-        // preserved but never re-saved (its value flowed through untouched into our prologue's save). Slots that
-        // an intervening frame DID save get overwritten below as we pop that frame.
-        Address mysp = Address.fromLong(Magic.readSP());
-        long ls = 0L;
-        while (ls < 16L)
-        {
-            if (ls < 10L)
-            {
-                unwindLocBuf.plus(ls * 8L).store(mysp.plus(8L + ls * 8L).loadLong());
-            }
-            else
-            {
-                unwindLocBuf.plus(ls * 8L).store(0L);
-            }
-            ls += 1L;
-        }
+        // NO REGISTER RECONSTRUCTION (frames/GC arc S1). Every framed method keeps its locals in its own frame,
+        // which popping the frames above it leaves intact, and none of them touches x19..x28 -- so the handler
+        // finds its locals where it left them, and the frameless entry's register locals were never disturbed.
+        // This retires the "local reads as garbage after a caught throw" bug class the old callee-saved
+        // reconstruction kept producing.
         while (true)
         {
             long h = findHandler(pc, exc);
@@ -359,8 +339,6 @@ final class VMUnwind
                 printHex(pc);
                 Uart.write(Magic.bytes(" nrl="));
                 printHex(jitRegLocalsAt(pc));
-                Uart.write(Magic.bytes(" buf0="));
-                printHex(unwindLocBuf.loadLong());
                 // addJitFrame writes the frame and local tables in LOCKSTEP and both compaction sites treat
                 // them together, so these counts must be equal. If they are not, the tables have desynced and
                 // a pc can be in one and absent from the other -- which is exactly what the -1s above show.
@@ -372,14 +350,10 @@ final class VMUnwind
             }
             if (h != 0L)
             {
-                // unwindLocBuf now holds the handler's live locals: each frame we popped saved its CALLER's
-                // x19.. registers, and the last frame popped (the one the handler called into) saved the handler's
-                // own locals -- so a catch/finally that reads a local set before the try sees the live value.
                 faultDepth = 0;                                            // fault resolved by a handler: a later fault
                                                                            //   (incl. one inside the handler) is FRESH,
                                                                            //   not a nested unwind fault
-                long hrl = jitRegLocalsAt(pc);                             // -1 = unknown; resume ignores it,
-                Magic.resume(h, sp.toLong(), excWord, hrl < 0L ? 0L : hrl, unwindLocBuf.toLong());  //   but never pass it a negative
+                Magic.resume(h, sp.toLong(), excWord, 0L, 0L);             // no registers to restore (see above)
             }
             long fs = frameSizeAt(pc);
             if (fs == 0L)
@@ -513,12 +487,7 @@ final class VMUnwind
                     Magic.wfe();    // uncaught at the top
                 }
             }
-            // Overwrite ONLY the slots this frame saved (its caller's x19.. at [sp+8+k*8]); leave higher slots to
-            // the seed / deeper frames. When the caller turns out to be the handler, these ARE its pre-try locals;
-            // the frame the handler called into is popped last, so it wins for the slots it saved.
-            // -1 = no local entry covers this pc (today: every IMAGE frame, since the image lookup is off);
-            // 0 = the frame genuinely saved no callee-saved register. Both mean "copy nothing", but they are
-            // no longer the same answer, so a future gap can be reported instead of silently skipped.
+            // Diagnostics only since S1 (nothing is copied): -1 = no local entry covers this pc, 0 = none saved.
             long nrl = jitRegLocalsAt(pc);
             if (Loader.UNWIND_DUMP && nrl < 0L && pc.toLong() >= Heap.CODE_BASE)
             {
@@ -580,12 +549,6 @@ final class VMUnwind
                 Uart.write(Magic.bytes(" x20@16="));
                 printHex(sp.plus(16L).loadLong());
                 Uart.putc((byte) 0x0A);
-            }
-            long k2 = 0L;
-            while (k2 < nrl && k2 < 16L)
-            {
-                unwindLocBuf.plus(k2 * 8L).store(sp.plus(8L + k2 * 8L).loadLong());
-                k2 += 1L;
             }
             pc = sp.loadAddress().minus(4L);        // the call site (return address - one instruction)
             sp = sp.plus(fs);                       // pop this frame

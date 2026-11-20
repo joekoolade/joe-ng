@@ -83,10 +83,11 @@ public final class UnboxedTest
         same(fx, "lenLong", "([J)I", "lenRefArr", "(Lmagic/ObjectReferenceArray;)I");
         same(fx, "zeroAtAddr", "(Lmagic/AddressArray;I)Z", "nullAtRefArr", "(Lmagic/ObjectReferenceArray;I)Z");
 
-        // x9 is operand slot 0, x10 slot 1, x11 slot 2; locals live in x19.. (after normal(): in first-use order).
-        // Every method below moves its arguments into locals first (x0 -> x19, x1 -> x20, ...) and returns in x0.
-        int[] in1 = { A64Enc.movReg(19, 0), A64Enc.movReg(9, 19) };
-        int[] in2 = { A64Enc.movReg(19, 0), A64Enc.movReg(20, 1), A64Enc.movReg(9, 19), A64Enc.movReg(10, 20) };
+        // x9 is operand slot 0, x10 slot 1, x11 slot 2; locals live in frame slots (after normal(): numbered 0, 8, 16..
+        // in first-use order). Every method below stores its arguments to their local slots first (x0 -> [sp], x1 ->
+        // [sp, #8], ...), loads them back onto the operand stack, and returns in x0.
+        int[] in1 = { A64Enc.strx(0, 31, 0), A64Enc.ldrx(9, 31, 0) };
+        int[] in2 = { A64Enc.strx(0, 31, 0), A64Enc.strx(1, 31, 8), A64Enc.ldrx(9, 31, 0), A64Enc.ldrx(10, 31, 8) };
         int[] ret = { A64Enc.movReg(0, 9), A64.ret() };
         T.eqWords("isZero", cat(in1, new int[] { A64Enc.cmpImm(9, 0), A64Enc.cset(9, A64Enc.EQ) }, ret),
                 normal(compile(fx, "isZero", "(Lmagic/Address;)Z")));
@@ -98,8 +99,8 @@ public final class UnboxedTest
                 normal(compile(fx, "zero", "()Lmagic/Address;")));
         T.eqWords("loadShort(Offset)", cat(in2, new int[] { A64Enc.addReg(9, 9, 10), A64Enc.ldrsh(9, 9, 0) }, ret),
                 normal(compile(fx, "loadShortOff", "(Lmagic/Address;Lmagic/Offset;)I")));
-        T.eqWords("store(byte, Offset)", new int[] { A64Enc.movReg(19, 0), A64Enc.movReg(20, 1), A64Enc.movReg(21, 2),
-            A64Enc.movReg(9, 19), A64Enc.movReg(10, 20), A64Enc.movReg(11, 21), A64Enc.addReg(16, 9, 11),
+        T.eqWords("store(byte, Offset)", new int[] { A64Enc.strx(0, 31, 0), A64Enc.strx(1, 31, 8), A64Enc.strx(2, 31, 16),
+            A64Enc.ldrx(9, 31, 0), A64Enc.ldrx(10, 31, 8), A64Enc.ldrx(11, 31, 16), A64Enc.addReg(16, 9, 11),
             A64Enc.strb(10, 16, 0), A64.ret() },
                 normal(compile(fx, "storeByteOff", "(Lmagic/Address;BLmagic/Offset;)V")));
         fused(fx);
@@ -276,15 +277,18 @@ public final class UnboxedTest
     }
 
     /**
-     * The words without what local-register allocation alone decides: {@code sub/add sp, sp, #n}, the
-     * {@code str/ldr x19..x28, [sp, #k]} that save and restore callee-saved registers, and the numbering of x19..x28
-     * in register moves (renumbered by first use). The fixtures touch locals only through moves, so nothing else
-     * changes -- and anything else that differs is a real difference.
+     * The words without what local allocation alone decides: {@code sub/add sp, sp, #n}; the frame offset of each
+     * local's slot in {@code str/ldr xN, [sp, #k]} (renumbered 0, 8, 16.. by first use -- a {@code long} parameter
+     * takes two local slots where an {@code Address} takes one, so the raw offsets differ); and, for the frameless
+     * entry's register locals, the {@code str/ldr x19..x28, [sp, #k]} saves and the numbering of x19..x28 in register
+     * moves. The fixtures touch locals only through those, so anything else that differs is a real difference.
      */
     private static int[] normal(int[] w)
     {
         int[] map = new int[32];
         int next = 19;
+        int[] slotMap = new int[4096];
+        int nextSlot = 1;                               // 0 = unmapped; slot k (1-based) -> offset (k-1)*8
         int[] out = new int[w.length];
         int n = 0;
         for (int x : w)
@@ -297,6 +301,16 @@ public final class UnboxedTest
             if (((x & 0xFFC003E0) == 0xF90003E0 || (x & 0xFFC003E0) == 0xF94003E0) && rt >= 19 && rt <= 28)
             {
                 continue;                               // str/ldr x19..x28, [sp, #imm]
+            }
+            if (((x & 0xFFC003E0) == 0xF90003E0 || (x & 0xFFC003E0) == 0xF94003E0) && rt != 30)
+            {
+                int imm = (x >> 10) & 0xFFF;            // str/ldr xN, [sp, #imm*8]: a local's (or spill) slot
+                if (slotMap[imm] == 0)
+                {
+                    slotMap[imm] = nextSlot;
+                    nextSlot = nextSlot + 1;
+                }
+                x = (x & ~(0xFFF << 10)) | ((slotMap[imm] - 1) << 10);
             }
             if ((x & 0xFFE0FFE0) == 0xAA0003E0)         // mov xd, xm (orr xd, xzr, xm)
             {

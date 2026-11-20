@@ -34,8 +34,12 @@ public final class Baseline
     // demo deep10 did for as long as the trampolines saved only x0..x7; fail loudly instead.
     private static final int MAX_ARG_REGS = 16;
     private static final int OP_MAX = 7;
-    private static final int LOC_BASE = 19;  // locals -> x19..x28
-    private static final int LOC_MAX = 10;   // beyond this a local lives in the frame
+    // MEMORY-BASED FRAMES (frames/GC arc S1, PLAN.md): every local of a framed method lives in a fixed frame slot,
+    // so no Baseline method saves, uses or restores x19..x28. The ONE exception is the frameless image entry
+    // (VM.boot, isEntry): it has no frame to put locals in, so its first LOC_MAX locals stay in x19..x28 -- which
+    // nothing else touches any more, so they survive every call and every caught exception untouched.
+    private static final int LOC_BASE = 19;  // the entry method's locals -> x19..x28
+    private static final int LOC_MAX = 10;   // ... and how many of them
     private static final int SCRATCH = 16;   // IP0 — not a local or operand register
 
     // The shared cp view (byte[] + offset/tag tables) that the metal loader also
@@ -63,7 +67,8 @@ public final class Baseline
     private boolean csCheck;      // this method does NOT own x21 and is being checked
     private int csId;             // the id printed at compile time and again if the check fires
     private int overflowBase;     // frame offset of local slot LOC_MAX
-    private int regLocals;        // locals held in x19.. (min(maxLocals, LOC_MAX))
+    private int regLocals;        // locals held in x19..: min(maxLocals, LOC_MAX) for the entry, 0 for every other method
+    private int locMax;           // slots below this live in x19..: LOC_MAX for the entry method, 0 otherwise
     private int overflowLocals;   // locals held in the frame (maxLocals - LOC_MAX)
     private int maxLocals;
     // #43 operand-stack spill: a pre-pass (computeDepths) finds the ACTUAL peak depth; when it exceeds OP_MAX
@@ -1080,15 +1085,15 @@ public final class Baseline
         }
         return LOC_BASE + slot;
     }
-    /** True if this local lives in a register rather than the frame. */
-    private static boolean inReg(int slot)
+    /** True if this local lives in a register rather than the frame (only ever in the frameless entry method). */
+    private boolean inReg(int slot)
     {
-        return slot < LOC_MAX;
+        return slot < locMax;
     }
-    /** Frame offset of an overflow local (slot &gt;= LOC_MAX). */
+    /** Frame offset of local {@code slot} (one not {@link #inReg}): the local area starts at slot {@code locMax}. */
     private int localMem(int slot)
     {
-        return overflowBase + (slot - LOC_MAX) * 8;
+        return overflowBase + (slot - locMax) * 8;
     }
     private void expectEmpty(int site)
     {
@@ -3379,7 +3384,8 @@ public final class Baseline
         }
         else
         {
-            cb.emit(A64Enc.movReg(0, localReg(0)));             // x0 = this (an instance method always has slot 0)
+            frameLoad(cb, 0, localMem(0));                      // x0 = this (an instance method always has slot 0;
+                                                                // never the frameless entry, so always in the frame)
         }
         cb.emit(A64Enc.movFromSp(1));                           // x1 = this frame's SP -- the unwinder's key
         symbols.callHelper(cb, Symbols.MON_ENTER_SYNC);
@@ -4294,7 +4300,7 @@ public final class Baseline
             cb.emit(A64Enc.movReg(pushReg(), 19));             // x19: callee-saved, so it survives what clobbers x0
         }
         else if (id == Intrinsics.RESUME)
-        // restore the handler's callee-saved locals, exc->x9, SP=sp, br pc (no return)
+        // exc->x9, SP=sp, br pc (no return); the handler's locals are already in its frame
         {
             int locBuf = popReg();                              // base of the reconstructed-locals buffer
             int nloc = popReg();                                // regLocals of the handler's method
@@ -4303,20 +4309,9 @@ public final class Baseline
             int pc = popReg();
             cb.emit(A64Enc.movReg(16, pc));                     // x16 = target (x9 gets clobbered below)
             cb.emit(A64Enc.movReg(17, spv));                    // x17 = handler frame SP (installed as the new SP)
-            cb.emit(A64Enc.movReg(18, locBuf));                 // x18 = reconstructed-locals buffer base
-            // Restore ALL callee-saved registers x19..x28 from [x18 + k*8]. The unwinder rebuilt the full
-            // callee-saved state at the handler-frame level: slots [0..handler.regLocals-1] are the handler's
-            // own pre-try locals (so a catch reads the live value), and the HIGHER slots hold the handler's
-            // CALLER's live registers that the popped frames clobbered but neither the handler nor the popped
-            // frames' (skipped) epilogues restored -- restoring only the handler's `nloc` left those clobbered,
-            // so a caller local held in x(19+nloc.. ) came back garbage (a leaked code address). `nloc` is now
-            // unused but still consumed (a 0 for a handler with no reg-locals is harmless: every slot is seeded).
-            int k = 0;
-            while (k < LOC_MAX)
-            {
-                cb.emit(A64Enc.ldrx(LOC_BASE + k, 18, k * 8));
-                k += 1;
-            }
+            // No callee-saved registers to restore (frames/GC arc S1): the handler's locals are in ITS frame, which
+            // the unwind leaves intact, and no framed method touches x19..x28 -- so they still hold what the
+            // frameless entry (VM.boot) put there. `nloc` and `locBuf` are consumed and ignored.
             cb.emit(A64Enc.movReg(9, exc));                     // exception -> handler's stack slot (x9)
             cb.emit(A64Enc.movToSp(17));
             cb.emit(A64Enc.br(16));
@@ -5242,11 +5237,12 @@ public final class Baseline
         }
         this.nonLeaf = isNonLeaf(code) || this.isSync || loopHeaders != null;
         this.saveLR = !isEntry && nonLeaf;
-        // Locals live in callee-saved x19..x28; a method needing more keeps the
-        // overflow in the frame (see localMem). Slots 0..LOC_MAX-1 stay in registers.
-        this.regLocals = maxLocals < LOC_MAX ? maxLocals : LOC_MAX;
-        this.overflowLocals = maxLocals > LOC_MAX ? maxLocals - LOC_MAX : 0;
-        // frame: [LR?][saved local regs][overflow locals][operand spill area]
+        // Every local of a framed method lives in the frame (see localMem); only the frameless entry keeps its
+        // first LOC_MAX in x19..x28 (it has no frame -- and a local past those would be a compile failure there).
+        this.locMax = isEntry ? LOC_MAX : 0;
+        this.regLocals = maxLocals < locMax ? maxLocals : locMax;
+        this.overflowLocals = maxLocals > locMax ? maxLocals - locMax : 0;
+        // frame: [LR?][saved local regs: none since S1][locals][operand spill area]
         this.localSaveBase = saveLR ? 8 : 0;
         this.overflowBase = localSaveBase + regLocals * 8;
         this.spillBase = overflowBase + overflowLocals * 8;
@@ -5425,7 +5421,14 @@ public final class Baseline
         int slot = 0;
         if (!isStatic)
         {
-            cb.emit(A64Enc.movReg(localReg(0), 0));
+            if (inReg(0))
+            {
+                cb.emit(A64Enc.movReg(localReg(0), 0));
+            }
+            else
+            {
+                frameStore(cb, 0, localMem(0));
+            }
             arg = 1;
             slot = 1;
         }
