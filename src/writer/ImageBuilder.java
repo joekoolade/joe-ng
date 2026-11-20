@@ -1354,6 +1354,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         fillStatic(image, staticWord, "vm/VM.wallEpochMs", BuildEpoch.MILLIS);   // the wall clock's lower bound
         fillStatic(image, staticWord, "board/Board.virt", boardVirt ? 1L : 0L);   // which machine (--board)
         fillStatic(image, staticWord, "compiler/Target.genericTimer", compiler.Target.genericTimer);   // the JIT's timer
+        fillStatic(image, staticWord, "board/Board.ramPhys", board.Board.ramPhys);   // RAM's physical base
         fillStatic(image, staticWord, "vm/VM.imageSymTable", addr(symTableWord));
         fillStatic(image, staticWord, "vm/VM.imageSymCount", symCount);
         String launchKey = BaselineCompiler.key("vm/Loader", "launchMain", "([B[B)V");
@@ -2466,20 +2467,28 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     }
 
     /**
-     * Set {@link compiler.Target} on the host from the --board platform class, before anything is compiled: its
-     * {@code GENERIC_TIMER} constant says which Arm generic timer the board ticks on. A platform without one stops
-     * the build (as a missing {@code board.Platform.OPS} method does). Baked into the image by {@code fillStatic}.
+     * Set {@link compiler.Target} and {@code board.Board.ramPhys} on the host from the --board platform class,
+     * before anything is compiled: its {@code GENERIC_TIMER} says which Arm generic timer the board ticks on, its
+     * {@code RAM_PHYS} where RAM is physically ({@code Board.phys}). A platform missing either stops the build (as a
+     * missing {@code board.Platform.OPS} method does). Both are baked into the image by {@code fillStatic}.
      */
     static void bindTarget()
+    {
+        compiler.Target.genericTimer = platformConstant("GENERIC_TIMER");
+        board.Board.ramPhys = platformConstant("RAM_PHYS");
+    }
+
+    /** A {@code public static long} constant of the --board platform class; the build stops if it is missing. */
+    private static long platformConstant(String name)
     {
         String cls = platformClass().replace('/', '.');
         try
         {
-            compiler.Target.genericTimer = Class.forName(cls).getField("GENERIC_TIMER").getLong(null);
+            return Class.forName(cls).getField(name).getLong(null);
         }
         catch (ReflectiveOperationException e)
         {
-            throw new IllegalStateException("platform " + cls + " declares no public static long GENERIC_TIMER", e);
+            throw new IllegalStateException("platform " + cls + " declares no public static long " + name, e);
         }
     }
 

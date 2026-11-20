@@ -72,6 +72,9 @@ public final class Platform
         { "irqMask(J)V",                                  "board/Irq.hwMaskAddr" },
         { "irqUnmask(J)V",                                "board/Irq.hwUnmaskAddr" },
         { "irqDevice(J)J",                                "board/Irq.hwDeviceAddr" },
+        // Memory map and secondary cores; VMScheduler's buildPageTables and bringUpSecondaries call these.
+        { "pageBlock(J)J",                                "vm/VM.pageBlockAddr" },
+        { "startSecondaries(J)V",                         "vm/VM.startSecondariesAddr" },
         // The network link (Pi: the CYW43455 WiFi chip; virt: virtio-net); net.Link calls these.
         { "netPresent()J",                                "net/Link.hwPresentAddr" },
         { "netUp(J)V",                                    "net/Link.hwUpAddr" },
