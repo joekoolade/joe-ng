@@ -9,7 +9,7 @@
 #
 # It copies the test into joe-ng's test/jdk/ mirror, compiles it against the guest java.base overlay into the
 # classDir (out/), points ramfs/etc/init at it, builds a throwaway image (/tmp/jdktest.img -- kernel8.img
-# untouched), boots QEMU for ~25 s, and prints the launch..end slice. The NetDemo manifest is restored unless
+# untouched), boots QEMU for ~25 s, and prints the launch..end slice. The committed manifest is restored unless
 # --keep is given. Real ground truth is a Pi 4; this is the fast triage loop.
 set -eu
 
