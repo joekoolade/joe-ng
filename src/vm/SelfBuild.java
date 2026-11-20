@@ -27,7 +27,7 @@ import static vm.VM.*;   // the retired engine references VM's live state (findC
  * The DEPRECATED M5.5c/M5.5d metacircular self-build + image-reproduction engine, extracted verbatim from
  * VM.java (which had grown past 8000 lines) to keep VM readable. It is RETIRED -- the host
  * {@code writer.BuildRuntimeImage} is the source of truth (see {@code VM.SELF_BUILD}, permanently false) -- and
- * kept only as reference, like {@code vm.EmitBoot}. {@code VM.run()} calls {@link #demo(int)} solely under a dead
+ * kept only as reference, like {@code board.bcm2711.EmitBoot}. {@code VM.run()} calls {@link #demo(int)} solely under a dead
  * {@code if (SELF_BUILD)} branch, so none of this is reachable at runtime. References to VM's live state are
  * qualified {@code VM.*} (findClass, printDec, addJitFrame/addJitHandler, the frame/handler tables, the
  * writer-stashed helper addresses, and the embedded blob byte[]s).

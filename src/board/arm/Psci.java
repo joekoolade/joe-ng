@@ -22,8 +22,8 @@ import vm.VMScheduler;
 
 /**
  * The Arm Power State Coordination Interface, called by HVC: how a machine whose firmware (or hypervisor)
- * implements PSCI starts its secondary cores -- QEMU virt today. Reached through {@code VirtPlatform
- * .startSecondaries} ({@code board.Platform.OPS}).
+ * implements PSCI starts its secondary cores and resets itself -- QEMU virt today. Reached through {@code
+ * VirtPlatform.startSecondaries} and {@code VirtPlatform.reboot} ({@code board.Platform.OPS}).
  */
 public final class Psci
 {
@@ -104,6 +104,29 @@ public final class Psci
 
     /** PSCI 0.2 CPU_ON, SMC64/HVC64 calling convention. */
     private static final long PSCI_CPU_ON = 0xC400_0003L;
+
+    /** PSCI 0.2 SYSTEM_RESET (SMC32/HVC32): reset the whole machine; never returns. */
+    private static final long PSCI_SYSTEM_RESET = 0x8400_0009L;
+
+    /** Where {@link #systemReset} emits its call: past the CPU_ON call ({@code SEC_STUB + 0x200}) in the stub page. */
+    private static final long RESET_CALL = VM.SEC_STUB + 0x300L;
+
+    /**
+     * Reset the machine with PSCI SYSTEM_RESET. There is no HVC intrinsic, so -- like the CPU_ON call above -- the
+     * call is a few emitted words: x0 = the function id, HVC #0, and a WFE loop should the hypervisor return (QEMU
+     * with {@code -no-reboot} exits instead of resetting, which is how {@code scripts/virt.sh} runs it).
+     */
+    public static void systemReset()
+    {
+        Address call = Address.fromLong(RESET_CALL);
+        int c = emitConst(call, 0, 0, PSCI_SYSTEM_RESET);
+        c = emit(call, c, A64Enc.hvc0());
+        int park = c;
+        c = emit(call, c, A64Enc.wfe());
+        c = emit(call, c, A64Enc.b(park - c));
+        Heap.publishCode(call, Address.fromLong(RESET_CALL + c * 4L));
+        long u = Magic.call0(RESET_CALL);
+    }
 
     /**
      * The tables a secondary turns its MMU on with ({@code VM.PT_BOOT}): an L1 that shares three of the

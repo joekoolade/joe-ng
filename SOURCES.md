@@ -33,7 +33,7 @@ logs what informed each piece so encodings and boot facts are auditable.
   register map at `0xFE215000` and its init sequence (enable, 8-bit LCR, clear
   FIFOs, baud divisor, CNTL tx/rx enable), plus GPIO GPFSEL1 ALT5 for GPIO14/15
   and the BCM2711 `GPIO_PUP_PDN_CNTRL_REG0` pull register — all in
-  `board/bcm2711/Bcm2711.java`, used by M1 `vm/EmitBoot.java`. Baud divisor for
+  `board/bcm2711/Bcm2711.java`, used by M1 `board/bcm2711/EmitBoot.java`. Baud divisor for
   115200 depends on the pinned core clock and needs on-silicon calibration.
 
 ## QEMU `virt` target (board/Board.java, writer/VirtPrelude.java)

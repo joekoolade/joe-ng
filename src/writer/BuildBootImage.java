@@ -12,7 +12,7 @@
 package writer;
 
 import asm.CodeBuffer;
-import vm.EmitBoot;
+import board.bcm2711.EmitBoot;
 
 import java.io.IOException;
 import java.nio.file.Path;

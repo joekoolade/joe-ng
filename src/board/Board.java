@@ -31,6 +31,15 @@ public final class Board
     {
     }
 
+    /**
+     * The fixed scratch every board's drivers place their device buffers in, {@code [DRIVER_SCRATCH,
+     * DRIVER_SCRATCH_END)}: the Pi's mailbox property buffer, virt's virtio-rng queue page. The VM's fixed-scratch
+     * map ({@code vm.ScratchMap}) reserves this range and names no board's buffer; a driver that needs a fixed
+     * buffer takes it from here.
+     */
+    public static final long DRIVER_SCRATCH = 0x0305_0000L;
+    public static final long DRIVER_SCRATCH_END = 0x0305_9000L;
+
     /** Physical base of RAM on {@code virt}; virtual 0 maps here. */
     public static final long VIRT_RAM_PHYS = 0x4000_0000L;
 

@@ -39,7 +39,7 @@ public final class VirtioRng
     }
 
     /** The virtqueue page (virtual): inside the Pi mailbox's scratch slot, which a virt image never uses. */
-    public static final long PAGE = 0x0305_8000L;
+    public static final long PAGE = board.Board.DRIVER_SCRATCH + 0x8000L;   // ends at DRIVER_SCRATCH_END
     public static final long PAGE_END = PAGE + 0x1000L;
     private static final long DESC = PAGE;               // QSIZE descriptors, 16 bytes each
     private static final long AVAIL = PAGE + 0x100L;      // flags, idx, ring[QSIZE] (u16s)

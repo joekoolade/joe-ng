@@ -148,8 +148,14 @@ public final class VirtioNet
         return base == 0L ? Address.zero() : mac;
     }
 
-    /** Find the device and bring it to DRIVER_OK with both queues set up and every receive buffer posted. */
-    static boolean init()
+    /** Whether the machine has a virtio-net card (QEMU {@code -device virtio-net-device}); touches nothing. */
+    public static boolean present()
+    {
+        return find() != 0L;
+    }
+
+    /** The MMIO base of the first virtio-net card, or 0 when there is none. */
+    private static long find()
     {
         int slot = 0;
         while (slot < MMIO_SLOTS)
@@ -157,11 +163,17 @@ public final class VirtioNet
             long b = MMIO_BASE + slot * MMIO_STRIDE;
             if (reg(b, REG_MAGIC) == MAGIC && reg(b, REG_DEVICE_ID) == DEVICE_NET)
             {
-                base = b;
-                break;
+                return b;
             }
             slot += 1;
         }
+        return 0L;
+    }
+
+    /** Find the device and bring it to DRIVER_OK with both queues set up and every receive buffer posted. */
+    static boolean init()
+    {
+        base = find();
         if (base == 0L)
         {
             board.Uart.write(Magic.bytes("net: no virtio-net device (-device virtio-net-device)\n"));
@@ -243,7 +255,7 @@ public final class VirtioNet
         setReg(REG_STATUS, ST_ACKNOWLEDGE | ST_DRIVER | ST_FEATURES_OK | ST_DRIVER_OK);
         Magic.dsb();
         setReg(REG_QUEUE_NOTIFY, RX);
-        intid = MMIO_FIRST_INTID + slot;
+        intid = MMIO_FIRST_INTID + (int) ((base - MMIO_BASE) / MMIO_STRIDE);
         board.Uart.write(Magic.bytes("net: virtio-net mac "));
         net.Ip.printMac(mac);
         board.Uart.write(Magic.bytes(" irq "));
