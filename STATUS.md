@@ -4,14 +4,28 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **PLATFORM, INCREMENT P10: the WiFi chip's SDIO host behind a board-neutral class -- `board.cyw43` names no board
+  (2026-11-19).**
+  - New abstract **`board.SdioHost`**: `init`, `control1`, `setClock`, `cmd52Read/Write`, `cmd53Read/Write`,
+    `enable/mask/unmask/clearCardInt`. Instance methods (subclassing), not `Platform.OPS`: a CMD53 takes six
+    arguments and runs on every received frame, and `Magic.callN` stops at three.
+  - **`board.bcm2711.Bcm2711SdioHost extends SdioHost`** forwards to the static `Sdio` (unchanged).
+    `Bcm2711Platform.netUp` sets `Cyw43.sdio = new Bcm2711SdioHost()` beside `Cyw43.irq`; the driver's 50
+    `Sdio.` calls are `sdio.` now, and its `board.bcm2711` import is gone.
+  - **Validated:** `make test` + overlaycheck OK; raspi4b TickProbe/ExitProbe/RunProbe/ChmRaceProbe/SpawnRaceProbe/
+    NetStaticsProbe 6/6; virt TickProbe/ExitProbe/ChmRaceProbe/NetTcpProbe 4/4. `strings`: the Pi image carries
+    `Bcm2711SdioHost`/`SdioHost`/`Cyw43`; the virt image none of them nor `Sdio`. QEMU has no CYW43: the SDIO path
+    needs the Pi. Not yet on a Pi.
 - **PLATFORM, INCREMENT P9: the WiFi chip's interrupt line comes from the platform (2026-11-19).**
   - The CYW43 driver (`board.cyw43`) no longer names `Bcm2711.SDIO_SPI`. New **`Cyw43.irq`** (default
     `Irq.NONE`) is the line the host board wired the chip's SDIO card interrupt to; `Bcm2711Platform.netUp` sets it
     to SPI 158 before `Wifi.bringUp`. The ISR's mask, `enableWifiIrq`'s enable and the two re-arms (`Cyw43`,
     `WlanPoll`) use it. `Bcm2711Platform.irqDevice` still matches SPI 158 -- the board's own table.
-  - Left: `Cyw43` still imports `board.bcm2711.Sdio` (the Pi's SDHCI host controller).
+  - Left: `Cyw43` still imports `board.bcm2711.Sdio` (the Pi's SDHCI host controller) -- P10.
   - **Validated:** `make test` + overlaycheck OK; raspi4b TickProbe/ExitProbe/RunProbe/ChmRaceProbe/SpawnRaceProbe/
-    NetStaticsProbe 6/6. QEMU has no CYW43, so the interrupt path itself needs the Pi. Not yet on a Pi.
+    NetStaticsProbe 6/6. QEMU has no CYW43, so the interrupt path itself needs the Pi. **PI-VALIDATED 2026-11-19:**
+    push of build `4fa28b09023d6d25` -- trial boot up in 27 s over WiFi and committed; pages 200; `/net` join 4,209 ms,
+    1 attempt, tx queued 38, dropped 0.
 - **PLATFORM, INCREMENT P8: the last board names out of the VM, and a reset on virt (2026-11-19).**
   - **`ScratchMap` names no board's buffer.** New `Board.DRIVER_SCRATCH`..`DRIVER_SCRATCH_END` (0x0305_0000..
     0x0305_9000) is the one range board drivers take fixed buffers from: `Bcm2711.MBOX_BUFFER` and

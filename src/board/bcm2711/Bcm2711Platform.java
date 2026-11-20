@@ -223,6 +223,7 @@ public final class Bcm2711Platform
     {
         Cyw43.runDemo = demo != 0L;
         Cyw43.irq = Bcm2711.SDIO_SPI;                     // the chip's SDIO card interrupt: EMMC's SPI 158
+        Cyw43.sdio = new Bcm2711SdioHost();               // ... and the host it hangs off (legacy EMMC)
         Wifi.bringUp();
     }
 

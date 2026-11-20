@@ -11,7 +11,7 @@
  */
 package board.cyw43;
 
-import board.bcm2711.Sdio;
+import board.SdioHost;
 import magic.Address;
 import magic.Magic;
 import vm.Heap;
@@ -19,7 +19,7 @@ import vm.VM;
 
 /**
  * Cypress CYW43455 WiFi chip driver over SDIO (PLAN.md WiFi §M1). This slice (M1a) is the first flashable
- * checkpoint: enumerate the chip as an SDIO device (via {@link Sdio}), dump its CCCR, enable the backplane
+ * checkpoint: enumerate the chip as an SDIO device (via its {@link SdioHost}, {@link #sdio}), dump its CCCR, enable the backplane
  * function (F1), request the ALP clock, then read the chip's identity through the backplane window — proving
  * the whole SDIO link (pins, host controller, CMD5/52/53, backplane addressing) end to end before the much
  * larger firmware-upload step (M1b).
@@ -48,7 +48,7 @@ public final class Cyw43
     private static final int FBR2_BLKSIZE = 0x210;   // F2's FBR: I/O block size, low byte (high byte at +1)
     static final int F2_BLOCK = 512;                 // F2 block size (brcmfmac's SDIO_FUNC2_BLOCKSIZE)
     private static final int SDHCI_CARD_INT = 1 << 8;   // SDHCI INTERRUPT: SDIO device asserted its IRQ
-    private static final int CCCR_BUS  = 0x07;  // bus interface control (bus width — set by Sdio.init)
+    private static final int CCCR_BUS  = 0x07;  // bus interface control (bus width — set by the host's init)
     private static final int CCCR_CAP  = 0x08;  // card capability
     private static final int CCCR_REV  = 0x00;  // CCCR/SDIO revision
 
@@ -77,7 +77,7 @@ public final class Cyw43
     {
         buf = Heap.allocData(64);
 
-        int rc = Sdio.init();                            // pins + host + CMD5/3/7 enumerate + 4-bit
+        int rc = sdio.init();                            // pins + host + CMD5/3/7 enumerate + 4-bit
         log(Magic.bytes("sdio init rc="), rc);
         if (rc != 0)
         {
@@ -85,40 +85,40 @@ public final class Cyw43
         }
 
         // CCCR dump — proves CMD52 (IO_RW_DIRECT) round-trips on F0.
-        log(Magic.bytes("cccr rev="), Sdio.cmd52Read(F0, CCCR_REV));
-        log(Magic.bytes("cccr cap="), Sdio.cmd52Read(F0, CCCR_CAP));
-        log(Magic.bytes("cccr ioe="), Sdio.cmd52Read(F0, CCCR_IOEx));
-        log(Magic.bytes("cccr ior="), Sdio.cmd52Read(F0, CCCR_IORx));
+        log(Magic.bytes("cccr rev="), sdio.cmd52Read(F0, CCCR_REV));
+        log(Magic.bytes("cccr cap="), sdio.cmd52Read(F0, CCCR_CAP));
+        log(Magic.bytes("cccr ioe="), sdio.cmd52Read(F0, CCCR_IOEx));
+        log(Magic.bytes("cccr ior="), sdio.cmd52Read(F0, CCCR_IORx));
 
         // Enable the backplane function (F1) and wait for it to report ready.
-        Sdio.cmd52Write(F0, CCCR_IOEx, 1 << F1);
+        sdio.cmd52Write(F0, CCCR_IOEx, 1 << F1);
         int tries = 0;
-        while ((Sdio.cmd52Read(F0, CCCR_IORx) & (1 << F1)) == 0)
+        while ((sdio.cmd52Read(F0, CCCR_IORx) & (1 << F1)) == 0)
         {
             tries = tries + 1;
             if (tries > 500)
             {
-                log(Magic.bytes("F1 not ready ior="), Sdio.cmd52Read(F0, CCCR_IORx));
+                log(Magic.bytes("F1 not ready ior="), sdio.cmd52Read(F0, CCCR_IORx));
                 return 0;
             }
             VM.delayMs(1);
         }
-        log(Magic.bytes("F1 ready ior="), Sdio.cmd52Read(F0, CCCR_IORx));
+        log(Magic.bytes("F1 ready ior="), sdio.cmd52Read(F0, CCCR_IORx));
 
         // Request the ALP clock (backplane reads need a clock running) and wait for it.
-        Sdio.cmd52Write(F1, CHIPCLKCSR, ALP_AVAIL_REQ);
+        sdio.cmd52Write(F1, CHIPCLKCSR, ALP_AVAIL_REQ);
         tries = 0;
-        while ((Sdio.cmd52Read(F1, CHIPCLKCSR) & ALP_AVAIL) == 0)
+        while ((sdio.cmd52Read(F1, CHIPCLKCSR) & ALP_AVAIL) == 0)
         {
             tries = tries + 1;
             if (tries > 500)
             {
-                log(Magic.bytes("no ALP clock csr="), Sdio.cmd52Read(F1, CHIPCLKCSR));
+                log(Magic.bytes("no ALP clock csr="), sdio.cmd52Read(F1, CHIPCLKCSR));
                 return 0;
             }
             VM.delayMs(1);
         }
-        log(Magic.bytes("ALP clock csr="), Sdio.cmd52Read(F1, CHIPCLKCSR));
+        log(Magic.bytes("ALP clock csr="), sdio.cmd52Read(F1, CHIPCLKCSR));
 
         // Read the ChipCommon ID word through the backplane window.
         int idword = bpRead32(SI_ENUM_BASE);
@@ -194,8 +194,8 @@ public final class Cyw43
         log(Magic.bytes("fw bytes="), (int) len);
 
         // The bus is still at the ~400 kHz ID clock; raise it so a 609 KB upload isn't glacial.
-        Sdio.setClock(25000000);
-        log(Magic.bytes("sdio clk ctl="), Sdio.control1());
+        sdio.setClock(25000000);
+        log(Magic.bytes("sdio clk ctl="), sdio.control1());
 
         int first = src.loadInt();                   // the ARM reset vector (first word)
         if (!bpWrite(RAMBASE, src, len))
@@ -300,17 +300,17 @@ public final class Cyw43
         armCr4Run(ARMCR4_WRAP);                           // out of reset, CPU running
         // F2's block size, for block-mode CMD53 writes of frames over 512 bytes (byte mode's count field is
         // 9 bits). Never set before: every transfer was byte mode. Read back and printed -- measured, not assumed.
-        Sdio.cmd52Write(F0, FBR2_BLKSIZE, F2_BLOCK & 0xFF);
-        Sdio.cmd52Write(F0, FBR2_BLKSIZE + 1, (F2_BLOCK >> 8) & 0xFF);
-        log(Magic.bytes("f2 blksize="), Sdio.cmd52Read(F0, FBR2_BLKSIZE) | (Sdio.cmd52Read(F0, FBR2_BLKSIZE + 1) << 8));
-        Sdio.cmd52Write(F0, CCCR_IOEx, (1 << F1) | (1 << F2));   // enable the WLAN data function
+        sdio.cmd52Write(F0, FBR2_BLKSIZE, F2_BLOCK & 0xFF);
+        sdio.cmd52Write(F0, FBR2_BLKSIZE + 1, (F2_BLOCK >> 8) & 0xFF);
+        log(Magic.bytes("f2 blksize="), sdio.cmd52Read(F0, FBR2_BLKSIZE) | (sdio.cmd52Read(F0, FBR2_BLKSIZE + 1) << 8));
+        sdio.cmd52Write(F0, CCCR_IOEx, (1 << F1) | (1 << F2));   // enable the WLAN data function
         int tries = 0;
-        while ((Sdio.cmd52Read(F0, CCCR_IORx) & (1 << F2)) == 0 && tries < 2000)
+        while ((sdio.cmd52Read(F0, CCCR_IORx) & (1 << F2)) == 0 && tries < 2000)
         {
             tries = tries + 1;
             VM.delayMs(1);
         }
-        int ior = Sdio.cmd52Read(F0, CCCR_IORx);
+        int ior = sdio.cmd52Read(F0, CCCR_IORx);
         log(Magic.bytes("after release ior="), ior);
         if ((ior & (1 << F2)) == 0)
         {
@@ -334,14 +334,14 @@ public final class Cyw43
      */
     private static void requestHtClock()
     {
-        Sdio.cmd52Write(F1, CHIPCLKCSR, HT_AVAIL_REQ);
+        sdio.cmd52Write(F1, CHIPCLKCSR, HT_AVAIL_REQ);
         int tries = 0;
-        while ((Sdio.cmd52Read(F1, CHIPCLKCSR) & HT_AVAIL) == 0 && tries < 50)
+        while ((sdio.cmd52Read(F1, CHIPCLKCSR) & HT_AVAIL) == 0 && tries < 50)
         {
             tries = tries + 1;
             VM.delayMs(1);
         }
-        log(Magic.bytes("HT clock csr="), Sdio.cmd52Read(F1, CHIPCLKCSR));
+        log(Magic.bytes("HT clock csr="), sdio.cmd52Read(F1, CHIPCLKCSR));
     }
 
     // SDIO device FIFO watermarks (brcmfmac sdio.h / sdio.c, the 43455 case of brcmf_sdio_firmware_callback).
@@ -360,13 +360,13 @@ public final class Cyw43
      */
     private static void setF2Watermarks()
     {
-        Sdio.cmd52Write(F1, SBSDIO_WATERMARK, CY_43455_F2_WATERMARK);
-        int devctl = Sdio.cmd52Read(F1, SBSDIO_DEVICE_CTL);
-        Sdio.cmd52Write(F1, SBSDIO_DEVICE_CTL, devctl | SBSDIO_DEVCTL_F2WM_ENAB);
-        Sdio.cmd52Write(F1, SBSDIO_FUNC1_MESBUSYCTRL, CY_43455_MESBUSYCTRL);
-        log(Magic.bytes("f2 watermark="), Sdio.cmd52Read(F1, SBSDIO_WATERMARK));
-        log(Magic.bytes("devctl="), Sdio.cmd52Read(F1, SBSDIO_DEVICE_CTL));
-        log(Magic.bytes("mesbusyctrl="), Sdio.cmd52Read(F1, SBSDIO_FUNC1_MESBUSYCTRL));
+        sdio.cmd52Write(F1, SBSDIO_WATERMARK, CY_43455_F2_WATERMARK);
+        int devctl = sdio.cmd52Read(F1, SBSDIO_DEVICE_CTL);
+        sdio.cmd52Write(F1, SBSDIO_DEVICE_CTL, devctl | SBSDIO_DEVCTL_F2WM_ENAB);
+        sdio.cmd52Write(F1, SBSDIO_FUNC1_MESBUSYCTRL, CY_43455_MESBUSYCTRL);
+        log(Magic.bytes("f2 watermark="), sdio.cmd52Read(F1, SBSDIO_WATERMARK));
+        log(Magic.bytes("devctl="), sdio.cmd52Read(F1, SBSDIO_DEVICE_CTL));
+        log(Magic.bytes("mesbusyctrl="), sdio.cmd52Read(F1, SBSDIO_FUNC1_MESBUSYCTRL));
     }
 
     /**
@@ -427,7 +427,7 @@ public final class Cyw43
         tx.plus(7).store((byte) 12);                        //   dataoffset = 12 (payload after the 12-byte hdr)
         store16(tx.plus(0), frameLen);                       // SDPCM hw: len
         store16(tx.plus(2), ~frameLen);                      //   ~len
-        if (!Sdio.cmd53Write(F2, 0, true, tx.toLong(), 1, (frameLen + 3) & ~3))
+        if (!sdio.cmd53Write(F2, 0, true, tx.toLong(), 1, (frameLen + 3) & ~3))
         {
             board.Uart.write(Magic.bytes("  ioctl tx FAILED\n"));
             return;
@@ -501,8 +501,8 @@ public final class Cyw43
     static void enableWifiIrq()
     {
         bpWrite32(SDIOD_CORE + SD_INTMASK, SD_FRAMEINT | SD_MAILBOXINT | SD_FCCHANGE);
-        Sdio.cmd52Write(F0, CCCR_IEN, 0x07);             // master + F1 + F2 function interrupts
-        Sdio.enableCardInt();                            // IRPT_MASK bit8 (status) + IRPT_EN bit8 (armed)
+        sdio.cmd52Write(F0, CCCR_IEN, 0x07);             // master + F1 + F2 function interrupts
+        sdio.enableCardInt();                            // IRPT_MASK bit8 (status) + IRPT_EN bit8 (armed)
         board.Irq.enable(irq);
     }
 
@@ -558,7 +558,7 @@ public final class Cyw43
         int ints = bpRead32(SDIOD_CORE + SD_INTSTATUS);
         serviceInts(ints);                               // mailbox ACK + flow control, before the status is cleared
         bpWrite32(SDIOD_CORE + SD_INTSTATUS, ints & ~SD_FCSTATE);   // write-1-to-clear (FC_STATE is a level)
-        Sdio.clearCardInt();                             // clear the SDHCI card-int status (de-assert DAT1)
+        sdio.clearCardInt();                             // clear the SDHCI card-int status (de-assert DAT1)
         board.Irq.unmask(irq);                           // re-arm the interrupt the ISR disabled
         return len;
     }
@@ -1545,11 +1545,11 @@ public final class Cyw43
         int len = (total + 3) & ~3;
         if (len <= 512)
         {
-            Sdio.cmd53Write(F2, 0, true, tx.toLong(), 1, len);
+            sdio.cmd53Write(F2, 0, true, tx.toLong(), 1, len);
         }
         else
         {
-            Sdio.cmd53Write(F2, 0, true, tx.toLong(), (len + F2_BLOCK - 1) / F2_BLOCK, F2_BLOCK);
+            sdio.cmd53Write(F2, 0, true, tx.toLong(), (len + F2_BLOCK - 1) / F2_BLOCK, F2_BLOCK);
         }
         txSeq = txSeq + 1;
     }
@@ -1677,6 +1677,9 @@ public final class Cyw43
      * Bcm2711Platform.netUp}). The chip driver names no interrupt number: it only masks, enables and re-arms this.
      */
     public static int irq = board.Irq.NONE;
+
+    /** The SDIO host the chip is wired to, made and set by the board's platform class before bring-up. */
+    public static SdioHost sdio;
 
     /** true = the bring-up runs its built-in DNS+HTTP-GET showcase; false = bring up connectivity only (the
      *  OS launches a program that owns the sockets). Set by VM.run before Wifi.bringUp. */
@@ -2077,7 +2080,7 @@ public final class Cyw43
      */
     static int readFrameOnce(Address dst, int cap)
     {
-        if (!Sdio.cmd53Read(F2, 0, true, dst.toLong(), 1, 4))     // hw header
+        if (!sdio.cmd53Read(F2, 0, true, dst.toLong(), 1, 4))     // hw header
         {
             return 0;
         }
@@ -2103,7 +2106,7 @@ public final class Cyw43
             {
                 n = 512;
             }
-            if (!Sdio.cmd53Read(F2, 0, true, dst.plus(4 + done).toLong(), 1, n))
+            if (!sdio.cmd53Read(F2, 0, true, dst.plus(4 + done).toLong(), 1, n))
             {
                 return 0;
             }
@@ -2123,7 +2126,7 @@ public final class Cyw43
             while (rest > 0)
             {
                 int n = rest > 512 ? 512 : rest;
-                if (!Sdio.cmd53Read(F2, 0, true, drainBuf.toLong(), 1, n))
+                if (!sdio.cmd53Read(F2, 0, true, drainBuf.toLong(), 1, n))
                 {
                     break;
                 }
@@ -2201,7 +2204,7 @@ public final class Cyw43
                 n = 512;
             }
             Address to = done < keep ? glomBuf.plus(done) : drainBuf;
-            if (!Sdio.cmd53Read(F2, 0, true, to.toLong(), 1, n))
+            if (!sdio.cmd53Read(F2, 0, true, to.toLong(), 1, n))
             {
                 return 0;
             }
@@ -2394,9 +2397,9 @@ public final class Cyw43
         int ints = bpRead32(SDIOD_CORE + SD_INTSTATUS);
         serviceInts(ints);
         bpWrite32(SDIOD_CORE + SD_INTSTATUS, ints & ~SD_FCSTATE);   // write-1-to-clear (FC_STATE is a level)
-        Sdio.maskCardInt();                              // CARD_INT is not write-1-to-clear (Pi run 6: it stayed
-        Sdio.clearCardInt();                             //   0x100 with SD_INTSTATUS and CCCR INT_PENDING both 0);
-        Sdio.unmaskCardInt();                            //   toggling its Status Enable is what drops it (SDHCI)
+        sdio.maskCardInt();                              // CARD_INT is not write-1-to-clear (Pi run 6: it stayed
+        sdio.clearCardInt();                             //   0x100 with SD_INTSTATUS and CCCR INT_PENDING both 0);
+        sdio.unmaskCardInt();                            //   toggling its Status Enable is what drops it (SDHCI)
     }
 
     /** Copy the bytes of {@code s} to {@code dst} then a NUL; returns the length written (incl. NUL). */
@@ -2597,9 +2600,9 @@ public final class Cyw43
         {
             return;
         }
-        Sdio.cmd52Write(F1, SBADDR_LOW,  (int) ((win >> 8) & 0xFF));
-        Sdio.cmd52Write(F1, SBADDR_MID,  (int) ((win >> 16) & 0xFF));
-        Sdio.cmd52Write(F1, SBADDR_HIGH, (int) ((win >> 24) & 0xFF));
+        sdio.cmd52Write(F1, SBADDR_LOW,  (int) ((win >> 8) & 0xFF));
+        sdio.cmd52Write(F1, SBADDR_MID,  (int) ((win >> 16) & 0xFF));
+        sdio.cmd52Write(F1, SBADDR_HIGH, (int) ((win >> 24) & 0xFF));
         curWindow = win;
     }
 
@@ -2608,7 +2611,7 @@ public final class Cyw43
     {
         setWindow(addr);
         int off = (int) (addr & SB_WIN_MASK) | SB_ACCESS_4B;
-        if (!Sdio.cmd53Read(F1, off, true, buf.toLong(), 1, 4))
+        if (!sdio.cmd53Read(F1, off, true, buf.toLong(), 1, 4))
         {
             return 0;
         }
@@ -2621,7 +2624,7 @@ public final class Cyw43
         setWindow(addr);
         int off = (int) (addr & SB_WIN_MASK) | SB_ACCESS_4B;
         buf.store(value);
-        return Sdio.cmd53Write(F1, off, true, buf.toLong(), 1, 4);
+        return sdio.cmd53Write(F1, off, true, buf.toLong(), 1, 4);
     }
 
     /** UART log: "  &lt;label&gt;0xHEX\n" (values are registers, so hex is the useful form). {@code label}
