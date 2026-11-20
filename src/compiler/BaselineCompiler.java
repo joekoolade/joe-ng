@@ -61,7 +61,7 @@ public final class BaselineCompiler
     }
 
     /** A single compiled method: its words, relocation fixups, and unwind metadata. */
-    public record CompiledMethod(int[] words, Relocations relocs, int frameSize, int regLocals,
+    public record CompiledMethod(int[] words, Relocations relocs, int frameSize, int gcMapWord,
                                  Vec<HandlerRange> handlers, int[] bcToWord) {}
     /** A try/catch region as word indices, for the writer's machine-PC handler table. */
     public record HandlerRange(int startWord, int endWord, int handlerWord, String catchClass) {}
@@ -126,10 +126,9 @@ public final class BaselineCompiler
             handlers.add(new HandlerRange(core.handlerStartWord(i), core.handlerEndWord(i),
                                           core.handlerWord(i), catchClass));
         }
-        // regLocals is reported ONLY for a frame that saved LR: the unwinder reads saved locals at
-        // [sp+8+k*8], which is where they are exactly when LR occupies [sp+0]. See Baseline.savesLR().
+        // gcMapWord: where the body's reference map (RefMaps) starts, after its last instruction; 0 = none.
         return new CompiledMethod(words, syms.relocations(), core.frameSize(),
-                core.savesLR() ? core.regLocals() : 0, handlers, core.bcToWord());
+                core.gcMapWord(), handlers, core.bcToWord());
     }
 
     /** Whether the last {@link #compileMethod} body compiled in deep-stack mode (see {@link Baseline#deepStack}). */

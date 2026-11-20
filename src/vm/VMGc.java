@@ -134,6 +134,10 @@ final class VMGc
             }
         }
         markRange(Address.fromLong(scanFrom), Address.fromLong(stackTop));
+        if (GcMapShadow.on != 0)
+        {
+            GcMapShadow.check(scanFrom, stackTop);    // S2: the reference maps against this conservative scan
+        }
         // THE BOOT TASK'S STACK IS A ROOT EVEN WHEN ANOTHER TASK IS COLLECTING. A spawned task's stack is a
         // HEAP OBJECT (taskStackBase, "keeps the stack GC-reachable"), so the trace reaches it; task 0's is
         // the IMAGE stack and is a heap object for nobody. Scanned only when task 0 happened to be the one
@@ -198,6 +202,7 @@ final class VMGc
         long tRoots = Magic.readCNTPCT_EL0();
         phaseRootTicks = tRoots - tStopped;
         drainMarkStack();                             // trace: scan each newly marked block exactly ONCE
+        markGcMaps();                                 // JIT reference maps live as long as their frame entry
         codeOnly = markCodeRoots();                   // ... then the addresses only compiled code holds
         drainMarkStack();
         if (markOverflow != 0)
@@ -565,6 +570,27 @@ final class VMGc
      * newly-marked entry is one the rest of the reachability graph did NOT cover — the return value is the
      * count of those, i.e. the number of blocks that survive *only* because code points at them.
      */
+    /** Mark each JIT body's reference map (a heap int[] the JIT local table names -- see Loader.gcMapOf). The
+     *  table is outside the heap, so nothing else keeps a map alive; a swept body's entry is dropped with it. */
+    private static void markGcMaps()
+    {
+        if (VM.jitLocalTable.isZero())
+        {
+            return;
+        }
+        long i = 0L;
+        while (i < VM.jitLocalCount)
+        {
+            long m = VM.jitLocalTable.plus(i * 24L + 16L).loadLong();
+            if (m != 0L)
+            {
+                tryMark(m - ObjectModel.ARRAY_BASE_OFFSET);
+            }
+            i += 1L;
+        }
+        drainMarkStack();
+    }
+
     private static long markCodeRoots()
     {
         long found = 0L;
@@ -1455,6 +1481,33 @@ final class VMGc
                 o = o.plus(size);
             }
         }
+    }
+
+    /** Whether {@code w} lies in the small or the large heap region (allocated part). */
+    static boolean inHeap(long w)
+    {
+        return (w >= Heap.BASE && w < Address.fromLong(Heap.PTR_CELL).loadLong())
+                || (w >= Heap.LARGE_BASE && w < Address.fromLong(Heap.LARGE_PTR_CELL).loadLong());
+    }
+
+    /** What the conservative scan would make of {@code w}: 1 = a block base, 2 = an allocData payload one header
+     *  past a block base, 0 = neither. The same test {@link #markRange} applies, without marking. Valid between
+     *  {@link #buildBlockBitmap} and the sweep. */
+    static int liveKind(long w)
+    {
+        if ((w & 7L) != 0L)
+        {
+            return 0;
+        }
+        if (inHeap(w) && isBlockBase(w))
+        {
+            return 1;
+        }
+        if (inHeap(w - 16L) && isBlockBase(w - 16L))
+        {
+            return 2;
+        }
+        return 0;
     }
 
     private static boolean isBlockBase(long w)

@@ -1031,6 +1031,7 @@ public final class Baseline
         {
             return;
         }
+        noteSpill(cb);
         for (int slot = 0; slot < sp; slot++)
         {
             int r = slot % OP_MAX;
@@ -3944,6 +3945,44 @@ public final class Baseline
         return size;
     }
 
+    // Where the operand stack was spilled, and how deep: {word index, depth} per spill, in emission order. The
+    // reference map (RefMaps) reads it to know which operand slots a call's frame really holds -- the slots a
+    // bytecode pops before its call are dead there, the ones it pops after are live, and the lowering's own
+    // transients are live too; only the spill that preceded the call can say which.
+    // Allocated only when a map is being built: a Baseline is made per compile, and on cores 1-3 every array it
+    // allocates is never reclaimed.
+    private int[] spillW;
+    private int[] spillD;
+    private int spillN;
+
+    private void noteSpill(CodeBuffer cb)
+    {
+        if (!gcMaps)
+        {
+            return;
+        }
+        if (spillW == null)
+        {
+            spillW = new int[64];
+            spillD = new int[64];
+        }
+        if (spillN == spillW.length)
+        {
+            int[] w = new int[spillN * 2];
+            int[] d = new int[spillN * 2];
+            for (int i = 0; i < spillN; i++)
+            {
+                w[i] = spillW[i];
+                d[i] = spillD[i];
+            }
+            spillW = w;
+            spillD = d;
+        }
+        spillW[spillN] = cb.wordCount();
+        spillD[spillN] = sp;
+        spillN += 1;
+    }
+
     /** Spill operand-stack values (x9..) to the frame so a call can't clobber them. */
     private void spillLive(CodeBuffer cb)
     {
@@ -3952,6 +3991,7 @@ public final class Baseline
             syncOut(cb);       // spill the whole circular window to its canonical memory homes
             return;
         }
+        noteSpill(cb);
         for (int i = 0; i < sp; i++)
         {
             frameStore(cb, OP_BASE + i, spillBase + i * 8);
@@ -5166,6 +5206,20 @@ public final class Baseline
 
     public int frameSize() { return frameSize; }
 
+    /** Whether compileBody appends a reference map (default yes). The metal loader's sizing pass turns it off: it
+     *  only measures the code, and on cores 1-3 every allocation it makes is never reclaimed. */
+    public void setGcMaps(boolean on) { gcMaps = on; }
+    private boolean gcMaps = true;
+
+    /** Word offset of this body's reference map ({@link RefMaps}), after its last instruction; 0 = none. */
+    public int gcMapWord() { return gcMapWord; }
+    private int gcMapWord;
+    /** Framed, calling methods the reference-map dataflow could not model (jsr/ret, an unknown form): no map. */
+    public static int gcMapsUnsolved;
+    /** Words of code, and of reference map after it, over every body that got a map (the map's cost). */
+    public static long gcMapCodeWords;
+    public static long gcMapWords;
+
     /** Number of locals held in callee-saved x19.. (so unwind can restore a handler's pre-try locals). */
     public int regLocals() { return regLocals; }
 
@@ -5285,6 +5339,7 @@ public final class Baseline
 
         CodeBuffer cb = new CodeBuffer(base);
         this.curCb = cb;
+        spillN = 0;
         if (!isEntry)
         {
             emitPrologue(cb, descOff, isStatic);
@@ -5387,6 +5442,33 @@ public final class Baseline
             hHandlerW[k] = bcToWord[exHandlerPc[k]];
         }
         lastBcToWord = bcToWord;                         // capture for the stack-trace resolver (PC -> bci -> line)
+        // The reference map (frames/GC arc S2) rides after the last instruction, so it lives and dies with the
+        // code. Only a framed method that calls has a site; the frameless entry keeps its locals in registers.
+        gcMapWord = 0;
+        if (gcMaps && saveLR && !isEntry)
+        {
+            int nLoc = needLocals > maxLocals ? needLocals : maxLocals;
+            int opSlots = deepStack ? opStackSlots : OP_MAX;     // the whole spill area, so the shadow check
+            if (maxActualDepth + OPSTACK_MARGIN > opSlots)       //   can tell a stale spill slot from a frame word
+            {
+                opSlots = maxActualDepth + OPSTACK_MARGIN;
+            }
+            RefMaps rm = new RefMaps(classBytes, cpOff, cpTag, code, nLoc, opSlots,
+                    exStartPc, exEndPc, exHandlerPc, exCount);
+            if (rm.solve(descOff, isStatic))
+            {
+                gcMapWord = rm.emitMap(cb, codeWords, bcToWord, overflowBase, spillBase, spillW, spillD, spillN);
+                if (gcMapWord != 0)
+                {
+                    gcMapCodeWords += codeWords;
+                    gcMapWords += cb.wordCount() - codeWords;
+                }
+            }
+            else
+            {
+                gcMapsUnsolved += 1;
+            }
+        }
         return cb.toWords();
     }
 

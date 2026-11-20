@@ -178,6 +178,16 @@ public final class VMStats
             i = put(arr, len, i, Address.fromLong(Heap.PTR_CELL + c * 8L).loadLong() - Heap.arenaBase(c).toLong());   // core c's arena use
             c += 1;
         }
+        i = put(arr, len, i, GcMapShadow.checks);                          // S2 shadow check (gcmaps=1): passes
+        i = put(arr, len, i, GcMapShadow.framesWalked);                    // ... frames walked
+        i = put(arr, len, i, GcMapShadow.framesMapped);                    // ... with a map site
+        i = put(arr, len, i, GcMapShadow.mapErrors);                       // ... map errors
+        int k = 0;
+        while (k < GcMapShadow.NCAT)                                       // ... live-looking words, by where
+        {
+            i = put(arr, len, i, GcMapShadow.hits != null ? GcMapShadow.hits[k] : 0L);
+            k += 1;
+        }
         return (long) i;
     }
 

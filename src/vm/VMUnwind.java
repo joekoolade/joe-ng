@@ -17,11 +17,11 @@ import magic.ObjectReference;
 import board.Uart;
 import static vm.VM.*;   // exception-table state + shared helpers stay in VM: handlerTable/Count, jitHandler*,
                          // unwindLog/Logged, faultDepth, and printHex/printStr/frameSizeAt/
-                         // jitRegLocalsAt/instanceOf — all reached here by simple name.
+                         // gcMapAt/instanceOf — all reached here by simple name.
 
 /**
  * Stack unwinding + backtrace capture, extracted verbatim from VM.java. {@link #unwind} is the throw engine:
- * it fills the exception's inline backtrace ({@link #captureTrace}), then walks frames via {@code VM.frameSizeAt}/{@code VM.jitRegLocalsAt}, resuming into the first
+ * it fills the exception's inline backtrace ({@link #captureTrace}), then walks frames via {@code VM.frameSizeAt}, resuming into the first
  * covering handler ({@link #findHandler}, matching catch types with {@code VM.instanceOf}) or reporting an
  * uncaught exception at the top. It is reached only by address: image {@code athrow} lowers to the UNWIND
  * helper (WriterSymbols), the metal JIT and the fault path ({@code VM.throwFromFault}) call the writer-stashed
@@ -338,7 +338,7 @@ final class VMUnwind
                 Uart.write(Magic.bytes("  UNW handler pc="));
                 printHex(pc);
                 Uart.write(Magic.bytes(" nrl="));
-                printHex(jitRegLocalsAt(pc));
+                printHex(gcMapAt(pc));      // the local table entry: -1 = none covers this pc
                 // addJitFrame writes the frame and local tables in LOCKSTEP and both compaction sites treat
                 // them together, so these counts must be equal. If they are not, the tables have desynced and
                 // a pc can be in one and absent from the other -- which is exactly what the -1s above show.
@@ -487,8 +487,8 @@ final class VMUnwind
                     Magic.wfe();    // uncaught at the top
                 }
             }
-            // Diagnostics only since S1 (nothing is copied): -1 = no local entry covers this pc, 0 = none saved.
-            long nrl = jitRegLocalsAt(pc);
+            // Diagnostics only: -1 = no local entry covers this pc (its third word is the reference map since S2).
+            long nrl = gcMapAt(pc);
             if (Loader.UNWIND_DUMP && nrl < 0L && pc.toLong() >= Heap.CODE_BASE)
             {
                 // A JIT pc the FRAME table covers but the LOCAL table does not, though addJitFrame writes

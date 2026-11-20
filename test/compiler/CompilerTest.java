@@ -116,6 +116,33 @@ public final class CompilerTest
         vWant.add(A64.addImm(31, 31, 80));
         vWant.add(A64.ret());
         T.eqWords("FieldFixture.callVal", toArray(vWant), compile(ff, "callVal", "(Lcompiler/FieldFixture;)I"));
+        // Its reference map (frames/GC arc S2): one call site, returning to word 8 (after the blr at 7); local 0
+        // (the FieldFixture argument) is a reference; the operand stack entering the invoke is 1 deep (the
+        // receiver, popped into x0 before the spill), so no operand slot is live across the call.
+        // Header: magic, sites, locals, operand slots, locals base, operand base, bit words, unique maps.
+        T.eqWords("FieldFixture.callVal map", new int[] {0x50414D47, 1, 1, 7, 8, 16, 1, 1, 8, 0x01000000, 1},
+                gcMap(ff, "callVal", "(Lcompiler/FieldFixture;)I"));
+        T.check("a leaf has no map", gcMap(ff, "get", "(Lcompiler/FieldFixture;)I").length == 0);
+
+        // ---- reference maps: the dataflow's merges, operands and unboxed words (compiler.RefMaps) ----
+        ClassFile mf = ClassFile.parse(classesDir.resolve("compiler/MapFixture.class"));
+        int[] jm = gcMap(mf, "join", "(ZLjava/lang/Object;)V");
+        T.check("join: three sites", jm.length > 1 && jm[1] == 3);
+        T.check("join site 0: slot 2 (t) is a reference", mapSlot(jm, 0, 2) == 1);
+        T.check("join site 1: slot 2 (t) is an int", mapSlot(jm, 1, 2) == 2);
+        T.check("join site 2: slot 2 merged REF/int -> dead", mapSlot(jm, 2, 2) == 0);
+        T.check("join site 2: slot 1 (o) is a reference", mapSlot(jm, 2, 1) == 1);
+        T.check("join site 2: slot 0 (c) is an int", mapSlot(jm, 2, 0) == 2);
+        int[] lm = gcMap(mf, "live", "(Ljava/lang/Object;)Ljava/lang/Object;");
+        T.check("live site 0: one operand live across the call", mapLive(lm, 0) == 1);
+        T.check("live site 0: that operand is a reference", mapSlot(lm, 0, lm[2] + 0) == 1);
+        T.check("live site 1: no operand live", mapLive(lm, 1) == 0);
+        int[] rm = gcMap(mf, "raw", "(Ljava/lang/Object;J)V");
+        T.check("raw site 0: slot 0 (o) is a reference", mapSlot(rm, 0, 0) == 1);
+        T.check("raw site 0: slot 1 (n, a long) is raw", mapSlot(rm, 0, 1) == 2);
+        T.check("raw site 0: slot 2 (n's second half) is dead", mapSlot(rm, 0, 2) == 0);
+        T.check("raw site 0: slot 3 (an Address) is raw", mapSlot(rm, 0, 3) == 2);
+        T.check("raw site 0: slot 4 (m, a long) is raw", mapSlot(rm, 0, 4) == 2);
 
         // ---- new with a live operand stack ----------------------------------
         // `x + new FieldFixture().value` pushes x, then allocates. Heap.alloc
@@ -354,11 +381,40 @@ public final class CompilerTest
         return compile(cf, method, "()V");
     }
 
+    /** The method's instructions -- without the reference map that follows them (see {@link #gcMap}). */
     private static int[] compile(ClassFile cf, String method, String desc)
     {
         CodeBuffer cb = new CodeBuffer();
         new BaselineCompiler(cf).compile(cf.method(method, desc), cb);
-        return cb.toWords();
+        int[] all = cb.toWords();
+        int code = new BaselineCompiler(cf).compileMethod(cf.method(method, desc), cb.base(), false).gcMapWord();
+        return code == 0 ? all : java.util.Arrays.copyOf(all, code);
+    }
+
+    /** The 2-bit type of map slot {@code slot} (locals first, then operands) at site {@code site}: 0 dead,
+     *  1 reference, 2 raw, 3 ObjectReference. */
+    private static int mapSlot(int[] m, int site, int slot)
+    {
+        int nSites = m[1];
+        int bitWords = m[6];
+        int idx = m[8 + site * 2 + 1] & 0xFFFF;
+        int bit = 2 * slot;
+        return (m[8 + nSites * 2 + idx * bitWords + (bit >> 5)] >>> (bit & 31)) & 3;
+    }
+
+    /** How many operand slots site {@code site} holds live across its call. */
+    private static int mapLive(int[] m, int site)
+    {
+        return (m[8 + site * 2 + 1] >>> 16) & 0xFF;
+    }
+
+    /** The method's reference map words (compiler.RefMaps), or an empty array when it has none. */
+    private static int[] gcMap(ClassFile cf, String method, String desc)
+    {
+        BaselineCompiler.CompiledMethod cm = new BaselineCompiler(cf).compileMethod(cf.method(method, desc),
+                CodeBuffer.LOAD_ADDRESS, false);
+        int at = cm.gcMapWord();
+        return at == 0 ? new int[0] : java.util.Arrays.copyOfRange(cm.words(), at, cm.words().length);
     }
 
     private static int[] toArray(List<Integer> l)

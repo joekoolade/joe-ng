@@ -138,7 +138,12 @@ public final class Unboxed
     /** Which unboxed type an internal class name (e.g. {@code magic/Address}) is, or {@link #NONE}. */
     public static int ownerKind(Utf8 owner)
     {
-        long h = hash(owner);
+        return kindOfHash(hash(owner));
+    }
+
+    /** {@link #ownerKind} from the name's {@link #hash} -- for a caller holding the bytes in a class file. */
+    public static int kindOfHash(long h)
+    {
         if (h == O_ADDRESS)
         {
             return ADDRESS;
