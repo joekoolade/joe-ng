@@ -9,14 +9,14 @@
  *
  * Created: 2026-07-23
  */
-package board.bcm2711;
+package board;
 
 import magic.Address;
 import magic.Magic;
 import vm.Heap;
 
 /**
- * A minimal read/write FAT32 driver over {@link Emmc} — the filesystem half of
+ * A minimal read/write FAT32 driver over the board's {@link Block} device — the filesystem half of
  * the self-hosting fixpoint (PLAN.md §M5.5d). The Pi's boot partition is a FAT32
  * volume inside an MBR; this finds {@code KERNEL8.IMG} in the root directory and
  * overwrites its cluster chain with the metal-reproduced image, so the next boot
@@ -24,11 +24,14 @@ import vm.Heap;
  * no allocation, no directory growth, no long-name handling.
  *
  * <p>Ordinary Java compiled to A64 by our own baseline compiler; block I/O is
- * {@link Emmc#readBlock}/{@link Emmc#writeBlock}.
+ * {@link Block#read}/{@link Block#write}, one sector at a time; the caller brings the device up
+ * ({@link Block#init}) first.
  */
 public final class Fat32
 {
-    private Fat32() {}
+    private Fat32()
+    {
+    }
 
     private static long fatStart;      // LBA of the first FAT
     private static long dataStart;     // LBA of the first data cluster (cluster 2)
@@ -50,7 +53,7 @@ public final class Fat32
     {
         fatBuf = Heap.allocData(512).toLong();
         long mbr = Heap.allocData(512).toLong();
-        if (!Emmc.readBlock(0L, mbr))
+        if (!Block.read(0L, mbr, 1))
         {
             return false;
         }
@@ -61,7 +64,7 @@ public final class Fat32
         }
         long partStart = u32(mbr, 446 + 8);                    // partition 1 start LBA
         long bpb = Heap.allocData(512).toLong();
-        if (!Emmc.readBlock(partStart, bpb))
+        if (!Block.read(partStart, bpb, 1))
         {
             return false;
         }
@@ -92,7 +95,7 @@ public final class Fat32
             int sc = 0;
             while (sc < secPerClus)
             {
-                if (!Emmc.readBlock(s0 + sc, fatBuf))
+                if (!Block.read(s0 + sc, fatBuf, 1))
                 {
                     return false;
                 }
@@ -155,7 +158,7 @@ public final class Fat32
             int sc = 0;
             while (sc < secPerClus && done < len)
             {
-                if (!Emmc.writeBlock(s0 + sc, src + done))
+                if (!Block.write(s0 + sc, src + done, 1))
                 {
                     return false;
                 }
@@ -178,7 +181,7 @@ public final class Fat32
             int sc = 0;
             while (sc < secPerClus && done < len)
             {
-                if (!Emmc.readBlock(s0 + sc, dst + done))
+                if (!Block.read(s0 + sc, dst + done, 1))
                 {
                     return false;
                 }
@@ -194,7 +197,7 @@ public final class Fat32
     private static long nextCluster(long cluster)
     {
         long fatByte = cluster * 4L;
-        if (!Emmc.readBlock(fatStart + fatByte / 512L, fatBuf))
+        if (!Block.read(fatStart + fatByte / 512L, fatBuf, 1))
         {
             return EOC;
         }

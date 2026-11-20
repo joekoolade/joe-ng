@@ -13,11 +13,7 @@ package vm;
 
 import asm.A64Enc;
 import board.Board;
-import board.bcm2711.Bcm2711;
-import board.bcm2711.Emmc;
-import board.bcm2711.Fat32;
 import board.Irq;
-import board.bcm2711.Reset;
 import board.Uart;
 import classfile.ClassReader;
 import compiler.Baseline;
@@ -3977,7 +3973,6 @@ public final class VM
     static long boardIdAddr;           // <Platform>.boardId()J — MetalBoard.boardId0()
     static long boardRebootFlagsAddr;  // <Platform>.setRebootFlags(J)J — MetalBoard.setRebootFlags0(int)
     static long boardRebootAddr;       // <Platform>.reboot()V — MetalBoard.reboot0()
-    static long blockInitAddr;         // <Platform>.blockInit()J — MetalBlock.init0()
     static long blockReadAddr;         // <Platform>.blockRead(JLmagic/ObjectReference;JJ)J — MetalBlock.read0(long,byte[],int,int)
     static long blockWriteAddr;        // <Platform>.blockWrite(JLmagic/ObjectReference;JJ)J — MetalBlock.write0(long,byte[],int,int)
     static long consoleAvailAddr;      // VMNatives.consoleAvailable()J — MetalConsoleIn.available0()
@@ -4512,14 +4507,14 @@ public final class VM
         // tasks) before bringUp. Set WIFI_ONLY false to restore the full boot before merging to main.
         if (WIFI_ONLY)
         {
-            if (WIFI_ENABLED && Uart.coreHz > 10000000)
+            if (WIFI_ENABLED && net.Link.present())
             {
                 startWifiScheduler();                      // task table + switch vectors + timer + IRQs
-                board.bcm2711.Wifi.bringUp();
+                net.Link.up(true);
             }
             else
             {
-                Uart.write(Magic.bytes("(wifi-only: not real hardware -> skipped)\n"));
+                Uart.write(Magic.bytes("(wifi-only: no network link -> skipped)\n"));
             }
             return;
         }
@@ -4562,7 +4557,7 @@ public final class VM
         // so each time joe-ng reproduces + persists itself and reboots into the image it wrote, this
         // climbs -- visible proof the metal-written image is what booted, not the seed's.
         int gen = -1;
-        if (Emmc.init() == 0)
+        if (board.Block.init() == 0)
         {
             gen = SelfBuild.readGeneration();
             Uart.write(Magic.bytes("generation "));

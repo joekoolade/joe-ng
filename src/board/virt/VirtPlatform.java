@@ -80,6 +80,18 @@ public final class VirtPlatform
         return -1L;
     }
 
+    /** {@code board.Block.read}: unreachable past a failed init; answers failure if reached. */
+    public static long sectorRead(long lba, long dst, long n)
+    {
+        return -1L;
+    }
+
+    /** {@code board.Block.write}: as {@link #sectorRead}. */
+    public static long sectorWrite(long lba, long src, long n)
+    {
+        return -1L;
+    }
+
     /** {@code MetalBlock.write0}: as {@link #blockRead}. */
     public static long blockWrite(long lba, ObjectReference arr, long off, long n)
     {

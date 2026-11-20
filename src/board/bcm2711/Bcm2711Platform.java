@@ -82,6 +82,18 @@ public final class Bcm2711Platform
         return Emmc.readBlocks(lba, dst, (int) n) ? 0L : -1L;
     }
 
+    /** {@code board.Block.read}: {@code n} sectors from {@code lba} into memory at {@code dst}. 0 = ok. */
+    public static long sectorRead(long lba, long dst, long n)
+    {
+        return Emmc.readBlocks(lba, dst, (int) n) ? 0L : -1L;
+    }
+
+    /** {@code board.Block.write}: {@code n} sectors to {@code lba} from memory at {@code src}. 0 = ok. */
+    public static long sectorWrite(long lba, long src, long n)
+    {
+        return Emmc.writeBlocks(lba, src, (int) n) ? 0L : -1L;
+    }
+
     /** {@code MetalBlock.write0(long,byte[],int,int)}: as {@link #blockRead}, the other way. */
     public static long blockWrite(long lba, ObjectReference arr, long off, long n)
     {

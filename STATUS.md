@@ -4,6 +4,24 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **PLATFORM, INCREMENT P7: the block device behind the platform -- `vm` imports nothing from `board.bcm2711` (2026-11-19).**
+  - **New `board.Block`:** `init()`, `read(lba, addr, n)`, `write(lba, addr, n)` -- the VM's raw-address door to the
+    board's block device, over three platform ops: `blockInit()J` (its static moved from `VM.blockInitAddr` to
+    `Block.hwInitAddr`; the guest's `MetalBlock.init0` now links there) and new `sectorRead(JJJ)J`/`sectorWrite(JJJ)J`
+    (Pi: `Emmc.readBlocks`/`writeBlocks`; virt: -1, unreachable past `BLOCK_NO_DEVICE`).
+  - **`Fat32` moved `board.bcm2711` -> `board`** (it is a filesystem, not a Pi driver) and reads through `Block`.
+  - **`SelfBuild`** (retired, `SELF_BUILD` false) and the demo suite's generation counter use `Block`/`board.Fat32`;
+    the reboot after persisting goes through the platform's `reboot` op. `VM` drops its `Bcm2711`/`Emmc`/`Fat32`/
+    `Reset` imports; the dead `WIFI_ONLY` path calls `net.Link.up(true)` instead of `board.bcm2711.Wifi.bringUp()`.
+  - `Emmc.readBlock`/`writeBlock` (CMD17/CMD24, single sector) DELETED: no caller left. Single sectors now go as a
+    1-block CMD18/CMD25 run, the path `/boot` has used on the Pi since #513.
+  - **Validated:** `make test` + overlaycheck OK. raspi4b with a host-made 64 MB FAT32 card (`-drive if=sd`) and a
+    throwaway boot line: `P7 block init 0 mount 1 kernel 1 size 3000000 gen 0` (the card's 3,000,000-byte
+    KERNEL8.IMG); demo/BlockDemo single vs multi-block `same bytes: true`, sha256 of sectors 0..4095 = host's
+    (`0a835c68...`). virt: `P7 block init -100` and BlockDemo's `IOException: SD card init failed (step -100)`, the
+    existing no-device answer. Throwaway reverted. Not yet on a Pi.
+  - **Left:** `ScratchMap` names `Bcm2711.MBOX_BUFFER`; `EmitBoot` (retired reference) imports `Bcm2711`; the demo
+    suite's WiFi finale still gates on `Uart.coreHz` rather than `net.Link.present()`.
 - **PLATFORM, INCREMENT P6b: the Pi's start-up routine -- no run-time board test left (2026-11-19).** Closes the
   platform arc: `Board.virt` and `Board.isVirt()` are DELETED; nothing in the VM asks which board it is on.
   - **`writer.Bcm2711Prelude`** (33 words), built like `VirtPrelude`: the writer appends it and puts a branch to it
@@ -19,7 +37,8 @@ Newest entries are at the top.
     NetStaticsProbe 6/6 and virt HVF 7/7, every boot `SMP: 4 of 4 cores up`. raspi4b `-d int`: the first exception
     return is `EL2 to AArch64 EL1 PC 0x80000` (the routine's ERET into `VM.boot`), then the secondaries' stub. A
     throwaway `Magic.call0(0x80000)` after `Uart.init` printed `BOOT RE-ENTERED at EL1 ... x30=0x...808B8` and
-    halted on raspi4b (reverted). Not yet on a Pi.
+    halted on raspi4b (reverted). **PI-VALIDATED 2026-11-19:** push of build `ac1391d552db511b` -- trial boot up in
+    26 s and committed, pages 200, `/threads` shows idle tasks on cores 1-3.
 - **PLATFORM, INCREMENT P6a: the memory map and secondary-core start per board (2026-11-19).**
   - **`VMScheduler` no longer tests the board.** `buildPageTables` takes each 2 MiB block's descriptor from the
     platform's **`pageBlock`** (Pi: the identity map, Device from 0xFC00_0000; virt: RAM up by 0x4000_0000, its
