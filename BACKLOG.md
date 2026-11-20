@@ -33,6 +33,12 @@ the item leaves this list; new findings that are not fixed on the spot come here
   and those waits pass the sender's retransmit timeout (`TcpExt DupData` 1-49 per upload). The collection attempt
   (a second bitmap at `0x1E00_0000`, per-core sweeps) passed QEMU but hung the Pi twice and was dropped -- QEMU
   gives launched programs no timer ticks, so it cannot validate this; every trial needs serial.
+- **A heap OOM on cores 1-3 wedges the board instead of throwing (2026-11-19).** demo/FrameBench via `/run`
+  (task 5, core 3, ~50 MB of garbage) printed `heap OOM` while task 5 held the loader lock in a first-call compile
+  (`ctx~java/math/BigInteger`); core 0's next collection then hit `GC: STW TIMEOUT -- unparked core 3 task 5 ...
+  loaderOwner=5 (collection SKIPPED)`, the loader lock stayed held (`held 606408ms`, owner RUNNABLE), and the
+  board stopped answering ping. Same root as the item above; the failure mode is the separate bug: an OOM should
+  throw `OutOfMemoryError` in the allocating task, not leave it spinning with the loader lock.
 - **41.5 MB live in the large-object region during an upload (2026-11-14).** Of ~60 MB live; the trace takes a
   steady ~413 ms. Unexplained -- measure what holds it before changing anything.
 
@@ -60,7 +66,7 @@ networking cannot be tested under emulation today. Candidate machines with a wor
 
 ## Optimizing compiler
 
-A phased plan for an optimizing tier above Baseline (2026-11-19). There is no interpreter, so Baseline is both the
+**Waits for the memory-frame / precise-GC arc (PLAN.md, decided 2026-11-19), which comes first.** A phased plan for an optimizing tier above Baseline (2026-11-19). There is no interpreter, so Baseline is both the
 deoptimization target and the test oracle.
 
 - **O1: an SSA IR that round-trips.** Bytecode -> SSA over a basic-block CFG, naive scheduling, linear-scan

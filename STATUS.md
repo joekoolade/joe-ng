@@ -4,6 +4,34 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **FRAMES/GC ARC, INCREMENT S0: the baseline the memory-frame change is measured against (2026-11-19).** The arc is
+  in PLAN.md ("Memory-based frames and precise GC"); Jikes RVM (`~/git/JOE/rvm`) is its guide.
+  - **New `demo/FrameBench`**: eight kernels, each warmed up once then timed as the best of 5, with a checksum per
+    kernel (a compiler change must leave them all identical; host JVM agrees). Run on the Pi through `/run` as a
+    jar (`/tmp/s0jar/framebench.jar`: `jar cfm` of `out/demo/FrameBench*.class`, Main-Class demo.FrameBench).
+  - **Pi 4, build `8f661ee0d35c7c1e`, three runs, each on a fresh boot** (median, ms):
+
+    | Kernel | ms | run spread |
+    |---|---|---|
+    | calls, fib(32) | 55.5 | 55.5-55.5 |
+    | locals, 8-local loop, 2M iterations | 37.3 | 37.3-37.3 |
+    | arrays, quicksort 200k ints | 84.5 | 84.0-84.5 |
+    | objects, depth-14 tree build + sum | 21.3 | 21.3-21.4 |
+    | dispatch, 1M interface calls | 23.3 | 22.6-50.6 (run 1 an outlier) |
+    | strings, StringBuilder 25 x 2000 appends | 19.9 | 19.9-19.9 |
+    | sha256, 1 MiB | 209.0 | 205.2-209.2 |
+    | bigint, modPow 1024-bit | 34.2 | 34.2-34.3 |
+    | total | 485.2 | 480.0-512.5 |
+
+  - **Conservative surface:** QEMU raspi4b FrameBench boot ends `nomap=0x27B9` (10,169 heap blocks scanned without
+    a map: S6's starting count), `roots=0x95D`, 8 collections. Raw-word references in VM code: 145 `allocData`
+    sites in 28 files, 763 `ObjectReference` uses, 458 `.toLong()` calls in vm/board/net (S2's shadow comparison
+    will measure which of them are live across a call).
+  - **QEMU is not a proxy here:** raspi4b ran the locals kernel 5x faster than the Pi (7 vs 37 ms) and fib(32) ~3x
+    slower (146 vs 55 ms). S1 is measured on the Pi.
+  - **Found:** the first, larger version (~50 MB of garbage) halted the Pi: heap OOM on core 3 while the run held the
+    loader lock, then `GC: STW TIMEOUT ... collection SKIPPED` and a wedged board (BACKLOG.md "Collector").
+    FrameBench now allocates ~25 MB a run, and each measured run had a fresh boot.
 - **PLATFORM, INCREMENT P10: the WiFi chip's SDIO host behind a board-neutral class -- `board.cyw43` names no board
   (2026-11-19).**
   - New abstract **`board.SdioHost`**: `init`, `control1`, `setClock`, `cmd52Read/Write`, `cmd53Read/Write`,

@@ -4880,6 +4880,74 @@ It is basic inheritance, not the priority-ceiling protocol, so it bounds blockin
 deadlock. The per-switch scan is linear; a per-priority ready bitmap would make it O(1) if `MAX_TASKS` ever
 grows past a few dozen.
 
+## Memory-based frames and precise GC (arc decided 2026-11-19)
+
+**Decision.** Before the optimizing compiler (BACKLOG.md "Optimizing compiler"), Baseline moves to a
+**memory-based stack frame** and the collector to **safepoint-based, precise** root finding. The memory frame is
+the canonical frame the optimizing tier deoptimizes into; precise roots are what a moving collector needs, and a
+moving collector is the lever the GC-pause and fragmentation problems are waiting for (BACKLOG.md "Collector",
+the compaction arc's stop). Confirmed with the user:
+
+1. **Fully memory-based Baseline.** Every local and operand-stack slot has a fixed FP-relative home; registers are
+   temporaries within a bytecode's lowering, written back before any call or branch target. No local is cached in
+   a register across bytecodes. Speed comes back from the optimizing tier, not from Baseline.
+2. **A Baseline slowdown is accepted** between S1 and the optimizing tier. S0 and S1 put a number on it first.
+3. **Each increment is validated on the Pi** before the next starts.
+
+**Reference: Jikes RVM**, used as the guide for this arc (concepts and structure; every line is still written here,
+per the first-principles rule). The source is in the JOE checkout, `~/git/JOE/rvm/src/org/jikesrvm` and
+`~/git/JOE/common/vmmagic/src/org/vmmagic/pragma`. PowerPC is the closer model (a RISC with a link register,
+like AArch64); IA-32 is the second opinion.
+
+| Topic | Jikes RVM |
+|---|---|
+| Baseline frame layout, locals and operand stack in memory | `compilers/baseline/ppc/BaselineCompilerImpl.java`, `ppc/StackframeLayoutConstants.java` |
+| Reference maps from bytecode (dataflow, JSR) | `compilers/baseline/BuildReferenceMaps.java`, `ReferenceMaps.java`, `JSRInfo.java`, `UnusualMaps.java` |
+| Walking a baseline frame's references | `compilers/baseline/ppc/BaselineGCMapIterator.java`, `AbstractBaselineGCMapIterator.java` |
+| One iterator per compiler, frames of every kind | `mm/mminterface/GCMapIterator.java`, `GCMapIteratorGroup.java`, `compilers/common/HardwareTrapGCMapIterator.java` |
+| Yieldpoints: where a thread may stop, and how a request reaches it | `scheduler/RVMThread.java` (`yieldpoint`, `takeYieldpoint`) |
+| Code with no yieldpoints, raw words that are not references | `org/vmmagic/pragma/Uninterruptible.java`, `Interruptible.java`, `UninterruptibleNoWarn.java`; `org.vmmagic.unboxed.ObjectReference` |
+| Exception delivery into a baseline frame | `compilers/baseline/ppc/BaselineExceptionDeliverer.java`, `BaselineExceptionTable.java` |
+
+**What exists today** (the starting point, measured 2026-11-19):
+- Locals live in x19..x28 (`Baseline.LOC_BASE`), the rest in the frame; the operand stack lives in x9..x15 and is
+  already written to fixed frame slots at every call (`Baseline.spillLive`). The unwinder rebuilds callee-saved
+  locals from `VM.frameSizeAt` + `VM.jitRegLocalsAt`.
+- The timer interrupt switches tasks at ANY instruction (`VMScheduler.schedule`, x0..x30 + ELR saved);
+  stop-the-world parks cores from there.
+- Roots are conservative (`VMGc`): the current, boot and idle stacks; spawned tasks' stacks (heap blocks,
+  scanned whole); cores 1-3's arenas (scanned whole). A probe counts only if it is an exact block base, so an
+  interior pointer keeps nothing alive.
+- The VM's own Java holds references in raw words: 145 `allocData` sites in 28 files, 763 `ObjectReference`
+  uses, 458 `.toLong()` calls in vm/board/net. Conservative scanning is what keeps those alive today.
+- Heap tracing is precise for typed objects; raw `allocData` blocks and raw arrays are still scanned
+  conservatively (the `nomap=` count).
+
+**Increments.**
+- **S0: measure.** Baseline benchmarks before any change (the number S1's slowdown is read against); a census of
+  raw-word references live across calls in VM code; the current `nomap` count.
+- **S1: memory frames.** Baseline, in the writer and on metal, gives every local a frame slot; x19..x28 are no
+  longer locals. The unwinder stops reconstructing callee-saved registers (`jitRegLocalsAt` and its bug class
+  retire). Measured against S0.
+- **S2: reference maps, checked in shadow.** Baseline computes per-slot types by dataflow (as
+  `BuildReferenceMaps` does, extending `computeDepths`) and records a reference bitmap at every call and poll
+  site, for image and JIT code alike. The collector stays conservative but compares: every reference only the
+  conservative scan found is reported with its frame and site. That report is S4's worklist.
+- **S3: safepoints.** Polls at loop back-edges (the `/run` stop polls grow into yieldpoints) and method
+  prologues; the timer only REQUESTS a switch, taken at the next poll; stop-the-world parks at polls. An
+  `@Uninterruptible`-style pragma marks code that gets no polls (allocator, scheduler, collector, interrupt
+  path). Measure time-to-safepoint.
+- **S4: hidden references.** Fix what S2 reports: type the value as a reference, or put the region under the
+  no-poll pragma. Done when the shadow comparison is clean over the probe regression and the suites.
+- **S5: precise roots.** The collector walks stacks by map; trampolines and stubs get descriptor-based maps (their
+  saved x0..x15 can hold reference arguments); task stacks are walked frame by frame, not scanned whole. At a
+  safepoint no register holds a live value, which is what the memory frame buys here.
+- **S6: precise heap.** Type `allocData` blocks and raw arrays until `nomap` is 0; retire the block-start bitmap.
+- **S7: a moving collector**, as its own arc.
+
+Then the optimizing compiler resumes, with two added requirements: maps that describe registers as well as
+slots, and derived-pointer entries for interior pointers.
+
 ## 5. Design decisions to lock day one
 
 - **Compile-only, no interpreter.** With no OS/interpreter beneath, the first code
