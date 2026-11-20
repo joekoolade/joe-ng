@@ -7,7 +7,7 @@
 # scripts/junit-stage.sh to copy + compile a test from the JDK tree first. This only sets the manifest,
 # builds a throwaway image (/tmp/junit.img -- kernel8.img untouched) and boots QEMU.
 #
-# The NetDemo manifest is always restored, including on failure: ramfs/etc/init is TRACKED, and leaving a
+# The committed manifest is always restored, including on failure: ramfs/etc/init is TRACKED, and leaving a
 # generated one behind is how it gets committed by accident.
 set -eu
 

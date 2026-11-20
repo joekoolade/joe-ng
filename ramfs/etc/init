@@ -1,3 +1,2 @@
-main=demo/NetDemo
-args=example.com
+main=demo/WebServerDemo
 net=1
