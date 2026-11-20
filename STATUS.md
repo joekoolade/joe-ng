@@ -4,6 +4,49 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **FRAMES/GC ARC, INCREMENT S1: memory-based frames in Baseline (2026-11-20).** Every local of a framed method now
+  lives in a fixed frame slot (the existing overflow-local path, from slot 0); no Baseline method saves, uses or
+  restores x19..x28. The one exception is the frameless image entry (`VM.boot`, `isEntry`), which has no frame:
+  its first 10 locals stay in x19..x28 -- and since nothing else touches them, they survive every call and throw.
+  - **Unwinder:** the callee-saved reconstruction is gone. `VMUnwind.unwind` no longer seeds a buffer from its own
+    prologue's saves or copies each popped frame's saved x19..; `RESUME` no longer reloads x19..x28 (it still
+    consumes its two arguments, passed 0). `VM.unwindLocBufs` deleted. A handler finds its locals in its own frame,
+    which the unwind leaves intact -- the "local reads as garbage after a caught throw" bug class is retired.
+  - Synchronized-method entry reads `this` from its frame slot. The frame and local tables are unchanged (the local
+    count is now 0 for every framed method); leaf frames are unchanged in kind (a leaf never calls, so the walk
+    never pops one mid-stack).
+  - Tests: CompilerTest's golden words rewritten to the frame form (`str x0, [sp]` / `ldr x9, [sp]` in place of the
+    x19 save + moves), the `long[]`-is-one-slot check now looks for `str x1` at slot 1's offset; UnboxedTest's
+    `normal()` also renumbers stack-slot offsets by first use (a `long` parameter takes two local slots where an
+    `Address` takes one).
+  - **Validated:** `make test` + overlaycheck OK. virt 17/17 and raspi4b 16/16: the usual set plus
+    ExcMessageRaceProbe, HighLocalThrowProbe, DeepTraceProbe, CtorChainTraceProbe, CatchDeniedProbe, WideFrameProbe,
+    DefaultFrameProbe, ThrowableStockProbe, TraceProbe, StackWalkerProbe.
+  - **Pi 4, build `79b171b1553ee33e`** (pushed by `scripts/push.sh`, trial boot committed, on-card sha256 = host),
+    FrameBench three runs, each on a fresh boot; every checksum identical to S0. The image now bakes
+    `demo.FrameBench`, so `/run` refuses that jar ("already part of this VM"); the same source was run as
+    `fbench.FrameBench` (`/tmp/s1jar/fbench.jar`, package line changed only). Median ms:
+
+    | Kernel | S0 | S1 | change |
+    |---|---|---|---|
+    | calls fib(32) | 55.5 | 56.7 | +2.2% |
+    | locals 8-local mix | 37.3 | 29.5 | **-20.9%** |
+    | arrays sort 200k | 84.5 | 90.2 | +6.7% |
+    | objects tree | 21.3 | 29.6 | **+39%** |
+    | dispatch interface | 23.3 | 48.3 | bimodal, see below |
+    | strings | 19.9 | 19.9 | 0 |
+    | sha256 1 MiB | 209.0 | 210.6 | +0.8% |
+    | bigint modPow | 34.2 | 36.5 | +6.7% |
+    | **sum without dispatch** | 461.7 | 473.0 | **+2.4%** |
+
+    Runs are tight (spread <= 2.1 ms per kernel) except dispatch, which is **bimodal in both builds** -- ~23 or ~50
+    ms per boot (S0 50.6/22.6/23.3, S1 48.3/24.3/51.0) -- so its median measures which mode a boot landed in, not
+    the frames; the fast modes are 22.6 vs 24.3 (+7.5%). The locals kernel got FASTER: the register form paid a
+    `mov` between x19.. and the operand registers on every access, which the load/store form replaces with a
+    forwarded `ldr`/`str`. The tree kernel is the real cost (allocation + a 3-argument constructor per node, every
+    argument now stored to and reloaded from the frame). Defining the 5 classes went 552-565 -> 649-665 ms (+17%):
+    the on-metal parser and compiler are themselves Baseline code. The arc accepted a Baseline slowdown until the
+    optimizing tier; the measured one is +2.4% overall.
 - **FRAMES/GC ARC, INCREMENT S0: the baseline the memory-frame change is measured against (2026-11-19).** The arc is
   in PLAN.md ("Memory-based frames and precise GC"); Jikes RVM (`~/git/JOE/rvm`) is its guide.
   - **New `demo/FrameBench`**: eight kernels, each warmed up once then timed as the best of 5, with a checksum per

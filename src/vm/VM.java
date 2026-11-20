@@ -3403,12 +3403,6 @@ public final class VM
     static long jitFrameCount;
     static Address jitLocalTable;               // parallel {codeStart, codeEnd, regLocals} — unwind's pre-try local restore
     static long jitLocalCount;
-    // 16 slots PER TASK (MAX_TASKS of them, indexed by curTask()): an unwind's scratch for reconstructing the
-    // handler's callee-saved locals. It was ONE buffer for the whole VM, so two tasks unwinding at once on two
-    // cores resumed into handlers holding each other's locals (ExcMessageRaceProbe: a captured AtomicInteger
-    // that held another thread's String). A task id is stable across migration, so preemption is safe too.
-    static Address unwindLocBufs;
-
     /** Point the JIT unwind tables (frame/local/handler) at their fixed scratch region if not yet set. These
      *  tables persist for the whole run behind these static pointers, but every JIT frame keeps writing to them,
      *  so they must NOT live in the managed heap: the mark-sweep GC reclaims dead blocks onto the free list and

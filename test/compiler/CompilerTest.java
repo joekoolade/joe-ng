@@ -60,18 +60,17 @@ public final class CompilerTest
         T.eqWords("writeReg()", toArray(regWant), compile(fx, "writeReg", "()V"));
 
         // ---- calling convention: frame prologue/epilogue + return value ----
+        // Memory-based frame (frames/GC arc S1): every local has a frame slot; no callee-saved register is touched.
         List<Integer> addWant = new ArrayList<>();
         addWant.add(A64.subImm(31, 31, 16));             // sub sp,sp,#16
-        addWant.add(A64.strx(19, 31, 0));                // str x19,[sp]  (save callee-saved local)
-        addWant.add(A64.movReg(19, 0));                  // mov x19,x0    (param x -> local slot0)
-        addWant.add(A64.movReg(9, 19));                  // iload_0
+        addWant.add(A64.strx(0, 31, 0));                 // str x0,[sp]   (param x -> local slot0's frame slot)
+        addWant.add(A64.ldrx(9, 31, 0));                 // iload_0
         addAll(addWant, A64.loadImm64(10, 1));            // iconst_1
         addWant.add(A64.addReg(9, 9, 10));               // iadd
         addWant.add(A64.sxtw(9, 9));                     // ... canonicalised: an int stays sign-extended in
                                                          //     its 64-bit register even when it overflows,
                                                          //     which is what idiv/irem read (Baseline.canonInt)
         addWant.add(A64.movReg(0, 9));                   // ireturn: result -> x0
-        addWant.add(A64.ldrx(19, 31, 0));                // restore x19
         addWant.add(A64.addImm(31, 31, 16));             // add sp,sp,#16
         addWant.add(A64.ret());
         T.eqWords("addOne(int)", toArray(addWant), compile(fx, "addOne", "(I)I"));
@@ -81,27 +80,21 @@ public final class CompilerTest
 
         List<Integer> getWant = new ArrayList<>();
         getWant.add(A64.subImm(31, 31, 16));
-        getWant.add(A64.strx(19, 31, 0));
-        getWant.add(A64.movReg(19, 0));                  // this-less: static param f -> slot0
-        getWant.add(A64.movReg(9, 19));                  // aload_0
+        getWant.add(A64.strx(0, 31, 0));                 // this-less: static param f -> slot0
+        getWant.add(A64.ldrx(9, 31, 0));                 // aload_0
         getWant.add(A64.ldrx(9, 9, 16));                 // getfield value @16
         getWant.add(A64.movReg(0, 9));                   // ireturn
-        getWant.add(A64.ldrx(19, 31, 0));
         getWant.add(A64.addImm(31, 31, 16));
         getWant.add(A64.ret());
         T.eqWords("FieldFixture.get", toArray(getWant), compile(ff, "get", "(Lcompiler/FieldFixture;)I"));
 
         List<Integer> setWant = new ArrayList<>();
         setWant.add(A64.subImm(31, 31, 16));
-        setWant.add(A64.strx(19, 31, 0));
-        setWant.add(A64.strx(20, 31, 8));
-        setWant.add(A64.movReg(19, 0));                  // f -> slot0
-        setWant.add(A64.movReg(20, 1));                  // v -> slot1
-        setWant.add(A64.movReg(9, 19));                  // aload_0
-        setWant.add(A64.movReg(10, 20));                 // iload_1
+        setWant.add(A64.strx(0, 31, 0));                 // f -> slot0
+        setWant.add(A64.strx(1, 31, 8));                 // v -> slot1
+        setWant.add(A64.ldrx(9, 31, 0));                 // aload_0
+        setWant.add(A64.ldrx(10, 31, 8));                // iload_1
         setWant.add(A64.strx(10, 9, 16));                // putfield value @16
-        setWant.add(A64.ldrx(19, 31, 0));
-        setWant.add(A64.ldrx(20, 31, 8));
         setWant.add(A64.addImm(31, 31, 16));
         setWant.add(A64.ret());
         T.eqWords("FieldFixture.set", toArray(setWant), compile(ff, "set", "(Lcompiler/FieldFixture;I)V"));
@@ -111,9 +104,8 @@ public final class CompilerTest
         List<Integer> vWant = new ArrayList<>();
         vWant.add(A64.subImm(31, 31, 80));
         vWant.add(A64.strx(30, 31, 0));                  // save LR (non-leaf)
-        vWant.add(A64.strx(19, 31, 8));
-        vWant.add(A64.movReg(19, 0));                    // f -> slot0
-        vWant.add(A64.movReg(9, 19));                    // aload_0
+        vWant.add(A64.strx(0, 31, 8));                   // f -> slot0
+        vWant.add(A64.ldrx(9, 31, 8));                   // aload_0
         vWant.add(A64.movReg(0, 9));                     // receiver -> x0
         vWant.add(A64.ldrx(16, 0, 0));                   // x16 = receiver.tib
         vWant.add(A64.ldrx(16, 16, 8));                  // x16 = tib[vmethod 0]  (offset 8)
@@ -121,7 +113,6 @@ public final class CompilerTest
         vWant.add(A64.movReg(9, 0));                     // result -> stack
         vWant.add(A64.movReg(0, 9));                     // ireturn
         vWant.add(A64.ldrx(30, 31, 0));
-        vWant.add(A64.ldrx(19, 31, 8));
         vWant.add(A64.addImm(31, 31, 80));
         vWant.add(A64.ret());
         T.eqWords("FieldFixture.callVal", toArray(vWant), compile(ff, "callVal", "(Lcompiler/FieldFixture;)I"));
@@ -210,27 +201,23 @@ public final class CompilerTest
         // ---- arrays: baload (base+index<<0) and arraylength (@16) ----
         List<Integer> elemWant = new ArrayList<>();
         elemWant.add(A64.subImm(31, 31, 16));
-        elemWant.add(A64.strx(19, 31, 0));
-        elemWant.add(A64.movReg(19, 0));                 // a -> slot0
-        elemWant.add(A64.movReg(9, 19));                 // aload_0
+        elemWant.add(A64.strx(0, 31, 0));                // a -> slot0
+        elemWant.add(A64.ldrx(9, 31, 0));                // aload_0
         addAll(elemWant, A64.loadImm64(10, 0));           // iconst_0 (index)
         elemWant.add(A64.addImm(9, 9, 24));              // &elem0
         elemWant.add(A64.addRegLsl(9, 9, 10, 0));        // &elem[index]
         elemWant.add(asm.A64Enc.ldrsb(9, 9, 0));        // baload (SIGN-extends: JVM byte semantics)
         elemWant.add(A64.movReg(0, 9));                  // ireturn
-        elemWant.add(A64.ldrx(19, 31, 0));
         elemWant.add(A64.addImm(31, 31, 16));
         elemWant.add(A64.ret());
         T.eqWords("arrElem0(byte[])", toArray(elemWant), compile(fx, "arrElem0", "([B)I"));
 
         List<Integer> lenWant = new ArrayList<>();
         lenWant.add(A64.subImm(31, 31, 16));
-        lenWant.add(A64.strx(19, 31, 0));
-        lenWant.add(A64.movReg(19, 0));
-        lenWant.add(A64.movReg(9, 19));                  // aload_0
+        lenWant.add(A64.strx(0, 31, 0));                 // a -> slot0
+        lenWant.add(A64.ldrx(9, 31, 0));                 // aload_0
         lenWant.add(A64.ldrx(9, 9, 16));                 // arraylength @16
         lenWant.add(A64.movReg(0, 9));                   // ireturn
-        lenWant.add(A64.ldrx(19, 31, 0));
         lenWant.add(A64.addImm(31, 31, 16));
         lenWant.add(A64.ret());
         T.eqWords("arrLen(int[])", toArray(lenWant), compile(fx, "arrLen", "([I)I"));
@@ -238,18 +225,14 @@ public final class CompilerTest
         // ---- irem: SDIV + MSUB, with the original dividend stashed in SCRATCH (x16) ----
         List<Integer> remWant = new ArrayList<>();
         remWant.add(A64.subImm(31, 31, 16));
-        remWant.add(A64.strx(19, 31, 0));
-        remWant.add(A64.strx(20, 31, 8));
-        remWant.add(A64.movReg(19, 0));                  // a -> slot0
-        remWant.add(A64.movReg(20, 1));                  // b -> slot1
-        remWant.add(A64.movReg(9, 19));                  // iload_0 (a)
-        remWant.add(A64.movReg(10, 20));                 // iload_1 (b)
+        remWant.add(A64.strx(0, 31, 0));                 // a -> slot0
+        remWant.add(A64.strx(1, 31, 8));                 // b -> slot1
+        remWant.add(A64.ldrx(9, 31, 0));                 // iload_0 (a)
+        remWant.add(A64.ldrx(10, 31, 8));                // iload_1 (b)
         remWant.add(A64.movReg(16, 9));                  // SCRATCH = a
         remWant.add(A64.sdivReg(9, 16, 10));             // r = a / b
         remWant.add(A64.msub(9, 9, 10, 16));             // r = a - (a/b)*b
         remWant.add(A64.movReg(0, 9));                   // ireturn
-        remWant.add(A64.ldrx(19, 31, 0));
-        remWant.add(A64.ldrx(20, 31, 8));
         remWant.add(A64.addImm(31, 31, 16));
         remWant.add(A64.ret());
         T.eqWords("rem(int,int)", toArray(remWant), compile(fx, "rem", "(II)I"));
@@ -262,15 +245,13 @@ public final class CompilerTest
         // ---- ternary: value survives the branch merge (same register both paths) ----
         List<Integer> ternWant = new ArrayList<>();
         ternWant.add(A64.subImm(31, 31, 16));
-        ternWant.add(A64.strx(19, 31, 0));
-        ternWant.add(A64.movReg(19, 0));                 // x -> slot0
-        ternWant.add(A64.movReg(9, 19));                 // iload_0
+        ternWant.add(A64.strx(0, 31, 0));                // x -> slot0
+        ternWant.add(A64.ldrx(9, 31, 0));                // iload_0
         ternWant.add(A64.cbz(9, 12));                    // ifeq -> else
         addAll(ternWant, A64.loadImm64(9, 0x41));         // bipush 0x41
         ternWant.add(A64.b(8));                          // goto end
         addAll(ternWant, A64.loadImm64(9, 0x42));         // else: bipush 0x42 (same reg x9)
         ternWant.add(A64.movReg(0, 9));                  // ireturn
-        ternWant.add(A64.ldrx(19, 31, 0));
         ternWant.add(A64.addImm(31, 31, 16));
         ternWant.add(A64.ret());
         T.eqWords("tern(int)", toArray(ternWant), compile(fx, "tern", "(I)I"));
@@ -323,17 +304,21 @@ public final class CompilerTest
         T.eq("catch type is MyExc", 1, vmcf.classAt(runM.exceptions[0].catchType()).equals("vm/MyExc") ? 1 : 0);
 
         // ---- regression: a long[]/double[] PARAM is a 1-slot reference (not category-2) ----
-        // afterLongArray(long[] a, int n): a -> slot0 (x19), n -> slot1 (x20). If [J were miscounted as 2 slots,
-        // n would map to x21 and the body's iload_1 (x20) would read garbage. This was the #43 loadGuest hang.
+        // afterLongArray(long[] a, int n): a -> slot0, n -> slot1, each in its frame slot (8 bytes apart). If [J were
+        // miscounted as 2 slots, n would land in slot 2's home and the body's iload_1 would read garbage. This was
+        // the #43 loadGuest hang.
         int[] ala = compile(fx, "afterLongArray", "([JI)I");
-        boolean nToX20 = false;
-        boolean nToX21 = false;
+        int aOff = -1;
         for (int w : ala)
         {
-            if (w == A64.movReg(20, 1)) { nToX20 = true; }   // mov x20, x1  (n -> slot1, correct)
-            if (w == A64.movReg(21, 1)) { nToX21 = true; }   // mov x21, x1  (n -> slot2, the bug)
+            for (int o = 0; o < 64 && aOff < 0; o += 8)
+            {
+                if (w == A64.strx(0, 31, o)) { aOff = o; }   // str x0, [sp, #o]  (a -> slot0)
+            }
         }
-        T.check("long[] param is 1 slot: int n -> x20 (not x21)", nToX20 && !nToX21);
+        boolean nToSlot1 = aOff >= 0 && contains(ala, A64.strx(1, 31, aOff + 8));    // n -> slot1 (correct)
+        boolean nToSlot2 = aOff >= 0 && contains(ala, A64.strx(1, 31, aOff + 16));   // n -> slot2 (the bug)
+        T.check("long[] param is 1 slot: int n -> slot1 (not slot2)", nToSlot1 && !nToSlot2);
 
         // ---- string literals: interned as a byte[] object laid out in the image ----
         String img = new String(BuildRuntimeImage.build(classesDir).toBytes(), StandardCharsets.US_ASCII);
