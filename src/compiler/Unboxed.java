@@ -60,6 +60,10 @@ public final class Unboxed
     /** {@code magic/ObjectReferenceArray}: a {@code long[]} at run time, lowered exactly as {@link #ADDRESS_ARRAY}. */
     public static final int OBJECT_REFERENCE_ARRAY = 7;
 
+    /** {@code magic/DataReference}: a raw data block's payload address; lowered exactly as {@link #ADDRESS}, but a
+     *  reference to the collector (compiler.RefMaps types it apart). */
+    public static final int DATA_REFERENCE = 8;
+
     private static final long O_ADDRESS = 7816296518595377735L; // "magic/Address"
     private static final long O_WORD = 2502753236447134729L;  // "magic/Word"
     private static final long O_OFFSET = -5453143413838101434L; // "magic/Offset"
@@ -67,6 +71,7 @@ public final class Unboxed
     private static final long O_ADDRESS_ARRAY = -2760638129083984252L; // "magic/AddressArray"
     private static final long O_OBJECT_REFERENCE = -5959478901542360285L; // "magic/ObjectReference"
     private static final long O_OBJECT_REFERENCE_ARRAY = -3793534773957816616L; // "magic/ObjectReferenceArray"
+    private static final long O_DATA_REFERENCE = -769869719729673626L; // "magic/DataReference"
     private static final long N_CREATE = -626457835795418115L; // "create"
     private static final long N_GET = -3106811833996379657L;  // "get"
     private static final long N_SET = -9062501282150740445L;  // "set"
@@ -83,6 +88,7 @@ public final class Unboxed
     private static final long N_TO_INT = 3078381310305587645L; // "toInt"
     private static final long N_TO_WORD = -3548672568172380628L; // "toWord"
     private static final long N_TO_ADDRESS = 3340780673232283588L; // "toAddress"
+    private static final long N_FROM_ADDRESS = -8590941786949706909L; // "fromAddress"
     private static final long N_TO_OFFSET = -4944248131659823137L; // "toOffset"
     private static final long N_TO_EXTENT = -4864762652956595076L; // "toExtent"
     private static final long N_TO_OBJECT_REFERENCE = -1624544305862165288L; // "toObjectReference"
@@ -119,6 +125,7 @@ public final class Unboxed
     private static final long N_LOAD_ADDRESS = -2245672408505575529L; // "loadAddress"
     private static final long N_LOAD_WORD = 3647669981763934105L; // "loadWord"
     private static final long N_LOAD_OBJECT_REFERENCE = 4613837479075637683L; // "loadObjectReference"
+    private static final long N_LOAD_DATA_REFERENCE = 3720825202977993910L; // "loadDataReference"
     private static final long N_STORE = 4967000543033605518L; // "store"
     private static final long N_ATTEMPT = 7198468255150783982L; // "attempt"
 
@@ -172,6 +179,10 @@ public final class Unboxed
         {
             return OBJECT_REFERENCE_ARRAY;
         }
+        if (h == O_DATA_REFERENCE)
+        {
+            return DATA_REFERENCE;
+        }
         return NONE;
     }
 
@@ -193,7 +204,7 @@ public final class Unboxed
             return referenceOp(h);
         }
         if (h == N_FROM_LONG || h == N_TO_LONG || h == N_TO_WORD || h == N_TO_ADDRESS || h == N_TO_OFFSET
-                || h == N_TO_EXTENT || h == N_TO_OBJECT_REFERENCE)
+                || h == N_TO_EXTENT || h == N_TO_OBJECT_REFERENCE || h == N_FROM_ADDRESS)
         {
             return Intrinsics.UB_MOVE;
         }
@@ -423,7 +434,8 @@ public final class Unboxed
         {
             return off ? Intrinsics.UB_LD32_OFF : Intrinsics.LOAD32;
         }
-        if (h == N_LOAD_LONG || h == N_LOAD_ADDRESS || h == N_LOAD_WORD || h == N_LOAD_OBJECT_REFERENCE)
+        if (h == N_LOAD_LONG || h == N_LOAD_ADDRESS || h == N_LOAD_WORD || h == N_LOAD_OBJECT_REFERENCE
+                || h == N_LOAD_DATA_REFERENCE)
         {
             return off ? Intrinsics.UB_LD64_OFF : Intrinsics.LOAD64;
         }

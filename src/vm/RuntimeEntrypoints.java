@@ -13,6 +13,7 @@ package vm;
 
 import board.Uart;
 import magic.Address;
+import magic.DataReference;
 import magic.Magic;
 import magic.ObjectReference;
 import objectmodel.ObjectModel;
@@ -52,7 +53,7 @@ final class RuntimeEntrypoints
         {
             return false;
         }
-        return exc.toAddress().plus(0L).loadAddress().EQ(ClassRegistry.clTab[i].tib);
+        return exc.toAddress().plus(0L).loadAddress().EQ(ClassRegistry.clTab[i].tib.toAddress());
     }
 
     /** Allocate a mini {@code java/lang/NullPointerException} (TIB set, field-free) — the JIT's null-check helper. */
@@ -178,7 +179,7 @@ final class RuntimeEntrypoints
         Address valueType = value == 0L ? Address.zero() : Loader.typeOfObject(ObjectReference.fromLong(value));
         if (e != 0L && !valueType.isZero() && Loader.classNameLen(valueType) > 0)   // a lambda has no name: omit
         {
-            setThrowableMessage(ObjectReference.fromLong(e), Loader.classNameString(valueType));
+            setThrowableMessage(ObjectReference.fromLong(e), Loader.classNameString(DataReference.fromAddress(valueType)));
         }
         return e;
     }
@@ -269,11 +270,11 @@ final class RuntimeEntrypoints
                                    int c0, int c1, int c2, int c3)
     {
         int cnt = level == 0 ? c0 : level == 1 ? c1 : level == 2 ? c2 : c3;
-        Address arr = Heap.allocArray(cnt, descElemSize(u1(desc.plus(off + 1))));
+        ObjectReference arr = Heap.allocArray(cnt, descElemSize(u1(desc.plus(off + 1)))).toObjectReference();
         Address tib = ArrayTypes.arrayTibOfDescN(desc, off, n);
         if (!tib.isZero())
         {
-            arr.plus(ObjectModel.TIB_OFFSET).store(tib);   // else leave the raw element size, as tagArray does
+            arr.toAddress().plus(ObjectModel.TIB_OFFSET).store(tib);   // else leave the raw element size, as tagArray does
         }
         if (level + 1 < dims)
         {
@@ -281,7 +282,7 @@ final class RuntimeEntrypoints
             while (k < cnt)
             {
                 long sub = multiLevel(desc, off + 1, n - 1, dims, level + 1, c0, c1, c2, c3);
-                arr.plus(ObjectModel.ARRAY_BASE_OFFSET).plus((long) k * ObjectModel.WORD).store(sub);
+                arr.toAddress().plus(ObjectModel.ARRAY_BASE_OFFSET).plus((long) k * ObjectModel.WORD).store(sub);
                 k += 1;
             }
         }
@@ -299,13 +300,13 @@ final class RuntimeEntrypoints
      * <p>They used to be recorded in statics by {@code castOk}'s failing path and read back here, which another
      * core's failing cast could overwrite or clear in between (ExcMessageRaceProbe).
      */
-    static long newCce(ObjectReference ref, Address targetType)
+    static long newCce(ObjectReference ref, DataReference targetType)
     {
         long e = newExc(Magic.bytes("java/lang/ClassCastException"));
         if (e != 0L && !ref.isNull() && !targetType.isZero())
         {
             long tib = ref.toAddress().loadLong();
-            setThrowableMessage(ObjectReference.fromLong(e), Loader.guestString(castFailureMessage(tib, Loader.typeOfObject(ref), targetType)));
+            setThrowableMessage(ObjectReference.fromLong(e), Loader.guestString(castFailureMessage(tib, Loader.typeOfObject(ref), targetType.toAddress())));
         }
         return e;
     }
@@ -373,8 +374,9 @@ final class RuntimeEntrypoints
             // and indistinguishable at the catch site from an exception that simply says little.
             excMissing(name);
         }
-        Address tib = i >= 0 ? ClassRegistry.clTab[i].tib : Address.zero();
-        long obj = Heap.alloc(i >= 0 ? (16 + ClassRegistry.clTab[i].fieldCount * 8) : 16).toLong();
+        DataReference tib = i >= 0 ? ClassRegistry.clTab[i].tib : DataReference.zero();
+        ObjectReference objRef = Heap.alloc(i >= 0 ? (16 + ClassRegistry.clTab[i].fieldCount * 8) : 16).toObjectReference();
+        long obj = objRef.toLong();                  // a raw copy; objRef keeps the block alive
         Address.fromLong(obj).plus(0L).store(tib);
         if (i >= 0)
         {

@@ -1555,7 +1555,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VM.monEnterSync(Lmagic/ObjectReference;J)V", "vm/VM.monEnterSyncAddr");  // synchronized method
         stashHelper(image, staticWord, wordOffset, "vm/VM.monExitSync()V",    "vm/VM.monExitSyncAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.arrayStoreOk(Lmagic/ObjectReference;Lmagic/ObjectReference;)I",  "vm/VM.arrayStoreOkAddr"); // aastore check
-        stashHelper(image, staticWord, wordOffset, "vm/VM.newCce(Lmagic/ObjectReference;Lmagic/Address;)J",        "vm/VM.newCceAddr");     // ClassCastException
+        stashHelper(image, staticWord, wordOffset, "vm/VM.newCce(Lmagic/ObjectReference;Lmagic/DataReference;)J",        "vm/VM.newCceAddr");     // ClassCastException
         stashHelper(image, staticWord, wordOffset, "vm/VM.castOk(Lmagic/ObjectReference;Lmagic/Address;)I",        "vm/VM.castOkAddr");     // checkcast predicate
         stashHelper(image, staticWord, wordOffset, "vm/VM.newUnresolved(J)J", "vm/VM.newUnresolvedAddr"); // late-resolved `new`
         stashHelper(image, staticWord, wordOffset, "vm/VM.ctorRefInit(J)V", "vm/VM.ctorRefInit0");         // ctor-ref <clinit> (JVMS 5.5)

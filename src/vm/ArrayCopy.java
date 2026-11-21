@@ -12,6 +12,7 @@
 package vm;
 
 import magic.Address;
+import magic.DataReference;
 import magic.Magic;
 import magic.ObjectReference;
 import objectmodel.ObjectModel;
@@ -56,7 +57,7 @@ final class ArrayCopy
     /** What {@code arr} is: not an array, a primitive array, a reference array, or a raw (untyped) array. */
     private static int kindOf(ObjectReference arr)
     {
-        Address tib = arr.toAddress().plus(ObjectModel.TIB_OFFSET).loadAddress();
+        DataReference tib = arr.toAddress().plus(ObjectModel.TIB_OFFSET).loadDataReference();
         if (tib.toLong() > 0L && tib.toLong() <= ObjectModel.MAX_RAW_ARRAY_TIB)
         {
             return RAW;
@@ -65,8 +66,8 @@ final class ArrayCopy
         {
             return NOT_ARRAY;
         }
-        Address type = tib.loadAddress();
-        if (!ArrayTypes.isArrayType(type))
+        DataReference type = tib.loadDataReference();
+        if (!ArrayTypes.isArrayType(type.toAddress()))
         {
             return NOT_ARRAY;
         }
@@ -74,12 +75,12 @@ final class ArrayCopy
         {
             return REF;
         }
-        return Primitives.primArrayElemChar(type) != 0 ? PRIM : REF;   // no element and no primitive: unresolved ref
+        return Primitives.primArrayElemChar(type.toAddress()) != 0 ? PRIM : REF;   // no element and no primitive: unresolved ref
     }
 
     private static Address typeOf(ObjectReference obj)
     {
-        Address tib = obj.toAddress().plus(ObjectModel.TIB_OFFSET).loadAddress();
+        DataReference tib = obj.toAddress().plus(ObjectModel.TIB_OFFSET).loadDataReference();
         return tib.toLong() > ObjectModel.MAX_RAW_ARRAY_TIB ? tib.loadAddress() : Address.zero();
     }
 

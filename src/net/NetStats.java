@@ -121,7 +121,7 @@ public final class NetStats
             ipReasmFails = ipReasmFails + 1;
             return false;
         }
-        if (!Ip.ourIp.isZero() && !Ip.eq(ip.plus(16), Ip.ourIp) && (ip.plus(19).loadUnsignedByte() & 0xFF) != 0xFF)
+        if (!Ip.ourIp.isZero() && !Ip.eq(ip.plus(16), Ip.ourIp.toAddress()) && (ip.plus(19).loadUnsignedByte() & 0xFF) != 0xFF)
         {
             ipInAddrErrors = ipInAddrErrors + 1;
             return false;

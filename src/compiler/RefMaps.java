@@ -24,9 +24,12 @@ import classfile.ClassReader;
  * every instruction in a try range (before it, and after it for a store) into the handler.
  *
  * <p>The unboxed {@code magic} types are words in a register, not references: {@code Address}, {@code Word},
- * {@code Offset} and {@code Extent} are {@link #RAW}, and {@code ObjectReference} is {@link #OREF}, kept apart
- * because it usually HOLDS an object and is where the VM's hidden references are expected (S4's worklist).
- * {@code AddressArray} and {@code ObjectReferenceArray} are real {@code long[]} objects, so they are references.
+ * {@code Offset} and {@code Extent} are {@link #RAW}; {@code DataReference} is {@link #DREF}, a raw data block's
+ * payload address, which the map gives its own code so the collector keeps that block alive. {@code ObjectReference} is {@link #OREF} in the dataflow and
+ * a REFERENCE in the map (frames/GC arc S4, decided with the user): it is the VM's unboxed form of a reference,
+ * so the collector traces it like one, and the shadow check's map-error test holds it to that -- a slot that
+ * holds anything but 0, an image object or a heap block base is reported. {@code AddressArray} and
+ * {@code ObjectReferenceArray} are real {@code long[]} objects, so they are references.
  *
  * <p>The map is recorded at every {@code BL}/{@code BLR} in the compiled body, keyed by its return address,
  * which is what a stack walk finds in the callee's saved-LR slot. A call is attributed to the bytecode whose
@@ -46,13 +49,17 @@ public final class RefMaps
     static final byte RAW = 2;     // a category-1 primitive, or an unboxed Address/Word/Offset/Extent
     static final byte OREF = 3;    // an unboxed ObjectReference: a raw word that usually holds an object
     static final byte WIDE = 4;    // a long or double: RAW in the map, but pop2/dup2 need its category
+    static final byte DREF = 5;    // a magic.DataReference: a raw data block's payload address, which keeps it alive
 
     /** First word of every map: "GMAP". */
     static final int MAGIC = 0x50414D47;
-    /** Map header words: magic, sites, locals, op slots, locals base, op base, bit words, unique maps. Then the
-     *  sites ({@link #SITE_WORDS} each, by return word), then the unique maps (bit words each, 2 bits a slot:
-     *  0 dead, 1 reference, 2 raw, 3 ObjectReference; locals first, then operand slots). */
-    static final int HEADER_WORDS = 8;
+    /** Map header words: magic, sites, locals, op slots, locals base, op base, bit words, unique maps, out-args
+     *  base, out-args slots. Then the sites ({@link #SITE_WORDS} each, by return word), then the unique maps (bit
+     *  words each, 2 bits a slot: 0 dead, 1 reference (an ObjectReference too), 2 raw, 3 data reference (a
+     *  {@code magic.DataReference}: a raw block's payload address); locals first, then operand slots).
+     *  The out-args area (arguments past the eighth, written just before a call) is not typed: the callee's
+     *  prologue copies them into its own locals, so only a frame between the two -- a trampoline -- needs them. */
+    static final int HEADER_WORDS = 10;
     /** Words per site: the return word, then unique-map index | live operand depth << 16 | entering depth << 24.
      *  A method whose site would not fit (65536 maps, 256 operand slots) gets no map. */
     static final int SITE_WORDS = 2;
@@ -491,6 +498,10 @@ public final class RefMaps
         if (k == Unboxed.OBJECT_REFERENCE)
         {
             return OREF;
+        }
+        if (k == Unboxed.DATA_REFERENCE)
+        {
+            return DREF;
         }
         return REF;
     }
@@ -961,11 +972,15 @@ public final class RefMaps
         }
         if (t == OREF)
         {
-            return 3;
+            return 1;                                   // an ObjectReference is a reference to the collector (S4)
         }
         if (t == RAW || t == WIDE)
         {
             return 2;
+        }
+        if (t == DREF)
+        {
+            return 3;                                   // a data reference: keeps the block at value - header
         }
         return 0;
     }
@@ -984,6 +999,10 @@ public final class RefMaps
     private int[] spD;
     private int spN;
     private int spAt;              // the next spill record not yet passed
+    private int[] trW0;            // the compiler's typed transients: {from word, to word, operand slot}
+    private int[] trW1;
+    private int[] trSlot;
+    private int trN;
 
     /**
      * Append the map for the body's {@code codeWords} words to {@code cb}; answer the word index of its header,
@@ -992,9 +1011,13 @@ public final class RefMaps
      * spillD} are the compiler's spills ({word, depth}, in word order): the depth of the last spill before a call
      * in the same bytecode is how many operand slots that call's frame holds live.
      */
-    int emitMap(CodeBuffer cb, int codeWords, int[] bcToWord, int localsBase, int opBase,
-                int[] spillW, int[] spillD, int spillN)
+    int emitMap(CodeBuffer cb, int codeWords, int[] bcToWord, int localsBase, int opBase, int outBase, int outSlots,
+                int[] spillW, int[] spillD, int spillN, int[] trW0, int[] trW1, int[] trSlot, int trN)
     {
+        this.trW0 = trW0;
+        this.trW1 = trW1;
+        this.trSlot = trSlot;
+        this.trN = trN;
         bitWords = (2 * width + 31) / 32;
         nSites = 0;
         sRet = new int[16];
@@ -1063,6 +1086,8 @@ public final class RefMaps
         cb.emit(opBase);
         cb.emit(bitWords);
         cb.emit(nUnique);
+        cb.emit(outBase);
+        cb.emit(outSlots);
         for (int i = 0; i < nSites; i++)
         {
             cb.emit(sRet[i]);
@@ -1146,6 +1171,15 @@ public final class RefMaps
                 {
                     int bit = 2 * (nLoc + k);
                     site[bit >> 5] = site[bit >> 5] & ~(3 << (bit & 31));
+                }
+                for (int t = 0; t < trN; t++)
+                {
+                    int k = trSlot[t];
+                    if (i >= trW0[t] && i < trW1[t] && k >= typed && k < liveD && k < nStk)
+                    {
+                        int bit = 2 * (nLoc + k);
+                        site[bit >> 5] = site[bit >> 5] | (1 << (bit & 31));   // a reference the lowering holds
+                    }
                 }
                 if (nSites == sRet.length)
                 {

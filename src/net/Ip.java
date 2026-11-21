@@ -12,6 +12,7 @@
 package net;
 
 import magic.Address;
+import magic.DataReference;
 import magic.Magic;
 import vm.Heap;
 
@@ -29,11 +30,11 @@ public final class Ip
 
     // Interface config, published by NetUp after DHCP + ARP (all zero until then: the network is not up).
     public static Address ourMac;   // heap addr of our 6-byte station MAC
-    public static Address ourIp;    // heap addr of our 4-byte leased IP
-    public static Address netMask;  // heap addr of the lease's 4-byte subnet mask (java.net.NetworkInterface)
-    public static Address gwMac;    // heap addr of the gateway's 6-byte MAC (all off-subnet traffic routes here)
-    public static Address gwIp;     // heap addr of the lease's 4-byte default gateway
-    public static Address dnsIp;    // heap addr of the lease's 4-byte DNS server
+    public static DataReference ourIp;    // heap addr of our 4-byte leased IP
+    public static DataReference netMask;  // heap addr of the lease's 4-byte subnet mask (java.net.NetworkInterface)
+    public static DataReference gwMac;    // heap addr of the gateway's 6-byte MAC (all off-subnet traffic routes here)
+    public static DataReference gwIp;     // heap addr of the lease's 4-byte default gateway
+    public static DataReference dnsIp;    // heap addr of the lease's 4-byte DNS server
 
     // Scratch describing the last IPv4 frame recvIp() accepted.
     public static int lastIhl;      // IP header length (bytes)
@@ -114,11 +115,11 @@ public final class Ip
         {
             return;                                      // not a request
         }
-        if (!eq(arp.plus(24), ourIp))
+        if (!eq(arp.plus(24), ourIp.toAddress()))
         {
             return;                                      // not asking for us
         }
-        Address buf = Heap.allocData(64);
+        DataReference buf = Heap.allocData(64);
         int i = 0;
         while (i < 6)
         {
@@ -140,7 +141,7 @@ public final class Ip
             r.plus(18 + i).store((byte) arp.plus(8 + i).loadUnsignedByte());             // target = the requester
             i = i + 1;
         }
-        copy4(ourIp, r.plus(14));
+        copy4(ourIp.toAddress(), r.plus(14));
         copy4(arp.plus(14), r.plus(24));
         i = 42;
         while (i < 60)
@@ -148,7 +149,7 @@ public final class Ip
             buf.plus(i).store((byte) 0);                     // pad to the 60-byte Ethernet minimum
             i = i + 1;
         }
-        send(buf, 60);
+        send(buf.toAddress(), 60);
     }
 
     /** One's-complement IPv4 header checksum over {@code len} bytes at {@code addr}. */

@@ -12,6 +12,7 @@
 package vm;
 
 import magic.Address;
+import magic.DataReference;
 
 /**
  * M8 Stage 3 (reified loader): one field in the loader's field registries. Reifies BOTH the static-field
@@ -22,7 +23,7 @@ import magic.Address;
  */
 final class RVMField
 {
-    Address base;    // declaring class blob base (holds its Utf8 strings)
+    DataReference base;    // declaring class blob base (holds its Utf8 strings)
     int  classOff;  // class name Utf8 offset (in base)
     int  nameOff;   // field name Utf8 offset (in base)
     long addr;      // the field's static-slot address

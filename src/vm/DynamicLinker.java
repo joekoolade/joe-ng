@@ -16,6 +16,7 @@ import board.Uart;
 import compiler.Baseline;
 import compiler.Symbols;
 import magic.Address;
+import magic.DataReference;
 import magic.AddressArray;
 import magic.Magic;
 import objectmodel.ObjectModel;
@@ -134,9 +135,9 @@ final class DynamicLinker
             // The SAME predicate the linear scan used -- the index only narrows which entries it is applied
             // to. Name-keyed, so the chain still has to check class and descriptor: `<init>`/`run`/`get`
             // repeat across the registry constantly.
-            if (Loader.utf8EqAt(refBase, classOff, MethodRegistry.rgTab[i].base, MethodRegistry.rgTab[i].classOff)
-                    && Loader.utf8EqAt(refBase, nameOff, MethodRegistry.rgTab[i].base, MethodRegistry.rgTab[i].nameOff)
-                    && Loader.utf8EqAt(refBase, descOff, MethodRegistry.rgTab[i].base, MethodRegistry.rgTab[i].descOff))
+            if (Loader.utf8EqAt(refBase, classOff, MethodRegistry.rgTab[i].base.toAddress(), MethodRegistry.rgTab[i].classOff)
+                    && Loader.utf8EqAt(refBase, nameOff, MethodRegistry.rgTab[i].base.toAddress(), MethodRegistry.rgTab[i].nameOff)
+                    && Loader.utf8EqAt(refBase, descOff, MethodRegistry.rgTab[i].base.toAddress(), MethodRegistry.rgTab[i].descOff))
             {
                 Loader.rgHitIdx = i;                            // memoisable: a single registry entry answered
                 Loader.bufResolveLog(refBase, classOff, nameOff, descOff, MethodRegistry.rgTab[i].buf, 1);
@@ -198,9 +199,9 @@ final class DynamicLinker
             while (j >= 0)
             {
                 Loader.t2Steps += 1;
-                if (Loader.utf8EqAt(Loader.pdBase.get(spd), Loader.pdNameOff[spd], MethodRegistry.rgTab[j].base, MethodRegistry.rgTab[j].classOff)
-                        && Loader.utf8EqAt(refBase, nameOff, MethodRegistry.rgTab[j].base, MethodRegistry.rgTab[j].nameOff)
-                        && Loader.utf8EqAt(refBase, descOff, MethodRegistry.rgTab[j].base, MethodRegistry.rgTab[j].descOff))
+                if (Loader.utf8EqAt(Loader.pdBase.get(spd), Loader.pdNameOff[spd], MethodRegistry.rgTab[j].base.toAddress(), MethodRegistry.rgTab[j].classOff)
+                        && Loader.utf8EqAt(refBase, nameOff, MethodRegistry.rgTab[j].base.toAddress(), MethodRegistry.rgTab[j].nameOff)
+                        && Loader.utf8EqAt(refBase, descOff, MethodRegistry.rgTab[j].base.toAddress(), MethodRegistry.rgTab[j].descOff))
                 {
                     Loader.bufResolveLog(refBase, classOff, nameOff, descOff, MethodRegistry.rgTab[j].buf, 2);
                     return MethodRegistry.rgTab[j].buf;
@@ -243,8 +244,8 @@ final class DynamicLinker
         }
         while (dlIndexed < dlN)
         {
-            int hh = Utf8.utf8Hash2(dlTab[dlIndexed].blob, dlTab[dlIndexed].classOff,
-                               dlTab[dlIndexed].blob, dlTab[dlIndexed].nameOff) & (DLTAB - 1);
+            int hh = Utf8.utf8Hash2(dlTab[dlIndexed].blob.toAddress(), dlTab[dlIndexed].classOff,
+                               dlTab[dlIndexed].blob.toAddress(), dlTab[dlIndexed].nameOff) & (DLTAB - 1);
             dlNext[dlIndexed] = dlBucket[hh];
             dlBucket[hh] = dlIndexed;
             dlIndexed += 1;
@@ -281,9 +282,9 @@ final class DynamicLinker
         {
             Loader.dlSteps += 1;
             if (dlTab[k].gen == Loader.loaderGen
-                    && Loader.utf8EqAt(clsBase, clsOff, dlTab[k].blob, dlTab[k].classOff)
-                    && Loader.utf8EqAt(nameBase, nameOff, dlTab[k].blob, dlTab[k].nameOff)
-                    && Loader.utf8EqAt(descBase, descOff, dlTab[k].blob, dlTab[k].descOff))
+                    && Loader.utf8EqAt(clsBase, clsOff, dlTab[k].blob.toAddress(), dlTab[k].classOff)
+                    && Loader.utf8EqAt(nameBase, nameOff, dlTab[k].blob.toAddress(), dlTab[k].nameOff)
+                    && Loader.utf8EqAt(descBase, descOff, dlTab[k].blob.toAddress(), dlTab[k].descOff))
             {
                 return dlTab[k].cell;
             }
@@ -403,11 +404,11 @@ final class DynamicLinker
         }
         int classOff = Loader.refClassNameOff(refCp);
         int nameOff = Loader.mrefNameOff(refCp);
-        if (Statics.sgIndexOf(Loader.gView.base, classOff, Loader.gView.base, nameOff) >= 0)
+        if (Statics.sgIndexOf(Loader.gView.base.toAddress(), classOff, Loader.gView.base.toAddress(), nameOff) >= 0)
         {
             return named;                               // declared by the named class itself
         }
-        int k = Statics.inheritedStaticIndex(Loader.gView.base, classOff, Loader.gView.base, nameOff, 0);
+        int k = Statics.inheritedStaticIndex(Loader.gView.base.toAddress(), classOff, Loader.gView.base.toAddress(), nameOff, 0);
         return k < 0 ? named : Statics.sgTab[k].base.plus((long) Statics.sgTab[k].classOff);
     }
 
@@ -1011,7 +1012,7 @@ final class DynamicLinker
             {
                 return b;
             }
-            if (blobDeclares(ClassRegistry.clTab[sreg].base, nameU, 0, descU, 0) == 1)
+            if (blobDeclares(ClassRegistry.clTab[sreg].base.toAddress(), nameU, 0, descU, 0) == 1)
             {
                 return 0L;                              // declared here and still not callable: report, do not climb
             }
@@ -1160,9 +1161,9 @@ final class DynamicLinker
         while (k >= 0)
         {
             if (MethodRegistry.rgTab[k].buf != 0L
-                    && Loader.utf8EqAt(MethodRegistry.rgTab[k].base, MethodRegistry.rgTab[k].classOff, clsU, 0)
-                    && Loader.utf8EqAt(MethodRegistry.rgTab[k].base, MethodRegistry.rgTab[k].nameOff, nameU, 0)
-                    && Loader.utf8EqAt(MethodRegistry.rgTab[k].base, MethodRegistry.rgTab[k].descOff, descU, 0))
+                    && Loader.utf8EqAt(MethodRegistry.rgTab[k].base.toAddress(), MethodRegistry.rgTab[k].classOff, clsU, 0)
+                    && Loader.utf8EqAt(MethodRegistry.rgTab[k].base.toAddress(), MethodRegistry.rgTab[k].nameOff, nameU, 0)
+                    && Loader.utf8EqAt(MethodRegistry.rgTab[k].base.toAddress(), MethodRegistry.rgTab[k].descOff, descU, 0))
             {
                 best = k;
             }
@@ -1193,7 +1194,7 @@ final class DynamicLinker
 
     static int regBySigU(Address clsU)
     {
-        return ClassRegistry.classRegAt(clsU, 0);                      // an absolute {u2 len}{bytes} run: offset 0 of clsU
+        return ClassRegistry.classRegAt(DataReference.fromAddress(clsU), 0);                      // an absolute {u2 len}{bytes} run: offset 0 of clsU
     }
 
     /**
@@ -1214,9 +1215,9 @@ final class DynamicLinker
         while (i < n)
         {
             Address e = Address.fromLong(VM.bakedTable + (long) i * 32L);
-            if (Loader.utf8EqAt(Loader.gView.base, Loader.gView.thisNameOff, e.loadAddress(), 0)
-                    && Loader.utf8EqAt(Loader.gView.base, nameOff, e.plus(8L).loadAddress(), 0)
-                    && Loader.utf8EqAt(Loader.gView.base, descOff, e.plus(16L).loadAddress(), 0))
+            if (Loader.utf8EqAt(Loader.gView.base.toAddress(), Loader.gView.thisNameOff, e.loadAddress(), 0)
+                    && Loader.utf8EqAt(Loader.gView.base.toAddress(), nameOff, e.plus(8L).loadAddress(), 0)
+                    && Loader.utf8EqAt(Loader.gView.base.toAddress(), descOff, e.plus(16L).loadAddress(), 0))
             {
                 return e.plus(24L).loadLong();
             }

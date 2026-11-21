@@ -435,4 +435,28 @@ public final class Address
     {
         throw intrinsic();
     }
+
+    /** The {@link DataReference} stored at this address. */
+    public DataReference loadDataReference()
+    {
+        throw intrinsic();
+    }
+
+    /** The {@link DataReference} stored at {@code offset} past this address. */
+    public DataReference loadDataReference(Offset offset)
+    {
+        throw intrinsic();
+    }
+
+    /** Store a {@link DataReference} at this address. */
+    public void store(DataReference value)
+    {
+        throw intrinsic();
+    }
+
+    /** Store a {@link DataReference} at {@code offset} past this address. */
+    public void store(DataReference value, Offset offset)
+    {
+        throw intrinsic();
+    }
 }

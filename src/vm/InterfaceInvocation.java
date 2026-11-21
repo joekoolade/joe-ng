@@ -13,6 +13,7 @@ package vm;
 
 import board.Uart;
 import magic.Address;
+import magic.DataReference;
 import magic.AddressArray;
 import magic.Magic;
 import magic.ObjectReference;
@@ -155,7 +156,7 @@ final class InterfaceInvocation
      *  hand-emitted scan it replaces: it stops at the 0 terminator instead of walking past it. */
     static long runFromItable(ObjectReference recv)
     {
-        return ifaceMethodFromItable(recv, Loader.runnableTypeAddr(), Loader.runnableRunSlot());
+        return ifaceMethodFromItable(recv, Loader.runnableTypeAddr().toAddress(), Loader.runnableRunSlot());
     }
 
     /** Slot {@code slot} of the receiver's itable run for interface {@code want}, or 0 (also 0 for want == 0). */
@@ -251,7 +252,7 @@ final class InterfaceInvocation
             int r = clIfaceReg[reg * MAX_DIRECT_IF + i];
             if (r >= 0 && ClassRegistry.clTab[r] != null)
             {
-                if (ClassRegistry.clTab[r].type.EQ(targetType))
+                if (ClassRegistry.clTab[r].type.EQ(DataReference.fromAddress(targetType)))
                 {
                     return true;
                 }
@@ -325,7 +326,7 @@ final class InterfaceInvocation
                     if (ITABLE_DIR_WATCH)
                     {
                         Uart.write(Magic.bytes("  itabledir "));
-                        Loader.printNameAt(ClassRegistry.clTab[ir].base, ClassRegistry.clTab[ir].nameOff);
+                        Loader.printNameAt(ClassRegistry.clTab[ir].base.toAddress(), ClassRegistry.clTab[ir].nameOff);
                         Uart.putc(0x2E);
                         Loader.printNameAt(nameOff, 0);
                         Loader.printNameAt(descOff, 0);
@@ -341,7 +342,7 @@ final class InterfaceInvocation
                     if (ITABLE_DIR_WATCH)
                     {
                         Uart.write(Magic.bytes("  itabledir(super) "));
-                        Loader.printNameAt(ClassRegistry.clTab[ir].base, ClassRegistry.clTab[ir].nameOff);
+                        Loader.printNameAt(ClassRegistry.clTab[ir].base.toAddress(), ClassRegistry.clTab[ir].nameOff);
                         Uart.putc(0x2E);
                         Loader.printNameAt(nameOff, 0);
                         Loader.printNameAt(descOff, 0);
@@ -432,7 +433,7 @@ final class InterfaceInvocation
             int attrs = u2(p.plus(6));
             if (Loader.isVirtual(u2(p), Loader.gView.cp[u2(p.plus(2))]))
             {
-                ifmAppendUnique(Loader.gView.base, Loader.gView.cp[u2(p.plus(2))], Loader.gView.cp[u2(p.plus(4))], Loader.gView.base);
+                ifmAppendUnique(Loader.gView.base.toAddress(), Loader.gView.cp[u2(p.plus(2))], Loader.gView.cp[u2(p.plus(4))], Loader.gView.base.toAddress());
             }
             p = Loader.skipAttributes(p.plus(8), attrs);
             m += 1;
@@ -454,9 +455,9 @@ final class InterfaceInvocation
             if (Loader.utf8EqAt(base, nameOff, ifBase.get(i), ifNameOff[i])
                     && Loader.utf8EqAt(base, descOff, ifBase.get(i), ifDescOff[i]))
             {
-                if (decl.EQ(Loader.gView.base))
+                if (decl.EQ(Loader.gView.base.toAddress()))
                 {
-                    ifDecl.set(i, Loader.gView.base);
+                    ifDecl.set(i, Loader.gView.base.toAddress());
                 }
                 return;
             }
@@ -525,7 +526,7 @@ final class InterfaceInvocation
     private static boolean ifaceDeclares(int r, Address nameU, Address descU)
     {
         int s = ifmSlotAbs(r, nameU, descU);
-        return s >= 0 && ifDecl.get(ClassRegistry.clTab[r].ifmStart + s).EQ(ClassRegistry.clTab[r].base);
+        return s >= 0 && ifDecl.get(ClassRegistry.clTab[r].ifmStart + s).EQ(ClassRegistry.clTab[r].base.toAddress());
     }
 
     /**
@@ -596,7 +597,7 @@ final class InterfaceInvocation
         {
             return 0;
         }
-        int s = ifmSlotIn(r, Loader.gView.base, Loader.mrefNameOff(idx), Loader.mrefDescOff(idx));
+        int s = ifmSlotIn(r, Loader.gView.base.toAddress(), Loader.mrefNameOff(idx), Loader.mrefDescOff(idx));
         return s >= 0 ? s : 0;
     }
 
@@ -623,7 +624,7 @@ final class InterfaceInvocation
     private static long buildItableFor(int ir, int n)
     {
         int count = ClassRegistry.clTab[ir].ifmCount;
-        Address it = Heap.allocData(count > 0 ? count * 8 : 8);
+        DataReference it = Heap.allocData(count > 0 ? count * 8 : 8);
         int s = 0;
         while (s < count)
         {
@@ -677,7 +678,7 @@ final class InterfaceInvocation
         while (i < n)
         {
             int ir = ifClosureBuf[i];
-            if (ifmSlotIn(ir, Loader.gView.base, Loader.mrefNameOff(idx), Loader.mrefDescOff(idx)) >= 0)
+            if (ifmSlotIn(ir, Loader.gView.base.toAddress(), Loader.mrefNameOff(idx), Loader.mrefDescOff(idx)) >= 0)
             {
                 return ir;
             }
@@ -703,7 +704,7 @@ final class InterfaceInvocation
     static int defaultIfaceSlotOf(int idx)
     {
         int ir = defaultIfaceRegOf(idx);
-        return ir < 0 ? 0 : ifmSlotIn(ir, Loader.gView.base, Loader.mrefNameOff(idx), Loader.mrefDescOff(idx));
+        return ir < 0 ? 0 : ifmSlotIn(ir, Loader.gView.base.toAddress(), Loader.mrefNameOff(idx), Loader.mrefDescOff(idx));
     }
 
     /** M8 itables: verify interface {@code reg}'s flattened per-interface slot numbering against
@@ -719,7 +720,7 @@ final class InterfaceInvocation
         if (Loader.LOAD_LOG)                                   // the header; a DIFF prints its own below, so a
         {                                               //   parity failure is never silenced by the flag
             Uart.write(Magic.bytes("  itparity "));
-            Loader.printNameAt(Loader.gView.base, Loader.gView.thisNameOff);
+            Loader.printNameAt(Loader.gView.base.toAddress(), Loader.gView.thisNameOff);
         }
         if (VtableLayout.gVtSigCount != ClassRegistry.clTab[reg].ifmCount)
         {
@@ -761,7 +762,7 @@ final class InterfaceInvocation
         if (!Loader.LOAD_LOG)
         {
             Uart.write(Magic.bytes("  itparity "));
-            Loader.printNameAt(Loader.gView.base, Loader.gView.thisNameOff);
+            Loader.printNameAt(Loader.gView.base.toAddress(), Loader.gView.thisNameOff);
         }
     }
 
@@ -819,10 +820,10 @@ final class InterfaceInvocation
             boolean holes = false;
             int off = 0;
             int k = 0;
-            Address t = dir.loadAddress();
+            DataReference t = dir.loadDataReference();
             while (!t.isZero())                             // walk entries by their TYPE key (order-independent)
             {
-                int ir = ClassRegistry.regOfType(t);
+                int ir = ClassRegistry.regOfType(t.toAddress());
                 if (ir >= 0)
                 {
                     long it = dir.plus(k * 16).plus(8).loadLong();
@@ -833,7 +834,7 @@ final class InterfaceInvocation
                     off += ClassRegistry.clTab[ir].ifmCount;
                 }
                 k += 1;
-                t = dir.plus(k * 16).loadAddress();
+                t = DataReference.fromAddress(dir.plus(k * 16).loadAddress());
             }
             if (holes)
             {
@@ -898,16 +899,16 @@ final class InterfaceInvocation
     {
         int total = 0;
         int k = 0;
-        Address t = Address.fromLong(dir).loadAddress();
+        DataReference t = Address.fromLong(dir).loadDataReference();
         while (!t.isZero())
         {
-            int ir = ClassRegistry.regOfType(t);
+            int ir = ClassRegistry.regOfType(t.toAddress());
             if (ir >= 0)
             {
                 total += ClassRegistry.clTab[ir].ifmCount;
             }
             k += 1;
-            t = Address.fromLong(dir).plus(k * 16).loadAddress();
+            t = DataReference.fromAddress(Address.fromLong(dir).plus(k * 16).loadAddress());
         }
         return total;
     }
@@ -990,7 +991,7 @@ final class InterfaceInvocation
         while (i < n)
         {
             int ir = ifClosureBuf[i];
-            Address ibase = ClassRegistry.clTab[ir].base;                   // a closure interface's blob; its own methods registered under it
+            DataReference ibase = ClassRegistry.clTab[ir].base;                   // a closure interface's blob; its own methods registered under it
             rfProbeSteps += 1;
             rfHashNameSteps += u2(base.plus(nameOff));
             // Hashed PER INTERFACE now that the index is keyed on class+name -- the interface supplies the
@@ -1009,8 +1010,8 @@ final class InterfaceInvocation
             {
                 rfChainSteps += 1;
                 if (MethodRegistry.rgTab[k].base.EQ(ibase) && MethodRegistry.rgTab[k].buf != 0L
-                        && Loader.utf8EqAt(base, nameOff, MethodRegistry.rgTab[k].base, MethodRegistry.rgTab[k].nameOff)
-                        && Loader.utf8EqAt(base, descOff, MethodRegistry.rgTab[k].base, MethodRegistry.rgTab[k].descOff))
+                        && Loader.utf8EqAt(base, nameOff, MethodRegistry.rgTab[k].base.toAddress(), MethodRegistry.rgTab[k].nameOff)
+                        && Loader.utf8EqAt(base, descOff, MethodRegistry.rgTab[k].base.toAddress(), MethodRegistry.rgTab[k].descOff))
                 {
                     return MethodRegistry.rgTab[k].buf;
                 }
@@ -1039,7 +1040,7 @@ final class InterfaceInvocation
         {
             return 0L;
         }
-        Address dir = Heap.allocData((n + 1) * 16);             // {interfaceType@0, itable@8} + sentinel
+        DataReference dir = Heap.allocData((n + 1) * 16);             // {interfaceType@0, itable@8} + sentinel
         int k = 0;
         while (k < n)
         {

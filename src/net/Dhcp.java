@@ -12,6 +12,7 @@
 package net;
 
 import magic.Address;
+import magic.DataReference;
 import magic.Magic;
 import vm.Heap;
 import vm.VM;
@@ -34,17 +35,17 @@ public final class Dhcp
      */
     public static boolean lease(Address mac, Address ipOut, Address maskOut, Address gwOut, Address dnsOut)
     {
-        Address serverId = Heap.allocData(4);
-        Address buf = Heap.allocData(512);
-        Address buf2 = Heap.allocData(512);
-        Address rx = Heap.allocData(2048);
+        DataReference serverId = Heap.allocData(4);
+        DataReference buf = Heap.allocData(512);
+        DataReference buf2 = Heap.allocData(512);
+        DataReference rx = Heap.allocData(2048);
         int disc = 0;
         while (disc < 4)
         {
             disc = disc + 1;
             board.Uart.write(Magic.bytes("net: dhcp discover\n"));
-            Link.send(buf, build(buf, mac, 1, Address.zero(), Address.zero()));          // DISCOVER
-            if (!await(rx, 2, ipOut, serverId, Address.zero(), Address.zero(), Address.zero()))   // OFFER (type 2)
+            Link.send(buf.toAddress(), build(buf.toAddress(), mac, 1, Address.zero(), Address.zero()));          // DISCOVER
+            if (!await(rx.toAddress(), 2, ipOut, serverId.toAddress(), Address.zero(), Address.zero(), Address.zero()))   // OFFER (type 2)
             {
                 board.Uart.write(Magic.bytes("net: dhcp no offer, retry\n"));
                 continue;
@@ -59,8 +60,8 @@ public final class Dhcp
             {
                 rq = rq + 1;
                 board.Uart.write(Magic.bytes("net: dhcp request\n"));
-                Link.send(buf2, build(buf2, mac, 3, ipOut, serverId));   // REQUEST (opt 50 req-ip, opt 54 server-id)
-                acked = await(rx, 5, ipOut, serverId, maskOut, gwOut, dnsOut);   // ACK (type 5)
+                Link.send(buf2.toAddress(), build(buf2.toAddress(), mac, 3, ipOut, serverId.toAddress()));   // REQUEST (opt 50 req-ip, opt 54 server-id)
+                acked = await(rx.toAddress(), 5, ipOut, serverId.toAddress(), maskOut, gwOut, dnsOut);   // ACK (type 5)
             }
             if (!acked)
             {

@@ -13,6 +13,7 @@ package vm;
 
 import board.Uart;
 import magic.Address;
+import magic.DataReference;
 import magic.AddressArray;
 import magic.Magic;
 
@@ -205,15 +206,15 @@ final class VtableLayout
     private static void inheritVtable(int superOff)
     {
         buildVtIndex();                                  // incremental: only entries added since last time
-        int i = vtBucket[Utf8.utf8Hash(Loader.gView.base, superOff) & (VTTAB - 1)];
+        int i = vtBucket[Utf8.utf8Hash(Loader.gView.base.toAddress(), superOff) & (VTTAB - 1)];
         while (i >= 0)
         {
             // The SAME predicate the scan used -- the index only narrows which entries it is applied to, so
             // a hit is the entry the scan would have found and a miss still applies nothing.
-            if (Loader.utf8EqAt(Loader.gView.base, superOff, vtClassBase.get(i), vtClassOff[i]))
+            if (Loader.utf8EqAt(Loader.gView.base.toAddress(), superOff, vtClassBase.get(i), vtClassOff[i]))
             {
                 int slot = vtSlot[i];
-                gvTab[slot].base = vtNameBase.get(i);
+                gvTab[slot].base = DataReference.fromAddress(vtNameBase.get(i));
                 gvTab[slot].name = vtNameOff[i];
                 gvTab[slot].desc = vtDescOff[i];
                 gvTab[slot].implBuf = vtBuf[i];             // inherited (already-compiled) impl
@@ -234,8 +235,8 @@ final class VtableLayout
         int s = 0;
         while (s < gvCount)
         {
-            if (Loader.utf8EqAt(Loader.gView.base, nameOff, gvTab[s].base, gvTab[s].name)
-                    && Loader.utf8EqAt(Loader.gView.base, descOff, gvTab[s].base, gvTab[s].desc))
+            if (Loader.utf8EqAt(Loader.gView.base.toAddress(), nameOff, gvTab[s].base.toAddress(), gvTab[s].name)
+                    && Loader.utf8EqAt(Loader.gView.base.toAddress(), descOff, gvTab[s].base.toAddress(), gvTab[s].desc))
             {
                 return s;
             }
@@ -267,8 +268,8 @@ final class VtableLayout
         int s = 0;
         while (s < gvCount)
         {
-            if (Loader.utf8EqAt(base, nameOff, gvTab[s].base, gvTab[s].name)
-                    && Loader.utf8EqAt(base, descOff, gvTab[s].base, gvTab[s].desc))
+            if (Loader.utf8EqAt(base, nameOff, gvTab[s].base.toAddress(), gvTab[s].name)
+                    && Loader.utf8EqAt(base, descOff, gvTab[s].base.toAddress(), gvTab[s].desc))
             {
                 return s;
             }
@@ -293,7 +294,7 @@ final class VtableLayout
                 return own;
             }
         }
-        int i = vtEntryOf(Loader.gView.base, Loader.refClassNameOff(idx), Loader.gView.base, Loader.mrefNameOff(idx), Loader.gView.base, Loader.mrefDescOff(idx));
+        int i = vtEntryOf(Loader.gView.base.toAddress(), Loader.refClassNameOff(idx), Loader.gView.base.toAddress(), Loader.mrefNameOff(idx), Loader.gView.base.toAddress(), Loader.mrefDescOff(idx));
         return i >= 0 ? vtSlot[i] : -1;
     }
 
@@ -302,7 +303,7 @@ final class VtableLayout
         int classOff = Loader.refClassNameOff(idx);
         int nameOff = Loader.mrefNameOff(idx);
         int descOff = Loader.mrefDescOff(idx);
-        int i = vtEntryOf(Loader.gView.base, classOff, Loader.gView.base, nameOff, Loader.gView.base, descOff);   // class-qualified (invokevirtual)
+        int i = vtEntryOf(Loader.gView.base.toAddress(), classOff, Loader.gView.base.toAddress(), nameOff, Loader.gView.base.toAddress(), descOff);   // class-qualified (invokevirtual)
         if (i >= 0)
         {
             logVtableSlot(classOff, nameOff, descOff, vtSlot[i], 0x51);   // 'Q' class-qualified
@@ -314,7 +315,7 @@ final class VtableLayout
         int chain = reg;
         while (chain >= 0)
         {
-            i = vtEntryOf(ClassRegistry.clTab[chain].base, ClassRegistry.clTab[chain].nameOff, Loader.gView.base, nameOff, Loader.gView.base, descOff);
+            i = vtEntryOf(ClassRegistry.clTab[chain].base.toAddress(), ClassRegistry.clTab[chain].nameOff, Loader.gView.base.toAddress(), nameOff, Loader.gView.base.toAddress(), descOff);
             if (i >= 0)
             {
                 logVtableSlot(classOff, nameOff, descOff, vtSlot[i], 0x48);   // 'H' cHain
@@ -355,8 +356,8 @@ final class VtableLayout
     private static void logVtableSlot(int classOff, int nameOff, int descOff, int slot, int path)
     {
         if (Loader.METHOD_WATCH_ON
-                && (Utf8.utf8IsAtBase(Loader.gView.base, nameOff, Magic.bytes("success"))
-                    || Utf8.utf8IsAtBase(Loader.gView.base, nameOff, Magic.bytes("blockingFailure"))))
+                && (Utf8.utf8IsAtBase(Loader.gView.base.toAddress(), nameOff, Magic.bytes("success"))
+                    || Utf8.utf8IsAtBase(Loader.gView.base.toAddress(), nameOff, Magic.bytes("blockingFailure"))))
         {
             // Watch two SPECIFIC methods regardless of slot. picocli's GroupMatchContainer.validate calls
             // `validationResult.success()`; reflection proves success() answers TRUE on both SUCCESS
@@ -388,22 +389,22 @@ final class VtableLayout
     /** Find the current class's vtSig/adoption entry: sets gBuild.adoptType/adoptStatics + parity data. */
     static void findVtSig()
     {
-        Loader.gBuild.adoptType = Address.zero();
+        Loader.gBuild.adoptType = DataReference.zero();
         gVtSigSlots = 0L;
         gVtSigCount = 0;
-        Loader.gBuild.adoptStatics = Address.zero();
+        Loader.gBuild.adoptStatics = DataReference.zero();
         Loader.gBuild.adoptStaticCount = 0;
         int n = (int) VM.vtSigCount;
         int i = 0;
         while (i < n)
         {
             Address e = Address.fromLong(VM.vtSigTable + (long) i * 48L);
-            if (Loader.utf8EqAt(Loader.gView.base, Loader.gView.thisNameOff, e.loadAddress(), 0))
+            if (Loader.utf8EqAt(Loader.gView.base.toAddress(), Loader.gView.thisNameOff, e.loadAddress(), 0))
             {
                 gVtSigSlots = e.plus(8L).loadLong();
                 gVtSigCount = (int) e.plus(16L).loadLong();
-                Loader.gBuild.adoptType = e.plus(24L).loadAddress();
-                Loader.gBuild.adoptStatics = e.plus(32L).loadAddress();
+                Loader.gBuild.adoptType = DataReference.fromAddress(e.plus(24L).loadAddress());
+                Loader.gBuild.adoptStatics = DataReference.fromAddress(e.plus(32L).loadAddress());
                 Loader.gBuild.adoptStaticCount = (int) e.plus(40L).loadLong();
                 return;
             }
@@ -426,7 +427,7 @@ final class VtableLayout
         if (Loader.LOAD_LOG)                                   // header only; every DIFF below prints its own
         {
             Uart.write(Magic.bytes("  vtparity "));
-            Loader.printNameAt(Loader.gView.base, Loader.gView.thisNameOff);
+            Loader.printNameAt(Loader.gView.base.toAddress(), Loader.gView.thisNameOff);
         }
         if (count != gvCount)
         {
@@ -446,8 +447,8 @@ final class VtableLayout
                 int found = 0;
                 while (f < gvCount)
                 {
-                    if (Loader.utf8EqAt(gvTab[f].base, gvTab[f].name, q.loadAddress(), 0)
-                            && Loader.utf8EqAt(gvTab[f].base, gvTab[f].desc, q.plus(8L).loadAddress(), 0))
+                    if (Loader.utf8EqAt(gvTab[f].base.toAddress(), gvTab[f].name, q.loadAddress(), 0)
+                            && Loader.utf8EqAt(gvTab[f].base.toAddress(), gvTab[f].desc, q.plus(8L).loadAddress(), 0))
                     {
                         found = 1;
                         f = gvCount;
@@ -471,8 +472,8 @@ final class VtableLayout
         while (s < count)
         {
             Address p = Address.fromLong(slots + (long) s * 16L);
-            if (!Loader.utf8EqAt(gvTab[s].base, gvTab[s].name, p.loadAddress(), 0)
-                    || !Loader.utf8EqAt(gvTab[s].base, gvTab[s].desc, p.plus(8L).loadAddress(), 0))
+            if (!Loader.utf8EqAt(gvTab[s].base.toAddress(), gvTab[s].name, p.loadAddress(), 0)
+                    || !Loader.utf8EqAt(gvTab[s].base.toAddress(), gvTab[s].desc, p.plus(8L).loadAddress(), 0))
             {
                 vtParityHeader();
                 Uart.write(Magic.bytes(" DIFF slot "));
@@ -496,7 +497,7 @@ final class VtableLayout
         if (!Loader.LOAD_LOG)
         {
             Uart.write(Magic.bytes("  vtparity "));
-            Loader.printNameAt(Loader.gView.base, Loader.gView.thisNameOff);
+            Loader.printNameAt(Loader.gView.base.toAddress(), Loader.gView.thisNameOff);
         }
     }
 
@@ -549,8 +550,8 @@ final class VtableLayout
         while (i < vtCount)
         {
             if (Utf8.utf8IsAtBase(vtClassBase.get(i), vtClassOff[i], Magic.bytes("java/lang/Object"))
-                    && Loader.utf8EqAt(Loader.gView.base, nameOff, vtNameBase.get(i), vtNameOff[i])
-                    && Loader.utf8EqAt(Loader.gView.base, descOff, vtNameBase.get(i), vtDescOff[i]))
+                    && Loader.utf8EqAt(Loader.gView.base.toAddress(), nameOff, vtNameBase.get(i), vtNameOff[i])
+                    && Loader.utf8EqAt(Loader.gView.base.toAddress(), descOff, vtNameBase.get(i), vtDescOff[i]))
             {
                 return vtSlot[i];
             }

@@ -13,6 +13,7 @@ package board.virt;
 
 import board.Board;
 import magic.Address;
+import magic.DataReference;
 import magic.Magic;
 import vm.Heap;
 import vm.VM;
@@ -98,12 +99,12 @@ public final class VirtioNet
     public static int intid;
 
     private static long base;                               // the device's transport (virtual), 0 = not found
-    private static Address mac;                             // 6 bytes
-    private static Address rxRingMem;                       // the heap blocks (kept for the collector) ...
-    private static Address txRingMem;
-    private static Address rxBufs;
-    private static Address txBufs;
-    private static Address lockMem;
+    private static DataReference mac;                             // 6 bytes
+    private static DataReference rxRingMem;                       // the heap blocks (kept for the collector) ...
+    private static DataReference txRingMem;
+    private static DataReference rxBufs;
+    private static DataReference txBufs;
+    private static DataReference lockMem;
     private static long rxRing;                             // ... and the 16-aligned ring addresses inside them
     private static long txRing;
     private static int rxAvail;                             // driver-ring idx for each queue
@@ -143,9 +144,9 @@ public final class VirtioNet
     }
 
     /** Our MAC (6 bytes), or a zero address before {@link #init}. */
-    public static Address mac()
+    public static DataReference mac()
     {
-        return base == 0L ? Address.zero() : mac;
+        return base == 0L ? DataReference.zero() : mac;
     }
 
     /** Whether the machine has a virtio-net card (QEMU {@code -device virtio-net-device}); touches nothing. */
@@ -257,7 +258,7 @@ public final class VirtioNet
         setReg(REG_QUEUE_NOTIFY, RX);
         intid = MMIO_FIRST_INTID + (int) ((base - MMIO_BASE) / MMIO_STRIDE);
         board.Uart.write(Magic.bytes("net: virtio-net mac "));
-        net.Ip.printMac(mac);
+        net.Ip.printMac(mac.toAddress());
         board.Uart.write(Magic.bytes(" irq "));
         VM.printDec(intid);
         board.Uart.putc(0x0A);

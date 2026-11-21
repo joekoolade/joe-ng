@@ -12,6 +12,7 @@
 package vm;
 
 import magic.Address;
+import magic.DataReference;
 import magic.Magic;
 import magic.ObjectReference;
 import board.Uart;
@@ -258,7 +259,7 @@ final class VMUnwind
         if (excWord > 0x1000L && !badThrowReported)
         {
             long t = ea.loadLong();
-            Address thrType = Loader.throwableTypeAddr();
+            Address thrType = (Loader.throwableTypeAddr()).toAddress();
             if (t > 0x1000L && !thrType.isZero() && VM.instanceOf(exc, thrType) == 0)
             {
                 badThrowReported = true;
@@ -369,9 +370,9 @@ final class VMUnwind
                 // hypothetical: a thrown non-Throwable printed a plausible-looking frame at pc 0x060B9DB8,
                 // which was simply a heap reference in one of its fields, and it sent the diagnosis chasing a
                 // wild branch that had never happened. Say what the object IS instead.
-                Address thrType = Loader.throwableTypeAddr();
+                DataReference thrType = Loader.throwableTypeAddr();
                 boolean isThrowable = xt > 0x1000L
-                        && (thrType.isZero() || VM.instanceOf(exc, thrType) != 0);
+                        && (thrType.isZero() || VM.instanceOf(exc, thrType.toAddress()) != 0);
                 if (xt > 0x1000L && !isThrowable)
                 {
                     Uart.write(Magic.bytes("\nUNWIND: THROWN OBJECT IS NOT A THROWABLE -- "));

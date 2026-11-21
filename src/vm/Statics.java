@@ -14,6 +14,7 @@ package vm;
 import board.Uart;
 import classfile.ClassReader;
 import magic.Address;
+import magic.DataReference;
 import magic.Magic;
 
 import static vm.ClassBytes.u2;
@@ -92,7 +93,7 @@ final class Statics
         // still-null static it was in the middle of assigning, so every instance's `type` was null -- and
         // blockingFailure() compares `type` to those constants, so `null == null` reported a BLOCKING FAILURE
         // on a SUCCESS and handed the console launcher a null exception to throw.
-        if (Loader.utf8EqAt(Loader.gView.base, Loader.refClassNameOff(idx), Loader.gView.base, Loader.gView.thisNameOff))
+        if (Loader.utf8EqAt(Loader.gView.base.toAddress(), Loader.refClassNameOff(idx), Loader.gView.base.toAddress(), Loader.gView.thisNameOff))
         {
             int s = 0;
             while (s < Loader.gBuild.sfCount)                        // same class: match by name Utf8 offset
@@ -102,9 +103,9 @@ final class Statics
                     if (Loader.STATIC_ADDR_LOG)
                     {
                         Uart.write(Magic.bytes("  ownstatic "));
-                        Loader.printNameAt(Loader.gView.base, Loader.gView.thisNameOff);
+                        Loader.printNameAt(Loader.gView.base.toAddress(), Loader.gView.thisNameOff);
                         Uart.putc(0x2E);
-                        Loader.printNameAt(Loader.gView.base, nameOff);
+                        Loader.printNameAt(Loader.gView.base.toAddress(), nameOff);
                         Uart.write(Magic.bytes(" -> "));
                         VM.printHex(Loader.gBuild.statics.plus(s * 8));
                         Uart.putc(0x0A);
@@ -125,19 +126,19 @@ final class Statics
         // The COMPILE-TIME twin of globalStaticByRef: identical key, identical predicate, identical answer,
         // and it carried its own copy of the same linear scan. One index serves both -- the same "one call
         // site's fix, two timers" shape the phase-B publish had.
-        long hit = sgCellOf(Loader.gView.base, classOff, nameOff);
+        long hit = sgCellOf(Loader.gView.base.toAddress(), classOff, nameOff);
         if (hit == 0L)
         {
-            hit = inheritedStaticCell(Loader.gView.base, classOff, Loader.gView.base, nameOff, 0);   // declared by a supertype (JVMS 5.4.3.2)
+            hit = inheritedStaticCell(Loader.gView.base.toAddress(), classOff, Loader.gView.base.toAddress(), nameOff, 0);   // declared by a supertype (JVMS 5.4.3.2)
         }
         if (hit != 0L)
         {
             if (Loader.STATIC_ADDR_LOG)
             {
                 Uart.write(Magic.bytes("  staticaddr "));
-                Loader.printNameAt(Loader.gView.base, classOff);
+                Loader.printNameAt(Loader.gView.base.toAddress(), classOff);
                 Uart.putc(0x2E);
-                Loader.printNameAt(Loader.gView.base, nameOff);
+                Loader.printNameAt(Loader.gView.base.toAddress(), nameOff);
                 Uart.write(Magic.bytes(" -> "));
                 VM.printHex(hit);
                 Uart.putc(0x0A);
@@ -175,7 +176,7 @@ final class Statics
         int s = 0;
         while (s < Loader.gBuild.sfCount)
         {
-            if (Utf8.utf8IsAtBase(Loader.gView.base, Loader.gBuild.sfName[s], name))
+            if (Utf8.utf8IsAtBase(Loader.gView.base.toAddress(), Loader.gBuild.sfName[s], name))
             {
                 return Loader.gBuild.statics.plus(s * 8L).toLong();
             }
@@ -195,13 +196,13 @@ final class Statics
         int ci = 0;
         while (ci < ClassRegistry.clCount)
         {
-            if (ClassRegistry.clTab[ci].type.EQ(typeAddr))
+            if (ClassRegistry.clTab[ci].type.EQ(DataReference.fromAddress(typeAddr)))
             {
                 int i = 0;
                 while (i < sgCount)
                 {
-                    if (Loader.utf8EqAt(sgTab[i].base, sgTab[i].classOff, ClassRegistry.clTab[ci].base, ClassRegistry.clTab[ci].nameOff)
-                            && Utf8.rawEqUtf8(fnBase, fnLen, sgTab[i].base, sgTab[i].nameOff))
+                    if (Loader.utf8EqAt(sgTab[i].base.toAddress(), sgTab[i].classOff, ClassRegistry.clTab[ci].base.toAddress(), ClassRegistry.clTab[ci].nameOff)
+                            && Utf8.rawEqUtf8(fnBase, fnLen, sgTab[i].base.toAddress(), sgTab[i].nameOff))
                     {
                         return sgTab[i].addr;
                     }
@@ -220,7 +221,7 @@ final class Statics
         while (i < sgCount)
         {
             sgScanSteps += 1;
-            if (Utf8.utf8IsAtBase(sgTab[i].base, sgTab[i].classOff, cls) && Utf8.utf8IsAtBase(sgTab[i].base, sgTab[i].nameOff, name))
+            if (Utf8.utf8IsAtBase(sgTab[i].base.toAddress(), sgTab[i].classOff, cls) && Utf8.utf8IsAtBase(sgTab[i].base.toAddress(), sgTab[i].nameOff, name))
             {
                 return sgTab[i].addr;
             }
@@ -245,8 +246,8 @@ final class Statics
         }
         while (sgIndexed < sgCount)
         {
-            int hh = Utf8.utf8Hash2(sgTab[sgIndexed].base, sgTab[sgIndexed].classOff,
-                               sgTab[sgIndexed].base, sgTab[sgIndexed].nameOff) & (SGTAB - 1);
+            int hh = Utf8.utf8Hash2(sgTab[sgIndexed].base.toAddress(), sgTab[sgIndexed].classOff,
+                               sgTab[sgIndexed].base.toAddress(), sgTab[sgIndexed].nameOff) & (SGTAB - 1);
             sgNext[sgIndexed] = sgBucket[hh];
             sgBucket[hh] = sgIndexed;
             sgIndexed += 1;
@@ -281,8 +282,8 @@ final class Statics
         while (k >= 0)
         {
             psSteps += 1;
-            if (Loader.utf8EqAt(clsBase, clsOff, sgTab[k].base, sgTab[k].classOff)
-                    && Loader.utf8EqAt(nameBase, nameOff, sgTab[k].base, sgTab[k].nameOff))
+            if (Loader.utf8EqAt(clsBase, clsOff, sgTab[k].base.toAddress(), sgTab[k].classOff)
+                    && Loader.utf8EqAt(nameBase, nameOff, sgTab[k].base.toAddress(), sgTab[k].nameOff))
             {
                 if (best < 0 || k < best)
                 {

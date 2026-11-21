@@ -18,6 +18,7 @@ import board.Uart;
 import classfile.ClassReader;
 import compiler.Baseline;
 import magic.Address;
+import magic.DataReference;
 import magic.Magic;
 import magic.ObjectReference;
 import magic.ObjectReferenceArray;
@@ -376,7 +377,8 @@ public final class VM
             irqHandler();
         }
         // A stub: save x0..x30, BL the Java handler, restore, ERET back to the interrupted code.
-        long raw = Heap.alloc(0x400).toLong();
+        ObjectReference rawRef = Heap.alloc(0x400).toObjectReference();
+        long raw = rawRef.toLong();                  // a raw copy; rawRef keeps the block alive
         // 16-byte-aligned code, but PAST the {TIB, status} header: aligning raw itself would land on
         // raw+8 (the size header) when raw is only 8-aligned, and the stub's first instruction would
         // clobber it -- leaving a heap block the GC sweep reads as a bogus size and walks off of.
@@ -1295,7 +1297,7 @@ public final class VM
 
     // The current batch's java/lang/String Type (Loader-set after each loadAll; 0 between batches).
     // isStringLike below compares against it; see Loader.stringTypeAddr for why once-per-batch and why exact.
-    static Address stringTypeCache;
+    static DataReference stringTypeCache;
 
     /**
      * The byte[] behind a "string" ref: a raw byte[] (array TIB = 0) is itself; a mini java/lang/String
@@ -1347,7 +1349,7 @@ public final class VM
         {
             return true;                                // raw byte[] (element size in @0)
         }
-        Address type = Address.fromLong(tib).loadAddress();            // TIB[0] = Type
+        DataReference type = Address.fromLong(tib).loadDataReference();            // TIB[0] = Type
         if ((type.loadLong() & ObjectModel.ARRAY_TYPE_TAG_MASK) == ObjectModel.ARRAY_TYPE_TAG)
         {
             return true;                                // a typed array
@@ -1543,7 +1545,7 @@ public final class VM
 
     /** Allocate a {@code java/lang/ClassCastException} — the JIT calls this on a failed {@code checkcast},
      *  passing the object and the target Type so the message can name both. */
-    static long newCce(ObjectReference ref, Address targetType)
+    static long newCce(ObjectReference ref, DataReference targetType)
     {
         return RuntimeEntrypoints.newCce(ref, targetType);
     }
@@ -1829,12 +1831,12 @@ public final class VM
         {
             return 1;                                      // untyped/raw array (no element Type to check against)
         }
-        Address elemType = Address.fromLong(tib).loadAddress().plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadAddress();
+        DataReference elemType = Address.fromLong(tib).loadAddress().plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadDataReference();
         if (elemType.isZero())
         {
             return 1;                                      // primitive-element array (shouldn't reach aastore) / unknown
         }
-        return instanceOf(value, elemType);                // 1 if value's Type <: element Type, else 0
+        return instanceOf(value, elemType.toAddress());                // 1 if value's Type <: element Type, else 0
     }
 
     /** {@code java/lang/InternalError} — the fault handler's catch-all for an unexpected hardware trap. */
@@ -2092,7 +2094,7 @@ public final class VM
         if (newAioobeIndexAddr == 0L) { long u = newAioobeIndex(0L, 0L); }
         if (newAseAddr == 0L) { long u = newAse(0L); }                // ArrayStoreException (aastore mismatch)
         if (arrayStoreOkAddr == 0L) { int u = arrayStoreOk(ObjectReference.nullReference(), ObjectReference.nullReference()); } // aastore covariant check
-        if (newCceAddr == 0L) { long u = newCce(ObjectReference.nullReference(), Address.zero()); }            // ClassCastException (failed checkcast)
+        if (newCceAddr == 0L) { long u = newCce(ObjectReference.nullReference(), DataReference.zero()); }            // ClassCastException (failed checkcast)
         if (castOkAddr == 0L) { int u = castOk(ObjectReference.nullReference(), Address.zero()); }             // checkcast predicate
         if (newUnresolvedAddr == 0L) { long u = newUnresolved(-1L); } // `new` the loader cannot resolve early
         if (ctorRefInit0 == 0L) { ctorRefInit(-1L); }                 // a constructor reference's <clinit> (JVMS 5.5)
@@ -2379,21 +2381,21 @@ public final class VM
         // bytes and manifestValue stops at its max without a word, so a long line was cut SILENTLY: a
         // 279-byte `args=` of JUnit classes arrived as "... CloseWrappedSt" (CANNOT LOAD), and the class after
         // it never ran.
-        Address nm = Heap.allocData(flen + 8);
-        int nl = manifestValue(conf, flen, Magic.bytes("main"), nm, flen);
+        armGcMaps(conf, flen);                              // gcmaps=1/2: the reference-map shadow check -- before the
+        armSafepoints(conf, flen);                          //   main= test, so the no-program demo suite can use it too
+        DataReference nm = Heap.allocData(flen + 8);
+        int nl = manifestValue(conf, flen, Magic.bytes("main"), nm.toAddress(), flen);
         if (nl == 0)
         {
             return false;
         }
-        byte[] mainClass = heapBytes(nm, nl);
-        Address al = Heap.allocData(flen + 8);
-        int alen = manifestValue(conf, flen, Magic.bytes("args"), al, flen);
-        byte[] argsLine = heapBytes(al, alen);              // raw space-separated args; argv built after loadAll
+        byte[] mainClass = heapBytes(nm.toAddress(), nl);
+        DataReference al = Heap.allocData(flen + 8);
+        int alen = manifestValue(conf, flen, Magic.bytes("args"), al.toAddress(), flen);
+        byte[] argsLine = heapBytes(al.toAddress(), alen);              // raw space-separated args; argv built after loadAll
         openClasspath(conf, flen);                          // classpath=<jar>: classes the image lacks come from it
         armHangDump(conf, flen);                            // hangdump=<secs>: report every task after that long
         armStdin(conf, flen);                               // stdin=uart: System.in reads the serial console
-        armGcMaps(conf, flen);                              // gcmaps=1: the S2 reference-map shadow check
-        armSafepoints(conf, flen);                          // safepoints=0: the timer preempts anywhere (pre-S3)
         Uart.write(Magic.bytes("launch "));
         Uart.write(mainClass);
         Uart.putc(0x0A);
@@ -2413,13 +2415,13 @@ public final class VM
      */
     private static void openClasspath(Address conf, int flen)
     {
-        Address cp = Heap.allocData(flen + 8);
-        int n = manifestValue(conf, flen, Magic.bytes("classpath"), cp, flen);
+        DataReference cp = Heap.allocData(flen + 8);
+        int n = manifestValue(conf, flen, Magic.bytes("classpath"), cp.toAddress(), flen);
         if (n == 0)
         {
             return;
         }
-        byte[] path = heapBytes(cp, n);
+        byte[] path = heapBytes(cp.toAddress(), n);
         boolean ok = JarFs.open(path);
         Uart.write(Magic.bytes("classpath "));
         Uart.write(path);
@@ -2444,8 +2446,8 @@ public final class VM
      */
     private static void armStdin(Address conf, int flen)
     {
-        Address v = Heap.allocData(16);
-        int n = manifestValue(conf, flen, Magic.bytes("stdin"), v, 8);
+        DataReference v = Heap.allocData(16);
+        int n = manifestValue(conf, flen, Magic.bytes("stdin"), v.toAddress(), 8);
         if (n == 4 && v.loadUnsignedByte() == 0x75 && v.plus(1L).loadUnsignedByte() == 0x61 && v.plus(2L).loadUnsignedByte() == 0x72
                 && v.plus(3L).loadUnsignedByte() == 0x74)            // "uart"
         {
@@ -2455,21 +2457,27 @@ public final class VM
     }
 
     /** {@code gcmaps=1} turns on {@link GcMapShadow}: every collection compares the reference maps with the
-     *  conservative stack scan and reports what only the conservative scan saw. */
+     *  conservative stack scan and reports what only the conservative scan saw. {@code gcmaps=2} also collects
+     *  every 1 MB allocated, so the check sees many more stacks. */
     private static void armGcMaps(Address conf, int flen)
     {
-        Address v = Heap.allocData(16);
-        int n = manifestValue(conf, flen, Magic.bytes("gcmaps"), v, 8);
-        if (n == 1 && v.loadUnsignedByte() == 0x31)
+        DataReference v = Heap.allocData(16);
+        int n = manifestValue(conf, flen, Magic.bytes("gcmaps"), v.toAddress(), 8);
+        if (n == 1 && (v.loadUnsignedByte() == 0x31 || v.loadUnsignedByte() == 0x32))
         {
             GcMapShadow.arm();
+        }
+        if (n == 1 && v.loadUnsignedByte() == 0x32)
+        {
+            Heap.gcStressBytes = 1024L * 1024L;              // gcmaps=2: collect every 1 MB as well
+            Uart.write(Magic.bytes("gcmaps: stress, a collection every 1 MB\n"));
         }
     }
 
     private static void armSafepoints(Address conf, int flen)
     {
-        Address v = Heap.allocData(16);
-        int n = manifestValue(conf, flen, Magic.bytes("safepoints"), v, 8);
+        DataReference v = Heap.allocData(16);
+        int n = manifestValue(conf, flen, Magic.bytes("safepoints"), v.toAddress(), 8);
         if (n == 1 && v.loadUnsignedByte() == 0x30)
         {
             noSafepoints = 1;
@@ -2479,8 +2487,8 @@ public final class VM
 
     private static void armHangDump(Address conf, int flen)
     {
-        Address v = Heap.allocData(16);
-        int n = manifestValue(conf, flen, Magic.bytes("hangdump"), v, 8);
+        DataReference v = Heap.allocData(16);
+        int n = manifestValue(conf, flen, Magic.bytes("hangdump"), v.toAddress(), 8);
         long secs = 0L;
         int i = 0;
         while (i < n)
@@ -2517,8 +2525,8 @@ public final class VM
         }
         Address conf = e.plus(16L).loadAddress();
         int flen = (int) e.plus(24L).loadLong();
-        Address v = Heap.allocData(16);
-        int n = manifestValue(conf, flen, Magic.bytes("net"), v, 8);
+        DataReference v = Heap.allocData(16);
+        int n = manifestValue(conf, flen, Magic.bytes("net"), v.toAddress(), 8);
         return n >= 1 && (v.loadUnsignedByte() & 0xFF) == 0x31;   // "1"
     }
 
@@ -2541,17 +2549,17 @@ public final class VM
         }
         Address conf = e.plus(16L).loadAddress();
         int flen = (int) e.plus(24L).loadLong();
-        Address v = Heap.allocData(256);
+        DataReference v = Heap.allocData(256);
         // ... and neither does an EMPTY manifest, which is exactly how the no-manifest suite image is built:
         // the file exists, so fileFind succeeds, and only `smp=` was ever consulted. That handed cores 1-3 to
         // the LAUNCH path before `smpDemo` was set, so they skipped smpWork/pcCoreMain entirely (jobs/core
         // c1-c3 = 0, ticks/core = 0) and the suite's own bringUpSecondaries then found only core 0. This
         // block exists for a launched PROGRAM; with no main= there is no program to give the cores to.
-        if (manifestValue(conf, flen, Magic.bytes("main"), v, 250) == 0)
+        if (manifestValue(conf, flen, Magic.bytes("main"), v.toAddress(), 250) == 0)
         {
             return false;
         }
-        int n = manifestValue(conf, flen, Magic.bytes("smp"), v, 8);
+        int n = manifestValue(conf, flen, Magic.bytes("smp"), v.toAddress(), 8);
         return n < 1 || (v.loadUnsignedByte() & 0xFF) != 0x30;    // absent = on; "0" = off
     }
 
@@ -2617,10 +2625,10 @@ public final class VM
             printHex(tib);
             if (tib > 0x1000L && tib < 0x40000000L)
             {
-                Address type = Address.fromLong(tib).loadAddress();                 // TIB[0] = Type
+                DataReference type = Address.fromLong(tib).loadDataReference();                 // TIB[0] = Type
                 Uart.write(Magic.bytes(" type="));
-                printHex(type);
-                Loader.reportClassOfType(type);
+                printHex(type.toAddress());
+                Loader.reportClassOfType(type.toAddress());
             }
         }
         Uart.putc(0x0A);
@@ -3224,8 +3232,8 @@ public final class VM
         {
             return 0;    // a raw array (element size in @0, no Type): not an instance of any class/interface type
         }
-        Address type = Address.fromLong(tib).loadAddress();           // TIB→Type (@0); for a typed array, the array Type
-        return typeAssignable(type, targetType) ? 1 : 0;
+        DataReference type = Address.fromLong(tib).loadDataReference();           // TIB→Type (@0); for a typed array, the array Type
+        return typeAssignable(type.toAddress(), targetType) ? 1 : 0;
     }
 
     /** True if an array Type (its instanceSize slot carries the tag). */
@@ -3274,11 +3282,11 @@ public final class VM
     {
         if (type.NE(targetType) && !targetType.isZero() && isArrayType(type) && isArrayType(targetType))
         {
-            Address elemType = type.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadAddress();
+            DataReference elemType = type.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadDataReference();
             Address elemTarget = targetType.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadAddress();
             if (!elemType.isZero() && !elemTarget.isZero())   // both reference-element arrays: covariant on the element
             {
-                if (typeAssignable(elemType, elemTarget))
+                if (typeAssignable(elemType.toAddress(), elemTarget))
                 {
                     return true;
                 }
@@ -3287,7 +3295,7 @@ public final class VM
                 // (an interface Type is a chain dead end), so Sub[] -> Base[] failed checkcast -- MEASURED:
                 // AnnotationSupport's cast of a repeated annotation's Tag[] to Annotation[] threw
                 // ClassCastException, and getAnnotationsByType with it (RepeatableProbe, ArrayCovarianceProbe).
-                if (InterfaceInvocation.ifaceExtends(elemType, elemTarget) != 0)
+                if (InterfaceInvocation.ifaceExtends(elemType.toAddress(), elemTarget) != 0)
                 {
                     return true;
                 }
@@ -3296,7 +3304,7 @@ public final class VM
                 // no display, no superclass link), so it never reaches Object. Map.Entry[] -> Object[] is
                 // the live case -- AbstractCollection.toArray(T[]) casts exactly that, which is how
                 // Map.copyOf(...) (java.util.jar.Attributes$Name's initializer) reached a checkCast spin.
-                return elemTarget.EQ(TibBuilder.objectTypeAddr());
+                return elemTarget.EQ(TibBuilder.objectTypeAddr().toAddress());
             }
             // a primitive element on either side is invariant: only the exact-match below can succeed
         }
@@ -3956,7 +3964,7 @@ public final class VM
     static long monEnterSyncAddr;      // VM.monEnterSync(Lmagic/ObjectReference;J)V — a synchronized METHOD's implicit monitorenter
     static long monExitSyncAddr;       // VM.monExitSync()V    — ... and its release on normal return
     static long arrayStoreOkAddr;      // VM.arrayStoreOk(Lmagic/ObjectReference;Lmagic/ObjectReference;)I — aastore covariant type check
-    static long newCceAddr;            // VM.newCce(Lmagic/ObjectReference;Lmagic/Address;)J  — a java/lang/ClassCastException (failed checkcast)
+    static long newCceAddr;            // VM.newCce(Lmagic/ObjectReference;Lmagic/DataReference;)J  — a java/lang/ClassCastException (failed checkcast)
     static long castOkAddr;            // VM.castOk(Lmagic/ObjectReference;Lmagic/Address;)I  — checkcast predicate (1 = holds, 0 = throw)
     static long newUnresolvedAddr;     // VM.newUnresolved(J)J — an executed `new` the loader resolves late
     static long ctorRefInit0;          // VM.ctorRefInit(J)V — a constructor reference initializes its target (JVMS 5.5)

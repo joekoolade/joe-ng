@@ -12,6 +12,7 @@
 package net;
 
 import magic.Address;
+import magic.DataReference;
 import magic.Magic;
 import vm.Heap;
 import vm.VM;
@@ -34,11 +35,11 @@ public final class Dns
      */
     public static boolean resolve(byte[] host, Address ipOut)
     {
-        Address buf = Heap.allocData(256);
+        DataReference buf = Heap.allocData(256);
         int localPort = Ip.ephemeralPort();
         int id = (int) (Ip.nextRandom() & 0xFFFF);
-        int flen = buildQuery(buf, host, localPort, id);
-        Address rx = Heap.allocData(2048);
+        int flen = buildQuery(buf.toAddress(), host, localPort, id);
+        DataReference rx = Heap.allocData(2048);
         long freq = Magic.readCNTFRQ_EL0();
         long endT = Magic.readCNTPCT_EL0() + freq * 6L;
         long nextSend = 0L;
@@ -55,16 +56,16 @@ public final class Dns
             long now = Magic.readCNTPCT_EL0();
             if (now >= nextSend)
             {
-                Link.send(buf, flen);
+                Link.send(buf.toAddress(), flen);
                 nextSend = now + freq / 2L;
                 sends = sends + 1;
             }
-            int len = Link.recv(q, rx, 2048);
+            int len = Link.recv(q, rx.toAddress(), 2048);
             if (len == 0)
             {
                 continue;
             }
-            int off = Link.ethOffset(rx, len);
+            int off = Link.ethOffset(rx.toAddress(), len);
             if (off < 0)
             {
                 continue;
@@ -83,7 +84,7 @@ public final class Dns
             }
             ipv4 = ipv4 + 1;
             Address ip = eth.plus(14);
-            if ((ip.plus(9).loadUnsignedByte() & 0xFF) != 17 || !Ip.eq(ip.plus(12), Ip.dnsIp))
+            if ((ip.plus(9).loadUnsignedByte() & 0xFF) != 17 || !Ip.eq(ip.plus(12), Ip.dnsIp.toAddress()))
             {
                 continue;                                // not UDP, or not from our DNS server
             }
@@ -186,8 +187,8 @@ public final class Dns
         ip.plus(8).store((byte) 64);
         ip.plus(9).store((byte) 17);
         Ip.be16(ip.plus(10), 0);
-        Ip.copy4(Ip.ourIp, ip.plus(12));
-        Ip.copy4(Ip.dnsIp, ip.plus(16));
+        Ip.copy4(Ip.ourIp.toAddress(), ip.plus(12));
+        Ip.copy4(Ip.dnsIp.toAddress(), ip.plus(16));
         Ip.be16(ip.plus(10), Ip.cksum(ip, 20));
         return 14 + 20 + 8 + dnsLen;
     }

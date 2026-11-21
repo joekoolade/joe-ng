@@ -12,6 +12,8 @@
 package compiler;
 
 import magic.Address;
+import magic.DataReference;
+import magic.ObjectReference;
 
 /**
  * Shapes for the reference maps (frames/GC arc S2, {@link RefMaps}); CompilerTest decodes their maps. Each call
@@ -92,5 +94,15 @@ final class MapFixture
         long m = n + 1L;
         sink(o);
         word(a.toLong() + m);
+    }
+
+    /** A DataReference and an ObjectReference beside a reference (site 0): both are references to the collector,
+     *  the data reference with its own code (S4). */
+    static void data(Object o, long n)
+    {
+        DataReference d = DataReference.fromLong(n);
+        ObjectReference r = ObjectReference.fromLong(n);
+        sink(o);
+        word(d.toLong() + r.toLong());
     }
 }

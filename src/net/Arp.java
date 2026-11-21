@@ -12,6 +12,7 @@
 package net;
 
 import magic.Address;
+import magic.DataReference;
 import magic.Magic;
 import vm.Heap;
 import vm.VM;
@@ -33,9 +34,9 @@ public final class Arp
      */
     public static boolean resolve(Address targetIp, Address macOut, Address ourMac, Address ourIp)
     {
-        Address buf = Heap.allocData(128);
-        int flen = build(buf, targetIp, ourMac, ourIp);
-        Address rx = Heap.allocData(2048);
+        DataReference buf = Heap.allocData(128);
+        int flen = build(buf.toAddress(), targetIp, ourMac, ourIp);
+        DataReference rx = Heap.allocData(2048);
         long freq = Magic.readCNTFRQ_EL0();
         long endT = Magic.readCNTPCT_EL0() + freq * 6L;
         long nextSend = 0L;                              // (re)send the request every 0.5 s
@@ -44,15 +45,15 @@ public final class Arp
             long now = Magic.readCNTPCT_EL0();
             if (now >= nextSend)
             {
-                Link.send(buf, flen);
+                Link.send(buf.toAddress(), flen);
                 nextSend = now + freq / 2L;
             }
-            int len = Link.waitFrame(rx, 2048, Link.RX_WAIT_MS);
+            int len = Link.waitFrame(rx.toAddress(), 2048, Link.RX_WAIT_MS);
             if (len == 0)
             {
                 continue;                                // no delay -- drain the FIFO as fast as possible
             }
-            int off = Link.ethOffset(rx, len);
+            int off = Link.ethOffset(rx.toAddress(), len);
             if (off < 0)
             {
                 continue;

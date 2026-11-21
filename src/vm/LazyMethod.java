@@ -12,6 +12,7 @@
 package vm;
 
 import magic.Address;
+import magic.DataReference;
 
 /**
  * M8 Stage 3 (reified loader): one deferred/lazily-compiled method -- everything {@code Loader.lazyCompile}
@@ -22,7 +23,7 @@ import magic.Address;
  */
 final class LazyMethod
 {
-    Address blob;     // class blob base (holds Utf8 strings)
+    DataReference blob;     // class blob base (holds Utf8 strings)
     int  len;        // blob length (for parseConstPool on context restore)
     int  reg;        // class registry index (clStatics/clTib/clType restore)
     int  nameOff;    // method name Utf8 offset (0 => compile from captured code, not re-find)

@@ -16,6 +16,7 @@ import compiler.Baseline;
 import board.Uart;
 import classfile.ClassReader;
 import magic.Address;
+import magic.DataReference;
 import magic.Magic;
 import objectmodel.ObjectModel;
 
@@ -196,9 +197,9 @@ final class LambdaFactory
     static void printLambdaImplName(int idx)
     {
         int mref = lambdaImplMref(idx);
-        Loader.printNameAt(Loader.gView.base, Loader.refClassNameOff(mref));
+        Loader.printNameAt(Loader.gView.base.toAddress(), Loader.refClassNameOff(mref));
         Uart.putc(0x2E);
-        Loader.printNameAt(Loader.gView.base, Loader.mrefNameOff(mref));
+        Loader.printNameAt(Loader.gView.base.toAddress(), Loader.mrefNameOff(mref));
     }
 
     private static void printLambdaIfaceName(int idx)
@@ -223,7 +224,7 @@ final class LambdaFactory
     }
 
     /** Type of the functional interface = the indy descriptor's return class, or 0 if not loaded. */
-    private static Address lambdaIfaceType(int idx)
+    private static DataReference lambdaIfaceType(int idx)
     {
         int descOff = Loader.mrefDescOff(idx);
         Address p = Loader.gView.base.plus(descOff + 2);                   // skip the u2 length
@@ -234,7 +235,7 @@ final class LambdaFactory
         p = p.plus(1);                                         // past ')'
         if (u1(p) != 'L')
         {
-            return Address.zero();
+            return DataReference.zero();
         }
         Address nameStart = p.plus(1);
         Address q = nameStart;
@@ -246,13 +247,13 @@ final class LambdaFactory
         int i = 0;
         while (i < ClassRegistry.clCount)
         {
-            if (Utf8.rawNameEq(ClassRegistry.clTab[i].base, ClassRegistry.clTab[i].nameOff, nameStart, nameLen))
+            if (Utf8.rawNameEq(ClassRegistry.clTab[i].base.toAddress(), ClassRegistry.clTab[i].nameOff, nameStart, nameLen))
             {
                 return ClassRegistry.clTab[i].type;
             }
             i += 1;
         }
-        return Address.zero();
+        return DataReference.zero();
     }
 
     /** The SAM's descriptor Utf8 offset: bootstrap_arguments[0] MethodType (its name is the indy's name). */
@@ -366,9 +367,9 @@ final class LambdaFactory
     {
         int mref = lambdaImplMref(idx);
         Uart.write(Magic.bytes("  METHOD REF ARG NOT UNBOXED "));
-        Loader.printNameAt(Loader.gView.base, Loader.refClassNameOff(mref));
+        Loader.printNameAt(Loader.gView.base.toAddress(), Loader.refClassNameOff(mref));
         Uart.putc(0x2E);
-        Loader.printNameAt(Loader.gView.base, Loader.mrefNameOff(mref));
+        Loader.printNameAt(Loader.gView.base.toAddress(), Loader.mrefNameOff(mref));
         Uart.write(Magic.bytes(" param="));
         VM.printDec(p);
         if (r > 7)
@@ -406,9 +407,9 @@ final class LambdaFactory
     {
         int mref = lambdaImplMref(idx);
         Uart.write(Magic.bytes("  UNBOXABLE METHOD REF "));
-        Loader.printNameAt(Loader.gView.base, Loader.refClassNameOff(mref));
+        Loader.printNameAt(Loader.gView.base.toAddress(), Loader.refClassNameOff(mref));
         Uart.putc(0x2E);
-        Loader.printNameAt(Loader.gView.base, Loader.mrefNameOff(mref));
+        Loader.printNameAt(Loader.gView.base.toAddress(), Loader.mrefNameOff(mref));
         Uart.write(Magic.bytes(" returns "));
         Uart.putc(retKind);
         Uart.write(Magic.bytes(" into a generic SAM (vm/VMBox.box not stashed)\n"));
@@ -506,7 +507,7 @@ final class LambdaFactory
         Uart.write(Magic.bytes("\n  CTOR-REF CANNOT INITIALIZE (its <init> may read null statics): "));
         if (ClassRegistry.clTab != null && cr >= 0 && cr < ClassRegistry.clCount && ClassRegistry.clTab[cr] != null)
         {
-            Loader.printNameAt(ClassRegistry.clTab[cr].base, ClassRegistry.clTab[cr].nameOff);
+            Loader.printNameAt(ClassRegistry.clTab[cr].base.toAddress(), ClassRegistry.clTab[cr].nameOff);
         }
         else
         {
@@ -521,7 +522,7 @@ final class LambdaFactory
         Uart.write(Magic.bytes("\n  CTOR-REF TARGET HAS NO TIB (the reference would build a null-TIB object): "));
         if (ClassRegistry.clTab != null && cr >= 0 && cr < ClassRegistry.clCount && ClassRegistry.clTab[cr] != null)
         {
-            Loader.printNameAt(ClassRegistry.clTab[cr].base, ClassRegistry.clTab[cr].nameOff);
+            Loader.printNameAt(ClassRegistry.clTab[cr].base.toAddress(), ClassRegistry.clTab[cr].nameOff);
         }
         else
         {
@@ -532,7 +533,7 @@ final class LambdaFactory
 
     static long buildLambdaTib(int idx)
     {
-        Address ifaceType = lambdaIfaceType(idx);
+        DataReference ifaceType = lambdaIfaceType(idx);
         Address ifaceU = ifaceType.isZero() ? lambdaIfaceNameU(idx) : Address.zero();
         if (ifaceType.isZero() && !ifaceU.isZero() && Loader.lzCompiling && !Loader.lzRetried
                 && !VM.dirBytes(ifaceU.plus(2L), u2(ifaceU)).isZero() && Loader.notePullNeeded(ifaceU))
@@ -656,9 +657,9 @@ final class LambdaFactory
                 if (Loader.LOAD_LOG)
                 {
                     Uart.write(Magic.bytes("  lambdaslot late "));
-                    Loader.printNameAt(Loader.gView.base, Loader.refClassNameOff(lambdaImplMref(idx)));
+                    Loader.printNameAt(Loader.gView.base.toAddress(), Loader.refClassNameOff(lambdaImplMref(idx)));
                     Uart.putc(0x2E);
-                    Loader.printNameAt(Loader.gView.base, Loader.mrefNameOff(lambdaImplMref(idx)));
+                    Loader.printNameAt(Loader.gView.base.toAddress(), Loader.mrefNameOff(lambdaImplMref(idx)));
                     Uart.putc(0x0A);
                 }
                 w = Loader.emitAt(thunk, w, A64Enc.movz(17, VirtualDispatch.virtualSiteIndex(lambdaImplMref(idx)), 0));
@@ -680,7 +681,7 @@ final class LambdaFactory
                 w = Loader.emitAt(thunk, w, A64Enc.br(16));                                  // tail-call
             }
             Heap.publishCode(thunk, thunk.plus(w * 4L));
-            return finishLambdaClass(thunk, ifaceType, idx, nc);
+            return finishLambdaClass(thunk, ifaceType.toAddress(), idx, nc);
         }
         if (kind == 8)
         {
@@ -711,7 +712,7 @@ final class LambdaFactory
                 {
                     reportLambdaCtorNoTib(cr);
                 }
-                return finishLambdaClass(thunk, ifaceType, idx, nc);            // discarded by the retry
+                return finishLambdaClass(thunk, ifaceType.toAddress(), idx, nc);            // discarded by the retry
             }
             int size = 16 + ClassRegistry.clTab[cr].fieldCount * 8;
             long ctib = ClassRegistry.clTab[cr].tib.toLong();
@@ -838,7 +839,7 @@ final class LambdaFactory
             w += 1;
             Heap.publishCode(thunk, thunk.plus(w * 4L));
             VM.addJitFrame(tlo, thi, frame, 0L);        // it calls <init>; an exception from there unwinds through here
-            return finishLambdaClass(thunk, ifaceType, idx, nc);
+            return finishLambdaClass(thunk, ifaceType.toAddress(), idx, nc);
         }
         long implBuf = lambdaImplBuf(idx);
         // The body is lambda$xxx(captures..., samArgs...). On entry x0 = lambda obj, x1..x(ia) = SAM args.
@@ -903,7 +904,7 @@ final class LambdaFactory
             w = emitBoxReturn(thunk, w, retKind);
         }
         Heap.publishCode(thunk, thunk.plus(w * 4L));
-        return finishLambdaClass(thunk, ifaceType, idx, nc);
+        return finishLambdaClass(thunk, ifaceType.toAddress(), idx, nc);
     }
 
     private static long finishLambdaClass(Address thunk, Address ifaceType, int idx, int nc)
@@ -943,7 +944,7 @@ final class LambdaFactory
             }
         }
         int extra = serReg >= 0 ? 1 : 0;
-        Address dir = Heap.allocData((n + 2 + extra) * 16);
+        DataReference dir = Heap.allocData((n + 2 + extra) * 16);
         dir.plus(0L).store(ifaceType);              // the functional interface itself
         dir.plus(8L).store(lambdaItableFor(fnReg, samName, samDesc, thunk));
         int e = 1;
@@ -973,7 +974,7 @@ final class LambdaFactory
         // and every aastore of a lambda into an Object[] threw ArrayStoreException. That is not an obscure
         // path -- it is EVERY varargs call taking a lambda, e.g. Arguments.of((Executable) () -> ...) in the
         // stock BasicGZIPInputStreamTest, whose argument array is an Object[].
-        Address type = Heap.allocData(ObjectModel.TYPE_SIZE);
+        DataReference type = Heap.allocData(ObjectModel.TYPE_SIZE);
         type.plus(0L).store((long) (16 + nc * 8));
         type.plus(ObjectModel.TYPE_SUPER_OFFSET).store(TibBuilder.objectTypeAddr());
         type.plus(16L).store(dir);
@@ -982,7 +983,7 @@ final class LambdaFactory
         type.plus(ObjectModel.TYPE_DISPLAY_OFFSET).store(0L);
         type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).store(0L);
         type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).store(0L);
-        DynamicTypeCheck.buildImplBitmap(type);                           // a lambda's dir interfaces ARE numbered
+        DynamicTypeCheck.buildImplBitmap(type.toAddress());                           // a lambda's dir interfaces ARE numbered
         // TIB { Type, Object's vtable }. The lambda declares no virtual method of its OWN -- its SAM is
         // reached through the itable directory above -- but it is still an ordinary object, and
         // equals/hashCode/toString on it must select java/lang/Object's implementations (JVMS 5.4.6: the
@@ -996,17 +997,17 @@ final class LambdaFactory
         // Stream.sorted(). Identity semantics inherited from Object are exactly right here --
         // LambdaMetafactory specifies the identity of a captured function object as unpredictable.
         int onv = TibBuilder.objectVtableCount();
-        Address tib = Heap.allocData(8 + onv * 8);
+        DataReference tib = Heap.allocData(8 + onv * 8);
         tib.plus(0L).store(type);
-        TibBuilder.fillObjectVtable(tib);                           // may copy zeros if Object is not compiled yet;
+        TibBuilder.fillObjectVtable(tib.toAddress());                           // may copy zeros if Object is not compiled yet;
                                                          //   refillSynthTibVtables repairs that at loadAll's end
         if (TibBuilder.lambdaTibRoots != null && TibBuilder.lambdaTibRootN < TibBuilder.lambdaTibRoots.length())
         {
-            TibBuilder.lambdaTibRoots.set(TibBuilder.lambdaTibRootN, tib);         // keep this TIB (and, via its trace, Type/dir/itables) a GC root
+            TibBuilder.lambdaTibRoots.set(TibBuilder.lambdaTibRootN, tib.toAddress());         // keep this TIB (and, via its trace, Type/dir/itables) a GC root
             TibBuilder.lambdaTibVtCap[TibBuilder.lambdaTibRootN] = onv;   // ... and how many vtable slots it has room for
             TibBuilder.lambdaTibFilled[TibBuilder.lambdaTibRootN] = false;// ... and NOT yet filled (explicit: see the field's note --
                                                     //   allocArray leaves elements undefined on this VM)
-            TibBuilder.lambdaHostBase.set(TibBuilder.lambdaTibRootN, Loader.gView.base); // ... and the class being compiled: the lambda's host
+            TibBuilder.lambdaHostBase.set(TibBuilder.lambdaTibRootN, Loader.gView.base.toAddress()); // ... and the class being compiled: the lambda's host
             TibBuilder.lambdaHostNameOff[TibBuilder.lambdaTibRootN] = Loader.gView.thisNameOff;
             TibBuilder.lambdaTibRootN += 1;
         }
@@ -1020,19 +1021,19 @@ final class LambdaFactory
     {
         if (ir < 0)
         {
-            Address one = Heap.allocData(8);
+            DataReference one = Heap.allocData(8);
             one.store(thunk);
             return one.toLong();
         }
         int count = ClassRegistry.clTab[ir].ifmCount;
-        Address it = Heap.allocData(count > 0 ? count * 8 : 8);
+        DataReference it = Heap.allocData(count > 0 ? count * 8 : 8);
         int s = 0;
         while (s < count)
         {
             it.plus(s * 8L).store(0L);
             s += 1;
         }
-        int slot = InterfaceInvocation.ifmSlotIn(ir, Loader.gView.base, samName, samDesc);
+        int slot = InterfaceInvocation.ifmSlotIn(ir, Loader.gView.base.toAddress(), samName, samDesc);
         it.plus((slot >= 0 ? slot : 0) * 8L).store(thunk);
         return it.toLong();
     }

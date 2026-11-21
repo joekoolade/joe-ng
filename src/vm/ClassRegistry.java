@@ -12,6 +12,7 @@
 package vm;
 
 import magic.Address;
+import magic.DataReference;
 import magic.ObjectReference;
 import objectmodel.ObjectModel;
 
@@ -123,7 +124,7 @@ final class ClassRegistry
         int r = 0;
         while (r < clCount)
         {
-            if (clTab[r] != null && Utf8.utf8IsAtBase(clTab[r].base, clTab[r].nameOff, name))
+            if (clTab[r] != null && Utf8.utf8IsAtBase(clTab[r].base.toAddress(), clTab[r].nameOff, name))
             {
                 return r;
             }
@@ -148,7 +149,7 @@ final class ClassRegistry
         int r = 0;
         while (r < clCount)
         {
-            if (clTab[r] != null && clTab[r].base.EQ(base))
+            if (clTab[r] != null && clTab[r].base.EQ(DataReference.fromAddress(base)))
             {
                 return r;
             }
@@ -193,7 +194,7 @@ final class ClassRegistry
     }
 
     /** Registry index of the class named at {@code base + nameOff}, or -1. The one body behind all three. */
-    static int classRegAt(Address base, int nameOff)
+    static int classRegAt(DataReference base, int nameOff)
     {
         if (nameOff == 0 && base.isZero())
         {
@@ -204,11 +205,11 @@ final class ClassRegistry
         // The SAME predicate the scan used -- the index only narrows what it is applied to, so a hit is the
         // same entry the scan would have found and a miss still answers -1.
         int best = -1;
-        int k = clBucket[Utf8.utf8Hash(base, nameOff) & (CLTAB - 1)];
+        int k = clBucket[Utf8.utf8Hash(base.toAddress(), nameOff) & (CLTAB - 1)];
         while (k >= 0)
         {
             rbSteps += 1;
-            if (Loader.utf8EqAt(base, nameOff, clTab[k].base, clTab[k].nameOff))
+            if (Loader.utf8EqAt(base.toAddress(), nameOff, clTab[k].base.toAddress(), clTab[k].nameOff))
             {
                 if (best < 0 || k < best)
                 {
@@ -226,7 +227,7 @@ final class ClassRegistry
         {
             return -1;
         }
-        return classRegAt(base, nameOff);
+        return classRegAt(DataReference.fromAddress(base), nameOff);
     }
 
     static int classRegByName(int nameOff)
@@ -251,13 +252,13 @@ final class ClassRegistry
         if (m != null)
         {
             int c = m[h];
-            if (c >= 0 && c < clCount && clTab[c].type.EQ(type))
+            if (c >= 0 && c < clCount && clTab[c].type.EQ(DataReference.fromAddress(type)))
             {
                 return c;
             }
         }
         int ci = 0;
-        while (ci < clCount && clTab[ci].type.NE(type))
+        while (ci < clCount && clTab[ci].type.NE(DataReference.fromAddress(type)))
         {
             ci += 1;
         }
@@ -318,7 +319,7 @@ final class ClassRegistry
         int sup = clTab[reg].superReg;
         if (sup < 0 && clTab[reg].superNameOff != 0)
         {
-            sup = classRegByNameAt(clTab[reg].base, clTab[reg].superNameOff);
+            sup = classRegByNameAt(clTab[reg].base.toAddress(), clTab[reg].superNameOff);
             clTab[reg].superReg = sup;
         }
         return sup == reg ? -1 : sup;
@@ -367,7 +368,7 @@ final class ClassRegistry
         int k = clBucket[h & (CLTAB - 1)];
         while (k >= 0)
         {
-            if ((best < 0 || k < best) && Utf8.utf8IsAtBase(clTab[k].base, clTab[k].nameOff, want))
+            if ((best < 0 || k < best) && Utf8.utf8IsAtBase(clTab[k].base.toAddress(), clTab[k].nameOff, want))
             {
                 best = k;
             }
@@ -412,7 +413,7 @@ final class ClassRegistry
         }
         while (ctIndexed < clCount)
         {
-            int h = typeHashOf(clTab[ctIndexed] != null ? clTab[ctIndexed].type : Address.zero());
+            int h = typeHashOf(clTab[ctIndexed] != null ? clTab[ctIndexed].type.toAddress() : Address.zero());
             ctNext[ctIndexed] = ctBucket[h];
             ctBucket[h] = ctIndexed;
             ctIndexed += 1;
@@ -431,7 +432,7 @@ final class ClassRegistry
             // The LOWEST matching index still wins, which the scan gave for free and a chain does not:
             // head-insertion makes the chain DESCENDING, so it is searched for the minimum rather than
             // stopped at the first hit. Same care `findPdByName`'s index needed.
-            if (clTab[i] != null && clTab[i].type.EQ(type) && (best < 0 || i < best))
+            if (clTab[i] != null && clTab[i].type.EQ(DataReference.fromAddress(type)) && (best < 0 || i < best))
             {
                 best = i;
             }

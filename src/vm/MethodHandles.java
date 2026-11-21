@@ -14,6 +14,7 @@ package vm;
 import asm.A64Enc;
 import board.Uart;
 import magic.Address;
+import magic.DataReference;
 import magic.Magic;
 import magic.ObjectReference;
 import objectmodel.ObjectModel;
@@ -59,18 +60,18 @@ final class MethodHandles
     /** True if the *ref at {@code idx} is a MethodHandle signature-polymorphic method the VM links itself. */
     static boolean isMhSigPoly(int idx)
     {
-        if (!Utf8.utf8IsAtBase(Loader.gView.base, Loader.refClassNameOff(idx), Magic.bytes("java/lang/invoke/MethodHandle")))
+        if (!Utf8.utf8IsAtBase(Loader.gView.base.toAddress(), Loader.refClassNameOff(idx), Magic.bytes("java/lang/invoke/MethodHandle")))
         {
             return false;
         }
         int n = Loader.mrefNameOff(idx);
-        return Utf8.utf8IsAtBase(Loader.gView.base, n, Magic.bytes("invokeExact"))
-                || Utf8.utf8IsAtBase(Loader.gView.base, n, Magic.bytes("invoke"))
-                || Utf8.utf8IsAtBase(Loader.gView.base, n, Magic.bytes("invokeBasic"))
-                || Utf8.utf8IsAtBase(Loader.gView.base, n, Magic.bytes("linkToStatic"))
-                || Utf8.utf8IsAtBase(Loader.gView.base, n, Magic.bytes("linkToSpecial"))
-                || Utf8.utf8IsAtBase(Loader.gView.base, n, Magic.bytes("linkToVirtual"))
-                || Utf8.utf8IsAtBase(Loader.gView.base, n, Magic.bytes("linkToInterface"));
+        return Utf8.utf8IsAtBase(Loader.gView.base.toAddress(), n, Magic.bytes("invokeExact"))
+                || Utf8.utf8IsAtBase(Loader.gView.base.toAddress(), n, Magic.bytes("invoke"))
+                || Utf8.utf8IsAtBase(Loader.gView.base.toAddress(), n, Magic.bytes("invokeBasic"))
+                || Utf8.utf8IsAtBase(Loader.gView.base.toAddress(), n, Magic.bytes("linkToStatic"))
+                || Utf8.utf8IsAtBase(Loader.gView.base.toAddress(), n, Magic.bytes("linkToSpecial"))
+                || Utf8.utf8IsAtBase(Loader.gView.base.toAddress(), n, Magic.bytes("linkToVirtual"))
+                || Utf8.utf8IsAtBase(Loader.gView.base.toAddress(), n, Magic.bytes("linkToInterface"));
     }
 
     /**
@@ -150,7 +151,7 @@ final class MethodHandles
         VM.loaderLock(VM.LOCK_REFLECT);
         try
         {
-            Address t = Loader.loadClassIncremental(Magic.bytes("java/lang/invoke/MethodHandleNatives"));
+            DataReference t = Loader.loadClassIncremental(Magic.bytes("java/lang/invoke/MethodHandleNatives"));
             if (!t.isZero())
             {
                 ClassInitializer.ensureInitOfType(t);
@@ -170,12 +171,12 @@ final class MethodHandles
         {
             return 0L;
         }
-        Address base = ClassRegistry.clTab[reg].base;
-        if (base.isZero() || u4(base) != 0xCAFEBABE)
+        DataReference base = ClassRegistry.clTab[reg].base;
+        if (base.isZero() || u4(base.toAddress()) != 0xCAFEBABE)
         {
             return 0L;
         }
-        return Loader.guestBytes(VM.heapBytes(base, classFileLength(base)));
+        return Loader.guestBytes(VM.heapBytes(base.toAddress(), classFileLength(base.toAddress())));
     }
 
     /** The length of the class file at {@code base}, by walking its structure (JVMS 4.1). */
@@ -428,7 +429,7 @@ final class MethodHandles
             return -1L;
         }
         long g = Loader.guestBytes(field);
-        return Reflection.fieldOffsetOfType(ClassRegistry.clTab[reg].type, Address.fromLong(g).plus(24L), field.length);
+        return Reflection.fieldOffsetOfType(ClassRegistry.clTab[reg].type.toAddress(), Address.fromLong(g).plus(24L), field.length);
     }
 
     /** The number of parameters in the absolute {@code {u2 len}(...)ret} descriptor at {@code descU}. */
@@ -475,7 +476,7 @@ final class MethodHandles
         int ci = 0;
         while (ci < ClassRegistry.clCount)
         {
-            if (ClassRegistry.clTab[ci] != null && ClassRegistry.clTab[ci].tib.EQ(tib))
+            if (ClassRegistry.clTab[ci] != null && ClassRegistry.clTab[ci].tib.EQ(DataReference.fromAddress(tib)))
             {
                 start = ci;
                 ci = ClassRegistry.clCount;
@@ -491,8 +492,8 @@ final class MethodHandles
             int j = 0;
             while (j < FieldRegistry.fldCount)
             {
-                if (Loader.utf8EqAt(ClassRegistry.clTab[chain].base, ClassRegistry.clTab[chain].nameOff, FieldRegistry.fldTab[j].base, FieldRegistry.fldTab[j].classOff)
-                        && Utf8.rawEqUtf8(fnBase, fnLen, FieldRegistry.fldTab[j].base, FieldRegistry.fldTab[j].nameOff))
+                if (Loader.utf8EqAt(ClassRegistry.clTab[chain].base.toAddress(), ClassRegistry.clTab[chain].nameOff, FieldRegistry.fldTab[j].base.toAddress(), FieldRegistry.fldTab[j].classOff)
+                        && Utf8.rawEqUtf8(fnBase, fnLen, FieldRegistry.fldTab[j].base.toAddress(), FieldRegistry.fldTab[j].nameOff))
                 {
                     return 16L + FieldRegistry.fldTab[j].slot * 8L;
                 }

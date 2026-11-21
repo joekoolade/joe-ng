@@ -12,6 +12,7 @@
 package vm;
 
 import magic.Address;
+import magic.DataReference;
 
 /**
  * One loaded classfile blob, parsed once: its heap copy and its constant-pool index (JikesRVM keeps the same
@@ -29,7 +30,7 @@ import magic.Address;
  */
 final class ClassFileView
 {
-    Address base;     // the blob in memory (its Utf8 strings are read in place, at base + offset)
+    DataReference base;     // the blob in memory (its Utf8 strings are read in place, at base + offset)
     byte[] bytes;     // heap copy of the blob, for the shared classfile.ClassReader
     int[] cp;         // byte offset of each constant-pool entry body
     int[] cpTag;      // tag of each constant-pool entry (7 = Class)

@@ -14,6 +14,7 @@ package vm;
 import board.Uart;
 import classfile.ClassReader;
 import magic.Address;
+import magic.DataReference;
 import magic.AddressArray;
 import magic.Magic;
 import magic.ObjectReference;
@@ -35,7 +36,7 @@ final class ClassAttributes
     {
     }
 
-    private static Address gAttrBase;                      // the blob classAttrOf last answered for
+    private static DataReference gAttrBase;                      // the blob classAttrOf last answered for
     /** Cap on member classes enumerated per class -- fixed so the two passes below stay on plain locals. */
     private static final int MAXDECLCLASS = 64;
 
@@ -54,10 +55,10 @@ final class ClassAttributes
         {
             return Address.zero();
         }
-        Address base = Reflection.reflEntry(rgIndex).base;
+        DataReference base = Reflection.reflEntry(rgIndex).base;
         int nameOff = Reflection.reflEntry(rgIndex).nameOff;
         int descOff = Reflection.reflEntry(rgIndex).descOff;
-        Loader.parseForMethods(base, Loader.blobLenOf(base));
+        Loader.parseForMethods(base.toAddress(), Loader.blobLenOf(base.toAddress()));
         Address p = Loader.gView.methodsStart;
         int mcount = u2(p);
         p = p.plus(2);
@@ -65,8 +66,8 @@ final class ClassAttributes
         while (m < mcount)
         {
             int attrs = u2(p.plus(6));
-            if (Loader.utf8EqAt(base, Loader.gView.cp[u2(p.plus(2))], base, nameOff)
-                    && Loader.utf8EqAt(base, Loader.gView.cp[u2(p.plus(4))], base, descOff))
+            if (Loader.utf8EqAt(base.toAddress(), Loader.gView.cp[u2(p.plus(2))], base.toAddress(), nameOff)
+                    && Loader.utf8EqAt(base.toAddress(), Loader.gView.cp[u2(p.plus(4))], base.toAddress(), descOff))
             {
                 return p;
             }
@@ -96,18 +97,18 @@ final class ClassAttributes
         {
             return 0L;
         }
-        Address base = ClassRegistry.clTab[reg].base;
-        Address ap = classAttrsPos(base);
+        DataReference base = ClassRegistry.clTab[reg].base;
+        Address ap = classAttrsPos(base.toAddress());
         if (ap.isZero())
         {
             return 0L;
         }
-        Address p = classAttrNamed(base, ap.plus(2L), u2(ap), Magic.bytes("Signature"));
+        Address p = classAttrNamed(base.toAddress(), ap.plus(2L), u2(ap), Magic.bytes("Signature"));
         if (p.isZero())
         {
             return 0L;
         }
-        return Loader.utf8ToString(base, Loader.gView.cp[u2(p)]);
+        return Loader.utf8ToString(base.toAddress(), Loader.gView.cp[u2(p)]);
     }
 
     /**
@@ -123,13 +124,13 @@ final class ClassAttributes
         {
             return 0L;
         }
-        Address base = Reflection.reflEntry(rgIndex).base;
-        Address q = classAttrNamed(base, p.plus(8L), u2(p.plus(6L)), Magic.bytes("Signature"));
+        DataReference base = Reflection.reflEntry(rgIndex).base;
+        Address q = classAttrNamed(base.toAddress(), p.plus(8L), u2(p.plus(6L)), Magic.bytes("Signature"));
         if (q.isZero())
         {
             return 0L;
         }
-        return Loader.utf8ToString(base, Loader.gView.cp[u2(q)]);
+        return Loader.utf8ToString(base.toAddress(), Loader.gView.cp[u2(q)]);
     }
 
     /**
@@ -145,8 +146,8 @@ final class ClassAttributes
         {
             return 0L;
         }
-        Address base = Reflection.reflEntry(rgIndex).base;
-        Address q = classAttrNamed(base, p.plus(8L), u2(p.plus(6L)), Magic.bytes("Exceptions"));
+        DataReference base = Reflection.reflEntry(rgIndex).base;
+        Address q = classAttrNamed(base.toAddress(), p.plus(8L), u2(p.plus(6L)), Magic.bytes("Exceptions"));
         if (q.isZero())
         {
             return 0L;
@@ -156,7 +157,7 @@ final class ClassAttributes
             return 0L;
         }
         int ci = u2(q.plus(2L + 2L * i));
-        return Loader.utf8ToString(base, Loader.gView.cp[u2(base.plus(Loader.gView.cp[ci]))]);  // CONSTANT_Class -> its name Utf8
+        return Loader.utf8ToString(base.toAddress(), Loader.gView.cp[u2(base.plus(Loader.gView.cp[ci]))]);  // CONSTANT_Class -> its name Utf8
     }
 
     /**
@@ -176,19 +177,19 @@ final class ClassAttributes
         {
             return -1L;
         }
-        Address base = Reflection.reflEntry(rgIndex).base;
+        DataReference base = Reflection.reflEntry(rgIndex).base;
         if (k == -3L)
         {
             // Not a parameter fact, but the same kind of question about the same method_info: does this
             // annotation element have an AnnotationDefault (JVMS 4.7.22)? 1 or 0. Method.getDefaultValue asks.
-            return classAttrNamed(base, p.plus(8L), u2(p.plus(6L)), Magic.bytes("AnnotationDefault")).isZero() ? 0L : 1L;
+            return classAttrNamed(base.toAddress(), p.plus(8L), u2(p.plus(6L)), Magic.bytes("AnnotationDefault")).isZero() ? 0L : 1L;
         }
         if (k == -2L)
         {
-            Address q = classAttrNamed(base, p.plus(8L), u2(p.plus(6L)), Magic.bytes("RuntimeVisibleParameterAnnotations"));
+            Address q = classAttrNamed(base.toAddress(), p.plus(8L), u2(p.plus(6L)), Magic.bytes("RuntimeVisibleParameterAnnotations"));
             return q.isZero() ? -1L : u1(q);
         }
-        Address q = classAttrNamed(base, p.plus(8L), u2(p.plus(6L)), Magic.bytes("MethodParameters"));
+        Address q = classAttrNamed(base.toAddress(), p.plus(8L), u2(p.plus(6L)), Magic.bytes("MethodParameters"));
         if (q.isZero())
         {
             return -1L;
@@ -217,14 +218,14 @@ final class ClassAttributes
         {
             return 0L;
         }
-        Address base = Reflection.reflEntry(rgIndex).base;
-        Address q = classAttrNamed(base, p.plus(8L), u2(p.plus(6L)), Magic.bytes("MethodParameters"));
+        DataReference base = Reflection.reflEntry(rgIndex).base;
+        Address q = classAttrNamed(base.toAddress(), p.plus(8L), u2(p.plus(6L)), Magic.bytes("MethodParameters"));
         if (q.isZero() || k < 0L || k >= u1(q))
         {
             return 0L;
         }
         int nameIdx = u2(q.plus(1L + 4L * k));
-        return nameIdx == 0 ? 0L : Loader.utf8ToString(base, Loader.gView.cp[nameIdx]);
+        return nameIdx == 0 ? 0L : Loader.utf8ToString(base.toAddress(), Loader.gView.cp[nameIdx]);
     }
 
     /**
@@ -242,8 +243,8 @@ final class ClassAttributes
         {
             return 0L;
         }
-        Address base = ClassRegistry.clTab[ci].base;
-        Loader.parseConstPool(base, Loader.blobLenOf(base));
+        DataReference base = ClassRegistry.clTab[ci].base;
+        Loader.parseConstPool(base, Loader.blobLenOf(base.toAddress()));
         Address p = Loader.gp.plus(6L);                               // past access_flags, this_class, super_class
         p = p.plus(2L + u2(p) * 2L);                           // past the interfaces list
         int fcount = u2(p);
@@ -254,14 +255,14 @@ final class ClassAttributes
         while (f < fcount)
         {
             int attrs = u2(p.plus(6));
-            if (Utf8.rawEqUtf8(nbase, nlen, base, Loader.gView.cp[u2(p.plus(2))]))
+            if (Utf8.rawEqUtf8(nbase, nlen, base.toAddress(), Loader.gView.cp[u2(p.plus(2))]))
             {
-                Address q = classAttrNamed(base, p.plus(8L), attrs, Magic.bytes("Signature"));
+                Address q = classAttrNamed(base.toAddress(), p.plus(8L), attrs, Magic.bytes("Signature"));
                 if (q.isZero())
                 {
                     return 0L;
                 }
-                return Loader.utf8ToString(base, Loader.gView.cp[u2(q)]);
+                return Loader.utf8ToString(base.toAddress(), Loader.gView.cp[u2(q)]);
             }
             p = Loader.skipAttributes(p.plus(8), attrs);
             f += 1;
@@ -288,20 +289,20 @@ final class ClassAttributes
         {
             return 0L;
         }
-        Address base = ClassRegistry.clTab[reg].base;
-        Address ap = classAttrsPos(base);
+        DataReference base = ClassRegistry.clTab[reg].base;
+        Address ap = classAttrsPos(base.toAddress());
         if (ap.isZero())
         {
             return 0L;
         }
-        Address p = classAttrNamed(base, ap.plus(2L), u2(ap), Magic.bytes("EnclosingMethod"));
+        Address p = classAttrNamed(base.toAddress(), ap.plus(2L), u2(ap), Magic.bytes("EnclosingMethod"));
         if (p.isZero())
         {
             return 0L;
         }
         if (part == 0L)
         {
-            return Loader.utf8ToString(base, Loader.gView.cp[u2(base.plus(Loader.gView.cp[u2(p)]))]);  // CONSTANT_Class -> its name Utf8
+            return Loader.utf8ToString(base.toAddress(), Loader.gView.cp[u2(base.plus(Loader.gView.cp[u2(p)]))]);  // CONSTANT_Class -> its name Utf8
         }
         int nat = u2(p.plus(2L));                           // u2 class_index, u2 method_index
         if (nat == 0)
@@ -309,7 +310,7 @@ final class ClassAttributes
             return 0L;
         }
         Address natPos = base.plus(Loader.gView.cp[nat]);                  // CONSTANT_NameAndType: u2 name, u2 descriptor
-        return Loader.utf8ToString(base, Loader.gView.cp[u2(natPos.plus((part == 1L ? 0L : 2L)))]);
+        return Loader.utf8ToString(base.toAddress(), Loader.gView.cp[u2(natPos.plus((part == 1L ? 0L : 2L)))]);
     }
 
     /**
@@ -330,12 +331,12 @@ final class ClassAttributes
         {
             return 0L;
         }
-        Address base = ClassRegistry.clTab[reg].base;
+        DataReference base = ClassRegistry.clTab[reg].base;
         if (k == 0L)
         {
             return ((long) u2(base.plus(4L)) << 16) | u2(base.plus(6L));   // u4 magic, u2 minor, u2 major
         }
-        Loader.parseConstPool(base, Loader.blobLenOf(base));          // leaves gp at access_flags, as loadStructure reads it
+        Loader.parseConstPool(base, Loader.blobLenOf(base.toAddress()));          // leaves gp at access_flags, as loadStructure reads it
         return u2(Loader.gp);
     }
 
@@ -357,24 +358,24 @@ final class ClassAttributes
         {
             return 0L;
         }
-        Address base = ClassRegistry.clTab[reg].base;
-        Address ap = classAttrsPos(base);
+        DataReference base = ClassRegistry.clTab[reg].base;
+        Address ap = classAttrsPos(base.toAddress());
         if (ap.isZero())
         {
             return 0L;
         }
         if (k < 0L)
         {
-            Address p = classAttrNamed(base, ap.plus(2L), u2(ap), Magic.bytes("NestHost"));
-            return p.isZero() ? 0L : Loader.utf8ToString(base, Loader.gView.cp[u2(base.plus(Loader.gView.cp[u2(p)]))]);  // CONSTANT_Class -> name
+            Address p = classAttrNamed(base.toAddress(), ap.plus(2L), u2(ap), Magic.bytes("NestHost"));
+            return p.isZero() ? 0L : Loader.utf8ToString(base.toAddress(), Loader.gView.cp[u2(base.plus(Loader.gView.cp[u2(p)]))]);  // CONSTANT_Class -> name
         }
-        Address p = classAttrNamed(base, ap.plus(2L), u2(ap), Magic.bytes("NestMembers"));
+        Address p = classAttrNamed(base.toAddress(), ap.plus(2L), u2(ap), Magic.bytes("NestMembers"));
         if (p.isZero() || k >= u2(p))                      // u2 number_of_classes, then u2 class indices
         {
             return 0L;
         }
         int ci = u2(p.plus(2L + 2L * k));
-        return Loader.utf8ToString(base, Loader.gView.cp[u2(base.plus(Loader.gView.cp[ci]))]);
+        return Loader.utf8ToString(base.toAddress(), Loader.gView.cp[u2(base.plus(Loader.gView.cp[ci]))]);
     }
 
     /**
@@ -395,8 +396,8 @@ final class ClassAttributes
         {
             return 0L;
         }
-        Address base = ClassRegistry.clTab[reg].base;
-        Address e = Reflection.ownInnerClassEntry(base);
+        DataReference base = ClassRegistry.clTab[reg].base;
+        Address e = Reflection.ownInnerClassEntry(base.toAddress());
         if (e.isZero())
         {
             return 0L;
@@ -408,9 +409,9 @@ final class ClassAttributes
         }
         if (part == 0L)
         {
-            return Loader.utf8ToString(base, Loader.gView.cp[u2(base.plus(Loader.gView.cp[idx]))]);    // CONSTANT_Class -> its name Utf8
+            return Loader.utf8ToString(base.toAddress(), Loader.gView.cp[u2(base.plus(Loader.gView.cp[idx]))]);    // CONSTANT_Class -> its name Utf8
         }
-        return Loader.utf8ToString(base, Loader.gView.cp[idx]);
+        return Loader.utf8ToString(base.toAddress(), Loader.gView.cp[idx]);
     }
 
     /**
@@ -428,14 +429,14 @@ final class ClassAttributes
         {
             return Address.zero();
         }
-        Address base = ClassRegistry.clTab[reg].base;
-        Address ap = classAttrsPos(base);
+        DataReference base = ClassRegistry.clTab[reg].base;
+        Address ap = classAttrsPos(base.toAddress());
         if (ap.isZero())
         {
             return Address.zero();
         }
         gAttrBase = base;
-        return classAttrNamed(base, ap.plus(2L), u2(ap), name);
+        return classAttrNamed(base.toAddress(), ap.plus(2L), u2(ap), name);
     }
 
     /** Position of record component {@code idx} in the Record attribute at {@code rec}, or 0 past the end. */
@@ -478,7 +479,7 @@ final class ClassAttributes
         {
             return 0L;
         }
-        Address base = gAttrBase;
+        DataReference base = gAttrBase;
         Address p = recordComponentPos(rec, code >> 2);
         if (p.isZero())
         {
@@ -487,14 +488,14 @@ final class ClassAttributes
         int part = (int) (code & 3L);
         if (part == 0)
         {
-            return Loader.utf8ToString(base, Loader.gView.cp[u2(p)]);
+            return Loader.utf8ToString(base.toAddress(), Loader.gView.cp[u2(p)]);
         }
         if (part == 1)
         {
-            return Loader.utf8ToString(base, Loader.gView.cp[u2(p.plus(2L))]);
+            return Loader.utf8ToString(base.toAddress(), Loader.gView.cp[u2(p.plus(2L))]);
         }
-        Address q = classAttrNamed(base, p.plus(6L), u2(p.plus(4L)), Magic.bytes("Signature"));
-        return q.isZero() ? 0L : Loader.utf8ToString(base, Loader.gView.cp[u2(q)]);
+        Address q = classAttrNamed(base.toAddress(), p.plus(6L), u2(p.plus(4L)), Magic.bytes("Signature"));
+        return q.isZero() ? 0L : Loader.utf8ToString(base.toAddress(), Loader.gView.cp[u2(q)]);
     }
 
     /** {@code RecordComponent.recordAnnos0}: the annotations written on component {@code idx}, as an Annotation[]. */
@@ -505,14 +506,14 @@ final class ClassAttributes
         {
             return 0L;
         }
-        Address base = gAttrBase;
+        DataReference base = gAttrBase;
         Address p = recordComponentPos(rec, idx);
         if (p.isZero())
         {
             return 0L;
         }
-        Address lp = Annotations.annoListPos(base, p.plus(6L), u2(p.plus(4L)));
-        return lp.isZero() ? Annotations.emptyAnnoArray() : Annotations.annotationsAt(base, lp);
+        Address lp = Annotations.annoListPos(base.toAddress(), p.plus(6L), u2(p.plus(4L)));
+        return lp.isZero() ? Annotations.emptyAnnoArray() : Annotations.annotationsAt(base.toAddress(), lp);
     }
 
     /** {@code Class.permitted0}: the {@code k}th name in the class's {@code PermittedSubclasses}, or 0. */
@@ -523,9 +524,9 @@ final class ClassAttributes
         {
             return 0L;
         }
-        Address base = gAttrBase;
+        DataReference base = gAttrBase;
         int ci = u2(ps.plus(2L + 2L * k));
-        return Loader.utf8ToString(base, Loader.gView.cp[u2(base.plus(Loader.gView.cp[ci]))]);   // CONSTANT_Class -> its name Utf8
+        return Loader.utf8ToString(base.toAddress(), Loader.gView.cp[u2(base.plus(Loader.gView.cp[ci]))]);   // CONSTANT_Class -> its name Utf8
     }
 
     /**
@@ -544,13 +545,13 @@ final class ClassAttributes
         {
             return 0L;
         }
-        Address base = ClassRegistry.clTab[reg].base;
-        Address ap = classAttrsPos(base);
+        DataReference base = ClassRegistry.clTab[reg].base;
+        Address ap = classAttrsPos(base.toAddress());
         if (ap.isZero())
         {
             return 0L;
         }
-        return !classAttrNamed(base, ap.plus(2L), u2(ap), Magic.bytes("PermittedSubclasses")).isZero() ? 1L : 0L;
+        return !classAttrNamed(base.toAddress(), ap.plus(2L), u2(ap), Magic.bytes("PermittedSubclasses")).isZero() ? 1L : 0L;
     }
 
     /** Position of the body of the attribute named {@code name} in an attribute list, or 0 if absent. */
@@ -599,20 +600,20 @@ final class ClassAttributes
      */
     static long classInterfaces(ObjectReference mirror)
     {
-        Address elemType = ClassMirrors.classMirrorTypeAddr();
+        DataReference elemType = ClassMirrors.classMirrorTypeAddr();
         if (mirror.toLong() <= 0x1000L)
         {
             return 0L;
         }
         int reg = ClassRegistry.regOfType(mirror.toAddress().plus(16L).loadAddress());
         int n = reg >= 0 ? InterfaceInvocation.clIfaceRegN[reg] : 0;
-        Address arr = Heap.allocArray(n, 8);
-        arr.plus(ObjectModel.TIB_OFFSET).store(ArrayTypes.refArrayTib(elemType));
+        ObjectReference arr = Heap.allocArray(n, 8).toObjectReference();
+        arr.toAddress().plus(ObjectModel.TIB_OFFSET).store(ArrayTypes.refArrayTib(elemType.toAddress()));
         int i = 0;
         while (i < n)
         {
-            arr.plus(ObjectModel.ARRAY_BASE_OFFSET).plus(i * 8L).store(
-                    ClassMirrors.classMirror(ClassRegistry.clTab[InterfaceInvocation.clIfaceReg[reg * InterfaceInvocation.MAX_DIRECT_IF + i]].type));
+            arr.toAddress().plus(ObjectModel.ARRAY_BASE_OFFSET).plus(i * 8L).store(
+                    ClassMirrors.classMirror(ClassRegistry.clTab[InterfaceInvocation.clIfaceReg[reg * InterfaceInvocation.MAX_DIRECT_IF + i]].type.toAddress()));
             i += 1;
         }
         return arr.toLong();
@@ -653,13 +654,13 @@ final class ClassAttributes
         {
             return Reflection.emptyClassArray();
         }
-        Address base = ClassRegistry.clTab[reg].base;
-        Address ap = classAttrsPos(base);
+        DataReference base = ClassRegistry.clTab[reg].base;
+        Address ap = classAttrsPos(base.toAddress());
         if (ap.isZero())
         {
             return Reflection.emptyClassArray();
         }
-        Address lp = innerClassesPos(base, ap.plus(2L), u2(ap));
+        Address lp = innerClassesPos(base.toAddress(), ap.plus(2L), u2(ap));
         if (lp.isZero())
         {
             return Reflection.emptyClassArray();                   // no InnerClasses attribute: declares no member class
@@ -683,7 +684,7 @@ final class ClassAttributes
             if (innerIdx != 0 && outerIdx != 0 && simpleIdx != 0)
             {
                 int outerNameOff = Loader.gView.cp[u2(base.plus(Loader.gView.cp[outerIdx]))];
-                if (Loader.utf8EqAt(base, outerNameOff, base, thisNameOff))
+                if (Loader.utf8EqAt(base.toAddress(), outerNameOff, base.toAddress(), thisNameOff))
                 {
                     nameAbs.set(found, base.plus(Loader.gView.cp[u2(base.plus(Loader.gView.cp[innerIdx]))]));
                     found += 1;
@@ -705,12 +706,12 @@ final class ClassAttributes
             }
             k += 1;
         }
-        Address arr = Heap.allocArray(built, 8);
-        arr.plus(ObjectModel.TIB_OFFSET).store(ArrayTypes.refArrayTib(ClassMirrors.classMirrorTypeAddr()));
+        ObjectReference arr = Heap.allocArray(built, 8).toObjectReference();
+        arr.toAddress().plus(ObjectModel.TIB_OFFSET).store(ArrayTypes.refArrayTib(ClassMirrors.classMirrorTypeAddr().toAddress()));
         int j = 0;
         while (j < built)
         {
-            arr.plus(ObjectModel.ARRAY_BASE_OFFSET).plus(j * 8L).store(mirrors[j]);
+            arr.toAddress().plus(ObjectModel.ARRAY_BASE_OFFSET).plus(j * 8L).store(mirrors[j]);
             j += 1;
         }
         return arr.toLong();

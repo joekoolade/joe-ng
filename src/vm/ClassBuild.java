@@ -12,6 +12,7 @@
 package vm;
 
 import magic.Address;
+import magic.DataReference;
 
 /**
  * The field layout of the class the loader is building or compiling: what {@code Loader.parseFields} derives from
@@ -40,20 +41,20 @@ final class ClassBuild
     int[] ifDescOff;   // Utf8 offset of each own instance field's type descriptor
     int ifCount;       // total: inherited + own
 
-    Address statics;   // this class's statics block
+    DataReference statics;   // this class's statics block
     int absentSuperOff; // Utf8 offset (in the blob) of a direct supertype that can never load, or 0
 
     // The class's Type and TIB (increment P2-4c; were gType/gTib). Set after parseFields -- allocated by TibBuilder
     // (or for an interface by loadStructure), or taken back from the class's registry entry by
     // RVMClass.resumeBuild. 0 until then; an interface has no TIB.
-    Address type;      // Type { instanceSize, superType, ... } -- a metal instanceof chain node
-    Address tib;       // TIB { Type, vtable... }
+    DataReference type;      // Type { instanceSize, superType, ... } -- a metal instanceof chain node
+    DataReference tib;       // TIB { Type, vtable... }
 
     // M8 adoption (were gAdoptType/gAdoptStatics/gAdoptStaticCount): the writer's Type node and dense statics block
     // for a BAKED class, found by VtableLayout.findVtSig from the signature table, so the class has ONE Type and ONE
     // statics block across both worlds. 0 when the class is not baked.
-    Address adoptType;
-    Address adoptStatics;
+    DataReference adoptType;
+    DataReference adoptStatics;
     int adoptStaticCount;  // ... the adopted block's declared-static slot count (checked against sfCount)
 
     // M8 itables, interfaces only (were gIfmStart/gIfmCount): the flattened per-interface method run that

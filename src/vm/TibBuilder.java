@@ -13,6 +13,7 @@ package vm;
 
 import board.Uart;
 import magic.Address;
+import magic.DataReference;
 import magic.AddressArray;
 import magic.Magic;
 import objectmodel.ObjectModel;
@@ -147,7 +148,7 @@ final class TibBuilder
             if (Loader.LOAD_LOG)
             {
                 Uart.write(Magic.bytes("  typeadopt "));
-                Loader.printNameAt(Loader.gView.base, Loader.gView.thisNameOff);
+                Loader.printNameAt(Loader.gView.base.toAddress(), Loader.gView.thisNameOff);
                 Uart.putc(0x0A);
             }
         }
@@ -156,7 +157,7 @@ final class TibBuilder
             Loader.gBuild.type = Heap.allocData(ObjectModel.TYPE_SIZE);
         }
         Loader.gBuild.type.plus(0).store((long) (16 + Loader.gBuild.ifCount * 8));       // TYPE_INSTANCE_SIZE_OFFSET
-        Loader.gBuild.type.plus(8).store(sr >= 0 ? ClassRegistry.clTab[sr].type : Address.zero());   // TYPE_SUPER_OFFSET (0 at Object)
+        Loader.gBuild.type.plus(8).store(sr >= 0 ? ClassRegistry.clTab[sr].type : DataReference.zero());   // TYPE_SUPER_OFFSET (0 at Object)
         if (Loader.gBuild.adoptType.isZero())
         {
             // O(1) type checks: metal-built class Types get a depth + display like the writer's
@@ -166,8 +167,8 @@ final class TibBuilder
             Loader.gBuild.type.plus(ObjectModel.TYPE_DISPLAY_OFFSET).store(0L);
             Loader.gBuild.type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).store(0L);       // bitmap built at fillTib
             Loader.gBuild.type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).store(0L);
-            DynamicTypeCheck.buildDisplay(Loader.gBuild.type, sr >= 0 ? ClassRegistry.clTab[sr].type : Address.zero());
-            buildRefMap(Loader.gBuild.type, sr >= 0 ? ClassRegistry.clTab[sr].type : Address.zero());   // GC reference map (adopted nodes carry
+            DynamicTypeCheck.buildDisplay(Loader.gBuild.type.toAddress(), sr >= 0 ? ClassRegistry.clTab[sr].type.toAddress() : Address.zero());
+            buildRefMap(Loader.gBuild.type.toAddress(), sr >= 0 ? ClassRegistry.clTab[sr].type.toAddress() : Address.zero());   // GC reference map (adopted nodes carry
         }                                                        //   the writer's -- never overwrite it)
         Loader.gBuild.tib = Heap.allocData((1 + VtableLayout.gvCount) * 8);
         Loader.gBuild.tib.store(Loader.gBuild.type);                      // TIB[0] = Type (slots filled by fillTib)
@@ -237,12 +238,12 @@ final class TibBuilder
     /** Whether vtable slot {@code s} of the class being built is Object's hashCode, equals or toString. */
     private static boolean isBakedDispatchSlot(int s)
     {
-        Address b = VtableLayout.gvTab[s].base;
+        DataReference b = VtableLayout.gvTab[s].base;
         int n = VtableLayout.gvTab[s].name;
         int d = VtableLayout.gvTab[s].desc;
-        return (Utf8.utf8IsAtBase(b, n, Magic.bytes("hashCode")) && Utf8.utf8IsAtBase(b, d, Magic.bytes("()I")))
-                || (Utf8.utf8IsAtBase(b, n, Magic.bytes("equals")) && Utf8.utf8IsAtBase(b, d, Magic.bytes("(Ljava/lang/Object;)Z")))
-                || (Utf8.utf8IsAtBase(b, n, Magic.bytes("toString")) && Utf8.utf8IsAtBase(b, d, Magic.bytes("()Ljava/lang/String;")));
+        return (Utf8.utf8IsAtBase(b.toAddress(), n, Magic.bytes("hashCode")) && Utf8.utf8IsAtBase(b.toAddress(), d, Magic.bytes("()I")))
+                || (Utf8.utf8IsAtBase(b.toAddress(), n, Magic.bytes("equals")) && Utf8.utf8IsAtBase(b.toAddress(), d, Magic.bytes("(Ljava/lang/Object;)Z")))
+                || (Utf8.utf8IsAtBase(b.toAddress(), n, Magic.bytes("toString")) && Utf8.utf8IsAtBase(b.toAddress(), d, Magic.bytes("()Ljava/lang/String;")));
     }
 
     /** Fill the vtable slots (this class's + inherited impl code) and the itable directory. */
@@ -288,21 +289,21 @@ final class TibBuilder
             InterfaceInvocation.instImapN += 1;
         }
         Loader.gBuild.type.plus(16).store(dir);                 // TYPE_ITABLE_DIR_OFFSET
-        DynamicTypeCheck.buildImplBitmap(Loader.gBuild.type);                         // O(1) interface checks: super bits | dir bits
+        DynamicTypeCheck.buildImplBitmap(Loader.gBuild.type.toAddress());                         // O(1) interface checks: super bits | dir bits
     }
 
-    static Address objectTypeAddr()
+    static DataReference objectTypeAddr()
     {
         int i = 0;
         while (i < ClassRegistry.clCount)
         {
-            if (Utf8.utf8IsAtBase(ClassRegistry.clTab[i].base, ClassRegistry.clTab[i].nameOff, Magic.bytes("java/lang/Object")))
+            if (Utf8.utf8IsAtBase(ClassRegistry.clTab[i].base.toAddress(), ClassRegistry.clTab[i].nameOff, Magic.bytes("java/lang/Object")))
             {
                 return ClassRegistry.clTab[i].type;
             }
             i += 1;
         }
-        return Address.zero();
+        return DataReference.zero();
     }
 
     /** Number of vtable slots a SYNTHESISED TIB reserves (= java/lang/Object's flattened vtable count), or 0.
