@@ -19,6 +19,7 @@ import magic.Address;
 import magic.Magic;
 import magic.ObjectReference;
 import magic.Uninterruptible;
+import objectmodel.ObjectModel;
 import static vm.VM.*;   // shared state stays in VM: the *Addr helper statics, the task/monitor/semaphore tables,
                          // TASK_* constants, MAX_TASKS/NUM_SEM/MAX_MON, WIFI_SEM, SCHED_FRAME, the SMP/pc fields,
                          // vbarBase/ticks/timerReload/runTramp, and the staying helpers (installSchedVectors,
@@ -764,6 +765,15 @@ public final class VMScheduler implements Uninterruptible
     {
         int core = (int) (Magic.readMPIDR() & 3L);
         clearYield(core);                                  // any switch answers this core's yieldpoint request
+        if (taskSafe != null)
+        {
+            // Whether the context being saved below (here or by gcPark) was taken at a safepoint: the svc in
+            // taskYield, whose caller is a mapped call site and whose registers hold nothing live. An interrupt
+            // that switches at once (a forced preemption, a core's idle task) stops a task anywhere, and the
+            // precise stack walk then scans that task conservatively (StackRoots).
+            taskSafe[coreTask[core]] = coreYielding[core];
+            coreYielding[core] = 0;
+        }
         // The hang dump hangs off EVERY switch, not only the timer: on QEMU the tick never reaches schedule()
         // (MEASURED, ticks=0 at main's return), so a launched program switches only when a task yields or
         // blocks -- and a hung program still has a yielder (main polls in Thread.join).
@@ -1151,6 +1161,10 @@ public final class VMScheduler implements Uninterruptible
     /** SVC (yield) path: no timer to service, just pick the next task. Called by the SVC handler stub. */
     static long yieldPick(long curSp)
     {
+        if (coreYielding != null)
+        {
+            coreYielding[(int) (Magic.readMPIDR() & 3L)] = 1;   // pickNext records the context as a safepoint's
+        }
         return pickNext(curSp);
     }
 
@@ -1986,7 +2000,7 @@ public final class VMScheduler implements Uninterruptible
         long stk = taskStackBase[id];
         if (stk == 0L)
         {
-            stk = Heap.alloc(0x8000).toLong();
+            stk = allocStack();
             taskStackBase[id] = stk;                       // object base: keeps the stack GC-reachable
         }
         long top = (stk + 0x8000L) & ~0xFL;                // 16-byte aligned top; stack grows down
@@ -2001,6 +2015,7 @@ public final class VMScheduler implements Uninterruptible
         frame.plus(248L).store(entry);                     // ELR_EL1 = task entry PC
         frame.plus(256L).store(0x5L);                      // SPSR_EL1 = EL1h (M=0b0101), DAIF clear -> IRQs on
         taskSp[id] = frame.toLong();
+        taskSafe[id] = 0;                                  // not saved at a safepoint: it has not run (StackRoots)
         taskWake[id] = 0L;                                 // reset per-task state (matters when recycling a slot)
         taskWaitOn[id] = 0;
         taskWaitObj.set(id, ObjectReference.nullReference());
@@ -2016,6 +2031,20 @@ public final class VMScheduler implements Uninterruptible
         taskState[id] = TASK_READY;                        // now runnable: every field above is visible first
         schedUnlock(ready);
         return id;
+    }
+
+    /**
+     * A task stack: a 32 KiB heap block typed as a BYTE ARRAY, so the trace never scans it as data. A stack is
+     * a root, not an object: the collector reads it through the frames (StackRoots, frames/GC arc S5), or
+     * conservatively from the saved SP up with {@code gcroots=0} -- never the dead area below the SP, which is
+     * what the old untyped block's conservative trace scanned. The stack grows down to the length word.
+     */
+    private static long allocStack()
+    {
+        long stk = Heap.alloc(0x8000).toLong();
+        Address.fromLong(stk).plus((long) ObjectModel.TIB_OFFSET).store(1L);   // element size 1: never scanned
+        Address.fromLong(stk).plus((long) ObjectModel.ARRAY_LENGTH_OFFSET).store(0x8000L - (long) ObjectModel.ARRAY_BASE_OFFSET);
+        return stk;
     }
 
     /** Like {@link #spawn}, but the task starts with {@code arg0} in x0 (so it can enter an instance method). */

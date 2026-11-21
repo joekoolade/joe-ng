@@ -1492,7 +1492,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMConcat.scStart()Lmagic/Address;",        "vm/VM.scStartAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMConcat.scChar(Lmagic/Address;I)V",       "vm/VM.scCharAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMConcat.scInt(Lmagic/Address;I)V",        "vm/VM.scIntAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VMConcat.scEnd(Lmagic/Address;)Lmagic/ObjectReference;",         "vm/VM.scEndAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMConcat.scEnd(Lmagic/ObjectReference;)Lmagic/ObjectReference;", "vm/VM.scEndAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMConcat.scStr(Lmagic/Address;Lmagic/ObjectReference;)V",        "vm/VM.scStrAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMConcat.scLong(Lmagic/Address;J)V",       "vm/VM.scLongAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.ensureInitByName(Lmagic/Address;)V",   "vm/VM.ensureInitAddr");

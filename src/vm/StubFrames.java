@@ -39,6 +39,51 @@ final class StubFrames
                                                                      //   read as an argument (see buildLazyTramp)
     static final int STUB_FRAME   = 144;                     // LR + 16 saved = 136, rounded up to the
                                                                      //   16-byte SP alignment AArch64 requires
+    static final int STUB_ID_OFF  = 136;                     // the alignment word: a resolve trampoline stores
+                                                                     //   x17 (its index) here, for the stack walk
+
+    // ---- stub frame descriptors (frames/GC arc S5) -----------------------------------------------------
+    // A stub frame has no reference map; its unwind-table entry's map word holds a DESCRIPTOR instead, so the
+    // precise stack walk ({@link StackRoots}) knows which of its words hold references. Bit 63 tags it (a map
+    // address is positive, and -1 is "no entry"), bits 56..62 are the kind, bits 0..47 a kind's payload.
+    static final long STUB_TAG = 1L << 63;
+    /** Resolve trampolines: x0..x15 at [sp+8..], the index at [sp+136]; the arguments are typed by the
+     *  descriptor that index names. */
+    static final int K_LAZY = 1;                             // LazyCompiler.lzTab[idx]: the callee's own descriptor
+    static final int K_LINK = 2;                             // DynamicLinker link stub idx: static or not unknown
+    static final int K_VIRTUAL = 3;                          // VirtualDispatch site idx: receiver + descriptor
+    static final int K_MH = 4;                               // MethodHandles site idx (invoke*/linkTo*)
+    static final int K_INDY = 5;                             // Indy site idx: the descriptor, before or after the
+                                                             //   resolver inserts the target in front
+    /** A per-stub frame whose reference words are fixed when it is built: payload bit i = [sp + 8*i] for i < 17.
+     *  With {@link #MASK_OVERFLOW} set, [sp + 128] (a saved x15) points at a call's arguments past the fifteenth,
+     *  and bit 17 + j types argument 15 + j (up to 30 of them). */
+    static final int K_MASK = 6;
+    static final long MASK_OVERFLOW = 1L << 47;
+    static final int MASK_OVERFLOW_SLOT = 16;
+    static final int MASK_OVERFLOW_BIT0 = 17;
+
+    /** The descriptor word for a stub frame of {@code kind}, with {@code payload} (a K_MASK slot mask). */
+    static long stubDesc(int kind, long payload)
+    {
+        return STUB_TAG | ((long) kind << 56) | (payload & 0xFFFF_FFFF_FFFFL);
+    }
+
+    /** True if a frame table's map word is a stub descriptor (not a map address, 0, or -1 for no entry). */
+    static boolean isStubDesc(long m)
+    {
+        return m < 0L && m != -1L;
+    }
+
+    static int stubKind(long m)
+    {
+        return (int) ((m >>> 56) & 0x7FL);
+    }
+
+    static long stubPayload(long m)
+    {
+        return m & 0xFFFF_FFFF_FFFFL;
+    }
 
     /**
      * Re-publish the persistent trampolines' frames into the JIT unwind table.
@@ -54,23 +99,35 @@ final class StubFrames
      * ONCE and cached for the life of the VM while {@code jitFrameCount} is zeroed per batch — registering
      * only at build time would leave every batch after the first unwalkable again.
      */
+    /** Store x17 (the trampoline's index) in the frame's spare word: the precise stack walk reads it back to find
+     *  the descriptor that types the saved argument registers. Emitted right after the register saves. */
+    static int emitSaveIndex(Address buf, int w)
+    {
+        buf.plus(w * 4L).store(asm.A64Enc.strx(17, STUB_SP, STUB_ID_OFF));
+        return w + 1;
+    }
+
     static void registerTrampFrames()
     {
         if (LazyCompiler.lazyTrampAddr != 0L)
         {
-            VM.addJitFrame(Address.fromLong(LazyCompiler.lazyTrampLo), Address.fromLong(LazyCompiler.lazyTrampHi), STUB_FRAME, 0L);
+            VM.addJitFrame(Address.fromLong(LazyCompiler.lazyTrampLo), Address.fromLong(LazyCompiler.lazyTrampHi), STUB_FRAME,
+                    stubDesc(K_LAZY, 0L));
         }
         if (VirtualDispatch.virtualTrampAddr != 0L)
         {
-            VM.addJitFrame(Address.fromLong(VirtualDispatch.virtualTrampLo), Address.fromLong(VirtualDispatch.virtualTrampHi), STUB_FRAME, 0L);
+            VM.addJitFrame(Address.fromLong(VirtualDispatch.virtualTrampLo), Address.fromLong(VirtualDispatch.virtualTrampHi), STUB_FRAME,
+                    stubDesc(K_VIRTUAL, 0L));
         }
         if (MethodHandles.mhTrampAddr != 0L)
         {
-            VM.addJitFrame(Address.fromLong(MethodHandles.mhTrampLo), Address.fromLong(MethodHandles.mhTrampHi), STUB_FRAME, 0L);
+            VM.addJitFrame(Address.fromLong(MethodHandles.mhTrampLo), Address.fromLong(MethodHandles.mhTrampHi), STUB_FRAME,
+                    stubDesc(K_MH, 0L));
         }
         if (Indy.indyTrampAddr != 0L)
         {
-            VM.addJitFrame(Address.fromLong(Indy.indyTrampLo), Address.fromLong(Indy.indyTrampHi), STUB_FRAME, 0L);
+            VM.addJitFrame(Address.fromLong(Indy.indyTrampLo), Address.fromLong(Indy.indyTrampHi), STUB_FRAME,
+                    stubDesc(K_INDY, 0L));
         }
     }
 }

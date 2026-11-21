@@ -441,7 +441,7 @@ final class LambdaFactory
         Address thi = thunk.plus(w * 4L);                               // at the `add sp`: the frame dies here
         w = Loader.emitAt(thunk, w, A64Enc.addImm(StubFrames.STUB_SP, StubFrames.STUB_SP, BOX_FRAME));
         w = Loader.emitAt(thunk, w, A64Enc.ret());
-        VM.addJitFrame(thunk.plus(4L), thi, BOX_FRAME, 0L);                                                 // live from just after the `sub sp`
+        VM.addJitFrame(thunk.plus(4L), thi, BOX_FRAME, StubFrames.stubDesc(StubFrames.K_MASK, 0L));         // live from just after the `sub sp`; no reference words
         return w;
     }
 
@@ -735,6 +735,8 @@ final class LambdaFactory
             w += 1;
             thunk.plus(w * 4L).store(A64Enc.strx(StubFrames.STUB_LR, StubFrames.STUB_SP, StubFrames.STUB_LR_OFF)); // str x30,[sp] (LR)
             w += 1;
+            thunk.plus(w * 4L).store(A64Enc.strx(31, 31, 8)); // str xzr,[sp+8]: the object slot is a reference word
+            w += 1;                                           //   for the GC walk, so it must not hold garbage before alloc
             int k = 0;
             while (k < ia)
             {
@@ -838,7 +840,10 @@ final class LambdaFactory
             thunk.plus(w * 4L).store(A64Enc.ret());
             w += 1;
             Heap.publishCode(thunk, thunk.plus(w * 4L));
-            VM.addJitFrame(tlo, thi, frame, 0L);        // it calls <init>; an exception from there unwinds through here
+            // It calls <init>; an exception from there unwinds through here, and a collection inside Heap.alloc or <init>
+            // walks it: [sp+8] is the new object, [sp+16+8k] constructor argument k, typed by the constructor's descriptor.
+            long ctorArgs = FrameMaps.argRefMask(Loader.gView.base.toAddress().plus(Loader.mrefDescOff(lambdaImplMref(idx))), false);
+            VM.addJitFrame(tlo, thi, frame, StubFrames.stubDesc(StubFrames.K_MASK, (1L << 1) | ((ctorArgs << 2) & 0xFFFF_FFFF_FFFCL)));
             return finishLambdaClass(thunk, ifaceType.toAddress(), idx, nc);
         }
         long implBuf = lambdaImplBuf(idx);

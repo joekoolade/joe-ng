@@ -49,6 +49,15 @@ the item leaves this list; new findings that are not fixed on the spot come here
   throttle flags 0 (`/threads`). Not an interrupt storm (tick rate and the RX task's busy time unchanged), not a code
   sweep (0 bytes swept), not a stats page. The default 16 MB trigger never fills the heap, so it does not appear
   there (5 runs per boot, 540-560 ms). Unexplained.
+- **Large region fragments to a halt under `gcvolume=0` with JIT maps on (2026-11-21, S5).** Core 0's 64 MiB large
+  region holds 37-42 MB live and refuses a 1-4 MiB request with ~22 MB free in pieces -> `large region OOM`
+  (regression batch ReflectUndenyProbe..SecretKeyFactoryProbe; fails with conservative roots + maps too, not on main
+  without maps). The small heap was as fragmented when tried as a fallback. Non-moving collector; S7 compaction is
+  the real fix. Also: what is the ~37 MB live (two image TIBs, ~45 blocks of ~320 KB and ~100 of ~132 KB)? Same
+  question as the item below.
+- **Pi did not come back from a soft `/reboot` once; a cold boot ran at 600 MHz (2026-11-21).** The `gcroots=0` S5
+  image hung on 1 of 4 reboots (no ping until power-cycled; no serial captured). After that power-on the firmware
+  measured the ARM clock at 600 MHz until a soft reboot (then 1,500). Neither attributed; capture serial next time.
 - **41.5 MB live in the large-object region during an upload (2026-11-14).** Of ~60 MB live; the trace takes a
   steady ~413 ms. Unexplained -- measure what holds it before changing anything.
 

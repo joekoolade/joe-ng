@@ -89,6 +89,17 @@ final class DynamicLinker
     private static long[] lkStub  = new long[MAXLINKSTUB];
     static int    lkCount;
     static long   linkTrampAddr;
+
+    /** Link stub {@code idx}'s callee descriptor ({u2 len}{bytes}), or zero: the GC walk types a link
+     *  trampoline's saved arguments by it ({@link FrameMaps}). */
+    static Address linkDesc(int idx)
+    {
+        if (idx < 0 || idx >= lkCount)
+        {
+            return Address.zero();
+        }
+        return lkDescU.get(idx);
+    }
     private static boolean lkFullReported;
     /**
      * Say WHY a link stub could not resolve, ONCE per class+method. Three very different failures shared one
@@ -525,6 +536,7 @@ final class DynamicLinker
         }
         buf.plus(w * 4L).store(A64Enc.strx(StubFrames.STUB_LR, StubFrames.STUB_SP, StubFrames.STUB_LR_OFF)); // LR at [sp+0]: what VM.unwind reads to pop this frame
         w += 1;
+        w = StubFrames.emitSaveIndex(buf, w);         // x17 (the index) at [sp+136]: the GC walk types the args by it
         buf.plus(w * 4L).store(A64Enc.movReg(0, 17)); // x0 = idx (the stub put it in x17)
         w += 1;
         buf.plus(w * 4L).store(A64Enc.movz(16, (int) (ra & 0xFFFF), 0));
@@ -560,7 +572,7 @@ final class DynamicLinker
         linkTrampAddr = buf.toLong();
         // Registered here only: linkTrampAddr is cleared by resetLoader, so this runs again every batch --
         // unlike the lazy/virtual trampolines, which outlive the table and are re-registered by resetLoader.
-        VM.addJitFrame(lo, hi, StubFrames.STUB_FRAME, 0L);
+        VM.addJitFrame(lo, hi, StubFrames.STUB_FRAME, StubFrames.stubDesc(StubFrames.K_LINK, 0L));
     }
 
     /**

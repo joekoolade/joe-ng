@@ -108,7 +108,7 @@ final class ProxySupport
      * frame's address in x2 and the Method in x1. The frame is registered with the unwinder, so a throw from the
      * handler unwinds through it to the caller like any other.
      */
-    private static Address proxyThunk(long method, long helper)
+    private static Address proxyThunk(long method, long helper, long slotMask)
     {
         Address t = Heap.allocCode(32 * 4);
         Heap.pinCodeAt(t);                                                // only an itable or vtable names it
@@ -130,8 +130,32 @@ final class ProxySupport
         w = Loader.emitAt(t, w, A64Enc.addImm(StubFrames.STUB_SP, StubFrames.STUB_SP, PROXY_FRAME));
         w = Loader.emitAt(t, w, A64Enc.ret());
         Heap.publishCode(t, t.plus(w * 4L));
-        VM.addJitFrame(t.plus(4L), thi, PROXY_FRAME, 0L);                                  // live from just after the `sub sp`
+        // live from just after the `sub sp`; slotMask types the saved arguments for the GC walk (StackRoots)
+        VM.addJitFrame(t.plus(4L), thi, PROXY_FRAME, StubFrames.stubDesc(StubFrames.K_MASK, slotMask));
         return t;
+    }
+
+    /**
+     * The proxy thunk frame's reference words for an interface method of descriptor {@code descU}: x_r is saved at
+     * [sp + 8 + 8r], frame slot r + 1, for r = 1..15 (x0, the proxy, is passed on to dispatch, not saved). Past 15
+     * parameters x15 is a pointer to the caller's out-args, which this mask cannot describe: said once, by name.
+     */
+    private static long argSlotMask(Address descU)
+    {
+        long regs = FrameMaps.argRefMask(descU, true);
+        if (FrameMaps.argN <= 16)
+        {
+            return (regs & 0xFFFEL) << 1;
+        }
+        // Past sixteen registers x15 (slot 16) is a pointer to the caller's out-args: arguments 15.. typed there.
+        if (FrameMaps.argN > 15 + 30)
+        {
+            Uart.write(Magic.bytes("  PROXY THUNK: more than 44 parameters, the rest untyped for the GC walk: "));
+            Loader.printUtf8Capped(descU);
+            Uart.putc(0x0A);
+        }
+        long over = (regs >>> 15) & 0x3FFF_FFFFL;
+        return ((regs & 0x7FFEL) << 1) | (over << StubFrames.MASK_OVERFLOW_BIT0) | StubFrames.MASK_OVERFLOW;
     }
 
     /** Put proxy {@code i}'s equals/hashCode/toString thunks into its TIB's Object vtable slots. */
@@ -241,7 +265,8 @@ final class ProxySupport
                     if (Utf8.rawEqUtf8(nb.plus(24L), (int) nb.plus(16L).loadLong(), InterfaceInvocation.ifBase.get(m), InterfaceInvocation.ifNameOff[m])
                             && Utf8.rawEqUtf8(db.plus(24L), (int) db.plus(16L).loadLong(), InterfaceInvocation.ifBase.get(m), InterfaceInvocation.ifDescOff[m]))
                     {
-                        thunk = proxyThunk(Address.fromLong(methodsArr).plus(24L).plus(j * 8L).loadLong(), helper);
+                        thunk = proxyThunk(Address.fromLong(methodsArr).plus(24L).plus(j * 8L).loadLong(), helper,
+                                argSlotMask(InterfaceInvocation.ifBase.get(m).plus(InterfaceInvocation.ifDescOff[m])));
                     }
                     j += 1;
                 }
@@ -268,7 +293,9 @@ final class ProxySupport
         int k = 0;
         while (k < 3)
         {
-            proxyObjThunks[i * 3 + k] = proxyThunk(Address.fromLong(objArr).plus(24L).plus(k * 8L).loadLong(), helper).toLong();
+            // equals/hashCode/toString: only equals takes an argument, an Object in x1 (slot 2). Typing x1 for all three
+            // is a safe over-approximation: a word that is no block base is never marked.
+            proxyObjThunks[i * 3 + k] = proxyThunk(Address.fromLong(objArr).plus(24L).plus(k * 8L).loadLong(), helper, 1L << 2).toLong();
             k += 1;
         }
         proxyN += 1;

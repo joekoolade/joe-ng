@@ -552,6 +552,10 @@ public final class VM
     // The task table (parallel arrays, index = task id). Task 0 is the boot flow; VMScheduler.spawn() adds more.
     static long[] taskSp;                   // saved context frame (SP) — the task's whole context
     static long[] taskStackBase;            // its heap stack's object base (a GC root keeps the stack alive)
+    // 1 = the task's saved context was taken at a safepoint (the svc in VMScheduler.taskYield), so a precise stack
+    // walk can start from its saved x30; 0 = preempted by an interrupt mid-method (frames/GC arc S5, StackRoots).
+    static int[]  taskSafe;
+    static int[]  coreYielding;             // index = core: 1 while that core's switch came through the yield path
     static int[]  taskState;                // TASK_READY / TASK_SLEEPING / TASK_BLOCKED / TASK_EMPTY
     static long[] taskWake;                 // CNTPCT deadline at which a sleeping task becomes ready again
     static int[]  taskWaitOn;               // for a BLOCKED task: the semaphore index it is waiting on (-1 = an object monitor)
@@ -966,6 +970,9 @@ public final class VM
     {
         taskSp = new long[MAX_TASKS];
         taskStackBase = new long[MAX_TASKS];
+        StackRoots.init();                                  // the precise root walk's tables, before any collection needs them
+        taskSafe = new int[MAX_TASKS];
+        coreYielding = new int[4];
         taskThreadObj = ObjectReferenceArray.create(MAX_TASKS);
         taskStopExc = ObjectReferenceArray.create(MAX_TASKS);
         taskStopFirst = new long[MAX_TASKS];
@@ -1002,6 +1009,7 @@ public final class VM
         while (t < MAX_TASKS)
         {
             syncDepth[t] = 0;                               // no synchronized method is on this task's stack yet
+            taskSafe[t] = 0;                                // no context saved at a safepoint yet
             taskCore[t] = -1;                               // no affinity: any core may pick it up
             taskIdle[t] = 0;                                // ... and it is real work, not a core's idle loop
             taskPrio[t] = PRIO_NORM;                        // ... at the default priority,
@@ -1012,6 +1020,7 @@ public final class VM
         while (c < 4)
         {
             coreIdle[c] = -1;                               // no idle task until a core joins the run queue
+            coreYielding[c] = 0;
             coreTask[c] = 0;
             coreSched[c] = 0;
             gcParked[c] = 0L;
@@ -2054,7 +2063,7 @@ public final class VM
         if (ensureInitAddr == 0L) { ensureInitByName(Address.zero()); }   // 0 is the no-op arg (Loader.ensureInitFor)
         if (scCharAddr == 0L) { VMConcat.scChar(Address.zero(), 0); }
         if (scIntAddr == 0L) { VMConcat.scInt(Address.zero(), 0); }
-        if (scEndAddr == 0L) { ObjectReference u = VMConcat.scEnd(Address.zero()); }
+        if (scEndAddr == 0L) { ObjectReference u = VMConcat.scEnd(ObjectReference.nullReference()); }
         if (scStrAddr == 0L) { VMConcat.scStr(Address.zero(), ObjectReference.nullReference()); }
         if (scLongAddr == 0L) { VMConcat.scLong(Address.zero(), 0L); }
         if (scBoolAddr == 0L) { VMConcat.scBool(Address.zero(), 0); }
@@ -2386,6 +2395,7 @@ public final class VM
         armGcMaps(conf, flen);                              // gcmaps=1/2: the reference-map shadow check -- before the
         armSafepoints(conf, flen);                          //   main= test, so the no-program demo suite can use it too
         armGcVolume(conf, flen);
+        armGcRoots(conf, flen);
         DataReference nm = Heap.allocData(flen + 8);
         int nl = manifestValue(conf, flen, Magic.bytes("main"), nm.toAddress(), flen);
         if (nl == 0)
@@ -2486,6 +2496,19 @@ public final class VM
         {
             Heap.noVolumeTrigger = 1;
             Uart.write(Magic.bytes("gcvolume: off, collections only when an arena is full\n"));
+        }
+    }
+
+    /** {@code gcroots=0}: the conservative stack-root scan instead of the precise walk ({@link StackRoots}), an A/B
+     *  switch for frames/GC arc S5. */
+    private static void armGcRoots(Address conf, int flen)
+    {
+        DataReference v = Heap.allocData(16);
+        int n = manifestValue(conf, flen, Magic.bytes("gcroots"), v.toAddress(), 8);
+        if (n == 1 && v.loadUnsignedByte() == 0x30)
+        {
+            StackRoots.on = 0;
+            Uart.write(Magic.bytes("gcroots: conservative stack scan\n"));
         }
     }
 
@@ -3888,7 +3911,7 @@ public final class VM
     static long unboxNullAddr;         // VMBox.unboxNull(J)J — throws the NPE for a null argument a thunk must unbox
     static long scCharAddr;            // VM.scChar(Lmagic/Address;I)V
     static long scIntAddr;             // VM.scInt(Lmagic/Address;I)V
-    static long scEndAddr;             // VM.scEnd(Lmagic/Address;)Lmagic/ObjectReference;
+    static long scEndAddr;             // VMConcat.scEnd(Lmagic/ObjectReference;)Lmagic/ObjectReference;
     static long scStrAddr;             // VM.scStr(Lmagic/Address;Lmagic/ObjectReference;)V — append a String/byte[] (slice 1b)
     static long scLongAddr;            // VM.scLong(Lmagic/Address;J)V — append a long in decimal (slice 1b)
     static long ensureInitAddr;        // VM.ensureInitByName(Lmagic/Address;)V — JVMS 5.5 trigger at an active use

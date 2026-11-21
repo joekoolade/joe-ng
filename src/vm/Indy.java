@@ -50,6 +50,17 @@ final class Indy
     private static long[] dsVal;
     private static int[] dsDone;
     private static int dsCount;
+    /** Dynamic site {@code idx}'s descriptor ({u2 len}{bytes}), or zero: the GC walk types an indy
+     *  trampoline's saved arguments by it ({@link FrameMaps}). */
+    static Address siteDesc(int idx)
+    {
+        if (dsDesc == null || idx < 0 || idx >= dsCount)
+        {
+            return Address.zero();
+        }
+        return dsDesc.get(idx);
+    }
+
     private static final int DYN_INDY = 0;
     private static final int DYN_CONST = 1;
     private static final int DYN_BITS = 2;

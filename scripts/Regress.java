@@ -78,7 +78,7 @@ public final class Regress
     private static final Pattern NOISE = Pattern.compile("^launch|^  batch|INITIALIZER RUNNING|^  \\.\\.\\.|^$"
             + "|UNREGISTERED SUPER|arrayadopt|NULL CLASS LITERAL|TRAP-WIRED|^\\[main|^gc:|^qemu|bakeMemosDropped"
             + "|sync: static|ARRAY ELEMENT|^  iface tier|UNRESOLVED STATIC|CTOR SKIPPED|^    tried|HUGE body"
-            + "|^code arena|^gcmap");
+            + "|^code arena|^gcmap|^gcroots");
 
     /** The VM printed this and halted for good (Heap, VMScheduler: a {@code wfe} spin), so no end marker follows. */
     private static final String HALTED = "|code arena OOM|heap OOM|large region OOM|MONITOR TABLE FULL";

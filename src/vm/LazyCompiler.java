@@ -449,6 +449,7 @@ final class LazyCompiler
         }
         buf.plus(w * 4L).store(A64Enc.strx(StubFrames.STUB_LR, StubFrames.STUB_SP, StubFrames.STUB_LR_OFF)); // LR at [sp+0]: what VM.unwind reads to pop this frame
         w += 1;
+        w = StubFrames.emitSaveIndex(buf, w);         // x17 (the index) at [sp+136]: the GC walk types the args by it
         buf.plus(w * 4L).store(A64Enc.movReg(0, 17)); // x0 = idx (the stub put it in x17)
         w += 1;
         buf.plus(w * 4L).store(A64Enc.movz(16, (int) (ca & 0xFFFF), 0)); // x16 = lazyCompile
