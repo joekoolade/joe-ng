@@ -47,7 +47,7 @@ public final class ObjectModelTest
         T.eq("Type refMap @64", 64, ObjectModel.TYPE_REFMAP_OFFSET);
         T.eq("Type refMap word1 @72", 72, ObjectModel.TYPE_REFMAP_OFFSET + ObjectModel.WORD);
         T.eq("Type refMap covers 126 slots", 126, ObjectModel.TYPE_REFMAP_MAX_SLOT);
-        T.eq("Type size 80", 80, ObjectModel.TYPE_SIZE);
+        T.eq("Type size 112", 112, ObjectModel.TYPE_SIZE);
         T.eq("array Type size = Type size", ObjectModel.TYPE_SIZE, ObjectModel.ARRAY_TYPE_SIZE);
 
         T.summary("object-model");

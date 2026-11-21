@@ -105,6 +105,15 @@ public final class MetalStats
         "... tasks stopped outside a safepoint, scanned whole",
         "... idle tasks stopped mid-loop, scanned whole",
         "... words scanned conservatively",
+        "heap shadow checks (S6; gcheap=2)",
+        "... blocks only a conservative word kept: from a raw slot (long, Address)",
+        "... from a scalar with no map or kinds",
+        "... from a word array with no element Type (long[], AddressArray)",
+        "... from a raw array",
+        "... from an allocData struct",
+        "... from an unrecognised header",
+        "... from a reference read as a data reference (w-16: conservative false positives)",
+        "... reached only through those (secondary)",
     };
 
     public static final String[] LOCKS_NAMES = {

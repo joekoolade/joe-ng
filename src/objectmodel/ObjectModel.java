@@ -108,8 +108,17 @@ public final class ObjectModel
     public static final int TYPE_REFMAP_OFFSET = 8 * WORD; // 64 (+72 = map word 1)
     /** Highest instance-field slot the two-word reference map can describe (bit 0 is the marker). */
     public static final int TYPE_REFMAP_MAX_SLOT = 126;
+    /** Frames/GC arc S6: the EXACT kinds of the slots the reference map above marks, same bit numbering. Two
+     *  64-bit bitmaps, two words each: {@code +80/+88} = the slot holds an object REFERENCE (a Java reference,
+     *  {@code magic.ObjectReference}, or one of the unboxed arrays, which are objects), {@code +96/+104} = the slot
+     *  holds a DATA REFERENCE ({@code magic.DataReference}: an {@code allocData} payload, its block one header
+     *  lower). A slot the reference map marks and neither bitmap does is RAW -- a {@code long}, {@code Address},
+     *  {@code Word}, {@code Offset} or {@code Extent} -- which a precise trace does not follow. Bit 0 of the
+     *  reference bitmap is the "kinds computed" marker; a Type without it has no exact kinds. */
+    public static final int TYPE_REFKIND_OFFSET = 10 * WORD;   // 80 (+88)
+    public static final int TYPE_DATAKIND_OFFSET = 12 * WORD;  // 96 (+104)
     /** Total Type size (one uniform record for class AND array Types). */
-    public static final int TYPE_SIZE = 10 * WORD;         // 80
+    public static final int TYPE_SIZE = 14 * WORD;         // 112
 
     // ----- array Type (a Type node whose objects are arrays) ---------------
     // An array's header TIB slot (@0) holds either a small element size (1/2/4/8 — a raw, untyped array, the

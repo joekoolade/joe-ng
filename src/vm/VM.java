@@ -971,6 +971,7 @@ public final class VM
         taskSp = new long[MAX_TASKS];
         taskStackBase = new long[MAX_TASKS];
         StackRoots.init();                                  // the precise root walk's tables, before any collection needs them
+        VMGc.initCensus();                                  // S6 heap census counters (gcheap=1)
         taskSafe = new int[MAX_TASKS];
         coreYielding = new int[4];
         taskThreadObj = ObjectReferenceArray.create(MAX_TASKS);
@@ -2396,6 +2397,7 @@ public final class VM
         armSafepoints(conf, flen);                          //   main= test, so the no-program demo suite can use it too
         armGcVolume(conf, flen);
         armGcRoots(conf, flen);
+        armGcHeap(conf, flen);
         DataReference nm = Heap.allocData(flen + 8);
         int nl = manifestValue(conf, flen, Magic.bytes("main"), nm.toAddress(), flen);
         if (nl == 0)
@@ -2509,6 +2511,25 @@ public final class VM
         {
             StackRoots.on = 0;
             Uart.write(Magic.bytes("gcroots: conservative stack scan\n"));
+        }
+    }
+
+    /** {@code gcheap=1}: print the S6 heap census line at every collection ({@link VMGc#censusPrint}); {@code gcheap=2}
+     *  also runs the precise-heap shadow check ({@link HeapShadow}). */
+    private static void armGcHeap(Address conf, int flen)
+    {
+        DataReference v = Heap.allocData(16);
+        int n = manifestValue(conf, flen, Magic.bytes("gcheap"), v.toAddress(), 8);
+        int c = v.loadUnsignedByte();
+        if (n == 1 && (c == 0x31 || c == 0x32))
+        {
+            VMGc.heapCensus = 1;
+            Uart.write(Magic.bytes("gcheap: census on\n"));
+        }
+        if (n == 1 && c == 0x32)
+        {
+            HeapShadow.arm();                               // gcheap=2: and the precise-heap shadow check
+            Uart.write(Magic.bytes("gcheap: shadow check on\n"));
         }
     }
 

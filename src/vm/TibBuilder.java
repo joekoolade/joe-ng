@@ -188,41 +188,115 @@ final class TibBuilder
     {
         long w0 = 1L;                                   // bit 0: this map is computed
         long w1 = 0L;
+        long r0 = 1L;                                   // S6 exact kinds (ObjectModel.TYPE_REFKIND_OFFSET):
+        long r1 = 0L;                                   //   bit 0 of r0 = the kinds are computed
+        long d0 = 0L;
+        long d1 = 0L;
         if (!superType.isZero())
         {
             w0 = superType.plus(ObjectModel.TYPE_REFMAP_OFFSET).loadLong();
             w1 = superType.plus(ObjectModel.TYPE_REFMAP_OFFSET).plus(8L).loadLong();
             if ((w0 & 1L) == 0L)
             {
-                type.plus(ObjectModel.TYPE_REFMAP_OFFSET).store(0L);      // super is unmapped: so are we
-                type.plus(ObjectModel.TYPE_REFMAP_OFFSET).plus(8L).store(0L);
+                clearMaps(type);                        // super is unmapped: so are we
                 return;
             }
+            r0 = superType.plus(ObjectModel.TYPE_REFKIND_OFFSET).loadLong();
+            r1 = superType.plus(ObjectModel.TYPE_REFKIND_OFFSET).plus(8L).loadLong();
+            d0 = superType.plus(ObjectModel.TYPE_DATAKIND_OFFSET).loadLong();
+            d1 = superType.plus(ObjectModel.TYPE_DATAKIND_OFFSET).plus(8L).loadLong();
         }
         int s = Loader.superFieldCount();                      // own fields start after the inherited ones
         while (s < Loader.gBuild.ifCount)
         {
             if (s > ObjectModel.TYPE_REFMAP_MAX_SLOT)
             {
-                type.plus(ObjectModel.TYPE_REFMAP_OFFSET).store(0L);      // too wide to describe
-                type.plus(ObjectModel.TYPE_REFMAP_OFFSET).plus(8L).store(0L);
+                clearMaps(type);                        // too wide to describe
                 return;
             }
-            if (mayHoldPointer(Loader.gBuild.ifDescOff[s]))
+            int off = Loader.gBuild.ifDescOff[s];
+            if (mayHoldPointer(off))
             {
+                long bit = s < 63 ? 1L << (s + 1) : 1L << (s - 63);
                 if (s < 63)
                 {
-                    w0 = w0 | (1L << (s + 1));
+                    w0 = w0 | bit;
                 }
                 else
                 {
-                    w1 = w1 | (1L << (s - 63));
+                    w1 = w1 | bit;
+                }
+                int kind = fieldKind(off);
+                if (kind == 1)
+                {
+                    if (s < 63)
+                    {
+                        r0 = r0 | bit;
+                    }
+                    else
+                    {
+                        r1 = r1 | bit;
+                    }
+                }
+                else if (kind == 3)
+                {
+                    if (s < 63)
+                    {
+                        d0 = d0 | bit;
+                    }
+                    else
+                    {
+                        d1 = d1 | bit;
+                    }
                 }
             }
             s += 1;
         }
         type.plus(ObjectModel.TYPE_REFMAP_OFFSET).store(w0);
         type.plus(ObjectModel.TYPE_REFMAP_OFFSET).plus(8L).store(w1);
+        type.plus(ObjectModel.TYPE_REFKIND_OFFSET).store(r0);
+        type.plus(ObjectModel.TYPE_REFKIND_OFFSET).plus(8L).store(r1);
+        type.plus(ObjectModel.TYPE_DATAKIND_OFFSET).store(d0);
+        type.plus(ObjectModel.TYPE_DATAKIND_OFFSET).plus(8L).store(d1);
+    }
+
+    /** No map and no kinds: the collector scans the object conservatively. */
+    private static void clearMaps(Address type)
+    {
+        type.plus(ObjectModel.TYPE_REFMAP_OFFSET).store(0L);
+        type.plus(ObjectModel.TYPE_REFMAP_OFFSET).plus(8L).store(0L);
+        type.plus(ObjectModel.TYPE_REFKIND_OFFSET).store(0L);
+        type.plus(ObjectModel.TYPE_REFKIND_OFFSET).plus(8L).store(0L);
+        type.plus(ObjectModel.TYPE_DATAKIND_OFFSET).store(0L);
+        type.plus(ObjectModel.TYPE_DATAKIND_OFFSET).plus(8L).store(0L);
+    }
+
+    /** The exact kind of the field whose descriptor Utf8 sits at {@code descOff}, as {@code ClassFile.fieldKind}
+     *  decides it on the host: 1 = object reference, 3 = data reference, 0 = neither (primitive or raw). */
+    private static int fieldKind(int descOff)
+    {
+        Address b = Loader.gView.base.toAddress();
+        int k = u1(b.plus(descOff + 2));
+        if (k == 0x5B)
+        {
+            return 1;                                   // '[': an array
+        }
+        if (k != 0x4C)
+        {
+            return 0;
+        }
+        if (Utf8.utf8IsAtBase(b, descOff, Magic.bytes("Lmagic/DataReference;")))
+        {
+            return 3;
+        }
+        if (Utf8.utf8IsAtBase(b, descOff, Magic.bytes("Lmagic/Address;"))
+            || Utf8.utf8IsAtBase(b, descOff, Magic.bytes("Lmagic/Word;"))
+            || Utf8.utf8IsAtBase(b, descOff, Magic.bytes("Lmagic/Offset;"))
+            || Utf8.utf8IsAtBase(b, descOff, Magic.bytes("Lmagic/Extent;")))
+        {
+            return 0;
+        }
+        return 1;
     }
 
     /** Whether the field whose descriptor Utf8 sits at {@code descOff} may hold a pointer the collector

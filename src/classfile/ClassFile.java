@@ -373,6 +373,90 @@ public final class ClassFile
         return new long[] {w0, w1};
     }
 
+    /** Slot kind for {@link #kindMaps}: not an exact pointer (a primitive, or a raw {@code long}/{@code Address}). */
+    public static final int KIND_NONE = 0;
+    /** Slot kind: an object reference. */
+    public static final int KIND_REF = 1;
+    /** Slot kind: a data reference ({@code magic.DataReference}, an {@code allocData} payload). */
+    public static final int KIND_DATA = 3;
+
+    /**
+     * The EXACT kind of a field of this descriptor (frames/GC arc S6). A Java reference is {@link #KIND_REF}, and so
+     * are {@code magic.ObjectReference} and the two unboxed arrays ({@code AddressArray}, {@code
+     * ObjectReferenceArray}: the array is an object even when its elements are raw); {@code magic.DataReference}
+     * is {@link #KIND_DATA}. Every other {@code magic} type ({@code Address}, {@code Word}, {@code Offset},
+     * {@code Extent}) and {@code long} are raw: {@link #KIND_NONE}, though {@link #mayHoldPointer} still says yes.
+     */
+    public static int fieldKind(String descriptor)
+    {
+        char k = descriptor.charAt(0);
+        if (k == '[')
+        {
+            return KIND_REF;
+        }
+        if (k != 'L')
+        {
+            return KIND_NONE;
+        }
+        if (!descriptor.startsWith("Lmagic/"))
+        {
+            return KIND_REF;
+        }
+        if (descriptor.equals("Lmagic/DataReference;"))
+        {
+            return KIND_DATA;
+        }
+        if (descriptor.equals("Lmagic/ObjectReference;") || descriptor.equals("Lmagic/AddressArray;")
+            || descriptor.equals("Lmagic/ObjectReferenceArray;"))
+        {
+            return KIND_REF;
+        }
+        return KIND_NONE;
+    }
+
+    /**
+     * The exact-kind bitmaps for {@code cls} ({@code {ref0, ref1, data0, data1}}), over the same slot numbering as
+     * {@link #refMap}: see {@link objectmodel.ObjectModel#TYPE_REFKIND_OFFSET}. Bit 0 of {@code ref0} marks them
+     * computed; all four words are 0 whenever {@link #refMap} publishes no map.
+     */
+    public static long[] kindMaps(String cls, Resolver resolve)
+    {
+        long[] none = new long[] {0L, 0L, 0L, 0L};
+        if ((refMap(cls, resolve)[0] & 1L) == 0L)
+        {
+            return none;
+        }
+        Vec<String> chain = new Vec<>();
+        String c = cls;
+        while (c != null)
+        {
+            chain.add(c);
+            c = resolve.resolve(c).superClassName();
+        }
+        long[] out = new long[] {1L, 0L, 0L, 0L};
+        int slot = 0;
+        for (int i = chain.size() - 1; i >= 0; i--)
+        {
+            ClassFile cf = resolve.resolve(chain.get(i));
+            for (FieldInfo f : cf.fields())
+            {
+                if (f.isStatic())
+                {
+                    continue;
+                }
+                int kind = fieldKind(f.descriptor());
+                if (kind != KIND_NONE)
+                {
+                    int bit = slot + 1;
+                    int w = (kind == KIND_DATA ? 2 : 0) + (bit < 64 ? 0 : 1);
+                    out[w] |= 1L << (bit < 64 ? bit : bit - 64);
+                }
+                slot++;
+            }
+        }
+        return out;
+    }
+
     /** Whether a field of this descriptor may hold a pointer the collector must follow: a reference
      *  ({@code L}/{@code [}) or a {@code long} (the VM's own objects keep raw addresses in those). */
     public static boolean mayHoldPointer(String descriptor)

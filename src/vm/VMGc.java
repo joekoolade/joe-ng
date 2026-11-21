@@ -89,6 +89,11 @@ final class VMGc implements Uninterruptible
         probes = 0L;                                  // precision metrics for this collection (gcLog)
         nomap = 0L;
         markSp = MARK_STACK;                          // the trace worklist starts empty
+        censusReset();                                // S6 census (gcheap=1): roots count as HC_ROOT
+        if (HeapShadow.on != 0)
+        {
+            HeapShadow.begin();                       // gcheap=2: the trace runs precisely first
+        }
         markOverflow = 0;
         // Stale-root hygiene: reap dead-parked tasks BEFORE marking. A task that ran taskExit (BLOCKED on
         // the reserved dead semaphore) can never be rescheduled -- pickNext skips BLOCKED tasks -- so its
@@ -163,13 +168,27 @@ final class VMGc implements Uninterruptible
         long tRoots = Magic.readCNTPCT_EL0();
         phaseRootTicks = tRoots - tStopped;
         drainMarkStack();                             // trace: scan each newly marked block exactly ONCE
+        hcCat = HC_ROOT;
         markGcMaps();                                 // JIT reference maps live as long as their frame entry
+        hcCat = HC_ROOT;
         codeOnly = markCodeRoots();                   // ... then the addresses only compiled code holds
         drainMarkStack();
         if (markOverflow != 0)
         {
             overflows = overflows + 1L;
             traceFixpoint();                          // stack ran out: fall back to re-scanning the heap
+        }
+        censusPrint();
+        if (HeapShadow.on != 0)
+        {
+            HeapShadow.rescanAll();                   // ... then conservatively: what only that keeps is a MISS
+            drainMarkStack();
+            if (markOverflow != 0)
+            {
+                overflows = overflows + 1L;
+                traceFixpoint();
+            }
+            HeapShadow.end();
         }
         if (GcMapShadow.on != 0)
         {
@@ -590,10 +609,13 @@ final class VMGc implements Uninterruptible
 
     /** Lowest address a TIB or Type pointer can have (the image loads at 0x80000); below it a header word
      *  is a raw array's element size or an untyped block's zero, never a pointer to dereference. */
-    private static final long META_LOW  = 0x0008_0000L;
-    /** One past the highest: core 0's arena ends where core 1's begins ({@code Heap.arenaLimit(0)}), and
-     *  TIBs only ever live in the image or in core 0's heap. Anything else is garbage -> stay conservative. */
-    private static final long META_HIGH = Heap.LARGE_LIMIT;
+    static final long META_LOW  = 0x0008_0000L;
+    /** One past the highest: the end of core 3's arena slot. A class loaded on a secondary core (a {@code /run}
+     *  program's, a server task's) has its TIB and Type in THAT core's arena; this bound used to stop at core 0's
+     *  heap ({@code Heap.LARGE_LIMIT}), so every instance of such a class was scanned conservatively as an
+     *  unrecognised header -- safe, but invisible on QEMU, where the probes load on core 0 (found by the S6 heap
+     *  shadow on the Pi). Anything outside is garbage -> stay conservative. */
+    static final long META_HIGH = Heap.LARGE_LIMIT + 3L * Heap.ARENA_SLOT;
 
     /**
      * Scan one marked block's payload for references, using the block's own TYPE METADATA where it has any.
@@ -605,9 +627,15 @@ final class VMGc implements Uninterruptible
      */
     private static boolean scanBlock(Address o, long size)
     {
+        if (HeapShadow.precise != 0)
+        {
+            HeapShadow.scanPrecise(o, size);           // gcheap=2, first phase: exact kinds only
+            return false;
+        }
         long tibw = o.plus(ObjectModel.TIB_OFFSET).loadLong();
         if (tibw != 0L && tibw <= (long) ObjectModel.MAX_RAW_ARRAY_TIB)
         {
+            census(HC_RAW_ARRAY, size, tibw >= 8L ? size : 0L);
             return scanArray(o, size, tibw);           // raw array: the header word IS the element size
         }
         if (tibw >= META_LOW && tibw < META_HIGH && (tibw & 7L) == 0L)
@@ -620,18 +648,130 @@ final class VMGc implements Uninterruptible
                 long isz = t.plus(ObjectModel.TYPE_INSTANCE_SIZE_OFFSET).loadLong();
                 if ((isz & ObjectModel.ARRAY_TYPE_TAG_MASK) == ObjectModel.ARRAY_TYPE_TAG)
                 {
-                    return scanArray(o, size, isz & 0xFFFFL);   // typed array: element size in the tag
+                    long es = isz & 0xFFFFL;
+                    if (es >= 8L)
+                    {
+                        census(t.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong() != 0L ? HC_REF_ARRAY
+                               : HC_WORD_ARRAY, size, size);
+                    }
+                    else
+                    {
+                        census(HC_NARROW_ARRAY, size, 0L);
+                    }
+                    return scanArray(o, size, es);   // typed array: element size in the tag
                 }
                 long map = t.plus(ObjectModel.TYPE_REFMAP_OFFSET).loadLong();
                 if ((map & 1L) != 0L)                           // bit 0 = the class's map was computed
                 {
+                    census(HC_MAPPED, size, 0L);
                     return scanMapped(o, size, map,
                                       t.plus(ObjectModel.TYPE_REFMAP_OFFSET + 8).loadLong());
                 }
+                census(HC_UNMAPPED, size, size);
             }
+            else
+            {
+                census(HC_OTHER, size, size);
+            }
+        }
+        else
+        {
+            census(tibw == 0L ? HC_DATA : HC_OTHER, size, size);
         }
         nomap = nomap + 1L;                                        // the remaining conservative surface
         return markRange(o.plus(ObjectModel.HEADER_SIZE), o.plus(size));   // unmapped scalar / untyped block
+    }
+
+    // ---- frames/GC arc S6 census (gcheap=1): what the trace scans, by block shape, and what each shape marks.
+    static final int HC_ROOT = 0;           // root scans (stacks, statics, code immediates, maps)
+    static final int HC_MAPPED = 1;         // scalar with a reference map
+    static final int HC_REF_ARRAY = 2;      // typed word array whose Type names an element Type (Object[] etc.)
+    static final int HC_WORD_ARRAY = 3;     // typed word array with no element Type (long[], double[])
+    static final int HC_NARROW_ARRAY = 4;   // typed array of sub-word elements: never scanned
+    static final int HC_RAW_ARRAY = 5;      // raw array (header word = element size)
+    static final int HC_DATA = 6;           // untyped allocData struct (header word 0)
+    static final int HC_UNMAPPED = 7;       // typed scalar whose Type has no map
+    static final int HC_OTHER = 8;          // a header word that is none of the above
+    static final int HC_N = 9;
+    /** 1 = keep the census ({@code gcheap=1}). */
+    static int heapCensus;
+    private static int hcCat;
+    private static int hcDataProbe;         // 1 while tryMark is probing w-16
+    private static long[] hcBlocks;
+    private static long[] hcBytes;
+    private static long[] hcScanned;        // bytes probed word by word
+    private static long[] hcMarks;          // blocks newly marked by a word this shape held
+    private static long[] hcMarksData;      // ... of which through the w-16 data-reference probe
+
+    static void initCensus()
+    {
+        hcBlocks = new long[HC_N];
+        hcBytes = new long[HC_N];
+        hcScanned = new long[HC_N];
+        hcMarks = new long[HC_N];
+        hcMarksData = new long[HC_N];
+    }
+
+    private static void census(int cat, long size, long scanned)
+    {
+        hcCat = cat;
+        if (heapCensus != 0)
+        {
+            hcBlocks[cat] = hcBlocks[cat] + 1L;
+            hcBytes[cat] = hcBytes[cat] + size;
+            hcScanned[cat] = hcScanned[cat] + scanned;
+        }
+    }
+
+    private static void censusReset()
+    {
+        hcCat = HC_ROOT;
+        if (heapCensus != 0)
+        {
+            int i = 0;
+            while (i < HC_N)
+            {
+                hcBlocks[i] = 0L;
+                hcBytes[i] = 0L;
+                hcScanned[i] = 0L;
+                hcMarks[i] = 0L;
+                hcMarksData[i] = 0L;
+                i += 1;
+            }
+        }
+    }
+
+    /** One line per collection: per shape, blocks / KB / KB scanned word by word / new marks (via w-16). */
+    private static void censusPrint()
+    {
+        if (heapCensus == 0)
+        {
+            return;
+        }
+        Uart.write(Magic.bytes("gcheap:"));
+        int i = 0;
+        while (i < HC_N)
+        {
+            Uart.putc((byte) 0x20);
+            Uart.write(i == HC_ROOT ? Magic.bytes("root") : i == HC_MAPPED ? Magic.bytes("mapped")
+                       : i == HC_REF_ARRAY ? Magic.bytes("refarr") : i == HC_WORD_ARRAY ? Magic.bytes("wordarr")
+                       : i == HC_NARROW_ARRAY ? Magic.bytes("narrow") : i == HC_RAW_ARRAY ? Magic.bytes("rawarr")
+                       : i == HC_DATA ? Magic.bytes("data") : i == HC_UNMAPPED ? Magic.bytes("unmapped")
+                       : Magic.bytes("other"));
+            Uart.putc((byte) 0x3D);
+            printDec((int) hcBlocks[i]);
+            Uart.putc((byte) 0x2F);
+            printDec((int) (hcBytes[i] >> 10));
+            Uart.putc((byte) 0x2F);
+            printDec((int) (hcScanned[i] >> 10));
+            Uart.putc((byte) 0x2F);
+            printDec((int) hcMarks[i]);
+            Uart.putc((byte) 0x28);
+            printDec((int) hcMarksData[i]);
+            Uart.putc((byte) 0x29);
+            i += 1;
+        }
+        Uart.putc((byte) 0x0A);
     }
 
     /**
@@ -684,10 +824,12 @@ final class VMGc implements Uninterruptible
                 {
                     any = true;
                 }
+                hcDataProbe = 1;
                 if (tryMark(w - 16L))
                 {
                     any = true;
                 }
+                hcDataProbe = 0;
             }
             i += 1;
         }
@@ -1010,10 +1152,12 @@ final class VMGc implements Uninterruptible
             {
                 any = true;
             }
+            hcDataProbe = 1;
             if (tryMark(w - 16L))                      // a raw-data payload pointer (Heap.allocData) sits one
             {                                          //   header past its block base: probe that base too
                 any = true;
             }
+            hcDataProbe = 0;
             lo = lo.plus(8);
         }
         return any;
@@ -1072,7 +1216,23 @@ final class VMGc implements Uninterruptible
             }
             if ((st & 1L) == 0L)
             {
-                block.plus(8).store(st + 1L);          // set mark bit
+                if (HeapShadow.rescan != 0)
+                {
+                    block.plus(8).store(st + 3L);      // mark bit + "marked by the heap shadow's rescan"
+                    HeapShadow.missed(w);
+                }
+                else
+                {
+                    block.plus(8).store(st + 1L);      // set mark bit
+                }
+                if (heapCensus != 0)
+                {
+                    hcMarks[hcCat] = hcMarks[hcCat] + 1L;
+                    if (hcDataProbe != 0)
+                    {
+                        hcMarksData[hcCat] = hcMarksData[hcCat] + 1L;
+                    }
+                }
                 if (markSp < MARK_STACK_END)           // ... and queue it for scanning exactly once
                 {
                     Address.fromLong(markSp).store(block);
@@ -1086,6 +1246,19 @@ final class VMGc implements Uninterruptible
             }
         }
         return false;
+    }
+
+    /** Mark {@code w} if it is a block base (the heap shadow's precise phase: no {@code w-16} probe). */
+    static void markExact(long w)
+    {
+        boolean ignored = tryMark(w);
+    }
+
+    /** One probe of the heap shadow's conservative rescan ({@link HeapShadow#missed} hears of a new mark). */
+    static void markRescan(long w)
+    {
+        probes = probes + 1L;
+        boolean ignored = tryMark(w);
     }
 
     /** One bit per 8 bytes of the 32 MiB code arena (512 KiB), recording every word seen pointing into it.
