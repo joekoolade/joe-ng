@@ -599,6 +599,8 @@ public final class VM
     // place every core passes through, on its own timer tick or its idle yield) with its context already
     // saved to its task's stack, so the collector can trace it. gcParked[c] = 1 while core c is parked.
     static int    gcStop;                   // 1 = every core but the collector must park in pickNext
+    static int    gcCore;                   // the core running the collection gcStop is for (any core, since S5a)
+    static final long GC_LOCK = 0x0302_0140L;   // 64-bit word: 1 while a core is collecting (taken with cas64)
     // A GENERATION, not a flag. A parked core clears a flag only AFTER it leaves the park, so between two
     // collections the flags still read 1 -- and a stop-the-world that believed them would mark and sweep with
     // three cores still mutating. A core publishes the generation it parked FOR; nothing needs clearing,
@@ -2383,6 +2385,7 @@ public final class VM
         // it never ran.
         armGcMaps(conf, flen);                              // gcmaps=1/2: the reference-map shadow check -- before the
         armSafepoints(conf, flen);                          //   main= test, so the no-program demo suite can use it too
+        armGcVolume(conf, flen);
         DataReference nm = Heap.allocData(flen + 8);
         int nl = manifestValue(conf, flen, Magic.bytes("main"), nm.toAddress(), flen);
         if (nl == 0)
@@ -2471,6 +2474,18 @@ public final class VM
         {
             Heap.gcStressBytes = 1024L * 1024L;              // gcmaps=2: collect every 1 MB as well
             Uart.write(Magic.bytes("gcmaps: stress, a collection every 1 MB\n"));
+        }
+    }
+
+    /** {@code gcvolume=0}: collect only when an arena is full ({@link Heap#noVolumeTrigger}), a test switch. */
+    private static void armGcVolume(Address conf, int flen)
+    {
+        DataReference v = Heap.allocData(16);
+        int n = manifestValue(conf, flen, Magic.bytes("gcvolume"), v.toAddress(), 8);
+        if (n == 1 && v.loadUnsignedByte() == 0x30)
+        {
+            Heap.noVolumeTrigger = 1;
+            Uart.write(Magic.bytes("gcvolume: off, collections only when an arena is full\n"));
         }
     }
 
@@ -4014,6 +4029,7 @@ public final class VM
     // The board platform's operations (board.Platform.OPS), bound by the writer to the --board platform class.
     static long hwEntropyAddr;         // <Platform>.entropy(Lmagic/ObjectReference;J)J — MetalRamfs.hwEntropy0(byte[],int)
     static long entropyReportAddr;     // <Platform>.entropyReport()V — the boot "hw rng:" line
+    static long boardHealthAddr;       // <Platform>.boardHealth()J — measured CPU clock, temperature, throttle flags
     static long consoleReadAddr;       // VMNatives.consoleRead(Lmagic/ObjectReference;JJ)J — MetalConsoleIn.read0(byte[],int,int)
     /**
      * The image's build id: the first 8 bytes of the SHA-256 of {@code kernel8.img} with this cell zero and no

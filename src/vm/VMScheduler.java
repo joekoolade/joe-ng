@@ -775,9 +775,9 @@ public final class VMScheduler implements Uninterruptible
         {
             stwLateReport(core, curSp);                    // a stop-the-world gave up waiting for this core
         }
-        if (gcStop != 0 && core != 0)
+        if (gcStop != 0 && core != gcCore)
         {
-            return gcPark(core, curSp);                    // core 0 is collecting: nobody else touches the heap
+            return gcPark(core, curSp);                    // another core is collecting: nobody else touches the heap
         }
         long daif = schedLock();
         int cur = coreTask[core];

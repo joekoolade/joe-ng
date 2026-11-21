@@ -55,6 +55,15 @@ final class VMGc implements Uninterruptible
 
     static void gcCollect(long scanFrom)
     {
+        // ANY CORE MAY COLLECT (frames/GC arc S5a): cores 1-3's arenas are collected now, so a core whose arena is
+        // full collects instead of halting. One collection at a time: a core that finds another collecting
+        // returns at once, and its allocation waits for that collection (Heap.waitForCollection) and retries.
+        if (!takeGcLock())
+        {
+            gcBusy = gcBusy + 1L;
+            return;
+        }
+        gcCore = (int) (Magic.readMPIDR() & 3L);
         lastScanFrom = scanFrom;
         long gcT0 = Magic.readCNTPCT_EL0();           // the pause /gc reports: entry to the world restarting
         long daif = Magic.readDaif();                 // no preemption mid-collection: a switched-in task
@@ -67,6 +76,7 @@ final class VMGc implements Uninterruptible
             // retries once and then halts with a loud "heap OOM", which is a strictly better failure than a
             // corrupted heap. This is what the comment above stopTheWorld always claimed happened.
             VMStats.gcSkipped = VMStats.gcSkipped + 1L;
+            releaseGcLock();
             if ((daif & 0x80L) == 0L)
             {
                 Magic.enableIrq();
@@ -74,6 +84,7 @@ final class VMGc implements Uninterruptible
             return;
         }
         long tStopped = Magic.readCNTPCT_EL0();
+        gcByCore[gcCore] = gcByCore[gcCore] + 1L;
         phaseStopTicks = tStopped - gcT0;             // the last collection's phases, for /gc
         probes = 0L;                                  // precision metrics for this collection (gcLog)
         nomap = 0L;
@@ -193,12 +204,8 @@ final class VMGc implements Uninterruptible
         }
         markRange(Address.fromLong(staticsStart), Address.fromLong(staticsEnd));
         staticsScans = staticsScans + 1L;             // did the root scan for statics actually run this pass?
-        int sc = 1;                                   // secondary cores' arenas are ROOT RANGES (never
-        while (sc < 4)                                //   collected, but their tasks hold refs into core 0's
-        {                                             //   heap — e.g. spawned Runnable receivers)
-            markRange(Heap.arenaBase(sc), Address.fromLong(Heap.PTR_CELL + sc * 8L).loadAddress());
-            sc += 1;
-        }
+        // Cores 1-3's arenas were ROOT RANGES here, scanned whole and never collected. Since S5a they are heap like
+        // core 0's: marked through the trace, swept into their own cores' free lists (sweepArena).
         rootProbes = probes;                          // split the metric: everything above is ROOT scanning
         long tRoots = Magic.readCNTPCT_EL0();
         phaseRootTicks = tRoots - tStopped;
@@ -269,7 +276,7 @@ final class VMGc implements Uninterruptible
                 {
                     if (runSize != 0L)                     // a survivor ends the run of dead blocks
                     {
-                        Heap.addFree(runStart, runSize);
+                        Heap.addFreeTo(0, runStart, runSize);
                         runStart = Address.zero();
                         runSize = 0L;
                     }
@@ -292,9 +299,15 @@ final class VMGc implements Uninterruptible
         }
         if (runSize != 0L)                             // the heap ended on dead blocks
         {
-            Heap.addFree(runStart, runSize);
+            Heap.addFreeTo(0, runStart, runSize);
         }
         sweepLargeRegion();
+        int ac = 1;
+        while (ac < 4)
+        {
+            sweepArena(ac);                           // cores 1-3's arenas, into their own free lists
+            ac += 1;
+        }
         if (gcLog != 0)
         {
             Uart.write(Magic.bytes("  [gc walked="));
@@ -333,6 +346,7 @@ final class VMGc implements Uninterruptible
         }
         phaseSweepTicks = Magic.readCNTPCT_EL0() - tTraced;
         startTheWorld();                              // the heap is consistent again: let the other cores run
+        releaseGcLock();
         VMStats.gcPause(Magic.readCNTPCT_EL0() - gcT0);
         if ((daif & 0x80L) == 0L)
         {
@@ -368,12 +382,12 @@ final class VMGc implements Uninterruptible
         long stw0 = Magic.readCNTPCT_EL0();
         if (noSafepoints == 0 && yieldReqAt != null)
         {
-            // S3: ask cores 1-3 to reach a yieldpoint now, instead of waiting up to a quantum for their ticks.
+            // S3: ask every other core to reach a yieldpoint now, instead of waiting up to a quantum for its tick.
             // A yieldpoint switches through pickNext, which parks the core there (gcPark).
-            int rc = 1;
+            int rc = 0;
             while (rc < 4)
             {
-                if (coreSched[rc] != 0)
+                if (rc != gcCore && coreSched[rc] != 0)
                 {
                     VMScheduler.requestYield(rc);
                 }
@@ -390,11 +404,13 @@ final class VMGc implements Uninterruptible
         if (unparked() != 0)
         {
             stwTimeouts = stwTimeouts + 1L;
-            Uart.write(Magic.bytes("\nGC: STW TIMEOUT -- unparked core"));
-            int c = 1;
+            Uart.write(Magic.bytes("\nGC: STW TIMEOUT -- collecting core "));
+            printDec(gcCore);
+            Uart.write(Magic.bytes(", unparked core"));
+            int c = 0;
             while (c < 4)
             {
-                if (coreSched[c] != 0 && gcParked[c] != gcGen)
+                if (c != gcCore && coreSched[c] != 0 && gcParked[c] != gcGen)
                 {
                     Uart.putc(0x20);
                     printDec(c);
@@ -426,6 +442,42 @@ final class VMGc implements Uninterruptible
         return true;
     }
 
+    /** Collections a core asked for while another core was collecting (it waited for that one instead). */
+    static long gcBusy;
+    /** Collections by the core that ran them: core 0 by volume, cores 1-3 when their arena filled. */
+    static long[] gcByCore = new long[4];
+
+    /** Take the collector lock, or return false at once if another core holds it. */
+    private static boolean takeGcLock()
+    {
+        while (true)
+        {
+            if (Address.fromLong(GC_LOCK).loadLong() != 0L)
+            {
+                return false;
+            }
+            if (Magic.cas64(GC_LOCK, 0L, 1L))         // LL/SC: may fail spuriously, so re-read and retry
+            {
+                Magic.dsb();
+                return true;
+            }
+        }
+    }
+
+    private static void releaseGcLock()
+    {
+        Magic.dsb();
+        Address.fromLong(GC_LOCK).store(0L);
+        Magic.dsb();
+        Magic.sev();
+    }
+
+    /** True while some core is collecting -- for an allocation that found the collector lock taken. */
+    static boolean collecting()
+    {
+        return Address.fromLong(GC_LOCK).loadLong() != 0L;
+    }
+
     /** Stop-the-world waits that stopped the world: how many, their total and the longest (CNTPCT ticks). */
     static long stwStops;
     static long stwWaitTicks;
@@ -436,10 +488,10 @@ final class VMGc implements Uninterruptible
     private static int unparked()
     {
         int n = 0;
-        int c = 1;
+        int c = 0;
         while (c < 4)
         {
-            if (coreSched[c] != 0 && gcParked[c] != gcGen)
+            if (c != gcCore && coreSched[c] != 0 && gcParked[c] != gcGen)
             {
                 n += 1;
             }
@@ -449,14 +501,14 @@ final class VMGc implements Uninterruptible
     }
 
 
-    /** Secondaries currently scheduling from the shared run queue. */
+    /** Cores other than the collector currently scheduling from the shared run queue (core 0 always is). */
     private static int scheduling()
     {
         int n = 0;
-        int c = 1;
+        int c = 0;
         while (c < 4)
         {
-            if (coreSched[c] != 0)
+            if (c != gcCore && coreSched[c] != 0)
             {
                 n += 1;
             }
@@ -652,8 +704,14 @@ final class VMGc implements Uninterruptible
      */
     private static Address liveEndOf(Address top)
     {
-        Address end = Address.fromLong(Heap.BASE);
-        Address o = Address.fromLong(Heap.BASE);
+        return liveEndIn(Address.fromLong(Heap.BASE), top);
+    }
+
+    /** {@link #liveEndOf} for the region starting at {@code base}. */
+    private static Address liveEndIn(Address base, Address top)
+    {
+        Address end = base;
+        Address o = base;
         while (o.LT(top))
         {
             long st = o.plus(8).loadLong();
@@ -780,11 +838,7 @@ final class VMGc implements Uninterruptible
     /** One past the last byte of whichever region {@code o} lives in. */
     private static Address regionTopOf(Address o)
     {
-        if (o.GE(Address.fromLong(Heap.LARGE_BASE)))
-        {
-            return Address.fromLong(Heap.LARGE_PTR_CELL).loadAddress();
-        }
-        return Address.fromLong(Heap.PTR_CELL).loadAddress();
+        return Address.fromLong(regionTopFor(o.toLong()));
     }
 
     private static void drainMarkStack()
@@ -820,6 +874,12 @@ final class VMGc implements Uninterruptible
             markSp = MARK_STACK;
             scanMarkedIn(Address.fromLong(Heap.BASE), Address.fromLong(Heap.PTR_CELL).loadAddress());
             scanMarkedIn(Address.fromLong(Heap.LARGE_BASE), Address.fromLong(Heap.LARGE_PTR_CELL).loadAddress());
+            int c = 1;
+            while (c < 4)
+            {
+                scanMarkedIn(Heap.arenaBase(c), Address.fromLong(Heap.PTR_CELL + c * 8L).loadAddress());
+                c += 1;
+            }
             drainMarkStack();                          // anything this pass queued, scanned before re-walking
             if (markOverflow == 0)
             {
@@ -901,13 +961,11 @@ final class VMGc implements Uninterruptible
             cw.store(cw.loadLong() | (1L << (int) (bit & 63L)));
             return false;                              // code is not a heap block; nothing to mark or trace
         }
-        // A heap pointer is now either the small region below the large base, or the large region above it.
+        // A heap pointer is in the small region, the large region, or (since S5a) one of cores 1-3's arenas.
         // Getting this wrong in the permissive direction only over-retains; getting it wrong in the strict
-        // direction sweeps live objects, so the large region MUST be included the moment anything is
-        // allocated there.
-        int inSmall = w >= Heap.BASE && w < Address.fromLong(Heap.PTR_CELL).loadLong() ? 1 : 0;
-        int inLarge = w >= Heap.LARGE_BASE && w < Address.fromLong(Heap.LARGE_PTR_CELL).loadLong() ? 1 : 0;
-        if ((inSmall != 0 || inLarge != 0) && (w & 7L) == 0L && isBlockBase(w))
+        // direction sweeps live objects, so every region MUST be included the moment anything is allocated there.
+        long regionTop = regionTopFor(w);
+        if (regionTop != 0L && (w & 7L) == 0L && isBlockBase(w))
         {
             Address block = Address.fromLong(w);       // validated: in a heap region, aligned, a block base
             long st = block.plus(8).loadLong();
@@ -916,8 +974,6 @@ final class VMGc implements Uninterruptible
             // "blob 0x1" the loader reports much later, with nothing left to say where it came from. Check
             // here, where the address and its caller are still in hand.
             long sz = st & -8L;
-            long regionTop = inLarge != 0 ? Address.fromLong(Heap.LARGE_PTR_CELL).loadLong()
-                                          : Address.fromLong(Heap.PTR_CELL).loadLong();
             if (sz < 16L || w + sz > regionTop)
             {
                 if (falseBaseSeen == 0)
@@ -928,7 +984,7 @@ final class VMGc implements Uninterruptible
                     Uart.write(Magic.bytes(" status="));
                     printHex(st);
                     Uart.write(Magic.bytes(" region="));
-                    printHex(inLarge != 0 ? 1L : 0L);
+                    printHex(w >= Heap.LARGE_LIMIT ? 2L : (w >= Heap.LARGE_BASE ? 1L : 0L));
                     Uart.write(Magic.bytes(" top="));
                     printHex(regionTop);
                     Uart.write(Magic.bytes(" largeTop="));
@@ -1415,8 +1471,96 @@ final class VMGc implements Uninterruptible
             z.store(0L);
             z = z.plus(8);
         }
-        markBlockBases(Address.fromLong(Heap.BASE), stop);
-        markBlockBases(Address.fromLong(Heap.LARGE_BASE), Address.fromLong(Heap.LARGE_PTR_CELL).loadAddress());
+        markBlockBases(Address.fromLong(Heap.BASE), stop, MARK_BITMAP, Heap.BASE);
+        markBlockBases(Address.fromLong(Heap.LARGE_BASE), Address.fromLong(Heap.LARGE_PTR_CELL).loadAddress(), MARK_BITMAP,
+                       Heap.BASE);
+        int c = 1;
+        while (c < 4)
+        {
+            // Each secondary arena's bitmap sits in its own top 1 MiB (Heap.arenaBitmap); clear only the part that
+            // covers what the arena has used -- one bitmap byte per 64 heap bytes.
+            Address base = Heap.arenaBase(c);
+            Address top = Address.fromLong(Heap.PTR_CELL + c * 8L).loadAddress();
+            Address bz = Address.fromLong(Heap.arenaBitmap(c));
+            Address bzEnd = bz.plus(((top.toLong() - base.toLong()) >> 6) + 8L);
+            while (bz.LT(bzEnd))
+            {
+                bz.store(0L);
+                bz = bz.plus(8);
+            }
+            markBlockBases(base, top, Heap.arenaBitmap(c), base.toLong());
+            c += 1;
+        }
+    }
+
+    /** Survivors, freed blocks and bytes of cores 1-3's arenas over the last collection (for /gc and gcLog). */
+    static long arenaLive;
+    static long arenaFreed;
+    static long arenaTrimmed;
+
+    /**
+     * Sweep secondary core {@code c}'s arena (frames/GC arc S5a) the way the small heap is swept: unmark survivors,
+     * coalesce each run of dead blocks into core {@code c}'s OWN free lists -- only core {@code c} allocates from
+     * them, and it is parked -- and lower its bump pointer past the last survivor.
+     */
+    private static void sweepArena(int c)
+    {
+        if (c == 1)
+        {
+            arenaLive = 0L;
+            arenaFreed = 0L;
+            arenaTrimmed = 0L;
+        }
+        Heap.clearCoreFreeLists(c);
+        Address base = Heap.arenaBase(c);
+        Address ptrCell = Address.fromLong(Heap.PTR_CELL + c * 8L);
+        Address stop = liveEndIn(base, ptrCell.loadAddress());
+        long trim = ptrCell.loadLong() - stop.toLong();
+        arenaTrimmed = arenaTrimmed + trim;
+        reclaimed = reclaimed + trim;
+        ptrCell.store(stop);
+        Address o = base;
+        Address runStart = Address.zero();
+        long runSize = 0L;
+        while (o.LT(stop))
+        {
+            long st = o.plus(8).loadLong();
+            long size = st & -8L;
+            if (size == 0L || o.plus(size).GT(stop) || o.plus(size).LE(o))
+            {
+                o = stop;                              // corrupt: stop (the small heap's guard)
+            }
+            else
+            {
+                if ((st & 1L) != 0L)
+                {
+                    if (runSize != 0L)
+                    {
+                        Heap.addFreeTo(c, runStart, runSize);
+                        runStart = Address.zero();
+                        runSize = 0L;
+                    }
+                    arenaLive = arenaLive + size;
+                    liveBytes = liveBytes + size;
+                    o.plus(8).store(size);             // clear the mark
+                }
+                else
+                {
+                    arenaFreed = arenaFreed + size;
+                    reclaimed = reclaimed + size;
+                    if (runSize == 0L)
+                    {
+                        runStart = o;
+                    }
+                    runSize = runSize + size;
+                }
+                o = o.plus(size);
+            }
+        }
+        if (runSize != 0L)
+        {
+            Heap.addFreeTo(c, runStart, runSize);
+        }
     }
 
     /**
@@ -1490,7 +1634,7 @@ final class VMGc implements Uninterruptible
 
     /** Record the base of every block in {@code [from,to)}. Both regions are walkable the same way: every
      *  block, allocated or free, carries its size in its status word. */
-    private static void markBlockBases(Address from, Address to)
+    private static void markBlockBases(Address from, Address to, long bitmap, long origin)
     {
         Address o = from;
         while (o.LT(to))
@@ -1503,8 +1647,8 @@ final class VMGc implements Uninterruptible
             }
             else
             {
-                long idx = (o.toLong() - Heap.BASE) >> 3;
-                Address w = Address.fromLong(MARK_BITMAP + ((idx >> 6) << 3));
+                long idx = (o.toLong() - origin) >> 3;
+                Address w = Address.fromLong(bitmap + ((idx >> 6) << 3));
                 w.store(w.loadLong() | (1L << (int) (idx & 63L)));
                 o = o.plus(size);
             }
@@ -1514,8 +1658,33 @@ final class VMGc implements Uninterruptible
     /** Whether {@code w} lies in the small or the large heap region (allocated part). */
     static boolean inHeap(long w)
     {
-        return (w >= Heap.BASE && w < Address.fromLong(Heap.PTR_CELL).loadLong())
-                || (w >= Heap.LARGE_BASE && w < Address.fromLong(Heap.LARGE_PTR_CELL).loadLong());
+        return regionTopFor(w) != 0L;
+    }
+
+    /**
+     * The allocated top of the heap region holding {@code w}, or 0 when no region does: core 0's small heap, the
+     * large region, or one of cores 1-3's arenas (collected since S5a). Getting this wrong in the strict
+     * direction sweeps live objects, so every region anything is allocated in must be here.
+     */
+    static long regionTopFor(long w)
+    {
+        if (w < Heap.BASE)
+        {
+            return 0L;
+        }
+        if (w < Heap.LARGE_LIMIT)
+        {
+            long top = w < Heap.LARGE_BASE ? Address.fromLong(Heap.PTR_CELL).loadLong()
+                                           : Address.fromLong(Heap.LARGE_PTR_CELL).loadLong();
+            return w < top ? top : 0L;
+        }
+        long c = ((w - Heap.LARGE_LIMIT) / Heap.ARENA_SLOT) + 1L;
+        if (c > 3L)
+        {
+            return 0L;
+        }
+        long top = Address.fromLong(Heap.PTR_CELL + c * 8L).loadLong();
+        return w < top ? top : 0L;
     }
 
     /** What the conservative scan would make of {@code w}: 1 = a block base, 2 = an allocData payload one header
@@ -1540,7 +1709,15 @@ final class VMGc implements Uninterruptible
 
     private static boolean isBlockBase(long w)
     {
-        long idx = (w - Heap.BASE) >> 3;
-        Address word = Address.fromLong(MARK_BITMAP + ((idx >> 6) << 3));
+        long bitmap = MARK_BITMAP;
+        long origin = Heap.BASE;
+        if (w >= Heap.LARGE_LIMIT)
+        {
+            int c = (int) ((w - Heap.LARGE_LIMIT) / Heap.ARENA_SLOT) + 1;   // callers have checked regionTopFor
+            bitmap = Heap.arenaBitmap(c);
+            origin = Heap.arenaBase(c).toLong();
+        }
+        long idx = (w - origin) >> 3;
+        Address word = Address.fromLong(bitmap + ((idx >> 6) << 3));
         return (word.loadLong() & (1L << (int) (idx & 63L))) != 0L;
     }}

@@ -55,6 +55,9 @@ public final class Bcm2711
     public static final int  TAG_SET_REBOOT_FLAGS = 0x0003_8064; // 1 = next boot reads tryboot.txt (one-shot)
     public static final int  TAG_SET_GPIO_STATE = 0x0003_8041;   // drive a firmware GPIO-expander pin (128+n)
     public static final int  CLOCK_ID_CORE = 4;           // the clock feeding the mini-UART
+    public static final int  CLOCK_ID_ARM = 3;            // the Cortex-A72 cores' clock
+    public static final int  TAG_GET_TEMPERATURE = 0x0003_0006;   // in: sensor id 0; out: milli-degrees C
+    public static final int  TAG_GET_THROTTLED = 0x0003_0046;     // out: the firmware's throttle/under-voltage flags
     public static final int  CLOCK_ID_EMMC = 1;           // the clock feeding the SD/SDIO (EMMC) controller
     public static final int  CLOCK_ID_EMMC2 = 12;         // the clock feeding EMMC2, the microSD slot's controller
     public static final int  EXPANDER_GPIO_BASE = 128;    // firmware GPIO-expander pins start here

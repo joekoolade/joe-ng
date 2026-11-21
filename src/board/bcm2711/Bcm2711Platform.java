@@ -47,6 +47,25 @@ public final class Bcm2711Platform implements magic.Uninterruptible
     }
 
     /**
+     * {@code /threads}' board health, asked of the firmware: the MEASURED ARM clock in MHz (bits 0..15), the SoC
+     * temperature in degrees C (bits 16..31) and the throttle flags (bits 32..63: bit 0 under-voltage now, 1 ARM
+     * frequency capped now, 2 throttled now, 3 soft temperature limit now; bits 16..19 the same, since boot). A
+     * benchmark that slows uniformly is first a clock question, and this is the only place to read the answer.
+     */
+    public static long boardHealth()
+    {
+        long mhz = (long) Mailbox.measuredClockHz(Bcm2711.CLOCK_ID_ARM) / 1_000_000L;
+        int[] t = new int[2];
+        t[0] = 0;
+        t[1] = 0;
+        long tempC = Mailbox.tag(Bcm2711.TAG_GET_TEMPERATURE, t) ? (long) t[1] / 1000L : 0L;
+        int[] f = new int[1];
+        f[0] = 0;
+        long flags = Mailbox.tag(Bcm2711.TAG_GET_THROTTLED, f) ? (long) f[0] & 0xFFFF_FFFFL : 0L;
+        return (mhz & 0xFFFFL) | ((tempC & 0xFFFFL) << 16) | (flags << 32);
+    }
+
+    /**
      * {@code MetalBoard.setRebootFlags0(int)}: firmware property SET_REBOOT_FLAGS ({@code 0x00038064}). Value 1
      * makes the NEXT boot a tryboot -- the firmware reads {@code tryboot.txt} instead of {@code config.txt} -- and
      * the flag is one-shot. 0 = the firmware answered, -1 = it did not.

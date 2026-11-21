@@ -48,6 +48,12 @@ public final class VirtPlatform implements magic.Uninterruptible
         return Platform.BOARD_VIRT;
     }
 
+    /** {@code /threads}' board health: QEMU has no firmware to measure a clock or a temperature, so 0. */
+    public static long boardHealth()
+    {
+        return 0L;
+    }
+
     /** {@code MetalBoard.setRebootFlags0(int)}: there is no firmware to ask, so -1, "it did not answer". */
     public static long setRebootFlags(long flags)
     {

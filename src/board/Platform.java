@@ -58,6 +58,7 @@ public final class Platform
         { "sectorWrite(JJJ)J",                            "board/Block.hwWriteAddr" },      // board.Block.write
         { "entropy(Lmagic/ObjectReference;J)J",           "vm/VM.hwEntropyAddr" },          // MetalRamfs.hwEntropy0
         { "entropyReport()V",                             "vm/VM.entropyReportAddr" },      // the boot "hw rng:" line
+        { "boardHealth()J",                               "vm/VM.boardHealthAddr" },        // /threads: clock, temperature
         // The console UART's register half; board.Uart (rings, locks, interrupt body) calls these.
         { "consoleInit()V",                               "board/Uart.hwInitAddr" },
         { "consoleTxReady()J",                            "board/Uart.hwTxReadyAddr" },

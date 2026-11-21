@@ -288,6 +288,10 @@ public final class Heap implements Uninterruptible
     /** True if enough has been allocated since the last collection to be worth collecting on volume. */
     private static boolean volumeTrigger()
     {
+        if (noVolumeTrigger != 0)
+        {
+            return false;
+        }
         if (gcStressBytes != 0L)
         {
             return allocSinceGc >= gcStressBytes;
@@ -298,6 +302,10 @@ public final class Heap implements Uninterruptible
     /** {@code gcmaps=2} in {@code /etc/init}: collect after this many bytes instead of {@link #GC_TRIGGER_BYTES},
      *  so the reference-map shadow check sees many more stacks (frames/GC arc S4). 0 = off. */
     static long gcStressBytes;
+
+    /** {@code gcvolume=0} in {@code /etc/init}: no volume-triggered collections, only an arena running full -- so a
+     *  core 1-3 arena fills and that core collects (frames/GC arc S5a), which the volume trigger otherwise pre-empts. */
+    static int noVolumeTrigger;
 
     /** Mark the code at {@code addr} as branched-to directly, so the sweep must keep it. */
     public static void pinCodeAt(Address ad)
@@ -355,10 +363,25 @@ public final class Heap implements Uninterruptible
         return Address.fromLong(core == 0 ? BASE : LARGE_LIMIT + (long) (core - 1) * 0x0400_0000L);
     }
 
-    /** End of core {@code c}'s arena: core 0 runs up to the secondaries' base; each secondary has 64 MiB. */
+    /** A secondary's 64 MiB slot, and the block-start bitmap at its top: one bit per 8 bytes of the 63 MiB below. */
+    static final long ARENA_SLOT = 0x0400_0000L;
+    static final long ARENA_BITMAP_BYTES = 0x0010_0000L;
+
+    /**
+     * End of core {@code c}'s allocatable arena: core 0 runs up to the large region; each secondary has its 64 MiB
+     * slot less the top 1 MiB, which holds the collector's block-start bitmap for that arena ({@link
+     * #arenaBitmap}). Cores 1-3's arenas are collected since frames/GC arc S5a: core 0's bitmap band is full, so
+     * each arena carries its own.
+     */
     static Address arenaLimit(int core)
     {
-        return core == 0 ? Address.fromLong(LARGE_BASE) : arenaBase(core).plus(0x0400_0000L);   // core 0's tail is the large region
+        return core == 0 ? Address.fromLong(LARGE_BASE) : arenaBase(core).plus(ARENA_SLOT - ARENA_BITMAP_BYTES);
+    }
+
+    /** Secondary core {@code c}'s block-start bitmap: bit i = a block starts at {@code arenaBase(c) + 8*i}. */
+    static long arenaBitmap(int core)
+    {
+        return arenaBase(core).toLong() + ARENA_SLOT - ARENA_BITMAP_BYTES;
     }
 
     /**
@@ -384,6 +407,7 @@ public final class Heap implements Uninterruptible
             c += 1;
         }
         Address.fromLong(CODE_PTR_CELL).store(CODE_BASE);
+        Address.fromLong(VM.GC_LOCK).store(0L);        // raw scratch RAM: free before any core can collect
         Address.fromLong(LARGE_PTR_CELL).store(LARGE_BASE);
         Address.fromLong(LARGE_FREE_CELL).store(0L);
         Address.fromLong(STOP_CELL).store(0L);
@@ -1505,7 +1529,7 @@ public final class Heap implements Uninterruptible
         Address freeCell = Address.fromLong(FREE_CELL + core * 8L);
         Address ptrCell = Address.fromLong(PTR_CELL + core * 8L);
         int attempt = 0;
-        while (attempt < 2)
+        while (attempt < 4)
         {
             if (core == 0 && volumeTrigger())               // collect on VOLUME, not on running out: the
             {                                               //   ratchet exists because nothing asks for a
@@ -1602,18 +1626,43 @@ public final class Heap implements Uninterruptible
                 }
                 return p;
             }
-            if (core != 0 || attempt == 1)
+            // ARENA FULL, on any core: every arena is collected since frames/GC arc S5a, so a secondary collects
+            // too instead of halting. Collect; if that found another core collecting (it returns at once), wait for
+            // that collection and retry; then collect once more before giving up.
+            if (attempt == 1)
             {
-                break;                                      // secondaries are never collected; core 0 tried once
+                waitForCollection();
             }
-            gcPressure += 1;                                // arena full: collect (Magic.gc spills x19..x28 so
-            Magic.gc();                                     //   callee-saved refs are on the scannable stack)
+            else
+            {
+                gcPressure += 1;                            // arena full: collect (Magic.gc spills x19..x28 so
+                Magic.gc();                                 //   callee-saved refs are on the scannable stack)
+            }
             attempt += 1;
         }
         board.Uart.write(Magic.bytes("heap OOM\n"));
         while (true)
         {
             Magic.wfe();                                    // out of memory even after a collection: halt
+        }
+    }
+
+    /**
+     * Wait out a collection another core is running. This core must PARK for it -- the collector stops the world
+     * and waits for every other scheduling core -- and parking happens in the scheduler, so once the stop is
+     * raised the wait yields (taskYield -> pickNext -> gcPark, which saves this task's context for the root scan).
+     * Before then it spins: the collector raises the stop right after taking its lock. Bounded, so a lock that is
+     * never released ends in the caller's OOM report rather than a silent hang.
+     */
+    private static void waitForCollection()
+    {
+        long deadline = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * 5L;
+        while (VMGc.collecting() && Magic.readCNTPCT_EL0() < deadline)
+        {
+            if (VM.gcStop != 0)
+            {
+                VMScheduler.kernelYield();
+            }
         }
     }
 
@@ -1703,10 +1752,10 @@ public final class Heap implements Uninterruptible
         return p;
     }
 
-    /** Reset the current core's free list (start of a sweep — the GC runs on the collecting core). */
+    /** Reset core 0's free lists and the large region's (start of a sweep -- whichever core collects). */
     static void resetFreeList()
     {
-        int core = (int) (Magic.readMPIDR() & 3L);
+        int core = 0;
         Address.fromLong(FREE_CELL + core * 8L).store(0L);
         clearSizeLists(core);
         Address.fromLong(LARGE_FREE_CELL).store(0L);   // the large sweep rebuilds this list too, and old
@@ -1768,7 +1817,12 @@ public final class Heap implements Uninterruptible
     /** Add a reclaimed block to the current core's free list: its exact-size list when small, else the general one. */
     static void addFree(Address a, long size)
     {
-        int core = (int) (Magic.readMPIDR() & 3L);
+        addFreeTo((int) (Magic.readMPIDR() & 3L), a, size);
+    }
+
+    /** Add a reclaimed block to core {@code core}'s free lists -- the sweep, run on whichever core collects. */
+    static void addFreeTo(int core, Address a, long size)
+    {
         Address freeCell = Address.fromLong(FREE_CELL + core * 8L);
         if (size >= (long) ObjectModel.HEADER_SIZE && size <= (long) SMALL_MAX && (size & 7L) == 0L)
         {

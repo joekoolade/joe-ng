@@ -698,6 +698,23 @@ public final class Loader
             VM.printDec(VMGc.idleMarked);                  //   the hole is closed, not a loss repaired
             Uart.write(Magic.bytes(" idleGc="));           // collections that ran ON an idle task (the
             VM.printDec(VMGc.idleGc);                      //   mis-bracketed case): expected 0 -- measured
+            Uart.write(Magic.bytes(" byCore="));           // which core ran them (S5a: any core collects)
+            int bc = 0;
+            while (bc < 4)
+            {
+                if (bc != 0)
+                {
+                    Uart.putc(0x2F);
+                }
+                VM.printDec((int) VMGc.gcByCore[bc]);
+                bc += 1;
+            }
+            Uart.write(Magic.bytes(" busy="));             // ... asked for while another core collected
+            VM.printDec((int) VMGc.gcBusy);
+            Uart.write(Magic.bytes(" arenaLive="));        // cores 1-3's arenas after the last collection
+            VM.printHex(VMGc.arenaLive);
+            Uart.write(Magic.bytes(" arenaFreed="));
+            VM.printHex(VMGc.arenaFreed);
             Uart.putc(0x0A);
         }
     }
