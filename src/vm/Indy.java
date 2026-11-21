@@ -15,6 +15,7 @@ import compiler.Baseline;
 import board.Uart;
 import classfile.ClassReader;
 import magic.Address;
+import magic.DataReference;
 import magic.AddressArray;
 import magic.Magic;
 import magic.ObjectReference;
@@ -79,12 +80,12 @@ final class Indy
             dsVal = new long[MAXDSITE];
             dsDone = new int[MAXDSITE];
         }
-        int reg = ClassRegistry.classRegByNameAt(Loader.gView.base, Loader.gView.thisNameOff);
-        Address type = reg >= 0 ? ClassRegistry.clTab[reg].type : Address.zero();
+        int reg = ClassRegistry.classRegByNameAt(Loader.gView.base.toAddress(), Loader.gView.thisNameOff);
+        DataReference type = reg >= 0 ? ClassRegistry.clTab[reg].type : DataReference.zero();
         int i = 0;
         while (i < dsCount)                             // dedup: the compiler visits each site in both passes
         {
-            if (dsType.get(i).EQ(type) && dsCp[i] == cpIndex)
+            if (dsType.get(i).EQ(type.toAddress()) && dsCp[i] == cpIndex)
             {
                 return i;
             }
@@ -95,7 +96,7 @@ final class Indy
             Loader.capHalt(Magic.bytes("MAXDSITE"), dsCount);
         }
         int tag = u1(Loader.gView.base.plus(Loader.gView.cp[cpIndex] - 1L));         // Loader.gView.cp points just PAST an entry's tag byte
-        dsType.set(dsCount, type);
+        dsType.set(dsCount, type.toAddress());
         dsCp[dsCount] = cpIndex;
         dsDesc.set(dsCount, (tag == 17 || tag == 18) ? Loader.gView.base.plus(Loader.mrefDescOff(cpIndex)) : Address.zero());
         dsVal[dsCount] = 0L;

@@ -130,7 +130,7 @@ public final class Supplicant
             Cyw43.genNonce(sNonce);
         }
         byte[] ptk = new byte[48];
-        Cyw43.derivePtk(Cyw43.staPmk, aa, Cyw43.heapBytes(Cyw43.ourMac, 6), aNonce, sNonce, ptk);
+        Cyw43.derivePtk(Cyw43.staPmk, aa, Cyw43.heapBytes(Cyw43.ourMac.toAddress(), 6), aNonce, sNonce, ptk);
         pendKck = Cyw43.slice(ptk, 0, 16);
         pendKek = Cyw43.slice(ptk, 16, 16);
         pendTk = Cyw43.slice(ptk, 32, 16);

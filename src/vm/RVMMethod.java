@@ -12,6 +12,7 @@
 package vm;
 
 import magic.Address;
+import magic.DataReference;
 
 /**
  * M8 Stage 3 (reified loader): one entry of the global method registry -- a compiled method known to the
@@ -22,7 +23,7 @@ import magic.Address;
  */
 final class RVMMethod
 {
-    Address base;    // declaring class blob base (holds its Utf8 strings)
+    DataReference base;    // declaring class blob base (holds its Utf8 strings)
     int  classOff;  // class name Utf8 offset
     int  nameOff;   // method name Utf8 offset
     int  descOff;   // descriptor Utf8 offset

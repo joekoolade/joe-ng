@@ -111,7 +111,8 @@ public final class VMScheduler implements Uninterruptible
     /** Build a task-1 initial context frame on a fresh stack, entering {@link #pcTask1}(id). Primary-only. */
     static long pcMakeTask(int id)
     {
-        long stk = Heap.alloc(0x8000).toLong();
+        ObjectReference stkRef = Heap.alloc(0x8000).toObjectReference();
+        long stk = stkRef.toLong();                  // a raw copy; stkRef keeps the block alive
         long top = (stk + 0x8000L) & ~0xFL;                // 16-byte aligned; grows down
         Address frame = Address.fromLong(top - SCHED_FRAME);
         int r = 0;
@@ -1825,14 +1826,14 @@ public final class VMScheduler implements Uninterruptible
             }
             i += 1;
         }
-        Address arr = Heap.allocArray(count, 8);              // Thread[count] (null TIB: iterated by index)
+        ObjectReference arr = Heap.allocArray(count, 8).toObjectReference();              // Thread[count] (null TIB: iterated by index)
         int j = 0;
         i = 0;
         while (i < taskCount)
         {
             if (!taskThreadObj.get(i).isNull() && taskDone[i] == 0)
             {
-                arr.plus(24L + j * 8L).store(taskThreadObj.get(i));
+                arr.toAddress().plus(24L + j * 8L).store(taskThreadObj.get(i));
                 j += 1;
             }
             i += 1;

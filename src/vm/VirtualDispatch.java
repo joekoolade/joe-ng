@@ -16,6 +16,7 @@ import board.Uart;
 import classfile.ClassReader;
 import compiler.Baseline;
 import magic.Address;
+import magic.DataReference;
 import magic.AddressArray;
 import magic.Magic;
 import magic.ObjectReference;
@@ -56,7 +57,7 @@ final class VirtualDispatch
     private static int[] vsBucket;                       // hash -> site index + 1 (0 = empty)
     static long virtualTrampAddr;
     static long virtualTrampLo, virtualTrampHi;   // the range over which its frame is live
-    private static Address vsMemoType;                   // one-entry memo: the same site is usually monomorphic
+    private static DataReference vsMemoType;                   // one-entry memo: the same site is usually monomorphic
     private static long vsMemoBuf;
     private static int vsMemoIdx = -1;
     // PER-SITE, WRITE-ONCE memo: the first receiver Type a site resolved for, and the body it resolved to.
@@ -287,7 +288,7 @@ final class VirtualDispatch
     private static int lazyVhTargetReg(ObjectReference recv, int ci)
     {
         byte[] lazy = Magic.bytes("java/lang/invoke/LazyInitializingVarHandle");
-        if (!Utf8.utf8IsAtBase(ClassRegistry.clTab[ci].base, ClassRegistry.clTab[ci].nameOff, lazy))
+        if (!Utf8.utf8IsAtBase(ClassRegistry.clTab[ci].base.toAddress(), ClassRegistry.clTab[ci].nameOff, lazy))
         {
             return -1;
         }
@@ -321,7 +322,7 @@ final class VirtualDispatch
         while (c >= 0 && hops < DynamicLinker.MAXCHAIN)
         {
             Address clsU = ClassRegistry.clTab[c].base.plus(ClassRegistry.clTab[c].nameOff);
-            if (Utf8.utf8IsAtBase(ClassRegistry.clTab[c].base, ClassRegistry.clTab[c].nameOff, vh))
+            if (Utf8.utf8IsAtBase(ClassRegistry.clTab[c].base.toAddress(), ClassRegistry.clTab[c].nameOff, vh))
             {
                 return DynamicLinker.declaresMethod(clsU, nameU, Address.zero(), true);   // the mode IS an access mode
             }
@@ -338,7 +339,7 @@ final class VirtualDispatch
     /** The VarHandle accessor named by site {@code idx} with descriptor {@code d}, up {@code ci}'s chain, or 0. */
     private static long vhChainResolve(int ci, int idx, byte[] d)
     {
-        Address descU = Loader.utf8Blob(d);
+        DataReference descU = Loader.utf8Blob(d);
         long buf = 0L;
         int c = ci;
         int hops = 0;
@@ -347,7 +348,7 @@ final class VirtualDispatch
             if (ClassRegistry.clTab[c] != null)
             {
                 buf = DynamicLinker.resolveLinkTarget(ClassRegistry.clTab[c].base.plus(ClassRegistry.clTab[c].nameOff),
-                        vsName.get(idx), descU);
+                        vsName.get(idx), descU.toAddress());
             }
             c = ClassRegistry.superRegOf(c);
             hops += 1;
@@ -580,17 +581,17 @@ final class VirtualDispatch
             Uart.putc(0x0A);
             return VM.denylistTrapAddr;
         }
-        long tib = recv.toAddress().plus(ObjectModel.TIB_OFFSET).loadLong();
-        if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
+        DataReference tib = recv.toAddress().plus(ObjectModel.TIB_OFFSET).loadDataReference();
+        if (tib.toLong() <= ObjectModel.MAX_RAW_ARRAY_TIB)
         {
             return VM.denylistTrapAddr;                 // a raw array has no Type to dispatch through
         }
-        Address type = Address.fromLong(tib).loadAddress();
+        DataReference type = tib.toAddress().loadDataReference();
         if (idx == vsMemoIdx && type.EQ(vsMemoType) && vsMemoBuf != 0L)
         {
             return vsMemoBuf;                           // monomorphic site: skip the whole lookup
         }
-        int ci = ClassRegistry.classRegByType(type);
+        int ci = ClassRegistry.classRegByType(type.toAddress());
         if (ci < 0 || ci >= ClassRegistry.clCount || ClassRegistry.clTab[ci] == null || vsName == null)
         {
             // A receiver whose Type is not in the class registry -- a writer-baked class the loader never
@@ -618,13 +619,13 @@ final class VirtualDispatch
                 // itable directory naming the interface it satisfies -- and that interface is where the
                 // default body lives. Try it before reporting; this is the whole reason a stream pipeline
                 // could not call Sink.begin on a lambda downstream.
-                long ib = InterfaceInvocation.resolveViaItableDir(type, vsName.get(idx), vsDesc.get(idx));
+                long ib = InterfaceInvocation.resolveViaItableDir(type.toAddress(), vsName.get(idx), vsDesc.get(idx));
                 if (ib != 0L && DynamicLinker.plausibleCode(Address.fromLong(ib)))
                 {
                     vsMemoIdx = idx;
                     vsMemoType = type;
                     vsMemoBuf = ib;
-                    publishSiteMemo(idx, type, ib);
+                    publishSiteMemo(idx, type.toAddress(), ib);
                     return ib;
                 }
                 Uart.write(Magic.bytes("\n  DISPATCH ON UNREGISTERED TYPE (receiver's class not in the registry): "));
@@ -638,9 +639,9 @@ final class VirtualDispatch
                 Uart.write(Magic.bytes("\n    recv="));
                 VM.printHex(recv.toLong());
                 Uart.write(Magic.bytes(" tib="));
-                VM.printHex(tib);
+                VM.printHex(tib.toAddress());
                 Uart.write(Magic.bytes(" type="));
-                VM.printHex(type);
+                VM.printHex(type.toAddress());
                 Uart.write(Magic.bytes("\n    size="));
                 VM.printHex(type.plus(0).loadLong());
                 Uart.write(Magic.bytes(" super="));
@@ -654,9 +655,9 @@ final class VirtualDispatch
                 Uart.write(Magic.bytes(" elem="));
                 VM.printHex(type.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong());
                 Uart.write(Magic.bytes(" objectType="));
-                VM.printHex(TibBuilder.objectTypeAddr());
+                VM.printHex(TibBuilder.objectTypeAddr().toAddress());
                 Uart.write(Magic.bytes("\n    synthesised(lambda/anno TIB)="));
-                VM.printDec(TibBuilder.isSynthesisedTib(Address.fromLong(tib)));
+                VM.printDec(TibBuilder.isSynthesisedTib(tib.toAddress()));
                 Uart.putc(0x0A);
             }
             return VM.denylistTrapAddr;
@@ -694,7 +695,7 @@ final class VirtualDispatch
                 if (Loader.LOAD_LOG)
                 {
                     Uart.write(Magic.bytes("  ifaceresolve "));
-                    Loader.printNameAt(ClassRegistry.clTab[ci].base, ClassRegistry.clTab[ci].nameOff);
+                    Loader.printNameAt(ClassRegistry.clTab[ci].base.toAddress(), ClassRegistry.clTab[ci].nameOff);
                     Uart.putc(0x2E);
                     Loader.printNameAt(vsName.get(idx), 0);
                     Uart.putc(0x0A);
@@ -746,7 +747,7 @@ final class VirtualDispatch
             // Name it. A bare denylistTrap from here reports TRAPWIRE index=-1 (no patch-time site was
             // recorded for a late-resolved call), which says nothing at all about what failed.
             Uart.write(Magic.bytes("  VIRTUALRESOLVE FAILED "));
-            Loader.printNameAt(ClassRegistry.clTab[ci].base, ClassRegistry.clTab[ci].nameOff);
+            Loader.printNameAt(ClassRegistry.clTab[ci].base.toAddress(), ClassRegistry.clTab[ci].nameOff);
             Uart.putc(0x2E);
             Loader.printNameAt(vsName.get(idx), 0);
             Loader.printNameAt(vsDesc.get(idx), 0);
@@ -762,7 +763,7 @@ final class VirtualDispatch
         vsMemoIdx = idx;
         vsMemoType = type;
         vsMemoBuf = buf;
-        publishSiteMemo(idx, type, buf);
+        publishSiteMemo(idx, type.toAddress(), buf);
         return buf;
     }
 
@@ -859,8 +860,8 @@ final class VirtualDispatch
         {
             return n;
         }
-        Address base = ClassRegistry.clTab[ci].base;
-        Loader.parseConstPool(base, Loader.blobLenOf(base));
+        DataReference base = ClassRegistry.clTab[ci].base;
+        Loader.parseConstPool(base, Loader.blobLenOf(base.toAddress()));
         int count = u2(base.plus(Loader.gView.afterCp + 6));            // interfaces_count (ClassReader.afterInterfaces layout)
         int k = 0;
         while (k < count && n < InterfaceInvocation.MAXIFACEFALLBACK)

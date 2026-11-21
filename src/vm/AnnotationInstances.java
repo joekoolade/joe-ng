@@ -13,6 +13,7 @@ package vm;
 
 import asm.A64Enc;
 import magic.Address;
+import magic.DataReference;
 import magic.AddressArray;
 import magic.Magic;
 import magic.ObjectReference;
@@ -91,18 +92,18 @@ final class AnnotationInstances
                 return;
             }
         }
-        Address cls = Loader.utf8Blob(Magic.bytes("jdk/internal/misc/MetalAnnotations"));
+        DataReference cls = Loader.utf8Blob(Magic.bytes("jdk/internal/misc/MetalAnnotations"));
         if (annoEqBuf == 0L)
         {
-            annoEqBuf = Loader.helperBuf(cls, Magic.bytes("annoEquals"), Magic.bytes("(Ljava/lang/Object;Ljava/lang/Object;)Z"));
+            annoEqBuf = Loader.helperBuf(cls.toAddress(), Magic.bytes("annoEquals"), Magic.bytes("(Ljava/lang/Object;Ljava/lang/Object;)Z"));
         }
         if (annoHashBuf == 0L)
         {
-            annoHashBuf = Loader.helperBuf(cls, Magic.bytes("annoHashCode"), Magic.bytes("(Ljava/lang/Object;)I"));
+            annoHashBuf = Loader.helperBuf(cls.toAddress(), Magic.bytes("annoHashCode"), Magic.bytes("(Ljava/lang/Object;)I"));
         }
         if (annoStrBuf == 0L)
         {
-            annoStrBuf = Loader.helperBuf(cls, Magic.bytes("annoToString"), Magic.bytes("(Ljava/lang/Object;)Ljava/lang/String;"));
+            annoStrBuf = Loader.helperBuf(cls.toAddress(), Magic.bytes("annoToString"), Magic.bytes("(Ljava/lang/Object;)Ljava/lang/String;"));
         }
     }
 
@@ -158,7 +159,7 @@ final class AnnotationInstances
         {
             int r = ClassRegistry.classRegByType(e.loadAddress());
             Address it = e.plus(8L).loadAddress();
-            if (r >= 0 && !it.isZero() && Utf8.utf8IsAtBase(ClassRegistry.clTab[r].base, ClassRegistry.clTab[r].nameOff, Magic.bytes("java/lang/annotation/Annotation")))
+            if (r >= 0 && !it.isZero() && Utf8.utf8IsAtBase(ClassRegistry.clTab[r].base.toAddress(), ClassRegistry.clTab[r].nameOff, Magic.bytes("java/lang/annotation/Annotation")))
             {
                 int z = 0;
                 while (z < ClassRegistry.clTab[r].ifmCount)
@@ -195,12 +196,12 @@ final class AnnotationInstances
     }
 
     /** The shared TIB for annotation interface {@code ifaceReg}, built once and GC-rooted like a lambda's. */
-    private static Address annoTibFor(int ifaceReg)
+    private static DataReference annoTibFor(int ifaceReg)
     {
-        Address ifaceType = ClassRegistry.clTab[ifaceReg].type;
+        DataReference ifaceType = ClassRegistry.clTab[ifaceReg].type;
         if (ifaceType.isZero())
         {
-            return Address.zero();
+            return DataReference.zero();
         }
         if (annoTibKey == null)
         {
@@ -211,19 +212,19 @@ final class AnnotationInstances
         int i = 0;
         while (i < annoTibN)
         {
-            if (annoTibKey.get(i).EQ(ifaceType))
+            if (annoTibKey.get(i).EQ(ifaceType.toAddress()))
             {
-                return annoTibVal.get(i);
+                return DataReference.fromAddress(annoTibVal.get(i));
             }
             i += 1;
         }
         if (annoTibN >= MAXANNOTIB)
         {
-            return Address.zero();
+            return DataReference.zero();
         }
         int n = ClassRegistry.clTab[ifaceReg].ifmCount;
-        Address it = Heap.allocData(n > 0 ? n * 8 : 8);
-        Address ownBase = ClassRegistry.clTab[ifaceReg].base;
+        DataReference it = Heap.allocData(n > 0 ? n * 8 : 8);
+        DataReference ownBase = ClassRegistry.clTab[ifaceReg].base;
         int s = 0;
         while (s < n)
         {
@@ -236,7 +237,7 @@ final class AnnotationInstances
             // annotationType() gets the mirror thunk here too; an inherited equals/hashCode/toString stays 0,
             // which the dispatch guard turns into a resolution, not a branch.
             Address thunk = Address.zero();
-            boolean own = InterfaceInvocation.ifBase.get(ClassRegistry.clTab[ifaceReg].ifmStart + s).EQ(ownBase);
+            boolean own = InterfaceInvocation.ifBase.get(ClassRegistry.clTab[ifaceReg].ifmStart + s).EQ(ownBase.toAddress());
             boolean isAnnoType = Utf8.utf8IsAtBase(InterfaceInvocation.ifBase.get(ClassRegistry.clTab[ifaceReg].ifmStart + s),
                     InterfaceInvocation.ifNameOff[ClassRegistry.clTab[ifaceReg].ifmStart + s], Magic.bytes("annotationType"));
             if (own || isAnnoType)
@@ -260,7 +261,7 @@ final class AnnotationInstances
         // Annotation.annotationType()/equals/hashCode, and a zero slot meets the dispatch guard (a named trap)
         // rather than branching into whatever a short table would have run off into.
         int closN = InterfaceInvocation.ifaceClosureOf(ifaceReg);
-        Address dir = Heap.allocData((closN + 2) * 16);
+        DataReference dir = Heap.allocData((closN + 2) * 16);
         dir.plus(0L).store(ifaceType);
         dir.plus(8L).store(it);
         int e = 1;
@@ -269,7 +270,7 @@ final class AnnotationInstances
         {
             int cr = InterfaceInvocation.ifClosureBuf[ci];
             int cn = ClassRegistry.clTab[cr].ifmCount;
-            Address cit = Heap.allocData(cn > 0 ? cn * 8 : 8);
+            DataReference cit = Heap.allocData(cn > 0 ? cn * 8 : 8);
             int z = 0;
             while (z < cn)
             {
@@ -301,7 +302,7 @@ final class AnnotationInstances
         }
         dir.plus(e * 16L).plus(0L).store(0L);          // sentinel: interfaceType 0 ends the directory
         dir.plus(e * 16L).plus(8L).store(0L);
-        Address type = Heap.allocData(ObjectModel.TYPE_SIZE);
+        DataReference type = Heap.allocData(ObjectModel.TYPE_SIZE);
         type.plus(0L).store((long) (16 + n * 8));
         type.plus(ObjectModel.TYPE_SUPER_OFFSET).store(TibBuilder.objectTypeAddr());   // NOT 0 -- see finishLambdaClass
         type.plus(16L).store(dir);
@@ -310,16 +311,16 @@ final class AnnotationInstances
         // nowhere to resolve. It also has to be the same SHAPE as a lambda TIB, because both live in
         // lambdaTibRoots and refillSynthTibVtables walks that one array.
         int onv2 = TibBuilder.objectVtableCount();
-        Address tib = Heap.allocData(8 + onv2 * 8);
+        DataReference tib = Heap.allocData(8 + onv2 * 8);
         tib.plus(0L).store(type);
-        TibBuilder.fillObjectVtable(tib);
-        patchAnnoContract(tib, onv2, dir);
-        annoTibKey.set(annoTibN, ifaceType);
-        annoTibVal.set(annoTibN, tib);
+        TibBuilder.fillObjectVtable(tib.toAddress());
+        patchAnnoContract(tib.toAddress(), onv2, dir.toAddress());
+        annoTibKey.set(annoTibN, ifaceType.toAddress());
+        annoTibVal.set(annoTibN, tib.toAddress());
         annoTibN += 1;
         if (TibBuilder.lambdaTibRoots != null && TibBuilder.lambdaTibRootN < TibBuilder.MAXLAMBDATIB)
         {
-            TibBuilder.lambdaTibRoots.set(TibBuilder.lambdaTibRootN, tib);    // same GC root as a lambda TIB, for the same reason:
+            TibBuilder.lambdaTibRoots.set(TibBuilder.lambdaTibRootN, tib.toAddress());    // same GC root as a lambda TIB, for the same reason:
             TibBuilder.lambdaTibVtCap[TibBuilder.lambdaTibRootN] = onv2;      //   nothing scanned would otherwise reference it
             TibBuilder.lambdaHostBase.set(TibBuilder.lambdaTibRootN, Address.zero());        // an annotation instance has no host class
             TibBuilder.lambdaHostNameOff[TibBuilder.lambdaTibRootN] = 0;
@@ -346,7 +347,7 @@ final class AnnotationInstances
      */
     static long buildAnnoObject(Address base, Address pairsPos, int ifaceReg)
     {
-        Address tib = annoTibFor(ifaceReg);
+        DataReference tib = annoTibFor(ifaceReg);
         if (tib.isZero())
         {
             return 0L;
@@ -357,9 +358,9 @@ final class AnnotationInstances
         // ONE EXTRA TRAILING WORD holds this annotation's own Class mirror, which is what
         // Annotation.annotationType() answers. Keeping it IN THE INSTANCE is what lets that method reuse the
         // same two-instruction thunk shape as every element accessor -- see annoTibFor.
-        Address obj = Heap.alloc(16 + (n + 1) * 8);
-        obj.plus(ObjectModel.TIB_OFFSET).store(tib);
-        obj.plus(16L).plus(n * 8L).store(ClassMirrors.classMirror(ClassRegistry.clTab[ifaceReg].type));
+        ObjectReference obj = Heap.alloc(16 + (n + 1) * 8).toObjectReference();
+        obj.toAddress().plus(ObjectModel.TIB_OFFSET).store(tib);
+        obj.toAddress().plus(16L).plus(n * 8L).store(ClassMirrors.classMirror(ClassRegistry.clTab[ifaceReg].type.toAddress()));
         int start = ClassRegistry.clTab[ifaceReg].ifmStart;
         int pendMark = annoPendN;                       // a NESTED build drains only what it adds past here
         int pairs = u2(pairsPos);
@@ -378,7 +379,7 @@ final class AnnotationInstances
                     annoPendSlot = s;                   // a 'c'/'e' value notes ITS slot, not a global one
                     annoArrayTib = annoArrayTibFor(InterfaceInvocation.ifBase.get(start + s), InterfaceInvocation.ifDescOff[start + s]);
                     annoArrayPrim = annoArrayPrimFor(InterfaceInvocation.ifBase.get(start + s), InterfaceInvocation.ifDescOff[start + s]);
-                    obj.plus(16L).plus(s * 8L).store(annoElementValue(base, p.plus(2L)));
+                    obj.toAddress().plus(16L).plus(s * 8L).store(annoElementValue(base, p.plus(2L)));
                     annoPendSlot = -1;
                     annoArrayTib = Address.zero();
                     annoArrayPrim = 0;
@@ -398,14 +399,14 @@ final class AnnotationInstances
         // Not optional. An annotation use writes only the elements it overrides -- picocli's
         // `@Command(name = "junit")` leaves a dozen defaulted -- so without this those read null and the
         // library NPEs on its own annotation. That is exactly how this surfaced.
-        applyAnnoDefaults(obj.toObjectReference(), ifaceReg, filled, n);
+        applyAnnoDefaults(obj, ifaceReg, filled, n);
         // PHASE 3 -- the elements that need a CLASS RESOLVED ('c' and 'e'). Deferred to here for the reason
         // phases 1 and 2 are separated at all: resolving demand-loads, a load re-parses a blob, and that
         // clobbers the gView cursor a walk is standing on. Nothing is walking now.
         //
         // The pending entries hold ABSOLUTE Utf8 addresses, which survive a re-parse because blobs do not move
         // -- only the parse STATE does. That is the same property applyAnnoDefaults relies on.
-        drainAnnoPending(obj.toObjectReference(), pendMark);
+        drainAnnoPending(obj, pendMark);
         return obj.toLong();
     }
 
@@ -419,7 +420,7 @@ final class AnnotationInstances
     private static void applyAnnoDefaults(ObjectReference obj, int ifaceReg, boolean[] filled, int n)
     {
         int start = ClassRegistry.clTab[ifaceReg].ifmStart;
-        Address ibase = ClassRegistry.clTab[ifaceReg].base;
+        DataReference ibase = ClassRegistry.clTab[ifaceReg].base;
         // Snapshot the element NAMES as absolute Utf8 addresses BEFORE re-parsing: ifNameOff[] is an offset
         // into ifBase[], and the parse below is what makes those offsets resolvable against a different blob.
         AddressArray want = AddressArray.create(n);
@@ -435,7 +436,7 @@ final class AnnotationInstances
             defArrayPrim[s] = filled[s] ? 0 : annoArrayPrimFor(InterfaceInvocation.ifBase.get(start + s), InterfaceInvocation.ifDescOff[start + s]);
             s += 1;
         }
-        Loader.parseForMethods(ibase, Loader.blobLenOf(ibase));
+        Loader.parseForMethods(ibase.toAddress(), Loader.blobLenOf(ibase.toAddress()));
         Address p = Loader.gView.methodsStart;
         int mcount = u2(p);
         p = p.plus(2);
@@ -448,7 +449,7 @@ final class AnnotationInstances
             int j = 0;
             while (j < n)
             {
-                if (!want.get(j).isZero() && Loader.utf8EqAt(ibase, nameOff, want.get(j), 0))
+                if (!want.get(j).isZero() && Loader.utf8EqAt(ibase.toAddress(), nameOff, want.get(j), 0))
                 {
                     slot = j;
                     break;
@@ -465,12 +466,12 @@ final class AnnotationInstances
                     q = q.plus(2);
                     int alen = u4(q);
                     q = q.plus(4);
-                    if (Utf8.utf8IsAtBase(ibase, Loader.gView.cp[anIdx], Magic.bytes("AnnotationDefault")))
+                    if (Utf8.utf8IsAtBase(ibase.toAddress(), Loader.gView.cp[anIdx], Magic.bytes("AnnotationDefault")))
                     {
                         annoPendSlot = slot;
                         annoArrayTib = defArrayTib.get(slot);   // computed BEFORE this parse: see applyAnnoDefaults
                         annoArrayPrim = defArrayPrim[slot];
-                        obj.toAddress().plus(16L).plus(slot * 8L).store(annoElementValue(ibase, q));
+                        obj.toAddress().plus(16L).plus(slot * 8L).store(annoElementValue(ibase.toAddress(), q));
                         annoPendSlot = -1;
                         annoArrayTib = Address.zero();
                         annoArrayPrim = 0;
@@ -517,7 +518,7 @@ final class AnnotationInstances
         if (tag == 0x5B)                                // '[' -- array of element_values
         {
             int count = u2(p.plus(1));
-            Address arr = Heap.allocArray(count, 8);
+            ObjectReference arr = Heap.allocArray(count, 8).toObjectReference();
             // TYPE it as Object[]: a RAW 8-byte-element array is not traced as references, so the Strings this
             // array holds would be reachable from nothing the collector follows and swept out from under it.
             // TYPE IT BY THE ELEMENT METHOD'S OWN DESCRIPTOR, not as Object[]. Object[] traces correctly but is
@@ -525,10 +526,10 @@ final class AnnotationInstances
             // followed by `checkcast [Ljava/lang/String;`, and an Object[] fails that cast. Falling back to
             // Object[] only when the element type is unresolvable keeps the GC tracing either way -- what must
             // never happen is a RAW array, whose elements are not traced as references at all.
-            Address at = !annoArrayTib.isZero() ? annoArrayTib : ArrayTypes.refArrayTib(TibBuilder.objectTypeAddr());
+            Address at = !annoArrayTib.isZero() ? annoArrayTib : ArrayTypes.refArrayTib(TibBuilder.objectTypeAddr().toAddress());
             if (!at.isZero())
             {
-                arr.plus(ObjectModel.TIB_OFFSET).store(at);
+                arr.toAddress().plus(ObjectModel.TIB_OFFSET).store(at);
             }
             Address q = p.plus(3L);
             int i = 0;
@@ -540,7 +541,7 @@ final class AnnotationInstances
                 // note (what this did before) left a Class[] element reading null for ever -- picocli's
                 // @Option(converter = ...) is exactly that shape.
                 annoPendElem = i;
-                arr.plus(24L).plus(i * 8L).store(annoElementValue(base, q));
+                arr.toAddress().plus(24L).plus(i * 8L).store(annoElementValue(base, q));
                 q = Annotations.skipElementValue(q);
                 i += 1;
             }
@@ -571,14 +572,14 @@ final class AnnotationInstances
         int count = u2(p.plus(1));
         int atype = Primitives.atypeForDescChar(annoArrayPrim);
         int esz = RuntimeEntrypoints.arrayElemSizeOfAtype(atype);
-        Address arr = Heap.allocArray(count, esz);
-        arr.plus(ObjectModel.TIB_OFFSET).store(ArrayTypes.primArrayTib(atype));
+        ObjectReference arr = Heap.allocArray(count, esz).toObjectReference();
+        arr.toAddress().plus(ObjectModel.TIB_OFFSET).store(ArrayTypes.primArrayTib(atype));
         Address q = p.plus(3L);
         int i = 0;
         while (i < count)
         {
             long v = annoElementValue(base, q);         // B C I S Z F: the value or raw bits; J D: 64 bits
-            Address at = arr.plus(ObjectModel.ARRAY_BASE_OFFSET + (long) i * esz);
+            Address at = arr.toAddress().plus(ObjectModel.ARRAY_BASE_OFFSET + (long) i * esz);
             if (esz == 1)
             {
                 at.store((byte) v);
@@ -679,8 +680,8 @@ final class AnnotationInstances
         {
             return Address.zero();
         }
-        Address et = ArrayTypes.elementTypeOfArrayDescN(base, ret, len - (ret - descOff - 2));
-        return et.isZero() ? Address.zero() : ArrayTypes.refArrayTib(et);
+        DataReference et = ArrayTypes.elementTypeOfArrayDescN(base, ret, len - (ret - descOff - 2));
+        return et.isZero() ? Address.zero() : ArrayTypes.refArrayTib(et.toAddress());
     }
 
     private static void noteAnnoPending(int kind, Address a, Address b)
@@ -812,7 +813,7 @@ final class AnnotationInstances
         {
             return 0L;
         }
-        long m = ClassMirrors.classMirror(ClassRegistry.clTab[ci].type);
+        long m = ClassMirrors.classMirror(ClassRegistry.clTab[ci].type.toAddress());
         return dims == 0 ? m : ArrayTypes.arrayOf(m, dims);
     }
 
@@ -858,26 +859,26 @@ final class AnnotationInstances
     private static long internUtf8Obj(Address base, int off)
     {
         int len = u2(base.plus(off));
-        Address bytes = Heap.allocArray(len, 1);
+        ObjectReference bytes = Heap.allocArray(len, 1).toObjectReference();
         Address bt = ArrayTypes.byteArrayTib();
         if (!bt.isZero())
         {
-            bytes.plus(ObjectModel.TIB_OFFSET).store(bt);
+            bytes.toAddress().plus(ObjectModel.TIB_OFFSET).store(bt);
         }
         int i = 0;
         while (i < len)
         {
-            bytes.plus(24).plus(i).store((byte) u1(base.plus(off + 2 + i)));
+            bytes.toAddress().plus(24).plus(i).store((byte) u1(base.plus(off + 2 + i)));
             i += 1;
         }
-        Address tib = Loader.stringTib();
+        DataReference tib = Loader.stringTib();
         if (tib.isZero())
         {
             return bytes.toLong();
         }
-        Address obj = Heap.alloc(Loader.stringSize());
-        obj.plus(0L).store(tib);
-        obj.plus(16L).store(bytes);
+        ObjectReference obj = Heap.alloc(Loader.stringSize()).toObjectReference();
+        obj.toAddress().plus(0L).store(tib);
+        obj.toAddress().plus(16L).store(bytes);
         return obj.toLong();
     }
 }

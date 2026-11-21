@@ -13,6 +13,7 @@ package vm;
 
 import board.Uart;
 import magic.Address;
+import magic.DataReference;
 import magic.Magic;
 import objectmodel.ObjectModel;
 
@@ -34,7 +35,7 @@ final class DynamicTypeCheck
     private static int unresTypeSeenN;
 
     /** Type node of the class named by {@code Class} entry {@code classIdx}, or 0 if unloaded. */
-    static Address typeOfClass(int classIdx)
+    static DataReference typeOfClass(int classIdx)
     {
         // Self-reference (a class doing `x instanceof Self` / `(Self) x`): the current class isn't in the
         // registry until AFTER its own compile, but its Type node (gBuild.type) is already built by buildTib —
@@ -42,15 +43,15 @@ final class DynamicTypeCheck
         int nameOff = Loader.gView.cp[u2(Loader.gView.base.plus(Loader.gView.cp[classIdx]))];
         if (u1(Loader.gView.base.plus(nameOff + 2)) == 0x5B)            // '[' : an array class ("[B", "[Ljava/...;", "[[I")
         {
-            Address tib = ArrayTypes.arrayTibOfDesc(Loader.gView.base, nameOff);
-            return tib.isZero() ? Address.zero() : tib.loadAddress();  // the array Type (checkcast/instanceof target)
+            Address tib = ArrayTypes.arrayTibOfDesc(Loader.gView.base.toAddress(), nameOff);
+            return tib.isZero() ? DataReference.zero() : tib.loadDataReference();  // the array Type (checkcast/instanceof target)
         }
-        if (Loader.utf8EqAt(Loader.gView.base, nameOff, Loader.gView.base, Loader.gView.thisNameOff))
+        if (Loader.utf8EqAt(Loader.gView.base.toAddress(), nameOff, Loader.gView.base.toAddress(), Loader.gView.thisNameOff))
         {
             return Loader.gBuild.type;
         }
         int r = ClassRegistry.classRegOf(classIdx);
-        return r >= 0 ? ClassRegistry.clTab[r].type : Address.zero();
+        return r >= 0 ? ClassRegistry.clTab[r].type : DataReference.zero();
     }
 
     /** O(1) type checks: give {@code type} a depth + superclass display (depth+1 Type addrs,
@@ -70,7 +71,7 @@ final class DynamicTypeCheck
             }
             d = superType.plus(ObjectModel.TYPE_DEPTH_OFFSET).loadLong() + 1L;
         }
-        Address disp = Heap.allocData(((int) d + 1) * 8);
+        DataReference disp = Heap.allocData(((int) d + 1) * 8);
         long i = 0L;
         while (i < d)
         {
@@ -91,7 +92,7 @@ final class DynamicTypeCheck
     {
         long b0 = 1L;                                    // bit 0 = computed marker
         long b1 = 0L;
-        Address superType = type.plus(ObjectModel.TYPE_SUPER_OFFSET).loadAddress();
+        DataReference superType = type.plus(ObjectModel.TYPE_SUPER_OFFSET).loadDataReference();
         if (!superType.isZero())
         {
             long sb0 = superType.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).loadLong();
@@ -159,15 +160,15 @@ final class DynamicTypeCheck
                 d += 1;
             }
             if (d < len && u1(Loader.gView.base.plus(nameOff0 + 2 + d)) == 0x4C
-                    && ArrayTypes.elementTypeOfArrayDescN(Loader.gView.base, nameOff0 + 2 + d - 1, len - d + 1).isZero())
+                    && ArrayTypes.elementTypeOfArrayDescN(Loader.gView.base.toAddress(), nameOff0 + 2 + d - 1, len - d + 1).isZero())
             {
                 int elOff = nameOff0 + 2 + d + 1;       // past the '['s and the 'L'
                 int elLen = len - d - 2;                // minus the trailing ';'
-                if (Loader.lzCompiling && !Loader.lzRetried && Loader.notePullNeededElement(Loader.gView.base, elOff, elLen))
+                if (Loader.lzCompiling && !Loader.lzRetried && Loader.notePullNeededElement(Loader.gView.base.toAddress(), elOff, elLen))
                 {
                     return 0L;                          // discarded compile: retried with the element loaded
                 }
-                if (!Loader.isDenylistedSlice(Loader.gView.base, elOff, elLen))
+                if (!Loader.isDenylistedSlice(Loader.gView.base.toAddress(), elOff, elLen))
                 {
                     reportUnresolvedTypeCheck(Loader.gView.base.plus(nameOff0));
                 }

@@ -12,6 +12,7 @@
 package net;
 
 import magic.Address;
+import magic.DataReference;
 import magic.AddressArray;
 import magic.Magic;
 import vm.Heap;
@@ -117,7 +118,7 @@ public final class Tcp
     private static long[] closeAt = new long[MAXCONN]; // CNTPCT when an orphan's socket was closed
 
     private static int lock = -1;                     // one mutex over the whole table (-1: before init, no-op)
-    private static Address syncRx;                    // receive buffer for the pre-RX-task path
+    private static DataReference syncRx;                    // receive buffer for the pre-RX-task path
 
     /** {@code sun.nio.ch.IOStatus.UNAVAILABLE}: a non-blocking read found nothing to return yet. */
     public static final int UNAVAILABLE = -2;
@@ -194,9 +195,9 @@ public final class Tcp
                 orphan[i] = 0;
                 if (ring.get(i).isZero())
                 {
-                    ring.set(i, Heap.allocData(RCVBUF));
-                    rip.set(i, Heap.allocData(4));
-                    rmac.set(i, Heap.allocData(6));
+                    ring.set(i, Heap.allocData(RCVBUF).toAddress());
+                    rip.set(i, Heap.allocData(4).toAddress());
+                    rmac.set(i, Heap.allocData(6).toAddress());
                 }
                 st[i] = RESERVED;
                 lport[i] = 0;
@@ -415,7 +416,7 @@ public final class Tcp
         }
         int isn = (int) Ip.nextRandom();                // a fresh initial sequence number
         lock();
-        Address ripA = rip.get(h);
+        DataReference ripA = DataReference.fromAddress(rip.get(h));
         ripA.plus(0).store((byte) ((ipBe >> 24) & 0xFF));
         ripA.plus(1).store((byte) ((ipBe >> 16) & 0xFF));
         ripA.plus(2).store((byte) ((ipBe >> 8) & 0xFF));
@@ -939,7 +940,7 @@ public final class Tcp
         }
         Ip.copy4(ip.plus(12), rip.get(h));
         Address eth = ip.minus(14);
-        Address rmacA = rmac.get(h);
+        DataReference rmacA = DataReference.fromAddress(rmac.get(h));
         int i = 0;
         while (i < 6)
         {
@@ -1025,7 +1026,7 @@ public final class Tcp
             ack = Ip.readBe32(tcp.plus(4)) + len;
             rflags = 0x14;
         }
-        sendRaw(ip.minus(14).plus(6), ip.plus(12), dport, sport, seq, ack, rflags, 0, Address.zero(), 0);
+        sendRaw(DataReference.fromAddress(ip.minus(14).plus(6)), DataReference.fromAddress(ip.plus(12)), dport, sport, seq, ack, rflags, 0, Address.zero(), 0);
     }
 
     /**
@@ -1276,7 +1277,7 @@ public final class Tcp
     /** Copy {@code n} bytes from {@code src} into connection {@code h}'s ring at sequence {@code seq}. */
     private static void copyIn(int h, int seq, Address src, int n)
     {
-        Address rA = ring.get(h);
+        DataReference rA = DataReference.fromAddress(ring.get(h));
         int idx = seq - (pisn[h] + 1);
         int i = 0;
         while (i < n)
@@ -1289,7 +1290,7 @@ public final class Tcp
     /** Copy {@code n} buffered bytes to {@code dst}, advance the read point, and reopen a closed-down window. */
     private static int copyOut(int h, Address dst, int n)
     {
-        Address rA = ring.get(h);
+        DataReference rA = DataReference.fromAddress(ring.get(h));
         int idx = rdSeq[h] - (pisn[h] + 1);
         int i = 0;
         while (i < n)
@@ -1418,7 +1419,7 @@ public final class Tcp
         {
             syncRx = Heap.allocData(2048);
         }
-        Address ip = Ip.recvIp(syncRx, 2048, ms);
+        Address ip = Ip.recvIp(syncRx.toAddress(), 2048, ms);
         if (!ip.isZero() && (ip.plus(9).loadUnsignedByte() & 0xFF) == 6)
         {
             input(ip, Ip.lastIpTotal);
@@ -1435,8 +1436,8 @@ public final class Tcp
     {
         int win = window(h);
         lastWin[h] = win;
-        Address dmac = useRmac[h] != 0 ? rmac.get(h) : Ip.gwMac;
-        sendRaw(dmac, rip.get(h), lport[h], rport[h], snd[h], (flags & 0x10) != 0 ? rcv[h] : 0, flags, win, payload,
+        DataReference dmac = useRmac[h] != 0 ? DataReference.fromAddress(rmac.get(h)) : Ip.gwMac;
+        sendRaw(dmac, DataReference.fromAddress(rip.get(h)), lport[h], rport[h], snd[h], (flags & 0x10) != 0 ? rcv[h] : 0, flags, win, payload,
                 payLen);
     }
 
@@ -1445,10 +1446,10 @@ public final class Tcp
      * {@code dmac} (6 bytes) and send it. A SYN carries our MSS option. No connection slot is needed, so a RST can
      * answer a segment that has none.
      */
-    private static void sendRaw(Address dmac, Address dstIp, int lp, int rp, int seq, int ack, int flags, int win,
+    private static void sendRaw(DataReference dmac, DataReference dstIp, int lp, int rp, int seq, int ack, int flags, int win,
             Address payload, int payLen)
     {
-        Address buf = Heap.allocData(2048);
+        DataReference buf = Heap.allocData(2048);
         int i = 0;
         while (i < 6)
         {
@@ -1483,7 +1484,7 @@ public final class Tcp
             i = i + 1;
         }
         int tcpLen = hdr + payLen;
-        Ip.be16(tcp.plus(16), NetStats.l4Cksum(6, tcp, tcpLen, Ip.ourIp, dstIp));
+        Ip.be16(tcp.plus(16), NetStats.l4Cksum(6, tcp, tcpLen, Ip.ourIp.toAddress(), dstIp.toAddress()));
         ip.plus(0).store((byte) 0x45);
         ip.plus(1).store((byte) 0);
         Ip.be16(ip.plus(2), 20 + tcpLen);
@@ -1492,9 +1493,9 @@ public final class Tcp
         ip.plus(8).store((byte) 64);
         ip.plus(9).store((byte) 6);                          // protocol = TCP
         Ip.be16(ip.plus(10), 0);
-        Ip.copy4(Ip.ourIp, ip.plus(12));
-        Ip.copy4(dstIp, ip.plus(16));
+        Ip.copy4(Ip.ourIp.toAddress(), ip.plus(12));
+        Ip.copy4(dstIp.toAddress(), ip.plus(16));
         Ip.be16(ip.plus(10), Ip.cksum(ip, 20));
-        Ip.send(buf, 14 + 20 + tcpLen);
+        Ip.send(buf.toAddress(), 14 + 20 + tcpLen);
     }
 }

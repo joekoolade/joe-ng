@@ -13,6 +13,7 @@ package vm;
 
 import board.Uart;
 import magic.Address;
+import magic.DataReference;
 import magic.ObjectReference;
 import magic.Magic;
 import objectmodel.ObjectModel;
@@ -45,11 +46,11 @@ final class VMConcat
     static Address scStart()
     {
         ObjectReference buf = Heap.allocArray(64, 1).toObjectReference();
-        Address sb = Heap.alloc(40);
-        sb.plus(16).store(buf);
-        sb.plus(24).store(0L);
-        sb.plus(32).store(0L);
-        return sb;
+        ObjectReference sb = Heap.alloc(40).toObjectReference();
+        sb.toAddress().plus(16).store(buf);
+        sb.toAddress().plus(24).store(0L);
+        sb.toAddress().plus(32).store(0L);
+        return sb.toAddress();
     }
 
     /** Grow a builder's backing byte[] to twice {@code cap} bytes, copying {@code count} units; returns the new buf. */
@@ -243,23 +244,23 @@ final class VMConcat
         long count = sb.plus(24).loadLong();
         int coder = sb.plus(32).loadLong() < 256L ? 0 : 1;
         long nbytes = coder == 0 ? count : count * 2L;
-        Address out = Heap.allocArray((int) nbytes, 1);
+        ObjectReference out = Heap.allocArray((int) nbytes, 1).toObjectReference();
         if (!byteArrayTibCache.isZero())
         {
-            out.store(byteArrayTibCache);
+            out.toAddress().store(byteArrayTibCache);
         }
         long i = 0L;
         while (i < nbytes)
         {
             long from = coder == 0 ? i * 2L : i;           // LATIN1 keeps each unit's low byte
-            out.plus(24L + i).store((byte) bufA.plus(24L + from).loadUnsignedByte());
+            out.toAddress().plus(24L + i).store((byte) bufA.plus(24L + from).loadUnsignedByte());
             i = i + 1L;
         }
-        Address str = Heap.alloc(Loader.stringSize());
-        str.store(Loader.stringTib());                    // TIB_OFFSET = 0
-        str.plus(16).store(out);                          // value
-        str.plus(24).store((long) coder);                 // coder: 0 = LATIN1, 1 = UTF16
-        return str.toObjectReference();
+        ObjectReference str = Heap.alloc(Loader.stringSize()).toObjectReference();
+        str.toAddress().store(Loader.stringTib());                    // TIB_OFFSET = 0
+        str.toAddress().plus(16).store(out);                          // value
+        str.toAddress().plus(24).store((long) coder);                 // coder: 0 = LATIN1, 1 = UTF16
+        return str;
     }
 
     /**

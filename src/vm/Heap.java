@@ -12,6 +12,7 @@
 package vm;
 
 import magic.Address;
+import magic.DataReference;
 import magic.Magic;
 import magic.Uninterruptible;
 import objectmodel.ObjectModel;
@@ -287,8 +288,16 @@ public final class Heap implements Uninterruptible
     /** True if enough has been allocated since the last collection to be worth collecting on volume. */
     private static boolean volumeTrigger()
     {
+        if (gcStressBytes != 0L)
+        {
+            return allocSinceGc >= gcStressBytes;
+        }
         return GC_TRIGGER_BYTES != 0L && allocSinceGc >= GC_TRIGGER_BYTES;
     }
+
+    /** {@code gcmaps=2} in {@code /etc/init}: collect after this many bytes instead of {@link #GC_TRIGGER_BYTES},
+     *  so the reference-map shadow check sees many more stacks (frames/GC arc S4). 0 = off. */
+    static long gcStressBytes;
 
     /** Mark the code at {@code addr} as branched-to directly, so the sweep must keep it. */
     public static void pinCodeAt(Address ad)
@@ -1638,9 +1647,9 @@ public final class Heap implements Uninterruptible
      * probes {@code w - 16} so a payload pointer marks its block, and the trace phase scans marked
      * blocks from +16 — exactly the payload — so refs inside these structs keep their targets alive.
      */
-    public static Address allocData(int size)
+    public static DataReference allocData(int size)
     {
-        return alloc(size + ObjectModel.HEADER_SIZE).plus(ObjectModel.HEADER_SIZE);
+        return DataReference.fromAddress(alloc(size + ObjectModel.HEADER_SIZE).plus(ObjectModel.HEADER_SIZE));
     }
 
     /**

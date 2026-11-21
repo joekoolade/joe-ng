@@ -13,6 +13,7 @@ package board.cyw43;
 
 import board.SdioHost;
 import magic.Address;
+import magic.DataReference;
 import magic.Magic;
 import vm.Heap;
 import vm.VM;
@@ -69,7 +70,7 @@ public final class Cyw43
     // Chip backplane: the ChipCommon core sits at the silicon enumeration base; its first word is the ID.
     private static final long SI_ENUM_BASE = 0x18000000L;
 
-    private static Address buf;         // a small heap buffer for CMD53 word transfers
+    private static DataReference buf;         // a small heap buffer for CMD53 word transfers
     private static long curWindow = -1; // last backplane window set (avoid redundant CMD52s)
 
     /** M1a: enumerate + backplane chip-ID probe. Logs each step; returns the chip ID (low 16 bits), or 0. */
@@ -224,14 +225,14 @@ public final class Cyw43
         }
         Address src = e.plus(16L).loadAddress();
         int srcLen = (int) e.plus(24L).loadLong();
-        Address buf = Heap.allocData(8192);
-        int varsz = processNvram(src, srcLen, buf);
+        DataReference buf = Heap.allocData(8192);
+        int varsz = processNvram(src, srcLen, buf.toAddress());
         long addr = RAMBASE + (long) ramsize - (long) varsz;
         log(Magic.bytes("nvram varsz="), varsz);
         board.Uart.write(Magic.bytes("  nvram addr="));
         VM.printHex(addr);
         board.Uart.putc(0x0A);
-        if (!bpWrite(addr, buf, varsz))
+        if (!bpWrite(addr, buf.toAddress(), varsz))
         {
             board.Uart.write(Magic.bytes("  nvram upload FAILED\n"));
             return false;
@@ -378,8 +379,8 @@ public final class Cyw43
     {
         enableWifiIrq();                                 // M6: arm the SDIO card interrupt once; stays armed for
                                                          // every RX below (all frame reads go through waitFrameIrq)
-        Address rb = Heap.allocData(256);
-        int flen = waitFrameIrq(rb, 256, 1000);          // block until the firmware's first SDPCM frame arrives
+        DataReference rb = Heap.allocData(256);
+        int flen = waitFrameIrq(rb.toAddress(), 256, 1000);          // block until the firmware's first SDPCM frame arrives
         if (flen == 0)
         {
             board.Uart.write(Magic.bytes("  F2 first frame TIMEOUT\n"));
@@ -410,7 +411,7 @@ public final class Cyw43
      */
     static void verIoctl()
     {
-        Address tx = Heap.allocData(512);                   // zeroed
+        DataReference tx = Heap.allocData(512);                   // zeroed
         int dataLen = 192;                               // response buffer for the version string
         tx.plus(28).store((byte) 0x76);                     // "ver\0" (BCDC data, right after the 16-byte BCDC hdr)
         tx.plus(29).store((byte) 0x65);
@@ -435,8 +436,8 @@ public final class Cyw43
         txSeq = txSeq + 1;
         reqId = reqId + 1;                               // ver consumed id 1; scan ioctls get 2,3,...
 
-        Address rx = Heap.allocData(1024);
-        int rlen = recvCtrl(rx, 1024, 1);                // ver uses BCDC id 1
+        DataReference rx = Heap.allocData(1024);
+        int rlen = recvCtrl(rx.toAddress(), 1024, 1);                // ver uses BCDC id 1
         if (rlen == 0)
         {
             board.Uart.write(Magic.bytes("  no ioctl response\n"));
@@ -608,10 +609,10 @@ public final class Cyw43
         }
         Address conf = e.plus(16L).loadAddress();
         int flen = (int) e.plus(24L).loadLong();
-        Address ssid = Heap.allocData(48);
-        int sl = confValue(conf, flen, Magic.bytes("ssid"), ssid);
-        Address psk = Heap.allocData(72);
-        int pl = confValue(conf, flen, Magic.bytes("psk"), psk);
+        DataReference ssid = Heap.allocData(48);
+        int sl = confValue(conf, flen, Magic.bytes("ssid"), ssid.toAddress());
+        DataReference psk = Heap.allocData(72);
+        int pl = confValue(conf, flen, Magic.bytes("psk"), psk.toAddress());
         if (sl == 0)
         {
             board.Uart.write(Magic.bytes("  wifi.conf: no ssid\n"));
@@ -622,12 +623,12 @@ public final class Cyw43
         staPsk = psk;
         staPskLen = pl;
         board.Uart.write(Magic.bytes("wifi: join "));
-        dumpRaw(ssid, sl);
+        dumpRaw(ssid.toAddress(), sl);
 
         if (pl > 0)
         {
             board.Uart.write(Magic.bytes("  security: WPA2-PSK\n"));
-            setupWpa2(psk, pl);
+            setupWpa2(psk.toAddress(), pl);
         }
         else
         {
@@ -638,7 +639,7 @@ public final class Cyw43
             setInt(WLC_SET_WPA_AUTH, 0);
         }
 
-        Address ss = Heap.allocData(48);                    // wlc_ssid_t: len (u32) + SSID[32]
+        DataReference ss = Heap.allocData(48);                    // wlc_ssid_t: len (u32) + SSID[32]
         ss.store(sl);
         int i = 0;
         while (i < sl)
@@ -658,7 +659,7 @@ public final class Cyw43
             }
             wpaAttempts = wpaAttempts + 1;
             heldLen = 0;                                 // a kept frame belongs to the attempt that read it
-            ok = associate(ss);
+            ok = associate(ss.toAddress());
         }
         if (!ok)
         {
@@ -741,9 +742,9 @@ public final class Cyw43
         return false;
     }
 
-    static Address staSsid;                              // SSID bytes (PBKDF2 salt)
+    static DataReference staSsid;                              // SSID bytes (PBKDF2 salt)
     static int staSsidLen;
-    static Address staPsk;                               // passphrase bytes
+    static DataReference staPsk;                               // passphrase bytes
     static int staPskLen;
 
     /** true = let the firmware's own supplicant run the 4-way (hand it the PMK via WLC_SET_WSEC_PMK, like
@@ -779,7 +780,7 @@ public final class Cyw43
         // ~once a second and silently drops stale replies, so a slow first response loses the race forever.
         staPmk = new byte[32];
         byte[] pass = heapBytes(psk, pl);
-        byte[] ssid = heapBytes(staSsid, staSsidLen);
+        byte[] ssid = heapBytes(staSsid.toAddress(), staSsidLen);
         // Generic PBKDF2 over crypto/Digest's SHA-1, not a WPA2-private copy: one derivation serves
         // this and javax.crypto.SecretKeyFactory. It also builds ONE Hmac and reuses it, where the
         // one-shot it replaced re-padded the key on every one of these 4096 iterations.
@@ -802,7 +803,7 @@ public final class Cyw43
      */
     private static void setPmk(byte[] pmk)
     {
-        Address b = Heap.allocData(140);                    // allocData zeroes; struct is 132 bytes
+        DataReference b = Heap.allocData(140);                    // allocData zeroes; struct is 132 bytes
         b.store(32);                            // key_len = 32 (LE u16) | flags = 0 (LE u16)
         int i = 0;
         while (i < 32)
@@ -810,10 +811,10 @@ public final class Cyw43
             b.plus(4 + i).store((byte) (pmk[i] & 0xFF));
             i = i + 1;
         }
-        readCtrl(sendBcdc(WLC_SET_WSEC_PMK, b, 132, true));
+        readCtrl(sendBcdc(WLC_SET_WSEC_PMK, b.toAddress(), 132, true));
     }
 
-    private static Address rxbuf;                        // shared RX frame buffer for the handshake
+    private static DataReference rxbuf;                        // shared RX frame buffer for the handshake
 
     /**
      * The WPA2 4-way handshake, run in Java. PMK = PBKDF2(psk, ssid); receive msg1 (ANonce, AP MAC); derive
@@ -849,7 +850,7 @@ public final class Cyw43
         byte[] sNonce = new byte[32];
         genNonce(sNonce);
         byte[] ptk = new byte[48];
-        derivePtk(pmk, aa, heapBytes(ourMac, 6), aNonce, sNonce, ptk);
+        derivePtk(pmk, aa, heapBytes(ourMac.toAddress(), 6), aNonce, sNonce, ptk);
         byte[] kck = slice(ptk, 0, 16);
         byte[] kek = slice(ptk, 16, 16);
         byte[] tk = slice(ptk, 32, 16);
@@ -882,7 +883,7 @@ public final class Cyw43
                 wpaMsg1 = wpaMsg1 + 1;
                 aNonce = heapBytes(f.plus(17), 32);
                 replay = heapBytes(f.plus(9), 8);
-                derivePtk(pmk, aa, heapBytes(ourMac, 6), aNonce, sNonce, ptk);
+                derivePtk(pmk, aa, heapBytes(ourMac.toAddress(), 6), aNonce, sNonce, ptk);
                 kck = slice(ptk, 0, 16);
                 kek = slice(ptk, 16, 16);
                 tk = slice(ptk, 32, 16);
@@ -958,19 +959,19 @@ public final class Cyw43
             if (heldLen > 0)
             {
                 len = heldLen;
-                copyBytes(heldEapol, rxbuf, len);
+                copyBytes(heldEapol.toAddress(), rxbuf.toAddress(), len);
                 heldLen = 0;
             }
             else
             {
-                len = waitFrameIrq(rxbuf, 2048, RX_WAIT_MS);
+                len = waitFrameIrq(rxbuf.toAddress(), 2048, RX_WAIT_MS);
             }
             if (len == 0)
             {
                 VM.delayMs(2);
                 continue;
             }
-            Address eth = eapolEth(rxbuf);
+            Address eth = eapolEth(rxbuf.toAddress());
             if (eth.isZero())
             {
                 continue;
@@ -1002,7 +1003,7 @@ public final class Cyw43
         return eth;
     }
 
-    private static Address heldEapol;                    // an EAPOL frame read before fourWay was listening
+    private static DataReference heldEapol;                    // an EAPOL frame read before fourWay was listening
     private static int heldLen;                          // its length; 0 = none held
 
     /**
@@ -1021,7 +1022,7 @@ public final class Cyw43
         {
             heldEapol = Heap.allocData(2048);
         }
-        copyBytes(frame, heldEapol, len);
+        copyBytes(frame, heldEapol.toAddress(), len);
         heldLen = len;
         wpaHeld = wpaHeld + 1;
     }
@@ -1050,7 +1051,7 @@ public final class Cyw43
         int total = 14 + 4 + eapLen;
         byte[] f = new byte[total];
         put(f, 0, apMac, 6);
-        put(f, 6, heapBytes(ourMac, 6), 6);
+        put(f, 6, heapBytes(ourMac.toAddress(), 6), 6);
         f[12] = (byte) 0x88;
         f[13] = (byte) 0x8e;
         int o = 14;
@@ -1081,14 +1082,14 @@ public final class Cyw43
                 i = i + 1;
             }
         }
-        Address buf = Heap.allocData(total + 16);
+        DataReference buf = Heap.allocData(total + 16);
         int i = 0;
         while (i < total)
         {
             buf.plus(i).store((byte) (f[i] & 0xFF));
             i = i + 1;
         }
-        txDataP(buf, total, 0);                          // EAPOL at BDC priority 0 (AC_BE) -- brcmfmac classifies
+        txDataP(buf.toAddress(), total, 0);                          // EAPOL at BDC priority 0 (AC_BE) -- brcmfmac classifies
                                                          // a bare 0x888E frame via cfg80211_classify8021d, which
                                                          // returns 0; priority 7 (AC_VO) is dropped by the firmware
                                                          // on the unauthorized controlled port (why our EAPOL never
@@ -1128,7 +1129,7 @@ public final class Cyw43
     /** Install a key via WLC_SET_KEY (brcmf_wsec_key_le): CCMP algo, ea = peer for the pairwise key. */
     static void installKey(int index, byte[] key, int keyLen, byte[] ea, boolean pairwise)
     {
-        Address b = Heap.allocData(200);                    // zeroed
+        DataReference b = Heap.allocData(200);                    // zeroed
         b.store(index);
         b.plus(4).store(keyLen);
         int i = 0;
@@ -1145,7 +1146,7 @@ public final class Cyw43
             b.plus(156 + i).store((byte) (ea[i] & 0xFF));     // ea = peer MAC (pairwise) / zero (group)
             i = i + 1;
         }
-        int id = sendBcdc(WLC_SET_KEY, b, 164, true);
+        int id = sendBcdc(WLC_SET_KEY, b.toAddress(), 164, true);
         if (WlanPoll.onRxTask())
         {
             return;                                      // the RX task is the one that would read the ack: a
@@ -1233,12 +1234,12 @@ public final class Cyw43
     /** Wait up to ~15 s for the E_LINK up event, tracing join events; returns true if the link came up. */
     private static boolean waitLink()
     {
-        Address rx = Heap.allocData(2048);
+        DataReference rx = Heap.allocData(2048);
         long endT = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * 15L;
         boolean linked = false;
         while (Magic.readCNTPCT_EL0() < endT && !linked)
         {
-            int len = waitFrameIrq(rx, 2048, RX_WAIT_MS);
+            int len = waitFrameIrq(rx.toAddress(), 2048, RX_WAIT_MS);
             if (len == 0)
             {
                 VM.delayMs(2);
@@ -1248,8 +1249,8 @@ public final class Cyw43
             {
                 continue;                                // ioctl ack
             }
-            holdIfEapol(rx, len);                        // msg1 can come before E_LINK: keep it for fourWay
-            linked = parseJoinEvent(rx, len);
+            holdIfEapol(rx.toAddress(), len);                        // msg1 can come before E_LINK: keep it for fourWay
+            linked = parseJoinEvent(rx.toAddress(), len);
         }
         return linked;
     }
@@ -1263,11 +1264,11 @@ public final class Cyw43
     /** {@link #iovarGet}, waiting up to {@code ms} for the reply. */
     private static int iovarGet(byte[] name, byte[] out, int ms)
     {
-        Address g = Heap.allocData(256);
-        int p = putStr(g, name);
-        int id = sendBcdc(WLC_GET_VAR, g, p + 128, false);
-        Address rx = Heap.allocData(512);
-        int len = recvCtrl(rx, 512, id, ms);
+        DataReference g = Heap.allocData(256);
+        int p = putStr(g.toAddress(), name);
+        int id = sendBcdc(WLC_GET_VAR, g.toAddress(), p + 128, false);
+        DataReference rx = Heap.allocData(512);
+        int len = recvCtrl(rx.toAddress(), 512, id, ms);
         if (len == 0)
         {
             return 0;
@@ -1292,20 +1293,20 @@ public final class Cyw43
      *  "bsscfg:" prefix is only for non-zero interface indices.) */
     private static void iovarInt(byte[] name, int value)
     {
-        Address b = Heap.allocData(64);
-        int p = putBytes(b, 0, name);
+        DataReference b = Heap.allocData(64);
+        int p = putBytes(b.toAddress(), 0, name);
         b.plus(p).store((byte) 0);                          // NUL after the iovar name
         p = p + 1;
         b.plus(p).store(value);
         p = p + 4;
-        readCtrl(sendBcdc(WLC_SET_VAR, b, p, true));
+        readCtrl(sendBcdc(WLC_SET_VAR, b.toAddress(), p, true));
     }
 
     /** Set a byte-array iovar: "&lt;name&gt;\0" + raw {@code data[0..len]}. Used for {@code wpaie} (the RSN IE). */
     private static void iovarData(byte[] name, byte[] data, int len)
     {
-        Address b = Heap.allocData(256);
-        int p = putBytes(b, 0, name);
+        DataReference b = Heap.allocData(256);
+        int p = putBytes(b.toAddress(), 0, name);
         b.plus(p).store((byte) 0);                          // NUL after the iovar name
         p = p + 1;
         int i = 0;
@@ -1315,7 +1316,7 @@ public final class Cyw43
             i = i + 1;
         }
         p = p + len;
-        readCtrl(sendBcdc(WLC_SET_VAR, b, p, true));
+        readCtrl(sendBcdc(WLC_SET_VAR, b.toAddress(), p, true));
     }
 
     /**
@@ -1339,16 +1340,16 @@ public final class Cyw43
     /** Set a bsscfg-scoped integer iovar on interface 0: "bsscfg:&lt;name&gt;\0" + index(u32) + value(u32). */
     private static void bsscfgInt(byte[] name, int value)
     {
-        Address b = Heap.allocData(64);
-        int p = putBytes(b, 0, Magic.bytes("bsscfg:"));
-        p = putBytes(b, p, name);
+        DataReference b = Heap.allocData(64);
+        int p = putBytes(b.toAddress(), 0, Magic.bytes("bsscfg:"));
+        p = putBytes(b.toAddress(), p, name);
         b.plus(p).store((byte) 0);                          // NUL after the iovar name
         p = p + 1;
         b.plus(p).store(0);                         // bsscfg index 0
         p = p + 4;
         b.plus(p).store(value);
         p = p + 4;
-        readCtrl(sendBcdc(WLC_SET_VAR, b, p, true));
+        readCtrl(sendBcdc(WLC_SET_VAR, b.toAddress(), p, true));
     }
 
     /** Find a {@code key=value} line in wifi.conf and copy the value (to CR/LF/end) into {@code dst}; returns
@@ -1391,16 +1392,16 @@ public final class Cyw43
         return 0;
     }
 
-    static Address ourMac;                               // heap addr of our 6-byte station MAC
+    static DataReference ourMac;                               // heap addr of our 6-byte station MAC
 
     /** M3: read our station MAC (iovar cur_etheraddr) into {@link #ourMac} and print it. */
     static void readMac()
     {
-        Address g = Heap.allocData(64);
-        int p = putStr(g, Magic.bytes("cur_etheraddr"));
-        int id = sendBcdc(WLC_GET_VAR, g, p + 6, false);
-        Address rx = Heap.allocData(256);
-        int len = recvCtrl(rx, 256, id);
+        DataReference g = Heap.allocData(64);
+        int p = putStr(g.toAddress(), Magic.bytes("cur_etheraddr"));
+        int id = sendBcdc(WLC_GET_VAR, g.toAddress(), p + 6, false);
+        DataReference rx = Heap.allocData(256);
+        int len = recvCtrl(rx.toAddress(), 256, id);
         ourMac = Heap.allocData(8);
         if (len == 0)
         {
@@ -1439,7 +1440,7 @@ public final class Cyw43
      *  802.1D network-control priority, like dhd/brcmfmac). */
     static void txDataP(Address frame, int flen, int prio)
     {
-        Address tx = Heap.allocData(2048);
+        DataReference tx = Heap.allocData(2048);
         tx.plus(5).store((byte) 2);                         // channel 2 = data
         tx.plus(6).store((byte) 0);
         tx.plus(7).store((byte) 12);                        // dataoffset
@@ -1457,7 +1458,7 @@ public final class Cyw43
         net.NetStats.out(frame, flen);
         store16(tx.plus(0), total);
         store16(tx.plus(2), ~total);
-        sendFrame(tx, total);
+        sendFrame(tx.toAddress(), total);
     }
 
     /**
@@ -1662,7 +1663,7 @@ public final class Cyw43
     }
 
     /** Our station MAC (heap address), read from the chip the first time it is asked for. */
-    public static Address mac()
+    public static DataReference mac()
     {
         if (ourMac.isZero())
         {
@@ -1688,13 +1689,13 @@ public final class Cyw43
     /** M4: resolve example.com via DNS and print the A record. */
     static void dns()
     {
-        Address ip = Heap.allocData(4);
-        if (net.Dns.resolve(Magic.bytes("example.com"), ip))
+        DataReference ip = Heap.allocData(4);
+        if (net.Dns.resolve(Magic.bytes("example.com"), ip.toAddress()))
         {
             board.Uart.write(Magic.bytes("wifi: dns example.com = "));
-            net.Ip.printIp(ip);
+            net.Ip.printIp(ip.toAddress());
             board.Uart.putc(0x0A);
-            httpGet(ip, Magic.bytes("example.com"));      // M4: TCP connect + HTTP GET (acceptance test)
+            httpGet(ip.toAddress(), Magic.bytes("example.com"));      // M4: TCP connect + HTTP GET (acceptance test)
         }
         else
         {
@@ -1719,21 +1720,21 @@ public final class Cyw43
         }
         board.Uart.write(Magic.bytes("wifi: tcp connected\n"));
 
-        Address req = Heap.allocData(256);
-        int reqLen = buildHttpReq(req, host);
-        net.Tcp.write(h, req, 0, reqLen);
+        DataReference req = Heap.allocData(256);
+        int reqLen = buildHttpReq(req.toAddress(), host);
+        net.Tcp.write(h, req.toAddress(), 0, reqLen);
         board.Uart.write(Magic.bytes("wifi: GET sent -----\n"));
 
-        Address rxbuf = Heap.allocData(2048);
+        DataReference rxbuf = Heap.allocData(2048);
         int total = 0;
         while (true)
         {
-            int n = net.Tcp.read(h, rxbuf, 0, 2048);
+            int n = net.Tcp.read(h, rxbuf.toAddress(), 0, 2048);
             if (n <= 0)                                  // n<0 = peer FIN/EOF, n==0 = timeout with no data
             {
                 break;
             }
-            printText(rxbuf, n);
+            printText(rxbuf.toAddress(), n);
             total = total + n;
         }
         net.Tcp.close(h);
@@ -1786,9 +1787,9 @@ public final class Cyw43
     /** Send a 4-byte (u32) SET ioctl and log its ack status. */
     private static void setInt(int cmd, int val)
     {
-        Address b = Heap.allocData(16);
+        DataReference b = Heap.allocData(16);
         b.store(val);
-        readCtrl(sendBcdc(cmd, b, 4, true));
+        readCtrl(sendBcdc(cmd, b.toAddress(), 4, true));
     }
 
     /** Copy the SSID from wifi.conf's first line into {@code dst} (strips an optional "ssid=" prefix and any
@@ -1865,11 +1866,11 @@ public final class Cyw43
      */
     static void enableEvents()
     {
-        Address g = Heap.allocData(256);
-        int p = putStr(g, Magic.bytes("event_msgs"));
-        Address rx = Heap.allocData(256);
-        int id = sendBcdc(WLC_GET_VAR, g, p + 64, false);
-        int len = recvCtrl(rx, 256, id);
+        DataReference g = Heap.allocData(256);
+        int p = putStr(g.toAddress(), Magic.bytes("event_msgs"));
+        DataReference rx = Heap.allocData(256);
+        int id = sendBcdc(WLC_GET_VAR, g.toAddress(), p + 64, false);
+        int len = recvCtrl(rx.toAddress(), 256, id);
         int mlen = 16;                                   // fallback
         if (len > 0)
         {
@@ -1881,8 +1882,8 @@ public final class Cyw43
             }
         }
         log(Magic.bytes("evt masklen="), mlen);
-        Address s = Heap.allocData(256);
-        int q = putStr(s, Magic.bytes("event_msgs"));    // mask is zeroed by allocData
+        DataReference s = Heap.allocData(256);
+        int q = putStr(s.toAddress(), Magic.bytes("event_msgs"));    // mask is zeroed by allocData
         Address m = s.plus(q);
         setEvt(m, 0);                                    // E_SET_SSID
         setEvt(m, 1);                                    // E_JOIN
@@ -1894,7 +1895,7 @@ public final class Cyw43
         setEvt(m, 12);                                   // E_DISASSOC_IND
         setEvt(m, 16);                                   // E_LINK
         setEvt(m, 46);                                   // E_PSK_SUP (for WPA later)
-        readCtrl(sendBcdc(WLC_SET_VAR, s, q + mlen, true));
+        readCtrl(sendBcdc(WLC_SET_VAR, s.toAddress(), q + mlen, true));
     }
 
     /** Set event bit {@code ev} in the event_msgs bitmask (byte ev/8, bit ev%8). */
@@ -1951,8 +1952,8 @@ public final class Cyw43
             {
                 flag = flag | 0x4;                       // DL_END
             }
-            Address buf = Heap.allocData(512);
-            int p = putStr(buf, Magic.bytes("clmload")); // "clmload\0"
+            DataReference buf = Heap.allocData(512);
+            int p = putStr(buf.toAddress(), Magic.bytes("clmload")); // "clmload\0"
             store16(buf.plus(p), flag);
             store16(buf.plus(p + 2), 2);                     // dload_type = DL_TYPE_CLM
             buf.plus(p + 4).store(n);               // chunk len
@@ -1963,7 +1964,7 @@ public final class Cyw43
                 buf.plus(p + 12 + i).store((byte) src.plus(off + i).loadUnsignedByte());
                 i = i + 1;
             }
-            readCtrl(sendBcdc(WLC_SET_VAR, buf, p + 12 + n, true));
+            readCtrl(sendBcdc(WLC_SET_VAR, buf.toAddress(), p + 12 + n, true));
             off = off + n;
         }
         board.Uart.write(Magic.bytes("  clm loaded\n"));
@@ -1973,7 +1974,7 @@ public final class Cyw43
      *  channel; returns the request id. */
     static int sendBcdc(int cmd, Address dataAddr, int dataLen, boolean isSet)
     {
-        Address tx = Heap.allocData(1024);
+        DataReference tx = Heap.allocData(1024);
         int i = 0;
         while (i < dataLen)
         {
@@ -1990,7 +1991,7 @@ public final class Cyw43
         tx.plus(7).store((byte) 12);
         store16(tx.plus(0), frameLen);
         store16(tx.plus(2), ~frameLen);
-        sendFrame(tx, frameLen);
+        sendFrame(tx.toAddress(), frameLen);
         int id = reqId;
         reqId = reqId + 1;
         return id;
@@ -2018,8 +2019,8 @@ public final class Cyw43
     /** Read the ioctl ack matching request {@code id} and log its status word (0 = OK). */
     static void readCtrl(int id)
     {
-        Address rx = Heap.allocData(1024);
-        int len = recvCtrl(rx, 1024, id);
+        DataReference rx = Heap.allocData(1024);
+        int len = recvCtrl(rx.toAddress(), 1024, id);
         if (len == 0)
         {
             board.Uart.write(Magic.bytes("  (no ctrl resp)\n"));
@@ -2137,7 +2138,7 @@ public final class Cyw43
         return len;
     }
 
-    private static Address drainBuf;                     // where the unread rest of an oversize frame goes
+    private static DataReference drainBuf;                     // where the unread rest of an oversize frame goes
 
     // RX glom (superframe). The firmware may bundle several frames into one F2 transfer: first a DESCRIPTOR
     // (channel 3 with flag 0x80; its payload is one little-endian u16 length per subframe), then the
@@ -2147,7 +2148,7 @@ public final class Cyw43
     // timed out with no SYN-ACK) discards every frame inside. Layout per brcmfmac's brcmf_sdio_rxglom.
     private static final int GLOM_MAX = 32768;          // largest superframe kept (bigger ones are drained)
     private static final int GLOM_SUBS = 64;             // most subframes in one descriptor
-    public static Address glomBuf;                       // the last superframe read
+    public static DataReference glomBuf;                       // the last superframe read
     public static int[] glomLens = new int[GLOM_SUBS];   // its descriptor lengths
     public static int glomCount;                         // how many of glomLens are valid
     private static int glomIdx;                          // the next descriptor entry glomNext hands out
@@ -2203,7 +2204,7 @@ public final class Cyw43
             {
                 n = 512;
             }
-            Address to = done < keep ? glomBuf.plus(done) : drainBuf;
+            Address to = done < keep ? glomBuf.plus(done) : drainBuf.toAddress();
             if (!sdio.cmd53Read(F2, 0, true, to.toLong(), 1, n))
             {
                 return 0;
@@ -2214,7 +2215,7 @@ public final class Cyw43
         {
             return 0;
         }
-        Address glom = glomBuf;
+        DataReference glom = glomBuf;
         int hw = glom.loadInt();
         int hlen = hw & 0xFFFF;
         int nlen = (hw >> 16) & 0xFFFF;

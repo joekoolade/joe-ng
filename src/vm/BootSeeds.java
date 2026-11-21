@@ -13,6 +13,7 @@ package vm;
 
 import board.Uart;
 import magic.Address;
+import magic.DataReference;
 import magic.Magic;
 import magic.ObjectReference;
 
@@ -126,8 +127,8 @@ final class BootSeeds
             reportPropsGap(Magic.bytes("java/util/Properties is not registered"));
             return;
         }
-        long obj = Reflection.allocInstance(ClassRegistry.clTab[pi].type);
-        if (obj == 0L)
+        ObjectReference obj = Reflection.allocInstance(ClassRegistry.clTab[pi].type);
+        if (obj.isNull())
         {
             reportPropsGap(Magic.bytes("java/util/Properties could not be allocated"));
             return;
@@ -138,9 +139,9 @@ final class BootSeeds
             reportPropsGap(Magic.bytes("java/util/Properties.<init>() has no compiled body"));
             return;                                     // no runnable <init>: leaving props null is honest
         }
-        Magic.call2(MethodRegistry.rgTab[ctor].buf, obj, 0L);          // receiver in x0; a no-arg ctor reads nothing else
+        Magic.call2(MethodRegistry.rgTab[ctor].buf, obj.toLong(), 0L);   // receiver in x0; a no-arg ctor reads nothing else
         slot.store(obj);
-        seedStandardProps(obj, pi);
+        seedStandardProps(obj.toLong(), pi);
         seedLineSeparator();
     }
 
@@ -232,15 +233,15 @@ final class BootSeeds
             reportPropsGap(Magic.bytes("VM.savedProps: java/util/Properties is not registered"));
             return;
         }
-        long obj = Reflection.allocInstance(ClassRegistry.clTab[pi].type);
+        ObjectReference obj = Reflection.allocInstance(ClassRegistry.clTab[pi].type);
         int ctor = Reflection.constructorResolve(ClassRegistry.clTab[pi].type, 0);
-        if (obj == 0L || ctor < 0 || MethodRegistry.rgTab[ctor].buf == 0L)
+        if (obj.isNull() || ctor < 0 || MethodRegistry.rgTab[ctor].buf == 0L)
         {
             reportPropsGap(Magic.bytes("VM.savedProps: java/util/Properties could not be constructed"));
             return;
         }
-        Magic.call2(MethodRegistry.rgTab[ctor].buf, obj, 0L);
-        seedStandardProps(obj, pi);
+        Magic.call2(MethodRegistry.rgTab[ctor].buf, obj.toLong(), 0L);
+        seedStandardProps(obj.toLong(), pi);
         slot.store(obj);
     }
 
@@ -286,9 +287,9 @@ final class BootSeeds
         // at all. Asking the registry could therefore only ever succeed by accident, in a closure that had
         // already compiled it for some other reason. That is exactly the shape of the bug this replaced: the
         // launcher image worked and a smaller one left EVERY property null.
-        long buf = DynamicLinker.bufBySigU(Loader.utf8Blob(Magic.bytes("java/util/Properties")),
-                Loader.utf8Blob(Magic.bytes("setProperty")),
-                Loader.utf8Blob(Magic.bytes("(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;")));
+        long buf = DynamicLinker.bufBySigU(Loader.utf8Blob(Magic.bytes("java/util/Properties")).toAddress(),
+                Loader.utf8Blob(Magic.bytes("setProperty")).toAddress(),
+                Loader.utf8Blob(Magic.bytes("(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;")).toAddress());
         if (buf == 0L)
         {
             // A BODY COMPILES ON FIRST CALL, and nothing has called setProperty yet: this runs during loader
@@ -301,9 +302,9 @@ final class BootSeeds
             // The registry entry already holds the three Utf8-shaped pointers compileSigOnDemand wants
             // (`base + *Off` is a u2 length followed by bytes), so this is the method's own identity, not a
             // reconstruction of it.
-            buf = LazyCompiler.compileSigOnDemand(Loader.utf8Blob(Magic.bytes("java/util/Properties")),
-                    Loader.utf8Blob(Magic.bytes("setProperty")),
-                    Loader.utf8Blob(Magic.bytes("(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;")));
+            buf = LazyCompiler.compileSigOnDemand(Loader.utf8Blob(Magic.bytes("java/util/Properties")).toAddress(),
+                    Loader.utf8Blob(Magic.bytes("setProperty")).toAddress(),
+                    Loader.utf8Blob(Magic.bytes("(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;")).toAddress());
         }
         if (buf == 0L)
         {
@@ -385,13 +386,13 @@ final class BootSeeds
         {
             return;                                     // not registered yet -- a later batch seeds it
         }
-        Address cls = Loader.utf8Blob(Magic.bytes("jdk/internal/misc/MetalStdStreams"));
-        Address name = Loader.utf8Blob(Magic.bytes("newStream"));
-        Address desc = Loader.utf8Blob(Magic.bytes("()Ljava/io/PrintStream;"));
-        long buf = DynamicLinker.bufBySigU(cls, name, desc);
+        DataReference cls = Loader.utf8Blob(Magic.bytes("jdk/internal/misc/MetalStdStreams"));
+        DataReference name = Loader.utf8Blob(Magic.bytes("newStream"));
+        DataReference desc = Loader.utf8Blob(Magic.bytes("()Ljava/io/PrintStream;"));
+        long buf = DynamicLinker.bufBySigU(cls.toAddress(), name.toAddress(), desc.toAddress());
         if (buf == 0L)
         {
-            buf = LazyCompiler.compileSigOnDemand(cls, name, desc);  // bodies compile on first call; this IS the first
+            buf = LazyCompiler.compileSigOnDemand(cls.toAddress(), name.toAddress(), desc.toAddress());  // bodies compile on first call; this IS the first
         }
         if (buf == 0L)
         {
@@ -518,8 +519,8 @@ final class BootSeeds
             int ci = ClassRegistry.classIndexByName(Magic.bytes("jdk/internal/misc/MetalConsoleIn"));
             if (ci >= 0)                                // field-free: the TIB is the whole object
             {
-                Address cobj = Heap.alloc(16 + ClassRegistry.clTab[ci].fieldCount * 8);
-                cobj.store(ClassRegistry.clTab[ci].tib);
+                ObjectReference cobj = Heap.alloc(16 + ClassRegistry.clTab[ci].fieldCount * 8).toObjectReference();
+                cobj.toAddress().store(ClassRegistry.clTab[ci].tib);
                 Address.fromLong(inSlot).store(cobj);
                 setStdGen(STD_IN);
                 return;
@@ -538,11 +539,11 @@ final class BootSeeds
         {
             return;
         }
-        Address obj = Heap.alloc(16 + ClassRegistry.clTab[bi].fieldCount * 8);
-        obj.store(ClassRegistry.clTab[bi].tib);
-        obj.plus(bufOff).store(Heap.allocArray(0, 1));   // empty byte[]; never read (count == 0)
-        obj.plus(posOff).store(0L);
-        obj.plus(cntOff).store(0L);
+        ObjectReference obj = Heap.alloc(16 + ClassRegistry.clTab[bi].fieldCount * 8).toObjectReference();
+        obj.toAddress().store(ClassRegistry.clTab[bi].tib);
+        obj.toAddress().plus(bufOff).store(Heap.allocArray(0, 1));   // empty byte[]; never read (count == 0)
+        obj.toAddress().plus(posOff).store(0L);
+        obj.toAddress().plus(cntOff).store(0L);
         Address.fromLong(inSlot).store(obj);
         setStdGen(STD_IN);
     }
@@ -561,8 +562,8 @@ final class BootSeeds
         Address slot = Address.fromLong(Statics.staticSlotOf(Magic.bytes("jdk/internal/misc/VM"), Magic.bytes("lock")));
         if (!slot.isZero() && slot.loadLong() == 0L)
         {
-            Address inst = Heap.alloc(16);                          // header only: a monitor needs no fields
-            inst.store(ClassRegistry.clTab[oi].tib);
+            ObjectReference inst = Heap.alloc(16).toObjectReference();                          // header only: a monitor needs no fields
+            inst.toAddress().store(ClassRegistry.clTab[oi].tib);
             slot.store(inst);
             sdVmLock = true;
         }
@@ -582,8 +583,8 @@ final class BootSeeds
         long slot = Statics.staticSlotOf(Magic.bytes("jdk/internal/access/SharedSecrets"), Magic.bytes("javaIOAccess"));
         if (slot != 0L)
         {
-            Address inst = Heap.alloc(16 + ClassRegistry.clTab[mi].fieldCount * 8);   // field-free -> header only
-            inst.store(ClassRegistry.clTab[mi].tib);                 // TIB (itable dir for the console() dispatch)
+            ObjectReference inst = Heap.alloc(16 + ClassRegistry.clTab[mi].fieldCount * 8).toObjectReference();   // field-free -> header only
+            inst.toAddress().store(ClassRegistry.clTab[mi].tib);                 // TIB (itable dir for the console() dispatch)
             Address.fromLong(slot).store(inst);
             sdJio = true;
         }
@@ -603,8 +604,8 @@ final class BootSeeds
         long slot = Statics.staticSlotOf(Magic.bytes("jdk/internal/access/SharedSecrets"), Magic.bytes("javaLangAccess"));
         if (slot != 0L)
         {
-            Address inst = Heap.alloc(16 + ClassRegistry.clTab[mi].fieldCount * 8);   // field-free -> header only
-            inst.store(ClassRegistry.clTab[mi].tib);                 // TIB (itable dir for getEnumConstantsShared dispatch)
+            ObjectReference inst = Heap.alloc(16 + ClassRegistry.clTab[mi].fieldCount * 8).toObjectReference();   // field-free -> header only
+            inst.toAddress().store(ClassRegistry.clTab[mi].tib);                 // TIB (itable dir for getEnumConstantsShared dispatch)
             Address.fromLong(slot).store(inst);
             sdJla = true;
         }

@@ -2648,6 +2648,7 @@ public final class Baseline
         int nargs = paramCount(cpIndex);                         // args occupy the top nargs operand slots
         int argBase = sp - nargs;                                // operand-slot index of the first arg
         emitCall(cb, 0, true, false, SYM_HELPER, Symbols.SC_START);   // scStart -> builder on top
+        int sbFrom = cb.wordCount();
         int sbIdx = sp - 1;                                      // operand-SLOT of the builder (opSlot maps it to a reg;
                                                                  // in a deep method that's a circular-window register)
         int recipeOff = symbols.concatRecipeOff(cpIndex);        // Utf8 body: [u2 len][chars]
@@ -2685,6 +2686,7 @@ public final class Baseline
             }
             i = i + 1;
         }
+        noteRefTransient(sbFrom, cb.wordCount(), sbIdx);         // the builder is a reference at every append's call
         cb.emit(A64Enc.movReg(0, opSlot(sbIdx)));                // x0 = builder
         sp = argBase;                                            // drop the builder + the nargs args (keep the rest)
         spillLive(cb);                                           // the operand stack is x9.. (caller-saved): preserve any
@@ -2896,6 +2898,7 @@ public final class Baseline
             cb.emit(A64Enc.movReg(1, arg1Reg));
         }
         int savedSp = sp;                                       // the throw block is off the fall-through path
+        int noteMark = spillN;
         // The throw block is skipped at runtime (a never-taken branch guards it), so it must NOT perturb the
         // compiler's operand-stack model for the fall-through code that follows. sp is saved below; for deep
         // methods the circular-window residency map (regHolds) is likewise saved -- the block's spill/reload
@@ -2917,6 +2920,7 @@ public final class Baseline
         {
             for (int i = 0; i < OP_MAX; i++) { regHolds[i] = savedHolds[i]; }
         }
+        restoreSpillNote(cb, noteMark);                         // calls after the block pair with the spill before it
     }
 
     /**
@@ -4030,8 +4034,79 @@ public final class Baseline
     private int[] spillW;
     private int[] spillD;
     private int spillN;
+    // Typed transients (frames/GC arc S4): an operand slot ABOVE the bytecode's own stack that the lowering
+    // keeps a reference in across its calls -- the string-concat builder. The dataflow cannot see it, so the
+    // lowering says so: {word from, word to, slot}. RefMaps types that slot a reference at the calls in range.
+    private int[] trW0;
+    private int[] trW1;
+    private int[] trSlot;
+    private int trN;
+
+    /** Record that operand slot {@code slot} holds a reference from word {@code w0} up to (not including)
+     *  {@code w1}. */
+    private void noteRefTransient(int w0, int w1, int slot)
+    {
+        if (!gcMaps)
+        {
+            return;
+        }
+        if (trW0 == null)
+        {
+            trW0 = new int[8];
+            trW1 = new int[8];
+            trSlot = new int[8];
+        }
+        if (trN == trW0.length)
+        {
+            int[] a = new int[trN * 2];
+            int[] b = new int[trN * 2];
+            int[] c = new int[trN * 2];
+            for (int i = 0; i < trN; i++)
+            {
+                a[i] = trW0[i];
+                b[i] = trW1[i];
+                c[i] = trSlot[i];
+            }
+            trW0 = a;
+            trW1 = b;
+            trSlot = c;
+        }
+        trW0[trN] = w0;
+        trW1[trN] = w1;
+        trSlot[trN] = slot;
+        trN += 1;
+    }
+
+    private int curBcWord;         // the word the bytecode being lowered starts at
 
     private void noteSpill(CodeBuffer cb)
+    {
+        noteSpillDepth(cb, sp);
+    }
+
+    /**
+     * After an out-of-line block that the fall-through path jumps over (a {@link #throwImplicit} block), note
+     * again the spill that was current before it: the block's own spills lie between the bytecode's spill and its
+     * next call in word order, and {@code RefMaps} pairs a call with the last spill before it -- measured, the
+     * dispatch guard's AIOOBE block made a virtual call's popped receiver slot read as live (a stale
+     * {@code Type} in a reference slot, the S4 shadow check's one map error). {@code mark} is {@link #spillN}
+     * before the block; a spill from an earlier bytecode does not count, so that case notes depth 0.
+     */
+    private void restoreSpillNote(CodeBuffer cb, int mark)
+    {
+        if (!gcMaps || spillN == mark)
+        {
+            return;
+        }
+        int d = 0;
+        if (mark > 0 && spillW[mark - 1] >= curBcWord)
+        {
+            d = spillD[mark - 1];
+        }
+        noteSpillDepth(cb, d);
+    }
+
+    private void noteSpillDepth(CodeBuffer cb, int depth)
     {
         if (!gcMaps)
         {
@@ -4055,7 +4130,7 @@ public final class Baseline
             spillD = d;
         }
         spillW[spillN] = cb.wordCount();
-        spillD[spillN] = sp;
+        spillD[spillN] = depth;
         spillN += 1;
     }
 
@@ -5420,6 +5495,7 @@ public final class Baseline
         CodeBuffer cb = new CodeBuffer(base);
         this.curCb = cb;
         spillN = 0;
+        trN = 0;
         if (!isEntry)
         {
             emitPrologue(cb, descOff, isStatic);
@@ -5448,6 +5524,7 @@ public final class Baseline
         while (pos < code.length)
         {
             bcToWord[pos] = cb.wordCount();
+            curBcWord = cb.wordCount();
             // Skip UNREACHABLE (dead) bytecode: javac emits cleanup stores after a goto/return/athrow in
             // finally/synchronized patterns that no edge reaches. Compiling it linearly would run the operand
             // model with a stale/empty sp and underflow on those stores. reachDepth (the control-flow pre-pass)
@@ -5548,7 +5625,8 @@ public final class Baseline
                     exStartPc, exEndPc, exHandlerPc, exCount);
             if (rm.solve(descOff, isStatic))
             {
-                gcMapWord = rm.emitMap(cb, codeWords, bcToWord, overflowBase, spillBase, spillW, spillD, spillN);
+                gcMapWord = rm.emitMap(cb, codeWords, bcToWord, overflowBase, spillBase, outArgsBase, outArgsSlots,
+                        spillW, spillD, spillN, trW0, trW1, trSlot, trN);
                 if (gcMapWord != 0)
                 {
                     gcMapCodeWords += codeWords;

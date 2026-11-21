@@ -18,6 +18,8 @@ import board.Uart;
 import classfile.ClassReader;
 import compiler.Baseline;
 import magic.Address;
+import magic.ObjectReference;
+import magic.DataReference;
 import magic.Magic;
 import objectmodel.ObjectModel;
 import static vm.VM.*;   // the retired engine references VM's live state (findClass, printDec, frame/handler
@@ -233,7 +235,8 @@ final class SelfBuild
     /** The self-hosting generation from the scratch sector (0 if uninitialised, -1 if no card). */
     static int readGeneration()   // package-private: called by VM.run() (live generation-counter readback)
     {
-        long buf = Heap.allocData(512).toLong();
+        DataReference bufRef = Heap.allocData(512);
+        long buf = bufRef.toLong();                  // a raw copy; bufRef keeps the block alive
         if (!Block.read(GEN_SECTOR, buf, 1))
         {
             return -1;
@@ -248,7 +251,8 @@ final class SelfBuild
     /** Persist {@code gen} into the scratch sector (magic + count). */
     private static boolean writeGeneration(int gen)
     {
-        long buf = Heap.allocData(512).toLong();                          // Heap.alloc zeroes the rest of the sector
+        DataReference bufRef = Heap.allocData(512);                          // Heap.alloc zeroes the rest of the sector
+        long buf = bufRef.toLong();                  // a raw copy; bufRef keeps the block alive
         Magic.store32(buf, GEN_MAGIC);
         Magic.store32(buf + 4L, gen);
         return Block.write(GEN_SECTOR, buf, 1);
@@ -271,7 +275,8 @@ final class SelfBuild
         }
         long buf = materializeImage();
         long wlen = (len + 511L) / 512L * 512L;              // whole sectors
-        long chk = Heap.allocData((int) wlen).toLong();
+        DataReference chkRef = Heap.allocData((int) wlen);
+        long chk = chkRef.toLong();                  // a raw copy; chkRef keeps the block alive
         if (!Fat32.writeKernel(buf, wlen) || !Fat32.readKernel(chk, wlen))
         {
             return false;
@@ -296,8 +301,10 @@ final class SelfBuild
             return false;
         }
         long nbytes = (Fat32.kernelSize() + 511L) / 512L * 512L;   // whole sectors of the file
-        long w = Heap.allocData((int) nbytes).toLong();
-        long r = Heap.allocData((int) nbytes).toLong();
+        DataReference wRef = Heap.allocData((int) nbytes);
+        long w = wRef.toLong();                  // a raw copy; wRef keeps the block alive
+        DataReference rRef = Heap.allocData((int) nbytes);
+        long r = rRef.toLong();                  // a raw copy; rRef keeps the block alive
         long i = 0L;
         while (i < nbytes)
         {
@@ -323,7 +330,8 @@ final class SelfBuild
     /** Whether the EMMC driver initialises and reads block 0 with a valid boot-sector signature. */
     private static boolean sdReadOk()
     {
-        long sd = Heap.allocData(512).toLong();
+        DataReference sdRef = Heap.allocData(512);
+        long sd = sdRef.toLong();                  // a raw copy; sdRef keeps the block alive
         return Block.init() == 0
             && Block.read(0L, sd, 1)
             && Magic.load8(sd + 510L) == 0x55
@@ -333,8 +341,10 @@ final class SelfBuild
     /** Whether a written scratch block reads back byte-identical (single-sector write round-trip). */
     private static boolean sdWriteOk()
     {
-        long w = Heap.allocData(512).toLong();
-        long r = Heap.allocData(512).toLong();
+        DataReference wRef = Heap.allocData(512);
+        long w = wRef.toLong();                  // a raw copy; wRef keeps the block alive
+        DataReference rRef = Heap.allocData(512);
+        long r = rRef.toLong();                  // a raw copy; rRef keeps the block alive
         int i = 0;
         while (i < 128)                                    // fill with a recognizable pattern
         {
@@ -393,7 +403,8 @@ final class SelfBuild
     private static long materializeImage()
     {
         int endW = imageEndWord();
-        long buf = Heap.allocData((endW * 4 + 511) & ~511).toLong();      // padded to a whole sector (zeroed tail)
+        DataReference bufRef = Heap.allocData((endW * 4 + 511) & ~511);      // padded to a whole sector (zeroed tail)
+        long buf = bufRef.toLong();                  // a raw copy; bufRef keeps the block alive
         int w = 0;
         while (w < endW)                                     // copy the whole running image (byte-identical)
         {
@@ -533,7 +544,8 @@ final class SelfBuild
             cur += clSize[p];
             p += 1;
         }
-        long codeBuf = Heap.allocData(cur * 4).toLong();
+        DataReference codeBufRef = Heap.allocData(cur * 4);
+        long codeBuf = codeBufRef.toLong();                  // a raw copy; codeBufRef keeps the block alive
 
         layoutClassRegions(codeBuf);
         boolean ok = patchNewAndWrite(codeBuf);
@@ -592,7 +604,8 @@ final class SelfBuild
             cur += clSize[p];
             p += 1;
         }
-        long codeBuf = Heap.allocData(cur * 4).toLong();
+        DataReference codeBufRef = Heap.allocData(cur * 4);
+        long codeBuf = codeBufRef.toLong();                  // a raw copy; codeBufRef keeps the block alive
 
         layoutClassRegions(codeBuf);
         boolean ok = patchNewAndWrite(codeBuf);
@@ -681,12 +694,14 @@ final class SelfBuild
             return;
         }
         byte[] name = utf8Copy(classOff);
-        long type = Heap.allocData(ObjectModel.TYPE_SIZE).toLong();
+        DataReference typeRef = Heap.allocData(ObjectModel.TYPE_SIZE);
+        long type = typeRef.toLong();                  // a raw copy; typeRef keeps the block alive
         Magic.store64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET,
                       ObjectModel.scalarSize(MetalClassModel.instanceFieldCount(name)));
         Magic.store64(type + ObjectModel.TYPE_SUPER_OFFSET, 0L);       // Cell's super is Object (a root)
         int vsize = MetalClassModel.vtableSize(name);                  // builds the vtable scratch
-        long tib = Heap.allocData(ObjectModel.tibSize(vsize)).toLong();
+        DataReference tibRef = Heap.allocData(ObjectModel.tibSize(vsize));
+        long tib = tibRef.toLong();                  // a raw copy; tibRef keeps the block alive
         Magic.store64(tib + ObjectModel.tibSlotOffset(ObjectModel.TIB_TYPE_SLOT), type);
         int slot = 0;
         while (slot < vsize)                                           // fill each placed vtable method's address
@@ -723,7 +738,8 @@ final class SelfBuild
         {
             return 0L;
         }
-        long dir = Heap.allocData((impls + 1) * ObjectModel.ITABLE_ENTRY_SIZE).toLong();   // +1 zeroed sentinel
+        DataReference dirRef = Heap.allocData((impls + 1) * ObjectModel.ITABLE_ENTRY_SIZE);   // +1 zeroed sentinel
+        long dir = dirRef.toLong();                  // a raw copy; dirRef keeps the block alive
         int e = 0;
         k = 0;
         while (k < ifCount)
@@ -744,7 +760,8 @@ final class SelfBuild
     private static long buildItable(byte[] iface, long codeBuf)
     {
         int n = MetalClassModel.interfaceMethodCount(iface);
-        long itab = Heap.allocData(n * ObjectModel.WORD).toLong();
+        DataReference itabRef = Heap.allocData(n * ObjectModel.WORD);
+        long itab = itabRef.toLong();                  // a raw copy; itabRef keeps the block alive
         int slot = 0;
         while (slot < n)
         {
@@ -902,7 +919,8 @@ final class SelfBuild
     private static long internLiteral(int utf8Off)
     {
         int len = ClassReader.u2(cB, utf8Off);
-        long arr = Heap.allocArray(len, 1).toLong();
+        ObjectReference arrRef = Heap.allocArray(len, 1).toObjectReference();
+        long arr = arrRef.toLong();                  // a raw copy; arrRef keeps the block alive
         int i = 0;
         while (i < len)
         {
@@ -945,7 +963,8 @@ final class SelfBuild
         clSize[0] = words.length;
         clWordOff[0] = 0;
 
-        long codeBuf = Heap.allocData(words.length * 4).toLong();
+        DataReference codeBufRef = Heap.allocData(words.length * 4);
+        long codeBuf = codeBufRef.toLong();                  // a raw copy; codeBufRef keeps the block alive
         layoutClassRegions(codeBuf);
         boolean ok = patchNewAndWrite(codeBuf);
         Heap.publishCode(Address.fromLong(codeBuf), Address.fromLong(codeBuf + words.length * 4L));
@@ -1006,7 +1025,8 @@ final class SelfBuild
             cur += clSize[p];
             p += 1;
         }
-        long codeBuf = Heap.allocData(cur * 4).toLong();
+        DataReference codeBufRef = Heap.allocData(cur * 4);
+        long codeBuf = codeBufRef.toLong();                  // a raw copy; codeBufRef keeps the block alive
 
         layoutClassRegions(codeBuf);
         boolean ok = patchNewAndWrite(codeBuf);
@@ -1067,7 +1087,8 @@ final class SelfBuild
             cur += clSize[p];
             p += 1;
         }
-        long codeBuf = Heap.allocData(cur * 4).toLong();
+        DataReference codeBufRef = Heap.allocData(cur * 4);
+        long codeBuf = codeBufRef.toLong();                  // a raw copy; codeBufRef keeps the block alive
 
         layoutClassRegions(codeBuf);
         boolean ok = patchNewAndWrite(codeBuf);
@@ -1126,7 +1147,8 @@ final class SelfBuild
             cur += clSize[p];
             p += 1;
         }
-        long codeBuf = Heap.allocData(cur * 4).toLong();
+        DataReference codeBufRef = Heap.allocData(cur * 4);
+        long codeBuf = codeBufRef.toLong();                  // a raw copy; codeBufRef keeps the block alive
 
         layoutClassRegions(codeBuf);
         boolean ok = patchNewAndWrite(codeBuf);
@@ -1371,10 +1393,12 @@ final class SelfBuild
             cur += gmSize[p];
             p += 1;
         }
-        long codeBuf = Heap.allocData(cur * 4).toLong();
+        DataReference codeBufRef = Heap.allocData(cur * 4);
+        long codeBuf = codeBufRef.toLong();                  // a raw copy; codeBufRef keeps the block alive
 
         collectStaticsG();
-        long staticsBuf = Heap.allocData(stCount * 8).toLong();
+        DataReference staticsBufRef = Heap.allocData(stCount * 8);
+        long staticsBuf = staticsBufRef.toLong();                  // a raw copy; staticsBufRef keeps the block alive
         int s = 0;
         while (s < stCount)
         {
@@ -1422,7 +1446,8 @@ final class SelfBuild
             return;
         }
         int total = 2 + n + 3;                              // prologue(2) + n BLs + epilogue(3)
-        long initBuf = Heap.allocData(total * 4).toLong();
+        DataReference initBufRef = Heap.allocData(total * 4);
+        long initBuf = initBufRef.toLong();                  // a raw copy; initBufRef keeps the block alive
         int frame = A64Enc.align16(8);                      // LR only
         int w = 0;
         Magic.store32(initBuf + w * 4L, A64Enc.subImm(31, 31, frame));
@@ -2412,7 +2437,7 @@ final class SelfBuild
         if (bytesEqual(nm, Magic.bytes("newArithAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("newArith"), Magic.bytes("()J")); }
         if (bytesEqual(nm, Magic.bytes("newAseAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("newAse"), Magic.bytes("(J)J")); }
         if (bytesEqual(nm, Magic.bytes("arrayStoreOkAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("arrayStoreOk"), Magic.bytes("(Lmagic/ObjectReference;Lmagic/ObjectReference;)I")); }
-        if (bytesEqual(nm, Magic.bytes("newCceAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("newCce"), Magic.bytes("(Lmagic/ObjectReference;Lmagic/Address;)J")); }
+        if (bytesEqual(nm, Magic.bytes("newCceAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("newCce"), Magic.bytes("(Lmagic/ObjectReference;Lmagic/DataReference;)J")); }
         if (bytesEqual(nm, Magic.bytes("castOkAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("castOk"), Magic.bytes("(Lmagic/ObjectReference;Lmagic/Address;)I")); }
         if (bytesEqual(nm, Magic.bytes("printStackTraceAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("printStackTrace"), Magic.bytes("(J)V")); }
         long blobV = blobStatic(nm);
@@ -2984,7 +3009,8 @@ final class SelfBuild
         {
             return;   // already laid out (or an interface, whose Type is built in pass 1)
         }
-        long type = Heap.allocData(ObjectModel.TYPE_SIZE).toLong();
+        DataReference typeRef = Heap.allocData(ObjectModel.TYPE_SIZE);
+        long type = typeRef.toLong();                  // a raw copy; typeRef keeps the block alive
         Magic.store64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET,
                       ObjectModel.scalarSize(MetalClassModel.instanceFieldCount(name)));
         // superType: 0 for a root super (chain ends), else the laid-out super's Type. Heap.alloc
@@ -2994,7 +3020,8 @@ final class SelfBuild
         int si = sup == null || MetalClassModel.isRoot(sup) ? -1 : findTibClassBytes(sup);
         Magic.store64(type + ObjectModel.TYPE_SUPER_OFFSET, si >= 0 ? nbTypeAddr[si] : 0L);
         int vs = MetalClassModel.vtableSize(name);
-        long tib = Heap.allocData(ObjectModel.tibSize(vs)).toLong();
+        DataReference tibRef = Heap.allocData(ObjectModel.tibSize(vs));
+        long tib = tibRef.toLong();                  // a raw copy; tibRef keeps the block alive
         Magic.store64(tib + ObjectModel.tibSlotOffset(ObjectModel.TIB_TYPE_SLOT), type);
         int slot = 0;
         while (slot < vs)
@@ -3032,7 +3059,8 @@ final class SelfBuild
         {
             return 0L;
         }
-        long dir = Heap.allocData((impls + 1) * ObjectModel.ITABLE_ENTRY_SIZE).toLong();   // +1 zeroed sentinel
+        DataReference dirRef = Heap.allocData((impls + 1) * ObjectModel.ITABLE_ENTRY_SIZE);   // +1 zeroed sentinel
+        long dir = dirRef.toLong();                  // a raw copy; dirRef keeps the block alive
         int e = 0;
         k = 0;
         while (k < ifCount)
@@ -3053,7 +3081,8 @@ final class SelfBuild
     private static long buildItableG(byte[] clsName, byte[] iface, long codeBuf)
     {
         int n = MetalClassModel.interfaceMethodCount(iface);
-        long itab = Heap.allocData(n * ObjectModel.WORD).toLong();
+        DataReference itabRef = Heap.allocData(n * ObjectModel.WORD);
+        long itab = itabRef.toLong();                  // a raw copy; itabRef keeps the block alive
         int slot = 0;
         while (slot < n)
         {
@@ -3368,11 +3397,11 @@ final class SelfBuild
             cur += clSize[p];
             p += 1;
         }
-        Address buf = Heap.allocData(cur * 4);
+        DataReference buf = Heap.allocData(cur * 4);
 
         // patch each recorded call to its callee's base, then write the words to the buffer.
         boolean ok = patchAndWrite(buf.toLong());
-        Heap.publishCode(buf, buf.plus(cur * 4L));             // I-cache maintenance before executing built code
+        Heap.publishCode(buf.toAddress(), buf.plus(cur * 4L));             // I-cache maintenance before executing built code
 
         long entry = buf.toLong() + clWordOff[0] * 4L;
         long unused = Magic.call2(entry, 0x7EL, 0L);       // run the built putc('~'); ignore the void return
@@ -3631,11 +3660,13 @@ final class SelfBuild
             cur += clSize[p];
             p += 1;
         }
-        long codeBuf = Heap.allocData(cur * 4).toLong();
+        DataReference codeBufRef = Heap.allocData(cur * 4);
+        long codeBuf = codeBufRef.toLong();                  // a raw copy; codeBufRef keeps the block alive
 
         // collect distinct statics and give each a zeroed 8-byte slot.
         collectStatics();
-        long staticsBuf = Heap.allocData(stCount * 8).toLong();
+        DataReference staticsBufRef = Heap.allocData(stCount * 8);
+        long staticsBuf = staticsBufRef.toLong();                  // a raw copy; staticsBufRef keeps the block alive
         int s = 0;
         while (s < stCount)
         {

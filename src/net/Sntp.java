@@ -13,6 +13,7 @@ package net;
 
 import board.Uart;
 import magic.Address;
+import magic.DataReference;
 import magic.Magic;
 import vm.Heap;
 import vm.VM;
@@ -43,13 +44,13 @@ public final class Sntp
     /** Ask, and set the clock from the answer. Prints one {@code clock:} line saying which source it now runs on. */
     public static void sync()
     {
-        Address ip = Heap.allocData(4);
-        if (!net.Dns.resolve(Magic.bytes("pool.ntp.org"), ip))                    // the NTP pool's round-robin name
+        DataReference ip = Heap.allocData(4);
+        if (!net.Dns.resolve(Magic.bytes("pool.ntp.org"), ip.toAddress()))                    // the NTP pool's round-robin name
         {
             Uart.write(Magic.bytes("clock: no DNS answer for pool.ntp.org -- stays at the commit time + uptime\n"));
             return;
         }
-        long nowMs = query(ip);
+        long nowMs = query(ip.toAddress());
         if (nowMs == 0L)
         {
             Uart.write(Magic.bytes("clock: no SNTP answer -- stays at the commit time + uptime\n"));
@@ -65,7 +66,7 @@ public final class Sntp
         }
         VM.setWallClock(nowMs);
         Uart.write(Magic.bytes("clock: SNTP "));
-        printIp(ip);
+        printIp(ip.toAddress());
         Uart.write(Magic.bytes(" -> "));
         printDate(nowMs);
         Uart.write(Magic.bytes(" UTC (was "));
@@ -76,8 +77,8 @@ public final class Sntp
     /** One SNTP exchange with {@code serverIp}, resent every second for 5 s; the time now in ms, or 0. */
     private static long query(Address serverIp)
     {
-        Address buf = Heap.allocData(128);
-        Address rx = Heap.allocData(2048);
+        DataReference buf = Heap.allocData(128);
+        DataReference rx = Heap.allocData(2048);
         long freq = Magic.readCNTFRQ_EL0();
         long endT = Magic.readCNTPCT_EL0() + freq * 5L;
         long nextSend = 0L;
@@ -95,11 +96,11 @@ public final class Sntp
                 sentAt = now;
                 stampHi = now >>> 32;                     // our transmit timestamp: any value the reply must echo
                 stampLo = now & 0xFFFFFFFFL;
-                int flen = build(buf, serverIp, localPort, (int) stampHi, (int) stampLo);
-                Ip.send(buf, flen);
+                int flen = build(buf.toAddress(), serverIp, localPort, (int) stampHi, (int) stampLo);
+                Ip.send(buf.toAddress(), flen);
                 nextSend = now + freq;
             }
-            Address ip = Ip.recvIp(q, rx, 2048, RX_WAIT_MS);
+            Address ip = Ip.recvIp(q, rx.toAddress(), 2048, RX_WAIT_MS);
             if (ip.isZero())
             {
                 continue;
@@ -176,7 +177,7 @@ public final class Sntp
         ip.plus(8).store((byte) 64);
         ip.plus(9).store((byte) 17);                         // UDP
         Ip.be16(ip.plus(10), 0);
-        Ip.copy4(Ip.ourIp, ip.plus(12));
+        Ip.copy4(Ip.ourIp.toAddress(), ip.plus(12));
         Ip.copy4(serverIp, ip.plus(16));
         Ip.be16(ip.plus(10), Ip.cksum(ip, 20));
         return 14 + 20 + 8 + 48;

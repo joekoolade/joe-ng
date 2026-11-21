@@ -15,6 +15,7 @@ import asm.A64Enc;
 import board.Uart;
 import compiler.Baseline;
 import magic.Address;
+import magic.DataReference;
 import magic.Magic;
 import magic.ObjectReference;
 import objectmodel.ObjectModel;
@@ -130,7 +131,7 @@ final class LazyCompiler
         if (lzN >= MAXLAZY) { Loader.capHalt(Magic.bytes("MAXLAZY-defer"), lzN); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
         int idx = lzN;
         int reg = ClassRegistry.classRegByName(Loader.gView.thisNameOff);
-        int pd = Loader.findPdByName(Loader.gView.base, Loader.gView.thisNameOff);
+        int pd = Loader.findPdByName(Loader.gView.base.toAddress(), Loader.gView.thisNameOff);
         lzTab[idx] = new LazyMethod();
         lzTab[idx].blob = Loader.gView.base;
         lzTab[idx].len = Loader.pdLen[pd];
@@ -164,7 +165,7 @@ final class LazyCompiler
      * index, or -1. Limitation: the method's cross-class callees must already be compiled (no dep pull here); a
      * same-class callee it needs is compiled alongside it (they share this compile batch).
      */
-    static int compileMethodOnDemand(Address type, ObjectReference nameArr)
+    static int compileMethodOnDemand(DataReference type, ObjectReference nameArr)
     {
         return compileMethodOnDemand(type, nameArr, ObjectReference.nullReference());
     }
@@ -182,7 +183,7 @@ final class LazyCompiler
      * on a monitor or spawn threads, and holding the loader lock across that would deadlock any task that
      * needs to compile before it can release.
      */
-    static int compileMethodOnDemand(Address type, ObjectReference nameArr, ObjectReference descArr)
+    static int compileMethodOnDemand(DataReference type, ObjectReference nameArr, ObjectReference descArr)
     {
         VM.loaderLock(VM.LOCK_ON_DEMAND);
         int r;
@@ -199,9 +200,9 @@ final class LazyCompiler
 
     /** {@link #compileMethodOnDemand} restricted to one DESCRIPTOR ({@code descArr} 0 = any). Without it the walk
      *  stops at the first method of that name, which for an overloaded class is a coin toss between two bodies. */
-    private static int compileMethodOnDemandLocked(Address type, ObjectReference nameArr, ObjectReference descArr)
+    private static int compileMethodOnDemandLocked(DataReference type, ObjectReference nameArr, ObjectReference descArr)
     {
-        int ci = ClassRegistry.classIndexByType(type);
+        int ci = ClassRegistry.classIndexByType(type.toAddress());
         // AN INTERFACE IS NOT REFUSED any more. It was, for having no TIB to reuse -- but this path compiles with
         // compileReuseTib, which never touches one (the reason compileSigOnDemand already compiles interface
         // STATICS). The refusal left every not-yet-called DEFAULT method unresolvable by reflection:
@@ -211,8 +212,8 @@ final class LazyCompiler
         {
             return -1;
         }
-        Address blob = ClassRegistry.clTab[ci].base;
-        int len = Loader.blobLenOf(blob);
+        DataReference blob = ClassRegistry.clTab[ci].base;
+        int len = Loader.blobLenOf(blob.toAddress());
         Loader.parseConstPool(blob, len);                         // set up the class's compile state (as loadBodies does,
         Loader.parseFields();                                     //   minus the TIB fill): statics block + vtable scratch
         int reg = ClassRegistry.classRegByName(Loader.gView.thisNameOff);
@@ -220,8 +221,8 @@ final class LazyCompiler
         {
             return -1;
         }
-        ClassRegistry.clTab[reg].resumeBuild(blob);
-        Loader.parseForMethods(blob, len);                        // gp at the methods table for the by-name method walk
+        ClassRegistry.clTab[reg].resumeBuild(blob.toAddress());
+        Loader.parseForMethods(blob.toAddress(), len);                        // gp at the methods table for the by-name method walk
         Address p = Loader.gView.methodsStart;
         int mcount = u2(p);
         p = p.plus(2);
@@ -237,10 +238,10 @@ final class LazyCompiler
         while (m < mcount)
         {
             int attrs = u2(p.plus(6));
-            if (Utf8.rawEqUtf8(nbase, nlen, blob, Loader.gView.cp[u2(p.plus(2))])
-                    && (dlen == 0 || Utf8.rawEqUtf8(dbase, dlen, blob, Loader.gView.cp[u2(p.plus(4))])))
+            if (Utf8.rawEqUtf8(nbase, nlen, blob.toAddress(), Loader.gView.cp[u2(p.plus(2))])
+                    && (dlen == 0 || Utf8.rawEqUtf8(dbase, dlen, blob.toAddress(), Loader.gView.cp[u2(p.plus(4))])))
             {
-                long c = Loader.findCode(blob, p.plus(8), attrs);
+                long c = Loader.findCode(blob.toAddress(), p.plus(8), attrs);
                 if (c != 0L)
                 {
                     code = c;
@@ -295,9 +296,9 @@ final class LazyCompiler
         Relocator.patchRelocs();                                     // resolve its cross-class calls (idempotent over prior relocs)
         if (dlen != 0)
         {
-            return Reflection.methodResolveRegistryDesc(type, nameArr, descArr);
+            return Reflection.methodResolveRegistryDesc(type.toAddress(), nameArr, descArr);
         }
-        return Reflection.methodResolveRegistry(type, nameArr);
+        return Reflection.methodResolveRegistry(type.toAddress(), nameArr);
     }
 
     /** Note that {@code buf} is the deferral stub for lazy method {@code idx}. */
@@ -336,7 +337,7 @@ final class LazyCompiler
             Uart.write(Magic.bytes("<idx out of range>"));
             return;
         }
-        Loader.printNameAt(ClassRegistry.clTab[lzTab[k].reg].base, ClassRegistry.clTab[lzTab[k].reg].nameOff);
+        Loader.printNameAt(ClassRegistry.clTab[lzTab[k].reg].base.toAddress(), ClassRegistry.clTab[lzTab[k].reg].nameOff);
         Uart.putc(0x2E);
         Loader.writeName(lzTab[k].blob.plus(lzTab[k].nameOff + 2), u2(lzTab[k].blob.plus(lzTab[k].nameOff)));
     }
@@ -536,12 +537,12 @@ final class LazyCompiler
         {
             return 0L;
         }
-        Address blob = ClassRegistry.clTab[reg].base;
-        int len = Loader.blobLenOf(blob);
+        DataReference blob = ClassRegistry.clTab[reg].base;
+        int len = Loader.blobLenOf(blob.toAddress());
         Loader.parseConstPool(blob, len);                      // rebuild this class's compile state (as loadBodies
         Loader.parseFields();                                  //   does, minus the TIB fill)
-        ClassRegistry.clTab[reg].resumeBuild(blob);              // compileReuseTib means the TIB is unused here
-        Loader.parseForMethods(blob, len);
+        ClassRegistry.clTab[reg].resumeBuild(blob.toAddress());              // compileReuseTib means the TIB is unused here
+        Loader.parseForMethods(blob.toAddress(), len);
         Address p = Loader.gView.methodsStart;
         int mcount = u2(p);
         p = p.plus(2);
@@ -553,10 +554,10 @@ final class LazyCompiler
         while (m < mcount)
         {
             int attrs = u2(p.plus(6));
-            if (Loader.utf8EqAt(blob, Loader.gView.cp[u2(p.plus(2))], nameU, 0)
-                    && Loader.utf8EqAt(blob, Loader.gView.cp[u2(p.plus(4))], descU, 0))
+            if (Loader.utf8EqAt(blob.toAddress(), Loader.gView.cp[u2(p.plus(2))], nameU, 0)
+                    && Loader.utf8EqAt(blob.toAddress(), Loader.gView.cp[u2(p.plus(4))], descU, 0))
             {
-                long c = Loader.findCode(blob, p.plus(8), attrs);
+                long c = Loader.findCode(blob.toAddress(), p.plus(8), attrs);
                 if (c != 0L)
                 {
                     code = c;
@@ -636,9 +637,9 @@ final class LazyCompiler
      * in-progress code buffer is not reachable yet -- doing this mid-compile swept it, and the method ran off
      * a zeroed buffer ({@code ec=0} at offset +0).
      */
-    static void pullIndyIfaces(Address blob)
+    static void pullIndyIfaces(DataReference blob)
     {
-        Loader.parseConstPool(blob, Loader.blobLenOf(blob));
+        Loader.parseConstPool(blob, Loader.blobLenOf(blob.toAddress()));
         int c = 1;
         while (c < Loader.gView.cpCount)
         {
@@ -761,7 +762,7 @@ final class LazyCompiler
         ClassInitializer.ensureClinit(lzTab[idx].reg);                   // JVMS 5.5 barrier: first call into the class initializes it.
                                                         // BEFORE restoreCtxForCompile -- the initializer re-enters here
                                                         // and each nested compile clobbers the g* context.
-        restoreCtxForCompile(lzTab[idx].blob, lzTab[idx].len, lzTab[idx].reg);
+        restoreCtxForCompile(DataReference.fromAddress(lzTab[idx].blob.toAddress()), lzTab[idx].len, lzTab[idx].reg);
         long code;
         int len;
         int descOff;
@@ -820,9 +821,9 @@ final class LazyCompiler
                 if (Loader.LOAD_LOG)
                 {
                     Uart.write(Magic.bytes("  baked "));
-                    Loader.printNameAt(Loader.gView.base, Loader.gView.thisNameOff);
+                    Loader.printNameAt(Loader.gView.base.toAddress(), Loader.gView.thisNameOff);
                     Uart.putc(0x2E);
-                    Loader.printNameAt(Loader.gView.base, bkName);
+                    Loader.printNameAt(Loader.gView.base.toAddress(), bkName);
                     Uart.putc(0x0A);
                 }
                 lzTab[idx].cache = baked;
@@ -837,15 +838,15 @@ final class LazyCompiler
         if (LAZY_TRACE)                                  // per-method compile trace (debug; off by default)
         {
             Uart.write(Magic.bytes("  jitc "));
-            Loader.printNameAt(Loader.gView.base, Loader.gView.thisNameOff);
+            Loader.printNameAt(Loader.gView.base.toAddress(), Loader.gView.thisNameOff);
             Uart.putc(0x2E);
             int trName = lzTab[idx].nameOff;            // deferral entries capture bytecode, not the name
             if (trName == 0)
             {
                 trName = Loader.findNameByCode(lzTab[idx].code);
             }
-            Loader.printNameAt(lzTab[idx].blob, trName);
-            Loader.printNameAt(lzTab[idx].blob, lzTab[idx].descOff);
+            Loader.printNameAt(lzTab[idx].blob.toAddress(), trName);
+            Loader.printNameAt(lzTab[idx].blob.toAddress(), lzTab[idx].descOff);
             Uart.putc(0x0A);
         }
         boolean reuseWas = Loader.compileReuseTib;              // a nested load resets it: restore, never clear
@@ -870,7 +871,7 @@ final class LazyCompiler
             Relocator.truncateRelocs(rcMark);                     // and drop its reloc sites: patching them later would
             Relocator.rsCount = rsMark;                           //   write into a buffer the sweep may already have reused
             Loader.lzRetried = true;                           // once only -- a class that is still missing reads null
-            restoreCtxForCompile(lzTab[idx].blob, lzTab[idx].len, lzTab[idx].reg);   // the pull clobbered g*
+            restoreCtxForCompile(DataReference.fromAddress(lzTab[idx].blob.toAddress()), lzTab[idx].len, lzTab[idx].reg);   // the pull clobbered g*
             if (lzTab[idx].code == 0L)                    // a captured body needs nothing re-found: it is still in hand
             {
                 FoundMethod f = Loader.findMethodByOffsets(lzTab[idx].nameOff, lzTab[idx].descOff);
@@ -895,15 +896,15 @@ final class LazyCompiler
             // An index alone is unchaseable -- it is a slot number in a table rebuilt every batch. Name the
             // method the same way LAZY_TRACE does; the context is restored, so gView (and its thisNameOff) is valid.
             Uart.write(Magic.bytes("  compile returned null for "));
-            Loader.printNameAt(Loader.gView.base, Loader.gView.thisNameOff);
+            Loader.printNameAt(Loader.gView.base.toAddress(), Loader.gView.thisNameOff);
             Uart.putc(0x2E);
             int nullName = lzTab[idx].nameOff;
             if (nullName == 0)
             {
                 nullName = Loader.findNameByCode(lzTab[idx].code);
             }
-            Loader.printNameAt(lzTab[idx].blob, nullName);
-            Loader.printNameAt(lzTab[idx].blob, lzTab[idx].descOff);
+            Loader.printNameAt(lzTab[idx].blob.toAddress(), nullName);
+            Loader.printNameAt(lzTab[idx].blob.toAddress(), lzTab[idx].descOff);
             Uart.putc(0x0A);
             Loader.capHalt(Magic.bytes("lazy-compile-null"), idx);   // the trampoline would `br 0` -- halt with a name instead
         }
@@ -945,8 +946,8 @@ final class LazyCompiler
                 int nameOff = Loader.findNameByCode(Loader.mCode[i]);
                 if (nameOff != 0)
                 {
-                    MethodRegistry.register(Loader.gView.base, Loader.gView.thisNameOff, nameOff, Loader.mDescOff[i], Loader.mBuf[i], Loader.mLine[i], Loader.mSrc.get(i),
-                             accessInContext(Loader.gView.base, nameOff, Loader.mDescOff[i]));
+                    MethodRegistry.register(Loader.gView.base.toAddress(), Loader.gView.thisNameOff, nameOff, Loader.mDescOff[i], Loader.mBuf[i], Loader.mLine[i], Loader.mSrc.get(i),
+                             accessInContext(Loader.gView.base.toAddress(), nameOff, Loader.mDescOff[i]));
                 }
             }
             i += 1;
@@ -968,7 +969,7 @@ final class LazyCompiler
         int i = MethodRegistry.rgBucket[Utf8.utf8Hash2(blob, Loader.gView.thisNameOff, blob, nameOff) & (MethodRegistry.RGTAB - 1)];
         while (i >= 0)
         {
-            if ((best < 0 || i < best) && MethodRegistry.rgTab[i].base.EQ(blob) && MethodRegistry.rgTab[i].nameOff == nameOff
+            if ((best < 0 || i < best) && MethodRegistry.rgTab[i].base.EQ(DataReference.fromAddress(blob)) && MethodRegistry.rgTab[i].nameOff == nameOff
                     && MethodRegistry.rgTab[i].descOff == descOff)
             {
                 best = i;
@@ -993,7 +994,7 @@ final class LazyCompiler
         {
             nameOff = Loader.findNameByCode(lzTab[idx].code);   // deferral entries capture bytecode, not the name
         }
-        int i = lazyBodyEntry(lzTab[idx].blob, nameOff, lzTab[idx].descOff);
+        int i = lazyBodyEntry(lzTab[idx].blob.toAddress(), nameOff, lzTab[idx].descOff);
         if (i >= 0)
         {
             MethodRegistry.rgTab[i].buf = buf;
@@ -1002,8 +1003,8 @@ final class LazyCompiler
             MethodRegistry.rgTab[i].src = Loader.mSrc.get(0);
             return;
         }
-        MethodRegistry.register(lzTab[idx].blob, Loader.gView.thisNameOff, nameOff, lzTab[idx].descOff, buf, Loader.mLine[0], Loader.mSrc.get(0),
-                 accessInContext(lzTab[idx].blob, nameOff, lzTab[idx].descOff));
+        MethodRegistry.register(lzTab[idx].blob.toAddress(), Loader.gView.thisNameOff, nameOff, lzTab[idx].descOff, buf, Loader.mLine[0], Loader.mSrc.get(0),
+                 accessInContext(lzTab[idx].blob.toAddress(), nameOff, lzTab[idx].descOff));
     }
 
     /**
@@ -1026,7 +1027,7 @@ final class LazyCompiler
      */
     private static int accessInContext(Address blob, int nameOff, int descOff)
     {
-        if (blob.NE(Loader.gView.base) || Loader.gView.methodsStart.isZero())
+        if (blob.NE(Loader.gView.base.toAddress()) || Loader.gView.methodsStart.isZero())
         {
             return 0;
         }
@@ -1037,8 +1038,8 @@ final class LazyCompiler
         while (m < mcount)
         {
             int attrs = u2(p.plus(6));
-            if (Loader.utf8EqAt(Loader.gView.base, Loader.gView.cp[u2(p.plus(2))], Loader.gView.base, nameOff)
-                    && Loader.utf8EqAt(Loader.gView.base, Loader.gView.cp[u2(p.plus(4))], Loader.gView.base, descOff))
+            if (Loader.utf8EqAt(Loader.gView.base.toAddress(), Loader.gView.cp[u2(p.plus(2))], Loader.gView.base.toAddress(), nameOff)
+                    && Loader.utf8EqAt(Loader.gView.base.toAddress(), Loader.gView.cp[u2(p.plus(4))], Loader.gView.base.toAddress(), descOff))
             {
                 return u2(p);
             }
@@ -1049,7 +1050,7 @@ final class LazyCompiler
     }
 
     /** Re-establish the g* compile context for an already-structure-registered class (loadBodies' preamble). */
-    static void restoreCtxForCompile(Address bytes, int len, int reg)
+    static void restoreCtxForCompile(DataReference bytes, int len, int reg)
     {
         if (reg >= 0 && ClassRegistry.clTab[reg].state < RVMClass.ST_RESOLVED)
         {
@@ -1058,9 +1059,9 @@ final class LazyCompiler
             // half-built context and corrupt silently -- halt loudly instead.
             Loader.capHalt(Magic.bytes("lifecycle-compile"), reg);
         }
-        Loader.parseConstPool(bytes, len);
+        Loader.parseConstPool(DataReference.fromAddress(bytes.toAddress()), len);
         Loader.parseFields();
-        ClassRegistry.clTab[reg].resumeBuild(bytes);
+        ClassRegistry.clTab[reg].resumeBuild(bytes.toAddress());
         Loader.provideKnownStatics();
     }
 
@@ -1088,12 +1089,12 @@ final class LazyCompiler
      */
     private static long dlCellFor(int classOff, int nameOff, int descOff)
     {
-        long cell = dlCellAt(Loader.gView.base, classOff, nameOff, descOff);
+        long cell = dlCellAt(Loader.gView.base.toAddress(), classOff, nameOff, descOff);
         if (cell != 0L)
         {
             return cell;
         }
-        int pd = Loader.findPdByName(Loader.gView.base, classOff);
+        int pd = Loader.findPdByName(Loader.gView.base.toAddress(), classOff);
         while (pd >= 0 && Loader.pdSuperOff[pd] != 0)
         {
             int spd = Loader.findPdByName(Loader.pdBase.get(pd), Loader.pdSuperOff[pd]);
@@ -1115,7 +1116,7 @@ final class LazyCompiler
      *  {@code clsBase}, or 0 if that exact class has no such phase-A cell. */
     private static long dlCellAt(Address clsBase, int classOff, int nameOff, int descOff)
     {
-        return DynamicLinker.dlCellOf(clsBase, classOff, Loader.gView.base, nameOff, Loader.gView.base, descOff);
+        return DynamicLinker.dlCellOf(clsBase, classOff, Loader.gView.base.toAddress(), nameOff, Loader.gView.base.toAddress(), descOff);
     }
 
     /** M8 phase-A: at structure registration of the gated class, allocate an offset cell + lazy stub for each
@@ -1124,7 +1125,7 @@ final class LazyCompiler
      *  order; each carries an lz entry that compiles the body on first call and data-patches the cell. */
     static void armPhaseACells()
     {
-        if (!stage2Gated(Loader.gView.base, Loader.gView.thisNameOff))
+        if (!stage2Gated(Loader.gView.base.toAddress(), Loader.gView.thisNameOff))
         {
             return;
         }
@@ -1135,7 +1136,7 @@ final class LazyCompiler
             DynamicLinker.dlN = 0;
         }
         int reg = ClassRegistry.clCount - 1;                          // this class's registry index (registerClassStructure did ClassRegistry.clCount++)
-        int pd = Loader.findPdByName(Loader.gView.base, Loader.gView.thisNameOff);
+        int pd = Loader.findPdByName(Loader.gView.base.toAddress(), Loader.gView.thisNameOff);
         int blobLen = Loader.pdLen[pd];
         Address p = Loader.gView.methodsStart;
         int mcount = u2(p);
@@ -1148,9 +1149,9 @@ final class LazyCompiler
             int attrs = u2(p.plus(6));
             int nameOff = Loader.gView.cp[u2(p.plus(2))];
             int descOff = Loader.gView.cp[u2(p.plus(4))];
-            long code = Loader.findCode(Loader.gView.base, p.plus(8), attrs);
+            long code = Loader.findCode(Loader.gView.base.toAddress(), p.plus(8), attrs);
             if (code != 0L && (access & 0x0008) != 0    // static methods only (Objects is all-static)
-                    && !Utf8.utf8IsAtBase(Loader.gView.base, nameOff, Magic.bytes("<clinit>")) && lzN < MAXLAZY && DynamicLinker.dlN < MAXLAZY)
+                    && !Utf8.utf8IsAtBase(Loader.gView.base.toAddress(), nameOff, Magic.bytes("<clinit>")) && lzN < MAXLAZY && DynamicLinker.dlN < MAXLAZY)
             {
                 int idx = lzN;
                 lzTab[idx] = new LazyMethod();
@@ -1168,9 +1169,9 @@ final class LazyCompiler
                     lzNHigh = lzN + 1;                      // high-water across reclaims
                 }
                 lzTab[idx].cache = 0L;
-                long cell = Heap.allocData(8).toLong();
-                lzTab[idx].slot = cell;                     // first call data-patches the cell -> later calls dispatch direct
-                Address.fromLong(cell).store(buildLazyCompileStub(idx));
+                DataReference cell = Heap.allocData(8);
+                lzTab[idx].slot = cell.toLong();            // first call data-patches the cell -> later calls dispatch direct
+                cell.store(buildLazyCompileStub(idx));
                 lzN += 1;
                 DynLink d = new DynLink();
                 if (Loader.gView == null)                            // PROBE: born zero, or zeroed later? This is the
@@ -1187,7 +1188,7 @@ final class LazyCompiler
                 d.classOff = Loader.gView.thisNameOff;
                 d.nameOff = nameOff;
                 d.descOff = descOff;
-                d.cell = cell;
+                d.cell = cell.toLong();
                 DynamicLinker.dlTab[DynamicLinker.dlN] = d;
                 DynamicLinker.dlN += 1;
                 armed += 1;
@@ -1201,7 +1202,7 @@ final class LazyCompiler
             Uart.write(Magic.bytes("  phaseA: "));
             VM.printDec(armed);
             Uart.write(Magic.bytes(" cells at structure time for "));
-            Loader.printNameAt(Loader.gView.base, Loader.gView.thisNameOff);
+            Loader.printNameAt(Loader.gView.base.toAddress(), Loader.gView.thisNameOff);
             Uart.putc(0x0A);
         }
     }
@@ -1262,7 +1263,7 @@ final class LazyCompiler
         // the class its own cells are filed under; the answer is only whether one exists, so chain order is moot.
         DynamicLinker.buildDlIndex();
         boolean hit = false;
-        int k = DynamicLinker.dlBucket[Utf8.utf8Hash2(Loader.gView.base, Loader.gView.thisNameOff, Loader.gView.base, nameOff) & (DynamicLinker.DLTAB - 1)];
+        int k = DynamicLinker.dlBucket[Utf8.utf8Hash2(Loader.gView.base.toAddress(), Loader.gView.thisNameOff, Loader.gView.base.toAddress(), nameOff) & (DynamicLinker.DLTAB - 1)];
         while (k >= 0 && !hit)
         {
             DynLink d = DynamicLinker.dlTab[k];

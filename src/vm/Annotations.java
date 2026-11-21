@@ -13,6 +13,7 @@ package vm;
 
 import board.Uart;
 import magic.Address;
+import magic.DataReference;
 import magic.AddressArray;
 import magic.Magic;
 import magic.ObjectReference;
@@ -57,7 +58,7 @@ final class Annotations
         {
             return false;
         }
-        return annoInAttrs(Reflection.reflEntry(rgIndex).base, p.plus(8), u2(p.plus(6)), descArr, descLen);
+        return annoInAttrs(Reflection.reflEntry(rgIndex).base.toAddress(), p.plus(8), u2(p.plus(6)), descArr, descLen);
     }
 
     /**
@@ -72,7 +73,7 @@ final class Annotations
         {
             return 0L;
         }
-        return annoFromAttrs(Reflection.reflEntry(rgIndex).base, p.plus(8), u2(p.plus(6)), descArr, descLen);
+        return annoFromAttrs(Reflection.reflEntry(rgIndex).base.toAddress(), p.plus(8), u2(p.plus(6)), descArr, descLen);
     }
 
     /**
@@ -93,8 +94,8 @@ final class Annotations
         {
             return 0L;
         }
-        Address zero = Heap.allocArray(2, 1);                    // u2 num_element_value_pairs = 0, zeroed by the allocator
-        return AnnotationInstances.buildAnnoObject(ClassRegistry.clTab[reg].base, zero.plus(ObjectModel.ARRAY_BASE_OFFSET), reg);
+        ObjectReference zero = Heap.allocArray(2, 1).toObjectReference();                    // u2 num_element_value_pairs = 0, zeroed by the allocator
+        return AnnotationInstances.buildAnnoObject(ClassRegistry.clTab[reg].base.toAddress(), zero.toAddress().plus(ObjectModel.ARRAY_BASE_OFFSET), reg);
     }
 
     /**
@@ -110,8 +111,8 @@ final class Annotations
         {
             return 0L;
         }
-        Address base = Reflection.reflEntry(rgIndex).base;
-        Address q = ClassAttributes.classAttrNamed(base, p.plus(8L), u2(p.plus(6L)), Magic.bytes("RuntimeVisibleParameterAnnotations"));
+        DataReference base = Reflection.reflEntry(rgIndex).base;
+        Address q = ClassAttributes.classAttrNamed(base.toAddress(), p.plus(8L), u2(p.plus(6L)), Magic.bytes("RuntimeVisibleParameterAnnotations"));
         if (q.isZero() || k < 0L || k >= u1(q))
         {
             return 0L;
@@ -130,7 +131,7 @@ final class Annotations
             }
             r += 1L;
         }
-        return annotationsAt(base, lp);
+        return annotationsAt(base.toAddress(), lp);
     }
 
     /**
@@ -170,8 +171,8 @@ final class Annotations
         {
             return 0L;
         }
-        Address base = ClassRegistry.clTab[ci].base;
-        Loader.parseConstPool(base, Loader.blobLenOf(base));
+        DataReference base = ClassRegistry.clTab[ci].base;
+        Loader.parseConstPool(base, Loader.blobLenOf(base.toAddress()));
         Address p = Loader.gp.plus(6L);                               // past access_flags, this_class, super_class
         p = p.plus(2L + u2(p) * 2L);                           // past the interfaces list
         int fcount = u2(p);
@@ -183,9 +184,9 @@ final class Annotations
         while (f < fcount)
         {
             int attrs = u2(p.plus(6));
-            if (Utf8.rawEqUtf8(nbase, nlen, base, Loader.gView.cp[u2(p.plus(2))]))
+            if (Utf8.rawEqUtf8(nbase, nlen, base.toAddress(), Loader.gView.cp[u2(p.plus(2))]))
             {
-                lp = annoListPos(base, p.plus(8L), attrs);
+                lp = annoListPos(base.toAddress(), p.plus(8L), attrs);
                 f = fcount;                             // found it; stop walking
             }
             else
@@ -198,7 +199,7 @@ final class Annotations
         {
             return emptyAnnoArray();                    // no such field, or none declared on it
         }
-        return annotationsAt(base, lp);
+        return annotationsAt(base.toAddress(), lp);
     }
 
     static long fieldAnnotation(ObjectReference mirror, ObjectReference nameArr, ObjectReference descArr, int descLen)
@@ -212,8 +213,8 @@ final class Annotations
         {
             return 0L;
         }
-        Address base = ClassRegistry.clTab[ci].base;
-        Loader.parseConstPool(base, Loader.blobLenOf(base));
+        DataReference base = ClassRegistry.clTab[ci].base;
+        Loader.parseConstPool(base, Loader.blobLenOf(base.toAddress()));
         Address p = Loader.gp.plus(6L);                               // past access_flags, this_class, super_class
         p = p.plus(2L + u2(p) * 2L);                           // past the interfaces list
         int fcount = u2(p);
@@ -224,9 +225,9 @@ final class Annotations
         while (f < fcount)
         {
             int attrs = u2(p.plus(6));
-            if (Utf8.rawEqUtf8(nbase, nlen, base, Loader.gView.cp[u2(p.plus(2))]))
+            if (Utf8.rawEqUtf8(nbase, nlen, base.toAddress(), Loader.gView.cp[u2(p.plus(2))]))
             {
-                return annoFromAttrs(base, p.plus(8), attrs, descArr, descLen);
+                return annoFromAttrs(base.toAddress(), p.plus(8), attrs, descArr, descLen);
             }
             p = Loader.skipAttributes(p.plus(8), attrs);
             f += 1;
@@ -246,13 +247,13 @@ final class Annotations
         {
             return 0L;
         }
-        Address base = ClassRegistry.clTab[reg].base;
-        Address p = ClassAttributes.classAttrsPos(base);
+        DataReference base = ClassRegistry.clTab[reg].base;
+        Address p = ClassAttributes.classAttrsPos(base.toAddress());
         if (p.isZero())
         {
             return 0L;
         }
-        return annoFromAttrs(base, p.plus(2L), u2(p), descArr, descLen);
+        return annoFromAttrs(base.toAddress(), p.plus(2L), u2(p), descArr, descLen);
     }
 
     /** Find RuntimeVisibleAnnotations in an attribute list and build the matching annotation's instance. */
@@ -313,18 +314,18 @@ final class Annotations
         {
             return emptyAnnoArray();
         }
-        Address base = ClassRegistry.clTab[reg].base;
-        Address ap = ClassAttributes.classAttrsPos(base);
+        DataReference base = ClassRegistry.clTab[reg].base;
+        Address ap = ClassAttributes.classAttrsPos(base.toAddress());
         if (ap.isZero())
         {
             return emptyAnnoArray();
         }
-        Address lp = annoListPos(base, ap.plus(2L), u2(ap));
+        Address lp = annoListPos(base.toAddress(), ap.plus(2L), u2(ap));
         if (lp.isZero())
         {
             return emptyAnnoArray();                    // no RuntimeVisibleAnnotations: none declared
         }
-        return annotationsAt(base, lp);
+        return annotationsAt(base.toAddress(), lp);
     }
 
     /**
@@ -354,13 +355,13 @@ final class Annotations
         {
             return emptyAnnoArray();                    // registered but not declared here: none to read
         }
-        Address base = Reflection.reflEntry(rgIndex).base;
-        Address lp = annoListPos(base, mp.plus(8L), u2(mp.plus(6)));
+        DataReference base = Reflection.reflEntry(rgIndex).base;
+        Address lp = annoListPos(base.toAddress(), mp.plus(8L), u2(mp.plus(6)));
         if (lp.isZero())
         {
             return emptyAnnoArray();                    // no RuntimeVisibleAnnotations: none declared
         }
-        return annotationsAt(base, lp);
+        return annotationsAt(base.toAddress(), lp);
     }
 
     /**
@@ -409,12 +410,12 @@ final class Annotations
             }
             k += 1;
         }
-        Address arr = Heap.allocArray(built, 8);
-        arr.plus(ObjectModel.TIB_OFFSET).store(ArrayTypes.refArrayTib(annotationTypeAddr()));
+        ObjectReference arr = Heap.allocArray(built, 8).toObjectReference();
+        arr.toAddress().plus(ObjectModel.TIB_OFFSET).store(ArrayTypes.refArrayTib(annotationTypeAddr().toAddress()));
         int j = 0;
         while (j < built)
         {
-            arr.plus(ObjectModel.ARRAY_BASE_OFFSET).plus(j * 8L).store(objs[j]);
+            arr.toAddress().plus(ObjectModel.ARRAY_BASE_OFFSET).plus(j * 8L).store(objs[j]);
             j += 1;
         }
         return arr.toLong();
@@ -423,13 +424,13 @@ final class Annotations
     /** A zero-length {@code Annotation[]} -- what a class with no declared annotations answers. */
     static long emptyAnnoArray()
     {
-        Address arr = Heap.allocArray(0, 8);
-        arr.plus(ObjectModel.TIB_OFFSET).store(ArrayTypes.refArrayTib(annotationTypeAddr()));
+        ObjectReference arr = Heap.allocArray(0, 8).toObjectReference();
+        arr.toAddress().plus(ObjectModel.TIB_OFFSET).store(ArrayTypes.refArrayTib(annotationTypeAddr().toAddress()));
         return arr.toLong();
     }
 
     /** {@code java/lang/annotation/Annotation}'s Type, or Object's if it is not loaded. */
-    private static Address annotationTypeAddr()
+    private static DataReference annotationTypeAddr()
     {
         int i = ClassRegistry.classIndexByName(Magic.bytes("java/lang/annotation/Annotation"));
         return i >= 0 ? ClassRegistry.clTab[i].type : TibBuilder.objectTypeAddr();

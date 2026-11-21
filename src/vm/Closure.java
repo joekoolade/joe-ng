@@ -13,6 +13,7 @@ package vm;
 
 import board.Uart;
 import magic.Address;
+import magic.DataReference;
 import magic.AddressArray;
 import magic.Magic;
 
@@ -556,7 +557,7 @@ final class Closure
             {                                           //   or named one the dir does not have, and neither
                 if (!nameRegistered(pendBase.get(r), pendClass[r])   // answer changes by being asked again.
                         && !closureDeferred(pendBase.get(r), pendClass[r])
-                        && registerNameFromDir(pendBase.get(r), pendClass[r]) != 0L)
+                        && registerNameFromDir(DataReference.fromAddress(pendBase.get(r)), pendClass[r]) != 0L)
                 {
                     grew = true;
                 }
@@ -570,7 +571,7 @@ final class Closure
             {
                 if (!markSettled(b))
                 {
-                    grew = pullStructural(Loader.pdBase.get(b), Loader.pdLen[b]) || grew;
+                    grew = pullStructural(DataReference.fromAddress(Loader.pdBase.get(b)), Loader.pdLen[b]) || grew;
                 }
                 b += 1;
             }
@@ -657,7 +658,7 @@ final class Closure
                 b += 1;
                 continue;
             }
-            Loader.parseConstPool(Loader.pdBase.get(b), Loader.pdLen[b]);
+            Loader.parseConstPool(DataReference.fromAddress(Loader.pdBase.get(b)), Loader.pdLen[b]);
             boolean iface = (u2(Loader.gp) & 0x0200) != 0;      // ACC_INTERFACE (access_flags right after the constant pool)
             if (iface)
             {
@@ -672,7 +673,7 @@ final class Closure
     }
 
     /** Pull {@code base}'s superclass + interfaces from the dir (needed for its TIB/itable), if not loaded. */
-    private static boolean pullStructural(Address base, int len)
+    private static boolean pullStructural(DataReference base, int len)
     {
         Loader.parseConstPool(base, len);
         Address p = Loader.gp;
@@ -681,7 +682,7 @@ final class Closure
         if (superIdx != 0)
         {
             int nameOff = Loader.gView.cp[u2(Loader.gView.base.plus(Loader.gView.cp[superIdx]))];
-            if (!nameRegistered(Loader.gView.base, nameOff) && registerNameFromDir(Loader.gView.base, nameOff) != 0L)
+            if (!nameRegistered(Loader.gView.base.toAddress(), nameOff) && registerNameFromDir(Loader.gView.base, nameOff) != 0L)
             {
                 grew = true;
             }
@@ -691,7 +692,7 @@ final class Closure
         while (k < ifCount)
         {
             int nameOff = Loader.gView.cp[u2(Loader.gView.base.plus(Loader.gView.cp[u2(p.plus(8 + k * 2))]))];
-            if (!nameRegistered(Loader.gView.base, nameOff) && registerNameFromDir(Loader.gView.base, nameOff) != 0L)
+            if (!nameRegistered(Loader.gView.base.toAddress(), nameOff) && registerNameFromDir(Loader.gView.base, nameOff) != 0L)
             {
                 grew = true;
             }
@@ -840,10 +841,10 @@ final class Closure
         if (INDY_IFACE_WATCH)
         {
             Uart.write(Magic.bytes("  pendiface "));
-            Loader.printNameAt(Loader.indyNameBuf, off);
+            Loader.printNameAt(Loader.indyNameBuf.toAddress(), off);
             Uart.putc(0x0A);
         }
-        addPend(Loader.indyNameBuf, off, 0, 0, PEND_PULL);
+        addPend(Loader.indyNameBuf.toAddress(), off, 0, 0, PEND_PULL);
     }
 
     /** Name Utf8 offset of a {@code CONSTANT_Class} at cp index {@code idx} (for the current {@code gView}). */
@@ -1017,10 +1018,10 @@ final class Closure
         // resolveVirtuals (RTA over instantiated types), NOT "mark in every class carrying the name+desc".
         // Reached through the class-name index rather than by scanning every pend per blob -- that guard was
         // a string compare per (blob, pend), which is pdCount x pendN of them per round.
-        int r = psBucket[Utf8.utf8Hash(Loader.gView.base, Loader.gView.thisNameOff) & (Loader.PVTAB - 1)];
+        int r = psBucket[Utf8.utf8Hash(Loader.gView.base.toAddress(), Loader.gView.thisNameOff) & (Loader.PVTAB - 1)];
         while (r >= 0)
         {
-            if (r >= virtFrom && Loader.utf8EqAt(pendBase.get(r), pendClass[r], Loader.gView.base, Loader.gView.thisNameOff))
+            if (r >= virtFrom && Loader.utf8EqAt(pendBase.get(r), pendClass[r], Loader.gView.base.toAddress(), Loader.gView.thisNameOff))
             {
                 long code = MethodTableCache.findDeclaredCached(b, pendBase.get(r), pendName[r], pendDesc[r]);
                 if (code != 0L)
@@ -1044,7 +1045,7 @@ final class Closure
     private static boolean markInheritedStatic(Address refBase, int nameOff, int descOff, Address curBase, int curLen)
     {
         boolean grew = false;
-        int pd = Loader.findPdByName(Loader.gView.base, Loader.gView.thisNameOff);        // current blob's pd (the ref class)
+        int pd = Loader.findPdByName(Loader.gView.base.toAddress(), Loader.gView.thisNameOff);        // current blob's pd (the ref class)
         while (pd >= 0 && Loader.pdSuperOff[pd] != 0)
         {
             int spd = Loader.findPdByName(Loader.pdBase.get(pd), Loader.pdSuperOff[pd]);
@@ -1175,13 +1176,13 @@ final class Closure
     /** pd index of {@code pd}'s superclass, or -1 (Object / super not loaded). */
     private static int superPdOf(int pd)
     {
-        Loader.parseConstPool(Loader.pdBase.get(pd), Loader.pdLen[pd]);
+        Loader.parseConstPool(DataReference.fromAddress(Loader.pdBase.get(pd)), Loader.pdLen[pd]);
         int superIdx = u2(Loader.gp.plus(4));                       // Loader.gp -> access_flags; this(+2), super(+4)
         if (superIdx == 0)
         {
             return SUPER_NONE;                           // java/lang/Object
         }
-        return Loader.findPdByName(Loader.gView.base, Loader.gView.cp[u2(Loader.gView.base.plus(Loader.gView.cp[superIdx]))]);
+        return Loader.findPdByName(Loader.gView.base.toAddress(), Loader.gView.cp[u2(Loader.gView.base.plus(Loader.gView.cp[superIdx]))]);
     }
 
     /**
@@ -1513,7 +1514,7 @@ final class Closure
         while (m < mcount)
         {
             int attrs = u2(p.plus(6));
-            grew = addReach(Loader.findCode(Loader.gView.base, p.plus(8), attrs)) || grew;   // 0 for a native/abstract method
+            grew = addReach(Loader.findCode(Loader.gView.base.toAddress(), p.plus(8), attrs)) || grew;   // 0 for a native/abstract method
             p = Loader.skipAttributes(p.plus(8), attrs);
             m += 1;
         }
@@ -1578,9 +1579,9 @@ final class Closure
         while (m < mcount)
         {
             int attrs = u2(p.plus(6));
-            if (Loader.utf8EqAt(refBase, nameOff, Loader.gView.base, Loader.gView.cp[u2(p.plus(2))]) && Loader.utf8EqAt(refBase, descOff, Loader.gView.base, Loader.gView.cp[u2(p.plus(4))]))
+            if (Loader.utf8EqAt(refBase, nameOff, Loader.gView.base.toAddress(), Loader.gView.cp[u2(p.plus(2))]) && Loader.utf8EqAt(refBase, descOff, Loader.gView.base.toAddress(), Loader.gView.cp[u2(p.plus(4))]))
             {
-                long code = Loader.findCode(Loader.gView.base, p.plus(8), attrs);
+                long code = Loader.findCode(Loader.gView.base.toAddress(), p.plus(8), attrs);
                 if (code != 0L)
                 {
                     return code;
@@ -1609,7 +1610,7 @@ final class Closure
             {
                 Address base = Loader.dpBase.get(d);                 // referenced class name (Utf8 in this blob)
                 int off = Loader.dpOff[d];
-                if (!nameRegistered(base, off) && registerNameFromDir(base, off) != 0L)
+                if (!nameRegistered(base, off) && registerNameFromDir(DataReference.fromAddress(base), off) != 0L)
                 {
                     grew = true;
                 }
@@ -1691,18 +1692,18 @@ final class Closure
     }
 
     /** Register the class named at Utf8 offset {@code off} in {@code base} if it's embedded; returns its base or 0. */
-    static long registerNameFromDir(Address base, int off)
+    static long registerNameFromDir(DataReference base, int off)
     {
         Address namePtr = base.plus(off + 2);                 // skip the u2 length prefix
         int len = u2(base.plus(off));
         // java/lang/Object is every class's superclass, so auto-pulling it from the dir would drag it into
         // EVERY closure (changing every vtable). It's an implicit root: loaded only when a demo explicitly
         // seeds it (the HashMap closure does, so String there inherits its hashCode/equals slots).
-        if (Utf8.utf8IsAtBase(base, off, Magic.bytes("java/lang/Object")))
+        if (Utf8.utf8IsAtBase(base.toAddress(), off, Magic.bytes("java/lang/Object")))
         {
             return 0L;
         }
-        if (Loader.isDenylisted(base, off))                   // metal-absent subtree: prune (a call to it traps, see patchRelocs)
+        if (Loader.isDenylisted(base.toAddress(), off))                   // metal-absent subtree: prune (a call to it traps, see patchRelocs)
         {
             return 0L;
         }

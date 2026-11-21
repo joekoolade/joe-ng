@@ -48,6 +48,11 @@ import java.util.zip.CRC32;
  * ITS OWN, and the solo run is the verdict, so batching can never fail a probe. It can only MASK a failure through
  * shared state (a class already initialized by an earlier probe), which is what {@code solo} in the list is for.
  *
+ * <p>{@code --init-extra <lines>} appends lines ({@code \\n} separates several) to every boot's {@code /etc/init}, e.g.
+ * {@code gcmaps=2}: the frames/GC arc's shadow check with a collection every 1 MB (S4's worklist run). Its report
+ * lines ({@code gcmap...}) are filtered from the comparison; one printed in the middle of a probe's line still
+ * splits that line (TraceProbe, seen in every stress run).
+ *
  * <p>{@code --board virt} builds QEMU {@code virt} images ({@code BuildRuntimeImage --board virt}) and boots them under
  * HVF ({@code -accel hvf -cpu host}, Apple silicon), where a probe runs in about a second instead of a minute;
  * {@code --tcg} emulates a Cortex-A72 instead. The default is the Pi image on {@code -M raspi4b}. The same list and
@@ -73,7 +78,7 @@ public final class Regress
     private static final Pattern NOISE = Pattern.compile("^launch|^  batch|INITIALIZER RUNNING|^  \\.\\.\\.|^$"
             + "|UNREGISTERED SUPER|arrayadopt|NULL CLASS LITERAL|TRAP-WIRED|^\\[main|^gc:|^qemu|bakeMemosDropped"
             + "|sync: static|ARRAY ELEMENT|^  iface tier|UNRESOLVED STATIC|CTOR SKIPPED|^    tried|HUGE body"
-            + "|^code arena");
+            + "|^code arena|^gcmap");
 
     /** The VM printed this and halted for good (Heap, VMScheduler: a {@code wfe} spin), so no end marker follows. */
     private static final String HALTED = "|code arena OOM|heap OOM|large region OOM|MONITOR TABLE FULL";
@@ -108,6 +113,9 @@ public final class Regress
     /** {@code --board virt}: QEMU virt images instead of the Pi's on raspi4b; {@code --tcg}: emulate, not HVF. */
     private static boolean virt;
     private static boolean tcg;
+
+    /** {@code --init-extra}: lines appended to every boot's {@code /etc/init} (empty = none). */
+    private static String initExtra = "";
 
     /** The host server {@code net} probes talk to; its port, once started (0 = not started). */
     private static int netPort;
@@ -159,6 +167,11 @@ public final class Regress
                 int port = NetTcpServer.start();
                 System.out.println("NetTcpServer on 127.0.0.1:" + port + " -- run: java NetTcpProbe 127.0.0.1 " + port);
                 Thread.currentThread().join();
+            }
+            else if (args[i].equals("--init-extra") && i + 1 < args.length)
+            {
+                initExtra = args[i + 1].replace("\\n", "\n") + "\n";   // e.g. gcmaps=2: added to every /etc/init
+                i += 2;
             }
             else if (args[i].equals("--tcg"))
             {
@@ -488,6 +501,7 @@ public final class Regress
         {
             init.append("net=1\nargs=10.0.2.2 ").append(netPort).append('\n');
         }
+        init.append(initExtra);
         Path initFile = runDir.resolve(tag + ".init");
         Path img = runDir.resolve(tag + ".img");
         Path logFile = runDir.resolve(tag + ".log");

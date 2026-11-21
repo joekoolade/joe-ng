@@ -12,6 +12,7 @@
 package net;
 
 import magic.Address;
+import magic.DataReference;
 import magic.Magic;
 import vm.Heap;
 import vm.VM;
@@ -29,19 +30,19 @@ public final class Icmp
     /** Send an echo request to {@code targetIp} (via {@code targetMac}) and wait (~4 s) for its reply. */
     public static boolean ping(Address targetIp, Address targetMac, Address ourMac, Address ourIp)
     {
-        Address buf = Heap.allocData(128);
-        Link.send(buf, build(buf, targetIp, targetMac, ourMac, ourIp));
-        Address rx = Heap.allocData(2048);
+        DataReference buf = Heap.allocData(128);
+        Link.send(buf.toAddress(), build(buf.toAddress(), targetIp, targetMac, ourMac, ourIp));
+        DataReference rx = Heap.allocData(2048);
         long endT = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * 4L;
         while (Magic.readCNTPCT_EL0() < endT)
         {
-            int len = Link.waitFrame(rx, 2048, Link.RX_WAIT_MS);
+            int len = Link.waitFrame(rx.toAddress(), 2048, Link.RX_WAIT_MS);
             if (len == 0)
             {
                 VM.delayMs(2);
                 continue;
             }
-            int off = Link.ethOffset(rx, len);
+            int off = Link.ethOffset(rx.toAddress(), len);
             if (off < 0)
             {
                 continue;

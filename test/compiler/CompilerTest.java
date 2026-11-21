@@ -119,8 +119,9 @@ public final class CompilerTest
         // Its reference map (frames/GC arc S2): one call site, returning to word 8 (after the blr at 7); local 0
         // (the FieldFixture argument) is a reference; the operand stack entering the invoke is 1 deep (the
         // receiver, popped into x0 before the spill), so no operand slot is live across the call.
-        // Header: magic, sites, locals, operand slots, locals base, operand base, bit words, unique maps.
-        T.eqWords("FieldFixture.callVal map", new int[] {0x50414D47, 1, 1, 7, 8, 16, 1, 1, 8, 0x01000000, 1},
+        // Header: magic, sites, locals, operand slots, locals base, operand base, bit words, unique maps, out-args
+        // base (after the 7-slot spill area: 16 + 56 = 72), out-args slots.
+        T.eqWords("FieldFixture.callVal map", new int[] {0x50414D47, 1, 1, 7, 8, 16, 1, 1, 72, 0, 8, 0x01000000, 1},
                 gcMap(ff, "callVal", "(Lcompiler/FieldFixture;)I"));
         T.check("a leaf has no map", gcMap(ff, "get", "(Lcompiler/FieldFixture;)I").length == 0);
 
@@ -143,6 +144,12 @@ public final class CompilerTest
         T.check("raw site 0: slot 2 (n's second half) is dead", mapSlot(rm, 0, 2) == 0);
         T.check("raw site 0: slot 3 (an Address) is raw", mapSlot(rm, 0, 3) == 2);
         T.check("raw site 0: slot 4 (m, a long) is raw", mapSlot(rm, 0, 4) == 2);
+
+        // S4: a DataReference is a data reference (code 3), an ObjectReference a reference (code 1).
+        int[] dm = gcMap(mf, "data", "(Ljava/lang/Object;J)V");
+        T.check("data site 0: slot 0 (o) is a reference", mapSlot(dm, 0, 0) == 1);
+        T.check("data site 0: slot 3 (a DataReference) is a data reference", mapSlot(dm, 0, 3) == 3);
+        T.check("data site 0: slot 4 (an ObjectReference) is a reference", mapSlot(dm, 0, 4) == 1);
 
         // Yieldpoints (frames/GC arc S3): a prologue poll in a framed method, one per loop header, none in a
         // magic.Uninterruptible class. A poll is `ldr x16, [x16]` on the request word, then a cbz over the call.
@@ -424,15 +431,15 @@ public final class CompilerTest
     {
         int nSites = m[1];
         int bitWords = m[6];
-        int idx = m[8 + site * 2 + 1] & 0xFFFF;
+        int idx = m[10 + site * 2 + 1] & 0xFFFF;
         int bit = 2 * slot;
-        return (m[8 + nSites * 2 + idx * bitWords + (bit >> 5)] >>> (bit & 31)) & 3;
+        return (m[10 + nSites * 2 + idx * bitWords + (bit >> 5)] >>> (bit & 31)) & 3;
     }
 
     /** How many operand slots site {@code site} holds live across its call. */
     private static int mapLive(int[] m, int site)
     {
-        return (m[8 + site * 2 + 1] >>> 16) & 0xFF;
+        return (m[10 + site * 2 + 1] >>> 16) & 0xFF;
     }
 
     /** The method's words (instructions and map) compiled WITH yieldpoints, as the image writer does. */

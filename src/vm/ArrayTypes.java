@@ -13,6 +13,8 @@ package vm;
 
 import board.Uart;
 import magic.Address;
+import magic.ObjectReference;
+import magic.DataReference;
 import magic.AddressArray;
 import magic.Magic;
 import objectmodel.ObjectModel;
@@ -46,8 +48,8 @@ final class ArrayTypes
     static int refArrCount;
     /** java/lang/Object's Type (array super), or 0 if Object isn't loaded yet. */
     /** Cached Types of the two interfaces every array implements; 0 until each is found (Types never move). */
-    static Address cloneableTypeCache;
-    static Address serializableTypeCache;
+    static DataReference cloneableTypeCache;
+    static DataReference serializableTypeCache;
     /** {@code clTab[0, arrayIfaceScanned)} has been searched for those two names. */
     static int arrayIfaceScanned;
 
@@ -133,15 +135,15 @@ final class ArrayTypes
             int atype = Primitives.atypeForDescChar(Primitives.primTypeChar(compType));
             if (atype >= 0)
             {
-                Address arr = Heap.allocArray(length, RuntimeEntrypoints.arrayElemSizeOfAtype(atype));
-                arr.store(primArrayTib(atype));  // the SAME interned TIB `new int[]` uses
+                ObjectReference arr = Heap.allocArray(length, RuntimeEntrypoints.arrayElemSizeOfAtype(atype)).toObjectReference();
+                arr.toAddress().store(primArrayTib(atype));  // the SAME interned TIB `new int[]` uses
                 return arr.toLong();
             }
         }
-        Address arr = Heap.allocArray(length, ObjectModel.WORD);
+        ObjectReference arr = Heap.allocArray(length, ObjectModel.WORD).toObjectReference();
         if (!compType.isZero())
         {
-            arr.store(refArrayTib(compType));    // typed [L<component>;, interned per element
+            arr.toAddress().store(refArrayTib(compType));    // typed [L<component>;, interned per element
         }
         return arr.toLong();                                       // else a raw untyped array: still fills and returns
     }
@@ -189,7 +191,7 @@ final class ArrayTypes
             }
             if (ClassRegistry.classIndexByName(el) < 0)
             {
-                if (Loader.isDenylisted(Loader.utf8Blob(el), 0) || Loader.loadClassIncremental(el).isZero())
+                if (Loader.isDenylisted(Loader.utf8Blob(el).toAddress(), 0) || Loader.loadClassIncremental(el).isZero())
                 {
                     return 0L;
                 }
@@ -199,7 +201,7 @@ final class ArrayTypes
         {
             return 0L;                                  // 'V', an unknown char, or trailing bytes
         }
-        Address tib = arrayTibOfDesc(Loader.utf8Blob(desc), 0);
+        Address tib = arrayTibOfDesc(Loader.utf8Blob(desc).toAddress(), 0);
         return tib.toLong() <= ObjectModel.MAX_RAW_ARRAY_TIB ? 0L : ClassMirrors.classMirror(tib.loadAddress());
     }
 
@@ -220,19 +222,19 @@ final class ArrayTypes
         {
             return 0L;
         }
-        Address type = Address.fromLong(elemMirror).plus(16L).loadAddress();
+        DataReference type = Address.fromLong(elemMirror).plus(16L).loadDataReference();
         int k = 0;
         while (k < dims)
         {
-            Address tib = refArrayTib(type);
+            Address tib = refArrayTib(type.toAddress());
             if (tib.isZero())
             {
                 return 0L;
             }
-            type = tib.loadAddress();
+            type = DataReference.fromAddress(tib.loadAddress());
             k += 1;
         }
-        return ClassMirrors.classMirror(type);
+        return ClassMirrors.classMirror(type.toAddress());
     }
 
     /** As {@link #arrayOf}, for an array of the primitive with descriptor char {@code c}: {@code [I}, {@code [[J}. */
@@ -243,19 +245,19 @@ final class ArrayTypes
         {
             return 0L;
         }
-        Address type = tib.loadAddress();
+        DataReference type = tib.loadDataReference();
         int k = 1;
         while (k < dims)
         {
-            tib = refArrayTib(type);
+            tib = refArrayTib(type.toAddress());
             if (tib.isZero())
             {
                 return 0L;
             }
-            type = tib.loadAddress();
+            type = DataReference.fromAddress(tib.loadAddress());
             k += 1;
         }
-        return ClassMirrors.classMirror(type);
+        return ClassMirrors.classMirror(type.toAddress());
     }
 
     /** Absolute address of the ARRAY DESCRIPTOR Utf8 ({@code {u2 len}{bytes}}) named by {@code classCp} --
@@ -293,12 +295,12 @@ final class ArrayTypes
                 if (ClassRegistry.clTab[i] != null)
                 {
                     if (cloneableTypeCache.isZero()
-                            && Utf8.utf8IsAtBase(ClassRegistry.clTab[i].base, ClassRegistry.clTab[i].nameOff, Magic.bytes("java/lang/Cloneable")))
+                            && Utf8.utf8IsAtBase(ClassRegistry.clTab[i].base.toAddress(), ClassRegistry.clTab[i].nameOff, Magic.bytes("java/lang/Cloneable")))
                     {
                         cloneableTypeCache = ClassRegistry.clTab[i].type;
                     }
                     else if (serializableTypeCache.isZero()
-                            && Utf8.utf8IsAtBase(ClassRegistry.clTab[i].base, ClassRegistry.clTab[i].nameOff, Magic.bytes("java/io/Serializable")))
+                            && Utf8.utf8IsAtBase(ClassRegistry.clTab[i].base.toAddress(), ClassRegistry.clTab[i].nameOff, Magic.bytes("java/io/Serializable")))
                     {
                         serializableTypeCache = ClassRegistry.clTab[i].type;
                     }
@@ -307,14 +309,14 @@ final class ArrayTypes
             }
             arrayIfaceScanned = n;
         }
-        return type.EQ(cloneableTypeCache) || type.EQ(serializableTypeCache);
+        return type.EQ(cloneableTypeCache.toAddress()) || type.EQ(serializableTypeCache.toAddress());
     }
 
     /** Allocate an array Type {tag|elemSize, super=Object, itableDir=0, elementType} + a 1-word TIB; return the TIB. */
-    private static Address makeArrayTib(int elemSize, Address elementType)
+    private static DataReference makeArrayTib(int elemSize, Address elementType)
     {
-        Address type = Heap.allocData(ObjectModel.ARRAY_TYPE_SIZE);
-        Address objType = TibBuilder.objectTypeAddr();
+        DataReference type = Heap.allocData(ObjectModel.ARRAY_TYPE_SIZE);
+        DataReference objType = TibBuilder.objectTypeAddr();
         type.plus(ObjectModel.TYPE_INSTANCE_SIZE_OFFSET).store(ObjectModel.ARRAY_TYPE_TAG | (long) elemSize);
         type.plus(ObjectModel.TYPE_SUPER_OFFSET).store(objType);            // arr instanceof Object
         type.plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).store(0L);            // Cloneable/Serializable: later
@@ -323,15 +325,15 @@ final class ArrayTypes
         type.plus(ObjectModel.TYPE_DISPLAY_OFFSET).store(0L);
         type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).store(1L);   // empty-but-computed bitmap
         type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).store(0L);
-        DynamicTypeCheck.buildDisplay(type, objType);                     // depth 1, display [Object, self]
+        DynamicTypeCheck.buildDisplay(type.toAddress(), objType.toAddress());                     // depth 1, display [Object, self]
         // The array TIB carries java/lang/Object's vtable so an invokevirtual on an array works. An array's static
         // type is Object at a dispatch site (e.g. Arrays.deepEquals0's `e1.equals(e2)`, or `element.toString()` in
         // String.valueOf/join), so the receiver's TIB must resolve equals/hashCode/toString to Object's impls.
         // Without the vtable the dispatch read past a 1-word TIB and BLR'd garbage (a wild branch to the image entry).
         int nv = TibBuilder.objectVtableCount();
-        Address tib = Heap.allocData(8 + nv * 8);
+        DataReference tib = Heap.allocData(8 + nv * 8);
         tib.plus(ObjectModel.TIB_TYPE_SLOT * 8).store(type);                // TIB[0] = Type
-        TibBuilder.fillObjectVtable(tib);                                                   // TIB[1..] = Object's vtable slots
+        TibBuilder.fillObjectVtable(tib.toAddress());                                                   // TIB[1..] = Object's vtable slots
         return tib;
     }
 
@@ -392,7 +394,7 @@ final class ArrayTypes
             }
             else
             {
-                primArrTib.set(atype, makeArrayTib(Primitives.primElemSize(atype), Address.zero()));
+                primArrTib.set(atype, makeArrayTib(Primitives.primElemSize(atype), Address.zero()).toAddress());
             }
         }
         return primArrTib.get(atype);
@@ -427,27 +429,27 @@ final class ArrayTypes
             Address elTib = arrayTibOfDescN(base, off + 1, n - 1);
             return refArrayTib(elTib.isZero() ? Address.zero() : elTib.loadAddress());
         }
-        return refArrayTib(elementTypeOfArrayDescN(base, off, n));   // "[L<class>;"
+        return refArrayTib(elementTypeOfArrayDescN(base, off, n).toAddress());   // "[L<class>;"
     }
 
     /** Element Type of the {@code n}-byte reference-array descriptor "[L<class>;" at {@code base+off}
      *  (the class's Type, or 0 when unresolved). */
-    static Address elementTypeOfArrayDescN(Address base, int off, int n)
+    static DataReference elementTypeOfArrayDescN(Address base, int off, int n)
     {
         if (u1(base.plus(off + 1)) != 0x4C)                 // not 'L'
         {
-            return Address.zero();
+            return DataReference.zero();
         }
         int i = 0;                                      // strip the leading "[L" and trailing ';' -> class name
         while (i < ClassRegistry.clCount)
         {
-            if (Utf8.utf8SliceEq(base, off + 2, n - 3, ClassRegistry.clTab[i].base, ClassRegistry.clTab[i].nameOff))
+            if (Utf8.utf8SliceEq(base, off + 2, n - 3, ClassRegistry.clTab[i].base.toAddress(), ClassRegistry.clTab[i].nameOff))
             {
                 return ClassRegistry.clTab[i].type;
             }
             i += 1;
         }
-        return Address.zero();
+        return DataReference.zero();
     }
 
     /** Array TIB for a reference array with the given element Type; created + cached (keyed by element Type). */
@@ -498,7 +500,7 @@ final class ArrayTypes
         }
         if (tib.isZero())
         {
-            tib = makeArrayTib(ObjectModel.WORD, elementType);   // reference elements are 8-byte pointers
+            tib = (makeArrayTib(ObjectModel.WORD, elementType)).toAddress();   // reference elements are 8-byte pointers
         }
         if (refArrCount >= refArrTib.length())
         {
@@ -573,7 +575,7 @@ final class ArrayTypes
      */
     static Address refArrayTibForClass(int classCp)
     {
-        Address type = DynamicTypeCheck.typeOfClass(classCp);
+        DataReference type = DynamicTypeCheck.typeOfClass(classCp);
         if (type.isZero())
         {
             int nameOff = Loader.gView.cp[u2(Loader.gView.base.plus(Loader.gView.cp[classCp]))];
@@ -583,10 +585,10 @@ final class ArrayTypes
                 return Address.zero();                              // discarded compile: retried with it loaded
             }
             reportUntypedArray(Loader.gView.base.plus(nameOff));
-            Address obj = TibBuilder.objectTypeAddr();
-            return obj.isZero() ? Address.zero() : refArrayTib(obj);   // Object[]: covariance holds, elements traced
+            DataReference obj = TibBuilder.objectTypeAddr();
+            return obj.isZero() ? Address.zero() : refArrayTib(obj.toAddress());   // Object[]: covariance holds, elements traced
         }
-        return refArrayTib(type);
+        return refArrayTib(type.toAddress());
     }
 
     /**

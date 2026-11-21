@@ -13,6 +13,7 @@ package vm;
 
 import board.Uart;
 import magic.Address;
+import magic.DataReference;
 import magic.AddressArray;
 import magic.Magic;
 import magic.ObjectReference;
@@ -45,7 +46,7 @@ final class ClassMirrors
     static AddressArray mirType;        // VM Type addr key
     static ObjectReferenceArray mirObj;   // its Class mirror object (no initializer: created per batch)
     static int mirN;
-    static Address classTibCache;    // guest java/lang/Class's TIB (0 = not loaded)
+    static DataReference classTibCache;    // guest java/lang/Class's TIB (0 = not loaded)
     /** Print each loader reset: it clears the Class-mirror table, so mirrors minted before it go stale. */
     static final boolean MIRROR_RESET_WATCH = false;
     private static boolean mirFullReported;
@@ -98,7 +99,7 @@ final class ClassMirrors
             {
                 ClassInitializer.ensureClinit(ci);                           // JVMS 5.5: Class.forName(name) INITIALIZES the class
             }
-            return classMirror(ClassRegistry.clTab[ci].type);             // already loaded: cached mirror (identity-stable)
+            return classMirror(ClassRegistry.clTab[ci].type.toAddress());             // already loaded: cached mirror (identity-stable)
         }
         // A DENIED CLASS IS NOT FOUND, which is the truth: it is deliberately absent from this VM.
         //
@@ -108,20 +109,20 @@ final class ClassMirrors
         // moves that to a ClassNotFoundException the caller can handle: it is what lets ServiceLoader skip a
         // provider it cannot load (JUnit's file-writing OpenTestReportGeneratingListener) instead of halting
         // the run.
-        if (Loader.isDenylisted(Loader.utf8Blob(slash), 0))
+        if (Loader.isDenylisted(Loader.utf8Blob(slash).toAddress(), 0))
         {
             return 0L;                                  // => the guest throws ClassNotFoundException
         }
-        Address type = Loader.loadClassIncremental(slash);
+        DataReference type = Loader.loadClassIncremental(slash);
         if (!type.isZero())
         {
-            ClassInitializer.linkable(ClassRegistry.classRegByType(type));
+            ClassInitializer.linkable(ClassRegistry.classRegByType(type.toAddress()));
         }
         if (init)
         {
-            ClassInitializer.ensureClinit(ClassRegistry.classRegByType(type));         // JVMS 5.5: forName INITIALIZES, and this batch's
+            ClassInitializer.ensureClinit(ClassRegistry.classRegByType(type.toAddress()));         // JVMS 5.5: forName INITIALIZES, and this batch's
         }                                               // runClinits left a gated initializer pending
-        return type.isZero() ? 0L : classMirror(type);
+        return type.isZero() ? 0L : classMirror(type.toAddress());
     }
 
     /** The Class mirror of the internal name of {@code len} bytes at {@code p}, demand-loading it if needed. */
@@ -140,11 +141,11 @@ final class ClassMirrors
             Loader.loadClassIncremental(name);
             ci = ClassRegistry.classIndexByName(name);
         }
-        return ci < 0 ? 0L : classMirror(ClassRegistry.clTab[ci].type);
+        return ci < 0 ? 0L : classMirror(ClassRegistry.clTab[ci].type.toAddress());
     }
 
     /** The Type of {@code java/lang/Class}, for typing a {@code Class[]}. */
-    static Address classMirrorTypeAddr()
+    static DataReference classMirrorTypeAddr()
     {
         int i = ClassRegistry.classIndexByName(Magic.bytes("java/lang/Class"));
         return i < 0 ? TibBuilder.objectTypeAddr() : ClassRegistry.clTab[i].type;
@@ -176,31 +177,31 @@ final class ClassMirrors
         int ci = ClassRegistry.classIndexByName(name);
         if (ci >= 0)
         {
-            return classMirror(ClassRegistry.clTab[ci].type);
+            return classMirror(ClassRegistry.clTab[ci].type.toAddress());
         }
-        if (Loader.isDenylisted(Loader.utf8Blob(name), 0))
+        if (Loader.isDenylisted(Loader.utf8Blob(name).toAddress(), 0))
         {
             ClassAttributes.reportNestedNotLoaded(name);
             return 0L;
         }
-        Address type = Loader.loadClassIncremental(name);
+        DataReference type = Loader.loadClassIncremental(name);
         if (type.isZero())
         {
             ClassAttributes.reportNestedNotLoaded(name);
             return 0L;
         }
-        return classMirror(type);
+        return classMirror(type.toAddress());
     }
 
     /** guest java/lang/Class's TIB, or 0 if it isn't loaded in this batch. */
-    private static Address classTib()
+    private static DataReference classTib()
     {
         if (classTibCache.isZero())
         {
             int i = 0;
             while (i < ClassRegistry.clCount)
             {
-                if (Utf8.utf8IsAtBase(ClassRegistry.clTab[i].base, ClassRegistry.clTab[i].nameOff, Magic.bytes("java/lang/Class")))
+                if (Utf8.utf8IsAtBase(ClassRegistry.clTab[i].base.toAddress(), ClassRegistry.clTab[i].nameOff, Magic.bytes("java/lang/Class")))
                 {
                     classTibCache = ClassRegistry.clTab[i].tib;
                     break;
@@ -231,22 +232,22 @@ final class ClassMirrors
         // signers(@48). Class mirrors are allocated HERE rather than by a constructor, so this size must track the
         // overlay's field count by hand: a field declared in guestsrc/java/lang/Class.java but not counted here is
         // written PAST the object.
-        Address obj = Heap.alloc(56);
-        Address ctib = classTib();
+        ObjectReference obj = Heap.alloc(56).toObjectReference();
+        DataReference ctib = classTib();
         if (mirN >= mirType.length())
         {
-            reportMirrorCacheFull(type, ctib);              // past here getClass() mints a NEW mirror each ask
+            reportMirrorCacheFull(type, ctib.toAddress());              // past here getClass() mints a NEW mirror each ask
         }
         if (ctib.isZero())
         {
             reportMirrorNoTib(type);                        // a TIB-0 mirror is a WILD DISPATCH, not an identity
         }
-        obj.plus(0L).store(ctib);                      // TIB (0 -> a bare identity object; see the report)
-        obj.plus(16L).store(type);                     // the VM Type this Class mirrors
+        obj.toAddress().plus(0L).store(ctib);                      // TIB (0 -> a bare identity object; see the report)
+        obj.toAddress().plus(16L).store(type);                     // the VM Type this Class mirrors
         if (mirN < mirType.length())
         {
             mirType.set(mirN, type);
-            mirObj.set(mirN, obj.toObjectReference());
+            mirObj.set(mirN, obj);
             mirN += 1;
         }
         return obj.toLong();
@@ -312,12 +313,12 @@ final class ClassMirrors
 
     static long selfClassMirror()
     {
-        return classMirror(Loader.gBuild.type);
+        return classMirror(Loader.gBuild.type.toAddress());
     }
 
     static long classLiteral(int classCp)
     {
-        Address type = DynamicTypeCheck.typeOfClass(classCp);
+        DataReference type = DynamicTypeCheck.typeOfClass(classCp);
         if (type.isZero())
         {
             // A CLASS LITERAL FOR A CLASS NOTHING PULLED. `emitAddr` bakes the mirror as an IMMEDIATE, so
@@ -335,7 +336,7 @@ final class ClassMirrors
             }
             reportNullClassLiteral(Loader.gView.base.plus(nameOff));
         }
-        return classMirror(type);
+        return classMirror(type.toAddress());
     }
 
     /** Name a class literal that stayed null -- silence here surfaces as an NPE in unrelated code. */
@@ -414,7 +415,7 @@ final class ClassMirrors
         {
             if (MethodRegistry.rgTab[i].buf == blk)
             {
-                return classMirrorByName(MethodRegistry.rgTab[i].base, MethodRegistry.rgTab[i].classOff);
+                return classMirrorByName(MethodRegistry.rgTab[i].base.toAddress(), MethodRegistry.rgTab[i].classOff);
             }
             i += 1;
         }
@@ -440,9 +441,9 @@ final class ClassMirrors
         int ci = 0;
         while (ci < ClassRegistry.clCount)
         {
-            if (ClassRegistry.clTab[ci] != null && Loader.utf8EqAt(ClassRegistry.clTab[ci].base, ClassRegistry.clTab[ci].nameOff, base, off))
+            if (ClassRegistry.clTab[ci] != null && Loader.utf8EqAt(ClassRegistry.clTab[ci].base.toAddress(), ClassRegistry.clTab[ci].nameOff, base, off))
             {
-                return classMirror(ClassRegistry.clTab[ci].type);
+                return classMirror(ClassRegistry.clTab[ci].type.toAddress());
             }
             ci += 1;
         }

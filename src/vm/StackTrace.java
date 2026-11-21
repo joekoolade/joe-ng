@@ -14,6 +14,7 @@ package vm;
 import board.Uart;
 import classfile.ClassReader;
 import magic.Address;
+import magic.DataReference;
 import magic.Magic;
 import magic.ObjectReference;
 import objectmodel.ObjectModel;
@@ -56,7 +57,7 @@ final class StackTrace
     private static int[] lnAt;
 
     /** TIB of {@code java/lang/StackTraceElement}, pulling the class if it is not loaded yet (0 only if absent). */
-    private static Address steTib()
+    private static DataReference steTib()
     {
         int i = ClassRegistry.classIndexByName(Magic.bytes("java/lang/StackTraceElement"));
         if (i < 0)
@@ -81,7 +82,7 @@ final class StackTrace
             }
             i = ClassRegistry.classIndexByName(Magic.bytes("java/lang/StackTraceElement"));
         }
-        return i >= 0 ? ClassRegistry.clTab[i].tib : Address.zero();
+        return i >= 0 ? ClassRegistry.clTab[i].tib : DataReference.zero();
     }
 
     /**
@@ -127,7 +128,7 @@ final class StackTrace
         {
             clsStr = Loader.guestBinaryName(MethodRegistry.rgTab[bestReg].base.plus(MethodRegistry.rgTab[bestReg].classOff + 2L),
                     u2(MethodRegistry.rgTab[bestReg].base.plus(MethodRegistry.rgTab[bestReg].classOff)));
-            methStr = Loader.guestStringUtf8(MethodRegistry.rgTab[bestReg].base, MethodRegistry.rgTab[bestReg].nameOff);
+            methStr = Loader.guestStringUtf8(MethodRegistry.rgTab[bestReg].base.toAddress(), MethodRegistry.rgTab[bestReg].nameOff);
             fileStr = Loader.guestStringUtf8(MethodRegistry.rgTab[bestReg].src, 0);
             line = lineAtOffset(MethodRegistry.rgTab[bestReg].line, (int) ((pc.toLong() - bestBuf) >> 2));
         }
@@ -210,12 +211,12 @@ final class StackTrace
             steLineOff = FieldRegistry.instanceFieldOffset(si, Magic.bytes("lineNumber"));
             steFieldsTib = steTib;
         }
-        Address ste = Heap.alloc((int) steSize);
-        ste.store(steTib);
-        ste.plus(steClassOff).store(clsStr);
-        ste.plus(steMethodOff).store(methStr);
-        ste.plus(steFileOff).store(fileStr);
-        ste.plus(steLineOff).store(line);
+        ObjectReference ste = Heap.alloc((int) steSize).toObjectReference();
+        ste.toAddress().store(steTib);
+        ste.toAddress().plus(steClassOff).store(clsStr);
+        ste.toAddress().plus(steMethodOff).store(methStr);
+        ste.toAddress().plus(steFileOff).store(fileStr);
+        ste.toAddress().plus(steLineOff).store(line);
         return ste.toLong();
     }
 
@@ -282,7 +283,7 @@ final class StackTrace
         {
             return 0L;
         }
-        Address tib = steTib();
+        DataReference tib = steTib();
         Address deep = Address.fromLong(throwableBacktrace(exc));             // every frame, when there were more than eight
         int n = 0;
         if (!deep.isZero())
@@ -296,17 +297,17 @@ final class StackTrace
                 n += 1;
             }
         }
-        Address arr = Heap.allocArray(n, 8);
+        ObjectReference arr = Heap.allocArray(n, 8).toObjectReference();
         if (!tib.isZero())
         {
-            arr.plus(ObjectModel.TIB_OFFSET).store(ArrayTypes.refArrayTib(tib.loadAddress()));
+            arr.toAddress().plus(ObjectModel.TIB_OFFSET).store(ArrayTypes.refArrayTib(tib.loadAddress()));
         }
         int i = 0;
         while (i < n)
         {
             Address fpc = !deep.isZero() ? deep.plus(ObjectModel.ARRAY_BASE_OFFSET).plus((long) i * 8L).loadAddress()
                                      : exc.toAddress().plus(16L).plus((long) i * 8L).loadAddress();
-            arr.plus(24L).plus((long) i * 8L).store(frameToElement(fpc, tib));
+            arr.toAddress().plus(24L).plus((long) i * 8L).store(frameToElement(fpc, tib.toAddress()));
             i += 1;
         }
         return arr.toLong();
@@ -367,8 +368,8 @@ final class StackTrace
             exc.toAddress().plus(off).store(exc);
             return 0L;
         }
-        Address arr = Heap.allocArray(n, 8);
-        arr.plus(ObjectModel.TIB_OFFSET).store(ArrayTypes.primArrayTib(11));   // long[]
+        ObjectReference arr = Heap.allocArray(n, 8).toObjectReference();
+        arr.toAddress().plus(ObjectModel.TIB_OFFSET).store(ArrayTypes.primArrayTib(11));   // long[]
         exc.toAddress().plus(off).store(arr);
         return arr.toLong();
     }
@@ -376,16 +377,17 @@ final class StackTrace
     /** Materialise a {@code StackTraceElement[]} for the frame chain at ({@code pc},{@code sp}). */
     static long buildTrace(long pc, long sp, long savedX30)
     {
-        Address tib = steTib();
-        int count = traceWalk(pc, sp, savedX30, 0L, tib);  // pass 1: count
-        long arr = Heap.allocArray(count, 8).toLong();              // StackTraceElement[count]
+        DataReference tib = steTib();
+        int count = traceWalk(pc, sp, savedX30, 0L, tib.toAddress());  // pass 1: count
+        ObjectReference arrRef = Heap.allocArray(count, 8).toObjectReference();              // StackTraceElement[count]
+        long arr = arrRef.toLong();                  // a raw copy; arrRef keeps the block alive
         if (!tib.isZero())
         {
             // Give the array the [LStackTraceElement; TIB (element Type = TIB[0]) so a `checkcast
             // [LStackTraceElement;` on a Map.Entry.getValue() result passes instead of walking a null Type.
             Address.fromLong(arr).plus(ObjectModel.TIB_OFFSET).store(ArrayTypes.refArrayTib(tib.loadAddress()));
         }
-        traceWalk(pc, sp, savedX30, arr, tib);             // pass 2: fill
+        traceWalk(pc, sp, savedX30, arr, tib.toAddress());             // pass 2: fill
         return arr;
     }
 

@@ -4,6 +4,71 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **FRAMES/GC ARC, INCREMENT S4: hidden references (2026-11-20).** Every reference the VM's own Java kept in a raw
+  word across a call now has a typed home a precise collector will see; the S2 shadow check finds no hidden
+  reference left over the whole probe regression and the demo suite under GC stress. Decided with the user:
+  `ObjectReference` is a reference, and EVERY raw block is rewritten (class-file blobs and `Type` records too, not
+  only scratch buffers).
+  - **`magic.DataReference`** (new unboxed type): the payload address of a raw `allocData` block. Lowered exactly as
+    `Address` (`compiler.Unboxed.DATA_REFERENCE` uses the same rules, plus `fromAddress`; `Address` gains
+    `loadDataReference` and `store(DataReference)`), but the reference maps give it its own code (3 = keeps the
+    block at value - 16). `Heap.allocData` returns one; arithmetic on it answers an `Address` (a derived pointer).
+  - **The maps:** `ObjectReference` slots are references (code 1); `DataReference` slots are data references (code
+    3). The shadow's map-error test now holds both to their kind -- a reference slot must hold an object base, a
+    data-reference slot a payload -- and found none wrong. Header +2 words: the out-args range, so the shadow can
+    tell an out-arg (reported) from the frame's alignment word (never written: stale, counted as `frame-pad`).
+  - **The rewrite** (73 files): `allocData` callers, every loader record that holds a blob or Type
+    (`RVMClass.base/type/tib/statics`, `RVMMethod`, `RVMField`, `VtSlot`, `LazyMethod`, `DynLink`, `ClassBuild`,
+    `ClassFileView.base`), the Type/TIB getters (`objectTypeAddr`, `stringTib`, `loadClassIncremental`, ...), every
+    `Type`/TIB read out of memory into a local (`loadDataReference`), the parameters the shadow found holding a Type
+    or blob (`Reflection.*Resolve*`, `LazyCompiler.compileMethodOnDemand*`, `ensureInitOfType`, `parseConstPool`,
+    ...), the pinned helper `VM.newCce(ObjectReference, DataReference)` (descriptor updated in ImageBuilder and
+    SelfBuild), and the 48 fresh objects held as `Address` locals (now `ObjectReference`). Where code does `long`
+    arithmetic on a fresh block (SelfBuild, Fat32, 35 sites), the block gets a typed OWNER local and the arithmetic
+    keeps a raw copy. Cursors (a pointer later moved with `plus`) stay `Address`: a data reference never holds an
+    interior pointer.
+  - **Borrowed copies are explained, not hidden:** a raw word whose block a typed slot on the SAME stack holds (an
+    `Address` argument a callee borrows from its caller's `DataReference`) is counted as `borrowed`. The shadow walks
+    each stack twice for it (owners first). A precise collector needs only the owner; a MOVING one (S7) will need
+    those derived copies recorded -- the derived-pointer requirement PLAN.md already names for the opt compiler.
+  - **The concat builder** (`Baseline.lowerConcat`) lives in an operand transient above the bytecode's stack across
+    every append call; the lowering now says so (`noteRefTransient`), and the map types that slot a reference at the
+    calls in range (the shadow honours a transient's bits).
+  - **A real map bug found by the GC stress, fixed:** `dispatchTargetGuard`'s inline AIOOBE block sits between a
+    virtual call's spill and its `blr`, and its own spills made `RefMaps` pair the call with the wrong spill -- the
+    popped receiver slot read as a live reference holding a stale `Type`: the one MAP ERROR (RunProbe,
+    SslEngineProbe). `throwImplicit` now re-notes the spill that was current before its block.
+  - **Instruments:** `gcmaps=2` in `/etc/init` = the shadow check plus a collection every 1 MB (`Heap.gcStressBytes`);
+    `gcmaps`/`safepoints` are now read before the `main=` test, so the no-program demo suite can use them.
+    `Regress.java --init-extra gcmaps=2` adds the line to every boot. Report lines name the kind of payload
+    (`/blob`, `/type`, `/payload`).
+  - **A trap paid on the way:** a helper the compiler reaches through a PINNED DESCRIPTOR (`VMConcat.scFloat`, in
+    ImageBuilder and WriterSymbols) must keep its signature: retyping its parameter left the helper unstashed
+    (`helper-stash MISS` -- printed, but buried in the build log) and every float concatenation branched to 0
+    (`elr=0x40080000` on virt, in seven batches). The concat helpers stay `Address`; their caller's builder is typed
+    by the transient note instead.
+  - **What is left in the shadow, and why it is not S4's:** `no-map` -- stubs and trampolines (S5: descriptor maps);
+    `unwalked`/`regs` -- a suspended task's saved registers and the stack above its top frame (S5). And raw `long`
+    locals holding `CNTPCT` TIMESTAMPS (`Loader.loadAllLocked` `tAll`/`bw0`, `Closure.markReachable` `ts0..ts3`,
+    `compileClass` `cc0`, `loadBodies` `lb*`): their values fall in the heap's address range and coincide with block
+    addresses. Not references -- the conservative scan is fooled by them, a precise one will not be.
+  - **Measured (QEMU virt, all 210 probes, `gcmaps=2`):** 209/210 -- TraceProbe differs only by a report line printed
+    inside its output line; 0 map errors; no unowned raw local, operand or transient. The worklist went 170 slot
+    reports in ~90 methods -> 0. Without stress: 210/210. **Demo suite (raspi4b, `gcmaps=2`):** 40 programs returned,
+    `want: checked=160 mismatch=0`, 787 collections each shadow-checked: 0 map errors, local-raw 0, op-raw 0, op-temp
+    0, 22,583 borrowed copies explained; 7,932 suspended tasks skipped as stopped outside a site (forced preemptions
+    on QEMU -- S5 must drive those to 0, as S3 recorded).
+  - **Cost:** image 39,830,260 -> 39,879,384 bytes (+49 KB); maps 486 KB after 2,084 KB of code. No new
+    instructions in compiled code: `DataReference` lowers exactly as `Address`.
+  - **Pi 4, build `5134e1c0b2960eef`** (default init; sha256 = host; pages 200). FrameBench, three fresh boots,
+    checksums identical to S3; medians: fib 69.2, locals 35.1, sort 100.3, tree 29.8, strings 23.2, sha256 217.3,
+    bigint 39.5 ms -- sum without dispatch **514.4 vs S3's 524.8 (-2.0%, noise-level; no codegen change)**.
+  - **Pi 4 with `gcmaps=1`** (build `354ec33aa15149dd`; 18 page loads + one FrameBench run): 14 collections, 14
+    shadow checks, **0 map errors, 0 hidden** (raw local 0, raw operand 0, lowering transient 0 -- S2's Pi run had
+    37 raw locals), 641 explained, 31 borrowed, 12 stub-frame words (S5), 8 unwalked. The `/gc` page's labels now
+    name the S4 categories. Default image `c8cf44c068684365` restored (this branch, default init; sha256 = host).
+  - Tests: CompilerTest 74 (a `DataReference` slot is code 3, an `ObjectReference` slot code 1, the map header's
+    out-args words); UnboxedTest 104 (the `DataReference` lowerings). `make test` + overlaycheck OK.
 - **FRAMES/GC ARC, INCREMENT S3: safepoints (2026-11-20).** The timer no longer switches tasks at an arbitrary
   instruction: it asks, and the task switches at its next **yieldpoint**, whose call site has a reference map (S2).
   A collection's other cores park there too.

@@ -13,6 +13,7 @@ package vm;
 
 import board.Uart;
 import magic.Address;
+import magic.DataReference;
 import magic.Magic;
 import magic.ObjectReference;
 import objectmodel.ObjectModel;
@@ -297,12 +298,12 @@ final class VMNatives
             return 0L;                                     // boot-time force-compile passes 0; no-op
         }
         long size = ref.toAddress().plus(8L).loadLong() & -8L;          // block size from the status word
-        Address copy = Heap.alloc((int) size);
-        copy.store(ref.toAddress().loadLong());            // same TIB (raw elem size or typed array TIB)
+        ObjectReference copy = Heap.alloc((int) size).toObjectReference();
+        copy.toAddress().store(ref.toAddress().loadLong());            // same TIB (raw elem size or typed array TIB)
         long i = 16L;
         while (i < size)
         {
-            copy.plus(i).store(ref.toAddress().plus(i).loadLong());
+            copy.toAddress().plus(i).store(ref.toAddress().plus(i).loadLong());
             i += 8L;
         }
         return copy.toLong();
@@ -337,12 +338,12 @@ final class VMNatives
         {
             return 0L;
         }
-        Address type = mirror.toAddress().plus(16L).loadAddress();            // mirror -> Type (@16)
+        DataReference type = mirror.toAddress().plus(16L).loadDataReference();            // mirror -> Type (@16)
         if (type.isZero())
         {
             return 0L;
         }
-        return ArrayTypes.arrayComponentMirror(type);           // answers 0 for a non-array Type
+        return ArrayTypes.arrayComponentMirror(type.toAddress());           // answers 0 for a non-array Type
     }
 
     /**
@@ -447,10 +448,10 @@ final class VMNatives
         {
             return 0L;
         }
-        Address type = mirror.toAddress().plus(16L).loadAddress();
+        DataReference type = mirror.toAddress().plus(16L).loadDataReference();
         Address fnBase = nameArr.toAddress().plus(24L);         // byte[] payload
         int fnLen = (int) nameArr.toAddress().plus(16L).loadLong();  // byte[] length
-        return Reflection.staticCellFor(type, fnBase, fnLen);
+        return Reflection.staticCellFor(type.toAddress(), fnBase, fnLen);
     }
 
     /** {@code Class.declaredFieldAt0(Class,int)} native: the NAME of the n-th field the class declares. */
@@ -1145,7 +1146,7 @@ final class VMNatives
         {
             return 0L;                                     // boot-time force-compile passes 0; no-op
         }
-        return Loader.classNameString(mirror.toAddress().plus(16L).loadAddress());
+        return Loader.classNameString(DataReference.fromAddress(mirror.toAddress().plus(16L).loadAddress()));
     }
 
     /**
@@ -1228,8 +1229,8 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView -- see the class doc
         try
         {
-            Address type = Loader.defineFromBytes(byteArr, (int) off, (int) len);
-            return type.isZero() ? 0L : ClassMirrors.classMirror(type);
+            DataReference type = Loader.defineFromBytes(byteArr, (int) off, (int) len);
+            return type.isZero() ? 0L : ClassMirrors.classMirror(type.toAddress());
         }
         finally
         {
@@ -1251,7 +1252,7 @@ final class VMNatives
         VM.loaderLock(VM.LOCK_REFLECT);      // re-points gView: a nested class's InnerClasses entry
         try                                  // is read from its blob -- see the class doc
         {
-            return (long) Reflection.classModifiersOf(mirror.toAddress().plus(16L).loadAddress());
+            return (long) Reflection.classModifiersOf(DataReference.fromAddress(mirror.toAddress().plus(16L).loadAddress()));
         }
         finally
         {
@@ -1277,7 +1278,7 @@ final class VMNatives
         {
             return -1;                                     // boot force-compile passes 0
         }
-        return Reflection.methodResolveDesc(mirrorRef.toAddress().plus(16L).loadAddress(), nameArrRef, descArrRef);
+        return Reflection.methodResolveDesc(DataReference.fromAddress(mirrorRef.toAddress().plus(16L).loadAddress()), nameArrRef, descArrRef);
     }
 
     /** Reflection: {@code Method.exact0(Class,byte[],byte[])} -> registry index of the method that class itself
@@ -1288,7 +1289,7 @@ final class VMNatives
         {
             return -1;                                     // boot force-compile passes 0
         }
-        return Reflection.methodResolveExact(mirrorRef.toAddress().plus(16L).loadAddress(), nameArrRef, descArrRef);
+        return Reflection.methodResolveExact(DataReference.fromAddress(mirrorRef.toAddress().plus(16L).loadAddress()), nameArrRef, descArrRef);
     }
 
     /** {@code MethodHandleNatives.declared0(Class,byte[],byte[])} -> see {@code Loader.mhDeclaredIndex}. */
@@ -1298,7 +1299,7 @@ final class VMNatives
         {
             return -1;                                     // boot force-compile passes 0
         }
-        return Reflection.mhDeclaredIndex(mirrorRef.toAddress().plus(16L).loadAddress(), nameArrRef, descArrRef);
+        return Reflection.mhDeclaredIndex(DataReference.fromAddress(mirrorRef.toAddress().plus(16L).loadAddress()), nameArrRef, descArrRef);
     }
 
     /** Reflection: {@code Method.itableTarget0(Object,int)} -> the receiver's itable answer for that method, or 0. */
@@ -1337,7 +1338,7 @@ final class VMNatives
         {
             return -1;                                     // boot force-compile passes 0
         }
-        return Reflection.constructorResolveDesc(mirrorRef.toAddress().plus(16L).loadAddress(), descArrRef);
+        return Reflection.constructorResolveDesc(DataReference.fromAddress(mirrorRef.toAddress().plus(16L).loadAddress()), descArrRef);
     }
 
     /** Reflection: {@code Constructor.ctorResolve0(Class,int)} -> registry index of the <init> with that arity, or -1. */
@@ -1347,7 +1348,7 @@ final class VMNatives
         {
             return -1;                                     // boot force-compile passes 0
         }
-        return Reflection.constructorResolve(mirrorRef.toAddress().plus(16L).loadAddress(), (int) paramCount);
+        return Reflection.constructorResolve(DataReference.fromAddress(mirrorRef.toAddress().plus(16L).loadAddress()), (int) paramCount);
     }
 
     /** Reflection: {@code Constructor.allocInstance0(Class)} -> a fresh zeroed instance (TIB set), or 0. */
@@ -1357,7 +1358,7 @@ final class VMNatives
         {
             return 0L;                                     // boot force-compile passes 0
         }
-        return Reflection.allocInstance(mirrorRef.toAddress().plus(16L).loadAddress());
+        return Reflection.allocInstance(mirrorRef.toAddress().plus(16L).loadDataReference()).toLong();
     }
 
     /**
@@ -1372,7 +1373,7 @@ final class VMNatives
         {
             return 0L;                                     // boot force-compile passes 0
         }
-        ClassInitializer.ensureInitOfType(mirrorRef.toAddress().plus(16L).loadAddress());
+        ClassInitializer.ensureInitOfType(DataReference.fromAddress(mirrorRef.toAddress().plus(16L).loadAddress()));
         return 0L;
     }
 
@@ -1397,8 +1398,8 @@ final class VMNatives
         {
             return 0L;
         }
-        Address st = mirror.toAddress().plus(16L).loadAddress().plus(8L).loadAddress();
-        return st.isZero() ? 0L : ClassMirrors.classMirror(st);
+        DataReference st = mirror.toAddress().plus(16L).loadAddress().plus(8L).loadDataReference();
+        return st.isZero() ? 0L : ClassMirrors.classMirror(st.toAddress());
     }
 
     /**
@@ -1441,8 +1442,8 @@ final class VMNatives
         }
         int hlen = (int) hostArrRef.toAddress().plus(16L).loadLong();   // guest byte[] length
         byte[] host = heapBytes(hostArrRef.toAddress().plus(24L), hlen);
-        Address ipOut = Heap.allocData(4);
-        if (!net.Dns.resolve(host, ipOut))
+        DataReference ipOut = Heap.allocData(4);
+        if (!net.Dns.resolve(host, ipOut.toAddress()))
         {
             return 0;
         }
@@ -1464,11 +1465,11 @@ final class VMNatives
         }
         if (key == 0L)
         {
-            return beInt(net.Ip.ourIp);
+            return beInt(net.Ip.ourIp.toAddress());
         }
         if (key == 1L)
         {
-            return net.Ip.netMask.isZero() ? 0L : beInt(net.Ip.netMask);
+            return net.Ip.netMask.isZero() ? 0L : beInt(net.Ip.netMask.toAddress());
         }
         if (key == 2L && !net.Ip.ourMac.isZero())
         {
@@ -1507,8 +1508,8 @@ final class VMNatives
         }
         int fnLen = (int) fnameArrRef.toAddress().plus(16L).loadLong();   // guest byte[] length
         Address fnBase = fnameArrRef.toAddress().plus(24L);         // guest byte[] data
-        Address tib = objRef.toAddress().loadAddress();                     // obj header TIB
-        return MethodHandles.vhFieldOffset(fnBase, fnLen, tib);
+        DataReference tib = objRef.toAddress().loadDataReference();                     // obj header TIB
+        return MethodHandles.vhFieldOffset(fnBase, fnLen, tib.toAddress());
     }
 
     /**
@@ -1573,7 +1574,7 @@ final class VMNatives
         {
             return tib == 0L ? 0L : 1L;                       // raw array: the TIB slot IS the element size
         }
-        Address type = Address.fromLong(tib).loadAddress();
+        DataReference type = Address.fromLong(tib).loadDataReference();
         if (type.isZero())
         {
             return 0L;
@@ -1690,14 +1691,14 @@ final class VMNatives
     /** Byte offset of the instance field {@code name} in {@code obj}'s class or a superclass, or -1. */
     private static long fieldOffsetNamed(ObjectReference obj, byte[] name)
     {
-        Address raw = Heap.allocData(name.length);
+        DataReference raw = Heap.allocData(name.length);
         int i = 0;
         while (i < name.length)
         {
             raw.plus(i).store(name[i]);
             i += 1;
         }
-        return MethodHandles.vhFieldOffset(raw, name.length, obj.toAddress().loadAddress());
+        return MethodHandles.vhFieldOffset(raw.toAddress(), name.length, obj.toAddress().loadAddress());
     }
 
     /**

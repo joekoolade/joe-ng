@@ -12,6 +12,7 @@
 package net;
 
 import magic.Address;
+import magic.DataReference;
 import magic.Magic;
 import vm.Heap;
 import vm.VMScheduler;
@@ -50,7 +51,7 @@ public final class RxQueues
     /** true once the RX task owns the chip: every receive must go through a queue. */
     public static boolean active;
 
-    private static Address pool;                         // POOL * FRAME bytes
+    private static DataReference pool;                         // POOL * FRAME bytes
     private static int[] freeList;                       // free buffer indices (a stack)
     private static int freeTop;
     private static int lockSem = -1;                     // mutex over the pool and every queue's ring

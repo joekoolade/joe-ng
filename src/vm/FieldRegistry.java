@@ -54,8 +54,8 @@ final class FieldRegistry
         int j = 0;
         while (j < fldCount)
         {
-            if (Loader.utf8EqAt(ClassRegistry.clTab[classIdx].base, ClassRegistry.clTab[classIdx].nameOff, fldTab[j].base, fldTab[j].classOff)
-                    && Utf8.utf8IsAtBase(fldTab[j].base, fldTab[j].nameOff, fname))
+            if (Loader.utf8EqAt(ClassRegistry.clTab[classIdx].base.toAddress(), ClassRegistry.clTab[classIdx].nameOff, fldTab[j].base.toAddress(), fldTab[j].classOff)
+                    && Utf8.utf8IsAtBase(fldTab[j].base.toAddress(), fldTab[j].nameOff, fname))
             {
                 return 16L + fldTab[j].slot * 8L;
             }
@@ -80,8 +80,8 @@ final class FieldRegistry
         }
         while (fldIndexed < fldCount)                    // INCREMENTAL: the registry only grows
         {
-            int hh = Utf8.utf8Hash2(fldTab[fldIndexed].base, fldTab[fldIndexed].classOff,
-                               fldTab[fldIndexed].base, fldTab[fldIndexed].nameOff) & (FLDTAB - 1);
+            int hh = Utf8.utf8Hash2(fldTab[fldIndexed].base.toAddress(), fldTab[fldIndexed].classOff,
+                               fldTab[fldIndexed].base.toAddress(), fldTab[fldIndexed].nameOff) & (FLDTAB - 1);
             fldNext[fldIndexed] = fldBucket[hh];
             fldBucket[hh] = fldIndexed;
             fldIndexed += 1;
@@ -97,8 +97,8 @@ final class FieldRegistry
         int k = fldBucket[Utf8.utf8Hash2(clsBase, clsOff, nameBase, nameOff) & (FLDTAB - 1)];
         while (k >= 0)
         {
-            if (Loader.utf8EqAt(clsBase, clsOff, fldTab[k].base, fldTab[k].classOff)
-                    && Loader.utf8EqAt(nameBase, nameOff, fldTab[k].base, fldTab[k].nameOff))
+            if (Loader.utf8EqAt(clsBase, clsOff, fldTab[k].base.toAddress(), fldTab[k].classOff)
+                    && Loader.utf8EqAt(nameBase, nameOff, fldTab[k].base.toAddress(), fldTab[k].nameOff))
             {
                 if (best < 0 || k < best)
                 {
@@ -114,7 +114,7 @@ final class FieldRegistry
     {
         int classOff = Loader.refClassNameOff(idx);
         int nameOff = Loader.mrefNameOff(idx);
-        int i = fldIndexOf(Loader.gView.base, classOff, Loader.gView.base, nameOff);   // class-qualified
+        int i = fldIndexOf(Loader.gView.base.toAddress(), classOff, Loader.gView.base.toAddress(), nameOff);   // class-qualified
         if (i >= 0)
         {
             Loader.fieldOffsetLog(classOff, nameOff, 16 + fldTab[i].slot * 8, 1);
@@ -125,10 +125,10 @@ final class FieldRegistry
         // classes can declare a same-named field at different slots (e.g. Pattern.buffer @72 vs
         // Pattern$SliceNode.buffer): a name-only match on `Slice.buffer` wrongly returned Pattern's slot, so the
         // getfield read a bogus field off a Slice object -> null -> the #43 NPE in Pattern$BnM.optimize.
-        int pd = Loader.findPdByName(Loader.gView.base, classOff);
+        int pd = Loader.findPdByName(Loader.gView.base.toAddress(), classOff);
         while (pd >= 0)
         {
-            int i2 = fldIndexOf(Loader.pdBase.get(pd), Loader.pdNameOff[pd], Loader.gView.base, nameOff);   // declared by THIS ancestor
+            int i2 = fldIndexOf(Loader.pdBase.get(pd), Loader.pdNameOff[pd], Loader.gView.base.toAddress(), nameOff);   // declared by THIS ancestor
             if (i2 >= 0)
             {
                 Loader.fieldOffsetLog(classOff, nameOff, 16 + fldTab[i2].slot * 8, 2);
@@ -203,7 +203,7 @@ final class FieldRegistry
                 s += 1;
             }
         }
-        Address clsBase = Loader.gView.base;
+        Address clsBase = Loader.gView.base.toAddress();
         int clsOff = classOff;
         int hops = 0;
         while (hops < 64)
@@ -231,10 +231,10 @@ final class FieldRegistry
     {
         if (isStatic)
         {
-            int k = Statics.sgIndexOf(clsBase, clsOff, Loader.gView.base, nameOff);   // the static registry's hash index
+            int k = Statics.sgIndexOf(clsBase, clsOff, Loader.gView.base.toAddress(), nameOff);   // the static registry's hash index
             return k < 0 ? -1 : Statics.sgTab[k].access;
         }
-        int i = fldIndexOf(clsBase, clsOff, Loader.gView.base, nameOff);   // the same lookup globalFieldOffset makes
+        int i = fldIndexOf(clsBase, clsOff, Loader.gView.base.toAddress(), nameOff);   // the same lookup globalFieldOffset makes
         return i < 0 ? -1 : fldTab[i].access;
     }
 }

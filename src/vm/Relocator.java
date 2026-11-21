@@ -221,7 +221,7 @@ final class Relocator
             return;
         }
         rcAddr[rcCount] = blAddr;
-        rcBase.set(rcCount, Loader.gView.base);
+        rcBase.set(rcCount, Loader.gView.base.toAddress());
         rcClass[rcCount] = Loader.refClassNameOff(idx);
         rcName[rcCount] = Loader.mrefNameOff(idx);
         rcDesc[rcCount] = Loader.mrefDescOff(idx);
@@ -242,7 +242,7 @@ final class Relocator
             return;
         }
         rcAddr[rcCount] = bAddr;
-        rcBase.set(rcCount, Loader.gView.base);
+        rcBase.set(rcCount, Loader.gView.base.toAddress());
         rcClass[rcCount] = Loader.refClassNameOff(idx);
         rcName[rcCount] = Loader.mrefNameOff(idx);
         rcDesc[rcCount] = Loader.mrefDescOff(idx);
@@ -263,7 +263,7 @@ final class Relocator
         }
         rsAddr[rsCount] = loadAddr;
         rsReg[rsCount] = reg;
-        rsBase.set(rsCount, Loader.gView.base);
+        rsBase.set(rsCount, Loader.gView.base.toAddress());
         rsClass[rsCount] = Loader.refClassNameOff(idx);
         rsName[rsCount] = Loader.mrefNameOff(idx);
         rsCount += 1;

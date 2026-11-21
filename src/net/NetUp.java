@@ -12,6 +12,7 @@
 package net;
 
 import magic.Address;
+import magic.DataReference;
 import magic.Magic;
 import vm.Heap;
 
@@ -32,16 +33,16 @@ public final class NetUp
     public static boolean configure()
     {
         Address mac = Link.mac();
-        Address ip = Heap.allocData(4);
-        Address mask = Heap.allocData(4);
-        Address gw = Heap.allocData(4);
-        Address dns = Heap.allocData(4);
-        if (!Dhcp.lease(mac, ip, mask, gw, dns))
+        DataReference ip = Heap.allocData(4);
+        DataReference mask = Heap.allocData(4);
+        DataReference gw = Heap.allocData(4);
+        DataReference dns = Heap.allocData(4);
+        if (!Dhcp.lease(mac, ip.toAddress(), mask.toAddress(), gw.toAddress(), dns.toAddress()))
         {
             return false;
         }
-        Address gwMac = Heap.allocData(8);
-        if (!Arp.resolve(gw, gwMac, mac, ip))
+        DataReference gwMac = Heap.allocData(8);
+        if (!Arp.resolve(gw.toAddress(), gwMac.toAddress(), mac, ip.toAddress()))
         {
             board.Uart.write(Magic.bytes("net: arp no reply\n"));
             return false;
@@ -53,12 +54,12 @@ public final class NetUp
         Ip.dnsIp = dns;
         Ip.gwMac = gwMac;
         board.Uart.write(Magic.bytes("net: gateway mac "));
-        Ip.printMac(gwMac);
+        Ip.printMac(gwMac.toAddress());
         board.Uart.putc(0x0A);
-        if (Icmp.ping(gw, gwMac, mac, ip))
+        if (Icmp.ping(gw.toAddress(), gwMac.toAddress(), mac, ip.toAddress()))
         {
             board.Uart.write(Magic.bytes("net: ping reply from "));
-            Ip.printIp(gw);
+            Ip.printIp(gw.toAddress());
             board.Uart.putc(0x0A);
         }
         else

@@ -12,6 +12,7 @@
 package vm;
 
 import magic.Address;
+import magic.DataReference;
 import magic.Magic;
 import magic.ObjectReference;
 
@@ -54,7 +55,7 @@ final class ObjectMethods
         while (j < FieldRegistry.fldCount)
         {
             if (FieldRegistry.fldTab[j] != null
-                    && Loader.utf8EqAt(ClassRegistry.clTab[reg].base, ClassRegistry.clTab[reg].nameOff, FieldRegistry.fldTab[j].base, FieldRegistry.fldTab[j].classOff))
+                    && Loader.utf8EqAt(ClassRegistry.clTab[reg].base.toAddress(), ClassRegistry.clTab[reg].nameOff, FieldRegistry.fldTab[j].base.toAddress(), FieldRegistry.fldTab[j].classOff))
             {
                 if (seen == want)
                 {
@@ -75,7 +76,7 @@ final class ObjectMethods
         while (j < FieldRegistry.fldCount)
         {
             if (FieldRegistry.fldTab[j] != null
-                    && Loader.utf8EqAt(ClassRegistry.clTab[reg].base, ClassRegistry.clTab[reg].nameOff, FieldRegistry.fldTab[j].base, FieldRegistry.fldTab[j].classOff))
+                    && Loader.utf8EqAt(ClassRegistry.clTab[reg].base.toAddress(), ClassRegistry.clTab[reg].nameOff, FieldRegistry.fldTab[j].base.toAddress(), FieldRegistry.fldTab[j].classOff))
             {
                 n += 1;
             }
@@ -114,8 +115,8 @@ final class ObjectMethods
         {
             return 0L;
         }
-        return DynamicLinker.resolveLinkTarget(ClassRegistry.clTab[reg].base.plus(ClassRegistry.clTab[reg].nameOff), Loader.utf8Blob(name),
-                Loader.utf8Blob(desc));
+        return DynamicLinker.resolveLinkTarget(ClassRegistry.clTab[reg].base.plus(ClassRegistry.clTab[reg].nameOff), Loader.utf8Blob(name).toAddress(),
+                Loader.utf8Blob(desc).toAddress());
     }
 
     /**

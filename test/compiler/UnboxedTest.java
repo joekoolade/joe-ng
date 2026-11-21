@@ -188,6 +188,17 @@ public final class UnboxedTest
                 Unboxed.op(ra, utf8("set"), utf8("(ILmagic/ObjectReference;)V")));
         T.eq("ObjectReferenceArray.length", Intrinsics.AA_LENGTH, Unboxed.op(ra, utf8("length"), utf8("()I")));
         T.eq("ObjectReferenceArray: no isNull", -1, Unboxed.op(ra, utf8("isNull"), utf8("()Z")));
+        int dr = Unboxed.DATA_REFERENCE;
+        T.eq("DataReference owner", dr, Unboxed.ownerKind(utf8("magic/DataReference")));
+        T.eq("DataReference.fromAddress", Intrinsics.UB_MOVE,
+                Unboxed.op(dr, utf8("fromAddress"), utf8("(Lmagic/Address;)Lmagic/DataReference;")));
+        T.eq("DataReference.plus", Intrinsics.UB_ADD, Unboxed.op(dr, utf8("plus"), utf8("(J)Lmagic/Address;")));
+        T.eq("DataReference.loadInt", Intrinsics.LOAD32, Unboxed.op(dr, utf8("loadInt"), utf8("()I")));
+        T.eq("DataReference.store(DataReference)", Intrinsics.STORE64,
+                Unboxed.op(dr, utf8("store"), utf8("(Lmagic/DataReference;)V")));
+        T.eq("Address.loadDataReference", Intrinsics.LOAD64,
+                Unboxed.op(a, utf8("loadDataReference"), utf8("()Lmagic/DataReference;")));
+        T.eq("DataReference.isZero", Intrinsics.UB_IS_ZERO, Unboxed.op(dr, utf8("isZero"), utf8("()Z")));
         int r = Unboxed.OBJECT_REFERENCE;
         T.eq("ObjectReference owner", r, Unboxed.ownerKind(utf8("magic/ObjectReference")));
         T.eq("ObjectReference.isNull", Intrinsics.UB_IS_ZERO, Unboxed.op(r, utf8("isNull"), utf8("()Z")));

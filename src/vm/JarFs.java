@@ -13,6 +13,7 @@ package vm;
 
 import board.Uart;
 import magic.Address;
+import magic.DataReference;
 import magic.Magic;
 import zip.ZipDir;
 
@@ -268,7 +269,7 @@ public final class JarFs
             }
             return -1;
         }
-        Address nameBlob = Heap.allocData(len);
+        DataReference nameBlob = Heap.allocData(len);
         int k = 0;
         while (k < len)
         {

@@ -14,6 +14,7 @@ package vm;
 import asm.A64Enc;
 import board.Uart;
 import magic.Address;
+import magic.DataReference;
 import magic.AddressArray;
 import magic.Magic;
 import magic.ObjectReference;
@@ -44,9 +45,9 @@ final class ProxySupport
     static int proxyN;
     static long proxyHelperBuf;
     static long objectCloneBuf;
-    static Address objectCloneCls;                 // the stub's name runs, held in statics (a GC root) for
-    static Address objectCloneName;                //   as long as the stub may still resolve through them
-    static Address objectCloneDesc;
+    static DataReference objectCloneCls;                 // the stub's name runs, held in statics (a GC root) for
+    static DataReference objectCloneName;                //   as long as the stub may still resolve through them
+    static DataReference objectCloneDesc;
 
     /** MetalProxies.dispatch, compiled once; its class is loaded on first use. 0 if it will not compile. */
     private static long proxyHelper()
@@ -63,7 +64,7 @@ final class ProxySupport
                 return 0L;
             }
         }
-        proxyHelperBuf = Loader.helperBuf(Loader.utf8Blob(Magic.bytes("jdk/internal/misc/MetalProxies")), Magic.bytes("dispatch"),
+        proxyHelperBuf = Loader.helperBuf(Loader.utf8Blob(Magic.bytes("jdk/internal/misc/MetalProxies")).toAddress(), Magic.bytes("dispatch"),
                 Magic.bytes("(Ljava/lang/Object;Ljava/lang/Object;J)J"));
         return proxyHelperBuf;
     }
@@ -87,8 +88,8 @@ final class ProxySupport
         objectCloneCls = Loader.utf8Blob(Magic.bytes("jdk/internal/misc/MetalObjects"));
         objectCloneName = Loader.utf8Blob(Magic.bytes("clone"));
         objectCloneDesc = Loader.utf8Blob(Magic.bytes("(Ljava/lang/Object;)Ljava/lang/Object;"));
-        objectCloneBuf = DynamicLinker.linkStubFor(objectCloneCls, objectCloneName,
-                objectCloneDesc);
+        objectCloneBuf = DynamicLinker.linkStubFor(objectCloneCls.toAddress(), objectCloneName.toAddress(),
+                objectCloneDesc.toAddress());
         return objectCloneBuf;
     }
 
@@ -218,7 +219,7 @@ final class ProxySupport
         }
         int ni = (int) Address.fromLong(ifacesArr).plus(16L).loadLong();
         int nm = (int) Address.fromLong(methodsArr).plus(16L).loadLong();
-        Address dir = Heap.allocData((ni + 1) * 16);
+        DataReference dir = Heap.allocData((ni + 1) * 16);
         int e = 0;
         while (e < ni)
         {
@@ -226,7 +227,7 @@ final class ProxySupport
             Address ity = mirror.isZero() ? Address.zero() : mirror.plus(16L).loadAddress();
             int ir = ClassRegistry.classRegByType(ity);
             int cn = ir >= 0 ? ClassRegistry.clTab[ir].ifmCount : 0;
-            Address cit = Heap.allocData(cn > 0 ? cn * 8 : 8);
+            DataReference cit = Heap.allocData(cn > 0 ? cn * 8 : 8);
             int z = 0;
             while (z < cn)
             {
@@ -253,17 +254,17 @@ final class ProxySupport
         }
         dir.plus(ni * 16L).store(0L);              // sentinel: interfaceType 0 ends the directory
         dir.plus(ni * 16L).plus(8L).store(0L);
-        Address type = Heap.allocData(ObjectModel.TYPE_SIZE);
+        DataReference type = Heap.allocData(ObjectModel.TYPE_SIZE);
         type.plus(0L).store((long) (16 + ClassRegistry.clTab[pr].fieldCount * 8));   // Proxy's instance: header + h
         type.plus(ObjectModel.TYPE_SUPER_OFFSET).store(ClassRegistry.clTab[pr].type);
         type.plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).store(dir);
         int onv = TibBuilder.objectVtableCount();
-        Address tib = Heap.allocData(8 + onv * 8);
+        DataReference tib = Heap.allocData(8 + onv * 8);
         tib.plus(0L).store(type);
-        TibBuilder.fillObjectVtable(tib);
+        TibBuilder.fillObjectVtable(tib.toAddress());
         int i = proxyN;
-        proxyTypes.set(i, type);
-        proxyTibs.set(i, tib);
+        proxyTypes.set(i, type.toAddress());
+        proxyTibs.set(i, tib.toAddress());
         int k = 0;
         while (k < 3)
         {
@@ -274,14 +275,14 @@ final class ProxySupport
         patchProxyObject(i);
         if (TibBuilder.lambdaTibRoots != null && TibBuilder.lambdaTibRootN < TibBuilder.MAXLAMBDATIB)
         {
-            TibBuilder.lambdaTibRoots.set(TibBuilder.lambdaTibRootN, tib);             // the same GC root a lambda's TIB has: nothing scanned
+            TibBuilder.lambdaTibRoots.set(TibBuilder.lambdaTibRootN, tib.toAddress());             // the same GC root a lambda's TIB has: nothing scanned
             TibBuilder.lambdaTibVtCap[TibBuilder.lambdaTibRootN] = onv;       //   would otherwise reach it
             TibBuilder.lambdaTibFilled[TibBuilder.lambdaTibRootN] = false;
             TibBuilder.lambdaHostBase.set(TibBuilder.lambdaTibRootN, Address.zero());        // a proxy has no host class
             TibBuilder.lambdaHostNameOff[TibBuilder.lambdaTibRootN] = 0;
             TibBuilder.lambdaTibRootN += 1;
         }
-        return ClassMirrors.classMirror(type);
+        return ClassMirrors.classMirror(type.toAddress());
     }
 
     /** {@code Proxy.proxyAlloc0}: a zeroed instance of proxy class {@code mirror}, or 0 if it is not one. */
@@ -291,14 +292,14 @@ final class ProxySupport
         {
             return 0L;
         }
-        Address type = mirror.toAddress().plus(16L).loadAddress();
+        DataReference type = mirror.toAddress().plus(16L).loadDataReference();
         int i = 0;
         while (i < proxyN)
         {
-            if (proxyTypes.get(i).EQ(type))
+            if (proxyTypes.get(i).EQ(type.toAddress()))
             {
-                Address obj = Heap.alloc((int) type.loadLong());
-                obj.plus(ObjectModel.TIB_OFFSET).store(proxyTibs.get(i));
+                ObjectReference obj = Heap.alloc((int) type.loadLong()).toObjectReference();
+                obj.toAddress().plus(ObjectModel.TIB_OFFSET).store(proxyTibs.get(i));
                 return obj.toLong();
             }
             i += 1;

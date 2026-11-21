@@ -13,6 +13,7 @@ package vm;
 
 import board.Uart;
 import magic.Address;
+import magic.DataReference;
 import magic.Magic;
 
 import static vm.ClassBytes.u2;
@@ -99,8 +100,8 @@ final class MethodRegistry
         // remove. resetLoader zeroes rgCount and rgIndexed together (see there).
         while (rgIndexed < rgCount)
         {
-            int h = Utf8.utf8Hash2(rgTab[rgIndexed].base, rgTab[rgIndexed].classOff,
-                              rgTab[rgIndexed].base, rgTab[rgIndexed].nameOff) & (RGTAB - 1);
+            int h = Utf8.utf8Hash2(rgTab[rgIndexed].base.toAddress(), rgTab[rgIndexed].classOff,
+                              rgTab[rgIndexed].base.toAddress(), rgTab[rgIndexed].nameOff) & (RGTAB - 1);
             rgNext[rgIndexed] = rgBucket[h];
             rgBucket[h] = rgIndexed;
             rgIndexed += 1;
@@ -113,7 +114,7 @@ final class MethodRegistry
     {
         if (rgCount >= MAXREG) { Loader.capHalt(Magic.bytes("MAXREG-method"), rgCount); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
         rgTab[rgCount] = new RVMMethod();
-        rgTab[rgCount].base = base;
+        rgTab[rgCount].base = DataReference.fromAddress(base);
         rgTab[rgCount].classOff = classOff;
         rgTab[rgCount].nameOff = nameOff;
         rgTab[rgCount].descOff = descOff;
@@ -134,13 +135,13 @@ final class MethodRegistry
         while (m < mcount)
         {
             int attrs = u2(p.plus(6));
-            long code = Loader.findCode(Loader.gView.base, p.plus(8), attrs);
+            long code = Loader.findCode(Loader.gView.base.toAddress(), p.plus(8), attrs);
             if (code != 0L)
             {
                 int mi = methodIndexOf(code);
                 if (mi >= 0)
                 {
-                    register(Loader.gView.base, Loader.gView.thisNameOff, Loader.gView.cp[u2(p.plus(2))], Loader.gView.cp[u2(p.plus(4))], Loader.mBuf[mi], Loader.mLine[mi], Loader.mSrc.get(mi), u2(p));
+                    register(Loader.gView.base.toAddress(), Loader.gView.thisNameOff, Loader.gView.cp[u2(p.plus(2))], Loader.gView.cp[u2(p.plus(4))], Loader.mBuf[mi], Loader.mLine[mi], Loader.mSrc.get(mi), u2(p));
                 }
             }
             p = Loader.skipAttributes(p.plus(8), attrs);
@@ -159,12 +160,12 @@ final class MethodRegistry
         // The scan was 4.0% of the busy core on InvokeGapProbe after #450 (qprof-tally.pl caller view).
         buildRegIndex();
         int best = -1;
-        int i = rgBucket[Utf8.utf8Hash2(Loader.gView.base, classOff, Loader.gView.base, nameOff) & (RGTAB - 1)];
+        int i = rgBucket[Utf8.utf8Hash2(Loader.gView.base.toAddress(), classOff, Loader.gView.base.toAddress(), nameOff) & (RGTAB - 1)];
         while (i >= 0)
         {
-            if (Loader.utf8EqAt(Loader.gView.base, classOff, rgTab[i].base, rgTab[i].classOff)
-                    && Loader.utf8EqAt(Loader.gView.base, nameOff, rgTab[i].base, rgTab[i].nameOff)
-                    && Loader.utf8EqAt(Loader.gView.base, descOff, rgTab[i].base, rgTab[i].descOff))
+            if (Loader.utf8EqAt(Loader.gView.base.toAddress(), classOff, rgTab[i].base.toAddress(), rgTab[i].classOff)
+                    && Loader.utf8EqAt(Loader.gView.base.toAddress(), nameOff, rgTab[i].base.toAddress(), rgTab[i].nameOff)
+                    && Loader.utf8EqAt(Loader.gView.base.toAddress(), descOff, rgTab[i].base.toAddress(), rgTab[i].descOff))
             {
                 best = i;
             }

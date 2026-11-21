@@ -12,6 +12,7 @@
 package vm;
 
 import magic.Address;
+import magic.DataReference;
 
 /**
  * M8 Stage 3 (reified loader): one slot of the class currently being built's flattened vtable -- its method
@@ -22,7 +23,7 @@ import magic.Address;
  */
 final class VtSlot
 {
-    Address base;    // blob holding this slot's name/descriptor
+    DataReference base;    // blob holding this slot's name/descriptor
     int  name;      // method name Utf8 offset (in base)
     int  desc;      // descriptor Utf8 offset (in base)
     long implBuf;   // inherited impl buffer (0 => this class's own)

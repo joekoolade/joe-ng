@@ -12,6 +12,7 @@
 package vm;
 
 import magic.Address;
+import magic.DataReference;
 
 /**
  * M8 Stage 3 (reified loader, first step): one entry of the phase-A dynamic-linking table -- a method's
@@ -22,7 +23,7 @@ import magic.Address;
  */
 final class DynLink
 {
-    Address blob;    // the method's class blob base (holds its Utf8 strings)
+    DataReference blob;    // the method's class blob base (holds its Utf8 strings)
     int  classOff;  // class name Utf8 offset (in blob)
     int  nameOff;   // method name Utf8 offset (in blob)
     int  descOff;   // descriptor Utf8 offset (in blob)

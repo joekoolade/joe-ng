@@ -12,6 +12,7 @@
 package vm;
 
 import magic.Address;
+import magic.DataReference;
 import magic.AddressArray;
 import magic.Magic;
 import objectmodel.ObjectModel;
@@ -62,12 +63,12 @@ final class Primitives
         }
         if (primTypeCache.get(idx).isZero())
         {
-            Address type = Heap.allocData(ObjectModel.TYPE_SIZE);
+            DataReference type = Heap.allocData(ObjectModel.TYPE_SIZE);
             type.plus(ObjectModel.TYPE_INSTANCE_SIZE_OFFSET).store(
                     ObjectModel.PRIM_TYPE_TAG | (long) descChar);
             type.plus(ObjectModel.TYPE_SUPER_OFFSET).store(0L);         // no super: instanceof stops here
             type.plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).store(0L);
-            primTypeCache.set(idx, type);
+            primTypeCache.set(idx, type.toAddress());
         }
         return primTypeCache.get(idx);
     }

@@ -12,6 +12,7 @@
 package vm;
 
 import magic.Address;
+import magic.DataReference;
 
 /**
  * M8 Stage 3 (reified loader): one loaded class -- its TIB, {@code Type} node, static block, field/vtable
@@ -22,7 +23,7 @@ import magic.Address;
  */
 final class RVMClass
 {
-    Address base;        // class blob base (holds Utf8 strings)
+    DataReference base;        // class blob base (holds Utf8 strings)
     int     nameOff;     // this class's own name Utf8 offset (in base)
     int     nameHash;    // FNV-1a of that name, folded ONCE at registration. Immutable by construction: `base`
                          //   and `nameOff` are written here and never re-pointed. It exists because the method
@@ -30,9 +31,9 @@ final class RVMClass
                          //   cacheable PREFIX -- and `refillImaps` re-folded it per closure interface, per
                          //   still-empty itable slot, on every batch. MEASURED on the demo suite: 916k of the
                          //   1,420k steps inside the refill were exactly this, against 38k of actual slot reads.
-    Address tib;         // its TIB { Type, vtable... }
-    Address type;        // its Type node (for instanceof/checkcast)
-    Address statics;     // its static block base (gBuild.statics), reused across load phases
+    DataReference tib;         // its TIB { Type, vtable... }
+    DataReference type;        // its Type node (for instanceof/checkcast)
+    DataReference statics;     // its static block base (gBuild.statics), reused across load phases
     int     fieldCount;  // instance-field count (for subclass field layout)
     int     vtCount;     // flattened vtable size (for subclass vtable copy)
     int     vtStart;     // start index of its slots in the vt registry

@@ -12,6 +12,7 @@
 package board;
 
 import magic.Address;
+import magic.DataReference;
 import magic.Magic;
 import vm.Heap;
 
@@ -52,7 +53,8 @@ public final class Fat32
     public static boolean mount()
     {
         fatBuf = Heap.allocData(512).toLong();
-        long mbr = Heap.allocData(512).toLong();
+        DataReference mbrRef = Heap.allocData(512);
+        long mbr = mbrRef.toLong();                  // a raw copy; mbrRef keeps the block alive
         if (!Block.read(0L, mbr, 1))
         {
             return false;
@@ -63,7 +65,8 @@ public final class Fat32
             return false;                                      // not a FAT32 partition
         }
         long partStart = u32(mbr, 446 + 8);                    // partition 1 start LBA
-        long bpb = Heap.allocData(512).toLong();
+        DataReference bpbRef = Heap.allocData(512);
+        long bpb = bpbRef.toLong();                  // a raw copy; bpbRef keeps the block alive
         if (!Block.read(partStart, bpb, 1))
         {
             return false;
