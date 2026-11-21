@@ -2451,6 +2451,30 @@ public final class Loader
         Uart.write(Magic.bytes("<exception>"));
     }
 
+    /** Print the name of any class Type -- registered, baked-but-unregistered, or neither ({@code Type@addr}). For
+     *  diagnostics ({@link HeapShadow}); prints nothing it did not find. */
+    static void printTypeName(Address type)
+    {
+        int i = 0;
+        while (i < ClassRegistry.clCount)
+        {
+            if (ClassRegistry.clTab[i].type.EQ(DataReference.fromAddress(type)))
+            {
+                writeName(ClassRegistry.clTab[i].base.plus(ClassRegistry.clTab[i].nameOff + 2), u2(ClassRegistry.clTab[i].base.plus(ClassRegistry.clTab[i].nameOff)));
+                return;
+            }
+            i += 1;
+        }
+        long nm = bakedTypeName(type);
+        if (nm != 0L)
+        {
+            writeName(Address.fromLong(nm + 2L), u2(Address.fromLong(nm)));
+            return;
+        }
+        Uart.write(Magic.bytes("Type@"));
+        VM.printHex(type.toLong());
+    }
+
     /** M4 {@code Class.getName()}: a fresh guest String of {@code type}'s dotted binary name (registry
      *  name bytes, '/'->'.'), or 0 if the Type isn't in the loaded registry. */
     static long classNameString(DataReference type)

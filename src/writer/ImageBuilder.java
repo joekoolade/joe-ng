@@ -1178,6 +1178,11 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 long[] rm = ClassFile.refMap(cls, this);
                 writeLong(image, tw + ObjectModel.TYPE_REFMAP_OFFSET / 4, rm[0]);
                 writeLong(image, tw + ObjectModel.TYPE_REFMAP_OFFSET / 4 + 2, rm[1]);
+                long[] km = ClassFile.kindMaps(cls, this);    // S6: which of those slots are exact references
+                writeLong(image, tw + ObjectModel.TYPE_REFKIND_OFFSET / 4, km[0]);
+                writeLong(image, tw + ObjectModel.TYPE_REFKIND_OFFSET / 4 + 2, km[1]);
+                writeLong(image, tw + ObjectModel.TYPE_DATAKIND_OFFSET / 4, km[2]);
+                writeLong(image, tw + ObjectModel.TYPE_DATAKIND_OFFSET / 4 + 2, km[3]);
             }
         }
 

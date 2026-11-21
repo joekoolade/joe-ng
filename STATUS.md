@@ -4,6 +4,47 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **FRAMES/GC ARC, INCREMENT S6a: exact heap kinds + the heap shadow check (2026-11-21).** S6 ("precise heap") was
+  split with the user after a census: S6a makes every heap word's kind knowable and measures what a precise trace
+  would lose; S6b fixes that worklist (as S4 fixed S2's); S6c turns the precise trace on; S6d makes the roots exact
+  and retires the block-start bitmap. The collector's behaviour is unchanged here.
+  - **Census (`gcheap=1`; one line per collection, whole virt list, 373 collections).** New marks by the block shape
+    whose word made them: roots 617k; mapped scalars 4.62M (1.82M through the `w-16` data-reference probe); typed
+    reference arrays 7.58M; typed WORD arrays with no element Type (`long[]`, and the unboxed `AddressArray` /
+    `ObjectReferenceArray`, both `long[]` at run time) 569k -- and 5.65 GB scanned word by word, ~15 MB per
+    collection; untyped `allocData` structs 751k (661k via `w-16`); raw arrays 1.6k; typed-but-unmapped 457.
+  - **Exact kinds in every Type.** The Type node grows 80 -> 112 bytes: two bitmaps beside the reference map
+    (`ObjectModel.TYPE_REFKIND_OFFSET` = object reference, `TYPE_DATAKIND_OFFSET` = data reference), same slot
+    numbering. `ClassFile.fieldKind`/`kindMaps` (writer) and `TibBuilder.buildRefMap` (metal) agree: `L`/`[`,
+    `ObjectReference` and the unboxed arrays are references, `DataReference` is a data reference, and `long`,
+    `Address`, `Word`, `Offset`, `Extent` are RAW -- still "may hold a pointer" to today's trace, not followed by a
+    precise one.
+  - **The heap shadow (`gcheap=2`, `vm.HeapShadow`).** The trace runs PRECISELY first (exact slots, and the
+    elements of arrays whose Type names an element Type), then rescans every block it marked the way the collector
+    does today; each block only the rescan reaches is a MISS, reported once per source -- a class's field slot, or
+    the allocation site of an array or struct (each `allocData`/`allocArray` block gets one more word holding
+    `Magic.readLR()` while the check is on). `/gc` rows count them by source kind.
+  - **Fixed on the way:** `VMGc.META_HIGH` stopped at core 0's heap, so an instance of a class loaded on cores 1-3
+    (TIB in that core's arena) was never recognised as typed and was scanned conservatively; it now covers core 3's
+    slot.
+  - **The worklist (virt, 370 collections; Pi web server + FrameBench, 14):** raw `long` slots holding data
+    references -- `vm/DynLink` +48, `vm/LazyMethod` +56, `java/lang/Class` +16 (most of the 951k raw-slot misses);
+    `allocData` structs -- statics blocks (`Loader.parseFields`), Types/TIBs (`TibBuilder.allocTib`,
+    `ArrayTypes.makeArrayTib`, `LambdaFactory.finishLambdaClass`), itable dirs, `JarFs.remember`; `long[]` tables
+    holding references and payloads -- `Loader.resetLoader`'s registry tables, `anchorLiteral`/`poolInsert`/
+    `parseConstPool` literal tables, `Primitives.primitiveType`, `ArrayTypes.growRefArrCache`, `ProxySupport`,
+    `AnnotationInstances`, `Indy.dynSiteIndex`, `JarFs.open`, `net/Tcp.allocLocked`; raw array `Loader.buildArgv`;
+    a few synthesised Types with no map. Every `ref-as-data` miss (228k on virt, 11k on the Pi) lands on a 16-byte
+    block: the conservative `w-16` probe's own false positive, which a precise trace rightly drops -- not worklist.
+  - **QEMU:** virt regression 211/211 with defaults and with `gcheap=2`; raspi4b demo suite `want: checked=160
+    mismatch=0`, churn demo `gc: collections=53`, `intact=32`, every failure marker 0. `make test` (Type size
+    test now 112) + overlaycheck OK.
+  - **Pi 4, `gcheap=2`** (build `1f21ecad69b472fe`): 8 pages 200, FrameBench checksums identical, 14 checks: raw-slot
+    50,598, unmapped 2, word-array 1,533, data 25,062, other 0, w-16 false positives 11,247, secondary 86,161.
+  - **Pi 4, default** (build `5cc4d0f3c9006b81`; sha256 = host; 8 pages 200): FrameBench, three fresh boots,
+    checksums identical to S5; median sum without dispatch **525.6 ms vs S5's 514.3 (+2.2%)**. An earlier build of
+    this branch (before the `META_HIGH` fix, same mutator code) measured 517.5 (+0.6%); the mutator differs from
+    S5 only by a flag load per array/struct allocation, so the spread reads as build layout. Image 39,952,964 bytes.
 - **FRAMES/GC ARC, INCREMENT S5: precise stack roots (2026-11-21).** The collector no longer scans stacks
   conservatively: every task's stack is walked frame by frame and only the words a reference map types as a
   reference are marked (`vm.StackRoots`, `vm.FrameMaps`) -- what Jikes RVM's GC map iterators do for baseline

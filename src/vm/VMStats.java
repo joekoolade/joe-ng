@@ -211,6 +211,14 @@ public final class VMStats
         i = put(arr, len, i, StackRoots.forced);                           // ... tasks stopped outside a safepoint
         i = put(arr, len, i, StackRoots.idle);                             // ... idle tasks stopped mid-loop: scanned whole
         i = put(arr, len, i, StackRoots.consWords);                        // ... words scanned conservatively
+        i = put(arr, len, i, HeapShadow.checks);                           // S6 heap shadow (gcheap=2): checks
+        int hk = 0;
+        while (hk < 7)
+        {
+            i = put(arr, len, i, HeapShadow.total(hk));                    // ... primary misses by source kind
+            hk += 1;
+        }
+        i = put(arr, len, i, HeapShadow.secondaries);                      // ... secondary misses
         return (long) i;
     }
 

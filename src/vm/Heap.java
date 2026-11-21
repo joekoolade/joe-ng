@@ -1699,6 +1699,14 @@ public final class Heap implements Uninterruptible
      */
     public static DataReference allocData(int size)
     {
+        long site = Magic.readLR();                      // first: the call below overwrites x30
+        if (HeapShadow.sites != 0)
+        {
+            // gcheap=2: one word more, at the block's end, recording where the struct came from (HeapShadow).
+            Address q = alloc(size + ObjectModel.HEADER_SIZE + 8);
+            q.plus((q.plus(ObjectModel.STATUS_OFFSET).loadLong() & -8L) - 8L).store(site);
+            return DataReference.fromAddress(q.plus(ObjectModel.HEADER_SIZE));
+        }
         return DataReference.fromAddress(alloc(size + ObjectModel.HEADER_SIZE).plus(ObjectModel.HEADER_SIZE));
     }
 
@@ -1726,6 +1734,7 @@ public final class Heap implements Uninterruptible
      */
     public static Address allocArray(int length, int elemSize)
     {
+        long site = Magic.readLR();                      // first: the calls below overwrite x30
         long bytes = (long) ObjectModel.ARRAY_BASE_OFFSET + (long) length * (long) elemSize;
         if (length < 0 || bytes > (long) MAX_ARRAY_BYTES)
         {
@@ -1744,12 +1753,16 @@ public final class Heap implements Uninterruptible
                 Magic.wfe();
             }
         }
-        Address p = alloc((int) bytes);
+        Address p = alloc((int) bytes + 8 * HeapShadow.sites);   // gcheap=2: + a word for the allocation site
         // The array's TIB slot holds its element size (1/2/4/8) — small, so it's distinguishable from an
         // object's TIB (a heap pointer), and it lets a generic System.arraycopy compute byte offsets. The
         // conservative GC never derefs this slot (it scans from +16), so a non-pointer here is safe.
         p.plus(ObjectModel.TIB_OFFSET).store((long) elemSize);
         p.plus(ObjectModel.ARRAY_LENGTH_OFFSET).store((long) length);
+        if (HeapShadow.sites != 0)
+        {
+            p.plus((p.plus(ObjectModel.STATUS_OFFSET).loadLong() & -8L) - 8L).store(site);   // ... recorded
+        }
         return p;
     }
 
