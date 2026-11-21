@@ -4,6 +4,53 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **FRAMES/GC ARC, INCREMENT S5a: cores 1-3's arenas collected; any core collects (2026-11-21).** Inserted before
+  S5 with the user: precise stack roots need a reference map for every JIT method, and S2 measured that building
+  them always runs RunProbe's raspi4b heap OOM 2 of 2, because `/run` programs compile on cores 1-3, whose 64 MiB
+  arenas were never collected -- only scanned whole as roots, which also kept every object they reached alive. S2
+  recorded "collecting cores 1-3 comes first"; the S5 walk (stashed) found the same wall.
+  - **The arenas are heap now.** `VMGc.tryMark`, `inHeap`/`liveKind`, the trace bound and the overflow fixpoint
+    know every region through one lookup (`regionTopFor`: core 0's small heap, the large region, arenas 1-3); the
+    arenas' whole-arena root scan is gone. Each arena is swept like the small heap (`sweepArena`): survivors
+    unmarked, dead runs coalesced into THAT core's own free lists (`Heap.addFreeTo`; only that core allocates from
+    them, and it is parked), the bump pointer lowered past the last survivor. Core 0's sweep now names core 0's lists
+    explicitly, since the collector may run elsewhere.
+  - **Block-start bitmaps inside the arenas.** Core 0's bitmap band (`MARK_BITMAP`, 3 MiB, small + large regions)
+    has no room left in the reserved scratch, so each secondary keeps its bitmap in its own slot's top 1 MiB
+    (`Heap.arenaBitmap`); an arena now allocates up to 63 MiB. Cleared each collection only as far as the arena is
+    used.
+  - **Any core collects.** A core whose arena fills runs the collection itself instead of halting with
+    `heap OOM`; `System.gc()` on a secondary no longer waits for itself to park. A 64-bit `cas64` lock
+    (`VM.GC_LOCK`, 0x0302_0140) keeps it to one collection: a core that finds the lock taken returns, and its
+    allocation waits (`Heap.waitForCollection`: spins until the stop is raised, then yields so the scheduler parks
+    it with its context saved) and retries, collecting once more before reporting OOM. Stop-the-world parks every
+    scheduling core but the collector (`VM.gcCore`), core 0 included; core 0 still collects by allocation volume.
+  - **A previous attempt** (a second bitmap at 0x1E00_0000, per-core sweeps; BACKLOG) passed QEMU and hung the Pi
+    twice -- when QEMU gave launched programs no timer ticks. This one runs on the Pi.
+  - **New:** `ArenaChurnProbe` (three threads churn 160 MiB each while 1,536 nodes stay linked across threads, i.e.
+    across arenas; host-identical, `bad 0`); `gcvolume=0` in `/etc/init` turns off the volume trigger so arenas
+    actually fill and their cores collect (a test switch); `/gc` rows for collections by core, waits for another
+    core's collection, and the arenas' live / freed / trimmed bytes (also on the launcher's `gc:` line as
+    `byCore=`, `busy=`, `arenaLive=`, `arenaFreed=`); `/threads` rows for the CPU clock as the firmware measures it,
+    the SoC temperature and the firmware's throttle flags (new platform op `boardHealth()J`; virt answers 0).
+  - **QEMU:** virt regression 211/211 (default: 340 collections, all core 0) and 211/211 with `gcvolume=0` (57
+    collections by core 53/1/2/1 -- each secondary collected); no FALSE BLOCK BASE, STW timeout or OOM.
+    ArenaChurnProbe with `gcvolume=0`: cores 1 and 2 collected, ~150 MB freed across the arenas per collection. The
+    raspi4b demo suite: 40 programs returned, `want: checked=160 mismatch=0`, 4 of 4 cores, churn demo
+    `gc: collections=52` (48 recorded before), every failure marker 0. `make test` + overlaycheck OK.
+  - **Pi 4, build `381be3a3d16b4f0b`** (default init; sha256 = host): FrameBench, three fresh boots, checksums
+    identical to S4; medians fib 71.0, locals 34.5, sort 103.3, tree 29.9, strings 22.1, sha256 218.4, bigint
+    39.9 ms -- sum without dispatch **519.1 vs S4's 514.4 (+0.9%)**. Five runs on ONE boot: 540-560 ms each (S0 rebooted before every
+    run because cores 1-3's never-collected arenas filled, ~50 MB, and once wedged the board).
+  - **Pi 4 with `gcvolume=0`** (builds `7fcc36aa2e537972`, `39bd73022890bc86`): up to 14 FrameBench runs per boot,
+    every page 200; cores 1 and 3 ran collections themselves (`byCore` 3/1/0/1), 0 skipped.
+  - **Found on the way, PRE-EXISTING (BACKLOG):** once core 0's heap is allowed to FILL before collecting (only with
+    the volume trigger off), core 0 runs ~2.5x slower from about the third to fifth collection until reboot -- every
+    kernel, fib included. Measured on a main control build with the trigger compiled out (run 7 of 9). Not the
+    clock: the new `/threads` rows read 1,500 MHz, 64-68 C, throttle flags 0. Unexplained; the default trigger never
+    reaches it.
+  - Default image `c23805815d275f5c` restored (this branch, default init; sha256 = host; 8 pages 200). Image
+    39,892,500 bytes.
 - **FRAMES/GC ARC, INCREMENT S4: hidden references (2026-11-20).** Every reference the VM's own Java kept in a raw
   word across a call now has a typed home a precise collector will see; the S2 shadow check finds no hidden
   reference left over the whole probe regression and the demo suite under GC stress. Decided with the user:

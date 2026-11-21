@@ -25,7 +25,9 @@ the item leaves this list; new findings that are not fixed on the spot come here
 
 ## Collector
 
-- **Cores 1-3's arenas are never collected (2026-11-14).** They are root-scanned whole: pauses grow from 0.5 to
+- **DONE in frames/GC arc S5a (2026-11-21): cores 1-3's arenas are collected,** and any core collects when its arena
+  is full (STATUS.md). Kept below as the record of what it cost before.
+- **(Was:) Cores 1-3's arenas are never collected (2026-11-14).** They are root-scanned whole: pauses grow from 0.5 to
   2.4 s over a session (root scan 92 -> 972 ms), they grow ~12.7 MB per boot upload, and they halt with "heap OOM"
   at 64 MB. A long pause can outlast a socket read timeout (`507 ... Read timed out`). The biggest remaining
   upload limit. It is also the WHOLE cause of the late ACKs: every ACK that waited >= 100 ms in the transmit
@@ -39,6 +41,14 @@ the item leaves this list; new findings that are not fixed on the spot come here
   loaderOwner=5 (collection SKIPPED)`, the loader lock stayed held (`held 606408ms`, owner RUNNABLE), and the
   board stopped answering ping. Same root as the item above; the failure mode is the separate bug: an OOM should
   throw `OutOfMemoryError` in the allocating task, not leave it spinning with the loader lock.
+- **A full core-0 heap leaves core 0 ~2.5x slower until reboot (2026-11-21, pre-existing).** With the volume trigger
+  off (`gcvolume=0` in `/etc/init`, or `Heap.GC_TRIGGER_BYTES = 0` on main), core 0's heap fills before each
+  collection (~55 MB live after) and, from about the third to fifth such collection, FrameBench via `/run` runs every
+  kernel ~2.5x slower -- fib included, which allocates nothing -- for the rest of the boot. MEASURED on main (run 7 of
+  9, after collection 5) and on S5a (5 of 5 boots). NOT the clock: the firmware reports 1,500 MHz, 64-68 C and
+  throttle flags 0 (`/threads`). Not an interrupt storm (tick rate and the RX task's busy time unchanged), not a code
+  sweep (0 bytes swept), not a stats page. The default 16 MB trigger never fills the heap, so it does not appear
+  there (5 runs per boot, 540-560 ms). Unexplained.
 - **41.5 MB live in the large-object region during an upload (2026-11-14).** Of ~60 MB live; the trace takes a
   steady ~413 ms. Unexplained -- measure what holds it before changing anything.
 

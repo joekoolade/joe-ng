@@ -1,0 +1,6 @@
+thread 0 churned 160 MiB sum -47708
+thread 1 churned 160 MiB sum -47708
+thread 2 churned 160 MiB sum -47667
+main churned sum -29630
+survivors checked 1536 bad 0
+ArenaChurnProbe done

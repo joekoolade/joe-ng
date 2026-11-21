@@ -179,6 +179,16 @@ public final class VMStats
             i = put(arr, len, i, Address.fromLong(Heap.PTR_CELL + c * 8L).loadLong() - Heap.arenaBase(c).toLong());   // core c's arena use
             c += 1;
         }
+        c = 0;
+        while (c < 4)
+        {
+            i = put(arr, len, i, VMGc.gcByCore[c]);                       // collections core c ran (S5a)
+            c += 1;
+        }
+        i = put(arr, len, i, VMGc.gcBusy);                                 // ... asked for while another core collected
+        i = put(arr, len, i, VMGc.arenaLive);                              // cores 1-3 arenas: live after the last
+        i = put(arr, len, i, VMGc.arenaFreed);                             // ... freed by it
+        i = put(arr, len, i, VMGc.arenaTrimmed);                           // ... handed back by lowering bump pointers
         i = put(arr, len, i, GcMapShadow.checks);                          // S2 shadow check (gcmaps=1): passes
         i = put(arr, len, i, GcMapShadow.framesWalked);                    // ... frames walked
         i = put(arr, len, i, GcMapShadow.framesMapped);                    // ... with a map site
@@ -247,6 +257,10 @@ public final class VMStats
         i = put(arr, len, i, VMGc.stwStops);                               // stop-the-world waits
         i = put(arr, len, i, ticksToUs(VMGc.stwWaitTicks / (VMGc.stwStops > 0L ? VMGc.stwStops : 1L)));
         i = put(arr, len, i, ticksToUs(VMGc.stwWaitMaxTicks));                // longest stop-the-world wait
+        long health = VM.boardHealthAddr != 0L ? Magic.call0(VM.boardHealthAddr) : 0L;
+        i = put(arr, len, i, health & 0xFFFFL);                            // measured ARM clock, MHz (0 = no firmware)
+        i = put(arr, len, i, (health >>> 16) & 0xFFFFL);                   // SoC temperature, C
+        i = put(arr, len, i, health >>> 32);                               // firmware throttle flags
         return (long) i;
     }
 
