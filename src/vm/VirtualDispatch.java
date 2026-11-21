@@ -1041,6 +1041,7 @@ final class VirtualDispatch
         }
         buf.plus(w * 4L).store(A64Enc.strx(StubFrames.STUB_LR, StubFrames.STUB_SP, StubFrames.STUB_LR_OFF)); // LR at [sp+0]: what VM.unwind reads to pop this frame
         w += 1;
+        w = StubFrames.emitSaveIndex(buf, w);         // x17 (the index) at [sp+136]: the GC walk types the args by it
         buf.plus(w * 4L).store(A64Enc.movReg(1, 17)); // x1 = site idx (x0 IS the receiver)
         w += 1;
         buf.plus(w * 4L).store(A64Enc.movz(16, (int) (ra & 0xFFFF), 0));

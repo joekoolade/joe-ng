@@ -92,6 +92,19 @@ public final class MetalStats
         "... spill slot not written for the call (stale)",
         "... frame alignment word, never written (stale)",
         "... raw copy of a block a typed slot on the same stack holds (borrowed)",
+        "... stub frame word its descriptor does not type",
+        "... MISSES: kept by no precise root (would have been freed)",
+        "precise stack roots (S5; gcroots=0 turns them off)",
+        "... stacks walked",
+        "... frames walked",
+        "... frames typed by a map site",
+        "... stub frames typed by a descriptor",
+        "... reference words marked",
+        "... frames scanned conservatively (no map or no site)",
+        "... stack tails scanned conservatively (an unknown frame)",
+        "... tasks stopped outside a safepoint, scanned whole",
+        "... idle tasks stopped mid-loop, scanned whole",
+        "... words scanned conservatively",
     };
 
     public static final String[] LOCKS_NAMES = {

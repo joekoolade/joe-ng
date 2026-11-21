@@ -112,6 +112,7 @@ final class MethodHandles
         }
         buf.plus(w * 4L).store(A64Enc.strx(StubFrames.STUB_LR, StubFrames.STUB_SP, StubFrames.STUB_LR_OFF)); // LR at [sp+0] for VM.unwind
         w += 1;
+        w = StubFrames.emitSaveIndex(buf, w);         // x17 (the index) at [sp+136]: the GC walk types the args by it
         buf.plus(w * 4L).store(A64Enc.addImm(0, StubFrames.STUB_SP, StubFrames.STUB_SAVE0)); // x0 = &saved x0
         w += 1;
         buf.plus(w * 4L).store(A64Enc.movReg(1, 17)); // x1 = site idx

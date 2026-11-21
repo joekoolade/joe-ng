@@ -1629,6 +1629,7 @@ public final class Heap implements Uninterruptible
             // ARENA FULL, on any core: every arena is collected since frames/GC arc S5a, so a secondary collects
             // too instead of halting. Collect; if that found another core collecting (it returns at once), wait for
             // that collection and retry; then collect once more before giving up.
+            prev = Address.zero();                          // a free-list block, dead from here on: not a root
             if (attempt == 1)
             {
                 waitForCollection();

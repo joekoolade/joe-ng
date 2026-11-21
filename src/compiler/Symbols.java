@@ -57,7 +57,7 @@ public interface Symbols
     int SC_START = 12;          // vm/VM.scStart()Lmagic/Address; -> a builder
     int SC_CHAR = 13;           // vm/VM.scChar(Lmagic/Address;I)V  — append one byte
     int SC_INT = 14;            // vm/VM.scInt(Lmagic/Address;I)V   — append an int in decimal
-    int SC_END = 15;            // vm/VM.scEnd(Lmagic/Address;)Lmagic/ObjectReference;    — finish -> the String
+    int SC_END = 15;            // vm/VMConcat.scEnd(Lmagic/ObjectReference;)Lmagic/ObjectReference;    — finish -> the String
     int PRINT_STR = 16;         // vm/VM.printStr(Lmagic/ObjectReference;)V — print a mini java/lang/String's value bytes
     int SC_STR = 17;            // vm/VM.scStr(Lmagic/Address;Lmagic/ObjectReference;)V   — append a String/byte[] (slice 1b)
     int SC_LONG = 18;           // vm/VM.scLong(Lmagic/Address;J)V  — append a long in decimal (slice 1b)

@@ -131,7 +131,7 @@ final class VMGc implements Uninterruptible
         {
             if (taskStackBase[me] != 0L)
             {
-                stackTop = taskStackBase[me] + 0x8000L;    // a spawned task: its stack is a heap object
+                stackTop = (taskStackBase[me] + 0x8000L) & ~0xFL;   // a spawned task: its stack is a heap object
             }
             else if (taskIdle != null && taskIdle[me] != 0 && taskCore[me] >= 1)
             {
@@ -145,14 +145,60 @@ final class VMGc implements Uninterruptible
                 idleGc = idleGc + 1;
             }
         }
-        markRange(Address.fromLong(scanFrom), Address.fromLong(stackTop));
+        if (StackRoots.on != 0)
+        {
+            // PRECISE STACK ROOTS (frames/GC arc S5): every task's stack, walked frame by frame and marked by its
+            // reference maps -- the collecting task, the boot task, the parked cores' tasks and every suspended one.
+            StackRoots.markStacks(scanFrom, stackTop);
+        }
+        else
+        {
+            conservativeStacks(scanFrom, stackTop, me);   // gcroots=0: the scan every collection made before S5
+        }
+        markRange(Address.fromLong(staticsStart), Address.fromLong(staticsEnd));
+        staticsScans = staticsScans + 1L;             // did the root scan for statics actually run this pass?
+        // Cores 1-3's arenas were ROOT RANGES here, scanned whole and never collected. Since S5a they are heap like
+        // core 0's: marked through the trace, swept into their own cores' free lists (sweepArena).
+        rootProbes = probes;                          // split the metric: everything above is ROOT scanning
+        long tRoots = Magic.readCNTPCT_EL0();
+        phaseRootTicks = tRoots - tStopped;
+        drainMarkStack();                             // trace: scan each newly marked block exactly ONCE
+        markGcMaps();                                 // JIT reference maps live as long as their frame entry
+        codeOnly = markCodeRoots();                   // ... then the addresses only compiled code holds
+        drainMarkStack();
+        if (markOverflow != 0)
+        {
+            overflows = overflows + 1L;
+            traceFixpoint();                          // stack ran out: fall back to re-scanning the heap
+        }
         if (GcMapShadow.on != 0)
         {
-            GcMapShadow.check(scanFrom, stackTop);    // S2: the reference maps against this conservative scan
+            // The shadow check, after the trace: every word a conservative scan of the stacks would keep, by where
+            // it sits -- and whether the precise walk + trace kept its block. One it did not is reported as a MISS
+            // and marked here, so a check run reports every miss instead of crashing on the first.
+            GcMapShadow.check(scanFrom, stackTop);
+            StackRoots.summary();
+            drainMarkStack();
+            if (markOverflow != 0)
+            {
+                overflows = overflows + 1L;
+                traceFixpoint();
+            }
         }
-        // THE BOOT TASK'S STACK IS A ROOT EVEN WHEN ANOTHER TASK IS COLLECTING. A spawned task's stack is a
-        // HEAP OBJECT (taskStackBase, "keeps the stack GC-reachable"), so the trace reaches it; task 0's is
-        // the IMAGE stack and is a heap object for nobody. Scanned only when task 0 happened to be the one
+        afterTrace(scanFrom, stackTop, gcT0, tRoots, reaped, daif);
+    }
+
+    /**
+     * The conservative stack roots ({@code gcroots=0}): every stack scanned whole from its SP, as before S5. Task
+     * stacks are typed byte arrays now, so the trace no longer reaches them as data -- each is scanned here from
+     * its saved SP instead.
+     */
+    private static void conservativeStacks(long scanFrom, long stackTop, int me)
+    {
+        markRange(Address.fromLong(scanFrom), Address.fromLong(stackTop));
+        // THE BOOT TASK'S STACK IS A ROOT EVEN WHEN ANOTHER TASK IS COLLECTING. Task 0's is the IMAGE stack and
+        // a heap object for nobody (a spawned task's is a heap block, scanned by the loop at the end of this
+        // method since S5 typed it as a byte array the trace skips). Scanned only when task 0 happened to be the one
         // that called Magic.gc, so a collection triggered by a spawned thread swept everything live only in
         // main's frames -- a local holding a Thread, say, whose header is then reused and whose next virtual
         // call reads a garbage TIB.
@@ -202,22 +248,30 @@ final class VMGc implements Uninterruptible
                 ic += 1;
             }
         }
-        markRange(Address.fromLong(staticsStart), Address.fromLong(staticsEnd));
-        staticsScans = staticsScans + 1L;             // did the root scan for statics actually run this pass?
-        // Cores 1-3's arenas were ROOT RANGES here, scanned whole and never collected. Since S5a they are heap like
-        // core 0's: marked through the trace, swept into their own cores' free lists (sweepArena).
-        rootProbes = probes;                          // split the metric: everything above is ROOT scanning
-        long tRoots = Magic.readCNTPCT_EL0();
-        phaseRootTicks = tRoots - tStopped;
-        drainMarkStack();                             // trace: scan each newly marked block exactly ONCE
-        markGcMaps();                                 // JIT reference maps live as long as their frame entry
-        codeOnly = markCodeRoots();                   // ... then the addresses only compiled code holds
-        drainMarkStack();
-        if (markOverflow != 0)
+        if (taskSp != null && taskStackBase != null && taskState != null)
         {
-            overflows = overflows + 1L;
-            traceFixpoint();                          // stack ran out: fall back to re-scanning the heap
+            int t = 1;
+            while (t < taskCount)
+            {
+                long stk = taskStackBase[t];
+                if (t != me && stk != 0L && taskState[t] != TASK_EMPTY)
+                {
+                    long top = (stk + 0x8000L) & ~0xFL;
+                    long lo = taskSp[t];
+                    if (lo < stk + 24L || lo >= top)
+                    {
+                        lo = stk + 24L;                   // no saved SP inside the stack: all of it
+                    }
+                    markRange(Address.fromLong(lo), Address.fromLong(top));
+                }
+                t += 1;
+            }
         }
+    }
+
+    /** The rest of a collection, after the trace: code liveness, the sweep, the counters. */
+    private static void afterTrace(long scanFrom, long stackTop, long gcT0, long tRoots, int reaped, long daif)
+    {
         // Code liveness is measured — and unreachable code SWEPT — only once the trace is complete. This
         // used to run before the overflow fallback, so an overflowed pass swept code against a half-finished
         // mark: any method reachable only through an object the fixpoint had yet to discover was freed while
@@ -662,7 +716,7 @@ final class VMGc implements Uninterruptible
         while (i < VM.jitLocalCount)
         {
             long m = VM.jitLocalTable.plus(i * 24L + 16L).loadLong();
-            if (m != 0L)
+            if (m > 0L)                                // a map array; a stub frame's entry holds a descriptor
             {
                 tryMark(m - ObjectModel.ARRAY_BASE_OFFSET);
             }
@@ -818,7 +872,7 @@ final class VMGc implements Uninterruptible
      * missing. They do not — scanning the whole image [0x80000, staticsEnd) changed nothing — so the call
      * is removed and the helper kept, since the next region to suspect will want exactly this shape.
      */
-    private static void markCodeInRange(long from, long to)
+    static void markCodeInRange(long from, long to)
     {
         Address p = Address.fromLong(from & -8L);
         Address end = Address.fromLong(to);
@@ -919,6 +973,26 @@ final class VMGc implements Uninterruptible
     private static long secStackTop(int core)
     {
         return ((long) SEC_STACK_HI << 16) + ((long) core << 20);
+    }
+
+    /** A root word a stack map types as a reference: mark its block if it is one (the block-base check still
+     *  applies, so a stale or mistyped word can retain, never corrupt). For {@link StackRoots}. */
+    static void markRoot(long w)
+    {
+        probes = probes + 1L;
+        boolean ignored = tryMark(w);
+    }
+
+    /** A range of root words with no type: the conservative scan. For {@link StackRoots}'s fallbacks. */
+    static void markRootRange(long lo, long hi)
+    {
+        boolean ignored = markRange(Address.fromLong(lo), Address.fromLong(hi));
+    }
+
+    /** True if block {@code b} carries this collection's mark. For the shadow check. */
+    static boolean isMarked(long b)
+    {
+        return (Address.fromLong(b).plus(8).loadLong() & 1L) != 0L;
     }
 
     /** Mark every heap object pointed to by an 8-aligned word in [lo,hi). Returns true if any newly marked. */

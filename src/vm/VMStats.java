@@ -199,6 +199,18 @@ public final class VMStats
             i = put(arr, len, i, GcMapShadow.hits != null ? GcMapShadow.hits[k] : 0L);
             k += 1;
         }
+        i = put(arr, len, i, GcMapShadow.missedLive);                      // ... MISSES: kept by no precise root
+        i = put(arr, len, i, (long) StackRoots.on);                        // S5: precise stack roots on
+        i = put(arr, len, i, StackRoots.walks);                            // ... stacks walked
+        i = put(arr, len, i, StackRoots.frames);                           // ... frames
+        i = put(arr, len, i, StackRoots.mapped);                           // ... typed by a map site
+        i = put(arr, len, i, StackRoots.stubs);                            // ... stub frames typed by a descriptor
+        i = put(arr, len, i, StackRoots.refs);                             // ... reference words marked
+        i = put(arr, len, i, StackRoots.consFrames);                       // ... frames scanned conservatively
+        i = put(arr, len, i, StackRoots.consTails);                        // ... stack tails scanned conservatively
+        i = put(arr, len, i, StackRoots.forced);                           // ... tasks stopped outside a safepoint
+        i = put(arr, len, i, StackRoots.idle);                             // ... idle tasks stopped mid-loop: scanned whole
+        i = put(arr, len, i, StackRoots.consWords);                        // ... words scanned conservatively
         return (long) i;
     }
 

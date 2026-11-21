@@ -19,9 +19,15 @@ import magic.Magic;
 import magic.Uninterruptible;
 
 /**
- * The S2 shadow check (frames/GC arc, PLAN.md): at each collection, walk the stacks frame by frame with the
- * compiler's reference maps ({@code compiler.RefMaps}) and compare what the maps call a reference with what the
- * conservative root scan treats as one. The collector itself is unchanged -- this only reads and reports.
+ * The shadow check (frames/GC arc S2, PLAN.md): at each collection, walk the stacks frame by frame with the
+ * compiler's reference maps ({@code compiler.RefMaps}) and compare what the maps call a reference with what a
+ * conservative root scan would treat as one.
+ *
+ * <p>Since S5 the collector's stack roots ARE the maps ({@link StackRoots}), so the check runs after the trace and
+ * asks the question that matters: was every word a conservative scan would have kept actually kept? A block that is
+ * not marked is reported as a MISS -- the precise collector would free it -- and then marked, so a check run reports
+ * every miss rather than crashing on the first. A miss in a stale category (a dead local, an operand slot the call
+ * did not spill, the frame's pad) is expected: that word is garbage the conservative scan used to keep.
  *
  * <p>Every word the conservative scan would keep alive (a heap block base, or an {@code allocData} payload one
  * header past one) is classified by where it sits: a map REFERENCE slot (explained), a local or operand slot
@@ -61,11 +67,14 @@ final class GcMapShadow implements Uninterruptible
     static final int C_OABOVE = 13;      // a spill slot the call's spill did not write: stale
     static final int C_PAD = 14;         // a mapped frame's alignment word, past its spill and out-args: stale
     static final int C_BORROW = 15;      // a raw copy of a block a typed slot on the same stack holds: borrowed
-    static final int NCAT = 16;
+    static final int C_STUB = 16;        // a stub frame word its descriptor does not type: not a reference argument
+    static final int NCAT = 17;
 
     static long[] hits;                  // per category
     static long[] payloadHits;           // ... of which an allocData payload pointer, not an object base
     static long mapErrors;               // a REFERENCE slot holding a heap address that is no block base
+    static long[] missed;                // per category: the block was not marked by the precise walk + trace
+    static long missedLive;              // ... of which in a category that is not stale: a lost reference
     static long framesWalked;
     static long framesMapped;
     static long refSlots;                // REFERENCE slots seen (non-null)
@@ -89,6 +98,7 @@ final class GcMapShadow implements Uninterruptible
     {
         hits = new long[NCAT];
         payloadHits = new long[NCAT];
+        missed = new long[NCAT];
         seen = new long[SEEN_SLOTS];
         owners = new long[OWNER_SLOTS];
         on = 1;
@@ -110,7 +120,15 @@ final class GcMapShadow implements Uninterruptible
         long ret = Address.fromLong(scanFrom - gcFs).loadLong();
         long sp = scanFrom + 96L;
         collectOwners(ret, sp, stackTop);
-        unwalked(scanFrom, sp);
+        // Magic.gc's save area: x19..x28 (the frameless boot entry's register locals, all primitives), the LR, and
+        // an alignment word nothing writes. Only the first can hold anything.
+        long a = scanFrom;
+        while (a < scanFrom + 80L)
+        {
+            classifyLoose(a, C_REGS, a - scanFrom + 19L * 8L);
+            a += 8L;
+        }
+        classifyLoose(scanFrom + 88L, C_PAD, 0L);
         walk(ret, sp, stackTop);
         int me = curTask();
         if (taskSp != null && taskState != null)
@@ -118,12 +136,12 @@ final class GcMapShadow implements Uninterruptible
             int t = 0;
             while (t < taskCount)
             {
-                if (t != me && taskState[t] != TASK_EMPTY && taskState[t] != TASK_RUNNING && taskSp[t] != 0L)
+                if (t != me && taskState[t] != TASK_EMPTY && taskSp[t] != 0L)
                 {
-                    long top = stackTopOf(t);
+                    long top = StackRoots.stackTopOf(t);
                     if (top != 0L)
                     {
-                        suspended(taskSp[t], top);
+                        suspended(t, taskSp[t], top);
                     }
                 }
                 t += 1;
@@ -132,26 +150,8 @@ final class GcMapShadow implements Uninterruptible
         summary();
     }
 
-    /** Top of task {@code t}'s stack, or 0 when it cannot be named. */
-    private static long stackTopOf(int t)
-    {
-        if (t == 0)
-        {
-            return STACK_TOP;
-        }
-        if (taskStackBase != null && taskStackBase[t] != 0L)
-        {
-            return taskStackBase[t] + 0x8000L;
-        }
-        if (taskIdle != null && taskIdle[t] != 0 && taskCore != null && taskCore[t] >= 1)
-        {
-            return ((long) SEC_STACK_HI << 16) + ((long) taskCore[t] << 20);
-        }
-        return 0L;
-    }
-
-    /** A suspended task: its saved context at {@code frame} (x0..x30, ELR at +248), its stack above. */
-    private static void suspended(long frame, long top)
+    /** Task {@code t}, not running here: its saved context at {@code frame} (x0..x30, ELR at +248), its stack above. */
+    private static void suspended(int t, long frame, long top)
     {
         Address f = Address.fromLong(frame);
         long sp = frame + SCHED_FRAME;
@@ -160,23 +160,25 @@ final class GcMapShadow implements Uninterruptible
             tasksSkipped = tasksSkipped + 1L;
             return;
         }
-        long pc = f.plus(248L).loadLong();
-        if (frameSizeAt(Address.fromLong(pc)) != 0L)
+        if (taskSafe == null || taskSafe[t] == 0 || (taskIdle != null && taskIdle[t] != 0))
         {
-            // Preempted inside a framed method: the pc is no call site, and in a prologue [sp] is not yet its
-            // saved LR. S3 moves every stop to a safepoint; until then the stack is counted, not walked.
+            // Stopped outside a safepoint (a forced preemption, a core's idle task): the pc is no call site, and in
+            // a prologue [sp] is not yet its saved LR. The stack is counted, not walked -- StackRoots scans it whole.
             tasksSkipped = tasksSkipped + 1L;
-            unwalked(sp, top);
+            unwalked(frame, top);
             return;
         }
         tasksWalked = tasksWalked + 1L;
         collectOwners(f.plus(240L).loadLong(), sp, top);
         long w = frame;
+        regsRet = f.plus(240L).loadLong();
+        regsPc = f.plus(248L).loadLong();
         while (w < frame + 248L)
         {
-            classifyLoose(w, C_REGS);
+            classifyLoose(w, C_REGS, w - frame);
             w += 8L;
         }
+        regsRet = 0L;
         walk(f.plus(240L).loadLong(), sp, top);           // a frameless leaf (taskYield): its caller is in x30
     }
 
@@ -270,13 +272,14 @@ final class GcMapShadow implements Uninterruptible
         long a = from;
         while (a < to)
         {
-            classifyLoose(a, C_UNWALKED);
+            classifyLoose(a, C_UNWALKED, a);
             a += 8L;
         }
     }
 
-    /** Count a word that would be kept alive conservatively, in category {@code cat}. */
-    private static void classifyLoose(long a, int cat)
+    /** Count a word that would be kept alive conservatively, in category {@code cat}; {@code tag} is what a miss
+     *  report prints for where it sat (an address, or for a saved register its offset, x_r at 8r). */
+    private static void classifyLoose(long a, int cat, long tag)
     {
         long w = Address.fromLong(a).loadLong();
         int k = VMGc.liveKind(w);
@@ -291,8 +294,65 @@ final class GcMapShadow implements Uninterruptible
             {
                 payloadHits[cat] = payloadHits[cat] + 1L;
             }
+            kept(0L, tag, cat, w, k);
         }
     }
+
+    /**
+     * Was the block of {@code w} (live kind {@code k}) kept by the precise walk and the trace? If not, the precise
+     * collector would free it: count a miss, report it unless its category is stale, and mark it now.
+     */
+    private static void kept(long ret, long off, int cat, long w, int k)
+    {
+        long block = k == 2 ? w - 16L : w;
+        if (VMGc.isMarked(block))
+        {
+            return;
+        }
+        missed[cat] = missed[cat] + 1L;
+        // Saved registers count as stale too: a task's context is saved only at a safepoint -- the svc in taskYield,
+        // reached by a CALL, and Baseline spills every live value to its frame before any call -- so nothing in a
+        // register is live there (MEASURED: x8, a scratch, holding a finished thread's reaped Thread object). The
+        // collecting task's save area holds the boot entry's register locals, all primitives.
+        boolean stale = cat == C_LTOP || cat == C_OTOP || cat == C_OABOVE || cat == C_PAD || cat == C_STUB
+                || cat == C_REGS;
+        if (!stale)
+        {
+            missedLive = missedLive + 1L;
+            if (missPrinted < 40L)
+            {
+                missPrinted = missPrinted + 1L;
+                Uart.write(Magic.bytes("gcmap MISS "));
+                Uart.write(catName(cat));
+                Uart.write(Magic.bytes(" off="));
+                printHex(off);
+                Uart.write(Magic.bytes(" w="));
+                printHex(w);
+                Uart.write(Magic.bytes(" at "));
+                if (ret != 0L)
+                {
+                    StackTrace.printFrameAt(Address.fromLong(ret - 4L));
+                }
+                else if (cat == C_REGS && regsRet != 0L)
+                {
+                    Uart.write(Magic.bytes("<saved registers, switched from> "));   // the task's top call site
+                    StackTrace.printFrameAt(Address.fromLong(regsRet - 4L));
+                    Uart.write(Magic.bytes(" pc="));
+                    printHex(regsPc);
+                }
+                else
+                {
+                    Uart.write(Magic.bytes("<no frame>"));
+                }
+                Uart.putc((byte) 0x0A);
+            }
+        }
+        VMGc.markRoot(block);
+    }
+
+    private static long missPrinted;
+    private static long regsRet;         // the suspended task being classified: its saved x30 and ELR, for a report
+    private static long regsPc;
 
     /** One frame: {@code ret} is the return address into it, {@code sp} its base, {@code fs} its size. */
     private static void frame(long ret, long sp, long fs)
@@ -300,6 +360,11 @@ final class GcMapShadow implements Uninterruptible
         Address pcA = Address.fromLong(ret - 4L);
         long ma = gcMapAt(pcA);
         long start = codeStartAt(pcA);
+        if (StubFrames.isStubDesc(ma))
+        {
+            stubFrame(ret, sp, fs, ma);
+            return;
+        }
         if (ma <= 0L || start == 0L)
         {
             if (!collecting)
@@ -433,6 +498,7 @@ final class GcMapShadow implements Uninterruptible
                 {
                     payloadHits[cat] = payloadHits[cat] + 1L;
                 }
+                kept(ret, off, cat, w, k);
                 if (cat != C_REF && cat != C_LTOP && cat != C_OTOP && cat != C_OABOVE && cat != C_PAD && cat != C_BORROW)
                 {
                     report(ret, off, cat, w);
@@ -473,6 +539,69 @@ final class GcMapShadow implements Uninterruptible
         }
     }
 
+    /**
+     * A stub frame, typed by its descriptor ({@link StubFrames}): the words it types are references, the rest of
+     * the frame is {@link #C_STUB}. Typed words are owners in the first walk, as a map's are.
+     */
+    private static void stubFrame(long ret, long sp, long fs, long d)
+    {
+        int kind = StubFrames.stubKind(d);
+        long mask;
+        long base;
+        int n;
+        if (kind == StubFrames.K_MASK)
+        {
+            mask = StubFrames.stubPayload(d);
+            base = 0L;
+            n = StubFrames.MASK_OVERFLOW_BIT0;
+        }
+        else
+        {
+            FrameMaps.trampArgs(kind, Address.fromLong(sp + StubFrames.STUB_ID_OFF).loadLong());
+            n = FrameMaps.tN > 16 ? 15 : FrameMaps.tN;
+            mask = FrameMaps.tMask & ((1L << n) - 1L);
+            base = StubFrames.STUB_SAVE0;
+        }
+        long off = 8L;
+        while (off < fs)
+        {
+            boolean ref = false;
+            long i = (off - base) >> 3;
+            if (off >= base && i < n)
+            {
+                ref = ((mask >>> (int) i) & 1L) != 0L;
+            }
+            long w = Address.fromLong(sp + off).loadLong();
+            int k = VMGc.liveKind(w);
+            if (collecting)
+            {
+                if (ref && k != 0)
+                {
+                    addOwner(k == 2 ? w - 16L : w);
+                }
+            }
+            else if (k != 0)
+            {
+                int cat = ref ? C_REF : C_STUB;
+                if (!ref && owned(w, k))
+                {
+                    cat = C_BORROW;
+                }
+                hits[cat] = hits[cat] + 1L;
+                if (k == 2)
+                {
+                    payloadHits[cat] = payloadHits[cat] + 1L;
+                }
+                kept(ret, off, cat, w, k);
+            }
+            off += 8L;
+        }
+        if (!collecting)
+        {
+            framesMapped = framesMapped + 1L;
+        }
+    }
+
     private static int slotType(Address bits, int s)
     {
         int bit = 2 * s;
@@ -496,6 +625,7 @@ final class GcMapShadow implements Uninterruptible
                 {
                     payloadHits[c] = payloadHits[c] + 1L;
                 }
+                kept(ret, off, c, w, k);
                 if (c != C_BORROW)
                 {
                     report(ret, off, c, w);
@@ -665,6 +795,10 @@ final class GcMapShadow implements Uninterruptible
         {
             return Magic.bytes("op-above");
         }
+        if (cat == C_STUB)
+        {
+            return Magic.bytes("stub-other");
+        }
         return Magic.bytes("regs");
     }
 
@@ -685,6 +819,8 @@ final class GcMapShadow implements Uninterruptible
         printDec((int) tasksSkipped);
         Uart.write(Magic.bytes(" mapErr="));
         printDec((int) mapErrors);
+        Uart.write(Magic.bytes(" MISS="));
+        printDec((int) missedLive);
         int c = 0;
         while (c < NCAT)
         {
@@ -696,6 +832,12 @@ final class GcMapShadow implements Uninterruptible
             {
                 Uart.write(Magic.bytes("(p"));
                 printDec((int) payloadHits[c]);
+                Uart.putc((byte) 0x29);
+            }
+            if (missed[c] != 0L)
+            {
+                Uart.write(Magic.bytes("(m"));
+                printDec((int) missed[c]);
                 Uart.putc((byte) 0x29);
             }
             c += 1;

@@ -490,7 +490,7 @@ final class VMUnwind
             }
             // Diagnostics only: -1 = no local entry covers this pc (its third word is the reference map since S2).
             long nrl = gcMapAt(pc);
-            if (Loader.UNWIND_DUMP && nrl < 0L && pc.toLong() >= Heap.CODE_BASE)
+            if (Loader.UNWIND_DUMP && nrl == -1L && pc.toLong() >= Heap.CODE_BASE)
             {
                 // A JIT pc the FRAME table covers but the LOCAL table does not, though addJitFrame writes
                 // both at the same index with the same range. Find the frame entry's index and print the

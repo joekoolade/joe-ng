@@ -4,6 +4,48 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **FRAMES/GC ARC, INCREMENT S5: precise stack roots (2026-11-21).** The collector no longer scans stacks
+  conservatively: every task's stack is walked frame by frame and only the words a reference map types as a
+  reference are marked (`vm.StackRoots`, `vm.FrameMaps`) -- what Jikes RVM's GC map iterators do for baseline
+  frames. Heap tracing was already precise; the roots now are too, apart from the counted fallbacks below.
+  - **The walk.** From the collector's `Magic.gc` save area for the collecting task; from the saved context for a
+    suspended one. A task switched at a safepoint (the `svc` in `taskYield`, recorded per task as `taskSafe` by
+    `pickNext`) is walked from its saved x30, and its registers hold nothing live. A task that never ran contributes
+    its x0. JIT frames are typed by their RefMaps site (locals, and the operand slots the call's spill wrote; `DREF`
+    slots mark the block one header below a data reference). Stub frames are typed by a descriptor
+    (`StubFrames`): resolve trampolines save their index, and the walk types the argument registers from the method
+    or call site it names (link, virtual, MH and indy trampolines); lambda and proxy thunks carry a build-time mask,
+    with overflow arguments typed in place. The run trampoline's Runnable is at [sp]. Code pointers on stacks still
+    keep code alive (`markCodeInRange`): no heap block is marked by that scan.
+  - **Fallbacks, all counted on `/gc`:** a frame with no map or no site, a stack tail past a frame the tables do not
+    know, a task preempted outside a safepoint, and a core's idle task are scanned conservatively. Idle stacks were
+    first given no roots; the shadow check refuted that (a MISS on an idle stack), so they are scanned whole.
+  - **JIT reference maps are now built whenever precise roots are on** (S2 built them only for the shadow check,
+    because `/run` programs compile on cores 1-3, whose arenas S5a now collects).
+  - **Shadow check, extended:** after the trace, every word a conservative scan would keep that the precise walk did
+    not is reported as a MISS and marked. Two MISSes were fixed at the source rather than classified:
+    `VMConcat.scEnd` held its builder only as a raw `Address` (now an `ObjectReference`), and `Heap.allocLocked` held
+    a dead free-list block in a raw local across S5a's wait for another core's collection (now cleared).
+  - **`gcroots=0`** in `/etc/init` restores the conservative stack scan (and builds no JIT maps): the A/B switch.
+  - **QEMU:** virt regression 211/211 by default and 211/211 with `gcmaps=1` -- 371 collections shadow-checked, MISS
+    0, map errors 0. With `gcmaps=1 gcvolume=0` ArenaChurnProbe's collections (two run by core 1) are MISS 0 too.
+    raspi4b demo suite `want: checked=160 mismatch=0`, churn demo `gc: collections=53` (S5a: 52), every failure
+    marker 0. `make test` + overlaycheck OK.
+  - **Under `gcvolume=0` only, the JIT maps cost a halt** (`large region OOM` in one regression batch, at
+    RuntimeProbe's 4 MiB array or a ~1 MiB request): core 0's 64 MiB large region holds 37-42 MB live and the free
+    remainder is in pieces. The precise walk is not the cause -- conservative roots WITH maps fail 5 of 6, without
+    maps (= S5a) 0 of 4, main 0 of 6; the live set is the same in both root modes. Serving the request from the small
+    heap instead was tried and reverted: the small heap was just as fragmented (`heap OOM`). BACKLOG; compaction
+    (S7) is the fix. The default trigger never gets there.
+  - **Pi 4, build `e3c460e5851ef18d`** (default init; sha256 = host; 8 pages 200; 65 stacks walked, 0 frames
+    scanned conservatively at the first look): FrameBench on three fresh boots, checksums identical; medians fib
+    70.4, locals 34.4, sort 102.1, tree 29.8, strings 23.1, sha256 214.8, bigint 39.7 ms -- sum without dispatch
+    **514.3 vs S5a's 519.1 (-0.9%)**. The `gcroots=0` arm (build `e78ff313a8b04688`, same code): 519.4, matching
+    S5a. Last-collection root scan 31.7 ms precise vs 23.1-34.7 ms conservative -- one sample each, no conclusion.
+  - **Seen on the Pi, not attributed:** one soft `/reboot` of the `gcroots=0` image never came back (no ping) until
+    power-cycled (1 of 4 reboots of that image; 0 of 3 of the precise one). After the cold power-on the firmware
+    reported a 600 MHz ARM clock (every soft reboot today: 1,500); a soft reboot restored 1,500. BACKLOG.
+  - Default image `e3c460e5851ef18d` restored. Image 39,923,572 bytes.
 - **FRAMES/GC ARC, INCREMENT S5a: cores 1-3's arenas collected; any core collects (2026-11-21).** Inserted before
   S5 with the user: precise stack roots need a reference map for every JIT method, and S2 measured that building
   them always runs RunProbe's raspi4b heap OOM 2 of 2, because `/run` programs compile on cores 1-3, whose 64 MiB

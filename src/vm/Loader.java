@@ -5510,11 +5510,11 @@ public final class Loader
             k += 1;
         }
         b.setExceptionTable(es, ee, eh, ec, n);
-        // A JIT body gets a reference map only while something reads it -- in S2 that is the gcmaps=1 shadow check
-        // alone -- and never in the sizing pass (base 0), which needs only the code's length. The maps are about a
-        // fifth of the code, and a /run program's compiles allocate on cores 1-3, whose arenas are never collected:
-        // keeping them always made RunProbe's existing raspi4b heap OOM (1 of 3 on main) happen 2 of 2.
-        b.setGcMaps(base != 0L && GcMapShadow.on != 0);
+        // A JIT body gets a reference map only while something reads it -- the precise stack walk (StackRoots, on
+        // unless gcroots=0) or the gcmaps=1 shadow check -- and never in the sizing pass (base 0), which needs only
+        // the code's length. The maps are about a fifth of the code; S2 kept them off by default because cores 1-3's
+        // arenas were never collected, and S5a collects them.
+        b.setGcMaps(base != 0L && (StackRoots.on != 0 || GcMapShadow.on != 0));
         int[] words = b.compileBody(extractCode(i), mDescOff[i], mStatic[i] != 0, mSync[i] != 0,
                                     mLocals[i], base, false);
         return new CompileResult(b, words, ec);

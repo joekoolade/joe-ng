@@ -238,8 +238,12 @@ final class VMConcat
      * {@code StringUTF16.LO_BYTE_SHIFT} is seeded for AArch64) otherwise -- with the {@code coder} field SET, which the
      * old byte[]-and-wrap epilogue never did. The value array is typed with {@code VM.byteArrayTibCache}.
      */
-    static ObjectReference scEnd(Address sb)
+    static ObjectReference scEnd(ObjectReference sbRef)
     {
+        // The builder is TYPED here (frames/GC arc S5): at this call the caller's operand stack has already dropped
+        // it, so this parameter is its only holder -- as a raw Address, an allocation below freed the builder and
+        // its buffer mid-copy (the shadow check's MISS, VMConcat.scEnd local-raw). Its raw copies are borrowed.
+        Address sb = sbRef.toAddress();
         Address bufA = sb.plus(16).loadAddress();
         long count = sb.plus(24).loadLong();
         int coder = sb.plus(32).loadLong() < 256L ? 0 : 1;
