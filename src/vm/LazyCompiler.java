@@ -432,6 +432,10 @@ final class LazyCompiler
     static void buildLazyTramp()
     {
         Address buf = Heap.allocCode(256);
+        // PINNED: reached through every deferral stub's immediate, which no trace reads. Its only root was the
+        // conservative scan of the raw static lazyTrampAddr -- gone once the statics are read by kind (frames/GC
+        // arc S6d).
+        Heap.pinCodeAt(buf);
         long ca = VM.lazyCompileAddr;
         int w = 0;
         // Preserve x0..x15, not x0..x7. lazyCompile runs the WHOLE compiler between the entry to this

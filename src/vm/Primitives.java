@@ -13,7 +13,7 @@ package vm;
 
 import magic.Address;
 import magic.DataReference;
-import magic.AddressArray;
+import magic.DataReferenceArray;
 import magic.Magic;
 import objectmodel.ObjectModel;
 
@@ -28,7 +28,8 @@ final class Primitives
     {
     }
 
-    private static AddressArray primTypeCache;                 // primitive Type per atype-style index (see primTypeIdx)
+    private static DataReferenceArray primTypeCache;           // primitive Type per atype-style index (see primTypeIdx);
+                                                               //   the Types' only root: data references (S6d)
 
     /** Index 0..8 for a JVMS primitive descriptor char (Z C F D B S I J V), or -1. */
     private static int primTypeIdx(int c)
@@ -59,7 +60,7 @@ final class Primitives
         }
         if (primTypeCache == null)
         {
-            primTypeCache = AddressArray.create(9);
+            primTypeCache = DataReferenceArray.create(9);
         }
         if (primTypeCache.get(idx).isZero())
         {
@@ -68,9 +69,9 @@ final class Primitives
                     ObjectModel.PRIM_TYPE_TAG | (long) descChar);
             type.plus(ObjectModel.TYPE_SUPER_OFFSET).store(0L);         // no super: instanceof stops here
             type.plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).store(0L);
-            primTypeCache.set(idx, type.toAddress());
+            primTypeCache.set(idx, type);
         }
-        return primTypeCache.get(idx);
+        return primTypeCache.get(idx).toAddress();
     }
 
     /** The {@code Class} mirror for a primitive, e.g. {@code int.class}. Identity-stable via the mirror cache. */

@@ -1176,17 +1176,19 @@ public final class Loader
     }
 
     /** Record a heap address being baked into the instruction stream. Image and statics addresses are
-     *  permanent and need no root; only the managed heap is collectable. */
-    static void noteCodeRoot(long addr)
+     *  permanent and need no root; only the managed heap is collectable. {@code data}: the address is an
+     *  allocData payload (marked one header lower), else an object; kept in bit 0 of the entry's address word
+     *  (both are 8-aligned), so the collector marks exactly (frames/GC arc S6d). */
+    static void noteCodeRoot(long addr, boolean data)
     {
         if (Relocator.relocRecording == 0)
         {
             return;    // the sizing pass emits the same addresses to a throwaway buffer; only the real
         }              // emit pass produces code that will run, and it is the one relocRecording marks
-        if (addr < Heap.BASE || addr >= Heap.LARGE_LIMIT)
+        if (addr < Heap.BASE || addr >= VMGc.META_HIGH)
         {
-            return;
-        }
+            return;    // up to the end of core 3's arena: since S5a cores 1-3's arenas are collected too, and a class
+        }              //   compiled on one of them bakes its own literals and TIBs (this stopped at core 0's heap)
         if (CODE_ROOTS + codeRootN * CODE_ROOT_ENTRY >= CODE_ROOTS_END)
         {
             if (RECLAIM_BY_GC)
@@ -1205,7 +1207,7 @@ public final class Loader
             }
             return;
         }
-        Address.fromLong(CODE_ROOTS).plus(codeRootN * CODE_ROOT_ENTRY).store(addr);
+        Address.fromLong(CODE_ROOTS).plus(codeRootN * CODE_ROOT_ENTRY).store(data ? addr | 1L : addr);
         Address.fromLong(CODE_ROOTS).plus(codeRootN * CODE_ROOT_ENTRY).plus(8L).store(codeRootOwner);
         codeRootN += 1;
     }
@@ -2988,6 +2990,10 @@ public final class Loader
         // The lookup is Java now (resolveRun), which can bounds-check, fall back, and say what it could not
         // find; the stub is just a frame, a call, and the dispatch.
         Address buf = Heap.allocCode(96);
+        // PINNED: reached through a spawned task's entry pc, which no trace reads. Its only root was the
+        // conservative scan of the raw static runTrampAddr -- gone once the statics are read by kind (frames/GC arc
+        // S6d).
+        Heap.pinCodeAt(buf);
         int w = 0;
         buf.plus(w * 4L).store(A64Enc.subImm(31, 31, 16)); // frame: the receiver must survive
         w += 1;
@@ -3642,12 +3648,12 @@ public final class Loader
     /** One permanently-zero word, shared by every static a late compile could not resolve. */
     static long unresolvedStaticCell()
     {
-        if (unresStaticCell == 0L)
+        if (unresStaticCell.isZero())
         {
-            unresStaticCell = Heap.allocData(8).toLong();
-            Address.fromLong(unresStaticCell).store(0L);         // allocData does NOT zero
+            unresStaticCell = Heap.allocData(8);
+            unresStaticCell.store(0L);         // allocData does NOT zero
         }
-        return unresStaticCell;
+        return unresStaticCell.toLong();
     }
 
     /**
@@ -3670,11 +3676,11 @@ public final class Loader
      */
     private static void reportLostStaticStore()
     {
-        if (unresStaticCell == 0L)
+        if (unresStaticCell.isZero())
         {
             return;
         }
-        long v = Address.fromLong(unresStaticCell).loadLong();
+        long v = unresStaticCell.loadLong();
         if (v == 0L)
         {
             return;
@@ -3684,7 +3690,7 @@ public final class Loader
         Uart.write(Magic.bytes(" -- that field reads null for ever; batch "));
         VM.printDec(cumBatches);
         Uart.putc(0x0A);
-        Address.fromLong(unresStaticCell).store(0L);             // re-arm: a second loss is a second report
+        unresStaticCell.store(0L);             // re-arm: a second loss is a second report
     }
 
     /**
@@ -3727,7 +3733,7 @@ public final class Loader
         Uart.putc(0x0A);
     }
 
-    private static long unresStaticCell;
+    private static DataReference unresStaticCell;   // a root: a data reference (frames/GC arc S6d)
 
     static long[] unresStaticSeen;
     static int unresStaticSeenN;

@@ -116,6 +116,8 @@ public final class MetalStats
         "... reached only through those (secondary)",
         "... compiled-code words only a conservative word kept (raw longs, long[] tables)",
         "... data payloads held in a reference slot (lost by a precise trace)",
+        "... blocks only a conservative read of an image statics slot kept (S6d)",
+        "... blocks only a conservative read of a code-root entry kept (S6d)",
         "precise heap trace on (S6c; gcprecise=0 = conservative)",
         "... blocks it scanned conservatively (no kinds, unrecognised header)",
     };

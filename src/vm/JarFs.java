@@ -277,13 +277,13 @@ public final class JarFs
             nameBlob.plus(k).store((byte) nameA.plus(k).loadUnsignedByte());
             k += 1;
         }
-        long blob = 0L;
-        int blobLen = 0;
+        DataReference blob = DataReference.zero();     // a root while the copy runs (frames/GC arc S6d: a raw long was
+        int blobLen = 0;                               //   none, across the loop's safepoints)
         if (data != null)
         {
             blobLen = data.length;
-            blob = Heap.allocData(blobLen).toLong();
-            Address blobA = Address.fromLong(blob);
+            blob = Heap.allocData(blobLen);
+            Address blobA = blob.toAddress();
             k = 0;
             while (k < blobLen)
             {
@@ -293,10 +293,10 @@ public final class JarFs
         }
         cacheName.set(cacheCount, nameBlob);
         cacheNameLen[cacheCount] = len;
-        cacheBlob.set(cacheCount, DataReference.fromLong(blob));
+        cacheBlob.set(cacheCount, blob);
         cacheBlobLen[cacheCount] = blobLen;
         cacheCount += 1;
-        return blob == 0L ? -1 : cacheCount - 1;
+        return blob.isZero() ? -1 : cacheCount - 1;
     }
 
     private static boolean sameName(long a, long b, int len)

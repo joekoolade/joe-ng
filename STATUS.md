@@ -4,6 +4,39 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **FRAMES/GC ARC, INCREMENT S6d-1: exact statics and code roots (2026-11-22).** S6d (exact roots, retire the
+  block-start bitmap) is split: S6d-1 the image statics region and the code-root table, S6d-2 the remaining
+  conservative fallbacks (Types with no kinds, the S5 stack fallbacks), S6d-3 the bitmap (which only a conservative
+  probe needs).
+  - **Statics:** the writer bakes two kind bitmaps for the region (`ImageBuilder.writeStaticsMaps`, from each slot's
+    field descriptor; `VM.staticsMap`) and lists every slot in `out/statics-map.txt`; `PreciseTrace.markStatics` reads
+    them. **Code roots:** `MetalSymbols.emitObject`/`emitData` record each baked address with its kind (bit 0 of the
+    entry = a data reference); interior and permanent addresses (a static's slot, a name in a blob, an inline-cache
+    word, a helper) are no longer recorded. `gcprecise=0` keeps both conservative. Recording now covers cores 1-3's
+    arenas too (it stopped at core 0's heap since S5a made them collectable).
+  - **Shadow:** `gcheap=2` rescans the statics region and the code-root table conservatively too (`static=`,
+    `code-root=`, two `/gc` rows); a root's `w-16` hit on a 16-byte neighbour is counted with the false positives.
+    Whole virt list, 384 collections: code roots 0; statics only `Heap.scanFreeMaxAddr` (the largest FREE block, a
+    diagnostic that must not keep anything alive).
+  - **Worklist fixed:** `Loader.unresStaticCell` and `Fat32.fatBuf` (raw `long` statics holding payloads) are
+    `DataReference`s; `Primitives.primTypeCache` (the primitive Types' only root) a `DataReferenceArray`;
+    `JarFs.remember` held a fresh blob as a raw `long` across its copy loop. **Trampolines pinned:** the link, run,
+    virtual and lazy trampolines, the EL1 vector table and the core-leaving words are reached only through stub
+    immediates and hardware registers; their sole root was the conservative scan of a raw static (found on the Pi log:
+    the link trampoline is rebuilt each batch, above the code sweep's floor), so each is `Heap.pinCodeAt` at build.
+  - **A live S6c bug, fixed:** `Cyw43.txqBuf` was a `long[]` and the ONLY holder of a queued TX frame's buffer -- a
+    precise trace frees it while queued. Now a `DataReferenceArray`, created at bring-up (`probeChip`).
+  - **Two instrument bugs on the way, both mine:** the pinned-block lookup ran for every code-range number in the
+    heap (a linear scan per miss) and a root false positive went to the heap report, whose `siteOf` faulted on the
+    statics region -- each hung the `gcheap=2` arm at its 6th collection. Lookup now only for statics; root false
+    positives are counted, not reported.
+  - **QEMU:** virt 212/212 default, `gcheap=2` and `gcprecise=0`; raspi4b suite `checked=160 mismatch=0`,
+    `collections=53`, markers as S6c. `make test` + overlaycheck OK.
+  - **Pi 4:** root words probed conservatively 1,844 -> 41; root-scan time unchanged (~29 ms: the statics were never
+    its cost); total pause 1.16-1.18 s (S6c 1.17). One boot of build `9ebe79548e1b9935` failed DHCP (before the first
+    collection; the BACKLOG WiFi slow-boot family). Final build `585a4a0b5533c170` (sha256 = host): 6 of 6 soft
+    reboots up in 27-30 s, WiFi join ~4.2 s in one attempt; FrameBench 514.6 / 528.1 / 528.1 ms (median 528.1; the
+    previous build 515.7 / 525.1 / 517.4), check values identical; 8 pages 200.
 - **FRAMES/GC ARC, INCREMENT S6c: the precise heap trace is on (2026-11-22).** The collector now scans the heap by
   kind instead of probing every word: `vm.PreciseTrace` (moved out of the heap shadow, whose first phase it still
   is). A scalar's slots by its Type's kind bitmaps, an array's elements by its Type's element kind, an `allocData`

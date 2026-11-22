@@ -58,7 +58,9 @@ final class HeapShadow implements Uninterruptible
     private static final int S_OTHER = 5;          // a header word that is none of the above
     private static final int S_REF_DATA = 6;       // an exact reference slot or element, read as a data reference
     private static final int S_REF_PAYLOAD = 7;    // ... whose w-16 block is LARGER than a header: w is a payload
-    private static final int S_N = 8;
+    private static final int S_STATIC = 8;         // a root: an image statics slot its kind map does not follow (S6d)
+    private static final int S_CODE_ROOT = 9;      // a root: a code-root entry, at the probe its kind does not make
+    private static final int S_N = 10;
 
     private static int srcKind;
     private static long srcBlock;
@@ -152,6 +154,7 @@ final class HeapShadow implements Uninterruptible
         rescan = 1;
         secondary = 0;
         checks = checks + 1L;
+        rescanRoots();                                 // S6d: the roots a precise collector reads by kind
         rescanIn(Address.fromLong(Heap.BASE), Address.fromLong(Heap.PTR_CELL).loadAddress());
         rescanIn(Address.fromLong(Heap.LARGE_BASE), Address.fromLong(Heap.LARGE_PTR_CELL).loadAddress());
         int c = 1;
@@ -169,6 +172,27 @@ final class HeapShadow implements Uninterruptible
         rescan = 0;
         secondary = 0;
         summary();
+    }
+
+    /** The image statics region and the code-root table, word by word as the conservative root scan reads them. */
+    private static void rescanRoots()
+    {
+        srcBlock = VM.staticsStart;
+        words(S_STATIC, Address.fromLong(VM.staticsStart), Address.fromLong(VM.staticsEnd), Address.fromLong(VM.staticsStart));
+        Address p = Address.fromLong(Loader.CODE_ROOTS);
+        Address end = p.plus(Loader.codeRootN * Loader.CODE_ROOT_ENTRY);
+        while (p.LT(end))
+        {
+            long e = p.loadLong();
+            srcBlock = p.plus(8L).loadLong();          // the owning code buffer, for the report
+            srcKind = S_CODE_ROOT;
+            srcOff = e & 1L;                           // the entry's kind: 1 = data reference
+            srcViaData = 0;
+            VMGc.markRescan(e & -8L);
+            srcViaData = 1;
+            VMGc.markRescan((e & -8L) - 16L);
+            p = p.plus(Loader.CODE_ROOT_ENTRY);
+        }
     }
 
     private static void rescanIn(Address from, Address to)
@@ -313,8 +337,24 @@ final class HeapShadow implements Uninterruptible
         {
             return;                                    // reached through a block only the rescan kept: counted there
         }
+        if (srcKind == S_STATIC)
+        {
+            // A PINNED block is never swept, so no word needs to reach it -- the trampolines a raw static names (S6d).
+            // Asked only for the ~1,800 statics slots: the block lookup can fall back to a linear scan of every code
+            // block, and asked for each code-range NUMBER in the heap's word arrays it stalled a collection for good.
+            Address st = Heap.codeBlockStartAt(Address.fromLong(w));
+            if (!st.isZero() && Heap.codePinnedIn(st, Heap.codeBlockEndAt(Address.fromLong(w)).diff(st).toLong()) != 0)
+            {
+                return;
+            }
+        }
         codeMisses = codeMisses + 1L;                  // apart from the heap's primary count: a separate worklist
         codeTotal = codeTotal + 1L;
+        if (srcKind == S_STATIC || srcKind == S_CODE_ROOT)
+        {
+            reportRoot(srcKind, w, true);              // a root word, not a block: name its slot or owner
+            return;
+        }
         report(srcKind, w, true);
     }
 
@@ -332,6 +372,23 @@ final class HeapShadow implements Uninterruptible
         {
             k = S_MAPPED_RAW;                          // cannot happen: an exact word the precise phase skipped
         }
+        if ((k == S_STATIC || k == S_CODE_ROOT) && srcViaData != 0
+            && (Address.fromLong(block).plus(8).loadLong() & -8L) == (long) ObjectModel.HEADER_SIZE)
+        {
+            // A root's w-16 probe on a 16-byte neighbour: the false positive, COUNTED with the others but not reported
+            // -- report() would read the root's source as a heap block (siteOf faulted on the statics region inside
+            // the collection, and the world never restarted).
+            byKind[S_REF_DATA] = byKind[S_REF_DATA] + 1L;
+            totalByKind[S_REF_DATA] = totalByKind[S_REF_DATA] + 1L;
+            return;
+        }
+        if (k == S_STATIC || k == S_CODE_ROOT)
+        {
+            byKind[k] = byKind[k] + 1L;
+            totalByKind[k] = totalByKind[k] + 1L;
+            reportRoot(k, block, false);
+            return;
+        }
         else if (k == S_REF_DATA && (Address.fromLong(block).plus(8).loadLong() & -8L) > (long) ObjectModel.HEADER_SIZE)
         {
             // The w-16 probe of an exact reference usually lands on a 16-byte neighbour (w is the next block's base:
@@ -345,6 +402,44 @@ final class HeapShadow implements Uninterruptible
     }
 
     // ---- reporting ----------------------------------------------------------------------------------------------
+
+    /** A root MISS: a statics slot (offset into the region: out/statics-map.txt names it) or a code root (its owner). */
+    private static void reportRoot(int k, long block, boolean code)
+    {
+        long key = (k == S_STATIC ? srcOff : srcBlock) * 64L + (long) k + (long) srcViaData * 16L + (code ? 32L : 0L);
+        if (printed[k] >= PRINT_MAX || !firstSeen(key))
+        {
+            return;
+        }
+        printed[k] = printed[k] + 1;
+        Uart.write(Magic.bytes(code ? "heap MISS code from " : "heap MISS "));
+        Uart.write(Magic.bytes(k == S_STATIC ? "static" : "code-root"));
+        if (srcViaData != 0)
+        {
+            Uart.write(Magic.bytes(" (w-16)"));
+        }
+        if (k == S_STATIC)
+        {
+            Uart.write(Magic.bytes(" off="));
+            printDec((int) srcOff);
+        }
+        else
+        {
+            Uart.write(Magic.bytes(srcOff != 0L ? " data owner " : " object owner "));
+            StackTrace.printFrameAt(Address.fromLong(srcBlock));
+        }
+        Uart.write(Magic.bytes(" -> "));
+        if (code)
+        {
+            StackTrace.printFrameAt(Address.fromLong(block));
+            Uart.putc((byte) 0x0A);
+            return;
+        }
+        printTypeOf(Address.fromLong(block).loadLong());
+        Uart.write(Magic.bytes(" size "));
+        printDec((int) (Address.fromLong(block).plus(8).loadLong() & -8L));
+        Uart.putc((byte) 0x0A);
+    }
 
     /** Print a primary MISS the first time its (source, offset) is seen; {@code code}: the target is a code address. */
     private static void report(int k, long block, boolean code)
@@ -527,6 +622,10 @@ final class HeapShadow implements Uninterruptible
         printDec((int) byKind[S_OTHER]);
         Uart.write(Magic.bytes(" ref-holds-payload="));
         printDec((int) byKind[S_REF_PAYLOAD]);
+        Uart.write(Magic.bytes(" static="));
+        printDec((int) byKind[S_STATIC]);
+        Uart.write(Magic.bytes(" code-root="));
+        printDec((int) byKind[S_CODE_ROOT]);
         Uart.write(Magic.bytes(" code="));
         printDec((int) codeMisses);
         Uart.write(Magic.bytes(" | total primary="));

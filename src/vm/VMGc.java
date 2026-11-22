@@ -160,7 +160,14 @@ final class VMGc implements Uninterruptible
         {
             conservativeStacks(scanFrom, stackTop, me);   // gcroots=0: the scan every collection made before S5
         }
-        markRange(Address.fromLong(staticsStart), Address.fromLong(staticsEnd));
+        if (PreciseTrace.on != 0 && staticsMap != 0L)
+        {
+            PreciseTrace.markStatics(staticsStart, staticsEnd, staticsMap);   // S6d: by the writer's kind maps
+        }
+        else
+        {
+            markRange(Address.fromLong(staticsStart), Address.fromLong(staticsEnd));
+        }
         staticsScans = staticsScans + 1L;             // did the root scan for statics actually run this pass?
         // Cores 1-3's arenas were ROOT RANGES here, scanned whole and never collected. Since S5a they are heap like
         // core 0's: marked through the trace, swept into their own cores' free lists (sweepArena).
@@ -881,14 +888,26 @@ final class VMGc implements Uninterruptible
         Address end = p.plus(Loader.codeRootN * Loader.CODE_ROOT_ENTRY);
         while (p.LT(end))
         {
-            long w = p.loadLong();                     // {addr, owner}: the owner is for sweeping, not marking
-            if (tryMark(w))
+            long e = p.loadLong();                     // {addr | data, owner}: the owner is for sweeping, not marking
+            long w = e & -8L;
+            if (PreciseTrace.on != 0)
             {
-                found = found + 1L;
+                // S6d: the entry says what it is -- an object (marked at w) or an allocData payload (one header lower)
+                if (tryMark((e & 1L) != 0L ? w - 16L : w))
+                {
+                    found = found + 1L;
+                }
             }
-            if (tryMark(w - 16L))                      // an allocData payload address: mark its block base
+            else
             {
-                found = found + 1L;
+                if (tryMark(w))
+                {
+                    found = found + 1L;
+                }
+                if (tryMark(w - 16L))                  // an allocData payload address: mark its block base
+                {
+                    found = found + 1L;
+                }
             }
             p = p.plus(Loader.CODE_ROOT_ENTRY);
         }

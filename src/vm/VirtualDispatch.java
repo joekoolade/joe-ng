@@ -1029,6 +1029,10 @@ final class VirtualDispatch
             return Address.fromLong(virtualTrampAddr);
         }
         Address buf = Heap.allocCode(256);
+        // PINNED: reached through compiled late-virtual sites' immediates, which no trace reads. Its only root was
+        // the conservative scan of the raw static virtualTrampAddr -- gone once the statics are read by kind
+        // (frames/GC arc S6d).
+        Heap.pinCodeAt(buf);
         long ra = VM.virtualResolveAddr;
         int w = 0;
         buf.plus(w * 4L).store(A64Enc.subImm(StubFrames.STUB_SP, StubFrames.STUB_SP, StubFrames.STUB_FRAME));
