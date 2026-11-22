@@ -391,6 +391,15 @@ public final class Method extends Executable
         {
             throw new InvocationTargetException(t);         // stock: whatever the TARGET throws arrives wrapped
         }
+        // A REFERENCE RESULT BECOMES AN OBJECT HERE, before any call. Held as the raw long `ret` across box()'s
+        // prologue -- a safepoint -- it was no root to the precise stack walk, so a collection there freed a result
+        // nothing else held: Class.getEnumConstants' values() clone, whose TIB and Type were then reused and whose
+        // (Object[]) cast faulted in typeAssignable (frames/GC arc S6b; latent since S5's precise roots).
+        if (returnChar == 'L' || returnChar == '[')
+        {
+            Object result = Magic.fromAddr(ret);
+            return result;
+        }
         return box(returnChar, ret);
     }
 

@@ -14,6 +14,7 @@ package vm;
 import board.Uart;
 import magic.Address;
 import magic.DataReference;
+import magic.DataReferenceArray;
 import magic.Magic;
 import zip.ZipDir;
 
@@ -45,9 +46,9 @@ public final class JarFs
 
     private static byte[] openedPath = new byte[0];    // its RAMFS path, empty when none is open
 
-    private static long[] cacheName;                   // blob holding the class's internal name ...
+    private static DataReferenceArray cacheName;                   // blob holding the class's internal name ...
     private static int[] cacheNameLen;                 // ... and its length
-    private static long[] cacheBlob;                   // the inflated classfile blob, 0 for a known miss
+    private static DataReferenceArray cacheBlob;                   // the inflated classfile blob, 0 for a known miss
     private static int[] cacheBlobLen;
     private static int cacheCount;
     private static boolean cacheFullSaid;              // the overflow report fires once, not per lookup
@@ -124,9 +125,9 @@ public final class JarFs
         }
         dir = opened;
         openedPath = path;
-        cacheName = new long[MAXCACHE];
+        cacheName = DataReferenceArray.create(MAXCACHE);
         cacheNameLen = new int[MAXCACHE];
-        cacheBlob = new long[MAXCACHE];
+        cacheBlob = DataReferenceArray.create(MAXCACHE);
         cacheBlobLen = new int[MAXCACHE];
         cacheCount = 0;
         cacheFullSaid = false;
@@ -138,7 +139,7 @@ public final class JarFs
     public static long classBytes(long namePtr, long len)
     {
         int i = entry(namePtr, (int) len);
-        return i < 0 ? 0L : cacheBlob[i];
+        return i < 0 ? 0L : cacheBlob.get(i).toLong();
     }
 
     /** Companion to {@link #classBytes}: the classfile's byte length, or 0. */
@@ -210,9 +211,9 @@ public final class JarFs
         while (i < cacheCount)
         {
             jfScanSteps += 1;
-            if (cacheNameLen[i] == len && sameName(cacheName[i], namePtr, len))
+            if (cacheNameLen[i] == len && sameName(cacheName.get(i).toLong(), namePtr, len))
             {
-                return cacheBlob[i] == 0L ? -1 : i;
+                return cacheBlob.get(i).isZero() ? -1 : i;
             }
             i += 1;
         }
@@ -290,9 +291,9 @@ public final class JarFs
                 k += 1;
             }
         }
-        cacheName[cacheCount] = nameBlob.toLong();
+        cacheName.set(cacheCount, nameBlob);
         cacheNameLen[cacheCount] = len;
-        cacheBlob[cacheCount] = blob;
+        cacheBlob.set(cacheCount, DataReference.fromLong(blob));
         cacheBlobLen[cacheCount] = blobLen;
         cacheCount += 1;
         return blob == 0L ? -1 : cacheCount - 1;

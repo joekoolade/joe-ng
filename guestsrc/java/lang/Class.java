@@ -11,6 +11,7 @@
  */
 package java.lang;
 
+import magic.DataReference;
 import magic.Magic;
 
 /**
@@ -26,7 +27,8 @@ import magic.Magic;
 public final class Class<T> implements java.io.Serializable, java.lang.reflect.GenericDeclaration,
                                        java.lang.reflect.Type, java.lang.reflect.AnnotatedElement
 {
-    private long typeAddr;      // the VM Type node this Class mirrors (set by the VM at materialisation)
+    private DataReference typeAddr;   // the VM Type node this Class mirrors (set by the VM at materialisation);
+                                      //   a data reference, so a precise collector keeps the Type (frames/GC S6b)
 
     /**
      * Per-Class map of {@link ClassValue} entries, declared exactly as JDK 26 does
@@ -799,7 +801,7 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
     /** True if {@code obj} is non-null and assignable to this type (the {@code instanceof} walk). */
     public boolean isInstance(Object obj)
     {
-        return isInstance0(obj, typeAddr);
+        return isInstance0(obj, typeAddr.toLong());
     }
 
     /** VM native (maps straight onto the JIT's {@code VM.instanceOf(JJ)I} helper: obj in x0, Type in x1). */
@@ -841,7 +843,7 @@ public final class Class<T> implements java.io.Serializable, java.lang.reflect.G
         {
             return !other.isPrimitive();
         }
-        return assignable0(other.typeAddr, typeAddr);
+        return assignable0(other.typeAddr.toLong(), typeAddr.toLong());
     }
 
     /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.assignable} -> {@code VM.typeAssignable}). */

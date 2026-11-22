@@ -14,6 +14,7 @@ package vm;
 import board.Uart;
 import magic.Address;
 import magic.DataReference;
+import magic.DataReferenceArray;
 import magic.AddressArray;
 import magic.Magic;
 import objectmodel.ObjectModel;
@@ -41,7 +42,7 @@ final class TibBuilder
     // (before any instance exists), the lambda TIB was swept and a reused block scribbled its Type to garbage,
     // making a later Function.apply on it NPE. Holding each TIB here (a scanned static array) keeps it live.
     static final int MAXLAMBDATIB = 8192;
-    static AddressArray lambdaTibRoots;
+    static DataReferenceArray lambdaTibRoots;
     // Vtable CAPACITY of each synthesised TIB above, so refillSynthTibVtables can never write past one. The
     // capacity is whatever java/lang/Object's vtable count was WHEN THE TIB WAS BUILT, and Object may not have
     // been registered yet (objectVtableCount answers 0 then) -- refilling blind would then overflow an 8-byte
@@ -101,7 +102,7 @@ final class TibBuilder
         int i = 0;
         while (i < lambdaTibRoots.length())
         {
-            if (lambdaTibRoots.get(i).EQ(tib))
+            if (lambdaTibRoots.get(i).toAddress().EQ(tib))
             {
                 return 1;
             }
@@ -260,6 +261,58 @@ final class TibBuilder
         type.plus(ObjectModel.TYPE_DATAKIND_OFFSET).plus(8L).store(d1);
     }
 
+    // ---- maps for SYNTHESISED Types (lambdas, annotation instances, proxies): frames/GC arc S6b ----------------
+
+    /** Start an empty, computed map + kinds on {@code type} (no slot may hold a pointer yet). */
+    static void beginMaps(DataReference type)
+    {
+        Address t = type.toAddress();
+        t.plus(ObjectModel.TYPE_REFMAP_OFFSET).store(1L);
+        t.plus(ObjectModel.TYPE_REFMAP_OFFSET).plus(8L).store(0L);
+        t.plus(ObjectModel.TYPE_REFKIND_OFFSET).store(1L);
+        t.plus(ObjectModel.TYPE_REFKIND_OFFSET).plus(8L).store(0L);
+        t.plus(ObjectModel.TYPE_DATAKIND_OFFSET).store(0L);
+        t.plus(ObjectModel.TYPE_DATAKIND_OFFSET).plus(8L).store(0L);
+    }
+
+    /** Describe field slot {@code slot} of {@code type}: a value of JVMS descriptor character {@code c} ({@code L} or
+     *  {@code [} = a reference, {@code J} = a raw long the old map still calls "may hold a pointer", anything else
+     *  nothing). A slot past the maps' reach drops the whole map: the object is scanned conservatively. */
+    static void mapSlot(DataReference type, int slot, int c)
+    {
+        Address t = type.toAddress();
+        if (slot > ObjectModel.TYPE_REFMAP_MAX_SLOT)
+        {
+            clearMaps(t);
+            return;
+        }
+        if (c != 0x4C && c != 0x5B && c != 0x4A)
+        {
+            return;
+        }
+        long word = slot < 63 ? 0L : 8L;
+        long bit = slot < 63 ? 1L << (slot + 1) : 1L << (slot - 63);
+        Address m = t.plus(ObjectModel.TYPE_REFMAP_OFFSET).plus(word);
+        m.store(m.loadLong() | bit);
+        if (c != 0x4A)
+        {
+            Address r = t.plus(ObjectModel.TYPE_REFKIND_OFFSET).plus(word);
+            r.store(r.loadLong() | bit);
+        }
+    }
+
+    /** Copy {@code from}'s map and kinds onto {@code to} (an object laid out exactly as {@code from}'s instances). */
+    static void copyMaps(DataReference to, DataReference from)
+    {
+        int w = 0;
+        while (w < 6)
+        {
+            long off = (long) ObjectModel.TYPE_REFMAP_OFFSET + w * 8L;
+            to.toAddress().plus(off).store(from.toAddress().plus(off).loadLong());
+            w += 1;
+        }
+    }
+
     /** No map and no kinds: the collector scans the object conservatively. */
     private static void clearMaps(Address type)
     {
@@ -356,9 +409,9 @@ final class TibBuilder
             s += 1;
         }
         long dir = InterfaceInvocation.buildItableDir();                    // M8 itables: per-interface tables (writer numbering)
-        if (dir != 0L && InterfaceInvocation.instImaps != null && InterfaceInvocation.instImapN < InterfaceInvocation.instImaps.length)
+        if (dir != 0L && InterfaceInvocation.instImaps != null && InterfaceInvocation.instImapN < InterfaceInvocation.instImaps.length())
         {
-            InterfaceInvocation.instImaps[InterfaceInvocation.instImapN] = dir;                 // capture the DIR for the post-phase-B default refill
+            InterfaceInvocation.instImaps.set(InterfaceInvocation.instImapN, DataReference.fromLong(dir));                // capture the DIR for the post-phase-B default refill
             InterfaceInvocation.instImapReg[InterfaceInvocation.instImapN] = ClassRegistry.classRegByName(Loader.gView.thisNameOff);
             InterfaceInvocation.instImapN += 1;
         }
@@ -437,17 +490,17 @@ final class TibBuilder
         int i = 0;
         while (i < lambdaTibRootN)
         {
-            if (!lambdaTibRoots.get(i).isZero() && !lambdaTibFilled[i])
+            if (!lambdaTibRoots.get(i).toAddress().isZero() && !lambdaTibFilled[i])
             {
-                if (fillObjectVtableUpTo(lambdaTibRoots.get(i), lambdaTibVtCap[i]))
+                if (fillObjectVtableUpTo(lambdaTibRoots.get(i).toAddress(), lambdaTibVtCap[i]))
                 {
                     lambdaTibFilled[i] = true;           // complete: nothing more can ever be written here
                 }
-                if (AnnotationInstances.isAnnoTib(lambdaTibRoots.get(i)))   // the refill copies Object's slots back over the
+                if (AnnotationInstances.isAnnoTib(lambdaTibRoots.get(i).toAddress()))   // the refill copies Object's slots back over the
                 {                                       //   annotation contract: put it back
-                    AnnotationInstances.patchAnnoContract(lambdaTibRoots.get(i), lambdaTibVtCap[i], Address.zero());
+                    AnnotationInstances.patchAnnoContract(lambdaTibRoots.get(i).toAddress(), lambdaTibVtCap[i], Address.zero());
                 }
-                int px = ProxySupport.proxyIndexOfTib(lambdaTibRoots.get(i));
+                int px = ProxySupport.proxyIndexOfTib(lambdaTibRoots.get(i).toAddress());
                 if (px >= 0)                            // ... and over a proxy's equals/hashCode/toString
                 {
                     ProxySupport.patchProxyObject(px);

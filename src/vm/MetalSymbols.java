@@ -182,6 +182,11 @@ final class MetalSymbols implements Symbols
     {
         return Loader.monitorOp(methodCp);
     }
+    /** No-op: only writer-compiled VM code creates unboxed reference arrays (see {@code Symbols.tagUnboxedArray}). */
+    public void tagUnboxedArray(CodeBuffer cb, int arrReg, int methodCp)
+    {
+    }
+
     public void tagArray(CodeBuffer cb, int arrReg, int operand, boolean isRef)
     {
         long tib = (isRef ? ArrayTypes.refArrayTibForClass(operand) : ArrayTypes.primArrayTib(operand)).toLong();

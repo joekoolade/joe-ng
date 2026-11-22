@@ -11,6 +11,7 @@
  */
 package vm;
 
+import magic.ObjectReferenceArray;
 import magic.Address;
 import magic.DataReference;
 
@@ -34,7 +35,7 @@ final class ClassFileView
     byte[] bytes;     // heap copy of the blob, for the shared classfile.ClassReader
     int[] cp;         // byte offset of each constant-pool entry body
     int[] cpTag;      // tag of each constant-pool entry (7 = Class)
-    long[] litObj;    // per-entry ldc-String intern cache: the one interned object for that entry, or 0
+    ObjectReferenceArray litObj;   // per-entry ldc-String intern cache: the one interned object for that entry, or null
     int cpCount;      // constant-pool entry count
     int afterCp;      // byte offset just past the constant pool
 

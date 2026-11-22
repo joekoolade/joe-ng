@@ -19,6 +19,7 @@ import magic.DataReference;
 import magic.AddressArray;
 import magic.Magic;
 import magic.ObjectReference;
+import magic.ObjectReferenceArray;
 
 import static vm.ClassBytes.u1;
 import static vm.ClassBytes.u2;
@@ -48,6 +49,9 @@ final class Indy
     private static int[] dsCp;
     private static AddressArray dsDesc;                       // absolute Utf8 descriptor, or 0 for a MethodType/MethodHandle
     private static long[] dsVal;
+    /** {@link #dsVal}'s OBJECT values, as references a precise collector follows; dsVal also holds a primitive
+     *  constant's raw bits, so it stays a long[] (frames/GC arc S6b). */
+    private static ObjectReferenceArray dsObj;
     private static int[] dsDone;
     private static int dsCount;
     /** Dynamic site {@code idx}'s descriptor ({u2 len}{bytes}), or zero: the GC walk types an indy
@@ -89,6 +93,7 @@ final class Indy
             dsCp = new int[MAXDSITE];
             dsDesc = AddressArray.create(MAXDSITE);
             dsVal = new long[MAXDSITE];
+            dsObj = ObjectReferenceArray.create(MAXDSITE);
             dsDone = new int[MAXDSITE];
         }
         int reg = ClassRegistry.classRegByNameAt(Loader.gView.base.toAddress(), Loader.gView.thisNameOff);
@@ -131,6 +136,7 @@ final class Indy
         {
             long cs = dynLink(idx, DYN_INDY);           // may throw BootstrapMethodError: unwinds to the site
             dsVal[idx] = cs;
+            dsObj.set(idx, ObjectReference.fromLong(cs));
             Magic.dsb();
             dsDone[idx] = 1;
         }
@@ -172,6 +178,10 @@ final class Indy
         boolean prim = !d.isZero() && u1(d.plus(2L)) != 0x4C && u1(d.plus(2L)) != 0x5B;   // not 'L' and not '['
         long v = dynLink(idx, prim ? DYN_BITS : DYN_CONST);
         dsVal[idx] = v;
+        if (!prim)
+        {
+            dsObj.set(idx, ObjectReference.fromLong(v));
+        }
         Magic.dsb();
         dsDone[idx] = 1;
         return v;

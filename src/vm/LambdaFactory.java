@@ -912,6 +912,35 @@ final class LambdaFactory
         return finishLambdaClass(thunk, ifaceType.toAddress(), idx, nc);
     }
 
+    /** The descriptor character of each of the first {@code nc} parameters of the method descriptor Utf8 at {@code d}
+     *  ({@code u2 length, bytes}): {@code L} for any object, {@code [} for an array, else the primitive's letter. */
+    private static byte[] captureKinds(Address d, int nc)
+    {
+        byte[] k = new byte[nc];
+        long p = 3L;                                    // past the u2 length and '('
+        int i = 0;
+        while (i < nc)
+        {
+            int c = d.plus(p).loadUnsignedByte();
+            k[i] = (byte) c;
+            while (c == 0x5B)                           // '[': skip the dimensions
+            {
+                p += 1L;
+                c = d.plus(p).loadUnsignedByte();
+            }
+            if (c == 0x4C)                              // 'L...;'
+            {
+                while (d.plus(p).loadUnsignedByte() != 0x3B)
+                {
+                    p += 1L;
+                }
+            }
+            p += 1L;
+            i += 1;
+        }
+        return k;
+    }
+
     private static long finishLambdaClass(Address thunk, Address ifaceType, int idx, int nc)
     {
         // M8 itables: PER-interface itables. The SAM's identity is (indy name, MethodType desc);
@@ -920,6 +949,8 @@ final class LambdaFactory
         // gets its OWN itable with the thunk at that interface's flattened slot of the SAM.
         int samName = Loader.mrefNameOff(idx);
         int samDesc = lambdaSamDescOff(idx);
+        byte[] capKinds = captureKinds(Loader.gView.base.toAddress().plus(Loader.mrefDescOff(idx)), nc);   // read now:
+                                                         //   the steps below may parse other blobs
         int fnReg = ClassRegistry.regOfType(ifaceType);
         int n = fnReg >= 0 ? InterfaceInvocation.ifaceClosureOf(fnReg) : 0;
         // FLAG_SERIALIZABLE: an altMetafactory site whose lambda was cast to an INTERSECTION with
@@ -989,6 +1020,13 @@ final class LambdaFactory
         type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).store(0L);
         type.plus(ObjectModel.TYPE_IMPLEMENTS_OFFSET).plus(8L).store(0L);
         DynamicTypeCheck.buildImplBitmap(type.toAddress());                           // a lambda's dir interfaces ARE numbered
+        TibBuilder.beginMaps(type);                     // the captures' kinds: a precise collector follows exactly
+        int cs = 0;                                     //   the reference captures (frames/GC arc S6b)
+        while (cs < nc)
+        {
+            TibBuilder.mapSlot(type, cs, capKinds[cs]);
+            cs += 1;
+        }
         // TIB { Type, Object's vtable }. The lambda declares no virtual method of its OWN -- its SAM is
         // reached through the itable directory above -- but it is still an ordinary object, and
         // equals/hashCode/toString on it must select java/lang/Object's implementations (JVMS 5.4.6: the
@@ -1008,7 +1046,7 @@ final class LambdaFactory
                                                          //   refillSynthTibVtables repairs that at loadAll's end
         if (TibBuilder.lambdaTibRoots != null && TibBuilder.lambdaTibRootN < TibBuilder.lambdaTibRoots.length())
         {
-            TibBuilder.lambdaTibRoots.set(TibBuilder.lambdaTibRootN, tib.toAddress());         // keep this TIB (and, via its trace, Type/dir/itables) a GC root
+            TibBuilder.lambdaTibRoots.set(TibBuilder.lambdaTibRootN, tib);         // keep this TIB (and, via its trace, Type/dir/itables) a GC root
             TibBuilder.lambdaTibVtCap[TibBuilder.lambdaTibRootN] = onv;   // ... and how many vtable slots it has room for
             TibBuilder.lambdaTibFilled[TibBuilder.lambdaTibRootN] = false;// ... and NOT yet filled (explicit: see the field's note --
                                                     //   allocArray leaves elements undefined on this VM)

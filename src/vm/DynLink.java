@@ -27,6 +27,7 @@ final class DynLink
     int  classOff;  // class name Utf8 offset (in blob)
     int  nameOff;   // method name Utf8 offset (in blob)
     int  descOff;   // descriptor Utf8 offset (in blob)
-    long cell;      // its offset cell: holds the lazy stub, then the compiled buffer after first call
+    DataReference cell;   // its offset cell (a one-word allocData block): holds the lazy stub, then the compiled
+                          //   buffer after first call
     int  gen;       // Loader.loaderGen when armed: a cell from an earlier registry generation is not found by name
 }

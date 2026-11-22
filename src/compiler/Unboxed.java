@@ -64,6 +64,16 @@ public final class Unboxed
      *  reference to the collector (compiler.RefMaps types it apart). */
     public static final int DATA_REFERENCE = 8;
 
+    /** {@code magic/DataReferenceArray}: a {@code long[]}'s operations, but a {@code vm.DataRefElem[]} at run time,
+     *  so the collector knows its elements are data references (frames/GC arc S6b). */
+    public static final int DATA_REFERENCE_ARRAY = 9;
+
+    /** The run-time class of a {@code magic.ObjectReferenceArray} (the writer bakes it). */
+    public static final String OBJECT_ARRAY_DESC = "[Ljava/lang/Object;";
+    /** The run-time class of a {@code magic.DataReferenceArray}: its array Type carries
+     *  {@code ObjectModel.ARRAY_DATA_ELEMS}. */
+    public static final String DATA_ARRAY_DESC = "[Lvm/DataRefElem;";
+
     private static final long O_ADDRESS = 7816296518595377735L; // "magic/Address"
     private static final long O_WORD = 2502753236447134729L;  // "magic/Word"
     private static final long O_OFFSET = -5453143413838101434L; // "magic/Offset"
@@ -72,6 +82,7 @@ public final class Unboxed
     private static final long O_OBJECT_REFERENCE = -5959478901542360285L; // "magic/ObjectReference"
     private static final long O_OBJECT_REFERENCE_ARRAY = -3793534773957816616L; // "magic/ObjectReferenceArray"
     private static final long O_DATA_REFERENCE = -769869719729673626L; // "magic/DataReference"
+    private static final long O_DATA_REFERENCE_ARRAY = -3025547711846171633L; // "magic/DataReferenceArray"
     private static final long N_CREATE = -626457835795418115L; // "create"
     private static final long N_GET = -3106811833996379657L;  // "get"
     private static final long N_SET = -9062501282150740445L;  // "set"
@@ -183,6 +194,10 @@ public final class Unboxed
         {
             return DATA_REFERENCE;
         }
+        if (h == O_DATA_REFERENCE_ARRAY)
+        {
+            return DATA_REFERENCE_ARRAY;
+        }
         return NONE;
     }
 
@@ -195,7 +210,7 @@ public final class Unboxed
     {
         long h = hash(name);
         int params = paramCount(desc);
-        if (kind == ADDRESS_ARRAY || kind == OBJECT_REFERENCE_ARRAY)
+        if (kind == ADDRESS_ARRAY || kind == OBJECT_REFERENCE_ARRAY || kind == DATA_REFERENCE_ARRAY)
         {
             return arrayOp(h, params);              // both ARE a long[]: the same four array-bytecode lowerings
         }

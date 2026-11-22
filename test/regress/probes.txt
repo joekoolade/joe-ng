@@ -197,6 +197,7 @@ SockOptProbe
 SortPrimProbe
 SpawnRaceProbe           solo
 ArenaChurnProbe          solo             # cores 1-3 churn ~2.5 arenas each: their arenas must be collected (S5a)
+ReflectResultProbe       solo             # a reflective result held raw across a safepoint was freed (S6b)
 StackWalkerProbe         solo             # prints stack frames; a batch adds its own
 StaleBlockedProbe
 StockExceptionProbe

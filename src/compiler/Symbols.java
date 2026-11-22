@@ -321,6 +321,14 @@ public interface Symbols
      */
     void tagArray(CodeBuffer cb, int arrReg, int operand, boolean isRef);
 
+    /**
+     * Retype the {@code long[]} an unboxed array's {@code create} (call {@code methodCp}) just allocated, when its
+     * elements are references (frames/GC arc S6b): an {@code ObjectReferenceArray} becomes an {@code Object[]} and a
+     * {@code DataReferenceArray} a {@code vm.DataRefElem[]}, whose array Type marks its elements data references --
+     * so the collector follows them exactly. An {@code AddressArray} stays a {@code long[]}: raw.
+     */
+    void tagUnboxedArray(CodeBuffer cb, int arrReg, int methodCp);
+
     /** Load into {@code reg} the Type address of the interface owning InterfaceMethodref {@code ifaceMethodCp}. */
     void interfaceType(CodeBuffer cb, int reg, int ifaceMethodCp);
 

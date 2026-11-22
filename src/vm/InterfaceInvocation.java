@@ -13,6 +13,7 @@ package vm;
 
 import board.Uart;
 import magic.Address;
+import magic.DataReferenceArray;
 import magic.DataReference;
 import magic.AddressArray;
 import magic.Magic;
@@ -45,7 +46,7 @@ final class InterfaceInvocation
     // default-method slots that were 0 because the interface holding the default hadn't been EMITTED yet when
     // this class's buildImap ran (phase B is superclass-first, not super-interface-first).
     static final int MAXIMAP = 2048;
-    static long[] instImaps;
+    static DataReferenceArray instImaps;   // itable directories (allocData payloads): data references
     static int[] instImapReg;    // the class registry index each imap belongs to (for its iface closure)
     static int instImapN;
     /**
@@ -788,7 +789,7 @@ final class InterfaceInvocation
                 continue;
             }
             rfVisit += 1;
-            Address dir = Address.fromLong(instImaps[m]);                    // the class's itable DIRECTORY (per-interface tables)
+            Address dir = instImaps.get(m).toAddress();                    // the class's itable DIRECTORY (per-interface tables)
             int reg = instImapReg[m];
             if (reg < 0 || dir.isZero())
             {

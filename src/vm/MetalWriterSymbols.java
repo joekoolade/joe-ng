@@ -133,6 +133,11 @@ final class MetalWriterSymbols implements Symbols
         ifClassOff[ifN] = ClassReader.refClassNameOff(classBytes, cpOff, ifaceMethodCp);
         ifN += 1;
     }
+    /** No-op: only writer-compiled VM code creates unboxed reference arrays (see {@code Symbols.tagUnboxedArray}). */
+    public void tagUnboxedArray(CodeBuffer cb, int arrReg, int methodCp)
+    {
+    }
+
     public void tagArray(CodeBuffer cb, int arrReg, int operand, boolean isRef)
     {
         // Metal writer (self-build, deprecated): no runtime array Types; arrays stay raw.

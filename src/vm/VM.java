@@ -1478,7 +1478,36 @@ public final class VM
 
     static long newNpe()
     {
+        long lr = Magic.readLR();                      // first: the JIT's null-check site
+        if (npeTrace != 0)
+        {
+            Uart.write(Magic.bytes("NPE TRACE (implicit check)"));
+            npeWalk(lr - 4L, Magic.readSP() + frameSizeAt(Address.fromLong(newNpeAddr)));
+        }
         return RuntimeEntrypoints.newNpe();
+    }
+
+    /** {@code npetrace=1}: print the call stack wherever an implicit NullPointerException is raised (a diagnostic). */
+    static int npeTrace;
+
+    /** Up to sixteen frames from pc {@code pc} whose frame starts at {@code sp} ([sp] = its caller's return). */
+    static void npeWalk(long pc, long sp)
+    {
+        int depth = 0;
+        while (depth < 16 && pc > 0x1000L)
+        {
+            Uart.write(Magic.bytes("\n      at "));
+            StackTrace.printFrameAt(Address.fromLong(pc));
+            long fs = frameSizeAt(Address.fromLong(pc));
+            if (fs == 0L)
+            {
+                break;
+            }
+            pc = Address.fromLong(sp).loadLong() - 4L;
+            sp = sp + fs;
+            depth += 1;
+        }
+        Uart.putc((byte) 0x0A);
     }
 
     /** Allocate a mini {@code java/lang/ArrayIndexOutOfBoundsException} — the JIT calls this on a bad index. */
@@ -2398,6 +2427,7 @@ public final class VM
         armGcVolume(conf, flen);
         armGcRoots(conf, flen);
         armGcHeap(conf, flen);
+        armNpeTrace(conf, flen);
         DataReference nm = Heap.allocData(flen + 8);
         int nl = manifestValue(conf, flen, Magic.bytes("main"), nm.toAddress(), flen);
         if (nl == 0)
@@ -2511,6 +2541,17 @@ public final class VM
         {
             StackRoots.on = 0;
             Uart.write(Magic.bytes("gcroots: conservative stack scan\n"));
+        }
+    }
+
+    /** {@code npetrace=1}: {@link #npeTrace}. */
+    private static void armNpeTrace(Address conf, int flen)
+    {
+        DataReference v = Heap.allocData(16);
+        int n = manifestValue(conf, flen, Magic.bytes("npetrace"), v.toAddress(), 8);
+        if (n == 1 && v.loadUnsignedByte() == 0x31)
+        {
+            npeTrace = 1;
         }
     }
 
@@ -2730,6 +2771,30 @@ public final class VM
             if ((ec == 0x20L || ec == 0x21L) && !DynamicLinker.plausibleCode(elr))
             {
                 reportWildBranch(Address.fromLong(sp));        // executing at a non-code address: say who branched there
+            }
+            if (npeTrace != 0)
+            {
+                Uart.write(Magic.bytes("NPE TRACE (fault far="));
+                printHex(fault0Far);
+                Uart.putc((byte) 0x29);
+                int rr = 0;
+                while (rr < 6)
+                {
+                    Uart.write(Magic.bytes(" x"));
+                    printDec(rr);
+                    Uart.putc((byte) 0x3D);
+                    printHex(Address.fromLong(sp).plus(rr * 8L).loadLong());
+                    rr += 1;
+                }
+                Uart.write(Magic.bytes("\n  frame:"));
+                rr = 0;
+                while (rr < 14)
+                {
+                    Uart.putc((byte) 0x20);
+                    printHex(Address.fromLong(sp + SCHED_FRAME).plus(rr * 8L).loadLong());
+                    rr += 1;
+                }
+                npeWalk(elr.toLong(), sp + SCHED_FRAME);
             }
             exc = newNpe();
         }

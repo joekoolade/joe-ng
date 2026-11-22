@@ -22,6 +22,7 @@ import zip.ZipDir;
 import magic.Address;
 import magic.DataReference;
 import magic.AddressArray;
+import magic.DataReferenceArray;
 import magic.Magic;
 import magic.ObjectReference;
 import magic.ObjectReferenceArray;
@@ -133,9 +134,9 @@ public final class Loader
         int k = 0;
         while (k < DynamicLinker.dlN)
         {
-            if (DynamicLinker.dlTab[k] != null && DynamicLinker.dlTab[k].cell != 0L)
+            if (DynamicLinker.dlTab[k] != null && !DynamicLinker.dlTab[k].cell.isZero())
             {
-                long target = Address.fromLong(DynamicLinker.dlTab[k].cell).loadLong();
+                long target = DynamicLinker.dlTab[k].cell.toAddress().loadLong();
                 if (target >= Heap.CODE_BASE && target < Heap.CODE_LIMIT
                         && Heap.codeBlockFreeAt(Address.fromLong(target)) == 1)
                 {
@@ -144,7 +145,7 @@ public final class Loader
                     Uart.write(Magic.bytes(" target="));
                     VM.printHex(target);
                     Uart.write(Magic.bytes(" cell="));
-                    VM.printHex(DynamicLinker.dlTab[k].cell);
+                    VM.printHex(DynamicLinker.dlTab[k].cell.toLong());
                     Uart.write(Magic.bytes("\n  method: "));
                     StackTrace.printFrameAt(Address.fromLong(target));
                     Uart.putc(0x0A);
@@ -362,7 +363,7 @@ public final class Loader
                     && Utf8.utf8IsAtBase(d.blob.toAddress(), d.nameOff, name)
                     && Utf8.utf8IsAtBase(d.blob.toAddress(), d.descOff, desc))
             {
-                return Address.fromLong(d.cell).loadLong();
+                return d.cell.toAddress().loadLong();
             }
             k += 1;
         }
@@ -794,6 +795,12 @@ public final class Loader
             while (i < len && line[i] != 0x20) { i += 1; }
         }
         ObjectReference argv = Heap.allocArray(n, 8).toObjectReference();                  // String[n] (8-byte reference elements)
+        DataReference strType = stringTypeAddr();
+        if (!strType.isZero())
+        {
+            // A real String[]: an untyped (raw) array's elements are not references to a precise collector.
+            argv.toAddress().store(ArrayTypes.refArrayTib(strType.toAddress()));
+        }
         int idx = 0;
         i = 0;
         while (i < len)                                     // pass 2: fill
@@ -1144,7 +1151,7 @@ public final class Loader
 
     static long lazyCellAt(int i)
     {
-        return LazyCompiler.lzTab == null || i < 0 || i >= LazyCompiler.lzTab.length || LazyCompiler.lzTab[i] == null ? 0L : LazyCompiler.lzTab[i].slot;
+        return LazyCompiler.lzTab == null || i < 0 || i >= LazyCompiler.lzTab.length || LazyCompiler.lzTab[i] == null ? 0L : LazyCompiler.lzTab[i].slot.toLong();
     }
 
 
@@ -1551,10 +1558,10 @@ public final class Loader
         ClassInitializer.clinitN = 0;
         ClassInitializer.clinitFdFirst = -1;
         ClassInitializer.clinitRunFrom = 0;
-        ArrayTypes.primArrTib = AddressArray.create(12);         // array Types live in the (reclaimed) demand heap: recreate per batch
+        ArrayTypes.primArrTib = DataReferenceArray.create(12);         // array Types live in the (reclaimed) demand heap: recreate per batch
         ArrayTypes.primArrAdopted = new boolean[12];  // (adopted image TIBs are permanent but re-adopting is idempotent)
-        ArrayTypes.refArrElem = AddressArray.create(64);
-        ArrayTypes.refArrTib = AddressArray.create(64);
+        ArrayTypes.refArrElem = DataReferenceArray.create(64);
+        ArrayTypes.refArrTib = DataReferenceArray.create(64);
         ArrayTypes.refArrAdopted = new boolean[64];
         ArrayTypes.refArrCount = 0;
         // CLASS MIRRORS. 256 was not enough for the console launcher, which overflowed it mid-discovery
@@ -1578,7 +1585,7 @@ public final class Loader
         InterfaceInvocation.clIfaceReg = new int[ClassRegistry.MAXCLASS * InterfaceInvocation.MAX_DIRECT_IF];
         InterfaceInvocation.clIfaceRegN = new int[ClassRegistry.MAXCLASS];
         InterfaceInvocation.ifClosureBuf = new int[InterfaceInvocation.MAXIFM];
-        InterfaceInvocation.instImaps = new long[InterfaceInvocation.MAXIMAP];
+        InterfaceInvocation.instImaps = DataReferenceArray.create(InterfaceInvocation.MAXIMAP);
         InterfaceInvocation.instImapReg = new int[InterfaceInvocation.MAXIMAP];
         InterfaceInvocation.instImapDone = new boolean[InterfaceInvocation.MAXIMAP];
         InterfaceInvocation.instImapDecl = new int[InterfaceInvocation.MAXIMAP][];
@@ -1590,7 +1597,7 @@ public final class Loader
             dm += 1;
         }
         InterfaceInvocation.instImapN = 0;
-        TibBuilder.lambdaTibRoots = AddressArray.create(TibBuilder.MAXLAMBDATIB);
+        TibBuilder.lambdaTibRoots = DataReferenceArray.create(TibBuilder.MAXLAMBDATIB);
         TibBuilder.lambdaTibVtCap = new int[TibBuilder.MAXLAMBDATIB];
         TibBuilder.lambdaTibFilled = new boolean[TibBuilder.MAXLAMBDATIB];    // beside the table it tracks: a latch that outlives
                                                         //   its array would skip a TIB that needs filling
@@ -3229,7 +3236,7 @@ public final class Loader
         v.cpCount = ClassReader.cpCount(v.bytes);
         v.cp = new int[v.cpCount];
         v.cpTag = new int[v.cpCount];
-        v.litObj = new long[v.cpCount];                 // per-blob ldc-String intern cache (one object per cp entry)
+        v.litObj = ObjectReferenceArray.create(v.cpCount);   // per-blob ldc-String intern cache (one object per cp entry)
         v.afterCp = ClassReader.constantPool(v.bytes, v.cp, v.cpTag);   // stable: gp is later reused as a walk cursor
         readHeader(v);
         useView(v);
@@ -7622,7 +7629,7 @@ public final class Loader
         LazyCompiler.lzTab[idx].reg = ClassRegistry.classRegByName(gView.thisNameOff);
         LazyCompiler.lzTab[idx].nameOff = 0;
         LazyCompiler.lzTab[idx].descOff = VtableLayout.gvTab[s].desc;
-        LazyCompiler.lzTab[idx].slot = 0L;                               // shared stub buffer: no single slot to patch
+        LazyCompiler.lzTab[idx].slot = DataReference.zero();             // shared stub buffer: no single slot to patch
         LazyCompiler.lzTab[idx].code = code;
         if (LazyCompiler.lzN >= LazyCompiler.lzNHigh)
         {
@@ -8849,10 +8856,10 @@ public final class Loader
         // sites compares == (JLS string interning). Without this each ldc site allocated a distinct object, so
         // e.g. Objects.requireNonNull("pants") == "pants" was false (BasicObjectsTest.testRequireNonNull). Keyed
         // by cp index in the current blob's cache (reset per parseConstPool); cross-blob interning is not modelled.
-        long[] lit = gView.litObj;
-        if (stringCp < lit.length && lit[stringCp] != 0L)
+        ObjectReferenceArray lit = gView.litObj;
+        if (stringCp < lit.length() && !lit.get(stringCp).isNull())
         {
-            return lit[stringCp];
+            return lit.get(stringCp).toLong();
         }
         ObjectReference bytesRef = ObjectReference.fromLong(internString(stringCp));   // the byte[]: a reference
         long bytes = bytesRef.toLong();                 // a raw copy; bytesRef keeps the array alive
@@ -8880,9 +8887,9 @@ public final class Loader
             }
         }
         lit = gView.litObj;                             // re-read: interning above may have parsed another blob
-        if (stringCp < lit.length)
+        if (stringCp < lit.length())
         {
-            lit[stringCp] = result;
+            lit.set(stringCp, ObjectReference.fromLong(result));
         }
         return result;
     }
@@ -8893,7 +8900,7 @@ public final class Loader
     // that ldc would push a freed (re-zeroed / reused) object. Every interned literal is therefore also
     // recorded here; the array is reachable from this static -> the image statics root -> its body is
     // traced -> the literals stay marked. Literals live until the next batch rewind reclaims them wholesale.
-    private static long[] litAnchor;
+    private static ObjectReferenceArray litAnchor;   // object references: exact roots (frames/GC arc S6b)
     private static int litAnchorN;
     // Per-blob ldc-String intern cache: gView.litObj[cpIndex] = the one interned object for that String cp entry
     // (so all ldc sites of the same literal in a class share one object). It lives in the blob's ClassFileView, so
@@ -8910,7 +8917,7 @@ public final class Loader
     // alive by litAnchor, not by this array (a long[] is not traced). STATED LIMITS: writer-BAKED literals are
     // not in the pool (only guest code compares against them here, measured for the case-mapping paths), and
     // an intern()ed string is held for the rest of the launch where stock's table is weak.
-    private static long[] strPool;
+    private static ObjectReferenceArray strPool;
     private static int strPoolN;
 
     /** FNV-1a over a String's coder and value bytes. */
@@ -8961,13 +8968,13 @@ public final class Loader
         {
             return 0L;
         }
-        int mask = strPool.length - 1;
+        int mask = strPool.length() - 1;
         int i = poolHash(str) & mask;
-        while (strPool[i] != 0L)
+        while (!strPool.get(i).isNull())
         {
-            if (poolSame(strPool[i], str))
+            if (poolSame(strPool.get(i).toLong(), str))
             {
-                return strPool[i];
+                return strPool.get(i).toLong();
             }
             i = (i + 1) & mask;
         }
@@ -8977,25 +8984,25 @@ public final class Loader
     /** Add {@code str}, known absent, growing the table at half full. */
     private static void poolInsert(long str)
     {
-        if (strPool == null || (strPoolN + 1) * 2 > strPool.length)
+        if (strPool == null || (strPoolN + 1) * 2 > strPool.length())
         {
-            long[] old = strPool;
-            strPool = new long[old == null ? 1024 : old.length * 2];
+            ObjectReferenceArray old = strPool;
+            strPool = ObjectReferenceArray.create(old == null ? 1024 : old.length() * 2);
             int k = 0;
-            while (k < strPool.length)
+            while (k < strPool.length())
             {
-                strPool[k] = 0L;                        // allocArray does not zero elements on this VM
+                strPool.set(k, ObjectReference.nullReference());   // allocArray does not zero elements on this VM
                 k += 1;
             }
             strPoolN = 0;
             if (old != null)
             {
                 int j = 0;
-                while (j < old.length)
+                while (j < old.length())
                 {
-                    if (old[j] != 0L)
+                    if (!old.get(j).isNull())
                     {
-                        poolPut(old[j]);
+                        poolPut(old.get(j).toLong());
                     }
                     j += 1;
                 }
@@ -9006,13 +9013,13 @@ public final class Loader
 
     private static void poolPut(long str)
     {
-        int mask = strPool.length - 1;
+        int mask = strPool.length() - 1;
         int i = poolHash(str) & mask;
-        while (strPool[i] != 0L)
+        while (!strPool.get(i).isNull())
         {
             i = (i + 1) & mask;
         }
-        strPool[i] = str;
+        strPool.set(i, ObjectReference.fromLong(str));
         strPoolN += 1;
     }
 
@@ -9033,18 +9040,18 @@ public final class Loader
     /** Record {@code obj} (a literal the JIT bakes into code) as a GC root; returns it for chaining. */
     private static long anchorLiteral(long obj)
     {
-        if (litAnchor == null || litAnchorN == litAnchor.length)
+        if (litAnchor == null || litAnchorN == litAnchor.length())
         {
-            long[] grown = new long[litAnchor == null ? 256 : litAnchor.length * 2];
+            ObjectReferenceArray grown = ObjectReferenceArray.create(litAnchor == null ? 256 : litAnchor.length() * 2);
             int i = 0;
             while (i < litAnchorN)
             {
-                grown[i] = litAnchor[i];
+                grown.set(i, litAnchor.get(i));
                 i += 1;
             }
             litAnchor = grown;
         }
-        litAnchor[litAnchorN] = obj;
+        litAnchor.set(litAnchorN, ObjectReference.fromLong(obj));
         litAnchorN += 1;
         return obj;
     }

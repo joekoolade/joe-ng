@@ -153,6 +153,30 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         cb.emit(A64.strx(16, arrReg, ObjectModel.TIB_OFFSET));
     }
 
+    public void tagUnboxedArray(CodeBuffer cb, int arrReg, int methodCp)
+    {
+        String desc = unboxedArrayDesc(Unboxed.ownerKind(new StringUtf8(cf.memberRef(methodCp).owner())));
+        if (desc != null)
+        {
+            relocs.tibRefs().add(new TibRef(cb.reserveAddr(16), 16, desc));
+            cb.emit(A64.strx(16, arrReg, ObjectModel.TIB_OFFSET));
+        }
+    }
+
+    /** The array class an unboxed array of {@code kind} is at run time, when that is not {@code long[]}; else null. */
+    public static String unboxedArrayDesc(int kind)
+    {
+        if (kind == Unboxed.OBJECT_REFERENCE_ARRAY)
+        {
+            return Unboxed.OBJECT_ARRAY_DESC;
+        }
+        if (kind == Unboxed.DATA_REFERENCE_ARRAY)
+        {
+            return Unboxed.DATA_ARRAY_DESC;
+        }
+        return null;
+    }
+
     /** The element class of a single-dim reference-array descriptor "[L<cls>;", or null. */
     static String refArrayElement(String desc)
     {
