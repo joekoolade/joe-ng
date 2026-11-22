@@ -46,6 +46,8 @@ final class Relocator
     static AddressArray rcBase;
     static int[] rcClass, rcName, rcDesc;       //   class/name/descriptor Utf8 offsets
     static int[] rcTail;                        //   1 = a tail branch (b), not a call (bl) -- lambda thunks
+    static int[] rcRecv;                        //   1 = the callee takes a receiver, 0 = static, -1 = not known: a
+                                                //   link stub's saved arguments are typed by it (frames/GC arc S6d-2)
     /**
      * PER-SITE MEMO FOR THE UNRESOLVED ARM, and the reason it is sound is that the arm's answer cannot change.
      * {@code patchRelocs} revisits every reloc site from 0 at each batch end -- deliberately, so a callee
@@ -215,7 +217,7 @@ final class Relocator
     }
 
     /** Record an unresolved cross-class call at {@code blAddr} (the ref names class/name/desc in the current cp). */
-    static void recordCallReloc(long blAddr, int idx)
+    static void recordCallReloc(long blAddr, int idx, int recv)
     {
         if (relocRecording == 0 || rcCount >= MAXRELOC)
         {
@@ -227,6 +229,7 @@ final class Relocator
         rcName[rcCount] = Loader.mrefNameOff(idx);
         rcDesc[rcCount] = Loader.mrefDescOff(idx);
         rcTail[rcCount] = 0;
+        rcRecv[rcCount] = recv;
         rcReg[rcCount] = -1;                            // not yet resolved through the direct registry tier
         rcStub[rcCount] = 0L;                           // nor settled on a link stub: see rcStub
         rcDone.set(rcCount, 0L);                           // nor written: see rcDone
@@ -236,7 +239,7 @@ final class Relocator
 
     /** Record an unresolved TAIL branch ({@code b}, not {@code bl}) at {@code bAddr} to Methodref {@code idx} --
      *  used by a lambda/method-ref thunk whose cross-class impl isn't registered yet at thunk-build time. */
-    static void recordTailReloc(long bAddr, int idx)
+    static void recordTailReloc(long bAddr, int idx, int recv)
     {
         if (relocRecording == 0 || rcCount >= MAXRELOC)
         {
@@ -248,6 +251,7 @@ final class Relocator
         rcName[rcCount] = Loader.mrefNameOff(idx);
         rcDesc[rcCount] = Loader.mrefDescOff(idx);
         rcTail[rcCount] = 1;
+        rcRecv[rcCount] = recv;
         rcReg[rcCount] = -1;                            // see rcReg: 0 is a VALID registry index, so an unset
         rcStub[rcCount] = 0L;                           //   entry would memoise the site to rgTab[0]; see rcStub
         rcDone.set(rcCount, 0L);                           //   ... and rcDone
@@ -691,7 +695,7 @@ final class Relocator
             if (!Loader.isDenylisted(rcBase.get(i), rcClass[i]))
             {
                 long stub = DynamicLinker.linkStubFor(rcBase.get(i).plus(rcClass[i]), rcBase.get(i).plus(rcName[i]),
-                        rcBase.get(i).plus(rcDesc[i]));
+                        rcBase.get(i).plus(rcDesc[i]), rcRecv[i]);
                 if (stub != 0L)
                 {
                     target = stub;

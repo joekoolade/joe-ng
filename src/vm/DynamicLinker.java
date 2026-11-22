@@ -87,6 +87,7 @@ final class DynamicLinker
     private static AddressArray lkDescU = AddressArray.create(MAXLINKSTUB);
     private static long[] lkMemo  = new long[MAXLINKSTUB];   // resolved target, filled on first call
     private static long[] lkStub  = new long[MAXLINKSTUB];
+    private static int[] lkRecv   = new int[MAXLINKSTUB];    // 1 = the callee takes a receiver, 0 = static, -1 = unknown
     static int    lkCount;
     static long   linkTrampAddr;
 
@@ -99,6 +100,17 @@ final class DynamicLinker
             return Address.zero();
         }
         return lkDescU.get(idx);
+    }
+
+    /** Whether link stub {@code idx}'s callee takes a receiver in x0: 1 yes, 0 static, -1 not known (the stack walk
+     *  then types the frame's registers as possible references, {@link FrameMaps#trampArgs}). */
+    static int linkRecv(int idx)
+    {
+        if (idx < 0 || idx >= lkCount)
+        {
+            return -1;
+        }
+        return lkRecv[idx];
     }
     private static boolean lkFullReported;
     /**
@@ -428,7 +440,7 @@ final class DynamicLinker
      * sites calling the same method share one. Returns 0 if the table is full, and the caller falls back to
      * the trap.
      */
-    static long linkStubFor(Address clsU, Address nameU, Address descU)
+    static long linkStubFor(Address clsU, Address nameU, Address descU, int recv)
     {
         // A LINEAR SCAN, and deliberately left one. It was indexed during the `patch` arc on the theory that
         // this was hot; MEASURED, the index bought NOTHING, and the cost turned out to be `dlCellOf` two
@@ -443,6 +455,10 @@ final class DynamicLinker
                     && Loader.utf8EqAt(lkNameU.get(k), 0, nameU, 0)
                     && Loader.utf8EqAt(lkDescU.get(k), 0, descU, 0))
             {
+                if (lkRecv[k] != recv)
+                {
+                    lkRecv[k] = -1;                     // two callers disagree (cannot in valid bytecode): say unknown
+                }
                 return lkStub[k];
             }
             k += 1;
@@ -464,6 +480,7 @@ final class DynamicLinker
         lkNameU.set(lkCount, nameU);
         lkDescU.set(lkCount, descU);
         lkMemo[lkCount] = 0L;
+        lkRecv[lkCount] = recv;
         lkStub[lkCount] = buildLinkStub(lkCount).toLong();
         lkCount += 1;
         return lkStub[lkCount - 1];

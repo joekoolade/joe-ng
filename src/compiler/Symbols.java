@@ -168,6 +168,13 @@ public interface Symbols
     /** Emit a {@code BL} to the method at Methodref/InterfaceMethodref index {@code methodCp}. */
     void call(CodeBuffer cb, int methodCp);
 
+    /** {@link #call}, saying whether the callee takes a receiver in x0: the metal side records it for the precise
+     *  stack walk, which types a link trampoline's saved arguments by the callee's descriptor (frames/GC arc S6d-2). */
+    default void call(CodeBuffer cb, int methodCp, boolean hasReceiver)
+    {
+        call(cb, methodCp);
+    }
+
     /** Emit a {@code BL} to a synthesised runtime helper (one of the ids above). */
     void callHelper(CodeBuffer cb, int helper);
 

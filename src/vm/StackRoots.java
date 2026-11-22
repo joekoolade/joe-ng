@@ -27,8 +27,11 @@ import magic.Uninterruptible;
  * <p>Where nothing can say which words are references, the walk falls back to scanning them conservatively, and
  * counts it: a frame with no map or no site for its return address; the rest of a stack past a frame the tables do
  * not know (a fault taken mid-instruction, or an unregistered stub); a task preempted outside a safepoint by a forced
- * switch, or a core's idle task (stopped wherever the interrupt found it). The fallback is what makes the walk safe to
- * turn on before every corner is described; the counters are how much it is still needed.
+ * switch; a stub frame whose descriptor cannot be found. Since frames/GC arc S6d-2 a core's idle task yields at a
+ * safepoint like any other (it used to be switched wherever the interrupt found it), stub arguments are typed by
+ * their exact kinds, and a fresh task's x0 and the run trampoline's Runnable are exact roots: over the whole virt
+ * probe list every one of these counters is 0. The fallback stays, so the walk is never wrong where a corner is not
+ * described; the counters say how much it is still needed.
  *
  * <p>Return addresses and other code pointers on a stack keep compiled code alive, and code is never moved, so each
  * live stack range is still scanned for CODE pointers only ({@link VMGc#markCodeInRange}): no heap block is marked
@@ -59,6 +62,8 @@ final class StackRoots implements Uninterruptible
     static long forced;              // suspended tasks stopped outside a safepoint, scanned whole
     static long idle;                // core idle tasks stopped outside a safepoint, scanned whole
     static long fresh;               // tasks that have not run yet: x0 only
+    static long runTramps;           // spawned threads' bottom frames: the Runnable at [sp]
+    static long stubWords;           // untyped stub-frame words (no descriptor), probed at w AND w-16
     static long consWords;           // words scanned conservatively by any of the above
     static long last;                // consWords at the start of the last collection
 
@@ -134,9 +139,9 @@ final class StackRoots implements Uninterruptible
         VMGc.markCodeInRange(frame, top);
         if (sp >= top)
         {
-            fresh += 1L;                                    // never ran: its x0 is the entry's receiver or argument
-            conservative(frame, frame + 8L);
-            return;
+            fresh += 1L;                                    // never ran: its x0 is the entry's receiver (a Runnable), an
+            VMGc.markRoot(Address.fromLong(frame).loadLong());   //   int id or 0 (VMScheduler.spawnWith): an object or
+            return;                                         //   no heap address at all
         }
         if (taskSafe != null && taskSafe[t] != 0)
         {
@@ -147,10 +152,11 @@ final class StackRoots implements Uninterruptible
         }
         if (taskIdle != null && taskIdle[t] != 0)
         {
-            // A core's idle task, switched by an interrupt wherever it was. It runs scheduler code, but "it holds
-            // no reference" was REFUTED by the shadow check (a MISS on an idle stack), so its stack is scanned
-            // whole, as before S5; the counter says how often.
+            // A core's idle task switched by an interrupt wherever it was: only with safepoints=0 since S6d-2 (it
+            // is asked to yield like any task, and never forced). "It holds no reference" was REFUTED by the shadow
+            // check (a MISS on an idle stack), so its stack is scanned whole, as before S5.
             idle += 1L;
+            report(Address.fromLong(frame).plus(248L).loadLong() + 4L, Magic.bytes("idle-unsafe"), top - frame);
             conservative(frame, top);
             return;
         }
@@ -193,7 +199,8 @@ final class StackRoots implements Uninterruptible
                 // The run trampoline: a spawned thread's bottom frame. 16 bytes, its Runnable at [sp] (not an LR),
                 // and nothing above it.
                 frames += 1L;
-                conservative(sp, sp + 8L);
+                runTramps += 1L;
+                VMGc.markRoot(Address.fromLong(sp).loadLong());
                 return;
             }
             FrameMaps.lookup(ret - 4L);
@@ -305,7 +312,7 @@ final class StackRoots implements Uninterruptible
             {
                 if (((mask >>> i) & 1L) != 0L)
                 {
-                    markWord(sp + i * 8L);
+                    markObject(sp + i * 8L);
                 }
                 i += 1;
             }
@@ -319,7 +326,7 @@ final class StackRoots implements Uninterruptible
                     {
                         if (((mask >>> (StubFrames.MASK_OVERFLOW_BIT0 + j)) & 1L) != 0L)
                         {
-                            markWord(p + j * 8L);
+                            markObject(p + j * 8L);
                         }
                         j += 1;
                     }
@@ -339,15 +346,14 @@ final class StackRoots implements Uninterruptible
             untypedStubs += 1L;
         }
         long mask = FrameMaps.tMask;
+        long data = FrameMaps.tData;
+        boolean untyped = FrameMaps.tUntyped;
         int n = FrameMaps.tN;
         int regs = n > 16 ? 15 : n;                         // past 16 arguments, x15 is a pointer to the rest
         int r = 0;
         while (r < regs)
         {
-            if (((mask >>> r) & 1L) != 0L)
-            {
-                markWord(sp + StubFrames.STUB_SAVE0 + r * 8L);
-            }
+            argWord(sp + StubFrames.STUB_SAVE0 + r * 8L, r, mask, data, untyped);
             r += 1;
         }
         if (n > 16)
@@ -358,25 +364,49 @@ final class StackRoots implements Uninterruptible
                 int i = 15;
                 while (i < n && i < 64)
                 {
-                    if (((mask >>> i) & 1L) != 0L)
-                    {
-                        markWord(p + (i - 15) * 8L);
-                    }
+                    argWord(p + (i - 15) * 8L, i, mask, data, untyped);
                     i += 1;
                 }
             }
         }
     }
 
-    /** A word a descriptor says holds a reference: an object, or (a payload pointer) a data block. */
-    private static void markWord(long a)
+    /** Saved argument {@code r} at {@code a}: an object reference, a data reference, or -- the descriptor unknown --
+     *  either, probed at {@code w} and {@code w-16} as the conservative scan would ({@link #stubWords}). */
+    private static void argWord(long a, int r, long mask, long data, boolean untyped)
+    {
+        long w = Address.fromLong(a).loadLong();
+        if (w == 0L)
+        {
+            return;
+        }
+        if (untyped)
+        {
+            refs += 1L;
+            stubWords += 1L;
+            VMGc.markRoot(w);
+            VMGc.markRoot(w - 16L);
+        }
+        else if (((mask >>> r) & 1L) != 0L)
+        {
+            refs += 1L;
+            VMGc.markRoot(w);
+        }
+        else if (((data >>> r) & 1L) != 0L)
+        {
+            refs += 1L;
+            VMGc.markRoot(w - 16L);                         // a data reference: the block is one header earlier
+        }
+    }
+
+    /** A word a thunk's build-time mask types as an object reference. */
+    private static void markObject(long a)
     {
         long w = Address.fromLong(a).loadLong();
         if (w != 0L)
         {
             refs += 1L;
             VMGc.markRoot(w);
-            VMGc.markRoot(w - 16L);
         }
     }
 
@@ -459,6 +489,12 @@ final class StackRoots implements Uninterruptible
         printDec((int) idle);
         Uart.write(Magic.bytes(" fresh="));
         printDec((int) fresh);
+        Uart.write(Magic.bytes(" runTramps="));
+        printDec((int) runTramps);
+        Uart.write(Magic.bytes(" stubWords="));
+        printDec((int) stubWords);
+        Uart.write(Magic.bytes(" heapFallbacks="));
+        printDec((int) PreciseTrace.fallbacks);
         Uart.write(Magic.bytes(" consWords="));
         printDec((int) consWords);
         Uart.write(Magic.bytes(" (+"));

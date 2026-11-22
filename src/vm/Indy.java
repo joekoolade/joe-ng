@@ -153,13 +153,7 @@ final class Indy
             Uart.putc(0x0A);
             return 0L;
         }
-        int r = n;
-        while (r > 0)
-        {
-            Address.fromLong(save).plus(r * 8L).store(Address.fromLong(save).plus((r - 1) * 8L).loadLong());
-            r -= 1;
-        }
-        Address.fromLong(save).store(target);
+        FrameMaps.shiftIndyArgs(save, n, target);
         return MethodHandles.lambdaFormTarget(ObjectReference.fromLong(target));
     }
 

@@ -1196,6 +1196,10 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 writeLong(image, tw + ObjectModel.TYPE_REFMAP_OFFSET / 4, rm[0]);
                 writeLong(image, tw + ObjectModel.TYPE_REFMAP_OFFSET / 4 + 2, rm[1]);
                 long[] km = ClassFile.kindMaps(cls, this);    // S6: which of those slots are exact references
+                if ((km[0] & 1L) == 0L && !registry.resolve(cls).isInterface())
+                {
+                    noKinds.add(cls);                        // S6d-2: an instance of it is traced conservatively
+                }
                 writeLong(image, tw + ObjectModel.TYPE_REFKIND_OFFSET / 4, km[0]);
                 writeLong(image, tw + ObjectModel.TYPE_REFKIND_OFFSET / 4 + 2, km[1]);
                 writeLong(image, tw + ObjectModel.TYPE_DATAKIND_OFFSET / 4, km[2]);
@@ -1392,6 +1396,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         fillStatic(image, staticWord, "vm/VM.handlerTable", addr(handlerTableWord));
         fillStatic(image, staticWord, "vm/VM.handlerCount", handlerEntries.size());
         writeStaticsMaps(image, staticsMapWord, staticsKind, staticsName);
+        System.out.println("  type kinds: " + noKinds.size() + " baked class(es) with no slot kinds"
+                + (noKinds.isEmpty() ? "" : " (traced conservatively): " + noKinds));
         fillStatic(image, staticWord, "vm/VM.staticsMap", addr(staticsMapWord));
         fillStatic(image, staticWord, "vm/VM.staticsStart", addr(staticsRegionStart));
         fillStatic(image, staticWord, "vm/VM.staticsEnd",   addr(staticsRegionEnd));
@@ -2464,6 +2470,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     private int staticsKindUnknown;
 
     /** Bake the statics region's two kind bitmaps at {@code mapWord} and list every slot in out/statics-map.txt. */
+    /** Baked classes whose Type has no exact slot kinds: too wide, or an unresolvable super (frames/GC arc S6d-2). */
+    private final Vec<String> noKinds = new Vec<>();
+
     private void writeStaticsMaps(int[] image, int mapWord, IntVec kinds, Vec<String> names)
     {
         int longs = (kinds.size() + 63) >> 6;

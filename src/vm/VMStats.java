@@ -276,7 +276,7 @@ public final class VMStats
         i = put(arr, len, i, ticksToUs(VMScheduler.ttsTicks / (VMScheduler.yieldTaken > 0L ? VMScheduler.yieldTaken : 1L)));
         i = put(arr, len, i, ticksToUs(VMScheduler.ttsMaxTicks));             // longest time-to-safepoint
         i = put(arr, len, i, VMScheduler.forcedPreempts);                  // preempted outside a safepoint
-        i = put(arr, len, i, VMScheduler.idleSwitches);                    // idle task switched at the interrupt
+        i = put(arr, len, i, VMScheduler.idleSwitches);                    // idle task asked to yield at the interrupt
         i = put(arr, len, i, VMScheduler.yieldMasked);                     // polls left pending, IRQs masked
         i = put(arr, len, i, VMScheduler.yieldOther);                      // slow paths for another core
         i = put(arr, len, i, Baseline.yieldPollsEmitted);                  // yieldpoints JIT-compiled this boot
