@@ -138,6 +138,12 @@ public final class ObjectModel
      *  the Type of {@code vm.CodeElem[]}, the run-time class of a {@code magic.CodeArray} (frames/GC arc S6b-3). A
      *  precise trace records each in the code bitmap and marks nothing on the heap. */
     public static final long ARRAY_CODE_ELEMS = 1L << 33;
+    /** Flag in an array Type's instanceSize word: the elements are REFERENCES, whether or not the element Type is known
+     *  (frames/GC arc S6c). A reference array whose element class was unresolved when its Type was built has element
+     *  Type 0 -- which, without this, reads exactly like a {@code long[]}, and a precise trace would not follow it
+     *  (a {@code multianewarray} outer level lost its {@code LambdaForm$Name[]} rows that way). Set on every
+     *  reference-array Type, baked and metal-built. */
+    public static final long ARRAY_REF_ELEMS = 1L << 34;
     /** Mask to read the tag (identify an array or primitive Type). */
     public static final long ARRAY_TYPE_TAG_MASK = 0xFFFF0000L;
     /** Tag in a PRIMITIVE Type's instanceSize slot; the low bits hold the JVMS descriptor char ('I', 'Z', ...).

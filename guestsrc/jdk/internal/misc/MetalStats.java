@@ -115,6 +115,9 @@ public final class MetalStats
         "... from a reference read as a data reference (w-16: conservative false positives)",
         "... reached only through those (secondary)",
         "... compiled-code words only a conservative word kept (raw longs, long[] tables)",
+        "... data payloads held in a reference slot (lost by a precise trace)",
+        "precise heap trace on (S6c; gcprecise=0 = conservative)",
+        "... blocks it scanned conservatively (no kinds, unrecognised header)",
     };
 
     public static final String[] LOCKS_NAMES = {

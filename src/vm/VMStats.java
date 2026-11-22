@@ -220,6 +220,9 @@ public final class VMStats
         }
         i = put(arr, len, i, HeapShadow.secondaries);                      // ... secondary misses
         i = put(arr, len, i, HeapShadow.codeTotal);                        // ... code words only the rescan kept
+        i = put(arr, len, i, HeapShadow.total(7));                         // ... payloads held in reference slots
+        i = put(arr, len, i, (long) PreciseTrace.on);                      // S6c: precise heap trace on
+        i = put(arr, len, i, PreciseTrace.fallbacks);                      // ... blocks it scanned conservatively
         return (long) i;
     }
 

@@ -4,6 +4,35 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **FRAMES/GC ARC, INCREMENT S6c: the precise heap trace is on (2026-11-22).** The collector now scans the heap by
+  kind instead of probing every word: `vm.PreciseTrace` (moved out of the heap shadow, whose first phase it still
+  is). A scalar's slots by its Type's kind bitmaps, an array's elements by its Type's element kind, an `allocData`
+  struct by its layout word; byte blocks, raw arrays and word arrays are not read. A block with nothing readable (a
+  Type with no kinds, an unrecognised header) falls back to the conservative scan and is counted (`/gc`). On by
+  default; **`gcprecise=0`** in `/etc/init` restores the conservative heap trace. Roots are unchanged (statics region
+  and stack fallbacks stay conservative until S6d).
+  - **Pi 4 A/B, 14 collections, three fresh boots each** (web server + FrameBench): total pause **2.22 s -> 1.17 s
+    (-47%)**; last collection's trace ~170 ms -> ~87.5 ms; words probed conservatively 2.70M -> 1,844 (the roots);
+    live after the last collection 57.5 MB both; FrameBench median 520.7 (gcprecise=0) / 521.2 ms (precise), check
+    values identical on all six boots; 224-269 blocks per boot fell back to the conservative scan.
+  - **Two real losses found by turning it on** (virt list, the S6b shadow had both on its residue and I had read the
+    first as numbers): (1) a reference array whose element class was unresolved when its Type was built has element
+    Type 0 and read like a `long[]` -- a `multianewarray` outer level dropped its `LambdaForm$Name[]` rows, and the
+    freed block came back as a backtrace's `CodeElem[]` (`InvokeGapProbe`: `ArrayStoreException: [Lvm.CodeElem;` in a
+    `<clinit>`). New array-Type flag `ObjectModel.ARRAY_REF_ELEMS` (bit 34) on every reference-array Type, baked and
+    metal-built. (2) the metal JIT never retyped a GUEST class's unboxed arrays (`MetalSymbols.tagUnboxedArray` was a
+    no-op), so `AddressFieldProbe`'s `ObjectReferenceArray` stayed a `long[]` and lost its element; it now stores the
+    writer-baked TIB, read once off a zero-length array VM code creates (`ArrayTypes.unboxedArrayTib`). The probe's
+    own check now asserts `Object[]`.
+  - **Shadow:** a reference slot holding an `allocData` payload would be lost too and looked like a `w-16` false
+    positive; split out as `ref-holds-payload` (new `/gc` row): 0. Whole virt list with `gcheap=2` (382
+    collections): raw slots 0, payloads 0, word arrays 22 (number arrays: `IntegerPolynomial` limbs; a reflective
+    argument buffer, `w-16` only), structs 10 (Type implements bitmaps), unmapped 1 (not yet explained: the fallback
+    scans such a block in both phases).
+  - **QEMU:** virt 212/212 default (precise), `gcheap=2` and `gcprecise=0`; raspi4b demo suite `want: checked=160
+    mismatch=0`, `gc: collections=53`, `intact=32`, markers as S6b-3. `make test` + overlaycheck OK.
+  - **Pi 4:** precise default build `1118fee8a6711c65`, `gcprecise=0` build `aa35a5e30cdf5011`; sha256 = host; 8
+    pages 200 on both.
 - **FRAMES/GC ARC, INCREMENT S6b-3: code addresses made exact (2026-11-22).** S6b-2's new code count showed that a
   precise trace loses the code addresses the VM keeps in `long` fields and `long[]` tables -- and the code sweep would
   then free methods still in use. Measured by the heap shadow (`gcheap=2`): code words only the conservative rescan

@@ -269,8 +269,10 @@ public class AddressFieldProbe
         t.set(1, ObjectReference.fromObject(a));
         t.set(2, p.iRef);
         check("ObjectReferenceArray set/get", t.get(1).toObject() == a && t.get(2).EQ(p.iRef) && t.get(0).isNull());
-        check("ObjectReferenceArray is a long[]", ((Object) t) instanceof long[]
-                && ((long[]) (Object) t)[1] == Address.fromObject(a).toLong());
+        // An Object[] at run time, as in VM code (frames/GC arc S6c: the metal JIT tags it too), so a precise trace
+        // follows its elements; element 1 still holds the reference's bits.
+        check("ObjectReferenceArray is an Object[]", ((Object) t) instanceof Object[]
+                && Address.fromObject(t).plus(24L + 8L).loadLong() == Address.fromObject(a).toLong());
         sRefs = t;
         t = null;
         a = null;
