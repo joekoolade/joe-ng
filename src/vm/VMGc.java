@@ -619,19 +619,19 @@ final class VMGc implements Uninterruptible
 
     /**
      * Scan one marked block's payload for references, using the block's own TYPE METADATA where it has any.
-     * Three shapes live in this heap and the header word at +0 tells them apart: 0 or a layout word ({@code
-     * ObjectModel.LAYOUT_TAG}: a Type, TIB, itable, statics block) = a raw {@link Heap#allocData} struct, scanned
-     * whole here (the heap shadow's precise phase reads the layout word);
-     * {@code <= MAX_RAW_ARRAY_TIB} = a raw array whose header holds its ELEMENT SIZE; anything else = a
-     * pointer to a TIB whose slot 0 is the Type. Only arrays are precise in this increment — a scalar
-     * object's per-field reference map lands in the next one, so scalars stay conservative.
+     * By default the block goes to {@link PreciseTrace} (frames/GC arc S6c). What follows is the conservative trace
+     * {@code gcprecise=0} keeps: three shapes live in this heap and the header word at +0 tells them apart: 0 or a
+     * layout word ({@code ObjectModel.LAYOUT_TAG}: a Type, TIB, itable, statics block) = a raw {@link Heap#allocData}
+     * struct, scanned whole; {@code <= MAX_RAW_ARRAY_TIB} = a raw array whose header holds its ELEMENT SIZE; anything
+     * else = a pointer to a TIB whose slot 0 is the Type. Arrays by element size, scalars by the reference map
+     * (every slot that may hold a pointer, raw ones included), every word at {@code w} and {@code w-16}.
      */
     private static boolean scanBlock(Address o, long size)
     {
-        if (HeapShadow.precise != 0)
+        if (PreciseTrace.on != 0 || HeapShadow.precise != 0)
         {
-            HeapShadow.scanPrecise(o, size);           // gcheap=2, first phase: exact kinds only
-            return false;
+            PreciseTrace.scanBlock(o, size);           // frames/GC arc S6c: the precise heap trace (gcheap=2's first
+            return false;                              //   phase runs it too, so the shadow measures what it loses)
         }
         long tibw = o.plus(ObjectModel.TIB_OFFSET).loadLong();
         if (tibw != 0L && tibw <= (long) ObjectModel.MAX_RAW_ARRAY_TIB)
@@ -719,7 +719,7 @@ final class VMGc implements Uninterruptible
         hcMarksData = new long[HC_N];
     }
 
-    private static void census(int cat, long size, long scanned)
+    static void census(int cat, long size, long scanned)
     {
         hcCat = cat;
         if (heapCensus != 0)
@@ -1142,6 +1142,12 @@ final class VMGc implements Uninterruptible
     static boolean isMarked(long b)
     {
         return (Address.fromLong(b).plus(8).loadLong() & 1L) != 0L;
+    }
+
+    /** {@link #markRange} for {@link PreciseTrace}'s conservative fallback. */
+    static void markWords(Address lo, Address hi)
+    {
+        boolean ignored = markRange(lo, hi);
     }
 
     /** Mark every heap object pointed to by an 8-aligned word in [lo,hi). Returns true if any newly marked. */

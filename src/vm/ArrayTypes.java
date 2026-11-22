@@ -16,8 +16,10 @@ import magic.Address;
 import magic.ObjectReference;
 import magic.DataReference;
 import magic.AddressArray;
+import magic.CodeArray;
 import magic.DataReferenceArray;
 import magic.Magic;
+import magic.ObjectReferenceArray;
 import objectmodel.ObjectModel;
 
 import static vm.ClassBytes.u1;
@@ -41,6 +43,13 @@ final class ArrayTypes
     // Array Type cache (per demand-load batch, since resetLoader reclaims the heap under them). primArrTib is
     // indexed by newarray atype (4..11); refArr* is a small element-Type-keyed registry for reference arrays.
     static DataReferenceArray primArrTib;     // arrayTib per primitive atype (0 = not yet created)
+
+    // The writer-baked TIBs of the unboxed arrays' run-time classes (Object[], vm.DataRefElem[], vm.CodeElem[]), read
+    // once off a zero-length array that writer-compiled code made -- the writer tags its creates, so the header IS the
+    // baked TIB, flags and all. Image-resident, so never reclaimed. 0 = not read yet.
+    private static long objectRefArrayTib;
+    private static long dataRefArrayTib;
+    private static long codeArrayTib;
     static boolean[] primArrAdopted;   // true = writer-baked image TIB (never refill: its Object
                                                // impls are baked code; loader bufs die with the batch heap)
     static DataReferenceArray refArrElem;     // element Type key (reference arrays)
@@ -314,11 +323,11 @@ final class ArrayTypes
     }
 
     /** Allocate an array Type {tag|elemSize, super=Object, itableDir=0, elementType} + a 1-word TIB; return the TIB. */
-    private static DataReference makeArrayTib(int elemSize, Address elementType)
+    private static DataReference makeArrayTib(int elemSize, long flags, Address elementType)
     {
         DataReference type = Heap.allocType();
         DataReference objType = TibBuilder.objectTypeAddr();
-        type.plus(ObjectModel.TYPE_INSTANCE_SIZE_OFFSET).store(ObjectModel.ARRAY_TYPE_TAG | (long) elemSize);
+        type.plus(ObjectModel.TYPE_INSTANCE_SIZE_OFFSET).store(ObjectModel.ARRAY_TYPE_TAG | flags | (long) elemSize);
         type.plus(ObjectModel.TYPE_SUPER_OFFSET).store(objType);            // arr instanceof Object
         type.plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).store(0L);            // Cloneable/Serializable: later
         type.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).store(elementType);
@@ -395,7 +404,7 @@ final class ArrayTypes
             }
             else
             {
-                primArrTib.set(atype, makeArrayTib(Primitives.primElemSize(atype), Address.zero()));
+                primArrTib.set(atype, makeArrayTib(Primitives.primElemSize(atype), 0L, Address.zero()));
             }
         }
         return primArrTib.get(atype).toAddress();
@@ -505,7 +514,7 @@ final class ArrayTypes
         }
         if (tib.isZero())
         {
-            tib = makeArrayTib(ObjectModel.WORD, elementType);   // reference elements are 8-byte pointers
+            tib = makeArrayTib(ObjectModel.WORD, ObjectModel.ARRAY_REF_ELEMS, elementType);   // 8-byte references
         }
         if (refArrCount >= refArrTib.length())
         {
@@ -630,5 +639,40 @@ final class ArrayTypes
         Uart.write(Magic.bytes(" -- "));
         Loader.printWhyUnpulled(clsU);
         Uart.putc(0x0A);
+    }
+
+    /**
+     * The TIB an unboxed array of {@code compiler.Unboxed} kind {@code kind} carries at run time, or 0 when it stays a
+     * plain {@code long[]} ({@code AddressArray}). For the metal JIT's {@code tagUnboxedArray}: a GUEST class that
+     * creates one must get the same run-time class as VM code does, or the precise trace reads its elements as
+     * numbers (frames/GC arc S6c; AddressFieldProbe lost its {@code ObjectReferenceArray}'s element).
+     */
+    static long unboxedArrayTib(int kind)
+    {
+        if (kind == compiler.Unboxed.OBJECT_REFERENCE_ARRAY)
+        {
+            if (objectRefArrayTib == 0L)
+            {
+                objectRefArrayTib = Address.fromLong(Magic.addrOf(ObjectReferenceArray.create(0))).loadLong();
+            }
+            return objectRefArrayTib;
+        }
+        if (kind == compiler.Unboxed.DATA_REFERENCE_ARRAY)
+        {
+            if (dataRefArrayTib == 0L)
+            {
+                dataRefArrayTib = Address.fromLong(Magic.addrOf(DataReferenceArray.create(0))).loadLong();
+            }
+            return dataRefArrayTib;
+        }
+        if (kind == compiler.Unboxed.CODE_ARRAY)
+        {
+            if (codeArrayTib == 0L)
+            {
+                codeArrayTib = Address.fromLong(Magic.addrOf(CodeArray.create(0))).loadLong();
+            }
+            return codeArrayTib;
+        }
+        return 0L;
     }
 }

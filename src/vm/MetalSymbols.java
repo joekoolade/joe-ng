@@ -182,9 +182,17 @@ final class MetalSymbols implements Symbols
     {
         return Loader.monitorOp(methodCp);
     }
-    /** No-op: only writer-compiled VM code creates unboxed reference arrays (see {@code Symbols.tagUnboxedArray}). */
+    /** Give an unboxed array a guest class creates the run-time class VM code's get (frames/GC arc S6c): without it
+     *  an {@code ObjectReferenceArray} stays a {@code long[]} the precise trace never reads. */
     public void tagUnboxedArray(CodeBuffer cb, int arrReg, int methodCp)
     {
+        long tib = ArrayTypes.unboxedArrayTib(Loader.unboxedKind(methodCp));
+        if (tib == 0L)
+        {
+            return;                                     // AddressArray: a long[] is its run-time class
+        }
+        emitAddr(cb, 16, tib);                          // x16 = the baked array TIB (scratch)
+        cb.emit(A64Enc.strx(16, arrReg, ObjectModel.TIB_OFFSET));
     }
 
     public void tagArray(CodeBuffer cb, int arrReg, int operand, boolean isRef)

@@ -1265,7 +1265,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             String el = arrayElementKeyOf(d);       // element class, or the nested element array desc
             int tw = typeWord.get(d);
             writeLong(image, tw + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET / 4,
-                      ObjectModel.ARRAY_TYPE_TAG | ObjectModel.WORD
+                      ObjectModel.ARRAY_TYPE_TAG | ObjectModel.WORD | ObjectModel.ARRAY_REF_ELEMS
                       | (d.equals(compiler.Unboxed.DATA_ARRAY_DESC) ? ObjectModel.ARRAY_DATA_ELEMS : 0L)
                       | (d.equals(compiler.Unboxed.CODE_ARRAY_DESC) ? ObjectModel.ARRAY_CODE_ELEMS : 0L));
             writeLong(image, tw + ObjectModel.TYPE_SUPER_OFFSET / 4, addr(typeWord.get("java/lang/Object")));

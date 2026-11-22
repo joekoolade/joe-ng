@@ -2427,6 +2427,7 @@ public final class VM
         armGcVolume(conf, flen);
         armGcRoots(conf, flen);
         armGcHeap(conf, flen);
+        armGcPrecise(conf, flen);
         armNpeTrace(conf, flen);
         DataReference nm = Heap.allocData(flen + 8);
         int nl = manifestValue(conf, flen, Magic.bytes("main"), nm.toAddress(), flen);
@@ -2541,6 +2542,19 @@ public final class VM
         {
             StackRoots.on = 0;
             Uart.write(Magic.bytes("gcroots: conservative stack scan\n"));
+        }
+    }
+
+    /** {@code gcprecise=0}: the conservative heap trace instead of the precise one ({@link PreciseTrace}), an A/B
+     *  switch for frames/GC arc S6c. */
+    private static void armGcPrecise(Address conf, int flen)
+    {
+        DataReference v = Heap.allocData(16);
+        int n = manifestValue(conf, flen, Magic.bytes("gcprecise"), v.toAddress(), 8);
+        if (n == 1 && v.loadUnsignedByte() == 0x30)
+        {
+            PreciseTrace.on = 0;
+            Uart.write(Magic.bytes("gcprecise: conservative heap trace\n"));
         }
     }
 
