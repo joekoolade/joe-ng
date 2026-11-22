@@ -68,11 +68,21 @@ public final class Unboxed
      *  so the collector knows its elements are data references (frames/GC arc S6b). */
     public static final int DATA_REFERENCE_ARRAY = 9;
 
+    /** {@code magic/CodeAddress}: an address in compiled code; lowered exactly as {@link #ADDRESS}. A field of this
+     *  type is a code root to the collector (its field kind), a local is raw (frames/GC arc S6b-3). */
+    public static final int CODE_ADDRESS = 10;
+
+    /** {@code magic/CodeArray}: a {@code long[]}'s operations, but a {@code vm.CodeElem[]} at run time, so the
+     *  collector knows its elements are code addresses (frames/GC arc S6b-3). */
+    public static final int CODE_ARRAY = 11;
+
     /** The run-time class of a {@code magic.ObjectReferenceArray} (the writer bakes it). */
     public static final String OBJECT_ARRAY_DESC = "[Ljava/lang/Object;";
     /** The run-time class of a {@code magic.DataReferenceArray}: its array Type carries
      *  {@code ObjectModel.ARRAY_DATA_ELEMS}. */
     public static final String DATA_ARRAY_DESC = "[Lvm/DataRefElem;";
+    /** The run-time class of a {@code magic.CodeArray}: its array Type carries {@code ObjectModel.ARRAY_CODE_ELEMS}. */
+    public static final String CODE_ARRAY_DESC = "[Lvm/CodeElem;";
 
     private static final long O_ADDRESS = 7816296518595377735L; // "magic/Address"
     private static final long O_WORD = 2502753236447134729L;  // "magic/Word"
@@ -83,6 +93,8 @@ public final class Unboxed
     private static final long O_OBJECT_REFERENCE_ARRAY = -3793534773957816616L; // "magic/ObjectReferenceArray"
     private static final long O_DATA_REFERENCE = -769869719729673626L; // "magic/DataReference"
     private static final long O_DATA_REFERENCE_ARRAY = -3025547711846171633L; // "magic/DataReferenceArray"
+    private static final long O_CODE_ADDRESS = -8333022919638263312L; // "magic/CodeAddress"
+    private static final long O_CODE_ARRAY = -2181801163590367507L; // "magic/CodeArray"
     private static final long N_CREATE = -626457835795418115L; // "create"
     private static final long N_GET = -3106811833996379657L;  // "get"
     private static final long N_SET = -9062501282150740445L;  // "set"
@@ -198,6 +210,14 @@ public final class Unboxed
         {
             return DATA_REFERENCE_ARRAY;
         }
+        if (h == O_CODE_ADDRESS)
+        {
+            return CODE_ADDRESS;
+        }
+        if (h == O_CODE_ARRAY)
+        {
+            return CODE_ARRAY;
+        }
         return NONE;
     }
 
@@ -210,9 +230,9 @@ public final class Unboxed
     {
         long h = hash(name);
         int params = paramCount(desc);
-        if (kind == ADDRESS_ARRAY || kind == OBJECT_REFERENCE_ARRAY || kind == DATA_REFERENCE_ARRAY)
+        if (kind == ADDRESS_ARRAY || kind == OBJECT_REFERENCE_ARRAY || kind == DATA_REFERENCE_ARRAY || kind == CODE_ARRAY)
         {
-            return arrayOp(h, params);              // both ARE a long[]: the same four array-bytecode lowerings
+            return arrayOp(h, params);              // all ARE a long[]: the same four array-bytecode lowerings
         }
         if (kind == OBJECT_REFERENCE)
         {

@@ -12,6 +12,7 @@
 package vm;
 
 import magic.Address;
+import magic.CodeAddress;
 import magic.DataReference;
 
 /**
@@ -34,6 +35,6 @@ final class LazyMethod
     int  codeLen;    // ... its length
     int  isStatic;   // ... 1 if static
     int  isSync;     // ... 1 if ACC_SYNCHRONIZED (the implicit method monitor, JVMS 2.11.10)
-    long cache;      // memoised compiled buffer (0 = not yet compiled)
-    long stubLit;    // the deferral stub's target literal (0 = no patchable stub); see Loader.writeLazyStub
+    CodeAddress cache;  // memoised compiled buffer (0 = not yet compiled; a code root: frames/GC arc S6b-3)
+    CodeAddress stubLit;  // the deferral stub's target literal (0 = no patchable stub); see Loader.writeLazyStub
 }

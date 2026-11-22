@@ -413,7 +413,7 @@ final class ClassMirrors
         int i = 0;
         while (i < MethodRegistry.rgCount)
         {
-            if (MethodRegistry.rgTab[i].buf == blk)
+            if (MethodRegistry.rgTab[i].buf.toLong() == blk)
             {
                 return classMirrorByName(MethodRegistry.rgTab[i].base.toAddress(), MethodRegistry.rgTab[i].classOff);
             }
@@ -425,7 +425,7 @@ final class ClassMirrors
             int c = 0;
             while (c < ClassInitializer.clinitN)
             {
-                if (ClassInitializer.clinitEntry[c] == blk)
+                if (ClassInitializer.clinitEntry.get(c) == blk)
                 {
                     return classMirrorByName(ClassInitializer.clinitBase.get(c), ClassInitializer.clinitNameOff[c]);
                 }

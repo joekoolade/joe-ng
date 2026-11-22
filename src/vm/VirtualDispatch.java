@@ -16,6 +16,7 @@ import board.Uart;
 import classfile.ClassReader;
 import compiler.Baseline;
 import magic.Address;
+import magic.CodeArray;
 import magic.DataReference;
 import magic.AddressArray;
 import magic.Magic;
@@ -72,7 +73,7 @@ final class VirtualDispatch
     // (2) within a launch a (site, receiver Type) pair cannot change its answer: registered classes keep their
     // Types and registered bodies stay reachable. Cleared in resetLoader, where both of those stop holding.
     private static long[] vsSiteType;
-    private static long[] vsSiteBuf;
+    private static CodeArray vsSiteBuf;
     /**
      * Last tier of {@link #virtualResolve}: look for {@code nameU}/{@code descU} on the INTERFACES of the
      * receiver's class chain -- an interface default, which no class declares and so no chain walk can find.
@@ -139,7 +140,7 @@ final class VirtualDispatch
         while (z < MAXVSITE)
         {
             vsSiteType[z] = 0L;
-            vsSiteBuf[z] = 0L;
+            vsSiteBuf.set(z, 0L);
             z += 1;
         }
         vsMemoIdx = -1;
@@ -153,8 +154,8 @@ final class VirtualDispatch
      */
     static long siteMemoAddr(int idx, boolean body)
     {
-        long[] a = body ? vsSiteBuf : vsSiteType;
-        return Magic.addrOf(a) + (long) ObjectModel.ARRAY_BASE_OFFSET + (long) idx * 8L;
+        long base = body ? Magic.addrOf(vsSiteBuf) : Magic.addrOf(vsSiteType);   // vsSiteBuf: a code root (S6b-3)
+        return base + (long) ObjectModel.ARRAY_BASE_OFFSET + (long) idx * 8L;
     }
 
     /** Publish a site's first resolution, once: body, then a barrier, then the Type a lock-free reader keys on. */
@@ -162,7 +163,7 @@ final class VirtualDispatch
     {
         if (vsSiteType != null && vsSiteType[idx] == 0L)
         {
-            vsSiteBuf[idx] = buf;
+            vsSiteBuf.set(idx, buf);
             Magic.dsb();
             vsSiteType[idx] = type.toLong();
         }
@@ -178,7 +179,7 @@ final class VirtualDispatch
             vsCls = AddressArray.create(MAXVSITE);
             vsBucket = new int[VSHASH];                  // allocArray does NOT zero: fill it explicitly
             vsSiteType = new long[MAXVSITE];
-            vsSiteBuf = new long[MAXVSITE];
+            vsSiteBuf = CodeArray.create(MAXVSITE);
             clearSiteMemos();
             int z = 0;
             while (z < VSHASH)
@@ -526,7 +527,7 @@ final class VirtualDispatch
             return 0L;
         }
         Magic.dsb();                                    // the Type was read before the body
-        long memoBuf = vsSiteBuf[idx];
+        long memoBuf = vsSiteBuf.get(idx);
         long tib = recv.toAddress().plus(ObjectModel.TIB_OFFSET).loadLong();
         if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB || Address.fromLong(tib).loadLong() != memoType)
         {

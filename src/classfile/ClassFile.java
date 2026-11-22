@@ -377,6 +377,9 @@ public final class ClassFile
     public static final int KIND_NONE = 0;
     /** Slot kind: an object reference. */
     public static final int KIND_REF = 1;
+    /** Slot kind: a code address ({@code magic.CodeAddress}). Encoded as BOTH kind bits (frames/GC arc S6b-3): no slot
+     *  is both a reference and a data reference, so the pair is free, and the Type keeps its size. */
+    public static final int KIND_CODE = 2;
     /** Slot kind: a data reference ({@code magic.DataReference}, an {@code allocData} payload). */
     public static final int KIND_DATA = 3;
 
@@ -406,8 +409,13 @@ public final class ClassFile
         {
             return KIND_DATA;
         }
+        if (descriptor.equals("Lmagic/CodeAddress;"))
+        {
+            return KIND_CODE;
+        }
         if (descriptor.equals("Lmagic/ObjectReference;") || descriptor.equals("Lmagic/AddressArray;")
-            || descriptor.equals("Lmagic/ObjectReferenceArray;") || descriptor.equals("Lmagic/DataReferenceArray;"))
+            || descriptor.equals("Lmagic/ObjectReferenceArray;") || descriptor.equals("Lmagic/DataReferenceArray;")
+            || descriptor.equals("Lmagic/CodeArray;"))
         {
             return KIND_REF;
         }
@@ -448,8 +456,16 @@ public final class ClassFile
                 if (kind != KIND_NONE)
                 {
                     int bit = slot + 1;
-                    int w = (kind == KIND_DATA ? 2 : 0) + (bit < 64 ? 0 : 1);
-                    out[w] |= 1L << (bit < 64 ? bit : bit - 64);
+                    int hi = bit < 64 ? 0 : 1;
+                    long m = 1L << (bit < 64 ? bit : bit - 64);
+                    if (kind != KIND_DATA)
+                    {
+                        out[hi] |= m;                   // reference, or code (both bits)
+                    }
+                    if (kind != KIND_REF)
+                    {
+                        out[2 + hi] |= m;               // data reference, or code (both bits)
+                    }
                 }
                 slot++;
             }

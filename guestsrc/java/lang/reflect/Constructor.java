@@ -11,6 +11,7 @@
  */
 package java.lang.reflect;
 
+import magic.CodeAddress;
 import magic.Magic;
 
 /**
@@ -26,7 +27,7 @@ public final class Constructor<T> extends Executable
 {
     private final Class<T> clazz;
     private final int access;
-    private final long buf;
+    private final CodeAddress buf;     // a code root to the collector (frames/GC arc S6b-3)
     private final int paramCount;
     private final byte[] paramChars;   // first descriptor char of each parameter ('I'/'J'/'Z'/.../'L'/'[')
     private final int rgIndex;         // this <init>'s slot in the VM's method registry (descriptor lookup key)
@@ -37,7 +38,7 @@ public final class Constructor<T> extends Executable
         this.rgIndex = rgIndex;
         this.clazz = clazz;
         this.access = access;
-        this.buf = buf;
+        this.buf = CodeAddress.fromLong(buf);
         this.paramCount = paramCount;
         this.paramChars = paramChars;
     }
@@ -254,7 +255,7 @@ public final class Constructor<T> extends Executable
         }
         try
         {
-            Magic.callN(buf, Magic.addrOf(slots) + 24L);  // <init> returns void
+            Magic.callN(buf.toLong(), Magic.addrOf(slots) + 24L);  // <init> returns void
         }
         catch (Throwable t)
         {
@@ -278,7 +279,7 @@ public final class Constructor<T> extends Executable
     /** Stock's: a fresh Constructor for the same constructor, not accessible, whose root is this one. */
     Constructor<T> copy()
     {
-        Constructor<T> c = new Constructor<>(clazz, access, buf, paramCount, paramChars, rgIndex);
+        Constructor<T> c = new Constructor<>(clazz, access, buf.toLong(), paramCount, paramChars, rgIndex);
         c.root = root != null ? root : this;
         return c;
     }

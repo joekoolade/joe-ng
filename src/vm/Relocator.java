@@ -15,6 +15,7 @@ import asm.A64Enc;
 import board.Uart;
 import compiler.Symbols;
 import magic.Address;
+import magic.CodeArray;
 import magic.AddressArray;
 import magic.Magic;
 
@@ -41,7 +42,7 @@ final class Relocator
     // patchRelocs() re-resolves + rewrites them after every class is loaded -- so no manual seed-ordering.
     static final int MAXRELOC = 24576;
     static int relocRecording;                  // 1 only during emitMethod (the real-base emit pass)
-    static long[] rcAddr;                       // call sites: bl address, ref blob base,
+    static CodeArray rcAddr;                       // call sites: bl address, ref blob base,
     static AddressArray rcBase;
     static int[] rcClass, rcName, rcDesc;       //   class/name/descriptor Utf8 offsets
     static int[] rcTail;                        //   1 = a tail branch (b), not a call (bl) -- lambda thunks
@@ -75,7 +76,7 @@ final class Relocator
      * {@link #patchRelocsFrom} skip a site whose branch already says what this pass would write. Dies with the
      * sites it indexes, like rcStub.
      */
-    static long[] rcDone;
+    static CodeArray rcDone;
     static long pcSkipped;                              // tail visits skipped: the branch was already in place
     static int rcCount;
     /**
@@ -220,7 +221,7 @@ final class Relocator
         {
             return;
         }
-        rcAddr[rcCount] = blAddr;
+        rcAddr.set(rcCount, blAddr);
         rcBase.set(rcCount, Loader.gView.base.toAddress());
         rcClass[rcCount] = Loader.refClassNameOff(idx);
         rcName[rcCount] = Loader.mrefNameOff(idx);
@@ -228,7 +229,7 @@ final class Relocator
         rcTail[rcCount] = 0;
         rcReg[rcCount] = -1;                            // not yet resolved through the direct registry tier
         rcStub[rcCount] = 0L;                           // nor settled on a link stub: see rcStub
-        rcDone[rcCount] = 0L;                           // nor written: see rcDone
+        rcDone.set(rcCount, 0L);                           // nor written: see rcDone
         rcGate[rcCount] = 0;                            // nor gated on a standing lookup: see rcGate
         rcCount += 1;
     }
@@ -241,7 +242,7 @@ final class Relocator
         {
             return;
         }
-        rcAddr[rcCount] = bAddr;
+        rcAddr.set(rcCount, bAddr);
         rcBase.set(rcCount, Loader.gView.base.toAddress());
         rcClass[rcCount] = Loader.refClassNameOff(idx);
         rcName[rcCount] = Loader.mrefNameOff(idx);
@@ -249,7 +250,7 @@ final class Relocator
         rcTail[rcCount] = 1;
         rcReg[rcCount] = -1;                            // see rcReg: 0 is a VALID registry index, so an unset
         rcStub[rcCount] = 0L;                           //   entry would memoise the site to rgTab[0]; see rcStub
-        rcDone[rcCount] = 0L;                           //   ... and rcDone
+        rcDone.set(rcCount, 0L);                           //   ... and rcDone
         rcGate[rcCount] = 0;                            //   ... and rcGate
         rcCount += 1;
     }
@@ -419,13 +420,13 @@ final class Relocator
         int w = 0;
         while (w < pcWrittenN)
         {
-            Heap.publishClean(Address.fromLong(rcAddr[pcWritten[w]]), Address.fromLong(rcAddr[pcWritten[w]] + 4L));
+            Heap.publishClean(Address.fromLong(rcAddr.get(pcWritten[w])), Address.fromLong(rcAddr.get(pcWritten[w]) + 4L));
             w += 1;
         }
         int p = pubFrom;
         while (p < rcCount)
         {
-            Heap.publishClean(Address.fromLong(rcAddr[p]), Address.fromLong(rcAddr[p] + 4L));
+            Heap.publishClean(Address.fromLong(rcAddr.get(p)), Address.fromLong(rcAddr.get(p) + 4L));
             p += 1;
         }
         int q = rsStart;
@@ -438,13 +439,13 @@ final class Relocator
         w = 0;
         while (w < pcWrittenN)
         {
-            Heap.publishInval(Address.fromLong(rcAddr[pcWritten[w]]), Address.fromLong(rcAddr[pcWritten[w]] + 4L));
+            Heap.publishInval(Address.fromLong(rcAddr.get(pcWritten[w])), Address.fromLong(rcAddr.get(pcWritten[w]) + 4L));
             w += 1;
         }
         p = pubFrom;
         while (p < rcCount)
         {
-            Heap.publishInval(Address.fromLong(rcAddr[p]), Address.fromLong(rcAddr[p] + 4L));
+            Heap.publishInval(Address.fromLong(rcAddr.get(p)), Address.fromLong(rcAddr.get(p) + 4L));
             p += 1;
         }
         q = rsStart;
@@ -620,7 +621,7 @@ final class Relocator
         if (rcReg[i] >= 0)
         {
             pcMemo += 1;
-            target = MethodRegistry.rgTab[rcReg[i]].buf;
+            target = MethodRegistry.rgTab[rcReg[i]].buf.toLong();
         }
         else if (gateStands(i))
         {
@@ -681,7 +682,7 @@ final class Relocator
                     Loader.writeName(rcBase.get(i).plus(rcName[i] + 2), u2(rcBase.get(i).plus(rcName[i])));     // callee method Utf8
                     Uart.putc(0x0A);
                 }
-                trapWireSite[trapWireCount] = rcAddr[i];   // ALWAYS recorded: denylistTrap looks up the fired
+                trapWireSite[trapWireCount] = rcAddr.get(i);   // ALWAYS recorded: denylistTrap looks up the fired
                 trapWireCls.set(trapWireCount, rcBase.get(i).plus(rcClass[i]));   // site by x30, so the table must exist
                 trapWireMth.set(trapWireCount, rcBase.get(i).plus(rcName[i]));    //   even when quiet -- and now it
                 trapWireCount += 1;                                    //   carries the NAME as well
@@ -727,10 +728,10 @@ final class Relocator
                 VM.printHex(target);
                 Uart.putc(0x0A);
             }
-            long d = target - rcAddr[i];                   // A64 bl reaches +-128 MiB (26-bit word offset)
+            long d = target - rcAddr.get(i);                   // A64 bl reaches +-128 MiB (26-bit word offset)
             if (d > 0x07FFFFFFL || d < -0x08000000L)
             {
-                VM.jitFail(Symbols.FAIL_BL_RANGE, (int) (rcAddr[i] >> 12), (int) (target >> 12));
+                VM.jitFail(Symbols.FAIL_BL_RANGE, (int) (rcAddr.get(i) >> 12), (int) (target >> 12));
                 for (;;) { }
             }
             int off = (int) (d >> 2);
@@ -742,7 +743,7 @@ final class Relocator
             // SslEngineProbe, QEMU 2026-11-06): patch was 8.8 s of the cold TLS session's 16.0 s of
             // batch work, and this tail (tailT) 5.1 s of the call loop's 14.2 s over the run. The test reads
             // the LIVE word, not only rcDone, so a site something else rewrote is patched as before.
-            if (rcDone[i] == target && Address.fromLong(rcAddr[i]).loadInt() == word)
+            if (rcDone.get(i) == target && Address.fromLong(rcAddr.get(i)).loadInt() == word)
             {
                 pcSkipped += 1;
                 if (PATCH_SITE_TIMERS)
@@ -751,14 +752,14 @@ final class Relocator
                 }
                 return;
             }
-            rcDone[i] = target;
+            rcDone.set(i, target);
             Heap.pinCodeAt(Address.fromLong(target));                       // CODE->CODE edge: after this store the only
                                                           //   record of `target` is a displacement inside
                                                           //   the caller's instructions, which nothing
                                                           //   scans -- pin it or the sweep may free it
-            CodeEdges.note(rcAddr[i], target);            // ... and record the edge, so compaction can
+            CodeEdges.note(rcAddr.get(i), target);            // ... and record the edge, so compaction can
                                                           //   find and rewrite it when `target` moves
-            Address.fromLong(rcAddr[i]).store(word);                // bl target, or b for a lambda/method-ref thunk
+            Address.fromLong(rcAddr.get(i)).store(word);                // bl target, or b for a lambda/method-ref thunk
             if (pcWrittenN < pcWritten.length)             // publish exactly the words written
             {
                 pcWritten[pcWrittenN] = i;

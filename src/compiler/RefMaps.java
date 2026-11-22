@@ -491,7 +491,8 @@ public final class RefMaps
             q += 1;
         }
         int k = Unboxed.kindOfHash(h);
-        if (k == Unboxed.ADDRESS || k == Unboxed.WORD || k == Unboxed.OFFSET || k == Unboxed.EXTENT)
+        if (k == Unboxed.ADDRESS || k == Unboxed.WORD || k == Unboxed.OFFSET || k == Unboxed.EXTENT
+            || k == Unboxed.CODE_ADDRESS)
         {
             return RAW;
         }

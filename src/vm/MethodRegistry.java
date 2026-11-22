@@ -13,6 +13,7 @@ package vm;
 
 import board.Uart;
 import magic.Address;
+import magic.CodeAddress;
 import magic.DataReference;
 import magic.Magic;
 
@@ -118,8 +119,8 @@ final class MethodRegistry
         rgTab[rgCount].classOff = classOff;
         rgTab[rgCount].nameOff = nameOff;
         rgTab[rgCount].descOff = descOff;
-        rgTab[rgCount].buf = buf;
-        rgTab[rgCount].line = lineTab;
+        rgTab[rgCount].buf = CodeAddress.fromLong(buf);
+        rgTab[rgCount].line = CodeAddress.fromLong(lineTab);
         rgTab[rgCount].src = srcAddr;
         rgTab[rgCount].access = access;
         rgCount += 1;
@@ -141,7 +142,7 @@ final class MethodRegistry
                 int mi = methodIndexOf(code);
                 if (mi >= 0)
                 {
-                    register(Loader.gView.base.toAddress(), Loader.gView.thisNameOff, Loader.gView.cp[u2(p.plus(2))], Loader.gView.cp[u2(p.plus(4))], Loader.mBuf[mi], Loader.mLine[mi], Loader.mSrc.get(mi), u2(p));
+                    register(Loader.gView.base.toAddress(), Loader.gView.thisNameOff, Loader.gView.cp[u2(p.plus(2))], Loader.gView.cp[u2(p.plus(4))], Loader.mBuf.get(mi), Loader.mLine.get(mi), Loader.mSrc.get(mi), u2(p));
                 }
             }
             p = Loader.skipAttributes(p.plus(8), attrs);
@@ -173,7 +174,7 @@ final class MethodRegistry
         }
         if (best >= 0)
         {
-            return rgTab[best].buf;
+            return rgTab[best].buf.toLong();
         }
         gbMiss += 1;
         if (Loader.reportUnresolved != 0)                      // probe mode: name the unembedded reference (surface)

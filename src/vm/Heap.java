@@ -1744,17 +1744,26 @@ public final class Heap implements Uninterruptible
     }
 
     /** Record that static slot {@code slot} of the {@code slots}-slot block {@code statics} holds an object reference
-     *  ({@code kind} 1) or a data reference ({@code kind} 3); any other kind is raw and leaves the bitmaps alone. */
+     *  ({@code kind} 1: the reference bitmap), a data reference (3: the data bitmap) or a code address (2: both, as in
+     *  a Type's kinds); any other kind is raw and leaves the bitmaps alone. */
     public static void markStatic(DataReference statics, int slots, int slot, int kind)
     {
-        if (kind != 1 && kind != 3)
+        if (kind != 1 && kind != 2 && kind != 3)
         {
             return;
         }
         int words = ObjectModel.staticsMapWords(slots);
-        int map = (slots + 1) + (kind == 3 ? words : 0) + (slot >> 6);
-        Address w = statics.toAddress().plus(map * 8L);
-        w.store(w.loadLong() | (1L << (slot & 63)));
+        long bit = 1L << (slot & 63);
+        if (kind != 3)
+        {
+            Address r = statics.toAddress().plus(((slots + 1) + (slot >> 6)) * 8L);
+            r.store(r.loadLong() | bit);
+        }
+        if (kind != 1)
+        {
+            Address d = statics.toAddress().plus(((slots + 1) + words + (slot >> 6)) * 8L);
+            d.store(d.loadLong() | bit);
+        }
     }
 
     /** An allocData block of {@code size} payload bytes whose header word is {@code layout} (0: no pointers). */

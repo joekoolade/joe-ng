@@ -11,6 +11,7 @@
  */
 package java.lang.reflect;
 
+import magic.CodeAddress;
 import magic.Magic;
 
 /**
@@ -27,7 +28,7 @@ public final class Method extends Executable
     private final Class<?> clazz;
     private final String name;
     private final int access;
-    private final long buf;
+    private final CodeAddress buf;     // a code root to the collector (frames/GC arc S6b-3)
     private final int paramCount;
     private final byte[] paramChars;   // first descriptor char of each parameter ('I'/'J'/'Z'/.../'L'/'[')
     private final int returnChar;
@@ -41,7 +42,7 @@ public final class Method extends Executable
         this.clazz = clazz;
         this.name = name;
         this.access = access;
-        this.buf = buf;
+        this.buf = CodeAddress.fromLong(buf);
         this.paramCount = paramCount;
         this.paramChars = paramChars;
         this.returnChar = returnChar;
@@ -347,7 +348,7 @@ public final class Method extends Executable
     private Object call(Object recv, Object[] args, boolean virtual) throws InvocationTargetException
     {
         boolean isStatic = (access & 0x0008) != 0;
-        long target = buf;
+        long target = buf.toLong();
         if (!isStatic)
         {
             if (recv == null)
@@ -417,9 +418,9 @@ public final class Method extends Executable
     private long dispatchTarget(Object recv)
     {
         Class<?> rc = recv.getClass();
-        if (rc == clazz && buf != 0L)
+        if (rc == clazz && buf.toLong() != 0L)
         {
-            return buf;
+            return buf.toLong();
         }
         byte[] n = jdk.internal.misc.MetalNames.utf8(name);
         byte[] d = jdk.internal.misc.MetalNames.utf8(descriptor());
@@ -428,9 +429,9 @@ public final class Method extends Executable
         {
             if (k == clazz)
             {
-                if (buf != 0L)
+                if (buf.toLong() != 0L)
                 {
-                    return buf;
+                    return buf.toLong();
                 }
                 break;
             }
@@ -448,7 +449,7 @@ public final class Method extends Executable
         {
             return t;
         }
-        return buf;
+        return buf.toLong();
     }
 
     /** This method's descriptor, {@code (params)ret}, as its class file spells it. */
@@ -487,7 +488,7 @@ public final class Method extends Executable
     /** Stock's: a fresh Method for the same method, not accessible, whose root is this one (ReflectAccess). */
     Method copy()
     {
-        Method m = new Method(clazz, name, access, buf, paramCount, paramChars, returnChar, rgIndex);
+        Method m = new Method(clazz, name, access, buf.toLong(), paramCount, paramChars, returnChar, rgIndex);
         m.root = root != null ? root : this;
         return m;
     }

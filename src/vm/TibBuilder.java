@@ -228,7 +228,7 @@ final class TibBuilder
                     w1 = w1 | bit;
                 }
                 int kind = fieldKind(off);
-                if (kind == 1)
+                if (kind == 1 || kind == 2)             // 2 = a code address: both bits (ClassFile.KIND_CODE)
                 {
                     if (s < 63)
                     {
@@ -239,7 +239,7 @@ final class TibBuilder
                         r1 = r1 | bit;
                     }
                 }
-                else if (kind == 3)
+                if (kind == 3 || kind == 2)
                 {
                     if (s < 63)
                     {
@@ -325,7 +325,7 @@ final class TibBuilder
     }
 
     /** The exact kind of the field whose descriptor Utf8 sits at {@code descOff}, as {@code ClassFile.fieldKind}
-     *  decides it on the host: 1 = object reference, 3 = data reference, 0 = neither (primitive or raw). Also the
+     *  decides it on the host: 1 = object reference, 3 = data reference, 2 = code address, 0 = none of those. Also the
      *  kind of a static field, for its statics block's bitmaps ({@link Loader#parseFields}). */
     static int fieldKind(int descOff)
     {
@@ -342,6 +342,10 @@ final class TibBuilder
         if (Utf8.utf8IsAtBase(b, descOff, Magic.bytes("Lmagic/DataReference;")))
         {
             return 3;
+        }
+        if (Utf8.utf8IsAtBase(b, descOff, Magic.bytes("Lmagic/CodeAddress;")))
+        {
+            return 2;
         }
         if (Utf8.utf8IsAtBase(b, descOff, Magic.bytes("Lmagic/Address;"))
             || Utf8.utf8IsAtBase(b, descOff, Magic.bytes("Lmagic/Word;"))

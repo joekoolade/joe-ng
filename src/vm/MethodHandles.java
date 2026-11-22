@@ -319,7 +319,7 @@ final class MethodHandles
             return 0L;
         }
         RVMMethod m = Reflection.reflEntry((int) e);
-        if (m == null || m.buf == 0L)
+        if (m == null || m.buf.toLong() == 0L)
         {
             Uart.write(Magic.bytes("\n  MH LINK: no body for "));
             if (m != null)
@@ -332,7 +332,7 @@ final class MethodHandles
             Uart.putc(0x0A);
             return 0L;
         }
-        return m.buf;
+        return m.buf.toLong();
     }
 
     /** The reflection index a MemberName's ResolvedMethodName carries, or -1 after naming why there is none. */
@@ -412,13 +412,13 @@ final class MethodHandles
             }
         }
         RVMMethod m = li < 0 ? null : Reflection.reflEntry(li);
-        if (m == null || m.buf == 0L)
+        if (m == null || m.buf.toLong() == 0L)
         {
             Uart.write(Magic.bytes("\n  MH LINK: no MethodHandleNatives linker\n"));
             return 0L;
         }
         long desc = Loader.guestString(VM.heapBytes(descU.plus(2L), u2(descU)));
-        return Magic.call2(m.buf, mh, desc);            // may throw WrongMethodTypeException: unwinds to the site
+        return Magic.call2(m.buf.toLong(), mh, desc);            // may throw WrongMethodTypeException: unwinds to the site
     }
 
     /** Byte offset of the instance field the named class itself declares, or -1. */

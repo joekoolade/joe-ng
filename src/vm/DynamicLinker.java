@@ -151,8 +151,8 @@ final class DynamicLinker
                     && Loader.utf8EqAt(refBase, descOff, MethodRegistry.rgTab[i].base.toAddress(), MethodRegistry.rgTab[i].descOff))
             {
                 Loader.rgHitIdx = i;                            // memoisable: a single registry entry answered
-                Loader.bufResolveLog(refBase, classOff, nameOff, descOff, MethodRegistry.rgTab[i].buf, 1);
-                return MethodRegistry.rgTab[i].buf;
+                Loader.bufResolveLog(refBase, classOff, nameOff, descOff, MethodRegistry.rgTab[i].buf.toLong(), 1);
+                return MethodRegistry.rgTab[i].buf.toLong();
             }
             i = MethodRegistry.rgNext[i];
         }
@@ -214,8 +214,8 @@ final class DynamicLinker
                         && Loader.utf8EqAt(refBase, nameOff, MethodRegistry.rgTab[j].base.toAddress(), MethodRegistry.rgTab[j].nameOff)
                         && Loader.utf8EqAt(refBase, descOff, MethodRegistry.rgTab[j].base.toAddress(), MethodRegistry.rgTab[j].descOff))
                 {
-                    Loader.bufResolveLog(refBase, classOff, nameOff, descOff, MethodRegistry.rgTab[j].buf, 2);
-                    return MethodRegistry.rgTab[j].buf;
+                    Loader.bufResolveLog(refBase, classOff, nameOff, descOff, MethodRegistry.rgTab[j].buf.toLong(), 2);
+                    return MethodRegistry.rgTab[j].buf.toLong();
                 }
                 j = MethodRegistry.rgNext[j];
             }
@@ -1172,7 +1172,7 @@ final class DynamicLinker
         int k = MethodRegistry.rgBucket[Utf8.utf8Hash2(clsU, 0, nameU, 0) & (MethodRegistry.RGTAB - 1)];
         while (k >= 0)
         {
-            if (MethodRegistry.rgTab[k].buf != 0L
+            if (MethodRegistry.rgTab[k].buf.toLong() != 0L
                     && Loader.utf8EqAt(MethodRegistry.rgTab[k].base.toAddress(), MethodRegistry.rgTab[k].classOff, clsU, 0)
                     && Loader.utf8EqAt(MethodRegistry.rgTab[k].base.toAddress(), MethodRegistry.rgTab[k].nameOff, nameU, 0)
                     && Loader.utf8EqAt(MethodRegistry.rgTab[k].base.toAddress(), MethodRegistry.rgTab[k].descOff, descU, 0))
@@ -1183,7 +1183,7 @@ final class DynamicLinker
         }
         if (best >= 0)
         {
-            return MethodRegistry.rgTab[best].buf;
+            return MethodRegistry.rgTab[best].buf.toLong();
         }
         long cell = dlCellOf(clsU, 0, nameU, 0, descU, 0);   // tier 2: a celled static, callable via its cell
         if (cell != 0L)
