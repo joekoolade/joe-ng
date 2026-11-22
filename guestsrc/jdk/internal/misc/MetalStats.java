@@ -114,6 +114,7 @@ public final class MetalStats
         "... from an unrecognised header",
         "... from a reference read as a data reference (w-16: conservative false positives)",
         "... reached only through those (secondary)",
+        "... compiled-code words only a conservative word kept (raw longs, long[] tables)",
     };
 
     public static final String[] LOCKS_NAMES = {

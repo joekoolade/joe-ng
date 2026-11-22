@@ -236,7 +236,7 @@ final class AnnotationInstances
             return DataReference.zero();
         }
         int n = ClassRegistry.clTab[ifaceReg].ifmCount;
-        DataReference it = Heap.allocData(n > 0 ? n * 8 : 8);
+        DataReference it = Heap.allocCodeTable(n > 0 ? n * 8 : 8);
         DataReference ownBase = ClassRegistry.clTab[ifaceReg].base;
         int s = 0;
         while (s < n)
@@ -274,7 +274,7 @@ final class AnnotationInstances
         // Annotation.annotationType()/equals/hashCode, and a zero slot meets the dispatch guard (a named trap)
         // rather than branching into whatever a short table would have run off into.
         int closN = InterfaceInvocation.ifaceClosureOf(ifaceReg);
-        DataReference dir = Heap.allocData((closN + 2) * 16);
+        DataReference dir = Heap.allocDataRefs((closN + 2) * 16);
         dir.plus(0L).store(ifaceType);
         dir.plus(8L).store(it);
         int e = 1;
@@ -283,7 +283,7 @@ final class AnnotationInstances
         {
             int cr = InterfaceInvocation.ifClosureBuf[ci];
             int cn = ClassRegistry.clTab[cr].ifmCount;
-            DataReference cit = Heap.allocData(cn > 0 ? cn * 8 : 8);
+            DataReference cit = Heap.allocCodeTable(cn > 0 ? cn * 8 : 8);
             int z = 0;
             while (z < cn)
             {
@@ -315,7 +315,7 @@ final class AnnotationInstances
         }
         dir.plus(e * 16L).plus(0L).store(0L);          // sentinel: interfaceType 0 ends the directory
         dir.plus(e * 16L).plus(8L).store(0L);
-        DataReference type = Heap.allocData(ObjectModel.TYPE_SIZE);
+        DataReference type = Heap.allocType();
         type.plus(0L).store((long) (16 + n * 8));
         type.plus(ObjectModel.TYPE_SUPER_OFFSET).store(TibBuilder.objectTypeAddr());   // NOT 0 -- see finishLambdaClass
         type.plus(16L).store(dir);
@@ -336,7 +336,7 @@ final class AnnotationInstances
         // nowhere to resolve. It also has to be the same SHAPE as a lambda TIB, because both live in
         // lambdaTibRoots and refillSynthTibVtables walks that one array.
         int onv2 = TibBuilder.objectVtableCount();
-        DataReference tib = Heap.allocData(8 + onv2 * 8);
+        DataReference tib = Heap.allocTib(8 + onv2 * 8);
         tib.plus(0L).store(type);
         TibBuilder.fillObjectVtable(tib.toAddress());
         patchAnnoContract(tib.toAddress(), onv2, dir.toAddress());

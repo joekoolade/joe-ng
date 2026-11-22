@@ -244,7 +244,7 @@ final class ProxySupport
         }
         int ni = (int) Address.fromLong(ifacesArr).plus(16L).loadLong();
         int nm = (int) Address.fromLong(methodsArr).plus(16L).loadLong();
-        DataReference dir = Heap.allocData((ni + 1) * 16);
+        DataReference dir = Heap.allocDataRefs((ni + 1) * 16);
         int e = 0;
         while (e < ni)
         {
@@ -252,7 +252,7 @@ final class ProxySupport
             Address ity = mirror.isZero() ? Address.zero() : mirror.plus(16L).loadAddress();
             int ir = ClassRegistry.classRegByType(ity);
             int cn = ir >= 0 ? ClassRegistry.clTab[ir].ifmCount : 0;
-            DataReference cit = Heap.allocData(cn > 0 ? cn * 8 : 8);
+            DataReference cit = Heap.allocCodeTable(cn > 0 ? cn * 8 : 8);
             int z = 0;
             while (z < cn)
             {
@@ -280,13 +280,13 @@ final class ProxySupport
         }
         dir.plus(ni * 16L).store(0L);              // sentinel: interfaceType 0 ends the directory
         dir.plus(ni * 16L).plus(8L).store(0L);
-        DataReference type = Heap.allocData(ObjectModel.TYPE_SIZE);
+        DataReference type = Heap.allocType();
         type.plus(0L).store((long) (16 + ClassRegistry.clTab[pr].fieldCount * 8));   // Proxy's instance: header + h
         type.plus(ObjectModel.TYPE_SUPER_OFFSET).store(ClassRegistry.clTab[pr].type);
         type.plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).store(dir);
         TibBuilder.copyMaps(type, ClassRegistry.clTab[pr].type);   // a proxy instance IS a Proxy's layout (S6b)
         int onv = TibBuilder.objectVtableCount();
-        DataReference tib = Heap.allocData(8 + onv * 8);
+        DataReference tib = Heap.allocTib(8 + onv * 8);
         tib.plus(0L).store(type);
         TibBuilder.fillObjectVtable(tib.toAddress());
         int i = proxyN;

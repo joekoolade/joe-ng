@@ -155,7 +155,7 @@ final class TibBuilder
         }
         else
         {
-            Loader.gBuild.type = Heap.allocData(ObjectModel.TYPE_SIZE);
+            Loader.gBuild.type = Heap.allocType();
         }
         Loader.gBuild.type.plus(0).store((long) (16 + Loader.gBuild.ifCount * 8));       // TYPE_INSTANCE_SIZE_OFFSET
         Loader.gBuild.type.plus(8).store(sr >= 0 ? ClassRegistry.clTab[sr].type : DataReference.zero());   // TYPE_SUPER_OFFSET (0 at Object)
@@ -171,7 +171,7 @@ final class TibBuilder
             DynamicTypeCheck.buildDisplay(Loader.gBuild.type.toAddress(), sr >= 0 ? ClassRegistry.clTab[sr].type.toAddress() : Address.zero());
             buildRefMap(Loader.gBuild.type.toAddress(), sr >= 0 ? ClassRegistry.clTab[sr].type.toAddress() : Address.zero());   // GC reference map (adopted nodes carry
         }                                                        //   the writer's -- never overwrite it)
-        Loader.gBuild.tib = Heap.allocData((1 + VtableLayout.gvCount) * 8);
+        Loader.gBuild.tib = Heap.allocTib((1 + VtableLayout.gvCount) * 8);
         Loader.gBuild.tib.store(Loader.gBuild.type);                      // TIB[0] = Type (slots filled by fillTib)
     }
 
@@ -325,8 +325,9 @@ final class TibBuilder
     }
 
     /** The exact kind of the field whose descriptor Utf8 sits at {@code descOff}, as {@code ClassFile.fieldKind}
-     *  decides it on the host: 1 = object reference, 3 = data reference, 0 = neither (primitive or raw). */
-    private static int fieldKind(int descOff)
+     *  decides it on the host: 1 = object reference, 3 = data reference, 0 = neither (primitive or raw). Also the
+     *  kind of a static field, for its statics block's bitmaps ({@link Loader#parseFields}). */
+    static int fieldKind(int descOff)
     {
         Address b = Loader.gView.base.toAddress();
         int k = u1(b.plus(descOff + 2));

@@ -66,6 +66,8 @@ final class HeapShadow implements Uninterruptible
     private static int secondary;                  // 1 while draining blocks the rescan itself marked
 
     static long checks;
+    static long codeMisses;                        // this collection's primary misses whose target is compiled code
+    static long codeTotal;                         // ... over the boot
     static long primary;
     static long secondaries;
     private static long[] byKind;                  // this collection's primary misses by source kind
@@ -87,7 +89,7 @@ final class HeapShadow implements Uninterruptible
         byKind = new long[S_N];
         totalByKind = new long[S_N];
         seen = new long[SEEN_SLOTS];
-        printed = new int[S_N];
+        printed = new int[S_N + 1];                    // + the code misses
         sites = 1;
         on = 1;
     }
@@ -122,9 +124,14 @@ final class HeapShadow implements Uninterruptible
     static void scanPrecise(Address o, long size)
     {
         long tibw = o.plus(ObjectModel.TIB_OFFSET).loadLong();
+        if (isLayout(tibw))
+        {
+            scanLayout(o, size, tibw);                 // an allocData struct that says what it holds (S6b-2)
+            return;
+        }
         if (tibw < VMGc.META_LOW || tibw >= VMGc.META_HIGH || (tibw & 7L) != 0L)
         {
-            return;                                    // allocData struct, raw array, unknown: nothing exact
+            return;                                    // byte-only allocData block, raw array, unknown: nothing exact
         }
         VMGc.markExact(tibw - 16L);                    // the object's own TIB (a data reference): see VMGc.scanBlock
         long type = Address.fromLong(tibw).plus(ObjectModel.TIB_TYPE_SLOT * ObjectModel.WORD).loadLong();
@@ -185,6 +192,128 @@ final class HeapShadow implements Uninterruptible
         }
     }
 
+    /** Whether header word {@code tibw} is an allocData layout word ({@link ObjectModel#LAYOUT_TAG}). */
+    static boolean isLayout(long tibw)
+    {
+        return tibw > (long) ObjectModel.MAX_RAW_ARRAY_TIB && (tibw & ObjectModel.LAYOUT_TAG_MASK) == ObjectModel.LAYOUT_TAG;
+    }
+
+    /** The kind field of layout word {@code layout}. */
+    private static int layoutKind(long layout)
+    {
+        return (int) ((layout >>> 3) & 31L);
+    }
+
+    /** Follow the words of allocData struct {@code o} its layout word names: data references at {@code w-16}, code
+     *  addresses at {@code w} (a code-arena hit is recorded in the code bitmap, nothing else is marked). */
+    private static void scanLayout(Address o, long size, long layout)
+    {
+        int kind = layoutKind(layout);
+        Address p = o.plus(ObjectModel.HEADER_SIZE);
+        Address end = o.plus(size);
+        if (kind == ObjectModel.LAYOUT_TYPE)
+        {
+            markData(p.plus(ObjectModel.TYPE_SUPER_OFFSET).loadLong());
+            markData(p.plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).loadLong());
+            markData(p.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong());
+            markData(p.plus(ObjectModel.TYPE_DISPLAY_OFFSET).loadLong());
+            return;
+        }
+        if (kind == ObjectModel.LAYOUT_TIB)
+        {
+            markData(p.loadLong());
+            p = p.plus(8);
+            while (p.LT(end))
+            {
+                VMGc.markExact(p.loadLong());
+                p = p.plus(8);
+            }
+            return;
+        }
+        if (kind == ObjectModel.LAYOUT_DATA_REFS)
+        {
+            while (p.LT(end))
+            {
+                markData(p.loadLong());
+                p = p.plus(8);
+            }
+            return;
+        }
+        if (kind == ObjectModel.LAYOUT_CODE)
+        {
+            while (p.LT(end))
+            {
+                VMGc.markExact(p.loadLong());
+                p = p.plus(8);
+            }
+            return;
+        }
+        if (kind == ObjectModel.LAYOUT_STATICS)
+        {
+            int n = (int) (layout >>> 8);
+            int words = ObjectModel.staticsMapWords(n);
+            Address refs = p.plus((n + 1) * 8L);
+            Address datas = refs.plus(words * 8L);
+            if (datas.plus(words * 8L).GT(end))
+            {
+                return;                                // cannot be: the block is smaller than its own layout
+            }
+            int s = 0;
+            while (s < n)
+            {
+                long bit = 1L << (s & 63);
+                long w = p.plus(s * 8L).loadLong();
+                if ((refs.plus((s >> 6) * 8L).loadLong() & bit) != 0L)
+                {
+                    VMGc.markExact(w);
+                }
+                else if ((datas.plus((s >> 6) * 8L).loadLong() & bit) != 0L)
+                {
+                    markData(w);
+                }
+                s += 1;
+            }
+        }
+    }
+
+    /** Whether {@link #scanLayout} follows the payload word at byte {@code off} of struct {@code o}. */
+    private static boolean layoutExact(Address o, long size, long layout, long off)
+    {
+        int kind = layoutKind(layout);
+        if (kind == ObjectModel.LAYOUT_TYPE)
+        {
+            return off == (long) ObjectModel.TYPE_SUPER_OFFSET || off == (long) ObjectModel.TYPE_ITABLE_DIR_OFFSET
+                   || off == (long) ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET || off == (long) ObjectModel.TYPE_DISPLAY_OFFSET;
+        }
+        if (kind == ObjectModel.LAYOUT_TIB || kind == ObjectModel.LAYOUT_DATA_REFS || kind == ObjectModel.LAYOUT_CODE)
+        {
+            return true;
+        }
+        if (kind == ObjectModel.LAYOUT_STATICS)
+        {
+            int n = (int) (layout >>> 8);
+            int s = (int) (off >> 3);
+            if (s >= n)
+            {
+                return false;
+            }
+            int words = ObjectModel.staticsMapWords(n);
+            Address refs = o.plus(ObjectModel.HEADER_SIZE).plus((n + 1) * 8L);
+            long bit = 1L << (s & 63);
+            return (refs.plus((s >> 6) * 8L).loadLong() & bit) != 0L
+                   || (refs.plus((words + (s >> 6)) * 8L).loadLong() & bit) != 0L;
+        }
+        return false;
+    }
+
+    private static void markData(long w)
+    {
+        if (w != 0L)
+        {
+            VMGc.markExact(w - 16L);
+        }
+    }
+
     private static Address arrayEnd(Address o, long size)
     {
         Address end = o.plus(ObjectModel.ARRAY_BASE_OFFSET)
@@ -208,6 +337,7 @@ final class HeapShadow implements Uninterruptible
             byKind[i] = 0L;
             i += 1;
         }
+        codeMisses = 0L;
     }
 
     /**
@@ -268,6 +398,19 @@ final class HeapShadow implements Uninterruptible
             if (tibw >= 8L)
             {
                 words(S_RAW_ARRAY, o.plus(ObjectModel.ARRAY_BASE_OFFSET), arrayEnd(o, size), o);
+            }
+            return;
+        }
+        if (isLayout(tibw))
+        {
+            // A word its layout follows exactly is reported like an exact slot of an object (ref-as-data: only its
+            // w-16 probe can miss); a word it calls raw is a data MISS -- a pointer the layout does not know about.
+            Address a = o.plus(ObjectModel.HEADER_SIZE);
+            while (a.LT(o.plus(size)))
+            {
+                word(layoutExact(o, size, tibw, a.diff(o).toLong() - (long) ObjectModel.HEADER_SIZE) ? S_REF_DATA : S_DATA,
+                     a, o);
+                a = a.plus(8);
             }
             return;
         }
@@ -352,6 +495,26 @@ final class HeapShadow implements Uninterruptible
         VMGc.markRescan(w - 16L);
     }
 
+    /**
+     * The rescan hit code-arena word {@code w} no earlier mark had recorded: compiled code a precise trace would let
+     * the code sweep free. Only a word probed AS ITSELF counts -- the {@code w-16} probe of an exact data reference
+     * can land in the code before it, which says nothing.
+     */
+    static void missedCode(long w)
+    {
+        if (srcViaData != 0)
+        {
+            return;
+        }
+        if (secondary != 0)
+        {
+            return;                                    // reached through a block only the rescan kept: counted there
+        }
+        codeMisses = codeMisses + 1L;                  // apart from the heap's primary count: a separate worklist
+        codeTotal = codeTotal + 1L;
+        report(srcKind, w, true);
+    }
+
     /** {@link VMGc#tryMark} newly marked {@code block} during the rescan: a MISS of the precise phase. */
     static void missed(long block)
     {
@@ -368,26 +531,27 @@ final class HeapShadow implements Uninterruptible
         }
         byKind[k] = byKind[k] + 1L;
         totalByKind[k] = totalByKind[k] + 1L;
-        report(k, block);
+        report(k, block, false);
     }
 
     // ---- reporting ----------------------------------------------------------------------------------------------
 
-    /** Print a primary MISS the first time its (source, offset) is seen. */
-    private static void report(int k, long block)
+    /** Print a primary MISS the first time its (source, offset) is seen; {@code code}: the target is a code address. */
+    private static void report(int k, long block, boolean code)
     {
         Address src = Address.fromLong(srcBlock);
         long tibw = src.plus(ObjectModel.TIB_OFFSET).loadLong();
         boolean scalar = k == S_MAPPED_RAW || k == S_UNMAPPED || k == S_OTHER;
         long who = scalar ? tibw : siteOf(srcBlock);
         long off = (k == S_WORD_ARRAY || k == S_RAW_ARRAY || k == S_REF_DATA && !scalar) ? 0L : srcOff;
-        long key = (who * 31L + off) * 8L + (long) k + (long) srcViaData * 4096L;
-        if (printed[k] >= PRINT_MAX || !firstSeen(key))
+        long key = (who * 31L + off) * 8L + (long) k + (long) srcViaData * 4096L + (code ? 8192L : 0L);
+        int pk = code ? S_N : k;
+        if (printed[pk] >= PRINT_MAX || !firstSeen(key))
         {
             return;
         }
-        printed[k] = printed[k] + 1;
-        Uart.write(Magic.bytes("heap MISS "));
+        printed[pk] = printed[pk] + 1;
+        Uart.write(Magic.bytes(code ? "heap MISS code from " : "heap MISS "));
         Uart.write(kindName(k));
         if (srcViaData != 0)
         {
@@ -415,6 +579,12 @@ final class HeapShadow implements Uninterruptible
             printTypeOf(tibw);
         }
         Uart.write(Magic.bytes(" -> "));
+        if (code)
+        {
+            StackTrace.printFrameAt(Address.fromLong(block));
+            Uart.putc((byte) 0x0A);
+            return;
+        }
         printTypeOf(Address.fromLong(block).loadLong());
         Uart.write(Magic.bytes(" size "));
         printDec((int) (Address.fromLong(block).plus(8).loadLong() & -8L));
@@ -449,6 +619,13 @@ final class HeapShadow implements Uninterruptible
         if (tibw == 0L)
         {
             Uart.write(Magic.bytes("<data>"));
+            return;
+        }
+        if (isLayout(tibw))
+        {
+            Uart.write(Magic.bytes("<data layout "));
+            printDec(layoutKind(tibw));
+            Uart.putc((byte) 0x3E);
             return;
         }
         if (tibw <= (long) ObjectModel.MAX_RAW_ARRAY_TIB)
@@ -534,6 +711,8 @@ final class HeapShadow implements Uninterruptible
         printDec((int) byKind[S_REF_DATA]);
         Uart.write(Magic.bytes(" other="));
         printDec((int) byKind[S_OTHER]);
+        Uart.write(Magic.bytes(" code="));
+        printDec((int) codeMisses);
         Uart.write(Magic.bytes(" | total primary="));
         printDec((int) primary);
         Uart.write(Magic.bytes(" secondary="));

@@ -1700,14 +1700,79 @@ public final class Heap implements Uninterruptible
     public static DataReference allocData(int size)
     {
         long site = Magic.readLR();                      // first: the call below overwrites x30
+        return dataBlock(size, 0L, site);
+    }
+
+    // ---- structs that HOLD POINTERS (frames/GC arc S6b-2): the header word names the layout, see
+    // ObjectModel.LAYOUT_TAG. Each reads its own caller as the allocation site, so the heap shadow names the real one.
+
+    /** A Type node ({@link ObjectModel#LAYOUT_TYPE}). */
+    public static DataReference allocType()
+    {
+        long site = Magic.readLR();
+        return dataBlock(ObjectModel.TYPE_SIZE, ObjectModel.layoutWord(ObjectModel.LAYOUT_TYPE, 0L), site);
+    }
+
+    /** A TIB of {@code bytes} ({@link ObjectModel#LAYOUT_TIB}): the Type, then code addresses. */
+    public static DataReference allocTib(int bytes)
+    {
+        long site = Magic.readLR();
+        return dataBlock(bytes, ObjectModel.layoutWord(ObjectModel.LAYOUT_TIB, 0L), site);
+    }
+
+    /** {@code bytes} of data references ({@link ObjectModel#LAYOUT_DATA_REFS}): an itable directory, a display. */
+    public static DataReference allocDataRefs(int bytes)
+    {
+        long site = Magic.readLR();
+        return dataBlock(bytes, ObjectModel.layoutWord(ObjectModel.LAYOUT_DATA_REFS, 0L), site);
+    }
+
+    /** {@code bytes} of code addresses ({@link ObjectModel#LAYOUT_CODE}): an itable, a lazy-compile cell. */
+    public static DataReference allocCodeTable(int bytes)
+    {
+        long site = Magic.readLR();
+        return dataBlock(bytes, ObjectModel.layoutWord(ObjectModel.LAYOUT_CODE, 0L), site);
+    }
+
+    /** A statics block of {@code slots} zeroed statics, its kind bitmaps empty ({@link ObjectModel#LAYOUT_STATICS}):
+     *  the caller marks each reference slot with {@link #markStatic}. */
+    public static DataReference allocStatics(int slots)
+    {
+        long site = Magic.readLR();
+        return dataBlock(ObjectModel.staticsBlockSize(slots), ObjectModel.layoutWord(ObjectModel.LAYOUT_STATICS, (long) slots),
+                         site);
+    }
+
+    /** Record that static slot {@code slot} of the {@code slots}-slot block {@code statics} holds an object reference
+     *  ({@code kind} 1) or a data reference ({@code kind} 3); any other kind is raw and leaves the bitmaps alone. */
+    public static void markStatic(DataReference statics, int slots, int slot, int kind)
+    {
+        if (kind != 1 && kind != 3)
+        {
+            return;
+        }
+        int words = ObjectModel.staticsMapWords(slots);
+        int map = (slots + 1) + (kind == 3 ? words : 0) + (slot >> 6);
+        Address w = statics.toAddress().plus(map * 8L);
+        w.store(w.loadLong() | (1L << (slot & 63)));
+    }
+
+    /** An allocData block of {@code size} payload bytes whose header word is {@code layout} (0: no pointers). */
+    private static DataReference dataBlock(int size, long layout, long site)
+    {
+        Address q;
         if (HeapShadow.sites != 0)
         {
             // gcheap=2: one word more, at the block's end, recording where the struct came from (HeapShadow).
-            Address q = alloc(size + ObjectModel.HEADER_SIZE + 8);
+            q = alloc(size + ObjectModel.HEADER_SIZE + 8);
             q.plus((q.plus(ObjectModel.STATUS_OFFSET).loadLong() & -8L) - 8L).store(site);
-            return DataReference.fromAddress(q.plus(ObjectModel.HEADER_SIZE));
         }
-        return DataReference.fromAddress(alloc(size + ObjectModel.HEADER_SIZE).plus(ObjectModel.HEADER_SIZE));
+        else
+        {
+            q = alloc(size + ObjectModel.HEADER_SIZE);
+        }
+        q.plus(ObjectModel.TIB_OFFSET).store(layout);
+        return DataReference.fromAddress(q.plus(ObjectModel.HEADER_SIZE));
     }
 
     /**
