@@ -14,6 +14,7 @@ package net;
 import magic.Address;
 import magic.DataReference;
 import magic.AddressArray;
+import magic.DataReferenceArray;
 import magic.Magic;
 import vm.Heap;
 import vm.VM;
@@ -83,7 +84,7 @@ public final class Tcp
     public static final int ECONNREFUSED = 111;
 
     private static int[]  st    = new int[MAXCONN];   // slot state
-    private static AddressArray rip;                  // remote IPv4 (4-byte heap buf); created by allocLocked
+    private static DataReferenceArray rip;                  // remote IPv4 (4-byte heap buf); created by allocLocked
     private static int[]  rport = new int[MAXCONN];   // remote port
     private static int[]  lport = new int[MAXCONN];   // local (ephemeral) port
     private static int[]  snd   = new int[MAXCONN];   // our next send sequence number
@@ -93,7 +94,7 @@ public final class Tcp
     private static int[]  finIn = new int[MAXCONN];   // 1 = the peer's FIN is accepted (counted in rcv, not data)
     private static int[]  finPend = new int[MAXCONN]; // 1 = a FIN arrived past a hole; finAt is its sequence
     private static int[]  finAt = new int[MAXCONN];
-    private static AddressArray ring;                 // RCVBUF-byte receive ring, indexed by sequence number
+    private static DataReferenceArray ring;                 // RCVBUF-byte receive ring, indexed by sequence number
     private static int[]  holeS = new int[MAXCONN * MAXHOLE];   // out-of-order runs [holeS, holeE) held in
     private static int[]  holeE = new int[MAXCONN * MAXHOLE];   //   the ring past rcv
     private static int[]  holes = new int[MAXCONN];
@@ -111,7 +112,7 @@ public final class Tcp
     private static int[]  pisn  = new int[MAXCONN];   // the peer's ISN (0 until the SYN-ACK)
 
     private static int[]  parent = new int[MAXCONN];  // a child's listener until accept() takes it, else -1
-    private static AddressArray rmac;                 // the peer's 6-byte MAC (heap buf)
+    private static DataReferenceArray rmac;                 // the peer's 6-byte MAC (heap buf)
     private static int[]  useRmac = new int[MAXCONN]; // 1 = send to rmac (a child: the SYN's source MAC)
     private static long[] synAt = new long[MAXCONN];  // CNTPCT when a child's SYN arrived (for reaping)
     private static int[] orphan = new int[MAXCONN];    // 1: the socket is closed; the stack finishes its FIN exchange
@@ -179,9 +180,9 @@ public final class Tcp
         long limit = Magic.readCNTFRQ_EL0() * CLOSE_MS / 1000L;
         if (ring == null)                                // no initializer: an AddressArray cannot be created on
         {                                                //   the host JVM, where the writer runs <clinit>
-            ring = AddressArray.create(MAXCONN);
-            rip = AddressArray.create(MAXCONN);
-            rmac = AddressArray.create(MAXCONN);
+            ring = DataReferenceArray.create(MAXCONN);
+            rip = DataReferenceArray.create(MAXCONN);
+            rmac = DataReferenceArray.create(MAXCONN);
         }
         int i = 0;
         while (i < MAXCONN)
@@ -195,9 +196,9 @@ public final class Tcp
                 orphan[i] = 0;
                 if (ring.get(i).isZero())
                 {
-                    ring.set(i, Heap.allocData(RCVBUF).toAddress());
-                    rip.set(i, Heap.allocData(4).toAddress());
-                    rmac.set(i, Heap.allocData(6).toAddress());
+                    ring.set(i, Heap.allocData(RCVBUF));
+                    rip.set(i, Heap.allocData(4));
+                    rmac.set(i, Heap.allocData(6));
                 }
                 st[i] = RESERVED;
                 lport[i] = 0;
@@ -348,7 +349,7 @@ public final class Tcp
         {
             return 0;
         }
-        return Ip.readBe32(rip.get(h));
+        return Ip.readBe32(rip.get(h).toAddress());
     }
 
     /** The remote port of connection {@code h}. */
@@ -416,7 +417,7 @@ public final class Tcp
         }
         int isn = (int) Ip.nextRandom();                // a fresh initial sequence number
         lock();
-        DataReference ripA = DataReference.fromAddress(rip.get(h));
+        DataReference ripA = rip.get(h);
         ripA.plus(0).store((byte) ((ipBe >> 24) & 0xFF));
         ripA.plus(1).store((byte) ((ipBe >> 16) & 0xFF));
         ripA.plus(2).store((byte) ((ipBe >> 8) & 0xFF));
@@ -894,7 +895,7 @@ public final class Tcp
         {
             int s = st[i];
             if ((s == SYN_SENT || s == SYN_RCVD || s == CONNECTED || s == CLOSED) && lport[i] == dport && rport[i] == sport
-                    && Ip.eq(srcIp, rip.get(i)))
+                    && Ip.eq(srcIp, rip.get(i).toAddress()))
             {
                 return i;
             }
@@ -938,9 +939,9 @@ public final class Tcp
             NetStats.tcpAttemptFails = NetStats.tcpAttemptFails + 1;
             return;
         }
-        Ip.copy4(ip.plus(12), rip.get(h));
+        Ip.copy4(ip.plus(12), rip.get(h).toAddress());
         Address eth = ip.minus(14);
-        DataReference rmacA = DataReference.fromAddress(rmac.get(h));
+        DataReference rmacA = rmac.get(h);
         int i = 0;
         while (i < 6)
         {
@@ -1277,7 +1278,7 @@ public final class Tcp
     /** Copy {@code n} bytes from {@code src} into connection {@code h}'s ring at sequence {@code seq}. */
     private static void copyIn(int h, int seq, Address src, int n)
     {
-        DataReference rA = DataReference.fromAddress(ring.get(h));
+        DataReference rA = ring.get(h);
         int idx = seq - (pisn[h] + 1);
         int i = 0;
         while (i < n)
@@ -1290,7 +1291,7 @@ public final class Tcp
     /** Copy {@code n} buffered bytes to {@code dst}, advance the read point, and reopen a closed-down window. */
     private static int copyOut(int h, Address dst, int n)
     {
-        DataReference rA = DataReference.fromAddress(ring.get(h));
+        DataReference rA = ring.get(h);
         int idx = rdSeq[h] - (pisn[h] + 1);
         int i = 0;
         while (i < n)
@@ -1436,8 +1437,8 @@ public final class Tcp
     {
         int win = window(h);
         lastWin[h] = win;
-        DataReference dmac = useRmac[h] != 0 ? DataReference.fromAddress(rmac.get(h)) : Ip.gwMac;
-        sendRaw(dmac, DataReference.fromAddress(rip.get(h)), lport[h], rport[h], snd[h], (flags & 0x10) != 0 ? rcv[h] : 0, flags, win, payload,
+        DataReference dmac = useRmac[h] != 0 ? rmac.get(h) : Ip.gwMac;
+        sendRaw(dmac, rip.get(h), lport[h], rport[h], snd[h], (flags & 0x10) != 0 ? rcv[h] : 0, flags, win, payload,
                 payLen);
     }
 

@@ -16,6 +16,7 @@ import magic.Address;
 import magic.ObjectReference;
 import magic.DataReference;
 import magic.AddressArray;
+import magic.DataReferenceArray;
 import magic.Magic;
 import objectmodel.ObjectModel;
 
@@ -39,11 +40,11 @@ final class ArrayTypes
 
     // Array Type cache (per demand-load batch, since resetLoader reclaims the heap under them). primArrTib is
     // indexed by newarray atype (4..11); refArr* is a small element-Type-keyed registry for reference arrays.
-    static AddressArray primArrTib;     // arrayTib per primitive atype (0 = not yet created)
+    static DataReferenceArray primArrTib;     // arrayTib per primitive atype (0 = not yet created)
     static boolean[] primArrAdopted;   // true = writer-baked image TIB (never refill: its Object
                                                // impls are baked code; loader bufs die with the batch heap)
-    static AddressArray refArrElem;     // element Type key (reference arrays)
-    static AddressArray refArrTib;      // arrayTib for that element
+    static DataReferenceArray refArrElem;     // element Type key (reference arrays)
+    static DataReferenceArray refArrTib;      // arrayTib for that element
     static boolean[] refArrAdopted;    // true = writer-baked image TIB (never refill)
     static int refArrCount;
     /** java/lang/Object's Type (array super), or 0 if Object isn't loaded yet. */
@@ -77,7 +78,7 @@ final class ArrayTypes
         int atype = 4;
         while (atype < 12)
         {
-            Address tib = primArrTib.get(atype);
+            Address tib = primArrTib.get(atype).toAddress();
             if (!tib.isZero() && tib.loadAddress().EQ(type))
             {
                 return Primitives.primDescChar(atype);
@@ -349,7 +350,7 @@ final class ArrayTypes
             {
                 if (!primArrTib.get(a).isZero() && !primArrAdopted[a])
                 {
-                    TibBuilder.fillObjectVtable(primArrTib.get(a));                 // adopted (baked) TIBs keep their writer impls
+                    TibBuilder.fillObjectVtable(primArrTib.get(a).toAddress());                 // adopted (baked) TIBs keep their writer impls
                 }
                 a += 1;
             }
@@ -359,7 +360,7 @@ final class ArrayTypes
         {
             if (!refArrTib.get(r).isZero() && !refArrAdopted[r])
             {
-                TibBuilder.fillObjectVtable(refArrTib.get(r));                      // adopted (baked) TIBs keep their writer impls
+                TibBuilder.fillObjectVtable(refArrTib.get(r).toAddress());                      // adopted (baked) TIBs keep their writer impls
             }
             r += 1;
         }
@@ -382,7 +383,7 @@ final class ArrayTypes
             Address baked = tab.isZero() || atype < 4 ? Address.zero() : tab.plus((long) (atype - 4) * 8L).loadAddress();
             if (!baked.isZero())
             {
-                primArrTib.set(atype, baked);
+                primArrTib.set(atype, DataReference.fromAddress(baked));
                 primArrAdopted[atype] = true;
                 if (Loader.LOAD_LOG)
                 {
@@ -394,10 +395,10 @@ final class ArrayTypes
             }
             else
             {
-                primArrTib.set(atype, makeArrayTib(Primitives.primElemSize(atype), Address.zero()).toAddress());
+                primArrTib.set(atype, makeArrayTib(Primitives.primElemSize(atype), Address.zero()));
             }
         }
-        return primArrTib.get(atype);
+        return primArrTib.get(atype).toAddress();
     }
 
     /** Array TIB for a byte[] (newarray atype 8) — used to type String value arrays / interned literals. */
@@ -458,9 +459,9 @@ final class ArrayTypes
         int i = 0;
         while (i < refArrCount)
         {
-            if (refArrElem.get(i).EQ(elementType))
+            if (refArrElem.get(i).toAddress().EQ(elementType))
             {
-                return refArrTib.get(i);
+                return refArrTib.get(i).toAddress();
             }
             i += 1;
         }
@@ -468,7 +469,11 @@ final class ArrayTypes
         // The table (VM.refArrayTibs: {elementType, tib} pairs) is keyed by the SAME adopted element
         // Type nodes both worlds share, so a writer-tagged Integer[] and a loader Integer[] carry one
         // TIB -- and the covariance walk compares one set of nodes. Metal-built when not baked.
-        Address tib = Address.zero();
+        // A DATA REFERENCE, not an Address: a freshly built TIB is reachable from nothing else until it is stored in
+        // the cache below, and growRefArrCache() allocates first. Held raw, it is no root to the precise stack walk
+        // (frames/GC arc S5), so a collection there would free the new TIB and the Type behind it. Found by reading
+        // while chasing S6b's Method.call result bug, not by a failure of its own.
+        DataReference tib = DataReference.zero();
         boolean adopted = false;
         if (!elementType.isZero())
         {
@@ -479,7 +484,7 @@ final class ArrayTypes
             {
                 if (tab.plus(k * 16L).loadAddress().EQ(elementType))
                 {
-                    tib = tab.plus(k * 16L).plus(8L).loadAddress();
+                    tib = tab.plus(k * 16L).plus(8L).loadDataReference();
                     adopted = true;
                     int r = ClassRegistry.regOfType(elementType);
                     if (r >= 0)
@@ -500,17 +505,17 @@ final class ArrayTypes
         }
         if (tib.isZero())
         {
-            tib = (makeArrayTib(ObjectModel.WORD, elementType)).toAddress();   // reference elements are 8-byte pointers
+            tib = makeArrayTib(ObjectModel.WORD, elementType);   // reference elements are 8-byte pointers
         }
         if (refArrCount >= refArrTib.length())
         {
             growRefArrCache();
         }
-        refArrElem.set(refArrCount, elementType);
+        refArrElem.set(refArrCount, DataReference.fromAddress(elementType));
         refArrTib.set(refArrCount, tib);
         refArrAdopted[refArrCount] = adopted;
         refArrCount += 1;
-        return tib;
+        return tib.toAddress();
     }
 
     /**
@@ -523,8 +528,8 @@ final class ArrayTypes
     private static void growRefArrCache()
     {
         int n = refArrTib.length() * 2;
-        AddressArray elem = AddressArray.create(n);
-        AddressArray tibs = AddressArray.create(n);
+        DataReferenceArray elem = DataReferenceArray.create(n);
+        DataReferenceArray tibs = DataReferenceArray.create(n);
         boolean[] adopted = new boolean[n];
         int i = 0;
         while (i < refArrCount)

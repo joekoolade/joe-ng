@@ -611,6 +611,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         // M8 ref arrays: a deep-baked reference array (e.g. IntegerCache's Integer[]) is typed with
         // the canonical array TIB for its component -- pull the desc chain + element class in
         // (BEFORE typeRefClasses is consumed below, so elements get Type chains like any target).
+        // frames/GC arc S6b: the run-time classes of the unboxed reference arrays (WriterSymbols.tagUnboxedArray).
+        collectArrayDesc(compiler.Unboxed.OBJECT_ARRAY_DESC, refArrDescs, typeRefClasses, null);
+        collectArrayDesc(compiler.Unboxed.DATA_ARRAY_DESC, refArrDescs, typeRefClasses, null);
         for (int _s2b = 0; _s2b < bakedObjs.size(); _s2b++)
         {
             Class<?> bc = bakedObjs.get(_s2b).getClass();
@@ -1261,7 +1264,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             String el = arrayElementKeyOf(d);       // element class, or the nested element array desc
             int tw = typeWord.get(d);
             writeLong(image, tw + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET / 4,
-                      ObjectModel.ARRAY_TYPE_TAG | ObjectModel.WORD);
+                      ObjectModel.ARRAY_TYPE_TAG | ObjectModel.WORD
+                      | (d.equals(compiler.Unboxed.DATA_ARRAY_DESC) ? ObjectModel.ARRAY_DATA_ELEMS : 0L));
             writeLong(image, tw + ObjectModel.TYPE_SUPER_OFFSET / 4, addr(typeWord.get("java/lang/Object")));
             writeLong(image, tw + ObjectModel.TYPE_ITABLE_DIR_OFFSET / 4, 0);
             writeLong(image, tw + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET / 4, addr(typeWord.get(el)));

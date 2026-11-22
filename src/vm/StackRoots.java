@@ -102,6 +102,12 @@ final class StackRoots implements Uninterruptible
             {
                 suspended(t);
             }
+            if (taskStackBase != null && taskStackBase[t] != 0L && taskState[t] != TASK_EMPTY)
+            {
+                // The stack BLOCK itself: taskStackBase is a long[], so nothing typed keeps a live task's stack
+                // allocated -- an exact root here does (frames/GC arc S6b).
+                VMGc.markRoot(taskStackBase[t]);
+            }
             t += 1;
         }
     }

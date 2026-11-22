@@ -14,6 +14,7 @@ package vm;
 import asm.A64Enc;
 import magic.Address;
 import magic.DataReference;
+import magic.DataReferenceArray;
 import magic.AddressArray;
 import magic.Magic;
 import magic.ObjectReference;
@@ -50,8 +51,8 @@ final class AnnotationInstances
     }
 
     private static final int MAXANNOTIB = 64;
-    private static AddressArray annoTibKey;                   // interface Type -> its shared TIB
-    private static AddressArray annoTibVal;
+    private static DataReferenceArray annoTibKey;                   // interface Type -> its shared TIB
+    private static DataReferenceArray annoTibVal;
     static int annoTibN;
     /** Compiled bodies of {@code MetalAnnotations.annoEquals/annoHashCode/annoToString}; 0 until compiled. */
     static long annoEqBuf;
@@ -113,7 +114,7 @@ final class AnnotationInstances
         int i = 0;
         while (i < annoTibN)
         {
-            if (annoTibVal.get(i).EQ(tib))
+            if (annoTibVal.get(i).toAddress().EQ(tib))
             {
                 return true;
             }
@@ -196,6 +197,18 @@ final class AnnotationInstances
     }
 
     /** The shared TIB for annotation interface {@code ifaceReg}, built once and GC-rooted like a lambda's. */
+    /** The first character of the return type of the method descriptor Utf8 at {@code d} ({@code u2 length, bytes}). */
+    private static int returnKind(Address d)
+    {
+        int len = u2(d);
+        int p = 2;
+        while (p < len + 2 && d.plus(p).loadUnsignedByte() != 0x29)   // ')'
+        {
+            p += 1;
+        }
+        return p + 1 < len + 2 ? d.plus(p + 1).loadUnsignedByte() : 0;
+    }
+
     private static DataReference annoTibFor(int ifaceReg)
     {
         DataReference ifaceType = ClassRegistry.clTab[ifaceReg].type;
@@ -205,16 +218,16 @@ final class AnnotationInstances
         }
         if (annoTibKey == null)
         {
-            annoTibKey = AddressArray.create(MAXANNOTIB);
-            annoTibVal = AddressArray.create(MAXANNOTIB);
+            annoTibKey = DataReferenceArray.create(MAXANNOTIB);
+            annoTibVal = DataReferenceArray.create(MAXANNOTIB);
             annoTibN = 0;
         }
         int i = 0;
         while (i < annoTibN)
         {
-            if (annoTibKey.get(i).EQ(ifaceType.toAddress()))
+            if (annoTibKey.get(i).EQ(ifaceType))
             {
-                return DataReference.fromAddress(annoTibVal.get(i));
+                return annoTibVal.get(i);
             }
             i += 1;
         }
@@ -306,6 +319,18 @@ final class AnnotationInstances
         type.plus(0L).store((long) (16 + n * 8));
         type.plus(ObjectModel.TYPE_SUPER_OFFSET).store(TibBuilder.objectTypeAddr());   // NOT 0 -- see finishLambdaClass
         type.plus(16L).store(dir);
+        // Each element slot holds its member's return type -- a reference, or a primitive's raw bits -- and the
+        // trailing word the annotation's Class mirror: the maps a precise collector follows (frames/GC arc S6b).
+        TibBuilder.beginMaps(type);
+        int ms = 0;
+        int mstart = ClassRegistry.clTab[ifaceReg].ifmStart;
+        while (ms < n)
+        {
+            TibBuilder.mapSlot(type, ms, returnKind(InterfaceInvocation.ifBase.get(mstart + ms)
+                                                    .plus(InterfaceInvocation.ifDescOff[mstart + ms])));
+            ms += 1;
+        }
+        TibBuilder.mapSlot(type, n, 0x4C);
         // TIB { Type, Object's vtable } -- see finishLambdaClass. An annotation instance is synthesised the
         // same way and has the same gap: unregistered, itable-only, so equals/hashCode/toString on one had
         // nowhere to resolve. It also has to be the same SHAPE as a lambda TIB, because both live in
@@ -315,12 +340,12 @@ final class AnnotationInstances
         tib.plus(0L).store(type);
         TibBuilder.fillObjectVtable(tib.toAddress());
         patchAnnoContract(tib.toAddress(), onv2, dir.toAddress());
-        annoTibKey.set(annoTibN, ifaceType.toAddress());
-        annoTibVal.set(annoTibN, tib.toAddress());
+        annoTibKey.set(annoTibN, ifaceType);
+        annoTibVal.set(annoTibN, tib);
         annoTibN += 1;
         if (TibBuilder.lambdaTibRoots != null && TibBuilder.lambdaTibRootN < TibBuilder.MAXLAMBDATIB)
         {
-            TibBuilder.lambdaTibRoots.set(TibBuilder.lambdaTibRootN, tib.toAddress());    // same GC root as a lambda TIB, for the same reason:
+            TibBuilder.lambdaTibRoots.set(TibBuilder.lambdaTibRootN, tib);    // same GC root as a lambda TIB, for the same reason:
             TibBuilder.lambdaTibVtCap[TibBuilder.lambdaTibRootN] = onv2;      //   nothing scanned would otherwise reference it
             TibBuilder.lambdaHostBase.set(TibBuilder.lambdaTibRootN, Address.zero());        // an annotation instance has no host class
             TibBuilder.lambdaHostNameOff[TibBuilder.lambdaTibRootN] = 0;

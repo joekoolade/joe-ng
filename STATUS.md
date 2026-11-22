@@ -4,6 +4,41 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **FRAMES/GC ARC, INCREMENT S6b-1: references in fields and tables made exact (2026-11-21).** S6b (fix S6a's
+  worklist) is split: S6b-1 does fields and tables, S6b-2 the `allocData` structs. Measured by the S6a heap shadow
+  (`gcheap=2`) over the whole virt list -- primary misses: raw slots 951,121 -> 0, unmapped scalars 67 -> 0, word
+  arrays 47,142 -> 3, raw arrays 1,671 -> 0. On the Pi (web server + FrameBench, 14 collections): raw slots 50,598
+  -> 0, word arrays 1,533 -> 0, unmapped 2 -> 0. What is left is `allocData` structs (34,671 on the Pi): S6b-2.
+  - **Fields:** `DynLink.cell`, `LazyMethod.slot` (always 0 or a one-word offset cell) and the `Class` overlay's
+    `typeAddr` are `DataReference`s.
+  - **Tables:** a new unboxed `magic.DataReferenceArray`, lowered as `AddressArray` is but retyped at `create` to
+    `vm.DataRefElem[]`, an array class whose Type carries `ObjectModel.ARRAY_DATA_ELEMS` (bit 32 of its instance-size
+    word, outside the tag and the element size); `ObjectReferenceArray.create` now retypes to `Object[]`. Both via
+    one new `Symbols.tagUnboxedArray` hook (the writer emits the TIB store; the metal JIT never creates these).
+    Data-reference tables: the array-Type caches (`primArrTib`, `refArrElem`, `refArrTib`), `instImaps`,
+    `lambdaTibRoots`, annotation and proxy TIB tables, `JarFs`' cache, the TCP rings. Object-reference tables:
+    `litAnchor`, `strPool`, each blob's `litObj`, and `Indy.dsObj` beside `dsVal` (which also holds a primitive
+    constant's raw bits, so it stays a `long[]`). `buildArgv`'s array is a real `String[]`. A live task's stack
+    block is an exact root (`taskStackBase` is a `long[]`).
+  - **Synthesised Types get maps:** lambdas from their captured parameter types, annotation instances from their
+    members' return types (plus the trailing mirror word), proxies copy `java.lang.reflect.Proxy`'s.
+  - **A collector bug, latent since S5, found and fixed.** `Method.invoke` kept the callee's result as a raw
+    `long` until `box()` -- across `box()`'s prologue safepoint, where the precise stack walk sees no root -- so a
+    collection started by another core there freed a result nothing else held. It surfaced as SystemLoggerProbe's
+    `ENUM CONSTANTS UNREADABLE ... values() threw NullPointerException`, deterministic in this branch's layout and
+    absent under every perturbation (an edit to `Class.java`, `gcheap=2`, `gcmaps=1`, `gcroots=0`). A new
+    `npetrace=1` switch (print the stack and fault registers wherever an implicit NPE is raised) named the fault: the
+    `(Object[])` cast in `typeAssignable` on an array whose TIB and Type had been reused (an `int[]` read back as the
+    display `0xFFFFFFFF00000002`). A reference result now becomes an `Object` straight after the call. New
+    **ReflectResultProbe** (one thread churns, another checks 20,000 reflective results): FAILS on main (1 of 3,
+    `bad 1`), passes 8 of 8 on QEMU and 3 of 3 on the Pi. Found by reading on the way, not measured failing: an
+    object now marks its own heap TIB (the trace never read the header word), and `ArrayTypes.refArrayTib` holds a
+    fresh TIB as a `DataReference` across `growRefArrCache`'s allocation.
+  - **QEMU:** virt 212/212 with defaults and with `gcheap=2`; raspi4b demo suite `want: checked=160 mismatch=0`,
+    churn demo `gc: collections=53`, `intact=32`, every failure marker 0. `make test` + overlaycheck OK.
+  - **Pi 4, `gcheap=2`** (build `06ec14fc4b91a57f`): 8 pages 200, FrameBench checksums identical, counts above.
+  - **Pi 4, default** (build `87a97b48c856f10d`; sha256 = host; 8 pages 200): FrameBench, three fresh boots,
+    checksums identical; median sum without dispatch **522.6 ms** (S6a 525.6, S5 514.3). Image 39,963,140 bytes.
 - **FRAMES/GC ARC, INCREMENT S6a: exact heap kinds + the heap shadow check (2026-11-21).** S6 ("precise heap") was
   split with the user after a census: S6a makes every heap word's kind knowable and measures what a precise trace
   would lose; S6b fixes that worklist (as S4 fixed S2's); S6c turns the precise trace on; S6d makes the roots exact

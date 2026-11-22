@@ -128,6 +128,11 @@ public final class ObjectModel
     // an element-Type field; its instanceSize slot carries a tag (so it is recognisable) with the element size.
     /** Tag in an array Type's instanceSize slot (high bits); the low 16 bits hold the element size. */
     public static final long ARRAY_TYPE_TAG = 0xA55A0000L;
+    /** Flag in an array Type's instanceSize word, above the tag: the elements are DATA references (payload addresses
+     *  of allocData blocks), not object references -- the Type of {@code vm.DataRefElem[]}, the run-time class of a
+     *  {@code magic.DataReferenceArray} (frames/GC arc S6b). Outside {@link #ARRAY_TYPE_TAG_MASK} and the element
+     *  size, so every existing reader of the word is unaffected. */
+    public static final long ARRAY_DATA_ELEMS = 1L << 32;
     /** Mask to read the tag (identify an array or primitive Type). */
     public static final long ARRAY_TYPE_TAG_MASK = 0xFFFF0000L;
     /** Tag in a PRIMITIVE Type's instanceSize slot; the low bits hold the JVMS descriptor char ('I', 'Z', ...).

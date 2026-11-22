@@ -28,7 +28,8 @@ final class LazyMethod
     int  reg;        // class registry index (clStatics/clTib/clType restore)
     int  nameOff;    // method name Utf8 offset (0 => compile from captured code, not re-find)
     int  descOff;    // descriptor Utf8 offset
-    long slot;       // &TIB[slot] / offset cell to patch with the fresh buffer (0 = memoise only)
+    DataReference slot;   // the offset cell (a one-word allocData block) to patch with the fresh buffer (zero =
+                          //   memoise only)
     long code;       // captured bytecode address (0 => re-find by name/desc)
     int  codeLen;    // ... its length
     int  isStatic;   // ... 1 if static

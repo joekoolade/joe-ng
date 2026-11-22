@@ -297,7 +297,7 @@ final class DynamicLinker
                     && Loader.utf8EqAt(nameBase, nameOff, dlTab[k].blob.toAddress(), dlTab[k].nameOff)
                     && Loader.utf8EqAt(descBase, descOff, dlTab[k].blob.toAddress(), dlTab[k].descOff))
             {
-                return dlTab[k].cell;
+                return dlTab[k].cell.toLong();
             }
             k = dlNext[k];
         }

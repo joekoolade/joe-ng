@@ -138,7 +138,7 @@ final class LazyCompiler
         lzTab[idx].reg = reg;
         lzTab[idx].nameOff = 0;
         lzTab[idx].descOff = Loader.mDescOff[i];
-        lzTab[idx].slot = 0L;                               // no single slot to patch: the stub buffer is shared
+        lzTab[idx].slot = DataReference.zero();             // no single slot to patch: the stub buffer is shared
         lzTab[idx].code = Loader.mCode[i];                         // compile straight from the captured bytecode
         lzTab[idx].codeLen = Loader.mLen[i];
         lzTab[idx].isStatic = Loader.mStatic[i];
@@ -828,9 +828,9 @@ final class LazyCompiler
                     Uart.putc(0x0A);
                 }
                 lzTab[idx].cache = baked;
-                if (lzTab[idx].slot != 0L)
+                if (!lzTab[idx].slot.isZero())
                 {
-                    Address.fromLong(lzTab[idx].slot).store(baked);
+                    lzTab[idx].slot.toAddress().store(baked);
                 }
                 patchLazyStub(idx, baked);
                 return baked;
@@ -913,9 +913,9 @@ final class LazyCompiler
         lzTab[idx].cache = buf;                         // memoize BEFORE draining: an initializer we are about
                                                         // to run may call straight back into this method
         ClassInitializer.drainPendingInit();                             // initialize what the body touches -- still before it runs
-        if (lzTab[idx].slot != 0L)                           // 1b/1c: point the TIB slot / offset cell at the buffer
+        if (!lzTab[idx].slot.isZero())                       // 1b/1c: point the offset cell at the buffer
         {
-            Address.fromLong(lzTab[idx].slot).store(buf);
+            lzTab[idx].slot.toAddress().store(buf);
         }
         patchLazyStub(idx, buf);                         // ... and the deferral stub itself, for every other caller
         return buf;
@@ -1171,7 +1171,7 @@ final class LazyCompiler
                 }
                 lzTab[idx].cache = 0L;
                 DataReference cell = Heap.allocData(8);
-                lzTab[idx].slot = cell.toLong();            // first call data-patches the cell -> later calls dispatch direct
+                lzTab[idx].slot = cell;                     // first call data-patches the cell -> later calls dispatch direct
                 cell.store(buildLazyCompileStub(idx));
                 lzN += 1;
                 DynLink d = new DynLink();
@@ -1189,7 +1189,7 @@ final class LazyCompiler
                 d.classOff = Loader.gView.thisNameOff;
                 d.nameOff = nameOff;
                 d.descOff = descOff;
-                d.cell = cell.toLong();
+                d.cell = cell;
                 DynamicLinker.dlTab[DynamicLinker.dlN] = d;
                 DynamicLinker.dlN += 1;
                 armed += 1;

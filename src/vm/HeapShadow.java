@@ -126,6 +126,7 @@ final class HeapShadow implements Uninterruptible
         {
             return;                                    // allocData struct, raw array, unknown: nothing exact
         }
+        VMGc.markExact(tibw - 16L);                    // the object's own TIB (a data reference): see VMGc.scanBlock
         long type = Address.fromLong(tibw).plus(ObjectModel.TIB_TYPE_SLOT * ObjectModel.WORD).loadLong();
         if (type < VMGc.META_LOW || type >= VMGc.META_HIGH || (type & 7L) != 0L)
         {
@@ -137,11 +138,20 @@ final class HeapShadow implements Uninterruptible
         {
             if ((isz & 0xFFFFL) == (long) ObjectModel.WORD && t.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong() != 0L)
             {
+                boolean data = (isz & ObjectModel.ARRAY_DATA_ELEMS) != 0L;   // a magic.DataReferenceArray
                 Address p = o.plus(ObjectModel.ARRAY_BASE_OFFSET);
                 Address end = arrayEnd(o, size);
                 while (p.LT(end))
                 {
-                    VMGc.markExact(p.loadLong());
+                    long w = p.loadLong();
+                    if (!data)
+                    {
+                        VMGc.markExact(w);
+                    }
+                    else if (w != 0L)
+                    {
+                        VMGc.markExact(w - 16L);
+                    }
                     p = p.plus(8);
                 }
             }

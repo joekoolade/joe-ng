@@ -15,6 +15,7 @@ import asm.A64Enc;
 import board.Uart;
 import magic.Address;
 import magic.DataReference;
+import magic.DataReferenceArray;
 import magic.AddressArray;
 import magic.Magic;
 import magic.ObjectReference;
@@ -39,8 +40,8 @@ final class ProxySupport
 
     private static final int MAXPROXY = 256;
     private static final int PROXY_FRAME = 144;         // x30 at [sp], x1..x15 at [sp+16..sp+128], 16-aligned
-    private static AddressArray proxyTypes;
-    private static AddressArray proxyTibs;
+    private static DataReferenceArray proxyTypes;
+    private static DataReferenceArray proxyTibs;
     private static long[] proxyObjThunks;               // 3 per proxy: hashCode, equals, toString
     static int proxyN;
     static long proxyHelperBuf;
@@ -189,7 +190,7 @@ final class ProxySupport
             }
             if (thunk != 0L)
             {
-                proxyTibs.get(i).plus(8L).plus((long) k * 8L).store(thunk);
+                proxyTibs.get(i).toAddress().plus(8L).plus((long) k * 8L).store(thunk);
             }
             k += 1;
         }
@@ -201,7 +202,7 @@ final class ProxySupport
         int i = 0;
         while (i < proxyN)
         {
-            if (proxyTibs.get(i).EQ(tib))
+            if (proxyTibs.get(i).toAddress().EQ(tib))
             {
                 return i;
             }
@@ -232,8 +233,8 @@ final class ProxySupport
         }
         if (proxyTypes == null)
         {
-            proxyTypes = AddressArray.create(MAXPROXY);
-            proxyTibs = AddressArray.create(MAXPROXY);
+            proxyTypes = DataReferenceArray.create(MAXPROXY);
+            proxyTibs = DataReferenceArray.create(MAXPROXY);
             proxyObjThunks = new long[MAXPROXY * 3];
         }
         if (proxyN >= MAXPROXY)
@@ -283,13 +284,14 @@ final class ProxySupport
         type.plus(0L).store((long) (16 + ClassRegistry.clTab[pr].fieldCount * 8));   // Proxy's instance: header + h
         type.plus(ObjectModel.TYPE_SUPER_OFFSET).store(ClassRegistry.clTab[pr].type);
         type.plus(ObjectModel.TYPE_ITABLE_DIR_OFFSET).store(dir);
+        TibBuilder.copyMaps(type, ClassRegistry.clTab[pr].type);   // a proxy instance IS a Proxy's layout (S6b)
         int onv = TibBuilder.objectVtableCount();
         DataReference tib = Heap.allocData(8 + onv * 8);
         tib.plus(0L).store(type);
         TibBuilder.fillObjectVtable(tib.toAddress());
         int i = proxyN;
-        proxyTypes.set(i, type.toAddress());
-        proxyTibs.set(i, tib.toAddress());
+        proxyTypes.set(i, type);
+        proxyTibs.set(i, tib);
         int k = 0;
         while (k < 3)
         {
@@ -302,7 +304,7 @@ final class ProxySupport
         patchProxyObject(i);
         if (TibBuilder.lambdaTibRoots != null && TibBuilder.lambdaTibRootN < TibBuilder.MAXLAMBDATIB)
         {
-            TibBuilder.lambdaTibRoots.set(TibBuilder.lambdaTibRootN, tib.toAddress());             // the same GC root a lambda's TIB has: nothing scanned
+            TibBuilder.lambdaTibRoots.set(TibBuilder.lambdaTibRootN, tib);             // the same GC root a lambda's TIB has: nothing scanned
             TibBuilder.lambdaTibVtCap[TibBuilder.lambdaTibRootN] = onv;       //   would otherwise reach it
             TibBuilder.lambdaTibFilled[TibBuilder.lambdaTibRootN] = false;
             TibBuilder.lambdaHostBase.set(TibBuilder.lambdaTibRootN, Address.zero());        // a proxy has no host class
@@ -323,10 +325,10 @@ final class ProxySupport
         int i = 0;
         while (i < proxyN)
         {
-            if (proxyTypes.get(i).EQ(type.toAddress()))
+            if (proxyTypes.get(i).EQ(type))
             {
                 ObjectReference obj = Heap.alloc((int) type.loadLong()).toObjectReference();
-                obj.toAddress().plus(ObjectModel.TIB_OFFSET).store(proxyTibs.get(i));
+                obj.toAddress().plus(ObjectModel.TIB_OFFSET).store(proxyTibs.get(i).toAddress());
                 return obj.toLong();
             }
             i += 1;

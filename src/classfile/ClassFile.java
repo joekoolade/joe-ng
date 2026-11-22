@@ -407,7 +407,7 @@ public final class ClassFile
             return KIND_DATA;
         }
         if (descriptor.equals("Lmagic/ObjectReference;") || descriptor.equals("Lmagic/AddressArray;")
-            || descriptor.equals("Lmagic/ObjectReferenceArray;"))
+            || descriptor.equals("Lmagic/ObjectReferenceArray;") || descriptor.equals("Lmagic/DataReferenceArray;"))
         {
             return KIND_REF;
         }

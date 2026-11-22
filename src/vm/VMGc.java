@@ -640,6 +640,11 @@ final class VMGc implements Uninterruptible
         }
         if (tibw >= META_LOW && tibw < META_HIGH && (tibw & 7L) == 0L)
         {
+            // THE HEADER IS A REFERENCE TOO: a TIB built on the metal is an allocData block (tibw its payload), and an
+            // object must keep its own TIB -- and through it the Type -- alive. Nothing did: a metal array TIB is held
+            // only by the per-launch ref-array cache and the code immediates of the method that created the array, so
+            // an array outliving both would keep a freed TIB (frames/GC arc S6b; by reading -- not yet seen to fail).
+            boolean ignoredTib = tryMark(tibw - 16L);
             Address tib = Address.fromLong(tibw);
             long type = tib.plus(ObjectModel.TIB_TYPE_SLOT * ObjectModel.WORD).loadLong();
             if (type >= META_LOW && type < META_HIGH && (type & 7L) == 0L)

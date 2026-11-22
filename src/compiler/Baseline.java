@@ -1995,6 +1995,7 @@ public final class Baseline
         // -- the operand-clobbered-across-a-call family this file already records for Magic.call2.
         if (symbols.isIntrinsicCall(cpIndex))
         {
+            intrinsicCp = cpIndex;
             lowerIntrinsic(symbols.intrinsicId(cpIndex), cb, pos);
             return;
         }
@@ -2103,6 +2104,7 @@ public final class Baseline
     {
         if (symbols.isIntrinsicCall(cpIndex))
         {
+            intrinsicCp = cpIndex;
             lowerIntrinsic(symbols.intrinsicId(cpIndex), cb, pos);  // an unboxed type's method: no null check, no call
             return;
         }
@@ -3918,6 +3920,7 @@ public final class Baseline
         if (id == Intrinsics.AA_NEW)
         {
             lowerNewArray(11, cb, pos);                         // atype 11 = T_LONG (JVMS newarray)
+            symbols.tagUnboxedArray(cb, opSlot(sp - 1), intrinsicCp);   // ... retyped when its elements are refs
         }
         else if (id == Intrinsics.AA_GET)
         {
@@ -4166,6 +4169,9 @@ public final class Baseline
      * (resolved per world behind {@link Symbols#intrinsicId}). Branching on an int
      * rather than a {@code String} key keeps this compilable on metal.
      */
+    /** The constant-pool index of the call {@link #lowerIntrinsic} is lowering (for {@code create}'s retag). */
+    private int intrinsicCp;
+
     private void lowerIntrinsic(int id, CodeBuffer cb, int pos)
     {
         if (id >= Intrinsics.UB_MOVE && id <= Intrinsics.UB_ST64_OFF)
