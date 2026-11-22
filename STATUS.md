@@ -4,6 +4,37 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **FRAMES/GC ARC, INCREMENT S6b-2: the VM's own structs describe their pointers (2026-11-22).** S6b-1 left the
+  `allocData` structs: blocks with a zero header word, so a precise trace had nothing to read. Measured by the heap
+  shadow (`gcheap=2`): on virt (web server under load, 12 collections) struct misses per collection 3,939 -> 1;
+  over the whole virt list (389 collections) 18 in all; on the Pi (14 collections) 34,671 -> 1.
+  - **A layout word in the header.** A struct that holds pointers carries `(param << 8) | (kind << 3) | 4` at +0
+    (`ObjectModel.LAYOUT_TAG`): the low bits keep it apart from a TIB pointer (8-aligned) and a raw array's element
+    size (<= 8), so every existing reader is unaffected and the conservative scan treats it as before. Kinds:
+    `LAYOUT_TYPE` (data references at super, itable dir, element Type, display), `LAYOUT_TIB` (the Type, then code
+    addresses), `LAYOUT_DATA_REFS` (itable directories, displays), `LAYOUT_CODE` (itables, lazy-compile cells),
+    `LAYOUT_STATICS` (param = slot count; the block carries its own object-reference and data-reference bitmaps
+    after the slots, filled by `Loader.parseFields` from each static's descriptor via `TibBuilder.fieldKind`).
+    New allocators `Heap.allocType/allocTib/allocDataRefs/allocCodeTable/allocStatics` (+ `markStatic`), each
+    recording its own caller as the allocation site; `allocData` stays the byte-only struct (header 0).
+  - **What is left is not a pointer.** The residual struct misses come from byte buffers and primitive arrays whose
+    contents happen to look like addresses -- `JarFs` file blobs, `IntegerPolynomial` limbs, `multiLevel` dimension
+    arrays, a Type's implements bitmap -- plus `AddressFieldProbe`'s deliberate ones. The rescan now reports a word
+    a layout follows exactly as `ref-as-data` (only its `w-16` probe can miss), as it already did for objects; the
+    statics `w-16` hits on adjacent 16-byte blocks were that.
+  - **A second worklist, newly measured: CODE.** The shadow now also counts code-arena words only the conservative
+    rescan recorded (`code=` in the summary, a new `/gc` row, kept out of the heap's primary count). A precise trace
+    loses them, and the code sweep would then free live methods: virt list 2.30M over 389 collections, Pi 104,830
+    over 14. Sources: code addresses in raw `long` fields (`RVMMethod`, `LazyMethod`) and `long[]` method tables
+    (`Loader.allocMethodTables`, `resetLoader`), plus numbers that fall in the arena's range (`ValueRange`, a
+    `DateTimeFormatterBuilder` table). This must be fixed before S6c (proposed: S6b-3).
+  - **QEMU:** virt 212/212 with defaults and with `gcheap=2`; raspi4b demo suite `want: checked=160 mismatch=0`,
+    `gc: collections=53`, `intact=32`, failure markers as S6b-1 (`UNDER THE LOADER LOCK=1`, the same AQS `Node`
+    line). `make test` + overlaycheck OK.
+  - **Pi 4, `gcheap=2`** (build `6c1d199a551ceed6`): 8 pages 200; allocData struct 1, raw slot 1, unmapped / word
+    array / raw array / other 0, ref-as-data 13,710, code 104,830.
+  - **Pi 4, default** (build `34bbe4f2e12cb2d7`; sha256 = host; 8 pages 200): FrameBench, three fresh boots,
+    checksums identical to S6b-1; median sum without dispatch **523.6 ms** (S6b-1 522.6).
 - **FRAMES/GC ARC, INCREMENT S6b-1: references in fields and tables made exact (2026-11-21).** S6b (fix S6a's
   worklist) is split: S6b-1 does fields and tables, S6b-2 the `allocData` structs. Measured by the S6a heap shadow
   (`gcheap=2`) over the whole virt list -- primary misses: raw slots 951,121 -> 0, unmapped scalars 67 -> 0, word

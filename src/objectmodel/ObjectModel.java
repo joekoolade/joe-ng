@@ -153,6 +153,48 @@ public final class ObjectModel
     public static final int ITABLE_ENTRY_TABLE_OFFSET = WORD;  // 8
     public static final int ITABLE_ENTRY_SIZE = 2 * WORD;      // 16
 
+    // ----- allocData struct layouts (frames/GC arc S6b-2) ------------------
+    // An allocData block's header word (@0) is 0 for a struct that holds no pointer (a byte buffer, a classfile copy).
+    // A struct that DOES hold pointers -- the VM's own metadata -- carries a LAYOUT WORD there instead, saying which
+    // payload words a precise trace follows and how: (param << 8) | (kind << 3) | LAYOUT_TAG. The low bits 0b100 keep
+    // it apart from a TIB pointer (8-aligned) and from a raw array's element size (<= MAX_RAW_ARRAY_TIB: kind >= 1
+    // makes the word >= 12), so every reader that tells those two apart is unaffected.
+    /** Low three bits of a layout word. */
+    public static final long LAYOUT_TAG = 4L;
+    /** Mask for {@link #LAYOUT_TAG}. */
+    public static final long LAYOUT_TAG_MASK = 7L;
+    /** A Type node: data references at {@code TYPE_SUPER_OFFSET}, {@code TYPE_ITABLE_DIR_OFFSET},
+     *  {@code ARRAY_TYPE_ELEMENT_OFFSET} and {@code TYPE_DISPLAY_OFFSET}; every other word is raw. */
+    public static final int LAYOUT_TYPE = 1;
+    /** A TIB: slot 0 a data reference (the Type), every later slot a code address. */
+    public static final int LAYOUT_TIB = 2;
+    /** Every word a data reference (or 0): an itable directory's {interface Type, itable} pairs, a display. */
+    public static final int LAYOUT_DATA_REFS = 3;
+    /** Every word a code address (or 0): an itable, a lazy-compile cell. */
+    public static final int LAYOUT_CODE = 4;
+    /** A statics block of {@code param} slots, then one spare word, then its kind bitmaps IN THE BLOCK: {@code
+     *  statics_words(param)} words of object-reference bits, the same number of data-reference bits (bit {@code s %
+     *  64} of word {@code s / 64} = slot {@code s}). A slot neither bitmap marks is raw or primitive. */
+    public static final int LAYOUT_STATICS = 5;
+
+    /** The layout word for a struct of {@code kind} with parameter {@code param}. */
+    public static long layoutWord(int kind, long param)
+    {
+        return (param << 8) | ((long) kind << 3) | LAYOUT_TAG;
+    }
+
+    /** Words in each of a statics block's two kind bitmaps, for {@code slots} statics. */
+    public static int staticsMapWords(int slots)
+    {
+        return (slots + 63) >> 6;
+    }
+
+    /** Payload bytes of a statics block of {@code slots} statics: the slots, the spare word, both bitmaps. */
+    public static int staticsBlockSize(int slots)
+    {
+        return slots * WORD + WORD + 2 * staticsMapWords(slots) * WORD;
+    }
+
     // ----- TIB (a word array) ----------------------------------------------
     /** TIB slot 0 → the {@code Type} metadata object. */
     public static final int TIB_TYPE_SLOT    = 0;

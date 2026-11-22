@@ -71,7 +71,7 @@ final class DynamicTypeCheck
             }
             d = superType.plus(ObjectModel.TYPE_DEPTH_OFFSET).loadLong() + 1L;
         }
-        DataReference disp = Heap.allocData(((int) d + 1) * 8);
+        DataReference disp = Heap.allocDataRefs(((int) d + 1) * 8);
         long i = 0L;
         while (i < d)
         {

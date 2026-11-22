@@ -625,7 +625,7 @@ final class InterfaceInvocation
     private static long buildItableFor(int ir, int n)
     {
         int count = ClassRegistry.clTab[ir].ifmCount;
-        DataReference it = Heap.allocData(count > 0 ? count * 8 : 8);
+        DataReference it = Heap.allocCodeTable(count > 0 ? count * 8 : 8);
         int s = 0;
         while (s < count)
         {
@@ -1041,7 +1041,7 @@ final class InterfaceInvocation
         {
             return 0L;
         }
-        DataReference dir = Heap.allocData((n + 1) * 16);             // {interfaceType@0, itable@8} + sentinel
+        DataReference dir = Heap.allocDataRefs((n + 1) * 16);             // {interfaceType@0, itable@8} + sentinel
         int k = 0;
         while (k < n)
         {

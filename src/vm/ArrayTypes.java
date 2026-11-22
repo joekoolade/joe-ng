@@ -316,7 +316,7 @@ final class ArrayTypes
     /** Allocate an array Type {tag|elemSize, super=Object, itableDir=0, elementType} + a 1-word TIB; return the TIB. */
     private static DataReference makeArrayTib(int elemSize, Address elementType)
     {
-        DataReference type = Heap.allocData(ObjectModel.ARRAY_TYPE_SIZE);
+        DataReference type = Heap.allocType();
         DataReference objType = TibBuilder.objectTypeAddr();
         type.plus(ObjectModel.TYPE_INSTANCE_SIZE_OFFSET).store(ObjectModel.ARRAY_TYPE_TAG | (long) elemSize);
         type.plus(ObjectModel.TYPE_SUPER_OFFSET).store(objType);            // arr instanceof Object
@@ -332,7 +332,7 @@ final class ArrayTypes
         // String.valueOf/join), so the receiver's TIB must resolve equals/hashCode/toString to Object's impls.
         // Without the vtable the dispatch read past a 1-word TIB and BLR'd garbage (a wild branch to the image entry).
         int nv = TibBuilder.objectVtableCount();
-        DataReference tib = Heap.allocData(8 + nv * 8);
+        DataReference tib = Heap.allocTib(8 + nv * 8);
         tib.plus(ObjectModel.TIB_TYPE_SLOT * 8).store(type);                // TIB[0] = Type
         TibBuilder.fillObjectVtable(tib.toAddress());                                                   // TIB[1..] = Object's vtable slots
         return tib;

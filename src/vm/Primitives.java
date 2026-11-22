@@ -63,7 +63,7 @@ final class Primitives
         }
         if (primTypeCache.get(idx).isZero())
         {
-            DataReference type = Heap.allocData(ObjectModel.TYPE_SIZE);
+            DataReference type = Heap.allocType();
             type.plus(ObjectModel.TYPE_INSTANCE_SIZE_OFFSET).store(
                     ObjectModel.PRIM_TYPE_TAG | (long) descChar);
             type.plus(ObjectModel.TYPE_SUPER_OFFSET).store(0L);         // no super: instanceof stops here

@@ -1170,7 +1170,7 @@ final class LazyCompiler
                     lzNHigh = lzN + 1;                      // high-water across reclaims
                 }
                 lzTab[idx].cache = 0L;
-                DataReference cell = Heap.allocData(8);
+                DataReference cell = Heap.allocCodeTable(8);
                 lzTab[idx].slot = cell;                     // first call data-patches the cell -> later calls dispatch direct
                 cell.store(buildLazyCompileStub(idx));
                 lzN += 1;

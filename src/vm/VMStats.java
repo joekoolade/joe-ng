@@ -219,6 +219,7 @@ public final class VMStats
             hk += 1;
         }
         i = put(arr, len, i, HeapShadow.secondaries);                      // ... secondary misses
+        i = put(arr, len, i, HeapShadow.codeTotal);                        // ... code words only the rescan kept
         return (long) i;
     }
 

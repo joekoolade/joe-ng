@@ -3369,6 +3369,7 @@ public final class Loader
         gBuild.ifName = new int[fcount + islot + 1];
         gBuild.ifAccess = new int[fcount + islot + 1];
         gBuild.ifDescOff = new int[fcount + islot + 1];
+        int[] sfKind = new int[fcount + 1];             // each static's exact kind: its block's bitmaps (S6b-2)
         int slot = 0;
         int f = 0;
         while (f < fcount)
@@ -3381,6 +3382,7 @@ public final class Loader
             {
                 gBuild.sfName[slot] = gView.cp[nameIdx];    // ACC_STATIC
                 gBuild.sfAccess[slot] = access;        // the JIT's volatile barriers read ACC_VOLATILE from here
+                sfKind[slot] = TibBuilder.fieldKind(gView.cp[descIdx]);
                 slot += 1;
             }
             else
@@ -3398,11 +3400,11 @@ public final class Loader
         gBuild.sfCount = slot;
         gBuild.ifCount = islot;                               // total: inherited + own
         VtableLayout.gvCount = 0;                                    // no vtable unless parseVtable runs
-        gBuild.statics = Heap.allocData(slot * 8 + 8);
+        gBuild.statics = Heap.allocStatics(slot);       // zeroed: statics default to 0
         int z = 0;
         while (z < slot)
         {
-            gBuild.statics.plus(z * 8).store(0L);    // statics default to 0
+            Heap.markStatic(gBuild.statics, slot, z, sfKind[z]);   // which slots a precise trace follows
             z += 1;
         }
         gp = p;
@@ -5085,7 +5087,7 @@ public final class Loader
             }
             else
             {
-                gBuild.type = Heap.allocData(ObjectModel.TYPE_SIZE);
+                gBuild.type = Heap.allocType();
                 gBuild.type.store(0L);           // instanceSize (not instantiated)
                 gBuild.type.plus(8).store(0L);           // superType
                 gBuild.type.plus(16).store(0L);          // no itableDir

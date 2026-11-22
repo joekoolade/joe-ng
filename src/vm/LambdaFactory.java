@@ -980,7 +980,7 @@ final class LambdaFactory
             }
         }
         int extra = serReg >= 0 ? 1 : 0;
-        DataReference dir = Heap.allocData((n + 2 + extra) * 16);
+        DataReference dir = Heap.allocDataRefs((n + 2 + extra) * 16);
         dir.plus(0L).store(ifaceType);              // the functional interface itself
         dir.plus(8L).store(lambdaItableFor(fnReg, samName, samDesc, thunk));
         int e = 1;
@@ -1010,7 +1010,7 @@ final class LambdaFactory
         // and every aastore of a lambda into an Object[] threw ArrayStoreException. That is not an obscure
         // path -- it is EVERY varargs call taking a lambda, e.g. Arguments.of((Executable) () -> ...) in the
         // stock BasicGZIPInputStreamTest, whose argument array is an Object[].
-        DataReference type = Heap.allocData(ObjectModel.TYPE_SIZE);
+        DataReference type = Heap.allocType();
         type.plus(0L).store((long) (16 + nc * 8));
         type.plus(ObjectModel.TYPE_SUPER_OFFSET).store(TibBuilder.objectTypeAddr());
         type.plus(16L).store(dir);
@@ -1040,7 +1040,7 @@ final class LambdaFactory
         // Stream.sorted(). Identity semantics inherited from Object are exactly right here --
         // LambdaMetafactory specifies the identity of a captured function object as unpredictable.
         int onv = TibBuilder.objectVtableCount();
-        DataReference tib = Heap.allocData(8 + onv * 8);
+        DataReference tib = Heap.allocTib(8 + onv * 8);
         tib.plus(0L).store(type);
         TibBuilder.fillObjectVtable(tib.toAddress());                           // may copy zeros if Object is not compiled yet;
                                                          //   refillSynthTibVtables repairs that at loadAll's end
@@ -1064,12 +1064,12 @@ final class LambdaFactory
     {
         if (ir < 0)
         {
-            DataReference one = Heap.allocData(8);
+            DataReference one = Heap.allocCodeTable(8);
             one.store(thunk);
             return one.toLong();
         }
         int count = ClassRegistry.clTab[ir].ifmCount;
-        DataReference it = Heap.allocData(count > 0 ? count * 8 : 8);
+        DataReference it = Heap.allocCodeTable(count > 0 ? count * 8 : 8);
         int s = 0;
         while (s < count)
         {

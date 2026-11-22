@@ -619,8 +619,9 @@ final class VMGc implements Uninterruptible
 
     /**
      * Scan one marked block's payload for references, using the block's own TYPE METADATA where it has any.
-     * Three shapes live in this heap and the header word at +0 tells them apart: 0 = a raw {@link
-     * Heap#allocData} struct (Type, TIB, itable, statics block, classfile copy) with no type at all;
+     * Three shapes live in this heap and the header word at +0 tells them apart: 0 or a layout word ({@code
+     * ObjectModel.LAYOUT_TAG}: a Type, TIB, itable, statics block) = a raw {@link Heap#allocData} struct, scanned
+     * whole here (the heap shadow's precise phase reads the layout word);
      * {@code <= MAX_RAW_ARRAY_TIB} = a raw array whose header holds its ELEMENT SIZE; anything else = a
      * pointer to a TIB whose slot 0 is the Type. Only arrays are precise in this increment — a scalar
      * object's per-field reference map lands in the next one, so scalars stay conservative.
@@ -681,7 +682,8 @@ final class VMGc implements Uninterruptible
         }
         else
         {
-            census(tibw == 0L ? HC_DATA : HC_OTHER, size, size);
+            boolean data = tibw == 0L || (tibw & ObjectModel.LAYOUT_TAG_MASK) == ObjectModel.LAYOUT_TAG;   // + a layout word
+            census(data ? HC_DATA : HC_OTHER, size, size);
         }
         nomap = nomap + 1L;                                        // the remaining conservative surface
         return markRange(o.plus(ObjectModel.HEADER_SIZE), o.plus(size));   // unmapped scalar / untyped block
@@ -1181,7 +1183,13 @@ final class VMGc implements Uninterruptible
             // still reachable.
             long bit = (w - Heap.CODE_BASE) >> 3;
             Address cw = Address.fromLong(CODE_BITMAP + ((bit >> 6) << 3));
-            cw.store(cw.loadLong() | (1L << (int) (bit & 63L)));
+            long had = cw.loadLong();
+            long mask = 1L << (int) (bit & 63L);
+            if (HeapShadow.rescan != 0 && (had & mask) == 0L)
+            {
+                HeapShadow.missedCode(w);              // gcheap=2: code only the conservative rescan reached
+            }
+            cw.store(had | mask);
             return false;                              // code is not a heap block; nothing to mark or trace
         }
         // A heap pointer is in the small region, the large region, or (since S5a) one of cores 1-3's arenas.
