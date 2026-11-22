@@ -2581,6 +2581,7 @@ public final class VM
         if (n == 1 && (c == 0x31 || c == 0x32))
         {
             VMGc.heapCensus = 1;
+            PreciseTrace.armReport();
             Uart.write(Magic.bytes("gcheap: census on\n"));
         }
         if (n == 1 && c == 0x32)

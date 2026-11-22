@@ -3670,7 +3670,7 @@ public final class Baseline
         }
         if (symKind == SYM_CP)
         {
-            symbols.call(cb, symArg);
+            symbols.call(cb, symArg, hasReceiver);
         }
         else
         {

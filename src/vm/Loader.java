@@ -1501,6 +1501,7 @@ public final class Loader
         Relocator.rcAddr = CodeArray.create(Relocator.MAXRELOC);
         Relocator.rcBase = AddressArray.create(Relocator.MAXRELOC);
         Relocator.rcTail = new int[Relocator.MAXRELOC];
+        Relocator.rcRecv = new int[Relocator.MAXRELOC];
         Relocator.rcStub = new long[Relocator.MAXRELOC];                    // per-site unres memo; dies with the sites it indexes
         Relocator.rcDone = CodeArray.create(Relocator.MAXRELOC);                    // per-site target last WRITTEN: see Relocator.rcDone
         Relocator.rcGate = new int[Relocator.MAXRELOC];                     // per-site lookup gate, likewise: set when each site is

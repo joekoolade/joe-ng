@@ -145,7 +145,7 @@ public final class MetalStats
         "time to safepoint, average us",
         "time to safepoint, longest us",
         "preempted outside a safepoint (no poll for a quantum)",
-        "idle core switched at the interrupt",
+        "idle core asked to yield at the interrupt",
         "polls left pending with IRQs masked",
         "poll slow paths for another core's request",
         "yieldpoints JIT-compiled this boot",

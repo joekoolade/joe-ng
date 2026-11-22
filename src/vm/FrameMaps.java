@@ -12,6 +12,7 @@
 package vm;
 
 import magic.Address;
+import magic.Magic;
 import magic.Uninterruptible;
 
 /**
@@ -189,11 +190,15 @@ final class FrameMaps implements Uninterruptible
     /** True when the descriptor is unknown and every register is treated as a possible reference. */
     static boolean tUntyped;
 
-    /** Argument-register reference mask of a call to descriptor {@code descU} ({u2 len}{bytes}): bit r = x_r. Sets
-     *  {@link #argN} to the number of registers. */
+    /** Argument-register OBJECT-reference mask of a call to descriptor {@code descU} ({u2 len}{bytes}): bit r = x_r.
+     *  Exact kinds (frames/GC arc S6d-2), as {@code ClassFile.fieldKind} decides a field's: a Java reference, {@code
+     *  magic.ObjectReference} and the unboxed arrays are references; {@code magic.DataReference} goes in {@link
+     *  #argDataMask} instead; the other {@code magic} types ({@code Address}, {@code Word}, {@code Offset}, {@code
+     *  Extent}, {@code CodeAddress}) and primitives are raw. Sets {@link #argN} to the number of registers. */
     static long argRefMask(Address descU, boolean receiver)
     {
         long mask = 0L;
+        long data = 0L;
         int r = 0;
         if (receiver)
         {
@@ -205,7 +210,7 @@ final class FrameMaps implements Uninterruptible
         while (p.LT(end) && p.loadUnsignedByte() != 0x29)      // ')'
         {
             int c = p.loadUnsignedByte();
-            if (c == 0x5B || c == 0x4C)                        // '[' or 'L': a reference
+            if (c == 0x5B)                                     // '[': an array, whatever its element
             {
                 if (r < 64)
                 {
@@ -217,31 +222,97 @@ final class FrameMaps implements Uninterruptible
                 }
                 if (p.LT(end) && p.loadUnsignedByte() == 0x4C)
                 {
-                    while (p.LT(end) && p.loadUnsignedByte() != 0x3B)
-                    {
-                        p = p.plus(1);
-                    }
+                    p = skipClassName(p, end);
                 }
+            }
+            else if (c == 0x4C)                                // 'L'
+            {
+                int k = classKind(p.plus(1), end);
+                if (r < 64 && k == 1)
+                {
+                    mask = mask | (1L << r);
+                }
+                else if (r < 64 && k == 3)
+                {
+                    data = data | (1L << r);
+                }
+                p = skipClassName(p, end);
             }
             p = p.plus(1);
             r += 1;
         }
         argN = r;
+        argDataMask = data;
         return mask;
+    }
+
+    /** The {@code magic.DataReference} arguments of the last {@link #argRefMask}: bit r = x_r, marked one header
+     *  below the payload. */
+    static long argDataMask;
+
+    /** From the 'L' at {@code p}, to its ';'. */
+    private static Address skipClassName(Address p, Address end)
+    {
+        while (p.LT(end) && p.loadUnsignedByte() != 0x3B)
+        {
+            p = p.plus(1);
+        }
+        return p;
+    }
+
+    /** The kind of the class named at {@code p} (up to ';'): 1 = an object reference, 3 = a data reference, 0 = a raw
+     *  {@code magic} word. */
+    private static int classKind(Address p, Address end)
+    {
+        if (!namePrefix(p, end, Magic.bytes("magic/")))
+        {
+            return 1;
+        }
+        if (nameIs(p, end, Magic.bytes("magic/DataReference")))
+        {
+            return 3;
+        }
+        if (nameIs(p, end, Magic.bytes("magic/ObjectReference")) || nameIs(p, end, Magic.bytes("magic/AddressArray"))
+            || nameIs(p, end, Magic.bytes("magic/ObjectReferenceArray"))
+            || nameIs(p, end, Magic.bytes("magic/DataReferenceArray")) || nameIs(p, end, Magic.bytes("magic/CodeArray")))
+        {
+            return 1;
+        }
+        return 0;
+    }
+
+    private static boolean namePrefix(Address p, Address end, byte[] want)
+    {
+        int i = 0;
+        while (i < want.length)
+        {
+            if (!p.plus(i).LT(end) || p.plus(i).loadUnsignedByte() != (want[i] & 0xFF))
+            {
+                return false;
+            }
+            i += 1;
+        }
+        return true;
+    }
+
+    private static boolean nameIs(Address p, Address end, byte[] want)
+    {
+        return namePrefix(p, end, want) && p.plus(want.length).LT(end) && p.plus(want.length).loadUnsignedByte() == 0x3B;
     }
 
     static int argN;
 
     /**
-     * Type the saved arguments of a resolve trampoline of {@code kind} whose index is {@code idx}, into {@link
-     * #tMask}/{@link #tN}. Where the index cannot say whether the callee takes a receiver (a link stub names a
-     * method, not an invoke) or the resolver reorders the save area while it runs (indy inserts the target in
-     * front), both readings are taken: a word marked that holds no reference is refused by the marker's
-     * block-base check, so the union costs at most a little retention, never a wrong mark.
+     * Type the saved arguments of a resolve trampoline of {@code kind} whose index word is {@code idx}, into {@link
+     * #tMask} (object references), {@link #tData} (data references) and {@link #tN}. Exact since frames/GC arc
+     * S6d-2: a link stub records whether its callee takes a receiver ({@link DynamicLinker#linkRecv}); an MH site's
+     * {@code linkTo*} is static and every other one takes the handle in x0; the indy resolver sets {@link
+     * #INDY_SHIFTED} in the index word once it has moved the arguments up and put the target in x0.
      */
     static void trampArgs(int kind, long idx)
     {
         tUntyped = false;
+        tData = 0L;
         Address d = Address.zero();
         if (kind == StubFrames.K_LAZY)
         {
@@ -250,6 +321,7 @@ final class FrameMaps implements Uninterruptible
             {
                 LazyMethod lm = tab[(int) idx];
                 tMask = argRefMask(lm.blob.toAddress().plus(lm.descOff), lm.isStatic == 0);
+                tData = argDataMask;
                 tN = argN;
                 return;
             }
@@ -262,38 +334,51 @@ final class FrameMaps implements Uninterruptible
                 if (!d.isZero())
                 {
                     tMask = argRefMask(d, true);
+                    tData = argDataMask;
                     tN = argN;
                     return;
                 }
             }
         }
-        else if (kind == StubFrames.K_LINK || kind == StubFrames.K_MH)
+        else if (kind == StubFrames.K_LINK)
         {
-            if (kind == StubFrames.K_LINK)
+            d = DynamicLinker.linkDesc((int) idx);
+            int recv = DynamicLinker.linkRecv((int) idx);
+            if (!d.isZero() && recv >= 0)
             {
-                d = DynamicLinker.linkDesc((int) idx);
-            }
-            else if (VirtualDispatch.vsDesc != null && idx >= 0L && idx < VirtualDispatch.vsCount)
-            {
-                d = VirtualDispatch.vsDesc.get((int) idx);
-            }
-            if (!d.isZero())
-            {
-                long a = argRefMask(d, false);                 // static: x0 is the first parameter
-                long b = argRefMask(d, true);                  // ... or an instance method: x0 is the receiver
-                tMask = a | b;
+                tMask = argRefMask(d, recv != 0);
+                tData = argDataMask;
                 tN = argN;
                 return;
             }
         }
+        else if (kind == StubFrames.K_MH)
+        {
+            if (VirtualDispatch.vsDesc != null && idx >= 0L && idx < VirtualDispatch.vsCount)
+            {
+                d = VirtualDispatch.vsDesc.get((int) idx);
+                if (!d.isZero())
+                {
+                    // linkToStatic/Special/Virtual/Interface are static (the MemberName is the last argument);
+                    // invokeBasic/invokeExact/invoke take the handle as a receiver (mhResolve keeps x0 a handle)
+                    Address n = VirtualDispatch.vsName.get((int) idx);
+                    Address nEnd = n.plus(2L + (long) n.loadUnsignedByte() * 256L + n.plus(1L).loadUnsignedByte());
+                    boolean linkTo = namePrefix(n.plus(2L), nEnd, Magic.bytes("linkTo"));
+                    tMask = argRefMask(d, !linkTo);
+                    tData = argDataMask;
+                    tN = argN;
+                    return;
+                }
+            }
+        }
         else if (kind == StubFrames.K_INDY)
         {
-            d = Indy.siteDesc((int) idx);
+            boolean shifted = (idx & INDY_SHIFTED) != 0L;
+            d = Indy.siteDesc((int) (idx & ~INDY_SHIFTED));
             if (!d.isZero())
             {
-                long a = argRefMask(d, false);                 // the site's arguments, as the resolver finds them
-                long b = argRefMask(d, true);                  // ... and shifted up, the target in x0, after
-                tMask = a | b;
+                tMask = argRefMask(d, shifted);                // after the shift: the target handle in x0
+                tData = argDataMask;
                 tN = argN;
                 return;
             }
@@ -301,5 +386,31 @@ final class FrameMaps implements Uninterruptible
         tUntyped = true;                                       // no descriptor: every saved register may be one
         tMask = 0xFFFFL;
         tN = 16;
+    }
+
+    /** Which saved argument registers hold data references ({@code magic.DataReference}): bit r = x_r. */
+    static long tData;
+
+    /** Set in an indy trampoline's index word ({@link StubFrames#STUB_ID_OFF}) once {@code Indy.indyResolve} has
+     *  shifted the arguments one register up and stored the target in x0. */
+    static final long INDY_SHIFTED = 1L << 62;
+
+    /**
+     * For {@code Indy.indyResolve}: shift an indy trampoline's {@code n} saved arguments at {@code save} (its saved
+     * x0) one register up, put {@code target} in x0, and say so in the frame's index word. Here, in a class with no
+     * polls, so no collection sees the save area half shifted or shifted without the flag.
+     */
+    static void shiftIndyArgs(long save, int n, long target)
+    {
+        Address a = Address.fromLong(save);
+        int r = n;
+        while (r > 0)
+        {
+            a.plus(r * 8L).store(a.plus((r - 1) * 8L).loadLong());
+            r -= 1;
+        }
+        a.store(target);
+        Address id = a.plus((long) (StubFrames.STUB_ID_OFF - StubFrames.STUB_SAVE0));
+        id.store(id.loadLong() | INDY_SHIFTED);
     }
 }

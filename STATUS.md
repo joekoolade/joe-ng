@@ -4,6 +4,37 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **FRAMES/GC ARC, INCREMENT S6d-2: the remaining conservative fallbacks (2026-11-22).** Measured first, with a new
+  per-collection `gcroots:` line under `gcheap=1` and a one-time `gcheap fallback` line naming each block the precise
+  heap trace scans conservatively. Whole virt list, S6d-1 code: heap fallbacks 2, idle stacks scanned whole 360
+  (21,770 words), forced preemptions 2, run-trampoline frames 48 and 205 stub words probed at `w` and `w-16`; frames
+  with no map, no site or an unknown tail 0. The writer bakes 0 classes without slot kinds (new build line `type
+  kinds:`), and no metal-built Type fell back.
+  - **Heap:** the 224-269 fallbacks per Pi boot S6c measured were already 0 after S6d-1. The two left on virt were
+    dead blocks a conservative stack word had marked (a 42 MB "block" from a forced preemption's scan; a 16-byte
+    object of a freed Type). A class wider than 126 slots would still fall back; none exists in the image or the list.
+  - **Idle tasks yield at a safepoint.** The timer switched a core's idle task at once, wherever it was, so its stack
+    was scanned whole. It is now asked like any task (`switchOrRequest`), and never forced: `idlePause` spins on the
+    yield byte, so the next `taskYield` switches through a mapped call site. (A request older than a quantum on an
+    idle core meant a QEMU vCPU the host had descheduled, not code without polls: 54 of them before this.) The map
+    shadow walks a safely switched idle task like any other.
+  - **Stub frames typed exactly.** `FrameMaps.argRefMask` follows `ClassFile.fieldKind`: `magic.DataReference`
+    arguments are data references (marked at `w-16` only), `Address`/`Word`/`Offset`/`Extent`/`CodeAddress` are raw,
+    other references are marked at `w` only. The "both readings" unions are gone: a link stub records whether its
+    callee takes a receiver (`Symbols.call(cb, cp, hasReceiver)` -> `Relocator.rcRecv` -> `DynamicLinker.linkRecv`;
+    lambda impls by kind), an MH site's `linkTo*` is static, and the indy resolver sets `FrameMaps.INDY_SHIFTED` in
+    the frame's index word when it moves the arguments up (in `FrameMaps.shiftIndyArgs`, a class with no polls, so
+    no collection sees it half done). A fresh task's x0 and the run trampoline's Runnable are exact roots.
+  - **After, whole virt list (380 collections, `gcheap=1 gcmaps=1`):** idle 0, forced 0, conservative stack words 0,
+    untyped stub words 0, map-shadow MISS 0, heap fallbacks 0 without `gcmaps` (the map shadow marks stale stack words
+    it finds, free blocks included, whose trace then falls back: an instrument effect). Under `gcheap=2` the blocks
+    only the rescan marked no longer count as fallbacks.
+  - **QEMU:** virt 212/212 default, `gcheap=2`, `gcprecise=0` and `safepoints=0`; raspi4b suite `want: checked=160
+    mismatch=0`, `gc: collections=53`, `intact=32`, markers as S6d-1. `make test` + overlaycheck OK.
+  - **Pi 4, build `bc781a530f9cf0bc`** (default init; sha256 = host): three fresh boots, FrameBench 515.3 / 519.6 /
+    518.4 ms (median 518.4; S6d-1 528.1), check values identical; 14 collections, total pause 1.16 s, last trace
+    ~85 ms, root words examined 38 (S6d-1 41), every fallback row on `/gc` 0; 8 pages 200. Root scan still ~29 ms:
+    the block-start bitmap build, which only conservative probes need -- S6d-3.
 - **FRAMES/GC ARC, INCREMENT S6d-1: exact statics and code roots (2026-11-22).** S6d (exact roots, retire the
   block-start bitmap) is split: S6d-1 the image statics region and the code-root table, S6d-2 the remaining
   conservative fallbacks (Types with no kinds, the S5 stack fallbacks), S6d-3 the bitmap (which only a conservative

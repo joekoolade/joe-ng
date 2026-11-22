@@ -826,7 +826,7 @@ final class LambdaFactory
                 // the normal lambda-body path (recordTailReloc) uses. Without this the `bl` with initBuf==0
                 // overflows imm26 and wild-branches (a constructor method-ref, Box::new, would jump to junk).
                 Address.fromLong(h2).store(A64Enc.bl(0));
-                Relocator.recordCallReloc(h2, lambdaImplMref(idx));
+                Relocator.recordCallReloc(h2, lambdaImplMref(idx), 1);   // <init>: the new object in x0
             }
             w += 1;
             thunk.plus(w * 4L).store(A64Enc.ldrx(0, 31, 8)); // x0 = obj (return)
@@ -894,14 +894,14 @@ final class LambdaFactory
             // As below, but the site is a call, so it takes the CALL reloc: patchRelocs must leave the
             // boxing epilogue after it reachable rather than turning the site into a tail branch.
             Address.fromLong(bAt).store(A64Enc.bl(0));
-            Relocator.recordCallReloc(bAt, lambdaImplMref(idx));
+            Relocator.recordCallReloc(bAt, lambdaImplMref(idx), lambdaImplKind(idx) == 6 ? 0 : 1);
         }
         else
         {
             // A method ref whose cross-class impl isn't registered yet: emit `b 0` and record a tail reloc so
             // patchRelocs rewrites it once every class is compiled (same late-binding as a normal bl call site).
             Address.fromLong(bAt).store(A64Enc.b(0));
-            Relocator.recordTailReloc(bAt, lambdaImplMref(idx));
+            Relocator.recordTailReloc(bAt, lambdaImplMref(idx), lambdaImplKind(idx) == 6 ? 0 : 1);
         }
         w += 1;
         if (boxRet)

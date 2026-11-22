@@ -786,6 +786,10 @@ final class VMGc implements Uninterruptible
             i += 1;
         }
         Uart.putc((byte) 0x0A);
+        if (StackRoots.on != 0 && GcMapShadow.on == 0)
+        {
+            StackRoots.summary();                      // the root fallbacks too (frames/GC arc S6d-2)
+        }
     }
 
     /**

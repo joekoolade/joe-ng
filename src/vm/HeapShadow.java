@@ -519,7 +519,7 @@ final class HeapShadow implements Uninterruptible
     }
 
     /** The class of an object whose header word is {@code tibw}, or what the header word says instead. */
-    private static void printTypeOf(long tibw)
+    static void printTypeOf(long tibw)
     {
         if (tibw == 0L)
         {

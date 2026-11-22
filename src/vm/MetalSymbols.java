@@ -37,6 +37,17 @@ final class MetalSymbols implements Symbols
     // ----- calls: emit a BL/BLR-free BL straight to the resolved code address -----
     public void call(CodeBuffer cb, int methodCp)
     {
+        call(cb, methodCp, -1);
+    }
+
+    public void call(CodeBuffer cb, int methodCp, boolean hasReceiver)
+    {
+        call(cb, methodCp, hasReceiver ? 1 : 0);
+    }
+
+    /** {@code recv}: 1 = the callee takes a receiver, 0 = static, -1 = not known (see {@link Relocator#rcRecv}). */
+    private void call(CodeBuffer cb, int methodCp, int recv)
+    {
         long cell = LazyCompiler.lazyStaticCell(methodCp);    // M8 1c: 0 unless LAZY_STATIC && gated && registered
         if (cell != 0L)
         {
@@ -46,7 +57,7 @@ final class MetalSymbols implements Symbols
         long target = Loader.resolveCallBuf(methodCp);
         if (target == 0L)                               // callee's class not loaded yet (dependency cycle):
         {                                               // record the bl for patchRelocs to fix after loadAll
-            Relocator.recordCallReloc(cb.base() + (long) cb.wordCount() * 4L, methodCp);
+            Relocator.recordCallReloc(cb.base() + (long) cb.wordCount() * 4L, methodCp, recv);
         }
         else
         {

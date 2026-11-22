@@ -90,7 +90,7 @@ final class ProxySupport
         objectCloneName = Loader.utf8Blob(Magic.bytes("clone"));
         objectCloneDesc = Loader.utf8Blob(Magic.bytes("(Ljava/lang/Object;)Ljava/lang/Object;"));
         objectCloneBuf = DynamicLinker.linkStubFor(objectCloneCls.toAddress(), objectCloneName.toAddress(),
-                objectCloneDesc.toAddress());
+                objectCloneDesc.toAddress(), 0);                // MetalObjects.clone(Object) is static
         return objectCloneBuf;
     }
 

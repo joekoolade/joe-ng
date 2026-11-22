@@ -11,7 +11,9 @@
  */
 package vm;
 
+import board.Uart;
 import magic.Address;
+import magic.Magic;
 import magic.Uninterruptible;
 import objectmodel.ObjectModel;
 
@@ -22,11 +24,13 @@ import objectmodel.ObjectModel;
  * kind, an {@code allocData} struct by its layout word; a byte block, a raw array and a word array with no element
  * Type hold no pointer and are not read at all. A block that says nothing a precise trace can read (a Type with no
  * kinds, a header that is no TIB) is scanned conservatively, as every block was before, and counted in {@link
- * #fallbacks}.
+ * #fallbacks}; with {@code gcheap} set, each kind of such block is named once on the console. Over the whole virt
+ * probe list with exact roots (S6d) that count is 0: the fallbacks S6c measured were dead blocks a conservative
+ * root word had marked.
  *
  * <p>On by default; {@code gcprecise=0} in {@code /etc/init} restores the conservative heap trace. The heap shadow
- * ({@code gcheap=2}) runs this as its first phase, so what it reports is what this trace loses. Roots are not
- * this class's business: the statics region and the stack fallbacks stay conservative until S6d.
+ * ({@code gcheap=2}) runs this as its first phase, so what it reports is what this trace loses. The image statics
+ * are read by their kind maps here too ({@link #markStatics}, S6d-1).
  */
 final class PreciseTrace implements Uninterruptible
 {
@@ -39,6 +43,16 @@ final class PreciseTrace implements Uninterruptible
 
     /** Blocks scanned conservatively because nothing in them could be read precisely, over the boot. */
     static long fallbacks;
+
+    /** With {@code gcheap} set: the header words a fallback has already named ({@link #reportFallback}). */
+    private static long[] reported;
+    private static int reportedCount;
+
+    /** {@code gcheap=1/2}: name each kind of block the trace falls back on, once. Called at boot, never in a GC. */
+    static void armReport()
+    {
+        reported = new long[64];
+    }
 
     /**
      * Scan marked block {@code o} following only words of an exactly known kind -- or, where the block says nothing
@@ -276,8 +290,47 @@ final class PreciseTrace implements Uninterruptible
     private static void conservative(int cat, Address o, long size)
     {
         VMGc.census(cat, size, size);
-        fallbacks = fallbacks + 1L;
+        if (HeapShadow.rescan == 0)                    // not a block only the gcheap=2 rescan marked (often junk)
+        {
+            fallbacks = fallbacks + 1L;
+            if (reported != null)
+            {
+                reportFallback(cat, o, size);
+            }
+        }
         VMGc.markWords(o.plus(ObjectModel.HEADER_SIZE), o.plus(size));
+    }
+
+    /** Print the class of fallback block {@code o} the first time its header word is seen. */
+    private static void reportFallback(int cat, Address o, long size)
+    {
+        long tibw = o.plus(ObjectModel.TIB_OFFSET).loadLong();
+        int i = 0;
+        while (i < reportedCount)
+        {
+            if (reported[i] == tibw)
+            {
+                return;
+            }
+            i += 1;
+        }
+        if (reportedCount >= reported.length)
+        {
+            return;
+        }
+        reported[reportedCount] = tibw;
+        reportedCount += 1;
+        Uart.write(Magic.bytes(cat == VMGc.HC_UNMAPPED ? "gcheap fallback no-kinds " : "gcheap fallback header "));
+        HeapShadow.printTypeOf(tibw);
+        Uart.write(Magic.bytes(" size "));
+        VM.printHex(size);
+        Uart.write(Magic.bytes(" block "));
+        VM.printHex(o.toLong());
+        Uart.write(Magic.bytes(" header "));
+        VM.printHex(tibw);
+        Uart.write(Magic.bytes(" status "));
+        VM.printHex(o.plus(8).loadLong());
+        Uart.putc((byte) 0x0A);
     }
 
     private static void markData(long w)

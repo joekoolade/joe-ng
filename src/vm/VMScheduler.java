@@ -918,7 +918,7 @@ public final class VMScheduler implements Uninterruptible
     static long ttsTicks;            // time-to-safepoint, request to yieldpoint, summed (CNTPCT ticks)
     static long ttsMaxTicks;         // ... the longest
     static long forcedPreempts;      // requests a task left unanswered for a whole quantum: preempted where it was
-    static long idleSwitches;        // interrupts that found a core's idle task and switched at once
+    static long idleSwitches;        // interrupts that found a core's idle task (asked to yield since S6d-2)
 
     /**
      * An interrupt wants the scheduler: switch now, or ask the running task to switch at its next yieldpoint.
@@ -928,11 +928,12 @@ public final class VMScheduler implements Uninterruptible
      * that polls -- calls {@link #yieldpoint}, which switches through {@link #pickNext}. Its top frame is then a
      * mapped call site instead of an arbitrary instruction.
      *
-     * <p>Two cases switch here, as before. A core's IDLE task runs scheduler code, which has no polls (see
-     * {@link magic.Uninterruptible}), and holds nothing: it switches at once, so work woken by this interrupt
-     * does not wait for its next 1 ms ask. And a request still pending a whole quantum after it was raised:
-     * the task is in code without polls (or with IRQs masked at every poll), and it is preempted where it is,
-     * as every task was before S3. {@link #forcedPreempts} counts those -- each is a task stopped outside a
+     * <p>A core's IDLE task is asked too (frames/GC arc S6d-2; it used to switch here at once): its back-off,
+     * {@code idlePause}, reads the byte on every spin and returns, and the loop's next {@code taskYield} switches at
+     * a safepoint -- so work woken by this interrupt still does not wait out the 1 ms, and the idle stack is walked
+     * by its maps instead of scanned whole; it is never forced. One case switches here, as before: a request still
+     * pending a whole quantum after it was raised: the task is in code without polls (or with IRQs masked at every poll), and it is
+     * preempted where it is, as every task was before S3. {@link #forcedPreempts} counts those -- each is a task stopped outside a
      * safepoint, which S5's precise roots cannot walk.
      */
     static long switchOrRequest(long curSp)
@@ -942,12 +943,19 @@ public final class VMScheduler implements Uninterruptible
         {
             return pickNext(curSp);
         }
+        Address cell = Address.fromLong(Heap.YIELD_CELL).plus((long) core);
         if (taskIdle[coreTask[core]] != 0)
         {
+            // Asked like any task (S6d-2), and never forced: idlePause spins on the byte, so the idle loop always
+            // answers. A request older than a quantum here means the core itself did not run (a QEMU vCPU the host
+            // descheduled), not code without polls; forcing it would only stop the idle task outside a safepoint.
             idleSwitches += 1L;
-            return pickNext(curSp);
+            if (cell.loadByte() == 0)
+            {
+                requestYield(core);
+            }
+            return curSp;
         }
-        Address cell = Address.fromLong(Heap.YIELD_CELL).plus((long) core);
         if (cell.loadByte() == 0)
         {
             requestYield(core);

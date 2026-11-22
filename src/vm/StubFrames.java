@@ -50,11 +50,11 @@ final class StubFrames
     /** Resolve trampolines: x0..x15 at [sp+8..], the index at [sp+136]; the arguments are typed by the
      *  descriptor that index names. */
     static final int K_LAZY = 1;                             // LazyCompiler.lzTab[idx]: the callee's own descriptor
-    static final int K_LINK = 2;                             // DynamicLinker link stub idx: static or not unknown
+    static final int K_LINK = 2;                             // DynamicLinker link stub idx (+ its linkRecv)
     static final int K_VIRTUAL = 3;                          // VirtualDispatch site idx: receiver + descriptor
     static final int K_MH = 4;                               // MethodHandles site idx (invoke*/linkTo*)
-    static final int K_INDY = 5;                             // Indy site idx: the descriptor, before or after the
-                                                             //   resolver inserts the target in front
+    static final int K_INDY = 5;                             // Indy site idx: the descriptor; FrameMaps.INDY_SHIFTED
+                                                             //   once the resolver has inserted the target in front
     /** A per-stub frame whose reference words are fixed when it is built: payload bit i = [sp + 8*i] for i < 17.
      *  With {@link #MASK_OVERFLOW} set, [sp + 128] (a saved x15) points at a call's arguments past the fifteenth,
      *  and bit 17 + j types argument 15 + j (up to 30 of them). */

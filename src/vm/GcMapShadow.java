@@ -160,10 +160,11 @@ final class GcMapShadow implements Uninterruptible
             tasksSkipped = tasksSkipped + 1L;
             return;
         }
-        if (taskSafe == null || taskSafe[t] == 0 || (taskIdle != null && taskIdle[t] != 0))
+        if (taskSafe == null || taskSafe[t] == 0)
         {
-            // Stopped outside a safepoint (a forced preemption, a core's idle task): the pc is no call site, and in
-            // a prologue [sp] is not yet its saved LR. The stack is counted, not walked -- StackRoots scans it whole.
+            // Stopped outside a safepoint (a forced preemption, a core's idle task taken by an interrupt): the pc is
+            // no call site, and in a prologue [sp] is not yet its saved LR. The stack is counted, not walked --
+            // StackRoots scans it whole. An idle task that yielded (S6d-2) is walked like any other.
             tasksSkipped = tasksSkipped + 1L;
             unwalked(frame, top);
             return;
@@ -559,7 +560,7 @@ final class GcMapShadow implements Uninterruptible
         {
             FrameMaps.trampArgs(kind, Address.fromLong(sp + StubFrames.STUB_ID_OFF).loadLong());
             n = FrameMaps.tN > 16 ? 15 : FrameMaps.tN;
-            mask = FrameMaps.tMask & ((1L << n) - 1L);
+            mask = (FrameMaps.tMask | FrameMaps.tData) & ((1L << n) - 1L);
             base = StubFrames.STUB_SAVE0;
         }
         long off = 8L;
