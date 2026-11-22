@@ -13,6 +13,7 @@ package vm;
 
 import board.Uart;
 import magic.Address;
+import magic.CodeArray;
 import magic.DataReference;
 import magic.AddressArray;
 import magic.Magic;
@@ -50,7 +51,7 @@ final class ClassInitializer
      * these (provideKnownStatics). Grows as new unrunnable stock initializers surface.
      */
     /** Entry addresses of this batch's compiled {@code <clinit>}s, in load order (run after patchRelocs). */
-    static long[] clinitEntry;   // compiled entry of initializer i, or 0 until clinitEntryOf compiles it
+    static CodeArray clinitEntry;   // compiled entry of initializer i, or 0 until clinitEntryOf compiles it
     static long[] clinitCode;    // its BYTECODE (captured at load); non-zero == this slot is enqueued
     static int[] clinitCodeLen;
     static int[] clinitDescOff;
@@ -309,7 +310,7 @@ final class ClassInitializer
             clinitCodeLen[clinitN] = ClassBytes.codeLength(code);
             clinitDescOff[clinitN] = f.descOff;
             clinitStatic[clinitN] = f.isStatic;
-            clinitEntry[clinitN] = 0L;              // uncompiled: clinitCode[] is now the "enqueued" marker
+            clinitEntry.set(clinitN, 0L);              // uncompiled: clinitCode[] is now the "enqueued" marker
                 clinitPd[clinitN] = Loader.findPdByName(Loader.gView.base.toAddress(), Loader.gView.thisNameOff);   // which blob (for dependency-ordered running)
             clinitBase.set(clinitN, Loader.gView.base.toAddress());                // batch-independent identity (see the declarations)
             clinitNameOff[clinitN] = Loader.gView.thisNameOff;
@@ -367,9 +368,9 @@ final class ClassInitializer
      */
     private static long clinitEntryOfLocked(int i)
     {
-        if (clinitEntry[i] != 0L)
+        if (clinitEntry.get(i) != 0L)
         {
-            return clinitEntry[i];                      // already compiled (or run once before)
+            return clinitEntry.get(i);                      // already compiled (or run once before)
         }
         if (clinitCode[i] == 0L)
         {
@@ -432,7 +433,7 @@ final class ClassInitializer
         {
             Loader.capHalt(Magic.bytes("clinit-compile-null"), i);  // about to call address 0 -- halt with an index instead
         }
-        clinitEntry[i] = buf;
+        clinitEntry.set(i, buf);
         // INITIALIZE WHAT THIS INITIALIZER READS, before ensureClinit calls it. The compile above just
         // recorded every cross-class getstatic/new site it contains (JVMS 5.5 active uses), and because this
         // method brackets the compile with lzCompiling those land in lzInitReg -- which only lazyCompile

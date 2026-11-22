@@ -134,12 +134,12 @@ final class BootSeeds
             return;
         }
         int ctor = Reflection.constructorResolve(ClassRegistry.clTab[pi].type, 0);
-        if (ctor < 0 || MethodRegistry.rgTab[ctor].buf == 0L)
+        if (ctor < 0 || MethodRegistry.rgTab[ctor].buf.toLong() == 0L)
         {
             reportPropsGap(Magic.bytes("java/util/Properties.<init>() has no compiled body"));
             return;                                     // no runnable <init>: leaving props null is honest
         }
-        Magic.call2(MethodRegistry.rgTab[ctor].buf, obj.toLong(), 0L);   // receiver in x0; a no-arg ctor reads nothing else
+        Magic.call2(MethodRegistry.rgTab[ctor].buf.toLong(), obj.toLong(), 0L);   // receiver in x0; a no-arg ctor reads nothing else
         slot.store(obj);
         seedStandardProps(obj.toLong(), pi);
         seedLineSeparator();
@@ -235,12 +235,12 @@ final class BootSeeds
         }
         ObjectReference obj = Reflection.allocInstance(ClassRegistry.clTab[pi].type);
         int ctor = Reflection.constructorResolve(ClassRegistry.clTab[pi].type, 0);
-        if (obj.isNull() || ctor < 0 || MethodRegistry.rgTab[ctor].buf == 0L)
+        if (obj.isNull() || ctor < 0 || MethodRegistry.rgTab[ctor].buf.toLong() == 0L)
         {
             reportPropsGap(Magic.bytes("VM.savedProps: java/util/Properties could not be constructed"));
             return;
         }
-        Magic.call2(MethodRegistry.rgTab[ctor].buf, obj.toLong(), 0L);
+        Magic.call2(MethodRegistry.rgTab[ctor].buf.toLong(), obj.toLong(), 0L);
         seedStandardProps(obj.toLong(), pi);
         slot.store(obj);
     }

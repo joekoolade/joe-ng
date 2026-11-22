@@ -20,6 +20,8 @@ import compiler.Symbols;
 import objectmodel.ObjectModel;
 import zip.ZipDir;
 import magic.Address;
+import magic.CodeArray;
+import magic.CodeAddress;
 import magic.DataReference;
 import magic.AddressArray;
 import magic.DataReferenceArray;
@@ -338,7 +340,7 @@ public final class Loader
                     && Utf8.utf8IsAtBase(MethodRegistry.rgTab[i].base.toAddress(), MethodRegistry.rgTab[i].nameOff, name)
                     && Utf8.utf8IsAtBase(MethodRegistry.rgTab[i].base.toAddress(), MethodRegistry.rgTab[i].descOff, desc))
             {
-                return MethodRegistry.rgTab[i].buf;
+                return MethodRegistry.rgTab[i].buf.toLong();
             }
             i += 1;
         }
@@ -1494,11 +1496,11 @@ public final class Loader
             Relocator.rcReg[rr] = -1;
             rr += 1;
         }
-        Relocator.rcAddr = new long[Relocator.MAXRELOC];
+        Relocator.rcAddr = CodeArray.create(Relocator.MAXRELOC);
         Relocator.rcBase = AddressArray.create(Relocator.MAXRELOC);
         Relocator.rcTail = new int[Relocator.MAXRELOC];
         Relocator.rcStub = new long[Relocator.MAXRELOC];                    // per-site unres memo; dies with the sites it indexes
-        Relocator.rcDone = new long[Relocator.MAXRELOC];                    // per-site target last WRITTEN: see Relocator.rcDone
+        Relocator.rcDone = CodeArray.create(Relocator.MAXRELOC);                    // per-site target last WRITTEN: see Relocator.rcDone
         Relocator.rcGate = new int[Relocator.MAXRELOC];                     // per-site lookup gate, likewise: set when each site is
         Relocator.rcGateCell = new long[Relocator.MAXRELOC];                //   recorded, so not filled here
         Relocator.rcGateDl = new long[Relocator.MAXRELOC];
@@ -1515,7 +1517,7 @@ public final class Loader
         Relocator.rsClass = new int[Relocator.MAXRELOC];
         Relocator.rsName = new int[Relocator.MAXRELOC];
         Relocator.rsCount = 0;
-        ClassInitializer.clinitEntry = new long[MAXBLOB];
+        ClassInitializer.clinitEntry = CodeArray.create(MAXBLOB);
         ClassInitializer.clinitCode = new long[MAXBLOB];
         ClassInitializer.clinitCodeLen = new int[MAXBLOB];
         ClassInitializer.clinitDescOff = new int[MAXBLOB];
@@ -2924,18 +2926,18 @@ public final class Loader
             int i = 0;
             while (i < MethodRegistry.rgCount)                            // registered cross-class methods
             {
-                if (MethodRegistry.rgTab[i].buf != 0L && MethodRegistry.rgTab[i].buf < ceil && MethodRegistry.rgTab[i].buf > bestBuf)
+                if (MethodRegistry.rgTab[i].buf.toLong() != 0L && MethodRegistry.rgTab[i].buf.toLong() < ceil && MethodRegistry.rgTab[i].buf.toLong() > bestBuf)
                 {
-                    bestBuf = MethodRegistry.rgTab[i].buf; bestReg = i; bestClin = -1;
+                    bestBuf = MethodRegistry.rgTab[i].buf.toLong(); bestReg = i; bestClin = -1;
                 }
                 i += 1;
             }
             int c = 0;
             while (c < ClassInitializer.clinitN)                            // compiled <clinit>s (NOT in rgBuf)
             {
-                if (ClassInitializer.clinitEntry[c] != 0L && ClassInitializer.clinitEntry[c] < ceil && ClassInitializer.clinitEntry[c] > bestBuf)
+                if (ClassInitializer.clinitEntry.get(c) != 0L && ClassInitializer.clinitEntry.get(c) < ceil && ClassInitializer.clinitEntry.get(c) > bestBuf)
                 {
-                    bestBuf = ClassInitializer.clinitEntry[c]; bestClin = c; bestReg = -1;
+                    bestBuf = ClassInitializer.clinitEntry.get(c); bestClin = c; bestReg = -1;
                 }
                 c += 1;
             }
@@ -3905,10 +3907,10 @@ public final class Loader
     private static final int MAXM = 512;
     static long[] mCode;      // each reachable method's bytecode address
     static int[] mLen;        // ... and its length
-    static long[] mBuf;       // ... and the buffer assigned to it
-    private static long[] mEnd;       // ... and the END of what emitMethod actually wrote there (0 = nothing,
+    static CodeArray mBuf;       // ... and the buffer assigned to it
+    private static CodeArray mEnd;       // ... and the END of what emitMethod actually wrote there (0 = nothing,
                                       //     either deferred -- the stub publishes itself -- or not emitted)
-    static long[] mLine;      // ... its line table addr (built in emitMethod; registerAll copies -> rgLine)
+    static CodeArray mLine;      // ... its line table addr (built in emitMethod; registerAll copies -> rgLine)
     static AddressArray mSrc; // ... its class's SourceFile filename Utf8 addr (-> rgSrc)
     static int[] mLocals;     // ... its max_locals
     static int[] mDescOff;    // ... its descriptor Utf8 offset (for the shared core's prologue)
@@ -4205,7 +4207,7 @@ public final class Loader
             i += 1;
         }
         publishEmitted();                               // the bodies this wrote, NOT the whole arena
-        return mBuf[0];
+        return mBuf.get(0);
     }
     // When set, compile() reuses the caller's already-allocated gBuild.tib (two-phase clinit) instead of rebuilding it.
     //
@@ -5472,9 +5474,9 @@ public final class Loader
     {
         mCode = new long[MAXM];
         mLen = new int[MAXM];
-        mBuf = new long[MAXM];
-        mEnd = new long[MAXM];
-        mLine = new long[MAXM];
+        mBuf = CodeArray.create(MAXM);
+        mEnd = CodeArray.create(MAXM);
+        mLine = CodeArray.create(MAXM);
         mSrc = AddressArray.create(MAXM);
         mLocals = new int[MAXM];
         mDescOff = new int[MAXM];
@@ -5562,7 +5564,7 @@ public final class Loader
     {
         if (mDefer[i] != 0)
         {
-            mBuf[i] = Heap.allocCode(32).toLong();               // just the stub -> no dry-run compile at load (genuine defer)
+            mBuf.set(i, Heap.allocCode(32).toLong());               // just the stub -> no dry-run compile at load (genuine defer)
             return;
         }
         CompileResult r0 = compileMethod(i, 0L);
@@ -5575,7 +5577,7 @@ public final class Loader
             printCurrentClass();
             Uart.putc(0x0A);
         }
-        mBuf[i] = Heap.allocCode(sz0).toLong();
+        mBuf.set(i, Heap.allocCode(sz0).toLong());
     }
 
     /**
@@ -5646,7 +5648,7 @@ public final class Loader
         else
         {
             Uart.write(Magic.bytes(" -- emitted buf="));
-            VM.printHex(mBuf[i]);
+            VM.printHex(mBuf.get(i));
         }
         Uart.write(Magic.bytes(" late="));
         VM.printDec(compileReuseTib ? 1 : 0);
@@ -5679,9 +5681,9 @@ public final class Loader
         int i = 0;
         while (i < mCount)
         {
-            if (mEnd[i] != 0L)
+            if (mEnd.get(i) != 0L)
             {
-                Heap.publishClean(Address.fromLong(mBuf[i]), Address.fromLong(mEnd[i]));
+                Heap.publishClean(Address.fromLong(mBuf.get(i)), Address.fromLong(mEnd.get(i)));
             }
             i += 1;
         }
@@ -5689,9 +5691,9 @@ public final class Loader
         i = 0;
         while (i < mCount)
         {
-            if (mEnd[i] != 0L)
+            if (mEnd.get(i) != 0L)
             {
-                Heap.publishInval(Address.fromLong(mBuf[i]), Address.fromLong(mEnd[i]));
+                Heap.publishInval(Address.fromLong(mBuf.get(i)), Address.fromLong(mEnd.get(i)));
             }
             i += 1;
         }
@@ -5730,7 +5732,7 @@ public final class Loader
             {
                 reportCompile(i, true);
             }
-            mEnd[i] = 0L;                               // emitDeferredStub publishes its own buffer
+            mEnd.set(i, 0L);                               // emitDeferredStub publishes its own buffer
             LazyCompiler.emitDeferredStub(i);
             return;
         }
@@ -5738,15 +5740,15 @@ public final class Loader
         {
             reportCompile(i, false);
         }
-        codeRootOwner = mBuf[i];                        // roots baked by this compile belong to this buffer
+        codeRootOwner = mBuf.get(i);                        // roots baked by this compile belong to this buffer
         Relocator.relocRecording = 1;                             // record unresolved cross-class sites at their real address
-        CompileResult r = compileMethod(i, mBuf[i]);    // real base -> resolved addresses
+        CompileResult r = compileMethod(i, mBuf.get(i));    // real base -> resolved addresses
         Relocator.relocRecording = 0;
         codeRootOwner = 0L;
         int[] words = r.words;
-        mLine[i] = StackTrace.buildLineTable(i, r.bcToWord);       // stack-trace debug info (PC-offset -> source line)
+        mLine.set(i, StackTrace.buildLineTable(i, r.bcToWord));       // stack-trace debug info (PC-offset -> source line)
         mSrc.set(i, StackTrace.sourceFileAddr());
-        long out = mBuf[i];
+        long out = mBuf.get(i);
         int codeLen = r.gcMapWord != 0 ? r.gcMapWord : words.length;   // the reference map rides after the code
         int k = 0;
         while (k < codeLen)
@@ -5755,17 +5757,17 @@ public final class Loader
             out += 4;
             k += 1;
         }
-        mEnd[i] = out;                                  // the MEASURED extent of this body, for publishEmitted
+        mEnd.set(i, out);                                  // the MEASURED extent of this body, for publishEmitted
         if (r.frameSize > 0)                            // let VM.unwind pop this JIT'd frame
         {
-            VM.addJitFrame(Address.fromLong(mBuf[i]), Address.fromLong(out), r.frameSize, gcMapOf(words, codeLen));
+            VM.addJitFrame(Address.fromLong(mBuf.get(i)), Address.fromLong(out), r.frameSize, gcMapOf(words, codeLen));
         }
         int h = 0;                                      // register try/catch ranges: a throw in another JIT'd
         while (h < r.handlerCount)                      // method can unwind into this method's catch (cross-method)
         {
-            long ms = mBuf[i] + (long) r.hStartW[h] * 4L;
-            long me = mBuf[i] + (long) r.hEndW[h] * 4L;
-            long hh = mBuf[i] + (long) r.handlerW[h] * 4L;
+            long ms = mBuf.get(i) + (long) r.hStartW[h] * 4L;
+            long me = mBuf.get(i) + (long) r.hEndW[h] * 4L;
+            long hh = mBuf.get(i) + (long) r.handlerW[h] * 4L;
             long ct = 0L;                                   // 0 = catch-all (a finally, or catch_type 0)
             int catchCp = r.catchCp[h];
             if (catchCp != 0)
@@ -5795,7 +5797,7 @@ public final class Loader
         {
             if (mCode[i] == code)
             {
-                return mBuf[i];
+                return mBuf.get(i);
             }
             i += 1;
         }
@@ -7315,11 +7317,11 @@ public final class Loader
         int k = MethodRegistry.rgBucket[Utf8.utf8HashFrom(ClassRegistry.clTab[ir].nameHash, base, nameOff) & (MethodRegistry.RGTAB - 1)];
         while (k >= 0)
         {
-            if (MethodRegistry.rgTab[k].base.EQ(ibase) && MethodRegistry.rgTab[k].buf != 0L
+            if (MethodRegistry.rgTab[k].base.EQ(ibase) && MethodRegistry.rgTab[k].buf.toLong() != 0L
                     && utf8EqAt(base, nameOff, MethodRegistry.rgTab[k].base.toAddress(), MethodRegistry.rgTab[k].nameOff)
                     && utf8EqAt(base, descOff, MethodRegistry.rgTab[k].base.toAddress(), MethodRegistry.rgTab[k].descOff))
             {
-                return MethodRegistry.rgTab[k].buf;
+                return MethodRegistry.rgTab[k].buf.toLong();
             }
             k = MethodRegistry.rgNext[k];
         }
@@ -7640,12 +7642,12 @@ public final class Loader
         LazyCompiler.lzTab[idx].codeLen = ClassBytes.codeLength(code);
         LazyCompiler.lzTab[idx].isStatic = 0;
         LazyCompiler.lzTab[idx].isSync = VtableLayout.gvTab[s].isSync;                // else this body compiles with NO monitor
-        LazyCompiler.lzTab[idx].cache = 0L;
+        LazyCompiler.lzTab[idx].cache = CodeAddress.zero();
         LazyCompiler.lzN += 1;
         Address buf = Heap.allocCode(32);
         LazyCompiler.noteStub(buf, idx);
         Heap.pinCodeAt(buf);
-        LazyCompiler.lzTab[idx].stubLit = LazyCompiler.writeLazyStub(buf, idx).toLong();
+        LazyCompiler.lzTab[idx].stubLit = CodeAddress.fromAddress(LazyCompiler.writeLazyStub(buf, idx));
         VtableLayout.gvTab[s].implBuf = buf.toLong();                // a class implementing N interfaces that each declare
         return buf.toLong();                            //   this method would otherwise mint N identical stubs
     }
@@ -8002,7 +8004,7 @@ public final class Loader
             int i = 0;
             while (i < MethodRegistry.rgCount)
             {
-                if (MethodRegistry.rgTab[i].buf == blk)
+                if (MethodRegistry.rgTab[i].buf.toLong() == blk)
                 {
                     int kind = ctorNameKind(MethodRegistry.rgTab[i].base.plus(MethodRegistry.rgTab[i].nameOff + 2L), u2(MethodRegistry.rgTab[i].base.plus(MethodRegistry.rgTab[i].nameOff)));
                     if (kind == FRAME_KEEP)

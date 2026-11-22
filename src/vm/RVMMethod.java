@@ -12,6 +12,7 @@
 package vm;
 
 import magic.Address;
+import magic.CodeAddress;
 import magic.DataReference;
 
 /**
@@ -27,8 +28,8 @@ final class RVMMethod
     int  classOff;  // class name Utf8 offset
     int  nameOff;   // method name Utf8 offset
     int  descOff;   // descriptor Utf8 offset
-    long buf;       // compiled buffer address
-    long line;      // {u32 count,(u32 wordOff,u32 line)*} table address, or 0
+    CodeAddress buf;  // compiled buffer address (a code root to the collector: frames/GC arc S6b-3)
+    CodeAddress line; // {u32 count,(u32 wordOff,u32 line)*} table address (in the code arena), or 0
     Address src;    // this class's SourceFile filename Utf8 address, or 0
     int  access;    // access_flags (ACC_STATIC etc.) -- reflective invoke + getModifiers
 }

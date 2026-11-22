@@ -14,6 +14,7 @@ package vm;
 import board.Uart;
 import classfile.ClassReader;
 import magic.Address;
+import magic.CodeArray;
 import magic.DataReference;
 import magic.Magic;
 import magic.ObjectReference;
@@ -107,7 +108,7 @@ final class StackTrace
         int i = 0;
         while (i < MethodRegistry.rgCount)
         {
-            long b = MethodRegistry.rgTab[i].buf;
+            long b = MethodRegistry.rgTab[i].buf.toLong();
             if (b != 0L && b <= pc.toLong() && b > bestBuf
                     && (pEnd != 0L ? b >= pStart : inSameCodeBlock(Address.fromLong(b), pc))) { bestBuf = b; bestReg = i; bestClin = -1; }
             i += 1;
@@ -115,7 +116,7 @@ final class StackTrace
         int c = 0;
         while (c < ClassInitializer.clinitN)
         {
-            long b = ClassInitializer.clinitEntry[c];
+            long b = ClassInitializer.clinitEntry.get(c);
             if (b != 0L && b <= pc.toLong() && b > bestBuf
                     && (pEnd != 0L ? b >= pStart : inSameCodeBlock(Address.fromLong(b), pc))) { bestBuf = b; bestClin = c; bestReg = -1; }
             c += 1;
@@ -130,7 +131,7 @@ final class StackTrace
                     u2(MethodRegistry.rgTab[bestReg].base.plus(MethodRegistry.rgTab[bestReg].classOff)));
             methStr = Loader.guestStringUtf8(MethodRegistry.rgTab[bestReg].base.toAddress(), MethodRegistry.rgTab[bestReg].nameOff);
             fileStr = Loader.guestStringUtf8(MethodRegistry.rgTab[bestReg].src, 0);
-            line = lineAtOffset(MethodRegistry.rgTab[bestReg].line, (int) ((pc.toLong() - bestBuf) >> 2));
+            line = lineAtOffset(MethodRegistry.rgTab[bestReg].line.toLong(), (int) ((pc.toLong() - bestBuf) >> 2));
         }
         else if (bestClin >= 0)
         {
@@ -351,7 +352,8 @@ final class StackTrace
     }
 
     /**
-     * Give {@code exc} a fresh {@code long[n]} backtrace and return it, or 0 when the field is unknown. With
+     * Give {@code exc} a fresh backtrace of {@code n} pcs (a {@code magic.CodeArray}, read as a {@code long[]}) and
+     * return it, or 0 when the field is unknown. With
      * {@code n == 0} it records that the trace is the INLINE slots instead, by storing {@code exc} itself:
      * stock's Throwable reads a null backtrace as "no trace captured", so it must be non-null, and a re-capture
      * ({@code fillInStackTrace()} again) that now fits the slots must not leave an older, deeper trace in place.
@@ -368,10 +370,10 @@ final class StackTrace
             exc.toAddress().plus(off).store(exc);
             return 0L;
         }
-        ObjectReference arr = Heap.allocArray(n, 8).toObjectReference();
-        arr.toAddress().plus(ObjectModel.TIB_OFFSET).store(ArrayTypes.primArrayTib(11));   // long[]
+        CodeArray pcs = CodeArray.create(n);           // a vm.CodeElem[]: its pcs are code roots (frames/GC arc S6b-3)
+        long arr = Magic.addrOf(pcs);
         exc.toAddress().plus(off).store(arr);
-        return arr.toLong();
+        return arr;
     }
 
     /** Materialise a {@code StackTraceElement[]} for the frame chain at ({@code pc},{@code sp}). */
@@ -425,9 +427,9 @@ final class StackTrace
         int i = 0;
         while (i < MethodRegistry.rgCount)
         {
-            if (MethodRegistry.rgTab[i].buf != 0L && MethodRegistry.rgTab[i].buf <= addr.toLong() && MethodRegistry.rgTab[i].buf > best)
+            if (MethodRegistry.rgTab[i].buf.toLong() != 0L && MethodRegistry.rgTab[i].buf.toLong() <= addr.toLong() && MethodRegistry.rgTab[i].buf.toLong() > best)
             {
-                best = MethodRegistry.rgTab[i].buf;
+                best = MethodRegistry.rgTab[i].buf.toLong();
                 bestReg = i;
             }
             i += 1;
@@ -469,7 +471,7 @@ final class StackTrace
         int i = 0;
         while (i < MethodRegistry.rgCount)
         {
-            long b = MethodRegistry.rgTab[i].buf;
+            long b = MethodRegistry.rgTab[i].buf.toLong();
             if (b != 0L && b <= addr.toLong() && b > bestBuf
                     && (aEnd != 0L ? b >= aStart : inSameCodeBlock(Address.fromLong(b), addr))) { bestBuf = b; bestReg = i; bestClin = -1; }
             i += 1;
@@ -477,7 +479,7 @@ final class StackTrace
         int c = 0;
         while (c < ClassInitializer.clinitN)
         {
-            long b = ClassInitializer.clinitEntry[c];
+            long b = ClassInitializer.clinitEntry.get(c);
             if (b != 0L && b <= addr.toLong() && b > bestBuf
                     && (aEnd != 0L ? b >= aStart : inSameCodeBlock(Address.fromLong(b), addr))) { bestBuf = b; bestClin = c; bestReg = -1; }
             c += 1;
@@ -500,7 +502,7 @@ final class StackTrace
                     u2(MethodRegistry.rgTab[bestReg].base.plus(MethodRegistry.rgTab[bestReg].classOff)));
             Uart.putc(0x2E);
             Loader.writeName(MethodRegistry.rgTab[bestReg].base.plus(MethodRegistry.rgTab[bestReg].nameOff + 2), u2(MethodRegistry.rgTab[bestReg].base.plus(MethodRegistry.rgTab[bestReg].nameOff)));
-            int line = lineAtOffset(MethodRegistry.rgTab[bestReg].line, (int) ((addr.toLong() - bestBuf) >> 2)); // (pc-base)/4 = word offset
+            int line = lineAtOffset(MethodRegistry.rgTab[bestReg].line.toLong(), (int) ((addr.toLong() - bestBuf) >> 2)); // (pc-base)/4 = word offset
             if (!MethodRegistry.rgTab[bestReg].src.isZero())
             {
                 Uart.putc(0x28);                                 // '('

@@ -4,6 +4,30 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **FRAMES/GC ARC, INCREMENT S6b-3: code addresses made exact (2026-11-22).** S6b-2's new code count showed that a
+  precise trace loses the code addresses the VM keeps in `long` fields and `long[]` tables -- and the code sweep would
+  then free methods still in use. Measured by the heap shadow (`gcheap=2`): code words only the conservative rescan
+  recorded, whole virt list 2.30M -> 40.6k (385 collections); web server on virt 13,322 -> 183 per collection; Pi
+  104,830 -> 1,118 (14 collections).
+  - **Two unboxed types.** `magic.CodeAddress` is lowered exactly as `Address`; as a FIELD its kind is "code",
+    encoded as BOTH kind bits (no slot is both a reference and a data reference, so the Type stays 112 bytes):
+    `ClassFile.KIND_CODE`, `TibBuilder.fieldKind` 2, `Heap.markStatic` kind 2. A LOCAL stays raw (`RefMaps`): code a
+    frame runs is kept by its return address. `magic.CodeArray` is a `long[]`'s operations retyped at `create` to
+    `vm.CodeElem[]`, whose array Type carries `ObjectModel.ARRAY_CODE_ELEMS` (bit 33). A precise trace records a
+    code word in the code bitmap and marks nothing on the heap; TIBs and itables (S6b-2 layouts) do the same now.
+  - **Retyped:** `RVMMethod.buf`/`line`, `LazyMethod.cache`/`stubLit`, the `Method`/`Constructor` overlays' `buf`,
+    `Throwable.bt0..bt7`; tables `Relocator.rcAddr`/`rcDone`, `ClassInitializer.clinitEntry`, `Loader.mBuf`/`mEnd`/
+    `mLine`, `VirtualDispatch.vsSiteBuf`, and a Throwable's deep backtrace (`StackTrace.newThrowableBacktrace`).
+  - **What is left is not a root.** Every remaining code word either points at no method (`unclaimed`: numbers --
+    `ValueRange` bounds, `DateTimeFormatterBuilder`'s 100,000,000, a Type's implements bitmap, class-file bytes) or
+    sits in `StackRoots.seen`, the print-once table of reported return addresses, which must not keep code alive.
+    Left raw on purpose: `asm/CodeBuffer.base` (the class also runs on the seed JVM, where unboxed types cannot).
+  - **QEMU:** virt 212/212 with defaults and with `gcheap=2`; raspi4b demo suite `want: checked=160 mismatch=0`,
+    `gc: collections=53`, `intact=32`, failure markers as S6b-2. `make test` + overlaycheck OK.
+  - **Pi 4, `gcheap=2`** (build `e79bc0b204acfb32`): 8 pages 200; code 1,118; allocData struct 7 (S6b-2 read 1; the
+    sources print on the UART only), raw slot / unmapped / word array / raw array / other 0.
+  - **Pi 4, default** (build `a3c62b45c0770b34`; sha256 = host; 8 pages 200): FrameBench, three fresh boots, check
+    values identical to S6b-2 and S6b-1; median sum without dispatch **523.5 ms** (S6b-2 523.6).
 - **FRAMES/GC ARC, INCREMENT S6b-2: the VM's own structs describe their pointers (2026-11-22).** S6b-1 left the
   `allocData` structs: blocks with a zero header word, so a precise trace had nothing to read. Measured by the heap
   shadow (`gcheap=2`): on virt (web server under load, 12 collections) struct misses per collection 3,939 -> 1;

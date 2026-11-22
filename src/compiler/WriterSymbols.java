@@ -174,6 +174,10 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         {
             return Unboxed.DATA_ARRAY_DESC;
         }
+        if (kind == Unboxed.CODE_ARRAY)
+        {
+            return Unboxed.CODE_ARRAY_DESC;
+        }
         return null;
     }
 

@@ -146,12 +146,17 @@ final class HeapShadow implements Uninterruptible
             if ((isz & 0xFFFFL) == (long) ObjectModel.WORD && t.plus(ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET).loadLong() != 0L)
             {
                 boolean data = (isz & ObjectModel.ARRAY_DATA_ELEMS) != 0L;   // a magic.DataReferenceArray
+                boolean code = (isz & ObjectModel.ARRAY_CODE_ELEMS) != 0L;   // a magic.CodeArray
                 Address p = o.plus(ObjectModel.ARRAY_BASE_OFFSET);
                 Address end = arrayEnd(o, size);
                 while (p.LT(end))
                 {
                     long w = p.loadLong();
-                    if (!data)
+                    if (code)
+                    {
+                        markCode(w);
+                    }
+                    else if (!data)
                     {
                         VMGc.markExact(w);
                     }
@@ -180,7 +185,11 @@ final class HeapShadow implements Uninterruptible
             long rb = i < 63L ? r0 >>> sh : r1 >>> sh;
             long db = i < 63L ? d0 >>> sh : d1 >>> sh;
             long w = o.plus(ObjectModel.HEADER_SIZE).plus(i * 8L).loadLong();
-            if ((rb & 1L) != 0L)
+            if ((rb & db & 1L) != 0L)
+            {
+                markCode(w);                           // both bits: a magic.CodeAddress (S6b-3)
+            }
+            else if ((rb & 1L) != 0L)
             {
                 VMGc.markExact(w);
             }
@@ -225,7 +234,7 @@ final class HeapShadow implements Uninterruptible
             p = p.plus(8);
             while (p.LT(end))
             {
-                VMGc.markExact(p.loadLong());
+                markCode(p.loadLong());
                 p = p.plus(8);
             }
             return;
@@ -243,7 +252,7 @@ final class HeapShadow implements Uninterruptible
         {
             while (p.LT(end))
             {
-                VMGc.markExact(p.loadLong());
+                markCode(p.loadLong());
                 p = p.plus(8);
             }
             return;
@@ -263,11 +272,17 @@ final class HeapShadow implements Uninterruptible
             {
                 long bit = 1L << (s & 63);
                 long w = p.plus(s * 8L).loadLong();
-                if ((refs.plus((s >> 6) * 8L).loadLong() & bit) != 0L)
+                boolean r = (refs.plus((s >> 6) * 8L).loadLong() & bit) != 0L;
+                boolean d = (datas.plus((s >> 6) * 8L).loadLong() & bit) != 0L;
+                if (r && d)
+                {
+                    markCode(w);
+                }
+                else if (r)
                 {
                     VMGc.markExact(w);
                 }
-                else if ((datas.plus((s >> 6) * 8L).loadLong() & bit) != 0L)
+                else if (d)
                 {
                     markData(w);
                 }
@@ -304,6 +319,15 @@ final class HeapShadow implements Uninterruptible
                    || (refs.plus((words + (s >> 6)) * 8L).loadLong() & bit) != 0L;
         }
         return false;
+    }
+
+    /** A code address the trace follows: recorded in the code bitmap; never a heap mark. */
+    private static void markCode(long w)
+    {
+        if (w >= Heap.CODE_BASE && w < Heap.CODE_LIMIT)
+        {
+            VMGc.markExact(w);
+        }
     }
 
     private static void markData(long w)

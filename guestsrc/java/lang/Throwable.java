@@ -126,15 +126,16 @@ public class Throwable implements Serializable {
     // joe-ng: the VM's inline backtrace -- up to eight frame pcs, 0-terminated, filled at construction
     // (VMUnwind.fillInTrace) or, for an exception the VM allocates without a constructor, at its throw
     // (VMUnwind.captureTrace). Inline so a trace that fits needs no allocation. They MUST stay the first
-    // instance fields: the VM reads them at object offsets 16..72.
-    long bt0;
-    long bt1;
-    long bt2;
-    long bt3;
-    long bt4;
-    long bt5;
-    long bt6;
-    long bt7;
+    // instance fields: the VM reads them at object offsets 16..72. CodeAddress, so the collector keeps the code
+    // they name (frames/GC arc S6b-3): a trace printed later must still find its methods.
+    magic.CodeAddress bt0;
+    magic.CodeAddress bt1;
+    magic.CodeAddress bt2;
+    magic.CodeAddress bt3;
+    magic.CodeAddress bt4;
+    magic.CodeAddress bt5;
+    magic.CodeAddress bt6;
+    magic.CodeAddress bt7;
 
     /**
      * The JVM saves some indication of the stack backtrace in this slot.

@@ -14,6 +14,7 @@ package vm;
 import board.Uart;
 import classfile.ClassReader;
 import magic.Address;
+import magic.CodeAddress;
 import magic.DataReference;
 import magic.Magic;
 import magic.ObjectReference;
@@ -503,7 +504,7 @@ final class Reflection
                 e.classOff = ClassRegistry.clTab[ci].nameOff;
                 e.nameOff = nameOff;
                 e.descOff = descOff;
-                e.buf = 0L;                             // nothing to call: Method.invoke dispatches or throws
+                e.buf = CodeAddress.zero();                             // nothing to call: Method.invoke dispatches or throws
                 e.access = u2(p);
                 MethodRegistry.bdTab[MethodRegistry.bdCount] = e;
                 MethodRegistry.bdCount += 1;
@@ -858,7 +859,7 @@ final class Reflection
             }
             n += 1;
         }
-        outArr.toAddress().plus(24L).plus(0L).store(reflEntry(rgIndex).buf);      // out[0] = compiled buffer
+        outArr.toAddress().plus(24L).plus(0L).store(reflEntry(rgIndex).buf.toLong());      // out[0] = compiled buffer
         outArr.toAddress().plus(24L).plus(8L).store((long) reflEntry(rgIndex).access);   // out[1] = access flags
         outArr.toAddress().plus(24L).plus(16L).store((long) u1(p.plus(1)));   // out[2] = return-type char (after ')')
         return n;

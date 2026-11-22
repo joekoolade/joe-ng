@@ -112,7 +112,8 @@ public final class ObjectModel
      *  64-bit bitmaps, two words each: {@code +80/+88} = the slot holds an object REFERENCE (a Java reference,
      *  {@code magic.ObjectReference}, or one of the unboxed arrays, which are objects), {@code +96/+104} = the slot
      *  holds a DATA REFERENCE ({@code magic.DataReference}: an {@code allocData} payload, its block one header
-     *  lower). A slot the reference map marks and neither bitmap does is RAW -- a {@code long}, {@code Address},
+     *  lower). A slot BOTH bitmaps mark holds a CODE ADDRESS ({@code magic.CodeAddress}, S6b-3): recorded in the code
+     *  bitmap, never a heap mark. A slot the reference map marks and neither bitmap does is RAW -- a {@code long}, {@code Address},
      *  {@code Word}, {@code Offset} or {@code Extent} -- which a precise trace does not follow. Bit 0 of the
      *  reference bitmap is the "kinds computed" marker; a Type without it has no exact kinds. */
     public static final int TYPE_REFKIND_OFFSET = 10 * WORD;   // 80 (+88)
@@ -133,6 +134,10 @@ public final class ObjectModel
      *  {@code magic.DataReferenceArray} (frames/GC arc S6b). Outside {@link #ARRAY_TYPE_TAG_MASK} and the element
      *  size, so every existing reader of the word is unaffected. */
     public static final long ARRAY_DATA_ELEMS = 1L << 32;
+    /** Flag in an array Type's instanceSize word, beside {@link #ARRAY_DATA_ELEMS}: the elements are CODE addresses --
+     *  the Type of {@code vm.CodeElem[]}, the run-time class of a {@code magic.CodeArray} (frames/GC arc S6b-3). A
+     *  precise trace records each in the code bitmap and marks nothing on the heap. */
+    public static final long ARRAY_CODE_ELEMS = 1L << 33;
     /** Mask to read the tag (identify an array or primitive Type). */
     public static final long ARRAY_TYPE_TAG_MASK = 0xFFFF0000L;
     /** Tag in a PRIMITIVE Type's instanceSize slot; the low bits hold the JVMS descriptor char ('I', 'Z', ...).

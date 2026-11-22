@@ -1010,11 +1010,11 @@ final class InterfaceInvocation
             while (k >= 0)
             {
                 rfChainSteps += 1;
-                if (MethodRegistry.rgTab[k].base.EQ(ibase) && MethodRegistry.rgTab[k].buf != 0L
+                if (MethodRegistry.rgTab[k].base.EQ(ibase) && MethodRegistry.rgTab[k].buf.toLong() != 0L
                         && Loader.utf8EqAt(base, nameOff, MethodRegistry.rgTab[k].base.toAddress(), MethodRegistry.rgTab[k].nameOff)
                         && Loader.utf8EqAt(base, descOff, MethodRegistry.rgTab[k].base.toAddress(), MethodRegistry.rgTab[k].descOff))
                 {
-                    return MethodRegistry.rgTab[k].buf;
+                    return MethodRegistry.rgTab[k].buf.toLong();
                 }
                 k = MethodRegistry.rgNext[k];
             }

@@ -614,6 +614,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         // frames/GC arc S6b: the run-time classes of the unboxed reference arrays (WriterSymbols.tagUnboxedArray).
         collectArrayDesc(compiler.Unboxed.OBJECT_ARRAY_DESC, refArrDescs, typeRefClasses, null);
         collectArrayDesc(compiler.Unboxed.DATA_ARRAY_DESC, refArrDescs, typeRefClasses, null);
+        collectArrayDesc(compiler.Unboxed.CODE_ARRAY_DESC, refArrDescs, typeRefClasses, null);
         for (int _s2b = 0; _s2b < bakedObjs.size(); _s2b++)
         {
             Class<?> bc = bakedObjs.get(_s2b).getClass();
@@ -1265,7 +1266,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             int tw = typeWord.get(d);
             writeLong(image, tw + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET / 4,
                       ObjectModel.ARRAY_TYPE_TAG | ObjectModel.WORD
-                      | (d.equals(compiler.Unboxed.DATA_ARRAY_DESC) ? ObjectModel.ARRAY_DATA_ELEMS : 0L));
+                      | (d.equals(compiler.Unboxed.DATA_ARRAY_DESC) ? ObjectModel.ARRAY_DATA_ELEMS : 0L)
+                      | (d.equals(compiler.Unboxed.CODE_ARRAY_DESC) ? ObjectModel.ARRAY_CODE_ELEMS : 0L));
             writeLong(image, tw + ObjectModel.TYPE_SUPER_OFFSET / 4, addr(typeWord.get("java/lang/Object")));
             writeLong(image, tw + ObjectModel.TYPE_ITABLE_DIR_OFFSET / 4, 0);
             writeLong(image, tw + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET / 4, addr(typeWord.get(el)));

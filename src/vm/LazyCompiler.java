@@ -15,6 +15,7 @@ import asm.A64Enc;
 import board.Uart;
 import compiler.Baseline;
 import magic.Address;
+import magic.CodeAddress;
 import magic.DataReference;
 import magic.Magic;
 import magic.ObjectReference;
@@ -143,18 +144,18 @@ final class LazyCompiler
         lzTab[idx].codeLen = Loader.mLen[i];
         lzTab[idx].isStatic = Loader.mStatic[i];
         lzTab[idx].isSync = Loader.mSync[i];
-        lzTab[idx].cache = 0L;
+        lzTab[idx].cache = CodeAddress.zero();
         if (lzN >= lzNHigh)
         {
             lzNHigh = lzN + 1;                      // high-water across reclaims
         }
         lzN += 1;
-        Address buf = Address.fromLong(Loader.mBuf[i]);        // stub-sized buffer allocated by sizeMethod
+        Address buf = Address.fromLong(Loader.mBuf.get(i));        // stub-sized buffer allocated by sizeMethod
         noteStub(buf, idx);                             // ... and make it NAMEABLE: without this a fault landing
                                                         //   here reports stubIdx -1 and reads as an ordinary body
         Heap.pinCodeAt(buf);                                              // the batch-path twin of buildLazyCompileStub: same stub,
                                                         //   same lifetime problem, same fix (see the note there)
-        lzTab[idx].stubLit = writeLazyStub(buf, idx).toLong();
+        lzTab[idx].stubLit = CodeAddress.fromAddress(writeLazyStub(buf, idx));
     }
 
     /**
@@ -396,7 +397,7 @@ final class LazyCompiler
      */
     private static void patchLazyStub(int idx, long body)
     {
-        long lit = lzTab[idx].stubLit;
+        long lit = lzTab[idx].stubLit.toLong();
         if (lit == 0L || body == 0L)
         {
             return;
@@ -418,7 +419,7 @@ final class LazyCompiler
         // whatever data now lives there. So pin it. 32 bytes each, and it is the safety net that makes every
         // stale dispatch copy correct.
         Heap.pinCodeAt(buf);
-        lzTab[idx].stubLit = writeLazyStub(buf, idx).toLong();
+        lzTab[idx].stubLit = CodeAddress.fromAddress(writeLazyStub(buf, idx));
         return buf;
     }
 
@@ -710,9 +711,9 @@ final class LazyCompiler
             }
             return 0L;                                  // dead force-reference (writer) / bad index
         }
-        if (lzTab[idx].cache != 0L)
+        if (lzTab[idx].cache.toLong() != 0L)
         {
-            return lzTab[idx].cache;                         // memoized: compile once, however many callers hit the stub
+            return lzTab[idx].cache.toLong();                         // memoized: compile once, however many callers hit the stub
         }
         VM.loaderLock(VM.LOCK_LAZY);                                // SMP: the compile context is static -- one compiler at a time
         long done;
@@ -756,9 +757,9 @@ final class LazyCompiler
     /** {@link #lazyCompile}'s body, run under the loader lock. */
     private static long lazyCompileLocked(int idx)
     {
-        if (lzTab[idx].cache != 0L)
+        if (lzTab[idx].cache.toLong() != 0L)
         {
-            return lzTab[idx].cache;                    // another core compiled it while we waited for the lock
+            return lzTab[idx].cache.toLong();                    // another core compiled it while we waited for the lock
         }
         ClassInitializer.ensureClinit(lzTab[idx].reg);                   // JVMS 5.5 barrier: first call into the class initializes it.
                                                         // BEFORE restoreCtxForCompile -- the initializer re-enters here
@@ -827,7 +828,7 @@ final class LazyCompiler
                     Loader.printNameAt(Loader.gView.base.toAddress(), bkName);
                     Uart.putc(0x0A);
                 }
-                lzTab[idx].cache = baked;
+                lzTab[idx].cache = CodeAddress.fromLong(baked);
                 if (!lzTab[idx].slot.isZero())
                 {
                     lzTab[idx].slot.toAddress().store(baked);
@@ -910,7 +911,7 @@ final class LazyCompiler
             Loader.capHalt(Magic.bytes("lazy-compile-null"), idx);   // the trampoline would `br 0` -- halt with a name instead
         }
         rememberLazyBody(idx, buf);
-        lzTab[idx].cache = buf;                         // memoize BEFORE draining: an initializer we are about
+        lzTab[idx].cache = CodeAddress.fromLong(buf);                         // memoize BEFORE draining: an initializer we are about
                                                         // to run may call straight back into this method
         ClassInitializer.drainPendingInit();                             // initialize what the body touches -- still before it runs
         if (!lzTab[idx].slot.isZero())                       // 1b/1c: point the offset cell at the buffer
@@ -942,12 +943,12 @@ final class LazyCompiler
         int i = 1;
         while (i < Loader.mCount)
         {
-            if (Loader.mDefer[i] == 0 && Loader.mBuf[i] != 0L)
+            if (Loader.mDefer[i] == 0 && Loader.mBuf.get(i) != 0L)
             {
                 int nameOff = Loader.findNameByCode(Loader.mCode[i]);
                 if (nameOff != 0)
                 {
-                    MethodRegistry.register(Loader.gView.base.toAddress(), Loader.gView.thisNameOff, nameOff, Loader.mDescOff[i], Loader.mBuf[i], Loader.mLine[i], Loader.mSrc.get(i),
+                    MethodRegistry.register(Loader.gView.base.toAddress(), Loader.gView.thisNameOff, nameOff, Loader.mDescOff[i], Loader.mBuf.get(i), Loader.mLine.get(i), Loader.mSrc.get(i),
                              accessInContext(Loader.gView.base.toAddress(), nameOff, Loader.mDescOff[i]));
                 }
             }
@@ -998,13 +999,13 @@ final class LazyCompiler
         int i = lazyBodyEntry(lzTab[idx].blob.toAddress(), nameOff, lzTab[idx].descOff);
         if (i >= 0)
         {
-            MethodRegistry.rgTab[i].buf = buf;
+            MethodRegistry.rgTab[i].buf = CodeAddress.fromLong(buf);
             Relocator.markRegDirty(i);                             // its memoised call sites now want the body
-            MethodRegistry.rgTab[i].line = Loader.mLine[0];
+            MethodRegistry.rgTab[i].line = CodeAddress.fromLong(Loader.mLine.get(0));
             MethodRegistry.rgTab[i].src = Loader.mSrc.get(0);
             return;
         }
-        MethodRegistry.register(lzTab[idx].blob.toAddress(), Loader.gView.thisNameOff, nameOff, lzTab[idx].descOff, buf, Loader.mLine[0], Loader.mSrc.get(0),
+        MethodRegistry.register(lzTab[idx].blob.toAddress(), Loader.gView.thisNameOff, nameOff, lzTab[idx].descOff, buf, Loader.mLine.get(0), Loader.mSrc.get(0),
                  accessInContext(lzTab[idx].blob.toAddress(), nameOff, lzTab[idx].descOff));
     }
 
@@ -1169,7 +1170,7 @@ final class LazyCompiler
                 {
                     lzNHigh = lzN + 1;                      // high-water across reclaims
                 }
-                lzTab[idx].cache = 0L;
+                lzTab[idx].cache = CodeAddress.zero();
                 DataReference cell = Heap.allocCodeTable(8);
                 lzTab[idx].slot = cell;                     // first call data-patches the cell -> later calls dispatch direct
                 cell.store(buildLazyCompileStub(idx));

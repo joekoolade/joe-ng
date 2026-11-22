@@ -212,12 +212,12 @@ final class Indy
             }
         }
         RVMMethod m = li < 0 ? null : Reflection.reflEntry(li);
-        if (m == null || m.buf == 0L)
+        if (m == null || m.buf.toLong() == 0L)
         {
             Uart.write(Magic.bytes("\n  INDY LINK: no MethodHandleNatives linker\n"));
             return 0L;
         }
-        return Magic.call2(m.buf, ClassMirrors.classMirror(dsType.get(idx)), (long) dsCp[idx]);
+        return Magic.call2(m.buf.toLong(), ClassMirrors.classMirror(dsType.get(idx)), (long) dsCp[idx]);
     }
 
     /** Locate the class-level {@code BootstrapMethods} attribute (after the methods table); set gBsmOff (0 if none). */
