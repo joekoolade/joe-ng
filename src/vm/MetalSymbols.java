@@ -84,15 +84,15 @@ final class MetalSymbols implements Symbols
     // placement-independent, so the metal can size/place/emit in phases.
     public void tib(CodeBuffer cb, int reg, int classCp)
     {
-        emitAddr(cb, reg, DynamicTypeCheck.tibOfClass(classCp));
+        emitData(cb, reg, DynamicTypeCheck.tibOfClass(classCp));
     }
     public void type(CodeBuffer cb, int reg, int classCp)
     {
-        emitAddr(cb, reg, DynamicTypeCheck.typeOfCheckedClass(classCp));
+        emitData(cb, reg, DynamicTypeCheck.typeOfCheckedClass(classCp));
     }
     public void interfaceType(CodeBuffer cb, int reg, int ifaceMethodCp)
     {
-        emitAddr(cb, reg, InterfaceInvocation.ifaceTypeOfMethod(ifaceMethodCp));
+        emitData(cb, reg, InterfaceInvocation.ifaceTypeOfMethod(ifaceMethodCp));
     }
     public void arrayDescAddr(CodeBuffer cb, int reg, int classCp)
     {
@@ -100,7 +100,7 @@ final class MetalSymbols implements Symbols
     }
     public void classLiteral(CodeBuffer cb, int reg, int classCp)
     {
-        emitAddr(cb, reg, ClassMirrors.classLiteral(classCp));
+        emitObject(cb, reg, ClassMirrors.classLiteral(classCp));
     }
     public long selfClassMonitor()
     {
@@ -108,7 +108,7 @@ final class MetalSymbols implements Symbols
     }
     public void emitSelfClassMonitor(CodeBuffer cb, int reg)
     {
-        emitAddr(cb, reg, ClassMirrors.selfClassMirror());
+        emitObject(cb, reg, ClassMirrors.selfClassMirror());
     }
     public boolean isWatchedField(int fieldCp)
     {
@@ -191,7 +191,7 @@ final class MetalSymbols implements Symbols
         {
             return;                                     // AddressArray: a long[] is its run-time class
         }
-        emitAddr(cb, 16, tib);                          // x16 = the baked array TIB (scratch)
+        emitData(cb, 16, tib);                          // x16 = the baked array TIB (scratch)
         cb.emit(A64Enc.strx(16, arrReg, ObjectModel.TIB_OFFSET));
     }
 
@@ -202,7 +202,7 @@ final class MetalSymbols implements Symbols
         {
             return;                                     // no array Type (Object not loaded): leave it raw
         }
-        emitAddr(cb, 16, tib);                          // x16 = array TIB (scratch)
+        emitData(cb, 16, tib);                          // x16 = array TIB (scratch)
         cb.emit(A64Enc.strx(16, arrReg, ObjectModel.TIB_OFFSET));   // arr.@0 = array TIB (was the raw element size)
     }
     public void staticField(CodeBuffer cb, int reg, int fieldCp)
@@ -264,7 +264,7 @@ final class MetalSymbols implements Symbols
         // loaded (so String methods work on literals), else a raw byte[] (unchanged for String-free
         // guests). The size pass compiles at base 0 too, so a spare copy leaks per string — harmless
         // under the bump allocator.
-        emitAddr(cb, reg, Loader.internStringObj(stringCp));
+        emitObject(cb, reg, Loader.internStringObj(stringCp));
     }
     // The JIT compiles real java.base-shaped code, which relies on the VM throwing NPE/AIOOBE on a bad
     // deref/index — and the mini exception hierarchy is loaded here, so we can allocate the object.
@@ -277,12 +277,27 @@ final class MetalSymbols implements Symbols
         emitAddr(cb, reg, cb.pcAt(targetWord));          // JIT compiles at the final base -> resolve now
     }
 
-    /** Fixed 2-word load of a &lt;4 GiB address into {@code reg} (MOVZ low16 + MOVK bits16..31). */
+    /** Fixed 2-word load of a &lt;4 GiB address into {@code reg} (MOVZ low16 + MOVK bits16..31). Records nothing: for
+     *  an address that keeps nothing alive -- in the image, in code, or INSIDE a block something else holds (a static's
+     *  slot, a name in a class-file blob, an inline-cache word). */
     private static void emitAddr(CodeBuffer cb, int reg, long addr)
     {
-        Loader.noteCodeRoot(addr);      // the pair below hides this address from any data scan: record it
         cb.emit(A64Enc.movz(reg, (int) (addr & 0xFFFFL), 0));
         cb.emit(A64Enc.movk(reg, (int) ((addr >>> 16) & 0xFFFFL), 1));
+    }
+
+    /** {@link #emitAddr} of an OBJECT's address, recorded as a code root: the pair hides it from any data scan. */
+    private static void emitObject(CodeBuffer cb, int reg, long addr)
+    {
+        Loader.noteCodeRoot(addr, false);
+        emitAddr(cb, reg, addr);
+    }
+
+    /** {@link #emitAddr} of a DATA REFERENCE (an allocData payload: a TIB, a Type), recorded as a code root. */
+    private static void emitData(CodeBuffer cb, int reg, long addr)
+    {
+        Loader.noteCodeRoot(addr, true);
+        emitAddr(cb, reg, addr);
     }
 
     // ----- symbol queries: resolve to a number from the loaded-class tables -----
@@ -300,7 +315,7 @@ final class MetalSymbols implements Symbols
     }
     public void defaultIfaceType(CodeBuffer cb, int reg, int methodCp)
     {
-        emitAddr(cb, reg, InterfaceInvocation.defaultIfaceTypeOf(methodCp));
+        emitData(cb, reg, InterfaceInvocation.defaultIfaceTypeOf(methodCp));
     }
     public int defaultIfaceSlot(int methodCp)
     {
@@ -435,7 +450,7 @@ final class MetalSymbols implements Symbols
             LambdaFactory.printLambdaImplName(idx);            // WHICH lambda -- idx alone cannot say, see the helper
             Uart.putc(0x0A);
         }
-        emitAddr(cb, reg, tib);
+        emitData(cb, reg, tib);
     }
 
     /** Compile-time trace of every lambda site: capture count, SAM argc, allocated size, impl kind. */
@@ -469,7 +484,7 @@ final class MetalSymbols implements Symbols
         }
         else
         {
-            emitAddr(cb, reg, Indy.typeSwitchWrapperType(idx, k));
+            emitData(cb, reg, Indy.typeSwitchWrapperType(idx, k));
         }
     }
     public boolean isRecordIndy(int idx)

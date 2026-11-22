@@ -321,6 +321,7 @@ public final class VM
         // instructions (looked like a "reset" during the long regex/split compile). The JIT code arena is
         // never reclaimed, so allocate there (same rationale as the #43 code arena for JIT buffers).
         long raw = Heap.allocCode(0x1000).toLong();
+        Heap.pinCodeAt(Address.fromLong(raw));             // pinned: VBAR_EL1 names it (frames/GC arc S6d)
         long table = (raw + 0x7FFL) & ~0x7FFL;             // VBAR_EL1 requires 2 KiB alignment
         int i = 0;
         while (i < 16)
@@ -1943,6 +1944,7 @@ public final class VM
             // Four words, one per core: task+1 that core is switching OFF, 0 when none (VMScheduler.pickNext /
             // claimable). In the code arena for the stub's reason: never GC'd, never rewound, fixed address.
             long lraw = Heap.allocCode(64).toLong();
+            Heap.pinCodeAt(Address.fromLong(lraw));        // pinned: the switch stub's immediate names it (S6d)
             coreLeavingAddr = (lraw + (long) ObjectModel.HEADER_SIZE + 0xFL) & ~0xFL;
             int q = 0;
             while (q < 4)
@@ -3898,6 +3900,8 @@ public final class VM
     // ----- garbage collection (conservative mark-sweep) --------------------
     public static final long STACK_TOP = 0x80000L;   // SP init; the stack grows down from here
     static long staticsStart, staticsEnd;     // image statics region, filled by the writer
+    static long staticsMap;   // its kind maps (frames/GC arc S6d): object-reference bits, then data-reference bits, one
+                              //   bit per 8-byte slot, each map ((slots + 63) >> 6) words; both bits = a code address
 
     static int gcLog;        // print per-collection stats (diagnostic)
 

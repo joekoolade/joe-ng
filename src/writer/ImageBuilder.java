@@ -785,6 +785,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         }
         int[] bakedStaticsWord = new int[vtSigClasses.size()];
         int[] bakedStaticCount = new int[vtSigClasses.size()];
+        IntVec staticsKind = new IntVec();                   // frames/GC arc S6d: each region slot's exact kind
+        Vec<String> staticsName = new Vec<>();               //   ... and its "class.field", for out/statics-map.txt
         for (int i = 0; i < vtSigClasses.size(); i++)
         {
             bakedStaticsWord[i] = cur;
@@ -794,6 +796,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 if (fld.isStatic())
                 {
                     staticWord.put(vtSigClasses.get(i) + "." + fld.name(), cur);
+                    staticsKind.add(ClassFile.fieldKind(fld.descriptor()));
+                    staticsName.add(vtSigClasses.get(i) + "." + fld.name());
                     cur += WORDS_PER_SLOT;
                     n++;
                 }
@@ -806,10 +810,19 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             if (!staticWord.containsKey(s))              // baked classes' fields already have block slots
             {
                 staticWord.put(s, cur);
+                staticsKind.add(staticFieldKind(s));
+                staticsName.add(s);
                 cur += WORDS_PER_SLOT;
             }
         }
         int staticsRegionEnd = cur;
+        // The region's exact kind maps (frames/GC arc S6d): two bitmaps, one bit per slot -- object references, then
+        // data references; a slot in both holds a code address -- so the collector reads the statics as it reads an
+        // object's fields instead of probing every word.
+        int staticsSlots = staticsKind.size();
+        int staticsMapLongs = (staticsSlots + 63) >> 6;
+        int staticsMapWord = cur;
+        cur += 2 * staticsMapLongs * WORDS_PER_SLOT;
         // itables: per instantiated class, a directory of {interfaceType, itable} plus the itables.
         StrIntTable itableDirWord = new StrIntTable();       // class -> directory
         StrIntTable itableWord = new StrIntTable();          // "class|iface" -> itable
@@ -1378,6 +1391,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         fillStatic(image, staticWord, "vm/VM.localCount",   localEntries.size());
         fillStatic(image, staticWord, "vm/VM.handlerTable", addr(handlerTableWord));
         fillStatic(image, staticWord, "vm/VM.handlerCount", handlerEntries.size());
+        writeStaticsMaps(image, staticsMapWord, staticsKind, staticsName);
+        fillStatic(image, staticWord, "vm/VM.staticsMap", addr(staticsMapWord));
         fillStatic(image, staticWord, "vm/VM.staticsStart", addr(staticsRegionStart));
         fillStatic(image, staticWord, "vm/VM.staticsEnd",   addr(staticsRegionEnd));
         for (int i = 0; i < bakedLink.size(); i++)
@@ -2418,6 +2433,72 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     }
 
     /** Write a 64-bit value as two little-endian image ints at word index {@code w}. */
+    /** The statics region's kind of {@code key} ("class.field"): its declared field's {@code ClassFile.fieldKind},
+     *  looked up from the named class up its superclass chain; 1 (a reference) when it cannot be found, which only
+     *  over-retains -- and is counted, so an unknown never hides. */
+    private int staticFieldKind(String key)
+    {
+        int dot = key.lastIndexOf('.');
+        String c = key.substring(0, dot);
+        String name = key.substring(dot + 1);
+        while (c != null)
+        {
+            ClassFile cf = registry.resolve(c);
+            if (cf == null)
+            {
+                break;
+            }
+            for (ClassFile.FieldInfo f : cf.fields())
+            {
+                if (f.isStatic() && f.name().equals(name))
+                {
+                    return ClassFile.fieldKind(f.descriptor());
+                }
+            }
+            c = cf.superClassName();
+        }
+        staticsKindUnknown++;
+        return ClassFile.KIND_REF;
+    }
+
+    private int staticsKindUnknown;
+
+    /** Bake the statics region's two kind bitmaps at {@code mapWord} and list every slot in out/statics-map.txt. */
+    private void writeStaticsMaps(int[] image, int mapWord, IntVec kinds, Vec<String> names)
+    {
+        int longs = (kinds.size() + 63) >> 6;
+        long[] refs = new long[longs];
+        long[] datas = new long[longs];
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < kinds.size(); i++)
+        {
+            int k = kinds.get(i);
+            if (k == ClassFile.KIND_REF || k == ClassFile.KIND_CODE)
+            {
+                refs[i >> 6] |= 1L << (i & 63);
+            }
+            if (k == ClassFile.KIND_DATA || k == ClassFile.KIND_CODE)
+            {
+                datas[i >> 6] |= 1L << (i & 63);
+            }
+            sb.append(i * 8).append(' ').append(k).append(' ').append(names.get(i)).append('\n');
+        }
+        for (int j = 0; j < longs; j++)
+        {
+            writeLong(image, mapWord + j * WORDS_PER_SLOT, refs[j]);
+            writeLong(image, mapWord + (longs + j) * WORDS_PER_SLOT, datas[j]);
+        }
+        try
+        {
+            java.nio.file.Files.writeString(java.nio.file.Path.of("out", "statics-map.txt"), sb.toString());
+        }
+        catch (java.io.IOException e)
+        {
+            System.err.println("statics map: " + e.getMessage());
+        }
+        System.out.println("statics region: " + kinds.size() + " slots, kinds unknown " + staticsKindUnknown);
+    }
+
     private static void writeLong(int[] image, int w, long v)
     {
         // Every 64-bit word the VM reads out of the image is read with a 64-bit load, which takes an

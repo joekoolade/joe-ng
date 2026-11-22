@@ -14,6 +14,7 @@ package board.cyw43;
 import board.SdioHost;
 import magic.Address;
 import magic.DataReference;
+import magic.DataReferenceArray;
 import magic.Magic;
 import vm.Heap;
 import vm.VM;
@@ -77,6 +78,7 @@ public final class Cyw43
     public static int probeChip()
     {
         buf = Heap.allocData(64);
+        txqBuf = DataReferenceArray.create(TXQ);        // here, at bring-up: never an allocation under the bus lock
 
         int rc = sdio.init();                            // pins + host + CMD5/3/7 enumerate + 4-bit
         log(Magic.bytes("sdio init rc="), rc);
@@ -1512,7 +1514,7 @@ public final class Cyw43
         else if (txqCount < TXQ)
         {
             int k = (txqHead + txqCount) & (TXQ - 1);
-            txqBuf[k] = tx.toLong();
+            txqBuf.set(k, DataReference.fromAddress(tx));
             txqLen[k] = total;
             txqAt[k] = Magic.readCNTPCT_EL0();
             txqGc[k] = vm.VM.gcCollections();
@@ -1559,7 +1561,11 @@ public final class Cyw43
     // lock. TXQ is a power of two.
     private static final int TXQ = 64;
     private static final int TXQ_FORCE_MS = 250;         // a frame held this long is sent anyway (see flushTxLocked)
-    private static long[] txqBuf = new long[TXQ];
+    // A queued frame's buffer is a fresh allocData block the sender no longer holds: this table is its ONLY root, so it
+    // is a data-reference array -- a long[] is not read by the precise heap trace (frames/GC arc S6c), which would free
+    // a frame waiting to be sent. Created by probeChip at bring-up (an unboxed array cannot be built where <clinit> may
+    // run, and the send path holds the bus lock).
+    private static DataReferenceArray txqBuf;
     private static int[] txqLen = new int[TXQ];
     private static long[] txqAt = new long[TXQ];         // CNTPCT when each frame was queued
     private static long[] txqGc = new long[TXQ];         // ... and the collection count then
@@ -1593,7 +1599,7 @@ public final class Cyw43
         }
         while (txqCount > 0)
         {
-            Address tx = Address.fromLong(txqBuf[txqHead]);
+            Address tx = txqBuf.get(txqHead).toAddress();
             if (!maySend(tx))
             {
                 long held = Magic.readCNTPCT_EL0() - txqSince;
@@ -1629,7 +1635,7 @@ public final class Cyw43
                     txqLongAcrossGc = txqLongAcrossGc + 1;
                 }
             }
-            txqBuf[txqHead] = 0L;
+            txqBuf.set(txqHead, DataReference.zero());
             txqHead = (txqHead + 1) & (TXQ - 1);
             txqCount = txqCount - 1;
             txqSince = Magic.readCNTPCT_EL0();

@@ -42,7 +42,7 @@ public final class Fat32
     private static long kernCluster;   // KERNEL8.IMG's first cluster (0 until found)
     private static long kernSize;      // ... and its byte length
 
-    private static long fatBuf;        // reused 512-byte scratch for FAT / directory sectors
+    private static DataReference fatBuf;   // a root: a data reference (frames/GC arc S6d)        // reused 512-byte scratch for FAT / directory sectors
 
     private static final long EOC = 0x0FFFFFF8L;   // cluster chain terminator (>= this = end)
 
@@ -52,7 +52,7 @@ public final class Fat32
      */
     public static boolean mount()
     {
-        fatBuf = Heap.allocData(512).toLong();
+        fatBuf = Heap.allocData(512);
         DataReference mbrRef = Heap.allocData(512);
         long mbr = mbrRef.toLong();                  // a raw copy; mbrRef keeps the block alive
         if (!Block.read(0L, mbr, 1))
@@ -98,14 +98,14 @@ public final class Fat32
             int sc = 0;
             while (sc < secPerClus)
             {
-                if (!Block.read(s0 + sc, fatBuf, 1))
+                if (!Block.read(s0 + sc, fatBuf.toLong(), 1))
                 {
                     return false;
                 }
                 int off = 0;
                 while (off < 512)
                 {
-                    Address ent = Address.fromLong(fatBuf).plus(off);
+                    Address ent = fatBuf.plus(off);
                     int first = ent.loadUnsignedByte();
                     if (first == 0)
                     {
@@ -114,8 +114,8 @@ public final class Fat32
                     int attr = ent.plus(11).loadUnsignedByte();
                     if (first != 0xE5 && attr != 0x0F && isKernel8Img(ent))
                     {
-                        kernCluster = ((long) u16(fatBuf, off + 20) << 16) | u16(fatBuf, off + 26);
-                        kernSize = u32(fatBuf, off + 28);
+                        kernCluster = ((long) u16(fatBuf.toLong(), off + 20) << 16) | u16(fatBuf.toLong(), off + 26);
+                        kernSize = u32(fatBuf.toLong(), off + 28);
                         return true;
                     }
                     off += 32;
@@ -200,11 +200,11 @@ public final class Fat32
     private static long nextCluster(long cluster)
     {
         long fatByte = cluster * 4L;
-        if (!Block.read(fatStart + fatByte / 512L, fatBuf, 1))
+        if (!Block.read(fatStart + fatByte / 512L, fatBuf.toLong(), 1))
         {
             return EOC;
         }
-        return u32(fatBuf, (int) (fatByte % 512L)) & 0x0FFFFFFFL;
+        return u32(fatBuf.toLong(), (int) (fatByte % 512L)) & 0x0FFFFFFFL;
     }
 
     /** Whether the 11-byte 8.3 name at {@code p} is {@code "KERNEL8 IMG"}. */

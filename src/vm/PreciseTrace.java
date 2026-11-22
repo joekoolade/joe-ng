@@ -298,4 +298,45 @@ final class PreciseTrace implements Uninterruptible
         }
         return end;
     }
+
+    /**
+     * The image statics region [{@code start}, {@code end}) as a root, read by the writer's kind maps at {@code map}
+     * (frames/GC arc S6d): a reference slot marked at {@code w}, a data reference at {@code w-16}, a code address in
+     * the code bitmap; every other slot -- a primitive, a raw {@code long} or {@code Address} -- is not a root.
+     */
+    static void markStatics(long start, long end, long map)
+    {
+        int slots = (int) ((end - start) >> 3);
+        long longs = (long) ((slots + 63) >> 6);
+        Address refs = Address.fromLong(map);
+        Address datas = refs.plus(longs * 8L);
+        int s = 0;
+        while (s < slots)
+        {
+            long rw = refs.plus((long) (s >> 6) * 8L).loadLong();
+            long dw = datas.plus((long) (s >> 6) * 8L).loadLong();
+            if ((rw | dw) == 0L && (s & 63) == 0)
+            {
+                s += 64;                               // a whole word of primitive slots
+                continue;
+            }
+            long bit = 1L << (s & 63);
+            long w = Address.fromLong(start).plus((long) s * 8L).loadLong();
+            boolean r = (rw & bit) != 0L;
+            boolean d = (dw & bit) != 0L;
+            if (r && d)
+            {
+                markCode(w);
+            }
+            else if (r)
+            {
+                VMGc.markExact(w);
+            }
+            else if (d)
+            {
+                markData(w);
+            }
+            s += 1;
+        }
+    }
 }
