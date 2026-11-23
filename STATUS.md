@@ -4,6 +4,40 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **FRAMES/GC ARC, INCREMENT S7-3: pretenuring (2026-11-23).** What a nursery must never hold is now allocated
+  "old" from birth: every `allocData` block (Types, TIBs, statics, buffers: `Heap.dataBlock` -> `OLD_DATA`), and the two
+  kinds of OBJECT compiled code bakes as immediates (`MetalSymbols.emitObject`), by allocation site through new
+  `Heap.allocOld`/`allocArrayOld`: Class mirrors (`ClassMirrors.classMirror`) and string literals with their value
+  arrays (`Loader.internStringObj`/`internString`). There is no nursery yet, so old lands in the same heap; with
+  `gcgen=1` the census records the block old at birth (`GenCensus.born`), treats every block that existed when it was
+  armed as old, and reports per collection how much pretenured data and site memory was live or dead. `Heap.alloc` is
+  now `allocAs(size, YOUNG)`; pretenuring costs only a branch on the ordinary path.
+  - **LARGE OBJECTS ARE NOT PRETENURED -- a reversal of the plan, measured.** The first cut pretenured them; the census
+    showed most large bytes die before their first collection (virt FrameBench cycle 8: 0.4 MB live, 11.3 MB dead), so
+    pretenured they would be garbage only a full collection reclaims. They must not be COPIED, which is not the same as
+    old: S7-4 leaves them in the large region and marks them in place while young. The census now reports young large
+    bytes live/dead (Pi: 162.6 MB over a boot, 117.8 MB dead at their first collection).
+  - **A FIND: the intern pool held YOUNG Strings that code baked.** With the above in place `code->young` still read
+    17 on the virt list; a new census line naming each code-root target said every one was a `java/lang/String`: a
+    runtime `String.intern()` put the receiver in the pool, and a literal of the same text resolved later IS the pool's
+    object. `Loader.poolIntern` now pools a pretenured copy (String and value array) and returns it -- `intern()` may
+    return any instance with the content (JLS 3.10.5). 17 -> 0.
+  - **The barrier check is stricter:** an unlogged edge INTO an allocData block was counted apart in S7-2 ("S7-3
+    allocates those old"); it is now a MISS, attributed (`toData`). Six `/gc` rows added (pretenured data and site:
+    count and bytes; young large bytes and dead), and the census line gains `largeYoungKB` and `pretenuredKB`.
+  - **QEMU:** virt list **214/214**. With `gcgen=1 gcbarrier=1`: **code->young 0, young allocData 0, 0 misses** over 801
+    collections and 2.16M old->young references, all 207 probes with an expected output identical once census lines
+    are dropped. Pretenured over the list: data 83 MB live / 28 MB dead at their first collection, site 11.7 / 2.0 MB.
+    raspi4b suite `checked=160 mismatch=0`, `collections=53`; `make test` + overlaycheck OK.
+  - **Pi 4, web server + FrameBench, six boots per arm, alternating:** control (main) 524.7/519.6/528.7/516.3/516.1/
+    522.0 ms (median **520.8**), S7-3 514.9/514.1/521.6/516.1/522.1/520.7 (median **518.4**): no cost, inside the
+    noise; checks identical, 14 collections, pause 0.90-0.92 s both. Shadow arm (`gcgen=1 gcbarrier=1`, 3 boots):
+    code->young **0**, misses **0** of 34,995 old->young checked, toData 0, fromStatics 1,062; pretenured 22.5k data
+    blocks (2.1 MB) and 17.8k by site (0.85 MB) per boot. Pi restored to main (build `58efa21b`, sha verified).
+  - **Seen, not caused here (both reproduce on main):** AnnoLoadProbe throws an NPE in `describe` (an
+    `annotationType()` of null) after AccessFlags+AccessRules+AnnoContract+AnnoDefault in one batch -- deterministic,
+    3/3 on S7-3 and 2/2 on main, identical alone, so Regress passes it; and with `gcgen=1` the census bitmap runs
+    batch2 (DeflaterProbe) out of large region.
 - **FRAMES/GC ARC, INCREMENT S7-2: the write barrier, checked in shadow (2026-11-23).** Baseline (writer and metal JIT)
   emits an object-remembering barrier inline after every reference `putfield`, `aastore` and `ObjectReferenceArray`/
   `DataReferenceArray` set (`Baseline.writeBarrier`, no call): a null or image-object value skips it; otherwise the

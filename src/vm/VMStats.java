@@ -254,8 +254,14 @@ public final class VMStats
         i = put(arr, len, i, WriteBarrier.loggedImage);                    // ... image objects logged, last cycle
         i = put(arr, len, i, WriteBarrier.checked);                        // ... old->young edges checked (gcgen=1)
         i = put(arr, len, i, WriteBarrier.missesTotal);                    // ... whose source was NOT logged
-        i = put(arr, len, i, WriteBarrier.missesToData);                   // ... unlogged, into allocData blocks
+        i = put(arr, len, i, WriteBarrier.missesToData);                   // ... of which into allocData blocks
         i = put(arr, len, i, WriteBarrier.fromStatics);                    // ... out of statics blocks (roots)
+        i = put(arr, len, i, Heap.oldDataN);                               // S7-3: pretenured allocData blocks
+        i = put(arr, len, i, Heap.oldDataBytes);                           // ... bytes
+        i = put(arr, len, i, Heap.oldSiteN);                               // ... by site (mirrors, literals)
+        i = put(arr, len, i, Heap.oldSiteBytes);                           // ... bytes
+        i = put(arr, len, i, GenCensus.largeYoungTotal);                   // ... young large bytes, summed (gcgen=1)
+        i = put(arr, len, i, GenCensus.largeYoungDeadTotal);               // ... dead at their first collection
         return (long) i;
     }
 

@@ -148,8 +148,14 @@ public final class MetalStats
         "... image objects logged, last cycle",
         "... old->young references checked against it (gcgen=1)",
         "... WHOSE SOURCE WAS NOT LOGGED (a store the barrier missed)",
-        "... unlogged, into allocData blocks (allocated old from S7-3)",
+        "... of which into allocData blocks (pretenured since S7-3: none expected)",
         "... out of statics blocks (roots of a minor collection: putstatic has no barrier)",
+        "pretenured allocData blocks (S7-3: Types, TIBs, statics, buffers)",
+        "... their bytes",
+        "pretenured by site (Class mirrors, string literals: code immediates)",
+        "... their bytes",
+        "young large-object bytes, summed (16 KiB or more: not pretenured, never copied; gcgen=1)",
+        "... dead at their first collection",
     };
 
     public static final String[] LOCKS_NAMES = {

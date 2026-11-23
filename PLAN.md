@@ -4979,11 +4979,16 @@ collection; every edge the trace follows is attributed to its source.
   `gcgen=1 gcbarrier=1` checks every old->young edge against it: 0 misses on virt (214 probes) and the Pi. Statics are
   roots (no `putstatic` barrier); edges into `allocData` blocks wait for S7-3. Cost on the Pi: +1.2% FrameBench. For
   S7-4: the barrier gains the nursery test (skip a young source), and the minor collection scans the logged objects.
-- **S7-3: pretenuring.** Decide what is allocated straight into the mature heap: `allocData` blocks, metadata, large
-  objects, and the objects compiled code bakes as immediates (by allocation site, from the census).
+- **S7-3: pretenuring. DONE (2026-11-23).** Allocated straight into the mature heap (`Heap.allocOld`,
+  `allocArrayOld`; every `allocData` block): metadata and buffers, and the two kinds of object compiled code bakes as
+  immediates -- Class mirrors and string literals, including the pool's copy of a runtime-`intern()`ed String (the
+  census found those). LARGE objects are NOT pretenured, reversing the plan: measured, most large bytes are dead by
+  their first collection (virt list: 3.2 of 6.8 GB), so S7-4 leaves them in the large region, never copied, marked in
+  place while young. With `gcgen=1 gcbarrier=1`: code->young 0, young allocData 0, and the barrier check now counts an
+  unlogged edge into allocData as a miss -- 0 over the virt list.
 - **S7-4: the nursery and the minor collection.** A bump-allocated nursery per core; a minor collection copies its
   survivors into the mature heap with forwarding pointers and updates the roots (exact stacks, statics, code roots,
-  the remembered set). A verify switch traces the whole heap after each minor collection and reports any reference
+  the remembered set). Young large objects are marked in place, not copied (S7-3). A verify switch traces the whole heap after each minor collection and reports any reference
   left pointing into the nursery.
 - **S7-5: sizing and measurement.** Nursery size, promotion, and the Pi pause numbers against S6d-3's.
 

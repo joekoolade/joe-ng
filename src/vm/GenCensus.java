@@ -30,7 +30,8 @@ import objectmodel.ObjectModel;
  *       a code-root entry (an address baked into compiled code), an old block or a young one.</li>
  *   <li><b>What could not move?</b> Young survivors whose identity hash was taken (S7-1's
  *       {@link IdentityHash} lets them move: a mover re-keys their entry), young survivors a code-root entry names (an immediate in compiled code), and
- *       young {@code allocData} survivors (device buffers are among them).</li>
+ *       young {@code allocData} survivors (device buffers are among them). Since S7-3 all of these are PRETENURED
+ *       ({@link Heap#allocOld}): old from birth, so the code-root and allocData counts here must read 0.</li>
  * </ul>
  * Off by default: arming allocates the survivor bitmap on the heap (3 MiB for core 0's small and large regions,
  * 1 MiB per secondary arena). Which objects were hashed comes from {@link IdentityHash}'s table (S7-1).
@@ -57,6 +58,8 @@ final class GenCensus implements Uninterruptible
     private static int src;
     private static boolean srcOld;
     private static boolean srcCounted;
+    private static int codePrinted;
+    private static final int CODE_PRINT_MAX = 20;      // over the boot
     private static long srcBlock;
 
     // This collection.
@@ -71,6 +74,17 @@ final class GenCensus implements Uninterruptible
     static long codeToYoung;           // code-root entries naming a young block (could not move)
     static long hashedYoungLive;       // young survivors whose identity hash was taken
     static long dataYoungLive;         // young allocData survivors (bytes)
+    // Pretenured since the previous collection (S7-3), live and dead at this one, by reason: did it pay to skip
+    // the nursery? A dead pretenured block is garbage a minor collection could not have reclaimed.
+    static long tenData;
+    static long tenDataDead;
+    static long tenSite;
+    static long tenSiteDead;
+    // Young LARGE blocks (Heap.LARGE_REQ or more), live and dead: never copied, marked in place from S7-4.
+    static long largeYoungLive;
+    static long largeYoungDead;
+    static long largeYoungTotal;
+    static long largeYoungDeadTotal;
     // Over the boot.
     static long collections;
     static long youngAllocTotal;
@@ -89,7 +103,55 @@ final class GenCensus implements Uninterruptible
     static void arm(long[] survivedMap)
     {
         survived = survivedMap;
+        oldAt(Heap.BASE, Address.fromLong(Heap.PTR_CELL).loadLong());
+        oldAt(Heap.LARGE_BASE, Address.fromLong(Heap.LARGE_PTR_CELL).loadLong());
+        int c = 1;
+        while (c < 4)
+        {
+            oldAt(Heap.arenaBase(c).toLong(), Address.fromLong(Heap.PTR_CELL + c * 8L).loadLong());
+            c += 1;
+        }
         on = 1;
+    }
+
+    /**
+     * Arming: every block allocated before the census existed counts as OLD (S7-3). A nursery that starts at this
+     * point would hold none of them, and the shadow checks depend on it: a block allocated before arming, still
+     * "young" at the first collection, would look like a young allocData block or a code immediate that escaped
+     * pretenuring. The census is armed from the init manifest, before any secondary core allocates.
+     */
+    private static void oldAt(long from, long to)
+    {
+        long o = from;
+        while (o < to)
+        {
+            long st = Address.fromLong(o).plus(ObjectModel.STATUS_OFFSET).loadLong();
+            long size = st & -8L;
+            if (size == 0L || o + size > to)
+            {
+                return;
+            }
+            if ((st & Heap.FREE_FLAG) == 0L)
+            {
+                put(survived, bit(o), true);
+            }
+            o = o + size;
+        }
+    }
+
+    /**
+     * Heap: block {@code o} was just allocated pretenured -- old from birth (S7-3). Its bit says old; the NEXT bit,
+     * its second word's (never a block start: a block is at least 16 bytes), says "pretenured since the last
+     * collection" until the next collection reads and clears it, so the census can say whether pretenuring paid
+     * without a second bitmap (a second one, 6 MiB, ran DeflaterProbe out of large region). Allocation runs with
+     * IRQs masked, and no two cores allocate within one bitmap word (their regions are disjoint and 512-byte
+     * aligned), so the read-modify-write cannot lose a bit.
+     */
+    static void born(long o)
+    {
+        long b = bit(o);
+        put(survived, b, true);
+        put(survived, b + 1L, true);
     }
 
     /** The bit index of heap address {@code w}, or -1 outside every collected region. */
@@ -156,6 +218,15 @@ final class GenCensus implements Uninterruptible
         else if (src == SRC_CODE)
         {
             codeToYoung = codeToYoung + 1L;
+            if (codePrinted < CODE_PRINT_MAX)
+            {
+                codePrinted += 1;                      // since S7-3 none is expected: name what escaped pretenuring
+                Uart.write(Magic.bytes("gcgen code->young: "));
+                HeapShadow.printTypeOf(Address.fromLong(w).loadLong());
+                Uart.write(Magic.bytes(" @"));
+                VM.printHex(w);
+                Uart.putc((byte) 0x0A);
+            }
         }
         else if (srcOld)
         {
@@ -182,6 +253,12 @@ final class GenCensus implements Uninterruptible
         youngLiveN = 0L;
         hashedYoungLive = 0L;
         dataYoungLive = 0L;
+        tenData = 0L;
+        tenDataDead = 0L;
+        largeYoungLive = 0L;
+        largeYoungDead = 0L;
+        tenSite = 0L;
+        tenSiteDead = 0L;
         region(Heap.BASE, Address.fromLong(Heap.PTR_CELL).loadLong());
         region(Heap.LARGE_BASE, Address.fromLong(Heap.LARGE_PTR_CELL).loadLong());
         int c = 1;
@@ -195,6 +272,8 @@ final class GenCensus implements Uninterruptible
         youngLiveTotal = youngLiveTotal + youngLive;
         codeToYoungTotal = codeToYoungTotal + codeToYoung;
         hashedYoungLiveTotal = hashedYoungLiveTotal + hashedYoungLive;
+        largeYoungTotal = largeYoungTotal + largeYoungLive + largeYoungDead;
+        largeYoungDeadTotal = largeYoungDeadTotal + largeYoungDead;
         if (oldToYoung > oldToYoungMax)
         {
             oldToYoungMax = oldToYoung;
@@ -223,6 +302,14 @@ final class GenCensus implements Uninterruptible
             }
             long b = bit(o);
             boolean old = get(survived, b);
+            if (get(survived, b + 1L))
+            {
+                put(survived, b + 1L, false);          // born() marked it: cleared before the sweep can reuse it
+                if ((st & Heap.FREE_FLAG) == 0L)
+                {
+                    tenured(o, size, (st & 1L) != 0L);
+                }
+            }
             if ((st & Heap.FREE_FLAG) != 0L)
             {
                 put(survived, b, false);
@@ -237,6 +324,10 @@ final class GenCensus implements Uninterruptible
                 {
                     youngLive = youngLive + size;
                     youngLiveN = youngLiveN + 1L;
+                    if (size >= Heap.LARGE_REQ)
+                    {
+                        largeYoungLive = largeYoungLive + size;
+                    }
                     if (IdentityHash.contains(o))
                     {
                         hashedYoungLive = hashedYoungLive + 1L;
@@ -258,10 +349,39 @@ final class GenCensus implements Uninterruptible
                 else
                 {
                     youngDead = youngDead + size;
+                    if (size >= Heap.LARGE_REQ)
+                    {
+                        largeYoungDead = largeYoungDead + size;
+                    }
                 }
                 put(survived, b, false);
             }
             o = o + size;
+        }
+    }
+
+    /** A block pretenured since the last collection, {@code live} or dead at this one: by reason, as Heap chose. */
+    private static void tenured(long o, long size, boolean live)
+    {
+        long tibw = Address.fromLong(o).loadLong();
+        if (tibw == 0L || PreciseTrace.isLayout(tibw))
+        {
+            if (live)
+            {
+                tenData = tenData + size;
+            }
+            else
+            {
+                tenDataDead = tenDataDead + size;
+            }
+        }
+        else if (live)
+        {
+            tenSite = tenSite + size;
+        }
+        else
+        {
+            tenSiteDead = tenSiteDead + size;
         }
     }
 
@@ -293,6 +413,19 @@ final class GenCensus implements Uninterruptible
         VM.printDec((int) (dataYoungLive >> 10));
         Uart.write(Magic.bytes(" hashCalls="));
         VM.printDec((int) VMNatives.identityHashes);
+        Uart.write(Magic.bytes(" largeYoungKB live/dead="));
+        liveDead(largeYoungLive, largeYoungDead);
+        Uart.write(Magic.bytes(" pretenuredKB live/dead data="));
+        liveDead(tenData, tenDataDead);
+        Uart.write(Magic.bytes(" site="));
+        liveDead(tenSite, tenSiteDead);
         Uart.putc((byte) 0x0A);
+    }
+
+    private static void liveDead(long live, long dead)
+    {
+        VM.printDec((int) (live >> 10));
+        Uart.putc((byte) 0x2F);
+        VM.printDec((int) (dead >> 10));
     }
 }
