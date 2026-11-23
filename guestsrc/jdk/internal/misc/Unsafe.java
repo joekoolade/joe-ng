@@ -294,10 +294,12 @@ public final class Unsafe
     // narrow-slot caller would not fail, it would corrupt its neighbour.
     public long getAndAddLong(Object o, long offset, long delta)
     {
-        Address a = Address.fromLong(at(o, offset));
+        Address a;
         long v;
         do
         {
+            a = Address.fromLong(at(o, offset));   // per try: a retry crosses a yieldpoint, and a minor
+                                                   //   collection there moves o (frames/GC arc S7-4)
             v = a.loadLong();
         }
         while (!a.attempt(v, v + delta));
@@ -316,10 +318,12 @@ public final class Unsafe
             while (casInt(o, offset, e, e + delta) != e);
             return e;
         }
-        Address a = Address.fromLong(at(o, offset));
+        Address a;
         int v;
         do
         {
+            a = Address.fromLong(at(o, offset));   // per try: a retry crosses a yieldpoint, and a minor
+                                                   //   collection there moves o (frames/GC arc S7-4)
             v = (int) a.loadLong();
         }
         while (!a.attempt(v, v + delta));
@@ -328,10 +332,12 @@ public final class Unsafe
 
     public long getAndSetLong(Object o, long offset, long x)
     {
-        Address a = Address.fromLong(at(o, offset));
+        Address a;
         long v;
         do
         {
+            a = Address.fromLong(at(o, offset));   // per try: a retry crosses a yieldpoint, and a minor
+                                                   //   collection there moves o (frames/GC arc S7-4)
             v = a.loadLong();
         }
         while (!a.attempt(v, x));
@@ -350,10 +356,12 @@ public final class Unsafe
             while (casInt(o, offset, e, x) != e);
             return e;
         }
-        Address a = Address.fromLong(at(o, offset));
+        Address a;
         int v;
         do
         {
+            a = Address.fromLong(at(o, offset));   // per try: a retry crosses a yieldpoint, and a minor
+                                                   //   collection there moves o (frames/GC arc S7-4)
             v = (int) a.loadLong();
         }
         while (!a.attempt(v, x));
@@ -362,11 +370,13 @@ public final class Unsafe
 
     public Object getAndSetReference(Object o, long offset, Object x)
     {
-        Address a = Address.fromLong(at(o, offset));
-        long nx = Magic.addrOf(x);
+        Address a;
+        long nx;
         long v;
         do
         {
+            a = Address.fromLong(at(o, offset));   // per try: a retry crosses a yieldpoint, and a minor collection
+            nx = Magic.addrOf(x);                  //   there moves o and x (frames/GC arc S7-4)
             v = a.loadLong();
         }
         while (!a.attempt(v, nx));
@@ -417,10 +427,12 @@ public final class Unsafe
             while (casInt(o, offset, e, e | mask) != e);
             return e;
         }
-        Address a = Address.fromLong(at(o, offset));
+        Address a;
         int v;
         do
         {
+            a = Address.fromLong(at(o, offset));   // per try: a retry crosses a yieldpoint, and a minor
+                                                   //   collection there moves o (frames/GC arc S7-4)
             v = (int) a.loadLong();
         }
         while (!a.attempt(v, v | mask));
@@ -449,10 +461,12 @@ public final class Unsafe
             while (casInt(o, offset, e, e & mask) != e);
             return e;
         }
-        Address a = Address.fromLong(at(o, offset));
+        Address a;
         int v;
         do
         {
+            a = Address.fromLong(at(o, offset));   // per try: a retry crosses a yieldpoint, and a minor
+                                                   //   collection there moves o (frames/GC arc S7-4)
             v = (int) a.loadLong();
         }
         while (!a.attempt(v, v & mask));
@@ -481,10 +495,12 @@ public final class Unsafe
             while (casInt(o, offset, e, e ^ mask) != e);
             return e;
         }
-        Address a = Address.fromLong(at(o, offset));
+        Address a;
         int v;
         do
         {
+            a = Address.fromLong(at(o, offset));   // per try: a retry crosses a yieldpoint, and a minor
+                                                   //   collection there moves o (frames/GC arc S7-4)
             v = (int) a.loadLong();
         }
         while (!a.attempt(v, v ^ mask));
@@ -503,10 +519,12 @@ public final class Unsafe
 
     public long getAndBitwiseOrLong(Object o, long offset, long mask)
     {
-        Address a = Address.fromLong(at(o, offset));
+        Address a;
         long v;
         do
         {
+            a = Address.fromLong(at(o, offset));   // per try: a retry crosses a yieldpoint, and a minor
+                                                   //   collection there moves o (frames/GC arc S7-4)
             v = a.loadLong();
         }
         while (!a.attempt(v, v | mask));
@@ -525,10 +543,12 @@ public final class Unsafe
 
     public long getAndBitwiseAndLong(Object o, long offset, long mask)
     {
-        Address a = Address.fromLong(at(o, offset));
+        Address a;
         long v;
         do
         {
+            a = Address.fromLong(at(o, offset));   // per try: a retry crosses a yieldpoint, and a minor
+                                                   //   collection there moves o (frames/GC arc S7-4)
             v = a.loadLong();
         }
         while (!a.attempt(v, v & mask));
@@ -547,10 +567,12 @@ public final class Unsafe
 
     public long getAndBitwiseXorLong(Object o, long offset, long mask)
     {
-        Address a = Address.fromLong(at(o, offset));
+        Address a;
         long v;
         do
         {
+            a = Address.fromLong(at(o, offset));   // per try: a retry crosses a yieldpoint, and a minor
+                                                   //   collection there moves o (frames/GC arc S7-4)
             v = a.loadLong();
         }
         while (!a.attempt(v, v ^ mask));

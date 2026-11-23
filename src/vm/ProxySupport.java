@@ -19,6 +19,7 @@ import magic.DataReferenceArray;
 import magic.AddressArray;
 import magic.Magic;
 import magic.ObjectReference;
+import magic.ObjectReferenceArray;
 import objectmodel.ObjectModel;
 
 
@@ -43,6 +44,9 @@ final class ProxySupport
     private static DataReferenceArray proxyTypes;
     private static DataReferenceArray proxyTibs;
     private static long[] proxyObjThunks;               // 3 per proxy: hashCode, equals, toString
+    /** 2 per proxy: its Method[] and Object-methods array, which hold the OLD copies its thunks bake (S7-4). The
+     *  guest's keep-alive list holds the originals it passed, so without this the copies would die. */
+    private static ObjectReferenceArray proxyArrs;
     static int proxyN;
     static long proxyHelperBuf;
     static long objectCloneBuf;
@@ -159,6 +163,28 @@ final class ProxySupport
         return ((regs & 0x7FFEL) << 1) | (over << StubFrames.MASK_OVERFLOW_BIT0) | StubFrames.MASK_OVERFLOW;
     }
 
+    /**
+     * Replace each of the first {@code n} elements of the Method[] at {@code arr} by an old copy when it is young
+     * (frames/GC arc S7-4): the thunk's {@code mov x1, #method} is a literal no collection rewrites. A reflective
+     * Method is a fresh copy anyway, so the guest's array taking the copy changes nothing it may rely on.
+     */
+    private static void tenureAll(long arr, int n)
+    {
+        int j = 0;
+        while (j < n)
+        {
+            Address at = Address.fromLong(arr).plus(24L).plus(j * 8L);
+            long o = at.loadLong();
+            long c = Nursery.tenure(o);
+            if (c != o)
+            {
+                Address.fromLong(arr).plus(24L).plus(j * 8L).store(c);   // re-derived: tenure may have collected
+                WriteBarrier.log(arr);
+            }
+            j += 1;
+        }
+    }
+
     /** Put proxy {@code i}'s equals/hashCode/toString thunks into its TIB's Object vtable slots. */
     static void patchProxyObject(int i)
     {
@@ -236,6 +262,7 @@ final class ProxySupport
             proxyTypes = DataReferenceArray.create(MAXPROXY);
             proxyTibs = DataReferenceArray.create(MAXPROXY);
             proxyObjThunks = new long[MAXPROXY * 3];
+            proxyArrs = ObjectReferenceArray.create(MAXPROXY * 2);
         }
         if (proxyN >= MAXPROXY)
         {
@@ -244,6 +271,10 @@ final class ProxySupport
         }
         int ni = (int) Address.fromLong(ifacesArr).plus(16L).loadLong();
         int nm = (int) Address.fromLong(methodsArr).plus(16L).loadLong();
+        tenureAll(methodsArr, nm);                 // each thunk BAKES its Method's address: it must never move
+        tenureAll(objArr, 3);
+        proxyArrs.set(proxyN * 2, ObjectReference.fromLong(methodsArr));
+        proxyArrs.set(proxyN * 2 + 1, ObjectReference.fromLong(objArr));
         DataReference dir = Heap.allocDataRefs((ni + 1) * 16);
         int e = 0;
         while (e < ni)

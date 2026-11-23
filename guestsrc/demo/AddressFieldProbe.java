@@ -81,8 +81,11 @@ public class AddressFieldProbe
 
     public static void main(String[] args)
     {
-        long[] mem = new long[4];
-        for (int i = 0; i < mem.length; i++)
+        // LARGE on purpose (16 KiB, the large-object region): an Address is a raw word nothing rewrites, so the
+        // object it points into must not MOVE, and since S7-4 a small young array is copied by the minor
+        // collection. A large block is never moved -- the guarantee this probe has always really been testing.
+        long[] mem = new long[2048];
+        for (int i = 0; i < 4; i++)
         {
             mem[i] = 0x5A5A_0000_0000L + i;
         }

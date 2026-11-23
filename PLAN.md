@@ -4990,6 +4990,21 @@ collection; every edge the trace follows is attributed to its source.
   survivors into the mature heap with forwarding pointers and updates the roots (exact stacks, statics, code roots,
   the remembered set). Young large objects are marked in place, not copied (S7-3). A verify switch traces the whole heap after each minor collection and reports any reference
   left pointing into the nursery.
+  - **S7-4a: a mostly-copying nursery, OFF by default.** Per-core nurseries above the log span, so the barrier skips young
+    sources for free. Allocation bumps through gaps, with filler blocks keeping the nursery walkable. Large requests
+    never enter it: they go to the large region and are freed only by a full collection.
+    - Every collection begins with a minor phase:
+      - pin what an ambiguous root names: conservative ranges, untyped stub words, and RAW/data-reference frame
+        slots (an `Address` copy of a young object);
+      - forward the exact slots;
+      - scan statics, JIT map entries and the logged objects (the remembered set);
+      - drain Cheney-style.
+    - `gcnursery=1` runs minor-only collections when a nursery is exhausted. `gcnursery=2` is VERIFY: every collection
+      is minor then full, poisoning what the minor phase reclaims, and the full trace reports a reference left into it.
+    - Done when the virt list passes in VERIFY mode and with the nursery on, and when off is still 214/214.
+  - **S7-4b: hunt what pinning hides.** Count pins by cause and retire the avoidable ones; cheaper remembered-set scan
+    (the whole log bitmap is walked today).
+  - **S7-4c: on by default**, once the Pi pause and throughput numbers favour it (feeds S7-5).
 - **S7-5: sizing and measurement.** Nursery size, promotion, and the Pi pause numbers against S6d-3's.
 
 ## 5. Design decisions to lock day one

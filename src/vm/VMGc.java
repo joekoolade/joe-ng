@@ -157,6 +157,19 @@ final class VMGc implements Uninterruptible
                 idleGc = idleGc + 1;
             }
         }
+        scanSrc = 0L;
+        if (Nursery.on != 0)
+        {
+            Nursery.collect(scanFrom, stackTop);      // S7-4a: every collection evacuates the nurseries first
+            if (Nursery.minorOnly != 0 && Nursery.on == 1)
+            {
+                finishMinor(gcT0, daif);              // ... and one the nursery asked for ends there
+                return;
+            }
+            Nursery.fulls = Nursery.fulls + 1L;
+            WriteBarrier.clearHeap();                 // the trace re-logs what still names a resident
+            Nursery.fullTrace = 1;
+        }
         GenCensus.source(GenCensus.SRC_ROOT);         // gcgen=1: what follows are root edges
         if (StackRoots.on != 0)
         {
@@ -177,6 +190,10 @@ final class VMGc implements Uninterruptible
             markRange(Address.fromLong(staticsStart), Address.fromLong(staticsEnd));
         }
         staticsScans = staticsScans + 1L;             // did the root scan for statics actually run this pass?
+        if (Nursery.fullTrace != 0)
+        {
+            Nursery.markResidents();                  // S7-4a: blocks pinned in the nursery are live, and roots
+        }
         // Cores 1-3's arenas were ROOT RANGES here, scanned whole and never collected. Since S5a they are heap like
         // core 0's: marked through the trace, swept into their own cores' free lists (sweepArena).
         rootProbes = probes;                          // split the metric: everything above is ROOT scanning
@@ -230,7 +247,20 @@ final class VMGc implements Uninterruptible
             WriteBarrier.afterTrace();                // gcbarrier=1: count the logged objects, clear for the next cycle
         }
         IdentityHash.purge();                         // S7-1: a hashed block the sweep frees loses its entry first
+        Nursery.fullTrace = 0;
         afterTrace(scanFrom, stackTop, gcT0, tRoots, reaped, daif);
+    }
+
+    /** A minor-only collection (S7-4a): the nurseries are evacuated; restart the world. */
+    private static void finishMinor(long gcT0, long daif)
+    {
+        startTheWorld();
+        releaseGcLock();
+        Nursery.minorPause(Magic.readCNTPCT_EL0() - gcT0);
+        if ((daif & 0x80L) == 0L)
+        {
+            Magic.enableIrq();
+        }
     }
 
     /**
@@ -654,6 +684,7 @@ final class VMGc implements Uninterruptible
      */
     private static boolean scanBlock(Address o, long size)
     {
+        scanSrc = o.toLong();                          // S7-4a: the block whose words follow (Nursery.fullEdge)
         if (GenCensus.on != 0)
         {
             GenCensus.sourceBlock(o.toLong());
@@ -1108,6 +1139,7 @@ final class VMGc implements Uninterruptible
                 boolean ignored = scanBlock(o, size);  //   corrupt size. Pushes are the real output here;
             }                                          //   the returned flag only matters to the fallback.
         }
+        scanSrc = 0L;
     }
 
     /**
@@ -1367,6 +1399,11 @@ final class VMGc implements Uninterruptible
         {
             return false;
         }
+        if (Nursery.fullTrace != 0 && Nursery.contains(w))
+        {
+            Nursery.fullEdge(w);                       // S7-4a: a resident -- not this region's to mark
+            return false;
+        }
         if (w >= Heap.CODE_BASE && w < Heap.CODE_LIMIT)
         {
             return tryMark(w);                         // a code address: the code bitmap, no heap block
@@ -1452,6 +1489,8 @@ final class VMGc implements Uninterruptible
     private static long exactFrom;
     /** For a gcverify report: the allocData struct {@link PreciseTrace} is reading, or minus a statics slot. */
     static long exactSrc;
+    /** The heap block whose words the trace is reading (0 for a root): a source the nursery remembers (S7-4a). */
+    static long scanSrc;
 
     /** {@code gcverify=1}: build the block-start bitmap every collection and check every exact mark against it. */
     static int verifyExact;

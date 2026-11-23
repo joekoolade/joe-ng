@@ -27,8 +27,9 @@ import static vm.VM.*;   // strBytes (the string-ref -> byte[] accessor stays in
  * batch's array TIB in {@code byteArrayTibCache} so stock code can checkcast/clone {@code String.value}). Reached
  * only via the stashed {@code sc*Addr} statics (which stay in VM); grouped here to shrink VM.java.
  *
- * <p>The builder is a raw heap block, not a Java object (no TIB), so it is an {@link Address}; its backing
- * {@code byte[]}, the argument references and the finished String are {@link ObjectReference}s.
+ * <p>The builder is a {@link ConcatBuilder} handled as an {@link Address} (the JIT passes it in a register and types
+ * the slot as a reference); its backing {@code byte[]}, the argument references and the finished String are
+ * {@link ObjectReference}s.
  */
 final class VMConcat
 {
@@ -46,11 +47,14 @@ final class VMConcat
     static Address scStart()
     {
         ObjectReference buf = Heap.allocArray(64, 1).toObjectReference();
-        ObjectReference sb = Heap.alloc(40).toObjectReference();
-        sb.toAddress().plus(16).store(buf);
-        sb.toAddress().plus(24).store(0L);
-        sb.toAddress().plus(32).store(0L);
-        return sb.toAddress();
+        ConcatBuilder sb = new ConcatBuilder();        // a TYPED object: its buf is traced (see ConcatBuilder)
+        Address a = Address.fromObject(sb);
+        a.plus(16).store(buf);
+        if (!Nursery.contains(a.toLong()))
+        {
+            WriteBarrier.log(a.toLong());              // a raw reference store: the compiled barrier's job, by hand
+        }
+        return a;
     }
 
     /** Grow a builder's backing byte[] to twice {@code cap} bytes, copying {@code count} units; returns the new buf. */
@@ -66,6 +70,10 @@ final class VMConcat
             i = i + 1L;
         }
         sb.plus(16).store(nbuf);
+        if (!Nursery.contains(sb.toLong()))
+        {
+            WriteBarrier.log(sb.toLong());             // an old builder now names a young array (S7-4)
+        }
         return nbuf;
     }
 

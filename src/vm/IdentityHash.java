@@ -63,6 +63,10 @@ final class IdentityHash implements Uninterruptible
     /** Whether {@code x} lies in a collected heap region (core 0's small and large regions, arenas 1-3). */
     static boolean movable(long x)
     {
+        if (Nursery.contains(x))
+        {
+            return true;                               // a young object (S7-4): its hash outlives the copy
+        }
         if (x < Heap.BASE)
         {
             return false;
@@ -134,12 +138,54 @@ final class IdentityHash implements Uninterruptible
         while (i < cap)
         {
             long k = table[2 * i];
-            if (k > 1L && (Address.fromLong(k).plus(ObjectModel.STATUS_OFFSET).loadLong() & 1L) == 0L)
+            if (k > 1L && !Nursery.contains(k)                // a resident: the minor phase already decided
+                && (Address.fromLong(k).plus(ObjectModel.STATUS_OFFSET).loadLong() & 1L) == 0L)
             {
                 table[2 * i] = 1L;
                 table[2 * i + 1] = 0L;
                 live = live - 1;
                 purged = purged + 1L;
+            }
+            i += 1;
+        }
+    }
+
+    /**
+     * After a minor collection's copy (frames/GC arc S7-4a), before the nursery is rebuilt: an entry for a young
+     * object follows its copy (the forwarding address is in its TIB word), stays for a resident, and is dropped
+     * for one that died. One pass, no allocation: a removal and an insertion per move, as {@link #move} does.
+     */
+    static void afterMinor()
+    {
+        if (table == null)
+        {
+            return;
+        }
+        int i = 0;
+        while (i < cap)
+        {
+            long k = table[2 * i];
+            if (k > 1L && Nursery.contains(k))
+            {
+                long st = Address.fromLong(k).plus(ObjectModel.STATUS_OFFSET).loadLong();
+                long h = table[2 * i + 1];
+                if ((st & Nursery.RESIDENT) == 0L)
+                {
+                    table[2 * i] = 1L;
+                    table[2 * i + 1] = 0L;
+                    live = live - 1;
+                    if ((st & Nursery.FWD) != 0L)
+                    {
+                        if (insert(Address.fromLong(k).loadLong(), h))
+                        {
+                            moves = moves + 1L;
+                        }
+                    }
+                    else
+                    {
+                        purged = purged + 1L;
+                    }
+                }
             }
             i += 1;
         }

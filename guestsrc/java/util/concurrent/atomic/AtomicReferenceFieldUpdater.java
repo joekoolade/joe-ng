@@ -39,7 +39,10 @@ public class AtomicReferenceFieldUpdater<T, V>
 
     public void set(T obj, V newValue)
     {
-        Address a = Address.fromObject(obj).plus(fieldOffset0(fname, obj));
+        // The offset FIRST: fieldOffset0 is a call (it may compile, so allocate, so run a minor collection that
+        // moves young objects -- frames/GC arc S7-4); every address is taken after it, with nothing in between.
+        long off = fieldOffset0(fname, obj);
+        Address a = Address.fromObject(obj).plus(off);
         a.store((newValue == null) ? 0L : Magic.addrOf(newValue));
         jdk.internal.misc.MetalBarrier.log(obj);           // a reference store the compiler cannot see (S7-2)
     }
@@ -57,9 +60,12 @@ public class AtomicReferenceFieldUpdater<T, V>
      */
     public boolean compareAndSet(T obj, V expect, V update)
     {
+        // The offset FIRST: fieldOffset0 is a call (it may compile, so allocate, so run a minor collection that
+        // moves young objects -- frames/GC arc S7-4); every address is taken after it, with nothing in between.
+        long off = fieldOffset0(fname, obj);
         long e = (expect == null) ? 0L : Magic.addrOf(expect);
         long u = (update == null) ? 0L : Magic.addrOf(update);
-        boolean ok = Magic.cas64(Magic.addrOf(obj) + fieldOffset0(fname, obj), e, u);
+        boolean ok = Magic.cas64(Magic.addrOf(obj) + off, e, u);
         jdk.internal.misc.MetalBarrier.log(obj);
         return ok;
     }

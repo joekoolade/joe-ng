@@ -156,6 +156,22 @@ public final class MetalStats
         "... their bytes",
         "young large-object bytes, summed (16 KiB or more: not pretenured, never copied; gcgen=1)",
         "... dead at their first collection",
+        "nursery (S7-4a; gcnursery=1, 2 = verify)",
+        "... KB per core",
+        "... minor collections",
+        "... of which went on as full collections",
+        "... bytes allocated young",
+        "... bytes copied out (promoted)",
+        "... objects copied out",
+        "... bytes copied by the last one",
+        "... blocks pinned (named by a conservative word)",
+        "... copies that found no mature space (stayed)",
+        "... remembered objects scanned by the last one",
+        "... most in one",
+        "... minor-only pauses, summed (us)",
+        "... longest minor-only pause (us)",
+        "... REFERENCES INTO EVACUATED SPACE (gcnursery=2)",
+        "... logged blocks with no precise layout",
     };
 
     public static final String[] LOCKS_NAMES = {

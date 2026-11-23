@@ -550,9 +550,9 @@ final class VirtualDispatch
         {
             return false;
         }
-        if (a >= Heap.BASE && a < Heap.managedTop().toLong())
+        if (Heap.isObject(a))
         {
-            return true;
+            return true;                               // the managed heap or a nursery (S7-4a)
         }
         return a >= VM.STACK_TOP && a < Heap.IMAGE_CEILING;
     }

@@ -245,16 +245,22 @@ public final class Constructor<T> extends Executable
         }
         int total = 1 + paramCount;
         long[] slots = argBuffer(total);
-        putArg(slots, total, 0, Magic.addrOf(obj));        // receiver in slot 0 (<init> is an instance method)
+        Object[] refs = new Object[total];                 // the reference arguments, typed: see refreshRefs
+        refs[0] = obj;                                     // receiver in slot 0 (<init> is an instance method)
         Class<?>[] pt = getParameterTypes();
         int k = 0;
         while (k < paramCount)
         {
             putArg(slots, total, 1 + k, convertArg(pt[k], args[k]));
+            if (!pt[k].isPrimitive())
+            {
+                refs[1 + k] = args[k];
+            }
             k += 1;
         }
         try
         {
+            refreshRefs(slots, total, refs);
             Magic.callN(buf.toLong(), Magic.addrOf(slots) + 24L);  // <init> returns void
         }
         catch (Throwable t)

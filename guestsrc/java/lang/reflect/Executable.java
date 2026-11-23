@@ -142,9 +142,32 @@ public abstract class Executable extends AccessibleObject implements Member, Gen
         {
             return new long[16];
         }
-        long[] slots = new long[total + 1];
-        slots[15] = Magic.addrOf(slots) + 24L + 16L * 8L;   // &slots[16]: the collector does not move objects
-        return slots;
+        return new long[total + 1];                 // slots[15] (&slots[16]) is set by refreshRefs, at the call
+    }
+
+    /**
+     * Just before {@link Magic#callN}: write every REFERENCE argument's address into the buffer from the typed
+     * {@code refs} (entry {@code k} non-null = argument {@code k} is that object), and the past-16 pointer to the
+     * buffer's own tail. Building the buffer allocates and may compile (each a possible minor collection, frames/GC
+     * arc S7-4), which MOVES young objects and updates typed slots only -- an address put in the {@code long[]}
+     * earlier could name where the object used to be. Nothing here allocates, so nothing moves between this and the
+     * call.
+     */
+    static void refreshRefs(long[] slots, int total, Object[] refs)
+    {
+        int k = 0;
+        while (k < total)
+        {
+            if (refs[k] != null)
+            {
+                putArg(slots, total, k, Magic.addrOf(refs[k]));
+            }
+            k += 1;
+        }
+        if (total > 16)
+        {
+            slots[15] = Magic.addrOf(slots) + 24L + 16L * 8L;   // &slots[16]
+        }
     }
 
     /** Store argument {@code k} of {@code total} into an {@link #argBuffer}. */

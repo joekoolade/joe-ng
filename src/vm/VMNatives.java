@@ -294,6 +294,27 @@ final class VMNatives
         return to.toLong();
     }
 
+    /**
+     * {@code jdk.internal.misc.MetalOffHeap.allocOld0(int)}: a {@code byte[]} of {@code n} zeroed bytes allocated
+     * straight into the mature heap (frames/GC arc S7-4a). "Off-heap" memory is such an array's payload, its address
+     * held raw by a DirectByteBuffer; a young array would be moved by a minor collection and that address left
+     * naming the old place. Boot's force-compile passes -1.
+     */
+    static long allocOldBytes(int n)
+    {
+        if (n < 0)
+        {
+            return 0L;
+        }
+        Address a = Heap.allocArrayOld(n, 1);
+        Address bt = ArrayTypes.byteArrayTib();
+        if (!bt.isZero())
+        {
+            a.plus(ObjectModel.TIB_OFFSET).store(bt);  // typed as byte[], like any other
+        }
+        return a.toLong();
+    }
+
     /** Element size (bytes) of an array: a raw array keeps it in @0; a typed array keeps it in its array Type's tag. */
     static long elemSize(ObjectReference arr)
     {
@@ -343,6 +364,10 @@ final class VMNatives
         {
             copy.toAddress().plus(i).store(ref.toAddress().plus(i).loadLong());
             i += 8L;
+        }
+        if (!Nursery.contains(copy.toLong()))
+        {
+            WriteBarrier.log(copy.toLong());               // a LARGE copy is old: raw stores of young referents (S7-4)
         }
         return copy.toLong();
     }

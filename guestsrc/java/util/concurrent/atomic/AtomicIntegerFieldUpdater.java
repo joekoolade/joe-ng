@@ -45,7 +45,8 @@ public class AtomicIntegerFieldUpdater<T>
      *  32-bit store over a negative value). */
     public void set(T obj, int newValue)
     {
-        Address.fromObject(obj).plus(fieldOffset0(fname, obj)).store((long) newValue);
+        long off = fieldOffset0(fname, obj);           // the call first: the address after it (S7-4)
+        Address.fromObject(obj).plus(off).store((long) newValue);
     }
 
     public void lazySet(T obj, int newValue)
@@ -55,7 +56,8 @@ public class AtomicIntegerFieldUpdater<T>
 
     public int get(T obj)
     {
-        return Address.fromObject(obj).plus(fieldOffset0(fname, obj)).loadInt();
+        long off = fieldOffset0(fname, obj);           // the call first: the address after it (S7-4)
+        return Address.fromObject(obj).plus(off).loadInt();
     }
 
     /**
@@ -67,6 +69,9 @@ public class AtomicIntegerFieldUpdater<T>
      */
     public boolean compareAndSet(T obj, int expect, int update)
     {
-        return Magic.cas64(Magic.addrOf(obj) + fieldOffset0(fname, obj), expect, update);
+        // The offset FIRST: fieldOffset0 is a call (it may compile, so allocate, so run a minor collection that
+        // moves young objects -- frames/GC arc S7-4); every address is taken after it, with nothing in between.
+        long off = fieldOffset0(fname, obj);
+        return Magic.cas64(Magic.addrOf(obj) + off, expect, update);
     }
 }

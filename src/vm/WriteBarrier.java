@@ -63,6 +63,22 @@ final class WriteBarrier implements Uninterruptible
         clear(Symbols.LOG_BITMAP, Symbols.LOG_BITMAP + (Symbols.LOG_SPAN >> 6));
     }
 
+    /** The nursery is armed (S7-4a): nothing logged before can name a young object. */
+    static void clearAll()
+    {
+        clear(Symbols.LOG_BITMAP, Symbols.LOG_BITMAP + (Symbols.LOG_SPAN >> 6));
+    }
+
+    /**
+     * A full collection after the minor phase (S7-4a): the heap's bits go, since the sweep may free a logged block and
+     * a stale bit would later name the middle of another; the trace re-logs every live block that still names a
+     * resident. The image's bits stay: its objects are never freed.
+     */
+    static void clearHeap()
+    {
+        clear(bitmapOf(Heap.BASE), Symbols.LOG_BITMAP + (Symbols.LOG_SPAN >> 6));
+    }
+
     /** Log the object at {@code o}: what the compiled barrier does, for VM code's raw reference stores. */
     static void log(long o)
     {

@@ -17,9 +17,10 @@ import magic.Magic;
 
 /**
  * joe-ng's "off-heap" memory for {@code Unsafe.allocateMemory}: a block is the PAYLOAD of a guest {@code byte[]},
- * held in a table from its address until {@code freeMemory}. Sound because the collector never moves objects
- * (compaction was settled unbuilt), so the payload address is stable for as long as the table references the array,
- * and the array is exactly as long as asked. This is what stock {@code DirectByteBuffer} and
+ * held in a table from its address until {@code freeMemory}. Sound because the array is PRETENURED ({@link
+ * #allocOld0}): the nursery's minor collection moves young objects (frames/GC arc S7-4a), and the mature heap never
+ * moves, so the payload address is stable for as long as the table references the array, and the array is exactly as
+ * long as asked. This is what stock {@code DirectByteBuffer} and
  * {@code sun.nio.ch.Util}'s temporary buffers allocate through; there is no other memory beneath the VM to ask.
  *
  * <p>Semantics kept from stock: {@code allocateMemory(0)} answers 0 and {@code freeMemory(0)} is a no-op;
@@ -46,7 +47,7 @@ final class MetalOffHeap
         {
             throw new OutOfMemoryError("Unable to allocate " + bytes + " bytes");
         }
-        byte[] block = new byte[(int) bytes];
+        byte[] block = allocOld0((int) bytes);
         long address = Magic.addrOf(block) + BASE;
         synchronized (LOCK)
         {
@@ -54,6 +55,9 @@ final class MetalOffHeap
         }
         return address;
     }
+
+    /** VM native ({@code VMNatives.allocOldBytes}): a zeroed {@code byte[]} in the mature heap, never moved. */
+    private static native byte[] allocOld0(int n);
 
     static void free(long address)
     {
