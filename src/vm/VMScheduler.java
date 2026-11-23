@@ -344,6 +344,7 @@ public final class VMScheduler implements Uninterruptible
         }
         smpStop = 0;
         Address.fromLong(SCHED_LOCK).store(0);             // free before anyone can take it (raw scratch RAM)
+        IdentityHash.init();                               // ... and the identity-hash table's lock word
         Uart.armLock(1);                                   // more than one core can print now: lock reports
         Magic.dsb();
         smpSched = 1;                                      // the table is shared now: take the lock around it

@@ -2431,6 +2431,7 @@ final class SelfBuild
         if (bytesEqual(nm, Magic.bytes("currentTimeMillisAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("currentTimeMillis"), Magic.bytes("()J")); }
         if (bytesEqual(nm, Magic.bytes("identityAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("identity"), Magic.bytes("(J)J")); }
         if (bytesEqual(nm, Magic.bytes("identityHashAddr"))) { return imAddrOf(Magic.bytes("vm/VMNatives"), Magic.bytes("identityHash"), Magic.bytes("(J)J")); }
+        if (bytesEqual(nm, Magic.bytes("testMoveAddr"))) { return imAddrOf(Magic.bytes("vm/VMNatives"), Magic.bytes("testMove"), Magic.bytes("(J)J")); }
         if (bytesEqual(nm, Magic.bytes("arraycopyAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("arraycopy"), Magic.bytes("(JIJII)V")); }
         if (bytesEqual(nm, Magic.bytes("newNpeAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("newNpe"), Magic.bytes("()J")); }
         if (bytesEqual(nm, Magic.bytes("newAioobeAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("newAioobe"), Magic.bytes("()J")); }

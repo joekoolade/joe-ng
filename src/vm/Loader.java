@@ -6295,6 +6295,11 @@ public final class Loader
             if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("defineClass0")))      { return VM.defineClassAddr; }   // (String,byte[],II)Class
             if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("lookup0")))           { return VM.forNameNoInitAddr; } // (byte[])Class
         }
+        // A test mover for the identity-hash side table (frames/GC arc S7-1): copy an object, carry its hash over.
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalGcTest")))
+        {
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("move0")))             { return VM.testMoveAddr; }        // (Object)Object
+        }
         // The VM's run-time counters (VMStats), read by the web server's statistics pages.
         if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalStats")))
         {

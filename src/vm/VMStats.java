@@ -241,6 +241,11 @@ public final class VMStats
         i = put(arr, len, i, GenCensus.codeToYoungTotal);                  // ... code-root entries naming a young block
         i = put(arr, len, i, GenCensus.hashedYoungLiveTotal);              // ... hashed young survivors
         i = put(arr, len, i, VMNatives.identityHashes);                    // ... identity hashes taken
+        i = put(arr, len, i, IdentityHash.liveNow());                      // S7-1: hash-table entries now
+        i = put(arr, len, i, IdentityHash.liveMax);                        // ... most at once
+        i = put(arr, len, i, IdentityHash.inserts);                        // ... entries made (first hashes)
+        i = put(arr, len, i, IdentityHash.purged);                         // ... dropped by a collection
+        i = put(arr, len, i, IdentityHash.moves);                          // ... re-keyed by a move
         return (long) i;
     }
 
