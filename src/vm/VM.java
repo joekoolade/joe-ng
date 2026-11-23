@@ -2107,6 +2107,7 @@ public final class VM
         if (currentTimeMillisAddr == 0L) { long u = VMNatives.currentTimeMillis(); }
         if (identityAddr == 0L) { long u = VMNatives.identity(0L); }
         if (identityHashAddr == 0L) { long u = VMNatives.identityHash(0L); }
+        if (testMoveAddr == 0L) { long u = VMNatives.testMove(0L); }                  // MetalGcTest.move0
         if (availProcsAddr == 0L) { int u = VMNatives.availableProcessors(); }
         if (runtimeGcAddr == 0L) { VMNatives.runtimeGc(); }
         if (runtimeFreeAddr == 0L) { long u = VMNatives.runtimeFreeMemory(); }
@@ -2582,7 +2583,7 @@ public final class VM
         int n = manifestValue(conf, flen, Magic.bytes("gcgen"), v.toAddress(), 8);
         if (n == 1 && v.loadUnsignedByte() == 0x31)
         {
-            GenCensus.arm(new long[GenCensus.words()], new long[GenCensus.HASHED_SLOTS]);
+            GenCensus.arm(new long[GenCensus.words()]);
             Uart.write(Magic.bytes("gcgen: generational census on\n"));
         }
     }
@@ -4097,6 +4098,7 @@ public final class VM
     static long currentTimeMillisAddr; // VM.currentTimeMillis()J
     static long identityAddr;          // VM.identity(J)J — the *Bits* pass-throughs
     static long identityHashAddr;      // VMNatives.identityHash(J)J — identityHashCode / Object.hashCode (S7-0)
+    static long testMoveAddr;          // VMNatives.testMove(J)J — MetalGcTest.move0(Object) (S7-1)
     static long availProcsAddr;        // VMNatives.availableProcessors()I — Runtime.availableProcessors()
     static long runtimeGcAddr;         // VMNatives.runtimeGc()V — Runtime.gc()
     static long runtimeFreeAddr;       // VMNatives.runtimeFreeMemory()J — Runtime.freeMemory()

@@ -4969,8 +4969,10 @@ collection; every edge the trace follows is attributed to its source.
   survived (the hash is the address today); and `allocData` buffers, some shared with devices.
 
 **Increments** (each validated on the Pi, as before):
-- **S7-1: identity hash that survives a move.** A side table of hashed objects: a moved object keeps the address it
-  was hashed at. Nothing moves yet; a test mover in a probe checks it.
+- **S7-1: identity hash that survives a move. DONE (2026-11-23).** A side table of hashed objects
+  (`vm.IdentityHash`, current address -> hash): a moved object keeps the address it was hashed at; the collector
+  purges dead entries before the sweep. Nothing moves yet; `demo/IdentityHashProbe` checks it with a test mover
+  (`MetalGcTest.move`). S7-4's minor collection calls `IdentityHash.move` for each survivor it copies.
 - **S7-2: the write barrier, checked in shadow.** Baseline (writer and metal) emits an object-remembering barrier on
   every reference store into an object or array, and VM code's `ObjectReference` stores get the same. The collector
   is still non-moving: at each collection the census's old->young edges are checked against the remembered set and

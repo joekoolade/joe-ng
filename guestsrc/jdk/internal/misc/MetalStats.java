@@ -136,6 +136,11 @@ public final class MetalStats
         "... code-root entries naming a young block, summed (could not move)",
         "... young survivors whose identity hash was taken, summed",
         "identity hashes taken (System.identityHashCode, Object.hashCode)",
+        "identity-hash table entries now (S7-1: hashed heap objects)",
+        "... most at once",
+        "... entries made (first hashes)",
+        "... dropped by a collection (object died)",
+        "... re-keyed by a move (hash kept)",
     };
 
     public static final String[] LOCKS_NAMES = {

@@ -259,17 +259,39 @@ final class VMNatives
     /** Calls of {@link #identityHash} over the boot: how often an identity hash is taken (frames/GC arc S7-0). */
     static long identityHashes;
 
-    /** {@code System.identityHashCode} and {@code Object.hashCode}: the reference IS its address, which only a
-     *  non-moving collector allows. Counted, and with the generational census armed the block is recorded as
-     *  hashed ({@link GenCensus#noteHashed}) -- a moving collector must keep that hash once the object moves. */
+    /** {@code System.identityHashCode} and {@code Object.hashCode}: the address the object had when its hash was
+     *  first taken, which {@link IdentityHash}'s side table keeps for it across a move (frames/GC arc S7-1). */
     static long identityHash(long x)
     {
         identityHashes = identityHashes + 1L;
-        if (GenCensus.on != 0 && x != 0L)
+        return IdentityHash.hash(x);
+    }
+
+    /**
+     * {@code jdk.internal.misc.MetalGcTest.move0(Object)}: what a copying collector does to one object, without the
+     * collector (frames/GC arc S7-1). Copies the block into a fresh one and hands its identity hash, if it has one,
+     * to the copy ({@link IdentityHash#move}); the copy is returned. The original's references are NOT updated, so
+     * the original stays a live, separate object -- with no hash now, and its address if it is hashed again. A test
+     * hook: a scalar or array block of the ordinary heap ({@code allocData} blocks are not copied).
+     */
+    static long testMove(long x)
+    {
+        if (x <= 0x1000L || !IdentityHash.movable(x))
         {
-            GenCensus.noteHashed(x);
+            return x;                                      // boot force-compile passes 0; image objects never move
         }
-        return x;
+        Address from = Address.fromLong(x);
+        long size = from.plus(ObjectModel.STATUS_OFFSET).loadLong() & -8L;
+        Address to = Heap.alloc((int) size);
+        to.store(from.loadLong());                         // the TIB
+        long i = (long) ObjectModel.HEADER_SIZE;
+        while (i < size)
+        {
+            to.plus(i).store(from.plus(i).loadLong());
+            i += 8L;
+        }
+        long h = IdentityHash.move(x, to.toLong());
+        return to.toLong();
     }
 
     /** Element size (bytes) of an array: a raw array keeps it in @0; a typed array keeps it in its array Type's tag. */

@@ -40,7 +40,8 @@ import jdk.internal.vm.annotation.IntrinsicCandidate;
 public class Object {
 
     // joe-ng: the natives stay native and bind in Loader.nativeBufAt -- getClass to VM.getClassOf, hashCode to the
-    // identity hash System.identityHashCode answers (a reference is its address; the GC does not move objects),
+    // identity hash System.identityHashCode answers (the address it was first hashed at, kept across a move by the
+    // VM's IdentityHash side table),
     // notify/notifyAll/wait0 to the scheduler's monitor helpers, and clone to MetalObjects.clone, which makes the
     // Cloneable check before the shallow copy. Call sites of getClass, wait(), wait(long), notify and notifyAll
     // are lowered to the same helpers by the compiler and never reach these bodies.

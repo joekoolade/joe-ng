@@ -28,13 +28,12 @@ import objectmodel.ObjectModel;
  *   <li><b>How many old objects point at young ones?</b> That is the remembered set a minor collection scans and the
  *       write barrier maintains: every block-to-block edge the trace follows is attributed to its source -- a root,
  *       a code-root entry (an address baked into compiled code), an old block or a young one.</li>
- *   <li><b>What could not move?</b> Young survivors whose identity hash was taken (the hash is the address today:
- *       {@link VMNatives#identityHash}), young survivors a code-root entry names (an immediate in compiled code), and
+ *   <li><b>What could not move?</b> Young survivors whose identity hash was taken (S7-1's
+ *       {@link IdentityHash} lets them move: a mover re-keys their entry), young survivors a code-root entry names (an immediate in compiled code), and
  *       young {@code allocData} survivors (device buffers are among them).</li>
  * </ul>
- * Off by default: arming allocates the two bitmaps (3 MiB for core 0's small and large regions, 1 MiB per secondary
- * arena) on the heap for the survivor bitmap, and a 64 KiB table of hashed block addresses. The table is written
- * from any core without a lock, so it can lose an entry to a race: a census, not a mechanism.
+ * Off by default: arming allocates the survivor bitmap on the heap (3 MiB for core 0's small and large regions,
+ * 1 MiB per secondary arena). Which objects were hashed comes from {@link IdentityHash}'s table (S7-1).
  */
 final class GenCensus implements Uninterruptible
 {
@@ -50,8 +49,6 @@ final class GenCensus implements Uninterruptible
     private static final long WORDS = CORE0_WORDS + 3L * ARENA_WORDS;
 
     private static long[] survived;
-    private static long[] hashed;                // open addressing: block addresses whose hash was taken, 0 = empty
-    static final int HASHED_SLOTS = 8192;
 
     // Where the edges being traced come from (set by VMGc around each phase).
     static final int SRC_ROOT = 0;
@@ -88,10 +85,9 @@ final class GenCensus implements Uninterruptible
         return (int) WORDS;
     }
 
-    static void arm(long[] survivedMap, long[] hashedTable)
+    static void arm(long[] survivedMap)
     {
         survived = survivedMap;
-        hashed = hashedTable;
         on = 1;
     }
 
@@ -128,63 +124,6 @@ final class GenCensus implements Uninterruptible
         int i = (int) (b >> 6);
         long m = 1L << (int) (b & 63L);
         map[i] = v ? map[i] | m : map[i] & ~m;
-    }
-
-    /** {@link VMNatives#identityHash}: the object at {@code x} has had its identity hash taken. */
-    static void noteHashed(long x)
-    {
-        if (bit(x) < 0L)
-        {
-            return;
-        }
-        int h = slot(x);
-        int probe = 0;
-        while (probe < HASHED_SLOTS)
-        {
-            long e = hashed[h];
-            if (e == x)
-            {
-                return;
-            }
-            if (e == 0L || e == 1L)
-            {
-                hashed[h] = x;
-                return;
-            }
-            h = (h + 1) & (HASHED_SLOTS - 1);
-            probe += 1;
-        }
-    }
-
-    private static int slot(long x)
-    {
-        return (int) ((x ^ (x >>> 17)) >>> 3) & (HASHED_SLOTS - 1);
-    }
-
-    /** Whether block {@code x} is in the hashed table; with {@code drop}, also remove it (a tombstone, 1). */
-    private static boolean wasHashed(long x, boolean drop)
-    {
-        int h = slot(x);
-        int probe = 0;
-        while (probe < HASHED_SLOTS)
-        {
-            long e = hashed[h];
-            if (e == x)
-            {
-                if (drop)
-                {
-                    hashed[h] = 1L;
-                }
-                return true;
-            }
-            if (e == 0L)
-            {
-                return false;
-            }
-            h = (h + 1) & (HASHED_SLOTS - 1);
-            probe += 1;
-        }
-        return false;
     }
 
     /** VMGc: the edges that follow come from a root ({@link #SRC_ROOT}) or a code-root entry ({@link #SRC_CODE}). */
@@ -281,7 +220,6 @@ final class GenCensus implements Uninterruptible
             if ((st & Heap.FREE_FLAG) != 0L)
             {
                 put(survived, b, false);
-                boolean ignored = wasHashed(o, true);
             }
             else if ((st & 1L) != 0L)
             {
@@ -293,7 +231,7 @@ final class GenCensus implements Uninterruptible
                 {
                     youngLive = youngLive + size;
                     youngLiveN = youngLiveN + 1L;
-                    if (wasHashed(o, false))
+                    if (IdentityHash.contains(o))
                     {
                         hashedYoungLive = hashedYoungLive + 1L;
                     }
@@ -316,7 +254,6 @@ final class GenCensus implements Uninterruptible
                     youngDead = youngDead + size;
                 }
                 put(survived, b, false);
-                boolean ignored = wasHashed(o, true);
             }
             o = o + size;
         }

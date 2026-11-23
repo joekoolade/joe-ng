@@ -225,6 +225,7 @@ final class VMGc implements Uninterruptible
         {
             GenCensus.afterTrace();                   // gcgen=1: young/old, before the sweep frees anything
         }
+        IdentityHash.purge();                         // S7-1: a hashed block the sweep frees loses its entry first
         afterTrace(scanFrom, stackTop, gcT0, tRoots, reaped, daif);
     }
 

@@ -4,6 +4,31 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **FRAMES/GC ARC, INCREMENT S7-1: identity hashes that survive a move (2026-11-23).** An object's identity hash is
+  the address it had when the hash was first taken, kept for life in a side table (`vm.IdentityHash`): every heap
+  object whose hash was taken has an entry keyed by its CURRENT address whose value is its hash; a mover calls
+  `IdentityHash.move(from, to)`, which re-keys the entry and keeps the value. Boot-image objects never move and get no
+  entry. The collector purges the entries of unmarked blocks after the trace, before the sweep, so a reused address
+  never answers a dead object's hash. The table is open-addressed (key, value) pairs under a lock word (0x0302_0180,
+  IRQs masked, taken only while more than one core schedules) and grows outside the lock, since an allocation can
+  collect. No header bit: the status word's low three bits are taken (two marks, `FREE_FLAG`) and every size read
+  masks with `-8`. The census (`gcgen=1`) now reads hashed blocks from this table; its own 64 KiB table is gone.
+  Five `/gc` rows (entries now, most at once, made, dropped by a collection, re-keyed by a move).
+  - **Test mover:** `jdk.internal.misc.MetalGcTest.move(Object)` -> `VMNatives.testMove`: copies a block into a fresh
+    one and moves its hash; nothing else is updated (the original stays a separate object). **`demo/IdentityHashProbe`**
+    (gate, metal-only): a moved and twice-moved object keep the hash through `identityHashCode` and `hashCode`; an
+    object moved before hashing gets its own; 2,000 moved hashes survive three collections with hashing churn between
+    them (dead originals' blocks reused); four threads hashing 4,000 shared objects agree. Its first run reported 3,200
+    disagreements -- the probe's own bug (thread strides 1/3/5/7 over 4,000 slots: 5 divides 4,000), fixed with
+    strides coprime to it.
+  - **Pi 4, web server + FrameBench, three boots** (build `769fb89a4b4c3811`): sums 515.9/530.6/525.5 ms, check values
+    identical, 14 collections, total pause 0.92 s (S6d-3: 0.91 s), 0 conservative blocks, every page 200. 850 hashes
+    taken per boot, 112 heap objects hashed (the rest are image objects), none died. **IdentityHashProbe via `/run`:
+    PASS**; 2,002 entries re-keyed by moves, 60,000 dropped by collections.
+  - **QEMU:** virt list 213/213 (with the new probe); the probe PASS with `gcgen=1` too (`hashedYoungLive=4015`);
+    raspi4b suite `want: checked=160 mismatch=0`, `collections=53`, `UNDER THE LOADER LOCK=1` (expected); `make test`
+    + overlaycheck OK.
+  - Default build restored on the Pi (`720d306492e167ec`, `main`).
 - **FRAMES/GC ARC, INCREMENT S7-0: the generational census (2026-11-22).** S7 is a generational nursery (decided with
   the user over mark-compact and semi-space; plan in PLAN.md "S7: a generational nursery"). Before anything moves,
   `gcgen=1` measures what a nursery would find (`vm.GenCensus`): a survivor bitmap (one bit per 8 heap bytes, set for
