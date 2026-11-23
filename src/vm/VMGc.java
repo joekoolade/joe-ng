@@ -157,6 +157,7 @@ final class VMGc implements Uninterruptible
                 idleGc = idleGc + 1;
             }
         }
+        GenCensus.source(GenCensus.SRC_ROOT);         // gcgen=1: what follows are root edges
         if (StackRoots.on != 0)
         {
             // PRECISE STACK ROOTS (frames/GC arc S5): every task's stack, walked frame by frame and marked by its
@@ -183,8 +184,10 @@ final class VMGc implements Uninterruptible
         phaseRootTicks = tRoots - tStopped;
         drainMarkStack();                             // trace: scan each newly marked block exactly ONCE
         hcCat = HC_ROOT;
+        GenCensus.source(GenCensus.SRC_ROOT);
         markGcMaps();                                 // JIT reference maps live as long as their frame entry
         hcCat = HC_ROOT;
+        GenCensus.source(GenCensus.SRC_CODE);         // gcgen=1: addresses baked into compiled code
         codeOnly = markCodeRoots();                   // ... then the addresses only compiled code holds
         drainMarkStack();
         if (markOverflow != 0)
@@ -217,6 +220,10 @@ final class VMGc implements Uninterruptible
                 overflows = overflows + 1L;
                 traceFixpoint();
             }
+        }
+        if (GenCensus.on != 0)
+        {
+            GenCensus.afterTrace();                   // gcgen=1: young/old, before the sweep frees anything
         }
         afterTrace(scanFrom, stackTop, gcT0, tRoots, reaped, daif);
     }
@@ -642,6 +649,10 @@ final class VMGc implements Uninterruptible
      */
     private static boolean scanBlock(Address o, long size)
     {
+        if (GenCensus.on != 0)
+        {
+            GenCensus.sourceBlock(o.toLong());
+        }
         if (PreciseTrace.on != 0 || HeapShadow.precise != 0)
         {
             PreciseTrace.scanBlock(o, size);           // frames/GC arc S6c: the precise heap trace (gcheap=2's first
@@ -1291,6 +1302,10 @@ final class VMGc implements Uninterruptible
                 }
             }
             return false;                          // refuse to mark it: not a block
+        }
+        if (GenCensus.on != 0)
+        {
+            GenCensus.edge(w);                         // gcgen=1: every edge, to a marked block or not
         }
         if ((st & 1L) == 0L)
         {

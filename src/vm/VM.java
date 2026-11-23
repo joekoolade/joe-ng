@@ -2106,6 +2106,7 @@ public final class VM
         if (cdsSeedAddr == 0L) { long u = VMNatives.cdsRandomSeedForDumping(); }
         if (currentTimeMillisAddr == 0L) { long u = VMNatives.currentTimeMillis(); }
         if (identityAddr == 0L) { long u = VMNatives.identity(0L); }
+        if (identityHashAddr == 0L) { long u = VMNatives.identityHash(0L); }
         if (availProcsAddr == 0L) { int u = VMNatives.availableProcessors(); }
         if (runtimeGcAddr == 0L) { VMNatives.runtimeGc(); }
         if (runtimeFreeAddr == 0L) { long u = VMNatives.runtimeFreeMemory(); }
@@ -2431,6 +2432,7 @@ public final class VM
         armGcHeap(conf, flen);
         armGcPrecise(conf, flen);
         armGcVerify(conf, flen);
+        armGcGen(conf, flen);
         armNpeTrace(conf, flen);
         DataReference nm = Heap.allocData(flen + 8);
         int nl = manifestValue(conf, flen, Magic.bytes("main"), nm.toAddress(), flen);
@@ -2570,6 +2572,18 @@ public final class VM
         {
             VMGc.verifyExact = 1;
             Uart.write(Magic.bytes("gcverify: every exact mark checked against the block-start bitmap\n"));
+        }
+    }
+
+    /** {@code gcgen=1}: the generational census ({@link GenCensus}, frames/GC arc S7-0). */
+    private static void armGcGen(Address conf, int flen)
+    {
+        DataReference v = Heap.allocData(16);
+        int n = manifestValue(conf, flen, Magic.bytes("gcgen"), v.toAddress(), 8);
+        if (n == 1 && v.loadUnsignedByte() == 0x31)
+        {
+            GenCensus.arm(new long[GenCensus.words()], new long[GenCensus.HASHED_SLOTS]);
+            Uart.write(Magic.bytes("gcgen: generational census on\n"));
         }
     }
 
@@ -4082,6 +4096,7 @@ public final class VM
     static long cdsSeedAddr;           // VMNatives.cdsRandomSeedForDumping()J
     static long currentTimeMillisAddr; // VM.currentTimeMillis()J
     static long identityAddr;          // VM.identity(J)J — the *Bits* pass-throughs
+    static long identityHashAddr;      // VMNatives.identityHash(J)J — identityHashCode / Object.hashCode (S7-0)
     static long availProcsAddr;        // VMNatives.availableProcessors()I — Runtime.availableProcessors()
     static long runtimeGcAddr;         // VMNatives.runtimeGc()V — Runtime.gc()
     static long runtimeFreeAddr;       // VMNatives.runtimeFreeMemory()J — Runtime.freeMemory()

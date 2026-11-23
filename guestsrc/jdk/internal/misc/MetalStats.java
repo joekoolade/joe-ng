@@ -124,6 +124,18 @@ public final class MetalStats
         "... exact marks made without it",
         "... checked against it every collection (gcverify=1)",
         "... EXACT WORDS THAT WERE NOT A BLOCK BASE (gcverify=1; refused)",
+        "generational census on (S7-0; gcgen=1)",
+        "... collections classified",
+        "... young bytes (allocated since the previous collection), summed",
+        "... of which survived their first collection",
+        "... last collection: young bytes that survived",
+        "... last collection: young bytes",
+        "... last collection: old bytes live",
+        "... most old->young references at one collection",
+        "... most old blocks holding one (remembered set)",
+        "... code-root entries naming a young block, summed (could not move)",
+        "... young survivors whose identity hash was taken, summed",
+        "identity hashes taken (System.identityHashCode, Object.hashCode)",
     };
 
     public static final String[] LOCKS_NAMES = {

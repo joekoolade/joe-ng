@@ -5876,7 +5876,7 @@ public final class Loader
             if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("nanoTime")))          { return VM.nanoTimeAddr; }
             if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("currentTimeMillis"))) { return VM.currentTimeMillisAddr; }
             if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("arraycopy")))         { return VM.arraycopyAddr; }
-            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("identityHashCode")))  { return VM.identityAddr; }  // ref IS its address -> identity hash
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("identityHashCode")))  { return VM.identityHashAddr; }  // ref IS its address -> identity hash
             if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("setOut0")))           { return VM.setOut0Addr; }   // (PrintStream)V
             if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("setErr0")))           { return VM.setErr0Addr; }   // (PrintStream)V
             if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("setIn0")))            { return VM.setIn0Addr; }    // (InputStream)V
@@ -6193,7 +6193,7 @@ public final class Loader
             // The stock Object's natives (the overlay is the JDK 26 source). Each instance native takes its
             // receiver in x0, which is the one argument every helper here reads.
             if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("getClass")))          { return VM.getClassAddr; }      // (obj) -> mirror
-            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("hashCode")))          { return VM.identityAddr; }      // = identityHashCode
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("hashCode")))          { return VM.identityHashAddr; }  // = identityHashCode
             if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("notify")))            { return VM.objNotifyAddr; }
             if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("notifyAll")))         { return VM.objNotifyAllAddr; }
             if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("wait0")))             { return VM.objWaitAddr; }       // (obj, ms)

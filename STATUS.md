@@ -4,6 +4,29 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **FRAMES/GC ARC, INCREMENT S7-0: the generational census (2026-11-22).** S7 is a generational nursery (decided with
+  the user over mark-compact and semi-space; plan in PLAN.md "S7: a generational nursery"). Before anything moves,
+  `gcgen=1` measures what a nursery would find (`vm.GenCensus`): a survivor bitmap (one bit per 8 heap bytes, set for
+  each block live after a collection, cleared when the sweep frees it, so a reused address reads young); every edge the
+  trace follows attributed to a root, a code-root entry or an old/young block; and a table of blocks whose identity hash
+  was taken -- `identityHashCode`/`Object.hashCode` now go through their own native, `VMNatives.identityHash` (still
+  the address, now counted). Twelve `/gc` rows.
+  - **Pi 4, web server + FrameBench, 14 collections, three boots** (build `eb3d7d341e70712d`, `gcgen=1`): 511 MB young
+    allocated per boot, 74.7 MB of it survived over all collections; at the last one **1.8 MB of 96.5 MB (1.9%)**, old
+    live 62 MB. At most 8,852 old->young references, held by at most **350 old blocks**. Code-root entries naming a
+    young block, summed: 8,505. Identity hashes taken: 850; hashed young survivors: 91. The three boots agree to tens
+    of bytes. FrameBench check values identical (the census costs pause time: 1.42 s total while armed).
+  - **Virt list (779 collections):** young survival 83% over collections 1-3 (the loader's metadata), **7.6% of 17 GB
+    after**; web server + FrameBench from collection 6: 5.3%. Most old->young references 17,734 from at most 1,068 old
+    blocks; code-root entries naming a young block 267k summed; hashed young survivors 3,229.
+  - **Reading:** young objects die, so a minor collection copies ~2 MB where a full trace walks ~62 MB; the remembered
+    set is a few hundred blocks, some of them large arrays (an object-remembering barrier rather than cards); what
+    cannot simply move is code-baked addresses, hashed objects and device-shared `allocData` buffers.
+  - **QEMU:** virt 212/212 default; raspi4b suite `want: checked=160 mismatch=0`, `collections=53`, `intact=32`; `make
+    test` + overlaycheck OK. With `gcgen=1` every probe's output matches once the census lines are dropped (all
+    six gates OK); the census's bitmap takes 6 MiB of the large region, and with a second bitmap for hashes (12 MiB)
+    SslEngineProbe ran out of it, so hashes are a 64 KiB table instead.
+  - Default build restored on the Pi (`59a5912009952984`, `main`).
 - **FRAMES/GC ARC, INCREMENT S6d-3: the block-start bitmap is built only when a conservative probe needs it
   (2026-11-22).** Every collection used to clear a 3 MiB bitmap and walk the whole heap to record block bases before
   marking -- the ~29 ms "root scan" on the Pi. Since S6d-2 no default collection probes conservatively, so the bitmap

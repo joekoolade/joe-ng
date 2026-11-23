@@ -4943,10 +4943,45 @@ like AArch64); IA-32 is the second opinion.
   saved x0..x15 can hold reference arguments); task stacks are walked frame by frame, not scanned whole. At a
   safepoint no register holds a live value, which is what the memory frame buys here.
 - **S6: precise heap.** Type `allocData` blocks and raw arrays until `nomap` is 0; retire the block-start bitmap.
-- **S7: a moving collector**, as its own arc.
+- **S7: a moving collector**, as its own arc -- planned below ("S7: a generational nursery").
 
 Then the optimizing compiler resumes, with two added requirements: maps that describe registers as well as
 slots, and derived-pointer entries for interior pointers.
+
+### S7: a generational nursery (arc started 2026-11-22)
+
+**Decision (with the user, 2026-11-22):** a generational collector -- a bump-allocated nursery whose survivors are
+copied into the existing non-moving heap -- over mark-compact or semi-space. It shortens most pauses and speeds
+allocation; it needs a write barrier in Baseline and a remembered set, and it fixes fragmentation only indirectly
+(far less survives into the mature heap).
+
+**S7-0, measured before anything moves** (`gcgen=1`, `vm.GenCensus`). A block is young if allocated since the last
+collection; every edge the trace follows is attributed to its source.
+- **Young objects die.** Pi, web server + FrameBench, 14 collections: 511 MB young allocated per boot; at the last
+  collection 1.8 MB of 96.5 MB survived (1.9%). Virt list: 83% survive collections 1-3 (the loader's metadata), 7.6%
+  of 17 GB after that; web server + FrameBench 5.3%. A minor collection would copy ~2 MB where a full one traces
+  ~62 MB live.
+- **The remembered set is small.** At most 350 old blocks hold a young reference on the Pi (1,068 on virt), though
+  they hold up to 8,852 references (17,734 on virt): a few big arrays. An object-remembering barrier (log a block
+  once, scan it whole) fits better than card marking.
+- **What cannot simply move:** addresses baked into compiled code -- 8,505 code-root entries named a young block over
+  a Pi boot (267k over the virt list); identity hashes -- 850 taken per Pi boot, 91 of them on young objects that
+  survived (the hash is the address today); and `allocData` buffers, some shared with devices.
+
+**Increments** (each validated on the Pi, as before):
+- **S7-1: identity hash that survives a move.** A side table of hashed objects: a moved object keeps the address it
+  was hashed at. Nothing moves yet; a test mover in a probe checks it.
+- **S7-2: the write barrier, checked in shadow.** Baseline (writer and metal) emits an object-remembering barrier on
+  every reference store into an object or array, and VM code's `ObjectReference` stores get the same. The collector
+  is still non-moving: at each collection the census's old->young edges are checked against the remembered set and
+  any source block missing from it is a MISS -- the S2 pattern. Measure the barrier's cost on FrameBench.
+- **S7-3: pretenuring.** Decide what is allocated straight into the mature heap: `allocData` blocks, metadata, large
+  objects, and the objects compiled code bakes as immediates (by allocation site, from the census).
+- **S7-4: the nursery and the minor collection.** A bump-allocated nursery per core; a minor collection copies its
+  survivors into the mature heap with forwarding pointers and updates the roots (exact stacks, statics, code roots,
+  the remembered set). A verify switch traces the whole heap after each minor collection and reports any reference
+  left pointing into the nursery.
+- **S7-5: sizing and measurement.** Nursery size, promotion, and the Pi pause numbers against S6d-3's.
 
 ## 5. Design decisions to lock day one
 

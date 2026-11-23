@@ -229,6 +229,18 @@ public final class VMStats
         i = put(arr, len, i, VMGc.exactMarks);                             // ... exact marks (no bitmap)
         i = put(arr, len, i, (long) VMGc.verifyExact);                     // ... gcverify=1
         i = put(arr, len, i, VMGc.exactBad);                               // ... exact words gcverify refused
+        i = put(arr, len, i, (long) GenCensus.on);                         // S7-0: generational census on
+        i = put(arr, len, i, GenCensus.collections);                       // ... collections it classified
+        i = put(arr, len, i, GenCensus.youngAllocTotal);                   // ... young bytes, live + dead, summed
+        i = put(arr, len, i, GenCensus.youngLiveTotal);                    // ... of which survived
+        i = put(arr, len, i, GenCensus.youngLive);                         // ... last collection: young live
+        i = put(arr, len, i, GenCensus.youngLive + GenCensus.youngDead);   // ... of young allocated
+        i = put(arr, len, i, GenCensus.oldLive);                           // ... old live
+        i = put(arr, len, i, GenCensus.oldToYoungMax);                     // ... most old->young edges
+        i = put(arr, len, i, GenCensus.remsetMax);                         // ... most old blocks holding one
+        i = put(arr, len, i, GenCensus.codeToYoungTotal);                  // ... code-root entries naming a young block
+        i = put(arr, len, i, GenCensus.hashedYoungLiveTotal);              // ... hashed young survivors
+        i = put(arr, len, i, VMNatives.identityHashes);                    // ... identity hashes taken
         return (long) i;
     }
 

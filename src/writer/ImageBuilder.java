@@ -1542,6 +1542,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                     "vm/VM.cdsSeedAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.currentTimeMillis()J", "vm/VM.currentTimeMillisAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.identity(J)J",      "vm/VM.identityAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.identityHash(J)J",  "vm/VM.identityHashAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredCtorCount(Lmagic/ObjectReference;)J", "vm/VM.declCtorCountAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredCtorDescAt(Lmagic/ObjectReference;J)J", "vm/VM.declCtorDescAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.availableProcessors()I", "vm/VM.availProcsAddr");
