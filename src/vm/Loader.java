@@ -8834,7 +8834,7 @@ public final class Loader
             i = decNext;
         }
         lastLiteralCoder = maxCh < 256 ? 0 : 1;
-        ObjectReference arr = Heap.allocArray(lastLiteralCoder == 0 ? nchars : nchars * 2, 1).toObjectReference();
+        ObjectReference arr = Heap.allocArrayOld(lastLiteralCoder == 0 ? nchars : nchars * 2, 1).toObjectReference();   // pretenured (S7-3): code bakes the literal
         Address bt = ArrayTypes.byteArrayTib();
         if (!bt.isZero())
         {
@@ -8887,7 +8887,7 @@ public final class Loader
         }
         else
         {
-            ObjectReference obj = Heap.alloc(stringSize()).toObjectReference();
+            ObjectReference obj = Heap.allocOld(stringSize()).toObjectReference();   // pretenured (S7-3): an ldc immediate
             obj.toAddress().plus(0L).store(tib);               // TIB
             obj.toAddress().plus(16L).store(bytes);            // value field (offset 16)
             obj.toAddress().plus(24L).store((long) lastLiteralCoder); // coder (offset 24): 0 LATIN1, 1 UTF16
@@ -9048,9 +9048,45 @@ public final class Loader
         {
             return canon;
         }
-        anchorLiteral(str.toLong());
-        poolInsert(str.toLong());
-        return str.toLong();
+        long copy = oldStringCopy(str);
+        anchorLiteral(copy);
+        poolInsert(copy);
+        return copy;
+    }
+
+    /**
+     * A PRETENURED copy of {@code str} and its value array, for the intern pool (frames/GC arc S7-3). A literal of the
+     * same text resolved later IS the pool's object, and compiled code bakes it as an immediate that no collector can
+     * update -- so the pool must never hold a young String. The census found exactly that: every code-root entry
+     * naming a young block was a runtime-interned String (SystemLoggerProbe, four). {@code intern()} may return any
+     * instance with the content (JLS 3.10.5, {@code String.intern}), not necessarily the receiver; the copy keeps
+     * every field, the cached hash included.
+     */
+    private static long oldStringCopy(ObjectReference str)
+    {
+        Address s = str.toAddress();
+        Address val = s.plus(16L).loadAddress();                                  // value (offset 16)
+        int n = (int) val.plus(ObjectModel.ARRAY_LENGTH_OFFSET).loadLong();
+        ObjectReference arr = Heap.allocArrayOld(n, 1).toObjectReference();      // a reference: kept across the alloc below
+        arr.toAddress().store(val.loadLong());                                    // the byte[] TIB
+        long off = (long) ObjectModel.ARRAY_BASE_OFFSET;
+        long end = (long) ObjectModel.ARRAY_BASE_OFFSET + (long) n;
+        while (off < end)
+        {
+            arr.toAddress().plus(off).store(val.plus(off).loadLong());           // whole words: the block is 8-rounded
+            off = off + 8L;
+        }
+        int size = stringSize();
+        Address c = Heap.allocOld(size);
+        c.store(s.loadLong());                                                    // TIB
+        long f = 16L;
+        while (f < (long) size)
+        {
+            c.plus(f).store(s.plus(f).loadLong());
+            f = f + 8L;
+        }
+        c.plus(16L).store(arr);
+        return c.toLong();
     }
 
     /** Record {@code obj} (a literal the JIT bakes into code) as a GC root; returns it for chaining. */

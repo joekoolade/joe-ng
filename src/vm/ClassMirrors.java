@@ -232,7 +232,7 @@ final class ClassMirrors
         // signers(@48). Class mirrors are allocated HERE rather than by a constructor, so this size must track the
         // overlay's field count by hand: a field declared in guestsrc/java/lang/Class.java but not counted here is
         // written PAST the object.
-        ObjectReference obj = Heap.alloc(56).toObjectReference();
+        ObjectReference obj = Heap.allocOld(56).toObjectReference();   // pretenured (S7-3): code bakes mirrors as immediates
         DataReference ctib = classTib();
         if (mirN >= mirType.length())
         {

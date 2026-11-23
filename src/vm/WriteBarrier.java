@@ -26,10 +26,9 @@ import objectmodel.ObjectModel;
  * object-remembering rather than cards (S7-0: a few hundred old blocks, some of them large arrays).
  * <p>Nothing moves yet, so the barrier is checked IN SHADOW: with {@code gcgen=1} the census attributes every
  * old->young edge to its source block, and a source whose bit is not set is a MISS ({@link #checkEdge}) -- a store
- * the barrier did not see. An unlogged edge INTO an {@code allocData} block (metadata, device buffers) is counted
- * apart ({@link #missesToData}): S7-3 allocates those blocks old, so they are never young targets; so is an edge
- * out of a STATICS block ({@link #fromStatics}): {@code putstatic} has no barrier, because statics are roots a minor
- * collection scans whole. With {@code gcbarrier=1} every collection clears the bitmap after the trace (so a bit
+ * the barrier did not see. An edge out of a STATICS block is counted apart ({@link #fromStatics}): {@code putstatic}
+ * has no barrier, because statics are roots a minor collection scans whole. A miss INTO an {@code allocData} block is
+ * also attributed ({@link #missesToData}); since S7-3 those blocks are pretenured, so it should not happen at all. With {@code gcbarrier=1} every collection clears the bitmap after the trace (so a bit
  * means "stored into since the last collection", the shadow check's premise) and counts what was logged; without it
  * the bits accumulate, and the barrier's cost is its already-logged path. VM code that stores a reference with a raw
  * {@code Address.store} calls {@link #log} itself.
@@ -51,8 +50,8 @@ final class WriteBarrier implements Uninterruptible
     static long missesTotal;
     static long fromStatics;           // ... edges out of a statics block (putstatic has no barrier: statics are
                                        //   roots), over the boot
-    static long missesToData;          // ... edges into allocData blocks (pretenured from S7-3: not the barrier's),
-                                       //   over the boot
+    static long missesToData;          // ... of which into an allocData block (pretenured since S7-3: none
+                                       //   expected), over the boot
     static long checked;               // old->young edges checked, over the boot
     private static int printed;
     private static long lastSrc;                         // one line per source block, not per edge
@@ -103,9 +102,8 @@ final class WriteBarrier implements Uninterruptible
         long dtib = Address.fromLong(dst).loadLong();
         if (dtib == 0L || PreciseTrace.isLayout(dtib))
         {
-            missesToData = missesToData + 1L;          // to an allocData block: S7-3 allocates those old
-            return;
-        }
+            missesToData = missesToData + 1L;          // to an allocData block: pretenured since S7-3, so never young
+        }                                              //   -- a real miss, attributed
         misses = misses + 1L;
         if (printed < PRINT_MAX && src != lastSrc)
         {

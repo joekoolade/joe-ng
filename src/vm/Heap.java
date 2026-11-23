@@ -1479,6 +1479,62 @@ public final class Heap implements Uninterruptible
      *  arena triggers a collection ({@link Magic#gc}) and one retry before halting out-of-memory. */
     public static Address alloc(int size)
     {
+        return allocAs(size, YOUNG);
+    }
+
+    // ---- pretenuring (frames/GC arc S7-3) ----------------------------------------------------------------------
+    // What a nursery must never hold, allocated "old" from birth: allocData blocks (Types, TIBs, statics, device
+    // buffers -- metadata the VM stores into with raw writes, some of it shared with devices), and the objects
+    // compiled code bakes as immediates -- Class mirrors and string literals (MetalSymbols.emitObject), which can
+    // never move because no relocation record finds them. There is no nursery yet, so "old" lands in the same heap as
+    // everything else; the census (gcgen=1) records the block as old from birth, and S7-4 sends everything else to
+    // the nursery.
+    //   LARGE objects (LARGE_REQ or more) are NOT pretenured, though the plan said so: measured (gcgen=1, FrameBench),
+    // most large bytes are dead by their first collection, and pretenured they would be garbage only a full
+    // collection reclaims. They must not be COPIED, which is a different thing from being old: S7-4 leaves them in
+    // the large region and marks them in place, young until they survive a collection.
+
+    /** An ordinary allocation: a nursery's, from S7-4. */
+    static final int YOUNG = -1;
+    /** Pretenured: an allocData block. */
+    static final int OLD_DATA = 0;
+    /** Pretenured by its allocation site ({@link #allocOld}, {@link #allocArrayOld}): baked into compiled code. */
+    static final int OLD_SITE = 1;
+    // Counts and bytes per reason, over the boot (VMStats). Every core adds without a lock: a lost add is a
+    // statistics error only.
+    public static long oldDataN;
+    public static long oldDataBytes;
+    public static long oldSiteN;
+    public static long oldSiteBytes;
+
+    /** Allocate {@code size} bytes straight into the mature heap: an object compiled code will name as an immediate. */
+    public static Address allocOld(int size)
+    {
+        return allocAs(size, OLD_SITE);
+    }
+
+    /** Record block {@code p}, just allocated, as pretenured for {@code reason}. IRQs masked (alloc's caller). */
+    private static void tenured(Address p, int reason)
+    {
+        long size = p.plus(ObjectModel.STATUS_OFFSET).loadLong() & -8L;
+        if (reason == OLD_DATA)
+        {
+            oldDataN = oldDataN + 1L;
+            oldDataBytes = oldDataBytes + size;
+        }
+        else
+        {
+            oldSiteN = oldSiteN + 1L;
+            oldSiteBytes = oldSiteBytes + size;
+        }
+        if (GenCensus.on != 0)
+        {
+            GenCensus.born(p.toLong());                // old from birth: never young to the census
+        }
+    }
+
+    private static Address allocAs(int size, int reason)
+    {
         // The free-list unlink and the bump-pointer load..store below MUST NOT be preempted: the timer
         // scheduler switches tasks on this core, and a task switched in mid-alloc allocates the SAME
         // address (a lost bump) — overlapping objects and size-walk holes that break the GC's heap scan.
@@ -1486,6 +1542,10 @@ public final class Heap implements Uninterruptible
         long daif = Magic.readDaif();
         Magic.disableIrq();
         Address p = allocLocked(size);
+        if (reason != YOUNG)
+        {
+            tenured(p, reason);
+        }
         if ((daif & 0x80L) == 0L)
         {
             Magic.enableIrq();
@@ -1786,13 +1846,13 @@ public final class Heap implements Uninterruptible
         if (HeapShadow.sites != 0)
         {
             // gcheap=2: one word more, at the block's end, recording where the struct came from (HeapShadow).
-            q = alloc(size + ObjectModel.HEADER_SIZE + 8);
+            q = allocAs(size + ObjectModel.HEADER_SIZE + 8, OLD_DATA);
             q.plus((q.plus(ObjectModel.STATUS_OFFSET).loadLong() & -8L) - 8L).store(site);
             keep = 8L;
         }
         else
         {
-            q = alloc(size + ObjectModel.HEADER_SIZE);
+            q = allocAs(size + ObjectModel.HEADER_SIZE, OLD_DATA);
         }
         // A first-fit block can be a word or so bigger than asked, and alloc zeroes only what was asked: the slack
         // keeps whatever the block held before. A layout is read to the BLOCK's end (PreciseTrace), so a stale word
@@ -1834,6 +1894,18 @@ public final class Heap implements Uninterruptible
     public static Address allocArray(int length, int elemSize)
     {
         long site = Magic.readLR();                      // first: the calls below overwrite x30
+        return arrayAs(length, elemSize, site, YOUNG);
+    }
+
+    /** {@link #allocArray} straight into the mature heap (S7-3): the value array of a string literal. */
+    public static Address allocArrayOld(int length, int elemSize)
+    {
+        long site = Magic.readLR();
+        return arrayAs(length, elemSize, site, OLD_SITE);
+    }
+
+    private static Address arrayAs(int length, int elemSize, long site, int reason)
+    {
         long bytes = (long) ObjectModel.ARRAY_BASE_OFFSET + (long) length * (long) elemSize;
         if (length < 0 || bytes > (long) MAX_ARRAY_BYTES)
         {
@@ -1852,7 +1924,7 @@ public final class Heap implements Uninterruptible
                 Magic.wfe();
             }
         }
-        Address p = alloc((int) bytes + 8 * HeapShadow.sites);   // gcheap=2: + a word for the allocation site
+        Address p = allocAs((int) bytes + 8 * HeapShadow.sites, reason);   // gcheap=2: + a word for the site
         // The array's TIB slot holds its element size (1/2/4/8) — small, so it's distinguishable from an
         // object's TIB (a heap pointer), and it lets a generic System.arraycopy compute byte offsets. The
         // conservative GC never derefs this slot (it scans from +16), so a non-pointer here is safe.
