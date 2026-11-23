@@ -95,6 +95,7 @@ final class ScratchMap
         add(Heap.JIT_TABLES, Heap.JIT_TABLES + VM.JIT_TABLES_BYTES);   // JIT frame/local/handler tables
         add(VMGc.MARK_STACK, Heap.PTR_CELL);                // GC mark stack
         add(Heap.PTR_CELL, 0x0400_0000L);                   // bump-pointer / free-list cells
+        add(compiler.Symbols.LOG_BITMAP, compiler.Symbols.LOG_BITMAP + (compiler.Symbols.LOG_SPAN >> 6));   // write barrier log bitmap (S7-2)
     }
 
     /**

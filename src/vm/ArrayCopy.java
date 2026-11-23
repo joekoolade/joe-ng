@@ -122,6 +122,10 @@ final class ArrayCopy
             return;
         }
         long es = VMNatives.elemSize(src);
+        if (dk != PRIM && es == 8L)
+        {
+            WriteBarrier.log(dst.toLong());                // references copied in raw: log the destination (S7-2)
+        }
         Address from = src.toAddress().plus((long) ObjectModel.ARRAY_BASE_OFFSET + (long) srcPos * es);
         Address to = dst.toAddress().plus((long) ObjectModel.ARRAY_BASE_OFFSET + (long) dstPos * es);
         if (sk == REF && dk == REF && src.NE(dst))

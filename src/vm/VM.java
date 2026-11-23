@@ -2434,6 +2434,7 @@ public final class VM
         armGcPrecise(conf, flen);
         armGcVerify(conf, flen);
         armGcGen(conf, flen);
+        armGcBarrier(conf, flen);
         armNpeTrace(conf, flen);
         DataReference nm = Heap.allocData(flen + 8);
         int nl = manifestValue(conf, flen, Magic.bytes("main"), nm.toAddress(), flen);
@@ -2585,6 +2586,18 @@ public final class VM
         {
             GenCensus.arm(new long[GenCensus.words()]);
             Uart.write(Magic.bytes("gcgen: generational census on\n"));
+        }
+    }
+
+    /** {@code gcbarrier=1}: clear and count the write barrier's log bitmap every collection (frames/GC arc S7-2). */
+    private static void armGcBarrier(Address conf, int flen)
+    {
+        DataReference v = Heap.allocData(16);
+        int n = manifestValue(conf, flen, Magic.bytes("gcbarrier"), v.toAddress(), 8);
+        if (n == 1 && v.loadUnsignedByte() == 0x31)
+        {
+            WriteBarrier.on = 1;
+            Uart.write(Magic.bytes("gcbarrier: log bitmap cleared and counted every collection\n"));
         }
     }
 
@@ -4718,6 +4731,7 @@ public final class VM
         VMScheduler.buildPageTables();
         VMScheduler.enableMmuThisCore();
         Uart.write(Magic.bytes("mmu on\n"));
+        WriteBarrier.init();                              // S7-2: the log bitmap is raw RAM; start it empty
 
         if (BOOTSTRAP_PROBE)                              // M8 full-bootstrap probe (off by default)
         {

@@ -4973,10 +4973,12 @@ collection; every edge the trace follows is attributed to its source.
   (`vm.IdentityHash`, current address -> hash): a moved object keeps the address it was hashed at; the collector
   purges dead entries before the sweep. Nothing moves yet; `demo/IdentityHashProbe` checks it with a test mover
   (`MetalGcTest.move`). S7-4's minor collection calls `IdentityHash.move` for each survivor it copies.
-- **S7-2: the write barrier, checked in shadow.** Baseline (writer and metal) emits an object-remembering barrier on
-  every reference store into an object or array, and VM code's `ObjectReference` stores get the same. The collector
-  is still non-moving: at each collection the census's old->young edges are checked against the remembered set and
-  any source block missing from it is a MISS -- the S2 pattern. Measure the barrier's cost on FrameBench.
+- **S7-2: the write barrier, checked in shadow. DONE (2026-11-23).** Baseline (writer and metal) emits an
+  object-remembering barrier inline after every reference `putfield`/`aastore`/reference-array set: a log bitmap at
+  0x1E00_0000 (one bit per 8 bytes); raw stores (Unsafe, field updaters, `Field.set`, `arraycopy`) log explicitly.
+  `gcgen=1 gcbarrier=1` checks every old->young edge against it: 0 misses on virt (214 probes) and the Pi. Statics are
+  roots (no `putstatic` barrier); edges into `allocData` blocks wait for S7-3. Cost on the Pi: +1.2% FrameBench. For
+  S7-4: the barrier gains the nursery test (skip a young source), and the minor collection scans the logged objects.
 - **S7-3: pretenuring.** Decide what is allocated straight into the mature heap: `allocData` blocks, metadata, large
   objects, and the objects compiled code bakes as immediates (by allocation site, from the census).
 - **S7-4: the nursery and the minor collection.** A bump-allocated nursery per core; a minor collection copies its

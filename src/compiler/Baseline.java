@@ -1809,7 +1809,63 @@ public final class Baseline
         {
             cb.emit(A64Enc.dmbIsh());                            // ... and store-load: a later volatile load waits
         }
+        if (fieldIsRef(cpIndex))
+        {
+            writeBarrier(cb, obj, val);
+        }
     }
+
+    /**
+     * The write barrier (frames/GC arc S7-2), after a reference store into the object at {@code obj}: log the object
+     * -- set its bit in the log bitmap ({@link Symbols#LOG_BITMAP}) -- unless the value cannot need it. Inline, no
+     * call, so nothing is spilled:
+     * <pre>
+     *   cbz  v, done                      a null store
+     *   lsr  x16, v, #20 ; cmp x16, #BASE>>20 ; b.lo done      an image object: never young
+     *   lsr  x16, o, #21 ; cmp x16, #SPAN>>21 ; b.hs done      no bit (never an object today)
+     *   movz x17, #LOG_BITMAP>>16, lsl #16
+     *   lsr  x16, o, #9 ; add x17, x17, x16, lsl #3 ; ldr x16, [x17]      the bitmap word
+     *   lsr  v, o, #3 ; lsrv o, x16, v ; tbnz o, #0, done                  already logged
+     *   movz o, #1 ; lslv o, o, v ; orr x16, x16, o ; str x16, [x17]       log it
+     * </pre>
+     * {@code obj} and {@code val} were popped and the store is done, so both are scratch here, as are x16/x17. A
+     * non-atomic read-modify-write: a racing core can only lose a bit (that object is logged again on its next
+     * store), never set one; the collector clears bits only stop-the-world.
+     */
+    private void writeBarrier(CodeBuffer cb, int obj, int val)
+    {
+        if (!Symbols.WRITE_BARRIER)
+        {
+            return;
+        }
+        int s1 = cb.emit(A64Enc.cbz(val, 0));
+        cb.emit(A64Enc.lsrImm(SCRATCH, val, 20));
+        cb.emit(A64Enc.cmpImm(SCRATCH, (int) (HEAP_BASE >> 20)));
+        int s2 = cb.emit(A64Enc.bcond(COND_LO, 0));
+        cb.emit(A64Enc.lsrImm(SCRATCH, obj, 21));
+        cb.emit(A64Enc.cmpImm(SCRATCH, (int) (Symbols.LOG_SPAN >> 21)));
+        int s3 = cb.emit(A64Enc.bcond(COND_HS, 0));
+        cb.emit(A64Enc.movz(17, (int) (Symbols.LOG_BITMAP >> 16), 1));
+        cb.emit(A64Enc.lsrImm(SCRATCH, obj, 9));
+        cb.emit(A64Enc.addRegLsl(17, 17, SCRATCH, 3));
+        cb.emit(A64Enc.ldrx(SCRATCH, 17, 0));
+        cb.emit(A64Enc.lsrImm(val, obj, 3));
+        cb.emit(A64Enc.lsrv(obj, SCRATCH, val));
+        int s4 = cb.emit(A64Enc.tbnz(obj, 0, 0));
+        cb.emit(A64Enc.movz(obj, 1, 0));
+        cb.emit(A64Enc.lslv(obj, obj, val));
+        cb.emit(A64Enc.orrReg(SCRATCH, SCRATCH, obj));
+        cb.emit(A64Enc.strx(SCRATCH, 17, 0));
+        int done = cb.wordCount();
+        cb.set(s1, A64Enc.cbz(val, done - s1));
+        cb.set(s2, A64Enc.bcond(COND_LO, done - s2));
+        cb.set(s3, A64Enc.bcond(COND_HS, done - s3));
+        cb.set(s4, A64Enc.tbnz(obj, 0, done - s4));
+    }
+
+    private static final long HEAP_BASE = 0x0600_0000L;   // vm.Heap.BASE (the compiler cannot see vm)
+    private static final int COND_LO = 3;                  // unsigned lower (CC)
+    private static final int COND_HS = 2;                  // unsigned higher or same (CS)
 
     // ----- allocation: new -> Heap.alloc(size), store TIB, push ref ---------
     /**
@@ -3928,12 +3984,33 @@ public final class Baseline
         }
         else if (id == Intrinsics.AA_SET)
         {
-            arrayStore(cb, 3, pos);
+            arrayStore(cb, 3, pos, false, ownerHoldsRefs(intrinsicCp));  // Object/DataReferenceArray: log
         }
         else
         {
             arrayLength(cb, pos);
         }
+    }
+
+    /**
+     * Whether the unboxed array a call at {@code cp} belongs to holds REFERENCES -- {@code ObjectReferenceArray},
+     * {@code DataReferenceArray} -- so its {@code set} takes the write barrier. An {@code AddressArray} or
+     * {@code CodeArray} holds raw addresses and stays exactly {@code lastore}.
+     */
+    private boolean ownerHoldsRefs(int cp)
+    {
+        int off = ClassReader.refClassNameOff(classBytes, cpOff, cp);
+        int n = ClassReader.u2(classBytes, off);
+        long h = 0xcbf29ce484222325L;                         // Unboxed.hash over the owner's name
+        int i = 0;
+        while (i < n)
+        {
+            h = h ^ (ClassReader.u1(classBytes, off + 2 + i) & 0xFF);
+            h = h * 0x100000001b3L;
+            i += 1;
+        }
+        int k = Unboxed.kindOfHash(h);
+        return k == Unboxed.OBJECT_REFERENCE_ARRAY || k == Unboxed.DATA_REFERENCE_ARRAY;
     }
 
     /** The {@code magic.AddressArray} op an invoke at {@code cp} lowers to, or -1 when it is anything else. */
@@ -3979,6 +4056,12 @@ public final class Baseline
 
     private void arrayStore(CodeBuffer cb, int scale, int pos, boolean isRef)
     {
+        arrayStore(cb, scale, pos, isRef, isRef);
+    }
+
+    /** {@code barrier}: emit the write barrier after the store ({@code aastore}, and the unboxed-array set). */
+    private void arrayStore(CodeBuffer cb, int scale, int pos, boolean isRef, boolean barrier)
+    {
         if (isRef && symbols.implicitChecks())
         {
             // aastore covariant check BEFORE popping: operands are [.., arr(sp-3), index(sp-2), val(sp-1)].
@@ -3988,6 +4071,14 @@ public final class Baseline
         int index = popReg();
         int arr = popReg();
         boundsCheck(cb, arr, index, pos);                        // null/bounds before the raw store
+        if (barrier && Symbols.WRITE_BARRIER)
+        {
+            cb.emit(A64Enc.addImm(SCRATCH, arr, ObjectModel.ARRAY_BASE_OFFSET));   // the array's start stays in arr
+            cb.emit(A64Enc.addRegLsl(SCRATCH, SCRATCH, index, scale));
+            cb.emit(A64Enc.strx(val, SCRATCH, 0));
+            writeBarrier(cb, arr, val);
+            return;
+        }
         cb.emit(A64Enc.addImm(arr, arr, ObjectModel.ARRAY_BASE_OFFSET));
         cb.emit(A64Enc.addRegLsl(arr, arr, index, scale));
         cb.emit(scale == 0 ? A64Enc.strb(val, arr, 0)
@@ -5231,6 +5322,13 @@ public final class Baseline
         int k = ClassReader.descReturnKind(classBytes, ClassReader.refDescOff(classBytes, cpOff, refCp));
         return k == 'J' || k == 'D';
     }
+    private boolean fieldIsRef(int fieldCp)
+    {
+        int off = ClassReader.refDescOff(classBytes, cpOff, fieldCp);
+        int c = ClassReader.u1(classBytes, off + 2);
+        return c == 'L' || c == '[';
+    }
+
     private boolean fieldIsWide(int fieldCp)
     {
         int off = ClassReader.refDescOff(classBytes, cpOff, fieldCp);   // descriptor Utf8 (u2 length, then bytes)
@@ -5552,7 +5650,17 @@ public final class Baseline
                 {
                     if (prevFalls)
                     {
+                        // THE FALL-THROUGH EDGE'S FLUSH BELONGS TO THAT EDGE, so the label goes AFTER it. It was
+                        // bound before it, and every BRANCH to this point ran the flush too -- storing registers
+                        // its own edge had left stale over memory that branch had just made canonical. MEASURED
+                        // (frames/GC arc S7-2): `x = c ? new ArrayList<>() : null` in a deep method --
+                        // `str x9, [slot0]; bl ArrayList.<init>; b L2; L1: mov x9, #0; L2: str x9, [slot0]` --
+                        // stored whatever x9 held after the call over the new object. ArrayList.<init> happened
+                        // to leave `this` in x9; the write barrier's scratch use of that register exposed it as
+                        // a null list in SwitchBootstraps (IndyProbe's enum switches).
                         syncOut(cb);
+                        bcToWord[pos] = cb.wordCount();
+                        curBcWord = cb.wordCount();
                     }
                     syncIn(cb);
                     if (isHandlerPc(pos))
