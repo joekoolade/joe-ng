@@ -459,7 +459,7 @@ public final class Heap implements Uninterruptible
         Address f = head.loadAddress();
         while (!f.isZero())
         {
-            long fsize = f.plus(ObjectModel.STATUS_OFFSET).loadLong();
+            long fsize = f.plus(ObjectModel.STATUS_OFFSET).loadLong() & -8L;   // without FREE_FLAG
             if (fsize >= want)
             {
                 Address next = f.loadAddress();
@@ -478,7 +478,7 @@ public final class Heap implements Uninterruptible
                     addFreeLarge(f.plus(want), rest);
                 }
                 largeReuse = largeReuse + 1L;
-                long served = f.plus(ObjectModel.STATUS_OFFSET).loadLong();
+                long served = f.plus(ObjectModel.STATUS_OFFSET).loadLong() & -8L;
                 servedSinceGc = servedSinceGc + served;
                 zeroPayload(f, (int) served);
                 return f;
@@ -505,7 +505,7 @@ public final class Heap implements Uninterruptible
     {
         Address head = Address.fromLong(LARGE_FREE_CELL);
         a.store(head.loadAddress());
-        a.plus(ObjectModel.STATUS_OFFSET).store(size);
+        a.plus(ObjectModel.STATUS_OFFSET).store(size | FREE_FLAG);
         head.store(a);
     }
 
@@ -864,7 +864,7 @@ public final class Heap implements Uninterruptible
             {
                 if (f.EQ(Address.fromLong(start + len)))    // the block immediately after this run is free
                 {
-                    len = len + f.plus(ObjectModel.STATUS_OFFSET).loadLong();
+                    len = len + (f.plus(ObjectModel.STATUS_OFFSET).loadLong() & -8L);
                     grew = 1;
                     f = Address.zero();
                 }
@@ -1548,7 +1548,7 @@ public final class Heap implements Uninterruptible
                     zeroPayload(sized, aligned);
                     if (core == 0)
                     {
-                        servedSinceGc = servedSinceGc + sized.plus(ObjectModel.STATUS_OFFSET).loadLong();
+                        servedSinceGc = servedSinceGc + (sized.plus(ObjectModel.STATUS_OFFSET).loadLong() & -8L);
                     }
                     return sized;
                 }
@@ -1559,7 +1559,7 @@ public final class Heap implements Uninterruptible
             scanFreeBlocks = 0L;
             while (!f.isZero())                             // first fit in this core's free list
             {
-                long fsize = f.plus(ObjectModel.STATUS_OFFSET).loadLong();
+                long fsize = f.plus(ObjectModel.STATUS_OFFSET).loadLong() & -8L;   // without FREE_FLAG
                 scanFreeBytes = scanFreeBytes + fsize;
                 scanFreeBlocks = scanFreeBlocks + 1L;
                 if (fsize > scanFreeMax)
@@ -1595,7 +1595,7 @@ public final class Heap implements Uninterruptible
                     }
                     if (core == 0)
                     {
-                        servedSinceGc = servedSinceGc + f.plus(ObjectModel.STATUS_OFFSET).loadLong();
+                        servedSinceGc = servedSinceGc + (f.plus(ObjectModel.STATUS_OFFSET).loadLong() & -8L);
                     }
                     return f;                               // status holds the size actually handed out
                 }
@@ -1668,6 +1668,15 @@ public final class Heap implements Uninterruptible
     }
 
     /**
+     * Status-word bit 2: the block is on a free list (frames/GC arc S6d-3). Bits 0 and 1 are the collector's marks;
+     * every size reader masks with {@code -8}. A conservative probe refuses a block carrying it: a free block's first
+     * word is its free-list link, and the precise trace would read that as a TIB and mark junk exactly -- without the
+     * block-start bitmap to refuse it, a corrupting {@code +1} on an interior word. Set by {@link #addFreeTo} and
+     * {@link #addFreeLarge}, cleared by {@link #zeroPayload} on every hand-out.
+     */
+    static final long FREE_FLAG = 4L;
+
+    /**
      * Zero an allocation's payload (past the {TIB, status} header), so freshly-allocated
      * objects and arrays honour Java's default initialization. Real hardware RAM comes up
      * with garbage; without this, uninitialized-but-assumed-zero fields (e.g. a compiler's
@@ -1678,7 +1687,10 @@ public final class Heap implements Uninterruptible
         base.plus(ObjectModel.TIB_OFFSET).store(0L);        // Also zero offset 0 (the TIB slot). A RAW allocation
         // (TIB / itableDir / imap / a code buffer) that reads offset 0 before its caller sets it would otherwise get
         // garbage on a warm reboot (RAM isn't cleared on a guest-triggered reset) -> intermittent wild branches.
-        // Offset 8 is STATUS (deterministically the block size, set by alloc), so it needs no zeroing.
+        // Offset 8 is STATUS (deterministically the block size, set by alloc), so it needs no zeroing -- only its
+        // FREE_FLAG cleared, for a free-list block handed out whole.
+        Address st = base.plus(ObjectModel.STATUS_OFFSET);
+        st.store(st.loadLong() & ~FREE_FLAG);
         Address z = base.plus(ObjectModel.HEADER_SIZE);
         Address end = base.plus(aligned);
         while (z.LT(end))
@@ -1770,15 +1782,28 @@ public final class Heap implements Uninterruptible
     private static DataReference dataBlock(int size, long layout, long site)
     {
         Address q;
+        long keep = 0L;                                 // trailing words that are not slack
         if (HeapShadow.sites != 0)
         {
             // gcheap=2: one word more, at the block's end, recording where the struct came from (HeapShadow).
             q = alloc(size + ObjectModel.HEADER_SIZE + 8);
             q.plus((q.plus(ObjectModel.STATUS_OFFSET).loadLong() & -8L) - 8L).store(site);
+            keep = 8L;
         }
         else
         {
             q = alloc(size + ObjectModel.HEADER_SIZE);
+        }
+        // A first-fit block can be a word or so bigger than asked, and alloc zeroes only what was asked: the slack
+        // keeps whatever the block held before. A layout is read to the BLOCK's end (PreciseTrace), so a stale word
+        // there would be followed as a data reference -- found by gcverify=1 as an interior pointer in an itable
+        // directory's trailing word (frames/GC arc S6d-3). Zero it.
+        Address end = q.plus((q.plus(ObjectModel.STATUS_OFFSET).loadLong() & -8L) - keep);
+        Address z = q.plus(((long) size + (long) ObjectModel.HEADER_SIZE + 7L) & -8L);
+        while (z.LT(end))
+        {
+            z.store(0L);
+            z = z.plus(8);
         }
         q.plus(ObjectModel.TIB_OFFSET).store(layout);
         return DataReference.fromAddress(q.plus(ObjectModel.HEADER_SIZE));
@@ -1919,7 +1944,7 @@ public final class Heap implements Uninterruptible
             bytes.store(bytes.loadLong() + size);
         }
         a.store(freeCell.loadAddress());                      // next
-        a.plus(ObjectModel.STATUS_OFFSET).store(size);        // size
+        a.plus(ObjectModel.STATUS_OFFSET).store(size | FREE_FLAG);   // size, and "on a free list"
         freeCell.store(a);
     }
 }

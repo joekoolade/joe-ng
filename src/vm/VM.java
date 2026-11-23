@@ -2430,6 +2430,7 @@ public final class VM
         armGcRoots(conf, flen);
         armGcHeap(conf, flen);
         armGcPrecise(conf, flen);
+        armGcVerify(conf, flen);
         armNpeTrace(conf, flen);
         DataReference nm = Heap.allocData(flen + 8);
         int nl = manifestValue(conf, flen, Magic.bytes("main"), nm.toAddress(), flen);
@@ -2557,6 +2558,18 @@ public final class VM
         {
             PreciseTrace.on = 0;
             Uart.write(Magic.bytes("gcprecise: conservative heap trace\n"));
+        }
+    }
+
+    /** {@code gcverify=1}: {@link VMGc#verifyExact} -- the block-start bitmap every collection, every exact mark checked. */
+    private static void armGcVerify(Address conf, int flen)
+    {
+        DataReference v = Heap.allocData(16);
+        int n = manifestValue(conf, flen, Magic.bytes("gcverify"), v.toAddress(), 8);
+        if (n == 1 && v.loadUnsignedByte() == 0x31)
+        {
+            VMGc.verifyExact = 1;
+            Uart.write(Magic.bytes("gcverify: every exact mark checked against the block-start bitmap\n"));
         }
     }
 

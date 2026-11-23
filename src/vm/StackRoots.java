@@ -384,8 +384,8 @@ final class StackRoots implements Uninterruptible
         {
             refs += 1L;
             stubWords += 1L;
-            VMGc.markRoot(w);
-            VMGc.markRoot(w - 16L);
+            VMGc.markRootMaybe(w);                          // not known to be a reference: the bitmap decides
+            VMGc.markRootMaybe(w - 16L);
         }
         else if (((mask >>> r) & 1L) != 0L)
         {
@@ -495,6 +495,10 @@ final class StackRoots implements Uninterruptible
         printDec((int) stubWords);
         Uart.write(Magic.bytes(" heapFallbacks="));
         printDec((int) PreciseTrace.fallbacks);
+        Uart.write(Magic.bytes(" bitmapBuilds="));
+        printDec((int) VMGc.bitmapBuilds);
+        Uart.write(Magic.bytes(" exactBad="));
+        printDec((int) VMGc.exactBad);
         Uart.write(Magic.bytes(" consWords="));
         printDec((int) consWords);
         Uart.write(Magic.bytes(" (+"));

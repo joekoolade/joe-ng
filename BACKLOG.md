@@ -25,6 +25,12 @@ the item leaves this list; new findings that are not fixed on the spot come here
 
 ## Collector
 
+- **Memory corruption in `demo/RunProbe` under `gcroots=0` (found 2026-11-22, frames/GC arc S6d-3).** With the
+  conservative stack-root scan, RunProbe dies right after its stop-poll bench while a stop is pending: on `main`
+  (`d7d8054`) 3 of 3 boots -- a wild branch to a pc made of two instruction words (`0xAA0003E99402A878`), or QEMU's
+  `Guest moved used index` (the virtio-net used ring overwritten) and a hang. Every other probe passes under
+  `gcroots=0`, and RunProbe passes under every other arm. Never seen before because no increment since S5 ran a
+  `gcroots=0` arm. Unexplained; it is the A/B switch, not the default.
 - **DONE in frames/GC arc S5a (2026-11-21): cores 1-3's arenas are collected,** and any core collects when its arena
   is full (STATUS.md). Kept below as the record of what it cost before.
 - **(Was:) Cores 1-3's arenas are never collected (2026-11-14).** They are root-scanned whole: pauses grow from 0.5 to
