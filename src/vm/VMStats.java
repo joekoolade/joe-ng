@@ -225,6 +225,10 @@ public final class VMStats
         i = put(arr, len, i, HeapShadow.total(9));                         // ... S6d roots: code-root entries
         i = put(arr, len, i, (long) PreciseTrace.on);                      // S6c: precise heap trace on
         i = put(arr, len, i, PreciseTrace.fallbacks);                      // ... blocks it scanned conservatively
+        i = put(arr, len, i, VMGc.bitmapBuilds);                           // S6d-3: collections that built the bitmap
+        i = put(arr, len, i, VMGc.exactMarks);                             // ... exact marks (no bitmap)
+        i = put(arr, len, i, (long) VMGc.verifyExact);                     // ... gcverify=1
+        i = put(arr, len, i, VMGc.exactBad);                               // ... exact words gcverify refused
         return (long) i;
     }
 

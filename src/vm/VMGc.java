@@ -128,8 +128,15 @@ final class VMGc implements Uninterruptible
             cz.store(0L);
             cz = cz.plus(8);
         }
-        // pre-pass: exact block bases for the probes
-        buildBlockBitmap(Address.fromLong(Heap.PTR_CELL).loadAddress());
+        // The block-start bitmap: exact block bases for CONSERVATIVE probes only (frames/GC arc S6d-3). An exact word
+        // -- a typed slot, a map-typed stack word, a statics or code-root entry by kind -- is marked without it; a
+        // conservative probe builds it on first need (isBlockBase), so a collection with no fallback never walks
+        // the heap for it. gcverify=1 builds it every collection and checks each exact mark against it.
+        bitmapBuilt = 0;
+        if (verifyExact != 0)
+        {
+            ensureBitmap();
+        }
         long stackTop = STACK_TOP;                    // boot task: SP runs down from the image stack top
         int me = curTask();
         if (taskStackBase != null && me != 0)
@@ -878,7 +885,8 @@ final class VMGc implements Uninterruptible
             long m = VM.jitLocalTable.plus(i * 24L + 16L).loadLong();
             if (m > 0L)                                // a map array; a stub frame's entry holds a descriptor
             {
-                tryMark(m - ObjectModel.ARRAY_BASE_OFFSET);
+                exactFrom = 0L;
+                tryMarkExact(m - ObjectModel.ARRAY_BASE_OFFSET);
             }
             i += 1L;
         }
@@ -897,7 +905,8 @@ final class VMGc implements Uninterruptible
             if (PreciseTrace.on != 0)
             {
                 // S6d: the entry says what it is -- an object (marked at w) or an allocData payload (one header lower)
-                if (tryMark((e & 1L) != 0L ? w - 16L : w))
+                exactFrom = 0L;
+                if (tryMarkExact((e & 1L) != 0L ? w - 16L : w))
                 {
                     found = found + 1L;
                 }
@@ -1147,9 +1156,18 @@ final class VMGc implements Uninterruptible
         return ((long) SEC_STACK_HI << 16) + ((long) core << 20);
     }
 
-    /** A root word a stack map types as a reference: mark its block if it is one (the block-base check still
-     *  applies, so a stale or mistyped word can retain, never corrupt). For {@link StackRoots}. */
+    /** A root word whose kind is known -- a stack map or descriptor types it as a reference: mark its block
+     *  without the block-start bitmap ({@link #tryMarkExact}). For {@link StackRoots}. */
     static void markRoot(long w)
+    {
+        exactFrom = Magic.readLR();
+        probes = probes + 1L;
+        boolean ignored = tryMarkExact(w);
+    }
+
+    /** A root word that MAY be a reference (a stub frame with no descriptor, a shadow check's rescue): mark it only
+     *  if the block-start bitmap says it is a block base. */
+    static void markRootMaybe(long w)
     {
         probes = probes + 1L;
         boolean ignored = tryMark(w);
@@ -1203,7 +1221,8 @@ final class VMGc implements Uninterruptible
      *  block-start bitmap ({@link #buildBlockBitmap}) — a status-word heuristic alone would sometimes
      *  accept an object INTERIOR and the {@code +1} mark write would corrupt real data (a stored pointer
      *  became odd and faulted the next dispatch). With the bitmap, mark writes only ever touch genuine
-     *  status words. */
+     *  status words. The CONSERVATIVE mark: a word that may or may not be a reference. A word whose kind is
+     *  known goes to {@link #tryMarkExact}, which needs no bitmap (frames/GC arc S6d-3). */
     private static boolean tryMark(long w)
     {
         if (w >= Heap.CODE_BASE && w < Heap.CODE_LIMIT)
@@ -1225,75 +1244,214 @@ final class VMGc implements Uninterruptible
         // Getting this wrong in the permissive direction only over-retains; getting it wrong in the strict
         // direction sweeps live objects, so every region MUST be included the moment anything is allocated there.
         long regionTop = regionTopFor(w);
-        if (regionTop != 0L && (w & 7L) == 0L && isBlockBase(w))
+        if (regionTop != 0L && (w & 7L) == 0L && isBlockBase(w)
+            && (Address.fromLong(w).plus(8).loadLong() & Heap.FREE_FLAG) == 0L)   // a block base, and not a free one
         {
-            Address block = Address.fromLong(w);       // validated: in a heap region, aligned, a block base
-            long st = block.plus(8).loadLong();
-            // GUARD: the block bitmap said this address is a block base. Verify it before writing to it --
-            // setting a mark bit on a word that is NOT a block turns data into data+1, which is exactly the
-            // "blob 0x1" the loader reports much later, with nothing left to say where it came from. Check
-            // here, where the address and its caller are still in hand.
-            long sz = st & -8L;
-            if (sz < 16L || w + sz > regionTop)
-            {
-                if (falseBaseSeen == 0)
-                {
-                    falseBaseSeen = 1;
-                    Uart.write(Magic.bytes("\nFALSE BLOCK BASE addr="));
-                    printHex(w);
-                    Uart.write(Magic.bytes(" status="));
-                    printHex(st);
-                    Uart.write(Magic.bytes(" region="));
-                    printHex(w >= Heap.LARGE_LIMIT ? 2L : (w >= Heap.LARGE_BASE ? 1L : 0L));
-                    Uart.write(Magic.bytes(" top="));
-                    printHex(regionTop);
-                    Uart.write(Magic.bytes(" largeTop="));
-                    printHex(Address.fromLong(Heap.LARGE_PTR_CELL).loadLong());
-                    Uart.putc(0x0A);
-                    Uart.write(Magic.bytes("  marked from "));
-                    StackTrace.printFrameAt(Address.fromLong(Magic.readLR())); // which scan handed us this word
-                    Uart.putc(0x0A);
-                }
-                return false;                          // refuse to mark it: not a block
-            }
-            if ((st & 1L) == 0L)
-            {
-                if (HeapShadow.rescan != 0)
-                {
-                    block.plus(8).store(st + 3L);      // mark bit + "marked by the heap shadow's rescan"
-                    HeapShadow.missed(w);
-                }
-                else
-                {
-                    block.plus(8).store(st + 1L);      // set mark bit
-                }
-                if (heapCensus != 0)
-                {
-                    hcMarks[hcCat] = hcMarks[hcCat] + 1L;
-                    if (hcDataProbe != 0)
-                    {
-                        hcMarksData[hcCat] = hcMarksData[hcCat] + 1L;
-                    }
-                }
-                if (markSp < MARK_STACK_END)           // ... and queue it for scanning exactly once
-                {
-                    Address.fromLong(markSp).store(block);
-                    markSp = markSp + 8L;
-                }
-                else
-                {
-                    markOverflow = 1;                  // queue full: the fixpoint fallback will catch up
-                }
-                return true;
-            }
+            return markBlock(w, regionTop);
         }
         return false;
     }
 
-    /** Mark {@code w} if it is a block base (the heap shadow's precise phase: no {@code w-16} probe). */
+    /** Set the mark on block {@code w} (in a region ending at {@code regionTop}) and queue it, after one last check
+     *  that its status word describes a block that fits; true if newly marked. */
+    private static boolean markBlock(long w, long regionTop)
+    {
+        Address block = Address.fromLong(w);       // in a heap region, aligned, a block base
+        long st = block.plus(8).loadLong();
+        // GUARD: the block bitmap (a conservative probe) or a type (an exact word) said this address is a block
+        // base. Verify it before writing to it --
+        // setting a mark bit on a word that is NOT a block turns data into data+1, which is exactly the
+        // "blob 0x1" the loader reports much later, with nothing left to say where it came from. Check
+        // here, where the address and its caller are still in hand.
+        long sz = st & -8L;
+        if (sz < 16L || w + sz > regionTop)
+        {
+            if (falseBaseSeen == 0)
+            {
+                falseBaseSeen = 1;
+                Uart.write(Magic.bytes("\nFALSE BLOCK BASE addr="));
+                printHex(w);
+                Uart.write(Magic.bytes(" status="));
+                printHex(st);
+                Uart.write(Magic.bytes(" region="));
+                printHex(w >= Heap.LARGE_LIMIT ? 2L : (w >= Heap.LARGE_BASE ? 1L : 0L));
+                Uart.write(Magic.bytes(" top="));
+                printHex(regionTop);
+                Uart.write(Magic.bytes(" largeTop="));
+                printHex(Address.fromLong(Heap.LARGE_PTR_CELL).loadLong());
+                Uart.putc(0x0A);
+                Uart.write(Magic.bytes("  marked from "));
+                StackTrace.printFrameAt(Address.fromLong(Magic.readLR())); // which scan handed us this word
+                Uart.putc(0x0A);
+                if (exactFrom != 0L)
+                {
+                    Uart.write(Magic.bytes("  an EXACT mark, from "));
+                    StackTrace.printFrameAt(Address.fromLong(exactFrom - 4L));
+                    Uart.putc(0x0A);
+                }
+            }
+            return false;                          // refuse to mark it: not a block
+        }
+        if ((st & 1L) == 0L)
+        {
+            if (HeapShadow.rescan != 0)
+            {
+                block.plus(8).store(st + 3L);      // mark bit + "marked by the heap shadow's rescan"
+                HeapShadow.missed(w);
+            }
+            else
+            {
+                block.plus(8).store(st + 1L);      // set mark bit
+            }
+            if (heapCensus != 0)
+            {
+                hcMarks[hcCat] = hcMarks[hcCat] + 1L;
+                if (hcDataProbe != 0)
+                {
+                    hcMarksData[hcCat] = hcMarksData[hcCat] + 1L;
+                }
+            }
+            if (markSp < MARK_STACK_END)           // ... and queue it for scanning exactly once
+            {
+                Address.fromLong(markSp).store(block);
+                markSp = markSp + 8L;
+            }
+            else
+            {
+                markOverflow = 1;                  // queue full: the fixpoint fallback will catch up
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /** Mark {@code w}, a word a precise trace knows is a reference (0, or a block base): {@link #tryMarkExact}. */
     static void markExact(long w)
     {
-        boolean ignored = tryMark(w);
+        exactFrom = Magic.readLR();
+        boolean ignored = tryMarkExact(w);
+    }
+
+    /**
+     * Mark {@code w}, which a type says is a reference -- 0 or a block base, never an interior pointer -- WITHOUT the
+     * block-start bitmap (frames/GC arc S6d-3). What still guards the mark write is cheap: the word must lie in a
+     * heap region, be 8-aligned, and name a status word whose size fits the region. With {@code gcverify=1} the
+     * bitmap is built anyway and a word it does not call a block base is reported and refused: the measurement that
+     * says exact words really are exact.
+     */
+    private static boolean tryMarkExact(long w)
+    {
+        long from = exactFrom;                         // who asked, for a report; cleared for the next caller
+        exactFrom = 0L;
+        if (w == 0L)
+        {
+            return false;
+        }
+        if (w >= Heap.CODE_BASE && w < Heap.CODE_LIMIT)
+        {
+            return tryMark(w);                         // a code address: the code bitmap, no heap block
+        }
+        long regionTop = regionTopFor(w);
+        if (regionTop == 0L || (w & 7L) != 0L)
+        {
+            return false;
+        }
+        exactMarks = exactMarks + 1L;
+        boolean free = (Address.fromLong(w).plus(8).loadLong() & Heap.FREE_FLAG) != 0L;   // a dangling reference
+        if (free || verifyExact != 0 && !isBlockBase(w))
+        {
+            exactBad = exactBad + 1L;
+            if (exactBadPrinted < 8)
+            {
+                exactBadPrinted += 1;
+                Uart.write(Magic.bytes(free ? "\nGCVERIFY: an exact word names a FREE block w="
+                                            : "\nGCVERIFY: an exact word is not a block base w="));
+                printHex(w);
+                Uart.write(Magic.bytes(" status="));
+                printHex(Address.fromLong(w).plus(8).loadLong());
+                Uart.write(Magic.bytes(" header="));
+                printHex(Address.fromLong(w).loadLong());
+                Uart.write(Magic.bytes(" w-16 base="));
+                printDec(isBlockBase(w - 16L) ? 1 : 0);
+                if (exactSrc > 0L)
+                {
+                    Uart.write(Magic.bytes(" in block "));
+                    printHex(exactSrc);
+                    Uart.write(Magic.bytes(" layout "));
+                    printHex(Address.fromLong(exactSrc).loadLong());
+                    long ssz = Address.fromLong(exactSrc).plus(8).loadLong() & -8L;
+                    Uart.write(Magic.bytes(" size "));
+                    printHex(ssz);
+                    Uart.write(Magic.bytes("\n  words:"));
+                    long q = 16L;
+                    while (q < ssz && q < 16L + 8L * 24L)
+                    {
+                        Uart.putc(0x20);
+                        printHex(Address.fromLong(exactSrc).plus(q).loadLong());
+                        q += 8L;
+                    }
+                    long b = w & -8L;
+                    long steps = 0L;
+                    while (b > Heap.BASE && steps < 65536L && !isBlockBase(b))
+                    {
+                        b -= 8L;
+                        steps += 1L;
+                    }
+                    Uart.write(Magic.bytes("\n  inside block "));
+                    printHex(b);
+                    Uart.write(Magic.bytes(" header "));
+                    printHex(Address.fromLong(b).loadLong());
+                    Uart.write(Magic.bytes(" status "));
+                    printHex(Address.fromLong(b).plus(8).loadLong());
+                }
+                else if (exactSrc < 0L)
+                {
+                    Uart.write(Magic.bytes(" in statics slot "));
+                    printHex(-exactSrc);
+                }
+                Uart.write(Magic.bytes("\n  marked from "));
+                if (from != 0L)
+                {
+                    StackTrace.printFrameAt(Address.fromLong(from - 4L));
+                }
+                else
+                {
+                    Uart.write(Magic.bytes("<the code-root table or a JIT map entry>"));
+                }
+                Uart.putc(0x0A);
+            }
+            return false;
+        }
+        exactFrom = from;                              // markBlock's FALSE BLOCK BASE report names it
+        boolean marked = markBlock(w, regionTop);
+        exactFrom = 0L;
+        return marked;
+    }
+
+    /** The caller of {@link #markRoot}/{@link #markExact}, for a gcverify report; 0 for a direct exact mark. */
+    private static long exactFrom;
+    /** For a gcverify report: the allocData struct {@link PreciseTrace} is reading, or minus a statics slot. */
+    static long exactSrc;
+
+    /** {@code gcverify=1}: build the block-start bitmap every collection and check every exact mark against it. */
+    static int verifyExact;
+    /** Exact marks attempted (words in a heap region), and those gcverify found were no block base. */
+    static long exactMarks;
+    static long exactBad;
+    private static int exactBadPrinted;
+    /** 1 once this collection has built the block-start bitmap; how many collections built it, over the boot. */
+    private static int bitmapBuilt;
+    static long bitmapBuilds;
+
+    /** Build the block-start bitmap if this collection has not yet: a conservative probe needs it. */
+    private static void ensureBitmap()
+    {
+        if (bitmapBuilt == 0)
+        {
+            bitmapBuilt = 1;
+            bitmapBuilds = bitmapBuilds + 1L;
+            buildBlockBitmap(Address.fromLong(Heap.PTR_CELL).loadAddress());
+        }
     }
 
     /** One probe of the heap shadow's conservative rescan ({@link HeapShadow#missed} hears of a new mark). */
@@ -1746,11 +1904,14 @@ final class VMGc implements Uninterruptible
     // rule keeps scannable -- not a sweep-time pointer move.
 
     /** Block-start bitmap: 1 bit per 8 bytes of core 0's arena (3 MiB at a fixed scratch address, above
-     *  the secondary stacks and below the heap cells). Rebuilt by each collection's pre-pass. */
+     *  the secondary stacks and below the heap cells). Built by the first conservative probe of a collection
+     *  ({@link #ensureBitmap}; every collection with gcverify=1) -- since frames/GC arc S6d-3 an exact mark does not
+     *  need it, and a collection with no fallback never builds it. */
     static final long MARK_BITMAP = 0x03B0_0000L;
 
-    /** Pre-pass: walk the heap by status sizes (sound — every allocation carries an intact header) and
-     *  record each block base in the bitmap, so conservative probes can be verified exactly. */
+    /** Walk the heap by status sizes (sound — every allocation carries an intact header) and record each block
+     *  base in the bitmap, so conservative probes can be verified exactly. Free blocks are bases too: a probe
+     *  refuses them by {@link Heap#FREE_FLAG}. */
     private static void buildBlockBitmap(Address stop)
     {
         Address z = Address.fromLong(MARK_BITMAP);
@@ -1998,6 +2159,7 @@ final class VMGc implements Uninterruptible
 
     private static boolean isBlockBase(long w)
     {
+        ensureBitmap();
         long bitmap = MARK_BITMAP;
         long origin = Heap.BASE;
         if (w >= Heap.LARGE_LIMIT)

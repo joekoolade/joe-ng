@@ -4,6 +4,35 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **FRAMES/GC ARC, INCREMENT S6d-3: the block-start bitmap is built only when a conservative probe needs it
+  (2026-11-22).** Every collection used to clear a 3 MiB bitmap and walk the whole heap to record block bases before
+  marking -- the ~29 ms "root scan" on the Pi. Since S6d-2 no default collection probes conservatively, so the bitmap
+  is now built on first need (`VMGc.ensureBitmap`), and an EXACT word -- a typed slot, a map-typed stack word, a
+  statics or code-root entry by kind, a JIT map array -- is marked without it (`VMGc.tryMarkExact`: region,
+  alignment and the status word's size still guard the write). A word that only MAY be a reference (a stub frame
+  with no descriptor, a shadow check's rescue) goes through the bitmap (`markRootMaybe`).
+  - **`gcverify=1`** builds the bitmap every collection and checks each exact mark against it; a word that is not a
+    block base is refused and reported with its source (`/gc` rows: bitmap builds, exact marks, exact words refused).
+  - **Two latent bugs it found, both fixed.** (1) `Heap.dataBlock` zeroed only the bytes asked for, and a first-fit
+    block can be a word bigger: a layout struct is read to the BLOCK's end, so the stale slack word was followed as a
+    data reference (an itable directory's trailing word held `"Ljava/la"`). Only the bitmap's check on every mark
+    kept it from corrupting since S6c. The slack is zeroed now. (2) The bitmap lists FREE blocks as bases, so a
+    conservative word could mark a free block -- harmless while every later mark was bitmap-checked, but the precise
+    trace then reads its free-list link as a TIB and marks junk exactly: the `gcroots=0`, `gcmaps=1` and `gcheap=2`
+    arms failed (`FALSE BLOCK BASE`, wild branches; `gcheap=2` 52/212). Free blocks now carry `Heap.FREE_FLAG`
+    (status bit 2; set by `addFreeTo`/`addFreeLarge`, cleared by `zeroPayload` on every hand-out, masked by every
+    size read); a conservative probe refuses them, and an exact word naming one is reported as dangling.
+  - **QEMU:** virt 212/212 default, `gcmaps=1`, `gcheap=2`, `gcverify=1`, `safepoints=0` and `gcprecise=0`, each with
+    0 GCVERIFY, 0 `FALSE BLOCK BASE`, map-shadow MISS 0; default builds the bitmap in 4 of ~380 collections (each with
+    a forced preemption). `gcroots=0` 211/212: `demo/RunProbe` corrupts memory after its stop-poll bench -- on
+    `main` too (3 of 3 boots: a wild branch, or QEMU's `Guest moved used index`), never run since S5 (BACKLOG).
+    raspi4b suite `want: checked=160 mismatch=0`, `gc: collections=53`, `intact=32`, markers as S6d-2. `make test` +
+    overlaycheck OK.
+  - **Pi 4, build `618c05dfe1ec78c9`** (default init; sha256 = host): three fresh boots, 14 collections each, root
+    scan **~29 ms -> 3.1-4.3 ms**, total pause **1.16 s -> 0.91 s (-21%)**, last trace ~78 ms, bitmap built in 0
+    collections; FrameBench 522.2 / 514.8 / 528.7 ms (median 522.2; S6d-2 518.4), check values identical; 8 pages 200.
+    `gcverify=1` build `6f02c12cde88a8ec`, three boots: ~1.24M exact marks each, 0 refused; root scan back at 28-32
+    ms (the bitmap's cost, measured both ways). Default build restored.
 - **FRAMES/GC ARC, INCREMENT S6d-2: the remaining conservative fallbacks (2026-11-22).** Measured first, with a new
   per-collection `gcroots:` line under `gcheap=1` and a one-time `gcheap fallback` line naming each block the precise
   heap trace scans conservatively. Whole virt list, S6d-1 code: heap fallbacks 2, idle stacks scanned whole 360

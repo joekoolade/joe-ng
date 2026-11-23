@@ -120,6 +120,10 @@ public final class MetalStats
         "... blocks only a conservative read of a code-root entry kept (S6d)",
         "precise heap trace on (S6c; gcprecise=0 = conservative)",
         "... blocks it scanned conservatively (no kinds, unrecognised header)",
+        "collections that built the block-start bitmap (S6d-3: only conservative probes need it)",
+        "... exact marks made without it",
+        "... checked against it every collection (gcverify=1)",
+        "... EXACT WORDS THAT WERE NOT A BLOCK BASE (gcverify=1; refused)",
     };
 
     public static final String[] LOCKS_NAMES = {

@@ -173,6 +173,7 @@ final class PreciseTrace implements Uninterruptible
      *  addresses at {@code w} (a code-arena hit is recorded in the code bitmap, nothing else is marked). */
     private static void scanLayout(Address o, long size, long layout)
     {
+        VMGc.exactSrc = o.toLong();
         int kind = layoutKind(layout);
         Address p = o.plus(ObjectModel.HEADER_SIZE);
         Address end = o.plus(size);
@@ -375,6 +376,7 @@ final class PreciseTrace implements Uninterruptible
             }
             long bit = 1L << (s & 63);
             long w = Address.fromLong(start).plus((long) s * 8L).loadLong();
+            VMGc.exactSrc = -(start + (long) s * 8L);   // a statics slot (negative: not a block)
             boolean r = (rw & bit) != 0L;
             boolean d = (dw & bit) != 0L;
             if (r && d)

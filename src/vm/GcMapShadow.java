@@ -348,7 +348,7 @@ final class GcMapShadow implements Uninterruptible
                 Uart.putc((byte) 0x0A);
             }
         }
-        VMGc.markRoot(block);
+        VMGc.markRootMaybe(block);
     }
 
     private static long missPrinted;
