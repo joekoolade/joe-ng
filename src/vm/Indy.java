@@ -144,7 +144,8 @@ final class Indy
         {
             MethodHandles.mhOffCsTarget = MethodHandles.declaredFieldOffset(Magic.bytes("java/lang/invoke/CallSite"), Magic.bytes("target"));
         }
-        long target = Address.fromLong(dsVal[idx]).plus(MethodHandles.mhOffCsTarget).loadLong();
+        // dsObj, not dsVal: the CallSite may be young, and only the typed copy is rewritten when it moves (S7-4)
+        long target = dsObj.get(idx).toAddress().plus(MethodHandles.mhOffCsTarget).loadLong();
         int n = MethodHandles.descParamCountAt(dsDesc.get(idx));
         if (n > StubFrames.STUB_SAVE_HI - 1)
         {
@@ -166,7 +167,8 @@ final class Indy
         }
         if (dsDone[idx] != 0)
         {
-            return dsVal[idx];
+            ObjectReference o = dsObj.get(idx);
+            return o.isNull() ? dsVal[idx] : o.toLong();   // an object from its typed copy: it may have moved
         }
         Address d = dsDesc.get(idx);
         boolean prim = !d.isZero() && u1(d.plus(2L)) != 0x4C && u1(d.plus(2L)) != 0x5B;   // not 'L' and not '['

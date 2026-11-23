@@ -262,6 +262,22 @@ public final class VMStats
         i = put(arr, len, i, Heap.oldSiteBytes);                           // ... bytes
         i = put(arr, len, i, GenCensus.largeYoungTotal);                   // ... young large bytes, summed (gcgen=1)
         i = put(arr, len, i, GenCensus.largeYoungDeadTotal);               // ... dead at their first collection
+        i = put(arr, len, i, (long) Nursery.on);                           // S7-4a: gcnursery (1, 2 = verify)
+        i = put(arr, len, i, Nursery.slot >> 10);                          // ... KB per core
+        i = put(arr, len, i, Nursery.minors);                              // ... minor phases
+        i = put(arr, len, i, Nursery.fulls);                               // ... of which went on as full collections
+        i = put(arr, len, i, Nursery.allocBytes);                          // ... bytes allocated young
+        i = put(arr, len, i, Nursery.copiedBytes);                         // ... bytes copied (promoted)
+        i = put(arr, len, i, Nursery.copiedObjects);                       // ... objects copied
+        i = put(arr, len, i, Nursery.survivedLast);                        // ... bytes copied by the last one
+        i = put(arr, len, i, Nursery.pinnedTotal);                         // ... blocks pinned
+        i = put(arr, len, i, Nursery.promotionFailures);                   // ... copies that found no space
+        i = put(arr, len, i, Nursery.remembered);                          // ... remembered objects, last one
+        i = put(arr, len, i, Nursery.rememberedMax);                       // ... most
+        i = put(arr, len, i, ticksToUs(Nursery.minorPauseTicks));          // ... minor-only pauses, summed (us)
+        i = put(arr, len, i, ticksToUs(Nursery.minorPauseMax));            // ... longest (us)
+        i = put(arr, len, i, Nursery.staleRefs);                           // ... stale references (gcnursery=2)
+        i = put(arr, len, i, Nursery.unknownBlocks);                       // ... logged blocks with no layout
         return (long) i;
     }
 

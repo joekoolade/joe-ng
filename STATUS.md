@@ -4,6 +4,72 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **FRAMES/GC ARC, INCREMENT S7-4a: a mostly-copying nursery, off by default (2026-11-23).** New `vm.Nursery`:
+  - **Layout.** One bump-allocated nursery per core at `0x1E80_0000 + c*8 MiB`, above the log span, so the barrier
+    skips young sources for free. `nursery=<KB>` sets the size: default 4096, maximum 8192.
+  - **Allocation.** `Heap.allocAs(YOUNG)` under 16 KiB goes there; large requests stay in the large region. An
+    exhausted nursery asks for a collection once, then falls back to mature.
+  - **Collection.** Every collection, with the nursery on, begins with a minor phase (`VMGc.gcCollect`):
+    1. Pin what an ambiguous root names: status bit RESIDENT.
+    2. Forward exact slots: the TIB word holds the copy, the status keeps the size.
+    3. Scan image statics by kind map, heap statics blocks, JIT map entries and the logged objects (the remembered
+       set).
+    4. Drain Cheney-style.
+    5. Re-key `IdentityHash`.
+    6. Rebuild the gaps.
+  - **The modes.**
+    - `gcnursery=1` runs minor-only collections when a nursery is full.
+    - `gcnursery=2` is VERIFY: every collection is minor then full. What the minor phase reclaims is poisoned, and
+      the full trace reports any reference left into it.
+    - A copy goes to mature through `Heap.allocInGc`, which never collects; a failed promotion stays resident.
+  - Sixteen `/gc` rows.
+  - **AMBIGUOUS ROOTS PIN, AND THAT INCLUDES RAW FRAME SLOTS -- the decision that made VERIFY pass.**
+    - The first VERIFY run of the virt list was 202/214. Most failures were VM and guest code holding a young
+      object's address as an `Address` or `long` across an allocation: VMConcat's builder, the reflective argument
+      buffer, Unsafe CAS loops, field-updater offsets.
+    - Some of these were fixed at the site (reflection refreshes its reference arguments just before the call;
+      `Unsafe` recomputes the address inside each loop).
+    - The general fix is in `StackRoots`: the pin pass pins whatever a RAW or data-reference slot names, in mapped
+      frames, typed stub arguments and mask thunks. A false pin costs one block for one cycle.
+  - **Raw holders that pinning cannot reach, fixed:**
+    - `Indy.dsVal`: CallSite addresses cached raw; now read through the typed `dsObj`.
+    - Proxy thunks bake their Method's address into code: `ProxySupport` now bakes an old copy
+      (`Nursery.tenure`) and keeps the arrays holding the copies on a VM root.
+    - MetalOffHeap blocks: now pretenured (`VMNatives.allocOldBytes`).
+    - BootSeeds: properties kept typed.
+    - `receiverAddress` and the loader's object bounds: now `Heap.isObject`.
+  - **Raw reference stores that skip the barrier, now logged:** a large `arrayClone` (old, holding young
+    references) and the concat builder's `buf` store.
+  - **A LATENT BUG ON MAIN, found by VERIFY: the string-concat builder was never traced.**
+    - It was a header-only heap block with TIB 0, which every trace reads as "bytes, no references". So `buf` was
+      followed by no collector, and a collection mid-concat could free the array being filled.
+    - It is now a typed `ConcatBuilder` with the same offsets. CharsetIdentityProbe printed garbage for its first
+      line until then.
+  - **AddressFieldProbe changed:** it held an `Address` into a small young array across collections. A moving
+    nursery does not keep that valid, so the probe now uses a 16 KiB array, which is never moved.
+  - **QEMU:**
+    - virt list **214/214** in all three modes: nursery off, `gcnursery=1`, and VERIFY (`gcnursery=2 nursery=1024`).
+      VERIFY reports 0 stale references, 0 corrupt blocks and 0 unknown layouts over 47 boots.
+    - raspi4b suite `checked=160 mismatch=0`, `collections=53`.
+    - `make test` and overlaycheck OK.
+    - virt FrameBench: off 104.8 ms, on 103.0 ms, VERIFY 161.0 ms; checks identical.
+  - **Pi 4, web server + FrameBench, two pushes of three boots per arm, alternating:**
+
+    | Arm | Runs (ms) | Median | Collections | Pause |
+    |---|---|---|---|---|
+    | main | 516.3, 518.5, 513.3, 514.5, 526.6, 522.5 | **517.4** | 14 | 0.92 s |
+    | S7-4a, nursery off | 530.9, 517.3, 531.0, 530.8, 516.1, 529.2 | **530.0** (+2.4%) | 14 | 0.92 s |
+    | S7-4a, `gcnursery=1` | 505.9, 492.1, 499.4, 494.4, 493.1, 497.4 | **495.9** (-4.2%) | 10 full | 0.73-0.75 s |
+
+    - The off arm is bimodal (516-517 or 529-531), so its +2.4% is probably layout, not work: GC pauses are unchanged.
+    - Checks are identical in all arms.
+    - Nursery-on rows per boot: 89 minor collections (10 went on to full), 342.6 MB allocated young, 27.2 MB
+      promoted (7.9%), 124 pins, 0 failed promotions, 0 unlogged layouts.
+  - **THE OPEN COST: minor pauses.** They sum to **1.92-1.96 s** per boot, longest **85-94 ms**, about 25 ms each, for
+    under 0.4 MB copied per collection. The time is outside the bench's own timing, which is why FrameBench gets
+    faster. Suspects, unmeasured: the whole-log-bitmap remembered-set walk (7.5 MiB), the block-start bitmap
+    rebuild, and the statics scan. This is S7-4b's first job, before S7-4c turns the nursery on by default.
+  - Pi restored to main (`31258fd`, build `9664e80e`, sha verified).
 - **FRAMES/GC ARC, INCREMENT S7-3: pretenuring (2026-11-23).** What a nursery must never hold is now allocated
   "old" from birth: every `allocData` block (Types, TIBs, statics, buffers: `Heap.dataBlock` -> `OLD_DATA`), and the two
   kinds of OBJECT compiled code bakes as immediates (`MetalSymbols.emitObject`), by allocation site through new

@@ -96,6 +96,10 @@ final class ScratchMap
         add(VMGc.MARK_STACK, Heap.PTR_CELL);                // GC mark stack
         add(Heap.PTR_CELL, 0x0400_0000L);                   // bump-pointer / free-list cells
         add(compiler.Symbols.LOG_BITMAP, compiler.Symbols.LOG_BITMAP + (compiler.Symbols.LOG_SPAN >> 6));   // write barrier log bitmap (S7-2)
+        add(Nursery.BASE, Nursery.END);                     // the per-core nurseries (S7-4a)
+        add(Nursery.BITS, Nursery.BITS_END);                // ... their block-start bitmap
+        add(Nursery.WORK, Nursery.WORK_END);                // ... the minor collection's copy worklist
+        add(Nursery.PINS, Nursery.PINS_END);                // ... and its pinned blocks
     }
 
     /**

@@ -3038,7 +3038,7 @@ public final class Loader
         {
             return 0L;                                  // boot force-compile probe: make the helper reachable
         }
-        if (recv.toLong() < Heap.BASE || recv.toLong() >= Heap.managedTop().toLong() || (recv.toLong() & 7L) != 0L)
+        if (!Heap.isObject(recv.toLong()) || (recv.toLong() & 7L) != 0L)
         {
             Uart.write(Magic.bytes("\n  RUNTRAMP: receiver is not an object: "));
             VM.printHex(recv.toLong());
@@ -6300,6 +6300,11 @@ public final class Loader
         {
             if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("move0")))             { return VM.testMoveAddr; }        // (Object)Object
         }
+        // Off-heap blocks that never move: a pretenured byte[] (frames/GC arc S7-4a).
+        if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalOffHeap")))
+        {
+            if (Utf8.utf8IsAtBase(nameBase, nameOff, Magic.bytes("allocOld0")))         { return VM.allocOldBytesAddr; }   // (I)byte[]
+        }
         // The VM's run-time counters (VMStats), read by the web server's statistics pages.
         if (Utf8.utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/MetalStats")))
         {
@@ -6372,7 +6377,7 @@ public final class Loader
     {
         Uart.write(Magic.bytes("\n    recv=0x"));
         VM.printHex(recv.toLong());
-        if (recv.toLong() < Heap.BASE || recv.toLong() >= Heap.managedTop().toLong())
+        if (!Heap.isObject(recv.toLong()))
         {
             Uart.write(Magic.bytes("  NOT A MANAGED HEAP ADDRESS (not an object)\n"));
             return;
@@ -8143,7 +8148,7 @@ public final class Loader
         VM.printDec((int) site);
         Uart.write(Magic.bytes(" recv="));
         VM.printHex(ref.toLong());
-        if (ref.toLong() < Heap.BASE || ref.toLong() >= Heap.managedTop().toLong() || (ref.toLong() & 7L) != 0L)
+        if (!Heap.isObject(ref.toLong()) || (ref.toLong() & 7L) != 0L)
         {
             Uart.write(Magic.bytes(" -- NOT a managed heap reference\n"));
             return;

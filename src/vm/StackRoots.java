@@ -67,6 +67,13 @@ final class StackRoots implements Uninterruptible
     static long consWords;           // words scanned conservatively by any of the above
     static long last;                // consWords at the start of the last collection
 
+    /**
+     * The minor collection's passes (frames/GC arc S7-4a): 1 = PIN, every word only a guess names pins the nursery
+     * block it falls in, exact slots are skipped; 2 = FORWARD, every exact slot is rewritten to its copy and guesses
+     * are skipped. 0 = an ordinary mark.
+     */
+    static int minor;
+
     private static long[] seen;      // return addresses already reported, open addressing
     private static final int SEEN_SLOTS = 1024;
     private static int printed;
@@ -93,7 +100,10 @@ final class StackRoots implements Uninterruptible
         FrameMaps.beginCollection();
         long gcFs = frameSizeAt(Address.fromLong(VM.gcCollect));
         long ret = Address.fromLong(scanFrom - gcFs).loadLong();
-        VMGc.markCodeInRange(scanFrom, stackTop);
+        if (minor == 0)
+        {
+            VMGc.markCodeInRange(scanFrom, stackTop);
+        }
         walk(ret, scanFrom + 96L, stackTop);
         int me = curTask();
         if (taskSp == null || taskState == null)
@@ -107,7 +117,7 @@ final class StackRoots implements Uninterruptible
             {
                 suspended(t);
             }
-            if (taskStackBase != null && taskStackBase[t] != 0L && taskState[t] != TASK_EMPTY)
+            if (minor == 0 && taskStackBase != null && taskStackBase[t] != 0L && taskState[t] != TASK_EMPTY)
             {
                 // The stack BLOCK itself: taskStackBase is a long[], so nothing typed keeps a live task's stack
                 // allocated -- an exact root here does (frames/GC arc S6b).
@@ -136,11 +146,14 @@ final class StackRoots implements Uninterruptible
             return;
         }
         long sp = frame + SCHED_FRAME;
-        VMGc.markCodeInRange(frame, top);
+        if (minor == 0)
+        {
+            VMGc.markCodeInRange(frame, top);
+        }
         if (sp >= top)
         {
             fresh += 1L;                                    // never ran: its x0 is the entry's receiver (a Runnable), an
-            VMGc.markRoot(Address.fromLong(frame).loadLong());   //   int id or 0 (VMScheduler.spawnWith): an object or
+            slot(frame);                                    //   int id or 0 (VMScheduler.spawnWith): an object or
             return;                                         //   no heap address at all
         }
         if (taskSafe != null && taskSafe[t] != 0)
@@ -200,7 +213,7 @@ final class StackRoots implements Uninterruptible
                 // and nothing above it.
                 frames += 1L;
                 runTramps += 1L;
-                VMGc.markRoot(Address.fromLong(sp).loadLong());
+                slot(sp);
                 return;
             }
             FrameMaps.lookup(ret - 4L);
@@ -282,14 +295,16 @@ final class StackRoots implements Uninterruptible
     {
         if (t == 1)
         {
-            long w = Address.fromLong(a).loadLong();
-            if (w != 0L)
-            {
-                refs += 1L;
-                VMGc.markRoot(w);
-            }
+            slot(a);
         }
-        else if (t == 3)
+        else if (minor == 1 && (t == 2 || t == 3))
+        {
+            // A RAW slot (an Address, Word or long) or a data reference may hold a young object's address copied
+            // out of a typed one -- VMConcat's builder, a reflective argument buffer. Nothing can rewrite it, so
+            // what it names stays put: an ambiguous root pins, as in any mostly-copying collector.
+            Nursery.pinWord(Address.fromLong(a).loadLong());
+        }
+        else if (t == 3 && minor == 0)
         {
             long w = Address.fromLong(a).loadLong();
             if (w != 0L)
@@ -313,6 +328,10 @@ final class StackRoots implements Uninterruptible
                 if (((mask >>> i) & 1L) != 0L)
                 {
                     markObject(sp + i * 8L);
+                }
+                else if (minor == 1)
+                {
+                    Nursery.pinWord(Address.fromLong(sp + i * 8L).loadLong());
                 }
                 i += 1;
             }
@@ -382,17 +401,27 @@ final class StackRoots implements Uninterruptible
         }
         if (untyped)
         {
-            refs += 1L;
-            stubWords += 1L;
-            VMGc.markRootMaybe(w);                          // not known to be a reference: the bitmap decides
-            VMGc.markRootMaybe(w - 16L);
+            if (minor == 1)
+            {
+                Nursery.pinWord(w);                         // a guess: whatever it names stays put
+            }
+            else if (minor == 0)
+            {
+                refs += 1L;
+                stubWords += 1L;
+                VMGc.markRootMaybe(w);                      // not known to be a reference: the bitmap decides
+                VMGc.markRootMaybe(w - 16L);
+            }
         }
         else if (((mask >>> r) & 1L) != 0L)
         {
-            refs += 1L;
-            VMGc.markRoot(w);
+            slot(a);
         }
-        else if (((data >>> r) & 1L) != 0L)
+        else if (minor == 1)
+        {
+            Nursery.pinWord(w);                             // a raw argument may be a copied young address
+        }
+        else if (minor == 0 && ((data >>> r) & 1L) != 0L)
         {
             refs += 1L;
             VMGc.markRoot(w - 16L);                         // a data reference: the block is one header earlier
@@ -402,6 +431,21 @@ final class StackRoots implements Uninterruptible
     /** A word a thunk's build-time mask types as an object reference. */
     private static void markObject(long a)
     {
+        slot(a);
+    }
+
+    /** An exact object-reference slot at {@code a}: marked, or (minor collection) forwarded in place. */
+    private static void slot(long a)
+    {
+        if (minor == 2)
+        {
+            Nursery.fwdSlot(a);
+            return;
+        }
+        if (minor == 1)
+        {
+            return;
+        }
         long w = Address.fromLong(a).loadLong();
         if (w != 0L)
         {
@@ -412,6 +456,15 @@ final class StackRoots implements Uninterruptible
 
     private static void conservative(long lo, long hi)
     {
+        if (minor == 1)
+        {
+            Nursery.pinRange(lo, hi);
+            return;
+        }
+        if (minor == 2)
+        {
+            return;
+        }
         if (hi > lo)
         {
             consWords += (hi - lo) >> 3;

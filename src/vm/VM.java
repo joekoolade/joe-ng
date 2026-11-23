@@ -1418,7 +1418,7 @@ public final class VM
         // ... and its first instance field. For a GroupValidationResult slot 0 is `type`, which is the thing
         // that decides success()/blockingFailure() -- so this says WHICH result was stored, not just that
         // something was.
-        if (v >= Heap.BASE && v < Heap.managedTop().toLong() && (v & 7L) == 0L)
+        if (Heap.isObject(v) && (v & 7L) == 0L)
         {
             Uart.write(Magic.bytes(" field0="));
             printHex(Address.fromLong(v).plus(16L).loadLong());
@@ -1436,7 +1436,7 @@ public final class VM
         printDec((int) site);
         Uart.putc((byte) 0x20);
         printHex(v);
-        if (v >= Heap.BASE && v < Heap.managedTop().toLong() && (v & 7L) == 0L)
+        if (Heap.isObject(v) && (v & 7L) == 0L)
         {
             Uart.write(Magic.bytes(" field0="));
             printHex(Address.fromLong(v).plus(16L).loadLong());
@@ -2108,6 +2108,7 @@ public final class VM
         if (identityAddr == 0L) { long u = VMNatives.identity(0L); }
         if (identityHashAddr == 0L) { long u = VMNatives.identityHash(0L); }
         if (testMoveAddr == 0L) { long u = VMNatives.testMove(0L); }                  // MetalGcTest.move0
+        if (allocOldBytesAddr == 0L) { long u = VMNatives.allocOldBytes(-1); }        // MetalOffHeap.allocOld0
         if (availProcsAddr == 0L) { int u = VMNatives.availableProcessors(); }
         if (runtimeGcAddr == 0L) { VMNatives.runtimeGc(); }
         if (runtimeFreeAddr == 0L) { long u = VMNatives.runtimeFreeMemory(); }
@@ -2435,6 +2436,7 @@ public final class VM
         armGcVerify(conf, flen);
         armGcGen(conf, flen);
         armGcBarrier(conf, flen);
+        armNursery(conf, flen);
         armNpeTrace(conf, flen);
         DataReference nm = Heap.allocData(flen + 8);
         int nl = manifestValue(conf, flen, Magic.bytes("main"), nm.toAddress(), flen);
@@ -2599,6 +2601,48 @@ public final class VM
             WriteBarrier.on = 1;
             Uart.write(Magic.bytes("gcbarrier: log bitmap cleared and counted every collection\n"));
         }
+    }
+
+    /**
+     * {@code gcnursery=1}: young objects in per-core nurseries and minor collections (frames/GC arc S7-4a);
+     * {@code gcnursery=2} verifies -- every collection full, evacuated space poisoned, stale references reported.
+     * {@code nursery=<KB>} sizes each core's nursery (default 4096, at most 8192). The generational census and the
+     * barrier's shadow check measure a heap with no nursery, so they are switched off.
+     */
+    private static void armNursery(Address conf, int flen)
+    {
+        DataReference v = Heap.allocData(16);
+        int n = manifestValue(conf, flen, Magic.bytes("gcnursery"), v.toAddress(), 8);
+        if (n != 1)
+        {
+            return;
+        }
+        int mode = v.loadUnsignedByte() - 0x30;
+        if (mode != 1 && mode != 2)
+        {
+            return;
+        }
+        long kb = 0L;
+        DataReference k = Heap.allocData(16);
+        int kn = manifestValue(conf, flen, Magic.bytes("nursery"), k.toAddress(), 8);
+        int i = 0;
+        while (i < kn)
+        {
+            int d = k.toAddress().plus((long) i).loadUnsignedByte() - 0x30;
+            if (d < 0 || d > 9)
+            {
+                break;
+            }
+            kb = kb * 10L + (long) d;
+            i += 1;
+        }
+        GenCensus.on = 0;
+        WriteBarrier.on = 0;
+        Nursery.arm(mode, kb);
+        Uart.write(Magic.bytes(mode == 2 ? "gcnursery: nursery on, VERIFY (every collection full, poisoned) KB="
+                                         : "gcnursery: nursery on KB="));
+        printDec((int) (Nursery.slot >> 10));
+        Uart.putc(0x0A);
     }
 
     /** {@code npetrace=1}: {@link #npeTrace}. */
@@ -4112,6 +4156,7 @@ public final class VM
     static long identityAddr;          // VM.identity(J)J — the *Bits* pass-throughs
     static long identityHashAddr;      // VMNatives.identityHash(J)J — identityHashCode / Object.hashCode (S7-0)
     static long testMoveAddr;          // VMNatives.testMove(J)J — MetalGcTest.move0(Object) (S7-1)
+    static long allocOldBytesAddr;     // VMNatives.allocOldBytes(I)J — MetalOffHeap.allocOld0(int) (S7-4a)
     static long availProcsAddr;        // VMNatives.availableProcessors()I — Runtime.availableProcessors()
     static long runtimeGcAddr;         // VMNatives.runtimeGc()V — Runtime.gc()
     static long runtimeFreeAddr;       // VMNatives.runtimeFreeMemory()J — Runtime.freeMemory()

@@ -141,7 +141,7 @@ final class BootSeeds
         }
         Magic.call2(MethodRegistry.rgTab[ctor].buf.toLong(), obj.toLong(), 0L);   // receiver in x0; a no-arg ctor reads nothing else
         slot.store(obj);
-        seedStandardProps(obj.toLong(), pi);
+        seedStandardProps(obj, pi);
         seedLineSeparator();
     }
 
@@ -241,7 +241,7 @@ final class BootSeeds
             return;
         }
         Magic.call2(MethodRegistry.rgTab[ctor].buf.toLong(), obj.toLong(), 0L);
-        seedStandardProps(obj.toLong(), pi);
+        seedStandardProps(obj, pi);
         slot.store(obj);
     }
 
@@ -280,7 +280,7 @@ final class BootSeeds
         }
     }
 
-    private static void seedStandardProps(long props, int propsClass)
+    private static void seedStandardProps(ObjectReference props, int propsClass)
     {
         // NOT through the method registry: `rgTab` holds one entry per COMPILED method, and bodies compile on
         // FIRST CALL -- this runs during loader init, so nothing has called setProperty and it is not in there
@@ -347,12 +347,16 @@ final class BootSeeds
     }
 
     /** One {@code props.setProperty(key, value)} through the ordinary call convention. */
-    private static void putProp(long buf, long props, byte[] key, byte[] value)
+    private static void putProp(long buf, ObjectReference props, byte[] key, byte[] value)
     {
+        // TYPED until the call: each allocation below may run a minor collection (frames/GC arc S7-4), which moves
+        // young objects and updates typed slots only -- a raw long copy of an address is left naming the old one.
+        ObjectReference k = ObjectReference.fromLong(Loader.guestString(key));
+        ObjectReference v = ObjectReference.fromLong(Loader.guestString(value));
         long[] args = new long[3];
-        args[0] = props;
-        args[1] = Loader.guestString(key);
-        args[2] = Loader.guestString(value);
+        args[0] = props.toLong();
+        args[1] = k.toLong();
+        args[2] = v.toLong();
         Magic.callN(buf, Magic.addrOf(args) + 24L);     // args[] elements start at +24
     }
 

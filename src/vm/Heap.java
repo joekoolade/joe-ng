@@ -447,7 +447,7 @@ public final class Heap implements Uninterruptible
     private static Address allocLarge(long size)
     {
         long want = (size + PAGE - 1L) & -PAGE;
-        if (volumeTrigger())                               // LARGE allocations are most of the volume, so
+        if (noCollect == 0 && volumeTrigger())             // LARGE allocations are most of the volume, so
         {                                                  //   the trigger has to see them or it never
             allocSinceGc = 0L;                             //   fires during the churn and Lisp phases --
             gcPressure += 1;                               //   measured: hooking only the small path left
@@ -1507,6 +1507,23 @@ public final class Heap implements Uninterruptible
     public static long oldSiteN;
     public static long oldSiteBytes;
 
+    /** Whether {@code a} lies where an OBJECT can: the managed heap (every core's region) or a nursery (S7-4a).
+     *  A plausibility bound for reports and dispatch, not a block-base test. */
+    public static boolean isObject(long a)
+    {
+        return a >= BASE && a < managedTop().toLong() || Nursery.contains(a);
+    }
+
+    /** 1 while a minor collection copies into the mature heap: an allocation that would collect returns zero. */
+    static int noCollect;
+
+    /** The minor collection's copy: {@code size} bytes of mature heap, never collecting (zero when there is none).
+     *  The world is stopped and IRQs are masked. */
+    static Address allocInGc(int size)
+    {
+        return allocLocked(size);
+    }
+
     /** Allocate {@code size} bytes straight into the mature heap: an object compiled code will name as an immediate. */
     public static Address allocOld(int size)
     {
@@ -1541,7 +1558,15 @@ public final class Heap implements Uninterruptible
         // Save/restore the I-bit so a caller that already masked (e.g. the collector) stays masked.
         long daif = Magic.readDaif();
         Magic.disableIrq();
-        Address p = allocLocked(size);
+        Address p = Address.zero();
+        if (reason == YOUNG && Nursery.on != 0 && (long) size < LARGE_REQ && noCollect == 0)
+        {
+            p = Nursery.alloc(size);                   // S7-4: young objects in this core's nursery
+        }
+        if (p.isZero())
+        {
+            p = allocLocked(size);
+        }
         if (reason != YOUNG)
         {
             tenured(p, reason);
@@ -1569,7 +1594,7 @@ public final class Heap implements Uninterruptible
         if (core == 0 && (long) aligned >= LARGE_REQ)
         {
             Address big = allocLarge((long) aligned);
-            if (!big.isZero())
+            if (!big.isZero() || noCollect != 0)
             {
                 return big;
             }
@@ -1591,7 +1616,7 @@ public final class Heap implements Uninterruptible
         int attempt = 0;
         while (attempt < 4)
         {
-            if (core == 0 && volumeTrigger())               // collect on VOLUME, not on running out: the
+            if (core == 0 && noCollect == 0 && volumeTrigger())   // collect on VOLUME, not on running out: the
             {                                               //   ratchet exists because nothing asks for a
                 allocSinceGc = 0L;                          //   collection until the arena is exhausted.
                 gcPressure += 1;                            // BEFORE serving, never after: a block handed
@@ -1690,6 +1715,10 @@ public final class Heap implements Uninterruptible
             // too instead of halting. Collect; if that found another core collecting (it returns at once), wait for
             // that collection and retry; then collect once more before giving up.
             prev = Address.zero();                          // a free-list block, dead from here on: not a root
+            if (noCollect != 0)
+            {
+                return Address.zero();                      // a minor collection's copy: the object stays put
+            }
             if (attempt == 1)
             {
                 waitForCollection();

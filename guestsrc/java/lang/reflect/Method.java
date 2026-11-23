@@ -372,20 +372,26 @@ public final class Method extends Executable
         int s = isStatic ? 0 : 1;
         int total = s + paramCount;
         long[] slots = argBuffer(total);
+        Object[] refs = new Object[total];              // the reference arguments, typed: see refreshRefs
         if (!isStatic)
         {
-            putArg(slots, total, 0, Magic.addrOf(recv));
+            refs[0] = recv;
         }
         Class<?>[] pt = getParameterTypes();
         int k = 0;
         while (k < paramCount)
         {
             putArg(slots, total, s + k, convertArg(pt[k], args[k]));
+            if (!pt[k].isPrimitive())
+            {
+                refs[s + k] = args[k];
+            }
             k += 1;
         }
         long ret;
         try
         {
+            refreshRefs(slots, total, refs);
             ret = Magic.callN(target, Magic.addrOf(slots) + 24L);   // array elements (header 16 + length 8)
         }
         catch (Throwable t)
