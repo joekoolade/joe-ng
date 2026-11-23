@@ -122,6 +122,7 @@ MacProbe
 MemberGenericsProbe
 MemberNameProbe
 MemberToStringProbe
+MergeSpillProbe          # a goto into a deep-stack merge point must not run the fall-through flush (S7-2)
 MethodHandleProbe
 MethodRefBoxFloatProbe
 MethodRefUnboxProbe

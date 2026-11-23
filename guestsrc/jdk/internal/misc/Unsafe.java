@@ -227,7 +227,9 @@ public final class Unsafe
 
     public boolean compareAndSetReference(Object o, long offset, Object expected, Object x)
     {
-        return Address.fromLong(at(o, offset)).attempt(Address.fromObject(expected), Address.fromObject(x));
+        boolean ok = Address.fromLong(at(o, offset)).attempt(Address.fromObject(expected), Address.fromObject(x));
+        MetalBarrier.log(o);                               // a reference store the compiler cannot see (S7-2)
+        return ok;
     }
 
     /** Stock's weak forms may fail SPURIOUSLY and callers always retry; an LL/SC CAS may too, so these are
@@ -270,6 +272,7 @@ public final class Unsafe
         Address a = Address.fromLong(at(o, offset));
         if (a.attempt(Address.fromObject(expected), Address.fromObject(x)))
         {
+            MetalBarrier.log(o);
             return expected;
         }
         return a.loadAddress().toObject();
@@ -367,6 +370,7 @@ public final class Unsafe
             v = a.loadLong();
         }
         while (!a.attempt(v, nx));
+        MetalBarrier.log(o);
         return Magic.fromAddr(v);
     }
 
@@ -578,6 +582,7 @@ public final class Unsafe
     public void putReference(Object o, long offset, Object x)
     {
         Address.fromLong(at(o, offset)).store(Address.fromObject(x));
+        MetalBarrier.log(o);
     }
 
     public Object getReferenceAcquire(Object o, long offset)

@@ -77,9 +77,11 @@ public final class UnboxedTest
         same(fx, "setLong", "([JIJ)V", "setAddr", "(Lmagic/AddressArray;ILmagic/Address;)V");
         same(fx, "lenLong", "([J)I", "lenAddr", "(Lmagic/AddressArray;)I");
         same(fx, "sumLong", "([J)J", "sumAddr", "(Lmagic/AddressArray;)J");
-        // ObjectReferenceArray IS a long[] as well.
+        // ObjectReferenceArray IS a long[] as well -- but it holds references, so its set is an aastore's: the same
+        // store and the write barrier after it (frames/GC arc S7-2), not a lastore's.
         same(fx, "getLong", "([JI)J", "getRefArr", "(Lmagic/ObjectReferenceArray;I)J");
-        same(fx, "setLong", "([JIJ)V", "setRefArr", "(Lmagic/ObjectReferenceArray;ILmagic/ObjectReference;)V");
+        same(fx, "setObj", "([Ljava/lang/Object;ILjava/lang/Object;)V", "setRefArr",
+                "(Lmagic/ObjectReferenceArray;ILmagic/ObjectReference;)V");
         same(fx, "lenLong", "([J)I", "lenRefArr", "(Lmagic/ObjectReferenceArray;)I");
         same(fx, "zeroAtAddr", "(Lmagic/AddressArray;I)Z", "nullAtRefArr", "(Lmagic/ObjectReferenceArray;I)Z");
 

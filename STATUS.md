@@ -4,6 +4,45 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **FRAMES/GC ARC, INCREMENT S7-2: the write barrier, checked in shadow (2026-11-23).** Baseline (writer and metal JIT)
+  emits an object-remembering barrier inline after every reference `putfield`, `aastore` and `ObjectReferenceArray`/
+  `DataReferenceArray` set (`Baseline.writeBarrier`, no call): a null or image-object value skips it; otherwise the
+  stored-into object's bit is set in the LOG BITMAP (`Symbols.LOG_BITMAP`, fixed RAM at 0x1E00_0000 just above the
+  arenas, one bit per 8 bytes of everything below 0x1E00_0000, 7.5 MiB, zeroed at boot, in ScratchMap). 18 words, one
+  load on the already-logged path. `putstatic` has none: statics are roots a minor collection scans whole. Raw
+  reference stores log explicitly: guest `Unsafe` (put/CAS/exchange/getAndSet), `AtomicReferenceFieldUpdater`,
+  `Field.set` (all through `jdk.internal.misc.MetalBarrier`, pure Java over the same constants) and VM
+  `System.arraycopy` of 8-byte non-primitive elements (`WriteBarrier.log`).
+  - **Shadow check** (`vm.WriteBarrier`): `gcbarrier=1` clears and counts the bitmap every collection; with `gcgen=1`
+    too, every old->young edge the census attributes to a heap block is checked against its source's bit, and an
+    unlogged one is a MISS (printed by type, up to 40 a boot). Counted apart, by design: edges OUT of a statics block
+    (roots) and edges INTO an `allocData` block (S7-3 allocates those old). Nine `/gc` rows.
+  - **The worklist it produced, all fixed:** `Type` metadata -> data blocks (into allocData: counted apart), heap
+    statics blocks (roots: counted apart), the per-class `ldc` String cache and `DataRefElem` arrays
+    (`ObjectReferenceArray.set`, an intrinsic: now barriered; `AddressArray.set` stays exactly `lastore`, as
+    UnboxedTest checks, and `ObjectReferenceArray.set` now compiles to exactly an `aastore`), and picocli's `@Spec`
+    injection (`Field.set`).
+  - **A LATENT COMPILER BUG, found by the barrier and fixed:** in a deep-stack method (operand depth past the 7-register
+    window) the label of a merge point was bound BEFORE the fall-through edge's register flush, so every branch into it
+    ran the flush too, storing registers its own edge had left stale over memory it had just made canonical.
+    `x = c ? new ArrayList<>() : null` compiled to `bl ArrayList.<init>; b L2; L1: mov x9, #0; L2: str x9, [slot0]` and
+    stored whatever x9 held after the constructor over the new object. `ArrayList.<init>` happened to leave `this` in
+    x9; the barrier's scratch use of x9 there made SwitchBootstraps' enum-label list null (IndyProbe: `enum constant
+    labels = THREW BootstrapMethodError`). Located by bisecting the barrier over a hash of each method's bytecode (an
+    `/etc/init` range, four virt boots in parallel per step, 16 steps to one method) and reading its disassembly. New
+    probe **MergeSpillProbe** (a constructor that ends with 12345 in x9): with the fix reverted it wild-branches even
+    with the barrier compiled out; with it, it passes.
+  - **QEMU:** virt list **214/214** (MergeSpillProbe added). With `gcgen=1 gcbarrier=1`: **0 misses** over 807
+    collections, 68k old->young references checked, all 207 probes with an expected output identical once the census
+    lines are dropped; heap objects logged per cycle mean 5.6k, most 80k. raspi4b suite `checked=160 mismatch=0`,
+    `collections=53`; `make test` + overlaycheck OK.
+  - **Pi 4, web server + FrameBench, six boots per arm, alternating:** barrier compiled out 513.5/516.2/513.3/514.0/
+    521.4/514.0 ms (median **514.0**), barrier in 530.3/525.9/520.7/519.7/516.7/516.0 (median **520.2**): **+1.2%**,
+    the ranges overlapping; check values identical, pause unchanged (0.91 s). Shadow arm (`gcgen=1 gcbarrier=1`, three
+    boots): **0 unlogged sources of ~47,000 old->young references** per boot, 603 into allocData, ~311 out of statics;
+    up to 115k heap objects logged in a cycle -- mostly young objects logged by their own constructors, which a
+    nursery's address-range test removes (S7-4).
+  - Default build restored on the Pi (`c2c0c3f7079510c7`, `main`).
 - **FRAMES/GC ARC, INCREMENT S7-1: identity hashes that survive a move (2026-11-23).** An object's identity hash is
   the address it had when the hash was first taken, kept for life in a side table (`vm.IdentityHash`): every heap
   object whose hash was taken has an entry keyed by its CURRENT address whose value is its hash; a mover calls

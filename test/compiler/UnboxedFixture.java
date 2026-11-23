@@ -170,6 +170,11 @@ final class UnboxedFixture
         a[i] = v;
     }
 
+    static void setObj(Object[] a, int i, Object v)
+    {
+        a[i] = v;
+    }
+
     static void setAddr(AddressArray a, int i, Address v)
     {
         a.set(i, v);

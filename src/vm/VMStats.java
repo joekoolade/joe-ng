@@ -13,6 +13,7 @@ package vm;
 
 import magic.Address;
 import compiler.Baseline;
+import compiler.Symbols;
 import magic.Magic;
 import net.Link;
 import net.NetStats;
@@ -246,6 +247,15 @@ public final class VMStats
         i = put(arr, len, i, IdentityHash.inserts);                        // ... entries made (first hashes)
         i = put(arr, len, i, IdentityHash.purged);                         // ... dropped by a collection
         i = put(arr, len, i, IdentityHash.moves);                          // ... re-keyed by a move
+        i = put(arr, len, i, Symbols.WRITE_BARRIER ? 1L : 0L);             // S7-2: write barrier compiled in
+        i = put(arr, len, i, (long) WriteBarrier.on);                      // ... gcbarrier=1 (cleared, counted)
+        i = put(arr, len, i, WriteBarrier.loggedHeap);                     // ... heap objects logged, last cycle
+        i = put(arr, len, i, WriteBarrier.loggedHeapMax);                  // ... most in one cycle
+        i = put(arr, len, i, WriteBarrier.loggedImage);                    // ... image objects logged, last cycle
+        i = put(arr, len, i, WriteBarrier.checked);                        // ... old->young edges checked (gcgen=1)
+        i = put(arr, len, i, WriteBarrier.missesTotal);                    // ... whose source was NOT logged
+        i = put(arr, len, i, WriteBarrier.missesToData);                   // ... unlogged, into allocData blocks
+        i = put(arr, len, i, WriteBarrier.fromStatics);                    // ... out of statics blocks (roots)
         return (long) i;
     }
 

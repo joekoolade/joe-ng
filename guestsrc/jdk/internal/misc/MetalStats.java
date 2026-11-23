@@ -141,6 +141,15 @@ public final class MetalStats
         "... entries made (first hashes)",
         "... dropped by a collection (object died)",
         "... re-keyed by a move (hash kept)",
+        "write barrier compiled in (S7-2)",
+        "... log bitmap cleared and counted every collection (gcbarrier=1)",
+        "... heap objects logged, last cycle",
+        "... most in one cycle",
+        "... image objects logged, last cycle",
+        "... old->young references checked against it (gcgen=1)",
+        "... WHOSE SOURCE WAS NOT LOGGED (a store the barrier missed)",
+        "... unlogged, into allocData blocks (allocated old from S7-3)",
+        "... out of statics blocks (roots of a minor collection: putstatic has no barrier)",
     };
 
     public static final String[] LOCKS_NAMES = {

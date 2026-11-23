@@ -41,6 +41,7 @@ public class AtomicReferenceFieldUpdater<T, V>
     {
         Address a = Address.fromObject(obj).plus(fieldOffset0(fname, obj));
         a.store((newValue == null) ? 0L : Magic.addrOf(newValue));
+        jdk.internal.misc.MetalBarrier.log(obj);           // a reference store the compiler cannot see (S7-2)
     }
 
     public void lazySet(T obj, V newValue)
@@ -58,6 +59,8 @@ public class AtomicReferenceFieldUpdater<T, V>
     {
         long e = (expect == null) ? 0L : Magic.addrOf(expect);
         long u = (update == null) ? 0L : Magic.addrOf(update);
-        return Magic.cas64(Magic.addrOf(obj) + fieldOffset0(fname, obj), e, u);
+        boolean ok = Magic.cas64(Magic.addrOf(obj) + fieldOffset0(fname, obj), e, u);
+        jdk.internal.misc.MetalBarrier.log(obj);
+        return ok;
     }
 }

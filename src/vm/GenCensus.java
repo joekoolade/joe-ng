@@ -57,6 +57,7 @@ final class GenCensus implements Uninterruptible
     private static int src;
     private static boolean srcOld;
     private static boolean srcCounted;
+    private static long srcBlock;
 
     // This collection.
     static long youngLive;
@@ -136,6 +137,7 @@ final class GenCensus implements Uninterruptible
     static void sourceBlock(long o)
     {
         src = SRC_HEAP;
+        srcBlock = o;
         srcOld = get(survived, bit(o));
         srcCounted = false;
     }
@@ -158,6 +160,10 @@ final class GenCensus implements Uninterruptible
         else if (srcOld)
         {
             oldToYoung = oldToYoung + 1L;
+            if (WriteBarrier.on != 0)
+            {
+                WriteBarrier.checkEdge(srcBlock, w);   // gcbarrier=1: the barrier must have logged this source
+            }
             if (!srcCounted)
             {
                 srcCounted = true;

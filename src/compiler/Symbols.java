@@ -150,6 +150,20 @@ public interface Symbols
     long YIELD_CELL = 0x03FF_0220L;
 
     /**
+     * The write barrier's log bitmap (frames/GC arc S7-2): one bit per 8 bytes of memory below {@link #LOG_SPAN},
+     * which covers the image and every heap region (core 0's small and large regions, cores 1-3's arenas end at
+     * 0x1E00_0000). A reference store {@code o.f = v} / {@code a[i] = v} sets the bit of the object's (or array's)
+     * START, once per object per collection; the collector reads and clears it. Fixed RAM just above the arenas
+     * (no firmware or device-tree use there: config.txt loads no DTB), named here because the writer bakes it into
+     * image code and cannot see {@code vm.WriteBarrier}. 7.5 MiB.
+     */
+    long LOG_BITMAP = 0x1E00_0000L;
+    long LOG_SPAN = 0x1E00_0000L;
+
+    /** Whether Baseline emits the write barrier after reference stores (frames/GC arc S7-2). */
+    boolean WRITE_BARRIER = true;
+
+    /**
      * The largest value a code address's top byte (bits 31..24) can take, for the dispatch-target guard.
      * Image code sits below {@code vm/Heap.IMAGE_CEILING == 0x02F0_0000} and the JIT arena spans
      * {@code [0x0400_0000, 0x0600_0000)} ({@code vm/Heap.CODE_BASE}/{@code CODE_LIMIT}), so a real target's top
