@@ -256,6 +256,22 @@ final class VMNatives
         return x;
     }
 
+    /** Calls of {@link #identityHash} over the boot: how often an identity hash is taken (frames/GC arc S7-0). */
+    static long identityHashes;
+
+    /** {@code System.identityHashCode} and {@code Object.hashCode}: the reference IS its address, which only a
+     *  non-moving collector allows. Counted, and with the generational census armed the block is recorded as
+     *  hashed ({@link GenCensus#noteHashed}) -- a moving collector must keep that hash once the object moves. */
+    static long identityHash(long x)
+    {
+        identityHashes = identityHashes + 1L;
+        if (GenCensus.on != 0 && x != 0L)
+        {
+            GenCensus.noteHashed(x);
+        }
+        return x;
+    }
+
     /** Element size (bytes) of an array: a raw array keeps it in @0; a typed array keeps it in its array Type's tag. */
     static long elemSize(ObjectReference arr)
     {
