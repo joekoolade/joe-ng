@@ -3767,7 +3767,18 @@ public final class VM
      */
     static long gcMapAt(Address pc)
     {
-        long w = tableValueIn(localTable, localCount, pc);           // image methods; -1 = no entry here
+        long i = imageIndex(pc.toLong());
+        if (i >= 0L)
+        {
+            Address e = localTable.plus(i * 24L);
+            long w = e.plus(16L).loadLong();
+            return w > 0L ? e.loadLong() + w * 4L : 0L;
+        }
+        if (i == -1L)
+        {
+            return tableValueIn(jitLocalTable, jitLocalCount, pc);   // not an image method: runtime JIT'd ones
+        }
+        long w = tableValueIn(localTable, localCount, pc);           // unsorted image table: the linear search
         if (w > 0L)
         {
             return tableStartIn(localTable, localCount, pc) + w * 4L;
@@ -3782,12 +3793,74 @@ public final class VM
     /** Start of the code range covering {@code pc} in the image or JIT local table, or 0 when none does. */
     static long codeStartAt(Address pc)
     {
-        long s = tableStartIn(localTable, localCount, pc);
+        long i = imageIndex(pc.toLong());
+        if (i >= 0L)
+        {
+            return localTable.plus(i * 24L).loadLong();
+        }
+        long s = i == -1L ? 0L : tableStartIn(localTable, localCount, pc);
         if (s != 0L)
         {
             return s;
         }
         return tableStartIn(jitLocalTable, jitLocalCount, pc);
+    }
+
+    /** 1 = the image's frame/local tables are sorted by code start (binary search), 2 = not, 0 = not checked. */
+    private static int imageSorted;
+
+    /**
+     * The index of the image method covering {@code pc} in the PARALLEL image frame and local tables, -1 when none
+     * does, or -2 when the tables are not in address order (the caller falls back to the linear search). The
+     * writer lays methods out in order, so they are; checked once. A lookup per frame of a stack walk was three
+     * linear scans of these tables (frames/GC arc S7-4b: most of a minor collection's pin pass).
+     */
+    static long imageIndex(long pc)
+    {
+        if (imageSorted == 0)
+        {
+            imageSorted = 1;
+            long k = 1L;
+            while (k < localCount)
+            {
+                Address prev = localTable.plus((k - 1L) * 24L);
+                Address cur = localTable.plus(k * 24L);
+                Address f = frameTable.plus(k * 24L);
+                if (cur.loadLong() < prev.plus(8L).loadLong() || f.loadLong() != cur.loadLong())
+                {
+                    imageSorted = 2;
+                }
+                k = k + 1L;
+            }
+            if (frameCount != localCount)
+            {
+                imageSorted = 2;
+            }
+        }
+        if (imageSorted != 1)
+        {
+            return -2L;
+        }
+        long lo = 0L;
+        long hi = localCount - 1L;
+        while (lo <= hi)
+        {
+            long mid = (lo + hi) >>> 1;
+            Address e = localTable.plus(mid * 24L);
+            if (pc < e.loadLong())
+            {
+                hi = mid - 1L;
+            }
+            else if (pc >= e.plus(8L).loadLong())
+            {
+                lo = mid + 1L;
+            }
+            else
+            {
+                return mid;
+            }
+        }
+        return -1L;
     }
 
     private static long tableStartIn(Address table, long count, Address pc)
@@ -3943,7 +4016,12 @@ public final class VM
     /** Frame size covering machine PC {@code pc}, from either table (0 = none). Package-visible for the self-check. */
     static long frameSizeAt(Address pc)
     {
-        long fs = tableValueIn(frameTable, frameCount, pc);       // image methods
+        long i = imageIndex(pc.toLong());
+        if (i >= 0L)
+        {
+            return frameTable.plus(i * 24L).plus(16L).loadLong();
+        }
+        long fs = i == -1L ? -1L : tableValueIn(frameTable, frameCount, pc);       // image methods
         if (fs >= 0L)
         {
             return fs;

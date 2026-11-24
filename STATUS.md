@@ -4,6 +4,59 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **FRAMES/GC ARC, INCREMENT S7-4b: the minor pause, measured and cut (2026-11-23).**
+  - **The instrument.** Seven new `/gc` rows time each phase of a minor collection: pin pass, forward pass, statics
+    and JIT maps, remembered set, drain, identity re-key and gap rebuild. Two more give the pin pass's block-start
+    bitmap builds and their count. Measured on virt with WebServerDemo running FrameBench through `/run`, then on
+    the Pi.
+  - **Three fixes:**
+    - **Remembered set** (53% of the phase on virt). It walked the whole log bitmap: 7.5 MiB for a 480 MiB span.
+      It now scans only where objects can be: the image, each arena up to its bump pointer, and the large region
+      up to its top. Zero runs are skipped eight bitmap words at a time. VERIFY also scans the whole bitmap and
+      halts on a logged bit outside those ranges.
+    - **The frame-lookup cache was cleared at the start of EVERY stack pass**, so both minor passes missed on every
+      frame. A miss is three linear scans of the image's method tables. It is now cleared only when a full
+      collection's walk begins: only a full sweep frees code, and every cached entry came from a live frame.
+    - **Image frame/local lookups binary-search** (`VM.imageIndex`). The writer lays methods out in address order;
+      a one-time check confirms it, and falls back to the linear search if not. `frameSizeAt`, `gcMapAt` and
+      `codeStartAt` all use it, so the unwinder gains too.
+    - Also: the pin pass's block-start bitmap is built lazily, per core.
+  - **virt, minor phases summed per boot:** 426 -> 128 ms.
+
+    | Phase | Before | After |
+    |---|---|---|
+    | remembered set | 227 ms | 42 ms |
+    | pin pass | 84 ms | 27 ms |
+    | forward pass | 56 ms | 1.4 ms |
+
+    Longest minor-only pause 16.5 -> 10.2 ms.
+  - **QEMU:** virt list **214/214** in all three modes (VERIFY reports no nursery errors); raspi4b suite
+    `checked=160 mismatch=0`, `collections=53`; `make test` and overlaycheck OK.
+  - **Pi 4, web server + FrameBench, two pushes of three boots per arm, alternating:**
+
+    | Arm | Runs (ms) | Median | Full collections | Pause |
+    |---|---|---|---|---|
+    | main (`32a69f3`) | 529.0, 527.6, 528.6, 521.8, 528.6, 526.4 | **528.1** | 14 | 0.92-0.95 s |
+    | S7-4b, nursery off | 519.6, 518.6, 527.0, 527.1, 520.6, 520.4 | **520.5** (-1.4%) | 14 | 0.88 s |
+    | S7-4b, `gcnursery=1` | 506.9, 488.3, 495.7, 509.0, 492.9, 500.3 | **498.0** (-5.7%) | 10 | 0.61-0.63 s |
+
+    - Checks are identical in all arms.
+    - The off arm's full pause fell because of the binary-searched frame tables.
+  - **Minor phases on the Pi:** **0.73-0.94 s** per boot, against S7-4a's 1.92-1.96 s (2.1-2.7x).
+
+    | Phase | Time per boot |
+    |---|---|
+    | pin pass | 185-337 ms (bitmap builds 107-109 ms) |
+    | remembered set | 255-259 ms |
+    | drain | 126-176 ms |
+    | re-key and rebuild | 85 ms |
+    | statics | 71-72 ms |
+    | forward pass | 5-8 ms |
+  - **OPEN: the longest minor pause.** It is 50-149 ms, and it went UP in two of three boots (S7-4a: 85-94 ms).
+    Suspect, unmeasured: the first minor after a full collection starts with an empty frame-lookup cache, and the
+    JIT tables (runtime-compiled code: the web server, the benchmark) are still searched linearly, unsorted.
+    S7-4c's first job, then the remembered-set scan (a summary bitmap), and the bitmap builds.
+  - Pi restored to main (`32a69f3`, build `8d780371`, sha verified).
 - **FRAMES/GC ARC, INCREMENT S7-4a: a mostly-copying nursery, off by default (2026-11-23).** New `vm.Nursery`:
   - **Layout.** One bump-allocated nursery per core at `0x1E80_0000 + c*8 MiB`, above the log span, so the barrier
     skips young sources for free. `nursery=<KB>` sets the size: default 4096, maximum 8192.
