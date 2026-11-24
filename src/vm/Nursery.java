@@ -70,6 +70,7 @@ final class Nursery implements Uninterruptible
 
     static final long FWD = 1L;                                  // status bit 0: forwarded, the copy in the TIB word
     static final long RESIDENT = 2L;                             // status bit 1: pinned this collection
+    static final long FILLER = 4L;                               // status bit 2: a gap's header, never a block to pin
     static final long POISON = 0x00DE_AD00_DEAD_0000L;           // far above mapped RAM: a use faults
 
     private static final int GAPS = 512;                        // free runs per core between residents
@@ -113,6 +114,16 @@ final class Nursery implements Uninterruptible
     static long tRemset;                                         // the logged objects
     static long tDrain;                                          // residents and copies, scanned
     static long tAfter;
+    static long tPinMax;
+    static long slowTotal;                                       // the slowest minor phase and its parts (ticks)
+    static long slowPin;
+    static long slowFwd;
+    static long slowRoots;
+    static long slowRemset;
+    static long slowDrain;
+    static long slowAfter;
+    static long slowCopied;
+    static long tPromoteAlloc;                                   // mature allocations for copies, summed (S7-4c probe)                                      // ... bytes it copied                                         // the slowest pin pass (S7-4c)
     static long tBits;                                           // ... of the pin pass: building BITS (S7-4b probe)
     static long nBits;                                          // IdentityHash re-key and the gap rebuild
     private static int stalePrinted;
@@ -163,11 +174,16 @@ final class Nursery implements Uninterruptible
         return w >= BASE && w < END;
     }
 
-    /** A block that holds nothing: a gap's header, so the nursery stays walkable by size. */
+    /**
+     * A block that holds nothing: a gap's header, so the nursery stays walkable by size. Its FILLER bit tells it
+     * apart from a fresh raw block (also TIB 0, status = size): a raw word naming a gap -- the allocator's own
+     * {@code cur}/{@code lim} locals on the collecting stack do -- pins nothing, where it used to idle the whole
+     * rest of the nursery for a cycle (S7-4c).
+     */
     private static void filler(long at, long size)
     {
         Address.fromLong(at).store(0L);
-        Address.fromLong(at).plus(ObjectModel.STATUS_OFFSET).store(size);
+        Address.fromLong(at).plus(ObjectModel.STATUS_OFFSET).store(size | FILLER);
     }
 
     // ---- allocation --------------------------------------------------------------------------------------------
@@ -267,6 +283,10 @@ final class Nursery implements Uninterruptible
         StackRoots.markStacks(scanFrom, stackTop);
         long t1 = Magic.readCNTPCT_EL0();
         tPin = tPin + (t1 - t0);
+        if (t1 - t0 > tPinMax)
+        {
+            tPinMax = t1 - t0;
+        }
         // 2. FORWARD every exact slot.
         StackRoots.minor = 2;
         StackRoots.markStacks(scanFrom, stackTop);
@@ -293,7 +313,19 @@ final class Nursery implements Uninterruptible
         tDrain = tDrain + (t5 - t4);
         IdentityHash.afterMinor();
         rebuild();
-        tAfter = tAfter + (Magic.readCNTPCT_EL0() - t5);
+        long t6 = Magic.readCNTPCT_EL0();
+        tAfter = tAfter + (t6 - t5);
+        if (t6 - t0 > slowTotal)
+        {
+            slowTotal = t6 - t0;                       // the slowest minor phase, phase by phase (S7-4c)
+            slowPin = t1 - t0;
+            slowFwd = t2 - t1;
+            slowRoots = t3 - t2;
+            slowRemset = t4 - t3;
+            slowDrain = t5 - t4;
+            slowAfter = t6 - t5;
+            slowCopied = copiedBytes - copied0;
+        }
         minors = minors + 1L;
         survivedLast = copiedBytes - copied0;
         minorTicks = minorTicks + (Magic.readCNTPCT_EL0() - t0);
@@ -324,9 +356,9 @@ final class Nursery implements Uninterruptible
         }
         Address st = Address.fromLong(b).plus(ObjectModel.STATUS_OFFSET);
         long s = st.loadLong();
-        if ((s & RESIDENT) != 0L)
+        if ((s & (RESIDENT | FILLER)) != 0L)
         {
-            return;
+            return;                                    // already pinned, or a gap: nothing lives there
         }
         st.store(s | RESIDENT);
         pinnedTotal = pinnedTotal + 1L;
@@ -356,24 +388,71 @@ final class Nursery implements Uninterruptible
             tBits = tBits + (Magic.readCNTPCT_EL0() - tb);
             nBits = nBits + 1L;
         }
-        long a = w & -8L;
-        long floor = BASE + ((w - BASE) / SLOT_MAX) * SLOT_MAX;
-        while (a >= floor)
+        // The nearest block start at or below w: whole bitmap words at a time (512 bytes each). One bit at a time,
+        // a word inside a big gap walked back megabytes -- the slowest pin passes (S7-4c).
+        long floor = BASE + (long) core * SLOT_MAX;
+        long bi = (w - BASE) >> 3;
+        long wi = bi >> 6;
+        long word = Address.fromLong(BITS + (wi << 3)).loadLong();
+        int bit = (int) (bi & 63L);
+        if (bit < 63)
         {
-            long bi = (a - BASE) >> 3;
-            long word = Address.fromLong(BITS + ((bi >> 6) << 3)).loadLong();
-            if (((word >>> (int) (bi & 63L)) & 1L) != 0L)
-            {
-                long size = Address.fromLong(a).plus(ObjectModel.STATUS_OFFSET).loadLong() & -8L;
-                if (w >= a + size)
-                {
-                    return 0L;
-                }
-                return a;                              // fillers too: pinning one only idles its gap a cycle
-            }
-            a -= 8L;
+            word = word & ((1L << (bit + 1)) - 1L);    // only the starts at or below w
         }
-        return 0L;
+        long wFloor = (floor - BASE) >> 9;
+        while (word == 0L)
+        {
+            if (wi <= wFloor)
+            {
+                return 0L;
+            }
+            wi -= 1L;
+            word = Address.fromLong(BITS + (wi << 3)).loadLong();
+        }
+        long a = BASE + ((wi << 6) + (long) highBit(word)) * 8L;
+        long size = Address.fromLong(a).plus(ObjectModel.STATUS_OFFSET).loadLong() & -8L;
+        if (w >= a + size)
+        {
+            return 0L;
+        }
+        return a;                                      // a filler too: pinWord tells it by its FILLER bit
+    }
+
+    /** The index of the highest set bit of {@code x} (nonzero). */
+    private static int highBit(long x)
+    {
+        int i = 0;
+        long v = x;
+        if ((v >>> 32) != 0L)
+        {
+            v = v >>> 32;
+            i += 32;
+        }
+        if ((v >>> 16) != 0L)
+        {
+            v = v >>> 16;
+            i += 16;
+        }
+        if ((v >>> 8) != 0L)
+        {
+            v = v >>> 8;
+            i += 8;
+        }
+        if ((v >>> 4) != 0L)
+        {
+            v = v >>> 4;
+            i += 4;
+        }
+        if ((v >>> 2) != 0L)
+        {
+            v = v >>> 2;
+            i += 2;
+        }
+        if ((v >>> 1) != 0L)
+        {
+            i += 1;
+        }
+        return i;
     }
 
     /** Walk core {@code c}'s nursery by size, recording its block starts (the pin pass's lookup), on first need. */
@@ -443,7 +522,9 @@ final class Nursery implements Uninterruptible
             corrupt(w, size);
             return w;
         }
+        long ta = Magic.readCNTPCT_EL0();
         Address n = Heap.allocInGc((int) size);
+        tPromoteAlloc = tPromoteAlloc + (Magic.readCNTPCT_EL0() - ta);
         if (n.isZero())
         {
             st.store(s | RESIDENT);                    // promotion failed: it stays, scanned in place
@@ -999,6 +1080,31 @@ final class Nursery implements Uninterruptible
                 VM.printHex(src);
                 Uart.write(Magic.bytes(" type "));
                 HeapShadow.printTypeOf(Address.fromLong(src).loadLong());
+                Uart.write(Magic.bytes(" tib "));
+                VM.printHex(Address.fromLong(src).loadLong());
+                Uart.write(Magic.bytes(" status "));
+                VM.printHex(Address.fromLong(src).plus(ObjectModel.STATUS_OFFSET).loadLong());
+                long ssz = Address.fromLong(src).plus(ObjectModel.STATUS_OFFSET).loadLong() & -8L;
+                long off = 16L;
+                while (off < ssz && off < 4096L)
+                {
+                    if (Address.fromLong(src).plus(off).loadLong() == w)
+                    {
+                        Uart.write(Magic.bytes(" at +"));
+                        VM.printHex(off);
+                    }
+                    off += 8L;
+                }
+                Address st0 = Address.fromLong(Address.fromLong(src).loadLong()).plus(ObjectModel.TIB_TYPE_SLOT * ObjectModel.WORD).loadAddress();
+                int up = 0;
+                while (!st0.isZero() && up < 6)
+                {
+                    Uart.write(Magic.bytes(" < "));
+                    Loader.printTypeName(st0);
+                    st0 = st0.plus(ObjectModel.TYPE_SUPER_OFFSET).loadAddress();
+                    up += 1;
+                }
+
             }
             else
             {

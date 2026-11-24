@@ -181,6 +181,19 @@ public final class MetalStats
         "... ... identity re-key and gap rebuild (us)",
         "... ... of the pin pass: block-start bitmap builds (us)",
         "... ... ... how many",
+        "... the slowest pin pass (us)",
+        "... the slowest minor phase (us)",
+        "... ... its pin pass (us)",
+        "... ... its forward pass (us)",
+        "... ... its statics and JIT maps (us)",
+        "... ... its remembered set (us)",
+        "... ... its drain (us)",
+        "... ... its re-key and rebuild (us)",
+        "... ... bytes it copied",
+        "... mature allocations for the copies, summed (us)",
+        "frame lookups by stack walks, all collections",
+        "... cache misses (each a frame-table search)",
+        "... time resolving misses (us)",
     };
 
     public static final String[] LOCKS_NAMES = {

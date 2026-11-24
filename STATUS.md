@@ -4,6 +4,65 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **FRAMES/GC ARC, INCREMENT S7-4c: the longest minor pause, and two raw holders VERIFY found (2026-11-24).**
+  - **Instruments.** New `/gc` rows:
+    - the slowest minor phase, split into its six parts, plus the bytes it copied;
+    - the slowest pin pass;
+    - frame lookups, cache misses and the time spent resolving misses;
+    - the mature allocations made for copies, summed.
+  - **The pin pass.** `Nursery.blockOf` walked the block-start bitmap backward a BIT at a time, so a pin that
+    landed after a large gap was slow. It now steps back a WORD at a time and takes the highest set bit. Fillers
+    carry a new status bit, `FILLER`, so a stale allocator `cur`/`lim` word no longer pins one. On virt the
+    slowest pin pass fell from 15 ms to 0.88 ms.
+  - **The longest minor pause is now drain-bound, and the drain is mature allocation.** On the Pi the slowest minor
+    phase is 94-97 ms. Of that, 85-87 ms is drain and about 3.5 ms is pin pass. The mature allocations for copies
+    total 146-152 ms per boot.
+  - **The fast promotion path was tried and is OFF by default (`gcpromote=1` turns it on).** `allocInGc` tries the
+    size-class list, then the bump pointer, before the general allocator's first-fit walk. Pi, FrameBench, three
+    boots per arm:
+
+    | | `gcpromote=1` | default |
+    |---|---|---|
+    | longest minor-only pause | 82-84 ms | 94-98 ms |
+    | slowest minor's drain | 74 ms | 85-87 ms |
+    | minor pauses, summed | 744-749 ms | 785-796 ms |
+    | full collections | 11 | 10 |
+    | full pauses, summed | 701 ms | 600 ms |
+
+    It bumps fresh arena where the free list would have filled a hole, and fresh bumps feed the 16 MB volume
+    trigger. That costs one more full collection per run, which outweighs what the minor phases save. The fix is
+    a cheap general free list, not a path around it.
+  - **VERIFY found two VM raw holders that S7-4b's timing had hidden:**
+    - **`AnnotationInstances` filled an annotation instance with raw stores across allocating calls.** A minor
+      collection in between clears the object's log bit, because it names nothing young yet. Later young element
+      values were then stored unlogged. A watchpoint caught picocli's `@Command` gaining a young value at +0x178
+      between two minors. Every element store now goes through `putRef`, which stores and then logs an old
+      target.
+    - **`Annotations.annotationsAt` parked the built instances in a `long[]` while building the next one.** A minor
+      collection treats a `long[]` as data, so the instances died or moved under it. On mode got away with it
+      because the dead copy was intact; VERIFY's poison turned it into AnnoLoadProbe reading a null element. They
+      are now held in a traced `Annotation[]`, typed before it is allocated, with logged stores. The other
+      `long[]` holders were checked: `getDeclaredClasses` holds only pretenured mirrors, and `ObjectMethods` and
+      `BootSeeds` read their argument blocks only at the call.
+    - Also: every mature block handed out while the nursery is on is LOGGED AT BIRTH (`Heap.allocAs`). This is a
+      net under fresh objects filled raw: a minor collection that finds one names nothing young clears the bit.
+      The STALE report now prints the source's TIB, its status, the offset of the stale slot and its type's super
+      chain.
+    - One VERIFY batch also returned into a poisoned pc in WideCallProbe, a call through a dead object's TIB. It
+      did not recur in 16 repeats of that batch after the `annotationsAt` fix, so the two are probably one bug;
+      not proven.
+  - **QEMU:**
+    - virt list **214/214** in all three modes, with no nursery errors from VERIFY.
+    - One VERIFY run had four batches print `GC: core stuck parked >10s` while `make test` ran beside it. They
+      were host load, identical alone.
+    - raspi4b suite `checked=160 mismatch=0`; `make test` and overlaycheck OK.
+  - **Pi 4, web server + FrameBench, `gcnursery=1`:**
+    - FrameBench sums: default 493.2, 499.6, 502.2 ms; `gcpromote=1` 493.5, 493.6, 496.0 ms.
+    - Checks are identical in every boot.
+    - Pin pass 165-169 ms per boot (S7-4b: 185-337), of which bitmap builds are 102-105 ms.
+    - Remembered set 257-268 ms.
+    - The longest pause overall, about 105 ms, is now a FULL collection, not a minor.
+    - Pi restored to main (`73088e5`, build `19151772`, sha verified).
 - **FRAMES/GC ARC, INCREMENT S7-4b: the minor pause, measured and cut (2026-11-23).**
   - **The instrument.** Seven new `/gc` rows time each phase of a minor collection: pin pass, forward pass, statics
     and JIT maps, remembered set, drain, identity re-key and gap rebuild. Two more give the pin pass's block-start

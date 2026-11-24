@@ -43,6 +43,7 @@ final class FrameMaps implements Uninterruptible
     private static long[] cStart;
     static long lookups;
     static long misses;
+    static long missTicks;           // S7-4c: time spent resolving misses (the frame-table searches)
 
     /** Allocate the cache (a collection must not allocate). Without it every lookup searches the tables. */
     static void init()
@@ -85,10 +86,12 @@ final class FrameMaps implements Uninterruptible
             return;
         }
         misses += 1L;
+        long t0 = Magic.readCNTPCT_EL0();
         Address a = Address.fromLong(pc);
         fSize = VM.frameSizeAt(a);
         fMap = VM.gcMapAt(a);
         fStart = VM.codeStartAt(a);
+        missTicks = missTicks + (Magic.readCNTPCT_EL0() - t0);
         if (cPc != null)
         {
             cPc[h] = pc;

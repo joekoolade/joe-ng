@@ -2636,6 +2636,11 @@ public final class VM
             kb = kb * 10L + (long) d;
             i += 1;
         }
+        DataReference pf = Heap.allocData(16);
+        if (manifestValue(conf, flen, Magic.bytes("gcpromote"), pf.toAddress(), 8) == 1 && pf.loadUnsignedByte() == 0x31)
+        {
+            Heap.promoteFast = 1;                      // gcpromote=1: copies skip the general free list (S7-4c A/B)
+        }
         GenCensus.on = 0;
         WriteBarrier.on = 0;
         Nursery.arm(mode, kb);

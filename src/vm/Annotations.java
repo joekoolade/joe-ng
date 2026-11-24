@@ -388,7 +388,14 @@ final class Annotations
             p = skipElementPairs(p);
             i += 1;
         }
-        long[] objs = new long[found];                   // PASS 2: resolve + build
+        // PASS 2: resolve + build, each instance held in a TRACED Annotation[]. A long[] holder (what this was)
+        // is raw data to a minor collection: building the next annotation can allocate and collect, and the
+        // instances built so far -- named by nothing else -- died or moved while the long[] kept their old
+        // addresses (frames/GC arc S7-4c, VERIFY: AnnoLoadProbe read a null element). The holder is the answer
+        // when every annotation resolves; otherwise its first `built` elements are copied into a shorter one.
+        Address annoTib = ArrayTypes.refArrayTib(annotationTypeAddr().toAddress());
+        ObjectReference objs = Heap.allocArray(found, 8).toObjectReference();
+        objs.toAddress().plus(ObjectModel.TIB_OFFSET).store(annoTib);
         int built = 0;
         int k = 0;
         while (k < found)
@@ -404,21 +411,36 @@ final class Annotations
                 long obj = AnnotationInstances.buildAnnoObject(base, pairsAbs.get(k), ifaceReg);
                 if (obj != 0L)
                 {
-                    objs[built] = obj;
+                    putElem(objs, built, obj);
                     built += 1;
                 }
             }
             k += 1;
         }
+        if (built == found)
+        {
+            return objs.toLong();
+        }
         ObjectReference arr = Heap.allocArray(built, 8).toObjectReference();
-        arr.toAddress().plus(ObjectModel.TIB_OFFSET).store(ArrayTypes.refArrayTib(annotationTypeAddr().toAddress()));
+        arr.toAddress().plus(ObjectModel.TIB_OFFSET).store(annoTib);
         int j = 0;
         while (j < built)
         {
-            arr.toAddress().plus(ObjectModel.ARRAY_BASE_OFFSET).plus(j * 8L).store(objs[j]);
+            putElem(arr, j, objs.toAddress().plus(ObjectModel.ARRAY_BASE_OFFSET).plus(j * 8L).loadLong());
             j += 1;
         }
         return arr.toLong();
+    }
+
+    /** Element {@code i} of the reference array {@code arr} := {@code v}, logged for the remembered set when the
+     *  array is old (an allocation between its birth and this store may have promoted it). */
+    private static void putElem(ObjectReference arr, int i, long v)
+    {
+        arr.toAddress().plus(ObjectModel.ARRAY_BASE_OFFSET).plus(i * 8L).store(v);
+        if (v != 0L && !Nursery.contains(arr.toLong()))
+        {
+            WriteBarrier.log(arr.toLong());
+        }
     }
 
     /** A zero-length {@code Annotation[]} -- what a class with no declared annotations answers. */
