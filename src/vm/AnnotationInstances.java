@@ -385,7 +385,7 @@ final class AnnotationInstances
         // same two-instruction thunk shape as every element accessor -- see annoTibFor.
         ObjectReference obj = Heap.alloc(16 + (n + 1) * 8).toObjectReference();
         obj.toAddress().plus(ObjectModel.TIB_OFFSET).store(tib);
-        obj.toAddress().plus(16L).plus(n * 8L).store(ClassMirrors.classMirror(ClassRegistry.clTab[ifaceReg].type.toAddress()));
+        putRef(obj, 16L + n * 8L, ClassMirrors.classMirror(ClassRegistry.clTab[ifaceReg].type.toAddress()));
         int start = ClassRegistry.clTab[ifaceReg].ifmStart;
         int pendMark = annoPendN;                       // a NESTED build drains only what it adds past here
         int pairs = u2(pairsPos);
@@ -404,7 +404,7 @@ final class AnnotationInstances
                     annoPendSlot = s;                   // a 'c'/'e' value notes ITS slot, not a global one
                     annoArrayTib = annoArrayTibFor(InterfaceInvocation.ifBase.get(start + s), InterfaceInvocation.ifDescOff[start + s]);
                     annoArrayPrim = annoArrayPrimFor(InterfaceInvocation.ifBase.get(start + s), InterfaceInvocation.ifDescOff[start + s]);
-                    obj.toAddress().plus(16L).plus(s * 8L).store(annoElementValue(base, p.plus(2L)));
+                    putRef(obj, 16L + s * 8L, annoElementValue(base, p.plus(2L)));
                     annoPendSlot = -1;
                     annoArrayTib = Address.zero();
                     annoArrayPrim = 0;
@@ -496,7 +496,7 @@ final class AnnotationInstances
                         annoPendSlot = slot;
                         annoArrayTib = defArrayTib.get(slot);   // computed BEFORE this parse: see applyAnnoDefaults
                         annoArrayPrim = defArrayPrim[slot];
-                        obj.toAddress().plus(16L).plus(slot * 8L).store(annoElementValue(ibase.toAddress(), q));
+                        putRef(obj, 16L + slot * 8L, annoElementValue(ibase.toAddress(), q));
                         annoPendSlot = -1;
                         annoArrayTib = Address.zero();
                         annoArrayPrim = 0;
@@ -566,7 +566,7 @@ final class AnnotationInstances
                 // note (what this did before) left a Class[] element reading null for ever -- picocli's
                 // @Option(converter = ...) is exactly that shape.
                 annoPendElem = i;
-                arr.toAddress().plus(24L).plus(i * 8L).store(annoElementValue(base, q));
+                putRef(arr, 24L + i * 8L, annoElementValue(base, q));
                 q = Annotations.skipElementValue(q);
                 i += 1;
             }
@@ -775,7 +775,7 @@ final class AnnotationInstances
             {
                 if (eidx[i] < 0)
                 {
-                    obj.toAddress().plus(16L).plus(eat[i] * 8L).store(v);
+                    putRef(obj, 16L + eat[i] * 8L, v);
                 }
                 else
                 {
@@ -792,7 +792,7 @@ final class AnnotationInstances
                     // A miss means the pending record is wrong, so it is skipped, not clamped.
                     if (!arr.isZero() && eidx[i] < (int) arr.plus(16L).loadLong())
                     {
-                        arr.plus(24L).plus(eidx[i] * 8L).store(v);
+                        putRef(arr.toObjectReference(), 24L + eidx[i] * 8L, v);
                     }
                 }
             }
@@ -880,6 +880,22 @@ final class AnnotationInstances
         return slot == 0L ? 0L : Address.fromLong(slot).loadLong();
     }
 
+    /**
+     * A raw reference store of {@code v} at {@code o + off}, logged for the remembered set when {@code o} is old
+     * (frames/GC arc S7-4c). These objects are filled AFTER allocations -- each element value can allocate, load
+     * and collect -- so one may already be mature, or a minor collection may have cleared the bit it was born
+     * with before the store: either way an unlogged old object would name a young value, found by VERIFY on
+     * picocli's {@code @Command}, whose 40-odd elements make the window wide.
+     */
+    private static void putRef(ObjectReference o, long off, long v)
+    {
+        o.toAddress().plus(off).store(v);
+        if (v != 0L && !Nursery.contains(o.toLong()))
+        {
+            WriteBarrier.log(o.toLong());
+        }
+    }
+
     /** A {@code java/lang/String} object for the Utf8 at {@code off} in {@code base} (no cp-index cache). */
     private static long internUtf8Obj(Address base, int off)
     {
@@ -903,7 +919,7 @@ final class AnnotationInstances
         }
         ObjectReference obj = Heap.alloc(Loader.stringSize()).toObjectReference();
         obj.toAddress().plus(0L).store(tib);
-        obj.toAddress().plus(16L).store(bytes);
+        putRef(obj, 16L, bytes.toLong());
         return obj.toLong();
     }
 }

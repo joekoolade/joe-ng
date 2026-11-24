@@ -1514,14 +1514,68 @@ public final class Heap implements Uninterruptible
         return a >= BASE && a < managedTop().toLong() || Nursery.contains(a);
     }
 
+    /**
+     * 1 = a minor collection's copies take {@link #allocInGc}'s fast path ({@code gcpromote=1}); OFF by default.
+     * Measured on the Pi (S7-4c, FrameBench x3 per arm): it cut the longest minor pause 94-98 -> 82-84 ms, but it
+     * bumps fresh arena where the general free list would have filled a hole, and fresh bumps feed the volume
+     * trigger -- one more full collection per run (11 vs 10), full pauses 600 -> 701 ms, more than the minor
+     * phases saved (790 -> 745 ms). The real cost is the general free list's first-fit walk; making that cheap
+     * is the fix, not routing around it.
+     */
+    static int promoteFast = 0;
+
     /** 1 while a minor collection copies into the mature heap: an allocation that would collect returns zero. */
     static int noCollect;
 
-    /** The minor collection's copy: {@code size} bytes of mature heap, never collecting (zero when there is none).
-     *  The world is stopped and IRQs are masked. */
+    /**
+     * The minor collection's copy: {@code size} bytes of mature heap, never collecting (zero when there is none).
+     * The world is stopped and IRQs are masked.
+     *
+     * <p>A size-class list, then the bump pointer, and only then the general allocator. Through {@link
+     * #allocLocked} alone, a copy whose class list was empty walked the WHOLE general free list first-fit: that
+     * was 99% of a minor collection's drain, and its slowest pauses (frames/GC arc S7-4c). Copies are smaller than
+     * {@link #LARGE_REQ} (a nursery never holds a large object).
+     */
     static Address allocInGc(int size)
     {
-        return allocLocked(size);
+        if (promoteFast == 0)
+        {
+            return allocLocked(size);
+        }
+        int aligned = (size + 7) & -8;
+        if (aligned < ObjectModel.HEADER_SIZE)
+        {
+            aligned = ObjectModel.HEADER_SIZE;
+        }
+        int core = (int) (Magic.readMPIDR() & 3L);
+        if (aligned <= SMALL_MAX)
+        {
+            Address sized = takeSized(core, aligned);
+            if (!sized.isZero())
+            {
+                zeroPayload(sized, aligned);
+                if (core == 0)
+                {
+                    servedSinceGc = servedSinceGc + (sized.plus(ObjectModel.STATUS_OFFSET).loadLong() & -8L);
+                }
+                return sized;
+            }
+        }
+        Address ptrCell = Address.fromLong(PTR_CELL + core * 8L);
+        Address p = ptrCell.loadAddress();
+        if (p.plus(aligned).LE(arenaLimit(core)))
+        {
+            ptrCell.store(p.plus(aligned));
+            p.plus(ObjectModel.STATUS_OFFSET).store((long) aligned);
+            zeroPayload(p, aligned);
+            allocSinceGc = allocSinceGc + (long) aligned;
+            if (core == 0)
+            {
+                servedSinceGc = servedSinceGc + (long) aligned;
+            }
+            return p;
+        }
+        return allocLocked(size);                       // the arena is full: the free list, or zero
     }
 
     /** Allocate {@code size} bytes straight into the mature heap: an object compiled code will name as an immediate. */
@@ -1570,6 +1624,16 @@ public final class Heap implements Uninterruptible
         if (reason != YOUNG)
         {
             tenured(p, reason);
+        }
+        if (Nursery.on != 0 && !Nursery.contains(p.toLong()))
+        {
+            // A MATURE block handed out while the nursery is on -- pretenured, large, or a young request the
+            // nursery could not serve -- is logged at birth. Code that fills a fresh object with raw stores, on
+            // the assumption that it is young, skips the barrier: a lambda's captures (Baseline.lowerLambda), a
+            // proxy instance, VM natives. Without this the old block names young objects unlogged, and the
+            // minor collection leaves its references stale (S7-4c, a VERIFY report). The first minor phase that
+            // finds it names nothing young clears the bit.
+            WriteBarrier.log(p.toLong());
         }
         if ((daif & 0x80L) == 0L)
         {

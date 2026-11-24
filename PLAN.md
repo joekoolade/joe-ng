@@ -5005,9 +5005,16 @@ collection; every edge the trace follows is attributed to its source.
   - **S7-4b: the minor pause. DONE (2026-11-23).** Per-phase timers. The remembered set is scanned only where objects
     can be. The frame-lookup cache is kept across minor passes, and image frame lookups binary-search. Pi minor
     phases 1.95 s -> 0.73-0.94 s per boot; FrameBench with the nursery on -5.7% against main.
-  - **S7-4c: the longest pause.** JIT frame tables searched in order, not linearly; a summary over the log bitmap;
-    cheaper block-start lookup for pins. Count pins by cause.
-  - **S7-4d: on by default**, once the Pi pause and throughput numbers favour it (feeds S7-5).
+  - **S7-4c: the longest pause. DONE (2026-11-24).** Slowest-minor instruments; word-level block-start search
+    and a FILLER status bit (slowest pin pass on virt 15 -> 0.88 ms). Two raw holders found by VERIFY
+    (annotation element stores, `annotationsAt`'s `long[]`), plus log-at-birth. The longest minor pause is drain
+    = mature allocation. A promotion fast path (`gcpromote=1`) cut it 94-98 -> 82-84 ms on the Pi, but cost one
+    more full collection per run, so it is off by default.
+  - **S7-4d: promotion into holes, cheaply.** The general free list's first-fit walk is the drain. Fix it with
+    segregated fits above SMALL_MAX, or an indexed free list, without bumping fresh arena. Then: JIT frame tables
+    sorted and binary-searched, a summary over the log bitmap, cheaper bitmap builds, and an audit of VM code that
+    fills fresh objects raw across allocating calls.
+  - **S7-4e: on by default**, once the Pi pause and throughput numbers favour it (feeds S7-5).
 - **S7-5: sizing and measurement.** Nursery size, promotion, and the Pi pause numbers against S6d-3's.
 
 ## 5. Design decisions to lock day one

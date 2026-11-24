@@ -287,6 +287,19 @@ public final class VMStats
         i = put(arr, len, i, ticksToUs(Nursery.tAfter));                   // ... re-key and rebuild
         i = put(arr, len, i, ticksToUs(Nursery.tBits));                    // ... of the pin pass: BITS builds (us)
         i = put(arr, len, i, Nursery.nBits);                               // ... how many
+        i = put(arr, len, i, ticksToUs(Nursery.tPinMax));                  // S7-4c: the slowest pin pass (us)
+        i = put(arr, len, i, ticksToUs(Nursery.slowTotal));                // ... the slowest minor phase (us)
+        i = put(arr, len, i, ticksToUs(Nursery.slowPin));
+        i = put(arr, len, i, ticksToUs(Nursery.slowFwd));
+        i = put(arr, len, i, ticksToUs(Nursery.slowRoots));
+        i = put(arr, len, i, ticksToUs(Nursery.slowRemset));
+        i = put(arr, len, i, ticksToUs(Nursery.slowDrain));
+        i = put(arr, len, i, ticksToUs(Nursery.slowAfter));
+        i = put(arr, len, i, Nursery.slowCopied);
+        i = put(arr, len, i, ticksToUs(Nursery.tPromoteAlloc));            // ... mature allocations for copies (us)
+        i = put(arr, len, i, FrameMaps.lookups);                           // ... frame lookups, all collections
+        i = put(arr, len, i, FrameMaps.misses);                            // ... cache misses
+        i = put(arr, len, i, ticksToUs(FrameMaps.missTicks));              // ... time resolving misses (us)
         return (long) i;
     }
 
