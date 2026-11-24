@@ -97,7 +97,13 @@ final class StackRoots implements Uninterruptible
     static void markStacks(long scanFrom, long stackTop)
     {
         last = consWords;
-        FrameMaps.beginCollection();
+        if (minor == 0)
+        {
+            // Only a FULL collection's sweep frees code, so a cached frame lookup stays right until the next full
+            // walk starts: every entry came from a live frame. A minor phase keeps the cache -- clearing it made
+            // each of its two passes re-run the linear frame-table searches for every frame (S7-4b).
+            FrameMaps.beginCollection();
+        }
         long gcFs = frameSizeAt(Address.fromLong(VM.gcCollect));
         long ret = Address.fromLong(scanFrom - gcFs).loadLong();
         if (minor == 0)

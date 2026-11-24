@@ -87,7 +87,7 @@ final class Nursery implements Uninterruptible
 
     private static long workSp;
     private static int pinN;
-    private static boolean bitsBuilt;
+    private static int bitsBuilt;                                // bit c: core c's block starts are in BITS
     private static boolean stillYoung;                           // the last slot forwarded still names the nursery
 
     // Statistics (/gc): over the boot unless noted.
@@ -106,6 +106,15 @@ final class Nursery implements Uninterruptible
     static long minorTicks;                                      // minor phases' time, summed (counter ticks)
     static long minorPauseTicks;                                 // minor-only collections' pauses, summed
     static long minorPauseMax;
+    // S7-4b: where a minor phase's time goes (counter ticks, summed)
+    static long tPin;                                            // pass 1: pin ambiguous roots (and build BITS)
+    static long tFwd;                                            // pass 2: forward exact stack slots
+    static long tRoots;                                          // image statics, heap statics, JIT map entries
+    static long tRemset;                                         // the logged objects
+    static long tDrain;                                          // residents and copies, scanned
+    static long tAfter;
+    static long tBits;                                           // ... of the pin pass: building BITS (S7-4b probe)
+    static long nBits;                                          // IdentityHash re-key and the gap rebuild
     private static int stalePrinted;
 
     /** VMGc.finishMinor: a minor-only collection's pause, entry to restart. */
@@ -250,19 +259,25 @@ final class Nursery implements Uninterruptible
         seal();
         workSp = WORK;
         pinN = 0;
-        bitsBuilt = false;
+        bitsBuilt = 0;
         long copied0 = copiedBytes;
         Heap.noCollect = 1;
         // 1. PIN: every word only a guess names, before anything moves.
         StackRoots.minor = 1;
         StackRoots.markStacks(scanFrom, stackTop);
+        long t1 = Magic.readCNTPCT_EL0();
+        tPin = tPin + (t1 - t0);
         // 2. FORWARD every exact slot.
         StackRoots.minor = 2;
         StackRoots.markStacks(scanFrom, stackTop);
         StackRoots.minor = 0;
+        long t2 = Magic.readCNTPCT_EL0();
+        tFwd = tFwd + (t2 - t1);
         statics();
         heapStatics();
         gcMaps();
+        long t3 = Magic.readCNTPCT_EL0();
+        tRoots = tRoots + (t3 - t2);
         int i = 0;
         while (i < pinN)
         {
@@ -270,10 +285,15 @@ final class Nursery implements Uninterruptible
             i += 1;
         }
         remset();
+        long t4 = Magic.readCNTPCT_EL0();
+        tRemset = tRemset + (t4 - t3);
         drain();
         Heap.noCollect = 0;
+        long t5 = Magic.readCNTPCT_EL0();
+        tDrain = tDrain + (t5 - t4);
         IdentityHash.afterMinor();
         rebuild();
+        tAfter = tAfter + (Magic.readCNTPCT_EL0() - t5);
         minors = minors + 1L;
         survivedLast = copiedBytes - copied0;
         minorTicks = minorTicks + (Magic.readCNTPCT_EL0() - t0);
@@ -324,9 +344,17 @@ final class Nursery implements Uninterruptible
     /** The nursery block holding {@code w}, or 0 (a filler, or no block). */
     private static long blockOf(long w)
     {
-        if (!bitsBuilt)
+        int core = (int) ((w - BASE) / SLOT_MAX);
+        if (w >= BASE + (long) core * SLOT_MAX + slot)
         {
-            buildBits();
+            return 0L;                                 // past this core's nursery: its BITS are never built
+        }
+        if ((bitsBuilt & (1 << core)) == 0)
+        {
+            long tb = Magic.readCNTPCT_EL0();
+            buildBits(core);
+            tBits = tBits + (Magic.readCNTPCT_EL0() - tb);
+            nBits = nBits + 1L;
         }
         long a = w & -8L;
         long floor = BASE + ((w - BASE) / SLOT_MAX) * SLOT_MAX;
@@ -348,35 +376,31 @@ final class Nursery implements Uninterruptible
         return 0L;
     }
 
-    /** Walk every nursery by size, recording block starts (the pin pass's lookup). */
-    private static void buildBits()
+    /** Walk core {@code c}'s nursery by size, recording its block starts (the pin pass's lookup), on first need. */
+    private static void buildBits(int c)
     {
-        bitsBuilt = true;
-        Address z = Address.fromLong(BITS);
-        while (z.LT(Address.fromLong(BITS_END)))
+        bitsBuilt = bitsBuilt | (1 << c);
+        long o = BASE + (long) c * SLOT_MAX;
+        long top = o + slot;
+        Address z = Address.fromLong(BITS + (((o - BASE) >> 9) << 3));
+        Address zEnd = Address.fromLong(BITS + (((top - BASE) >> 9) << 3));
+        while (z.LT(zEnd))
         {
             z.store(0L);
             z = z.plus(8);
         }
-        int c = 0;
-        while (c < 4)
+        while (o < top)
         {
-            long o = BASE + (long) c * SLOT_MAX;
-            long top = o + slot;
-            while (o < top)
+            long size = Address.fromLong(o).plus(ObjectModel.STATUS_OFFSET).loadLong() & -8L;
+            if (size < (long) ObjectModel.HEADER_SIZE || o + size > top)
             {
-                long size = Address.fromLong(o).plus(ObjectModel.STATUS_OFFSET).loadLong() & -8L;
-                if (size < (long) ObjectModel.HEADER_SIZE || o + size > top)
-                {
-                    corrupt(o, size);
-                    break;
-                }
-                long bi = (o - BASE) >> 3;
-                Address bw = Address.fromLong(BITS + ((bi >> 6) << 3));
-                bw.store(bw.loadLong() | (1L << (int) (bi & 63L)));
-                o = o + size;
+                corrupt(o, size);
+                break;
             }
-            c += 1;
+            long bi = (o - BASE) >> 3;
+            Address bw = Address.fromLong(BITS + ((bi >> 6) << 3));
+            bw.store(bw.loadLong() | (1L << (int) (bi & 63L)));
+            o = o + size;
         }
     }
 
@@ -547,43 +571,133 @@ final class Nursery implements Uninterruptible
      */
     private static void remset()
     {
-        long n = 0L;
-        Address w = Address.fromLong(Symbols.LOG_BITMAP);
-        Address end = Address.fromLong(Symbols.LOG_BITMAP + (Symbols.LOG_SPAN >> 6));
-        while (w.LT(end))
+        remN = 0L;
+        remsetRange(0x80000L, Heap.IMAGE_CEILING);                         // the image's objects
+        int c = 0;
+        while (c < 4)
         {
-            long bits = w.loadLong();
-            if (bits != 0L)
+            remsetRange(Heap.arenaBase(c).toLong(), Address.fromLong(Heap.PTR_CELL + c * 8L).loadLong());
+            c += 1;
+        }
+        remsetRange(Heap.LARGE_BASE, Address.fromLong(Heap.LARGE_PTR_CELL).loadLong());
+        if (on == 2)
+        {
+            outsideRanges();
+        }
+        remembered = remN;
+        if (remN > rememberedMax)
+        {
+            rememberedMax = remN;
+        }
+    }
+
+    private static long remN;
+
+    /**
+     * The logged objects in {@code [lo, hi)}: S7-4b scans only where objects can be -- the image, each arena up to
+     * its bump pointer, the large region up to its top -- not the whole 480 MiB span (7.5 MiB of bitmap, 53% of a
+     * minor phase on virt). Eight bitmap words are tested at once: almost all of them are zero.
+     */
+    private static void remsetRange(long lo, long hi)
+    {
+        if (hi <= lo)
+        {
+            return;
+        }
+        long w = Symbols.LOG_BITMAP + ((lo >> 9) << 3);
+        long end = Symbols.LOG_BITMAP + (((hi + 511L) >> 9) << 3);
+        while (w + 64L <= end)
+        {
+            Address a = Address.fromLong(w);
+            if ((a.loadLong() | a.plus(8).loadLong() | a.plus(16).loadLong() | a.plus(24).loadLong()
+                 | a.plus(32).loadLong() | a.plus(40).loadLong() | a.plus(48).loadLong() | a.plus(56).loadLong()) != 0L)
             {
-                long base = (w.toLong() - Symbols.LOG_BITMAP) << 6;   // word k (byte 8k) covers [512k, 512k+512)
-                long keep = 0L;
-                while (bits != 0L)
+                int k = 0;
+                while (k < 8)
                 {
-                    int b = lowBit(bits);
-                    bits = bits & (bits - 1L);
-                    long o = base + ((long) b << 3);
-                    n = n + 1L;
-                    if (o >= Heap.BASE && (Address.fromLong(o).plus(ObjectModel.STATUS_OFFSET).loadLong()
-                                           & Heap.FREE_FLAG) != 0L)
-                    {
-                        continue;                      // freed since (a full collection clears these)
-                    }
-                    stillYoung = false;
-                    scanSlots(o);
-                    if (stillYoung)
-                    {
-                        keep = keep | (1L << b);
-                    }
+                    remsetWord(w + (long) k * 8L);
+                    k += 1;
                 }
-                w.store(keep);
             }
-            w = w.plus(8);
+            w += 64L;
         }
-        remembered = n;
-        if (n > rememberedMax)
+        while (w < end)
         {
-            rememberedMax = n;
+            remsetWord(w);
+            w += 8L;
         }
+    }
+
+    /** One bitmap word at {@code w}: scan each logged object; keep the bits of those that still name a resident. */
+    private static void remsetWord(long w)
+    {
+        Address wa = Address.fromLong(w);
+        long bits = wa.loadLong();
+        if (bits == 0L)
+        {
+            return;
+        }
+        long base = (w - Symbols.LOG_BITMAP) << 6;     // word k (byte 8k) covers [512k, 512k+512)
+        long keep = 0L;
+        while (bits != 0L)
+        {
+            int b = lowBit(bits);
+            bits = bits & (bits - 1L);
+            long o = base + ((long) b << 3);
+            remN = remN + 1L;
+            if (o >= Heap.BASE && (Address.fromLong(o).plus(ObjectModel.STATUS_OFFSET).loadLong()
+                                   & Heap.FREE_FLAG) != 0L)
+            {
+                continue;                              // freed since (a full collection clears these)
+            }
+            stillYoung = false;
+            scanSlots(o);
+            if (stillYoung)
+            {
+                keep = keep | (1L << b);
+            }
+        }
+        wa.store(keep);
+    }
+
+    /** VERIFY: a logged bit outside the ranges {@link #remset} scans would be a remembered object it never saw. */
+    private static void outsideRanges()
+    {
+        long w = Symbols.LOG_BITMAP;
+        long end = Symbols.LOG_BITMAP + (Symbols.LOG_SPAN >> 6);
+        while (w < end)
+        {
+            if (Address.fromLong(w).loadLong() != 0L)
+            {
+                long a = (w - Symbols.LOG_BITMAP) << 6;
+                if (!inScanned(a))
+                {
+                    Uart.write(Magic.bytes("nursery: a logged object outside the remembered-set ranges @"));
+                    VM.printHex(a);
+                    Uart.putc(0x0A);
+                    halt(Magic.bytes("nursery: remembered-set ranges miss a logged object"));
+                }
+            }
+            w += 8L;
+        }
+    }
+
+    private static boolean inScanned(long a)
+    {
+        if (a + 512L > 0x80000L && a < Heap.IMAGE_CEILING)
+        {
+            return true;
+        }
+        int c = 0;
+        while (c < 4)
+        {
+            if (a + 512L > Heap.arenaBase(c).toLong() && a < Address.fromLong(Heap.PTR_CELL + c * 8L).loadLong())
+            {
+                return true;
+            }
+            c += 1;
+        }
+        return a + 512L > Heap.LARGE_BASE && a < Address.fromLong(Heap.LARGE_PTR_CELL).loadLong();
     }
 
     /** The index of the lowest set bit of {@code x} (nonzero). */

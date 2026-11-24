@@ -278,6 +278,15 @@ public final class VMStats
         i = put(arr, len, i, ticksToUs(Nursery.minorPauseMax));            // ... longest (us)
         i = put(arr, len, i, Nursery.staleRefs);                           // ... stale references (gcnursery=2)
         i = put(arr, len, i, Nursery.unknownBlocks);                       // ... logged blocks with no layout
+        i = put(arr, len, i, ticksToUs(Nursery.minorTicks));               // S7-4b: minor phases, summed (us)
+        i = put(arr, len, i, ticksToUs(Nursery.tPin));                     // ... pin pass
+        i = put(arr, len, i, ticksToUs(Nursery.tFwd));                     // ... forward pass (stacks)
+        i = put(arr, len, i, ticksToUs(Nursery.tRoots));                   // ... statics and JIT maps
+        i = put(arr, len, i, ticksToUs(Nursery.tRemset));                  // ... remembered set
+        i = put(arr, len, i, ticksToUs(Nursery.tDrain));                   // ... drain
+        i = put(arr, len, i, ticksToUs(Nursery.tAfter));                   // ... re-key and rebuild
+        i = put(arr, len, i, ticksToUs(Nursery.tBits));                    // ... of the pin pass: BITS builds (us)
+        i = put(arr, len, i, Nursery.nBits);                               // ... how many
         return (long) i;
     }
 

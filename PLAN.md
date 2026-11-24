@@ -5002,9 +5002,12 @@ collection; every edge the trace follows is attributed to its source.
     - `gcnursery=1` runs minor-only collections when a nursery is exhausted. `gcnursery=2` is VERIFY: every collection
       is minor then full, poisoning what the minor phase reclaims, and the full trace reports a reference left into it.
     - Done when the virt list passes in VERIFY mode and with the nursery on, and when off is still 214/214.
-  - **S7-4b: hunt what pinning hides.** Count pins by cause and retire the avoidable ones; cheaper remembered-set scan
-    (the whole log bitmap is walked today).
-  - **S7-4c: on by default**, once the Pi pause and throughput numbers favour it (feeds S7-5).
+  - **S7-4b: the minor pause. DONE (2026-11-23).** Per-phase timers. The remembered set is scanned only where objects
+    can be. The frame-lookup cache is kept across minor passes, and image frame lookups binary-search. Pi minor
+    phases 1.95 s -> 0.73-0.94 s per boot; FrameBench with the nursery on -5.7% against main.
+  - **S7-4c: the longest pause.** JIT frame tables searched in order, not linearly; a summary over the log bitmap;
+    cheaper block-start lookup for pins. Count pins by cause.
+  - **S7-4d: on by default**, once the Pi pause and throughput numbers favour it (feeds S7-5).
 - **S7-5: sizing and measurement.** Nursery size, promotion, and the Pi pause numbers against S6d-3's.
 
 ## 5. Design decisions to lock day one

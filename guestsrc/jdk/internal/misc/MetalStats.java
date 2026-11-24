@@ -172,6 +172,15 @@ public final class MetalStats
         "... longest minor-only pause (us)",
         "... REFERENCES INTO EVACUATED SPACE (gcnursery=2)",
         "... logged blocks with no precise layout",
+        "... minor phases, summed (us)",
+        "... ... pin pass (us)",
+        "... ... forward pass: stacks (us)",
+        "... ... statics and JIT maps (us)",
+        "... ... remembered set (us)",
+        "... ... drain (us)",
+        "... ... identity re-key and gap rebuild (us)",
+        "... ... of the pin pass: block-start bitmap builds (us)",
+        "... ... ... how many",
     };
 
     public static final String[] LOCKS_NAMES = {
