@@ -185,6 +185,7 @@ public final class MetalStats
         "... ... ... logged objects scanned",
         "... ... ... their reference slots",
         "... ... ... aastore elements forwarded from the slot log",
+        "... ... re-key and rebuild: of which the identity re-key (us)",
         "... the slowest pin pass (us)",
         "... the slowest minor phase (us)",
         "... ... its pin pass (us)",

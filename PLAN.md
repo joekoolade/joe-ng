@@ -5020,10 +5020,17 @@ collection; every edge the trace follows is attributed to its source.
     pass 17.6 -> 2.2 ms). An `aastore` logs its ELEMENT in a twin slot log (`Symbols.SLOT_BITMAP`) instead of the
     array: the loader's 16-32 K-entry method and field tables were rescanned whole for one young entry (virt
     remembered set 29 -> 10 ms; slots scanned 8.7 M -> 0.4 M). Same barrier size. Pi minor phases 545 -> 349 ms.
-  - **S7-4d'': leftovers.**
+  - **S7-4d'': the rebuild and the statics. DONE (2026-11-25).** The gaps after a minor phase come from the sorted
+    pin list (residents are exactly it), not a walk of every nursery block (virt 22 -> 1 ms). Statics are no longer
+    roots scanned whole: `putstatic` logs its cell in the slot log, as do the raw static stores (Unsafe's null-base
+    pair, static `Field.set`, `BootSeeds`, `Primitives`, `Loader.provideKnownStatics` -- the last found by VERIFY's
+    new per-minor check that no static names an evacuated block). Virt statics and maps 12.7 -> 2.3 ms; minor phases
+    summed 63 -> 40 ms. Pi minor phases 349 -> 203 ms, minor-only pauses 377 -> 237 ms.
+  - **S7-4d''': leftovers.**
     - An audit of VM code that fills fresh objects raw across allocating calls.
     - The barrier's slow path out of line, if the code-size cost matters.
-    - The remembered set's dirty-window word scan (both bitmaps): most of what remains of it.
+    - The remembered set's dirty-window word scan (both bitmaps); the JIT map entries (pretenure the maps).
+    - The drain: now the longest minor pause, i.e. copying.
   - **S7-4e: on by default**, once the Pi pause and throughput numbers favour it (feeds S7-5).
 - **S7-5: sizing and measurement.** Nursery size, promotion, and the Pi pause numbers against S6d-3's.
 

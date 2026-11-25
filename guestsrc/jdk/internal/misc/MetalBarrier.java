@@ -45,4 +45,34 @@ public final class MetalBarrier
         w.store(w.loadLong() | (1L << (int) ((a >> 3) & 63L)));
         Address.fromLong(Symbols.LOG_SUMMARY + (a >> 15)).store((byte) 0);   // and its summary byte: 0 = dirty (S7-4d)
     }
+
+    /** A reference was just stored at {@code offset} in {@code o}; a null {@code o} makes {@code offset} the absolute
+     *  address of a STATIC's cell (Unsafe's staticFieldBase/Offset pair), logged as a slot (S7-4d''). */
+    public static void logAt(Object o, long offset)
+    {
+        if (o == null)
+        {
+            logSlot(offset);
+        }
+        else
+        {
+            log(o);
+        }
+    }
+
+    /** A reference was just stored into the static cell at {@code a}: log the slot, as {@code putstatic} does. */
+    public static void logSlot(long a)
+    {
+        if (!Symbols.WRITE_BARRIER)
+        {
+            return;
+        }
+        if (a <= 0L || a >= Symbols.LOG_SPAN)
+        {
+            return;
+        }
+        Address w = Address.fromLong(Symbols.SLOT_BITMAP + ((a >> 9) << 3));
+        w.store(w.loadLong() | (1L << (int) ((a >> 3) & 63L)));
+        Address.fromLong(Symbols.LOG_SUMMARY + (a >> 15)).store((byte) 0);
+    }
 }

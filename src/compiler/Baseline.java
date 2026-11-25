@@ -1684,6 +1684,13 @@ public final class Baseline
     private void putstatic(CodeBuffer cb, int cpIndex)
     {
         initGuardAt(cb, cpIndex, false);               // BEFORE the pop: spillLive only covers the stack
+        boolean ref = Symbols.WRITE_BARRIER && fieldIsRef(cpIndex);
+        int cell = -1;
+        if (ref)
+        {
+            cell = pushReg();                          // a register apart from v, x16 and x17 for the barrier
+            popReg();
+        }
         int v = popReg();
         symbols.staticField(cb, 16, cpIndex);
         boolean vol = symbols.isVolatileField(cpIndex, true);
@@ -1695,6 +1702,13 @@ public final class Baseline
         if (vol)
         {
             cb.emit(A64Enc.dmbIsh());                    // ... and a later volatile load cannot pass it
+        }
+        if (ref)
+        {
+            // S7-4d'': log the CELL in the slot log, so a minor collection forwards the statics written since the
+            // last one instead of scanning every static in the image and every class's statics block.
+            cb.emit(A64Enc.movReg(cell, 16));
+            writeBarrier(cb, cell, v, Symbols.SLOT_BITMAP, SLOT_SUMMARY_BIAS);
         }
     }
 

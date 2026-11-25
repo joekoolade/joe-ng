@@ -99,6 +99,22 @@ final class WriteBarrier implements Uninterruptible
         Address.fromLong(Symbols.LOG_SUMMARY + (o >> 15)).store((byte) 0);   // dirty, as the compiled barrier does
     }
 
+    /**
+     * Log the reference SLOT at {@code a} in the slot log (S7-4d''): what the compiled {@code putstatic} and
+     * {@code aastore} barriers do, for VM code that stores a reference into a static cell with a raw store. Statics
+     * are not scanned whole by a minor collection any more, so an unlogged one is a reference it never updates.
+     */
+    static void logSlot(long a)
+    {
+        if (a <= 0L || a >= Symbols.LOG_SPAN)
+        {
+            return;
+        }
+        Address w = Address.fromLong(Symbols.SLOT_BITMAP + ((a >> 9) << 3));
+        w.store(w.loadLong() | (1L << (int) ((a >> 3) & 63L)));
+        Address.fromLong(Symbols.LOG_SUMMARY + (a >> 15)).store((byte) 0);
+    }
+
     /** Whether the object at {@code o} has been logged since the bitmap was last cleared. */
     static boolean logged(long o)
     {

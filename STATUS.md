@@ -4,6 +4,38 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **FRAMES/GC ARC, INCREMENT S7-4d'': the rebuild and the statics (2026-11-25).**
+  - **The gap rebuild, from the pin list.** After the copy, `rebuild()` walked every block of every nursery by size
+    to find the residents -- 22 of 67 ms of minor phases on virt (a split timer showed the identity re-key beside it
+    was 0.15 ms). The residents are exactly the pin list, so it is sorted (insertion sort, a few dozen entries) and
+    the gaps are what lies between. `forward`'s promotion failures now join the list too (they were RESIDENT but not
+    listed; a full trace now roots them as well). VERIFY still walks, checking that no block stays RESIDENT and each
+    gap is a FILLER of its size.
+  - **Statics are logged, not scanned.** A split timer put the statics phase at image statics 19%, heap statics
+    blocks 63% (1,644 classes, each through `scanSlots`), JIT maps 18%. `putstatic` now runs the barrier on its CELL
+    into S7-4d''s slot log (the cell's address moves to a register apart from x16/x17), and the minor phase drops
+    both statics scans: the remembered set forwards the statics written since the last one.
+    - Raw static stores log the slot too: Unsafe's null-base pair (`MetalBarrier.logAt`), static `Field.set`
+      (`MetalBarrier.logSlot`), the `BootSeeds` stream/props/SharedSecrets seeds and `Primitives`' TYPE mirrors
+      (`WriteBarrier.logSlot`).
+    - VERIFY scans every image and heap static after the drain and halts on one naming a non-resident young block,
+      printing the image offset to look up in `out/statics-map.txt`. Its first boot named `java/lang/Integer.digits`:
+      `Loader.provideKnownStatics` seeds it with a raw store. That was the only one the virt list found.
+    - Across a full collection: image slot bits are never cleared (kept bits survive), and heap statics blocks are
+      traced as blocks, so `fullEdge` re-logs any that names a resident.
+  - **virt, `gcnursery=1`:** minor phases summed 63 -> 40 ms; statics and JIT maps 12.7 -> 2.3 ms; rebuild 22 ->
+    1.1 ms. `gcgen=1 gcbarrier=1`: 0 misses of 35,090.
+  - **Pi 4, `gcnursery=1`, 3 boots each, against main (S7-4d'):**
+    - minor phases summed 349 -> 203 ms; minor-only pauses summed 377 -> 237 ms;
+    - longest minor-only pause 54 -> 47.5 ms (drain: copying);
+    - statics and JIT maps 74 -> 11.2 ms; re-key and rebuild 93 -> 5.7 ms; remembered set 56 -> 62.6 ms (it now
+      carries the statics written);
+    - full collections 11, their pauses, FrameBench (532/525/524 vs 548/521/522 ms) and checks unchanged.
+    - Against S7-4d's main: minor-only pauses summed 569 -> 237 ms over two increments.
+    - The Pi is restored to main (sha verified).
+  - **QEMU:** virt list **214/214** in all three modes; raspi4b suite `checked=160 mismatch=0`, `collections=53`;
+    `make test` and overlaycheck OK.
+
 - **FRAMES/GC ARC, INCREMENT S7-4d': the pin pass and the remembered set (2026-11-25).**
   - **A crossing map replaces the block-start bitmap builds.** The pin pass used to walk a core's whole nursery
     by size, setting a bit per block, the first time an ambiguous word named it -- 15.9 of the 17.6 ms pin pass on

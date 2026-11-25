@@ -141,6 +141,7 @@ final class BootSeeds
         }
         Magic.call2(MethodRegistry.rgTab[ctor].buf.toLong(), obj.toLong(), 0L);   // receiver in x0; a no-arg ctor reads nothing else
         slot.store(obj);
+        WriteBarrier.logSlot(slot.toLong());                 // a static cell: the slot log (S7-4d'')
         seedStandardProps(obj, pi);
         seedLineSeparator();
     }
@@ -243,6 +244,7 @@ final class BootSeeds
         Magic.call2(MethodRegistry.rgTab[ctor].buf.toLong(), obj.toLong(), 0L);
         seedStandardProps(obj, pi);
         slot.store(obj);
+        WriteBarrier.logSlot(slot.toLong());                 // a static cell: the slot log (S7-4d'')
     }
 
     /**
@@ -277,6 +279,7 @@ final class BootSeeds
         if (!slot.isZero() && slot.loadLong() == 0L)
         {
             slot.store(Loader.guestString(Magic.bytes("\n")));   // Uart.putc makes this CRLF for the console
+            WriteBarrier.logSlot(slot.toLong());                 // a static cell: the slot log (S7-4d'')
         }
     }
 
@@ -407,11 +410,13 @@ final class BootSeeds
         if (needOut)
         {
             Address.fromLong(outSlot).store(Magic.call0(buf));
+            WriteBarrier.logSlot(outSlot);                 // a static cell: the slot log (S7-4d'')
             setStdGen(STD_OUT);
         }
         if (needErr)
         {
             Address.fromLong(errSlot).store(Magic.call0(buf));
+            WriteBarrier.logSlot(errSlot);                 // a static cell: the slot log (S7-4d'')
             setStdGen(STD_ERR);
         }
     }
@@ -434,6 +439,7 @@ final class BootSeeds
         if (slot != 0L)
         {
             Address.fromLong(slot).store(ref);
+            WriteBarrier.logSlot(slot);                 // a static cell: the slot log (S7-4d'')
             // A stream the PROGRAM installed is current: the seed must not replace it this generation.
             if (name[0] == 'o')
             {
@@ -526,6 +532,7 @@ final class BootSeeds
                 ObjectReference cobj = Heap.alloc(16 + ClassRegistry.clTab[ci].fieldCount * 8).toObjectReference();
                 cobj.toAddress().store(ClassRegistry.clTab[ci].tib);
                 Address.fromLong(inSlot).store(cobj);
+                WriteBarrier.logSlot(inSlot);                 // a static cell: the slot log (S7-4d'')
                 setStdGen(STD_IN);
                 return;
             }
@@ -549,6 +556,7 @@ final class BootSeeds
         obj.toAddress().plus(posOff).store(0L);
         obj.toAddress().plus(cntOff).store(0L);
         Address.fromLong(inSlot).store(obj);
+        WriteBarrier.logSlot(inSlot);                 // a static cell: the slot log (S7-4d'')
         setStdGen(STD_IN);
     }
 
@@ -569,6 +577,7 @@ final class BootSeeds
             ObjectReference inst = Heap.alloc(16).toObjectReference();                          // header only: a monitor needs no fields
             inst.toAddress().store(ClassRegistry.clTab[oi].tib);
             slot.store(inst);
+            WriteBarrier.logSlot(slot.toLong());                 // a static cell: the slot log (S7-4d'')
             sdVmLock = true;
         }
     }
@@ -590,6 +599,7 @@ final class BootSeeds
             ObjectReference inst = Heap.alloc(16 + ClassRegistry.clTab[mi].fieldCount * 8).toObjectReference();   // field-free -> header only
             inst.toAddress().store(ClassRegistry.clTab[mi].tib);                 // TIB (itable dir for the console() dispatch)
             Address.fromLong(slot).store(inst);
+            WriteBarrier.logSlot(slot);                 // a static cell: the slot log (S7-4d'')
             sdJio = true;
         }
     }
@@ -611,6 +621,7 @@ final class BootSeeds
             ObjectReference inst = Heap.alloc(16 + ClassRegistry.clTab[mi].fieldCount * 8).toObjectReference();   // field-free -> header only
             inst.toAddress().store(ClassRegistry.clTab[mi].tib);                 // TIB (itable dir for getEnumConstantsShared dispatch)
             Address.fromLong(slot).store(inst);
+            WriteBarrier.logSlot(slot);                 // a static cell: the slot log (S7-4d'')
             sdJla = true;
         }
     }
