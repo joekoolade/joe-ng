@@ -152,8 +152,8 @@ public interface Symbols
     /**
      * The write barrier's log bitmap (frames/GC arc S7-2): one bit per 8 bytes of memory below {@link #LOG_SPAN},
      * which covers the image and every heap region (core 0's small and large regions, cores 1-3's arenas end at
-     * 0x1E00_0000). A reference store {@code o.f = v} / {@code a[i] = v} sets the bit of the object's (or array's)
-     * START, once per object per collection; the collector reads and clears it. Fixed RAM just above the arenas
+     * 0x1E00_0000). A reference store {@code o.f = v} sets the bit of the object's START, once per object per
+     * collection; the collector reads and clears it. An {@code aastore} logs its SLOT in {@link #SLOT_BITMAP} instead. Fixed RAM just above the arenas
      * (no firmware or device-tree use there: config.txt loads no DTB), named here because the writer bakes it into
      * image code and cannot see {@code vm.WriteBarrier}. 7.5 MiB.
      */
@@ -168,6 +168,16 @@ public interface Symbols
      * below the nurseries.
      */
     long LOG_SUMMARY = 0x1E78_0000L;
+
+    /**
+     * The slot log (frames/GC arc S7-4d'): the log bitmap's twin, one bit per 8 bytes below {@link #LOG_SPAN}, set by
+     * the {@code aastore} barrier for the stored-into ELEMENT rather than the array. A minor collection forwards each
+     * logged slot instead of scanning the whole array: the loader's method and field tables (16-32 K entries) were
+     * rescanned in full whenever one young entry went in -- 8.7 M slots on the virt FrameBench run. It shares
+     * {@link #LOG_SUMMARY}: a 32 MiB multiple, so {@code LOG_SUMMARY - SLOT_BITMAP/512} is one {@code movz} too.
+     * Above the nurseries' scratch. 7.5 MiB.
+     */
+    long SLOT_BITMAP = 0x2200_0000L;
 
     /** Whether Baseline emits the write barrier after reference stores (frames/GC arc S7-2). */
     boolean WRITE_BARRIER = true;

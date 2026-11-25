@@ -98,9 +98,10 @@ final class ScratchMap
         add(compiler.Symbols.LOG_BITMAP, compiler.Symbols.LOG_BITMAP + (compiler.Symbols.LOG_SPAN >> 6));   // write barrier log bitmap (S7-2)
         add(compiler.Symbols.LOG_SUMMARY, compiler.Symbols.LOG_SUMMARY + (compiler.Symbols.LOG_SPAN >> 15));   // ... its summary (S7-4d)
         add(Nursery.BASE, Nursery.END);                     // the per-core nurseries (S7-4a)
-        add(Nursery.BITS, Nursery.BITS_END);                // ... their block-start bitmap
+        add(Nursery.CROSS, Nursery.CROSS_END);              // ... their crossing map
         add(Nursery.WORK, Nursery.WORK_END);                // ... the minor collection's copy worklist
         add(Nursery.PINS, Nursery.PINS_END);                // ... and its pinned blocks
+        add(compiler.Symbols.SLOT_BITMAP, compiler.Symbols.SLOT_BITMAP + (compiler.Symbols.LOG_SPAN >> 6));   // the aastore slot log (S7-4d')
     }
 
     /**

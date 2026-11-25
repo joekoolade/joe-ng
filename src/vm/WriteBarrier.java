@@ -23,7 +23,9 @@ import objectmodel.ObjectModel;
  * {@code putfield} and {@code aastore} ({@code Baseline.writeBarrier}): it sets the stored-into object's bit in the
  * LOG BITMAP ({@link Symbols#LOG_BITMAP}, one bit per 8 bytes of everything below {@link Symbols#LOG_SPAN}). A
  * logged object is one a minor collection would scan for references into the nursery -- the remembered set,
- * object-remembering rather than cards (S7-0: a few hundred old blocks, some of them large arrays).
+ * object-remembering rather than cards (S7-0: a few hundred old blocks, some of them large arrays). Since S7-4d'
+ * an {@code aastore} logs the ELEMENT instead, in the twin SLOT LOG ({@link Symbols#SLOT_BITMAP}), so a large table
+ * costs a minor collection the slots written, not its length; raw stores still log the whole object.
  * <p>Nothing moves yet, so the barrier is checked IN SHADOW: with {@code gcgen=1} the census attributes every
  * old->young edge to its source block, and a source whose bit is not set is a MISS ({@link #checkEdge}) -- a store
  * the barrier did not see. An edge out of a STATICS block is counted apart ({@link #fromStatics}): {@code putstatic}
@@ -61,6 +63,7 @@ final class WriteBarrier implements Uninterruptible
     static void init()
     {
         clear(Symbols.LOG_BITMAP, Symbols.LOG_BITMAP + (Symbols.LOG_SPAN >> 6));
+        clear(Symbols.SLOT_BITMAP, Symbols.SLOT_BITMAP + (Symbols.LOG_SPAN >> 6));
         clearSummary(0L, Symbols.LOG_SPAN);
     }
 
@@ -68,6 +71,7 @@ final class WriteBarrier implements Uninterruptible
     static void clearAll()
     {
         clear(Symbols.LOG_BITMAP, Symbols.LOG_BITMAP + (Symbols.LOG_SPAN >> 6));
+        clearSlots(0L, Symbols.LOG_SPAN);
         clearSummary(0L, Symbols.LOG_SPAN);
     }
 
@@ -79,6 +83,7 @@ final class WriteBarrier implements Uninterruptible
     static void clearHeap()
     {
         clear(bitmapOf(Heap.BASE), Symbols.LOG_BITMAP + (Symbols.LOG_SPAN >> 6));
+        clearSlots(Heap.BASE, Symbols.LOG_SPAN);
         clearSummary(Heap.BASE, Symbols.LOG_SPAN);
     }
 
@@ -109,7 +114,7 @@ final class WriteBarrier implements Uninterruptible
     static void checkEdge(long src, long dst)
     {
         checked = checked + 1L;
-        if (logged(src))
+        if (logged(src) || slotLogged(src))
         {
             return;
         }
@@ -179,7 +184,63 @@ final class WriteBarrier implements Uninterruptible
         }
         misses = 0L;
         clear(Symbols.LOG_BITMAP, Symbols.LOG_BITMAP + (Symbols.LOG_SPAN >> 6));
+        clearSlots(0L, Symbols.LOG_SPAN);
         clearSummary(0L, Symbols.LOG_SPAN);
+    }
+
+    /**
+     * Whether any slot of the block at {@code src} is in the slot log (an {@code aastore} logs the element, S7-4d').
+     * The census does not say which slot held the edge, so for an array this accepts any logged element: looser than
+     * the object check, but a barrier that logged nothing at all is still a miss.
+     */
+    private static boolean slotLogged(long src)
+    {
+        long tib = Address.fromLong(src).loadLong();
+        if (tib < VMGc.META_LOW || tib >= VMGc.META_HIGH || (tib & 7L) != 0L)
+        {
+            return false;                              // a layout block or raw data: never an aastore target
+        }
+        long type = Address.fromLong(tib).plus(ObjectModel.TIB_TYPE_SLOT * ObjectModel.WORD).loadLong();
+        if (type < VMGc.META_LOW || type >= VMGc.META_HIGH || (type & 7L) != 0L)
+        {
+            return false;
+        }
+        long isz = Address.fromLong(type).plus(ObjectModel.TYPE_INSTANCE_SIZE_OFFSET).loadLong();
+        if ((isz & ObjectModel.ARRAY_TYPE_TAG_MASK) != ObjectModel.ARRAY_TYPE_TAG)
+        {
+            return false;                              // not an array: only its start is ever logged
+        }
+        long len = Address.fromLong(src).plus(ObjectModel.ARRAY_LENGTH_OFFSET).loadLong();
+        long a = src + (long) ObjectModel.ARRAY_BASE_OFFSET;
+        long e = a + len * 8L;                         // the image's arrays too: no size in their status word
+        while (a < e)
+        {
+            long w = Address.fromLong(Symbols.SLOT_BITMAP + ((a >> 9) << 3)).loadLong();
+            if (((w >>> (int) ((a >> 3) & 63L)) & 1L) != 0L)
+            {
+                return true;
+            }
+            a += 8L;
+        }
+        return false;
+    }
+
+    /**
+     * Clear the slot log for memory {@code [lo, hi)} (32 KiB aligned) where the summary is dirty: every bit is set
+     * with its summary byte, so a clean byte's 64 words are already zero. Saves clearing 6 MiB per full collection.
+     */
+    private static void clearSlots(long lo, long hi)
+    {
+        long s = lo >> 15;
+        long sEnd = hi >> 15;
+        while (s < sEnd)
+        {
+            if (Address.fromLong(Symbols.LOG_SUMMARY + s).loadByte() == 0)
+            {
+                clear(Symbols.SLOT_BITMAP + (s << 9), Symbols.SLOT_BITMAP + (s << 9) + 512L);
+            }
+            s += 1L;
+        }
     }
 
     /** The bitmap word holding address {@code a}'s bit. */
