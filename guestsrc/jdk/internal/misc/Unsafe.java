@@ -228,7 +228,7 @@ public final class Unsafe
     public boolean compareAndSetReference(Object o, long offset, Object expected, Object x)
     {
         boolean ok = Address.fromLong(at(o, offset)).attempt(Address.fromObject(expected), Address.fromObject(x));
-        MetalBarrier.log(o);                               // a reference store the compiler cannot see (S7-2)
+        MetalBarrier.logAt(o, offset);                     // a reference store the compiler cannot see (S7-2)
         return ok;
     }
 
@@ -272,7 +272,7 @@ public final class Unsafe
         Address a = Address.fromLong(at(o, offset));
         if (a.attempt(Address.fromObject(expected), Address.fromObject(x)))
         {
-            MetalBarrier.log(o);
+            MetalBarrier.logAt(o, offset);
             return expected;
         }
         return a.loadAddress().toObject();
@@ -380,7 +380,7 @@ public final class Unsafe
             v = a.loadLong();
         }
         while (!a.attempt(v, nx));
-        MetalBarrier.log(o);
+        MetalBarrier.logAt(o, offset);
         return Magic.fromAddr(v);
     }
 
@@ -604,7 +604,7 @@ public final class Unsafe
     public void putReference(Object o, long offset, Object x)
     {
         Address.fromLong(at(o, offset)).store(Address.fromObject(x));
-        MetalBarrier.log(o);
+        MetalBarrier.logAt(o, offset);
     }
 
     public Object getReferenceAcquire(Object o, long offset)

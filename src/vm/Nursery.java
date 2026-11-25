@@ -115,6 +115,7 @@ final class Nursery implements Uninterruptible
     static long tRemset;                                         // the logged objects
     static long tDrain;                                          // residents and copies, scanned
     static long tAfter;
+    static long tRekey;                                          // ... of which the identity re-key (S7-4d'')
     static long tPinMax;
     static long slowTotal;                                       // the slowest minor phase and its parts (ticks)
     static long slowPin;
@@ -315,8 +316,8 @@ final class Nursery implements Uninterruptible
         StackRoots.minor = 0;
         long t2 = Magic.readCNTPCT_EL0();
         tFwd = tFwd + (t2 - t1);
-        statics();
-        heapStatics();
+        // Statics are no longer scanned whole (S7-4d''): putstatic, and every raw static store, logs its cell in
+        // the slot log, so the remembered set forwards those that changed. VERIFY checks them all after the drain.
         gcMaps();
         long t3 = Magic.readCNTPCT_EL0();
         tRoots = tRoots + (t3 - t2);
@@ -330,10 +331,19 @@ final class Nursery implements Uninterruptible
         long t4 = Magic.readCNTPCT_EL0();
         tRemset = tRemset + (t4 - t3);
         drain();
+        if (on == 2)
+        {
+            staticCheck = true;                        // every static must now name no evacuated block
+            statics();
+            heapStatics();
+            staticCheck = false;
+        }
         Heap.noCollect = 0;
         long t5 = Magic.readCNTPCT_EL0();
         tDrain = tDrain + (t5 - t4);
         IdentityHash.afterMinor();
+        long t5b = Magic.readCNTPCT_EL0();
+        tRekey = tRekey + (t5b - t5);
         rebuild();
         long t6 = Magic.readCNTPCT_EL0();
         tAfter = tAfter + (t6 - t5);
@@ -384,6 +394,11 @@ final class Nursery implements Uninterruptible
         }
         st.store(s | RESIDENT);
         pinnedTotal = pinnedTotal + 1L;
+        addPin(b);
+    }
+
+    private static void addPin(long b)
+    {
         if (pinN < (int) ((PINS_END - PINS) >> 3))
         {
             Address.fromLong(PINS + (long) pinN * 8L).store(b);
@@ -449,6 +464,11 @@ final class Nursery implements Uninterruptible
         {
             return;
         }
+        if (staticCheck)
+        {
+            checkStatic(a, w);
+            return;
+        }
         long n = forward(w);
         if (n != w)
         {
@@ -486,6 +506,7 @@ final class Nursery implements Uninterruptible
         if (n.isZero())
         {
             st.store(s | RESIDENT);                    // promotion failed: it stays, scanned in place
+            addPin(w);                                 // ... so rebuild() keeps it (and a full trace roots it)
             promotionFailures = promotionFailures + 1L;
             push(w);
             return w;
@@ -570,7 +591,38 @@ final class Nursery implements Uninterruptible
         }
     }
 
-    /** Heap statics blocks (classes loaded on the metal): roots too -- {@code putstatic} has no barrier. */
+    private static boolean staticCheck;
+
+    /**
+     * VERIFY, after the drain: a static naming a young block that is not resident was never forwarded -- a raw
+     * static store nothing logged (S7-4d''). Its block has been copied, so the static names the stale original.
+     */
+    private static void checkStatic(long a, long w)
+    {
+        long b = blockOf(w);
+        if (b != 0L && (Address.fromLong(b).plus(ObjectModel.STATUS_OFFSET).loadLong() & RESIDENT) != 0L)
+        {
+            return;
+        }
+        Uart.write(Magic.bytes("nursery: an UNLOGGED STATIC at "));
+        VM.printHex(a);
+        Uart.write(Magic.bytes(" names "));
+        VM.printHex(w);
+        if (a >= VM.staticsStart && a < VM.staticsEnd)
+        {
+            Uart.write(Magic.bytes(" (image statics, offset "));
+            VM.printDec((int) (a - VM.staticsStart));
+            Uart.write(Magic.bytes(" in out/statics-map.txt)"));
+        }
+        else
+        {
+            Uart.write(Magic.bytes(" (a heap statics block)"));
+        }
+        Uart.putc((byte) 0x0A);
+        halt(Magic.bytes("nursery: a static store was not logged"));
+    }
+
+    /** Heap statics blocks (classes loaded on the metal); since S7-4d'' only VERIFY's check walks them. */
     private static void heapStatics()
     {
         int i = 0;
@@ -981,42 +1033,45 @@ final class Nursery implements Uninterruptible
         }
     }
 
-    /** After the copy: each core's free runs are what is not resident; residents become ordinary young blocks. */
+    /**
+     * After the copy: each core's free runs are what is not resident; residents become ordinary young blocks. The
+     * residents are exactly the pin list ({@link #pinWord}, and {@link #forward}'s promotion failures), so the gaps
+     * come from sorting it -- S7-4d'' -- not from walking every block of every nursery by size (22 of 67 ms of minor
+     * phases on virt). VERIFY still walks, to check what this built.
+     */
     private static void rebuild()
     {
+        sortPins();
+        int i = 0;
         int c = 0;
         while (c < 4)
         {
-            long o = BASE + (long) c * SLOT_MAX;
-            long top = o + slot;
+            long base = BASE + (long) c * SLOT_MAX;
+            long top = base + slot;
             int n = 0;
-            long run = 0L;
-            while (o < top)
+            long run = base;
+            while (i < pinN)
             {
-                Address st = Address.fromLong(o).plus(ObjectModel.STATUS_OFFSET);
-                long s = st.loadLong();
-                long size = s & -8L;
-                if (size < (long) ObjectModel.HEADER_SIZE || o + size > top)
+                long b = Address.fromLong(PINS + (long) i * 8L).loadLong();
+                if (b >= top)
                 {
-                    corrupt(o, size);
-                    break;
+                    break;                             // the next core's
                 }
-                if ((s & RESIDENT) != 0L)
+                Address st = Address.fromLong(b).plus(ObjectModel.STATUS_OFFSET);
+                long size = st.loadLong() & -8L;
+                if (size < (long) ObjectModel.HEADER_SIZE || b + size > top || b < run)
                 {
-                    st.store(size);
-                    if (run != 0L)
-                    {
-                        n = gap(c, n, run, o);
-                        run = 0L;
-                    }
+                    corrupt(b, size);
                 }
-                else if (run == 0L)
+                st.store(size);                        // no longer RESIDENT
+                if (b > run)
                 {
-                    run = o;
+                    n = gap(c, n, run, b);
                 }
-                o = o + size;
+                run = b + size;
+                i += 1;
             }
-            if (run != 0L)
+            if (run < top)
             {
                 n = gap(c, n, run, top);
             }
@@ -1031,6 +1086,66 @@ final class Nursery implements Uninterruptible
             {
                 cur[c] = top;
                 lim[c] = top;
+            }
+            c += 1;
+        }
+        if (on == 2)
+        {
+            checkRebuild();
+        }
+    }
+
+    /** The pin list in address order: an insertion sort (a few dozen entries, a few thousand at most). */
+    private static void sortPins()
+    {
+        int i = 1;
+        while (i < pinN)
+        {
+            long v = Address.fromLong(PINS + (long) i * 8L).loadLong();
+            int j = i - 1;
+            while (j >= 0 && Address.fromLong(PINS + (long) j * 8L).loadLong() > v)
+            {
+                Address.fromLong(PINS + (long) (j + 1) * 8L).store(Address.fromLong(PINS + (long) j * 8L).loadLong());
+                j -= 1;
+            }
+            Address.fromLong(PINS + (long) (j + 1) * 8L).store(v);
+            i += 1;
+        }
+    }
+
+    /**
+     * VERIFY: walk every nursery by size, as the rebuild used to. Every block must be well formed and none still
+     * RESIDENT, and each recorded gap must be a FILLER of exactly its size -- what the sorted pin list missed would
+     * show here as a resident left marked, or a gap over a live block.
+     */
+    private static void checkRebuild()
+    {
+        int c = 0;
+        while (c < 4)
+        {
+            long o = BASE + (long) c * SLOT_MAX;
+            long top = o + slot;
+            while (o < top)
+            {
+                long s = Address.fromLong(o).plus(ObjectModel.STATUS_OFFSET).loadLong();
+                long size = s & -8L;
+                if (size < (long) ObjectModel.HEADER_SIZE || o + size > top || (s & RESIDENT) != 0L)
+                {
+                    corrupt(o, s);
+                    break;
+                }
+                o = o + size;
+            }
+            int g = 0;
+            while (g < gapN[c])
+            {
+                long lo = gapLo[c * GAPS + g];
+                long s = Address.fromLong(lo).plus(ObjectModel.STATUS_OFFSET).loadLong();
+                if ((s & FILLER) == 0L || (s & -8L) != gapHi[c * GAPS + g] - lo)
+                {
+                    corrupt(lo, s);
+                }
+                g += 1;
             }
             c += 1;
         }

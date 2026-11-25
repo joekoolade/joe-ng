@@ -5287,6 +5287,7 @@ public final class Loader
             i += 1;
         }
         Address.fromLong(slot).store(tab);
+        WriteBarrier.logSlot(slot);                      // a young array in a static cell: the slot log (S7-4d'')
     }
 
 

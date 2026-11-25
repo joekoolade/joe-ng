@@ -145,6 +145,7 @@ final class Primitives
         }
         long m = primitiveMirror(descChar);
         Address.fromLong(slot).store(m);
+        WriteBarrier.logSlot(slot);                 // a static cell: the slot log (S7-4d'')
         if (m != 0L)                                    // ... and so is a mirror the Type table cannot yet build
         {
             BootSeeds.sdPrimMask |= 1 << bit;

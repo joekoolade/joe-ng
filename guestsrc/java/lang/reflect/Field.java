@@ -294,8 +294,15 @@ public final class Field extends AccessibleObject implements Member
                 throw new IllegalArgumentException(name);
             }
             Address.fromLong(a).store(value == null ? 0L : Magic.addrOf(value));
-            jdk.internal.misc.MetalBarrier.log(obj);       // a raw reference store: log the object (S7-2); a static
-            return;                                        //   (obj null) is a root and needs none
+            if (Modifier.isStatic(modifiers))
+            {
+                jdk.internal.misc.MetalBarrier.logSlot(a);  // a static's cell: the slot log, as putstatic (S7-4d'')
+            }
+            else
+            {
+                jdk.internal.misc.MetalBarrier.log(obj);   // a raw reference store: log the object (S7-2)
+            }
+            return;
         }
         if (value instanceof Integer v)
         {
