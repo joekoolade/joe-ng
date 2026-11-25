@@ -401,6 +401,8 @@ final class ClassInitializer
         Loader.lzCompiling = true;
         Loader.lzPullN = 0;
         Loader.lzRetried = false;
+        int myRetry = Loader.odRetries;                       // THIS compile's retries so far: captured, and the
+        Loader.odRetries = 0;                                 //   global cleared so a NESTED compile gets its own
         // isSync = 0 STATED, not defaulted: a <clinit> is never synchronized (JVMS 2.9.2 -- the class
         // initializer's ACC_SYNCHRONIZED is ignored), and the convenience overload that used to supply
         // that 0 silently is deleted, because it is what let THREE compile paths drop the monitor without
@@ -417,14 +419,18 @@ final class ClassInitializer
         }
         Loader.lzRetried = outerRetried;
         Loader.lzPullN = outerPullN;
-        if (pulled && !Loader.odRetried)
+        if (pulled && myRetry >= Loader.OD_RETRY_MAX)
+        {
+            Loader.reportRetryExhausted();                   // the retry pulled again: say so, never register silently
+        }
+        if (pulled && myRetry < Loader.OD_RETRY_MAX)
         {
             // Recompile with the pulled classes present. Everything is re-derived from `i`, so the retry is
             // this method again; the first buffer is abandoned before anything can have called it, since
-            // clinitEntry[i] is only assigned below. odRetried bounds it to one attempt.
-            Loader.odRetried = true;
+            // clinitEntry[i] is only assigned below. odRetries bounds it (Loader.OD_RETRY_MAX).
+            Loader.odRetries = myRetry + 1;
             long again = clinitEntryOf(i);
-            Loader.odRetried = false;
+            Loader.odRetries = 0;
             return again;
         }
         LazyCompiler.registerCoCompiled();                           // a private static helper the initializer calls

@@ -113,6 +113,8 @@ public final class A64Test
         T.eqWord("STR  x0,[x1]",   0xF9000020, A64.strx(0, 1, 0));
         T.eqWord("LDR  x0,[x1]",   0xF9400020, A64.ldrx(0, 1, 0));
         T.eqWord("STRB w0,[x1]",   0x39000020, A64.strb(0, 1, 0));
+        T.eqWord("STRB wzr,[x16,x9]", 0x38296A1F, asm.A64Enc.strbReg(31, 16, 9));   // llvm-mc
+        T.eqWord("STRB w0,[x1,x2]",   0x38226820, asm.A64Enc.strbReg(0, 1, 2));     // llvm-mc
         T.eqWord("LDRB w0,[x1]",   0x39400020, A64.ldrb(0, 1, 0));
         T.eqWord("LDRSB x0,[x1]",  0x39800020, asm.A64Enc.ldrsb(0, 1, 0));
         T.eqWord("LDRSB x9,[x10,#3]", 0x39800D49, asm.A64Enc.ldrsb(9, 10, 3));

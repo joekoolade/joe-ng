@@ -19,8 +19,9 @@ import magic.Magic;
  * The write barrier for guest code that stores a reference WITHOUT a {@code putfield}/{@code aastore} -- through
  * {@code magic.Address} (Unsafe, the field updaters). The compiler emits the barrier after every reference
  * {@code putfield} and {@code aastore}; a raw store is invisible to it, so its writer logs the object here: the same
- * bit in the same log bitmap (frames/GC arc S7-2, {@code vm.WriteBarrier}). The constants are the compiler's,
- * inlined by javac.
+ * bit in the same log bitmap (frames/GC arc S7-2, {@code vm.WriteBarrier}), and the same summary byte (S7-4d: a
+ * bit set without it is never scanned, and the object's young referents go stale). The constants are the
+ * compiler's, inlined by javac.
  */
 public final class MetalBarrier
 {
@@ -42,5 +43,6 @@ public final class MetalBarrier
         }
         Address w = Address.fromLong(Symbols.LOG_BITMAP + ((a >> 9) << 3));
         w.store(w.loadLong() | (1L << (int) ((a >> 3) & 63L)));
+        Address.fromLong(Symbols.LOG_SUMMARY + (a >> 15)).store((byte) 0);   // and its summary byte: 0 = dirty (S7-4d)
     }
 }

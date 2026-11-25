@@ -269,6 +269,8 @@ final class LazyCompiler
         Loader.lzCompiling = true;                                // collect the classes this body's statics NAME
         Loader.lzPullN = 0;
         Loader.lzRetried = false;
+        int myRetry = Loader.odRetries;                       // THIS compile's retries so far: captured, and the
+        Loader.odRetries = 0;                                 //   global cleared so a NESTED compile gets its own
         Loader.compile(code, ClassBytes.codeLength(code), descOff, isStatic, isSync);
         Loader.lzCompiling = outerCompiling;
         Loader.compileReuseTib = reuseWas;
@@ -281,16 +283,20 @@ final class LazyCompiler
         }
         Loader.lzRetried = outerRetried;
         Loader.lzPullN = outerPullN;
-        if (pulled && !Loader.odRetried)
+        if (pulled && myRetry >= Loader.OD_RETRY_MAX)
+        {
+            Loader.reportRetryExhausted();                   // the retry pulled again: say so, never register silently
+        }
+        if (pulled && myRetry < Loader.OD_RETRY_MAX)
         {
             // Everything above is re-derived from (type, nameArr, descArr), so the retry is just this method
             // again -- with the pulled classes present, so the getstatic resolves to the real cell. The first
             // buffer is abandoned: nothing has registered it or stored it in a TIB slot, so no caller can have
-            // run it. `odRetried` bounds it to one attempt, since a class that is still missing after the pull
+            // run it. `odRetries` bounds it (Loader.OD_RETRY_MAX), since a class that is still missing after the pull
             // would otherwise re-note and recurse for ever.
-            Loader.odRetried = true;
+            Loader.odRetries = myRetry + 1;
             int r = compileMethodOnDemand(type, nameArr, descArr);
-            Loader.odRetried = false;
+            Loader.odRetries = 0;
             return r;
         }
         MethodRegistry.registerAll();                                     // register the just-compiled method(s) -> globalBuf
@@ -590,6 +596,8 @@ final class LazyCompiler
         Loader.lzCompiling = true;                             // same deferred-pull retry as compileMethodOnDemand
         Loader.lzPullN = 0;
         Loader.lzRetried = false;
+        int myRetry = Loader.odRetries;                       // THIS compile's retries so far: captured, and the
+        Loader.odRetries = 0;                                 //   global cleared so a NESTED compile gets its own
         Loader.compile(code, ClassBytes.codeLength(code), descOff, isStatic, isSync);
         Loader.lzCompiling = outerCompiling;
         Loader.compileReuseTib = reuseWas;
@@ -602,11 +610,15 @@ final class LazyCompiler
         }
         Loader.lzRetried = outerRetried;
         Loader.lzPullN = outerPullN;
-        if (pulled && !Loader.odRetried)
+        if (pulled && myRetry >= Loader.OD_RETRY_MAX)
         {
-            Loader.odRetried = true;                           // re-derived from (clsU, nameU, descU), like the twin above
+            Loader.reportRetryExhausted();                   // the retry pulled again: say so, never register silently
+        }
+        if (pulled && myRetry < Loader.OD_RETRY_MAX)
+        {
+            Loader.odRetries = myRetry + 1;                           // re-derived from (clsU, nameU, descU), like the twin above
             long r = compileSigOnDemand(clsU, nameU, descU);
-            Loader.odRetried = false;
+            Loader.odRetries = 0;
             return r;
         }
         MethodRegistry.registerAll();

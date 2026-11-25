@@ -3751,16 +3751,171 @@ public final class VM
             reportJitTableFull(Magic.bytes("frame"), jitFrameCount);
             return;
         }
-        Address e = jitFrameTable.plus(jitFrameCount * 24L);
+        // SORTED BY CODE START, both tables at the same index, so a lookup binary-searches (jitIndex). The arena
+        // reuses freed code, so compile order is not address order: the entries above this one shift up first.
+        // The compactions keep relative order, and swept code drops its entries, so ranges never overlap.
+        // ORDER MATTERS for a reader on another core (an exception unwind runs while a compile inserts): the
+        // last entry is duplicated into the new slot BEFORE the count grows, so every visible entry is always a
+        // real one or a duplicate of its neighbour, and no live method's range is ever missing.
+        long n = jitFrameCount;
+        long pos = jitInsertIndex(codeStart.toLong());
+        if (pos > 0L && jitFrameTable.plus((pos - 1L) * 24L).loadLong() == codeStart.toLong())
+        {
+            // The SAME start again: a trampoline re-published by registerTrampFrames without a reset between, or
+            // code at an address whose old entry is gone. Replace it in place -- the newest describes the code
+            // there now -- rather than keep two entries a search could pick between.
+            Address re = jitFrameTable.plus((pos - 1L) * 24L);
+            Address rl = jitLocalTable.plus((pos - 1L) * 24L);
+            re.plus(8L).store(codeEnd);
+            re.plus(16L).store(frameSize);
+            rl.plus(8L).store(codeEnd);
+            rl.plus(16L).store(gcMap);
+            return;
+        }
+        if (pos < n)
+        {
+            copyEntry(jitFrameTable, n - 1L, n);
+            copyEntry(jitLocalTable, n - 1L, n);
+            jitFrameCount = n + 1L;
+            jitLocalCount = n + 1L;
+            long j = n - 1L;
+            while (j > pos)
+            {
+                copyEntry(jitFrameTable, j - 1L, j);
+                copyEntry(jitLocalTable, j - 1L, j);
+                j -= 1L;
+            }
+        }
+        Address e = jitFrameTable.plus(pos * 24L);
         e.store(codeStart);
         e.plus(8L).store(codeEnd);
         e.plus(16L).store(frameSize);
-        Address le = jitLocalTable.plus(jitLocalCount * 24L);               // same pc-range, parallel table (tableValueIn reads it)
+        Address le = jitLocalTable.plus(pos * 24L);                         // same pc-range, parallel table
         le.store(codeStart);
         le.plus(8L).store(codeEnd);
         le.plus(16L).store(gcMap);
-        jitFrameCount = jitFrameCount + 1L;
-        jitLocalCount = jitLocalCount + 1L;
+        if (pos == n)
+        {
+            jitFrameCount = n + 1L;                                         // appended: visible once written
+            jitLocalCount = n + 1L;
+        }
+    }
+
+    /** Copy the 24-byte entry {@code from} of {@code table} over entry {@code to}. */
+    private static void copyEntry(Address table, long from, long to)
+    {
+        Address src = table.plus(from * 24L);
+        Address dst = table.plus(to * 24L);
+        dst.store(src.loadLong());
+        dst.plus(8L).store(src.plus(8L).loadLong());
+        dst.plus(16L).store(src.plus(16L).loadLong());
+    }
+
+    /** The first index of the (sorted) JIT frame table whose code starts above {@code start}. */
+    private static long jitInsertIndex(long start)
+    {
+        long lo = 0L;
+        long hi = jitFrameCount;
+        while (lo < hi)
+        {
+            long mid = (lo + hi) >>> 1;
+            if (jitFrameTable.plus(mid * 24L).loadLong() <= start)
+            {
+                lo = mid + 1L;
+            }
+            else
+            {
+                hi = mid;
+            }
+        }
+        return lo;
+    }
+
+    /**
+     * The index of the JIT method covering {@code pc} in the parallel JIT frame and local tables, or -1. They are
+     * kept sorted by code start ({@link #addJitFrame}); a linear search of them was each frame-lookup cache miss,
+     * ~9 us on virt -- most of a minor collection's pin pass outside its bitmap builds (frames/GC arc S7-4d).
+     */
+    static long jitIndex(long pc)
+    {
+        if (jitFrameTable.isZero())
+        {
+            return -1L;
+        }
+        long i = jitInsertIndex(pc) - 1L;              // the last entry starting at or below pc
+        if (i < 0L || pc >= jitFrameTable.plus(i * 24L).plus(8L).loadLong())
+        {
+            i = -1L;
+        }
+        if (Nursery.on == 2)
+        {
+            checkJitIndex(pc, i);                      // VERIFY: the linear search must agree
+        }
+        return i;
+    }
+
+    /** Whether JIT table entries {@code a} and {@code b} say the same thing (range, frame size and map). */
+    private static boolean sameEntry(long a, long b)
+    {
+        Address ea = jitFrameTable.plus(a * 24L);
+        Address eb = jitFrameTable.plus(b * 24L);
+        return ea.loadLong() == eb.loadLong() && ea.plus(8L).loadLong() == eb.plus(8L).loadLong()
+               && ea.plus(16L).loadLong() == eb.plus(16L).loadLong()
+               && jitLocalTable.plus(a * 24L + 16L).loadLong() == jitLocalTable.plus(b * 24L + 16L).loadLong();
+    }
+
+    /** VERIFY ({@code gcnursery=2}): halt when the binary search disagrees with a linear one over the JIT tables. */
+    private static void checkJitIndex(long pc, long got)
+    {
+        long want = -1L;
+        long k = 0L;
+        while (k < jitFrameCount)
+        {
+            Address e = jitFrameTable.plus(k * 24L);
+            if (pc >= e.loadLong() && pc < e.plus(8L).loadLong())
+            {
+                want = k;
+                break;
+            }
+            k += 1L;
+        }
+        if (want != got && (want < 0L || got < 0L || !sameEntry(want, got)))
+        {
+            Uart.write(Magic.bytes("\nJIT TABLE ORDER: pc="));
+            printHex(pc);
+            Uart.write(Magic.bytes(" binary="));
+            printHex(got);
+            Uart.write(Magic.bytes(" linear="));
+            printHex(want);
+            Uart.write(Magic.bytes("\n"));
+            long q = 0L;
+            while (q < jitFrameCount && q < 6L)
+            {
+                Address e = jitFrameTable.plus(q * 24L);
+                Address le = jitLocalTable.plus(q * 24L);
+                Uart.write(Magic.bytes("  ["));
+                printHex(e.loadLong());
+                Uart.write(Magic.bytes(", "));
+                printHex(e.plus(8L).loadLong());
+                Uart.write(Magic.bytes(") frame="));
+                printHex(e.plus(16L).loadLong());
+                Uart.write(Magic.bytes(" map="));
+                printHex(le.plus(16L).loadLong());
+                Uart.write(Magic.bytes("\n"));
+                q += 1L;
+            }
+            while (true)
+            {
+                Magic.wfe();
+            }
+        }
+    }
+
+    /** The third word of the JIT local table's entry covering {@code pc}, or -1 when none does. */
+    private static long jitLocalValue(Address pc)
+    {
+        long i = jitIndex(pc.toLong());
+        return i >= 0L ? jitLocalTable.plus(i * 24L).plus(16L).loadLong() : -1L;
     }
 
     /**
@@ -3781,7 +3936,7 @@ public final class VM
         }
         if (i == -1L)
         {
-            return tableValueIn(jitLocalTable, jitLocalCount, pc);   // not an image method: runtime JIT'd ones
+            return jitLocalValue(pc);                                // not an image method: runtime JIT'd ones
         }
         long w = tableValueIn(localTable, localCount, pc);           // unsorted image table: the linear search
         if (w > 0L)
@@ -3792,7 +3947,7 @@ public final class VM
         {
             return 0L;
         }
-        return tableValueIn(jitLocalTable, jitLocalCount, pc);       // runtime JIT'd methods; -1 = UNKNOWN
+        return jitLocalValue(pc);                                    // runtime JIT'd methods; -1 = UNKNOWN
     }
 
     /** Start of the code range covering {@code pc} in the image or JIT local table, or 0 when none does. */
@@ -3808,7 +3963,8 @@ public final class VM
         {
             return s;
         }
-        return tableStartIn(jitLocalTable, jitLocalCount, pc);
+        long j = jitIndex(pc.toLong());
+        return j >= 0L ? jitLocalTable.plus(j * 24L).loadLong() : 0L;
     }
 
     /** 1 = the image's frame/local tables are sorted by code start (binary search), 2 = not, 0 = not checked. */
@@ -4031,7 +4187,8 @@ public final class VM
         {
             return fs;
         }
-        fs = tableValueIn(jitFrameTable, jitFrameCount, pc);      // runtime JIT'd methods
+        long j = jitIndex(pc.toLong());                           // runtime JIT'd methods
+        fs = j >= 0L ? jitFrameTable.plus(j * 24L).plus(16L).loadLong() : -1L;
         // 0 = NO FRAME is this method's long-standing contract -- VMUnwind reads it as "the exception reached
         // the top uncaught". Preserved deliberately: a frame entry is only ever added with frameSize > 0, so
         // for THIS table absent and zero cannot be confused anyway.

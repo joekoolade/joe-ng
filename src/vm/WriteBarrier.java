@@ -61,12 +61,14 @@ final class WriteBarrier implements Uninterruptible
     static void init()
     {
         clear(Symbols.LOG_BITMAP, Symbols.LOG_BITMAP + (Symbols.LOG_SPAN >> 6));
+        clearSummary(0L, Symbols.LOG_SPAN);
     }
 
     /** The nursery is armed (S7-4a): nothing logged before can name a young object. */
     static void clearAll()
     {
         clear(Symbols.LOG_BITMAP, Symbols.LOG_BITMAP + (Symbols.LOG_SPAN >> 6));
+        clearSummary(0L, Symbols.LOG_SPAN);
     }
 
     /**
@@ -77,6 +79,7 @@ final class WriteBarrier implements Uninterruptible
     static void clearHeap()
     {
         clear(bitmapOf(Heap.BASE), Symbols.LOG_BITMAP + (Symbols.LOG_SPAN >> 6));
+        clearSummary(Heap.BASE, Symbols.LOG_SPAN);
     }
 
     /** Log the object at {@code o}: what the compiled barrier does, for VM code's raw reference stores. */
@@ -88,6 +91,7 @@ final class WriteBarrier implements Uninterruptible
         }
         Address w = Address.fromLong(Symbols.LOG_BITMAP + ((o >> 9) << 3));
         w.store(w.loadLong() | (1L << (int) ((o >> 3) & 63L)));
+        Address.fromLong(Symbols.LOG_SUMMARY + (o >> 15)).store((byte) 0);   // dirty, as the compiled barrier does
     }
 
     /** Whether the object at {@code o} has been logged since the bitmap was last cleared. */
@@ -175,6 +179,7 @@ final class WriteBarrier implements Uninterruptible
         }
         misses = 0L;
         clear(Symbols.LOG_BITMAP, Symbols.LOG_BITMAP + (Symbols.LOG_SPAN >> 6));
+        clearSummary(0L, Symbols.LOG_SPAN);
     }
 
     /** The bitmap word holding address {@code a}'s bit. */
@@ -199,6 +204,18 @@ final class WriteBarrier implements Uninterruptible
             p = p + 8L;
         }
         return n;
+    }
+
+    /** Mark the summary bytes for memory {@code [lo, hi)} (both 256 KiB aligned) clean: 0xFF (zero is dirty). */
+    private static void clearSummary(long lo, long hi)
+    {
+        long p = Symbols.LOG_SUMMARY + (lo >> 15);
+        long to = Symbols.LOG_SUMMARY + (hi >> 15);
+        while (p < to)
+        {
+            Address.fromLong(p).store(-1L);
+            p = p + 8L;
+        }
     }
 
     private static void clear(long from, long to)

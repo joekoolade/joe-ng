@@ -64,6 +64,13 @@ public final class Heap implements Uninterruptible
     static final int SIZE_CLASSES = SMALL_MAX / 8 + 1;
     /** Bytes on core c's exact-size lists, at {@code SIZE_BYTES + c*8} -- what the miss diagnostics add back. */
     static final long SIZE_BYTES = 0x03FF_1900L;
+    /**
+     * Which of core c's exact-size lists are non-empty: bit k of the two words at {@code SIZE_MASK + c*16} (k < 64 in
+     * the first, k = 64 in the second). {@link #takeSized} wants the smallest non-empty class at or above a size,
+     * and stepping through the heads to find it was ~58 empty heads per allocation once the lists ran dry -- the
+     * usual state right after a collection, and so of every minor collection's copies (frames/GC arc S7-4d).
+     */
+    static final long SIZE_MASK = 0x03FF_1A00L;
     /** Start of CORE 0's allocation region (96 MiB) — above the image (from 0x80000, below IMAGE_CEILING), the
      *  48-64 MiB scratch band and the 64-96 MiB JIT code arena; grows up. */
     public static final long BASE      = 0x0600_0000L;   // 96 MiB: above the JIT code arena (see CODE_BASE)
@@ -1524,6 +1531,18 @@ public final class Heap implements Uninterruptible
      */
     static int promoteFast = 0;
 
+    // S7-4d probe: where a minor collection's copies find mature space (allocInGc, default path).
+    static int lastPath;                                // 1 = exact-size list, 2 = general list, 3 = bump
+    static long sizedProbes;                            // size classes looked at by takeSized, all callers
+    static long promoProbes;
+    static long promoSized;
+    static long promoGeneral;
+    static long promoBump;
+    static long promoWalked;                            // general-list blocks walked by copies
+    static long promoSizedTicks;
+    static long promoGeneralTicks;
+    static long promoBumpTicks;
+
     /** 1 while a minor collection copies into the mature heap: an allocation that would collect returns zero. */
     static int noCollect;
 
@@ -1538,9 +1557,48 @@ public final class Heap implements Uninterruptible
      */
     static Address allocInGc(int size)
     {
+        copyNoZero = 1;
+        Address got = allocInGcInner(size);
+        copyNoZero = 0;
+        return got;
+    }
+
+    /**
+     * 1 while {@link #allocInGc} runs: {@link #zeroPayload} skips the payload, because the caller ({@code
+     * Nursery.forward}) overwrites every word of it up to the copied size at once and zeroes what lies past that
+     * (a block handed out whole can be 8 bytes over). Zeroing first was half the cost of a copy's allocation.
+     */
+    static int copyNoZero;
+
+    private static Address allocInGcInner(int size)
+    {
         if (promoteFast == 0)
         {
-            return allocLocked(size);
+            long t0 = Magic.readCNTPCT_EL0();
+            long probes0 = sizedProbes;
+            lastPath = 0;
+            scanFreeBlocks = 0L;
+            Address r = allocLocked(size);
+            long dt = Magic.readCNTPCT_EL0() - t0;
+            promoProbes = promoProbes + (sizedProbes - probes0);
+            if (lastPath == 1)
+            {
+                promoSized = promoSized + 1L;
+                promoSizedTicks = promoSizedTicks + dt;
+            }
+            else if (lastPath == 2)
+            {
+                promoGeneral = promoGeneral + 1L;
+                promoGeneralTicks = promoGeneralTicks + dt;
+                promoWalked = promoWalked + scanFreeBlocks;
+            }
+            else
+            {
+                promoBump = promoBump + 1L;
+                promoBumpTicks = promoBumpTicks + dt;
+                promoWalked = promoWalked + scanFreeBlocks;
+            }
+            return r;
         }
         int aligned = (size + 7) & -8;
         if (aligned < ObjectModel.HEADER_SIZE)
@@ -1693,6 +1751,7 @@ public final class Heap implements Uninterruptible
                 Address sized = takeSized(core, aligned);
                 if (!sized.isZero())
                 {
+                    lastPath = 1;
                     lastFromFreeList = 1;
                     zeroPayload(sized, aligned);
                     if (core == 0)
@@ -1727,6 +1786,7 @@ public final class Heap implements Uninterruptible
                     {
                         prev.store(next);
                     }
+                    lastPath = 2;
                     lastFromFreeList = 1;
                     zeroPayload(f, aligned);                // Java requires 0/default fields+elements
                     // SPLIT the remainder off rather than handing back the whole block. Without this a
@@ -1837,6 +1897,13 @@ public final class Heap implements Uninterruptible
      */
     private static void zeroPayload(Address base, int aligned)
     {
+        if (copyNoZero != 0)
+        {
+            base.plus(ObjectModel.TIB_OFFSET).store(0L);
+            Address cst = base.plus(ObjectModel.STATUS_OFFSET);
+            cst.store(cst.loadLong() & ~FREE_FLAG);
+            return;                                         // a minor collection's copy: see copyNoZero
+        }
         base.plus(ObjectModel.TIB_OFFSET).store(0L);        // Also zero offset 0 (the TIB slot). A RAW allocation
         // (TIB / itableDir / imap / a code buffer) that reads offset 0 before its caller sets it would otherwise get
         // garbage on a warm reboot (RAM isn't cleared on a guest-triggered reset) -> intermittent wild branches.
@@ -2057,6 +2124,8 @@ public final class Heap implements Uninterruptible
             k += 1;
         }
         Address.fromLong(SIZE_BYTES + core * 8L).store(0L);
+        Address.fromLong(SIZE_MASK + core * 16L).store(0L);
+        Address.fromLong(SIZE_MASK + core * 16L + 8L).store(0L);
     }
 
     /**
@@ -2068,28 +2137,51 @@ public final class Heap implements Uninterruptible
     private static Address takeSized(int core, int aligned)
     {
         Address heads = Address.fromLong(SIZE_HEADS + (long) core * SIZE_CLASSES * 8L);
-        int k = aligned >> 3;
-        while (k < SIZE_CLASSES)
+        Address mask = Address.fromLong(SIZE_MASK + (long) core * 16L);
+        int k = sizedClassAtLeast(mask, aligned >> 3);
+        if (k < 0)
         {
-            Address cell = heads.plus(k * 8);
-            Address f = cell.loadAddress();
-            if (!f.isZero())
-            {
-                long size = (long) k * 8L;
-                cell.store(f.loadAddress());                                  // pop
-                Address bytes = Address.fromLong(SIZE_BYTES + core * 8L);
-                bytes.store(bytes.loadLong() - size);
-                long rest = size - (long) aligned;
-                if (rest >= (long) ObjectModel.HEADER_SIZE)
-                {
-                    f.plus(ObjectModel.STATUS_OFFSET).store((long) aligned);
-                    addFree(f.plus(aligned), rest);
-                }
-                return f;
-            }
-            k += 1;
+            return Address.zero();
         }
-        return Address.zero();
+        sizedProbes = sizedProbes + 1L;
+        Address cell = heads.plus(k * 8);
+        Address f = cell.loadAddress();
+        long size = (long) k * 8L;
+        Address next = f.loadAddress();
+        cell.store(next);                                                 // pop
+        if (next.isZero())
+        {
+            Address w = mask.plus((long) (k >> 6) * 8L);
+            w.store(w.loadLong() & ~(1L << (k & 63)));                    // that list is empty now
+        }
+        Address bytes = Address.fromLong(SIZE_BYTES + core * 8L);
+        bytes.store(bytes.loadLong() - size);
+        long rest = size - (long) aligned;
+        if (rest >= (long) ObjectModel.HEADER_SIZE)
+        {
+            f.plus(ObjectModel.STATUS_OFFSET).store((long) aligned);
+            addFree(f.plus(aligned), rest);
+        }
+        return f;
+    }
+
+    /** The smallest size class at or above {@code k} whose list is non-empty, by the core's {@link #SIZE_MASK}
+     *  words at {@code mask}; -1 if none. */
+    private static int sizedClassAtLeast(Address mask, int k)
+    {
+        if (k < 64)
+        {
+            long lo = mask.loadLong() & (-1L << k);
+            if (lo != 0L)
+            {
+                return Nursery.lowBit(lo);
+            }
+        }
+        if (k <= 64 && (mask.plus(8L).loadLong() & 1L) != 0L)
+        {
+            return 64;
+        }
+        return -1;
     }
 
     /** Add a reclaimed block to the current core's free list: its exact-size list when small, else the general one. */
@@ -2107,6 +2199,9 @@ public final class Heap implements Uninterruptible
             freeCell = Address.fromLong(SIZE_HEADS + ((long) core * SIZE_CLASSES + (size >> 3)) * 8L);
             Address bytes = Address.fromLong(SIZE_BYTES + core * 8L);
             bytes.store(bytes.loadLong() + size);
+            int k = (int) (size >> 3);
+            Address w = Address.fromLong(SIZE_MASK + (long) core * 16L + (long) (k >> 6) * 8L);
+            w.store(w.loadLong() | (1L << (k & 63)));
         }
         a.store(freeCell.loadAddress());                      // next
         a.plus(ObjectModel.STATUS_OFFSET).store(size | FREE_FLAG);   // size, and "on a free list"

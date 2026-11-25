@@ -3517,7 +3517,32 @@ public final class Loader
     static boolean lzRetried;
     /** Bounds the ON-DEMAND compile paths to one pull-and-retry each. Separate from {@link #lzRetried},
      *  which those paths save and restore around their own attempt so a nested compile is unaffected. */
-    static boolean odRetried;
+    static int odRetries;
+
+    /** Recompiles an on-demand compile may make while each attempt pulls a class it had not loaded: a chain
+     *  (each pull's class names the next) converges in a few; a pull that never completes still ends. */
+    static final int OD_RETRY_MAX = 3;
+
+    /**
+     * An on-demand compile's RETRY also pulled a class, so its relocations were dropped and the parse cursor now
+     * names the pulled class. Said aloud, because the compile then registers whatever the cursor names: a
+     * method that never reaches the registry, found later as `LINK FAILED ... class OK but no body`.
+     *
+     * <p>Two ways it happened before frames/GC arc S7-4d. A compile NESTED inside another compile's retry inherited
+     * the global "already retried" flag and got no retry of its own; and ONE retry was the whole budget, while a
+     * pull can name a class whose own pull is only discovered by the retry -- VERIFY's timing had {@code
+     * ClassLoader.<init>} pull twice, the second time {@code java/security/cert/Certificate}. Each compile now
+     * keeps its own count, up to {@link #OD_RETRY_MAX}.
+     */
+    static void reportRetryExhausted()
+    {
+        Uart.write(Magic.bytes("\n  COMPILE RETRY PULLED AGAIN: the on-demand compile of a method in "));
+        if (gView != null && gView.thisNameOff != 0)
+        {
+            printUtf8Capped(gView.base.plus(gView.thisNameOff));
+        }
+        Uart.write(Magic.bytes(" (the cursor, after the pull) is registered under the wrong class\n"));
+    }
 
     /** Note that the body being compiled reads a static of the (unloaded) class named at {@code clsU}.
      *  False if it is not worth retrying for -- absent from the classDir, denylisted, or the list is full. */
