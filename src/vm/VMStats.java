@@ -297,6 +297,14 @@ public final class VMStats
         i = put(arr, len, i, ticksToUs(Nursery.slowAfter));
         i = put(arr, len, i, Nursery.slowCopied);
         i = put(arr, len, i, ticksToUs(Nursery.tPromoteAlloc));            // ... mature allocations for copies (us)
+        i = put(arr, len, i, Heap.promoSized);                             // S7-4d: ... from an exact-size list
+        i = put(arr, len, i, ticksToUs(Heap.promoSizedTicks));
+        i = put(arr, len, i, Heap.promoGeneral);                           // ... from the general list
+        i = put(arr, len, i, ticksToUs(Heap.promoGeneralTicks));
+        i = put(arr, len, i, Heap.promoBump);                              // ... by bumping
+        i = put(arr, len, i, ticksToUs(Heap.promoBumpTicks));
+        i = put(arr, len, i, Heap.promoWalked);                            // ... general-list blocks walked
+        i = put(arr, len, i, Heap.promoProbes);                            // ... size classes probed
         i = put(arr, len, i, FrameMaps.lookups);                           // ... frame lookups, all collections
         i = put(arr, len, i, FrameMaps.misses);                            // ... cache misses
         i = put(arr, len, i, ticksToUs(FrameMaps.missTicks));              // ... time resolving misses (us)

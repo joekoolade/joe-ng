@@ -4,6 +4,78 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **FRAMES/GC ARC, INCREMENT S7-4d: the minor pause, nearly halved; and a loader retry bug VERIFY found (2026-11-24).**
+  - **Promotion's mature allocation.** Profiling showed what it pays for: 92% of copies bump the arena (free
+    lists are nearly empty right after a collection), and each first paid for:
+    - `takeSized` stepping through about 58 empty size-class heads;
+    - zeroing a block the copy overwrites at once.
+
+    Two fixes:
+    - A per-core NON-EMPTY BITMAP over the size classes (`Heap.SIZE_MASK`) finds the next list with one bit
+      search. Every small allocation gains, not only copies.
+    - Copies skip `zeroPayload` (`Heap.copyNoZero`); `Nursery.forward` zeroes only what lies past the copied
+      size.
+
+    New `/gc` rows split copies by where they were served, with probes and walked blocks. On virt, copy
+    allocation fell from 37.5 to 5.7 ms per boot, and the bump path from 240 to 29 ns per copy.
+  - **JIT frame tables, sorted.** `addJitFrame` inserts in code-start order. The frame and local tables stay
+    parallel, and the last entry is duplicated before the count grows, so an unwind on another core never sees
+    a gap. `VM.jitIndex` binary-searches them.
+    - VERIFY cross-checks every lookup against the linear search. That flagged a trampoline registered twice
+      with an identical entry; an equal start now replaces in place.
+    - Frame-lookup miss time on virt fell from 10.8 to 0.6 ms.
+  - **A summary over the log bitmap** (`Symbols.LOG_SUMMARY`, one byte per 32 KiB, ZERO = dirty). The minor
+    phase reads about 15 KiB of summary and scans only flagged windows.
+    - Every bit-setter sets its byte: the compiled barrier, `WriteBarrier.log`, and the guest `MetalBarrier`.
+      The last was missed at first; VERIFY's new check, that every logged bit's byte is dirty BEFORE the scan,
+      named it, after a stale field had surfaced as a DENYLIST TRAP in `BuiltinClassLoader.findMiscResource`.
+    - The barrier's store is THREE words: `lsr x16, x17, #9 ; movz o, #bias ; strb wzr, [x16, o]`, with a new
+      register-offset `STRB` checked against llvm-mc.
+  - **THE BARRIER'S SIZE COSTS ONE FULL COLLECTION on this workload.** With any summary words it runs 11 full
+    collections against main's 10, on the Pi and on virt.
+    - It is the code size, not the summary: on virt, 5 NOPs with no summary also gave 11, and 0 extra words
+      gave 10.
+    - This run sits near a 16 MB volume trigger, and a ~1% volume change tips it, as S7-4c's fast promotion did.
+    - It is outweighed: see the Pi figures below.
+  - **VERIFY found a loader bug: one global retry flag for on-demand compiles.** A compile that pulls a class it
+    has not loaded drops its body and recompiles. Two faults:
+    - `odRetried` was one global, so a compile NESTED inside another's retry inherited "already retried" and got
+      no retry of its own;
+    - one retry was the whole budget.
+
+    On exhaustion the compile registered whatever class the parse cursor now named, silently. Under VERIFY's
+    timing, `ClassLoader.<init>(String,ClassLoader)` pulled twice (the second time
+    `java/security/cert/Certificate`), so its body never reached the registry. That surfaced as `LINK FAILED ...
+    class OK but no body` in LinkTrapProbe, and as a DENYLIST TRAP in `SecureClassLoader.<init>` in batch 8.
+    - Each on-demand compile now captures and clears the count (`Loader.odRetries`), so nested compiles get
+      their own budget, and retries up to `OD_RETRY_MAX` = 3. All four sites are changed: `compileMethodOnDemand`,
+      `compileSigOnDemand`, a `<clinit>` entry, and `constructorResolve`.
+    - Exhaustion prints `COMPILE RETRY PULLED AGAIN` instead of registering under the wrong class.
+    - No single S7-4d change reverted it, the recorded sign of a perturbation exposing a latent bug.
+  - **virt, WebServer + FrameBench, `gcnursery=1`:**
+    - minor pauses summed 144 -> 92 ms; longest minor 20.9 -> about 8 ms;
+    - pin pass 26 -> 15 ms; remembered set 43 -> 27 ms; drain 37 -> 17.5 ms.
+  - **QEMU:** virt list **214/214** in all three modes on the final build, with no nursery, JIT-table or retry
+    reports. raspi4b suite `checked=160 mismatch=0`, `collections=53`. `make test` (A64 145 checks) and
+    overlaycheck OK.
+  - **Pi 4, FrameBench via `/run`, three boots per arm, `gcnursery=1`, 5-word barrier:**
+
+    | | main `cc6d852` | S7-4d |
+    |---|---|---|
+    | longest minor-only pause | 96.4-96.7 ms | **52.7-53.0 ms** |
+    | minor pauses, summed | 785-797 ms | **565 ms** |
+    | ... pin pass | 168-173 ms | 114 ms |
+    | ... remembered set | 265-268 ms | 170-172 ms |
+    | ... drain | 175-178 ms | 105.5 ms |
+    | mature allocation for copies | 146-148 ms | 40.3-40.6 ms |
+    | frame-lookup misses | 68-72 ms | 3.2 ms |
+    | full collections / full pauses | 10 / 599 ms | 11 / 668-670 ms |
+    | total pause | ~1.39 s | **~1.23 s** |
+    | FrameBench sums | 495.1, 493.4, 493.4 ms | 504.3, 505.2, 499.0 ms |
+
+    - Checks are identical in every boot.
+    - The longest pause overall is a full collection, about 102-104 ms in both arms.
+    - Pi restored to main (`cc6d852`, sha verified).
 - **FRAMES/GC ARC, INCREMENT S7-4c: the longest minor pause, and two raw holders VERIFY found (2026-11-24).**
   - **Instruments.** New `/gc` rows:
     - the slowest minor phase, split into its six parts, plus the bytes it copied;

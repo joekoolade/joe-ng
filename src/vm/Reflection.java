@@ -776,6 +776,8 @@ final class Reflection
         Loader.lzCompiling = true;
         Loader.lzPullN = 0;
         Loader.lzRetried = false;
+        int myRetry = Loader.odRetries;                       // THIS compile's retries so far: captured, and the
+        Loader.odRetries = 0;                                 //   global cleared so a NESTED compile gets its own
         // JLS 8.8.3 forbids `synchronized` on a constructor, so isSync is 0 by the language, not by omission.
         Loader.compile(code, ClassBytes.codeLength(code), descOff, 0, 0);           // <init> is an instance method (receiver = the new object)
         Loader.lzCompiling = outerCompiling;
@@ -789,11 +791,15 @@ final class Reflection
         }
         Loader.lzRetried = outerRetried;
         Loader.lzPullN = outerPullN;
-        if (pulled && !Loader.odRetried)
+        if (pulled && myRetry >= Loader.OD_RETRY_MAX)
         {
-            Loader.odRetried = true;                              // re-derived from (type, paramCount); bounded to one
+            Loader.reportRetryExhausted();                   // the retry pulled again: say so, never register silently
+        }
+        if (pulled && myRetry < Loader.OD_RETRY_MAX)
+        {
+            Loader.odRetries = myRetry + 1;                              // re-derived from (type, paramCount); bounded by Loader.OD_RETRY_MAX
             int again = constructorResolveLocked(type, paramCount);
-            Loader.odRetried = false;
+            Loader.odRetries = 0;
             return again;
         }
         MethodRegistry.registerAll();

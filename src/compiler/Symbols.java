@@ -160,6 +160,15 @@ public interface Symbols
     long LOG_BITMAP = 0x1E00_0000L;
     long LOG_SPAN = 0x1E00_0000L;
 
+    /**
+     * A summary over the log bitmap (frames/GC arc S7-4d): one byte per 32 KiB of memory (64 bitmap words), ZERO
+     * when any of its bitmap words may hold a logged bit and 0xFF when none does (zero = dirty, so the barrier
+     * stores {@code wzr}). The barrier sets it on the slow path that sets a bit, so a
+     * minor collection reads ~15 KiB instead of the bitmap's ~2 MiB of mostly zero words. Right after the bitmap,
+     * below the nurseries.
+     */
+    long LOG_SUMMARY = 0x1E78_0000L;
+
     /** Whether Baseline emits the write barrier after reference stores (frames/GC arc S7-2). */
     boolean WRITE_BARRIER = true;
 

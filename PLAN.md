@@ -5010,10 +5010,16 @@ collection; every edge the trace follows is attributed to its source.
     (annotation element stores, `annotationsAt`'s `long[]`), plus log-at-birth. The longest minor pause is drain
     = mature allocation. A promotion fast path (`gcpromote=1`) cut it 94-98 -> 82-84 ms on the Pi, but cost one
     more full collection per run, so it is off by default.
-  - **S7-4d: promotion into holes, cheaply.** The general free list's first-fit walk is the drain. Fix it with
-    segregated fits above SMALL_MAX, or an indexed free list, without bumping fresh arena. Then: JIT frame tables
-    sorted and binary-searched, a summary over the log bitmap, cheaper bitmap builds, and an audit of VM code that
-    fills fresh objects raw across allocating calls.
+  - **S7-4d: the minor pause, nearly halved. DONE (2026-11-24).** A size-class bitmap and no-zero copies (copy
+    allocation 146 -> 40 ms on the Pi); sorted, binary-searched JIT frame tables (misses 70 -> 3 ms); a summary
+    over the log bitmap (remembered set 266 -> 171 ms). Pi longest minor 96 -> 53 ms, minor pauses 790 -> 565 ms.
+    The barrier grew 3 words, which costs this workload one more full collection (a volume-trigger threshold).
+    Also fixed a loader bug VERIFY found: on-demand compile retries were one global flag with one retry.
+  - **S7-4d': leftovers.**
+    - Cheaper block-start bitmap builds: about 100 ms of the Pi pin pass.
+    - The remembered set's object scan: what remains after the summary.
+    - An audit of VM code that fills fresh objects raw across allocating calls.
+    - The barrier's slow path out of line, if the code-size cost matters.
   - **S7-4e: on by default**, once the Pi pause and throughput numbers favour it (feeds S7-5).
 - **S7-5: sizing and measurement.** Nursery size, promotion, and the Pi pause numbers against S6d-3's.
 

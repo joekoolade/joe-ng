@@ -123,7 +123,7 @@ final class Nursery implements Uninterruptible
     static long slowDrain;
     static long slowAfter;
     static long slowCopied;
-    static long tPromoteAlloc;                                   // mature allocations for copies, summed (S7-4c probe)                                      // ... bytes it copied                                         // the slowest pin pass (S7-4c)
+    static long tPromoteAlloc;                                   // mature allocations for copies, summed (S7-4c probe)
     static long tBits;                                           // ... of the pin pass: building BITS (S7-4b probe)
     static long nBits;                                          // IdentityHash re-key and the gap rebuild
     private static int stalePrinted;
@@ -539,6 +539,12 @@ final class Nursery implements Uninterruptible
             n.plus(k).store(o.plus(k).loadLong());
             k += 8L;
         }
+        long got = n.plus(ObjectModel.STATUS_OFFSET).loadLong() & -8L;
+        while (k < got)
+        {
+            n.plus(k).store(0L);                       // past the copy: allocInGc did not zero the block
+            k += 8L;
+        }
         o.store(n);                                    // the forwarding address, in the TIB word
         st.store(s | FWD);
         copiedBytes = copiedBytes + size;
@@ -653,6 +659,12 @@ final class Nursery implements Uninterruptible
     private static void remset()
     {
         remN = 0L;
+        if (on == 2)
+        {
+            sumPhase = 1;
+            outsideRanges();                                               // before: every writer set the summary too
+            sumPhase = 2;
+        }
         remsetRange(0x80000L, Heap.IMAGE_CEILING);                         // the image's objects
         int c = 0;
         while (c < 4)
@@ -673,11 +685,15 @@ final class Nursery implements Uninterruptible
     }
 
     private static long remN;
+    private static int sumPhase;                                          // VERIFY: 1 = before the scan, 2 = after
 
     /**
      * The logged objects in {@code [lo, hi)}: S7-4b scans only where objects can be -- the image, each arena up to
      * its bump pointer, the large region up to its top -- not the whole 480 MiB span (7.5 MiB of bitmap, 53% of a
-     * minor phase on virt). Eight bitmap words are tested at once: almost all of them are zero.
+     * minor phase on virt). S7-4d reads the SUMMARY first ({@link Symbols#LOG_SUMMARY}, one byte per 32 KiB, dirtied (zeroed)
+     * with every bit) and scans only the 64 bitmap words of a window it marks. A window that ends with nothing
+     * logged has its byte cleared -- but only when it lies wholly inside this range, since the rest of it belongs
+     * to a range scanned separately (or to none).
      */
     private static void remsetRange(long lo, long hi)
     {
@@ -685,38 +701,47 @@ final class Nursery implements Uninterruptible
         {
             return;
         }
-        long w = Symbols.LOG_BITMAP + ((lo >> 9) << 3);
-        long end = Symbols.LOG_BITMAP + (((hi + 511L) >> 9) << 3);
-        while (w + 64L <= end)
+        long wLo = Symbols.LOG_BITMAP + ((lo >> 9) << 3);
+        long wHi = Symbols.LOG_BITMAP + (((hi + 511L) >> 9) << 3);
+        long s = lo >> 15;
+        long sEnd = (hi + 32767L) >> 15;
+        while (s < sEnd)
         {
-            Address a = Address.fromLong(w);
-            if ((a.loadLong() | a.plus(8).loadLong() | a.plus(16).loadLong() | a.plus(24).loadLong()
-                 | a.plus(32).loadLong() | a.plus(40).loadLong() | a.plus(48).loadLong() | a.plus(56).loadLong()) != 0L)
+            Address sb = Address.fromLong(Symbols.LOG_SUMMARY + s);
+            if (sb.loadByte() == 0)                    // zero = dirty
             {
-                int k = 0;
-                while (k < 8)
+                long w0 = Symbols.LOG_BITMAP + (s << 9);  // the window's 64 bitmap words
+                long w1 = w0 + 512L;
+                boolean whole = w0 >= wLo && w1 <= wHi;
+                long w = w0 > wLo ? w0 : wLo;
+                long e = w1 < wHi ? w1 : wHi;
+                boolean kept = false;
+                while (w < e)
                 {
-                    remsetWord(w + (long) k * 8L);
-                    k += 1;
+                    if (remsetWord(w))
+                    {
+                        kept = true;
+                    }
+                    w += 8L;
+                }
+                if (whole && !kept)
+                {
+                    sb.store((byte) -1);                // clean
                 }
             }
-            w += 64L;
-        }
-        while (w < end)
-        {
-            remsetWord(w);
-            w += 8L;
+            s += 1L;
         }
     }
 
-    /** One bitmap word at {@code w}: scan each logged object; keep the bits of those that still name a resident. */
-    private static void remsetWord(long w)
+    /** One bitmap word at {@code w}: scan each logged object; keep the bits of those that still name a resident.
+     *  True if any bit is kept. */
+    private static boolean remsetWord(long w)
     {
         Address wa = Address.fromLong(w);
         long bits = wa.loadLong();
         if (bits == 0L)
         {
-            return;
+            return false;
         }
         long base = (w - Symbols.LOG_BITMAP) << 6;     // word k (byte 8k) covers [512k, 512k+512)
         long keep = 0L;
@@ -739,6 +764,7 @@ final class Nursery implements Uninterruptible
             }
         }
         wa.store(keep);
+        return keep != 0L;
     }
 
     /** VERIFY: a logged bit outside the ranges {@link #remset} scans would be a remembered object it never saw. */
@@ -751,6 +777,25 @@ final class Nursery implements Uninterruptible
             if (Address.fromLong(w).loadLong() != 0L)
             {
                 long a = (w - Symbols.LOG_BITMAP) << 6;
+                if (Address.fromLong(Symbols.LOG_SUMMARY + (a >> 15)).loadByte() != 0)
+                {
+                    Uart.write(Magic.bytes("nursery: a logged object its summary byte does not mark @"));
+                    VM.printHex(a);
+                    Uart.write(Magic.bytes(sumPhase == 1 ? " (before the scan: a writer skipped it) word=" : " (after the scan) word="));
+                    VM.printHex(Address.fromLong(w).loadLong());
+                    long bits = Address.fromLong(w).loadLong();
+                    long o = a + ((long) lowBit(bits) << 3);
+                    Uart.write(Magic.bytes(" obj="));
+                    VM.printHex(o);
+                    Uart.write(Magic.bytes(" tib="));
+                    VM.printHex(Address.fromLong(o).loadLong());
+                    Uart.write(Magic.bytes(" status="));
+                    VM.printHex(Address.fromLong(o).plus(8L).loadLong());
+                    Uart.write(Magic.bytes(" minors="));
+                    VM.printHex(minors);
+                    Uart.putc(0x0A);
+                    halt(Magic.bytes("nursery: log summary misses a logged object"));
+                }
                 if (!inScanned(a))
                 {
                     Uart.write(Magic.bytes("nursery: a logged object outside the remembered-set ranges @"));
@@ -782,7 +827,7 @@ final class Nursery implements Uninterruptible
     }
 
     /** The index of the lowest set bit of {@code x} (nonzero). */
-    private static int lowBit(long x)
+    static int lowBit(long x)
     {
         int i = 0;
         long v = x;

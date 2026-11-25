@@ -1827,6 +1827,8 @@ public final class Baseline
      *   lsr  x16, o, #9 ; add x17, x17, x16, lsl #3 ; ldr x16, [x17]      the bitmap word
      *   lsr  v, o, #3 ; lsrv o, x16, v ; tbnz o, #0, done                  already logged
      *   movz o, #1 ; lslv o, o, v ; orr x16, x16, o ; str x16, [x17]       log it
+     *   lsr x16, x17, #9 ; movz o, #(LOG_SUMMARY - LOG_BITMAP/512)>>16, lsl #16
+     *   strb wzr, [x16, o]                                                 and its summary byte (S7-4d): 0 = dirty
      * </pre>
      * {@code obj} and {@code val} were popped and the store is done, so both are scratch here, as are x16/x17. A
      * non-atomic read-modify-write: a racing core can only lose a bit (that object is logged again on its next
@@ -1856,6 +1858,14 @@ public final class Baseline
         cb.emit(A64Enc.lslv(obj, obj, val));
         cb.emit(A64Enc.orrReg(SCRATCH, SCRATCH, obj));
         cb.emit(A64Enc.strx(SCRATCH, 17, 0));
+        // THREE words, not five: x17 is the bitmap word's address, LOG_BITMAP + (o >> 9) * 8, so x17 >> 9 is
+        // LOG_BITMAP/512 + (o >> 15) -- the summary index plus a constant the movz supplies -- and the store is of
+        // the ZERO register, so 0 means dirty. Five words grew every barrier's code enough to cost the Pi one more
+        // full collection per FrameBench run (the compiler's buffers scale with the code); a NOP-padded build with
+        // no summary at all reproduced it, which is how the size, not the summary, was named.
+        cb.emit(A64Enc.lsrImm(SCRATCH, 17, 9));
+        cb.emit(A64Enc.movz(obj, (int) (SUMMARY_BIAS >> 16), 1));
+        cb.emit(A64Enc.strbReg(31, SCRATCH, obj));
         int done = cb.wordCount();
         cb.set(s1, A64Enc.cbz(val, done - s1));
         cb.set(s2, A64Enc.bcond(COND_LO, done - s2));
@@ -1864,6 +1874,15 @@ public final class Baseline
     }
 
     private static final long HEAP_BASE = 0x0600_0000L;   // vm.Heap.BASE (the compiler cannot see vm)
+    /** LOG_SUMMARY - LOG_BITMAP/512: one movz (a multiple of 64 KiB), checked where the class loads. */
+    private static final long SUMMARY_BIAS = Symbols.LOG_SUMMARY - (Symbols.LOG_BITMAP >> 9);
+    static
+    {
+        if ((SUMMARY_BIAS & 0xFFFFL) != 0L || (SUMMARY_BIAS >> 32) != 0L)
+        {
+            throw new IllegalStateException("LOG_SUMMARY - LOG_BITMAP/512 must be a 64 KiB multiple below 4 GiB");
+        }
+    }
     private static final int COND_LO = 3;                  // unsigned lower (CC)
     private static final int COND_HS = 2;                  // unsigned higher or same (CS)
 

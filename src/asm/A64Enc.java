@@ -420,6 +420,11 @@ public final class A64Enc
     {
         return ldst(2, 1, rt, rn, off);
     }
+    /** {@code STRB Wt, [Xn, Xm]} — store byte, register offset (option LSL, no shift). */
+    public static int strbReg(int rt, int rn, int rm)
+    {
+        return 0x38206800 | (rm << 16) | (rn << 5) | rt;
+    }
     /** {@code STRB Wt, [Xn, #off]} — store byte. */
     public static int strb(int rt, int rn, int off)
     {
