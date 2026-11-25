@@ -285,8 +285,12 @@ public final class VMStats
         i = put(arr, len, i, ticksToUs(Nursery.tRemset));                  // ... remembered set
         i = put(arr, len, i, ticksToUs(Nursery.tDrain));                   // ... drain
         i = put(arr, len, i, ticksToUs(Nursery.tAfter));                   // ... re-key and rebuild
-        i = put(arr, len, i, ticksToUs(Nursery.tBits));                    // ... of the pin pass: BITS builds (us)
-        i = put(arr, len, i, Nursery.nBits);                               // ... how many
+        i = put(arr, len, i, ticksToUs(Nursery.tBits));                    // ... of the pin pass: block-start lookups (us)
+        i = put(arr, len, i, Nursery.nBits);                               // ... blocks they walked
+        i = put(arr, len, i, Nursery.remWindows);                          // S7-4d': dirty summary windows scanned
+        i = put(arr, len, i, Nursery.remObjects);                          // ... logged objects scanned
+        i = put(arr, len, i, Nursery.remSlots);                            // ... their reference slots
+        i = put(arr, len, i, Nursery.remSlotBits);                         // ... slot-log elements forwarded
         i = put(arr, len, i, ticksToUs(Nursery.tPinMax));                  // S7-4c: the slowest pin pass (us)
         i = put(arr, len, i, ticksToUs(Nursery.slowTotal));                // ... the slowest minor phase (us)
         i = put(arr, len, i, ticksToUs(Nursery.slowPin));

@@ -5015,11 +5015,15 @@ collection; every edge the trace follows is attributed to its source.
     over the log bitmap (remembered set 266 -> 171 ms). Pi longest minor 96 -> 53 ms, minor pauses 790 -> 565 ms.
     The barrier grew 3 words, which costs this workload one more full collection (a volume-trigger threshold).
     Also fixed a loader bug VERIFY found: on-demand compile retries were one global flag with one retry.
-  - **S7-4d': leftovers.**
-    - Cheaper block-start bitmap builds: about 100 ms of the Pi pin pass.
-    - The remembered set's object scan: what remains after the summary.
+  - **S7-4d': the pin pass and the remembered set. DONE (2026-11-25).** A crossing map (one block start per 4 KiB
+    card, kept by every header the nursery writes) replaces the per-collection block-start bitmap builds (virt pin
+    pass 17.6 -> 2.2 ms). An `aastore` logs its ELEMENT in a twin slot log (`Symbols.SLOT_BITMAP`) instead of the
+    array: the loader's 16-32 K-entry method and field tables were rescanned whole for one young entry (virt
+    remembered set 29 -> 10 ms; slots scanned 8.7 M -> 0.4 M). Same barrier size. Pi minor phases 545 -> 349 ms.
+  - **S7-4d'': leftovers.**
     - An audit of VM code that fills fresh objects raw across allocating calls.
     - The barrier's slow path out of line, if the code-size cost matters.
+    - The remembered set's dirty-window word scan (both bitmaps): most of what remains of it.
   - **S7-4e: on by default**, once the Pi pause and throughput numbers favour it (feeds S7-5).
 - **S7-5: sizing and measurement.** Nursery size, promotion, and the Pi pause numbers against S6d-3's.
 

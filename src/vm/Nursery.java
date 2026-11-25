@@ -55,11 +55,13 @@ final class Nursery implements Uninterruptible
     static final long BASE = 0x1E80_0000L;
     static final long SLOT_MAX = 0x0080_0000L;                  // 8 MiB per core
     static final long END = BASE + 4L * SLOT_MAX;               // 0x2080_0000
-    /** Block starts in the nurseries, one bit per 8 bytes, built on the first pin of a collection. */
-    static final long BITS = END;
-    static final long BITS_END = BITS + ((END - BASE) >> 6);     // 512 KiB
+    /** The crossing map: per 4 KiB card of the nurseries, a block start at or below the card's first byte, kept by
+     *  every header written there ({@link #cross}); the pin pass walks forward from it (S7-4d'). */
+    static final long CROSS = END;
+    static final long CROSS_END = CROSS + ((END - BASE) >> 12) * 8L;   // 64 KiB
+    static final int CARD_SHIFT = 12;
     /** The copy worklist: copied and resident blocks whose slots are still to be forwarded. */
-    static final long WORK = BITS_END;
+    static final long WORK = CROSS_END;
     static final long WORK_END = WORK + 0x0040_0000L;            // 4 MiB = 512k entries
     /** Blocks pinned this collection (for a full collection's roots). */
     static final long PINS = WORK_END;
@@ -88,7 +90,6 @@ final class Nursery implements Uninterruptible
 
     private static long workSp;
     private static int pinN;
-    private static int bitsBuilt;                                // bit c: core c's block starts are in BITS
     private static boolean stillYoung;                           // the last slot forwarded still names the nursery
 
     // Statistics (/gc): over the boot unless noted.
@@ -108,7 +109,7 @@ final class Nursery implements Uninterruptible
     static long minorPauseTicks;                                 // minor-only collections' pauses, summed
     static long minorPauseMax;
     // S7-4b: where a minor phase's time goes (counter ticks, summed)
-    static long tPin;                                            // pass 1: pin ambiguous roots (and build BITS)
+    static long tPin;                                            // pass 1: pin ambiguous roots
     static long tFwd;                                            // pass 2: forward exact stack slots
     static long tRoots;                                          // image statics, heap statics, JIT map entries
     static long tRemset;                                         // the logged objects
@@ -124,8 +125,13 @@ final class Nursery implements Uninterruptible
     static long slowAfter;
     static long slowCopied;
     static long tPromoteAlloc;                                   // mature allocations for copies, summed (S7-4c probe)
-    static long tBits;                                           // ... of the pin pass: building BITS (S7-4b probe)
-    static long nBits;                                          // IdentityHash re-key and the gap rebuild
+    static long tBits;                                           // ... of the pin pass: block-start lookups (S7-4d')
+    static long nBits;                                           // ... the blocks those lookups walked
+    static long remWindows;                                      // dirty summary windows scanned, summed (S7-4d')
+    static long remObjects;                                      // logged objects scanned, summed
+    static long remSlots;                                        // ... the slots they held, summed
+    static long remSlotBits;                                     // slot-log bits (aastore elements) forwarded
+    private static long slotsSeen;
     private static int stalePrinted;
 
     /** VMGc.finishMinor: a minor-only collection's pause, entry to restart. */
@@ -184,6 +190,19 @@ final class Nursery implements Uninterruptible
     {
         Address.fromLong(at).store(0L);
         Address.fromLong(at).plus(ObjectModel.STATUS_OFFSET).store(size | FILLER);
+        cross(at, size);
+    }
+
+    /** The block [at, at + size) begins every card whose first byte it holds: record it there. */
+    private static void cross(long at, long size)
+    {
+        long k = (at - BASE + (1L << CARD_SHIFT) - 1L) >> CARD_SHIFT;
+        long last = (at + size - 1L - BASE) >> CARD_SHIFT;
+        while (k <= last)
+        {
+            Address.fromLong(CROSS + (k << 3)).store(at);
+            k += 1L;
+        }
     }
 
     // ---- allocation --------------------------------------------------------------------------------------------
@@ -223,6 +242,10 @@ final class Nursery implements Uninterruptible
                 {
                     z.store(0L);
                     z = z.plus(8);
+                }
+                if (((c - 1L) ^ (c + want - 1L)) >= (1L << CARD_SHIFT))
+                {
+                    cross(c, want);                    // a card's first byte falls in this block
                 }
                 allocBytes = allocBytes + want;
                 return p;
@@ -275,7 +298,6 @@ final class Nursery implements Uninterruptible
         seal();
         workSp = WORK;
         pinN = 0;
-        bitsBuilt = 0;
         long copied0 = copiedBytes;
         Heap.noCollect = 1;
         // 1. PIN: every word only a guess names, before anything moves.
@@ -373,119 +395,55 @@ final class Nursery implements Uninterruptible
         }
     }
 
-    /** The nursery block holding {@code w}, or 0 (a filler, or no block). */
+    /** The nursery block holding {@code w}, or 0 (no block). */
     private static long blockOf(long w)
     {
         int core = (int) ((w - BASE) / SLOT_MAX);
-        if (w >= BASE + (long) core * SLOT_MAX + slot)
+        long top = BASE + (long) core * SLOT_MAX + slot;
+        if (w >= top)
         {
-            return 0L;                                 // past this core's nursery: its BITS are never built
+            return 0L;                                 // past this core's nursery
         }
-        if ((bitsBuilt & (1 << core)) == 0)
+        long tb = Magic.readCNTPCT_EL0();
+        // From the card's recorded start, forward by size: at most a card's worth of blocks. This replaced a
+        // whole-nursery walk building a block-start bitmap on the first pin of each core (S7-4d').
+        long a = Address.fromLong(CROSS + (((w - BASE) >> CARD_SHIFT) << 3)).loadLong();
+        if (a < BASE + (long) core * SLOT_MAX || a > w)
         {
-            long tb = Magic.readCNTPCT_EL0();
-            buildBits(core);
-            tBits = tBits + (Magic.readCNTPCT_EL0() - tb);
-            nBits = nBits + 1L;
-        }
-        // The nearest block start at or below w: whole bitmap words at a time (512 bytes each). One bit at a time,
-        // a word inside a big gap walked back megabytes -- the slowest pin passes (S7-4c).
-        long floor = BASE + (long) core * SLOT_MAX;
-        long bi = (w - BASE) >> 3;
-        long wi = bi >> 6;
-        long word = Address.fromLong(BITS + (wi << 3)).loadLong();
-        int bit = (int) (bi & 63L);
-        if (bit < 63)
-        {
-            word = word & ((1L << (bit + 1)) - 1L);    // only the starts at or below w
-        }
-        long wFloor = (floor - BASE) >> 9;
-        while (word == 0L)
-        {
-            if (wi <= wFloor)
-            {
-                return 0L;
-            }
-            wi -= 1L;
-            word = Address.fromLong(BITS + (wi << 3)).loadLong();
-        }
-        long a = BASE + ((wi << 6) + (long) highBit(word)) * 8L;
-        long size = Address.fromLong(a).plus(ObjectModel.STATUS_OFFSET).loadLong() & -8L;
-        if (w >= a + size)
-        {
+            Uart.write(Magic.bytes("nursery: crossing map names "));
+            VM.printHex(a);
+            Uart.write(Magic.bytes(" for "));
+            VM.printHex(w);
+            Uart.putc((byte) 0x0A);
+            halt(Magic.bytes("nursery: crossing map"));
             return 0L;
         }
-        return a;                                      // a filler too: pinWord tells it by its FILLER bit
-    }
-
-    /** The index of the highest set bit of {@code x} (nonzero). */
-    private static int highBit(long x)
-    {
-        int i = 0;
-        long v = x;
-        if ((v >>> 32) != 0L)
+        long n = 0L;
+        while (true)
         {
-            v = v >>> 32;
-            i += 32;
-        }
-        if ((v >>> 16) != 0L)
-        {
-            v = v >>> 16;
-            i += 16;
-        }
-        if ((v >>> 8) != 0L)
-        {
-            v = v >>> 8;
-            i += 8;
-        }
-        if ((v >>> 4) != 0L)
-        {
-            v = v >>> 4;
-            i += 4;
-        }
-        if ((v >>> 2) != 0L)
-        {
-            v = v >>> 2;
-            i += 2;
-        }
-        if ((v >>> 1) != 0L)
-        {
-            i += 1;
-        }
-        return i;
-    }
-
-    /** Walk core {@code c}'s nursery by size, recording its block starts (the pin pass's lookup), on first need. */
-    private static void buildBits(int c)
-    {
-        bitsBuilt = bitsBuilt | (1 << c);
-        long o = BASE + (long) c * SLOT_MAX;
-        long top = o + slot;
-        Address z = Address.fromLong(BITS + (((o - BASE) >> 9) << 3));
-        Address zEnd = Address.fromLong(BITS + (((top - BASE) >> 9) << 3));
-        while (z.LT(zEnd))
-        {
-            z.store(0L);
-            z = z.plus(8);
-        }
-        while (o < top)
-        {
-            long size = Address.fromLong(o).plus(ObjectModel.STATUS_OFFSET).loadLong() & -8L;
-            if (size < (long) ObjectModel.HEADER_SIZE || o + size > top)
+            long size = Address.fromLong(a).plus(ObjectModel.STATUS_OFFSET).loadLong() & -8L;
+            if (size < (long) ObjectModel.HEADER_SIZE || a + size > top)
             {
-                corrupt(o, size);
+                corrupt(a, size);
+                a = 0L;
                 break;
             }
-            long bi = (o - BASE) >> 3;
-            Address bw = Address.fromLong(BITS + ((bi >> 6) << 3));
-            bw.store(bw.loadLong() | (1L << (int) (bi & 63L)));
-            o = o + size;
+            n += 1L;
+            if (w < a + size)
+            {
+                break;                                 // a filler too: pinWord tells it by its FILLER bit
+            }
+            a = a + size;
         }
+        nBits = nBits + n;
+        tBits = tBits + (Magic.readCNTPCT_EL0() - tb);
+        return a;
     }
 
     /** Forward pass: the exact reference slot at {@code a}. */
     static void fwdSlot(long a)
     {
+        slotsSeen = slotsSeen + 1L;
         long w = Address.fromLong(a).loadLong();
         if (!contains(w))
         {
@@ -659,6 +617,7 @@ final class Nursery implements Uninterruptible
     private static void remset()
     {
         remN = 0L;
+        long slots0 = slotsSeen;
         if (on == 2)
         {
             sumPhase = 1;
@@ -678,6 +637,8 @@ final class Nursery implements Uninterruptible
             outsideRanges();
         }
         remembered = remN;
+        remObjects = remObjects + remN;
+        remSlots = remSlots + (slotsSeen - slots0);
         if (remN > rememberedMax)
         {
             rememberedMax = remN;
@@ -707,9 +668,16 @@ final class Nursery implements Uninterruptible
         long sEnd = (hi + 32767L) >> 15;
         while (s < sEnd)
         {
+            if ((s & 7L) == 0L && s + 8L <= sEnd
+                && Address.fromLong(Symbols.LOG_SUMMARY + s).loadLong() == -1L)
+            {
+                s += 8L;                               // eight clean windows in one load (S7-4d')
+                continue;
+            }
             Address sb = Address.fromLong(Symbols.LOG_SUMMARY + s);
             if (sb.loadByte() == 0)                    // zero = dirty
             {
+                remWindows = remWindows + 1L;
                 long w0 = Symbols.LOG_BITMAP + (s << 9);  // the window's 64 bitmap words
                 long w1 = w0 + 512L;
                 boolean whole = w0 >= wLo && w1 <= wHi;
@@ -719,6 +687,10 @@ final class Nursery implements Uninterruptible
                 while (w < e)
                 {
                     if (remsetWord(w))
+                    {
+                        kept = true;
+                    }
+                    if (remsetSlots(w - Symbols.LOG_BITMAP + Symbols.SLOT_BITMAP))
                     {
                         kept = true;
                     }
@@ -767,19 +739,58 @@ final class Nursery implements Uninterruptible
         return keep != 0L;
     }
 
+    /**
+     * One slot-log word at {@code w} (S7-4d'): each bit is an array ELEMENT an {@code aastore} wrote, forwarded on its
+     * own; keep the bits of those that still name a resident. True if any bit is kept. Nothing in the mature heap is
+     * freed between full collections, and a full collection clears these, so a bit always names a live element.
+     */
+    private static boolean remsetSlots(long w)
+    {
+        Address wa = Address.fromLong(w);
+        long bits = wa.loadLong();
+        if (bits == 0L)
+        {
+            return false;
+        }
+        long base = (w - Symbols.SLOT_BITMAP) << 6;
+        long keep = 0L;
+        while (bits != 0L)
+        {
+            int b = lowBit(bits);
+            bits = bits & (bits - 1L);
+            remSlotBits = remSlotBits + 1L;
+            stillYoung = false;
+            fwdSlot(base + ((long) b << 3));
+            if (stillYoung)
+            {
+                keep = keep | (1L << b);
+            }
+        }
+        wa.store(keep);
+        return keep != 0L;
+    }
+
     /** VERIFY: a logged bit outside the ranges {@link #remset} scans would be a remembered object it never saw. */
     private static void outsideRanges()
     {
-        long w = Symbols.LOG_BITMAP;
-        long end = Symbols.LOG_BITMAP + (Symbols.LOG_SPAN >> 6);
+        outsideRanges(Symbols.LOG_BITMAP);
+        outsideRanges(Symbols.SLOT_BITMAP);                               // ... and the slot log's (S7-4d')
+    }
+
+    private static void outsideRanges(long bitmap)
+    {
+        long w = bitmap;
+        long end = bitmap + (Symbols.LOG_SPAN >> 6);
         while (w < end)
         {
             if (Address.fromLong(w).loadLong() != 0L)
             {
-                long a = (w - Symbols.LOG_BITMAP) << 6;
+                long a = (w - bitmap) << 6;
                 if (Address.fromLong(Symbols.LOG_SUMMARY + (a >> 15)).loadByte() != 0)
                 {
-                    Uart.write(Magic.bytes("nursery: a logged object its summary byte does not mark @"));
+                    Uart.write(Magic.bytes(bitmap == Symbols.SLOT_BITMAP
+                        ? "nursery: a logged SLOT its summary byte does not mark @"
+                        : "nursery: a logged object its summary byte does not mark @"));
                     VM.printHex(a);
                     Uart.write(Magic.bytes(sumPhase == 1 ? " (before the scan: a writer skipped it) word=" : " (after the scan) word="));
                     VM.printHex(Address.fromLong(w).loadLong());
@@ -798,7 +809,9 @@ final class Nursery implements Uninterruptible
                 }
                 if (!inScanned(a))
                 {
-                    Uart.write(Magic.bytes("nursery: a logged object outside the remembered-set ranges @"));
+                    Uart.write(Magic.bytes(bitmap == Symbols.SLOT_BITMAP
+                        ? "nursery: a logged SLOT outside the remembered-set ranges @"
+                        : "nursery: a logged object outside the remembered-set ranges @"));
                     VM.printHex(a);
                     Uart.putc(0x0A);
                     halt(Magic.bytes("nursery: remembered-set ranges miss a logged object"));

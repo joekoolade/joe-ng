@@ -1830,11 +1830,19 @@ public final class Baseline
      *   lsr x16, x17, #9 ; movz o, #(LOG_SUMMARY - LOG_BITMAP/512)>>16, lsl #16
      *   strb wzr, [x16, o]                                                 and its summary byte (S7-4d): 0 = dirty
      * </pre>
+     * For an {@code aastore}, {@code o} is the ELEMENT's address and the bitmap is the slot log (S7-4d'): same words,
+     * another {@code movz} constant.
      * {@code obj} and {@code val} were popped and the store is done, so both are scratch here, as are x16/x17. A
      * non-atomic read-modify-write: a racing core can only lose a bit (that object is logged again on its next
      * store), never set one; the collector clears bits only stop-the-world.
      */
     private void writeBarrier(CodeBuffer cb, int obj, int val)
+    {
+        writeBarrier(cb, obj, val, Symbols.LOG_BITMAP, SUMMARY_BIAS);
+    }
+
+    /** The barrier into {@code bitmap} (the log bitmap, or the slot log with {@code obj} = the element's address). */
+    private void writeBarrier(CodeBuffer cb, int obj, int val, long bitmap, long summaryBias)
     {
         if (!Symbols.WRITE_BARRIER)
         {
@@ -1847,7 +1855,7 @@ public final class Baseline
         cb.emit(A64Enc.lsrImm(SCRATCH, obj, 21));
         cb.emit(A64Enc.cmpImm(SCRATCH, (int) (Symbols.LOG_SPAN >> 21)));
         int s3 = cb.emit(A64Enc.bcond(COND_HS, 0));
-        cb.emit(A64Enc.movz(17, (int) (Symbols.LOG_BITMAP >> 16), 1));
+        cb.emit(A64Enc.movz(17, (int) (bitmap >> 16), 1));
         cb.emit(A64Enc.lsrImm(SCRATCH, obj, 9));
         cb.emit(A64Enc.addRegLsl(17, 17, SCRATCH, 3));
         cb.emit(A64Enc.ldrx(SCRATCH, 17, 0));
@@ -1864,7 +1872,7 @@ public final class Baseline
         // full collection per FrameBench run (the compiler's buffers scale with the code); a NOP-padded build with
         // no summary at all reproduced it, which is how the size, not the summary, was named.
         cb.emit(A64Enc.lsrImm(SCRATCH, 17, 9));
-        cb.emit(A64Enc.movz(obj, (int) (SUMMARY_BIAS >> 16), 1));
+        cb.emit(A64Enc.movz(obj, (int) (summaryBias >> 16), 1));
         cb.emit(A64Enc.strbReg(31, SCRATCH, obj));
         int done = cb.wordCount();
         cb.set(s1, A64Enc.cbz(val, done - s1));
@@ -1876,11 +1884,21 @@ public final class Baseline
     private static final long HEAP_BASE = 0x0600_0000L;   // vm.Heap.BASE (the compiler cannot see vm)
     /** LOG_SUMMARY - LOG_BITMAP/512: one movz (a multiple of 64 KiB), checked where the class loads. */
     private static final long SUMMARY_BIAS = Symbols.LOG_SUMMARY - (Symbols.LOG_BITMAP >> 9);
+    /** ... and LOG_SUMMARY - SLOT_BITMAP/512, for the aastore barrier into the slot log (S7-4d'). */
+    private static final long SLOT_SUMMARY_BIAS = Symbols.LOG_SUMMARY - (Symbols.SLOT_BITMAP >> 9);
     static
     {
         if ((SUMMARY_BIAS & 0xFFFFL) != 0L || (SUMMARY_BIAS >> 32) != 0L)
         {
             throw new IllegalStateException("LOG_SUMMARY - LOG_BITMAP/512 must be a 64 KiB multiple below 4 GiB");
+        }
+        if ((SLOT_SUMMARY_BIAS & 0xFFFFL) != 0L || SLOT_SUMMARY_BIAS <= 0L || (SLOT_SUMMARY_BIAS >> 32) != 0L)
+        {
+            throw new IllegalStateException("LOG_SUMMARY - SLOT_BITMAP/512 must be a 64 KiB multiple below 4 GiB");
+        }
+        if ((Symbols.SLOT_BITMAP & 0xFFFFL) != 0L || (Symbols.SLOT_BITMAP >> 32) != 0L)
+        {
+            throw new IllegalStateException("SLOT_BITMAP must be a 64 KiB multiple below 4 GiB (one movz)");
         }
     }
     private static final int COND_LO = 3;                  // unsigned lower (CC)
@@ -4092,10 +4110,12 @@ public final class Baseline
         boundsCheck(cb, arr, index, pos);                        // null/bounds before the raw store
         if (barrier && Symbols.WRITE_BARRIER)
         {
-            cb.emit(A64Enc.addImm(SCRATCH, arr, ObjectModel.ARRAY_BASE_OFFSET));   // the array's start stays in arr
-            cb.emit(A64Enc.addRegLsl(SCRATCH, SCRATCH, index, scale));
-            cb.emit(A64Enc.strx(val, SCRATCH, 0));
-            writeBarrier(cb, arr, val);
+            // The barrier logs the ELEMENT in the slot log, not the array (S7-4d'): a minor collection forwards
+            // that one slot instead of rescanning a 32 K-entry table for one young entry.
+            cb.emit(A64Enc.addImm(arr, arr, ObjectModel.ARRAY_BASE_OFFSET));
+            cb.emit(A64Enc.addRegLsl(arr, arr, index, scale));          // arr = &elem[index]
+            cb.emit(A64Enc.strx(val, arr, 0));
+            writeBarrier(cb, arr, val, Symbols.SLOT_BITMAP, SLOT_SUMMARY_BIAS);
             return;
         }
         cb.emit(A64Enc.addImm(arr, arr, ObjectModel.ARRAY_BASE_OFFSET));

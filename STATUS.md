@@ -4,6 +4,42 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **FRAMES/GC ARC, INCREMENT S7-4d': the pin pass and the remembered set (2026-11-25).**
+  - **A crossing map replaces the block-start bitmap builds.** The pin pass used to walk a core's whole nursery
+    by size, setting a bit per block, the first time an ambiguous word named it -- 15.9 of the 17.6 ms pin pass on
+    virt. Now every header the nursery writes (an allocation that crosses a 4 KiB card's first byte, a filler)
+    records its start for those cards (`Nursery.CROSS`, 64 KiB), and a lookup walks forward from the card's
+    record: 6,807 blocks walked, 93 us, over the boot.
+  - **The remembered set's object scan was the loader's own tables.** New `/gc` rows (dirty windows, logged objects,
+    their slots) showed 43,692 logged objects holding 8.7 M slots. A temporary diagnostic named them:
+    `RVMMethod[]` (24,576), `LazyMethod[]` (32,768), `RVMField[]` and `DynLink[]`, logged whenever a young entry
+    went in and then scanned end to end, nearly every minor.
+    - An `aastore` now logs its ELEMENT in a twin SLOT LOG (`Symbols.SLOT_BITMAP` = 0x2200_0000, 7.5 MiB, sharing
+      `LOG_SUMMARY`), and the minor phase forwards each logged slot alone. The barrier keeps its size:
+      the element address was already computed for the store, and only the `movz` constants differ (a 32 MiB
+      multiple keeps the summary bias one `movz`). Raw stores still log the whole object.
+    - A full collection clears the slot log only under dirty summary bytes. VERIFY checks it for summary misses and
+      out-of-range bits; the `gcbarrier=1` shadow check accepts an array source with any logged element (the census
+      does not know the slot), so it is looser for arrays.
+    - Slots scanned 8.7 M -> 311 K, plus 80,523 slot-log elements.
+  - **Summary skip, measured as nothing.** Skipping eight clean summary bytes per load changed nothing: the time was
+    never in the summary loop. Kept (it is cheap), recorded so nobody retries it.
+  - **virt, WebServer + FrameBench, `gcnursery=1`, against main:** minor phases summed 95.9 -> 63.1 ms; pin pass
+    17.6 -> 2.2 ms; remembered set 29.3 -> 10.3 ms; longest minor-only pause 8.4 -> 6.1 ms. Full collections 11
+    (unchanged), FrameBench unchanged. `gcgen=1 gcbarrier=1`: 0 misses of 35,087 old->young edges.
+  - **QEMU:** virt list **214/214** in all three modes (verify, on, off). raspi4b suite `checked=160 mismatch=0`,
+    `collections=53`. `make test` and overlaycheck OK.
+  - **Pi 4, `gcnursery=1`, 3 boots each, against main:**
+    - minor phases summed 545 -> 349 ms; minor-only pauses summed 569 -> 376 ms;
+    - pin pass 111 -> 11.7 ms; remembered set 175 -> 56 ms;
+    - longest minor-only pause unchanged (53 -> 54 ms): it is drain, i.e. copying;
+    - full collections 11 and their pauses (`total pause`, which counts only those) unchanged; FrameBench
+      unchanged (535/549/522 vs 522/523/559 ms); checks identical.
+    - Three later phases each rose a little in every run: statics and JIT maps +10 ms, drain +4.5 ms, re-key and
+      rebuild +9 ms. Likely the old bitmap build's whole-nursery walk had warmed the cache for them (inferred, not
+      measured). Net about -190 ms of pause per boot.
+    - The Pi is restored to main (sha verified).
+
 - **FRAMES/GC ARC, INCREMENT S7-4d: the minor pause, nearly halved; and a loader retry bug VERIFY found (2026-11-24).**
   - **Promotion's mature allocation.** Profiling showed what it pays for: 92% of copies bump the arena (free
     lists are nearly empty right after a collection), and each first paid for:
