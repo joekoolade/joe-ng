@@ -2616,9 +2616,9 @@ public final class VM
      * Young objects in per-core nurseries and minor collections (frames/GC arc S7-4a), ON BY DEFAULT since S7-4e --
      * with no {@code gcnursery=} line, and with no {@code /etc/init} at all ({@code flen} 0). {@code gcnursery=0}
      * turns it off; {@code gcnursery=2} verifies -- every collection full, evacuated space poisoned, stale references
-     * reported. {@code nursery=<KB>} sizes each core's nursery (default 4096, at most 8192). The generational census
-     * ({@code gcgen=1}) and the barrier's shadow check ({@code gcbarrier=1}) measure a heap with no nursery, so they
-     * are switched off unless {@code gcnursery=0} is given too.
+     * reported. {@code nursery=<KB>} sizes each core's nursery (default and most 8192, least 64). The generational
+     * census ({@code gcgen=1}) and the barrier's shadow check ({@code gcbarrier=1}) measure a heap with no nursery, so
+     * they are switched off unless {@code gcnursery=0} is given too.
      */
     private static void armNursery(Address conf, int flen)
     {
@@ -2648,6 +2648,9 @@ public final class VM
             kb = kb * 10L + (long) d;
             i += 1;
         }
+        // A value Nursery.arm will not take (not all digits, below 64 KB, above the reserved slot) used to be
+        // dropped SILENTLY for the default; say so, with what was given.
+        boolean badSize = kn > 0 && (i != kn || kb < 64L || kb * 1024L > Nursery.SLOT_MAX);
         DataReference pf = Heap.allocData(16);
         if (manifestValue(conf, flen, Magic.bytes("gcpromote"), pf.toAddress(), 8) == 1 && pf.loadUnsignedByte() == 0x31)
         {
@@ -2660,6 +2663,16 @@ public final class VM
                                          : "gcnursery: nursery on KB="));
         printDec((int) (Nursery.slot >> 10));
         Uart.putc(0x0A);
+        if (badSize)
+        {
+            Uart.write(Magic.bytes("nursery: IGNORED nursery="));
+            Uart.write(heapBytes(k.toAddress(), kn));
+            Uart.write(Magic.bytes(" -- want KB from 64 to "));
+            printDec((int) (Nursery.SLOT_MAX >> 10));
+            Uart.write(Magic.bytes("; the size in use is KB="));
+            printDec((int) (Nursery.slot >> 10));
+            Uart.putc(0x0A);
+        }
     }
 
     /** {@code npetrace=1}: {@link #npeTrace}. */

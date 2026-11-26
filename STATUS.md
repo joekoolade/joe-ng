@@ -4,6 +4,36 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **FRAMES/GC ARC, INCREMENT S7-5: the nursery is 8 MiB per core (2026-11-26).**
+  - **The sweep.** `nursery=<KB>` on main (S7-4e), WebServerDemo + FrameBench through `/run`, then `/gc`.
+    - **Pi 4, 3 boots each** (4096 is S7-4e's default arm):
+
+      | KB | minors / full | total pause | longest minor | minor-only summed | minor phases | FrameBench |
+      |---|---|---|---|---|---|---|
+      | 2048 | 171 / 11 | 654-655 ms | 25.1-26.6 ms | 296 ms | 208 ms | 493-507 ms |
+      | 4096 | 89-90 / 11 | 651-652 ms | 34.0-34.3 ms | 187-188 ms | 150-153 ms | 495-505 ms |
+      | 8192 | 46-47 / 10 | 606-638 ms | 12.2 ms | 106-109 ms | 114 ms | 486-505 ms |
+
+      Longest pause (a full collection) 98-104 ms in all three. Checksums agree; every endpoint 200.
+    - **Virt, 2 boots each (1024-8192):** the same ordering of minors, fulls (10 at 8192) and minor phases, but
+      FrameBench read ~9% SLOWER at 8192 (105 vs 96 ms) -- not reproduced on the Pi, where it is level. Virt
+      throughput is not evidence for a sizing call.
+    - **The longest minor is not proportional to the size.** It fell 34 -> 12 ms going 4 -> 8 MiB: a minor's cost is
+      what SURVIVES, and with a longer interval FrameBench's mid-phase structures die before the next minor instead
+      of being copied. (Inferred from the shape of the numbers -- not instrumented per collection.)
+  - **The change: `Nursery.slot` defaults to `SLOT_MAX` (8 MiB)**, the whole slot already reserved per core, so the
+    memory layout does not move. `nursery=<KB>` still sizes it down (64 KB minimum). The copy worklist (512k entries)
+    halts loudly when full (`nursery: copy worklist full`); overflow needs more than 512k simultaneous young survivors,
+    which 4 x 4 MiB could already hold.
+  - **`nursery=` no longer fails silently.** A value `Nursery.arm` will not take (not all digits, below 64 KB, above
+    the 8 MiB slot) was dropped for the default without a word; boot now prints
+    `nursery: IGNORED nursery=99999 -- want KB from 64 to 8192; the size in use is KB=8192`. Checked on virt with
+    `99999`, `32` and `abc` (each warns) and `2048` (no warning, `KB=2048`); 0 warnings across the VERIFY arm's
+    `nursery=1024` logs.
+  - **QEMU:** virt list **215/215** default (47 of 47 batch logs `KB=8192`), `gcnursery=0`, VERIFY. raspi4b suite
+    `checked=160 mismatch=0`, `collections=78` at the churn line (113 at 4 MiB, 53 with no nursery). `make test` and
+    overlaycheck OK.
+
 - **FRAMES/GC ARC, INCREMENT S7-4e: the nursery on by default (2026-11-26).**
   - **The switch.** With no `gcnursery=` line -- and with no `/etc/init` at all -- the nursery is armed
     (`gcnursery: nursery on KB=4096`). `gcnursery=0` turns it off (`gcnursery: nursery off`); `gcnursery=2` is

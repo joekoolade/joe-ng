@@ -67,8 +67,10 @@ final class Nursery implements Uninterruptible
     static final long PINS = WORK_END;
     static final long PINS_END = PINS + 0x8000L;                 // 4096 entries
 
-    /** Bytes per core's nursery ({@code nursery=<KB>}, default 4 MiB, at most 8). */
-    static long slot = 0x0040_0000L;
+    /** Bytes per core's nursery ({@code nursery=<KB>}, default 8 MiB = {@link #SLOT_MAX}, the whole reserved
+     *  slot). S7-5 measured 2/4/8 MiB on the Pi: 8 had one full collection fewer, the shortest minor pauses (longest
+     *  12 ms vs 34 at 4 MiB) and the same FrameBench. */
+    static long slot = SLOT_MAX;
 
     static final long FWD = 1L;                                  // status bit 0: forwarded, the copy in the TIB word
     static final long RESIDENT = 2L;                             // status bit 1: pinned this collection
