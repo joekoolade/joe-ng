@@ -5044,7 +5044,9 @@ collection; every edge the trace follows is attributed to its source.
     - The barrier's slow path out of line, if the code-size cost matters.
     - The JIT map entries (pretenure the maps).
     - The drain's remaining per-object cost (the scan of each copy, the forwarding word).
-  - **S7-4e: on by default**, once the Pi pause and throughput numbers favour it (feeds S7-5).
+  - **S7-4e: on by default. DONE (2026-11-26).** No `gcnursery=` line (or no `/etc/init`) arms the nursery;
+    `gcnursery=0` turns it off. Pi default init: total pause 651 vs 861 ms off, longest pause 100 vs 124 ms,
+    FrameBench level. The `gc:` line's `heap=` no longer goes negative after a minor.
 - **S7-5: sizing and measurement.** Nursery size, promotion, and the Pi pause numbers against S6d-3's.
 
 ## 5. Design decisions to lock day one

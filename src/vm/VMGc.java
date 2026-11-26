@@ -86,6 +86,8 @@ final class VMGc implements Uninterruptible
         long tStopped = Magic.readCNTPCT_EL0();
         gcByCore[gcCore] = gcByCore[gcCore] + 1L;
         phaseStopTicks = tStopped - gcT0;             // the last collection's phases, for /gc
+        long fullProbes = probes;                     // the last FULL collection's precision metrics: a minor-only
+        long fullNomap = nomap;                       //   collection puts them back (it never sets rootProbes)
         probes = 0L;                                  // precision metrics for this collection (gcLog)
         nomap = 0L;
         markSp = MARK_STACK;                          // the trace worklist starts empty
@@ -163,6 +165,8 @@ final class VMGc implements Uninterruptible
             Nursery.collect(scanFrom, stackTop);      // S7-4a: every collection evacuates the nurseries first
             if (Nursery.minorOnly != 0 && Nursery.on == 1)
             {
+                probes = fullProbes;                  // lastProbes/roots/heap/nomap describe the last full trace;
+                nomap = fullNomap;                    //   left zeroed, `heap=` printed probes - rootProbes < 0
                 finishMinor(gcT0, daif);              // ... and one the nursery asked for ends there
                 return;
             }
