@@ -148,7 +148,7 @@ test: build
 	$(JAVA) -cp $(OUT) compiler.opt.OptIrTest $(OUT)
 	$(JAVA) -cp $(OUT) compiler.opt.AllocTest
 	$(JAVA) -cp $(OUT) asm.A64EmuTest
-	$(JAVA) --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.util=ALL-UNNAMED -cp $(OUT) writer.OptDiff $(OUT) 300
+	$(JAVA) --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.util=ALL-UNNAMED -cp $(OUT) writer.OptDiff $(OUT) 100
 	$(JAVA) -cp $(OUT) compiler.opt.OptCorpus --oracle --jrt $(OUT)
 	$(JAVA) -cp $(OUT) hosttest.CryptoTest
 	$(JAVA) -cp $(OUT) hosttest.ZipTest

@@ -74,6 +74,7 @@ public final class SsaBuilder
         this.g = new Graph(cls, cpOff, cpTag, descOff, isStatic, isSynchronized, maxLocals, exStart, exEnd,
                            exHandler, exCatch, exCount);
         this.code = code;
+        this.g.code = code;
         this.cls = cls;
         this.cpOff = cpOff;
         this.cpTag = cpTag;
@@ -227,6 +228,7 @@ public final class SsaBuilder
         loc = copy(el, g.maxLocals);
         stk = copy(entryStk[b.id], entryStk[b.id].length + 8);
         sp = entrySp[b.id];
+        b.entryDepth = sp;
         noteHomes(-1);
         while (pc < b.endBci && reason == OK)
         {

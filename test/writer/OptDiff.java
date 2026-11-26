@@ -75,6 +75,13 @@ public final class OptDiff implements OptTier.Diff
         String desc = method.descriptor;
         boolean isStatic = method.isStatic;
         methods += 1;
+        String rel = sameRelocations(baseline, opt);
+        if (rel != null)
+        {
+            mismatches += 1;
+            System.err.println("  RELOCATIONS " + key + ": " + rel);
+            return;
+        }
         Random r = new Random(key.hashCode());
         for (int t = 0; t < trials; t++)
         {
@@ -91,8 +98,8 @@ public final class OptDiff implements OptTier.Diff
             }
             eb.x[31] = 0x7000_0000L;
             eo.x[31] = 0x7000_0000L;
-            boolean okB = eb.run(baseline.words(), base, 200_000);
-            boolean okO = eo.run(opt.words(), base, 200_000);
+            boolean okB = eb.run(patched(baseline), base, 200_000);
+            boolean okO = eo.run(patched(opt), base, 200_000);
             if (co.error != null || cb.error != null)
             {
                 mismatches += 1;
@@ -403,6 +410,122 @@ public final class OptDiff implements OptTier.Diff
         }
         STATIC.put(key, st);
         return st;
+    }
+
+    /**
+     * The code with every relocated address load (a TIB, a Type, a static's cell, a string) patched to a fake
+     * address derived from its KEY, so a tier that names the wrong class or field computes a different value and the
+     * runs diverge. Interface Types stay 0: the itable walk compares against them and must still end at a zero
+     * entry; {@link #sameRelocations} checks their keys instead.
+     */
+    private static int[] patched(CompiledMethod cm)
+    {
+        int[] w = cm.words().clone();
+        var rl = cm.relocs();
+        for (var t : list(rl.tibRefs()))
+        {
+            patch(w, t.wordIndex(), t.reg(), "tib:" + t.className());
+        }
+        for (var t : list(rl.typeRefs()))
+        {
+            patch(w, t.wordIndex(), t.reg(), "type:" + t.className());
+        }
+        for (var t : list(rl.staticRefs()))
+        {
+            patch(w, t.wordIndex(), t.reg(), "static:" + t.fieldKey());
+        }
+        for (var t : list(rl.strRefs()))
+        {
+            patch(w, t.wordIndex(), t.reg(), "str:" + new String(t.text(), java.nio.charset.StandardCharsets.ISO_8859_1));
+        }
+        for (var t : list(rl.stringObjs()))
+        {
+            patch(w, t.wordIndex(), t.reg(), "strobj:" + new String(t.text(), java.nio.charset.StandardCharsets.ISO_8859_1));
+        }
+        return w;
+    }
+
+    /** As CodeBuffer.patchAddr: movz rd, lo16 ; movk rd, hi16, lsl 16 -- an 8-aligned fake address below 4 GiB. */
+    private static void patch(int[] w, int at, int rd, String key)
+    {
+        long addr = 0x1000_0000L + ((key.hashCode() & 0x0FFF_FFFFL) << 3) % 0x2000_0000L;
+        w[at] = asm.A64Enc.movz(rd, (int) (addr & 0xFFFF), 0);
+        w[at + 1] = asm.A64Enc.movk(rd, (int) ((addr >>> 16) & 0xFFFF), 1);
+    }
+
+    private static <T> java.util.List<T> list(util.Vec<T> v)
+    {
+        java.util.ArrayList<T> out = new java.util.ArrayList<>();
+        for (int i = 0; i < v.size(); i++)
+        {
+            out.add(v.get(i));
+        }
+        return out;
+    }
+
+    /** Both tiers must name the same symbols: every relocation kind's keys, as multisets. */
+    private static String sameRelocations(CompiledMethod a, CompiledMethod b)
+    {
+        String[] kinds = { "calls", "tibs", "types", "interfaces", "statics", "strings", "stringObjs" };
+        for (String k : kinds)
+        {
+            java.util.List<String> x = keys(a.relocs(), k);
+            java.util.List<String> y = keys(b.relocs(), k);
+            if (!x.equals(y))
+            {
+                return k + " baseline " + x + " opt " + y;
+            }
+        }
+        return null;
+    }
+
+    private static java.util.List<String> keys(compiler.BaselineCompiler.Relocations rl, String kind)
+    {
+        java.util.ArrayList<String> out = new java.util.ArrayList<>();
+        if (kind.equals("calls"))
+        {
+            for (var c : list(rl.callSites()))
+            {
+                out.add(c.calleeKey());
+            }
+        }
+        else if (kind.equals("tibs"))
+        {
+            for (var c : list(rl.tibRefs()))
+            {
+                out.add(c.className());
+            }
+        }
+        else if (kind.equals("types"))
+        {
+            for (var c : list(rl.typeRefs()))
+            {
+                out.add(c.className());
+            }
+        }
+        else if (kind.equals("interfaces"))
+        {
+            for (var c : list(rl.interfaceRefs()))
+            {
+                out.add(c.className());
+            }
+        }
+        else if (kind.equals("statics"))
+        {
+            for (var c : list(rl.staticRefs()))
+            {
+                out.add(c.fieldKey());
+            }
+        }
+        else
+        {
+            for (var c : list(kind.equals("strings") ? rl.strRefs() : rl.stringObjs()))
+            {
+                out.add(new String(c.text(), java.nio.charset.StandardCharsets.ISO_8859_1));
+            }
+        }
+        java.util.Collections.sort(out);
+        return out;
     }
 
     /** The two runs' stores outside the stack must agree word for word (the frames differ by design). */

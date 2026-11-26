@@ -89,6 +89,12 @@ public final class A64Select
     public static final int UMULH = 51;      // ... unsigned
     public static final int FENCE = 52;      // aux 0 = dsb sy, 1 = isb
     public static final int MRS = 53;        // defs[0] = the system register aux
+    public static final int TIBSTORE = 54;   // header.tib of uses[0] = the TIB of class cp aux (relocated, via x16)
+    public static final int TAGARRAY = 55;   // the array uses[0] gets its array Type: aux = atype or element cp,
+                                             //   imm 1 = a reference array (Symbols.tagArray)
+    public static final int TAGUNBOXED = 56; // ... retyped for an unboxed array's owner (Symbols.tagUnboxedArray)
+    public static final int TYPEADDR = 57;   // defs[0] = the Type of class cp aux (relocated)
+    public static final int DESCADDR = 58;   // defs[0] = the {u2 len}{bytes} descriptor of array class cp aux
 
     public static final int OK = 0;
     public static final int R_CALL = 1;
@@ -109,6 +115,7 @@ public final class A64Select
     };
 
     private static final int MAX_ARGS = 16;
+    private static final int MAX_MULTI_DIMS = 4;             // Baseline's: the counts ride in x2..x5
 
     private final Graph g;
     private final Symbols syms;
@@ -117,6 +124,7 @@ public final class A64Select
     private int[] vreg;           // IR instruction id -> virtual register
     private MBlock[] mblock;      // IR block rpo -> machine block
     private MBlock cur;
+    private boolean[] loopPolls;     // Baseline's loop headers (a backward branch's target), when polls are on
     public int reason;
     /** The method makes a call or polls: it saves the link register and gets a GC map. */
     public boolean nonLeaf;
@@ -199,9 +207,9 @@ public final class A64Select
                     yieldPoint(-1);                          // the prologue yieldpoint, as Baseline's
                 }
             }
-            else if (polls && blk.loopHeader)
+            else if (loopPolls != null && blk.startBci >= 0 && loopPolls[blk.startBci] && blk.entryDepth == 0)
             {
-                yieldPoint(blk.startBci);                    // a loop's yieldpoint
+                yieldPoint(blk.startBci);                    // a loop's yieldpoint, where Baseline puts one
             }
             for (int i = 0; i < blk.nCode && reason == OK; i++)
             {
@@ -219,6 +227,15 @@ public final class A64Select
     private int screen()
     {
         polls = syms.yieldCellAddr() != 0L && !uninterruptible;
+        loopPolls = polls ? baselineLoopHeaders(g.code) : null;
+        if (loopPolls != null && anyTrue(loopPolls))
+        {
+            nonLeaf = true;                                  // a loop's yieldpoint is a call
+        }
+        if (baselineNonLeaf(g.code))
+        {
+            nonLeaf = true;                                  // Baseline's leaf decision, so the polls and LR match
+        }
         if (g.isSynchronized)
         {
             return R_SYNC;
@@ -235,10 +252,7 @@ public final class A64Select
         for (int b = 0; b < g.nBlocks; b++)
         {
             Block blk = g.blocks[b];
-            if (blk.loopHeader && polls)
-            {
-                nonLeaf = true;                              // its yieldpoint is a call
-            }
+
             for (int i = 0; i < blk.nPhis; i++)
             {
                 if (!intLike(blk.phis[i].kind))
@@ -274,6 +288,15 @@ public final class A64Select
                 {
                     return R_INTRINSIC;                      // an init-guard helper call before it (Locale only)
                 }
+                if (x.op == Op.NEW && syms.needsInitGuardClass((int) x.aux))
+                {
+                    return R_INTRINSIC;
+                }
+                if (x.op == Op.NEW || x.op == Op.NEWARRAY || x.op == Op.ANEWARRAY || x.op == Op.MULTIANEWARRAY
+                    || x.op == Op.CHECKCAST || x.op == Op.INSTANCEOF)
+                {
+                    nonLeaf = true;                          // each is a helper call
+                }
                 if (x.op == Op.LDC)
                 {
                     int tag = g.cpTag[(int) x.aux];
@@ -303,7 +326,15 @@ public final class A64Select
         }
         if (x.aux2 != 0xB7 && syms.isIntrinsicCall(cp))
         {
-            return supportedIntrinsic(syms.intrinsicId(cp)) ? OK : R_INTRINSIC;
+            if (!supportedIntrinsic(syms.intrinsicId(cp)))
+            {
+                return R_INTRINSIC;
+            }
+            if (syms.intrinsicEmitsCall(cp))
+            {
+                nonLeaf = true;                              // AddressArray.create allocates: a call, as Baseline sees it
+            }
+            return OK;
         }
         if (x.aux2 == 0xB8 && syms.mathIntrinsicId(cp) >= 0)
         {
@@ -382,11 +413,13 @@ public final class A64Select
     private static int screenOp0(Instr x)
     {
         int op = x.op;
-        if (op == Op.NEW || op == Op.NEWARRAY || op == Op.ANEWARRAY || op == Op.MULTIANEWARRAY
-            || op == Op.CHECKCAST || op == Op.INSTANCEOF || op == Op.MONITORENTER || op == Op.MONITOREXIT
-            || op == Op.THROW)
+        if (op == Op.MONITORENTER || op == Op.MONITOREXIT || op == Op.THROW)
         {
             return R_CALL;
+        }
+        if (op == Op.MULTIANEWARRAY && x.in.length > MAX_MULTI_DIMS)
+        {
+            return R_OP;                                     // as Baseline, which refuses it at compile time
         }
         if (op == Op.LDC && x.kind != Kind.A)
         {
@@ -554,6 +587,60 @@ public final class A64Select
         {
             arrayStore(x);
         }
+        else if (op == Op.NEW)
+        {
+            int cp = (int) x.aux;
+            int size = temp();
+            MInstr k = emit(LIMM, size, null, x);
+            k.imm = syms.objectSize(cp);
+            callInstr(HCALL, d, new int[] { size }, Symbols.HEAP_ALLOC, 0, x);
+            MInstr t = emit(TIBSTORE, -1, new int[] { d }, x);
+            t.aux = cp;
+        }
+        else if (op == Op.NEWARRAY || op == Op.ANEWARRAY)
+        {
+            boolean ref = op == Op.ANEWARRAY;
+            int t = newArray(x, v(x.in[0]), ref ? 8 : elemSize(x.aux2));
+            MInstr tag = emit(TAGARRAY, -1, new int[] { t }, x);
+            tag.aux = ref ? (int) x.aux : x.aux2;
+            tag.imm = ref ? 1 : 0;
+            MInstr m = MInstr.move(d, t);
+            m.bci = x.bci;
+            cur.add(m);
+        }
+        else if (op == Op.MULTIANEWARRAY)
+        {
+            int dims = x.in.length;
+            int[] args = new int[2 + MAX_MULTI_DIMS];        // vm/VM.multiNewArray(desc, dims, c0..c3)
+            args[0] = temp();
+            MInstr da = emit(DESCADDR, args[0], null, x);
+            da.aux = (int) x.aux;
+            args[1] = temp();
+            MInstr dk = emit(LIMM, args[1], null, x);
+            dk.imm = dims;
+            for (int i = 0; i < MAX_MULTI_DIMS; i++)
+            {
+                if (i < dims)
+                {
+                    args[2 + i] = v(x.in[i]);
+                }
+                else
+                {
+                    args[2 + i] = temp();
+                    MInstr z = emit(LIMM, args[2 + i], null, x);
+                    z.imm = 0;
+                }
+            }
+            callInstr(HCALL, d, args, Symbols.MULTI_NEW_ARRAY, 0, x);
+        }
+        else if (op == Op.CHECKCAST || op == Op.INSTANCEOF)
+        {
+            int ty = temp();
+            MInstr ta = emit(TYPEADDR, ty, null, x);
+            ta.aux = (int) x.aux;
+            callInstr(HCALL, d, new int[] { v(x.in[0]), ty }, op == Op.CHECKCAST ? Symbols.CHECK_CAST
+                      : Symbols.INSTANCE_OF, 0, x);
+        }
         else if (op == Op.LDC)
         {
             int tag = g.cpTag[(int) x.aux];
@@ -691,6 +778,103 @@ public final class A64Select
         m.clobbers = callerSaved();
     }
 
+    private static boolean anyTrue(boolean[] b)
+    {
+        for (int i = 0; i < b.length; i++)
+        {
+            if (b[i])
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** As Baseline's loopHeaders: every target of a backward (or self) branch -- where it polls when the operand
+     *  stack is empty. */
+    private static boolean[] baselineLoopHeaders(byte[] code)
+    {
+        boolean[] h = new boolean[code.length];
+        int pos = 0;
+        while (pos < code.length)
+        {
+            int op = code[pos] & 0xFF;
+            int target = -1;
+            if ((op >= 0x99 && op <= 0xA7) || op == 0xC6 || op == 0xC7)
+            {
+                target = pos + (short) (((code[pos + 1] & 0xFF) << 8) | (code[pos + 2] & 0xFF));
+            }
+            else if (op == 0xC8)
+            {
+                target = pos + compiler.Baseline.s4(code, pos + 1);
+            }
+            if (target >= 0 && target <= pos && target < code.length)
+            {
+                h[target] = true;
+            }
+            int len = compiler.Baseline.opLen(op, code, pos);
+            pos += len < 1 ? 1 : len;
+        }
+        return h;
+    }
+
+    /**
+     * As Baseline's isNonLeaf in the writer (no implicit checks): whether its code for this bytecode calls -- over
+     * ALL the bytecode, reachable or not, as Baseline scans it. A method that is non-leaf there saves LR and polls in
+     * its prologue, so this tier must agree even where its own code makes no call (Math.multiplyHigh is one
+     * instruction here, a call-shaped invokestatic there).
+     */
+    private boolean baselineNonLeaf(byte[] code)
+    {
+        int pos = 0;
+        while (pos < code.length)
+        {
+            int op = code[pos] & 0xFF;
+            int idx = pos + 2 < code.length ? ((code[pos + 1] & 0xFF) << 8) | (code[pos + 2] & 0xFF) : 0;
+            boolean intrinsic = (op == 0xB6 || op == 0xB8) && syms.isIntrinsicCall(idx);
+            if (intrinsic && syms.intrinsicId(idx) >= compiler.Intrinsics.AA_NEW
+                && syms.intrinsicId(idx) <= compiler.Intrinsics.AA_LENGTH)
+            {
+                if (syms.intrinsicId(idx) == compiler.Intrinsics.AA_NEW)
+                {
+                    return true;
+                }
+            }
+            else if (op == 0xB6 && intrinsic && !syms.intrinsicEmitsCall(idx))
+            {
+                op = 0;                                      // an unboxed type's method: instructions
+            }
+            else if (op == 0xBB || op == 0xBC || op == 0xBD || op == 0xB6 || op == 0xB9 || op == 0xBA || op == 0xBF
+                     || op == 0xC0 || op == 0xC1 || op == 0x72 || op == 0x73 || op == 0xC5)
+            {
+                return true;
+            }
+            else if ((op == 0xB2 || op == 0xB3) && syms.needsInitGuard(idx))
+            {
+                return true;
+            }
+            else if (op == 0x12 || op == 0x13 || op == 0x14)
+            {
+                int ci = op == 0x12 ? (code[pos + 1] & 0xFF) : idx;
+                int tag = g.cpTag[ci];
+                if (tag == 15 || tag == 16 || tag == 17)
+                {
+                    return true;
+                }
+            }
+            else if (op == 0xB8 && (!intrinsic || syms.intrinsicEmitsCall(idx)))
+            {
+                return true;
+            }
+            else if (op == 0xB7 && !syms.isSkippableInit(idx))
+            {
+                return true;
+            }
+            pos += compiler.Baseline.opLen(code[pos] & 0xFF, code, pos);
+        }
+        return false;
+    }
+
     /** The intrinsics this tier lowers (O1-6a): those that are instructions on their operands -- no call, no
      *  allocation, no system state but the counter and the barriers. */
     static boolean supportedIntrinsic(int id)
@@ -699,7 +883,7 @@ public final class A64Select
         {
             return true;
         }
-        return id == compiler.Intrinsics.AA_GET || id == compiler.Intrinsics.AA_SET
+        return id == compiler.Intrinsics.AA_NEW || id == compiler.Intrinsics.AA_GET || id == compiler.Intrinsics.AA_SET
                || id == compiler.Intrinsics.AA_LENGTH || id == compiler.Intrinsics.LOAD8
                || id == compiler.Intrinsics.LOAD32 || id == compiler.Intrinsics.LOAD64
                || id == compiler.Intrinsics.STORE8 || id == compiler.Intrinsics.STORE32
@@ -798,6 +982,17 @@ public final class A64Select
             store(id == compiler.Intrinsics.STORE8 ? STRB : (id == compiler.Intrinsics.STORE32 ? STRW : STRX), a, b, 0,
                   false, x);
         }
+        else if (id == compiler.Intrinsics.AA_NEW)
+        {
+            int t = newArray(x, a, 8);                       // a long[] (newarray long) ...
+            MInstr tag = emit(TAGARRAY, -1, new int[] { t }, x);
+            tag.aux = 11;
+            MInstr un = emit(TAGUNBOXED, -1, new int[] { t }, x);   // ... retyped when its elements are refs
+            un.aux = (int) x.aux;
+            MInstr m = MInstr.move(d, t);
+            m.bci = x.bci;
+            cur.add(m);
+        }
         else if (id == compiler.Intrinsics.AA_GET)
         {
             elementAddress(x, a, b, 3, d, LDRX);
@@ -826,6 +1021,36 @@ public final class A64Select
             MInstr m = emit(MRS, d, null, x);                // the generic timer's count or its frequency
             m.aux = id == compiler.Intrinsics.READ_CNTPCT_EL0 ? compiler.Target.counter() : asm.A64Enc.CNTFRQ_EL0;
         }
+    }
+
+    /** Heap.allocArray(length, elemSize) into a new register (the array, untagged). */
+    private int newArray(Instr x, int length, int elemSize)
+    {
+        int es = temp();
+        MInstr k = emit(LIMM, es, null, x);
+        k.imm = elemSize;
+        int t = temp();
+        f.vgc[t] = MFunc.GC_REF;
+        callInstr(HCALL, t, new int[] { length, es }, Symbols.HEAP_ALLOC_ARRAY, 0, x);
+        return t;
+    }
+
+    /** As Baseline's arrayElemSize: the newarray atype's element size in bytes. */
+    private static int elemSize(int atype)
+    {
+        if (atype == 4 || atype == 8)
+        {
+            return 1;
+        }
+        if (atype == 5 || atype == 9)
+        {
+            return 2;
+        }
+        if (atype == 6 || atype == 10)
+        {
+            return 4;
+        }
+        return 8;
     }
 
     /** {@code &array[index]} for an element of {@code 1 << shift} bytes; with {@code lop} >= 0 also load it into

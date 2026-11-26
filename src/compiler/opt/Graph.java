@@ -32,6 +32,8 @@ public final class Graph
     public final int[] exCatch;
     public final int exCount;
 
+    /** The method's bytecode. */
+    public byte[] code;
     public Block[] blocks = new Block[0];
     public int nBlocks;
     /** Whether bytecode locals are mirrored in home slots (the method has a reachable handler). */

@@ -5140,6 +5140,7 @@ also with `--opt all` (virt list, raspi4b suite) and a Pi boot.
   prologue and loop-header polls, the bci map.
 - **O1-4a (2026-11-26): statics, stores, the write barrier, ldc** -- 1122 methods. **O1-4b: allocation and type
   checks** (`new`, `newarray`, `anewarray`, `checkcast`, `instanceof`); throws and monitors stay with O1-5.
+  **DONE on QEMU (2026-11-26):** 2556 of 2843 image methods; Baseline's leaf and loop-poll decisions ported.
 - **O1-4: the object model.** Fields, statics, arrays, `new`, write barriers, type checks, implicit null, bounds,
   divide and size checks (by explicit test, as Baseline does -- implicit null checks are O5).
 - **O1-5: exceptions and monitors.** Handler ranges and the home-slot protocol above, `athrow`, synchronized
