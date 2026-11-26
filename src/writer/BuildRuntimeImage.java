@@ -468,6 +468,11 @@ public final class BuildRuntimeImage
                 }
                 i += 2;
             }
+            else if (a.equals("--opt") && i + 1 < args.length)
+            {
+                OptTier.spec = args[i + 1];      // the optimizing tier: all, or keys / owner.* / pkg/** globs
+                i += 2;
+            }
             else if (a.equals("--init") && i + 1 < args.length)
             {
                 initOverride = Files.readAllBytes(Path.of(args[i + 1]));
@@ -504,6 +509,7 @@ public final class BuildRuntimeImage
 
         ImageBuilder.bindTarget();                  // before ANY compile: Baseline lowers the timer by board
         CodeBuffer code = build(classesDir);
+        OptTier.report();
         BootImageWriter writer = new BootImageWriter(code);
         byte[] bytes = code.toBytes();
         bytes = appendPrelude(bytes);

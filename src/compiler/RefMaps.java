@@ -44,12 +44,12 @@ import classfile.ClassReader;
  */
 public final class RefMaps
 {
-    static final byte TOP = 0;     // unknown, or two different types merged: not a reference
-    static final byte REF = 1;     // a reference
-    static final byte RAW = 2;     // a category-1 primitive, or an unboxed Address/Word/Offset/Extent
-    static final byte OREF = 3;    // an unboxed ObjectReference: a raw word that usually holds an object
-    static final byte WIDE = 4;    // a long or double: RAW in the map, but pop2/dup2 need its category
-    static final byte DREF = 5;    // a magic.DataReference: a raw data block's payload address, which keeps it alive
+    public static final byte TOP = 0;     // unknown, or two different types merged: not a reference
+    public static final byte REF = 1;     // a reference
+    public static final byte RAW = 2;     // a category-1 primitive, or an unboxed Address/Word/Offset/Extent
+    public static final byte OREF = 3;    // an unboxed ObjectReference: a raw word that usually holds an object
+    public static final byte WIDE = 4;    // a long or double: RAW in the map, but pop2/dup2 need its category
+    public static final byte DREF = 5;    // a magic.DataReference: a raw data block's payload address, which keeps it alive
 
     /** First word of every map: "GMAP". */
     static final int MAGIC = 0x50414D47;
@@ -71,8 +71,8 @@ public final class RefMaps
     private final byte[] cls;
     private final int[] cpOff;
     private final int[] cpTag;
-    private final byte[] code;
-    private final int nLoc;
+    final byte[] code;
+    final int nLoc;
     private final int nStk;
     private final int width;
     private final int[] exStart;
@@ -80,21 +80,21 @@ public final class RefMaps
     private final int[] exHandler;
     private final int exCount;
 
-    private int[] headOf;          // pc -> block index, -1 when pc does not start a block
-    private int[] headPc;
+    int[] headOf;          // pc -> block index, -1 when pc does not start a block
+    int[] headPc;
     private int nHeads;
     private byte[] headState;      // nHeads * width: entering locals then entering stack
-    private int[] headDepth;       // -1 = not reached
+    int[] headDepth;       // -1 = not reached
     private boolean[] dirty;
 
-    private byte[] loc;
-    private byte[] stk;
-    private int dep;
+    byte[] loc;
+    byte[] stk;
+    int dep;
     private int survivors;         // the lowest depth the last exec reached (pop bookkeeping)
     private byte[] excStk;         // a handler's entering stack: the exception
-    private boolean failed;
+    boolean failed;
 
-    RefMaps(byte[] cls, int[] cpOff, int[] cpTag, byte[] code, int nLoc, int nStk,
+    public RefMaps(byte[] cls, int[] cpOff, int[] cpTag, byte[] code, int nLoc, int nStk,
             int[] exStart, int[] exEnd, int[] exHandler, int exCount)
     {
         this.cls = cls;
@@ -112,7 +112,7 @@ public final class RefMaps
 
     /** Run the dataflow to its fixpoint. False when the method is outside the model (jsr/ret, an unknown opcode,
      *  a stack deeper than {@code nStk}, depths that disagree at a join); such a method gets no map. */
-    boolean solve(int descOff, boolean isStatic)
+    public boolean solve(int descOff, boolean isStatic)
     {
         if (code.length == 0 || nStk < 1)
         {
@@ -337,7 +337,7 @@ public final class RefMaps
         }
     }
 
-    private void load(int h)
+    void load(int h)
     {
         int base = h * width;
         for (int i = 0; i < nLoc; i++)
@@ -587,7 +587,7 @@ public final class RefMaps
     }
 
     /** Apply the instruction at {@code pc} to the current state. */
-    private void exec(int pc, int op)
+    void exec(int pc, int op)
     {
         survivors = dep;
         if (op == 0x00)

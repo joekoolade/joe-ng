@@ -63,10 +63,13 @@ public final class ClassFile
         public final byte[] code;
         public final ExceptionEntry[] exceptions;
         public final int codeBodyOff;  // Code attribute body offset (at max_stack), for the LineNumberTable, or -1
+        /** Carries the {@code @magic.Optimize} pragma (a CLASS-retention annotation): opt-compile it. */
+        public final boolean optimize;
         Method(String name, String descriptor, int descOff, boolean isStatic, boolean isSynchronized,
                int maxStack, int maxLocals,
-               byte[] code, ExceptionEntry[] exceptions, int codeBodyOff)
+               byte[] code, ExceptionEntry[] exceptions, int codeBodyOff, boolean optimize)
         {
+            this.optimize = optimize;
             this.name = name;
             this.descriptor = descriptor;
             this.descOff = descOff;
@@ -878,9 +881,14 @@ public final class ClassFile
             byte[] code = null;
             int codeBodyOff = -1;
             ExceptionEntry[] exceptions = new ExceptionEntry[0];
+            boolean optimize = false;
             for (int a = 0; a < attrs; a++)
             {
                 int body = p + 6;                               // name(2) + length(4)
+                if (utf8(ClassReader.u2(b, p)).equals("RuntimeInvisibleAnnotations"))
+                {
+                    optimize = hasAnnotation(b, body, "Lmagic/Optimize;");
+                }
                 if (utf8(ClassReader.u2(b, p)).equals("Code"))
                 {
                     codeBodyOff = body;
@@ -897,9 +905,62 @@ public final class ClassFile
                 p = body + ClassReader.u4(b, p + 2);            // next attribute
             }
             ms[i] = new Method(name, desc, descOff, (access & ACC_STATIC) != 0,
-                               (access & ACC_SYNCHRONIZED) != 0, maxStack, maxLocals, code, exceptions, codeBodyOff);
+                               (access & ACC_SYNCHRONIZED) != 0, maxStack, maxLocals, code, exceptions, codeBodyOff,
+                               optimize);
         }
         return ms;
+    }
+
+    /** Whether the annotations table at {@code p} (num_annotations first) names the type {@code desc}. */
+    private boolean hasAnnotation(byte[] b, int p, String desc)
+    {
+        int n = ClassReader.u2(b, p);
+        p += 2;
+        for (int i = 0; i < n; i++)
+        {
+            if (utf8(ClassReader.u2(b, p)).equals(desc))
+            {
+                return true;
+            }
+            p = skipAnnotation(b, p);
+        }
+        return false;
+    }
+
+    /** Offset just past the annotation at {@code p} (JVMS 4.7.16). */
+    private static int skipAnnotation(byte[] b, int p)
+    {
+        int pairs = ClassReader.u2(b, p + 2);
+        p += 4;
+        for (int i = 0; i < pairs; i++)
+        {
+            p = skipElementValue(b, p + 2);
+        }
+        return p;
+    }
+
+    private static int skipElementValue(byte[] b, int p)
+    {
+        int tag = ClassReader.u1(b, p);
+        if (tag == 'e')
+        {
+            return p + 5;
+        }
+        if (tag == '@')
+        {
+            return skipAnnotation(b, p + 1);
+        }
+        if (tag == '[')
+        {
+            int n = ClassReader.u2(b, p + 1);
+            p += 3;
+            for (int i = 0; i < n; i++)
+            {
+                p = skipElementValue(b, p);
+            }
+            return p;
+        }
+        return p + 3;                                       // const_value_index or class_info_index
     }
 
     /** Read a Code attribute's exception table; {@code p} points at its length. */
