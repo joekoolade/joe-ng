@@ -460,7 +460,7 @@ final class Nursery implements Uninterruptible
     {
         slotsSeen = slotsSeen + 1L;
         long w = Address.fromLong(a).loadLong();
-        if (!contains(w))
+        if (w < BASE || w >= END)                      // contains(w), inline: this runs for every slot scanned
         {
             return;
         }
@@ -512,12 +512,9 @@ final class Nursery implements Uninterruptible
             return w;
         }
         n.store(o.loadLong());                         // the TIB
-        long k = (long) ObjectModel.HEADER_SIZE;
-        while (k < size)
-        {
-            n.plus(k).store(o.plus(k).loadLong());
-            k += 8L;
-        }
+        long k = (long) ObjectModel.HEADER_SIZE;       // the status word is the allocator's (the size handed out)
+        Magic.copyWords(n.toLong() + k, w + k, size - k);   // ldp/stp, not a word at a time (S7-4d'''')
+        k = size;
         long got = n.plus(ObjectModel.STATUS_OFFSET).loadLong() & -8L;
         while (k < got)
         {
@@ -736,13 +733,16 @@ final class Nursery implements Uninterruptible
                 long w = w0 > wLo ? w0 : wLo;
                 long e = w1 < wHi ? w1 : wHi;
                 boolean kept = false;
+                long slotDelta = Symbols.SLOT_BITMAP - Symbols.LOG_BITMAP;
                 while (w < e)
                 {
-                    if (remsetWord(w))
+                    // Test the two words here and call only for a set one: most of a dirty window's 128 words
+                    // are zero, and a call per word was most of this scan (S7-4d'''').
+                    if (Address.fromLong(w).loadLong() != 0L && remsetWord(w))
                     {
                         kept = true;
                     }
-                    if (remsetSlots(w - Symbols.LOG_BITMAP + Symbols.SLOT_BITMAP))
+                    if (Address.fromLong(w + slotDelta).loadLong() != 0L && remsetSlots(w + slotDelta))
                     {
                         kept = true;
                     }
@@ -983,17 +983,33 @@ final class Nursery implements Uninterruptible
             size = isz & 0xFFFF_FFFFL;                 // an image object: no size in its status word
         }
         long slots = (size - (long) ObjectModel.HEADER_SIZE) >> 3;
-        long i = 0L;
-        while (i < slots && i <= (long) ObjectModel.TYPE_REFMAP_MAX_SLOT)
+        // Only the reference slots, by their set bits (S7-4d''''), not every slot tested in turn. Slot i is bit
+        // i+1 of r0 (bit 0 marks a valid map) for i < 63, and bit i-63 of r1 up to TYPE_REFMAP_MAX_SLOT (126).
+        long first = o + (long) ObjectModel.HEADER_SIZE;
+        long m0 = (r0 & ~d0) >>> 1;
+        if (slots < 63L)
         {
-            int sh = (int) (i < 63L ? i + 1L : i - 63L);
-            long rb = i < 63L ? r0 >>> sh : r1 >>> sh;
-            long db = i < 63L ? d0 >>> sh : d1 >>> sh;
-            if ((rb & 1L) != 0L && (db & 1L) == 0L)
+            m0 = m0 & ((1L << (int) slots) - 1L);
+        }
+        while (m0 != 0L)
+        {
+            int bit = lowBit(m0);
+            m0 = m0 & (m0 - 1L);
+            fwdSlot(first + ((long) bit << 3));
+        }
+        if (slots > 63L)
+        {
+            long m1 = r1 & ~d1;
+            if (slots - 63L < 64L)
             {
-                fwdSlot(o + (long) ObjectModel.HEADER_SIZE + i * 8L);
+                m1 = m1 & ((1L << (int) (slots - 63L)) - 1L);
             }
-            i += 1L;
+            while (m1 != 0L)
+            {
+                int bit = lowBit(m1);
+                m1 = m1 & (m1 - 1L);
+                fwdSlot(first + ((long) (63 + bit) << 3));
+            }
         }
     }
 

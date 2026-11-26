@@ -213,6 +213,10 @@ public final class A64Test
         T.eqWord("LDAXR x17,[x3]", 0xC85FFC71, A64Enc.ldaxr(17, 3));
         T.eqWord("STLXR w0,x0,[x0]",   0xC800FC00, A64Enc.stlxr(0, 0, 0));
         T.eqWord("STLXR w17,x16,[x3]", 0xC811FC70, A64Enc.stlxr(17, 16, 3));
+        T.eqWord("LDP x16,x17,[x3],#16", 0xA8C14470, A64Enc.ldpPostX(16, 17, 3, 16));   // llvm-mc
+        T.eqWord("STP x16,x17,[x5],#16", 0xA88144B0, A64Enc.stpPostX(16, 17, 5, 16));   // llvm-mc
+        T.eqWord("STP x0,x1,[x2],#16",   0xA8810440, A64Enc.stpPostX(0, 1, 2, 16));     // llvm-mc
+        T.eqWord("SUBS x4,x4,#16",       0xF1004084, A64Enc.subsImm(4, 4, 16));         // llvm-mc
         T.eqWord("LDXR x16,[x17]",  0xC85F7E30, A64Enc.ldxr(16, 17));      // llvm-mc
         T.eqWord("LDXR x0,[x0]",    0xC85F7C00, A64Enc.ldxr(0, 0));
         T.eqWord("STXR w3,x16,[x17]", 0xC8037E30, A64Enc.stxr(3, 16, 17));  // llvm-mc

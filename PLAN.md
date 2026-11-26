@@ -5035,10 +5035,15 @@ collection; every edge the trace follows is attributed to its source.
     barrier's bitmap OR is atomic (`ldxr`/`stxr`; a CAS in the Java barriers): two cores logging neighbouring objects
     shared a bitmap word and lost a bit; `boot()` enables the MMU first, since the Pi's `stxr` cannot complete on
     the Device memory of an MMU-off boot. Pi: no measurable cost. New probe NurseryFillProbe.
-  - **S7-4d'''': leftovers.**
+  - **S7-4d'''': drain speed and the remembered-set scan. DONE (2026-11-25).** The promotion copy is a new
+    `Magic.copyWords` intrinsic (`ldp`/`stp` pairs; copy -59%); the mature allocation for the copies takes a lean
+    path in the same size-class / first-fit / bump order, without per-request statistics (-40%; full collections
+    unchanged); the remembered set calls out only for non-zero bitmap words and `scanSlots` walks set bits. Virt
+    minor phases summed 36.5 -> 27.4 ms; Pi 204 -> 150 ms, longest minor-only pause 47 -> 34 ms.
+  - **S7-4d⁵: leftovers.**
     - The barrier's slow path out of line, if the code-size cost matters.
-    - The remembered set's dirty-window word scan (both bitmaps); the JIT map entries (pretenure the maps).
-    - The drain: now the longest minor pause, i.e. copying.
+    - The JIT map entries (pretenure the maps).
+    - The drain's remaining per-object cost (the scan of each copy, the forwarding word).
   - **S7-4e: on by default**, once the Pi pause and throughput numbers favour it (feeds S7-5).
 - **S7-5: sizing and measurement.** Nursery size, promotion, and the Pi pause numbers against S6d-3's.
 

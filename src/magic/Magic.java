@@ -106,6 +106,17 @@ public final class Magic
         throw intrinsic();
     }
 
+    /**
+     * Copy {@code bytes} (a multiple of 8, at least 0) from {@code src} to {@code dst}, 16 bytes per {@code ldp}/{@code
+     * stp} pair and one 8-byte tail. Forward only: the ranges must not overlap with {@code dst} above {@code src}.
+     * Instructions, not a call. The minor collection's copy loop (frames/GC arc S7-4d''''), where a word at a time
+     * through baseline code was the largest part of a promotion.
+     */
+    public static void copyWords(long dst, long src, long bytes)
+    {
+        throw intrinsic();
+    }
+
     /** {@code DC CVAU, addr} — clean the data-cache line at {@code addr} to the point of unification. */
     public static void dcCVAU(long addr)
     {

@@ -174,5 +174,6 @@ public final class Intrinsics
     public static final int AA_GET = 144;            // get(int): laload
     public static final int AA_SET = 145;            // set(int, Address): lastore
     public static final int AA_LENGTH = 146;         // length(): arraylength
+    public static final int COPY_WORDS = 148;        // magic.copyWords(dst, src, bytes): ldp/stp loop, bytes % 8 == 0
     public static final int CALL3 = 147;             // magic.call3(addr, a, b, c): x0..x2 <- a..c, blr addr, x0 result
 }

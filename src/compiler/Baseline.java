@@ -4407,6 +4407,26 @@ public final class Baseline
         {
             cb.emit(A64Enc.dcCvau(popReg()));      // clean the D-cache line at the address arg
         }
+        else if (id == Intrinsics.COPY_WORDS)
+        {
+            // copyWords(dst, src, bytes): operands pop in reverse. x16/x17 carry the pair; the three operand
+            // registers are consumed (advanced and counted down), as the write barrier consumes its own.
+            int n = popReg();
+            int src = popReg();
+            int dst = popReg();
+            cb.emit(A64Enc.subsImm(n, n, 16));
+            int toTail = cb.emit(A64Enc.bcond(A64Enc.LT, 0));
+            int loop = cb.emit(A64Enc.ldpPostX(16, 17, src, 16));
+            cb.emit(A64Enc.stpPostX(16, 17, dst, 16));
+            cb.emit(A64Enc.subsImm(n, n, 16));
+            cb.emit(A64Enc.bcond(A64Enc.GE, loop - cb.wordCount()));
+            cb.set(toTail, A64Enc.bcond(A64Enc.LT, cb.wordCount() - toTail));
+            // n is now -16 (none left) or -8 (one word left): bit 3 tells them apart.
+            int skip = cb.emit(A64Enc.tbz(n, 3, 0));
+            cb.emit(A64Enc.ldrx(16, src, 0));
+            cb.emit(A64Enc.strx(16, dst, 0));
+            cb.set(skip, A64Enc.tbz(n, 3, cb.wordCount() - skip));
+        }
         else if (id == Intrinsics.DC_CVAC)
         {
             cb.emit(A64Enc.dcCvac(popReg()));      // clean the D-cache line to PoC at the address arg

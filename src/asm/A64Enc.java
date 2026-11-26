@@ -122,6 +122,21 @@ public final class A64Enc
     {
         return 0xD100_0000 | (unsigned(imm12, 12) << 10) | (rn << 5) | rd;
     }
+    /** {@code SUBS Xd, Xn, #imm12} -- subtract and set flags (64-bit). */
+    public static int subsImm(int rd, int rn, int imm12)
+    {
+        return 0xF100_0000 | (unsigned(imm12, 12) << 10) | (rn << 5) | rd;
+    }
+    /** {@code LDP Xt, Xt2, [Xn], #imm} -- load a pair, then add {@code imm} (a multiple of 8) to Xn. Xn must not be Xt or Xt2. */
+    public static int ldpPostX(int rt, int rt2, int rn, int imm)
+    {
+        return 0xA8C0_0000 | (signed(imm >> 3, 7) << 15) | (rt2 << 10) | (rn << 5) | rt;
+    }
+    /** {@code STP Xt, Xt2, [Xn], #imm} -- store a pair, then add {@code imm} (a multiple of 8) to Xn. */
+    public static int stpPostX(int rt, int rt2, int rn, int imm)
+    {
+        return 0xA880_0000 | (signed(imm >> 3, 7) << 15) | (rt2 << 10) | (rn << 5) | rt;
+    }
     /** {@code ADD Xd, Xn, #imm12, LSL #12} -- the shifted form ({@code sh}, bit 22): adds {@code imm12 << 12}. */
     public static int addImmLsl12(int rd, int rn, int imm12)
     {
