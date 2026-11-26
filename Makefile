@@ -20,6 +20,9 @@ OUT     := out
 IMG     := kernel8.img
 # `make image IMAGE_INIT=<file>` bakes <file> as /etc/init in place of ramfs/etc/init (scripts/push.sh does).
 IMAGE_INIT ?=
+# `make image OPT=all` (or a comma list of method keys / owner.* / pkg/** globs) selects methods for the optimizing
+# tier (PLAN.md "The optimizing compiler"); methods carrying @magic.Optimize are selected with no flag.
+OPT ?=
 # Host tools + host-side unit tests. JDK test programs under test/jdk are GUEST programs (compiled against the
 # java.base overlay by the `jdktests` target), not host code, so exclude them here; test/realjdk is guest code
 # too (compiled by `jdktests` against the real java.base).
@@ -142,6 +145,8 @@ test: build
 	$(JAVA) -cp $(OUT) classfile.RefMapTest $(OUT)
 	$(JAVA) --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.util=ALL-UNNAMED -cp $(OUT) compiler.CompilerTest $(OUT)
 	$(JAVA) -cp $(OUT) compiler.UnboxedTest $(OUT)
+	$(JAVA) -cp $(OUT) compiler.opt.OptIrTest $(OUT)
+	$(JAVA) -cp $(OUT) compiler.opt.OptCorpus --oracle --jrt $(OUT)
 	$(JAVA) -cp $(OUT) hosttest.CryptoTest
 	$(JAVA) -cp $(OUT) hosttest.ZipTest
 	$(JAVA) -cp $(OUT) overlay.OverlayCheck --baseline test/overlay/known-gaps.txt
@@ -310,7 +315,7 @@ junitjar: $(JUNIT_JAR)
 	@mkdir -p ramfs/lib && cp $(JUNIT_JAR) ramfs/lib/junit.jar && ls -l ramfs/lib/junit.jar
 
 image: build jdktests realjdktests plugins appjar runprogs junitjar
-	$(JAVA) --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.util=ALL-UNNAMED -cp $(OUT) writer.BuildRuntimeImage $(OUT) $(IMG) $(if $(IMAGE_INIT),--init $(IMAGE_INIT))
+	$(JAVA) --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.util=ALL-UNNAMED -cp $(OUT) writer.BuildRuntimeImage $(OUT) $(IMG) $(if $(IMAGE_INIT),--init $(IMAGE_INIT)) $(if $(OPT),--opt '$(OPT)')
 	@ls -l $(IMG)
 
 qemu: image

@@ -2621,6 +2621,10 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     private CompiledMethod compile(String key, long base, boolean isEntry)
     {
         Resolved r = lookup(key);
+        if (OptTier.selected(key, r.method))
+        {
+            OptTier.check(key, r.cf, r.method);       // O1-1: build + verify the IR; Baseline's code is installed
+        }
         try
         {
             return new BaselineCompiler(r.cf, this).yieldPolls(true).compileMethod(r.method, base, isEntry);

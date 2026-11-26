@@ -100,6 +100,18 @@ logs what informed each piece so encodings and boot facts are auditable.
   JDK's `java.util.zip`/`java.util.jar` writers and compares our reader against
   them byte-for-byte.
 
+## Optimizing compiler (compiler/opt)
+
+- **Cooper, Harvey, Kennedy, "A Simple, Fast Dominance Algorithm"** (Rice University, 2001) -- the iterative
+  immediate-dominator computation in `compiler/opt/Dominators.java` (intersect processed predecessors in reverse
+  postorder to a fixpoint).
+- **JVMS 21 §4.7.16** (`RuntimeInvisibleAnnotations`, `element_value`) -- reading the `@magic.Optimize` pragma in
+  `classfile/ClassFile.java`; **JVMS §4.10.1** (type merging at joins, category-2 values as two slots) -- the
+  builder's per-slot state and the HI marker in `compiler/opt/SsaBuilder.java`.
+- **Cytron et al., "Efficiently Computing Static Single Assignment Form and the Control Dependence Graph"**
+  (TOPLAS 1991) -- *concept only*: SSA form itself. The construction here is not theirs (no dominance frontiers):
+  a phi per slot at every join, created when the first predecessor finishes, then trivial phis removed.
+
 ## Concepts (not code) referenced
 
 - **Jikes RVM** and **JOE / bare-metal JVM** writeups — *ideas only* for the

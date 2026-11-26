@@ -4,6 +4,41 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **OPT COMPILER ARC, INCREMENT O1-1: the IR, the bytecode -> SSA builder and the verifier, host only
+  (2026-11-26).** The arc's shape is decided in PLAN.md ("The optimizing compiler"): writer first, selection by
+  `--opt` list/`all` AND the `@magic.Optimize` pragma, values spilled across calls so opt frames reuse Baseline's
+  frame metadata.
+  - **What landed (`compiler/opt`, 12 classes):** `Kind`, `Op`, `Instr`, `Block`, `FrameState`, `Graph`; `Cfg`
+    (leaders, edges, reverse postorder, loop headers, a synthetic entry block so bci 0 can be a loop header);
+    `SsaBuilder` (abstract interpretation over JVM slots -- a long or double is two, the second a HI marker; a phi
+    per slot at every join, created when the first predecessor finishes; a framestate on every throwing
+    instruction, taken BEFORE it); `PhiResolver` (trivial phis out, kinds inferred, conflicting slots dropped);
+    `Dominators` (Cooper-Harvey-Kennedy); `Verifier`; `OptCompiler`. Handlers use the HOME protocol: in a method
+    with a handler every local definition also stores its home slot, and a handler starts from `CATCH` + one
+    `LOAD_LOCAL` per local whose kind is inferred from the values stored at the points it covers.
+  - **Writer:** `--opt all|<keys, owner.*, pkg/**>` (`make image OPT=...`) and `@magic.Optimize`
+    (CLASS retention, read from `RuntimeInvisibleAnnotations` by `ClassFile`). Each selected method's IR is built
+    and verified; the code installed is still Baseline's. `--opt all` over the image:
+    **`opt: built=2842 verified=2842 malformed=0 rejected=0`.**
+  - **Three bugs the corpus found in the builder before it passed:** `goto` targets were never leaders (an NPE on
+    every ternary); the HI half of a long on the stack at a join became a phi, so the `lreturn` after a
+    `c ? 1L : 0L` saw no HI; and an int stored over a long's low half left the old HI in the next slot, so a later
+    store there killed the int (`LazyCompiler.lazyCompileLocked`, locals 8/9).
+  - **Tests (`make test`):** `OptIrTest` (45 checks) -- fixture shapes (loops, longs/doubles across joins, a slot
+    int on one path and a reference on the other, try/catch and try/finally with a handler covering itself, a long
+    live into a handler, switches, `dup2_x1`, an Address phi merging null, a loop header at bci 0) and SEVEN
+    corruptions the verifier must report, each checked to fail for the reason it tests. `OptCorpus --oracle --jrt
+    out`: every method of the seed JDK's `java.base` and of `out/` -- **74,078 methods, 0 malformed**, and every
+    framestate (893,934) compared with RefMaps' types at its bci (an independent dataflow, test-side
+    `compiler.RefMapsOracle`): **0 mismatches**, 11 where RefMaps is coarser (int/float or long/double merged to
+    RAW/WIDE where the builder marks the slot dead; null merged with an Address). Over EVERY JDK module
+    (`--jrt-all`, not in `make test`): 218,701 methods, 5,271,155 framestates, 0 malformed, 0 mismatches.
+  - **The image is byte-identical to main** with and without `--opt all` (measured against main's compiled host
+    classes over the same `out/`), so there is nothing new to boot: this increment cannot change behaviour on the
+    board. A first attempt put the oracle's replay in `RefMaps` and the image grew by 1,312 bytes -- the image
+    compiles every method of the compiler's classes -- so it lives in `test/` now, through package access.
+  - `make test` and overlaycheck OK.
+
 - **FRAMES/GC ARC, INCREMENT S7-5: the nursery is 8 MiB per core (2026-11-26).**
   - **The sweep.** `nursery=<KB>` on main (S7-4e), WebServerDemo + FrameBench through `/run`, then `/gc`.
     - **Pi 4, 3 boots each** (4096 is S7-4e's default arm):

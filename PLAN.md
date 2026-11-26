@@ -5054,6 +5054,63 @@ collection; every edge the trace follows is attributed to its source.
   - **Open:** the trend says larger still helps, but past 8 MiB the reserved slots and the tables above them move;
     the longest pause is now a FULL collection, so the next pause win is there (S7-6 or the opt compiler).
 
+## The optimizing compiler (arc started 2026-11-26)
+
+The phases O1-O5 are in `BACKLOG.md` ("Optimizing compiler"). This section is the decided shape of O1 and its
+increments. **Decided with the user (2026-11-26):**
+
+1. **Writer first.** O1 installs opt code only in the image, compiled by the writer on the host JVM, where the IR
+   verifier runs after every phase and a failure is a host exception with a method name. The on-metal JIT uses the
+   tier from O4 (counters). The code is still written in the self-compilable subset -- no lambdas, no JDK
+   collections, no records in the core -- so it can be baked and run on metal later, as Baseline is.
+2. **Selection: both a list and a pragma.** Default OFF. The writer flag `--opt <spec>` takes `all` (opt-compile
+   every method the tier accepts -- the stress mode) or a comma list of method keys and `owner.*` / `pkg/**` globs;
+   a method carrying `@magic.Optimize` (CLASS retention, read by the writer from `RuntimeInvisibleAnnotations`)
+   is opt-compiled with no flag. A method the tier does not accept -- an opcode or shape not covered yet -- falls
+   back to Baseline and is COUNTED by reason, so coverage is a number the build prints.
+3. **Spill across calls.** O1 keeps a value in a register only between calls; anything live across a call or a
+   poll lives in a frame slot. So an opt frame looks to the VM exactly like a Baseline frame -- LR at `[sp+0]`, a
+   fixed `frameSize`, machine-PC handler ranges, a GMAP slot map at every call -- and `VMUnwind`, `VMGc`,
+   `StackRoots` and the nursery need no opt-frame iterator. Register-describing maps and callee-saved allocation
+   come when they pay (O2/O3), with the derived-pointer entries the frames/GC arc already requires.
+
+**The IR** (package `compiler.opt`). A CFG of basic blocks; each block a list of SSA instructions with an int
+opcode, a value kind and operand references. Kinds: `I` (int, and the sub-word types), `J`, `F`, `D`, `A`
+(reference), `W` (a raw word: Address/Word/Offset/Extent), `O` (ObjectReference -- a raw word the collector
+traces), `R` (DataReference), `V` (no value). Phis at block heads; exception edges are explicit successors of the
+block a throwing instruction ends. Every instruction that can throw, call or poll carries a **framestate** (bci +
+the SSA value of every bytecode local and stack slot) -- unused until deopt (O4), but built and verified from O1
+so it never has to be retrofitted. Magic intrinsics and fences are pinned instructions.
+
+**Exceptions into a handler.** The unwinder delivers to a handler PC with only the frame (memory) intact. In a
+method with handlers, every bytecode-local definition also stores to that local's HOME frame slot, and a handler
+block begins by loading its locals from the homes -- so the homes match the bytecode locals at every bci, and
+their reference map at a call is RefMaps' entering locals at that bci. O2 may narrow this to the locals live into
+a handler; it may never sink or drop a home store.
+
+**Increments.** Each one ends with `make test`, overlaycheck and the probe regression; the ones that install code
+also with `--opt all` (virt list, raspi4b suite) and a Pi boot.
+- **O1-1: the IR, the bytecode -> SSA builder and the verifier, on the host only.** Nothing is emitted. The
+  writer builds and verifies the IR of every method it compiles when `--opt` is given, and prints
+  `opt: built=N verified=N rejected=N` with the rejection reasons. The selection flag and pragma land here.
+  **DONE (2026-11-26):** image `built=2842 verified=2842 rejected=0`; `OptCorpus` 74,078 methods (java.base +
+  `out/`) and 218,701 (every JDK module) with 0 malformed, every framestate matching RefMaps' types.
+- **O1-2: the back end for leaf methods.** Lowering to machine-level IR, liveness, linear scan over x0..x15
+  (minus the reserved scratch), frame and prologue/epilogue, emission through `asm.A64Enc`; installed for leaf
+  methods with no allocation, calls or exceptions. Opt code replaces the Baseline body at the same symbol, so
+  callers are unchanged.
+- **O1-3: calls and safepoints.** Static/special/virtual/interface calls through the same `Symbols` seam
+  Baseline uses (so relocation records are shared), spill across calls, GMAP maps at every call and yieldpoint,
+  prologue and loop-header polls, the bci map.
+- **O1-4: the object model.** Fields, statics, arrays, `new`, write barriers, type checks, implicit null, bounds,
+  divide and size checks (by explicit test, as Baseline does -- implicit null checks are O5).
+- **O1-5: exceptions and monitors.** Handler ranges and the home-slot protocol above, `athrow`, synchronized
+  methods and blocks.
+- **O1-6: the rest of the bytecode set** (switches, floats, magic intrinsics, invokedynamic, the unboxed
+  types) until `--opt all` rejects nothing reachable in the image but what is recorded, and the image boots and
+  passes the regression with every accepted method opt-compiled. That is O1 done: opt code behaves exactly like
+  Baseline.
+
 ## 5. Design decisions to lock day one
 
 - **Compile-only, no interpreter.** With no OS/interpreter beneath, the first code
