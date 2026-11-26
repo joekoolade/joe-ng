@@ -48,6 +48,8 @@ import java.util.zip.CRC32;
  * ITS OWN, and the solo run is the verdict, so batching can never fail a probe. It can only MASK a failure through
  * shared state (a class already initialized by an earlier probe), which is what {@code solo} in the list is for.
  *
+ * <p>{@code --opt <spec>} builds every image with the optimizing tier ({@code BuildRuntimeImage --opt}, e.g. {@code all}).
+ *
  * <p>{@code --init-extra <lines>} appends lines ({@code \\n} separates several) to every boot's {@code /etc/init}, e.g.
  * {@code gcmaps=2}: the frames/GC arc's shadow check with a collection every 1 MB (S4's worklist run). Its report
  * lines ({@code gcmap...}) are filtered from the comparison; one printed in the middle of a probe's line still
@@ -117,6 +119,9 @@ public final class Regress
     /** {@code --init-extra}: lines appended to every boot's {@code /etc/init} (empty = none). */
     private static String initExtra = "";
 
+    /** {@code --opt <spec>}: build every image with the optimizing tier ({@code BuildRuntimeImage --opt}). */
+    private static String opt;
+
     /** The host server {@code net} probes talk to; its port, once started (0 = not started). */
     private static int netPort;
 
@@ -171,6 +176,11 @@ public final class Regress
             else if (args[i].equals("--init-extra") && i + 1 < args.length)
             {
                 initExtra = args[i + 1].replace("\\n", "\n") + "\n";   // e.g. gcmaps=2: added to every /etc/init
+                i += 2;
+            }
+            else if (args[i].equals("--opt") && i + 1 < args.length)
+            {
+                opt = args[i + 1];                                // e.g. all: the optimizing tier everywhere it applies
                 i += 2;
             }
             else if (args[i].equals("--tcg"))
@@ -506,9 +516,15 @@ public final class Regress
         Path img = runDir.resolve(tag + ".img");
         Path logFile = runDir.resolve(tag + ".log");
         Files.writeString(initFile, init);
-        int rc = run(List.of("java", "--add-opens", "java.base/java.lang=ALL-UNNAMED", "--add-opens",
-                "java.base/java.util=ALL-UNNAMED", "-cp", "out", "writer.BuildRuntimeImage", "out", img.toString(),
-                "--init", initFile.toString(), "--board", virt ? "virt" : "pi4"), runDir.resolve(tag + ".build"));
+        List<String> build = new ArrayList<>(List.of("java", "--add-opens", "java.base/java.lang=ALL-UNNAMED",
+                "--add-opens", "java.base/java.util=ALL-UNNAMED", "-cp", "out", "writer.BuildRuntimeImage", "out",
+                img.toString(), "--init", initFile.toString(), "--board", virt ? "virt" : "pi4"));
+        if (opt != null)
+        {
+            build.add("--opt");
+            build.add(opt);
+        }
+        int rc = run(build, runDir.resolve(tag + ".build"));
         if (rc != 0)
         {
             for (Probe p : job.probes())

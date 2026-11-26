@@ -2623,7 +2623,11 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         Resolved r = lookup(key);
         if (OptTier.selected(key, r.method))
         {
-            OptTier.check(key, r.cf, r.method);       // O1-1: build + verify the IR; Baseline's code is installed
+            CompiledMethod opt = OptTier.compile(key, r.cf, r.method, base, isEntry, this);
+            if (opt != null)
+            {
+                return opt;                           // the optimizing tier's code, at the same symbol
+            }
         }
         try
         {
