@@ -123,6 +123,7 @@ MemberGenericsProbe
 MemberNameProbe
 MemberToStringProbe
 MergeSpillProbe          # a goto into a deep-stack merge point must not run the fall-through flush (S7-2)
+NurseryFillProbe         # VM raw fills across allocating calls: multianewarray levels into a promoted/large outer (S7-4d''')
 MethodHandleProbe
 MethodRefBoxFloatProbe
 MethodRefUnboxProbe

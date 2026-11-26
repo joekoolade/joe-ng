@@ -5026,8 +5026,16 @@ collection; every edge the trace follows is attributed to its source.
     pair, static `Field.set`, `BootSeeds`, `Primitives`, `Loader.provideKnownStatics` -- the last found by VERIFY's
     new per-minor check that no static names an evacuated block). Virt statics and maps 12.7 -> 2.3 ms; minor phases
     summed 63 -> 40 ms. Pi minor phases 349 -> 203 ms, minor-only pauses 377 -> 237 ms.
-  - **S7-4d''': leftovers.**
-    - An audit of VM code that fills fresh objects raw across allocating calls.
+  - **S7-4d''': the raw-fill audit. DONE (2026-11-25).** A 64 KB nursery under VERIFY (`gcnursery=2 nursery=64`)
+    makes minors frequent enough to land inside VM fills; main failed 5 of 214 probes that way. VM code that stores
+    a reference raw into an object it allocated BEFORE another allocating call now goes through
+    `WriteBarrier.putRef`/`putElem` (`multianewarray`'s levels, the stack-trace array and `Throwable` backtrace,
+    `setThrowableMessage`, `argv`, the `BootSeeds` stdin buffer). Reflection's 17+ slot `Magic.callN` passes x15
+    into a heap `long[]`; `StackRoots.markStub` now pins it and roots its arguments across a lazy compile. The
+    barrier's bitmap OR is atomic (`ldxr`/`stxr`; a CAS in the Java barriers): two cores logging neighbouring objects
+    shared a bitmap word and lost a bit; `boot()` enables the MMU first, since the Pi's `stxr` cannot complete on
+    the Device memory of an MMU-off boot. Pi: no measurable cost. New probe NurseryFillProbe.
+  - **S7-4d'''': leftovers.**
     - The barrier's slow path out of line, if the code-size cost matters.
     - The remembered set's dirty-window word scan (both bitmaps); the JIT map entries (pretenure the maps).
     - The drain: now the longest minor pause, i.e. copying.

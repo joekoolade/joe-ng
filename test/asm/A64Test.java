@@ -213,6 +213,9 @@ public final class A64Test
         T.eqWord("LDAXR x17,[x3]", 0xC85FFC71, A64Enc.ldaxr(17, 3));
         T.eqWord("STLXR w0,x0,[x0]",   0xC800FC00, A64Enc.stlxr(0, 0, 0));
         T.eqWord("STLXR w17,x16,[x3]", 0xC811FC70, A64Enc.stlxr(17, 16, 3));
+        T.eqWord("LDXR x16,[x17]",  0xC85F7E30, A64Enc.ldxr(16, 17));      // llvm-mc
+        T.eqWord("LDXR x0,[x0]",    0xC85F7C00, A64Enc.ldxr(0, 0));
+        T.eqWord("STXR w3,x16,[x17]", 0xC8037E30, A64Enc.stxr(3, 16, 17));  // llvm-mc
         T.eqWord("CLREX",          0xD5033F5F, A64Enc.clrex());
         // The 64-bit forms differ from the 32-bit ONLY in the size field -- assert that rather than trust it.
         T.eqWord("LDAXR size bit", 0x40000000, A64Enc.ldaxr(5, 7) ^ A64Enc.ldaxrw(5, 7));

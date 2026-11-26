@@ -272,6 +272,14 @@ public final class VM
         Magic.writeCPACR_EL1(0x300000L);   // CPACR_EL1.FPEN = 0b11 (no FP trap)
         Magic.isb();
         Magic.writeSP(0x80000L);           // stack below the image (needed before any call)
+        // The MMU goes on FIRST, before any compiled code that could store a reference (S7-4d'''). The write
+        // barrier sets its log bit with an exclusive ldxr/stxr pair, and with the MMU off every data access is
+        // Device memory, where the Pi's stxr does not complete: the first barrier spun for ever. ScratchMap.check's
+        // `lo = new long[MAX]`, a putstatic of a heap reference, ran before the old enable point in run(), and the
+        // Pi's trial boot never answered. The mailbox the UART init calibrates through cache-maintains its buffer,
+        // so it is correct with the MMU on (Mailbox.tag); the tables need nothing but the stack.
+        VMScheduler.buildPageTables();
+        VMScheduler.enableMmuThisCore();
 
         Heap.init();
         Uart.init();
@@ -5010,11 +5018,8 @@ public final class VM
         Uart.write(Magic.bytes("MHz\n"));
         printBuildId();
 
-        // Enable the identity-mapped MMU now -- after the mailbox (the one DMA path) has run with the MMU
-        // off, and before anything that needs cacheable/coherent RAM (SMP + the HW spinlock). RAM becomes
-        // Normal cacheable, MMIO stays Device; every secondary core enables it too (see secondaryMain).
-        VMScheduler.buildPageTables();
-        VMScheduler.enableMmuThisCore();
+        // The identity-mapped MMU went on in boot(), before anything ran (see there): RAM Normal cacheable, MMIO
+        // Device; every secondary core enables it too (see secondaryMain).
         Uart.write(Magic.bytes("mmu on\n"));
         WriteBarrier.init();                              // S7-2: the log bitmap is raw RAM; start it empty
 

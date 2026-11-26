@@ -95,7 +95,16 @@ final class WriteBarrier implements Uninterruptible
             return;
         }
         Address w = Address.fromLong(Symbols.LOG_BITMAP + ((o >> 9) << 3));
-        w.store(w.loadLong() | (1L << (int) ((o >> 3) & 63L)));
+        long bit = 1L << (int) ((o >> 3) & 63L);
+        long old = w.loadLong();
+        // The OR is ATOMIC, as the compiled barrier's is (S7-4d'''): a word covers 512 bytes, so two cores logging
+        // neighbouring objects share it, and a plain load/or/store loses a bit. INLINE, not a helper: MEASURED, a
+        // shared private helper here sent ClinitRaceProbe (nursery on) to a wild pc 0x80 in 24 of 24 boots; why is
+        // not established -- this runs inside collections (the drain, fullEdge), so keep it call-free.
+        while ((old & bit) == 0L && !w.attempt(old, old | bit))
+        {
+            old = w.loadLong();
+        }
         Address.fromLong(Symbols.LOG_SUMMARY + (o >> 15)).store((byte) 0);   // dirty, as the compiled barrier does
     }
 
@@ -111,8 +120,44 @@ final class WriteBarrier implements Uninterruptible
             return;
         }
         Address w = Address.fromLong(Symbols.SLOT_BITMAP + ((a >> 9) << 3));
-        w.store(w.loadLong() | (1L << (int) ((a >> 3) & 63L)));
+        long bit = 1L << (int) ((a >> 3) & 63L);
+        long old = w.loadLong();
+        // The OR is ATOMIC, as the compiled barrier's is (S7-4d'''): a word covers 512 bytes, so two cores logging
+        // neighbouring objects share it, and a plain load/or/store loses a bit. INLINE, not a helper: MEASURED, a
+        // shared private helper here sent ClinitRaceProbe (nursery on) to a wild pc 0x80 in 24 of 24 boots; why is
+        // not established -- this runs inside collections (the drain, fullEdge), so keep it call-free.
+        while ((old & bit) == 0L && !w.attempt(old, old | bit))
+        {
+            old = w.loadLong();
+        }
         Address.fromLong(Symbols.LOG_SUMMARY + (a >> 15)).store((byte) 0);
+    }
+
+    /**
+     * VM code's reference FIELD store (S7-4d'''): {@code holder.off = v}, then the compiled barrier's job by hand --
+     * log the holder when it is old and {@code v} young. For a holder filled across ALLOCATING calls: a minor
+     * collection in between can promote a young holder, or find a mature one (logged at birth) naming nothing young
+     * and clear its bit, and a raw store after that is an old->young edge no remembered set sees. Pass the holder's
+     * address re-derived AFTER the allocating call, never one computed before it.
+     */
+    static void putRef(Address holder, long off, long v)
+    {
+        holder.plus(off).store(v);
+        if (Nursery.contains(v) && !Nursery.contains(holder.toLong()))
+        {
+            log(holder.toLong());
+        }
+    }
+
+    /** ... and an ELEMENT store {@code arr[k] = v} of a reference array: logs the slot, as {@code aastore} does. */
+    static void putElem(Address arr, long k, long v)
+    {
+        Address slot = arr.plus((long) ObjectModel.ARRAY_BASE_OFFSET + k * 8L);
+        slot.store(v);
+        if (Nursery.contains(v) && !Nursery.contains(arr.toLong()))
+        {
+            logSlot(slot.toLong());
+        }
     }
 
     /** Whether the object at {@code o} has been logged since the bitmap was last cleared. */

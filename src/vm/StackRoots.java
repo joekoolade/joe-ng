@@ -384,7 +384,19 @@ final class StackRoots implements Uninterruptible
         if (n > 16)
         {
             long p = Address.fromLong(sp + StubFrames.STUB_SAVE0 + 15L * 8L).loadLong();
-            if (p > sp && p + (n - 15) * 8L <= top)         // the caller's out-args, above this frame
+            boolean onStack = p > sp && p + (n - 15) * 8L <= top;   // the caller's out-args, above this frame
+            // ... or a HEAP buffer: reflection's Magic.callN passes x15 into the argument long[] it built
+            // (Executable.argBuffer). A lazy-compile trampoline that collects before the callee's prologue reads it
+            // must not let that buffer move -- x15 is a raw interior pointer nothing rewrites -- and the reference
+            // arguments in it are roots like any other. Unpinned, a minor phase evacuated the buffer and the callee
+            // read its arguments from poisoned space (WideCallProbe's 16-argument constructor, S7-4d''').
+            boolean inHeap = !onStack && (p & 7L) == 0L
+                             && ((p >= Heap.BASE && p < compiler.Symbols.LOG_SPAN) || Nursery.contains(p));
+            if (inHeap && minor == 1)
+            {
+                Nursery.pinWord(p);
+            }
+            if (onStack || inHeap)
             {
                 int i = 15;
                 while (i < n && i < 64)

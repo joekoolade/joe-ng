@@ -241,7 +241,8 @@ final class StackTrace
             }
             if (arr != 0L)
             {
-                Address.fromLong(arr).plus(24L).plus(n * 8L).store(frameToElement(Address.fromLong(cpc), steTib));
+                long ste = frameToElement(Address.fromLong(cpc), steTib);   // allocates: store after it (S7-4d''')
+                WriteBarrier.putElem(Address.fromLong(arr), n, ste);
             }
             n += 1;
             long cfs = VM.frameSizeAt(Address.fromLong(cpc));
@@ -308,7 +309,8 @@ final class StackTrace
         {
             Address fpc = !deep.isZero() ? deep.plus(ObjectModel.ARRAY_BASE_OFFSET).plus((long) i * 8L).loadAddress()
                                      : exc.toAddress().plus(16L).plus((long) i * 8L).loadAddress();
-            arr.toAddress().plus(24L).plus((long) i * 8L).store(frameToElement(fpc, tib.toAddress()));
+            long ste = frameToElement(fpc, tib.toAddress());          // allocates: arr may be old after it (S7-4d''')
+            WriteBarrier.putElem(arr.toAddress(), i, ste);
             i += 1;
         }
         return arr.toLong();
@@ -372,7 +374,7 @@ final class StackTrace
         }
         CodeArray pcs = CodeArray.create(n);           // a vm.CodeElem[]: its pcs are code roots (frames/GC arc S6b-3)
         long arr = Magic.addrOf(pcs);
-        exc.toAddress().plus(off).store(arr);
+        WriteBarrier.putRef(exc.toAddress(), off, arr);  // exc may be old: the create above can collect (S7-4d''')
         return arr;
     }
 

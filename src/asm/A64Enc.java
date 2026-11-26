@@ -501,6 +501,19 @@ public final class A64Enc
         return 0xC800_FC00 | (rs << 16) | (rn << 5) | rt;
     }
     /**
+     * {@code LDXR Xt, [Xn]} -- load exclusive (64-bit), no acquire: {@link #ldaxr} with bit 15 (o0) clear. For an
+     * atomic read-modify-write that orders nothing, such as the write barrier's bit OR into a log bitmap word.
+     */
+    public static int ldxr(int rt, int rn)
+    {
+        return 0xC85F_7C00 | (rn << 5) | rt;
+    }
+    /** {@code STXR Ws, Xt, [Xn]} -- store exclusive (64-bit), no release; Ws = 0 on success. Ws must differ from Xt and Xn. */
+    public static int stxr(int rs, int rt, int rn)
+    {
+        return 0xC800_7C00 | (rs << 16) | (rn << 5) | rt;
+    }
+    /**
      * {@code CLREX} — clear the local exclusive monitor.
      *
      * <p>REQUIRED on the FAILURE path of a compare-and-swap, and its absence is not a performance question.
