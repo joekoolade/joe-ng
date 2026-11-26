@@ -101,6 +101,13 @@ public final class BaselineCompiler
         return this;
     }
 
+    /** The writer's {@link Symbols} for {@code cf}, for the optimizing tier's back end (it asks only pure queries --
+     *  field offsets, volatility -- so it shares Baseline's answers without sharing its relocation records). */
+    public static Symbols writerSymbols(ClassFile cf, ClassResolver resolver)
+    {
+        return new WriterSymbols(cf, resolver);
+    }
+
     /** Method key used for call resolution: {@code owner.name+descriptor}. */
     public static String key(String owner, String name, String desc)
     {

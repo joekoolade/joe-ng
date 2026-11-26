@@ -4,6 +4,37 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **OPT COMPILER ARC, INCREMENT O1-2b: the AArch64 back end for leaf methods -- the first opt code in the image
+  (2026-11-26).** QEMU-validated; Pi pending.
+  - **What:** `A64Select` (IR -> machine IR, one machine instruction per A64 instruction, so the allocator's
+    "uses read before defs" holds of the emitted code) and `A64Emit` (blocks in layout order, a jump to the next
+    block dropped, branches patched; a frame only when something spills: `sub sp`, slot k at `[sp+8k]`, `add sp`
+    before `ret`). `OptTier` installs the result in place of Baseline's body at the same symbol (`--opt`, or
+    `@magic.Optimize`); `JOENG_OPT_NOEMIT` turns installation off, `JOENG_OPT_LIST` names what was installed.
+  - **What it accepts:** leaf methods -- no invoke, allocation, type check, monitor, throw, static access or
+    reference store (each a call or a barrier: O1-3/O1-4), no handler, no float or double, at most 16 arguments, no
+    loop outside an `Uninterruptible` class (any other loop gets a yieldpoint, which is a call). Ints, longs,
+    references and the word types; arithmetic, shifts, compares and branches, switches, field and array loads.
+    `--opt all` installs **245** of the image's 2841 methods on the Pi build (248 on virt); declined: calls or
+    allocates 2294, loop 215, handler 76, synchronized 9, float 1.
+  - **Exactly Baseline's semantics in the writer** (`implicitChecks()` off): no null, bounds or zero-divisor tests
+    (`sdiv` by 0 answers 0, as Baseline's does); ints re-canonicalized after the ops that can overflow; and -- found
+    by the differential test below -- re-sign-extended at the ordered compares, the switches and `i2l`, where
+    Baseline does it too, because an int can arrive with junk above bit 31 (a W-form load in an intrinsic). The first
+    cut assumed every int canonical there and differed from Baseline in 3 of 245 methods (`Baseline.inReg`,
+    `Inflate.pendingOutput`, `Inflate.bytesRead`). Removing provably redundant extensions is an O2 cleanup.
+  - **`writer.OptDiff` (in `make test`): both tiers, side by side.** For every method the tier installs, Baseline's
+    code is compiled too and both run on a host AArch64 emulator (`test/asm/A64Emu`, new) over the same canonical
+    random arguments and the same deterministic memory: **245 methods, 73,489 runs, 0 mismatches**; the opt code
+    executes 1.03M instructions to Baseline's 1.50M (-31%, dynamic count on the emulator, not a timing). A planted
+    bug (`sub` operands swapped) gives 14 mismatches. `A64EmuTest` checks the emulator itself against Java
+    arithmetic for every instruction class it decodes (~140,000 runs), since both tiers run on it.
+  - **QEMU, `--opt all`:** virt probe list **215/215** (`Regress --opt all`, new flag; all 47 images
+    `installed=248 badAlloc=0`). raspi4b suite **`checked=160 mismatch=0`**, `collections=78` at the churn line (as
+    S7-5), the marker line clean except `UNDER THE LOADER LOCK=1`, which every suite log since S7-4d2 shows.
+    `scripts/demo-suite.sh` takes `OPT=<spec>`.
+  - **Without `--opt` the image is byte-identical to main.** `make test` and overlaycheck OK.
+
 - **OPT COMPILER ARC, INCREMENT O1-2a: the target seam, the machine IR and the register allocator, host only
   (2026-11-26).** User direction: AArch64 first, but built for x86-64 and PowerPC (PLAN.md "Targets").
   - **The seam.** `OptTarget` (register file, word size, where the return address lives, stack alignment; selection

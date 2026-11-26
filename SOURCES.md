@@ -117,6 +117,9 @@ logs what informed each piece so encodings and boot facts are auditable.
 - **Briggs, Cooper, Harvey, Simpson, "Practical Improvements to the Construction and Destruction of SSA Form"**
   (SP&E 1998) -- *concept only*: phis become parallel copies on (split) edges, sequentialized with a temporary
   for cycles (`compiler/opt/PhiElim.java`).
+- **ARM ARM (DDI 0487), A64 base instructions and the shared pseudocode** (`DecodeBitMasks`, `AddWithCarry`,
+  the bitfield moves, `ConditionHolds`) -- the host-test emulator `test/asm/A64Emu.java`, checked against Java's own
+  arithmetic by `test/asm/A64EmuTest.java`.
 - **Intel SDM Vol. 2 (IDIV, two-operand ADD/IMUL, shift by CL)** and the **System V AMD64 ABI** (argument
   registers, caller-saved set) -- the constraints the test-only x86-64-shaped register file in
   `test/compiler/opt/AllocTest.java` imposes; no x86 code is generated.

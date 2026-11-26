@@ -50,6 +50,10 @@ public final class MInstr
     public MBlock[] targets;
     public long imm;
     public int aux;
+    /** A target's case keys (a switch). */
+    public int[] keys;
+    /** The bytecode offset this came from, or -1 (for the bci -> machine-code map). */
+    public int bci = -1;
     /** Linear position, set by {@link Liveness}: uses read at 4*index, clobbers at +1..+2, defs written at +3. */
     public int pos;
 

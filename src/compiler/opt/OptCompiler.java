@@ -11,6 +11,8 @@
  */
 package compiler.opt;
 
+import compiler.Symbols;
+
 /**
  * The optimizing tier's front door (PLAN.md "The optimizing compiler"). O1-1: build a method's SSA graph and
  * verify it; nothing is emitted yet. The result says which of three things happened -- built and verified, not
@@ -25,6 +27,10 @@ public final class OptCompiler
 
     private Graph graph;
     private int reason;
+    private int backReason;
+    private int[] words;
+    private int frameSize;
+    private int[] bcToWord;
     private int reasonBci;
     private String error;
 
@@ -47,6 +53,62 @@ public final class OptCompiler
             return MALFORMED;
         }
         return ACCEPTED;
+    }
+
+    /**
+     * O1-2b: after {@link #compile} accepted the method, generate AArch64 code for it at {@code base}. ACCEPTED with
+     * {@link #words}, {@link #frameSize} and {@link #bcToWord}; REJECTED when the back end does not cover it yet
+     * ({@link #backReason}, an {@link A64Select} reason); MALFORMED when the allocation fails its check (a back-end
+     * bug -- the method falls back to Baseline either way).
+     */
+    public int generateA64(Symbols syms, boolean uninterruptible, long base, int codeLength)
+    {
+        A64Select sel = new A64Select(graph, syms, uninterruptible);
+        MFunc f = sel.select();
+        if (f == null)
+        {
+            backReason = sel.reason;
+            return REJECTED;
+        }
+        PhiElim.run(f);
+        Constraints.run(f);
+        A64Target t = new A64Target();
+        LinearScan.run(f, t.regs());
+        error = AllocCheck.check(f, t.regs());
+        if (error != null)
+        {
+            return MALFORMED;
+        }
+        A64Emit e = new A64Emit(f);
+        words = e.emit(base, codeLength);
+        if (words == null)
+        {
+            backReason = A64Select.R_OP;
+            return REJECTED;
+        }
+        frameSize = e.frameSize;
+        bcToWord = e.bcToWord;
+        return ACCEPTED;
+    }
+
+    public int backReason()
+    {
+        return backReason;
+    }
+
+    public int[] words()
+    {
+        return words;
+    }
+
+    public int frameSize()
+    {
+        return frameSize;
+    }
+
+    public int[] bcToWord()
+    {
+        return bcToWord;
     }
 
     public Graph graph()

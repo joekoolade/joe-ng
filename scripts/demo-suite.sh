@@ -12,7 +12,8 @@
 #
 # The no-manifest demo suite on QEMU: the full regression's suite step.
 #
-# Usage: scripts/demo-suite.sh <tag> [checkout]
+# Usage: [OPT=<spec>] scripts/demo-suite.sh <tag> [checkout]
+#   OPT         build with the optimizing tier (BuildRuntimeImage --opt <spec>, e.g. all)
 #   <tag>       names the files: /tmp/arm-<tag>.{build,w,img,log,txt}
 #   [checkout]  the joe-ng tree to build (default: this script's own). The control run passes ../joe-ng-wt.
 #
@@ -32,7 +33,7 @@ cd "$TREE" || exit 1
 cp ramfs/etc/init /tmp/i-$T.s && : > ramfs/etc/init
 make build jdktests plugins > /tmp/arm-$T.build 2>&1
 JOENG_SYMMAP=1 java --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.util=ALL-UNNAMED \
-    -cp out writer.BuildRuntimeImage out /tmp/arm-$T.img > /tmp/arm-$T.w 2>&1
+    -cp out writer.BuildRuntimeImage out /tmp/arm-$T.img ${OPT:+--opt "$OPT"} > /tmp/arm-$T.w 2>&1
 echo "wr=$?"
 cp /tmp/i-$T.s ramfs/etc/init
 git diff --quiet ramfs/etc/init && echo init-ok
