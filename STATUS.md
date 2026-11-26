@@ -4,8 +4,30 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
-- **OPT COMPILER ARC, INCREMENT O1-3a: direct calls, yieldpoints and GC maps (2026-11-26).** virt-validated; the
-  raspi4b suite was still running when this merged; Pi not run.
+- **OPT COMPILER ARC, INCREMENT O1-3b: virtual and interface dispatch (2026-11-26).** QEMU-validated; Pi not run.
+  - **Dispatch as Baseline does it in the writer (no guards):** `VCALL` -- the receiver's TIB, its vtable slot,
+    `blr x16` -- when the writer resolves a slot; `ICALL` -- the interface's Type (a relocated address load through
+    `Symbols.interfaceType`), the itable-directory walk in x17/x18, the found table's slot, `blr x16`; an
+    invokeinterface naming one of Object's public methods takes the virtual path. The invokevirtuals Baseline turns
+    into helpers are `HCALL`s (`getClass`, array `clone`, `wait`/`notify`/`notifyAll`), and
+    `desiredAssertionStatus` folds to false. Declined: default-method dispatch and invokedynamic (2), the
+    intrinsics and unboxed-type methods (666, most of them now `invokevirtual`s on `magic` types).
+  - **A writer symbol query that throws now DECLINES the method** (`symbolQueryFailed=1`:
+    `Throwable.getStackTrace`, an array `clone` the writer cannot resolve) instead of counting as malformed --
+    Baseline's compile throws the same way and `compileOrStub` bakes a resolve stub, which is what happens.
+  - **`OptDiff` runs dispatches:** a BLR's callee is named from the bytecode (the opt tier records its sites;
+    Baseline's map back through `bcToWord`) and keyed by the target both tiers loaded. The emulator's unwritten memory
+    is now zero a quarter of the time, so the itable walk and the compilers' terminator scans end as they do over
+    real memory (skipped runs 5,815 -> 1,931 at 100 trials). **778 methods, 227,561 runs, 400,238 calls of which
+    156,933 dispatches, 318,351 moved references, 0 mismatches.** Planted bugs: vtable slot + 1 -> 132 mismatches,
+    itable slot + 1 -> 46.
+  - **`--opt all` installs 778 of 2841** (757 on virt). QEMU virt **215/215**; raspi4b suite **`checked=160
+    mismatch=0`**, `collections=78` at the churn line, markers clean but the long-standing `UNDER THE LOADER LOCK=1`.
+    `make test` and overlaycheck OK.
+
+- **OPT COMPILER ARC, INCREMENT O1-3a: direct calls, yieldpoints and GC maps (2026-11-26).** QEMU-validated; Pi not
+  run. (The raspi4b suite finished just after the merge: `checked=160 mismatch=0`, `collections=78` at the churn line,
+  628 methods installed.)
   - **Calls:** invokestatic and invokespecial through the same `Symbols.call` seam as Baseline (so the call-site
     relocations are the writer's own); arguments pinned to x0.., the result to x0, every caller-saved register
     destroyed -- so whatever is live across a call is spilled (PLAN.md: spill across calls). Declined still:

@@ -36,6 +36,7 @@ public final class OptDiff implements OptTier.Diff
     private long baseSteps;
     private long calls;
     private long moved;
+    private long dynCalls;
 
     private OptDiff(int trials)
     {
@@ -60,7 +61,7 @@ public final class OptDiff implements OptTier.Diff
             System.setOut(real);
         }
         System.out.println("OptDiff: methods=" + d.methods + " runs=" + d.compared + " mismatches=" + d.mismatches
-                           + " skipped=" + d.skipped + " calls=" + d.calls + " movedRefs=" + d.moved
+                           + " skipped=" + d.skipped + " calls=" + d.calls + " dispatches=" + d.dynCalls + " movedRefs=" + d.moved
                            + " instructions: baseline=" + d.baseSteps + " opt=" + d.optSteps);
         if (d.mismatches > 0 || d.methods == 0)
         {
@@ -68,17 +69,19 @@ public final class OptDiff implements OptTier.Diff
         }
     }
 
-    public void compare(String key, String desc, boolean isStatic, CompiledMethod baseline, CompiledMethod opt,
-                        long base)
+    public void compare(String key, classfile.ClassFile cf, classfile.ClassFile.Method method,
+                        CompiledMethod baseline, CompiledMethod opt, compiler.opt.OptCompiler oc, long base)
     {
+        String desc = method.descriptor;
+        boolean isStatic = method.isStatic;
         methods += 1;
         Random r = new Random(key.hashCode());
         for (int t = 0; t < trials; t++)
         {
             long[] a = args(desc, isStatic, r);
             long seed = r.nextLong();
-            Callee cb = new Callee(baseline, seed, 1);
-            Callee co = new Callee(opt, seed, 2);
+            Callee cb = new Callee(baseline, seed, 1, cf, method, null);
+            Callee co = new Callee(opt, seed, 2, cf, method, oc);
             A64Emu eb = cb.emu;
             A64Emu eo = co.emu;
             for (int i = 0; i < a.length; i++)
@@ -99,7 +102,7 @@ public final class OptDiff implements OptTier.Diff
             if (!okB || !okO)
             {
                 skipped += 1;
-                if (skipped <= 5)
+                if (skipped <= 5 || System.getenv("OPTDIFF_SKIPS") != null)
                 {
                     System.err.println("  skip " + key + ": baseline " + why(eb) + " / opt " + why(eo));
                 }
@@ -110,6 +113,7 @@ public final class OptDiff implements OptTier.Diff
             optSteps += eo.steps;
             calls += co.calls;
             moved += co.moved;
+            dynCalls += co.dispatches;
             if (cb.calls != co.calls || cb.trace != co.trace || (eb.x[0] != eo.x[0] && !desc.endsWith(")V")))
             {
                 mismatches += 1;
@@ -145,11 +149,20 @@ public final class OptDiff implements OptTier.Diff
         String error;
         int calls;
         int moved;
+        int dispatches;
         long trace = 17;                                   // every call's name and arguments, in order
 
-        Callee(CompiledMethod cm, long seed, int tier)
+        final classfile.ClassFile cf;
+        final classfile.ClassFile.Method method;
+        final compiler.opt.OptCompiler oc;
+
+        Callee(CompiledMethod cm, long seed, int tier, classfile.ClassFile cf, classfile.ClassFile.Method method,
+               compiler.opt.OptCompiler oc)
         {
             this.cm = cm;
+            this.cf = cf;
+            this.method = method;
+            this.oc = oc;
             this.garbage = new Random(seed * 31 + tier);
             for (int i = 0; i < cm.relocs().callSites().size(); i++)
             {
@@ -162,11 +175,22 @@ public final class OptDiff implements OptTier.Diff
         public void call(A64Emu e, int word)
         {
             String key = byWord.get(word);
+            boolean dispatch = false;
             if (key == null)
             {
-                error = "BL at word " + word + " has no relocation";
+                key = dispatchKey(word);
+                dispatch = true;
+            }
+            if (key == null)
+            {
+                error = "call at word " + word + " has no relocation and is no dispatch site";
                 e.unsupported = error;
                 return;
+            }
+            if (dispatch)
+            {
+                key = key + "@" + Long.toHexString(e.lastTarget);   // the target both tiers loaded
+                dispatches += 1;
             }
             calls += 1;
             if (!collect(e, word + 1))
@@ -175,8 +199,8 @@ public final class OptDiff implements OptTier.Diff
                 return;
             }
             int paren = key.indexOf('(');
-            String d = key.substring(paren);
-            int n = paramCount(d) + (isStatic(key) ? 0 : 1);
+            String d = key.substring(paren, dispatch ? key.indexOf('@') : key.length());
+            int n = paramCount(d) + (dispatch || !isStatic(key) ? 1 : 0);
             long h = key.hashCode();
             for (int i = 0; i < n && i < 16; i++)
             {
@@ -188,6 +212,43 @@ public final class OptDiff implements OptTier.Diff
                 e.x[i] = garbage.nextLong();
             }
             e.x[0] = result(d.charAt(d.indexOf(')') + 1), h);
+        }
+
+        /**
+         * The Methodref a dispatch (BLR) at {@code word} calls: the opt tier records its sites; for Baseline, the
+         * bytecode whose machine range contains the word (bcToWord is complete there), which must be an invoke.
+         */
+        private String dispatchKey(int word)
+        {
+            int cp;
+            if (oc != null)
+            {
+                cp = oc.dispatchCpAt(word);
+            }
+            else
+            {
+                int[] b2w = cm.bcToWord();
+                int bci = -1;
+                for (int i = 0; i < b2w.length; i++)
+                {
+                    if (b2w[i] >= 0 && b2w[i] <= word)
+                    {
+                        bci = i;
+                    }
+                }
+                int op = bci < 0 ? -1 : method.code[bci] & 0xFF;
+                if (op != 0xB6 && op != 0xB9)
+                {
+                    return null;
+                }
+                cp = ((method.code[bci + 1] & 0xFF) << 8) | (method.code[bci + 2] & 0xFF);
+            }
+            if (cp < 0)
+            {
+                return null;
+            }
+            var r = cf.memberRef(cp);
+            return r.owner() + "." + r.name() + r.descriptor();
         }
 
         /** The simulated collection: move every reference the map says the frame at sp holds at this call. */
