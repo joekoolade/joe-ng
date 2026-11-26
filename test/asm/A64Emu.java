@@ -16,8 +16,8 @@ import java.util.HashMap;
 /**
  * A small AArch64 user-mode emulator for host tests: the integer instructions the compilers emit in a LEAF body
  * (no calls), decoded from the ARM ARM encodings (A64 base instructions; DecodeBitMasks for logical immediates;
- * the bitfield moves). Memory is sparse: a word never stored reads as a hash of its address, so two runs over the
- * same addresses see the same contents. An encoding it does not know stops the run with {@link #unsupported}
+ * the bitfield moves). Memory is sparse: a word never stored reads as a hash of its address (zero a quarter of the
+ * time), so two runs over the same addresses see the same contents. An encoding it does not know stops the run with {@link #unsupported}
  * set, never a guess.
  *
  * <p>Used by writer.OptDiff to run Baseline's code and the optimizing tier's for the same method on the same
@@ -35,6 +35,8 @@ public final class A64Emu
     public long steps;
     /** What a {@code BL} does: the callee, simulated. Null: a BL is unsupported. */
     public CallHook calls;
+    /** The target register's value at the last BLR (what a dispatch loaded). */
+    public long lastTarget;
     private long codeBase;
 
     /** A simulated callee: {@code word} is the BL's word index in the code, x30 already holds the return address. */
@@ -83,10 +85,18 @@ public final class A64Emu
         return h ^ (h >>> 32);
     }
 
+    /** A word never stored: a hash of its address -- and zero a quarter of the time, so the scans the compilers
+     *  emit (a string to its terminator, an itable directory to its matching entry) end, as they do over real
+     *  memory. Both runs of a comparison read the same contents either way. */
     private long word(long a)
     {
         Long w = mem.get(a);
-        return w == null ? hash(a) : w;
+        if (w != null)
+        {
+            return w;
+        }
+        long h = hash(a);
+        return (h >>> 62) == 0 ? 0L : h;
     }
 
     /** Little-endian load of {@code size} bytes (1, 2, 4, 8) at {@code a}, zero-extended. */
@@ -480,6 +490,13 @@ public final class A64Emu
             boolean nz = ((w >>> 24) & 1) == 1;
             boolean set = ((x[rd] >>> bit) & 1) == 1 && rd != 31;
             return set == nz ? pc + (((long) (w << 13) >> 18) << 2) : next;
+        }
+        if ((w & 0xFFFF_FC1F) == 0xD63F_0000 && calls != null)     // BLR: the hook is the callee
+        {
+            lastTarget = x[rn];
+            x[30] = next;
+            calls.call(this, (int) ((pc - codeBase) >> 2));
+            return next;
         }
         if ((w & 0xFFFF_FC1F) == 0xD65F_0000)                       // RET
         {

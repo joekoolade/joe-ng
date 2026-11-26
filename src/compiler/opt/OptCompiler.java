@@ -32,6 +32,9 @@ public final class OptCompiler
     private int frameSize;
     private int[] bcToWord;
     private int gcMapWord;
+    private int[] dynWord;
+    private int[] dynCp;
+    private int nDyn;
     private int reasonBci;
     private String error;
 
@@ -90,6 +93,9 @@ public final class OptCompiler
         frameSize = e.frameSize;
         bcToWord = e.bcToWord;
         gcMapWord = e.gcMapWord;
+        dynWord = e.dynWord;
+        dynCp = e.dynCp;
+        nDyn = e.nDyn;
         return ACCEPTED;
     }
 
@@ -111,6 +117,19 @@ public final class OptCompiler
     public int[] bcToWord()
     {
         return bcToWord;
+    }
+
+    /** The cp index of the dispatch (BLR) at word {@code w}, or -1 -- for writer.OptDiff. */
+    public int dispatchCpAt(int w)
+    {
+        for (int i = 0; i < nDyn; i++)
+        {
+            if (dynWord[i] == w)
+            {
+                return dynCp[i];
+            }
+        }
+        return -1;
     }
 
     /** Word offset of the GC map after the code (0 = none: a leaf). */

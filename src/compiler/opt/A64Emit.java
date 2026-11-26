@@ -14,6 +14,7 @@ package compiler.opt;
 import asm.A64Enc;
 import asm.CodeBuffer;
 import compiler.Symbols;
+import objectmodel.ObjectModel;
 
 /**
  * AArch64 emission (O1-2b): allocated machine IR into instruction words through {@code asm.A64Enc}, blocks in
@@ -43,6 +44,10 @@ public final class A64Emit
     private int nSites;
     private long[] liveOutSlots;                       // scratch: slots live after the instruction being emitted
     public int gcMapWord;
+    /** Dispatch sites (a BLR): its word and the Methodref / InterfaceMethodref it calls -- for writer.OptDiff. */
+    public int[] dynWord = new int[8];
+    public int[] dynCp = new int[8];
+    public int nDyn;
     private int[] blockWord;
     private int[] fixWord;
     private int[] fixBlock;
@@ -156,6 +161,37 @@ public final class A64Emit
         {
             syms.call(cb, x.aux, x.imm != 0);              // BL + its relocation, through the shared seam
             site(cb.wordCount() - 1);
+        }
+        else if (op == A64Select.HCALL)
+        {
+            syms.callHelper(cb, x.aux);
+            site(cb.wordCount() - 1);
+        }
+        else if (op == A64Select.VCALL)
+        {
+            // Baseline's vtable dispatch, writer form (no guards): the receiver is in x0
+            cb.emit(A64Enc.ldrx(SCRATCH, 0, ObjectModel.TIB_OFFSET));
+            cb.emit(A64Enc.ldrx(SCRATCH, SCRATCH, ObjectModel.tibSlotOffset(ObjectModel.tibVMethodSlot((int) x.imm))));
+            dynamic(x.aux);
+        }
+        else if (op == A64Select.ICALL)
+        {
+            // Baseline's itableDispatch, writer form: x16 = the interface's Type, x17 walks the receiver's itable
+            // directory (x18 the entry's interface), then the found table's slot is the target
+            syms.interfaceType(cb, SCRATCH, x.aux);
+            cb.emit(A64Enc.ldrx(17, 0, ObjectModel.TIB_OFFSET));
+            cb.emit(A64Enc.ldrx(17, 17, ObjectModel.tibSlotOffset(ObjectModel.TIB_TYPE_SLOT)));
+            cb.emit(A64Enc.ldrx(17, 17, ObjectModel.TYPE_ITABLE_DIR_OFFSET));
+            int search = cb.wordCount();
+            cb.emit(A64Enc.ldrx(18, 17, ObjectModel.ITABLE_ENTRY_IFACE_OFFSET));
+            cb.emit(A64Enc.cmpReg(18, SCRATCH));
+            int beq = cb.emit(A64Enc.bcond(A64Enc.EQ, 0));
+            cb.emit(A64Enc.addImm(17, 17, ObjectModel.ITABLE_ENTRY_SIZE));
+            cb.emit(A64Enc.b(search - cb.wordCount()));
+            cb.set(beq, A64Enc.bcond(A64Enc.EQ, cb.wordCount() - beq));
+            cb.emit(A64Enc.ldrx(17, 17, ObjectModel.ITABLE_ENTRY_TABLE_OFFSET));
+            cb.emit(A64Enc.ldrx(SCRATCH, 17, (int) x.imm * ObjectModel.WORD));
+            dynamic(x.aux);
         }
         else if (op == A64Select.YIELD)
         {
@@ -274,6 +310,28 @@ public final class A64Emit
         {
             failed = true;
         }
+    }
+
+    /** {@code blr x16}, its GC map site, and the dispatch-site record. */
+    private void dynamic(int cp)
+    {
+        int w = cb.emit(A64Enc.blr(SCRATCH));
+        site(w);
+        if (nDyn == dynWord.length)
+        {
+            int[] a = new int[nDyn * 2];
+            int[] b = new int[nDyn * 2];
+            for (int i = 0; i < nDyn; i++)
+            {
+                a[i] = dynWord[i];
+                b[i] = dynCp[i];
+            }
+            dynWord = a;
+            dynCp = b;
+        }
+        dynWord[nDyn] = w;
+        dynCp[nDyn] = cp;
+        nDyn += 1;
     }
 
     /** Record a GC map site at the BL in word {@code w}: the spill slots live after it. */

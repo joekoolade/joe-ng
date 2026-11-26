@@ -69,6 +69,9 @@ public final class A64Select
     public static final int CALL = 33;       // a direct call: aux = Methodref cp, imm 1 = has a receiver; args pinned
                                              //   to x0.., the result to x0, destroys every caller-saved register
     public static final int YIELD = 34;      // a yieldpoint: poll the request word, call the helper when it is set
+    public static final int VCALL = 35;      // vtable dispatch: imm = the vtable slot; as CALL otherwise
+    public static final int ICALL = 36;      // itable dispatch: aux = InterfaceMethodref cp, imm = the itable slot
+    public static final int HCALL = 37;      // a VM helper call: aux = the Symbols helper id
 
     public static final int OK = 0;
     public static final int R_CALL = 1;
@@ -80,11 +83,12 @@ public final class A64Select
     public static final int R_OP = 7;
     public static final int R_DISPATCH = 8;
     public static final int R_INTRINSIC = 9;
-    public static final int REASONS = 10;
+    public static final int R_UNRESOLVED = 10;
+    public static final int REASONS = 11;
     private static final String[] REASON_NAMES = {
         "ok", "allocates, throws or stores a reference", "has a handler", "float/double",
         "loop without yieldpoints", "more than 16 arguments", "synchronized", "op not selected yet",
-        "virtual/interface/dynamic call", "intrinsic or special call",
+        "invokedynamic or default-method dispatch", "intrinsic or special call", "virtual call with no slot",
     };
 
     private static final int MAX_ARGS = 16;
@@ -264,9 +268,17 @@ public final class A64Select
     private int screenCall(Instr x)
     {
         int cp = (int) x.aux;
-        if (x.aux2 == 0xB6 || x.aux2 == 0xB9 || x.aux2 == 0xBA)
+        if (x.aux2 == 0xBA)
         {
             return R_DISPATCH;
+        }
+        if (x.in.length > MAX_ARGS)
+        {
+            return R_ARGS;
+        }
+        if (x.aux2 == 0xB6 || x.aux2 == 0xB9)
+        {
+            return screenDispatch(x, cp);
         }
         if (syms.isIntrinsicCall(cp) || syms.mathIntrinsicId(cp) >= 0 || syms.isGetCallerClass(cp)
             || syms.isMhSigPoly(cp) || syms.isWatchedCall(cp) || syms.isWatchedCallArgs(cp))
@@ -287,6 +299,34 @@ public final class A64Select
         }
         nonLeaf = true;
         return OK;
+    }
+
+    /** invokevirtual / invokeinterface: Baseline's dispatch shapes, in the writer's world (no guards). */
+    private int screenDispatch(Instr x, int cp)
+    {
+        if (syms.isIntrinsicCall(cp) || syms.isMhSigPoly(cp) || syms.isWatchedCall(cp) || syms.isWatchedCallArgs(cp)
+            || syms.isWatchedRecv(cp))
+        {
+            return R_INTRINSIC;
+        }
+        nonLeaf = true;
+        if (x.aux2 == 0xB9 && !syms.isObjectPublicMethod(cp))
+        {
+            return OK;                                       // itable dispatch
+        }
+        if (syms.isGetClass(cp) || syms.isArrayClone(cp) || syms.monitorOp(cp) != 0)
+        {
+            return OK;                                       // a helper call
+        }
+        if (syms.isDesiredAssertionStatus(cp))
+        {
+            return OK;                                       // folds to false
+        }
+        if (syms.defaultDispatch(cp))
+        {
+            return R_DISPATCH;
+        }
+        return syms.vtableSlot(cp) < 0 ? R_UNRESOLVED : OK;
     }
 
     private static int screenOp(Instr x)
@@ -493,6 +533,13 @@ public final class A64Select
         {
             return;
         }
+        if (x.aux2 == 0xB6 || (x.aux2 == 0xB9 && syms.isObjectPublicMethod(cp)))
+        {
+            if (virtualSpecial(x, d, cp))
+            {
+                return;
+            }
+        }
         int n = x.in.length;
         int[] args = new int[n];
         int[] pins = new int[n];
@@ -501,15 +548,79 @@ public final class A64Select
             args[i] = v(x.in[i]);
             pins[i] = i;                                     // argument i in xi (receiver first)
         }
-        MInstr m = emit(CALL, d, args, x);
+        int mop = CALL;
+        long imm = x.aux2 == 0xB8 ? 0 : 1;
+        if (x.aux2 == 0xB9 && !syms.isObjectPublicMethod(cp))
+        {
+            mop = ICALL;
+            imm = syms.interfaceSlot(cp);
+        }
+        else if (x.aux2 == 0xB6 || x.aux2 == 0xB9)
+        {
+            mop = VCALL;
+            imm = syms.vtableSlot(cp);
+        }
+        callInstr(mop, d, args, cp, imm, x);
+    }
+
+    private void callInstr(int mop, int d, int[] args, int aux, long imm, Instr x)
+    {
+        int[] pins = new int[args.length];
+        for (int i = 0; i < args.length; i++)
+        {
+            pins[i] = i;                                     // argument i in xi (receiver first)
+        }
+        MInstr m = emit(mop, d, args, x);
         m.fixedUses = pins;
         if (d >= 0)
         {
             m.fixedDefs = new int[] { 0 };
         }
-        m.aux = cp;
-        m.imm = x.aux2 == 0xB8 ? 0 : 1;
+        m.aux = aux;
+        m.imm = imm;
         m.clobbers = callerSaved();
+    }
+
+    /** The invokevirtuals Baseline lowers to a helper or a constant rather than a dispatch; true if this was one. */
+    private boolean virtualSpecial(Instr x, int d, int cp)
+    {
+        int recv = v(x.in[0]);
+        if (syms.isGetClass(cp))
+        {
+            callInstr(HCALL, d, new int[] { recv }, Symbols.GET_CLASS, 0, x);
+            return true;
+        }
+        if (syms.isArrayClone(cp))
+        {
+            callInstr(HCALL, d, new int[] { recv }, Symbols.ARRAY_CLONE, 0, x);
+            return true;
+        }
+        if (syms.isDesiredAssertionStatus(cp))
+        {
+            MInstr m = emit(LIMM, d, null, x);               // assertions are off: false
+            m.imm = 0;
+            return true;
+        }
+        int mop = syms.monitorOp(cp);
+        if (mop == 1)
+        {
+            int zero = temp();
+            MInstr z = emit(LIMM, zero, null, x);
+            z.imm = 0;
+            callInstr(HCALL, -1, new int[] { recv, zero }, Symbols.MON_WAIT, 0, x);   // wait() = wait(0)
+            return true;
+        }
+        if (mop == 2)
+        {
+            callInstr(HCALL, -1, new int[] { recv, v(x.in[1]) }, Symbols.MON_WAIT, 0, x);
+            return true;
+        }
+        if (mop == 3 || mop == 4)
+        {
+            callInstr(HCALL, -1, new int[] { recv }, mop == 3 ? Symbols.MON_NOTIFY : Symbols.MON_NOTALL, 0, x);
+            return true;
+        }
+        return false;
     }
 
     private void yieldPoint(int bci)

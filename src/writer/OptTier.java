@@ -39,8 +39,8 @@ final class OptTier
     /** A differential check, installed by a test (writer.OptDiff): both tiers' code for each installed method. */
     interface Diff
     {
-        void compare(String key, String descriptor, boolean isStatic, CompiledMethod baseline, CompiledMethod opt,
-                     long base);
+        void compare(String key, ClassFile cf, ClassFile.Method m, CompiledMethod baseline, CompiledMethod opt,
+                     OptCompiler oc, long base);
     }
 
     static Diff diff;
@@ -53,6 +53,7 @@ final class OptTier
     private static final int REPORT_LIMIT = 20;
     private static int installed;
     private static int backMalformed;
+    private static int symbolFailures;
     private static final int[] byBack = new int[A64Select.REASONS];
     /** JOENG_OPT_NOEMIT: build and verify only (O1-1's behaviour), install nothing -- a bisection switch. */
     private static final boolean NO_EMIT = System.getenv("JOENG_OPT_NOEMIT") != null;
@@ -142,7 +143,25 @@ final class OptTier
             if (r == OptCompiler.ACCEPTED && !isEntry && !NO_EMIT)
             {
                 compiler.Symbols syms = BaselineCompiler.writerSymbols(cf, resolver);
-                int gen = oc.generateA64(syms, uninterruptible(cf), base, m.code.length);
+                int gen;
+                try
+                {
+                    gen = oc.generateA64(syms, uninterruptible(cf), base, m.code.length);
+                }
+                catch (RuntimeException e)
+                {
+                    // A writer symbol query threw (a class the writer cannot resolve): Baseline's compile of this
+                    // method throws the same way, and compileOrStub then bakes a resolve stub. Decline, and let it.
+                    if (first)
+                    {
+                        symbolFailures += 1;
+                        if (System.getenv("JOENG_OPT_REJECTS") != null)
+                        {
+                            System.out.println("  opt: declined " + key + ": " + e.getMessage());
+                        }
+                    }
+                    return null;
+                }
                 if (first)
                 {
                     countBack(key, oc, gen);
@@ -151,9 +170,8 @@ final class OptTier
                 {
                     CompiledMethod bl = new BaselineCompiler(cf, resolver).yieldPolls(true)
                             .compileMethod(m, base, false);
-                    diff.compare(key, m.descriptor, m.isStatic, bl, new CompiledMethod(oc.words(),
-                                 BaselineCompiler.relocationsOf(syms), oc.frameSize(), oc.gcMapWord(), new Vec<>(),
-                                 oc.bcToWord()), base);
+                    diff.compare(key, cf, m, bl, new CompiledMethod(oc.words(), BaselineCompiler.relocationsOf(syms),
+                                 oc.frameSize(), oc.gcMapWord(), new Vec<>(), oc.bcToWord()), oc, base);
                 }
                 if (gen == OptCompiler.ACCEPTED)
                 {
@@ -249,7 +267,8 @@ final class OptTier
         StringBuilder sb = new StringBuilder();
         sb.append("opt: built=").append(accepted + malformed).append(" verified=").append(accepted)
           .append(" malformed=").append(malformed).append(" rejected=").append(rejected)
-          .append(" installed=").append(installed).append(" badAlloc=").append(backMalformed);
+          .append(" installed=").append(installed).append(" badAlloc=").append(backMalformed)
+          .append(" symbolQueryFailed=").append(symbolFailures);
         for (int i = 1; i < byReason.length; i++)
         {
             if (byReason[i] > 0)
