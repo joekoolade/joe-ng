@@ -1,0 +1,13 @@
+small outer, large inner: 200 x 1000 sum=716800000
+large outer, small inner: 5000 x 4 sum=1549720000
+three levels: true sum=799980000
+partial dims: nulls=30000
+small outer, large inner: 200 x 1000 sum=716800000
+large outer, small inner: 5000 x 4 sum=1549720000
+three levels: true sum=799980000
+partial dims: nulls=30000
+small outer, large inner: 200 x 1000 sum=716800000
+large outer, small inner: 5000 x 4 sum=1549720000
+three levels: true sum=799980000
+partial dims: nulls=30000
+NurseryFillProbe done

@@ -1872,14 +1872,17 @@ public final class Baseline
         cb.emit(A64Enc.movz(17, (int) (bitmap >> 16), 1));
         cb.emit(A64Enc.lsrImm(SCRATCH, obj, 9));
         cb.emit(A64Enc.addRegLsl(17, 17, SCRATCH, 3));
-        cb.emit(A64Enc.ldrx(SCRATCH, 17, 0));
         cb.emit(A64Enc.lsrImm(val, obj, 3));
-        cb.emit(A64Enc.lsrv(obj, SCRATCH, val));
-        int s4 = cb.emit(A64Enc.tbnz(obj, 0, 0));
         cb.emit(A64Enc.movz(obj, 1, 0));
-        cb.emit(A64Enc.lslv(obj, obj, val));
+        cb.emit(A64Enc.lslv(obj, obj, val));                  // obj = this word's bit (lslv takes val mod 64)
+        // The OR is ATOMIC (S7-4d'''): a bitmap word covers 512 bytes, and two cores storing into neighbouring
+        // objects -- two threads' arrays promoted side by side -- raced a plain load/orr/store and one lost its bit:
+        // an unlogged old->young slot (ArenaChurnProbe under a 64 KB VERIFY nursery). Unconditional, so a bit
+        // already set costs an exclusive pair rather than a test, and no bail path leaves the monitor armed.
+        int retry = cb.emit(A64Enc.ldxr(SCRATCH, 17));
         cb.emit(A64Enc.orrReg(SCRATCH, SCRATCH, obj));
-        cb.emit(A64Enc.strx(SCRATCH, 17, 0));
+        cb.emit(A64Enc.stxr(val, SCRATCH, 17));
+        cb.emit(A64Enc.cbnz(val, retry - cb.wordCount()));
         // THREE words, not five: x17 is the bitmap word's address, LOG_BITMAP + (o >> 9) * 8, so x17 >> 9 is
         // LOG_BITMAP/512 + (o >> 15) -- the summary index plus a constant the movz supplies -- and the store is of
         // the ZERO register, so 0 means dirty. Five words grew every barrier's code enough to cost the Pi one more
@@ -1892,7 +1895,6 @@ public final class Baseline
         cb.set(s1, A64Enc.cbz(val, done - s1));
         cb.set(s2, A64Enc.bcond(COND_LO, done - s2));
         cb.set(s3, A64Enc.bcond(COND_HS, done - s3));
-        cb.set(s4, A64Enc.tbnz(obj, 0, done - s4));
     }
 
     private static final long HEAP_BASE = 0x0600_0000L;   // vm.Heap.BASE (the compiler cannot see vm)

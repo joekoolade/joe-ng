@@ -42,7 +42,12 @@ public final class MetalBarrier
             return;
         }
         Address w = Address.fromLong(Symbols.LOG_BITMAP + ((a >> 9) << 3));
-        w.store(w.loadLong() | (1L << (int) ((a >> 3) & 63L)));
+        long bit = 1L << (int) ((a >> 3) & 63L);
+        long old = w.loadLong();
+        while ((old & bit) == 0L && !w.attempt(old, old | bit))   // atomic: two cores share a word (S7-4d''')
+        {
+            old = w.loadLong();
+        }
         Address.fromLong(Symbols.LOG_SUMMARY + (a >> 15)).store((byte) 0);   // and its summary byte: 0 = dirty (S7-4d)
     }
 
@@ -72,7 +77,12 @@ public final class MetalBarrier
             return;
         }
         Address w = Address.fromLong(Symbols.SLOT_BITMAP + ((a >> 9) << 3));
-        w.store(w.loadLong() | (1L << (int) ((a >> 3) & 63L)));
+        long bit = 1L << (int) ((a >> 3) & 63L);
+        long old = w.loadLong();
+        while ((old & bit) == 0L && !w.attempt(old, old | bit))   // atomic: two cores share a word (S7-4d''')
+        {
+            old = w.loadLong();
+        }
         Address.fromLong(Symbols.LOG_SUMMARY + (a >> 15)).store((byte) 0);
     }
 }

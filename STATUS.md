@@ -4,6 +4,68 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **FRAMES/GC ARC, INCREMENT S7-4d''': the raw-fill audit (2026-11-25).**
+  - **The hazard.** VM code that allocates a container and then fills it with raw stores across further allocating
+    calls. A minor collection in between leaves the container OLD and UNLOGGED -- promoted (its copy is logged only
+    if it names a resident), or born mature (16 KiB or more) and its log-at-birth bit cleared by a minor that found
+    it naming nothing young. The next young element stored raw is an old->young edge no remembered set sees; the
+    following minor evacuates it and the slot is stale.
+  - **The audit instrument: a 64 KB nursery under VERIFY** (`gcnursery=2 nursery=64`, the KB minimum), which makes
+    minors frequent enough to land inside the fill windows. Main failed **5 of 214** on the virt list that way
+    (SslEngineProbe also timed out, without a nursery report):
+    - RandomProbe, ReaderProbe, IdentityHashProbe: `NURSERY STALE` after `arrayadopt [[ (nested)` --
+      `multianewarray`'s level fill (`RuntimeEntrypoints.multiLevel`).
+    - ArenaChurnProbe: a stale element of a 64-element `Object[]` (below: not a raw fill).
+    - WideCallProbe: `ctor(16) reflect=-151845897`, then an NPE and a poisoned pc `0x00DEAD00DEACFFFC`.
+  - **The fix: `WriteBarrier.putRef(holder, off, v)` and `putElem(arr, k, v)`**, a raw store plus the barrier's
+    test (log the holder, or the element's slot as `aastore` does), with the holder's address re-derived AFTER the
+    allocating call. Applied at `multiLevel`'s sub-array store, `setThrowableMessage`, `StackTrace`'s two element
+    fills and `newThrowableBacktrace`, the `Loader` argv fill, and the `BootSeeds` stdin buffer. Already safe:
+    typed VM tables (`ObjectReferenceArray.set`/`DataReferenceArray.set` are lowered with the barrier), pretenured
+    class mirrors, `AnnotationInstances` and `VMConcat`.
+  - **WideCallProbe was a different bug: x15 into a heap buffer.** Reflection's `Magic.callN` with 17 or more slots
+    passes x15 = `&slots[16]`, an interior pointer into the young `long[]` it built (`Executable.argBuffer`). An
+    uncompiled target goes through the lazy-compile trampoline, which can collect before the callee's prologue reads
+    x15; `StackRoots.markStub` handled the overflow pointer only when it was on the stack, so a minor evacuated the
+    buffer and the callee read its arguments from poisoned space. Now a heap x15 is pinned in the pin pass
+    (`Nursery.pinWord` takes interior pointers) and its reference arguments are roots like the stack case.
+  - **ArenaChurnProbe was a third bug: a lost log bit between cores.** The stale slot was element 36 of the probe's
+    own `Object[] window = new Object[64]`, filled by an ordinary `aastore` -- so the compiled barrier, not VM code.
+    The holder was the second object in core 2's arena, and the first was another 0x218-byte `Object[64]`: two
+    threads' windows promoted side by side. A slot-log bitmap word covers 512 bytes, so the end of one window and
+    the start of the next share a word, and the barrier set its bit with a plain load/orr/store: two cores storing
+    at once and one bit is lost. The barrier's OR is now an exclusive `ldxr`/`orr`/`stxr` loop (new encoders,
+    checked against llvm-mc), unconditional so no bail path leaves the monitor armed -- 10 words against 11, the
+    mask computed first. `WriteBarrier.log`/`logSlot` and the guest `MetalBarrier` use a CAS loop
+    (`Address.attempt`), written INLINE: the first version shared a private `setBit` helper, and ClinitRaceProbe
+    with the nursery on (4 MB) went to a wild pc `0x80` in 24 of 24 boots. Bisected -- Java side reverted with the
+    atomic compiled barrier kept: 4 of 4 pass; inlined: 24 of 24 pass. Why the call broke it is not established
+    (these run inside collections); they stay call-free.
+    - **Measured, 12 boots each (4 at a time, 64 KB VERIFY):** the old barrier halted **5 of 12** with
+      `NURSERY STALE` (again an `Object[64]` window, element 61 -- in the word it shares with the next object); the
+      atomic one **0 of 12**. On main this probe also failed, and was first credited to the stack-trace fill.
+  - **The Pi would not boot it: the MMU now goes on first.** The first Pi push of the atomic barrier never answered
+    its trial boot (power-cycled back to main). With the MMU off every data access is Device memory, and the
+    Pi's `stxr` does not complete there; `ScratchMap.check`'s `lo = new long[MAX]` -- a `putstatic` of a heap
+    reference -- ran in `boot()` before `run()` enabled the MMU, so the first barrier spun. (Inferred from the code;
+    the UART was not captured. QEMU's exclusives work with the MMU off, so virt and raspi4b both passed.)
+    `boot()` now builds the tables and enables the MMU right after setting SP, before `Heap.init`; the mailbox the
+    UART init calibrates through cache-maintains its buffer, so it is correct either way. On virt the prelude had
+    the MMU on already. The fixed image booted and committed on the first try.
+  - **New probe NurseryFillProbe:** `multianewarray`'s shapes -- a small outer promoted in mid-fill, a large outer
+    born mature, three levels, a partial-dims reference leaf -- between churn. **Negative control:** without the
+    `multiLevel` fix it halts with `NURSERY STALE` from a 200-element outer array.
+  - **QEMU (final build):** virt list **215/215** in VERIFY, on and off. 64 KB VERIFY **214/215**: SslEngineProbe
+    ran past the 900 s cap with 4 boots at once and no nursery report; alone it passes in 377 s (12,793
+    collections). raspi4b suite `checked=160 mismatch=0`, `collections=53`; `make test` (A64 148 checks) and
+    overlaycheck OK. MMU-first build: virt on and VERIFY 215/215, raspi4b suite `checked=160 mismatch=0`.
+  - **Pi 4, 3 boots each, against main (S7-4d''):** no measurable cost from the atomic barrier.
+    - `gcnursery=1`: FrameBench 500.8/502.8/505.2 vs 504.4/503.0/508.0 ms; minor phases summed 203.1/203.5/202.9 vs
+      213.0/201.6/201.0 ms; minor-only pauses summed 233-234 vs 235-246 ms; longest minor-only 46.5-46.7 vs
+      47.0-47.5 ms; 90 minors and 11 full collections in both.
+    - nursery off: FrameBench 508.5/508.7/495.9 vs 503.7/500.6/500.0 ms; 14 collections in both. Checksums agree.
+    - The Pi is restored to main (build 33342bc6271d975d, sha verified).
+
 - **FRAMES/GC ARC, INCREMENT S7-4d'': the rebuild and the statics (2026-11-25).**
   - **The gap rebuild, from the pin list.** After the copy, `rebuild()` walked every block of every nursery by size
     to find the residents -- 22 of 67 ms of minor phases on virt (a split timer showed the identity re-key beside it

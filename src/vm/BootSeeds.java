@@ -552,7 +552,8 @@ final class BootSeeds
         }
         ObjectReference obj = Heap.alloc(16 + ClassRegistry.clTab[bi].fieldCount * 8).toObjectReference();
         obj.toAddress().store(ClassRegistry.clTab[bi].tib);
-        obj.toAddress().plus(bufOff).store(Heap.allocArray(0, 1));   // empty byte[]; never read (count == 0)
+        long buf = Heap.allocArray(0, 1).toLong();                    // empty byte[]; never read (count == 0)
+        WriteBarrier.putRef(obj.toAddress(), bufOff, buf);           // obj may be old after that allocation
         obj.toAddress().plus(posOff).store(0L);
         obj.toAddress().plus(cntOff).store(0L);
         Address.fromLong(inSlot).store(obj);

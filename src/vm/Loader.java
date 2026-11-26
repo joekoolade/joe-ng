@@ -818,7 +818,8 @@ public final class Loader
                 tok[k] = line[start + k];
                 k += 1;
             }
-            argv.toAddress().plus(24L).plus(idx * 8L).store(guestString(tok));
+            long str = guestString(tok);                    // allocates: argv may be old after it (S7-4d''')
+            WriteBarrier.putElem(argv.toAddress(), idx, str);
             idx += 1;
         }
         return argv;

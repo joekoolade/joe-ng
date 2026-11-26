@@ -282,7 +282,7 @@ final class RuntimeEntrypoints
             while (k < cnt)
             {
                 long sub = multiLevel(desc, off + 1, n - 1, dims, level + 1, c0, c1, c2, c3);
-                arr.toAddress().plus(ObjectModel.ARRAY_BASE_OFFSET).plus((long) k * ObjectModel.WORD).store(sub);
+                WriteBarrier.putElem(arr.toAddress(), k, sub);  // arr may be old by now: promoted, or born large (S7-4d''')
                 k += 1;
             }
         }
@@ -450,7 +450,7 @@ final class RuntimeEntrypoints
         thrMessageOff = throwableFieldOff(thrMessageOff, Magic.bytes("detailMessage"));
         if (thrMessageOff > 0L)
         {
-            exc.toAddress().plus(thrMessageOff).store(msg);
+            WriteBarrier.putRef(exc.toAddress(), thrMessageOff, msg);   // msg was allocated after exc
         }
     }
 
