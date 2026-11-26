@@ -362,6 +362,7 @@ final class MetalWriterSymbols implements Symbols
         if (utf8Is(n, Magic.bytes("bytes"))) { return Intrinsics.BYTES; }
         if (utf8Is(n, Magic.bytes("dcCVAU"))) { return Intrinsics.DC_CVAU; }
         if (utf8Is(n, Magic.bytes("dcCVAC"))) { return Intrinsics.DC_CVAC; }
+        if (utf8Is(n, Magic.bytes("copyWords"))) { return Intrinsics.COPY_WORDS; }
         if (utf8Is(n, Magic.bytes("icIALLU"))) { return Intrinsics.IC_IALLU; }
         if (utf8Is(n, Magic.bytes("icIVAU"))) { return Intrinsics.IC_IVAU; }
         if (utf8Is(n, Magic.bytes("writeVBAR_EL1"))) { return Intrinsics.WRITE_VBAR_EL1; }

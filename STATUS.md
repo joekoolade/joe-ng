@@ -4,6 +4,38 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **FRAMES/GC ARC, INCREMENT S7-4d'''': drain speed and the remembered-set scan (2026-11-25).**
+  - **Where the time was.** The Pi split of S7-4d''' (`gcnursery=1`): minor phases summed 203 ms, of which the
+    drain 108, the remembered set 62.8, the pin pass 11.8, statics and JIT maps 11.3, re-key and rebuild 5.6. The
+    longest minor (46 ms) is almost all drain. Inside the drain, a temporary tick instrument on virt (at minor 60)
+    put the promotion COPY at 193,424 ticks and the mature ALLOCATION for the copies at 80,815 -- the Pi's
+    allocation counters agreed (136,125 bumps, 30.7 of 42.3 ms). Baseline does not inline, so a per-word loop
+    and a per-request statistics block are what the drain was paying for.
+  - **The copy: `Magic.copyWords(dst, src, bytes)`, a new intrinsic.** A forward copy of a multiple of 8 bytes,
+    lowered to a `ldp`/`stp` post-index pair loop of 16 bytes and an 8-byte tail (new encoders `ldpPostX`,
+    `stpPostX`, `subsImm`, checked bit-for-bit, A64 152 checks). `Nursery.forward` uses it for the body in place
+    of its word loop. Copy ticks 193,424 -> 79,444 (-59%).
+  - **The allocation: a lean path in `Heap.allocInGcInner`.** Same ORDER as before -- size class, then the general
+    first-fit (now `takeFirstFit`, factored out of `allocLocked`), then bump -- without the per-request statistics
+    and timers. The order is the point: S7-4c measured that skipping the general list (`gcpromote=1`) costs one
+    more full collection, and full collections stay at 11 here. The three "their allocation time" stats rows went
+    with the timers. Allocation ticks 80,815 -> 48,268 (-40%).
+  - **The remembered set and the slot scan.** `remsetRange` reads both bitmaps' words in one pass and calls out only
+    for a non-zero word; `scanSlots` walks the SET BITS of the reference mask (`lowBit`) instead of every slot, and
+    `fwdSlot` inlines the nursery bounds test.
+  - **Virt (`gcnursery=1`, minor phases summed):** main 36.5 ms -> copyWords 32.5 -> lean allocation 29.1/28.3/28.6
+    -> remset and scan 27.7/27.0 (-25%); remset 10.1 -> 9.3-9.8 ms. 89-90 minors and 11 full collections
+    throughout; FrameBench checksums unchanged.
+  - **QEMU:** virt list **215/215** in VERIFY, on and off. 64 KB VERIFY **214/215**: SslEngineProbe killed at the
+    cap mid-handshake (signal 15, no nursery report), as in S7-4d'''. `make test` and overlaycheck OK. raspi4b
+    suite `checked=160 mismatch=0`, `collections=53`.
+  - **Pi 4, 3 boots each, against main (S7-4d'''):**
+    - `gcnursery=1`: minor phases summed **148.9/150.7/151.3 vs 204.1/204.1/203.3 ms (-26%)**; minor-only pauses
+      summed 181.5-183.9 vs 233.6-234.5 ms (-22%); **longest minor-only pause 34.2-35.1 vs 46.7-47.2 ms (-26%)**;
+      90 minors and 11 full collections in both. FrameBench 492.6/498.0/503.4 vs 506.6/501.1/501.0 ms.
+    - nursery off: FrameBench 496.4/496.8/495.2 vs 509.6/501.8/496.2 ms; total pause 859-862 vs 873 ms; 14 collections in both. Checksums agree.
+    - The Pi is restored to main (build b6c546ebc3f75e61, sha verified).
+
 - **FRAMES/GC ARC, INCREMENT S7-4d''': the raw-fill audit (2026-11-25).**
   - **The hazard.** VM code that allocates a container and then fills it with raw stores across further allocating
     calls. A minor collection in between leaves the container OLD and UNLOGGED -- promoted (its copy is logged only

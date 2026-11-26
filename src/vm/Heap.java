@@ -1539,9 +1539,6 @@ public final class Heap implements Uninterruptible
     static long promoGeneral;
     static long promoBump;
     static long promoWalked;                            // general-list blocks walked by copies
-    static long promoSizedTicks;
-    static long promoGeneralTicks;
-    static long promoBumpTicks;
 
     /** 1 while a minor collection copies into the mature heap: an allocation that would collect returns zero. */
     static int noCollect;
@@ -1572,40 +1569,60 @@ public final class Heap implements Uninterruptible
 
     private static Address allocInGcInner(int size)
     {
-        if (promoteFast == 0)
-        {
-            long t0 = Magic.readCNTPCT_EL0();
-            long probes0 = sizedProbes;
-            lastPath = 0;
-            scanFreeBlocks = 0L;
-            Address r = allocLocked(size);
-            long dt = Magic.readCNTPCT_EL0() - t0;
-            promoProbes = promoProbes + (sizedProbes - probes0);
-            if (lastPath == 1)
-            {
-                promoSized = promoSized + 1L;
-                promoSizedTicks = promoSizedTicks + dt;
-            }
-            else if (lastPath == 2)
-            {
-                promoGeneral = promoGeneral + 1L;
-                promoGeneralTicks = promoGeneralTicks + dt;
-                promoWalked = promoWalked + scanFreeBlocks;
-            }
-            else
-            {
-                promoBump = promoBump + 1L;
-                promoBumpTicks = promoBumpTicks + dt;
-                promoWalked = promoWalked + scanFreeBlocks;
-            }
-            return r;
-        }
         int aligned = (size + 7) & -8;
         if (aligned < ObjectModel.HEADER_SIZE)
         {
             aligned = ObjectModel.HEADER_SIZE;
         }
         int core = (int) (Magic.readMPIDR() & 3L);
+        if (promoteFast == 0)
+        {
+            // allocLocked's order -- a size class, the general list first-fit, then the bump pointer -- without its
+            // per-request statistics (the size histogram, the bump-cause scan totals) and the per-path timers this
+            // used to wrap it in: 136 K bumps at ~225 ns each on the Pi were mostly that (S7-4d''''). The general
+            // list is still walked first, so copies fill its holes: skipping it (gcpromote=1) costs a full
+            // collection per run (S7-4c). The volume trigger never fires here (noCollect), and the served/allocated
+            // byte counts it reads are kept exactly as allocLocked keeps them.
+            if (aligned <= SMALL_MAX)
+            {
+                long probes0 = sizedProbes;
+                Address sized = takeSized(core, aligned);
+                promoProbes = promoProbes + (sizedProbes - probes0);
+                if (!sized.isZero())
+                {
+                    zeroPayload(sized, aligned);
+                    if (core == 0)
+                    {
+                        servedSinceGc = servedSinceGc + (sized.plus(ObjectModel.STATUS_OFFSET).loadLong() & -8L);
+                    }
+                    promoSized = promoSized + 1L;
+                    return sized;
+                }
+            }
+            Address f = takeFirstFit(core, aligned);
+            promoWalked = promoWalked + scanFreeBlocks;
+            if (!f.isZero())
+            {
+                promoGeneral = promoGeneral + 1L;
+                return f;
+            }
+            Address bp = Address.fromLong(PTR_CELL + core * 8L);
+            Address q = bp.loadAddress();
+            if (q.plus(aligned).LE(arenaLimit(core)))
+            {
+                bp.store(q.plus(aligned));
+                q.plus(ObjectModel.STATUS_OFFSET).store((long) aligned);   // record size for the GC
+                zeroPayload(q, aligned);
+                allocSinceGc = allocSinceGc + (long) aligned;
+                if (core == 0)
+                {
+                    servedSinceGc = servedSinceGc + (long) aligned;
+                }
+                promoBump = promoBump + 1L;
+                return q;
+            }
+            return allocLocked(size);                   // the arena is full: zero (noCollect), the copy stays
+        }
         if (aligned <= SMALL_MAX)
         {
             Address sized = takeSized(core, aligned);
@@ -1634,6 +1651,66 @@ public final class Heap implements Uninterruptible
             return p;
         }
         return allocLocked(size);                       // the arena is full: the free list, or zero
+    }
+
+    /**
+     * First fit in core {@code core}'s general free list: unlink the first block of at least {@code aligned} bytes,
+     * zero it ({@link #zeroPayload}), split off the remainder, and count it served. Zero when none fits. Leaves the
+     * walk's totals in {@code scanFree*} for the bump-cause statistics.
+     */
+    private static Address takeFirstFit(int core, int aligned)
+    {
+        Address freeCell = Address.fromLong(FREE_CELL + core * 8L);
+        Address prev = Address.zero();
+        Address f = freeCell.loadAddress();
+        scanFreeBytes = 0L;
+        scanFreeMax = 0L;
+        scanFreeBlocks = 0L;
+        while (!f.isZero())                                 // first fit in this core's free list
+        {
+            long fsize = f.plus(ObjectModel.STATUS_OFFSET).loadLong() & -8L;   // without FREE_FLAG
+            scanFreeBytes = scanFreeBytes + fsize;
+            scanFreeBlocks = scanFreeBlocks + 1L;
+            if (fsize > scanFreeMax)
+            {
+                scanFreeMax = fsize;
+                scanFreeMaxAddr = f.toLong();
+            }
+            if (fsize >= aligned)
+            {
+                Address next = f.loadAddress();
+                if (prev.isZero())
+                {
+                    freeCell.store(next);
+                }
+                else
+                {
+                    prev.store(next);
+                }
+                zeroPayload(f, aligned);                    // Java requires 0/default fields+elements
+                // SPLIT the remainder off rather than handing back the whole block. Without this a
+                // 64 KiB free block servicing a 32-byte cons cell stays 64 KiB, and the arena's usable
+                // capacity collapses to "one allocation per freed block" -- invisible while the loader
+                // rewound the heap every batch (the free list was discarded and allocation was
+                // essentially pure bump), fatal the moment reclamation is by reachability. The remainder
+                // must itself be a legal block: at least a {TIB, status} header, so its status word lies
+                // inside its own extent.
+                long rest = fsize - (long) aligned;
+                if (rest >= (long) ObjectModel.HEADER_SIZE)
+                {
+                    f.plus(ObjectModel.STATUS_OFFSET).store((long) aligned);       // this block's size
+                    addFree(f.plus(aligned), rest);                        // ... and the rest
+                }
+                if (core == 0)
+                {
+                    servedSinceGc = servedSinceGc + (f.plus(ObjectModel.STATUS_OFFSET).loadLong() & -8L);
+                }
+                return f;
+            }
+            prev = f;
+            f = f.loadAddress();
+        }
+        return Address.zero();
     }
 
     /** Allocate {@code size} bytes straight into the mature heap: an object compiled code will name as an immediate. */
@@ -1761,55 +1838,12 @@ public final class Heap implements Uninterruptible
                     return sized;
                 }
             }
-            Address f = freeCell.loadAddress();
-            scanFreeBytes = 0L;
-            scanFreeMax = 0L;
-            scanFreeBlocks = 0L;
-            while (!f.isZero())                             // first fit in this core's free list
+            Address f = takeFirstFit(core, aligned);
+            if (!f.isZero())
             {
-                long fsize = f.plus(ObjectModel.STATUS_OFFSET).loadLong() & -8L;   // without FREE_FLAG
-                scanFreeBytes = scanFreeBytes + fsize;
-                scanFreeBlocks = scanFreeBlocks + 1L;
-                if (fsize > scanFreeMax)
-                {
-                    scanFreeMax = fsize;
-                    scanFreeMaxAddr = f.toLong();
-                }
-                if (fsize >= aligned)
-                {
-                    Address next = f.loadAddress();
-                    if (prev.isZero())
-                    {
-                        freeCell.store(next);
-                    }
-                    else
-                    {
-                        prev.store(next);
-                    }
-                    lastPath = 2;
-                    lastFromFreeList = 1;
-                    zeroPayload(f, aligned);                // Java requires 0/default fields+elements
-                    // SPLIT the remainder off rather than handing back the whole block. Without this a
-                    // 64 KiB free block servicing a 32-byte cons cell stays 64 KiB, and the arena's usable
-                    // capacity collapses to "one allocation per freed block" -- invisible while the loader
-                    // rewound the heap every batch (the free list was discarded and allocation was
-                    // essentially pure bump), fatal the moment reclamation is by reachability. The remainder
-                    // must itself be a legal block: at least a {TIB, status} header, so its status word lies
-                    // inside its own extent.
-                    long rest = fsize - (long) aligned;
-                    if (rest >= (long) ObjectModel.HEADER_SIZE)
-                    {
-                        f.plus(ObjectModel.STATUS_OFFSET).store((long) aligned);       // this block's size
-                        addFree(f.plus(aligned), rest);                        // ... and the rest
-                    }
-                    if (core == 0)
-                    {
-                        servedSinceGc = servedSinceGc + (f.plus(ObjectModel.STATUS_OFFSET).loadLong() & -8L);
-                    }
-                    return f;                               // status holds the size actually handed out
-                }
-                prev = f;
-                f = f.loadAddress();
+                lastPath = 2;
+                lastFromFreeList = 1;
+                return f;                                   // status holds the size actually handed out
             }
             scanFreeBytes = scanFreeBytes + Address.fromLong(SIZE_BYTES + core * 8L).loadLong();   // the general
             Address p = ptrCell.loadAddress();                                     //   list was walked; the sized
