@@ -82,6 +82,13 @@ public final class A64Select
                                              //   copies that die here, since the barrier overwrites them; aux 1 = slot log
     public static final int LDCSTR = 45;     // defs[0] = the String literal at cp aux (relocated)
     public static final int LDCCLASS = 46;   // defs[0] = the class literal at cp aux (relocated)
+    public static final int CSET = 47;       // defs[0] = (uses[0] cmp uses[1] (or #0)) ? 1 : 0, condition aux
+    public static final int UBNOT = 48;      // defs[0] = ~uses[0]
+    public static final int LDRB = 49;       // defs[0] = [uses[0]], one byte zero-extended
+    public static final int SMULH = 50;      // defs[0] = high 64 bits of uses[0] * uses[1], signed
+    public static final int UMULH = 51;      // ... unsigned
+    public static final int FENCE = 52;      // aux 0 = dsb sy, 1 = isb
+    public static final int MRS = 53;        // defs[0] = the system register aux
 
     public static final int OK = 0;
     public static final int R_CALL = 1;
@@ -293,6 +300,14 @@ public final class A64Select
         if (x.aux2 == 0xBA)
         {
             return R_DISPATCH;
+        }
+        if (x.aux2 != 0xB7 && syms.isIntrinsicCall(cp))
+        {
+            return supportedIntrinsic(syms.intrinsicId(cp)) ? OK : R_INTRINSIC;
+        }
+        if (x.aux2 == 0xB8 && syms.mathIntrinsicId(cp) >= 0)
+        {
+            return OK;
         }
         if (x.in.length > MAX_ARGS)
         {
@@ -617,6 +632,17 @@ public final class A64Select
         {
             return;
         }
+        if (x.aux2 != 0xB7 && syms.isIntrinsicCall(cp))
+        {
+            intrinsic(x, d, syms.intrinsicId(cp));
+            return;
+        }
+        if (x.aux2 == 0xB8 && syms.mathIntrinsicId(cp) >= 0)
+        {
+            int mh = syms.mathIntrinsicId(cp);
+            emit(mh == compiler.Intrinsics.SMULH ? SMULH : UMULH, d, new int[] { v(x.in[0]), v(x.in[1]) }, x);
+            return;
+        }
         if (x.aux2 == 0xB6 || (x.aux2 == 0xB9 && syms.isObjectPublicMethod(cp)))
         {
             if (virtualSpecial(x, d, cp))
@@ -663,6 +689,196 @@ public final class A64Select
         m.aux = aux;
         m.imm = imm;
         m.clobbers = callerSaved();
+    }
+
+    /** The intrinsics this tier lowers (O1-6a): those that are instructions on their operands -- no call, no
+     *  allocation, no system state but the counter and the barriers. */
+    static boolean supportedIntrinsic(int id)
+    {
+        if (id >= compiler.Intrinsics.UB_MOVE && id <= compiler.Intrinsics.UB_ST64_OFF)
+        {
+            return true;
+        }
+        return id == compiler.Intrinsics.AA_GET || id == compiler.Intrinsics.AA_SET
+               || id == compiler.Intrinsics.AA_LENGTH || id == compiler.Intrinsics.LOAD8
+               || id == compiler.Intrinsics.LOAD32 || id == compiler.Intrinsics.LOAD64
+               || id == compiler.Intrinsics.STORE8 || id == compiler.Intrinsics.STORE32
+               || id == compiler.Intrinsics.STORE64 || id == compiler.Intrinsics.BYTES
+               || id == compiler.Intrinsics.ADDR_OF || id == compiler.Intrinsics.FROM_ADDR
+               || id == compiler.Intrinsics.DSB || id == compiler.Intrinsics.ISB
+               || id == compiler.Intrinsics.READ_CNTPCT_EL0 || id == compiler.Intrinsics.READ_CNTFRQ_EL0;
+    }
+
+    /** Baseline's lowerUnboxed / lowerIntrinsic / lowerAddressArray for the ids {@link #supportedIntrinsic} names,
+     *  instruction for instruction in effect. Operands are in bytecode order: the receiver (or first argument)
+     *  first. */
+    private void intrinsic(Instr x, int d, int id)
+    {
+        int a = x.in.length > 0 ? v(x.in[0]) : -1;
+        int b = x.in.length > 1 ? v(x.in[1]) : -1;
+        if (id == compiler.Intrinsics.UB_MOVE || id == compiler.Intrinsics.BYTES
+            || id == compiler.Intrinsics.ADDR_OF || id == compiler.Intrinsics.FROM_ADDR)
+        {
+            MInstr m = MInstr.move(d, a);                    // a reinterpret: the same 64-bit word
+            m.bci = x.bci;
+            cur.add(m);
+        }
+        else if (id == compiler.Intrinsics.UB_ZEXT32 || id == compiler.Intrinsics.UB_SXTW)
+        {
+            emit(id == compiler.Intrinsics.UB_ZEXT32 ? UXTW : SXTW, d, new int[] { a }, x);
+        }
+        else if (id >= compiler.Intrinsics.UB_ZERO && id <= compiler.Intrinsics.UB_SMAX)
+        {
+            MInstr m = emit(LIMM, d, null, x);
+            m.imm = unboxedConstant(id);
+        }
+        else if (id == compiler.Intrinsics.UB_IS_ZERO)
+        {
+            MInstr m = emit(CSET, d, new int[] { a }, x);
+            m.aux = 0;                                       // eq
+        }
+        else if (id == compiler.Intrinsics.UB_IS_MAX || id == compiler.Intrinsics.UB_IS_SMAX)
+        {
+            int k = temp();
+            MInstr c = emit(LIMM, k, null, x);
+            c.imm = id == compiler.Intrinsics.UB_IS_MAX ? -1L : Long.MAX_VALUE;
+            MInstr m = emit(CSET, d, new int[] { a, k }, x);
+            m.aux = 0;
+        }
+        else if (id >= compiler.Intrinsics.UB_ADD && id <= compiler.Intrinsics.UB_ASR && id != compiler.Intrinsics.UB_NOT)
+        {
+            int[] ops = { ADD, SUB, AND, ORR, EOR, -1, LSLV, LSRV, ASRV };
+            emit(ops[id - compiler.Intrinsics.UB_ADD], d, new int[] { a, b }, x);
+        }
+        else if (id == compiler.Intrinsics.UB_NOT)
+        {
+            emit(UBNOT, d, new int[] { a }, x);
+        }
+        else if (id >= compiler.Intrinsics.UB_EQ && id <= compiler.Intrinsics.UB_SGE)
+        {
+            MInstr m = emit(CSET, d, new int[] { a, b }, x);
+            m.aux = unboxedCond(id);
+        }
+        else if (id == compiler.Intrinsics.UB_LD8S || id == compiler.Intrinsics.UB_LD16U
+                 || id == compiler.Intrinsics.UB_LD16S)
+        {
+            emit(id == compiler.Intrinsics.UB_LD8S ? LDRSB : (id == compiler.Intrinsics.UB_LD16U ? LDRH : LDRSH), d,
+                 new int[] { a }, x);
+        }
+        else if (id == compiler.Intrinsics.UB_ST16)
+        {
+            store(STRH, a, b, 0, false, x);
+        }
+        else if (id >= compiler.Intrinsics.UB_LD8S_OFF && id <= compiler.Intrinsics.UB_LD64_OFF)
+        {
+            int t = temp();
+            emit(ADD, t, new int[] { a, b }, x);             // address + Offset
+            int k = id - compiler.Intrinsics.UB_LD8S_OFF;
+            int[] lops = { LDRSB, LDRB, LDRH, LDRSH, LDRSW, LDRX };
+            MInstr m = emit(lops[k], d, new int[] { t }, x);
+            m.imm = 0;
+        }
+        else if (id >= compiler.Intrinsics.UB_ST8_OFF && id <= compiler.Intrinsics.UB_ST64_OFF)
+        {
+            int t = temp();
+            emit(ADD, t, new int[] { a, v(x.in[2]) }, x);    // (address, value, offset)
+            int[] sops = { STRB, STRH, STRW, STRX };
+            store(sops[id - compiler.Intrinsics.UB_ST8_OFF], t, b, 0, false, x);
+        }
+        else if (id == compiler.Intrinsics.LOAD8 || id == compiler.Intrinsics.LOAD32
+                 || id == compiler.Intrinsics.LOAD64)
+        {
+            MInstr m = emit(id == compiler.Intrinsics.LOAD8 ? LDRB : (id == compiler.Intrinsics.LOAD32 ? LDRSW : LDRX),
+                            d, new int[] { a }, x);
+            m.imm = 0;
+        }
+        else if (id == compiler.Intrinsics.STORE8 || id == compiler.Intrinsics.STORE32
+                 || id == compiler.Intrinsics.STORE64)
+        {
+            store(id == compiler.Intrinsics.STORE8 ? STRB : (id == compiler.Intrinsics.STORE32 ? STRW : STRX), a, b, 0,
+                  false, x);
+        }
+        else if (id == compiler.Intrinsics.AA_GET)
+        {
+            elementAddress(x, a, b, 3, d, LDRX);
+        }
+        else if (id == compiler.Intrinsics.AA_SET)
+        {
+            int elem = elementAddress(x, a, b, 3, -1, -1);
+            store(STRX, elem, v(x.in[2]), 0, false, x);
+            if (ownerHoldsRefs((int) x.aux))
+            {
+                barrier(elem, v(x.in[2]), true, x);          // Object/DataReferenceArray: the slot log
+            }
+        }
+        else if (id == compiler.Intrinsics.AA_LENGTH)
+        {
+            MInstr m = emit(LDRX, d, new int[] { a }, x);
+            m.imm = ObjectModel.ARRAY_LENGTH_OFFSET;
+        }
+        else if (id == compiler.Intrinsics.DSB || id == compiler.Intrinsics.ISB)
+        {
+            MInstr m = emit(FENCE, -1, null, x);
+            m.aux = id == compiler.Intrinsics.DSB ? 0 : 1;
+        }
+        else
+        {
+            MInstr m = emit(MRS, d, null, x);                // the generic timer's count or its frequency
+            m.aux = id == compiler.Intrinsics.READ_CNTPCT_EL0 ? compiler.Target.counter() : asm.A64Enc.CNTFRQ_EL0;
+        }
+    }
+
+    /** {@code &array[index]} for an element of {@code 1 << shift} bytes; with {@code lop} >= 0 also load it into
+     *  {@code d}. Answers the address register. */
+    private int elementAddress(Instr x, int arr, int index, int shift, int d, int lop)
+    {
+        int base = temp();
+        MInstr a = emit(ADDI, base, new int[] { arr }, x);
+        a.imm = ObjectModel.ARRAY_BASE_OFFSET;
+        int elem = temp();
+        MInstr s = emit(ADDLSL, elem, new int[] { base, index }, x);
+        s.imm = shift;
+        if (lop >= 0)
+        {
+            emit(lop, d, new int[] { elem }, x);
+        }
+        return elem;
+    }
+
+    private static long unboxedConstant(int id)
+    {
+        if (id == compiler.Intrinsics.UB_ZERO)
+        {
+            return 0L;
+        }
+        if (id == compiler.Intrinsics.UB_ONE)
+        {
+            return 1L;
+        }
+        return id == compiler.Intrinsics.UB_MAX ? -1L : Long.MAX_VALUE;
+    }
+
+    /** As Baseline's unboxedCond: the unsigned compares for addresses and words, the signed ones for Offset. */
+    private static int unboxedCond(int id)
+    {
+        int[] conds = { 0, 1, 3, 9, 8, 2, 11, 13, 12, 10 };   // eq ne lo ls hi hs lt le gt ge
+        return conds[id - compiler.Intrinsics.UB_EQ];
+    }
+
+    /** As Baseline's ownerHoldsRefs: the call's owner is an ObjectReferenceArray or DataReferenceArray, whose set
+     *  takes the write barrier; an AddressArray or CodeArray holds raw words. */
+    private boolean ownerHoldsRefs(int cp)
+    {
+        int off = classfile.ClassReader.refClassNameOff(g.cls, g.cpOff, cp);
+        int n = classfile.ClassReader.u2(g.cls, off);
+        long h = 0xcbf29ce484222325L;
+        for (int i = 0; i < n; i++)
+        {
+            h = h ^ (classfile.ClassReader.u1(g.cls, off + 2 + i) & 0xFF);
+            h = h * 0x100000001b3L;
+        }
+        int k = compiler.Unboxed.kindOfHash(h);
+        return k == compiler.Unboxed.OBJECT_REFERENCE_ARRAY || k == compiler.Unboxed.DATA_REFERENCE_ARRAY;
     }
 
     /** The invokevirtuals Baseline lowers to a helper or a constant rather than a dispatch; true if this was one. */

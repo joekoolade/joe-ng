@@ -5144,6 +5144,8 @@ also with `--opt all` (virt list, raspi4b suite) and a Pi boot.
   divide and size checks (by explicit test, as Baseline does -- implicit null checks are O5).
 - **O1-5: exceptions and monitors.** Handler ranges and the home-slot protocol above, `athrow`, synchronized
   methods and blocks.
+- **O1-6a (DONE on QEMU, 2026-11-26, taken before O1-4b by measured demand): the call-free intrinsics** -- 2307 of
+  2843 image methods; `OptDiff` 0 mismatches over 2.3M emulated calls.
 - **O1-6: the rest of the bytecode set** (switches, floats, magic intrinsics, invokedynamic, the unboxed
   types) until `--opt all` rejects nothing reachable in the image but what is recorded, and the image boots and
   passes the regression with every accepted method opt-compiled. That is O1 done: opt code behaves exactly like

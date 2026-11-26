@@ -444,6 +444,13 @@ public final class A64Emu
             int op31 = (w >>> 21) & 7;
             boolean o0 = ((w >>> 15) & 1) == 1;
             int ra = (w >>> 10) & 31;
+            if (op31 == 2 || op31 == 6)                              // SMULH / UMULH
+            {
+                long p = op31 == 2 ? Math.multiplyHigh(rz(rn, true), rz(rm, true))
+                                   : Math.unsignedMultiplyHigh(rz(rn, true), rz(rm, true));
+                setZ(rd, p, true);
+                return next;
+            }
             if (op31 != 0)
             {
                 return bad(w);
@@ -522,6 +529,11 @@ public final class A64Emu
         if ((w & 0xFFFF_FC1F) == 0xD61F_0000)                       // BR
         {
             return x[rn];
+        }
+        if ((w & 0xFFF0_0000) == 0xD530_0000)                       // MRS: a deterministic value per register
+        {
+            setZ(rd, hash(w & 0xFFFF_FFE0L), true);
+            return next;
         }
         if ((w & 0xFFFF_F01F) == 0xD503_301F || (w & 0xFFFF_F01F) == 0xD503_201F)   // barriers, hints
         {

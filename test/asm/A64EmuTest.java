@@ -47,6 +47,9 @@ public final class A64EmuTest
             bin("lsrv", A64Enc.lsrv(2, 0, 1), a, b, a >>> (b & 63));
             bin("asrv", A64Enc.asrv(2, 0, 1), a, b, a >> (b & 63));
             bin("addlsl3", A64Enc.addRegLsl(2, 0, 1, 3), a, b, a + (b << 3));
+            bin("smulh", A64Enc.smulh(2, 0, 1), a, b, Math.multiplyHigh(a, b));
+            bin("umulh", A64Enc.umulh(2, 0, 1), a, b, Math.unsignedMultiplyHigh(a, b));
+            un("not", A64Enc.movn(2, 0, 0), a, -1L);
             un("sxtw", A64Enc.sxtw(2, 0), a, (int) a);
             un("sxtb", A64Enc.sxtb(2, 0), a, (byte) a);
             un("sxth", A64Enc.sxth(2, 0), a, (short) a);

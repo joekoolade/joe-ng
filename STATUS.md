@@ -4,6 +4,26 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **OPT COMPILER ARC, INCREMENT O1-6a: the call-free intrinsics -- 81% of the image (2026-11-26).** QEMU-validated;
+  Pi not run. Taken ahead of O1-4b because it was measured to be the larger gate (`JOENG_OPT_BLOCKERS=1` now also
+  counts, per intrinsic id, the methods declined for it: the unboxed reinterpret alone was in 875, `UB_ADD` in 710,
+  `Magic.bytes` in 401, `load64` in 362).
+  - **What:** every unboxed-type method (`magic.Address/Word/Offset/Extent`: reinterpret, constants, arithmetic,
+    shifts, the unsigned and signed compares, loads and stores, the `+Offset` forms), `Magic.load8/32/64` and
+    `store8/32/64`, `bytes`/`addrOf`/`fromAddr` (reinterprets), the `AddressArray` family's get, set (with the slot
+    log's barrier when the owner holds references, as Baseline's `ownerHoldsRefs` decides) and length, `dsb`/`isb`,
+    the generic timer's count and frequency, and `Math.multiplyHigh`/`unsignedMultiplyHigh`. Each is the
+    instruction Baseline emits for it (`load32` sign-extends, `load8` zero-extends, `UB_NOT` through x16). Still
+    declined: the intrinsics that call, allocate or touch system state (159 methods), `AddressArray.create`.
+  - **Baseline is untouched** (its two small mappings -- the unboxed compare conditions and `ownerHoldsRefs` -- are
+    mirrored rather than made public, so Baseline's own compiled code in the image does not move again).
+  - **`OptDiff`: 2307 methods, 655,351 runs, 2,338,676 calls, 968,798 moved references, 0 mismatches** (the emulator
+    gained `smulh`/`umulh` and `mrs`; `A64EmuTest` checks the first two against Java). Planted bugs: the unsigned
+    compare conditions swapped -> 14 mismatches; `load32` without its sign extension -> 7.
+  - **`--opt all` installs 2307 of 2843** (2157 on virt). Still declined: allocation and type checks 282, intrinsics
+    159, handlers 76, synchronized 9. QEMU virt **215/215**; raspi4b suite **`checked=160 mismatch=0`**,
+    `collections=78` at the churn line. `make test` and overlaycheck OK.
+
 - **OPT COMPILER ARC, INCREMENT O1-4a: statics, stores, the write barrier, ldc (2026-11-26).** QEMU-validated; Pi
   not run.
   - **What:** `getstatic`/`putstatic` through `Symbols.staticField` (a relocated cell address, then the load or

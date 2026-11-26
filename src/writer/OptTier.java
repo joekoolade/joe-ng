@@ -165,6 +165,11 @@ final class OptTier
                 if (first)
                 {
                     countBack(key, oc, gen);
+                    if (gen == OptCompiler.REJECTED && oc.backReason() == A64Select.R_INTRINSIC
+                        && System.getenv("JOENG_OPT_BLOCKERS") != null)
+                    {
+                        noteIntrinsics(oc, syms);
+                    }
                 }
                 if (gen == OptCompiler.ACCEPTED && first && diff != null)
                 {
@@ -234,6 +239,40 @@ final class OptTier
         }
     }
 
+    /** JOENG_OPT_BLOCKERS: per intrinsic id, the methods declined for intrinsics that use it (-1 = a special call that
+     *  is not a Magic/unboxed intrinsic: Math.multiplyHigh, getCallerClass, a MethodHandle call). */
+    private static final java.util.TreeMap<Integer, Integer> intrinsicUse = new java.util.TreeMap<>();
+
+    private static void noteIntrinsics(OptCompiler oc, compiler.Symbols syms)
+    {
+        java.util.HashSet<Integer> ids = new java.util.HashSet<>();
+        compiler.opt.Graph g = oc.graph();
+        for (int b = 0; b < g.nBlocks; b++)
+        {
+            compiler.opt.Block blk = g.blocks[b];
+            for (int i = 0; i < blk.nCode; i++)
+            {
+                compiler.opt.Instr x = blk.code[i];
+                if (x.op == compiler.opt.Op.INVOKE && x.aux2 != 0xBA)
+                {
+                    int cp = (int) x.aux;
+                    if (syms.isIntrinsicCall(cp))
+                    {
+                        ids.add(syms.intrinsicId(cp));
+                    }
+                    else if (syms.mathIntrinsicId(cp) >= 0 || syms.isGetCallerClass(cp))
+                    {
+                        ids.add(-1);
+                    }
+                }
+            }
+        }
+        for (int id : ids)
+        {
+            intrinsicUse.merge(id, 1, Integer::sum);
+        }
+    }
+
     private static void countBack(String key, OptCompiler oc, int gen)
     {
         if (gen == OptCompiler.REJECTED)
@@ -296,6 +335,12 @@ final class OptTier
                 }
             }
             System.out.println(bl);
+            StringBuilder iu = new StringBuilder("opt: intrinsic ids in methods declined for intrinsics (id=methods):");
+            for (var e : intrinsicUse.entrySet())
+            {
+                iu.append(' ').append(e.getKey()).append('=').append(e.getValue());
+            }
+            System.out.println(iu);
         }
     }
 }
