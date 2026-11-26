@@ -5040,10 +5040,8 @@ collection; every edge the trace follows is attributed to its source.
     path in the same size-class / first-fit / bump order, without per-request statistics (-40%; full collections
     unchanged); the remembered set calls out only for non-zero bitmap words and `scanSlots` walks set bits. Virt
     minor phases summed 36.5 -> 27.4 ms; Pi 204 -> 150 ms, longest minor-only pause 47 -> 34 ms.
-  - **S7-4d⁵: leftovers.**
-    - The barrier's slow path out of line, if the code-size cost matters.
-    - The JIT map entries (pretenure the maps).
-    - The drain's remaining per-object cost (the scan of each copy, the forwarding word).
+  - **S7-4d⁵: leftovers -- moved to `BACKLOG.md` (Collector, 2026-11-26)** with the rest of S7's open items: the
+    barrier's slow path out of line, pretenured JIT map entries, the drain's per-object cost.
   - **S7-4e: on by default. DONE (2026-11-26).** No `gcnursery=` line (or no `/etc/init`) arms the nursery;
     `gcnursery=0` turns it off. Pi default init: total pause 651 vs 861 ms off, longest pause 100 vs 124 ms,
     FrameBench level. The `gc:` line's `heap=` no longer goes negative after a minor.

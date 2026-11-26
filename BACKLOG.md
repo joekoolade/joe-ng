@@ -25,6 +25,42 @@ the item leaves this list; new findings that are not fixed on the spot come here
 
 ## Collector
 
+- **The longest pause is now a FULL collection (2026-11-26, frames/GC arc S7-5).** With the nursery at 8 MiB the
+  longest minor is ~12 ms on the Pi, but a full collection still pauses ~100 ms (10 per FrameBench session),
+  tracing ~57 MB live. The next pause win is there: a cheaper full trace (Baseline has no inlining, so the per-slot
+  calls in the mark loop are the likely cost -- split it with a phase timer first), or fewer full collections.
+- **A nursery larger than 8 MiB per core (2026-11-26, S7-5).** The Pi sweep improved at every step (2 -> 4 -> 8 MiB:
+  minor-only pauses summed 296 -> 187 -> 107 ms; 11 -> 11 -> 10 full collections), so larger may still help. 8 MiB
+  is `Nursery.SLOT_MAX`, the reserved slot; the crossing map, copy worklist and pin list sit directly above
+  (`CROSS = END`), so growing it means moving them, and the LOG/SLOT bitmap spans must still cover what they log.
+- **Survivor aging is untried (2026-11-26, S7-5).** Every object alive at a minor is promoted. A minor's cost is what
+  survives (the longest minor fell 34 -> 12 ms going 4 -> 8 MiB, inferred to be FrameBench structures dying before
+  the next minor), so keeping survivors young for one more minor may cut promotion and full collections. Measure
+  promoted bytes per minor before building it.
+- **The copy worklist halts when full (2026-11-26, S7-5).** `Nursery.push` stops the board with
+  `nursery: copy worklist full` past 512k pending entries (4 MiB at `WORK`). Reaching it needs that many young
+  survivors queued at once (e.g. one young `Object[]` naming 512k young objects across the four nurseries) -- not
+  seen, but a program can build it. Spill or grow instead of halting.
+- **The drain's per-object cost (2026-11-26, S7-4d'''').** After `copyWords` and the lean allocation, the drain is
+  still the bulk of a minor: each copy's slot scan (`scanSlots` per object) and the forwarding-word write. The
+  optimizing compiler (inlining) is the general fix; a block-copy-then-scan-range pass is the local one.
+- **Write-barrier slow path out of line (2026-11-25, S7-4d''').** The compiled barrier is 10 words inline at every
+  reference store (ldxr/orr/stxr loop). Moving the log path out of line shrinks code; measure code arena size and
+  FrameBench before and after.
+- **Pretenure the JIT map entries (2026-11-25, S7-4d'').** The statics-and-JIT-maps phase was ~11 ms of the Pi's
+  minor phases before S7-4d''''; the map entries are young when created and long-lived, so allocating them mature
+  removes them from every minor.
+- **A call inside `WriteBarrier.log`/`logSlot` broke ClinitRaceProbe (2026-11-25, S7-4d''', UNEXPLAINED).** Sharing a
+  private `setBit` helper between them sent ClinitRaceProbe (nursery on, 4 MB) to a wild pc `0x80` in 24 of 24
+  boots; inlining the same CAS loop passes 24 of 24. They run inside collections; why a call there breaks is not
+  established, and the rule "keep them call-free" stands only on the measurement.
+- **`gcpromote=1` is a dead A/B switch (2026-11-26).** S7-4c measured that skipping the general free list for copies
+  costs a full collection; S7-4d'''' kept the default order on the lean path. Remove the switch and its branch.
+- **SslEngineProbe exceeds the 900 s cap in the 64 KB VERIFY arm at `-j 4` (2026-11-25, low).** 12,793 collections;
+  alone it passes in 377 s. A harness cap, not a VM failure -- give that arm a longer cap or run it solo.
+- **Virt read FrameBench ~9% slower at an 8 MiB nursery (2026-11-26, low, QEMU only).** 105 vs 96 ms over two boots;
+  the Pi shows no difference. Unexplained; only matters if virt becomes a throughput instrument.
+
 - **Memory corruption in `demo/RunProbe` under `gcroots=0` (found 2026-11-22, frames/GC arc S6d-3).** With the
   conservative stack-root scan, RunProbe dies right after its stop-poll bench while a stop is pending: on `main`
   (`d7d8054`) 3 of 3 boots -- a wild branch to a pc made of two instruction words (`0xAA0003E99402A878`), or QEMU's
