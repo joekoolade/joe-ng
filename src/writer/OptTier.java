@@ -285,5 +285,17 @@ final class OptTier
             }
         }
         System.out.println(sb);
+        if (System.getenv("JOENG_OPT_BLOCKERS") != null)
+        {
+            StringBuilder bl = new StringBuilder("opt: first blocking op:");
+            for (int i = 0; i < A64Select.BLOCKED_BY.length; i++)
+            {
+                if (A64Select.BLOCKED_BY[i] > 0)
+                {
+                    bl.append(' ').append(compiler.opt.Op.name(i)).append('=').append(A64Select.BLOCKED_BY[i]);
+                }
+            }
+            System.out.println(bl);
+        }
     }
 }

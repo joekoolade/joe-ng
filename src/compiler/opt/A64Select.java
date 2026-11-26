@@ -72,6 +72,16 @@ public final class A64Select
     public static final int VCALL = 35;      // vtable dispatch: imm = the vtable slot; as CALL otherwise
     public static final int ICALL = 36;      // itable dispatch: aux = InterfaceMethodref cp, imm = the itable slot
     public static final int HCALL = 37;      // a VM helper call: aux = the Symbols helper id
+    public static final int STATICADDR = 38; // defs[0] = the address of the static at Fieldref aux (relocated)
+    public static final int STRX = 39;       // [uses[0] + imm] = uses[1]
+    public static final int STRB = 40;       // [uses[0]] = uses[1], one byte
+    public static final int STRH = 41;
+    public static final int STRW = 42;
+    public static final int DMB = 43;        // dmb ish (a volatile access's fence)
+    public static final int BARRIER = 44;    // the write barrier: uses = object (or slot address), value -- both
+                                             //   copies that die here, since the barrier overwrites them; aux 1 = slot log
+    public static final int LDCSTR = 45;     // defs[0] = the String literal at cp aux (relocated)
+    public static final int LDCCLASS = 46;   // defs[0] = the class literal at cp aux (relocated)
 
     public static final int OK = 0;
     public static final int R_CALL = 1;
@@ -253,6 +263,18 @@ public final class A64Select
                         return r;
                     }
                 }
+                if ((x.op == Op.GETSTATIC || x.op == Op.PUTSTATIC) && syms.needsInitGuard((int) x.aux))
+                {
+                    return R_INTRINSIC;                      // an init-guard helper call before it (Locale only)
+                }
+                if (x.op == Op.LDC)
+                {
+                    int tag = g.cpTag[(int) x.aux];
+                    if (tag != 7 && tag != 8)
+                    {
+                        return R_OP;                         // MethodHandle / MethodType / dynamic: later
+                    }
+                }
             }
         }
         return args > MAX_ARGS ? R_ARGS : OK;
@@ -329,15 +351,35 @@ public final class A64Select
         return syms.vtableSlot(cp) < 0 ? R_UNRESOLVED : OK;
     }
 
+    /** Debug (JOENG_OPT_BLOCKERS): every op that blocks the back end, counted by name across the build. */
+    public static final int[] BLOCKED_BY = new int[Op.COUNT];
+
     private static int screenOp(Instr x)
+    {
+        int r = screenOp0(x);
+        if (r != OK)
+        {
+            BLOCKED_BY[x.op] += 1;
+        }
+        return r;
+    }
+
+    private static int screenOp0(Instr x)
     {
         int op = x.op;
         if (op == Op.NEW || op == Op.NEWARRAY || op == Op.ANEWARRAY || op == Op.MULTIANEWARRAY
             || op == Op.CHECKCAST || op == Op.INSTANCEOF || op == Op.MONITORENTER || op == Op.MONITOREXIT
-            || op == Op.THROW || op == Op.GETSTATIC || op == Op.PUTSTATIC || op == Op.PUTFIELD || op == Op.ASTORE
-            || op == Op.LDC)
+            || op == Op.THROW)
         {
             return R_CALL;
+        }
+        if (op == Op.LDC && x.kind != Kind.A)
+        {
+            return R_OP;                                     // a dynamic constant of a primitive type
+        }
+        if (op == Op.ASTORE && (x.aux2 == 0x51 || x.aux2 == 0x52))
+        {
+            return R_FLOAT;
         }
         if (op == Op.CATCH || op == Op.LOAD_LOCAL || op == Op.STORE_LOCAL)
         {
@@ -460,6 +502,48 @@ public final class A64Select
             MInstr m = emit(LDRX, d, new int[] { v(x.in[0]) }, x);
             m.imm = syms.fieldOffset(cp);
             m.aux = syms.isVolatileField(cp, false) ? 1 : 0;
+        }
+        else if (op == Op.GETSTATIC)
+        {
+            int cp = (int) x.aux;
+            int a = temp();
+            MInstr sa = emit(STATICADDR, a, null, x);
+            sa.aux = cp;
+            MInstr m = emit(LDRX, d, new int[] { a }, x);
+            m.imm = 0;
+            m.aux = syms.isVolatileField(cp, true) ? 1 : 0;
+        }
+        else if (op == Op.PUTSTATIC)
+        {
+            int cp = (int) x.aux;
+            int a = temp();
+            MInstr sa = emit(STATICADDR, a, null, x);
+            sa.aux = cp;
+            store(STRX, a, v(x.in[0]), 0, syms.isVolatileField(cp, true), x);
+            if (compiler.Baseline.fieldIsRef(g.cls, g.cpOff, cp))
+            {
+                barrier(a, v(x.in[0]), true, x);             // the CELL into the slot log (S7-4d''), as Baseline
+            }
+        }
+        else if (op == Op.PUTFIELD)
+        {
+            int cp = (int) x.aux;
+            int obj = v(x.in[0]);
+            store(STRX, obj, v(x.in[1]), syms.fieldOffset(cp), syms.isVolatileField(cp, false), x);
+            if (compiler.Baseline.fieldIsRef(g.cls, g.cpOff, cp))
+            {
+                barrier(obj, v(x.in[1]), false, x);
+            }
+        }
+        else if (op == Op.ASTORE)
+        {
+            arrayStore(x);
+        }
+        else if (op == Op.LDC)
+        {
+            int tag = g.cpTag[(int) x.aux];
+            MInstr m = emit(tag == 8 ? LDCSTR : LDCCLASS, d, null, x);
+            m.aux = (int) x.aux;
         }
         else if (op == Op.ARRAYLENGTH)
         {
@@ -703,6 +787,56 @@ public final class A64Select
         MInstr s = emit(ADDLSL, elem, new int[] { base, v(x.in[1]) }, x);
         s.imm = shift;
         emit(lop, d, new int[] { elem }, x);
+    }
+
+    /** A store, fenced on both sides when the field is volatile (Baseline's release + store-load). */
+    private void store(int op, int base, int val, int off, boolean vol, Instr x)
+    {
+        if (vol)
+        {
+            emit(DMB, -1, null, x);
+        }
+        MInstr m = emit(op, -1, new int[] { base, val }, x);
+        m.imm = off;
+        if (vol)
+        {
+            emit(DMB, -1, null, x);
+        }
+    }
+
+    /** The write barrier on copies of {@code obj} and {@code val}: it overwrites both registers, and the copies die
+     *  at it, so no value anyone still needs is in them. */
+    private void barrier(int obj, int val, boolean slotLog, Instr x)
+    {
+        int o = temp();
+        int w = temp();
+        MInstr a = MInstr.move(o, obj);
+        a.bci = x.bci;
+        cur.add(a);
+        MInstr b = MInstr.move(w, val);
+        b.bci = x.bci;
+        cur.add(b);
+        MInstr m = emit(BARRIER, -1, new int[] { o, w }, x);
+        m.aux = slotLog ? 1 : 0;
+    }
+
+    /** xastore: the element's address, the sized store; aastore logs the ELEMENT in the slot log (S7-4d'). */
+    private void arrayStore(Instr x)
+    {
+        int c = x.aux2;
+        int shift = c == 0x54 ? 0 : (c == 0x55 || c == 0x56 ? 1 : (c == 0x4F ? 2 : 3));
+        int sop = c == 0x54 ? STRB : (c == 0x55 || c == 0x56 ? STRH : (c == 0x4F ? STRW : STRX));
+        int base = temp();
+        MInstr a = emit(ADDI, base, new int[] { v(x.in[0]) }, x);
+        a.imm = ObjectModel.ARRAY_BASE_OFFSET;
+        int elem = temp();
+        MInstr s = emit(ADDLSL, elem, new int[] { base, v(x.in[1]) }, x);
+        s.imm = shift;
+        store(sop, elem, v(x.in[2]), 0, false, x);
+        if (c == 0x53)
+        {
+            barrier(elem, v(x.in[2]), true, x);
+        }
     }
 
     private static final int[] CONDS = { 0, 1, 11, 10, 12, 13 };     // eq ne lt ge gt le (A64Enc codes)

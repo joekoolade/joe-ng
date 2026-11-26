@@ -167,6 +167,42 @@ public final class A64Emit
             syms.callHelper(cb, x.aux);
             site(cb.wordCount() - 1);
         }
+        else if (op == A64Select.STATICADDR)
+        {
+            syms.staticField(cb, d, x.aux);                // a relocated address load, as Baseline's getstatic
+        }
+        else if (op == A64Select.LDCSTR)
+        {
+            syms.string(cb, d, x.aux);
+        }
+        else if (op == A64Select.LDCCLASS)
+        {
+            syms.classLiteral(cb, d, x.aux);
+        }
+        else if (op == A64Select.STRX)
+        {
+            cb.emit(A64Enc.strx(b, a, (int) x.imm));
+        }
+        else if (op == A64Select.STRB)
+        {
+            cb.emit(A64Enc.strb(b, a, 0));
+        }
+        else if (op == A64Select.STRH)
+        {
+            cb.emit(A64Enc.strh(b, a, 0));
+        }
+        else if (op == A64Select.STRW)
+        {
+            cb.emit(A64Enc.strw(b, a, 0));
+        }
+        else if (op == A64Select.DMB)
+        {
+            cb.emit(A64Enc.dmbIsh());
+        }
+        else if (op == A64Select.BARRIER)
+        {
+            compiler.Baseline.emitWriteBarrier(cb, a, b, x.aux == 1);
+        }
         else if (op == A64Select.VCALL)
         {
             // Baseline's vtable dispatch, writer form (no guards): the receiver is in x0

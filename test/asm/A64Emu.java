@@ -99,6 +99,12 @@ public final class A64Emu
         return (h >>> 62) == 0 ? 0L : h;
     }
 
+    /** Every word stored to, by address (what a run changed in memory). */
+    public java.util.Map<Long, Long> stored()
+    {
+        return mem;
+    }
+
     /** Little-endian load of {@code size} bytes (1, 2, 4, 8) at {@code a}, zero-extended. */
     public long load(long a, int size)
     {
@@ -490,6 +496,17 @@ public final class A64Emu
             boolean nz = ((w >>> 24) & 1) == 1;
             boolean set = ((x[rd] >>> bit) & 1) == 1 && rd != 31;
             return set == nz ? pc + (((long) (w << 13) >> 18) << 2) : next;
+        }
+        if ((w & 0xFFFF_FC00) == 0xC85F_7C00)                       // LDXR (64-bit): one core, so a plain load
+        {
+            setZ(rd, load(x[rn], 8), true);
+            return next;
+        }
+        if ((w & 0xFFE0_FC00) == 0xC800_7C00)                       // STXR (64-bit): always succeeds (status 0)
+        {
+            store(x[rn], 8, rd == 31 ? 0 : x[rd]);
+            setZ(rm, 0, true);
+            return next;
         }
         if ((w & 0xFFFF_FC1F) == 0xD63F_0000 && calls != null)     // BLR: the hook is the callee
         {

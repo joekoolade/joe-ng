@@ -1858,6 +1858,19 @@ public final class Baseline
     /** The barrier into {@code bitmap} (the log bitmap, or the slot log with {@code obj} = the element's address). */
     private void writeBarrier(CodeBuffer cb, int obj, int val, long bitmap, long summaryBias)
     {
+        emitWriteBarrier(cb, obj, val, bitmap == Symbols.SLOT_BITMAP);
+    }
+
+    /**
+     * The write barrier's code, shared with the optimizing tier's back end ({@code compiler.opt.A64Emit}) so the two
+     * tiers can never log differently: into the log bitmap ({@code slotLog} false; {@code obj} = the object), or
+     * into the slot log ({@code obj} = the stored slot's address). Overwrites {@code obj}, {@code val}, x16, x17 and
+     * the flags.
+     */
+    public static void emitWriteBarrier(CodeBuffer cb, int obj, int val, boolean slotLog)
+    {
+        long bitmap = slotLog ? Symbols.SLOT_BITMAP : Symbols.LOG_BITMAP;
+        long summaryBias = slotLog ? SLOT_SUMMARY_BIAS : SUMMARY_BIAS;
         if (!Symbols.WRITE_BARRIER)
         {
             return;
@@ -5398,6 +5411,13 @@ public final class Baseline
         return k == 'J' || k == 'D';
     }
     private boolean fieldIsRef(int fieldCp)
+    {
+        return fieldIsRef(classBytes, cpOff, fieldCp);
+    }
+
+    /** Whether a store to the Fieldref at {@code fieldCp} gets the write barrier: its descriptor is a class or an
+     *  array -- which includes the unboxed {@code magic} types, as Baseline has always decided it. */
+    public static boolean fieldIsRef(byte[] classBytes, int[] cpOff, int fieldCp)
     {
         int off = ClassReader.refDescOff(classBytes, cpOff, fieldCp);
         int c = ClassReader.u1(classBytes, off + 2);
