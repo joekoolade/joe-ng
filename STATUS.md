@@ -4,6 +4,28 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **FRAMES/GC ARC, INCREMENT S7-4e: the nursery on by default (2026-11-26).**
+  - **The switch.** With no `gcnursery=` line -- and with no `/etc/init` at all -- the nursery is armed
+    (`gcnursery: nursery on KB=4096`). `gcnursery=0` turns it off (`gcnursery: nursery off`); `gcnursery=2` is
+    still VERIFY. `gcgen=1` and `gcbarrier=1` measure a heap with no nursery, so they now need `gcnursery=0` beside
+    them. Why now: S7-4d'''' measured on the Pi, nursery on vs off, FrameBench level (492-503 vs 495-497 ms),
+    total pause 655 vs 860 ms, longest pause 100 vs 123 ms, 11 full collections against 14.
+  - **A diagnostic it exposed: `heap=` went negative.** The `gc: collections=` line prints the last collection's
+    `lastProbes`, `roots` and `heap=probes - rootProbes`. A minor-only collection zeroed `probes` and returned
+    before `rootProbes` was set, so after a minor the line mixed the minor's count with the last full collection's
+    split -- `heap=0xFFFFFFFFFFFFFF50` at the end of the suite. A minor now puts the last full collection's
+    `probes`/`nomap` back; the line describes the last FULL trace (`heap=0`, as on main).
+  - **The suite's `collections=` counts minors now:** 113 at the churn line against 53, a change of meaning, not of
+    behaviour. Compare like with like.
+  - **QEMU:** virt list **215/215** with the default init (nursery on, checked: 47 of 47 batch logs say so), with
+    `gcnursery=0` and in VERIFY. raspi4b suite `checked=160 mismatch=0` (nursery on). `make test` and overlaycheck
+    OK.
+  - **Pi 4, 3 boots each:** default init -- minor phases summed 150.4/150.9/152.9 ms, longest minor-only pause
+    34.0-34.3 ms, 89-90 minors and 11 full collections, total pause 651-652 ms, FrameBench 494.9/495.9/504.5 ms.
+    `gcnursery=0` -- no minors, 14 collections, total pause 860-863 ms, FrameBench 505.4/507.8/508.1 ms. Checksums
+    agree; every endpoint 200 in both. The first push back to main timed out (PUT, 900 s, nothing staged and nothing
+    live changed); the retry committed, and the Pi is on main (build 7847994e51e59c1d, sha verified).
+
 - **FRAMES/GC ARC, INCREMENT S7-4d'''': drain speed and the remembered-set scan (2026-11-25).**
   - **Where the time was.** The Pi split of S7-4d''' (`gcnursery=1`): minor phases summed 203 ms, of which the
     drain 108, the remembered set 62.8, the pin pass 11.8, statics and JIT maps 11.3, re-key and rebuild 5.6. The

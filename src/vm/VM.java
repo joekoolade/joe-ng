@@ -2427,6 +2427,7 @@ public final class VM
         Address e = fileFind(Magic.bytes("/etc/init"));
         if (e.toLong() == 0L)
         {
+            armNursery(Address.zero(), 0);                   // S7-4e: the nursery is on without a manifest too
             return false;
         }
         Address conf = e.plus(16L).loadAddress();
@@ -2612,22 +2613,25 @@ public final class VM
     }
 
     /**
-     * {@code gcnursery=1}: young objects in per-core nurseries and minor collections (frames/GC arc S7-4a);
-     * {@code gcnursery=2} verifies -- every collection full, evacuated space poisoned, stale references reported.
-     * {@code nursery=<KB>} sizes each core's nursery (default 4096, at most 8192). The generational census and the
-     * barrier's shadow check measure a heap with no nursery, so they are switched off.
+     * Young objects in per-core nurseries and minor collections (frames/GC arc S7-4a), ON BY DEFAULT since S7-4e --
+     * with no {@code gcnursery=} line, and with no {@code /etc/init} at all ({@code flen} 0). {@code gcnursery=0}
+     * turns it off; {@code gcnursery=2} verifies -- every collection full, evacuated space poisoned, stale references
+     * reported. {@code nursery=<KB>} sizes each core's nursery (default 4096, at most 8192). The generational census
+     * ({@code gcgen=1}) and the barrier's shadow check ({@code gcbarrier=1}) measure a heap with no nursery, so they
+     * are switched off unless {@code gcnursery=0} is given too.
      */
     private static void armNursery(Address conf, int flen)
     {
+        int mode = 1;
         DataReference v = Heap.allocData(16);
         int n = manifestValue(conf, flen, Magic.bytes("gcnursery"), v.toAddress(), 8);
-        if (n != 1)
+        if (n == 1)
         {
-            return;
+            mode = v.loadUnsignedByte() - 0x30;
         }
-        int mode = v.loadUnsignedByte() - 0x30;
         if (mode != 1 && mode != 2)
         {
+            Uart.write(Magic.bytes("gcnursery: nursery off\n"));
             return;
         }
         long kb = 0L;
