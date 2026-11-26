@@ -4,6 +4,29 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **OPT COMPILER ARC, INCREMENT O1-4b: allocation and type checks -- 90% of the image (2026-11-26).** QEMU-validated;
+  Pi not run.
+  - **What:** `new` (`Heap.alloc(size)`, then the class's TIB into the header through x16), `newarray`/`anewarray`
+    (`Heap.allocArray(length, elemSize)`, then `Symbols.tagArray`), `multianewarray` up to 4 dimensions
+    (`VM.multiNewArray(desc, dims, c0..c3)`), `checkcast`/`instanceof` (the writer's `CHECK_CAST`/`INSTANCE_OF`
+    helpers with the class's Type), and `AddressArray.create` (a `long[]`, re-tagged by owner) -- each as Baseline
+    lowers it in the writer.
+  - **A real bug the new relocation check found, in O1-6a's code:** `AddressArray.create` allocates, so a method
+    using it is NON-LEAF, but intrinsics never marked it -- the opt code saved no LR and skipped the prologue
+    yieldpoint, and its `ret` would have gone wrong (`ArrayTypes.unboxedArrayTib`, installed by O1-6a but on no path
+    the regression reached). The fix ports Baseline's own decisions instead of approximating them:
+    `baselineNonLeaf` (its `isNonLeaf`, over ALL the bytecode, reachable or not -- `Math.multiplyHigh` is a call there)
+    and `baselineLoopHeaders` (polls at every backward-branch target WITH AN EMPTY STACK, where Baseline puts them,
+    rather than at every RPO loop header).
+  - **`OptDiff` checks symbols now:** every relocated address load (TIB, Type, static cell, string) is patched to a
+    fake address derived from its key, so naming the wrong one diverges, and the two tiers' relocation keys (calls
+    included -- which is what caught the missing yieldpoint) must agree as multisets. Planted bug: a primitive array
+    tagged with the wrong atype -> 131 methods flagged. **2556 methods, 700,935 runs, 3,955,429 calls, 836,746
+    dispatches, 0 mismatches.** `make test` runs it at 100 trials a method now (300 took ~9 minutes).
+  - **`--opt all` installs 2556 of 2843** (2374 on virt). Declined: calling/system intrinsics 147, handlers 76, throws
+    37, synchronized 9, symbol queries the writer cannot answer 14. QEMU virt **215/215**; raspi4b suite
+    **`checked=160 mismatch=0`**, `collections=78` at the churn line. `make test` and overlaycheck OK.
+
 - **OPT COMPILER ARC, INCREMENT O1-6a: the call-free intrinsics -- 81% of the image (2026-11-26).** QEMU-validated;
   Pi not run. Taken ahead of O1-4b because it was measured to be the larger gate (`JOENG_OPT_BLOCKERS=1` now also
   counts, per intrinsic id, the methods declined for it: the unboxed reinterpret alone was in 875, `UB_ADD` in 710,

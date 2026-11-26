@@ -233,6 +233,27 @@ public final class A64Emit
         {
             cb.emit(A64Enc.mrs(d, x.aux));
         }
+        else if (op == A64Select.TIBSTORE)
+        {
+            syms.tib(cb, SCRATCH, x.aux);                  // x16 = the class's TIB (relocated)
+            cb.emit(A64Enc.strx(SCRATCH, a, ObjectModel.TIB_OFFSET));
+        }
+        else if (op == A64Select.TAGARRAY)
+        {
+            syms.tagArray(cb, a, x.aux, x.imm != 0);
+        }
+        else if (op == A64Select.TAGUNBOXED)
+        {
+            syms.tagUnboxedArray(cb, a, x.aux);
+        }
+        else if (op == A64Select.TYPEADDR)
+        {
+            syms.type(cb, d, x.aux);
+        }
+        else if (op == A64Select.DESCADDR)
+        {
+            syms.arrayDescAddr(cb, d, x.aux);
+        }
         else if (op == A64Select.VCALL)
         {
             // Baseline's vtable dispatch, writer form (no guards): the receiver is in x0

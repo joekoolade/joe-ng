@@ -42,6 +42,8 @@ public final class Block
     public Block idom;
     /** Loop header: the target of a back edge. */
     public boolean loopHeader;
+    /** Operand-stack depth (JVM slots) entering the block. */
+    public int entryDepth;
 
     Block(int id, int startBci)
     {
