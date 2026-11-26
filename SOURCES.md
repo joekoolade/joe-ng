@@ -111,6 +111,15 @@ logs what informed each piece so encodings and boot facts are auditable.
 - **Cytron et al., "Efficiently Computing Static Single Assignment Form and the Control Dependence Graph"**
   (TOPLAS 1991) -- *concept only*: SSA form itself. The construction here is not theirs (no dominance frontiers):
   a phi per slot at every join, created when the first predecessor finishes, then trivial phis removed.
+- **Poletto and Sarkar, "Linear Scan Register Allocation"** (TOPLAS 1999) -- the allocation in
+  `compiler/opt/LinearScan.java`: intervals by start, spill the one ending furthest away. The spill-and-rescan loop
+  (reload/store temporaries that are never spilled) is the classic iterative rewrite, written here.
+- **Briggs, Cooper, Harvey, Simpson, "Practical Improvements to the Construction and Destruction of SSA Form"**
+  (SP&E 1998) -- *concept only*: phis become parallel copies on (split) edges, sequentialized with a temporary
+  for cycles (`compiler/opt/PhiElim.java`).
+- **Intel SDM Vol. 2 (IDIV, two-operand ADD/IMUL, shift by CL)** and the **System V AMD64 ABI** (argument
+  registers, caller-saved set) -- the constraints the test-only x86-64-shaped register file in
+  `test/compiler/opt/AllocTest.java` imposes; no x86 code is generated.
 
 ## Concepts (not code) referenced
 

@@ -4,6 +4,30 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **OPT COMPILER ARC, INCREMENT O1-2a: the target seam, the machine IR and the register allocator, host only
+  (2026-11-26).** User direction: AArch64 first, but built for x86-64 and PowerPC (PLAN.md "Targets").
+  - **The seam.** `OptTarget` (register file, word size, where the return address lives, stack alignment; selection
+    and emission join it in O1-2b) with `A64Target`: x0..x15 and v0..v7/v16..v31 allocatable -- all caller-saved, as
+    O1's spill-across-calls decision needs; x16..x30 and v8..v15 never. The machine IR states everything the
+    allocator needs as data -- uses, defs, a use tied to the first def, operands fixed to a register, clobber sets
+    -- and the allocator never reads an opcode, so nothing in it names a target.
+  - **The passes (all target-neutral):** `PhiElim` (phis -> parallel copies on split edges, a cycle broken by a
+    temporary), `Constraints` (tied -> a copy before; fixed -> a copy into or out of a register pinned only across
+    the instruction), `Liveness` (positions 4i: uses at 4i, clobbers [4i+1, 4i+3), defs at 4i+3, so only a value
+    live ACROSS an instruction meets its clobbers), `LinearScan` (Poletto-Sarkar; spill = slot + never-spilled
+    reload/store temporaries + rescan), `AllocCheck` (abstract interpretation of which value each register and slot
+    holds; every read must find its value).
+  - **Second customer from day one:** `AllocTest` has a test-only x86-64-shaped register file -- 16 registers,
+    two-address arithmetic (tied), `idiv` pinned to rax/rdx, System V argument registers, the return address on the
+    stack -- with no encoder. An interpreter runs each program on virtual registers before allocation and on
+    physical registers and slots after it, a call filling every register it destroys with garbage. **400/400
+    seeded random programs agree on each register file** (loops, swapped header phis, diamonds, calls, divides,
+    int and FP classes, up to ~30 values live; AArch64 spills in 359, x86-shaped in 398). The checker is shown
+    catching corruptions: 360/360 operand collisions, and 2,849/2,849 corruptions the interpreter sees change the
+    answer.
+  - **The image is byte-identical to main** (pinned `SOURCE_DATE_EPOCH`: the image bakes HEAD's commit time, so two
+    commits' images differ in 25 bytes without it). `make test` (now with `AllocTest`) and overlaycheck OK.
+
 - **OPT COMPILER ARC, INCREMENT O1-1: the IR, the bytecode -> SSA builder and the verifier, host only
   (2026-11-26).** The arc's shape is decided in PLAN.md ("The optimizing compiler"): writer first, selection by
   `--opt` list/`all` AND the `@magic.Optimize` pragma, values spilled across calls so opt frames reuse Baseline's

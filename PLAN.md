@@ -5074,6 +5074,30 @@ increments. **Decided with the user (2026-11-26):**
    `StackRoots` and the nursery need no opt-frame iterator. Register-describing maps and callee-saved allocation
    come when they pay (O2/O3), with the derived-pointer entries the frames/GC arc already requires.
 
+**Targets (user direction, 2026-11-26): AArch64 first, but built for others -- x86-64 and PowerPC.** The tier is
+split so a new target is a new back end, not a rewrite:
+- **Target-neutral:** the IR (`compiler.opt`), its builder, verifier and every optimization over it; liveness and
+  linear-scan allocation; the frame's slot assignment; the metadata (GC maps, handler ranges, bci map,
+  framestates), keyed by machine-code offset.
+- **Per target, behind `compiler.opt.OptTarget`:** the register file (classes, allocatable, caller/callee-saved,
+  argument and return registers, scratch, registers an instruction clobbers or needs FIXED); instruction selection
+  from the IR into the machine IR; the frame conventions (where the return address lives -- a link register on
+  AArch64 and PowerPC, pushed on the stack on x86 -- alignment, a PowerPC back chain); and emission through that
+  target's own encoder (`asm.A64Enc` today).
+- **What the shared parts must not assume** -- each an ARM-ism that would leak: three-address operations (x86 is
+  two-address: the result is tied to the first operand); any register can do anything (x86 divide needs
+  rax/rdx, a variable shift needs cl); condition flags (PowerPC has eight CR fields; compare-and-branch is not one
+  shape); a word of 64 bits (`Kind.W` is the TARGET's word -- 64 on AArch64, x86-64 and PPC64, 32 on a PPC32);
+  little-endian memory; which immediates encode. The machine IR therefore carries, per instruction, its uses and
+  defs with register classes, tied operands, fixed-register constraints and clobber sets, and the allocator works
+  from those alone.
+- **Kept honest by a second register file from the start.** A test-only x86-64-shaped description (16 integer
+  registers, two-address operations, a fixed-register divide, the return address on the stack) runs the allocator
+  in `make test` beside AArch64's. It has no encoder; it exists so the seam is exercised by more than one target
+  before an ARM assumption hardens into the shared code.
+- The Baseline compiler stays AArch64-only; an x86-64 Baseline is the BACKLOG "Intel board" item, and the opt
+  tier's x86 back end would come after it (Baseline is the deopt target).
+
 **The IR** (package `compiler.opt`). A CFG of basic blocks; each block a list of SSA instructions with an int
 opcode, a value kind and operand references. Kinds: `I` (int, and the sub-word types), `J`, `F`, `D`, `A`
 (reference), `W` (a raw word: Address/Word/Offset/Extent), `O` (ObjectReference -- a raw word the collector
@@ -5095,10 +5119,17 @@ also with `--opt all` (virt list, raspi4b suite) and a Pi boot.
   `opt: built=N verified=N rejected=N` with the rejection reasons. The selection flag and pragma land here.
   **DONE (2026-11-26):** image `built=2842 verified=2842 rejected=0`; `OptCorpus` 74,078 methods (java.base +
   `out/`) and 218,701 (every JDK module) with 0 malformed, every framestate matching RefMaps' types.
-- **O1-2: the back end for leaf methods.** Lowering to machine-level IR, liveness, linear scan over x0..x15
-  (minus the reserved scratch), frame and prologue/epilogue, emission through `asm.A64Enc`; installed for leaf
-  methods with no allocation, calls or exceptions. Opt code replaces the Baseline body at the same symbol, so
-  callers are unchanged.
+- **O1-2a: the target seam, the machine IR and the register allocator, on the host.** `OptTarget`, the machine IR,
+  liveness and linear scan, checked against the AArch64 register file AND a test-only x86-shaped one (below).
+  Nothing is installed.
+  **DONE (2026-11-26):** `RegFile`, `OptTarget`/`A64Target`, the machine IR (`MFunc`/`MBlock`/`MInstr`: target
+  opcodes with uses, defs, tied and fixed operands and clobbers as data), `PhiElim`, `Constraints`, `Liveness`,
+  `LinearScan`, `AllocCheck`. `AllocTest`: 400 seeded random programs per register file agree before and after
+  allocation (AArch64: 359 spill, x86-shaped: 398); the checker catches 360/360 collisions and 2,849/2,849
+  answer-changing corruptions.
+- **O1-2b: the AArch64 back end for leaf methods.** Instruction selection to the machine IR, frame and
+  prologue/epilogue, emission through `asm.A64Enc`; installed for leaf methods with no allocation, calls or
+  exceptions. Opt code replaces the Baseline body at the same symbol, so callers are unchanged.
 - **O1-3: calls and safepoints.** Static/special/virtual/interface calls through the same `Symbols` seam
   Baseline uses (so relocation records are shared), spill across calls, GMAP maps at every call and yieldpoint,
   prologue and loop-header polls, the bci map.
