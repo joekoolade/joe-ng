@@ -5138,6 +5138,8 @@ also with `--opt all` (virt list, raspi4b suite) and a Pi boot.
 - **O1-3: calls and safepoints.** Static/special/virtual/interface calls through the same `Symbols` seam
   Baseline uses (so relocation records are shared), spill across calls, GMAP maps at every call and yieldpoint,
   prologue and loop-header polls, the bci map.
+- **O1-4a (2026-11-26): statics, stores, the write barrier, ldc** -- 1122 methods. **O1-4b: allocation and type
+  checks** (`new`, `newarray`, `anewarray`, `checkcast`, `instanceof`); throws and monitors stay with O1-5.
 - **O1-4: the object model.** Fields, statics, arrays, `new`, write barriers, type checks, implicit null, bounds,
   divide and size checks (by explicit test, as Baseline does -- implicit null checks are O5).
 - **O1-5: exceptions and monitors.** Handler ranges and the home-slot protocol above, `athrow`, synchronized

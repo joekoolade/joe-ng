@@ -114,7 +114,9 @@ public final class OptDiff implements OptTier.Diff
             calls += co.calls;
             moved += co.moved;
             dynCalls += co.dispatches;
-            if (cb.calls != co.calls || cb.trace != co.trace || (eb.x[0] != eo.x[0] && !desc.endsWith(")V")))
+            String memDiff = memory(eb, eo);
+            if (memDiff != null || cb.calls != co.calls || cb.trace != co.trace
+                || (eb.x[0] != eo.x[0] && !desc.endsWith(")V")))
             {
                 mismatches += 1;
                 if (mismatches <= 20)
@@ -126,7 +128,8 @@ public final class OptDiff implements OptTier.Diff
                     }
                     System.err.println("  MISMATCH " + key + " args" + sb + ": baseline 0x" + Long.toHexString(eb.x[0])
                                        + " opt 0x" + Long.toHexString(eo.x[0]) + " calls " + cb.calls + "/"
-                                       + co.calls + " trace " + (cb.trace == co.trace ? "same" : "differs"));
+                                       + co.calls + " trace " + (cb.trace == co.trace ? "same" : "differs")
+                                       + (memDiff == null ? "" : " memory: " + memDiff));
                 }
                 return;
             }
@@ -401,6 +404,50 @@ public final class OptDiff implements OptTier.Diff
         STATIC.put(key, st);
         return st;
     }
+
+    /** The two runs' stores outside the stack must agree word for word (the frames differ by design). */
+    private static String memory(A64Emu eb, A64Emu eo)
+    {
+        java.util.TreeMap<Long, Long> b = heapStores(eb);
+        java.util.TreeMap<Long, Long> o = heapStores(eo);
+        if (b.equals(o))
+        {
+            return null;
+        }
+        for (Long a : b.keySet())
+        {
+            if (!b.get(a).equals(o.get(a)))
+            {
+                return "0x" + Long.toHexString(a) + " baseline 0x" + Long.toHexString(b.get(a)) + " opt "
+                       + (o.get(a) == null ? "unwritten" : "0x" + Long.toHexString(o.get(a)));
+            }
+        }
+        for (Long a : o.keySet())
+        {
+            if (!b.containsKey(a))
+            {
+                return "0x" + Long.toHexString(a) + " written by opt only";
+            }
+        }
+        return "differs";
+    }
+
+    private static java.util.TreeMap<Long, Long> heapStores(A64Emu e)
+    {
+        java.util.TreeMap<Long, Long> r = new java.util.TreeMap<>();
+        for (var en : e.stored().entrySet())
+        {
+            long a = en.getKey();
+            if (a < STACK_LOW || a >= STACK_TOP)
+            {
+                r.put(a, en.getValue());
+            }
+        }
+        return r;
+    }
+
+    private static final long STACK_TOP = 0x7000_0000L;
+    private static final long STACK_LOW = STACK_TOP - (1L << 20);
 
     private static String why(A64Emu e)
     {

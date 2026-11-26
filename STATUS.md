@@ -4,6 +4,31 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **OPT COMPILER ARC, INCREMENT O1-4a: statics, stores, the write barrier, ldc (2026-11-26).** QEMU-validated; Pi
+  not run.
+  - **What:** `getstatic`/`putstatic` through `Symbols.staticField` (a relocated cell address, then the load or
+    store); `putfield`; the primitive and reference array stores; `ldc` of a String or a class literal
+    (`Symbols.string`/`classLiteral`). Volatile accesses fenced as Baseline fences them (`dmb ish` after a load,
+    both sides of a store). A static that needs an init guard (only `java/util/Locale` in the writer) and the
+    dynamic constants are declined.
+  - **The write barrier is ONE emitter for both tiers now:** Baseline's sequence moved into
+    `Baseline.emitWriteBarrier(cb, obj, val, slotLog)` (and `Baseline.fieldIsRef`, which decides it by the
+    descriptor -- so an `Address`-typed field store is barriered, as it always was). The opt tier's `BARRIER` takes
+    COPIES of the object (or the slot's address: the cell for a static, the element for an `aastore`, into the slot
+    log) and of the value, because the barrier overwrites both registers; the copies die there.
+  - **The image is no longer byte-identical to main without `--opt`, and that is Baseline itself:** its three
+    barrier methods changed shape (`emitWriteBarrier` new, `writeBarrier` now 224 bytes, `fieldIsRef` split). Every
+    one of the other ~3,400 image methods has the same size as on main, so Baseline's OUTPUT did not move. Virt list
+    without `--opt`: **215/215**.
+  - **`OptDiff` compares memory now:** every word a run stores outside the stack must agree between the tiers
+    (the emulator gained `ldxr`/`stxr` for the barrier's exclusive pair). **1122 methods, 326,164 runs, 1,032,520
+    calls, 833,836 moved references, 0 mismatches.** Planted bugs: no barrier on `putfield` -> 22 mismatches; a
+    field store 8 bytes off -> 146.
+  - **`--opt all` installs 1122 of 2843** (1068 on virt). Now declined most: intrinsics and the unboxed types
+    (1400), allocation and type checks (226; `JOENG_OPT_BLOCKERS=1` counts the first blocking op). QEMU virt
+    **215/215**; raspi4b suite **`checked=160 mismatch=0`**, `collections=78` at the churn line. `make test` and
+    overlaycheck OK.
+
 - **OPT COMPILER ARC, INCREMENT O1-3b: virtual and interface dispatch (2026-11-26).** QEMU-validated; Pi not run.
   - **Dispatch as Baseline does it in the writer (no guards):** `VCALL` -- the receiver's TIB, its vtable slot,
     `blr x16` -- when the writer resolves a slot; `ICALL` -- the interface's Type (a relocated address load through
