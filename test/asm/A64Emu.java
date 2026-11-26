@@ -33,12 +33,22 @@ public final class A64Emu
     private final HashMap<Long, Long> mem = new HashMap<>();
     public String unsupported;
     public long steps;
+    /** What a {@code BL} does: the callee, simulated. Null: a BL is unsupported. */
+    public CallHook calls;
+    private long codeBase;
+
+    /** A simulated callee: {@code word} is the BL's word index in the code, x30 already holds the return address. */
+    public interface CallHook
+    {
+        void call(A64Emu e, int word);
+    }
     private static final long RETURN_SENTINEL = 0x5EED_0000_0000L;
 
     /** Run {@code code} (loaded at {@code base}) until it returns; false if it did not (budget, unknown op). */
     public boolean run(int[] code, long base, long maxSteps)
     {
         x[30] = RETURN_SENTINEL;
+        codeBase = base;
         long pc = base;
         while (steps < maxSteps)
         {
@@ -442,6 +452,12 @@ public final class A64Emu
                 r = !op ? (o2 ? b + 1 : b) : (o2 ? -b : ~b);
             }
             setZ(rd, r, sf);
+            return next;
+        }
+        if ((w & 0xFC00_0000) == 0x9400_0000 && calls != null)     // BL: the hook is the callee
+        {
+            x[30] = next;
+            calls.call(this, (int) ((pc - codeBase) >> 2));
             return next;
         }
         if ((w & 0xFC00_0000) == 0x1400_0000)                       // B

@@ -39,7 +39,8 @@ final class OptTier
     /** A differential check, installed by a test (writer.OptDiff): both tiers' code for each installed method. */
     interface Diff
     {
-        void compare(String key, String descriptor, boolean isStatic, int[] baseline, int[] opt, long base);
+        void compare(String key, String descriptor, boolean isStatic, CompiledMethod baseline, CompiledMethod opt,
+                     long base);
     }
 
     static Diff diff;
@@ -140,8 +141,8 @@ final class OptTier
             }
             if (r == OptCompiler.ACCEPTED && !isEntry && !NO_EMIT)
             {
-                int gen = oc.generateA64(BaselineCompiler.writerSymbols(cf, resolver), uninterruptible(cf), base,
-                                         m.code.length);
+                compiler.Symbols syms = BaselineCompiler.writerSymbols(cf, resolver);
+                int gen = oc.generateA64(syms, uninterruptible(cf), base, m.code.length);
                 if (first)
                 {
                     countBack(key, oc, gen);
@@ -150,7 +151,9 @@ final class OptTier
                 {
                     CompiledMethod bl = new BaselineCompiler(cf, resolver).yieldPolls(true)
                             .compileMethod(m, base, false);
-                    diff.compare(key, m.descriptor, m.isStatic, bl.words(), oc.words(), base);
+                    diff.compare(key, m.descriptor, m.isStatic, bl, new CompiledMethod(oc.words(),
+                                 BaselineCompiler.relocationsOf(syms), oc.frameSize(), oc.gcMapWord(), new Vec<>(),
+                                 oc.bcToWord()), base);
                 }
                 if (gen == OptCompiler.ACCEPTED)
                 {
@@ -162,8 +165,8 @@ final class OptTier
                             System.out.println("  opt: installed " + key + " (" + oc.words().length + " words)");
                         }
                     }
-                    return new CompiledMethod(oc.words(), new BaselineCompiler.Relocations(), oc.frameSize(), 0,
-                                              new Vec<>(), oc.bcToWord());
+                    return new CompiledMethod(oc.words(), BaselineCompiler.relocationsOf(syms), oc.frameSize(),
+                                              oc.gcMapWord(), new Vec<>(), oc.bcToWord());
                 }
             }
         }

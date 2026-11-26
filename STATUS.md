@@ -4,6 +4,28 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **OPT COMPILER ARC, INCREMENT O1-3a: direct calls, yieldpoints and GC maps (2026-11-26).** virt-validated; the
+  raspi4b suite was still running when this merged; Pi not run.
+  - **Calls:** invokestatic and invokespecial through the same `Symbols.call` seam as Baseline (so the call-site
+    relocations are the writer's own); arguments pinned to x0.., the result to x0, every caller-saved register
+    destroyed -- so whatever is live across a call is spilled (PLAN.md: spill across calls). Declined still:
+    virtual/interface/dynamic calls (624), intrinsics and the special lowerings (233), a static call needing an init
+    guard (only `java/util/Locale` in the writer); a skippable root `super()` is dropped as Baseline drops it.
+  - **Yieldpoints where Baseline puts them:** the prologue of a method that calls or loops, every loop header,
+    none in an `Uninterruptible` class -- Baseline's four-instruction poll with the helper call on the slow path.
+    So loops are accepted now.
+  - **Frame and map:** a method that calls saves LR at `[sp]` (where every stack walk reads it), spill slots from
+    `[sp+8]`. Its GMAP map has a site at every `BL`, its "locals" the spill slots, each typed by the spilled value's
+    GC kind (`MFunc.vgc`, carried through every copy the passes make) where `SlotLiveness` says it is live after
+    the call, dead otherwise.
+  - **`OptDiff` now covers calls and the collector:** a BL runs a simulated callee (an answer hashed from its name
+    and arguments, garbage in every caller-saved register), and DURING it a simulated moving collector moves every
+    slot the tier's map marks as a reference; a reference the map missed diverges from Baseline's run. **628
+    methods, 184,713 runs, 502,933 calls, 282,352 references moved, 0 mismatches** (`make test`). Planted bugs:
+    every slot typed dead -> 127 mismatches; a call that destroys nothing -> 51.
+  - **`--opt all` installs 628 of 2841** (Pi build; 612 on virt). QEMU virt list **215/215**, all 47 images
+    `installed=612 badAlloc=0`. `make test` and overlaycheck OK.
+
 - **OPT COMPILER ARC, INCREMENT O1-2b: the AArch64 back end for leaf methods -- the first opt code in the image
   (2026-11-26).** QEMU-validated; Pi pending.
   - **What:** `A64Select` (IR -> machine IR, one machine instruction per A64 instruction, so the allocator's

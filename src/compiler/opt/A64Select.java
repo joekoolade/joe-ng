@@ -15,17 +15,20 @@ import compiler.Symbols;
 import objectmodel.ObjectModel;
 
 /**
- * AArch64 instruction selection (O1-2b): the IR of a leaf method into machine IR, ONE machine instruction per
- * A64 instruction (or per fixed sequence that reads every operand before it writes its result), so the
- * allocator's "uses read before defs are written" holds of the code as emitted.
+ * AArch64 instruction selection: the IR into machine IR, ONE machine instruction per A64 instruction (or per fixed
+ * sequence that reads every operand before it writes its result), so the allocator's "uses read before defs are
+ * written" holds of the code as emitted.
  *
  * <p>It produces exactly what Baseline computes in the writer, where {@code implicitChecks()} is off: no null,
  * bounds or divide-by-zero tests (a zero divisor answers 0 from {@code sdiv}, as Baseline's does), ints kept
  * sign-extended in their 64-bit registers, every field an 8-byte slot, a volatile load followed by
- * {@code dmb ish}. A method is accepted only if it makes no call -- no invoke, allocation, type check, monitor,
- * throw, static access or reference store (a write barrier) -- has no handler, holds no float or double, takes
- * at most 16 arguments, and has no loop unless its class is {@code Uninterruptible} (any other loop gets a
- * yieldpoint, which is a call: O1-3).
+ * {@code dmb ish}.
+ *
+ * <p>Covered (O1-2b, O1-3a): ints, longs, references and the word types; arithmetic, shifts, compares, branches,
+ * switches, field and array loads; DIRECT calls (invokestatic, invokespecial) through the same {@link Symbols}
+ * seam as Baseline, with yieldpoints where Baseline puts them (the prologue of a method that calls or loops, and
+ * every loop header, unless the class is {@code Uninterruptible}). Not yet: virtual and interface dispatch,
+ * intrinsics, allocation, type checks, monitors, throws, statics, reference stores, handlers, floats.
  */
 public final class A64Select
 {
@@ -63,6 +66,9 @@ public final class A64Select
     public static final int CBNZ = 30;
     public static final int SWITCH = 31;     // term: keys; targets[0] = default
     public static final int RET = 32;        // term: uses[0] in x0, or nothing
+    public static final int CALL = 33;       // a direct call: aux = Methodref cp, imm 1 = has a receiver; args pinned
+                                             //   to x0.., the result to x0, destroys every caller-saved register
+    public static final int YIELD = 34;      // a yieldpoint: poll the request word, call the helper when it is set
 
     public static final int OK = 0;
     public static final int R_CALL = 1;
@@ -72,10 +78,13 @@ public final class A64Select
     public static final int R_ARGS = 5;
     public static final int R_SYNC = 6;
     public static final int R_OP = 7;
-    public static final int REASONS = 8;
+    public static final int R_DISPATCH = 8;
+    public static final int R_INTRINSIC = 9;
+    public static final int REASONS = 10;
     private static final String[] REASON_NAMES = {
-        "ok", "calls or allocates", "has a handler", "float/double", "loop (needs a yieldpoint)",
-        "more than 16 arguments", "synchronized", "op not selected yet",
+        "ok", "allocates, throws or stores a reference", "has a handler", "float/double",
+        "loop without yieldpoints", "more than 16 arguments", "synchronized", "op not selected yet",
+        "virtual/interface/dynamic call", "intrinsic or special call",
     };
 
     private static final int MAX_ARGS = 16;
@@ -88,6 +97,9 @@ public final class A64Select
     private MBlock[] mblock;      // IR block rpo -> machine block
     private MBlock cur;
     public int reason;
+    /** The method makes a call or polls: it saves the link register and gets a GC map. */
+    public boolean nonLeaf;
+    private boolean polls;
 
     public A64Select(Graph g, Symbols syms, boolean uninterruptible)
     {
@@ -134,13 +146,13 @@ public final class A64Select
             }
             for (int i = 0; i < blk.nPhis; i++)
             {
-                vreg[blk.phis[i].id] = f.newVreg(RegFile.INT);
+                vreg[blk.phis[i].id] = valueVreg(blk.phis[i].kind);
             }
             for (int i = 0; i < blk.nCode; i++)
             {
                 if (blk.code[i].kind != Kind.V)
                 {
-                    vreg[blk.code[i].id] = f.newVreg(RegFile.INT);
+                    vreg[blk.code[i].id] = valueVreg(blk.code[i].kind);
                 }
             }
         }
@@ -161,6 +173,14 @@ public final class A64Select
             if (b == 0)
             {
                 params(blk);
+                if (polls && nonLeaf)
+                {
+                    yieldPoint(-1);                          // the prologue yieldpoint, as Baseline's
+                }
+            }
+            else if (polls && blk.loopHeader)
+            {
+                yieldPoint(blk.startBci);                    // a loop's yieldpoint
             }
             for (int i = 0; i < blk.nCode && reason == OK; i++)
             {
@@ -177,6 +197,7 @@ public final class A64Select
     /** Everything this increment does not select, decided before any machine IR exists. */
     private int screen()
     {
+        polls = syms.yieldCellAddr() != 0L && !uninterruptible;
         if (g.isSynchronized)
         {
             return R_SYNC;
@@ -193,9 +214,9 @@ public final class A64Select
         for (int b = 0; b < g.nBlocks; b++)
         {
             Block blk = g.blocks[b];
-            if (blk.loopHeader && !uninterruptible)
+            if (blk.loopHeader && polls)
             {
-                return R_LOOP;
+                nonLeaf = true;                              // its yieldpoint is a call
             }
             for (int i = 0; i < blk.nPhis; i++)
             {
@@ -220,6 +241,14 @@ public final class A64Select
                 {
                     return r;
                 }
+                if (x.op == Op.INVOKE)
+                {
+                    r = screenCall(x);
+                    if (r != OK)
+                    {
+                        return r;
+                    }
+                }
             }
         }
         return args > MAX_ARGS ? R_ARGS : OK;
@@ -230,10 +259,40 @@ public final class A64Select
         return k == Kind.I || k == Kind.J || Kind.refLike(k);
     }
 
+    /** A direct call (invokestatic, invokespecial) through the {@link Symbols} seam, as Baseline's lowerCall; the
+     *  others -- dispatch, intrinsics, the special lowerings -- are later increments. */
+    private int screenCall(Instr x)
+    {
+        int cp = (int) x.aux;
+        if (x.aux2 == 0xB6 || x.aux2 == 0xB9 || x.aux2 == 0xBA)
+        {
+            return R_DISPATCH;
+        }
+        if (syms.isIntrinsicCall(cp) || syms.mathIntrinsicId(cp) >= 0 || syms.isGetCallerClass(cp)
+            || syms.isMhSigPoly(cp) || syms.isWatchedCall(cp) || syms.isWatchedCallArgs(cp))
+        {
+            return R_INTRINSIC;
+        }
+        if (x.aux2 == 0xB8 && syms.needsInitGuard(cp))
+        {
+            return R_INTRINSIC;                              // an init-guard helper call before it (Locale only)
+        }
+        if (x.in.length > MAX_ARGS)
+        {
+            return R_ARGS;
+        }
+        if (x.aux2 == 0xB7 && syms.isSkippableInit(cp))
+        {
+            return OK;                                       // super() into a root class: no call at all
+        }
+        nonLeaf = true;
+        return OK;
+    }
+
     private static int screenOp(Instr x)
     {
         int op = x.op;
-        if (op == Op.INVOKE || op == Op.NEW || op == Op.NEWARRAY || op == Op.ANEWARRAY || op == Op.MULTIANEWARRAY
+        if (op == Op.NEW || op == Op.NEWARRAY || op == Op.ANEWARRAY || op == Op.MULTIANEWARRAY
             || op == Op.CHECKCAST || op == Op.INSTANCEOF || op == Op.MONITORENTER || op == Op.MONITOREXIT
             || op == Op.THROW || op == Op.GETSTATIC || op == Op.PUTSTATIC || op == Op.PUTFIELD || op == Op.ASTORE
             || op == Op.LDC)
@@ -388,6 +447,10 @@ public final class A64Select
             m.keys = x.keys;
             m.targets = targets(x);
         }
+        else if (op == Op.INVOKE)
+        {
+            call(x, d);
+        }
         else if (op == Op.RETURN)
         {
             MInstr m;
@@ -406,6 +469,61 @@ public final class A64Select
         {
             reason = R_OP;
         }
+    }
+
+    /** A register for an IR value, typed for the collector by its kind (an ObjectReference is a reference). */
+    private int valueVreg(int kind)
+    {
+        int v = f.newVreg(RegFile.INT);
+        if (kind == Kind.A || kind == Kind.O)
+        {
+            f.vgc[v] = MFunc.GC_REF;
+        }
+        else if (kind == Kind.R)
+        {
+            f.vgc[v] = MFunc.GC_DREF;
+        }
+        return v;
+    }
+
+    private void call(Instr x, int d)
+    {
+        int cp = (int) x.aux;
+        if (x.aux2 == 0xB7 && syms.isSkippableInit(cp))
+        {
+            return;
+        }
+        int n = x.in.length;
+        int[] args = new int[n];
+        int[] pins = new int[n];
+        for (int i = 0; i < n; i++)
+        {
+            args[i] = v(x.in[i]);
+            pins[i] = i;                                     // argument i in xi (receiver first)
+        }
+        MInstr m = emit(CALL, d, args, x);
+        m.fixedUses = pins;
+        if (d >= 0)
+        {
+            m.fixedDefs = new int[] { 0 };
+        }
+        m.aux = cp;
+        m.imm = x.aux2 == 0xB8 ? 0 : 1;
+        m.clobbers = callerSaved();
+    }
+
+    private void yieldPoint(int bci)
+    {
+        MInstr m = new MInstr(YIELD, null, null);
+        m.bci = bci;
+        m.clobbers = callerSaved();
+        cur.add(m);
+    }
+
+    private static long[] callerSaved()
+    {
+        RegFile rf = new A64Target().regs();
+        return new long[] { rf.callerSaved(RegFile.INT), rf.callerSaved(RegFile.FP) };
     }
 
     private void unaryCanon(int mop, int d, int a, boolean isInt, Instr x)

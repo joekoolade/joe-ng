@@ -5132,6 +5132,8 @@ also with `--opt all` (virt list, raspi4b suite) and a Pi boot.
   exceptions. Opt code replaces the Baseline body at the same symbol, so callers are unchanged.
   **DONE on QEMU (2026-11-26), Pi pending:** `--opt all` installs 245 leaf methods; `OptDiff` 0 mismatches over
   73,489 emulated runs against Baseline; virt 215/215, raspi4b suite `checked=160 mismatch=0`.
+- **O1-3a (DONE on virt, 2026-11-26): direct calls, yieldpoints, GC maps** -- 628 methods; `OptDiff` simulates
+  callees and a moving collector (0 mismatches over 502,933 calls). **O1-3b: virtual and interface dispatch.**
 - **O1-3: calls and safepoints.** Static/special/virtual/interface calls through the same `Symbols` seam
   Baseline uses (so relocation records are shared), spill across calls, GMAP maps at every call and yieldpoint,
   prologue and loop-header polls, the bci map.

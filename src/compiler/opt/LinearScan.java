@@ -302,8 +302,7 @@ public final class LinearScan
         {
             if (spilled[v])
             {
-                slot[v] = f.nSlots;
-                f.nSlots += 1;
+                slot[v] = f.newSlot(v);
             }
         }
         for (int b = 0; b < f.nBlocks; b++)
@@ -345,7 +344,7 @@ public final class LinearScan
                         // a tied read-modify-write of a spilled register: the reload's temporary is also written,
                         // so it is stored back
                         MInstr s = new MInstr(MInstr.SPILL, null, new int[] { v });
-                        s.aux = slot[f.origin[v]];
+                        s.aux = slot[f.origin[v]];   // origin is the spilled register itself
                         blk.insert(i + before + 1 + after, s);
                         after += 1;
                     }
@@ -360,6 +359,7 @@ public final class LinearScan
         int t = f.newVreg(f.vclass[v]);
         f.noSpill[t] = true;
         f.origin[t] = f.origin[v];
+        f.copyGc(t, v);
         return t;
     }
 
