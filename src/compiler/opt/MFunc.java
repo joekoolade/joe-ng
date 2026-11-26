@@ -31,9 +31,36 @@ public final class MFunc
     public boolean[] noSpill = new boolean[16];
     /** Per virtual register: the register it stands for (itself, or the spilled one a temporary carries). */
     public int[] origin = new int[16];
+    /** Per virtual register: what the collector must do with it in a frame slot -- {@link #GC_RAW} (the default),
+     *  {@link #GC_REF} or {@link #GC_DREF}; the same 2-bit codes as a GMAP map. */
+    public byte[] vgc = new byte[16];
     /** Per virtual register: its physical register, after allocation. */
     public int[] loc;
     public int nSlots;
+    /** Per spill slot: the virtual register spilled there (its {@link #vgc} types the slot in a GC map). */
+    public int[] slotVreg = new int[8];
+
+    public static final byte GC_REF = 1;
+    public static final byte GC_RAW = 2;
+    public static final byte GC_DREF = 3;
+
+    /** Give {@code dst} the GC kind of {@code src}: a copy holds what its source holds. */
+    public void copyGc(int dst, int src)
+    {
+        vgc[dst] = vgc[src];
+    }
+
+    /** A new spill slot for virtual register {@code v}. */
+    public int newSlot(int v)
+    {
+        if (nSlots == slotVreg.length)
+        {
+            slotVreg = growInt(slotVreg, nSlots * 2);
+        }
+        slotVreg[nSlots] = v;
+        nSlots += 1;
+        return nSlots - 1;
+    }
 
     public MBlock newBlock()
     {
@@ -71,14 +98,18 @@ public final class MFunc
             fixed = growInt(fixed, m);
             origin = growInt(origin, m);
             boolean[] ns = new boolean[m];
+            byte[] gc = new byte[m];
             for (int i = 0; i < nV; i++)
             {
                 ns[i] = noSpill[i];
+                gc[i] = vgc[i];
             }
             noSpill = ns;
+            vgc = gc;
         }
         int v = nV;
         vclass[v] = cls;
+        vgc[v] = GC_RAW;
         fixed[v] = -1;
         origin[v] = v;
         nV += 1;

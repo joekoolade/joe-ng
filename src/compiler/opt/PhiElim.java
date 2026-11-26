@@ -136,6 +136,7 @@ public final class PhiElim
                 }
                 int d = dst[i];
                 int tmp = f.newVreg(f.vclass[d]);
+                f.copyGc(tmp, d);
                 e.insert(e.n - 1, MInstr.move(tmp, d));
                 for (int j = 0; j < n; j++)
                 {

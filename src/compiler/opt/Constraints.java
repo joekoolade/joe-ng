@@ -60,6 +60,7 @@ public final class Constraints
                     if (k != x.tied && x.uses[k] == d)
                     {
                         int keep = f.newVreg(f.vclass[d]);         // d's old value, read after d is overwritten
+                        f.copyGc(keep, d);
                         blk.insert(i, MInstr.move(keep, d));
                         i += 1;
                         x.uses[k] = keep;
@@ -76,6 +77,7 @@ public final class Constraints
             if (p >= 0 && f.fixed[x.uses[k]] != p)
             {
                 int t = f.fixedVreg(f.vclass[x.uses[k]], p);
+                f.copyGc(t, x.uses[k]);
                 blk.insert(i, MInstr.move(t, x.uses[k]));
                 i += 1;
                 x.uses[k] = t;
@@ -92,6 +94,7 @@ public final class Constraints
                     throw new IllegalStateException("a terminator may not define a fixed register");
                 }
                 int t = f.fixedVreg(f.vclass[x.defs[k]], p);
+                f.copyGc(t, x.defs[k]);
                 blk.insert(after, MInstr.move(x.defs[k], t));
                 after += 1;
                 x.defs[k] = t;

@@ -13,21 +13,36 @@ package compiler.opt;
 
 import asm.A64Enc;
 import asm.CodeBuffer;
+import compiler.Symbols;
 
 /**
  * AArch64 emission (O1-2b): allocated machine IR into instruction words through {@code asm.A64Enc}, blocks in
  * layout order, a jump to the next block dropped, branches patched once every block's first word is known.
  *
- * <p>The frame, when the allocator spilled anything: {@code sub sp, sp, #frameSize} on entry, spill slot k at
- * {@code [sp + 8k]}, {@code add sp} before {@code ret}. A leaf saves no link register (it makes no call), so the
- * frame is the slots and nothing else; with no spill there is no frame at all.
+ * <p>The frame. A method that calls or polls (O1-3) saves the link register at {@code [sp]} -- where every stack
+ * walk reads it -- with spill slot k at {@code [sp + 8 + 8k]}; a leaf saves none, slot k at {@code [sp + 8k]}, and
+ * with no spill has no frame at all. {@code sub sp} on entry, {@code add sp} before {@code ret}.
+ *
+ * <p>The GC map (a {@code compiler.RefMaps} GMAP, after the last instruction): a site at every {@code BL}, keyed by
+ * its return word, whose "locals" are the spill slots -- each typed by the spilled value's kind where it is live
+ * across that call, dead elsewhere. Nothing else can hold a reference at a call: every allocatable register is
+ * caller-saved, so the allocator spills whatever is live across one (PLAN.md: spill across calls).
  */
 public final class A64Emit
 {
     private static final int SCRATCH = 16;            // IP0: never allocated
 
     private final MFunc f;
+    private final Symbols syms;
+    private final boolean saveLR;
+    private int slotBase;
     private CodeBuffer cb;
+    // call sites: the BL's word, and the live spill slots after it (one word of bits per 32 slots)
+    private int[] siteWord = new int[8];
+    private int[][] siteLive = new int[8][];
+    private int nSites;
+    private long[] liveOutSlots;                       // scratch: slots live after the instruction being emitted
+    public int gcMapWord;
     private int[] blockWord;
     private int[] fixWord;
     private int[] fixBlock;
@@ -37,9 +52,11 @@ public final class A64Emit
     /** Set when a branch did not reach (the method falls back to Baseline). */
     public boolean failed;
 
-    public A64Emit(MFunc f)
+    public A64Emit(MFunc f, Symbols syms, boolean saveLR)
     {
         this.f = f;
+        this.syms = syms;
+        this.saveLR = saveLR;
     }
 
     public int[] emit(long base, int codeLength)
@@ -50,7 +67,10 @@ public final class A64Emit
         {
             bcToWord[i] = -1;
         }
-        frameSize = f.nSlots == 0 ? 0 : A64Enc.align16(f.nSlots * 8);
+        slotBase = saveLR ? 8 : 0;
+        int words = f.nSlots + (saveLR ? 1 : 0);
+        frameSize = words == 0 ? 0 : A64Enc.align16(words * 8);
+        SlotLiveness sl = new SlotLiveness(f);
         if (frameSize >= 4096)
         {
             failed = true;
@@ -71,11 +91,16 @@ public final class A64Emit
         {
             cb.emit(A64Enc.subImm(31, 31, frameSize));
         }
+        if (saveLR)
+        {
+            cb.emit(A64Enc.strx(30, 31, 0));
+        }
         for (int b = 0; b < f.nBlocks; b++)
         {
             MBlock blk = f.blocks[b];
             MBlock next = b + 1 < f.nBlocks ? f.blocks[b + 1] : null;
             blockWord[blk.id] = cb.wordCount();
+            long[][] after = sl.afterEach(blk);
             for (int i = 0; i < blk.n; i++)
             {
                 MInstr x = blk.code[i];
@@ -83,12 +108,22 @@ public final class A64Emit
                 {
                     bcToWord[x.bci] = cb.wordCount();
                 }
+                liveOutSlots = after[i];
                 one(x, next);
             }
         }
         patch();
         monotone();
-        return failed ? null : cb.toWords();
+        if (failed)
+        {
+            return null;
+        }
+        gcMapWord = 0;
+        if (nSites > 0)
+        {
+            emitMap();
+        }
+        return cb.toWords();
     }
 
     private int r(int v)
@@ -111,11 +146,27 @@ public final class A64Emit
         }
         else if (op == MInstr.SPILL)
         {
-            cb.emit(A64Enc.strx(a, 31, x.aux * 8));
+            cb.emit(A64Enc.strx(a, 31, slotBase + x.aux * 8));
         }
         else if (op == MInstr.RELOAD)
         {
-            cb.emit(A64Enc.ldrx(d, 31, x.aux * 8));
+            cb.emit(A64Enc.ldrx(d, 31, slotBase + x.aux * 8));
+        }
+        else if (op == A64Select.CALL)
+        {
+            syms.call(cb, x.aux, x.imm != 0);              // BL + its relocation, through the shared seam
+            site(cb.wordCount() - 1);
+        }
+        else if (op == A64Select.YIELD)
+        {
+            // Baseline's poll (emitYieldPoll): load the request word; only when any core's byte is set, call the
+            // helper, which takes this core's request -- a task switch or a park for a collection -- and returns.
+            cb.emitAll(A64Enc.loadImm64(SCRATCH, syms.yieldCellAddr()));
+            cb.emit(A64Enc.ldrx(SCRATCH, SCRATCH, 0));
+            int over = cb.emit(A64Enc.cbz(SCRATCH, 0));
+            syms.callHelper(cb, Symbols.YIELDPOINT);
+            site(cb.wordCount() - 1);
+            cb.set(over, A64Enc.cbz(SCRATCH, cb.wordCount() - over));
         }
         else if (op == MInstr.JUMP)
         {
@@ -209,6 +260,10 @@ public final class A64Emit
         }
         else if (op == A64Select.RET)
         {
+            if (saveLR)
+            {
+                cb.emit(A64Enc.ldrx(30, 31, 0));
+            }
             if (frameSize > 0)
             {
                 cb.emit(A64Enc.addImm(31, 31, frameSize));
@@ -219,6 +274,95 @@ public final class A64Emit
         {
             failed = true;
         }
+    }
+
+    /** Record a GC map site at the BL in word {@code w}: the spill slots live after it. */
+    private void site(int w)
+    {
+        if (nSites == siteWord.length)
+        {
+            int[] sw = new int[nSites * 2];
+            int[][] sv = new int[nSites * 2][];
+            for (int i = 0; i < nSites; i++)
+            {
+                sw[i] = siteWord[i];
+                sv[i] = siteLive[i];
+            }
+            siteWord = sw;
+            siteLive = sv;
+        }
+        int bitWords = (2 * f.nSlots + 31) / 32;
+        int[] bits = new int[bitWords];
+        for (int s = 0; s < f.nSlots; s++)
+        {
+            if ((liveOutSlots[s >> 6] & (1L << (s & 63))) != 0)
+            {
+                int t = f.vgc[f.slotVreg[s]];
+                int bit = 2 * s;
+                bits[bit >> 5] |= t << (bit & 31);
+            }
+        }
+        siteWord[nSites] = w;
+        siteLive[nSites] = bits;
+        nSites += 1;
+    }
+
+    /** The GMAP map in {@code compiler.RefMaps}'s format: header, sites by return word, then the unique maps. The
+     *  spill slots are its "locals" (based at {@link #slotBase}); there are no operand slots. */
+    private void emitMap()
+    {
+        int bitWords = (2 * f.nSlots + 31) / 32;
+        int[] uniq = new int[nSites];
+        int nUnique = 0;
+        for (int i = 0; i < nSites; i++)
+        {
+            int u = 0;
+            while (u < nUnique && !same(siteLive[uniq[u]], siteLive[i]))
+            {
+                u += 1;
+            }
+            if (u == nUnique)
+            {
+                uniq[nUnique] = i;
+                nUnique += 1;
+            }
+            siteWord[i] = (siteWord[i] + 1) | (u << 20);   // return word | its map index, unpacked below
+        }
+        gcMapWord = cb.emit(0x50414D47);                   // RefMaps.MAGIC, "GMAP"
+        cb.emit(nSites);
+        cb.emit(f.nSlots);                                 // "locals": the spill slots
+        cb.emit(0);                                        // no operand slots
+        cb.emit(slotBase);
+        cb.emit(slotBase);
+        cb.emit(bitWords);
+        cb.emit(nUnique);
+        cb.emit(0);                                        // no out-args area
+        cb.emit(0);
+        for (int i = 0; i < nSites; i++)
+        {
+            cb.emit(siteWord[i] & 0xFFFFF);
+            cb.emit(siteWord[i] >>> 20);                   // map index | live depth 0 | entering depth 0
+        }
+        for (int u = 0; u < nUnique; u++)
+        {
+            int[] bits = siteLive[uniq[u]];
+            for (int k = 0; k < bitWords; k++)
+            {
+                cb.emit(bits[k]);
+            }
+        }
+    }
+
+    private static boolean same(int[] a, int[] b)
+    {
+        for (int i = 0; i < a.length; i++)
+        {
+            if (a[i] != b[i])
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static int binary(int op, int d, int a, int b)

@@ -31,6 +31,7 @@ public final class OptCompiler
     private int[] words;
     private int frameSize;
     private int[] bcToWord;
+    private int gcMapWord;
     private int reasonBci;
     private String error;
 
@@ -79,7 +80,7 @@ public final class OptCompiler
         {
             return MALFORMED;
         }
-        A64Emit e = new A64Emit(f);
+        A64Emit e = new A64Emit(f, syms, sel.nonLeaf);
         words = e.emit(base, codeLength);
         if (words == null)
         {
@@ -88,6 +89,7 @@ public final class OptCompiler
         }
         frameSize = e.frameSize;
         bcToWord = e.bcToWord;
+        gcMapWord = e.gcMapWord;
         return ACCEPTED;
     }
 
@@ -109,6 +111,12 @@ public final class OptCompiler
     public int[] bcToWord()
     {
         return bcToWord;
+    }
+
+    /** Word offset of the GC map after the code (0 = none: a leaf). */
+    public int gcMapWord()
+    {
+        return gcMapWord;
     }
 
     public Graph graph()

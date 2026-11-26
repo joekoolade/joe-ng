@@ -105,7 +105,15 @@ public final class BaselineCompiler
      *  field offsets, volatility -- so it shares Baseline's answers without sharing its relocation records). */
     public static Symbols writerSymbols(ClassFile cf, ClassResolver resolver)
     {
-        return new WriterSymbols(cf, resolver);
+        WriterSymbols s = new WriterSymbols(cf, resolver);
+        s.setYieldPolls(true);                           // as the image writer's Baseline compiles (ImageBuilder)
+        return s;
+    }
+
+    /** The relocation records a {@link #writerSymbols} instance collected (call sites, for now). */
+    public static Relocations relocationsOf(Symbols s)
+    {
+        return ((WriterSymbols) s).relocations();
     }
 
     /** Method key used for call resolution: {@code owner.name+descriptor}. */
