@@ -5048,6 +5048,13 @@ collection; every edge the trace follows is attributed to its source.
     `gcnursery=0` turns it off. Pi default init: total pause 651 vs 861 ms off, longest pause 100 vs 124 ms,
     FrameBench level. The `gc:` line's `heap=` no longer goes negative after a minor.
 - **S7-5: sizing and measurement.** Nursery size, promotion, and the Pi pause numbers against S6d-3's.
+  - **Size: 8 MiB per core, the reserved maximum. DONE (2026-11-26).** Pi sweep 2/4/8 MiB: 8 had 10 full
+    collections against 11, minor-only pauses summed 107 vs 187 ms, longest minor 12 vs 34 ms, FrameBench level.
+  - **Against S6d-3 (no nursery), Pi default init:** total pause 0.91 s -> ~0.62 s; collections 14 full -> 10 full
+    + 46 minor; longest pause ~100 ms against ~124 ms with `gcnursery=0` today (S6d-3 did not record it) -- a full
+    collection's trace of ~57 MB live.
+  - **Open:** the trend says larger still helps, but past 8 MiB the reserved slots and the tables above them move;
+    the longest pause is now a FULL collection, so the next pause win is there (S7-6 or the opt compiler).
 
 ## 5. Design decisions to lock day one
 
