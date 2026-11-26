@@ -203,6 +203,36 @@ public final class A64Emit
         {
             compiler.Baseline.emitWriteBarrier(cb, a, b, x.aux == 1);
         }
+        else if (op == A64Select.CSET)
+        {
+            cb.emit(x.uses.length == 2 ? A64Enc.cmpReg(a, b) : A64Enc.cmpImm(a, 0));
+            cb.emit(A64Enc.cset(d, x.aux));
+        }
+        else if (op == A64Select.UBNOT)
+        {
+            cb.emit(A64Enc.movn(SCRATCH, 0, 0));
+            cb.emit(A64Enc.eorReg(d, a, SCRATCH));
+        }
+        else if (op == A64Select.LDRB)
+        {
+            cb.emit(A64Enc.ldrb(d, a, 0));
+        }
+        else if (op == A64Select.SMULH)
+        {
+            cb.emit(A64Enc.smulh(d, a, b));
+        }
+        else if (op == A64Select.UMULH)
+        {
+            cb.emit(A64Enc.umulh(d, a, b));
+        }
+        else if (op == A64Select.FENCE)
+        {
+            cb.emit(x.aux == 0 ? A64Enc.dsb() : A64Enc.isb());
+        }
+        else if (op == A64Select.MRS)
+        {
+            cb.emit(A64Enc.mrs(d, x.aux));
+        }
         else if (op == A64Select.VCALL)
         {
             // Baseline's vtable dispatch, writer form (no guards): the receiver is in x0
