@@ -27,8 +27,18 @@ import objectmodel.ObjectModel;
  * <p>Covered (O1-2b, O1-3a): ints, longs, references and the word types; arithmetic, shifts, compares, branches,
  * switches, field and array loads; DIRECT calls (invokestatic, invokespecial) through the same {@link Symbols}
  * seam as Baseline, with yieldpoints where Baseline puts them (the prologue of a method that calls or loops, and
- * every loop header, unless the class is {@code Uninterruptible}). Not yet: virtual and interface dispatch,
- * intrinsics, allocation, type checks, monitors, throws, statics, reference stores, handlers, floats.
+ * every loop header, unless the class is {@code Uninterruptible}). Since: dispatch (O1-3b), statics, stores and the
+ * barrier (O1-4a), allocation and type checks (O1-4b), the call-free intrinsics (O1-6a).
+ *
+ * <p>O1-5, exceptions. A method with a handler mirrors every bytecode local in a HOME frame slot -- one per local and
+ * GC kind, so a reference home only ever holds a reference, and the null the prologue stores before anything can
+ * collect: the GC map types the reference homes at every site with no flow analysis. A handler block is entered with
+ * nothing but the exception in x9 ({@link #EXC_REG}, where {@code Magic.resume} leaves it) and loads its locals from
+ * the homes. {@code athrow} is Baseline's throwStored; the machine-PC handler ranges are the runs of blocks a try
+ * range covers, per exception-table entry in table order. {@code monitorenter}/{@code monitorexit} are the
+ * helper calls Baseline makes (the writer has no such helper, so a method with a synchronized block is declined as
+ * Baseline's compile of it fails); a synchronized METHOD takes no monitor in the writer, as in Baseline. Not yet:
+ * the calling and system intrinsics, invokedynamic and default-method dispatch, floats.
  */
 public final class A64Select
 {
@@ -95,6 +105,16 @@ public final class A64Select
     public static final int TAGUNBOXED = 56; // ... retyped for an unboxed array's owner (Symbols.tagUnboxedArray)
     public static final int TYPEADDR = 57;   // defs[0] = the Type of class cp aux (relocated)
     public static final int DESCADDR = 58;   // defs[0] = the {u2 len}{bytes} descriptor of array class cp aux
+    public static final int HSTORE = 59;     // home slot aux = uses[0] (a bytecode local's store, O1-5)
+    public static final int HLOAD = 60;      // defs[0] = home slot aux (a handler's local)
+    public static final int CATCHX = 61;     // defs[0] = the exception, in x9 where the unwinder delivers it
+    public static final int DELIVER = 62;    // term: branch to the handler targets[0] with uses[0] in x9
+    public static final int CODEPC = 63;     // defs[0] = the absolute pc of this instruction (the throw site)
+    public static final int SPVAL = 64;      // defs[0] = sp
+    public static final int HALT = 65;       // term: wfe forever (after an unwind, which never returns)
+
+    /** Where a handler finds its exception: Baseline's operand slot 0, which {@code Magic.resume} loads. */
+    public static final int EXC_REG = 9;
 
     public static final int OK = 0;
     public static final int R_CALL = 1;
@@ -125,6 +145,7 @@ public final class A64Select
     private MBlock[] mblock;      // IR block rpo -> machine block
     private MBlock cur;
     private boolean[] loopPolls;     // Baseline's loop headers (a backward branch's target), when polls are on
+    private int[] homeSlot;          // by 3 * local + GC kind - 1: the home spill slot, or -1
     public int reason;
     /** The method makes a call or polls: it saves the link register and gets a GC map. */
     public boolean nonLeaf;
@@ -173,6 +194,8 @@ public final class A64Select
             {
                 mb.succs[i] = mblock[blk.succs[i].rpo];
             }
+            mb.handler = blk.isHandler;
+            mb.cover = cover(blk);
             for (int i = 0; i < blk.nPhis; i++)
             {
                 vreg[blk.phis[i].id] = valueVreg(blk.phis[i].kind);
@@ -184,6 +207,11 @@ public final class A64Select
                     vreg[blk.code[i].id] = valueVreg(blk.code[i].kind);
                 }
             }
+        }
+        homeSlot = new int[3 * g.maxLocals];
+        for (int i = 0; i < homeSlot.length; i++)
+        {
+            homeSlot[i] = -1;
         }
         for (int b = 0; b < g.nBlocks && reason == OK; b++)
         {
@@ -220,7 +248,148 @@ public final class A64Select
                 }
             }
         }
+        f.nHomes = f.nSlots;
+        f.handlerOf = new MBlock[g.exCount];
+        for (int e = 0; e < g.exCount; e++)
+        {
+            f.handlerOf[e] = handlerOf(e);
+        }
         return reason == OK ? f : null;
+    }
+
+    /** Which exception-table entries cover {@code blk}'s bytecode (null: none). A block never straddles a try
+     *  range's boundary (Cfg), so containment decides it. */
+    private boolean[] cover(Block blk)
+    {
+        if (blk.startBci < 0 || g.exCount == 0)
+        {
+            return null;
+        }
+        boolean[] c = null;
+        for (int e = 0; e < g.exCount; e++)
+        {
+            if (blk.startBci >= g.exStart[e] && blk.endBci <= g.exEnd[e])
+            {
+                if (c == null)
+                {
+                    c = new boolean[g.exCount];
+                }
+                c[e] = true;
+            }
+        }
+        return c;
+    }
+
+    /** The home slot of bytecode local {@code local} for values of {@code kind}: one per local and GC kind, so a
+     *  reference home only ever holds a reference (or the null the prologue stores) and the GC map can type it at
+     *  every site without knowing which store reached it. */
+    private int home(int local, int kind)
+    {
+        byte gc = MFunc.GC_RAW;                              // an int, a long or a raw word (W)
+        if (kind == Kind.A || kind == Kind.O)
+        {
+            gc = MFunc.GC_REF;
+        }
+        else if (kind == Kind.R)
+        {
+            gc = MFunc.GC_DREF;
+        }
+        int k = 3 * local + gc - 1;
+        if (homeSlot[k] < 0)
+        {
+            homeSlot[k] = f.newSlot(-1);
+            byte[] t = new byte[f.nSlots];
+            for (int i = 0; i < f.homeGc.length; i++)
+            {
+                t[i] = f.homeGc[i];
+            }
+            t[f.nSlots - 1] = gc;
+            f.homeGc = t;
+        }
+        return homeSlot[k];
+    }
+
+    /** The handler block entered for exception-table entry {@code e}. */
+    private MBlock handlerOf(int e)
+    {
+        for (int b = 0; b < g.nBlocks; b++)
+        {
+            if (g.blocks[b].isHandler && g.blocks[b].startBci == g.exHandler[e])
+            {
+                return mblock[b];
+            }
+        }
+        return null;
+    }
+
+    /**
+     * athrow, as Baseline's throwStored in the writer (no trace capture there): each covering entry in table order
+     * -- a catch-all branches to its handler, a typed one asks {@code instanceOf} and branches on a match -- and when
+     * none matched, {@code unwind(exc, pc, sp)}, which never returns. Every block it opens covers what the throwing
+     * block covers, so the unwind's pc is in the same handler ranges.
+     */
+    private void athrow(Instr x)
+    {
+        int exc = v(x.in[0]);
+        int pos = x.bci;
+        for (int e = 0; e < g.exCount; e++)
+        {
+            if (g.exStart[e] > pos || pos >= g.exEnd[e])
+            {
+                continue;
+            }
+            MBlock h = handlerOf(e);
+            if (h == null)
+            {
+                reason = R_OP;
+                return;
+            }
+            if (g.exCatch[e] == 0)
+            {
+                deliver(exc, h, x);
+                return;
+            }
+            int ty = temp();
+            MInstr ta = emit(TYPEADDR, ty, null, x);
+            ta.aux = g.exCatch[e];
+            int c = temp();
+            callInstr(HCALL, c, new int[] { exc, ty }, Symbols.INSTANCE_OF, 0, x);
+            MBlock hit = subBlock(cur);
+            MBlock miss = subBlock(hit);
+            MInstr br = emit(CBZ, -1, new int[] { c }, x);
+            br.term = true;
+            br.targets = new MBlock[] { miss, hit };
+            cur.link(miss);
+            cur.link(hit);
+            cur = hit;
+            deliver(exc, h, x);
+            cur = miss;
+        }
+        int pc = temp();
+        emit(CODEPC, pc, null, x);
+        int sp = temp();
+        emit(SPVAL, sp, null, x);
+        callInstr(HCALL, -1, new int[] { exc, pc, sp }, Symbols.UNWIND, 0, x);
+        MInstr halt = emit(HALT, -1, null, x);
+        halt.term = true;
+    }
+
+    /** A block laid out right after {@code after}, covering what it covers. */
+    private MBlock subBlock(MBlock after)
+    {
+        MBlock b = f.newBlockAfter(after);
+        b.cover = after.cover;
+        return b;
+    }
+
+    /** Branch to handler {@code h} with the exception where the unwinder would leave it. */
+    private void deliver(int exc, MBlock h, Instr x)
+    {
+        MInstr d = emit(DELIVER, -1, new int[] { exc }, x);
+        d.fixedUses = new int[] { EXC_REG };
+        d.term = true;
+        d.targets = new MBlock[] { h };
+        cur.link(h);
     }
 
     /** Everything this increment does not select, decided before any machine IR exists. */
@@ -236,13 +405,9 @@ public final class A64Select
         {
             nonLeaf = true;                                  // Baseline's leaf decision, so the polls and LR match
         }
-        if (g.isSynchronized)
+        if (g.isSynchronized && syms.implicitChecks())
         {
-            return R_SYNC;
-        }
-        if (g.homes || g.exCount > 0)
-        {
-            return R_HANDLER;
+            return R_SYNC;                                   // the implicit monitor is metal-JIT only, as Baseline's
         }
         if (g.returnKind == Kind.F || g.returnKind == Kind.D)
         {
@@ -275,6 +440,10 @@ public final class A64Select
                 if (r != OK)
                 {
                     return r;
+                }
+                if (x.op == Op.THROW || x.op == Op.MONITORENTER || x.op == Op.MONITOREXIT)
+                {
+                    nonLeaf = true;                          // helper calls
                 }
                 if (x.op == Op.INVOKE)
                 {
@@ -413,10 +582,6 @@ public final class A64Select
     private static int screenOp0(Instr x)
     {
         int op = x.op;
-        if (op == Op.MONITORENTER || op == Op.MONITOREXIT || op == Op.THROW)
-        {
-            return R_CALL;
-        }
         if (op == Op.MULTIANEWARRAY && x.in.length > MAX_MULTI_DIMS)
         {
             return R_OP;                                     // as Baseline, which refuses it at compile time
@@ -428,10 +593,6 @@ public final class A64Select
         if (op == Op.ASTORE && (x.aux2 == 0x51 || x.aux2 == 0x52))
         {
             return R_FLOAT;
-        }
-        if (op == Op.CATCH || op == Op.LOAD_LOCAL || op == Op.STORE_LOCAL)
-        {
-            return R_HANDLER;
         }
         if (op == Op.CMP && x.aux2 != 0x94)
         {
@@ -676,6 +837,30 @@ public final class A64Select
         else if (op == Op.INVOKE)
         {
             call(x, d);
+        }
+        else if (op == Op.STORE_LOCAL)
+        {
+            MInstr m = emit(HSTORE, -1, new int[] { v(x.in[0]) }, x);
+            m.aux = home((int) x.aux, x.in[0].kind);
+        }
+        else if (op == Op.LOAD_LOCAL)
+        {
+            MInstr m = emit(HLOAD, d, null, x);
+            m.aux = home((int) x.aux, x.kind);
+        }
+        else if (op == Op.CATCH)
+        {
+            MInstr m = emit(CATCHX, d, null, x);
+            m.fixedDefs = new int[] { EXC_REG };
+        }
+        else if (op == Op.THROW)
+        {
+            athrow(x);
+        }
+        else if (op == Op.MONITORENTER || op == Op.MONITOREXIT)
+        {
+            callInstr(HCALL, -1, new int[] { v(x.in[0]) }, op == Op.MONITORENTER ? Symbols.MON_ENTER
+                      : Symbols.MON_EXIT, 0, x);
         }
         else if (op == Op.RETURN)
         {

@@ -4,6 +4,32 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **OPT COMPILER ARC, INCREMENT O1-5: exceptions -- 94% of the image (2026-11-26).** QEMU-validated; Pi not run.
+  - **What:** handlers, `athrow` and the home-slot protocol. A method with a handler mirrors every bytecode local in a
+    HOME frame slot, one per local AND GC kind, so a reference home only ever holds a reference -- the prologue
+    stores null into each before anything can collect -- and the GC map types the homes at every site with no flow
+    analysis. A handler block is entered with nothing but the exception in x9 (where `Magic.resume` leaves it) and
+    loads its locals from the homes. `athrow` is Baseline's `throwStored` in the writer: each covering entry in
+    table order (a catch-all branches, a typed one asks `instanceOf`), then `unwind(exc, pc, sp)`. The machine-PC
+    ranges are the runs of blocks each try range covers, per entry in table order (more than one range per entry
+    where the layout splits it). A synchronized METHOD takes no monitor in the writer, as in Baseline; a synchronized
+    BLOCK stays declined, because the writer has no `monitorenter` helper and Baseline's compile of it fails the same
+    way (such methods bake as stubs).
+  - **`OptDiff` simulates the unwinder:** a callee in a method with an exception table sometimes throws, and
+    `unwind` searches that tier's own ranges at the pc it was handed, entering the handler with x9 and the frame's
+    sp and every other register garbage. A home the map types as a reference but the run never wrote fails the run.
+    Every INSTALLED image method has exactly one distinct handler, so `test/writer/OptShapes` adds the shapes the
+    image lacks (nested and multi-catch ranges, an `athrow` inside typed ranges, rethrow, a handler that throws,
+    slot reuse, wide and reference locals into a handler), opt-compiled and run against Baseline the same way.
+  - **Planted bugs, all caught except one:** home stores dropped, reference homes left out of the map, homes not
+    nulled, a typed catch that always matches, the wrong handler, ranges in reverse order. NOT caught: a range one
+    word short -- no installed method or shape has a call as the last word of a range (the covered code ends in a
+    branch), and the end is exclusive exactly as Baseline's.
+  - **Measured:** `make test` `OptDiff` 2676 methods (10 shapes), 245,482 runs, 0 mismatches; handler methods alone at
+    1000 trials 70,339 runs, 6,338 exceptions caught, 0 mismatches. `--opt all` installs **2666 of 2843**; declined:
+    calling/system intrinsics 150, invokedynamic/default dispatch 5, float 2, symbol queries the writer cannot answer
+    19 (the 5 new ones are the synchronized blocks). QEMU virt **215/215**; raspi4b suite **`checked=160 mismatch=0`**, `collections=78` at the churn line. `make test` and overlaycheck OK.
+
 - **OPT COMPILER ARC, INCREMENT O1-4b: allocation and type checks -- 90% of the image (2026-11-26).** QEMU-validated;
   Pi not run.
   - **What:** `new` (`Heap.alloc(size)`, then the class's TIB into the header through x16), `newarray`/`anewarray`

@@ -53,6 +53,8 @@ public final class A64Emit
     private int[] fixBlock;
     private int nFix;
     public int frameSize;
+    /** Spill slots [0, nHomes) are the homes (writer.OptDiff checks what the map says they hold). */
+    public int nHomes;
     public int[] bcToWord;
     /** Set when a branch did not reach (the method falls back to Baseline). */
     public boolean failed;
@@ -73,6 +75,7 @@ public final class A64Emit
             bcToWord[i] = -1;
         }
         slotBase = saveLR ? 8 : 0;
+        nHomes = f.nHomes;
         int words = f.nSlots + (saveLR ? 1 : 0);
         frameSize = words == 0 ? 0 : A64Enc.align16(words * 8);
         SlotLiveness sl = new SlotLiveness(f);
@@ -100,6 +103,13 @@ public final class A64Emit
         {
             cb.emit(A64Enc.strx(30, 31, 0));
         }
+        for (int s = 0; s < f.nHomes; s++)
+        {
+            if (f.homeGc[s] != MFunc.GC_RAW)
+            {
+                cb.emit(A64Enc.strx(A64Enc.XZR, 31, slotBase + s * 8));   // a reference home starts null
+            }
+        }
         for (int b = 0; b < f.nBlocks; b++)
         {
             MBlock blk = f.blocks[b];
@@ -117,8 +127,10 @@ public final class A64Emit
                 one(x, next);
             }
         }
+        int end = cb.wordCount();
         patch();
         monotone();
+        handlerRanges(end);
         if (failed)
         {
             return null;
@@ -291,9 +303,34 @@ public final class A64Emit
             site(cb.wordCount() - 1);
             cb.set(over, A64Enc.cbz(SCRATCH, cb.wordCount() - over));
         }
-        else if (op == MInstr.JUMP)
+        else if (op == MInstr.JUMP || op == A64Select.DELIVER)
         {
-            jumpTo(x.targets[0], next);
+            jumpTo(x.targets[0], next);                      // DELIVER: its exception is already in x9
+        }
+        else if (op == A64Select.HSTORE)
+        {
+            cb.emit(A64Enc.strx(a, 31, slotBase + x.aux * 8));
+        }
+        else if (op == A64Select.HLOAD)
+        {
+            cb.emit(A64Enc.ldrx(d, 31, slotBase + x.aux * 8));
+        }
+        else if (op == A64Select.CATCHX)
+        {
+            return;                                          // the exception arrives in its pinned register
+        }
+        else if (op == A64Select.CODEPC)
+        {
+            syms.codePc(cb, d, cb.wordCount());              // a pc in this method, inside the thrower's ranges
+        }
+        else if (op == A64Select.SPVAL)
+        {
+            cb.emit(A64Enc.movFromSp(d));
+        }
+        else if (op == A64Select.HALT)
+        {
+            int h = cb.emit(A64Enc.wfe());
+            cb.emit(A64Enc.b(h - cb.wordCount()));          // unwind never returns: spin, as Baseline's emitHalt
         }
         else if (op == A64Select.PARAMS)
         {
@@ -399,6 +436,78 @@ public final class A64Emit
         }
     }
 
+    /** Handler ranges, in exception-table order: per entry, a range for every run of blocks (in layout order)
+     *  whose code its try range covers. Several ranges for one entry keep its place in the search, since the
+     *  unwinder tries the table front to back. */
+    public int nHandlers;
+    public int[] hStart = new int[4];
+    public int[] hEnd = new int[4];
+    public int[] hHandler = new int[4];
+    public int[] hEntry = new int[4];
+
+    private void handlerRanges(int end)
+    {
+        for (int e = 0; e < f.handlerOf.length; e++)
+        {
+            MBlock h = handlerBlock(e);
+            int start = -1;
+            for (int b = 0; b <= f.nBlocks; b++)
+            {
+                boolean in = b < f.nBlocks && f.blocks[b].cover != null && f.blocks[b].cover[e];
+                int w = b < f.nBlocks ? blockWord[f.blocks[b].id] : end;
+                if (in && start < 0)
+                {
+                    start = w;
+                }
+                else if (!in && start >= 0)
+                {
+                    if (w > start)
+                    {
+                        if (h == null)
+                        {
+                            failed = true;                   // covered code with no handler to enter
+                            return;
+                        }
+                        addRange(start, w, blockWord[h.id], e);
+                    }
+                    start = -1;
+                }
+            }
+        }
+    }
+
+    /** The handler entry an exception-table entry names: recorded on the block by the selector. */
+    private MBlock handlerBlock(int e)
+    {
+        return e < f.handlerOf.length ? f.handlerOf[e] : null;
+    }
+
+    private void addRange(int s, int e, int h, int entry)
+    {
+        if (nHandlers == hStart.length)
+        {
+            hStart = grow(hStart);
+            hEnd = grow(hEnd);
+            hHandler = grow(hHandler);
+            hEntry = grow(hEntry);
+        }
+        hStart[nHandlers] = s;
+        hEnd[nHandlers] = e;
+        hHandler[nHandlers] = h;
+        hEntry[nHandlers] = entry;
+        nHandlers += 1;
+    }
+
+    private static int[] grow(int[] a)
+    {
+        int[] b = new int[a.length * 2];
+        for (int i = 0; i < a.length; i++)
+        {
+            b[i] = a[i];
+        }
+        return b;
+    }
+
     /** {@code blr x16}, its GC map site, and the dispatch-site record. */
     private void dynamic(int cp)
     {
@@ -438,7 +547,13 @@ public final class A64Emit
         }
         int bitWords = (2 * f.nSlots + 31) / 32;
         int[] bits = new int[bitWords];
-        for (int s = 0; s < f.nSlots; s++)
+        for (int s = 0; s < f.nHomes; s++)
+        {
+            int t = f.homeGc[s] == MFunc.GC_RAW ? 0 : f.homeGc[s];   // a raw home is never needed by the collector
+            int bit = 2 * s;
+            bits[bit >> 5] |= t << (bit & 31);
+        }
+        for (int s = f.nHomes; s < f.nSlots; s++)
         {
             if ((liveOutSlots[s >> 6] & (1L << (s & 63))) != 0)
             {

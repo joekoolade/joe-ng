@@ -68,7 +68,7 @@ public final class AllocCheck
             in[b] = new int[w];
             for (int i = 0; i < w; i++)
             {
-                in[b][i] = b == 0 ? UNKNOWN : UNSET;
+                in[b][i] = b == 0 || f.blocks[b].handler ? UNKNOWN : UNSET;   // the unwinder enters a handler
             }
         }
         boolean changed = true;

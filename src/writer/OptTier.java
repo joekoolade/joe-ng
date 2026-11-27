@@ -109,6 +109,9 @@ final class OptTier
      * more than once (a sizing pass, then at its address) and the code is position-independent, so every call
      * gives the same answer.
      */
+    /** The writer's class resolver, kept for writer.OptDiff's extra (test-only) methods. */
+    static BaselineCompiler.ClassResolver lastResolver;
+
     static CompiledMethod compile(String key, ClassFile cf, ClassFile.Method m, long base, boolean isEntry,
                                   BaselineCompiler.ClassResolver resolver)
     {
@@ -117,6 +120,7 @@ final class OptTier
             return null;
         }
         boolean first = seen.add(key);
+        lastResolver = resolver;
         ClassFile.ExceptionEntry[] ex = m.exceptions;
         int n = ex.length;
         int[] es = new int[n];
@@ -171,12 +175,22 @@ final class OptTier
                         noteIntrinsics(oc, syms);
                     }
                 }
+                Vec<BaselineCompiler.HandlerRange> handlers = new Vec<>();
+                if (gen == OptCompiler.ACCEPTED)
+                {
+                    for (int i = 0; i < oc.handlerCount(); i++)
+                    {
+                        int ct = ec[oc.handlerEntry(i)];
+                        handlers.add(new BaselineCompiler.HandlerRange(oc.handlerStartWord(i), oc.handlerEndWord(i),
+                                     oc.handlerWord(i), ct == 0 ? null : cf.classAt(ct)));
+                    }
+                }
                 if (gen == OptCompiler.ACCEPTED && first && diff != null)
                 {
                     CompiledMethod bl = new BaselineCompiler(cf, resolver).yieldPolls(true)
                             .compileMethod(m, base, false);
                     diff.compare(key, cf, m, bl, new CompiledMethod(oc.words(), BaselineCompiler.relocationsOf(syms),
-                                 oc.frameSize(), oc.gcMapWord(), new Vec<>(), oc.bcToWord()), oc, base);
+                                 oc.frameSize(), oc.gcMapWord(), handlers, oc.bcToWord()), oc, base);
                 }
                 if (gen == OptCompiler.ACCEPTED)
                 {
@@ -189,7 +203,7 @@ final class OptTier
                         }
                     }
                     return new CompiledMethod(oc.words(), BaselineCompiler.relocationsOf(syms), oc.frameSize(),
-                                              oc.gcMapWord(), new Vec<>(), oc.bcToWord());
+                                              oc.gcMapWord(), handlers, oc.bcToWord());
                 }
             }
         }
