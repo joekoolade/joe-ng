@@ -4,6 +4,20 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **OPT COMPILER ARC: interrupt code stays on Baseline -- `--opt all` boots on the Pi (2026-11-27).** Pi-validated.
+  - **What:** `OptTier` leaves every method of a `magic.Uninterruptible` class (the interrupt path, the scheduler,
+    the collector) and every device ISR (`onIrq`: Cyw43, VirtioNet) on Baseline; the build's `opt:` line counts them
+    as `interrupt=` (472). `--opt all` installs **2271** (was 2666).
+  - **Why:** the first Pi run of `--opt all` hung in WiFi bring-up (`web: no network interface yet`). A bisect by
+    `--opt` lists landed on ONE method, `Bcm2711Platform.irqAck()J`, whose opt code is instruction-for-instruction
+    Baseline's except a 16-byte frame (Baseline 80) and x1/x2 as scratch. NOP padding did not help; frames of 48 and 64
+    still hung; 80 booted once. Diag counters plus a GIC read in the hang dump, against a same-conditions control:
+    SPI 158 was delivered ~70k times in BOTH (failing 0x11189, healthy 0x11BE5), so it was never a storm. The difference
+    was `GICC_RPR=0` (an interrupt left active, never ended) with the timer and SPI 158 pending behind it, against
+    `0xFF` healthy, plus one spurious acknowledge. **The cause inside the opt `irqAck` is not known**; the rule makes
+    it moot rather than explaining it.
+  - **Measured:** Pi `--opt all` build 40cbf7c3c8515b07 up in 26 s, web server live; `make test` OK (OptDiff 2281 methods, 209,271 runs, 0 mismatches).
+
 - **OPT COMPILER ARC, INCREMENT O1-5: exceptions -- 94% of the image (2026-11-26).** QEMU-validated; Pi not run.
   - **What:** handlers, `athrow` and the home-slot protocol. A method with a handler mirrors every bytecode local in a
     HOME frame slot, one per local AND GC kind, so a reference home only ever holds a reference -- the prologue
