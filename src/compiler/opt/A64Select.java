@@ -97,7 +97,7 @@ public final class A64Select
     public static final int LDRB = 49;       // defs[0] = [uses[0]], one byte zero-extended
     public static final int SMULH = 50;      // defs[0] = high 64 bits of uses[0] * uses[1], signed
     public static final int UMULH = 51;      // ... unsigned
-    public static final int FENCE = 52;      // aux 0 = dsb sy, 1 = isb
+    public static final int FENCE = 52;      // aux 0 = dsb sy, 1 = isb, 2 = wfe, 3 = sev, 4 = ic iallu, 5 = tlbi vmalle1
     public static final int MRS = 53;        // defs[0] = the system register aux
     public static final int TIBSTORE = 54;   // header.tib of uses[0] = the TIB of class cp aux (relocated, via x16)
     public static final int TAGARRAY = 55;   // the array uses[0] gets its array Type: aux = atype or element cp,
@@ -112,6 +112,11 @@ public final class A64Select
     public static final int CODEPC = 63;     // defs[0] = the absolute pc of this instruction (the throw site)
     public static final int SPVAL = 64;      // defs[0] = sp
     public static final int HALT = 65;       // term: wfe forever (after an unwind, which never returns)
+    public static final int MSR = 66;        // the system register aux = uses[0]
+    public static final int CACHEOP = 67;    // a cache maintenance op by address uses[0]: aux 0 dc cvau, 1 dc cvac,
+                                             //   2 ic ivau, 3 dc civac
+    public static final int RCALL = 68;      // a Magic raw call (call0/2/3/N): aux = the intrinsic id, imm = the
+                                             //   Methodref cp; uses = args then the target, all pinned
 
     /** Where a handler finds its exception: Baseline's operand slot 0, which {@code Magic.resume} loads. */
     public static final int EXC_REG = 9;
@@ -499,7 +504,7 @@ public final class A64Select
             {
                 return R_INTRINSIC;
             }
-            if (syms.intrinsicEmitsCall(cp))
+            if (syms.intrinsicEmitsCall(cp) || rawCall(syms.intrinsicId(cp)))
             {
                 nonLeaf = true;                              // AddressArray.create allocates: a call, as Baseline sees it
             }
@@ -1075,7 +1080,132 @@ public final class A64Select
                || id == compiler.Intrinsics.STORE64 || id == compiler.Intrinsics.BYTES
                || id == compiler.Intrinsics.ADDR_OF || id == compiler.Intrinsics.FROM_ADDR
                || id == compiler.Intrinsics.DSB || id == compiler.Intrinsics.ISB
-               || id == compiler.Intrinsics.READ_CNTPCT_EL0 || id == compiler.Intrinsics.READ_CNTFRQ_EL0;
+               || id == compiler.Intrinsics.READ_CNTPCT_EL0 || id == compiler.Intrinsics.READ_CNTFRQ_EL0
+               || fenceKind(id) >= 0 || readReg(id) >= 0 || writeReg(id) >= 0 || cacheKind(id) >= 0 || rawCall(id);
+    }
+
+    /** The no-operand instructions FENCE carries, as Baseline's lowerIntrinsic emits them (-1: not one). */
+    static int fenceKind(int id)
+    {
+        if (id == compiler.Intrinsics.DSB)
+        {
+            return 0;
+        }
+        if (id == compiler.Intrinsics.ISB)
+        {
+            return 1;
+        }
+        if (id == compiler.Intrinsics.WFE)
+        {
+            return 2;
+        }
+        if (id == compiler.Intrinsics.SEV)
+        {
+            return 3;
+        }
+        if (id == compiler.Intrinsics.IC_IALLU)
+        {
+            return 4;
+        }
+        return id == compiler.Intrinsics.TLBI_ALL ? 5 : -1;
+    }
+
+    /** The system register a read intrinsic moves from (MRS), as Baseline's lowerIntrinsic; -1: not one. */
+    static int readReg(int id)
+    {
+        if (id == compiler.Intrinsics.READ_CNTPCT_EL0)
+        {
+            return compiler.Target.counter();
+        }
+        if (id == compiler.Intrinsics.READ_CNTFRQ_EL0)
+        {
+            return asm.A64Enc.CNTFRQ_EL0;
+        }
+        if (id == compiler.Intrinsics.READ_MPIDR)
+        {
+            return asm.A64Enc.MPIDR_EL1;
+        }
+        if (id == compiler.Intrinsics.READ_CURRENT_EL)
+        {
+            return asm.A64Enc.CurrentEL;
+        }
+        if (id == compiler.Intrinsics.READ_ESR_EL1)
+        {
+            return asm.A64Enc.ESR_EL1;
+        }
+        if (id == compiler.Intrinsics.READ_ELR_EL1)
+        {
+            return asm.A64Enc.ELR_EL1;
+        }
+        if (id == compiler.Intrinsics.READ_FAR_EL1)
+        {
+            return asm.A64Enc.FAR_EL1;
+        }
+        if (id == compiler.Intrinsics.READ_DAIF)
+        {
+            return asm.A64Enc.DAIF;
+        }
+        return id == compiler.Intrinsics.READ_CNTP_CTL_EL0 ? compiler.Target.timerControl() : -1;
+    }
+
+    /** The system register a write intrinsic moves to (MSR), as Baseline's lowerIntrinsic; -1: not one. The EL2
+     *  writes stay out: only the frameless boot path makes them. */
+    static int writeReg(int id)
+    {
+        if (id == compiler.Intrinsics.WRITE_VBAR_EL1)
+        {
+            return asm.A64Enc.VBAR_EL1;
+        }
+        if (id == compiler.Intrinsics.WRITE_CNTP_TVAL_EL0)
+        {
+            return compiler.Target.timerValue();
+        }
+        if (id == compiler.Intrinsics.WRITE_CNTP_CTL_EL0)
+        {
+            return compiler.Target.timerControl();
+        }
+        if (id == compiler.Intrinsics.WRITE_MAIR_EL1)
+        {
+            return asm.A64Enc.MAIR_EL1;
+        }
+        if (id == compiler.Intrinsics.WRITE_TCR_EL1)
+        {
+            return asm.A64Enc.TCR_EL1;
+        }
+        if (id == compiler.Intrinsics.WRITE_TTBR0_EL1)
+        {
+            return asm.A64Enc.TTBR0_EL1;
+        }
+        if (id == compiler.Intrinsics.WRITE_SCTLR_EL1)
+        {
+            return asm.A64Enc.SCTLR_EL1;
+        }
+        return id == compiler.Intrinsics.WRITE_CPACR_EL1 ? asm.A64Enc.CPACR_EL1 : -1;
+    }
+
+    /** CACHEOP's aux for a by-address cache maintenance intrinsic; -1: not one. */
+    static int cacheKind(int id)
+    {
+        if (id == compiler.Intrinsics.DC_CVAU)
+        {
+            return 0;
+        }
+        if (id == compiler.Intrinsics.DC_CVAC)
+        {
+            return 1;
+        }
+        if (id == compiler.Intrinsics.IC_IVAU)
+        {
+            return 2;
+        }
+        return id == compiler.Intrinsics.DC_CIVAC ? 3 : -1;
+    }
+
+    /** Magic.call0/call2/call3/callN: a BLR to a raw code address. */
+    static boolean rawCall(int id)
+    {
+        return id == compiler.Intrinsics.CALL0 || id == compiler.Intrinsics.CALL2 || id == compiler.Intrinsics.CALL3
+               || id == compiler.Intrinsics.CALL_N;
     }
 
     /** Baseline's lowerUnboxed / lowerIntrinsic / lowerAddressArray for the ids {@link #supportedIntrinsic} names,
@@ -1196,16 +1326,69 @@ public final class A64Select
             MInstr m = emit(LDRX, d, new int[] { a }, x);
             m.imm = ObjectModel.ARRAY_LENGTH_OFFSET;
         }
-        else if (id == compiler.Intrinsics.DSB || id == compiler.Intrinsics.ISB)
+        else if (fenceKind(id) >= 0)
         {
             MInstr m = emit(FENCE, -1, null, x);
-            m.aux = id == compiler.Intrinsics.DSB ? 0 : 1;
+            m.aux = fenceKind(id);
+        }
+        else if (writeReg(id) >= 0)
+        {
+            MInstr m = emit(MSR, -1, new int[] { a }, x);
+            m.aux = writeReg(id);
+        }
+        else if (cacheKind(id) >= 0)
+        {
+            MInstr m = emit(CACHEOP, -1, new int[] { a }, x);
+            m.aux = cacheKind(id);
+        }
+        else if (rawCall(id))
+        {
+            rawCall(x, d, id);
+        }
+        else if (d >= 0)
+        {
+            MInstr m = emit(MRS, d, null, x);                // a system register read (nothing to do when unused)
+            m.aux = readReg(id);
+        }
+    }
+
+    /**
+     * Baseline's CALL0/CALL2/CALL3/CALL_N: the arguments in x0.. and a BLR to the target, the result in x0. The
+     * operands arrive as (target, args...); the target is pinned to the register after the arguments (callN's
+     * argument buffer to x1), and the emitter moves callN's pair to x16/x17 before it loads x0..x15 from the buffer.
+     * A raw call destroys every caller-saved register, as a call does; its return address gets a GC map site.
+     */
+    private void rawCall(Instr x, int d, int id)
+    {
+        int n = x.in.length;
+        int[] uses = new int[n];
+        int[] pins = new int[n];
+        if (id == compiler.Intrinsics.CALL_N)
+        {
+            uses[0] = v(x.in[0]);
+            pins[0] = 0;                                     // the target
+            uses[1] = v(x.in[1]);
+            pins[1] = 1;                                     // the argument buffer
         }
         else
         {
-            MInstr m = emit(MRS, d, null, x);                // the generic timer's count or its frequency
-            m.aux = id == compiler.Intrinsics.READ_CNTPCT_EL0 ? compiler.Target.counter() : asm.A64Enc.CNTFRQ_EL0;
+            for (int i = 1; i < n; i++)
+            {
+                uses[i - 1] = v(x.in[i]);
+                pins[i - 1] = i - 1;                         // argument i-1 in x(i-1)
+            }
+            uses[n - 1] = v(x.in[0]);
+            pins[n - 1] = n - 1;                             // the target after them
         }
+        MInstr m = emit(RCALL, d, uses, x);
+        m.fixedUses = pins;
+        if (d >= 0)
+        {
+            m.fixedDefs = new int[] { 0 };
+        }
+        m.aux = id;
+        m.imm = x.aux;
+        m.clobbers = callerSaved();
     }
 
     /** Heap.allocArray(length, elemSize) into a new register (the array, untagged). */

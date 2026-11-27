@@ -269,6 +269,21 @@ public final class OptDiff implements OptTier.Diff
                 dispatches += 1;
             }
             calls += 1;
+            int raw = rawArgs(key.substring(0, key.indexOf('@') < 0 ? key.length() : key.indexOf('@')));
+            if (raw >= 0)
+            {
+                // a Magic raw call: the callee sees x0.. and the target (in the key); Baseline maps no site here,
+                // so neither tier's frame is collected across it
+                long h = key.hashCode();
+                for (int i = 0; i < raw; i++)
+                {
+                    h = h * 0x100000001B3L ^ e.x[i];
+                }
+                trace = trace * 31 + h;
+                clobber(e);
+                e.x[0] = result('J', h);
+                return;
+            }
             if (!collect(e, word + 1))
             {
                 e.unsupported = error;
@@ -311,6 +326,24 @@ public final class OptDiff implements OptTier.Diff
             }
             clobber(e);
             e.x[0] = result(d.charAt(d.indexOf(')') + 1), h);
+        }
+
+        /** The registers a Magic raw call hands its callee (x0..), or -1: not one. */
+        private static int rawArgs(String key)
+        {
+            if (key.equals("magic/Magic.call0(J)J"))
+            {
+                return 0;
+            }
+            if (key.equals("magic/Magic.call2(JJJ)J"))
+            {
+                return 2;
+            }
+            if (key.equals("magic/Magic.call3(JJJJ)J"))
+            {
+                return 3;
+            }
+            return key.equals("magic/Magic.callN(JJ)J") ? 16 : -1;
         }
 
         private void clobber(A64Emu e)
@@ -369,16 +402,25 @@ public final class OptDiff implements OptTier.Diff
                     }
                 }
                 int op = bci < 0 ? -1 : method.code[bci] & 0xFF;
-                if (op != 0xB6 && op != 0xB9)
+                if (op != 0xB6 && op != 0xB9 && op != 0xB8)
                 {
                     return null;
                 }
                 cp = ((method.code[bci + 1] & 0xFF) << 8) | (method.code[bci + 2] & 0xFF);
+                if (op == 0xB8 && rawArgs(memberKey(cp)) < 0)
+                {
+                    return null;                             // an invokestatic BLRs only as a Magic raw call
+                }
             }
             if (cp < 0)
             {
                 return null;
             }
+            return memberKey(cp);
+        }
+
+        private String memberKey(int cp)
+        {
             var r = cf.memberRef(cp);
             return r.owner() + "." + r.name() + r.descriptor();
         }

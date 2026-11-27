@@ -239,7 +239,37 @@ public final class A64Emit
         }
         else if (op == A64Select.FENCE)
         {
-            cb.emit(x.aux == 0 ? A64Enc.dsb() : A64Enc.isb());
+            int[] k = { A64Enc.dsb(), A64Enc.isb(), A64Enc.wfe(), A64Enc.sev(), A64Enc.icIallu(), A64Enc.tlbiVmalle1() };
+            cb.emit(k[x.aux]);
+        }
+        else if (op == A64Select.MSR)
+        {
+            cb.emit(A64Enc.msr(x.aux, a));
+        }
+        else if (op == A64Select.CACHEOP)
+        {
+            int[] k = { A64Enc.dcCvau(a), A64Enc.dcCvac(a), A64Enc.icIvau(a), A64Enc.dcCivac(a) };
+            cb.emit(k[x.aux]);
+        }
+        else if (op == A64Select.RCALL)
+        {
+            int target;
+            if (x.aux == compiler.Intrinsics.CALL_N)
+            {
+                // Baseline's callN: x16 = the target, x17 = the argument buffer, then x0..x15 from the buffer
+                cb.emit(A64Enc.movReg(SCRATCH, 0));
+                cb.emit(A64Enc.movReg(17, 1));
+                for (int i = 0; i < 16; i++)
+                {
+                    cb.emit(A64Enc.ldrx(i, 17, i * 8));
+                }
+                target = SCRATCH;
+            }
+            else
+            {
+                target = r(x.uses[x.uses.length - 1]);
+            }
+            raw(target, (int) x.imm);
         }
         else if (op == A64Select.MRS)
         {
@@ -509,10 +539,24 @@ public final class A64Emit
     }
 
     /** {@code blr x16}, its GC map site, and the dispatch-site record. */
+    /** A Magic raw call: the BLR, its map site, and its cp in the dispatch table (writer.OptDiff names it). */
+    private void raw(int target, int cp)
+    {
+        int w = cb.emit(A64Enc.blr(target));
+        site(w);
+        noteDynamic(w, cp);
+    }
+
     private void dynamic(int cp)
     {
         int w = cb.emit(A64Enc.blr(SCRATCH));
         site(w);
+        noteDynamic(w, cp);
+    }
+
+    /** Record the BLR at word {@code w} as a call of Methodref {@code cp} (for writer.OptDiff). */
+    private void noteDynamic(int w, int cp)
+    {
         if (nDyn == dynWord.length)
         {
             int[] a = new int[nDyn * 2];

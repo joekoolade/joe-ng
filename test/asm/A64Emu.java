@@ -558,6 +558,10 @@ public final class A64Emu
             setZ(rd, hash(w & 0xFFFF_FFE0L), true);
             return next;
         }
+        if ((w & 0xFFF0_0000) == 0xD510_0000 || (w & 0xFFF8_0000) == 0xD508_0000)   // MSR; SYS (dc, ic, tlbi)
+        {
+            return next;
+        }
         if ((w & 0xFFFF_F01F) == 0xD503_301F || (w & 0xFFFF_F01F) == 0xD503_201F)   // barriers, hints
         {
             return next;
