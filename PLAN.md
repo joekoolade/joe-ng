@@ -5154,6 +5154,10 @@ also with `--opt all` (virt list, raspi4b suite) and a Pi boot.
   compiles `test/writer/OptShapes` -- the nested, multi-catch and typed-throw shapes no image method has.
 - **O1-6a (DONE on QEMU, 2026-11-26, taken before O1-4b by measured demand): the call-free intrinsics** -- 2307 of
   2843 image methods; `OptDiff` 0 mismatches over 2.3M emulated calls.
+- **O1-6b (2026-11-27): the system intrinsics and the raw calls** -- system-register reads and writes (MRS/MSR),
+  wfe/sev/ic iallu/tlbi, the by-address cache ops, and `Magic.call0/2/3/N` (a BLR with the arguments in x0.., a GC
+  map at the return address); `readLR`, `readX0`, `resume` and `gc` stay declined (they read or hand over raw
+  register state, which the tiers do not share). Interrupt code stays on Baseline (#648). 2328 of 2843 installed.
 - **O1-6: the rest of the bytecode set** (switches, floats, magic intrinsics, invokedynamic, the unboxed
   types) until `--opt all` rejects nothing reachable in the image but what is recorded, and the image boots and
   passes the regression with every accepted method opt-compiled. That is O1 done: opt code behaves exactly like

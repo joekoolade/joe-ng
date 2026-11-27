@@ -4,6 +4,25 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **OPT COMPILER ARC, INCREMENT O1-6b: system intrinsics and raw calls -- 2328 methods (2026-11-27).** Pi-validated.
+  - **What:** Baseline's `lowerIntrinsic`, ported:
+    - system-register reads (`MRS`: MPIDR, ESR/ELR/FAR, DAIF, CNTP_CTL, CurrentEL) and writes (a new `MSR`: VBAR,
+      CNTP_TVAL/CTL, MAIR/TCR/TTBR0/SCTLR/CPACR; the EL2 writes stay out, only the frameless boot path makes them)
+    - wfe, sev, ic iallu and tlbi as `FENCE` kinds
+    - the by-address cache ops (a new `CACHEOP`: dc cvau/cvac/civac, ic ivau)
+    - `Magic.call0/2/3/N` (a new `RCALL`): the arguments pinned to x0.., the target after them, a BLR that destroys
+      every caller-saved register, a GC map site at the return address; callN moves its target and buffer to
+      x16/x17 and loads x0..x15 from the buffer, as Baseline
+  - **Still declined:** `readLR`, `readX0`, `resume` and `gc` read or hand over raw register state, which the two
+    tiers do not share; 16 methods in all.
+  - **`OptDiff`:** a raw call is a simulated callee in both tiers, keyed by its target and hashed over the registers it
+    passes. Baseline maps no site there, so neither frame is collected across it. The emulator takes MSR and SYS as
+    no-ops. New methods that never return (`Reset.reboot`, `VM.spin`, `ScratchMap.fail`, the fatal reporters' wfe
+    loops) are skipped on every run, so they are not compared.
+  - **Measured:** `--opt all` installs **2328** (was 2271); `make test` OptDiff 2338 methods, 213,846 runs, 0
+    mismatches; QEMU virt **215/215**; raspi4b suite **`checked=160 mismatch=0`**, `collections=78`; Pi build
+    7b2a56762392617d up in 27 s, web server live.
+
 - **OPT COMPILER ARC: interrupt code stays on Baseline -- `--opt all` boots on the Pi (2026-11-27).** Pi-validated.
   - **What:** `OptTier` leaves every method of a `magic.Uninterruptible` class (the interrupt path, the scheduler,
     the collector) and every device ISR (`onIrq`: Cyw43, VirtioNet) on Baseline; the build's `opt:` line counts them
