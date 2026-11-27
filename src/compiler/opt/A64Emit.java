@@ -404,7 +404,7 @@ public final class A64Emit
         }
         else if (op == A64Select.ADDI)
         {
-            cb.emit(A64Enc.addImm(d, a, (int) x.imm));
+            cb.emit(x.imm < 0 ? A64Enc.subImm(d, a, (int) -x.imm) : A64Enc.addImm(d, a, (int) x.imm));
         }
         else if (op == A64Select.ADDLSL)
         {
@@ -425,7 +425,7 @@ public final class A64Emit
         }
         else if (op == A64Select.BCMP)
         {
-            cb.emit(x.uses.length == 2 ? A64Enc.cmpReg(a, b) : A64Enc.cmpImm(a, 0));
+            cb.emit(x.uses.length == 2 ? A64Enc.cmpReg(a, b) : A64Enc.cmpImm(a, (int) x.imm));
             fixup(A64Enc.bcond(x.aux, 0), x.targets[0]);
             jumpTo(x.targets[1], next);
         }

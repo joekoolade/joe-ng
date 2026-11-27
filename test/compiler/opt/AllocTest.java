@@ -81,6 +81,11 @@ public final class AllocTest
             return true;
         }
 
+        public boolean pure(MInstr x)
+        {
+            return false;
+        }
+
         public int stackAlign()
         {
             return 16;

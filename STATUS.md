@@ -4,6 +4,48 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **OPT COMPILER ARC, INCREMENT O2-1: dead code, reloads, immediates -- geomean 0.8318 -> 0.7969 (2026-11-27).**
+  Pi-validated.
+  - **What, each measured on its own (cumulative, `OptDiff` geomean opt/Baseline instructions, methods slower, code):**
+
+      | step | geomean | slower | code words |
+      |---|---|---|---|
+      | O2-0 | 0.8318 | 322 | 0.8777 |
+      | + `DeadCode`: machine-IR DCE after phi elimination | 0.8312 | 319 | 0.8761 |
+      | + `ReloadReuse`: a reload of a slot a register still holds | 0.8260 | 298 | 0.8708 |
+      | + compare/add immediates, provably canonical ints | **0.7969** | **162** | **0.8406** |
+
+    - `DeadCode` drops `OptTarget.pure` instructions whose defs are unused. Magic intrinsics are now `pinned` (an MMIO
+      load is an effect), and relocated address loads are not pure (both tiers must carry the same relocations).
+      It runs on the machine IR, not the SSA graph, whose framestates keep every value a deopt would need.
+    - `ReloadReuse`, after allocation: within a block it tracks which slot each register holds. A redundant
+      reload becomes a move or nothing. Knowledge is dropped at defs, at block starts, and at every clobber (calls,
+      yieldpoints), so no register copy of a reference survives a point where the collector may move it.
+      **`AllocCheck` had a gap that this exposed:** it treated a MOVE of a value into a register of the same
+      origin as a NEW value and forgot the slot. A same-origin move is now a copy.
+    - Immediates: an int compare against 0..4095 is `cmp #imm`, and an add/sub of a constant in +-4095 is
+      `add`/`sub #imm`; the constant's `LIMM` dies (deadCode 258 -> 5258). `canon()`'s SXTW before an ordered
+      compare, a switch or i2l is skipped where the IR proves the int canonical: constants, int arithmetic,
+      compares, narrowing conversions, the sign-extending array loads, shifts, and bitwise ops/phis of canonical
+      ints.
+  - **Two claims that were refused or plugged:**
+    - An array length was in the canonical set first. It holds on hardware, but `OptDiff`'s memory is arbitrary
+      words, so it was 10 mismatches and is out.
+    - A planted "parameters are canonical" was NOT caught: `OptDiff` only ever passed canonical ints. Now 1 in 8
+      int arguments carries junk above bit 31 (the shape a W-form load or a zero-extended field hands over). Main's
+      tiers agree on that, and the plant is 221 mismatches.
+  - **Planted, `ReloadReuse`:**
+    - Ignoring call clobbers -- `AllocCheck` refuses 190 methods (they fall back to Baseline).
+    - Ignoring the barrier's overwritten operands -- no change at all. Its operands are fresh copies that die at it
+      and never hold a slot, so the rule is a guard that today's code cannot exercise.
+  - **Pi, FrameBench via `/run`, A-B-A with main's `--opt all` as the same-session control, three fresh boots
+    each:** define + compile **766-768 ms (control) against 738-740 ms (O2-1, both sessions): -3.7%** (-14% against the
+    Baseline image's 859). Kernel totals overlap: 510-523 control, 511-527 O2-1. The guest-only `locals` kernel
+    read 36.2 against 34.6 in both O2-1 sessions, with code identical in both images (compiled on metal by Baseline),
+    so that is layout -- the image is 49 KB smaller -- and no kernel change is claimed.
+  - **Measured:** `make test` OptDiff 2342 methods, 214,299 runs, 0 mismatches; QEMU virt **215/215**; raspi4b
+    suite **`checked=160 mismatch=0`**, `collections=78`; Pi build bf5d38a4d36e7570 up in 26-27 s.
+
 - **OPT COMPILER ARC, INCREMENT O2-0: the speed baseline (2026-11-27).** Measurement only; no compiler change.
   - **Host, `OptDiff`:** a new `speed:` line -- the geometric mean, per method, of opt/Baseline emulated
     instructions over the compared runs (so a few long loops do not decide it), how many methods opt makes slower,

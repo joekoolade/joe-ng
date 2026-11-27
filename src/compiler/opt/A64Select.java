@@ -666,6 +666,15 @@ public final class A64Select
         {
             frem(x, d);
         }
+        else if ((op == Op.ADD || op == Op.SUB) && (isInt || x.kind == Kind.J) && addImm(x.in[1]))
+        {
+            MInstr m = emit(ADDI, isInt ? temp() : d, new int[] { v(x.in[0]) }, x);   // the immediate form (O2-1)
+            m.imm = op == Op.ADD ? x.in[1].aux : -x.in[1].aux;
+            if (isInt)
+            {
+                emit(SXTW, d, new int[] { m.defs[0] }, x);
+            }
+        }
         else if (op == Op.ADD || op == Op.SUB || op == Op.MUL || op == Op.DIV)
         {
             int mop = op == Op.ADD ? ADD : (op == Op.SUB ? SUB : (op == Op.MUL ? MUL : SDIV));
@@ -839,7 +848,7 @@ public final class A64Select
         }
         else if (op == Op.SWITCH)
         {
-            MInstr m = emit(SWITCH, -1, new int[] { canon(v(x.in[0]), x) }, x);
+            MInstr m = emit(SWITCH, -1, new int[] { canonIn(x.in[0], x) }, x);
             m.term = true;
             m.keys = x.keys;
             m.targets = targets(x);
@@ -916,7 +925,12 @@ public final class A64Select
         }
         if (x.aux2 != 0xB7 && syms.isIntrinsicCall(cp))
         {
+            int from = cur.n;
             intrinsic(x, d, syms.intrinsicId(cp));
+            for (int i = from; i < cur.n; i++)
+            {
+                cur.code[i].pinned = true;                   // magic intrinsics are pinned (BACKLOG O-constraints)
+            }
             return;
         }
         if (x.aux2 == 0xB8 && syms.mathIntrinsicId(cp) >= 0)
@@ -1087,6 +1101,25 @@ public final class A64Select
                || id == compiler.Intrinsics.DSB || id == compiler.Intrinsics.ISB
                || id == compiler.Intrinsics.READ_CNTPCT_EL0 || id == compiler.Intrinsics.READ_CNTFRQ_EL0
                || fenceKind(id) >= 0 || readReg(id) >= 0 || writeReg(id) >= 0 || cacheKind(id) >= 0 || rawCall(id);
+    }
+
+    /** For {@link OptTarget#pure}: an instruction whose only effect is its defs. Not the relocated address loads
+     *  (both tiers must carry the same relocations), the volatile loads, the system-register reads, or anything
+     *  pinned. */
+    static boolean pure(MInstr x)
+    {
+        if (x.pinned || x.defs.length == 0 || x.fixedDefs != null || x.clobbers != null)
+        {
+            return false;
+        }
+        int op = x.op;
+        if (op == LDRX)
+        {
+            return x.aux != 1;                               // aux 1: a volatile load, fenced
+        }
+        return op == MInstr.MOVE || op == LIMM || (op >= ADD && op <= ADDLSL) || op == LDRSB || op == LDRH
+               || op == LDRSH || op == LDRSW || op == LDRB || op == CSET || op == UBNOT || op == SMULH
+               || op == UMULH || op == FPOP || op == HLOAD;
     }
 
     /** The no-operand instructions FENCE carries, as Baseline's lowerIntrinsic emits them (-1: not one). */
@@ -1590,6 +1623,13 @@ public final class A64Select
             m.aux = c;
             return;
         }
+        if (c == 0x85 && canonical(x.in[0], 0))
+        {
+            MInstr m = MInstr.move(d, a);                    // i2l of a canonical int: already its long (O2-1)
+            m.bci = x.bci;
+            cur.add(m);
+            return;
+        }
         int mop = c == 0x88 ? SXTW : (c == 0x91 ? SXTB : (c == 0x92 ? UXTH : SXTH));
         emit(c == 0x85 ? SXTW : mop, d, new int[] { a }, x);   // i2l re-sign-extends, as Baseline's does
     }
@@ -1702,8 +1742,14 @@ public final class A64Select
         }
         else if (x.in.length == 1)
         {
-            m = emit(BCMP, -1, new int[] { canon(v(x.in[0]), x) }, x);
+            m = emit(BCMP, -1, new int[] { canonIn(x.in[0], x) }, x);
             m.aux = CONDS[op - 0x99];
+        }
+        else if (op < 0xA5 && imm12(x.in[1]))
+        {
+            m = emit(BCMP, -1, new int[] { canonIn(x.in[0], x) }, x);   // cmp against the immediate (O2-1)
+            m.aux = CONDS[op - 0x9F];
+            m.imm = x.in[1].aux;
         }
         else if (op >= 0xA5)
         {
@@ -1712,7 +1758,7 @@ public final class A64Select
         }
         else
         {
-            m = emit(BCMP, -1, new int[] { canon(v(x.in[0]), x), canon(v(x.in[1]), x) }, x);
+            m = emit(BCMP, -1, new int[] { canonIn(x.in[0], x), canonIn(x.in[1], x) }, x);
             m.aux = CONDS[op - 0x9F];
         }
         m.term = true;
@@ -1726,6 +1772,66 @@ public final class A64Select
      * this tier's must not either. {@code ifeq}/{@code ifne} test the whole register in both tiers. Dropping the
      * extension where the value is provably canonical is an O2 cleanup.
      */
+    /** {@link #canon} unless the IR shows {@code in} is already a canonical int (O2-1). */
+    private int canonIn(Instr in, Instr x)
+    {
+        return canonical(in, 0) ? v(in) : canon(v(in), x);
+    }
+
+    /** An int or long constant in [-4095, 4095]: an add's or subtract's 12-bit immediate (either sign). */
+    private static boolean addImm(Instr in)
+    {
+        return in.op == Op.CONST && (in.kind == Kind.I || in.kind == Kind.J) && in.aux > -4096 && in.aux < 4096;
+    }
+
+    /** An int constant in [0, 4095]: a compare's 12-bit immediate. */
+    private static boolean imm12(Instr in)
+    {
+        return in.op == Op.CONST && in.kind == Kind.I && in.aux >= 0 && in.aux < 4096;
+    }
+
+    /**
+     * Whether an int value is provably sign-extended from bit 31 in its register, by how this tier produces it: an
+     * int constant (held sign-extended), int arithmetic and negation (re-extended by their SXTW), a compare's
+     * -1/0/1, the narrowing and l2i conversions, the sign-extending (and the 16-bit zero-extending) array loads, the
+     * left shifts (re-extended) -- and an {@code >>}, AND, OR, XOR or phi of canonical ints.
+     * Parameters, field and static loads and calls are NOT: an int can arrive with junk above bit 31 there.
+     */
+    private static boolean canonical(Instr v, int depth)
+    {
+        if (v.kind != Kind.I || depth > 4)
+        {
+            return false;
+        }
+        int op = v.op;
+        if (op == Op.CONST || op == Op.ADD || op == Op.SUB || op == Op.MUL || op == Op.DIV || op == Op.NEG
+            || op == Op.CMP || op == Op.SHL || op == Op.USHR)
+        {
+            return true;
+        }
+        if (op == Op.CONV)
+        {
+            return v.aux2 == 0x88 || (v.aux2 >= 0x91 && v.aux2 <= 0x93);   // l2i, i2b, i2c, i2s
+        }
+        if (op == Op.ALOAD)
+        {
+            int c = v.aux2;
+            return c == 0x2E || c == 0x33 || c == 0x34 || c == 0x35;      // iaload, baload, caload, saload
+        }
+        if (op == Op.SHR || op == Op.AND || op == Op.OR || op == Op.XOR || op == Op.PHI)
+        {
+            for (Instr in : v.in)
+            {
+                if (!canonical(in, depth + 1))
+                {
+                    return false;
+                }
+            }
+            return v.in.length > 0;
+        }
+        return false;
+    }
+
     private int canon(int a, Instr x)
     {
         int t = temp();

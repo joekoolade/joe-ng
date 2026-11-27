@@ -19,9 +19,20 @@ package compiler.opt;
  * later phase), x29 (frame pointer), x30 (link register), sp. Floating point: v0..v7 and v16..v31, which a call
  * destroys; v8..v15 are callee-saved in their low halves and stay out until callee-saved allocation exists.
  */
-public final class A64Target extends OptTarget
+public final class A64Target extends OptTarget implements ReloadReuse.Overwrites
 {
     private static final RegFile REGS = build();
+
+    /** The write barrier consumes its two operand registers (they are copies, A64Select.barrier). */
+    public boolean overwritesUses(MInstr x)
+    {
+        return x.op == A64Select.BARRIER;
+    }
+
+    public boolean pure(MInstr x)
+    {
+        return A64Select.pure(x);
+    }
 
     private static RegFile build()
     {

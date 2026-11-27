@@ -211,11 +211,13 @@ public final class AllocCheck
         {
             int v = x.defs[k];
             int o = f.origin[v];
-            for (int i = 0; i < s.length && x.op != MInstr.RELOAD; i++)
+            boolean copy = x.op == MInstr.RELOAD || (x.op == MInstr.MOVE && f.origin[x.uses[0]] == o);
+            for (int i = 0; i < s.length && !copy; i++)
             {
                 if (s[i] == o)
                 {
-                    s[i] = UNKNOWN;                            // a NEW value of o: older copies are stale now
+                    s[i] = UNKNOWN;                            // a NEW value of o: older copies are stale now (a
+                                                               // reload, or a move of o itself, copies the value)
                 }
             }
             s[f.vclass[v] * 64 + f.loc[v]] = o;
