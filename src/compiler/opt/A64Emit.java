@@ -242,6 +242,10 @@ public final class A64Emit
             int[] k = { A64Enc.dsb(), A64Enc.isb(), A64Enc.wfe(), A64Enc.sev(), A64Enc.icIallu(), A64Enc.tlbiVmalle1() };
             cb.emit(k[x.aux]);
         }
+        else if (op == A64Select.FPOP)
+        {
+            fpop(x.aux, d, a, b);
+        }
         else if (op == A64Select.MSR)
         {
             cb.emit(A64Enc.msr(x.aux, a));
@@ -539,6 +543,131 @@ public final class A64Emit
     }
 
     /** {@code blr x16}, its GC map site, and the dispatch-site record. */
+    /** Baseline's float/double sequences (its fbinop, fneg, fcmp and conversions): the bits move to v0/v1, the
+     *  result back to {@code d}. */
+    private void fpop(int code, int d, int a, int b)
+    {
+        boolean dbl = (code & 1) != 0;
+        if (code >= 0x62 && code <= 0x6F)
+        {
+            int kind = (code - 0x62) >> 2;                   // 0 add, 1 sub, 2 mul, 3 div
+            if (dbl)
+            {
+                cb.emit(A64Enc.fmovXtoD(0, a));
+                cb.emit(A64Enc.fmovXtoD(1, b));
+                cb.emit(kind == 0 ? A64Enc.faddd(0, 0, 1) : kind == 1 ? A64Enc.fsubd(0, 0, 1)
+                        : kind == 2 ? A64Enc.fmuld(0, 0, 1) : A64Enc.fdivd(0, 0, 1));
+                cb.emit(A64Enc.fmovDtoX(d, 0));
+            }
+            else
+            {
+                cb.emit(A64Enc.fmovWtoS(0, a));
+                cb.emit(A64Enc.fmovWtoS(1, b));
+                cb.emit(kind == 0 ? A64Enc.fadds(0, 0, 1) : kind == 1 ? A64Enc.fsubs(0, 0, 1)
+                        : kind == 2 ? A64Enc.fmuls(0, 0, 1) : A64Enc.fdivs(0, 0, 1));
+                cb.emit(A64Enc.fmovStoW(d, 0));
+            }
+        }
+        else if (code == 0x76 || code == 0x77)
+        {
+            if (dbl)
+            {
+                cb.emit(A64Enc.fmovXtoD(0, a));
+                cb.emit(A64Enc.fnegd(0, 0));
+                cb.emit(A64Enc.fmovDtoX(d, 0));
+            }
+            else
+            {
+                cb.emit(A64Enc.fmovWtoS(0, a));
+                cb.emit(A64Enc.fnegs(0, 0));
+                cb.emit(A64Enc.fmovStoW(d, 0));
+            }
+        }
+        else if (code >= 0x95 && code <= 0x98)
+        {
+            if (code >= 0x97)
+            {
+                cb.emit(A64Enc.fmovXtoD(0, a));
+                cb.emit(A64Enc.fmovXtoD(1, b));
+                cb.emit(A64Enc.fcmpd(0, 1));
+            }
+            else
+            {
+                cb.emit(A64Enc.fmovWtoS(0, a));
+                cb.emit(A64Enc.fmovWtoS(1, b));
+                cb.emit(A64Enc.fcmps(0, 1));
+            }
+            if (code == 0x96 || code == 0x98)                // ...g: NaN (unordered, HI) -> +1
+            {
+                cb.emit(A64Enc.cset(d, A64Enc.HI));
+                cb.emit(A64Enc.csinv(d, d, A64Enc.XZR, A64Enc.PL));
+            }
+            else                                             // ...l: NaN -> -1
+            {
+                cb.emit(A64Enc.cset(d, A64Enc.GT));
+                cb.emit(A64Enc.csinv(d, d, A64Enc.XZR, A64Enc.GE));
+            }
+        }
+        else if (code == 0x86)
+        {
+            cb.emit(A64Enc.scvtfSW(0, a));
+            cb.emit(A64Enc.fmovStoW(d, 0));
+        }
+        else if (code == 0x87)
+        {
+            cb.emit(A64Enc.scvtfDW(0, a));
+            cb.emit(A64Enc.fmovDtoX(d, 0));
+        }
+        else if (code == 0x89)
+        {
+            cb.emit(A64Enc.scvtfSX(0, a));
+            cb.emit(A64Enc.fmovStoW(d, 0));
+        }
+        else if (code == 0x8A)
+        {
+            cb.emit(A64Enc.scvtfDX(0, a));
+            cb.emit(A64Enc.fmovDtoX(d, 0));
+        }
+        else if (code == 0x8B)
+        {
+            cb.emit(A64Enc.fmovWtoS(0, a));
+            cb.emit(A64Enc.fcvtzsWS(d, 0));
+            cb.emit(A64Enc.sxtw(d, d));
+        }
+        else if (code == 0x8C)
+        {
+            cb.emit(A64Enc.fmovWtoS(0, a));
+            cb.emit(A64Enc.fcvtzsXS(d, 0));
+        }
+        else if (code == 0x8D)
+        {
+            cb.emit(A64Enc.fmovWtoS(0, a));
+            cb.emit(A64Enc.fcvtDS(0, 0));
+            cb.emit(A64Enc.fmovDtoX(d, 0));
+        }
+        else if (code == 0x8E)
+        {
+            cb.emit(A64Enc.fmovXtoD(0, a));
+            cb.emit(A64Enc.fcvtzsWD(d, 0));
+            cb.emit(A64Enc.sxtw(d, d));
+        }
+        else if (code == 0x8F)
+        {
+            cb.emit(A64Enc.fmovXtoD(0, a));
+            cb.emit(A64Enc.fcvtzsXD(d, 0));
+        }
+        else if (code == 0x90)
+        {
+            cb.emit(A64Enc.fmovXtoD(0, a));
+            cb.emit(A64Enc.fcvtSD(0, 0));
+            cb.emit(A64Enc.fmovStoW(d, 0));
+        }
+        else
+        {
+            throw new IllegalStateException("FPOP " + Integer.toHexString(code));
+        }
+    }
+
     /** A Magic raw call: the BLR, its map site, and its cp in the dispatch table (writer.OptDiff names it). */
     private void raw(int target, int cp)
     {

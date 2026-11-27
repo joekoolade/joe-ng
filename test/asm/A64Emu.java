@@ -26,6 +26,8 @@ import java.util.HashMap;
 public final class A64Emu
 {
     public final long[] x = new long[32];        // x31 here is SP; XZR is handled by the decoder
+    /** The FP/SIMD registers' low 64 bits (a single in the low 32, the rest zeroed as a write to Sn does). */
+    public final long[] fv = new long[32];
     private boolean n;
     private boolean z;
     private boolean c;
@@ -157,6 +159,161 @@ public final class A64Emu
     // ----- registers -------------------------------------------------------------------------------------------
 
     /** Register r as an operand where 31 is XZR. */
+    // ----- scalar floating point: the forms the opt tier and Baseline emit, matched against asm.A64Enc's own
+    //       encodings (register fields masked out), so the decoder cannot disagree with the encoder -----
+
+    private static final int RD = 31;
+    private static final int RDN = 31 | (31 << 5);
+    private static final int RDNM = RDN | (31 << 16);
+
+    private static boolean is(int w, int enc, int fields)
+    {
+        return (w & ~fields) == enc;
+    }
+
+    private static double dv(long bits)
+    {
+        return Double.longBitsToDouble(bits);
+    }
+
+    private static float sv(long bits)
+    {
+        return Float.intBitsToFloat((int) bits);
+    }
+
+    private static long db(double d)
+    {
+        return Double.doubleToRawLongBits(d);
+    }
+
+    private static long sb(float f)
+    {
+        return Integer.toUnsignedLong(Float.floatToRawIntBits(f));
+    }
+
+    private boolean fp(int w, int rd, int rn, int rm)
+    {
+        if (is(w, A64Enc.fmovXtoD(0, 0), RDN))
+        {
+            fv[rd] = rz(rn, true);
+        }
+        else if (is(w, A64Enc.fmovDtoX(0, 0), RDN))
+        {
+            setZ(rd, fv[rn], true);
+        }
+        else if (is(w, A64Enc.fmovWtoS(0, 0), RDN))
+        {
+            fv[rd] = rz(rn, false);
+        }
+        else if (is(w, A64Enc.fmovStoW(0, 0), RDN))
+        {
+            setZ(rd, fv[rn] & 0xFFFFFFFFL, false);
+        }
+        else if (is(w, A64Enc.faddd(0, 0, 0), RDNM))
+        {
+            fv[rd] = db(dv(fv[rn]) + dv(fv[rm]));
+        }
+        else if (is(w, A64Enc.fsubd(0, 0, 0), RDNM))
+        {
+            fv[rd] = db(dv(fv[rn]) - dv(fv[rm]));
+        }
+        else if (is(w, A64Enc.fmuld(0, 0, 0), RDNM))
+        {
+            fv[rd] = db(dv(fv[rn]) * dv(fv[rm]));
+        }
+        else if (is(w, A64Enc.fdivd(0, 0, 0), RDNM))
+        {
+            fv[rd] = db(dv(fv[rn]) / dv(fv[rm]));
+        }
+        else if (is(w, A64Enc.fadds(0, 0, 0), RDNM))
+        {
+            fv[rd] = sb(sv(fv[rn]) + sv(fv[rm]));
+        }
+        else if (is(w, A64Enc.fsubs(0, 0, 0), RDNM))
+        {
+            fv[rd] = sb(sv(fv[rn]) - sv(fv[rm]));
+        }
+        else if (is(w, A64Enc.fmuls(0, 0, 0), RDNM))
+        {
+            fv[rd] = sb(sv(fv[rn]) * sv(fv[rm]));
+        }
+        else if (is(w, A64Enc.fdivs(0, 0, 0), RDNM))
+        {
+            fv[rd] = sb(sv(fv[rn]) / sv(fv[rm]));
+        }
+        else if (is(w, A64Enc.fnegd(0, 0), RDN))
+        {
+            fv[rd] = fv[rn] ^ Long.MIN_VALUE;
+        }
+        else if (is(w, A64Enc.fnegs(0, 0), RDN))
+        {
+            fv[rd] = (fv[rn] ^ 0x8000_0000L) & 0xFFFFFFFFL;
+        }
+        else if (is(w, A64Enc.fcmpd(0, 0), RDNM))
+        {
+            fcmpFlags(dv(fv[rn]), dv(fv[rm]));
+        }
+        else if (is(w, A64Enc.fcmps(0, 0), RDNM))
+        {
+            fcmpFlags(sv(fv[rn]), sv(fv[rm]));
+        }
+        else if (is(w, A64Enc.scvtfDW(0, 0), RDN))
+        {
+            fv[rd] = db((int) rz(rn, false));
+        }
+        else if (is(w, A64Enc.scvtfDX(0, 0), RDN))
+        {
+            fv[rd] = db(rz(rn, true));
+        }
+        else if (is(w, A64Enc.scvtfSW(0, 0), RDN))
+        {
+            fv[rd] = sb((int) rz(rn, false));
+        }
+        else if (is(w, A64Enc.scvtfSX(0, 0), RDN))
+        {
+            fv[rd] = sb(rz(rn, true));
+        }
+        else if (is(w, A64Enc.fcvtzsWD(0, 0), RDN))
+        {
+            setZ(rd, (int) dv(fv[rn]), false);               // Java's cast saturates and sends NaN to 0, as FCVTZS
+        }
+        else if (is(w, A64Enc.fcvtzsXD(0, 0), RDN))
+        {
+            setZ(rd, (long) dv(fv[rn]), true);
+        }
+        else if (is(w, A64Enc.fcvtzsWS(0, 0), RDN))
+        {
+            setZ(rd, (int) sv(fv[rn]), false);
+        }
+        else if (is(w, A64Enc.fcvtzsXS(0, 0), RDN))
+        {
+            setZ(rd, (long) sv(fv[rn]), true);
+        }
+        else if (is(w, A64Enc.fcvtDS(0, 0), RDN))
+        {
+            fv[rd] = db(sv(fv[rn]));
+        }
+        else if (is(w, A64Enc.fcvtSD(0, 0), RDN))
+        {
+            fv[rd] = sb((float) dv(fv[rn]));
+        }
+        else
+        {
+            return false;
+        }
+        return true;
+    }
+
+    /** FCMP's NZCV: less 1000, equal 0110, greater 0010, unordered 0011. */
+    private void fcmpFlags(double a, double b)
+    {
+        boolean un = Double.isNaN(a) || Double.isNaN(b);
+        n = !un && a < b;
+        z = !un && a == b;
+        c = un || a >= b;
+        v = un;
+    }
+
     private long rz(int r, boolean sf)
     {
         long val = r == 31 ? 0 : x[r];
@@ -344,6 +501,10 @@ public final class A64Emu
         int rn = (w >>> 5) & 31;
         int rm = (w >>> 16) & 31;
         long next = pc + 4;
+        if ((w & 0x1F00_0000) == 0x1E00_0000 && fp(w, rd, rn, rm))  // scalar floating point
+        {
+            return next;
+        }
 
         if ((w & 0x1F80_0000) == 0x1280_0000)                       // move wide (MOVN/MOVZ/MOVK)
         {

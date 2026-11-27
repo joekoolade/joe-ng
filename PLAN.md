@@ -5158,6 +5158,13 @@ also with `--opt all` (virt list, raspi4b suite) and a Pi boot.
   wfe/sev/ic iallu/tlbi, the by-address cache ops, and `Magic.call0/2/3/N` (a BLR with the arguments in x0.., a GC
   map at the return address); `readLR`, `readX0`, `resume` and `gc` stay declined (they read or hand over raw
   register state, which the tiers do not share). Interrupt code stays on Baseline (#648). 2328 of 2843 installed.
+- **O1-6c (2026-11-27): floats and doubles** -- as Baseline holds them, as BITS in the integer registers, with
+  v0/v1 scratch inside each operation (arithmetic, neg, the four compares, every conversion, frem/drem through the
+  DREM helper, the 4-byte float array element). The image's two float methods: `VM.drem` installs; `startScheduler`
+  calls `enableIrq`, which stays declined with the other interrupt-mask intrinsics. **O1-6 DONE:** 2329 of 2843
+  installed. What is declined is recorded: 472 interrupt-code methods (#648); 17 that read or hand over raw register
+  state (`readLR`, `readX0`, `resume`, `gc`) or mask interrupts; 5 invokedynamic sites and 19 symbol queries the
+  writer cannot answer, which Baseline bakes as stubs too.
 - **O1-6: the rest of the bytecode set** (switches, floats, magic intrinsics, invokedynamic, the unboxed
   types) until `--opt all` rejects nothing reachable in the image but what is recorded, and the image boots and
   passes the regression with every accepted method opt-compiled. That is O1 done: opt code behaves exactly like

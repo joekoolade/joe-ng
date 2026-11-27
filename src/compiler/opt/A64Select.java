@@ -115,6 +115,8 @@ public final class A64Select
     public static final int MSR = 66;        // the system register aux = uses[0]
     public static final int CACHEOP = 67;    // a cache maintenance op by address uses[0]: aux 0 dc cvau, 1 dc cvac,
                                              //   2 ic ivau, 3 dc civac
+    public static final int FPOP = 69;       // a float/double bytecode aux (Baseline's sequence through v0/v1):
+                                             //   arithmetic, neg, the compares, the conversions; uses/defs hold bits
     public static final int RCALL = 68;      // a Magic raw call (call0/2/3/N): aux = the intrinsic id, imm = the
                                              //   Methodref cp; uses = args then the target, all pinned
 
@@ -414,10 +416,6 @@ public final class A64Select
         {
             return R_SYNC;                                   // the implicit monitor is metal-JIT only, as Baseline's
         }
-        if (g.returnKind == Kind.F || g.returnKind == Kind.D)
-        {
-            return R_FLOAT;
-        }
         int args = 0;
         for (int b = 0; b < g.nBlocks; b++)
         {
@@ -446,7 +444,8 @@ public final class A64Select
                 {
                     return r;
                 }
-                if (x.op == Op.THROW || x.op == Op.MONITORENTER || x.op == Op.MONITOREXIT)
+                if (x.op == Op.THROW || x.op == Op.MONITORENTER || x.op == Op.MONITOREXIT
+                    || (x.op == Op.REM && (x.kind == Kind.F || x.kind == Kind.D)))
                 {
                     nonLeaf = true;                          // helper calls
                 }
@@ -484,9 +483,10 @@ public final class A64Select
         return args > MAX_ARGS ? R_ARGS : OK;
     }
 
+    /** A value the integer registers hold: floats and doubles too, as their bits (Baseline's representation). */
     private static boolean intLike(int k)
     {
-        return k == Kind.I || k == Kind.J || Kind.refLike(k);
+        return k == Kind.I || k == Kind.J || k == Kind.F || k == Kind.D || Kind.refLike(k);
     }
 
     /** A direct call (invokestatic, invokespecial) through the {@link Symbols} seam, as Baseline's lowerCall; the
@@ -595,18 +595,6 @@ public final class A64Select
         {
             return R_OP;                                     // a dynamic constant of a primitive type
         }
-        if (op == Op.ASTORE && (x.aux2 == 0x51 || x.aux2 == 0x52))
-        {
-            return R_FLOAT;
-        }
-        if (op == Op.CMP && x.aux2 != 0x94)
-        {
-            return R_FLOAT;
-        }
-        if (op == Op.CONV && !(x.aux2 == 0x85 || x.aux2 == 0x88 || (x.aux2 >= 0x91 && x.aux2 <= 0x93)))
-        {
-            return R_FLOAT;
-        }
         return OK;
     }
 
@@ -666,6 +654,18 @@ public final class A64Select
             MInstr m = emit(LIMM, d, null, x);
             m.imm = op == Op.NULL ? 0L : x.aux;
         }
+        else if ((op == Op.ADD || op == Op.SUB || op == Op.MUL || op == Op.DIV || op == Op.NEG)
+                 && (x.kind == Kind.F || x.kind == Kind.D))
+        {
+            int base = op == Op.ADD ? 0x62 : (op == Op.SUB ? 0x66 : (op == Op.MUL ? 0x6A : (op == Op.DIV ? 0x6E : 0x76)));
+            int[] in = op == Op.NEG ? new int[] { v(x.in[0]) } : new int[] { v(x.in[0]), v(x.in[1]) };
+            MInstr m = emit(FPOP, d, in, x);
+            m.aux = base + (x.kind == Kind.D ? 1 : 0);
+        }
+        else if (op == Op.REM && (x.kind == Kind.F || x.kind == Kind.D))
+        {
+            frem(x, d);
+        }
         else if (op == Op.ADD || op == Op.SUB || op == Op.MUL || op == Op.DIV)
         {
             int mop = op == Op.ADD ? ADD : (op == Op.SUB ? SUB : (op == Op.MUL ? MUL : SDIV));
@@ -701,6 +701,11 @@ public final class A64Select
         else if (op == Op.SHL || op == Op.SHR || op == Op.USHR)
         {
             shift(x, d, isInt);
+        }
+        else if (op == Op.CMP && x.aux2 != 0x94)
+        {
+            MInstr m = emit(FPOP, d, new int[] { v(x.in[0]), v(x.in[1]) }, x);
+            m.aux = x.aux2;                                  // fcmpl/fcmpg/dcmpl/dcmpg
         }
         else if (op == Op.CMP)
         {
@@ -1579,16 +1584,51 @@ public final class A64Select
     {
         int a = v(x.in[0]);
         int c = x.aux2;
+        if (!(c == 0x85 || c == 0x88 || (c >= 0x91 && c <= 0x93)))
+        {
+            MInstr m = emit(FPOP, d, new int[] { a }, x);   // a conversion to or from float/double
+            m.aux = c;
+            return;
+        }
         int mop = c == 0x88 ? SXTW : (c == 0x91 ? SXTB : (c == 0x92 ? UXTH : SXTH));
         emit(c == 0x85 ? SXTW : mop, d, new int[] { a }, x);   // i2l re-sign-extends, as Baseline's does
+    }
+
+    /** frem/drem as Baseline's: the DREM helper (vm/VM.drem), a float widened to double around it. */
+    private void frem(Instr x, int d)
+    {
+        boolean isFloat = x.kind == Kind.F;
+        int a = v(x.in[0]);
+        int b = v(x.in[1]);
+        if (isFloat)
+        {
+            a = fconv(0x8D, a, x);                           // f2d
+            b = fconv(0x8D, b, x);
+        }
+        int r = isFloat ? temp() : d;
+        callInstr(HCALL, r, new int[] { a, b }, Symbols.DREM, 0, x);
+        if (isFloat)
+        {
+            MInstr m = emit(FPOP, d, new int[] { r }, x);
+            m.aux = 0x90;                                    // d2f
+        }
+    }
+
+    private int fconv(int code, int a, Instr x)
+    {
+        int t = temp();
+        MInstr m = emit(FPOP, t, new int[] { a }, x);
+        m.aux = code;
+        return t;
     }
 
     /** baload/caload/saload/iaload/laload/aaload: element address, then the sized load (Baseline's widths). */
     private void arrayLoad(Instr x, int d)
     {
         int c = x.aux2;
-        int shift = c == 0x33 ? 0 : (c == 0x34 || c == 0x35 ? 1 : (c == 0x2E ? 2 : 3));
-        int lop = c == 0x33 ? LDRSB : (c == 0x34 ? LDRH : (c == 0x35 ? LDRSH : (c == 0x2E ? LDRSW : LDRX)));
+        boolean four = c == 0x2E || c == 0x30;               // iaload, faload: Baseline's sign-extending 4-byte load
+        int shift = c == 0x33 ? 0 : (c == 0x34 || c == 0x35 ? 1 : (four ? 2 : 3));
+        int lop = c == 0x33 ? LDRSB : (c == 0x34 ? LDRH : (c == 0x35 ? LDRSH : (four ? LDRSW : LDRX)));
         int base = temp();
         MInstr a = emit(ADDI, base, new int[] { v(x.in[0]) }, x);
         a.imm = ObjectModel.ARRAY_BASE_OFFSET;
@@ -1633,8 +1673,9 @@ public final class A64Select
     private void arrayStore(Instr x)
     {
         int c = x.aux2;
-        int shift = c == 0x54 ? 0 : (c == 0x55 || c == 0x56 ? 1 : (c == 0x4F ? 2 : 3));
-        int sop = c == 0x54 ? STRB : (c == 0x55 || c == 0x56 ? STRH : (c == 0x4F ? STRW : STRX));
+        boolean four = c == 0x4F || c == 0x51;               // iastore, fastore
+        int shift = c == 0x54 ? 0 : (c == 0x55 || c == 0x56 ? 1 : (four ? 2 : 3));
+        int sop = c == 0x54 ? STRB : (c == 0x55 || c == 0x56 ? STRH : (four ? STRW : STRX));
         int base = temp();
         MInstr a = emit(ADDI, base, new int[] { v(x.in[0]) }, x);
         a.imm = ObjectModel.ARRAY_BASE_OFFSET;
