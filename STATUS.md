@@ -4,6 +4,31 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **OPT COMPILER ARC, INCREMENT O2-0: the speed baseline (2026-11-27).** Measurement only; no compiler change.
+  - **Host, `OptDiff`:** a new `speed:` line -- the geometric mean, per method, of opt/Baseline emulated
+    instructions over the compared runs (so a few long loops do not decide it), how many methods opt makes slower,
+    and static code words for both tiers. `OPTDIFF_TOP=n` lists the worst methods. **At O1-6:** geomean
+    **0.8318** over 2258 methods, **322 slower**; code words 333,933 -> 293,091 (**0.8777**).
+  - **Where opt loses (read off `VMNatives.fieldSignature`, 1.25x):** the worst methods are nearly all methods with a
+    handler. A value is stored twice -- to its spill slot (live across a call) and to its home -- and copied
+    slot to slot (the parameters after the prologue poll; a call's result: store, reload, store). A handler also
+    loads homes it never uses. Using a value's home as its spill slot, plus DCE, is O2 work.
+  - **Pi, FrameBench via `/run`** (as `bench.FrameBench`: the image carries `demo.FrameBench`, which `/run` refuses),
+    three fresh boots per arm, medians, both arms built from main `ce3001f`. Baseline image `12c9f0c3e6a5771a`
+    against `--opt all` `7311095fc5eaafe3`:
+
+      | | Baseline | opt | |
+      |---|---|---|---|
+      | kernel medians summed | 523.8 ms | 514.5 ms | -1.8% |
+      | define + compile 5 classes | 859 ms | 767 ms | **-10.7%** |
+      | sha256 1 MiB | 217.7 | 210.4 | -3.4% |
+      | strings | 25.4 | 23.2 | -8.7% |
+      | calls, locals, arrays, objects, dispatch | 70.1, 34.4, 101.9, 7.9, 27.1 | 69.9, 35.1, 101.8, 7.8, 27.1 | level |
+
+    The guest kernels are compiled on the metal by Baseline, so they are level by construction. The wins are where
+    the work runs in BAKED code: java.base's SHA-256 and StringBuilder, and the classfile parser, loader and
+    Baseline compiler behind a define. The run-to-run spread is about 1% except for one 556 ms Baseline outlier.
+
 - **OPT COMPILER ARC, INCREMENT O1-6c: floats and doubles -- O1-6 DONE, 2329 methods (2026-11-27).** Pi-validated.
   - **What:** F and D values are BITS in the integer registers, as Baseline holds them, so moves, phis, spills,
     calls and returns need nothing new. A new `FPOP` carries each float bytecode and emits Baseline's sequence
