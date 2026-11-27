@@ -32,4 +32,8 @@ public abstract class OptTarget
 
     /** Stack-pointer alignment at a call, in bytes. */
     public abstract int stackAlign();
+
+    /** Whether {@code x} has no effect but its defs, so {@link DeadCode} may drop it when they are all unused. A
+     *  {@link MInstr#pinned} instruction (a magic intrinsic: an MMIO load is an effect) never is. */
+    public abstract boolean pure(MInstr x);
 }

@@ -5169,6 +5169,10 @@ also with `--opt all` (virt list, raspi4b suite) and a Pi boot.
   instructions, methods slower, code words) and a Pi FrameBench A/B. At O1-6: geomean 0.8318, 322 of 2258 slower,
   code 0.8777; Pi defines -10.7%, FrameBench -1.8% (the guest kernels are Baseline-compiled on metal). Every O2
   increment reports both against these.
+- **O2-1 (2026-11-27): machine-IR DCE, redundant-reload reuse, compare/add immediates, canonical-int tracking.**
+  Geomean 0.8318 -> 0.7969 (slower 322 -> 162, code 0.8406); Pi defines -3.7% against a same-session control.
+  Remaining losses: the spill-across-calls policy (every value live over a call is stored and reloaded), and
+  handler methods' home-plus-spill double stores.
 - **O1-6: the rest of the bytecode set** (switches, floats, magic intrinsics, invokedynamic, the unboxed
   types) until `--opt all` rejects nothing reachable in the image but what is recorded, and the image boots and
   passes the regression with every accepted method opt-compiled. That is O1 done: opt code behaves exactly like

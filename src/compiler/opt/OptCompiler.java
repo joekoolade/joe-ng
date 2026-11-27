@@ -71,6 +71,11 @@ public final class OptCompiler
      * ({@link #backReason}, an {@link A64Select} reason); MALFORMED when the allocation fails its check (a back-end
      * bug -- the method falls back to Baseline either way).
      */
+    /** O2-1: machine instructions {@link DeadCode} dropped in the last generate. */
+    public int removed;
+    /** O2-1: reloads {@link ReloadReuse} turned into moves or dropped. */
+    public int reused;
+
     public int generateA64(Symbols syms, boolean uninterruptible, long base, int codeLength)
     {
         A64Select sel = new A64Select(graph, syms, uninterruptible);
@@ -81,9 +86,11 @@ public final class OptCompiler
             return REJECTED;
         }
         PhiElim.run(f);
-        Constraints.run(f);
         A64Target t = new A64Target();
+        removed = DeadCode.run(f, t);
+        Constraints.run(f);
         LinearScan.run(f, t.regs());
+        reused = ReloadReuse.run(f, t.regs(), t);
         error = AllocCheck.check(f, t.regs());
         if (error != null)
         {

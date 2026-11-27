@@ -886,7 +886,14 @@ public final class OptDiff implements OptTier.Diff
         if (c == 'I')
         {
             int[] edge = { 0, 1, -1, 2, 31, 32, 33, 63, 64, Integer.MIN_VALUE, Integer.MAX_VALUE, 255, 65535 };
-            return r.nextInt(3) == 0 ? edge[r.nextInt(edge.length)] : r.nextInt();
+            int i = r.nextInt(3) == 0 ? edge[r.nextInt(edge.length)] : r.nextInt();
+            if (r.nextInt(8) == 0)
+            {
+                // junk above bit 31, as an int can arrive (a W-form load, a zero-extended field): both tiers must
+                // answer from the low 32 bits alone -- what lets the opt tier skip an extension it can PROVE (O2-1)
+                return (i & 0xFFFF_FFFFL) | ((long) r.nextInt() << 32);
+            }
+            return i;
         }
         if (c == 'J')
         {
