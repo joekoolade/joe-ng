@@ -4,6 +4,29 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **OPT COMPILER ARC, INCREMENT O1-6c: floats and doubles -- O1-6 DONE, 2329 methods (2026-11-27).** Pi-validated.
+  - **What:** F and D values are BITS in the integer registers, as Baseline holds them, so moves, phis, spills,
+    calls and returns need nothing new. A new `FPOP` carries each float bytecode and emits Baseline's sequence
+    through v0/v1 (fbinop, fneg, fcmp, the conversions with f2i/d2i re-canonicalised). frem/drem call the DREM
+    helper (a float widened to double around it). **A latent width bug fixed on the way:** `faload`/`fastore` took
+    the 8-byte path; Baseline's are 4-byte (`ldrsw`/`strw`), the same as `iaload`/`iastore`.
+  - **The image's two float methods:** `VM.drem` installs. `VM.startScheduler` now declines on `Magic.enableIrq`,
+    which stays declined along with the other interrupt-mask intrinsics, under the interrupt-code rule.
+  - **`A64Emu` does scalar FP:** fmov, the four arithmetic ops, fneg, fcmp (NZCV, unordered 0011), scvtf, fcvtzs (Java's
+    saturating casts match), fcvt. Each form is matched against `asm.A64Enc`'s own encoding with the register
+    fields masked, so the decoder cannot disagree with the encoder. `OptShapes` adds three float shapes: double
+    ops with forced NaN and -infinity, every int/long/float/double conversion and frem, and float/double arrays
+    with a double loop phi.
+  - **Planted bugs:** a 4-byte faload taken as 8 -- caught. fcmpg's NaN answer flipped -- NOT caught until the shape
+    forced NaN (random bits are NaN once in ~2048), then caught.
+  - **What O1-6 leaves declined, recorded:**
+    - 472 interrupt-code methods (#648)
+    - 17 that read or hand over raw register state (`readLR`, `readX0`, `resume`, `gc`) or mask interrupts
+    - 5 invokedynamic sites and 19 symbol queries the writer cannot answer; Baseline bakes those as stubs too
+  - **Measured:** `make test` OptDiff 2342 methods (13 shapes), 214,239 runs, 0 mismatches; QEMU virt **215/215**;
+    raspi4b suite **`checked=160 mismatch=0`**, `collections=78`; Pi build 7311095fc5eaafe3 up in 26 s, web server
+    live.
+
 - **OPT COMPILER ARC, INCREMENT O1-6b: system intrinsics and raw calls -- 2328 methods (2026-11-27).** Pi-validated.
   - **What:** Baseline's `lowerIntrinsic`, ported:
     - system-register reads (`MRS`: MPIDR, ESR/ELR/FAR, DAIF, CNTP_CTL, CurrentEL) and writes (a new `MSR`: VBAR,

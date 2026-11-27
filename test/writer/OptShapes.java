@@ -275,4 +275,63 @@ final class OptShapes
         }
         return t;
     }
+
+    static double fd(double x)
+    {
+        return x;
+    }
+
+    static float ff(float x)
+    {
+        return x;
+    }
+
+    /** Double arithmetic, both compare flavours against NaN (forced: random bits are rarely one), and a double live across calls (spilled bits). */
+    static int shapeDoubleOps(double a0, double b, int k)
+    {
+        double a = (k & 3) == 0 ? Double.NaN : ((k & 3) == 1 ? Double.NEGATIVE_INFINITY : a0);   // the unordered cases
+        double s = a * b + fd(a - b);
+        double q = s / (b == 0.0 ? 1.0 : b);
+        int r = 0;
+        if (q < a)
+        {
+            r += 1;
+        }
+        if (q > a)
+        {
+            r += 2;
+        }
+        if (q == q)
+        {
+            r += 4;
+        }
+        r += (int) -q;
+        r += (int) (long) (s % (b + 3.0));
+        return r + k + f((int) fd(q * 0.5));
+    }
+
+    /** Float arithmetic and every conversion between int, long, float and double. */
+    static long shapeFloatConv(float a, int i, long l, double d)
+    {
+        float x = a + (float) i - (float) l * 0.25f;
+        double y = (double) x + (double) i + (double) l - d;
+        float z = (float) y % (a == 0.0f ? 2.0f : a);
+        long r = (long) x + (long) y + (int) z + (int) ff(-z) + (long) (float) d;
+        return r ^ (x < z ? 1 : 0) ^ (y > d ? 2 : 0);
+    }
+
+    /** Float and double arrays, and a double phi round a loop. */
+    static double shapeFloatArrays(int n)
+    {
+        float[] fa = new float[(n & 7) + 1];
+        double[] da = new double[fa.length];
+        double acc = 0.0;
+        for (int i = 0; i < fa.length; i++)
+        {
+            fa[i] = i * 1.5f;
+            da[i] = fd(fa[i]) + acc;
+            acc = acc * 0.5 + da[i];
+        }
+        return acc + fa[fa.length - 1];
+    }
 }
