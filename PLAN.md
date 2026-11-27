@@ -5165,6 +5165,10 @@ also with `--opt all` (virt list, raspi4b suite) and a Pi boot.
   installed. What is declined is recorded: 472 interrupt-code methods (#648); 17 that read or hand over raw register
   state (`readLR`, `readX0`, `resume`, `gc`) or mask interrupts; 5 invokedynamic sites and 19 symbol queries the
   writer cannot answer, which Baseline bakes as stubs too.
+- **O2-0 (2026-11-27): the speed baseline.** `OptDiff`'s `speed:` line (per-method geomean of emulated
+  instructions, methods slower, code words) and a Pi FrameBench A/B. At O1-6: geomean 0.8318, 322 of 2258 slower,
+  code 0.8777; Pi defines -10.7%, FrameBench -1.8% (the guest kernels are Baseline-compiled on metal). Every O2
+  increment reports both against these.
 - **O1-6: the rest of the bytecode set** (switches, floats, magic intrinsics, invokedynamic, the unboxed
   types) until `--opt all` rejects nothing reachable in the image but what is recorded, and the image boots and
   passes the regression with every accepted method opt-compiled. That is O1 done: opt code behaves exactly like

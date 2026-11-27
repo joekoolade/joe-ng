@@ -39,6 +39,13 @@ public final class OptDiff implements OptTier.Diff
     private long dynCalls;
     private long thrownRuns;
     private long caught;
+    /** O2-0: the speed measures -- per method (compared runs only), so a few long loops do not decide them. */
+    private double logRatio;
+    private int ratioMethods;
+    private int slower;
+    private long baseWords;
+    private long optWords;
+    private final java.util.ArrayList<String> perMethod = new java.util.ArrayList<>();
 
     private OptDiff(int trials)
     {
@@ -85,6 +92,20 @@ public final class OptDiff implements OptTier.Diff
         System.out.println("OptDiff: methods=" + d.methods + " runs=" + d.compared + " mismatches=" + d.mismatches
                            + " skipped=" + d.skipped + " calls=" + d.calls + " caught=" + d.caught + " thrownOut=" + d.thrownRuns + " dispatches=" + d.dynCalls + " movedRefs=" + d.moved
                            + " instructions: baseline=" + d.baseSteps + " opt=" + d.optSteps);
+        System.out.println(String.format("OptDiff: speed: geomean opt/baseline instructions=%.4f over %d methods "
+                                         + "(%d slower); code words baseline=%d opt=%d (%.4f)",
+                                         Math.exp(d.logRatio / Math.max(1, d.ratioMethods)), d.ratioMethods, d.slower,
+                                         d.baseWords, d.optWords, (double) d.optWords / Math.max(1, d.baseWords)));
+        String top = System.getenv("OPTDIFF_TOP");
+        if (top != null)
+        {
+            d.perMethod.sort(null);
+            int n = Integer.parseInt(top);
+            for (int i = 0; i < n && i < d.perMethod.size(); i++)
+            {
+                System.out.println("  WORST " + d.perMethod.get(d.perMethod.size() - 1 - i).substring(9));
+            }
+        }
         if (d.mismatches > 0 || d.methods == 0 || shapesIn != shapes)
         {
             System.exit(1);
@@ -135,6 +156,8 @@ public final class OptDiff implements OptTier.Diff
             return;
         }
         Random r = new Random(key.hashCode());
+        long mb = 0;
+        long mo = 0;
         for (int t = 0; t < trials; t++)
         {
             long[] a = args(desc, isStatic, r);
@@ -175,6 +198,8 @@ public final class OptDiff implements OptTier.Diff
             caught += co.caught;
             baseSteps += eb.steps;
             optSteps += eo.steps;
+            mb += eb.steps;
+            mo += eo.steps;
             calls += co.calls;
             moved += co.moved;
             dynCalls += co.dispatches;
@@ -200,6 +225,21 @@ public final class OptDiff implements OptTier.Diff
                 }
                 return;
             }
+        }
+        baseWords += baseline.words().length;
+        optWords += opt.words().length;
+        if (mb > 0 && mo > 0)
+        {
+            double lr = Math.log((double) mo / mb);
+            logRatio += lr;
+            ratioMethods += 1;
+            if (mo > mb)
+            {
+                slower += 1;
+            }
+            perMethod.add(String.format("%09d", Math.round(1e6 + lr * 1e5)) + String.format("%.3f", (double) mo / mb)
+                          + " " + key + " baseline=" + mb + " opt=" + mo + " words " + baseline.words().length + "/"
+                          + opt.words().length);
         }
     }
 
