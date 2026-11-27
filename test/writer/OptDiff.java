@@ -37,6 +37,8 @@ public final class OptDiff implements OptTier.Diff
     private long calls;
     private long moved;
     private long dynCalls;
+    private long thrownRuns;
+    private long caught;
 
     private OptDiff(int trials)
     {
@@ -60,10 +62,30 @@ public final class OptDiff implements OptTier.Diff
         {
             System.setOut(real);
         }
+        int shapes = 0;
+        int shapesIn = 0;
+        classfile.ClassFile sc = classfile.ClassFile.parse(classes.resolve("writer/OptShapes.class"));
+        for (classfile.ClassFile.Method m : sc.methods())
+        {
+            if (m.name.startsWith("shape"))
+            {
+                shapes += 1;
+                String key = sc.thisClassName() + "." + m.name + m.descriptor;
+                if (OptTier.compile(key, sc, m, 0x0200_0000L, false, OptTier.lastResolver) != null)
+                {
+                    shapesIn += 1;
+                }
+                else
+                {
+                    System.err.println("  SHAPE NOT INSTALLED " + key);
+                }
+            }
+        }
+        System.out.println("OptDiff: shapes installed " + shapesIn + " of " + shapes);
         System.out.println("OptDiff: methods=" + d.methods + " runs=" + d.compared + " mismatches=" + d.mismatches
-                           + " skipped=" + d.skipped + " calls=" + d.calls + " dispatches=" + d.dynCalls + " movedRefs=" + d.moved
+                           + " skipped=" + d.skipped + " calls=" + d.calls + " caught=" + d.caught + " thrownOut=" + d.thrownRuns + " dispatches=" + d.dynCalls + " movedRefs=" + d.moved
                            + " instructions: baseline=" + d.baseSteps + " opt=" + d.optSteps);
-        if (d.mismatches > 0 || d.methods == 0)
+        if (d.mismatches > 0 || d.methods == 0 || shapesIn != shapes)
         {
             System.exit(1);
         }
@@ -74,7 +96,37 @@ public final class OptDiff implements OptTier.Diff
     {
         String desc = method.descriptor;
         boolean isStatic = method.isStatic;
+        if ((System.getenv("OPTDIFF_HANDLERS") != null && method.exceptions.length == 0)
+            || (System.getenv("OPTDIFF_SHAPESONLY") != null && !key.startsWith("writer/OptShapes.")))
+        {
+            return;                                          // only the methods with an exception table
+        }
         methods += 1;
+        if (System.getenv("OPTDIFF_SHAPES") != null)
+        {
+            java.util.HashSet<Integer> hs = new java.util.HashSet<>();
+            int typed = 0;
+            for (var x : method.exceptions)
+            {
+                hs.add(x.handlerPc());
+                typed += x.catchType() != 0 ? 1 : 0;
+            }
+            int athrows = 0;
+            for (int i = 0; i < method.code.length; i++)
+            {
+                athrows += (method.code[i] & 0xFF) == 0xBF ? 1 : 0;   // a rough count (operand bytes too)
+            }
+            System.err.println("  SHAPE " + key + " entries=" + method.exceptions.length + " handlers=" + hs.size()
+                               + " typed=" + typed + " ranges=" + opt.handlers().size());
+            for (int i = 0; i < opt.handlers().size(); i++)
+            {
+                var hr = opt.handlers().get(i);
+                int last = opt.words()[hr.endWord() - 1];
+                System.err.println("    range [" + hr.startWord() + "," + hr.endWord() + ") -> " + hr.handlerWord()
+                                   + " " + hr.catchClass() + " last=" + Integer.toHexString(last)
+                                   + ((last & 0xFC000000) == 0x94000000 ? " (BL)" : ""));
+            }
+        }
         String rel = sameRelocations(baseline, opt);
         if (rel != null)
         {
@@ -87,8 +139,8 @@ public final class OptDiff implements OptTier.Diff
         {
             long[] a = args(desc, isStatic, r);
             long seed = r.nextLong();
-            Callee cb = new Callee(baseline, seed, 1, cf, method, null);
-            Callee co = new Callee(opt, seed, 2, cf, method, oc);
+            Callee cb = new Callee(baseline, seed, 1, cf, method, null, base);
+            Callee co = new Callee(opt, seed, 2, cf, method, oc, base);
             A64Emu eb = cb.emu;
             A64Emu eo = co.emu;
             for (int i = 0; i < a.length; i++)
@@ -116,14 +168,20 @@ public final class OptDiff implements OptTier.Diff
                 continue;                                    // e.g. a loop that never ends for this input, in both
             }
             compared += 1;
+            if (eb.thrown)
+            {
+                thrownRuns += 1;
+            }
+            caught += co.caught;
             baseSteps += eb.steps;
             optSteps += eo.steps;
             calls += co.calls;
             moved += co.moved;
             dynCalls += co.dispatches;
             String memDiff = memory(eb, eo);
-            if (memDiff != null || cb.calls != co.calls || cb.trace != co.trace
-                || (eb.x[0] != eo.x[0] && !desc.endsWith(")V")))
+            if (memDiff != null || cb.calls != co.calls || cb.trace != co.trace || eb.thrown != eo.thrown
+                || cb.thrownExc != co.thrownExc || cb.caught != co.caught
+                || (!eb.thrown && eb.x[0] != eo.x[0] && !desc.endsWith(")V")))
             {
                 mismatches += 1;
                 if (mismatches <= 20)
@@ -136,6 +194,8 @@ public final class OptDiff implements OptTier.Diff
                     System.err.println("  MISMATCH " + key + " args" + sb + ": baseline 0x" + Long.toHexString(eb.x[0])
                                        + " opt 0x" + Long.toHexString(eo.x[0]) + " calls " + cb.calls + "/"
                                        + co.calls + " trace " + (cb.trace == co.trace ? "same" : "differs")
+                                       + " thrown " + eb.thrown + "/" + eo.thrown + " caught " + cb.caught + "/"
+                                       + co.caught
                                        + (memDiff == null ? "" : " memory: " + memDiff));
                 }
                 return;
@@ -161,15 +221,21 @@ public final class OptDiff implements OptTier.Diff
         int moved;
         int dispatches;
         long trace = 17;                                   // every call's name and arguments, in order
+        int caught;                                        // exceptions the simulated unwinder delivered here
+        long thrownExc;                                    // the exception that left the method, or 0
+        final long base;
+        final boolean throwing;
 
         final classfile.ClassFile cf;
         final classfile.ClassFile.Method method;
         final compiler.opt.OptCompiler oc;
 
         Callee(CompiledMethod cm, long seed, int tier, classfile.ClassFile cf, classfile.ClassFile.Method method,
-               compiler.opt.OptCompiler oc)
+               compiler.opt.OptCompiler oc, long base)
         {
             this.cm = cm;
+            this.base = base;
+            this.throwing = method.exceptions.length > 0;
             this.cf = cf;
             this.method = method;
             this.oc = oc;
@@ -208,6 +274,24 @@ public final class OptDiff implements OptTier.Diff
                 e.unsupported = error;
                 return;
             }
+            if (key.startsWith("vm/VMUnwind.unwind("))
+            {
+                // athrow found no local handler: the unwinder searches this frame's ranges at the pc it was
+                // handed (Baseline's and the opt tier's differ, so neither the pc nor the sp is traced) ...
+                long exc = e.x[0];
+                trace = trace * 31 + exc;
+                unwind(e, exc, (int) ((e.x[1] - base) >> 2), e.x[2]);
+                return;
+            }
+            if (key.startsWith("vm/VM.instanceOf("))
+            {
+                trace = trace * 31 + e.x[0] * 7 + e.x[1];
+                long exc = e.x[0];
+                long ty = e.x[1];
+                clobber(e);
+                e.x[0] = instanceOfAnswer(exc, ty);
+                return;
+            }
             int paren = key.indexOf('(');
             String d = key.substring(paren, dispatch ? key.indexOf('@') : key.length());
             int n = paramCount(d) + (dispatch || !isStatic(key) ? 1 : 0);
@@ -217,11 +301,49 @@ public final class OptDiff implements OptTier.Diff
                 h = h * 0x100000001B3L ^ e.x[i];
             }
             trace = trace * 31 + h;
+            if (throwing && !HELPERS.contains(key) && ((h >>> 23) & 7) == 0)
+            {
+                // ... and a callee throws: the unwinder searches this frame at the call (return address - 4)
+                long exc = 0x4800_0000L + 8L * ((h >>> 3) & 0xFFFFF);
+                trace = trace * 31 + exc;
+                unwind(e, exc, word, e.x[31]);
+                return;
+            }
+            clobber(e);
+            e.x[0] = result(d.charAt(d.indexOf(')') + 1), h);
+        }
+
+        private void clobber(A64Emu e)
+        {
             for (int i = 0; i <= 18; i++)
             {
                 e.x[i] = garbage.nextLong();
             }
-            e.x[0] = result(d.charAt(d.indexOf(')') + 1), h);
+        }
+
+        /** VMUnwind's search of one frame: the ranges in table order, a catch-all or a matching type wins, and
+         *  the handler is entered with the frame's sp and the exception in x9 -- every other register garbage. */
+        private void unwind(A64Emu e, long exc, int pcWord, long sp)
+        {
+            for (int i = 0; i < cm.handlers().size(); i++)
+            {
+                var hr = cm.handlers().get(i);
+                if (pcWord < hr.startWord() || pcWord >= hr.endWord())
+                {
+                    continue;
+                }
+                if (hr.catchClass() == null || instanceOfAnswer(exc, fakeAddress("type:" + hr.catchClass())) != 0)
+                {
+                    clobber(e);
+                    e.x[9] = exc;
+                    e.x[31] = sp;
+                    e.redirect = base + 4L * hr.handlerWord();
+                    caught += 1;
+                    return;
+                }
+            }
+            thrownExc = exc;
+            e.redirect = A64Emu.THROWN;
         }
 
         /**
@@ -303,6 +425,15 @@ public final class OptDiff implements OptTier.Diff
                 }
                 long a = s < nLoc ? sp + locBase + 8L * s : sp + opBase + 8L * (s - nLoc);
                 long v = e.load(a, 8);
+                if (oc != null && s < oc.homeCount() && !e.stored().containsKey(a))
+                {
+                    // the real collector would follow it: a home the map types as a reference that this run never
+                    // wrote holds whatever the stack held before (what it holds once written may be anything a
+                    // simulated field load answered, so that is not checked)
+                    error = "home " + s + " is mapped as a reference but was never written: 0x" + Long.toHexString(v)
+                            + " (return word " + retWord + ")";
+                    return false;
+                }
                 if (v != 0)
                 {
                     e.store(a, 8, v + MOVE);
@@ -311,6 +442,39 @@ public final class OptDiff implements OptTier.Diff
             }
             return true;
         }
+    }
+
+    /** The simulated VM.instanceOf: a function of the object and the Type, so the in-method catch tests and the
+     *  unwinder's agree; about half answer no, so both the matched and the unmatched path run. */
+    private static long instanceOfAnswer(long obj, long type)
+    {
+        long h = (obj * 0x9E3779B97F4A7C15L) ^ (type * 0xC2B2AE3D27D4EB4FL);
+        return (h >>> 41) & 1;
+    }
+
+    /** The VM helpers' callee keys (they never throw here). */
+    private static final java.util.Set<String> HELPERS = helperKeys();
+
+    private static java.util.Set<String> helperKeys()
+    {
+        java.util.HashSet<String> out = new java.util.HashSet<>();
+        try
+        {
+            java.lang.reflect.Field fl = Class.forName("compiler.WriterSymbols").getDeclaredField("HELPER_KEY");
+            fl.setAccessible(true);
+            for (String k : (String[]) fl.get(null))
+            {
+                if (k != null)
+                {
+                    out.add(k);
+                }
+            }
+        }
+        catch (ReflectiveOperationException ex)
+        {
+            throw new IllegalStateException(ex);
+        }
+        return out;
     }
 
     /** How far the simulated collector moves an object. */
@@ -446,9 +610,14 @@ public final class OptDiff implements OptTier.Diff
     }
 
     /** As CodeBuffer.patchAddr: movz rd, lo16 ; movk rd, hi16, lsl 16 -- an 8-aligned fake address below 4 GiB. */
+    private static long fakeAddress(String key)
+    {
+        return 0x1000_0000L + ((key.hashCode() & 0x0FFF_FFFFL) << 3) % 0x2000_0000L;
+    }
+
     private static void patch(int[] w, int at, int rd, String key)
     {
-        long addr = 0x1000_0000L + ((key.hashCode() & 0x0FFF_FFFFL) << 3) % 0x2000_0000L;
+        long addr = fakeAddress(key);
         w[at] = asm.A64Enc.movz(rd, (int) (addr & 0xFFFF), 0);
         w[at + 1] = asm.A64Enc.movk(rd, (int) ((addr >>> 16) & 0xFFFF), 1);
     }
@@ -641,6 +810,10 @@ public final class OptDiff implements OptTier.Diff
         {
             long[] edge = { 0, 1, -1, Long.MIN_VALUE, Long.MAX_VALUE, 63, 64, 0xFFFF_FFFFL, 1L << 32 };
             return r.nextInt(3) == 0 ? edge[r.nextInt(edge.length)] : r.nextLong();
+        }
+        if (type.equals("Lmagic/ObjectReference;"))
+        {
+            return ref(r);                                   // a traced word: a reference
         }
         if (type.startsWith("Lmagic/"))
         {

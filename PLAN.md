@@ -5145,6 +5145,13 @@ also with `--opt all` (virt list, raspi4b suite) and a Pi boot.
   divide and size checks (by explicit test, as Baseline does -- implicit null checks are O5).
 - **O1-5: exceptions and monitors.** Handler ranges and the home-slot protocol above, `athrow`, synchronized
   methods and blocks.
+  **DONE on QEMU (2026-11-26):** 2666 of 2843 image methods. One home per local AND GC kind (a reference home only
+  ever holds a reference; the prologue nulls them), so the GC map types homes at every site with no flow analysis;
+  a handler is entered with only x9 (the exception) and loads its locals; ranges are the runs of covered blocks per
+  table entry, in table order. The writer has no `monitorenter` helper, so synchronized BLOCKS stay declined exactly
+  as Baseline's compile of them fails (they bake as stubs); a synchronized METHOD takes no monitor in the writer,
+  as in Baseline. `OptDiff` simulates the unwinder (callees throw into handlers, `unwind` searches the ranges) and
+  compiles `test/writer/OptShapes` -- the nested, multi-catch and typed-throw shapes no image method has.
 - **O1-6a (DONE on QEMU, 2026-11-26, taken before O1-4b by measured demand): the call-free intrinsics** -- 2307 of
   2843 image methods; `OptDiff` 0 mismatches over 2.3M emulated calls.
 - **O1-6: the rest of the bytecode set** (switches, floats, magic intrinsics, invokedynamic, the unboxed

@@ -24,6 +24,11 @@ public final class MBlock
     /** Linear positions [from, to) after {@link Liveness}. */
     public int from;
     public int to;
+    /** Entered by the unwinder (a handler's first block): nothing but the exception, in its pinned register. */
+    public boolean handler;
+    /** Per exception-table entry: whether its try range covers the bytecode this block's code comes from (null:
+     *  none) -- the machine-PC handler ranges are the runs of covered blocks in layout order. */
+    public boolean[] cover;
 
     public MBlock(int id)
     {

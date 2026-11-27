@@ -45,6 +45,12 @@ public final class A64Emu
         void call(A64Emu e, int word);
     }
     private static final long RETURN_SENTINEL = 0x5EED_0000_0000L;
+    /** A hook sets {@link #redirect} to this when the exception it threw leaves the method: the run ends. */
+    public static final long THROWN = 0x5EED_0000_1000L;
+    /** Set by a hook: where the call "returns" to instead (a handler the simulated unwinder chose), or 0. */
+    public long redirect;
+    /** The run ended by an exception leaving the method ({@link #THROWN}). */
+    public boolean thrown;
 
     /** Run {@code code} (loaded at {@code base}) until it returns; false if it did not (budget, unknown op). */
     public boolean run(int[] code, long base, long maxSteps)
@@ -56,6 +62,11 @@ public final class A64Emu
         {
             if (pc == RETURN_SENTINEL)
             {
+                return true;
+            }
+            if (pc == THROWN)
+            {
+                thrown = true;
                 return true;
             }
             long idx = (pc - base) >> 2;
@@ -73,6 +84,18 @@ public final class A64Emu
             pc = next;
         }
         return false;
+    }
+
+    /** After a simulated call: the return address, or where the hook redirected it. */
+    private long taken(long next)
+    {
+        if (redirect != 0)
+        {
+            long r = redirect;
+            redirect = 0;
+            return r;
+        }
+        return next;
     }
 
     // ----- memory ----------------------------------------------------------------------------------------------
@@ -481,7 +504,7 @@ public final class A64Emu
         {
             x[30] = next;
             calls.call(this, (int) ((pc - codeBase) >> 2));
-            return next;
+            return taken(next);
         }
         if ((w & 0xFC00_0000) == 0x1400_0000)                       // B
         {
@@ -520,7 +543,7 @@ public final class A64Emu
             lastTarget = x[rn];
             x[30] = next;
             calls.call(this, (int) ((pc - codeBase) >> 2));
-            return next;
+            return taken(next);
         }
         if ((w & 0xFFFF_FC1F) == 0xD65F_0000)                       // RET
         {

@@ -37,6 +37,12 @@ public final class MFunc
     /** Per virtual register: its physical register, after allocation. */
     public int[] loc;
     public int nSlots;
+    /** Spill slots [0, nHomes) are the HOMES of a method with a handler (one per bytecode local and GC kind),
+     *  typed by {@link #homeGc} at every GC site: a reference home always holds a reference or null. */
+    public int nHomes;
+    public byte[] homeGc = new byte[0];
+    /** Per exception-table entry: the block its handler starts (null: unreachable). */
+    public MBlock[] handlerOf = new MBlock[0];
     /** Per spill slot: the virtual register spilled there (its {@link #vgc} types the slot in a GC map). */
     public int[] slotVreg = new int[8];
 

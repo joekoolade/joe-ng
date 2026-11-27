@@ -35,6 +35,12 @@ public final class OptCompiler
     private int[] dynWord;
     private int[] dynCp;
     private int nDyn;
+    private int nHandlers;
+    private int nHomes;
+    private int[] hStart;
+    private int[] hEnd;
+    private int[] hHandler;
+    private int[] hEntry;
     private int reasonBci;
     private String error;
 
@@ -96,7 +102,46 @@ public final class OptCompiler
         dynWord = e.dynWord;
         dynCp = e.dynCp;
         nDyn = e.nDyn;
+        nHandlers = e.nHandlers;
+        nHomes = e.nHomes;
+        hStart = e.hStart;
+        hEnd = e.hEnd;
+        hHandler = e.hHandler;
+        hEntry = e.hEntry;
         return ACCEPTED;
+    }
+
+    /** The machine-PC handler ranges, in the order the unwinder must try them: word range [start, end), the
+     *  handler's word, and the exception-table entry it stands for (whose catch type it carries). */
+    /** The home slots: GMAP "locals" [0, homeCount()). */
+    public int homeCount()
+    {
+        return nHomes;
+    }
+
+    public int handlerCount()
+    {
+        return nHandlers;
+    }
+
+    public int handlerStartWord(int i)
+    {
+        return hStart[i];
+    }
+
+    public int handlerEndWord(int i)
+    {
+        return hEnd[i];
+    }
+
+    public int handlerWord(int i)
+    {
+        return hHandler[i];
+    }
+
+    public int handlerEntry(int i)
+    {
+        return hEntry[i];
     }
 
     public int backReason()
