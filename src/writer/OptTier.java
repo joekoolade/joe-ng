@@ -48,6 +48,8 @@ final class OptTier
     private static final Set<String> seen = new HashSet<>();
     private static int accepted;
     private static int rejected;
+    /** Interrupt code left on Baseline: magic.Uninterruptible classes and the device ISRs. */
+    private static int interruptSkipped;
     private static int malformed;
     private static final int[] byReason = new int[SsaBuilder.REASONS];
     private static final int REPORT_LIMIT = 20;
@@ -121,6 +123,20 @@ final class OptTier
         }
         boolean first = seen.add(key);
         lastResolver = resolver;
+        if (uninterruptible(cf) || m.name.equals("onIrq"))
+        {
+            // Interrupt code stays on Baseline: a magic.Uninterruptible class is the interrupt path, the scheduler
+            // or the collector, which run with IRQs masked or switch the stack under them, and onIrq is a device
+            // driver's ISR (Cyw43, VirtioNet), run from VMScheduler.schedule through the board's irqDevice.
+            // MEASURED on the Pi: the opt Bcm2711Platform.irqAck (code equivalent to Baseline's) left an interrupt
+            // active on core 0 (GICC_RPR=0), so its timer and the WiFi SPI were never delivered again and bring-up
+            // hung; the cause inside it is not known.
+            if (first)
+            {
+                interruptSkipped += 1;
+            }
+            return null;
+        }
         ClassFile.ExceptionEntry[] ex = m.exceptions;
         int n = ex.length;
         int[] es = new int[n];
@@ -321,7 +337,8 @@ final class OptTier
         sb.append("opt: built=").append(accepted + malformed).append(" verified=").append(accepted)
           .append(" malformed=").append(malformed).append(" rejected=").append(rejected)
           .append(" installed=").append(installed).append(" badAlloc=").append(backMalformed)
-          .append(" symbolQueryFailed=").append(symbolFailures);
+          .append(" symbolQueryFailed=").append(symbolFailures)
+          .append(" interrupt=").append(interruptSkipped);
         for (int i = 1; i < byReason.length; i++)
         {
             if (byReason[i] > 0)
