@@ -207,6 +207,10 @@ public final class AllocCheck
         {
             s[RegFile.CLASSES * 64 + x.aux] = f.origin[x.uses[0]];
         }
+        if (x.op == A64Select.HSTORE)
+        {
+            s[RegFile.CLASSES * 64 + x.aux] = f.origin[x.uses[0]];   // a home store writes a frame slot too (O2-2:
+        }                                                            // a home can be a spilled value's slot)
         for (int k = 0; k < x.defs.length; k++)
         {
             int v = x.defs[k];

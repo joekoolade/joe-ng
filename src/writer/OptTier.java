@@ -53,6 +53,7 @@ final class OptTier
     /** O2-1: machine instructions DeadCode dropped, and reloads ReloadReuse rewrote, over the installed methods. */
     private static long deadRemoved;
     private static long reloadsReused;
+    private static long homesShared;
     private static int malformed;
     private static final int[] byReason = new int[SsaBuilder.REASONS];
     private static final int REPORT_LIMIT = 20;
@@ -192,6 +193,7 @@ final class OptTier
                     {
                         deadRemoved += oc.removed;
                         reloadsReused += oc.reused;
+                        homesShared += oc.homesShared;
                     }
                     if (gen == OptCompiler.REJECTED && oc.backReason() == A64Select.R_INTRINSIC
                         && System.getenv("JOENG_OPT_BLOCKERS") != null)
@@ -347,7 +349,8 @@ final class OptTier
           .append(" installed=").append(installed).append(" badAlloc=").append(backMalformed)
           .append(" symbolQueryFailed=").append(symbolFailures)
           .append(" interrupt=").append(interruptSkipped)
-          .append(" deadCode=").append(deadRemoved).append(" reloadsReused=").append(reloadsReused);
+          .append(" deadCode=").append(deadRemoved).append(" reloadsReused=").append(reloadsReused)
+          .append(" homesShared=").append(homesShared);
         for (int i = 1; i < byReason.length; i++)
         {
             if (byReason[i] > 0)

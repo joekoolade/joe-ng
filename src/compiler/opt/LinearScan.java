@@ -298,9 +298,10 @@ public final class LinearScan
     {
         int nv = f.nV;
         int[] slot = new int[nv];
+        MInstr[] paired = homeSlots(spilled, slot);
         for (int v = 0; v < nv; v++)
         {
-            if (spilled[v])
+            if (spilled[v] && paired[v] == null)
             {
                 slot[v] = f.newSlot(v);
             }
@@ -312,6 +313,12 @@ public final class LinearScan
             while (i < blk.n)
             {
                 MInstr x = blk.code[i];
+                if (x.uses.length == 1 && x.uses[0] < nv && paired[x.uses[0]] == x)
+                {
+                    blk.remove(i);                           // the home is this value's slot: its SPILL wrote it
+                    homesShared += 1;
+                    continue;
+                }
                 int before = 0;
                 int after = 0;
                 for (int k = 0; k < x.uses.length; k++)
@@ -352,6 +359,153 @@ public final class LinearScan
                 i += before + 1 + after;
             }
         }
+    }
+
+    /** O2-2: spilled values that took their home as their slot. */
+    public int homesShared;
+    /** Homes already standing as a spilled value's slot, by home: the claimed live intervals, as from/to pairs. */
+    private int[][] homeClaims;
+    private int[] nHomeClaims;
+
+    /**
+     * O2-2: a spilled value whose home is its slot. In a method with handlers a value is stored to its local's HOME
+     * (O1-5) and, when spilled, to a spill slot as well, and the home store then reloads it only to copy it across.
+     * A spilled {@code v} takes home {@code h} as its slot when its one def reaches {@code HSTORE v -> h} across
+     * nothing that can throw or touch h ({@link #defReaches}; so a handler sees h change where it did) and nothing else writes h while v is live -- no other
+     * value's HSTORE to h, and no other value already holding h as its slot. The home is then written by v's SPILL
+     * and the HSTORE is dropped; every reload of v reads h. The GC map types a home by its kind, which is v's.
+     * Answers, by vreg, the HSTORE each such value replaces (null where none) and sets its slot.
+     */
+    private MInstr[] homeSlots(boolean[] spilled, int[] slot)
+    {
+        int nv = f.nV;
+        MInstr[] paired = new MInstr[nv];
+        if (f.nHomes == 0 || rounds > 1)
+        {
+            // the first round only: its intervals are what the claims are checked against, and a later round's
+            // positions (and vregs -- a claimed value is all reload and spill temporaries by then) are new
+            return paired;
+        }
+        homeClaims = new int[f.nHomes][];
+        nHomeClaims = new int[f.nHomes];
+        int[] defs = new int[nv];
+        for (int b = 0; b < f.nBlocks; b++)
+        {
+            MBlock blk = f.blocks[b];
+            for (int i = 0; i < blk.n; i++)
+            {
+                for (int d : blk.code[i].defs)
+                {
+                    if (d < nv)
+                    {
+                        defs[d] += 1;
+                    }
+                }
+            }
+        }
+        for (int b = 0; b < f.nBlocks; b++)
+        {
+            MBlock blk = f.blocks[b];
+            for (int j = 1; j < blk.n; j++)
+            {
+                MInstr h = blk.code[j];
+                if (h.op != A64Select.HSTORE)
+                {
+                    continue;
+                }
+                int v = h.uses[0];
+                if (v >= nv || !spilled[v] || defs[v] != 1 || paired[v] != null)
+                {
+                    continue;
+                }
+                int home = h.aux;
+                if (!defReaches(blk, j, v, home))
+                {
+                    continue;
+                }
+                if (!homeFree(home, v, h))
+                {
+                    continue;
+                }
+                paired[v] = h;
+                slot[v] = home;
+                claim(home, lv.from[v], lv.to[v]);
+            }
+        }
+        return paired;
+    }
+
+    /**
+     * Whether {@code v}'s def is earlier in the same block than the HSTORE at {@code j}, with only instructions
+     * between that cannot throw or touch {@code home}: yieldpoints (the prologue's poll lies before every try range,
+     * and a poll never throws), stores to OTHER homes and moves -- the parameters' home stores follow the
+     * prologue's poll and each other. So writing the home at the def is invisible to a handler.
+     */
+    private static boolean defReaches(MBlock blk, int j, int v, int home)
+    {
+        for (int i = j - 1; i >= 0; i--)
+        {
+            MInstr y = blk.code[i];
+            for (int d : y.defs)
+            {
+                if (d == v)
+                {
+                    return y.tied < 0;
+                }
+            }
+            boolean quiet = y.op == A64Select.YIELD || y.op == MInstr.MOVE
+                            || (y.op == A64Select.HSTORE && y.aux != home);
+            if (!quiet)
+            {
+                return false;
+            }
+        }
+        return false;
+    }
+
+    /** Whether nothing but {@code own} writes {@code home} inside v's live interval. */
+    private boolean homeFree(int home, int v, MInstr own)
+    {
+        int a = lv.from[v];
+        int z = lv.to[v];
+        for (int k = 0; k < nHomeClaims[home]; k++)
+        {
+            if (homeClaims[home][2 * k] <= z && a <= homeClaims[home][2 * k + 1])
+            {
+                return false;
+            }
+        }
+        for (int b = 0; b < f.nBlocks; b++)
+        {
+            MBlock blk = f.blocks[b];
+            for (int i = 0; i < blk.n; i++)
+            {
+                MInstr y = blk.code[i];
+                boolean writes = (y.op == A64Select.HSTORE || y.op == MInstr.SPILL) && y.aux == home;
+                if (writes && y != own && y.pos >= a && y.pos <= z)
+                {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    private void claim(int home, int a, int z)
+    {
+        int n = nHomeClaims[home];
+        if (homeClaims[home] == null || homeClaims[home].length < 2 * n + 2)
+        {
+            int[] g = new int[2 * n + 8];
+            for (int k = 0; k < 2 * n; k++)
+            {
+                g[k] = homeClaims[home] == null ? 0 : homeClaims[home][k];
+            }
+            homeClaims[home] = g;
+        }
+        homeClaims[home][2 * n] = a;
+        homeClaims[home][2 * n + 1] = z;
+        nHomeClaims[home] = n + 1;
     }
 
     private int temp(int v)
