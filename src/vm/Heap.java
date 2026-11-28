@@ -137,6 +137,10 @@ public final class Heap implements Uninterruptible
      * fixed cell the compiled code can name, beside the allocator's.
      */
     public static final long STOP_CELL = 0x03FF_0218L;
+    /** Per-TASK x19..x28 images for the exception unwinder (O2-3): task t's ten words at
+     *  {@code CALLEE_SAVED_CELLS + t*80}, VM.MAX_TASKS (40) of them in the unused 0x03FF_0300..0x03FF_0F80 stretch
+     *  of this page. Per task, not per core: an unwind can block (the loader lock) and resume on another core. */
+    public static final long CALLEE_SAVED_CELLS = 0x03FF_0300L;
     /**
      * The yieldpoint request word (frames/GC arc S3): byte {@code c} nonzero while core {@code c} is asked to reach
      * a safepoint. Every framed method's prologue and every loop header loads it (Baseline.emitYieldPoll) and calls

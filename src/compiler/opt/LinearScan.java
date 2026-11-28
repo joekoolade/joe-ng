@@ -60,6 +60,28 @@ public final class LinearScan
     private boolean[] scan()
     {
         lv = new Liveness(f);
+        nClobber = 0;
+        for (int b = 0; b < f.nBlocks; b++)
+        {
+            MBlock blk = f.blocks[b];
+            for (int i = 0; i < blk.n; i++)
+            {
+                if (blk.code[i].clobbers != null)
+                {
+                    if (nClobber == clobberPos.length)
+                    {
+                        int[] g = new int[nClobber * 2];
+                        for (int k = 0; k < nClobber; k++)
+                        {
+                            g[k] = clobberPos[k];
+                        }
+                        clobberPos = g;
+                    }
+                    clobberPos[nClobber] = blk.code[i].pos + 1;   // a clobber occupies [4i+1, 4i+3)
+                    nClobber += 1;
+                }
+            }
+        }
         int nv = f.nV;
         int[] loc = new int[nv];
         for (int v = 0; v < nv; v++)
@@ -135,10 +157,52 @@ public final class LinearScan
         return r;
     }
 
+    /**
+     * The registers {@code v} may take. A callee-saved register only for a value that can never hold an address
+     * ({@link MFunc#noAddress}: an int, float or double) in a non-leaf method (O2-3, option 1): the collector never
+     * looks in registers -- it neither updates a reference there nor PINS a raw word that names a young object --
+     * and a leaf has no frame to save a caller's copy in. The lowest free register is taken, so a value that
+     * crosses no call still lands in a caller-saved one, which costs no save.
+     */
+    private long allowed(int v, int cls)
+    {
+        long ok = rf.allocatable(cls);
+        if (!f.calleeSavedOk || !f.noAddress[v] || clobbersIn(lv.from[v], lv.to[v]) < CALLEE_MIN_CLOBBERS)
+        {
+            ok &= ~rf.calleeSaved(cls);
+        }
+        return ok;
+    }
+
+    /**
+     * The calls and polls an interval must cross before it may take a callee-saved register. MEASURED (O2-3, Pi,
+     * defines against a same-session control): 1 = -6.5%, 3 = level. The per-method geomean prefers a higher bar --
+     * the save and restore cost every invocation, fast paths included -- but the total, which weights by how often
+     * code runs, predicted the Pi: the registers pay in hot code.
+     */
+    static final int CALLEE_MIN_CLOBBERS = 1;
+
+    /** Clobbering instructions (calls, yieldpoints) at positions in [a, b), from {@link #clobberPos}. */
+    private int clobbersIn(int a, int b)
+    {
+        int n = 0;
+        for (int i = 0; i < nClobber; i++)
+        {
+            if (clobberPos[i] >= a && clobberPos[i] < b)
+            {
+                n += 1;
+            }
+        }
+        return n;
+    }
+
+    private int[] clobberPos = new int[16];
+    private int nClobber;
+
     /** The lowest allocatable register of {@code cls} free over cur's whole interval, or -1. */
     private int freeReg(int cur, int cls, int[] loc, int[] active, int nActive)
     {
-        long ok = rf.allocatable(cls);
+        long ok = allowed(cur, cls);
         for (int a = 0; a < nActive; a++)
         {
             int v = active[a];
@@ -168,7 +232,7 @@ public final class LinearScan
             {
                 continue;
             }
-            if (blockedOver(cls, loc[v], lv.from[cur], lv.to[cur]))
+            if (blockedOver(cls, loc[v], lv.from[cur], lv.to[cur]) || (allowed(cur, cls) & (1L << loc[v])) == 0)
             {
                 continue;
             }

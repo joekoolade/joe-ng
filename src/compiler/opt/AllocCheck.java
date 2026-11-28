@@ -166,6 +166,14 @@ public final class AllocCheck
             bad("v" + v + " in B" + blk.id + " given unallocatable " + rf.name(cls, p));
             return false;
         }
+        if ((rf.calleeSaved(cls) & (1L << p)) != 0 && (!f.noAddress[v] || !f.calleeSavedOk))
+        {
+            // O2-3: the collector never reads a register (to update a reference or pin a raw address), and a leaf
+            // has no save area
+            bad("v" + v + " in B" + blk.id + (!f.noAddress[v] ? " (may hold an address)" : " (a leaf)")
+                + " in callee-saved " + rf.name(cls, p));
+            return false;
+        }
         return true;
     }
 

@@ -134,7 +134,7 @@ final class FrameMaps implements Uninterruptible
         int bitWords = map.plus(24L).loadInt();
         int nUnique = map.plus(28L).loadInt();
         hOutBase = map.plus(32L).loadInt();
-        hOutEnd = hOutBase + map.plus(36L).loadInt() * 8L;
+        hOutEnd = hOutBase + (map.plus(36L).loadInt() & 0xFFFF) * 8L;   // bits 16..: opt's callee-saved set (O2-3)
         int retWord = (int) ((ret - start) >> 2);
         Address sites = map.plus(40L);
         int lo = 0;

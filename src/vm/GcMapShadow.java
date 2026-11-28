@@ -393,7 +393,7 @@ final class GcMapShadow implements Uninterruptible
         int bitWords = map.plus(24L).loadInt();
         int nUnique = map.plus(28L).loadInt();
         long outBase = map.plus(32L).loadInt();
-        long outEnd = outBase + map.plus(36L).loadInt() * 8L;
+        long outEnd = outBase + (map.plus(36L).loadInt() & 0xFFFF) * 8L;   // bits 16..: opt's callee-saved set
         int retWord = (int) ((ret - start) >> 2);
         Address sites = map.plus(40L);
         int lo = 0;

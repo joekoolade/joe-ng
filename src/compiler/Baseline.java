@@ -4671,6 +4671,14 @@ public final class Baseline
         {
             cb.emit(A64Enc.movReg(pushReg(), 16));             // x16 = a dispatch's target (wild-branch diagnostic)
         }
+        else if (id == Intrinsics.SAVE_CALLEE_SAVED)
+        {
+            int buf = popReg();
+            for (int i = 0; i < 10; i++)
+            {
+                cb.emit(A64Enc.strx(19 + i, buf, i * 8));      // x19..x28, as the thrower left them
+            }
+        }
         else if (id == Intrinsics.READ_X19)
         {
             cb.emit(A64Enc.movReg(pushReg(), 19));             // x19: callee-saved, so it survives what clobbers x0
@@ -4683,11 +4691,18 @@ public final class Baseline
             int exc = popReg();
             int spv = popReg();
             int pc = popReg();
+            // The handler's locals are in ITS frame, which the unwind leaves intact (frames/GC arc S1). But opt code
+            // keeps values in x19..x28 across calls and saves its caller's copies in its frame (O2-3), so when
+            // `nloc` is non-zero the unwinder hands the callee-saved registers the popped frames had saved: x19..x28
+            // reload from `locBuf`. None of the operand registers below is one of them.
+            int skip = cb.emit(A64Enc.cbz(nloc, 0));
+            for (int i = 0; i < 10; i++)
+            {
+                cb.emit(A64Enc.ldrx(19 + i, locBuf, i * 8));
+            }
+            cb.set(skip, A64Enc.cbz(nloc, cb.wordCount() - skip));
             cb.emit(A64Enc.movReg(16, pc));                     // x16 = target (x9 gets clobbered below)
             cb.emit(A64Enc.movReg(17, spv));                    // x17 = handler frame SP (installed as the new SP)
-            // No callee-saved registers to restore (frames/GC arc S1): the handler's locals are in ITS frame, which
-            // the unwind leaves intact, and no framed method touches x19..x28 -- so they still hold what the
-            // frameless entry (VM.boot) put there. `nloc` and `locBuf` are consumed and ignored.
             cb.emit(A64Enc.movReg(9, exc));                     // exception -> handler's stack slot (x9)
             cb.emit(A64Enc.movToSp(17));
             cb.emit(A64Enc.br(16));

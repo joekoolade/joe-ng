@@ -117,6 +117,7 @@ public final class A64Select
                                              //   2 ic ivau, 3 dc civac
     public static final int FPOP = 69;       // a float/double bytecode aux (Baseline's sequence through v0/v1):
                                              //   arithmetic, neg, the compares, the conversions; uses/defs hold bits
+    public static final int CSSAVE = 70;     // emitter-only: store the used callee-saved registers (a save edge, O2-3)
     public static final int RCALL = 68;      // a Magic raw call (call0/2/3/N): aux = the intrinsic id, imm = the
                                              //   Methodref cp; uses = args then the target, all pinned
 
@@ -905,6 +906,7 @@ public final class A64Select
     private int valueVreg(int kind)
     {
         int v = f.newVreg(RegFile.INT);
+        f.noAddress[v] = kind == Kind.I || kind == Kind.F || kind == Kind.D;
         if (kind == Kind.A || kind == Kind.O)
         {
             f.vgc[v] = MFunc.GC_REF;

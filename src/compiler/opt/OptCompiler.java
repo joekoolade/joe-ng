@@ -88,6 +88,7 @@ public final class OptCompiler
             return REJECTED;
         }
         PhiElim.run(f);
+        f.calleeSavedOk = sel.nonLeaf;
         A64Target t = new A64Target();
         removed = DeadCode.run(f, t);
         Constraints.run(f);
