@@ -4,6 +4,33 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **OPT COMPILER ARC, INCREMENT O2-2: a spilled value's home is its slot -- slower methods 162 -> 103 (2026-11-27).**
+  Pi-validated.
+  - **What:** in a method with handlers every local has a HOME (O1-5), and a spilled value used to get a spill slot
+    besides -- stored twice, and reloaded just to copy it into the home. `LinearScan` now gives a spilled value its
+    home as its slot when all of these hold:
+    - it has one def, and that def reaches its first `HSTORE` across nothing that can throw or touch the home
+      (yieldpoints, moves, other homes' stores: the parameters' home stores sit behind the prologue poll);
+    - nothing else writes that home inside its live interval.
+
+    Its SPILL then writes the home and the HSTORE is dropped. The decision is taken in the first rewrite round
+    only, whose intervals the claims are checked against. 283 values share (`homesShared=` on the build line).
+  - **`AllocCheck` now models a home store as a write to its slot.** It did not, so a conflicting home write was
+    invisible to it. New `OptShapes`: `shapeHomeConflict` (a value still live in a second local after the first is
+    reassigned, across calls in a try) and `shapeHomeChurn` (references and longs reassigned and spilled).
+  - **Planted:**
+    - Dropping the conflict check: in the image alone (+2 shares) nothing reported it; with the new shapes and
+      the `AllocCheck` fix, both shapes are refused (13 of 15 install).
+    - Dropping the reach check: +6 shares, nothing reported -- javac puts a value's first home store right after
+      its def except at the prologue, so no shape can exercise it; the rule is a guard.
+  - **Measured, `OptDiff`:** geomean **0.7969 -> 0.7931**, slower methods **162 -> 103**, code words 0.8406 -> 0.8384;
+    2344 methods (15 shapes), 214,499 runs, 0 mismatches. QEMU virt **215/215**; raspi4b suite **`checked=160
+    mismatch=0`**, `collections=78`.
+  - **Pi, FrameBench via `/run` (O2-2 116347f25fa7215c, then main's O2-1 e3696aa34b4d87f1 as the same-session
+    control):** define + compile 733/733/720 ms against 738/738/724 (-0.7%, inside the spread); kernel totals 507-546
+    on both. No Pi change claimed: the handler methods this speeds up are mostly the loader-lock natives, not the
+    define path.
+
 - **OPT COMPILER ARC, INCREMENT O2-1: dead code, reloads, immediates -- geomean 0.8318 -> 0.7969 (2026-11-27).**
   Pi-validated.
   - **What, each measured on its own (cumulative, `OptDiff` geomean opt/Baseline instructions, methods slower, code):**

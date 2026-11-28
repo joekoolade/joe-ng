@@ -59,6 +59,16 @@ public final class MBlock
         n += 1;
     }
 
+    public void remove(int at)
+    {
+        for (int i = at; i + 1 < n; i++)
+        {
+            code[i] = code[i + 1];
+        }
+        n -= 1;
+        code[n] = null;
+    }
+
     public MInstr last()
     {
         return n == 0 ? null : code[n - 1];

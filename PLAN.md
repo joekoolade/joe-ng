@@ -5173,6 +5173,9 @@ also with `--opt all` (virt list, raspi4b suite) and a Pi boot.
   Geomean 0.8318 -> 0.7969 (slower 322 -> 162, code 0.8406); Pi defines -3.7% against a same-session control.
   Remaining losses: the spill-across-calls policy (every value live over a call is stored and reloaded), and
   handler methods' home-plus-spill double stores.
+- **O2-2 (2026-11-27): a spilled value's home is its slot** (methods with handlers): slower methods 162 -> 103,
+  geomean 0.7931. AllocCheck models home stores. Remaining: spill-across-calls (registers across calls need
+  callee-saved allocation and register maps).
 - **O1-6: the rest of the bytecode set** (switches, floats, magic intrinsics, invokedynamic, the unboxed
   types) until `--opt all` rejects nothing reachable in the image but what is recorded, and the image boots and
   passes the regression with every accepted method opt-compiled. That is O1 done: opt code behaves exactly like

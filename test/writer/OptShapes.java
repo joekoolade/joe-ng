@@ -334,4 +334,42 @@ final class OptShapes
         }
         return acc + fa[fa.length - 1];
     }
+
+    /** A value still live after its local is reassigned (it lives on in another local), across calls in a try: a
+     *  spilled value may not take a home that another value overwrites while it is live (O2-2). */
+    static int shapeHomeConflict(int x)
+    {
+        int a = f(x);
+        int old = a;
+        try
+        {
+            a = g(a);
+            a += f(old);
+            a += g(old + 1);
+        }
+        catch (RuntimeException e)
+        {
+            return a - old;
+        }
+        return a + old;
+    }
+
+    /** Several references and longs reassigned inside a try, each spilled across calls. */
+    static long shapeHomeChurn(Object o, long l, int k)
+    {
+        Object p = o;
+        long m = l;
+        try
+        {
+            o = obj(k);
+            m = fl(m) + use(p);
+            p = obj(use(o));
+            l = fl(l + m) + use(p) + use(o);
+        }
+        catch (RuntimeException e)
+        {
+            return m + l + use(o) + use(p);
+        }
+        return m ^ l ^ use(p);
+    }
 }

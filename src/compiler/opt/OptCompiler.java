@@ -75,6 +75,8 @@ public final class OptCompiler
     public int removed;
     /** O2-1: reloads {@link ReloadReuse} turned into moves or dropped. */
     public int reused;
+    /** O2-2: spilled values whose slot is their home. */
+    public int homesShared;
 
     public int generateA64(Symbols syms, boolean uninterruptible, long base, int codeLength)
     {
@@ -89,7 +91,7 @@ public final class OptCompiler
         A64Target t = new A64Target();
         removed = DeadCode.run(f, t);
         Constraints.run(f);
-        LinearScan.run(f, t.regs());
+        homesShared = LinearScan.run(f, t.regs()).homesShared;
         reused = ReloadReuse.run(f, t.regs(), t);
         error = AllocCheck.check(f, t.regs());
         if (error != null)
