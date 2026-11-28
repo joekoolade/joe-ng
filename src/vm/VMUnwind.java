@@ -325,12 +325,46 @@ final class VMUnwind
                 Magic.wfe();
             }
         }
+        // CALLEE-SAVED REGISTERS (O2-3). Every framed method keeps its locals in its own frame, which popping the
+        // frames above it leaves intact (frames/GC arc S1). Baseline never touches x19..x28; opt code keeps
+        // NON-REFERENCE values there across calls and saves its caller's copies in its frame. So the registers
+        // the handler's frame must see are what the popped frames had saved -- the outermost saver of each wins --
+        // and, for the rest, what they hold now (this method is Baseline: the thrower's values). Start from those
+        // and fold in each popped frame's save area; resume reloads the result.
+        // The image is per TASK: an unwind can block (the loader lock, a class load) and resume on another core.
+        // IRQs masked while reading which task this is, or a migration between the core id and its task lies.
+        long daif = Magic.readDaif();
+        Magic.disableIrq();
+        int task = VM.curTask();
+        if ((daif & 0x80L) == 0L)
+        {
+            Magic.enableIrq();                                 // DAIF.I was clear: unmask again
+        }
+        Address regs = Address.fromLong(Heap.CALLEE_SAVED_CELLS + (long) task * 80L);
+        Magic.saveCalleeSaved(regs.toLong());
+        // The frames between THIS one and `sp` are popped too, without a walk ever visiting them: a helper that
+        // throws on its caller's behalf (a type check, the fault path) passes the caller's pc and sp. Opt code
+        // among them may hold x19..x28 -- fold what each saved, innermost first, before the walk proper starts.
+        long mysp = Magic.readSP();
+        Address csp = Address.fromLong(mysp);
+        long cfs = frameSizeAt(Address.fromLong(VM.unwindAddr));
+        int steps = 0;
+        while (cfs > 0L && steps < 64)
+        {
+            Address cpc = csp.loadAddress().minus(4L);         // [sp+0] is each frame's saved LR
+            csp = csp.plus(cfs);
+            if (csp.toLong() >= sp.toLong())
+            {
+                break;                                         // reached the thrower's frame: the walk takes it
+            }
+            cfs = frameSizeAt(cpc);
+            if (cfs > 0L)
+            {
+                restoreSaved(cpc, csp, cfs, regs);
+            }
+            steps += 1;
+        }
         captureTrace(exc, pc, sp);                     // fill exc's backtrace if not already captured at the throw site
-        // NO REGISTER RECONSTRUCTION (frames/GC arc S1). Every framed method keeps its locals in its own frame,
-        // which popping the frames above it leaves intact, and none of them touches x19..x28 -- so the handler
-        // finds its locals where it left them, and the frameless entry's register locals were never disturbed.
-        // This retires the "local reads as garbage after a caught throw" bug class the old callee-saved
-        // reconstruction kept producing.
         while (true)
         {
             long h = findHandler(pc, exc);
@@ -354,7 +388,7 @@ final class VMUnwind
                 faultDepth = 0;                                            // fault resolved by a handler: a later fault
                                                                            //   (incl. one inside the handler) is FRESH,
                                                                            //   not a nested unwind fault
-                Magic.resume(h, sp.toLong(), excWord, 0L, 0L);             // no registers to restore (see above)
+                Magic.resume(h, sp.toLong(), excWord, 1L, regs.toLong());  // x19..x28 as the handler's frame needs
             }
             long fs = frameSizeAt(pc);
             if (fs == 0L)
@@ -551,6 +585,7 @@ final class VMUnwind
                 printHex(sp.plus(16L).loadLong());
                 Uart.putc((byte) 0x0A);
             }
+            restoreSaved(pc, sp, fs, regs);         // what this frame saved of its caller's x19..x28
             pc = sp.loadAddress().minus(4L);        // the call site (return address - one instruction)
             sp = sp.plus(fs);                       // pop this frame
             // A SYNCHRONIZED METHOD whose frame just went away must drop its implicit monitor, or an
@@ -560,6 +595,91 @@ final class VMUnwind
             // its frame is not popped, and its normal return still pairs with monExitSync.
             VM.monUnwindSync(sp);
         }
+    }
+
+    /**
+     * O2-3: the frame at {@code sp} (size {@code fs}, executing {@code pc}) is being popped; if it is opt code that
+     * saved callee-saved registers, they are its CALLER's values, so they replace those in {@code regs}. The saved
+     * set is bits 16..25 of the GC map's header word 9 (x19..x28; a Baseline map's word 9 is its out-args count,
+     * below 0x10000), stored in register order in the frame's top words.
+     */
+    private static void restoreSaved(Address pc, Address sp, long fs, Address regs)
+    {
+        long ma = VM.gcMapAt(pc);
+        if (ma <= 0L)
+        {
+            return;
+        }
+        Address map = Address.fromLong(ma);
+        if (map.loadInt() != 0x50414D47)
+        {
+            return;
+        }
+        int mask = (map.plus(36L).loadInt() >>> 16) & 0x3FF;
+        if (mask == 0)
+        {
+            return;
+        }
+        if (!savedAt(map, pc))
+        {
+            return;                                 // outside the saved region: it never touched x19..x28
+        }
+        int n = 0;
+        for (int r = 0; r < 10; r++)
+        {
+            n += (mask >>> r) & 1;
+        }
+        Address area = sp.plus(fs - 8L * n);
+        int k = 0;
+        for (int r = 0; r < 10; r++)
+        {
+            if ((mask & (1 << r)) != 0)
+            {
+                regs.plus(r * 8L).store(area.plus(k * 8L).loadLong());
+                k += 1;
+            }
+        }
+    }
+
+    /**
+     * Whether an opt frame stopped at {@code pc} had saved its callee-saved registers (shrink-wrapping, O2-3): the
+     * bit, in the bitmap after the map's unique maps, of the first call site past {@code pc}. That is the call itself
+     * for a callee's throw (pc = return address - 4) and athrow's own call into the unwinder for an athrow, both
+     * in pc's block. Searched here rather than through FrameMaps.site, whose answer is static fields: two cores
+     * can unwind at once. No site past pc (no call in the rest of the method): not saved.
+     */
+    private static boolean savedAt(Address map, Address pc)
+    {
+        long start = VM.codeStartAt(pc);
+        if (start == 0L)
+        {
+            return false;
+        }
+        int pcWord = (int) ((pc.toLong() - start) >> 2);
+        int nSites = map.plus(4L).loadInt();
+        int bitWords = map.plus(24L).loadInt();
+        int nUnique = map.plus(28L).loadInt();
+        Address sites = map.plus(40L);
+        int lo = 0;
+        int hi = nSites;
+        while (lo < hi)
+        {
+            int mid = (lo + hi) >>> 1;
+            if (sites.plus(mid * 8L).loadInt() > pcWord)
+            {
+                hi = mid;
+            }
+            else
+            {
+                lo = mid + 1;
+            }
+        }
+        if (lo >= nSites)
+        {
+            return false;
+        }
+        Address bits = sites.plus(nSites * 8L).plus((long) nUnique * bitWords * 4L);
+        return ((bits.plus((lo >> 5) * 4L).loadInt() >>> (lo & 31)) & 1) != 0;
     }
 
     private static long findHandler(Address pc, ObjectReference exc)

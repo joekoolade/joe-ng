@@ -49,7 +49,11 @@ public final class A64Target extends OptTarget implements ReloadReuse.Overwrites
         }
         long intCallerSaved = RegFile.range(0, 18) | RegFile.mask(30);
         long fpCallerSaved = RegFile.range(0, 7) | RegFile.range(16, 31);
-        return new RegFile(x, RegFile.range(0, 15), intCallerSaved, v, fpCallerSaved, fpCallerSaved);
+        // x19..x28 are allocatable from O2-3, callee-saved: an opt method that uses one saves its caller's copy in
+        // its frame (A64Emit) and VMUnwind restores it when an exception pops the frame. Only NON-reference values
+        // go there (LinearScan); a reference in a callee-saved register needs register GC maps (option 2).
+        return new RegFile(x, RegFile.range(0, 15) | RegFile.range(19, 28), intCallerSaved, v, fpCallerSaved,
+                           fpCallerSaved);
     }
 
     public String name()

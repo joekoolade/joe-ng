@@ -516,11 +516,21 @@ public final class Magic
     }
 
     /**
+     * Store x19..x28 to the ten words at {@code buf}: the exception unwinder's starting point for the callee-saved
+     * registers it hands {@link #resume} (O2-3). Only Baseline code may call it -- Baseline never touches x19..x28,
+     * so what it reads is the thrower's.
+     */
+    public static void saveCalleeSaved(long buf)
+    {
+        throw intrinsic();
+    }
+
+    /**
      * Resume execution at a handler: set SP, place {@code exc} in the handler's
      * operand-stack slot (x9), and branch to {@code pc}. Never returns — used by
      * the exception unwinder to transfer control to a catch block in a caller.
-     * {@code locBuf} points at a 16-slot buffer holding the handler's reconstructed
-     * callee-saved locals (x19..); the first {@code regLocals} are reloaded from it.
+     * When {@code regLocals} is non-zero, x19..x28 are first reloaded from the ten words at {@code locBuf}: what the
+     * frames the unwind popped had saved of them (O2-3: opt code keeps values in callee-saved registers).
      */
     public static void resume(long pc, long sp, long exc, long regLocals, long locBuf)
     {

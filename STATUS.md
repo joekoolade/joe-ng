@@ -4,6 +4,49 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **OPT COMPILER ARC, INCREMENT O2-3: callee-saved registers for values that cannot hold an address -- Pi defines
+  -6.5% (2026-11-27).** Pi-validated. Option 1 of the two-step plan (user decision 2026-11-27).
+  - **What:**
+    - x19..x28 are allocatable, for a value that can never hold an address (`MFunc.noAddress`: an int, float or
+      double) live across at least one call, in a non-leaf method. Opt frames save the registers they use in the
+      frame's top words; the GC map's header word 9 carries the set in bits 16..25.
+    - **Shrink-wrapped:** the saves run on entry to the SAVED REGION (the blocks touching a callee-saved register
+      and everything reachable from them, closed so a handler agrees with the blocks it covers), on appended save
+      edges; only returns inside the region restore; a per-site bitmap after the map says where the save area is
+      valid.
+    - **The unwinder:** `VMUnwind.unwind` captures x19..x28 (a new `Magic.saveCalleeSaved`) into a PER-TASK cell, folds
+      in each popped opt frame's save area where the site says it saved -- INCLUDING the frames between itself and
+      the sp it is handed (a helper throwing for its caller skips its own frame) -- and `Magic.resume` reloads them
+      (its `regLocals`/`locBuf` pair, unused since S1).
+  - **Two bugs this found, both of the "silent wrong answer" class, both caught by the virt regression and not by
+    `OptDiff`:**
+    - **The frames `unwind` was never shown:** a helper that unwinds on its caller's behalf passes the caller's pc/sp.
+      Its own opt frame was popped with no restore. `ExcMessageRaceProbe` died with "THROWN OBJECT IS NOT A THROWABLE".
+      Fixed by walking from `unwind`'s own frame up to the given sp.
+    - **A raw word in a register is invisible to the minor collection's PIN.** The first rule let any non-reference
+      value in (longs, `Address`/`Word`). `VMConcat.scFloat` holds the concat builder as an `Address` across the
+      call that compiles `Float.toString`; a nursery collection there moved the builder, and the first float
+      concat printed an EMPTY STRING (`UnsafeAccessProbe`: `float volatile = /1.5`). A raw frame slot PINS what it
+      names (`StackRoots.markTyped`); a register cannot. Found by bisecting callee-saved use by method, then
+      `gcnursery=0` and `gcroots=0` both passing. Longs and unboxed words now stay in pinned frame slots; making
+      the collector see registers is option 2's work.
+  - **The threshold, MEASURED on the Pi** (defines against a same-session control, three fresh boots each): crossing
+    1 call -6.5%, crossing 3 level. The per-method geomean disagrees -- the saves cost every invocation, so small
+    fast-path methods lose -- but the total, which weights by execution, predicted the Pi.
+  - **`OptDiff`:** x19..x28 get the caller's values at entry and must hold them at return; an exception that leaves
+    the method must leave exactly what VMUnwind would restore. A planted missing epilogue restore is caught at once.
+  - **Measured:**
+
+      | | O2-2 | O2-3 |
+      |---|---|---|
+      | `OptDiff` total instructions | 47.86M | **42.82M (-10.5%)** |
+      | per-method geomean / slower | 0.7931 / 103 | 0.8044 / 230 |
+      | code words | 0.8384 | 0.8288 |
+      | Pi define + compile, median of 3 | 725 ms (control, same session) | **678 ms** |
+
+    0 mismatches; QEMU virt **215/215**; raspi4b suite **`checked=160 mismatch=0`**, `collections=78`; FrameBench
+    kernels inside the noise. Pi build 3b043d5b33a9d8a1 (the measured arm, byte-identical).
+
 - **OPT COMPILER ARC, INCREMENT O2-2: a spilled value's home is its slot -- slower methods 162 -> 103 (2026-11-27).**
   Pi-validated.
   - **What:** in a method with handlers every local has a HOME (O1-5), and a spilled value used to get a spill slot

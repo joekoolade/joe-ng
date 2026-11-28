@@ -66,6 +66,212 @@ public final class A64Emit
         this.saveLR = saveLR;
     }
 
+    /** O2-3: the callee-saved registers this method uses (a bit per register number), and how many. */
+    public long savedMask;
+    public int nSaved;
+
+    /** By block id: whether the callee-saved registers are saved on entry to it (shrink-wrapping, O2-3). */
+    private boolean[] inSaved;
+    private boolean curSaved;
+    /** By site: whether the frame's save area is valid there -- the per-site bitmap after the GC map. */
+    private boolean[] siteSaved = new boolean[16];
+
+    /**
+     * Shrink-wrapping (O2-3). Saving the callee-saved registers in the prologue charges every invocation, also the
+     * fast paths that never reach the code that needs them -- MEASURED: with prologue saves, 335 methods ran slower
+     * than Baseline against 103 without callee-saved registers. So the saves run on entry to the SAVED REGION: the
+     * blocks that touch a callee-saved register and everything reachable from them, closed so a handler and the
+     * blocks it covers agree (an exception carries the state of its throw site into the handler). Each edge into
+     * the region from outside gets a block that saves and jumps on (appended to the layout, so no covered range
+     * is split); the entry block in the region saves in the prologue; only returns inside it restore. Each call
+     * site records whether it is in the region, so VMUnwind restores from a frame only where it had saved.
+     */
+    private void savedRegion()
+    {
+        inSaved = new boolean[maxBlockId() + 1];
+        if (nSaved == 0)
+        {
+            return;
+        }
+        for (int b = 0; b < f.nBlocks; b++)
+        {
+            MBlock blk = f.blocks[b];
+            for (int i = 0; i < blk.n && !inSaved[blk.id]; i++)
+            {
+                MInstr x = blk.code[i];
+                for (int v : x.defs)
+                {
+                    inSaved[blk.id] |= (regBit(v) & savedMask) != 0;
+                }
+                for (int v : x.uses)
+                {
+                    inSaved[blk.id] |= (regBit(v) & savedMask) != 0;
+                }
+            }
+        }
+        boolean changed = true;
+        while (changed)
+        {
+            changed = false;
+            for (int b = 0; b < f.nBlocks; b++)
+            {
+                MBlock blk = f.blocks[b];
+                if (!inSaved[blk.id])
+                {
+                    continue;
+                }
+                for (int k = 0; k < blk.nSuccs; k++)
+                {
+                    if (!inSaved[blk.succs[k].id])
+                    {
+                        inSaved[blk.succs[k].id] = true;
+                        changed = true;
+                    }
+                }
+            }
+            for (int e = 0; e < f.handlerOf.length; e++)
+            {
+                MBlock h = f.handlerOf[e];
+                if (h == null)
+                {
+                    continue;
+                }
+                boolean any = inSaved[h.id];
+                for (int b = 0; b < f.nBlocks && !any; b++)
+                {
+                    MBlock blk = f.blocks[b];
+                    any = blk.cover != null && e < blk.cover.length && blk.cover[e] && inSaved[blk.id];
+                }
+                if (!any)
+                {
+                    continue;
+                }
+                if (!inSaved[h.id])
+                {
+                    inSaved[h.id] = true;
+                    changed = true;
+                }
+                for (int b = 0; b < f.nBlocks; b++)
+                {
+                    MBlock blk = f.blocks[b];
+                    if (blk.cover != null && e < blk.cover.length && blk.cover[e] && !inSaved[blk.id])
+                    {
+                        inSaved[blk.id] = true;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        int n = f.nBlocks;
+        for (int b = 0; b < n; b++)
+        {
+            MBlock p = f.blocks[b];
+            if (inSaved[p.id] || p.n == 0)
+            {
+                continue;
+            }
+            MInstr t = p.last();
+            for (int k = 0; t.targets != null && k < t.targets.length; k++)
+            {
+                MBlock to = t.targets[k];
+                if (to != null && inSaved[to.id])
+                {
+                    MBlock e = f.newBlock();             // the save edge: appended, so covered ranges stay whole
+                    MInstr save = new MInstr(A64Select.CSSAVE, null, null);
+                    save.bci = t.bci;
+                    e.add(save);
+                    e.add(MInstr.jump(to));
+                    for (int j = k; j < t.targets.length; j++)
+                    {
+                        if (t.targets[j] == to)
+                        {
+                            t.targets[j] = e;
+                        }
+                    }
+                    for (int j = 0; j < p.nSuccs; j++)
+                    {
+                        if (p.succs[j] == to)
+                        {
+                            p.succs[j] = e;
+                        }
+                    }
+                    e.preds[0] = p;
+                    e.nPreds = 1;
+                    e.succs[0] = to;
+                    e.nSuccs = 1;
+                    for (int j = 0; j < to.nPreds; j++)
+                    {
+                        if (to.preds[j] == p)
+                        {
+                            to.preds[j] = e;
+                        }
+                    }
+                }
+            }
+        }
+        boolean[] g = new boolean[maxBlockId() + 1];
+        for (int i = 0; i < inSaved.length; i++)
+        {
+            g[i] = inSaved[i];
+        }
+        inSaved = g;
+    }
+
+    private int maxBlockId()
+    {
+        int m = 0;
+        for (int b = 0; b < f.nBlocks; b++)
+        {
+            m = Math.max(m, f.blocks[b].id);
+        }
+        return m;
+    }
+
+    /** Every callee-saved register an allocated value of this method occupies. */
+    private long calleeSavedUsed()
+    {
+        long cs = new A64Target().regs().calleeSaved(compiler.opt.RegFile.INT);
+        long used = 0L;
+        for (int b = 0; b < f.nBlocks; b++)
+        {
+            MBlock blk = f.blocks[b];
+            for (int i = 0; i < blk.n; i++)
+            {
+                MInstr x = blk.code[i];
+                for (int v : x.defs)
+                {
+                    used |= regBit(v);
+                }
+                for (int v : x.uses)
+                {
+                    used |= regBit(v);
+                }
+            }
+        }
+        return used & cs;
+    }
+
+    private long regBit(int v)
+    {
+        return f.vclass[v] == compiler.opt.RegFile.INT && f.loc[v] >= 0 ? 1L << f.loc[v] : 0L;
+    }
+
+    /** Store (prologue) or reload (each return) the saved callee-saved registers: the frame's top words, in
+     *  register order, where VMUnwind finds them by the map's mask. */
+    private void saveCalleeSaved(boolean store)
+    {
+        int k = 0;
+        for (int r = 19; r <= 28; r++)
+        {
+            if ((savedMask & (1L << r)) != 0)
+            {
+                int off = frameSize - 8 * nSaved + 8 * k;
+                cb.emit(store ? A64Enc.strx(r, 31, off) : A64Enc.ldrx(r, 31, off));
+                k += 1;
+            }
+        }
+    }
+
     public int[] emit(long base, int codeLength)
     {
         cb = new CodeBuffer(base);
@@ -76,8 +282,11 @@ public final class A64Emit
         }
         slotBase = saveLR ? 8 : 0;
         nHomes = f.nHomes;
-        int words = f.nSlots + (saveLR ? 1 : 0);
+        savedMask = calleeSavedUsed();
+        nSaved = Long.bitCount(savedMask);
+        int words = f.nSlots + (saveLR ? 1 : 0) + nSaved;
         frameSize = words == 0 ? 0 : A64Enc.align16(words * 8);
+        savedRegion();
         SlotLiveness sl = new SlotLiveness(f);
         if (frameSize >= 4096)
         {
@@ -103,6 +312,10 @@ public final class A64Emit
         {
             cb.emit(A64Enc.strx(30, 31, 0));
         }
+        if (nSaved > 0 && inSaved[f.blocks[0].id])
+        {
+            saveCalleeSaved(true);
+        }
         for (int s = 0; s < f.nHomes; s++)
         {
             if (f.homeGc[s] != MFunc.GC_RAW)
@@ -115,6 +328,7 @@ public final class A64Emit
             MBlock blk = f.blocks[b];
             MBlock next = b + 1 < f.nBlocks ? f.blocks[b + 1] : null;
             blockWord[blk.id] = cb.wordCount();
+            curSaved = nSaved > 0 && inSaved[blk.id];
             long[][] after = sl.afterEach(blk);
             for (int i = 0; i < blk.n; i++)
             {
@@ -452,8 +666,16 @@ public final class A64Emit
             }
             jumpTo(x.targets[0], next);
         }
+        else if (op == A64Select.CSSAVE)
+        {
+            saveCalleeSaved(true);
+        }
         else if (op == A64Select.RET)
         {
+            if (curSaved)
+            {
+                saveCalleeSaved(false);                      // only where the region's saves have run
+            }
             if (saveLR)
             {
                 cb.emit(A64Enc.ldrx(30, 31, 0));
@@ -706,6 +928,16 @@ public final class A64Emit
     /** Record a GC map site at the BL in word {@code w}: the spill slots live after it. */
     private void site(int w)
     {
+        if (nSites == siteSaved.length)
+        {
+            boolean[] g = new boolean[nSites * 2 + 16];
+            for (int i = 0; i < nSites; i++)
+            {
+                g[i] = siteSaved[i];
+            }
+            siteSaved = g;
+        }
+        siteSaved[nSites] = curSaved;
         if (nSites == siteWord.length)
         {
             int[] sw = new int[nSites * 2];
@@ -770,7 +1002,7 @@ public final class A64Emit
         cb.emit(bitWords);
         cb.emit(nUnique);
         cb.emit(0);                                        // no out-args area
-        cb.emit(0);
+        cb.emit((int) (savedMask >>> 19) << 16);           // bits 16..25: the saved x19..x28 (VMUnwind, O2-3)
         for (int i = 0; i < nSites; i++)
         {
             cb.emit(siteWord[i] & 0xFFFFF);
@@ -782,6 +1014,19 @@ public final class A64Emit
             for (int k = 0; k < bitWords; k++)
             {
                 cb.emit(bits[k]);
+            }
+        }
+        if (savedMask != 0)
+        {
+            // O2-3: a bit per site, in site order -- is the frame's callee-saved save area valid there
+            for (int k = 0; k < (nSites + 31) / 32; k++)
+            {
+                int bits = 0;
+                for (int i = 32 * k; i < nSites && i < 32 * k + 32; i++)
+                {
+                    bits |= siteSaved[i] ? 1 << (i & 31) : 0;
+                }
+                cb.emit(bits);
             }
         }
     }

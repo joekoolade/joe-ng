@@ -40,6 +40,8 @@ public final class MFunc
     /** Spill slots [0, nHomes) are the HOMES of a method with a handler (one per bytecode local and GC kind),
      *  typed by {@link #homeGc} at every GC site: a reference home always holds a reference or null. */
     public int nHomes;
+    /** O2-3: whether non-reference values may take callee-saved registers (a framed, non-leaf method). */
+    public boolean calleeSavedOk;
     public byte[] homeGc = new byte[0];
     /** Per exception-table entry: the block its handler starts (null: unreachable). */
     public MBlock[] handlerOf = new MBlock[0];
@@ -54,7 +56,16 @@ public final class MFunc
     public void copyGc(int dst, int src)
     {
         vgc[dst] = vgc[src];
+        noAddress[dst] = noAddress[src];
     }
+
+    /**
+     * Per virtual register: a value that can never hold an address -- an int (and the sub-word kinds), a float or a
+     * double -- and so may live in a callee-saved register (O2-3). A long or an unboxed word may hold a young
+     * object's address copied out of a reference (VMConcat's builder), which the minor collection must PIN, and
+     * it pins only what it can see: frame slots (StackRoots.markTyped), never registers.
+     */
+    public boolean[] noAddress = new boolean[16];
 
     /** A new spill slot for virtual register {@code v}. */
     public int newSlot(int v)
@@ -104,18 +115,22 @@ public final class MFunc
             fixed = growInt(fixed, m);
             origin = growInt(origin, m);
             boolean[] ns = new boolean[m];
+            boolean[] na = new boolean[m];
             byte[] gc = new byte[m];
             for (int i = 0; i < nV; i++)
             {
                 ns[i] = noSpill[i];
+                na[i] = noAddress[i];
                 gc[i] = vgc[i];
             }
             noSpill = ns;
+            noAddress = na;
             vgc = gc;
         }
         int v = nV;
         vclass[v] = cls;
         vgc[v] = GC_RAW;
+        noAddress[v] = false;
         fixed[v] = -1;
         origin[v] = v;
         nV += 1;

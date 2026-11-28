@@ -173,6 +173,14 @@ public final class OptDiff implements OptTier.Diff
             }
             eb.x[31] = 0x7000_0000L;
             eo.x[31] = 0x7000_0000L;
+            for (int i = 0; i < 10; i++)
+            {
+                long v = r.nextLong();                       // the caller's callee-saved values (O2-3)
+                eb.x[19 + i] = v;
+                eo.x[19 + i] = v;
+                cb.entryRegs[i] = v;
+                co.entryRegs[i] = v;
+            }
             boolean okB = eb.run(patched(baseline), base, 200_000);
             boolean okO = eo.run(patched(opt), base, 200_000);
             if (co.error != null || cb.error != null)
@@ -191,6 +199,19 @@ public final class OptDiff implements OptTier.Diff
                 continue;                                    // e.g. a loop that never ends for this input, in both
             }
             compared += 1;
+            for (int i = 0; i < 10 && !eo.thrown; i++)
+            {
+                if (eo.x[19 + i] != co.entryRegs[i] && co.calleeError == null)
+                {
+                    co.calleeError = "x" + (19 + i) + " at return is 0x" + Long.toHexString(eo.x[19 + i]);
+                }
+            }
+            if (co.calleeError != null || cb.calleeError != null)
+            {
+                mismatches += 1;
+                System.err.println("  CALLEE-SAVED " + key + ": opt " + co.calleeError + " / baseline " + cb.calleeError);
+                return;
+            }
             if (eb.thrown)
             {
                 thrownRuns += 1;
@@ -417,7 +438,52 @@ public final class OptDiff implements OptTier.Diff
             }
             thrownExc = exc;
             e.redirect = A64Emu.THROWN;
+            // ... and VMUnwind pops this frame: x19..x28 become what it saved of them (the map's mask, the frame's
+            // top words) or what they hold now -- which must be the caller's, as on entry (O2-3)
+            int[] w = cm.words();
+            int m = cm.gcMapWord();
+            int mask = m == 0 ? 0 : (w[m + 9] >>> 16) & 0x3FF;
+            if (mask != 0 && !savedAt(w, m, pcWord))
+            {
+                mask = 0;                                    // outside the saved region: as VMUnwind.savedAt
+            }
+            int n = Integer.bitCount(mask);
+            int k = 0;
+            for (int r = 0; r < 10; r++)
+            {
+                long v = e.x[19 + r];
+                if ((mask & (1 << r)) != 0)
+                {
+                    v = e.load(sp + cm.frameSize() - 8L * n + 8L * k, 8);
+                    k += 1;
+                }
+                if (v != entryRegs[r] && calleeError == null)
+                {
+                    calleeError = "x" + (19 + r) + " after the unwind pops the frame is 0x" + Long.toHexString(v);
+                }
+            }
         }
+
+        /** VMUnwind.savedAt over the words: the saved bit of the first site whose return word is past pcWord. */
+        private boolean savedAt(int[] w, int m, int pcWord)
+        {
+            int nSites = w[m + 1];
+            int bitWords = w[m + 6];
+            int nUnique = w[m + 7];
+            for (int i = 0; i < nSites; i++)
+            {
+                if (w[m + 10 + 2 * i] > pcWord)
+                {
+                    int bits = w[m + 10 + 2 * nSites + nUnique * bitWords + (i >> 5)];
+                    return ((bits >>> (i & 31)) & 1) != 0;
+                }
+            }
+            return false;
+        }
+
+        /** x19..x28 on entry (O2-3: the callee-saved contract), and the first breach seen. */
+        long[] entryRegs = new long[10];
+        String calleeError;
 
         /**
          * The Methodref a dispatch (BLR) at {@code word} calls: the opt tier records its sites; for Baseline, the

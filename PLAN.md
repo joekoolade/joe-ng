@@ -5176,6 +5176,12 @@ also with `--opt all` (virt list, raspi4b suite) and a Pi boot.
 - **O2-2 (2026-11-27): a spilled value's home is its slot** (methods with handlers): slower methods 162 -> 103,
   geomean 0.7931. AllocCheck models home stores. Remaining: spill-across-calls (registers across calls need
   callee-saved allocation and register maps).
+- **O2-3 (2026-11-27): callee-saved registers, option 1** -- x19..x28 for ints, floats and doubles live across
+  calls; shrink-wrapped saves, a per-site saved bitmap, VMUnwind restores (per-task image, including the frames
+  between unwind and its sp). Pi defines -6.5%. Longs and unboxed words stay in frame slots, because a raw word that
+  names a young object must be PINNED and the collector cannot see registers. **Option 2 (next, user decision):**
+  references and raw words in callee-saved registers, with the collector reading save areas and switch frames
+  (pin + update).
 - **O1-6: the rest of the bytecode set** (switches, floats, magic intrinsics, invokedynamic, the unboxed
   types) until `--opt all` rejects nothing reachable in the image but what is recorded, and the image boots and
   passes the regression with every accepted method opt-compiled. That is O1 done: opt code behaves exactly like

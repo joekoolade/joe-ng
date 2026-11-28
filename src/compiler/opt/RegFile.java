@@ -47,6 +47,12 @@ public final class RegFile
     }
 
     /** Bit p set: a call destroys register p. */
+    /** The allocatable registers a call preserves: a callee that uses one saves and restores it. */
+    public long calleeSaved(int cls)
+    {
+        return allocatable[cls] & ~callerSaved[cls];
+    }
+
     public long callerSaved(int cls)
     {
         return callerSaved[cls];
